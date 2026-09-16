@@ -16,15 +16,15 @@ dependencies = [
     "httpx>=0.27",
     "psutil>=6.0",
     "sqlite-vec>=0.1.6",
-    "keyring>=25.0",
+    "keyring>=25.7.0",
     "watchdog>=5.0",
     "numpy>=2.0",
     "typer>=0.12",
 ]
 
 [project.optional-dependencies]
-shell = ["PySide6>=6.8", "pynput>=1.7"]
-voice = ["faster-whisper>=1.1", "sounddevice>=0.5", "piper-tts>=1.2"]
+shell = ["PySide6>=6.8", "pynput>=1.8.2"]
+voice = ["faster-whisper>=1.1", "sounddevice>=0.5.6", "piper-tts>=1.2"]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
@@ -35,7 +35,7 @@ dev = [
     "types-PyYAML",
     "types-psutil",
 ]
-e2e = ["playwright>=1.47", "pytest-playwright>=0.5"]
+e2e = ["playwright>=1.62.0", "pytest-playwright>=0.5"]
 rl = ["mss>=9.0", "opencv-python-headless>=4.10", "numpy>=2.0"]
 
 [project.scripts]
