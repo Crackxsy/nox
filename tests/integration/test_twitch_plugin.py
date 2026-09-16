@@ -9,7 +9,6 @@ No Twitch bot account exists yet (ES-01), so there is no "real Twitch" network t
 from __future__ import annotations
 
 import asyncio
-import random
 import shutil
 from pathlib import Path
 
@@ -23,6 +22,7 @@ from nox.core.events import Event
 from nox.ipc.errors import IpcError
 from nox.plugins.manager import PluginState
 from nox.security.secrets import KeyringSecretStore
+from tests._ports import free_port_base
 from tests.unit.plugins.twitch.fake_irc_server import FakeIrcServer
 
 pytestmark = pytest.mark.timeout(180)
@@ -76,7 +76,7 @@ def _twitch_plugin_dir(tmp_path: Path, *, port: int) -> Path:
 
 
 def _config(tmp_path: Path, *, plugins_dir: Path):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     (tmp_path / "vault").mkdir()
     overrides = {
         "paths": {

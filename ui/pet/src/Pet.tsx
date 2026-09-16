@@ -4,11 +4,17 @@
  * motion amplitude). All 21 expressions are expressed through posture/mimicry parameters coming
  * from AnimParams (petState.ts::deriveAnim) — the variant only fixes *which creature* is doing the
  * expressing, never how an expression itself looks; colour (palette) only supports it (A57/D34).
+ *
+ * #25: the few *chrome* colours the canvas needs — the creature's line work and the status label
+ * plate under it — come from the shared design tokens via `theme.ts::readChrome` instead of the
+ * hard-coded dark palette this file used to carry. The body tint still comes from the variant
+ * palette through `AnimParams`, which `App.tsx` now derives per theme.
  */
 
 import { useEffect, useRef } from 'react';
 
 import { type AnimParams, decaySpeaking } from './petState';
+import { CHROME_FALLBACK, type PetChrome, type ThemeMode, readChrome } from './theme';
 import { neutral } from './variants';
 import type { PetVariant } from './variants';
 
@@ -22,6 +28,8 @@ export interface PetProps {
   size?: number;
   /** Silhouette/palette/motion parameters (OP-1); defaults to the `neutral` placeholder. */
   variant?: PetVariant;
+  /** Active token theme; only the chrome colours depend on it (#25). */
+  theme?: ThemeMode;
 }
 
 const TAU = Math.PI * 2;
@@ -34,14 +42,20 @@ export function Pet({
   onInteract,
   size = 260,
   variant = neutral,
+  theme = 'dark',
 }: PetProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const paramsRef = useRef(params);
   const variantRef = useRef(variant);
+  const chromeRef = useRef<PetChrome>(CHROME_FALLBACK[theme]);
   const levelRef = useRef(speakingLevel);
   paramsRef.current = params;
   variantRef.current = variant;
   levelRef.current = Math.max(levelRef.current, speakingLevel);
+
+  useEffect(() => {
+    chromeRef.current = readChrome(theme);
+  }, [theme]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -77,7 +91,7 @@ export function Pet({
         blinkAt = now + 2500 + Math.random() * 4000;
       }
       blink = Math.max(0, blink - dt / 120);
-      draw(ctx, p, variantRef.current, now / 1000, size, levelRef.current, blink);
+      draw(ctx, p, variantRef.current, now / 1000, size, levelRef.current, blink, chromeRef.current);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
@@ -112,6 +126,7 @@ function draw(
   size: number,
   level: number,
   blink: number,
+  chrome: PetChrome = CHROME_FALLBACK.dark,
 ) {
   ctx.clearRect(0, 0, size, size);
   const cx = size / 2;
@@ -126,7 +141,7 @@ function draw(
 
   const body = hsl(p.hue, p.sat, p.light);
   const accent = hsl(variant.palette.accentHue, p.sat, Math.max(0.25, p.light - 0.14));
-  const dark = '#0b0b12';
+  const dark = chrome.ink;
 
   ctx.save();
   ctx.translate(cx + jx, cy + bob + jy);
@@ -190,7 +205,7 @@ function draw(
     ctx.stroke();
   }
   if (p.ring === 'cross') {
-    ctx.strokeStyle = '#e05a5a';
+    ctx.strokeStyle = chrome.danger;
     ctx.lineWidth = 4;
     ctx.beginPath();
     ctx.moveTo(-mw * 1.3, my - r * 0.18);
@@ -200,18 +215,23 @@ function draw(
   ctx.restore(); // breath scale
 
   // status ring (shape, not only colour — D238)
-  drawRing(ctx, p, t, r);
+  drawRing(ctx, p, t, r, chrome);
   ctx.restore();
 
+  // Status label: the same translucent chip material as the DOM chrome (#25), so the window reads
+  // as one surface whether the label is drawn here or by `CaptureIndicator`.
   if (p.label) {
     ctx.font = `${Math.round(size * 0.05)}px "Segoe UI", system-ui, sans-serif`;
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(11,11,18,0.85)';
     const tw = ctx.measureText(p.label).width + 16;
+    ctx.fillStyle = chrome.chipBg;
+    ctx.strokeStyle = chrome.chipLine;
+    ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.roundRect(cx - tw / 2, size * 0.9, tw, size * 0.075, 8);
     ctx.fill();
-    ctx.fillStyle = '#c8c8d4';
+    ctx.stroke();
+    ctx.fillStyle = chrome.chipInk;
     ctx.fillText(p.label, cx, size * 0.9 + size * 0.053);
   }
 }
@@ -412,7 +432,13 @@ function drawTail(
   ctx.restore();
 }
 
-function drawRing(ctx: CanvasRenderingContext2D, p: AnimParams, t: number, r: number) {
+function drawRing(
+  ctx: CanvasRenderingContext2D,
+  p: AnimParams,
+  t: number,
+  r: number,
+  chrome: PetChrome,
+) {
   const R = r * 1.45;
   ctx.lineWidth = 3;
   switch (p.ring) {
@@ -447,7 +473,7 @@ function drawRing(ctx: CanvasRenderingContext2D, p: AnimParams, t: number, r: nu
       return;
     }
     case 'shield': {
-      ctx.strokeStyle = '#5fb37a';
+      ctx.strokeStyle = chrome.ok;
       ctx.beginPath();
       ctx.moveTo(0, -R);
       ctx.lineTo(R * 0.8, -R * 0.5);
@@ -460,7 +486,7 @@ function drawRing(ctx: CanvasRenderingContext2D, p: AnimParams, t: number, r: nu
       return;
     }
     case 'alert': {
-      ctx.strokeStyle = '#e05a5a';
+      ctx.strokeStyle = chrome.danger;
       ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.moveTo(0, -R * 1.05);
@@ -468,14 +494,14 @@ function drawRing(ctx: CanvasRenderingContext2D, p: AnimParams, t: number, r: nu
       ctx.stroke();
       ctx.beginPath();
       ctx.arc(0, -R * 0.45, 3, 0, TAU);
-      ctx.fillStyle = '#e05a5a';
+      ctx.fillStyle = chrome.danger;
       ctx.fill();
       return;
     }
     case 'cross':
       return; // drawn over the mouth
     case 'bar': {
-      ctx.strokeStyle = '#6b6b76';
+      ctx.strokeStyle = chrome.muted;
       ctx.setLineDash([6, 6]);
       ctx.beginPath();
       ctx.arc(0, 0, R, 0, TAU);

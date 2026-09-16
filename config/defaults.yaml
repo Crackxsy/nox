@@ -77,6 +77,9 @@ ipc:
   auth: token                    # per-start session tokens issued by core, stored under %APPDATA%/Nox/runtime
 
 voice:
+  models_dir: ""                 # root for piper/kokoro/openwakeword model files;
+                                 # empty = <paths.data_dir>/models. The voice worker only receives
+                                 # this section, so repeat the path here if paths.data_dir moved.
   stt:
     engine: faster-whisper
     model: small
@@ -85,9 +88,26 @@ voice:
     vad: true
     wake_word: "Nox"
     push_to_talk_hotkey: "ctrl+alt+space"
+    listening_mode: continuous   # continuous | ptt_only (ptt_only never opens the mic on its own)
+    # Wake-word gate in front of Whisper (#20): without it every VAD segment is transcribed, which
+    # is where the 20-40 s queue with background audio came from.
+    wake_word_engine: openwakeword   # openwakeword | text; falls back to text (health: limited)
+                                     # when the package or the model file is missing
+    wake_word_model: ""          # file in <models_dir>/openwakeword, or an absolute path;
+                                 # empty = every model there. openWakeWord has no "Nox" model,
+                                 # so this stays empty until one is trained -> text matching.
+    wake_word_threshold: 0.5
+    wake_window_s: 8             # a detection keeps the gate open this long
+    conversation_window_s: 20    # follow-up questions may skip the wake word for this long
+    kill_phrase_watchdog: true   # short segments still reach Whisper so "Nox Notaus" keeps
+    kill_watchdog_max_ms: 2500   # working; non-kill transcripts are discarded, never reported
   tts:
-    engine: piper                # piper | kokoro (decided by SP-03)
-    voice: ""                    # engine-specific voice id, chosen after SP-03
+    engine: piper                # piper | kokoro; piper stays the default until the PO switches.
+                                 # kokoro needs the voice-kokoro extra and the model files in
+                                 # <models_dir>/kokoro (python -m nox.worker --download-kokoro).
+    voice: ""                    # engine-specific voice id; empty = the engine default
+                                 # (piper: de_DE-thorsten-medium, kokoro: af_heart - no German
+                                 # voice exists in Kokoro v1.0, see README)
     rate: 1.0
     volume: 0.8
     streaming: true
@@ -150,8 +170,15 @@ stream:                          # Spec v0.2 Stream Bot (EPIC-11); numbers are p
   relevance:
     unsolicited_interval_s: 120.0   # ~one unsolicited chat message per 2 min (Spec v0.2 §3.3)
     mention_cooldown_s: 5.0
-  twitch:
+  twitch:                        # read by the twitch plugin (#26); editable in the dashboard
     channel: ""                  # channel Nox joins; empty = the twitch plugin never joins one
+    bot_names: [nox]             # names/aliases that count as "the bot was addressed"
+    relevance_cooldown_s: 20.0   # per-viewer cooldown of the relevance classifier
+    rate_limit_max_messages: 20  # chat send budget per window (Spec v0.2 §9: Twitch allows 20/30s)
+    rate_limit_window_s: 30.0
+    rate_limit_min_gap_s: 1.5    # minimum pause between two chat messages
+    min_backoff_s: 1.0           # IRC reconnect backoff, doubled up to max_backoff_s
+    max_backoff_s: 30.0
 
 attention:
   proactivity_level: 3           # 0..5 global ceiling

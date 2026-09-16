@@ -8,7 +8,7 @@ and the timings are deterministic.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +83,7 @@ def build(
     enabled: Sequence[str] = ("demo",),
     engine: FakeEngine | None = None,
     secrets: FakeSecrets | None = None,
+    clock: Callable[[], float] | None = None,
     **settings: Any,
 ) -> Harness:
     bus = FakeBus()
@@ -104,6 +105,7 @@ def build(
         engine=engine or FakeEngine(),
         secrets=secrets or FakeSecrets(),
         settings=harness_settings,
+        **({"clock": clock} if clock is not None else {}),
     )
     harness = Harness(manager, hub, bus)
 
@@ -249,14 +251,15 @@ async def test_crash_restarts_with_backoff_then_fails(plugins_dir: Path) -> None
 
 async def test_restarts_outside_the_window_do_not_count(plugins_dir: Path) -> None:
     write_manifest(plugins_dir, "demo")
-    built = build(plugins_dir, restart_limit=1, restart_window_s=0.05)
+    now = [1000.0]  # injected clock: no real sleeps, so a slow CI runner cannot skew the window
+    built = build(plugins_dir, restart_limit=1, restart_window_s=60.0, clock=lambda: now[0])
     manager = built.manager
     try:
         await manager.start()
         record = manager.records()["demo"]
         built.processes[-1].exit(1)
         await wait_until(lambda: record.restarts == 1)
-        await asyncio.sleep(0.1)  # the first restart ages out of the window
+        now[0] += 120.0  # the first restart ages out of the window
         built.processes[-1].exit(1)
         await wait_until(lambda: record.restarts == 2)
         assert record.state is PluginState.SPAWNED

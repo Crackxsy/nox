@@ -10,7 +10,6 @@ regression in any of them shows up as a failure in this file.
 
 from __future__ import annotations
 
-import random
 from pathlib import Path
 from typing import Any
 
@@ -27,13 +26,14 @@ from nox.ipc.protocol import Envelope, Kind, Source
 from nox.remote.install import install
 from nox.security.model import Risk
 from nox.tools.registry import ToolSpec
+from tests._ports import free_port_base
 
 SENDER = "987654321"
 STRANGER = "111222333"
 
 
 def _config(tmp_path: Path, **overrides: Any):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     settings = {
         "paths": {
             "data_dir": str(tmp_path / "data"),

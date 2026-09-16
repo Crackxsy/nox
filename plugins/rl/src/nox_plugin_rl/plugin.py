@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from nox.core.events import HealthStatus
 from nox.plugins.api import PluginApi
 from nox.rl import replay_parser
+from nox.rl.capture_gate import CaptureGate
 from nox.rl.paths import default_replay_folder
 from nox.security.model import Risk
 
@@ -83,10 +84,10 @@ class RlPlugin:
         if not bool(vision_cfg.get("enabled", False)):
             self._vision_sampler.disable_manually()  # opt-in-by-default (Spec §12 open point)
         self._vision_task: asyncio.Task[None] | None = None
-        # ST-18-03 AC2: both stages stop together when a privacy zone blocks screen capture. Stage
-        # 1's own `_recognize_loop` has no equivalent gate yet (pre-existing gap, out of this
-        # story's scope - flagged in the report rather than silently left unfixed here).
-        self._capture_allowed = True
+        # ST-18-03 AC2 / FR-7.16: both stages stop together when a privacy zone (or a privacy
+        # mode, or `privacy.capture.screen: false`) blocks screen capture. One gate for both loops:
+        # while it is closed no frame is grabbed at all, and the transition is logged once.
+        self._gate = CaptureGate(initially_allowed=True, log=self.api.log)
 
     # -- lifecycle ---------------------------------------------------------------------------
 
@@ -95,6 +96,7 @@ class RlPlugin:
         self.api.events.on("security.kill_switch", self._on_stop_signal)
         self.api.events.on("security.panic", self._on_stop_signal)
         self.api.events.on("privacy.capture_changed", self._on_capture_changed)
+        self.api.events.on("privacy.zone_changed", self._on_zone_changed)
         self._watcher.seed_known()
         self._watcher.start()
         self._detect_task = asyncio.create_task(self._detect_loop(), name="rl-detect")
@@ -132,10 +134,16 @@ class RlPlugin:
                 self._vision_task = None
 
     async def _on_capture_changed(self, _name: str, payload: dict[str, Any]) -> None:
-        """`privacy.capture_changed` (ST-18-03 AC2): both stages stop together when a privacy zone
-        blocks screen capture - `_vision_loop` checks this flag every tick, same latency bound as
-        the plugin's own poll interval."""
-        self._capture_allowed = bool(payload.get("screen", True))
+        """`privacy.capture_changed` (ST-18-03 AC2): both capture loops go through `_gate`, so
+        they pause together within one poll interval and resume together."""
+        self._gate.on_capture_changed(payload)
+
+    async def _on_zone_changed(self, _name: str, payload: dict[str, Any]) -> None:
+        self._gate.on_zone_changed(payload)
+
+    @property
+    def _capture_allowed(self) -> bool:
+        return self._gate.allowed
 
     # -- game detection ------------------------------------------------------------------------
 
@@ -178,9 +186,12 @@ class RlPlugin:
         boost_threshold = int(self.api.config.get("callouts", {}).get("boost_low_threshold", 20))
         while True:
             try:
-                frame = await asyncio.to_thread(self._capture_fn)
+                frame = await self._gate.maybe_capture(lambda: asyncio.to_thread(self._capture_fn))
             except Exception as exc:  # noqa: BLE001 - capture must never crash the plugin
                 self.api.log.warning("rl.capture_failed", error=str(exc))
+                await asyncio.sleep(interval)
+                continue
+            if frame is None:  # privacy gate closed: nothing was grabbed, nothing is derived
                 await asyncio.sleep(interval)
                 continue
             await self._process_frame(frame, boost_threshold=boost_threshold)

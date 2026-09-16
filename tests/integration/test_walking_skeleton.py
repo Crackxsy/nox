@@ -6,7 +6,6 @@ engages the kill switch and shuts down cleanly."""
 from __future__ import annotations
 
 import asyncio
-import random
 from pathlib import Path
 
 import pytest
@@ -16,10 +15,11 @@ from nox.core.config import load_config
 from nox.ipc.client import IpcClient
 from nox.ipc.errors import IpcError
 from nox.ipc.tokens import read_session_token
+from tests._ports import free_port_base
 
 
 def _config(tmp_path: Path):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     overrides = {
         "paths": {
             "data_dir": str(tmp_path / "data"),

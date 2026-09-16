@@ -265,3 +265,44 @@ def test_tray_language(qapp: Any, tmp_path: Path, fake_bridge_factory: Any, lang
     )
     expected = "Beenden" if lang == "de" else "Quit"
     assert app.tray.action_quit.text() == expected
+
+
+def test_settings_changed_reloads_the_pet_page_with_the_new_variant(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    """#24: `config.set pet.variant` publishes `settings.changed {paths: ["pet.variant"]}`; the
+    shell re-reads the variant and reloads the pet page with it. The pet page does its own live
+    swap on the same event; this reload is the fallback that always works."""
+    from types import SimpleNamespace
+
+    factory, created = fake_bridge_factory
+    config: dict[str, Any] = {"identity": {"ui_language": "en"}, "pet": {"variant": "fox"}}
+    app = ShellApp(
+        runtime_dir=make_runtime(tmp_path),
+        config=config,
+        bridge_factory=factory,
+        enable_hotkeys=False,
+        create_pet_window=False,
+        open_url=lambda _url: None,
+    )
+    loads: list[str] = []
+    app.pet = SimpleNamespace(load=loads.append, show_offline_page=lambda: loads.append("offline"))
+    app._load_pet_page()
+    app._connect_bridge()
+    qapp.processEvents()
+    assert "settings.changed" in created[0].calls[0][1]["patterns"]
+    assert len(loads) == 1 and "variant=fox" in loads[0]
+
+    config["pet"]["variant"] = "sprite:placeholder"
+    created[0].emit("settings.changed", {"paths": ["pet.variant"]})
+    qapp.processEvents()
+    assert len(loads) == 2 and "variant=sprite:placeholder" in loads[1]
+
+    # Unrelated settings, and a malformed payload, do not touch the window.
+    created[0].emit("settings.changed", {"paths": ["identity.ui_language"]})
+    created[0].emit("settings.changed", {})
+    created[0].emit("settings.changed", {"paths": "pet.variant"})
+    qapp.processEvents()
+    assert len(loads) == 2
+    app._ping_timer.stop()
+    app._reconnect_timer.stop()

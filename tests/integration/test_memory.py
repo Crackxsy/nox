@@ -6,7 +6,6 @@ write a note through the `vault.append_inbox` tool, confirm it is indexed and fo
 from __future__ import annotations
 
 import asyncio
-import random
 from pathlib import Path
 
 import pytest
@@ -15,10 +14,11 @@ from nox.app import DEFAULTS_PATH, PROFILES_DIR, NoxCore
 from nox.core.config import load_config
 from nox.core.state import PrivacyMode
 from nox.memory.install import install as install_memory
+from tests._ports import free_port_base
 
 
 def _config(tmp_path: Path):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     overrides = {
         "paths": {
             "data_dir": str(tmp_path / "data"),

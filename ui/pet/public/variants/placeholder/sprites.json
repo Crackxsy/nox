@@ -1,0 +1,36 @@
+{
+  "id": "placeholder",
+  "name": "Placeholder (generated silhouette)",
+  "frames": {
+    "idle": [
+      "idle.png"
+    ],
+    "blink": [
+      "blink.png"
+    ],
+    "listening": [
+      "listening-0.png",
+      "listening-1.png"
+    ],
+    "speaking": [
+      "speaking-0.png",
+      "speaking-1.png",
+      "speaking-2.png"
+    ],
+    "thinking": [
+      "thinking-0.png",
+      "thinking-1.png",
+      "thinking-2.png"
+    ],
+    "sleeping": [
+      "sleeping-0.png",
+      "sleeping-1.png"
+    ]
+  },
+  "fps": 8,
+  "anchor": [
+    0.5,
+    0.56
+  ],
+  "scale": 1.0
+}

@@ -11,7 +11,6 @@ clip library. `ClipWatcher` is also exercised directly against a second fixture 
 from __future__ import annotations
 
 import asyncio
-import random
 from pathlib import Path
 from typing import Any
 
@@ -25,12 +24,13 @@ from nox.core.config import load_config
 from nox.core.events import E, Event
 from nox.security.model import Decision, Risk
 from nox.tools.registry import ToolSpec
+from tests._ports import free_port_base
 
 pytestmark = pytest.mark.timeout(60)
 
 
 def _config(tmp_path: Path):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     (tmp_path / "vault").mkdir()
     overrides = {
         "paths": {

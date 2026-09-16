@@ -10,7 +10,6 @@ to reach through `plugin.secret.get` into a real secret store; the auth path its
 from __future__ import annotations
 
 import asyncio
-import random
 import shutil
 import sys
 from pathlib import Path
@@ -21,6 +20,7 @@ import yaml
 from nox.app import DEFAULTS_PATH, PROFILES_DIR, REPO_ROOT, NoxCore
 from nox.core.config import load_config
 from nox.plugins.manager import PluginState
+from tests._ports import free_port_base
 from tests.unit.plugins.obs.fake_obs_server import FakeObsServer, default_scene_list
 
 pytestmark = pytest.mark.timeout(180)
@@ -53,7 +53,7 @@ def _obs_plugin_dir(tmp_path: Path, *, port: int) -> Path:
 
 
 def _config(tmp_path: Path, *, plugins_dir: Path):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     (tmp_path / "vault").mkdir()
     overrides = {
         "paths": {

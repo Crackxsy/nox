@@ -61,7 +61,12 @@ is process this repository's tooling can verify.
       step echoes a secret value. _Evidence: CI run, log review._
 - [ ] **16. `CHANGELOG.md` present, versioning process documented** — done this pass
       (`CHANGELOG.md` at repo root, Keep-a-Changelog style, v0.1.0/v0.2.0 backfilled from git log).
-      _Evidence: the file itself._
+      Its compare links now use the tag-based form (`.../compare/vX...vY`,
+      `.../releases/tag/vX`) the publication runbook (item 20) is expected to create tags for,
+      not commit hashes from this pre-publication history, which would 404 on the public
+      repository (#29) — confirm `v0.1.0`/`v0.2.0` are actually tagged as part of item 20 before
+      the repo goes public, so those links resolve. _Evidence: the file itself; the tags existing
+      on the published repository once item 20 runs._
 - [x] **17. Support policy published** — see `README.md` "Support" section and the note below.
       _Evidence: doc link._
 - [ ] **18. No known critical security vulnerability remains** — ties to items 11/12; cannot be
