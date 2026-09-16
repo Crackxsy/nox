@@ -1,0 +1,31 @@
+# Branching policy: `develop` is the integration branch (default; every contribution targets it),
+# `main` is the release branch and only receives pull requests from `develop`. This check is a
+# required status on `main`, so a pull request from any other branch cannot be merged there.
+name: Branch policy
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  main-accepts-develop-only:
+    name: Branch policy (main accepts develop only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the source branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "::error::Pull requests into main must come from this repository's develop branch, not from a fork ($HEAD_REPO)."
+            exit 1
+          fi
+          if [ "$HEAD_REF" != "develop" ]; then
+            echo "::error::Pull requests into main must come from develop (got '$HEAD_REF'). Open the pull request against develop instead."
+            exit 1
+          fi
+          echo "OK: develop -> main"

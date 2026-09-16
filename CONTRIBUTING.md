@@ -46,12 +46,15 @@ code needs negative-path tests (the case that must be *rejected*), not only the 
 
 ## Branches, commits, pull requests
 
-- Branch off `main`: `feat/<short-topic>`, `fix/<short-topic>`, `docs/<short-topic>`, `chore/...`.
+- Two long-lived branches: **`develop`** (default; integration, every contribution targets it) and
+  **`main`** (release; only receives pull requests from `develop`, opened by the maintainer).
+- Branch off `develop`: `feat/<short-topic>`, `fix/<short-topic>`, `docs/<short-topic>`, `chore/...`.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/), as the
   existing history does: `feat(stream): ...`, `fix(core): ...`, `docs: ...`, `ci: ...`,
   `test: ...`, `chore: ...`. Write what changed and why, in the imperative.
-- `main` is protected: changes land through a pull request with green CI and a linear history
-  (rebase or squash, no merge commits, no force-push to `main`).
+- Both branches are protected: changes land through a pull request with green CI and a linear
+  history (rebase or squash, no merge commits, no force-push). `main` additionally requires a
+  code-owner review and the "Branch policy" check, which only passes for `develop` → `main`.
 - One logical change per pull request. Fill in the pull-request template, including the
   `CHANGELOG.md` entry under `## [Unreleased]`.
 - **No DCO sign-off and no CLA are required.** By contributing you agree your contribution is
