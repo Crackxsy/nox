@@ -19,9 +19,9 @@ jobs:
     name: Python (ruff, mypy, unit + integration tests)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -64,9 +64,9 @@ jobs:
       matrix:
         app: [pet, dashboard]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: "npm"
@@ -88,7 +88,7 @@ jobs:
     name: Guard - no input-synthesis / process-memory APIs (Security Model §10)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Rocket League is observation-only (ENGINEERING.md hard rules): no input-synthesis or
       # process-memory API may ever be imported or called for a game window. This fails the build
@@ -112,11 +112,11 @@ jobs:
     name: Release hygiene (third-party license audit ST-21-02, secrets scan ST-21-07)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # secrets_scan.py needs the full git history, not the default shallow clone
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -145,7 +145,7 @@ jobs:
 
       - name: Upload third-party license report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: third-party-licenses
           path: docs/THIRD_PARTY_LICENSES.md
@@ -161,9 +161,9 @@ jobs:
     # B-10 report. Promote to a required check once that trust is established.
     continue-on-error: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -177,7 +177,7 @@ jobs:
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "$pwd\.venv\Scripts"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: "npm"
