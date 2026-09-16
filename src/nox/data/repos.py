@@ -540,3 +540,128 @@ class MemoryItemRepository:
             (_iso(now or _now()),),
         )
         return int(cur.rowcount)
+
+
+# ---- proactive notifications (EPIC-19 ST-19-08 follow-up, migration 0010_notifications.sql) ------
+
+#: Fallback for `NotificationRepository.purge_expired`'s `retention_days` when the caller has none
+#: configured. `nox.proactive.store` re-exports this so `ProactiveConfig` can grow a matching
+#: `notifications_retention_days` field later without this module depending on `nox.core.config`.
+DEFAULT_NOTIFICATIONS_RETENTION_DAYS = 30
+
+
+class NotificationRow(Row):
+    id: str
+    created_at: datetime
+    priority: str
+    kind: str
+    title: str = ""
+    body: str = ""
+    source: str = ""
+    channel: str = ""
+    spoken: bool = False
+    announced: bool = False
+    suppressed_reason: str = ""
+    dismissed_at: datetime | None = None
+    expires_at: datetime | None = None
+
+
+class NotificationRepository:
+    """CRUD over `proactive_notifications`. `nox.proactive.store.NotificationStore` is the only
+    intended caller (keeps the `id`-is-a-uuid-hex convention and the in-memory-fallback behaviour
+    for tests/db-less callers there); this repository itself has no opinion on either."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    def add(
+        self,
+        *,
+        id: str,  # noqa: A002 - matches the column name, kept for call-site readability
+        priority: str,
+        kind: str,
+        title: str = "",
+        body: str = "",
+        source: str = "",
+        channel: str = "",
+        spoken: bool = False,
+        announced: bool = False,
+        suppressed_reason: str = "",
+        created_at: datetime | None = None,
+        dismissed_at: datetime | None = None,
+        expires_at: datetime | None = None,
+    ) -> NotificationRow:
+        self._db.execute(
+            "INSERT INTO proactive_notifications "
+            "(id, created_at, priority, kind, title, body, source, channel, spoken, announced, "
+            "suppressed_reason, dismissed_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                id,
+                _iso(created_at or _now()),
+                priority,
+                kind,
+                title,
+                body,
+                source,
+                channel,
+                int(spoken),
+                int(announced),
+                suppressed_reason,
+                _iso(dismissed_at),
+                _iso(expires_at),
+            ),
+        )
+        row = self.get(id)
+        assert row is not None
+        return row
+
+    def get(self, notification_id: str) -> NotificationRow | None:
+        row = self._db.fetch_one(
+            "SELECT * FROM proactive_notifications WHERE id = ?", (notification_id,)
+        )
+        return None if row is None else NotificationRow(**dict(row))
+
+    def list_recent(
+        self, limit: int = 50, *, include_dismissed: bool = True
+    ) -> list[NotificationRow]:
+        """Newest first, matching `NotificationStore.list_recent`'s (and
+        `HealthHistoryRepository.list_recent`'s) convention."""
+        if include_dismissed:
+            rows = self._db.fetch_all(
+                "SELECT * FROM proactive_notifications ORDER BY created_at DESC LIMIT ?", (limit,)
+            )
+        else:
+            rows = self._db.fetch_all(
+                "SELECT * FROM proactive_notifications WHERE dismissed_at IS NULL "
+                "ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+        return [NotificationRow(**dict(r)) for r in rows]
+
+    def dismiss(self, notification_id: str, *, dismissed_at: datetime | None = None) -> bool:
+        cur = self._db.execute(
+            "UPDATE proactive_notifications SET dismissed_at = ? "
+            "WHERE id = ? AND dismissed_at IS NULL",
+            (_iso(dismissed_at or _now()), notification_id),
+        )
+        return cur.rowcount == 1
+
+    def purge_expired(
+        self,
+        *,
+        now: datetime | None = None,
+        retention_days: int = DEFAULT_NOTIFICATIONS_RETENTION_DAYS,
+    ) -> int:
+        """Removes rows whose own `expires_at` has passed, plus dismissed rows older than
+        `retention_days` (Data Model retention convention: dismissing something is not an
+        instruction to forget it immediately, only to stop showing it)."""
+        ts = now or _now()
+        cutoff = ts - timedelta(days=retention_days)
+        cur = self._db.execute(
+            "DELETE FROM proactive_notifications WHERE "
+            "(expires_at IS NOT NULL AND expires_at <= ?) OR "
+            "(dismissed_at IS NOT NULL AND dismissed_at <= ?)",
+            (_iso(ts), _iso(cutoff)),
+        )
+        return int(cur.rowcount)

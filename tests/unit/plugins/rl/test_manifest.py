@@ -52,6 +52,7 @@ def test_rl_manifest_events_match_events_py() -> None:
         "security.kill_switch",
         "security.panic",
         "privacy.capture_changed",
+        "privacy.zone_changed",
     }
 
 

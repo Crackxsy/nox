@@ -4,6 +4,7 @@ entry points; no business logic lives here (ADR-002 process model)."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 from pathlib import Path
 
@@ -110,6 +111,17 @@ def rl_calibrate() -> None:
 
 secrets_app = typer.Typer(help="Manage secrets in the Windows Credential Manager (never in files).")
 app.add_typer(secrets_app, name="secrets")
+
+
+def _voice_app() -> typer.Typer:
+    """Lazy: the worker module pulls in numpy and the audio libraries."""
+    from nox.worker.main import voice_app
+
+    return voice_app
+
+
+with contextlib.suppress(Exception):  # voice extras missing: the group is simply absent
+    app.add_typer(_voice_app(), name="voice")
 
 
 @secrets_app.command("set")

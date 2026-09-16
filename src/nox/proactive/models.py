@@ -67,7 +67,9 @@ class AttentionDecision(BaseModel):
 
 class NotificationRecord(BaseModel):
     """One `proactive.notify()` call, kept for `proactive.status.read` (ST-19-08's notification
-    store). In-memory only in this pass (no DB migration; see `ProactiveConfig` docstring)."""
+    store). Persisted via `nox.proactive.store.NotificationStore` (migration `0010_notifications`,
+    #28) so it survives a restart; `source`/`dismissed_at`/`expires_at` are additive fields every
+    existing caller of `notify()` can simply leave at their defaults."""
 
     id: str = Field(default_factory=lambda: uuid4().hex)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -78,6 +80,9 @@ class NotificationRecord(BaseModel):
     spoken: bool = False
     announced: bool = False
     suppressed_reason: str = ""
+    source: str = ""
+    dismissed_at: datetime | None = None
+    expires_at: datetime | None = None
 
 
 class ProactiveStatus(BaseModel):

@@ -8,7 +8,6 @@ reaches the real `PrivacyService` and, end to end through the real bus, the real
 
 from __future__ import annotations
 
-import random
 from pathlib import Path
 
 import pytest
@@ -19,6 +18,7 @@ from nox.core.events import E
 from nox.core.state import PetFunctional
 from nox.sensors.install import install
 from nox.sensors.win32 import ForegroundInfo
+from tests._ports import free_port_base
 
 
 class FakeWin32Probe:
@@ -36,7 +36,7 @@ class FakeWin32Probe:
 
 
 def _config(tmp_path: Path):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     overrides = {
         "paths": {
             "data_dir": str(tmp_path / "data"),

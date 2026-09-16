@@ -798,6 +798,7 @@ class NoxCore:
         env = dict(os.environ)
         env.update(self.tokens.worker_env(f"worker:{service}"))
         env["NOX_HUB_URL"] = self.hub.url
+        env["NOX_DATA_DIR"] = str(self.config.paths.data_dir)  # models live below it
         cmd = [*self.worker_command, "--service", service]
         try:
             proc = subprocess.Popen(cmd, env=env, cwd=str(REPO_ROOT))  # noqa: S603

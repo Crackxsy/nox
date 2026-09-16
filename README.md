@@ -44,7 +44,7 @@ Nox is **pre-1.0**. Honest state as of the latest release:
 | --- | --- |
 | Core, supervisor, kill switch, privacy modes/zones, permission engine, audit chain | Works |
 | Local IPC hub, desktop shell (pet window, tray, hotkeys), dashboard | Works |
-| Voice: push-to-talk, wake word, local STT (faster-whisper) + TTS (Piper) | Works, needs the `voice` extra and a model download |
+| Voice: push-to-talk, wake word, local STT (faster-whisper) + TTS (Piper or Kokoro) | Works, needs the `voice` extra and a model download; see [Voice](#voice-microphone-and-speech) |
 | AI routing: Claude Code CLI → Ollama → deterministic rules fallback | Works; each provider reports its real health |
 | Memory: SQLite + `sqlite-vec`, vault indexing | Works; first start indexes the whole vault once |
 | Twitch chat bot, OBS scene control, Funken ledger, dashboard Stream page | Works (stream profile only) |
@@ -88,8 +88,9 @@ cd ui\dashboard ; npm ci ; npm run build ; cd ..\..
 ```
 
 Other entry points: `nox dev` (core + shell in one console, no supervisor), `nox core --no-voice`,
-`nox shell`, `nox rl calibrate`, and `python -m nox.worker --service voice --selftest` (devices,
-models, TTS, a 3-second microphone check).
+`nox shell`, `nox rl calibrate`, `python -m nox.worker --service voice --selftest` (devices,
+models, TTS, wake-word gate, a 3-second microphone check) and
+`python -m nox.worker --download-kokoro` (Kokoro TTS model files).
 
 Runtime files live in `%APPDATA%\Nox\runtime\{session.token,ipc.json,supervisor.token}`, logs in
 `%APPDATA%\Nox\logs`. Your data and vault folders are chosen during onboarding and are never inside
@@ -157,6 +158,48 @@ ollama pull nomic-embed-text   # embeddings for memory search
 
 Ollama runs on `127.0.0.1:11434`; nothing leaves the machine. It is also the fallback whenever the
 cloud provider is unavailable, and the only allowed provider in the `offline` and `work` profiles.
+
+### Voice (microphone and speech)
+
+Voice needs the `voice` extra and model files. Nothing is ever downloaded on its own: a missing
+model is an `unavailable` health reason that names the path and the command that fetches it. All
+voice models live under `<data_dir>/models/` (`piper/`, `kokoro/`, `openwakeword/`); if your
+`paths.data_dir` is not the default, set `voice.models_dir` in your user layer as well — the voice
+worker only ever receives the `voice` section of the configuration.
+
+**Text-to-speech engines.** `voice.tts.engine` is `piper` (default) or `kokoro`:
+
+| | `piper` | `kokoro` |
+| --- | --- | --- |
+| German voice | yes (`de_DE-thorsten-medium`) | **no** — Kokoro v1.0 has no German voice; German text is read by the English `af_heart` voice, and health reports `limited` |
+| Latency (7 s of speech, CPU) | ~90 ms to first audio, RTF 0.03 | ~750-840 ms to first audio, RTF 0.22 |
+| Extra | `voice` | `voice-kokoro` + `python -m nox.worker --download-kokoro` (~354 MB) |
+| License | `piper-tts` is GPL-3.0 | package and model are permissive, **but** `kokoro-onnx` still pulls GPL-3.0 `phonemizer`/espeak-ng |
+
+Switch with `voice.tts.engine: kokoro` in `%APPDATA%\Nox\user.yaml` and restart. Kokoro was added
+to get bundled builds out from under the GPL (see [`NOTICE`](NOTICE)); it does not get there on its
+own, because its grapheme-to-phoneme front end is still GPL-3.0. Treat the license question as
+open, not solved.
+
+**Listening and the wake-word gate.** Continuous listening used to send every detected speech
+segment to Whisper, so a video or a game in the background could push the queue to 20–40 seconds
+and make Whisper "recognise" words in noise. A small always-on detector
+([openWakeWord](https://github.com/dscripka/openWakeWord), Apache-2.0, ONNX) now sits in front of
+it: while push-to-talk is not held and no conversation window is open, a segment reaches Whisper
+only if the wake word fired within `voice.stt.wake_window_s` (default 8 s). Everything else is
+dropped before transcription — a privacy property as much as a CPU one, because audio you did not
+direct at Nox is never turned into text at all.
+
+openWakeWord ships no pre-trained model for "Nox", and training one is not part of this repository.
+Until a model file is placed in `<data_dir>/models/openwakeword/`, the gate falls back to matching
+the wake word on the Whisper transcript — the previous behaviour — and reports `limited` with that
+reason (`python -m nox.worker --selftest` prints it). The voice kill phrase ("Nox Notaus") has no
+acoustic model either, so short segments (`voice.stt.kill_watchdog_max_ms`, default 2.5 s) are
+still transcribed to keep it working; if such a transcript is not the kill phrase it is discarded
+immediately and never becomes an event or reaches a language model.
+
+`voice.stt.listening_mode` chooses between `continuous` (default, microphone open behind the gate)
+and `ptt_only`, which never opens the microphone unless push-to-talk is held.
 
 ### Profiles
 

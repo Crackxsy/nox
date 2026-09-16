@@ -79,7 +79,13 @@ class ProactiveService:
             max_weight=pcfg.feedback_max_weight,
             step=pcfg.feedback_step,
         )
-        self._store = store or NotificationStore(limit=pcfg.notification_store_limit)
+        # `store or ...` used to silently replace a freshly-constructed, still-empty `store` here:
+        # `NotificationStore` has `__len__`, so a caller-supplied store with 0 records so far (e.g.
+        # `nox.proactive.install.install`'s db-backed store, right after boot) was falsy and got
+        # swapped for a brand-new in-memory one - #28.
+        self._store = (
+            store if store is not None else NotificationStore(limit=pcfg.notification_store_limit)
+        )
 
     # ---- public API -----------------------------------------------------------------------
 
@@ -94,6 +100,15 @@ class ProactiveService:
     @property
     def store(self) -> NotificationStore:
         return self._store
+
+    async def dismiss(self, notification_id: str) -> bool:
+        """`proactive.notification.dismiss` (#28). Publishes `proactive.notification.dismissed`
+        only on an actual state change (unknown id / already-dismissed id -> no event, matching
+        `_gate_hint`'s "no event for a no-op" shape elsewhere in this service)."""
+        dismissed = self._store.dismiss(notification_id)
+        if dismissed:
+            await self._publish_event("proactive.notification.dismissed", {"id": notification_id})
+        return dismissed
 
     def status(self) -> ProactiveStatus:
         mode = str(self._state.get("assistant.mode"))

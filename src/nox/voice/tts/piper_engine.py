@@ -4,65 +4,31 @@ SP-03).
 Synthesis runs in a worker thread per request; each sentence is pushed to the async consumer as
 soon as it is rendered so the first audio is heard while later sentences are still being computed.
 `prepared_clip` plays `<clips_dir>/<id>.wav` without synthesis (clip ids are validated against a
-strict pattern; no path components allowed).
+strict pattern; no path components allowed). Voice models and clips are resolved below the
+configured data directory - see `nox.voice.models`.
 """
 
 from __future__ import annotations
 
 import asyncio
-import re
 import threading
-import wave
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from nox.core.events import HealthStatus
 from nox.voice._logging import get_logger
-from nox.voice.audio import resample_linear
 from nox.voice.base import TtsRequest
+from nox.voice.models import default_clips_dir, engine_models_dir
+from nox.voice.tts.clips import ClipNotFoundError, play_clip
 from nox.voice.tts.sentences import split_sentences
 
 log = get_logger(__name__)
 
-DEFAULT_MODELS_DIR = r"E:\Nox\models\piper"
-DEFAULT_CLIPS_DIR = r"E:\Nox\data\clips"
+__all__ = ["DEFAULT_VOICES", "ClipNotFoundError", "PiperTts"]
+
 DEFAULT_VOICES: dict[str, str] = {"de": "de_DE-thorsten-medium", "en": "en_US-lessac-medium"}
-_CLIP_ID = re.compile(r"^[a-z0-9][a-z0-9_\-]{0,63}$")
 _END = object()
-
-
-class ClipNotFoundError(FileNotFoundError):
-    pass
-
-
-def read_clip_pcm16(path: Path, target_rate: int) -> bytes:
-    """Read a WAV clip and return mono PCM16 at `target_rate`."""
-    with wave.open(str(path), "rb") as wf:
-        channels, width, rate, frames = (
-            wf.getnchannels(),
-            wf.getsampwidth(),
-            wf.getframerate(),
-            wf.getnframes(),
-        )
-        raw = wf.readframes(frames)
-    if width != 2:
-        raise ValueError(
-            f"clip {path.name}: only 16-bit PCM WAV is supported (got {width * 8}-bit)"
-        )
-    pcm = np.frombuffer(raw, dtype=np.int16)
-    if channels > 1:
-        pcm = pcm.reshape(-1, channels).mean(axis=1).astype(np.int16)
-    if rate != target_rate:
-        f = resample_linear(pcm.astype(np.float32) / 32768.0, rate, target_rate)
-        pcm = (f * 32767.0).clip(-32768, 32767).astype(np.int16)
-    return pcm.tobytes()
-
-
-def chunk_bytes(data: bytes, chunk_size: int) -> list[bytes]:
-    return [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)] if data else []
 
 
 class PiperTts:
@@ -72,14 +38,14 @@ class PiperTts:
         self,
         *,
         voices: dict[str, str] | None = None,
-        models_dir: str = DEFAULT_MODELS_DIR,
-        clips_dir: str = DEFAULT_CLIPS_DIR,
+        models_dir: str | Path = "",
+        clips_dir: str | Path = "",
         rate: float = 1.0,
         default_language: str = "de",
     ) -> None:
         self.voice_names = dict(voices or DEFAULT_VOICES)
-        self.models_dir = Path(models_dir)
-        self.clips_dir = Path(clips_dir)
+        self.models_dir = Path(models_dir) if models_dir else engine_models_dir("piper")
+        self.clips_dir = Path(clips_dir) if clips_dir else default_clips_dir()
         self.rate = rate
         self.default_language = default_language
         self._voices: dict[str, Any] = {}  # voice name -> PiperVoice
@@ -201,11 +167,5 @@ class PiperTts:
             cancel.set()
 
     async def _play_clip(self, clip_id: str) -> AsyncIterator[bytes]:
-        if not _CLIP_ID.match(clip_id):
-            raise ValueError(f"invalid clip id {clip_id!r}")
-        path = self.clips_dir / f"{clip_id}.wav"
-        if not path.is_file():
-            raise ClipNotFoundError(str(path))
-        pcm = await asyncio.to_thread(read_clip_pcm16, path, self._sample_rate)
-        for chunk in chunk_bytes(pcm, self._sample_rate // 10 * 2):  # ~100 ms per chunk
+        async for chunk in play_clip(clip_id, self.clips_dir, self._sample_rate):
             yield chunk

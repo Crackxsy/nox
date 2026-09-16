@@ -509,6 +509,31 @@ export function parseSecretStatus(payload: unknown): SecretStatus[] | null {
   return out;
 }
 
+/**
+ * `security.pin.status {}` response: `{configured}`. Anything else — a refused request, a core
+ * that does not know the name — reads as `false`: the page then sends no PIN and the core answers
+ * with its own "PIN required" error, which is better than this UI demanding a PIN nobody set.
+ */
+export function parsePinConfigured(payload: unknown): boolean {
+  return isRec(payload) && payload.configured === true;
+}
+
+/**
+ * Which PIN message an error from `secrets.set`/`secrets.delete` deserves, if any.
+ *
+ * The core answers every refusal with the same code, so the message is the only thing separating
+ * "no PIN was sent" from "that PIN was wrong" — and a permission error that has nothing to do with
+ * the PIN (an unknown secret name) keeps its own message instead of being relabelled.
+ */
+export function pinErrorKey(
+  code: string,
+  message: string,
+  pinSent: boolean,
+): 'pin_required' | 'pin_wrong' | null {
+  if (code !== 'permission.denied' || !/\bpin\b/i.test(message)) return null;
+  return pinSent ? 'pin_wrong' : 'pin_required';
+}
+
 export interface TwitchDeviceCode {
   userCode: string;
   verificationUri: string;

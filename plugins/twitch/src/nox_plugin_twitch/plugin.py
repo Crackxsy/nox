@@ -32,6 +32,7 @@ from .relevance import RelevanceClassifier
 from .rps import ALIASES as RPS_ALIASES
 from .rps import GERMAN_ALIASES as RPS_GERMAN_ALIASES
 from .rps import RockPaperScissors, RpsResult
+from .settings import resolve_settings
 
 TWITCH_OAUTH_SECRET = "nox/twitch/oauth_token"  # noqa: S105 - a secret *name*, not a value
 TWITCH_USERNAME_SECRET = "nox/twitch/bot_username"  # noqa: S105 - a secret *name*, not a value
@@ -51,45 +52,25 @@ def _help_text(lang: str) -> str:
     return "Commands: !rps <rock|paper|scissors>, !funken, !help"
 
 
-def _resolve_channel(api: PluginApi) -> str:
-    """The channel to join: `manifest.yaml`'s `config.channel` first, else `stream.twitch.channel`.
-
-    The Plugin API only hands a worker its own manifest block, but the channel is a *user* setting
-    the dashboard edits (`config.set`), so it lives in `NoxConfig` as well. The manifest value
-    still wins when someone sets it explicitly (tests, a second instance); the shipped manifest
-    leaves it empty, so in practice the dashboard setting is what applies. A configuration that
-    cannot be read is not fatal: the plugin then simply has no channel and reports that honestly
-    through `twitch.chat.status.read`.
-    """
-    manifest_channel = str(api.config.get("channel", "")).strip().lstrip("#")
-    if manifest_channel:
-        return manifest_channel
-    try:
-        from nox.settings.layers import load_merged_config
-
-        return str(load_merged_config().stream.twitch.channel).strip().lstrip("#")
-    except Exception as exc:  # noqa: BLE001 - a missing/invalid config layer must not kill the worker
-        api.log.warning("twitch.channel_config_unavailable", error=type(exc).__name__)
-        return ""
-
-
 class TwitchPlugin:
     def __init__(self, api: PluginApi) -> None:
         self.api = api
         self._chat_event_id = 0
-        self._channel = _resolve_channel(api)
+        #: `stream.twitch.*` from the configuration, with the deprecated manifest keys still
+        #: honoured for one release (#26, see `nox_plugin_twitch.settings`).
+        self.settings = resolve_settings(api)
+        self._channel = self.settings.channel
 
-        bot_names = [str(n) for n in api.config.get("bot_names", ["nox"])] or ["nox"]
         self.relevance = RelevanceClassifier(
-            bot_names, cooldown_s=float(api.config.get("relevance_cooldown_s", 20.0))
+            list(self.settings.bot_names), cooldown_s=self.settings.relevance_cooldown_s
         )
         self.moderation = ModerationGate(
             blocklist=[str(b) for b in api.config.get("moderation_blocklist", [])]
         )
         self.rate_limiter = RateLimiter(
-            max_messages=int(api.config.get("rate_limit_max_messages", 20)),
-            window_s=float(api.config.get("rate_limit_window_s", 30.0)),
-            min_gap_s=float(api.config.get("rate_limit_min_gap_s", 1.5)),
+            max_messages=self.settings.rate_limit_max_messages,
+            window_s=self.settings.rate_limit_window_s,
+            min_gap_s=self.settings.rate_limit_min_gap_s,
         )
         self.rps = RockPaperScissors(
             cooldown_s=float(api.config.get("rps_cooldown_s", 30.0)),
@@ -108,8 +89,8 @@ class TwitchPlugin:
             on_connected=self._on_connected,
             on_disconnected=self._on_disconnected,
             tls=bool(api.config.get("tls", True)),
-            min_backoff_s=float(api.config.get("min_backoff_s", 1.0)),
-            max_backoff_s=float(api.config.get("max_backoff_s", 30.0)),
+            min_backoff_s=self.settings.min_backoff_s,
+            max_backoff_s=self.settings.max_backoff_s,
             authorize=lambda: self.api.egress.authorize(host, port, scheme="irc"),
         )
         self._commands: dict[str, Any] = {

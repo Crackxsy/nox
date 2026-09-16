@@ -54,7 +54,16 @@ from nox.shell.tray import TrayController
 
 log = get_logger(__name__)
 
-SUBSCRIPTIONS = ["security.*", "privacy.*", "system.*", "voice.*", "state.changed"]
+SUBSCRIPTIONS = [
+    "security.*",
+    "privacy.*",
+    "system.*",
+    "voice.*",
+    "state.changed",
+    # #24: `config.set pet.variant` publishes this; the shell reloads the pet page with the new
+    # variant so the setting takes effect without restarting Nox.
+    "settings.changed",
+]
 PING_INTERVAL_MS = 5000
 RECONNECT_INTERVAL_MS = 3000
 PING_FAILURES_BEFORE_RECONNECT = 2
@@ -89,6 +98,8 @@ class ShellApp:
         create_pet_window: bool = True,
     ) -> None:
         self.runtime_dir = runtime_dir or resolve_runtime_dir()
+        # Re-read on `settings.changed` only when we own the file (tests inject a dict instead).
+        self._config_from_disk = config is None
         self.config = config if config is not None else load_config()
         self.language = str(self.config.get("identity", {}).get("ui_language", "de"))
         self.model = ShellModel()
@@ -238,7 +249,7 @@ class ShellApp:
     def _load_pet_page(self) -> None:
         assert self.pet is not None
         if self.token is not None and self.endpoints is not None:
-            variant = str(self.config.get("pet", {}).get("variant", "neutral"))
+            variant = self._pet_variant()
             self.pet.load(
                 pet_url(self.endpoints.http_port, self.token, self.endpoints.host, variant=variant)
             )
@@ -300,11 +311,36 @@ class ShellApp:
         if name == "security.permission_requested":
             self._handle_permission(payload)
             return
+        if name == "settings.changed":
+            self._apply_settings_changed(payload)
         changed = self.model.apply_event(name, payload)
         if changed:
             self.tray.refresh(self.model)
         if name == "security.kill_switch":
             self.tray.notify("Nox", "Kill switch engaged – safe mode", critical=True)
+
+    def _apply_settings_changed(self, payload: dict[str, Any]) -> None:
+        """#24: apply a changed `pet.variant` by reloading the pet page with the new variant.
+
+        `settings.changed` carries paths only, never values (Event Model), so the value is re-read
+        from the configuration. The pet page subscribes to the same event and swaps the variant in
+        place when it can read the new value from the core; this reload is the fallback that works
+        regardless, and is also what applies a variant change while the page is showing the offline
+        placeholder.
+        """
+        paths = payload.get("paths")
+        if not isinstance(paths, list) or "pet.variant" not in paths:
+            return
+        if self._config_from_disk:
+            self.config = load_config()
+        if self.pet is None:
+            return
+        log.info("shell.pet_variant_changed", variant=self._pet_variant())
+        self._load_pet_page()
+
+    def _pet_variant(self) -> str:
+        pet = self.config.get("pet")
+        return str(pet.get("variant", "neutral")) if isinstance(pet, dict) else "neutral"
 
     def _handle_permission(self, payload: dict[str, Any]) -> None:
         key = (str(payload.get("agent")), str(payload.get("tool")), str(payload.get("action")))

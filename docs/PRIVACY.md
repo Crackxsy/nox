@@ -63,6 +63,13 @@ cannot be hidden or disabled by configuration.
   profile) — everything else, including other loopback ports, is denied and logged in the audit
   trail.
 
+### Voice: what reaches the speech recogniser
+
+With `voice.stt.listening_mode: continuous`, microphone audio passes a local wake-word gate
+first; audio that does not pass the gate is never transcribed. Short segments still reach the
+recogniser for the voice kill-phrase watchdog, and those transcripts are discarded without
+becoming an event. With `ptt_only`, the microphone is only open while push-to-talk is held.
+
 ## Privacy modes
 
 | Mode | What changes |

@@ -72,6 +72,10 @@ _DASHBOARD: tuple[str, ...] = (
     # the name is reachable for a UI role at all.
     "config.get",
     "config.set",
+    # Read-only `{"configured": bool}` (#23): two segments after `security.`, so `security.*`
+    # above does not cover it and it is listed by name, like `security.permission.reply` is for
+    # the shell role.
+    "security.pin.status",
     "secrets.status",
     "secrets.set",
     "secrets.delete",

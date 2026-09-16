@@ -5,7 +5,8 @@ Implements the worker side of the Process Model / IPC Model (worker.register, wo
 `security.*` and `privacy.*` to stop or gate capture). `--service stt|tts|voice` selects which
 engines are loaded; v0.1 runs everything in one `voice` worker. The worker token comes from the
 environment (`NOX_WORKER_TOKEN`), never from the command line, and is never logged.
-`--selftest` validates devices, models, playback and a 3 s microphone transcription without a hub.
+`--selftest` validates devices, models, playback and a 3 s microphone transcription without a hub;
+`--download-kokoro` fetches the Kokoro TTS model files (user-initiated, never automatic).
 `--plugin <id>` runs this process as a plugin worker instead (ST-11-01, implemented in
 `nox.worker.plugin`); it shares only token and hub-url handling with the voice path.
 """
@@ -34,6 +35,7 @@ from nox.ipc.protocol import Envelope
 from nox.voice._logging import get_logger
 from nox.voice.base import Transcript, TtsRequest, VoicePipeline
 from nox.voice.pipeline import DefaultVoicePipeline, Emit, PipelineConfig
+from nox.voice.stt.wake_gate import WakeGate
 
 log = get_logger(__name__)
 
@@ -383,12 +385,36 @@ def pipeline_config_from(voice: VoiceConfig) -> PipelineConfig:
         wake_word=voice.stt.wake_word,
         language=voice.stt.language,
         barge_in=voice.barge_in,
+        listening_mode=voice.stt.listening_mode,
+    )
+
+
+def build_wake_gate(voice: VoiceConfig) -> WakeGate:
+    """The acoustic gate in front of Whisper (#20); degrades to text matching on its own."""
+    from nox.voice.models import engine_models_dir
+    from nox.voice.stt.wake_gate import WakeGateConfig, build_detector
+
+    detector = build_detector(
+        engine=voice.stt.wake_word_engine,
+        models_dir=engine_models_dir("openwakeword", voice.models_dir),
+        model=voice.stt.wake_word_model,
+    )
+    return WakeGate(
+        detector=detector,
+        config=WakeGateConfig(
+            threshold=voice.stt.wake_word_threshold,
+            wake_window_s=voice.stt.wake_window_s,
+            conversation_window_s=voice.stt.conversation_window_s,
+            kill_watchdog=voice.stt.kill_phrase_watchdog,
+            kill_watchdog_max_ms=voice.stt.kill_watchdog_max_ms,
+        ),
     )
 
 
 def build_components(voice: VoiceConfig, *, service: str) -> dict[str, Any]:
     """Instantiate engines and devices for a service (models are loaded later, asynchronously)."""
     from nox.voice.audio import SoundDeviceInput, SoundDeviceOutput
+    from nox.voice.models import engine_models_dir
     from nox.voice.stt.faster_whisper_engine import FasterWhisperStt
     from nox.voice.tts.piper_engine import PiperTts
 
@@ -404,15 +430,29 @@ def build_components(voice: VoiceConfig, *, service: str) -> dict[str, Any]:
         "tts": None,
     }
     if "stt" in caps:
-        components["stt"] = FasterWhisperStt(model_size=voice.stt.model, device=voice.stt.device)
+        components["stt"] = FasterWhisperStt(
+            model_size=voice.stt.model,
+            device=voice.stt.device,
+            models_dir=str(engine_models_dir("faster-whisper", voice.models_dir)),
+        )
     if "tts" in caps:
         if voice.tts.engine == "kokoro":
+            from nox.voice.tts.kokoro_engine import DEFAULT_VOICES as KOKORO_VOICES
             from nox.voice.tts.kokoro_engine import KokoroTts
 
-            components["tts"] = KokoroTts(rate=voice.tts.rate)
+            voices = dict.fromkeys(KOKORO_VOICES, voice.tts.voice) if voice.tts.voice else None
+            components["tts"] = KokoroTts(
+                voices=voices,
+                models_dir=engine_models_dir("kokoro", voice.models_dir),
+                rate=voice.tts.rate,
+            )
         else:
             voices = {"de": voice.tts.voice} if voice.tts.voice else None
-            components["tts"] = PiperTts(voices=voices, rate=voice.tts.rate)
+            components["tts"] = PiperTts(
+                voices=voices,
+                models_dir=engine_models_dir("piper", voice.models_dir),
+                rate=voice.tts.rate,
+            )
     return components
 
 
@@ -472,6 +512,7 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
             emit=emit,
             capture_allowed=capture_allowed,
             config=pipeline_config_from(cfg),
+            wake_gate=build_wake_gate(cfg),
         )
 
     client = IpcClient(
@@ -528,6 +569,13 @@ async def run_selftest(voice_cfg: VoiceConfig, *, seconds: float = 3.0) -> int:
         f"  tts {tts.id} {tts.loaded_voices}: {tts.load_time_ms:.0f} ms "
         f"(total {time.perf_counter() - t0:.1f} s)"
     )
+    for name, engine in (("stt", stt), ("tts", tts)):
+        status, reason = await engine.health()
+        echo(f"  {name} health: {status} ({reason})")
+    gate = build_wake_gate(voice_cfg)
+    gate_status, gate_reason = gate.health()
+    echo(f"  wake gate: {gate.detector.id} -> {gate_status} ({gate_reason})")
+    echo(f"  listening mode: {voice_cfg.stt.listening_mode}")
 
     events: list[tuple[str, dict[str, Any]]] = []
 
@@ -543,6 +591,7 @@ async def run_selftest(voice_cfg: VoiceConfig, *, seconds: float = 3.0) -> int:
         emit=emit,
         capture_allowed=lambda: True,
         config=pipeline_config_from(voice_cfg),
+        wake_gate=gate,
     )
     echo("== tts ==")
     t0 = time.perf_counter()
@@ -572,6 +621,28 @@ async def run_selftest(voice_cfg: VoiceConfig, *, seconds: float = 3.0) -> int:
     return 0
 
 
+#: Mounted by the top-level CLI as `nox voice ...` (`app.add_typer(voice_app, name="voice")`).
+voice_app = typer.Typer(help="Voice models and self-test.", no_args_is_help=True)
+
+
+@voice_app.command("download-kokoro")
+def voice_download_kokoro(
+    models_dir: str = typer.Option("", help="override voice.models_dir"),
+    force: bool = typer.Option(False, "--force", help="re-download even if the files exist"),
+) -> None:
+    """Download the Kokoro v1.0 TTS model files (~354 MB). Never happens automatically."""
+    from nox.voice.models import download_kokoro, engine_models_dir
+
+    code = download_kokoro(engine_models_dir("kokoro", models_dir), echo=typer.echo, force=force)
+    raise typer.Exit(code)
+
+
+@voice_app.command("selftest")
+def voice_selftest() -> None:
+    """Devices, model load, TTS playback and a 3 s microphone transcription (no hub)."""
+    raise typer.Exit(asyncio.run(run_selftest(VoiceConfig())))
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="python -m nox.worker", description="Nox voice worker")
     ap.add_argument("--service", choices=sorted(SERVICES), default="voice")
@@ -579,6 +650,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument(
         "--selftest", action="store_true", help="devices, models, TTS + 3 s mic; no hub"
     )
+    ap.add_argument(
+        "--download-kokoro",
+        action="store_true",
+        help="download the Kokoro TTS model files (~354 MB) into <models_dir>/kokoro",
+    )
+    ap.add_argument("--models-dir", default=None, help="override voice.models_dir for this run")
     ap.add_argument("--plugin", default=None, help="run as the worker of plugins/<id> (ST-11-01)")
     ap.add_argument("--stt-model", default=None, help="override voice.stt.model (base|small|...)")
     ap.add_argument("--tts-engine", default=None, choices=["piper", "kokoro"])
@@ -597,6 +674,13 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return asyncio.run(run_plugin_worker(args.plugin, args.hub_url, plugin_token))
     voice_cfg = VoiceConfig()
+    if args.models_dir:
+        voice_cfg = voice_cfg.model_copy(update={"models_dir": args.models_dir})
+    if args.download_kokoro:
+        # User-initiated download from the worker process: no core, no egress guard involved.
+        from nox.voice.models import download_kokoro, engine_models_dir
+
+        return download_kokoro(engine_models_dir("kokoro", voice_cfg.models_dir), echo=typer.echo)
     if args.stt_model:
         voice_cfg = voice_cfg.model_copy(
             update={"stt": voice_cfg.stt.model_copy(update={"model": args.stt_model})}

@@ -11,6 +11,7 @@ import pytest
 from nox.data.db import Database
 from nox.data.repos import (
     HealthHistoryRepository,
+    NotificationRepository,
     SessionRepository,
     StateCheckpointRepository,
     TaskRepository,
@@ -118,3 +119,87 @@ def test_temporary_grants(db: Database) -> None:
     assert repo.list_active(now=NOW) == []
     assert repo.purge(now=NOW) == 2
     assert repo.get(dead.grant_id) is None
+
+
+def test_proactive_notifications_add_get_list_recent(db: Database) -> None:
+    repo = NotificationRepository(db)
+    older = repo.add(
+        id="older",
+        priority="normal",
+        kind="proactive",
+        body="You have 3 new emails",
+        created_at=NOW - timedelta(minutes=5),
+    )
+    newer = repo.add(
+        id="newer",
+        priority="security",
+        kind="urgent",
+        body="Kill switch armed",
+        channel="speech+toast",
+        spoken=True,
+        announced=False,
+        source="security_engine",
+        created_at=NOW,
+    )
+    assert older.body == "You have 3 new emails" and older.title == ""
+    assert newer.spoken is True and newer.source == "security_engine"
+    assert repo.get("older") == older
+    assert repo.get("missing") is None
+    # newest first, matching HealthHistoryRepository.list_recent's convention
+    assert [n.id for n in repo.list_recent()] == ["newer", "older"]
+    assert [n.id for n in repo.list_recent(1)] == ["newer"]
+
+
+def test_proactive_notifications_dismiss(db: Database) -> None:
+    repo = NotificationRepository(db)
+    repo.add(id="n1", priority="normal", kind="proactive", body="hint", created_at=NOW)
+    assert repo.get("n1").dismissed_at is None  # type: ignore[union-attr]
+
+    assert repo.dismiss("n1", dismissed_at=NOW) is True
+    assert repo.get("n1").dismissed_at == NOW  # type: ignore[union-attr]
+    assert repo.dismiss("n1") is False  # already dismissed -> no-op
+    assert repo.dismiss("missing") is False
+
+    assert [n.id for n in repo.list_recent(include_dismissed=False)] == []
+    assert [n.id for n in repo.list_recent(include_dismissed=True)] == ["n1"]
+
+
+def test_proactive_notifications_purge_expired(db: Database) -> None:
+    repo = NotificationRepository(db)
+    repo.add(
+        id="expired_ttl",
+        priority="normal",
+        kind="proactive",
+        body="stale hint",
+        created_at=NOW - timedelta(days=1),
+        expires_at=NOW - timedelta(minutes=1),
+    )
+    repo.add(
+        id="live",
+        priority="normal",
+        kind="proactive",
+        body="fresh hint",
+        created_at=NOW,
+    )
+    repo.add(
+        id="dismissed_old",
+        priority="normal",
+        kind="proactive",
+        body="old, dismissed long ago",
+        created_at=NOW - timedelta(days=40),
+    )
+    repo.dismiss("dismissed_old", dismissed_at=NOW - timedelta(days=35))
+    repo.add(
+        id="dismissed_recent",
+        priority="normal",
+        kind="proactive",
+        body="dismissed just now",
+        created_at=NOW,
+    )
+    repo.dismiss("dismissed_recent", dismissed_at=NOW)
+
+    removed = repo.purge_expired(now=NOW, retention_days=30)
+
+    assert removed == 2  # expired_ttl (own TTL) + dismissed_old (past the 30-day retention window)
+    remaining = {n.id for n in repo.list_recent(100)}
+    assert remaining == {"live", "dismissed_recent"}

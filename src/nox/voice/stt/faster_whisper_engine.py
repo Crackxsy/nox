@@ -21,10 +21,10 @@ from nox.core.events import HealthStatus
 from nox.voice._logging import get_logger
 from nox.voice.audio import resample_linear
 from nox.voice.base import Transcript
+from nox.voice.models import engine_models_dir
 
 log = get_logger(__name__)
 
-DEFAULT_MODELS_DIR = r"E:\Nox\models\faster-whisper"
 WHISPER_RATE = 16000
 
 
@@ -37,7 +37,7 @@ class FasterWhisperStt:
         model_size: str = "small",
         device: str = "cpu",
         compute_type: str = "int8",
-        models_dir: str = DEFAULT_MODELS_DIR,
+        models_dir: str = "",
         languages: tuple[str, ...] = ("de", "en"),
         cpu_threads: int = 0,
         beam_size: int = 1,
@@ -45,7 +45,7 @@ class FasterWhisperStt:
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
-        self.models_dir = models_dir
+        self.models_dir = models_dir or str(engine_models_dir("faster-whisper"))
         self.languages = languages
         # SP-02: ctranslate2's default under-uses the 7800X3D; physical cores (capped at 8) were
         # 35 % faster than the default and SMT threads (16) brought nothing.

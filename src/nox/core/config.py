@@ -203,10 +203,28 @@ class SttConfig(_Strict):
     vad: bool = True
     wake_word: str = "Nox"
     push_to_talk_hotkey: str = "ctrl+alt+space"
+    #: `continuous` keeps the microphone open behind the wake-word gate; `ptt_only` opens it only
+    #: while push-to-talk is held (#20).
+    listening_mode: Literal["continuous", "ptt_only"] = "continuous"
+    #: `openwakeword` is used when the package and a model file are both available and falls back
+    #: to `text` (matching on the Whisper transcript) with a `limited` health reason otherwise.
+    wake_word_engine: Literal["openwakeword", "text"] = "openwakeword"
+    #: Model file for the acoustic detector, relative to `<models_dir>/openwakeword` or absolute.
+    #: Empty = every model file in that directory. openWakeWord ships no model for "Nox".
+    wake_word_model: str = ""
+    wake_word_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    #: How long a detection keeps the gate open for the utterance that follows it.
+    wake_window_s: float = Field(default=8.0, gt=0.0)
+    #: After Nox was addressed, follow-up questions may skip the wake word for this long.
+    conversation_window_s: float = Field(default=20.0, ge=0.0)
+    #: Keep the voice kill phrase reachable without an acoustic model for it: short segments are
+    #: still transcribed, checked for the kill phrase and then discarded (never reported).
+    kill_phrase_watchdog: bool = True
+    kill_watchdog_max_ms: int = Field(default=2500, ge=0)
 
 
 class TtsConfig(_Strict):
-    engine: str = "piper"
+    engine: Literal["piper", "kokoro"] = "piper"
     voice: str = ""
     rate: float = Field(default=1.0, gt=0.0, le=4.0)
     volume: float = Field(default=0.8, ge=0.0, le=1.0)
@@ -224,6 +242,10 @@ class VoiceConfig(_Strict):
     tts: TtsConfig = Field(default_factory=TtsConfig)
     channels: VoiceChannelsConfig = Field(default_factory=VoiceChannelsConfig)
     barge_in: bool = True
+    #: Root for the voice model files (`<models_dir>/piper`, `/kokoro`, `/openwakeword`). Empty
+    #: resolves to `<paths.data_dir>/models`; the voice worker only ever receives this section of
+    #: the configuration, so a moved `paths.data_dir` has to be repeated here (nox.voice.models).
+    models_dir: str = ""
 
 
 # ---- ai ------------------------------------------------------------------------------------------
@@ -377,12 +399,47 @@ class StreamChatConfig(_Strict):
 
 
 class StreamTwitchConfig(_Strict):
-    """The Twitch channel Nox joins. Lives here (not only in `plugins/twitch/manifest.yaml`)
-    because it is a user setting the dashboard edits through `config.set`, while the manifest
-    block holds the plugin's own technical knobs. The plugin reads the manifest value first and
-    falls back to this one when the manifest leaves it empty (the shipped default)."""
+    """What the Twitch bot joins and how loudly it talks - the knobs a streamer actually changes.
 
+    Everything below `channel` used to live in `plugins/twitch/manifest.yaml` only, which put it
+    out of the dashboard's reach: a manifest is the plugin's own declaration, not a user layer.
+    They are configuration now (#26) and the plugin reads them from here; a manifest that still
+    carries one of the keys is honoured for one release, with a deprecation log line.
+
+    The defaults are exactly the values the shipped manifest had, so an installation that never
+    touches them behaves as before.
+    """
+
+    #: Channel Nox joins; empty = the plugin never joins one. A leading `#` is optional.
     channel: str = ""
+    #: Names/aliases the relevance classifier reads as "the bot was addressed".
+    bot_names: list[str] = Field(default_factory=lambda: ["nox"])
+    #: Per-viewer cooldown before the same viewer's unaddressed chatter counts as relevant again.
+    relevance_cooldown_s: float = Field(default=20.0, ge=0.0)
+    #: Chat send budget (Spec v0.2 §9). The default stays under Twitch's own 20 msg/30 s limit for
+    #: a moderator account; a larger value is rate-limited by Twitch instead of by Nox.
+    rate_limit_max_messages: int = Field(default=20, ge=1, le=100)
+    rate_limit_window_s: float = Field(default=30.0, gt=0.0)
+    rate_limit_min_gap_s: float = Field(default=1.5, ge=0.0)
+    #: Reconnect backoff, doubled from `min` up to `max` between two IRC connection attempts.
+    min_backoff_s: float = Field(default=1.0, gt=0.0)
+    max_backoff_s: float = Field(default=30.0, gt=0.0)
+
+    @field_validator("bot_names")
+    @classmethod
+    def _at_least_one_name(cls, value: list[str]) -> list[str]:
+        names = [name.strip() for name in value if name.strip()]
+        if not names:
+            raise ValueError("bot_names must contain at least one name")
+        return names
+
+    @field_validator("max_backoff_s")
+    @classmethod
+    def _backoff_ordered(cls, value: float, info: Any) -> float:
+        minimum = info.data.get("min_backoff_s")
+        if minimum is not None and value < minimum:
+            raise ValueError("max_backoff_s must not be smaller than min_backoff_s")
+        return value
 
 
 class StreamConfig(_Strict):
@@ -730,10 +787,12 @@ class SensorsConfig(_Strict):
 class ProactiveConfig(_Strict):
     """EPIC-19 (ST-19-04..08): knobs for the notification/attention layer that sit alongside, and
     reuse, `AttentionConfig` (quiet hours, proactivity_level, per_mode, interruptions_per_hour
-    already live there - not duplicated here). No migration in this change: the notification store
-    is an in-memory bounded buffer (`nox.proactive.store.NotificationStore`), not a DB table."""
+    already live there - not duplicated here). Notifications persist in `proactive_notifications`
+    (migration 0010); the ring buffer only bounds what `proactive.status.read` returns."""
 
     enabled: bool = True
+    #: Dismissed/expired notifications older than this are purged (`NotificationRepository`).
+    notifications_retention_days: int = Field(default=30, ge=1, le=3650)
     #: `nox.proactive.store.NotificationStore` ring-buffer depth for `proactive.status.read`.
     notification_store_limit: int = Field(default=200, ge=10, le=2000)
     #: A.13: announce before unsolicited speech, except URGENT itself and time-critical callouts.
