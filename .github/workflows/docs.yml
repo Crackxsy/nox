@@ -1,0 +1,26 @@
+# Lightweight documentation check: every relative link in the Markdown files must resolve.
+# Deliberately separate from ci.yml (which needs the full Windows toolchain) - this one runs in
+# seconds on Linux and needs no dependencies beyond the standard library.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    name: Docs (relative links)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Relative links resolve
+        run: python scripts/check_links.py

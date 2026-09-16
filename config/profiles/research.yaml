@@ -1,0 +1,52 @@
+# Nox permission profile "research" (Security Model §3, PRD FR-13). Cloud and web tools allowed.
+security:
+  profile: research
+
+permissions:
+  id: research
+  description: Broad daily research. Web search/fetch and cloud providers allowed; no purchases, no form side effects.
+  cloud_allowed: true
+  egress_allowlist: []
+  memory_writes_allowed: true
+  screenshots_to_cloud: false
+  filesystem_roots: []
+  tools_allowed: []
+  integrations_allowed: [ollama, claude_code, web]
+  rules:
+    - id: research.web.search
+      tool: "web*"
+      action: "search"
+      decision: allow
+    - id: research.web.fetch
+      tool: "web*"
+      action: "fetch"
+      decision: allow
+      reason: "text first, read-only"
+    - id: research.browser.navigate
+      tool: "browser*"
+      action: "navigate"
+      decision: allow
+    - id: research.browser.purchase
+      tool: "browser*"
+      action: "purchase*"
+      decision: deny
+      reason: "no purchases or contracts (FR-13.2)"
+    - id: research.browser.form_submit
+      tool: "browser*"
+      action: "form.submit"
+      decision: confirm
+      reason: "form submission with consequences needs approval"
+    - id: research.browser.download
+      tool: "browser*"
+      action: "download"
+      decision: confirm
+      reason: "downloads only into staging with a Defender scan"
+    - id: research.vault.write_research
+      tool: "vault*"
+      action: "write"
+      target: "*14 - Research*"
+      decision: allow
+    - id: research.memory.write
+      tool: "memory*"
+      action: "write"
+      decision: allow

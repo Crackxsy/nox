@@ -1,0 +1,83 @@
+[project]
+name = "nox"
+version = "0.1.0.dev0"
+description = "Nox - persistent, local-first personal digital companion (desktop pet, voice, stream bot, coach, project manager)."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "Apache-2.0"
+authors = [{ name = "Nox Project" }]
+dependencies = [
+    "pydantic>=2.9",
+    "pyyaml>=6.0",
+    "structlog>=24.4",
+    "websockets>=13.0",
+    "starlette>=0.41",
+    "uvicorn[standard]>=0.32",
+    "httpx>=0.27",
+    "psutil>=6.0",
+    "sqlite-vec>=0.1.6",
+    "keyring>=25.0",
+    "watchdog>=5.0",
+    "numpy>=2.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+shell = ["PySide6>=6.8", "pynput>=1.7"]
+voice = ["faster-whisper>=1.1", "sounddevice>=0.5", "piper-tts>=1.2"]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "pytest-timeout>=2.3",
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "types-PyYAML",
+    "types-psutil",
+]
+e2e = ["playwright>=1.47", "pytest-playwright>=0.5"]
+rl = ["mss>=9.0", "opencv-python-headless>=4.10", "numpy>=2.0"]
+
+[project.scripts]
+nox = "nox.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]  # >=1.27: PEP 639 `license = "Apache-2.0"` string support
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nox"]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "S", "ASYNC", "T20"]
+ignore = ["S101", "S603", "S607", "ASYNC109"]
+per-file-ignores = { "tests/**" = ["S", "T20"], "scripts/**" = ["T20", "S"], "spikes/**" = ["T20", "S"], "src/nox/cli.py" = ["B008"], "src/nox/app.py" = ["ASYNC220", "ASYNC240", "T201"] }
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+timeout = 60
+timeout_method = "thread"
+markers = [
+    "spike: measurement/feasibility tests that need real hardware or services (deselect in CI)",
+    "hardware: needs microphone/speaker/GPU",
+    "network: needs network or external services",
+    "e2e: browser smoke test against a live NoxCore (Playwright, B-10); needs ui/*/dist built",
+]

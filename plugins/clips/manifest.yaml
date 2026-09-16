@@ -1,0 +1,35 @@
+# Clip Pipeline plugin (ST-15-01/03, Spec v0.6 Clip Pipeline). Highlight candidate detector only -
+# no tool surface. The Plugin API has no cross-plugin tool call (a plugin only ever sees its own
+# `api.tools`), so this plugin never talks to OBS directly: it scores `rl.event`/
+# `twitch.chat_mood_changed`/`twitch.command_invoked` against configurable rules and cooldowns and
+# only ever emits `clip.requested`. The core-side `nox.clips` service is the one that calls
+# `obs.replay_buffer.save`/`.status.read` (plugins/obs) through `ToolExecutor`, and it is the one
+# that owns the `clips`/`clip_markers` tables and the `clip.list`/`clip.tag`/`clip.export`/
+# `clip.trim` tools (registered directly on the core's shared `ToolRegistry`, the same pattern as
+# `nox.tools.builtin.register_v01_tools` - not through a plugin manifest).
+id: clips
+name: Clip Pipeline
+version: 0.1.0
+api_version: 1
+entry: nox_plugin_clips:create
+profiles: [stream, coding, companion]   # marker/detector path is usable outside `stream` too
+permissions: []
+events:
+  emits: [clip.requested]
+  listens: [rl.event, twitch.chat_mood_changed, twitch.command_invoked, stream.started,
+            stream.ended, stream.mode_changed, security.kill_switch, security.panic]
+secrets: []
+network:
+  egress: []   # local-only; this plugin makes no outbound call of any kind
+resources:
+  memory_mb: 64
+  priority: low
+config:
+  #: `rl.event.kind` values that qualify as a highlight (Spec v0.6 §4.1); pending calibration.
+  highlight_kinds: [goal, save, win, overtime]
+  chat_hype_threshold: 0.75
+  #: Per-`trigger_kind` cooldown (Spec v0.6 §9: "1 per event kind per 15s"), anti-double-clip.
+  cooldown_s: 15.0
+  #: A manual trigger (`!clip`/hotkey) attaches any `rl.event` seen in this preceding window as a
+  #: secondary tag (Spec v0.6 §4.2).
+  manual_lookback_s: 20.0

@@ -1,0 +1,49 @@
+# Nox permission profile "work" (Security Model §3, PRD FR-2.6). Restrictive: local only, no memory.
+# Work code stays local; no cloud transfer, no screenshots of work content to the cloud, no entries
+# in the normal vault or memory. Enforced by the permission engine and egress guard, not by prompt.
+security:
+  profile: work
+
+permissions:
+  id: work
+  description: Work profile. Local models only, egress limited to the explicit allow-list, no memory or vault writes.
+  cloud_allowed: false
+  egress_allowlist:               # cloud_allowed=false: only this list applies, never the global one
+    - "127.0.0.1:*"
+    - "localhost:*"
+  memory_writes_allowed: false
+  screenshots_to_cloud: false
+  # Work roots (employer folders) are set in the user layer; they are forbidden roots outside this profile.
+  filesystem_roots: []
+  tools_allowed: []
+  integrations_allowed: [ollama]
+  rules:
+    - id: work.memory.write
+      tool: "memory*"
+      action: "write"
+      decision: deny
+      reason: "no entries in the normal memory (FR-2.6)"
+    - id: work.vault.write
+      tool: "vault*"
+      action: "write"
+      decision: deny
+      reason: "no entries in the normal vault (FR-2.6)"
+    - id: work.vault.inbox
+      tool: "vault*"
+      action: "append_inbox"
+      decision: deny
+    - id: work.cloud
+      tool: "cloud*"
+      decision: deny
+      reason: "work content never goes to the cloud"
+    - id: work.screenshot.upload
+      tool: "screenshot*"
+      action: "upload*"
+      decision: deny
+    - id: work.git.push
+      tool: "git*"
+      action: "push*"
+      decision: confirm
+    - id: work.shell
+      tool: "shell*"
+      decision: confirm

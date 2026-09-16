@@ -1,0 +1,55 @@
+# Nox permission profile "coding" (Security Model §3, PRD FR-11). Filesystem limited to workspaces.
+security:
+  profile: coding
+
+permissions:
+  id: coding
+  description: Claude Code sessions and local development, scoped to configured workspaces.
+  cloud_allowed: true
+  egress_allowlist: []
+  memory_writes_allowed: true
+  screenshots_to_cloud: false
+  # Configured workspaces (FR-11.14). Placeholders only: the user layer (see docs/USER_GUIDE.md)
+  # replaces this list with the real workspace paths on the machine. Employer/work folders never
+  # belong here. The list must stay non-empty - an empty list would inherit the global roots.
+  filesystem_roots:
+    - "%USERPROFILE%/Projects"
+  tools_allowed: []
+  integrations_allowed: [ollama, claude_code]
+  rules:
+    - id: coding.filesystem.write_in_workspace
+      agent: "*coding*"
+      tool: "filesystem*"
+      action: "write"
+      decision: allow
+      reason: "writes inside configured workspaces are the point of a coding session"
+    - id: coding.filesystem.delete
+      tool: "filesystem*"
+      action: "delete*"
+      decision: confirm
+    - id: coding.git.destructive
+      tool: "git*"
+      action: "force_push"
+      decision: deny
+      reason: "never destructive (FR-11.15)"
+    - id: coding.git.reset_hard
+      tool: "git*"
+      action: "reset_hard"
+      decision: deny
+    - id: coding.git.commit
+      tool: "git*"
+      action: "commit"
+      decision: allow
+      reason: "autonomous local commits after checks (FR-11.15)"
+    - id: coding.git.push
+      tool: "git*"
+      action: "push*"
+      decision: confirm
+      reason: "push only to approved remotes, confirmed"
+    - id: coding.shell.run
+      tool: "shell*"
+      decision: confirm
+    - id: coding.memory.write
+      tool: "memory*"
+      action: "write"
+      decision: allow

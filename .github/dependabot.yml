@@ -1,0 +1,64 @@
+# Dependency updates for Nox.
+# Docs: https://docs.github.com/code-security/dependabot/dependabot-version-updates
+version: 2
+
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    labels: ["dependencies", "python"]
+    groups:
+      python-dev-tooling:
+        patterns: ["pytest*", "ruff", "mypy", "types-*", "coverage*"]
+
+  - package-ecosystem: npm
+    directory: "/ui/pet"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    labels: ["dependencies", "ui"]
+    groups:
+      pet-dev-tooling:
+        patterns: ["@types/*", "vite*", "vitest*", "typescript", "@vitejs/*"]
+
+  - package-ecosystem: npm
+    directory: "/ui/dashboard"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    labels: ["dependencies", "ui"]
+    groups:
+      dashboard-dev-tooling:
+        patterns: ["@types/*", "vite*", "vitest*", "typescript", "@vitejs/*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci(deps)"
+    labels: ["dependencies", "ci"]

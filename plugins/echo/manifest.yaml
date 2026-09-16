@@ -1,0 +1,23 @@
+# Example plugin shipped with Nox and used by the plugin-runtime tests (ST-11-01).
+# It is the smallest manifest that exercises every boundary: one tool inside its own namespace,
+# one emitted event, no secrets, no network egress.
+id: echo
+name: Echo
+version: 0.1.0
+api_version: 1
+entry: nox_plugin_echo:create
+profiles: []                      # empty = runs in every profile
+permissions:
+  - tool: echo.ping
+    risk: read
+events:
+  emits: [echo.pong]
+  listens: [system.mode_changed]
+secrets: []
+network:
+  egress: []
+resources:
+  memory_mb: 64
+  priority: normal
+config:
+  greeting: "pong"

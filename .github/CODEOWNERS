@@ -1,0 +1,17 @@
+# Code owners for Nox.
+# Every path falls to the maintainer unless a more specific rule below applies.
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+*                       @Crackxsy
+
+# Security-critical surfaces: review is never optional here.
+/src/nox/security/      @Crackxsy
+/src/nox/ipc/           @Crackxsy
+/src/nox/supervisor/    @Crackxsy
+/plugins/rl/            @Crackxsy
+/config/                @Crackxsy
+/.github/               @Crackxsy
+/scripts/               @Crackxsy
+/SECURITY.md            @Crackxsy
+/LICENSE                @Crackxsy
+/NOTICE                 @Crackxsy

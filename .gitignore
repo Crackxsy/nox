@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Node / UI
+node_modules/
+ui/*/dist/
+ui/*/.vite/
+*.tsbuildinfo
+
+# Nox runtime data (never in Git)
+/data/
+/runtime/
+*.db
+*.db-wal
+*.db-shm
+*.log
+*.jsonl
+
+# Secrets (never in Git; Nox uses Windows Credential Manager)
+.env
+.env.*
+*.pem
+*.key
+*.token
+secrets*.yaml
+config/user.yaml
+config/local*.yaml
+
+# Models / large artifacts
+/models/
+*.onnx
+*.gguf
+*.bin
+*.pt
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Spike outputs (measurements are documented in the vault, raw outputs stay local)
+/spikes/out/
+
+# Installer (ST-10-01/02, SP-16): build.py's downloaded runtime cache and ISCC's compiled output
+# are large, machine-specific artifacts, never committed. `installer/requirements.lock` IS tracked
+# (it is the reproducible, reviewable dependency lock - not a build byproduct).
+installer/out/
+installer/build/
+installer/.cache/
+installer/_requirements.filtered.txt

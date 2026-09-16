@@ -1,0 +1,103 @@
+name: Bug report
+description: Something in Nox does not work the way it says it does.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Do not report a security vulnerability here** — use the
+        [private security advisory](https://github.com/Crackxsy/nox/security/advisories/new)
+        instead (see `SECURITY.md`).
+
+        Please do not paste secrets, tokens, or the contents of your vault. `nox doctor`
+        output is safe to share; raw log files may contain file paths you would rather not publish.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: This is not a security vulnerability (those go through a private advisory).
+          required: true
+        - label: I ran `nox doctor` and read its output.
+          required: false
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+      placeholder: |
+        Expected: ...
+        Actual: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - core / supervisor
+        - desktop shell / pet window
+        - dashboard
+        - voice (STT/TTS)
+        - AI providers (Claude Code / Ollama)
+        - memory / vault
+        - stream (Twitch / OBS)
+        - Rocket League
+        - coding assistant
+        - plugins
+        - installer / setup
+        - other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Nox version or commit
+      placeholder: "v0.1.0, or the short commit SHA from a source checkout"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Windows build, Python version and how it was installed (python.org vs. Microsoft Store), Node version, and whether Ollama or the Claude Code CLI are present.
+      placeholder: |
+        Windows 11 26100.x
+        Python 3.13.x (python.org)
+        Node 22.x
+        Ollama: yes (llama3.2:3b) / no
+        Claude Code CLI: logged in / not installed
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`nox doctor` output"
+      description: Paste the output. Redact anything you do not want public.
+      render: text
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: From `%APPDATA%\Nox\logs`. Logs are PII-filtered, but check before pasting.
+      render: text

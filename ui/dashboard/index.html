@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Nox Dashboard</title>
+    <style>
+      /* Critical paint only — the design system lives in src/styles.css (no web fonts, no CDN). */
+      :root { color-scheme: light dark; background: #ffffff; }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) { color-scheme: dark; background: #000000; }
+      }
+      :root[data-theme="dark"] { color-scheme: dark; background: #000000; }
+      :root[data-theme="light"] { color-scheme: light; background: #ffffff; }
+      html, body, #root { margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text",
+          "Segoe UI", system-ui, sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

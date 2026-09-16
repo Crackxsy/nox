@@ -1,0 +1,66 @@
+# Creative Apps plugin (Spec v0.7 Creative Apps, EPIC-16). Status: pending approval per the vault
+# spec/stories (all `status: proposed`); implementation proceeded on the PO sign-off relayed to
+# this agent 2026-09-14 ("Bau am besten v1 fertig" / "Mach einfach fuer v0.3-v1 gleichzeitig
+# agents"), with every still-open spec decision shipped as a `# pending approval` config default
+# (see `config/defaults.yaml` `creative:` and `config.creative.*` below) rather than a blocker.
+#
+# App-family awareness only (FL Studio, Blender, Krita, CapCut, DaVinci Resolve, the private
+# browser-DAW project): presence/window-title, never window content, never continuous OCR
+# (Spec v0.7 F332). No UI automation of any creative app in v0.7 (FR-14.2) - `mouse.*`/`keyboard.*`
+# tools do not exist here at all, by omission, not by a denied permission.
+#
+# Not enabled by default: this id is intentionally absent from `config/defaults.yaml`
+# `plugins.enabled` (ENGINEERING.md coordination note for this task).
+id: creative
+name: Creative Apps
+version: 0.1.0
+api_version: 1
+entry: nox_plugin_creative:create
+profiles: []   # every security profile may start it; Work-profile suppression is a runtime check
+               # in the core-side `nox.creative.service.CreativeModeService` (manifest-time
+               # `profiles` gating happens once at plugin start, not on live profile switches).
+permissions:
+  - tool: creative.artifact.inspect      # risk: low - local metadata-only inspection, no cloud
+    risk: low
+  - tool: creative.screenshot.analyze    # risk: medium - confirm; decision made core-side
+    risk: medium
+events:
+  emits: [creative.app_detected, creative.app_left, creative.note_written,
+          creative.screenshot.requested]
+  # sensor.foreground_changed: v0.5 process/activity sensor (FR-14.4), defined defensively in
+  # src/nox/core/events.py by this agent (re-checked absent immediately before adding it).
+  listens: [sensor.foreground_changed, creative.screenshot.result]
+secrets: []
+network:
+  egress: []   # local-only: app-family detection and artefact metadata never leave the machine
+resources:
+  memory_mb: 128
+  priority: normal
+config:
+  # Runtime source of truth for THIS plugin process (plugins do not read NoxConfig directly);
+  # mirrors config/defaults.yaml `creative:` - keep in sync by hand until a shared-defaults loader
+  # exists (see CreativeConfig docstring in src/nox/core/config.py).
+  hysteresis_s: 15.0   # pending approval (Spec v0.7 §11)
+  vault_folder: "16 - Creative Projects"   # pending approval (Spec v0.7 §3.4/§11)
+  app_patterns:
+    blender:
+      - { process: "blender.exe" }
+    fl_studio:
+      - { process: "fl64.exe" }
+      - { process: "fl.exe" }
+    krita:
+      - { process: "krita.exe" }
+    capcut:
+      - { process: "capcut.exe" }
+    davinci_resolve:            # not verified against a live install; speculative/config-only
+      - { process: "resolve.exe" }
+    browser_daw:                 # browser-based DAW project; window-title match
+      - { process: "chrome.exe", title: "*Web DAW*" }
+      - { process: "msedge.exe", title: "*Web DAW*" }
+      - { process: "firefox.exe", title: "*Web DAW*" }
+  # FL Studio feedback is scoped to rendered audio export only in this pass; no `.flp` parser
+  # exists (Spec v0.7 §11 open point, resolved "no" per the relayed PO sign-off).
+  fl_studio_project_parsing: false
+  # Local-analysis resource-budget spike (Spec v0.7 §10/§11) is deferred - not registered in
+  # 11 - Spikes/Spikes Overview yet; `creative.artifact.inspect` is metadata-only in this pass
+  # (no LUFS/structure/decode work), so the spike's concern does not apply to what shipped here.

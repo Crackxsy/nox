@@ -1,0 +1,77 @@
+# Rocket League observation plugin (ST-12-01..08, Spec v0.3 Rocket League Stage 1). Observation
+# only, per the immutable boundary in Security Model §10 / FR-10.1: no input-synthesis, memory-read,
+# injection or hook verb exists anywhere in this plugin's tool surface - not merely denied by
+# profile, the verbs do not exist, same pattern as `obs`'s missing scene.delete. CI greps
+# plugins/rl/** for forbidden APIs.
+#
+# `profiles: []` (deliberate deviation from Spec v0.3 §6.1's `profiles: [rocket_league]` draft):
+# `PluginManager._apply_enablement`/`matches_profile` (ST-11-01) gate *plugin startup* on the
+# manifest's `profiles` list matching the *currently active* security profile - not just tool
+# permissions. `rl`'s entire job is to detect the game and drive the switch *into* the
+# `rocket_league` profile (Spec §3.1), so gating its own startup on that profile already being
+# active is a deadlock (confirmed via `tests/integration/test_rl_plugin.py`: the plugin never left
+# `VALIDATED`). `profiles: []` matches any active profile, so the detector runs from boot once
+# opted into `plugins.enabled`; the `rocket_league` *permission* profile (`config/profiles/
+# rocket_league.yaml`) still governs risk/confirm for every `rl.*` tool once that mode is active.
+id: rl
+name: Rocket League Coach
+version: 0.1.0
+api_version: 1
+entry: nox_plugin_rl:create
+profiles: []
+permissions:
+  - tool: rl.status.read           # risk: read - current match/calibration/budget state
+    risk: read
+  - tool: rl.replay.list           # risk: read - index of parsed local replays
+    risk: read
+  - tool: rl.replay.summary        # risk: read - one replay's header/property-tree summary
+    risk: read
+  - tool: rl.calibrate             # risk: medium - captures one screenshot, writes calibration
+    risk: medium                   # config; confirm in the `rocket_league` profile (dashboard-only
+                                    # action, never autonomous mid-match)
+  - tool: rl.vision.status.read    # risk: read - Vision Stage 2 backend/state/budget snapshot
+    risk: read
+  - tool: rl.vision.enable         # risk: medium - manual on/off override (Spec v0.9 §4.4 step 4);
+    risk: medium                   # confirm in the `rocket_league` profile, same as rl.calibrate
+events:
+  emits: [game.detected, game.ended, rl.match_started, rl.match_ended, rl.event,
+          rl.replay_parsed, rl.callout, rl.vision.detections, rl.vision.disabled]
+  listens: [system.mode_changed, security.kill_switch, security.panic, privacy.capture_changed]
+secrets: []                        # none - fully local, no external account, no API key
+network:
+  egress: []                       # no network access of any kind - local capture, local replay
+                                    # files, local TTS clips only
+resources:
+  memory_mb: 256
+  priority: low                    # the GPU/CPU belongs to the game first (FR-10.4); this plugin
+                                    # is the one background worker explicitly budget-capped, not
+                                    # just deprioritized
+config:
+  detection:
+    poll_interval_s: 2.0
+    process_names: ["RocketLeague.exe"]
+  replay_folder: ""                # "" = resolve via nox.rl.paths.default_replay_folder()
+  calibration_state_path: ""       # "" = <runtime_dir>/rl/calibration.json (set by create())
+  budget:
+    max_gpu_pct: 10.0
+    max_fps_loss_pct: 5.0
+    capture_hz: 2.0
+    min_capture_hz: 0.5
+  callouts:
+    min_per_minute: 2
+    max_per_minute: 4
+    cooldown_s: 20.0
+    boost_low_threshold: 20
+    demo_confidence_threshold: 0.75
+    min_confidence: 0.6
+  vision:                          # Vision Stage 2 (Spec v0.9 EPIC-18, ST-18-01..06); opt-in-by-
+                                    # default (see `enabled`) - the GTX 1060 budget risk (OP-E) is
+                                    # unresolved, so this never starts just because `rl` is enabled.
+    enabled: false
+    backend: none                  # none | opencv | onnx (onnx: documented stub, always reports
+                                    # unavailable - onnxruntime is not an installed dependency)
+    sample_hz: 1.0
+    min_confidence: 0.5            # SP-19 open point: default not yet PO-confirmed
+    max_process_fraction: 0.5      # cost proxy: detection time / sample interval (see SP-19)
+    consecutive_over_budget: 3
+    cooldown_s: 60.0

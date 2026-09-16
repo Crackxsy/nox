@@ -1,0 +1,41 @@
+# Nox permission profile "rocket_league" (Spec v0.3 Rocket League Stage 1 §6.5, ST-12-01). No
+# egress of any kind while Rocket League is in the foreground (FR-10.4's resource-order intent);
+# observation only (Security Model §10). `security:` here mirrors `stream.yaml`'s convention
+# (informational alongside `permissions:`, which is what `nox.security.profiles.load_profile`
+# actually parses).
+security:
+  profile: rocket_league
+
+permissions:
+  id: rocket_league
+  description: Rocket League is in the foreground. Observation only, minimal proactivity, no egress.
+  cloud_allowed: false
+  egress_allowlist: []
+  loopback_allowlist: []            # no Ollama GPU use in this mode (config.py's
+                                     # OllamaProviderConfig._never_in_game already enforces this
+                                     # independent of this profile)
+  memory_writes_allowed: true       # coaching-profile/pattern writes still allowed locally
+  screenshots_to_cloud: false
+  filesystem_roots:
+    # Placeholder. At runtime the real folder is resolved via nox.rl.paths.default_replay_folder() /
+    # SHGetFolderPathW - the OneDrive-redirected Documents special folder, not a hardcoded drive
+    # letter; the user layer overrides this entry if the install machine differs (Spec §6.5/§15).
+    - "%USERPROFILE%/Documents/My Games/Rocket League/TAGame/DemosEpic"
+  tools_allowed: []
+  integrations_allowed: [rl]
+  rules:
+    - id: rocket_league.rl.read
+      tool: "rl*"
+      risk: "read"
+      decision: allow
+    - id: rocket_league.rl.calibrate
+      tool: "rl*"
+      action: "calibrate"
+      decision: confirm
+      reason: "calibration is a deliberate dashboard action, never automatic mid-match"
+    - id: rocket_league.rl.vision_enable
+      tool: "rl*"
+      action: "vision.enable"
+      decision: confirm
+      reason: "Vision Stage 2 on/off is a deliberate dashboard action (Spec v0.9 §4.4 step 4: manual
+        override always available), same pattern as rl.calibrate"

@@ -1,0 +1,210 @@
+{
+  "cli": "2.1.268 (Claude Code)",
+  "runs": [
+    {
+      "model": "(cli default)",
+      "run": 1,
+      "ttft_ms": 1752,
+      "total_ms": 3443,
+      "deltas": 22,
+      "chars": 148,
+      "tokens_in": 638,
+      "tokens_out": 78,
+      "cost_usd": 0.009293
+    },
+    {
+      "model": "(cli default)",
+      "run": 2,
+      "ttft_ms": 1470,
+      "total_ms": 3308,
+      "deltas": 18,
+      "chars": 145,
+      "tokens_in": 638,
+      "tokens_out": 72,
+      "cost_usd": 0.003121
+    },
+    {
+      "model": "(cli default)",
+      "run": 3,
+      "ttft_ms": 1573,
+      "total_ms": 3269,
+      "deltas": 19,
+      "chars": 148,
+      "tokens_in": 638,
+      "tokens_out": 77,
+      "cost_usd": 0.003226
+    },
+    {
+      "model": "(cli default)",
+      "run": 4,
+      "ttft_ms": 1463,
+      "total_ms": 3504,
+      "deltas": 25,
+      "chars": 161,
+      "tokens_in": 638,
+      "tokens_out": 83,
+      "cost_usd": 0.003376
+    },
+    {
+      "model": "(cli default)",
+      "run": 5,
+      "ttft_ms": 1544,
+      "total_ms": 3373,
+      "deltas": 20,
+      "chars": 132,
+      "tokens_in": 638,
+      "tokens_out": 65,
+      "cost_usd": 0.002931
+    },
+    {
+      "model": "sonnet",
+      "run": 1,
+      "ttft_ms": 2399,
+      "total_ms": 3952,
+      "deltas": 13,
+      "chars": 85,
+      "tokens_in": 1038,
+      "tokens_out": 44,
+      "cost_usd": 0.005566
+    },
+    {
+      "model": "sonnet",
+      "run": 2,
+      "ttft_ms": 1551,
+      "total_ms": 2886,
+      "deltas": 12,
+      "chars": 81,
+      "tokens_in": 1038,
+      "tokens_out": 43,
+      "cost_usd": 0.0016192000000000003
+    },
+    {
+      "model": "sonnet",
+      "run": 3,
+      "ttft_ms": 1511,
+      "total_ms": 2770,
+      "deltas": 9,
+      "chars": 76,
+      "tokens_in": 1038,
+      "tokens_out": 36,
+      "cost_usd": 0.0015442
+    },
+    {
+      "model": "sonnet",
+      "run": 4,
+      "ttft_ms": 1472,
+      "total_ms": 2634,
+      "deltas": 8,
+      "chars": 75,
+      "tokens_in": 1038,
+      "tokens_out": 36,
+      "cost_usd": 0.0015442
+    },
+    {
+      "model": "sonnet",
+      "run": 5,
+      "ttft_ms": 2149,
+      "total_ms": 3201,
+      "deltas": 11,
+      "chars": 70,
+      "tokens_in": 1038,
+      "tokens_out": 36,
+      "cost_usd": 0.0015792
+    },
+    {
+      "model": "haiku",
+      "run": 1,
+      "ttft_ms": 3551,
+      "total_ms": 4332,
+      "deltas": 9,
+      "chars": 95,
+      "tokens_in": 564,
+      "tokens_out": 275,
+      "cost_usd": 0.002912
+    },
+    {
+      "model": "haiku",
+      "run": 2,
+      "ttft_ms": 3955,
+      "total_ms": 4891,
+      "deltas": 15,
+      "chars": 127,
+      "tokens_in": 564,
+      "tokens_out": 321,
+      "cost_usd": 0.003142
+    },
+    {
+      "model": "haiku",
+      "run": 3,
+      "ttft_ms": 4544,
+      "total_ms": 5340,
+      "deltas": 10,
+      "chars": 94,
+      "tokens_in": 564,
+      "tokens_out": 367,
+      "cost_usd": 0.003372
+    },
+    {
+      "model": "haiku",
+      "run": 4,
+      "ttft_ms": 3913,
+      "total_ms": 4869,
+      "deltas": 15,
+      "chars": 112,
+      "tokens_in": 564,
+      "tokens_out": 288,
+      "cost_usd": 0.002977
+    },
+    {
+      "model": "haiku",
+      "run": 5,
+      "ttft_ms": 6036,
+      "total_ms": 6800,
+      "deltas": 9,
+      "chars": 87,
+      "tokens_in": 564,
+      "tokens_out": 507,
+      "cost_usd": 0.004072
+    }
+  ],
+  "summary": {
+    "(cli default)": {
+      "cold_ttft_ms": 1752,
+      "cold_total_ms": 3443,
+      "warm_ttft_ms_median": 1507.0,
+      "warm_ttft_ms_max": 1573,
+      "warm_total_ms_median": 3340.5,
+      "streaming_deltas_median": 19.5,
+      "cost_usd_median": 0.0031735
+    },
+    "sonnet": {
+      "cold_ttft_ms": 2399,
+      "cold_total_ms": 3952,
+      "warm_ttft_ms_median": 1531.0,
+      "warm_ttft_ms_max": 2149,
+      "warm_total_ms_median": 2828.0,
+      "streaming_deltas_median": 10.0,
+      "cost_usd_median": 0.0015617
+    },
+    "haiku": {
+      "cold_ttft_ms": 3551,
+      "cold_total_ms": 4332,
+      "warm_ttft_ms_median": 4249.5,
+      "warm_ttft_ms_max": 6036,
+      "warm_total_ms_median": 5115.5,
+      "streaming_deltas_median": 12.5,
+      "cost_usd_median": 0.003257
+    }
+  },
+  "health": {
+    "status": "available",
+    "reason": "2.1.268 (Claude Code); round-trip 4131 ms",
+    "version": "2.1.268 (Claude Code)",
+    "ms": 4177
+  },
+  "logged_out": {
+    "outcome": "ProviderUnavailableError",
+    "message": "Not logged in · Please run /login",
+    "ms": 742
+  }
+}

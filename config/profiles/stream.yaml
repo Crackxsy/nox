@@ -1,0 +1,62 @@
+# Nox permission profile "stream" (Security Model §3, PRD FR-9). Scene switches confirm; never to cloud.
+security:
+  profile: stream
+
+permissions:
+  id: stream
+  description: Live streaming. OBS scene switches are confirmed, scenes are never deleted, screenshots stay local.
+  cloud_allowed: true
+  # Twitch IRC chat + Helix API for the twitch plugin (Spec v0.2 Stream Bot §6.2/§6.4, ST-11-04).
+  # Not loopback, so this only applies in FULL/BALANCED privacy mode - PRIVATE/OFFLINE still block it.
+  egress_allowlist: ["irc.chat.twitch.tv:6697", "api.twitch.tv:443", "id.twitch.tv:443"]
+  loopback_allowlist: ["127.0.0.1:11434", "127.0.0.1:4455"]   # Ollama and the OBS websocket
+  memory_writes_allowed: true
+  screenshots_to_cloud: false
+  filesystem_roots: []
+  tools_allowed: []
+  integrations_allowed: [obs, twitch, ollama, claude_code]
+  rules:
+    - id: stream.obs.scene_delete
+      tool: "obs*"
+      action: "scene.delete"
+      decision: deny
+      reason: "existing scenes and sources are never deleted (FR-9.5)"
+    - id: stream.obs.scene_rename
+      tool: "obs*"
+      action: "scene.rename"
+      decision: deny
+    - id: stream.obs.source_delete
+      tool: "obs*"
+      action: "source.delete"
+      decision: deny
+    - id: stream.obs.scene_switch
+      tool: "obs*"
+      action: "scene.switch"
+      decision: confirm
+      reason: "scene switches are confirmed in the stream profile"
+    - id: stream.obs.read
+      tool: "obs*"
+      risk: "read"
+      decision: allow
+    - id: stream.screenshot.cloud
+      tool: "screenshot*"
+      action: "upload*"
+      decision: deny
+      reason: "screenshots never leave the machine while streaming"
+    - id: stream.twitch.ban
+      tool: "twitch*"
+      action: "moderation.ban"
+      decision: confirm
+      reason: "bans are not autonomous in the MVP (FR-9.8)"
+    - id: stream.twitch.timeout
+      tool: "twitch*"
+      action: "moderation.timeout"
+      decision: confirm
+    - id: stream.twitch.chat
+      tool: "twitch*"
+      action: "chat.send"
+      decision: allow
+    - id: stream.memory.write
+      tool: "memory*"
+      action: "write"
+      decision: allow

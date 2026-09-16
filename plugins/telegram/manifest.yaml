@@ -1,0 +1,47 @@
+# Telegram bot plugin (EPIC-17, Spec v0.8 Mobile Companion). Bot API long polling over the
+# plugin's guarded `http()` client - `api.telegram.org:443` is the only host it may reach, and the
+# egress guard enforces that independently of anything this code does (ADR-013).
+#
+# The plugin is a *transport*, nothing more. It forwards inbound messages as `remote.message`
+# events carrying the Telegram sender id, and it sends what the core hands it through one tool.
+# It makes no trust decision: whether a sender is paired, whether a kill switch may be engaged and
+# whether a privacy mode may change is decided in `src/nox/remote` (Security Model §2 - security
+# below the AI layer, never in a plugin and never in a prompt).
+#
+# It listens to no events at all (`listens: []`): transcripts, AI responses and memory content are
+# structurally out of reach, so no transcript or secret can ever leave over this channel.
+id: telegram
+name: Telegram Companion
+version: 0.1.0
+api_version: 1
+entry: nox_plugin_telegram:create
+profiles: [companion]
+permissions:
+  - tool: telegram.send               # risk: low - rate-limited (20 msg/min, >=1s gap), plain text
+    risk: low                         # only, and the core is the only caller
+  - tool: telegram.status.read        # risk: read - polling/connection status, never fakes "up"
+    risk: read
+events:
+  emits: [remote.message, telegram.connected, telegram.disconnected]
+  listens: []
+# The secret *name* only (ENGINEERING.md): set with `nox secrets set nox/telegram/bot_token` after
+# creating a bot with BotFather (ES-04). Without it the plugin reports UNAVAILABLE and polls nothing.
+secrets: [nox/telegram/bot_token]
+network:
+  egress: ["api.telegram.org:443"]
+resources:
+  memory_mb: 128
+  priority: normal
+config:
+  # Bot API base; only overridden by tests pointing at the fake Telegram server.
+  api_base: "https://api.telegram.org"
+  poll_timeout_s: 25        # Bot API long-poll window
+  request_timeout_s: 35.0   # must exceed poll_timeout_s or every long poll looks like a failure
+  min_backoff_s: 1.0
+  max_backoff_s: 30.0
+  max_message_chars: 3500   # Telegram's own limit is 4096; the margin is for the "..." suffix
+  # telegram.send rate limiting: stays far under the Bot API's ~30 msg/s, and keeps a compromised
+  # or looping caller from turning the phone into a notification firehose.
+  rate_limit_max_messages: 20
+  rate_limit_window_s: 60.0
+  rate_limit_min_gap_s: 1.0

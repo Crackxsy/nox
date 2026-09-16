@@ -1,0 +1,75 @@
+{
+  "window": [
+    829,
+    385,
+    260,
+    260
+  ],
+  "corners_before": [
+    [
+      12,
+      12,
+      12
+    ],
+    [
+      12,
+      12,
+      12
+    ],
+    [
+      12,
+      12,
+      12
+    ],
+    [
+      12,
+      12,
+      12
+    ]
+  ],
+  "corners_after": [
+    [
+      12,
+      12,
+      12
+    ],
+    [
+      12,
+      12,
+      12
+    ],
+    [
+      12,
+      12,
+      12
+    ],
+    [
+      12,
+      12,
+      12
+    ]
+  ],
+  "center_before": [
+    12,
+    12,
+    12
+  ],
+  "center_after": [
+    139,
+    124,
+    246
+  ],
+  "transparent_corners": true,
+  "pet_visible_at_center": true,
+  "black_background": false,
+  "cpu_percent_idle_tree": 0.1,
+  "cpu_logical_cores": 16,
+  "rss_mb_tree": 280.7,
+  "process_count": 2,
+  "hwnd_at_center_before_clickthrough_is_ours": true,
+  "hwnd_at_center_after_clickthrough_is_ours": false,
+  "click_through_works": true,
+  "screenshot": "E:\\Nox\\repo\\spikes\\out\\sp09.png",
+  "fps": 60.1,
+  "max_frame_gap_ms": 16.8
+}

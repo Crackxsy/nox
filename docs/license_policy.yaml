@@ -1,0 +1,133 @@
+# License compatibility policy for Nox's third-party dependency audit (ST-21-02, scripts/license_audit.py).
+#
+# Categories:
+#   allow            - compatible with a permissively-licensed public release, no action needed.
+#   allow_with_note  - compatible, but only with a documented compliance approach (e.g. LGPL's
+#                      dynamic-linking requirement); the note is carried in THIRD_PARTY_LICENSES.md.
+#   deny             - never acceptable for code Nox bundles/redistributes (copyleft that would
+#                      force Nox's own source to be released under the same terms).
+# Matching: a package's declared license text is tokenized on " OR " / " AND " / "," and each token
+# is matched case-insensitively against the patterns below, longest/most-specific pattern first
+# (so "LGPL" is checked before the bare "GPL" substring it contains). An "OR" expression is
+# satisfied if any token is allow/allow_with_note (the project chooses that alternative). An "AND"
+# expression (bundled multi-licensed code) requires every token to be allow/allow_with_note.
+#
+# A token that matches nothing here is "unknown" and fails `--check` unless the exact
+# package+ecosystem is listed under package_exceptions with a written reason.
+
+allow:
+  - MIT
+  - BSD
+  - Apache
+  - ISC
+  - PSF
+  - Python Software Foundation
+  - 0BSD
+  - Unlicense
+  - Zlib
+  - CC0
+  - HPND
+  - BlueOak
+  - Python-2.0
+
+allow_with_note:
+  - LGPL
+  - LGPLv2
+  - LGPLv3
+
+deny:
+  - AGPL
+  - GPL
+  - CDDL
+  - EUPL
+  - SSPL
+  - CC-BY-NC
+  - CC-BY-SA
+
+# Per-package overrides. `category` overrides the automatic classification; `reason` is mandatory
+# and is copied into THIRD_PARTY_LICENSES.md. Use this only for a specific, vetted package, never
+# to blanket-allow a whole license family — that belongs in the lists above instead.
+package_exceptions:
+  - name: numpy
+    ecosystem: python
+    category: allow
+    reason: >
+      Declared license expression is an SPDX AND of BSD-3-Clause, 0BSD, MIT, Zlib and CC0-1.0 for
+      numpy's own code plus small vendored components; every component is permissive. Verified
+      against numpy's LICENSE.txt (2026-09-14).
+  - name: sqlite-vec
+    ecosystem: python
+    category: allow
+    reason: >
+      Dual-licensed "MIT License, Apache License, Version 2.0" (project's own PyPI classifier
+      text) - Nox uses it under the MIT alternative.
+  - name: structlog
+    ecosystem: python
+    category: allow
+    reason: "Dual-licensed MIT OR Apache-2.0 (SPDX expression); Nox uses it under the MIT alternative."
+  - name: pyside6
+    ecosystem: python
+    category: allow_with_note
+    reason: >
+      SPDX expression "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only" (Qt for open source). Nox
+      uses the LGPL-3.0 alternative and installs PySide6 as an unmodified PyPI wheel dependency
+      (dynamic linking, no static link, no PySide6 source modification) - the common LGPL-compatible
+      path (see `NOTICE`). OPEN POINT (spec §4/§13): a named person must sign off that
+      Nox's actual packaging (embedded-Python installer, FR-15.4) preserves the user's LGPL right to
+      replace the PySide6/Qt libraries; this is flagged, not resolved, by this audit.
+  - name: piper-tts
+    ecosystem: python
+    category: allow_with_note
+    reason: >
+      GPL-3.0-or-later, and it is an optional dependency of the `voice` extra only - it is never
+      imported by, linked into or shipped with the Apache-2.0 core. PO decision 2026-09-16 (closes
+      OP-D): Nox's own code is Apache-2.0, which is one-way compatible with GPL-3.0, so any
+      distribution that bundles the voice extra (e.g. the Inno Setup installer) is a combined work
+      that must be distributed under GPL-3.0 terms as a whole; `NOTICE` states this. A checkout
+      without `--extra voice`, and the source distribution of Nox itself, stay pure Apache-2.0.
+      Replacing Piper with a permissively licensed engine (Kokoro/ONNX) is tracked for wave 2.
+  - name: pynput
+    ecosystem: python
+    category: allow_with_note
+    reason: >
+      LGPLv3. Used as an unmodified PyPI dependency (dynamic import, no static link, no source
+      modification) - same dynamic-linking reasoning as PySide6, not independently re-verified
+      against pynput's own packaging.
+  - name: certifi
+    ecosystem: python
+    category: allow
+    reason: >
+      MPL-2.0 (Mozilla Public License, file-level copyleft). Used unmodified as an httpx/requests
+      CA-bundle dependency; MPL-2.0 imposes no obligation on code that merely depends on an
+      unmodified MPL file, only on modifications to MPL-licensed files themselves.
+  - name: pathspec
+    ecosystem: python
+    category: allow
+    reason: "MPL-2.0, transitive dev-tooling dependency, unmodified - same reasoning as certifi."
+  - name: pytest-base-url
+    ecosystem: python
+    category: allow
+    reason: >
+      MPL-2.0, dev-only test dependency (pytest-playwright), never imported by or shipped with the
+      product; not redistributed to end users.
+  - name: text-unidecode
+    ecosystem: python
+    category: allow
+    reason: "Perl Artistic License 2.0 - OSI-approved permissive license, unmodified dependency."
+  - name: tqdm
+    ecosystem: python
+    category: allow
+    reason: >
+      SPDX expression "MPL-2.0 AND MIT" (tqdm dual-licenses its own code MPLv2.0, with an MIT
+      option for the Windows CLI wrapper only); used unmodified as a progress-bar dependency of
+      faster-whisper - same MPL-on-an-unmodified-dependency reasoning as certifi.
+  - name: caniuse-lite
+    ecosystem: ui/pet
+    category: allow
+    reason: >
+      CC-BY-4.0 data package (browser compatibility data consumed by browserslist/autoprefixer at
+      build time only); not code, and not included in the built `dist/` bundle shipped to users.
+  - name: caniuse-lite
+    ecosystem: ui/dashboard
+    category: allow
+    reason: "Same as ui/pet/caniuse-lite - build-time-only browserslist data, not shipped in dist/."

@@ -1,0 +1,61 @@
+# OBS Studio plugin (ST-11-02/03, Spec v0.2 Stream Bot; ST-15-02, Spec v0.6 Clip Pipeline).
+# obs-websocket v5 over loopback only.
+#
+# Tool surface is deliberately narrow: read-only status/scene inventory, one confirmed scene
+# switch, one safety action (privacy scene), a read-only preflight check, and the Clip Pipeline's
+# only path into OBS (replay-buffer save/status - the `clips` plugin has no cross-plugin tool call
+# and never talks to OBS itself). `obs.scene.delete`, `obs.scene.rename`, `obs.source.delete`, any
+# stream-stop or recording-delete verb do not exist here at all - on top of being
+# hard-prohibited/profile-denied (Spec v0.2 §6.1/§5); the replay-buffer tools cannot touch the
+# recording file either, only OBS's own replay-buffer output (Spec v0.6 §6.1/§6.3).
+id: obs
+name: OBS Studio
+version: 0.1.0
+api_version: 1
+entry: nox_plugin_obs:create
+profiles: [stream]
+permissions:
+  - tool: obs.status.read             # risk: read - full scene/source/stream-state snapshot
+    risk: read
+  - tool: obs.scenes.list             # risk: read
+    risk: read
+  - tool: obs.scene.switch            # risk: medium - confirm in the `stream` profile; target must
+    risk: medium                      # be a name from `config.scene_set` (Spec v0.2 §9)
+  - tool: obs.privacy_scene.activate  # risk: medium - manual, confirmable trigger of the privacy
+    risk: medium                      # scene (the security.panic path below bypasses confirm)
+  - tool: obs.preflight.check         # risk: read - draft §3.1 pre-flight, honest "unknown" for
+    risk: read                        # items OBS cannot observe
+  - tool: obs.replay_buffer.save         # risk: medium - triggers OBS's own replay-buffer save and
+    risk: medium                         # resolves the written path (Spec v0.6 §6.1); never touches
+                                          # the live recording
+  - tool: obs.replay_buffer.status.read  # risk: read - whether OBS's replay buffer is active
+    risk: read
+events:
+  emits: [obs.connected, obs.disconnected, obs.scene_changed, stream.started, stream.ended,
+          obs.recording_changed]
+  listens: [security.panic]
+secrets: [nox/obs/websocket_password]
+network:
+  egress: ["127.0.0.1:4455"]
+resources:
+  memory_mb: 128
+  priority: normal
+config:
+  host: "127.0.0.1"
+  port: 4455
+  # Designated privacy/panic scene and the allow-listed Nox scene set (Spec v0.2 §3.2/§3.6, names
+  # from ES-02) - both pending approval, defaults per the spec draft.
+  privacy_scene: "Technical Problems"  # pending approval ES-02
+  scene_set:                          # pending approval ES-02
+    - "Start"
+    - "Live"
+    - "Pause"
+    - "Gaming"
+    - "Just Chatting"
+    - "End"
+    - "Technical Problems"
+    - "Smoking"
+  subscribe_events: true
+  min_backoff_s: 1.0
+  max_backoff_s: 30.0
+  replay_save_timeout_s: 10.0  # obs.replay_buffer.save: max wait for OBS's ReplayBufferSaved event

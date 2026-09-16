@@ -1,0 +1,405 @@
+{
+  "runs": [
+    {
+      "model": "llama3.2:3b",
+      "label": "cold",
+      "cpu_only": false,
+      "ttft_ms": 19682,
+      "total_ms": 20830,
+      "load_ms": 17103,
+      "prompt_eval_ms": 2573,
+      "tokens_out": 51,
+      "tok_s": 44.5,
+      "chars": 189,
+      "loaded": [
+        {
+          "name": "llama3.2:3b",
+          "size_vram": 2554708622,
+          "size": 2554708622
+        }
+      ]
+    },
+    {
+      "model": "llama3.2:3b",
+      "label": "warm1",
+      "cpu_only": false,
+      "ttft_ms": 32,
+      "total_ms": 1091,
+      "load_ms": 4,
+      "prompt_eval_ms": 23,
+      "tokens_out": 48,
+      "tok_s": 45.4,
+      "chars": 168
+    },
+    {
+      "model": "llama3.2:3b",
+      "label": "warm2",
+      "cpu_only": false,
+      "ttft_ms": 35,
+      "total_ms": 1074,
+      "load_ms": 3,
+      "prompt_eval_ms": 23,
+      "tokens_out": 47,
+      "tok_s": 45.3,
+      "chars": 174
+    },
+    {
+      "model": "llama3.2:3b",
+      "label": "warm3",
+      "cpu_only": false,
+      "ttft_ms": 34,
+      "total_ms": 800,
+      "load_ms": 3,
+      "prompt_eval_ms": 23,
+      "tokens_out": 35,
+      "tok_s": 45.7,
+      "chars": 134
+    },
+    {
+      "model": "llama3.2:3b",
+      "label": "cold",
+      "cpu_only": true,
+      "ttft_ms": 1980,
+      "total_ms": 4108,
+      "load_ms": 1582,
+      "prompt_eval_ms": 392,
+      "tokens_out": 54,
+      "tok_s": 25.4,
+      "chars": 212,
+      "loaded": [
+        {
+          "name": "llama3.2:3b",
+          "size_vram": 0,
+          "size": 2561524365
+        }
+      ]
+    },
+    {
+      "model": "llama3.2:3b",
+      "label": "warm1",
+      "cpu_only": true,
+      "ttft_ms": 53,
+      "total_ms": 1888,
+      "load_ms": 4,
+      "prompt_eval_ms": 41,
+      "tokens_out": 43,
+      "tok_s": 23.4,
+      "chars": 165
+    },
+    {
+      "model": "llama3.2:3b",
+      "label": "warm2",
+      "cpu_only": true,
+      "ttft_ms": 61,
+      "total_ms": 1702,
+      "load_ms": 6,
+      "prompt_eval_ms": 44,
+      "tokens_out": 40,
+      "tok_s": 24.4,
+      "chars": 151
+    },
+    {
+      "model": "llama3.2:3b",
+      "label": "warm3",
+      "cpu_only": true,
+      "ttft_ms": 59,
+      "total_ms": 2380,
+      "load_ms": 5,
+      "prompt_eval_ms": 42,
+      "tokens_out": 56,
+      "tok_s": 24.1,
+      "chars": 204
+    },
+    {
+      "model": "gemma4:e2b",
+      "label": "cold",
+      "cpu_only": false,
+      "ttft_ms": 15284,
+      "total_ms": 16450,
+      "load_ms": 15162,
+      "prompt_eval_ms": 116,
+      "tokens_out": 50,
+      "tok_s": 43.0,
+      "chars": 237,
+      "loaded": [
+        {
+          "name": "gemma4:e2b",
+          "size_vram": 1708392447,
+          "size": 1708392447
+        }
+      ]
+    },
+    {
+      "model": "gemma4:e2b",
+      "label": "warm1",
+      "cpu_only": false,
+      "ttft_ms": 66,
+      "total_ms": 1141,
+      "load_ms": 5,
+      "prompt_eval_ms": 55,
+      "tokens_out": 47,
+      "tok_s": 43.8,
+      "chars": 198
+    },
+    {
+      "model": "gemma4:e2b",
+      "label": "warm2",
+      "cpu_only": false,
+      "ttft_ms": 69,
+      "total_ms": 1326,
+      "load_ms": 4,
+      "prompt_eval_ms": 54,
+      "tokens_out": 55,
+      "tok_s": 43.8,
+      "chars": 264
+    },
+    {
+      "model": "gemma4:e2b",
+      "label": "warm3",
+      "cpu_only": false,
+      "ttft_ms": 72,
+      "total_ms": 1193,
+      "load_ms": 4,
+      "prompt_eval_ms": 56,
+      "tokens_out": 49,
+      "tok_s": 43.8,
+      "chars": 232
+    },
+    {
+      "model": "gemma4:e2b",
+      "label": "cold",
+      "cpu_only": true,
+      "ttft_ms": 6438,
+      "total_ms": 7928,
+      "load_ms": 6193,
+      "prompt_eval_ms": 240,
+      "tokens_out": 46,
+      "tok_s": 30.9,
+      "chars": 203,
+      "loaded": [
+        {
+          "name": "gemma4:e2b",
+          "size_vram": 0,
+          "size": 6733158152
+        }
+      ]
+    },
+    {
+      "model": "gemma4:e2b",
+      "label": "warm1",
+      "cpu_only": true,
+      "ttft_ms": 77,
+      "total_ms": 1772,
+      "load_ms": 3,
+      "prompt_eval_ms": 68,
+      "tokens_out": 49,
+      "tok_s": 28.9,
+      "chars": 229
+    },
+    {
+      "model": "gemma4:e2b",
+      "label": "warm2",
+      "cpu_only": true,
+      "ttft_ms": 76,
+      "total_ms": 1959,
+      "load_ms": 4,
+      "prompt_eval_ms": 63,
+      "tokens_out": 51,
+      "tok_s": 27.1,
+      "chars": 221
+    },
+    {
+      "model": "gemma4:e2b",
+      "label": "warm3",
+      "cpu_only": true,
+      "ttft_ms": 84,
+      "total_ms": 1688,
+      "load_ms": 5,
+      "prompt_eval_ms": 69,
+      "tokens_out": 49,
+      "tok_s": 30.6,
+      "chars": 213
+    },
+    {
+      "model": "mistral",
+      "label": "cold",
+      "cpu_only": false,
+      "ttft_ms": 6562,
+      "total_ms": 9855,
+      "load_ms": 6317,
+      "prompt_eval_ms": 238,
+      "tokens_out": 66,
+      "tok_s": 20.0,
+      "chars": 211,
+      "loaded": [
+        {
+          "name": "mistral:latest",
+          "size_vram": 4342205644,
+          "size": 5060595545
+        }
+      ]
+    },
+    {
+      "model": "mistral",
+      "label": "warm1",
+      "cpu_only": false,
+      "ttft_ms": 68,
+      "total_ms": 2856,
+      "load_ms": 6,
+      "prompt_eval_ms": 49,
+      "tokens_out": 60,
+      "tok_s": 21.5,
+      "chars": 184
+    },
+    {
+      "model": "mistral",
+      "label": "warm2",
+      "cpu_only": false,
+      "ttft_ms": 70,
+      "total_ms": 3971,
+      "load_ms": 6,
+      "prompt_eval_ms": 47,
+      "tokens_out": 80,
+      "tok_s": 20.5,
+      "chars": 247
+    },
+    {
+      "model": "mistral",
+      "label": "warm3",
+      "cpu_only": false,
+      "ttft_ms": 88,
+      "total_ms": 2771,
+      "load_ms": 18,
+      "prompt_eval_ms": 51,
+      "tokens_out": 54,
+      "tok_s": 20.1,
+      "chars": 168
+    },
+    {
+      "model": "mistral",
+      "label": "cold",
+      "cpu_only": true,
+      "ttft_ms": 4334,
+      "total_ms": 11617,
+      "load_ms": 3346,
+      "prompt_eval_ms": 981,
+      "tokens_out": 72,
+      "tok_s": 9.9,
+      "chars": 226,
+      "loaded": [
+        {
+          "name": "mistral:latest",
+          "size_vram": 0,
+          "size": 5034905434
+        }
+      ]
+    },
+    {
+      "model": "mistral",
+      "label": "warm1",
+      "cpu_only": true,
+      "ttft_ms": 141,
+      "total_ms": 6893,
+      "load_ms": 6,
+      "prompt_eval_ms": 119,
+      "tokens_out": 65,
+      "tok_s": 9.6,
+      "chars": 217
+    },
+    {
+      "model": "mistral",
+      "label": "warm2",
+      "cpu_only": true,
+      "ttft_ms": 131,
+      "total_ms": 8922,
+      "load_ms": 5,
+      "prompt_eval_ms": 108,
+      "tokens_out": 80,
+      "tok_s": 9.1,
+      "chars": 268
+    },
+    {
+      "model": "mistral",
+      "label": "warm3",
+      "cpu_only": true,
+      "ttft_ms": 134,
+      "total_ms": 8289,
+      "load_ms": 6,
+      "prompt_eval_ms": 110,
+      "tokens_out": 77,
+      "tok_s": 9.4,
+      "chars": 231
+    }
+  ],
+  "summary": {
+    "llama3.2:3b (gpu)": {
+      "cold_ttft_ms": 19682,
+      "cold_total_ms": 20830,
+      "load_ms": 17103,
+      "warm_ttft_ms_median": 34,
+      "warm_total_ms_median": 1074,
+      "tok_s_median": 45.4,
+      "vram_bytes": 2554708622
+    },
+    "llama3.2:3b (cpu)": {
+      "cold_ttft_ms": 1980,
+      "cold_total_ms": 4108,
+      "load_ms": 1582,
+      "warm_ttft_ms_median": 59,
+      "warm_total_ms_median": 1888,
+      "tok_s_median": 24.1,
+      "vram_bytes": 0
+    },
+    "gemma4:e2b (gpu)": {
+      "cold_ttft_ms": 15284,
+      "cold_total_ms": 16450,
+      "load_ms": 15162,
+      "warm_ttft_ms_median": 69,
+      "warm_total_ms_median": 1193,
+      "tok_s_median": 43.8,
+      "vram_bytes": 1708392447
+    },
+    "gemma4:e2b (cpu)": {
+      "cold_ttft_ms": 6438,
+      "cold_total_ms": 7928,
+      "load_ms": 6193,
+      "warm_ttft_ms_median": 77,
+      "warm_total_ms_median": 1772,
+      "tok_s_median": 28.9,
+      "vram_bytes": 0
+    },
+    "mistral (gpu)": {
+      "cold_ttft_ms": 6562,
+      "cold_total_ms": 9855,
+      "load_ms": 6317,
+      "warm_ttft_ms_median": 70,
+      "warm_total_ms_median": 2856,
+      "tok_s_median": 20.5,
+      "vram_bytes": 4342205644
+    },
+    "mistral (cpu)": {
+      "cold_ttft_ms": 4334,
+      "cold_total_ms": 11617,
+      "load_ms": 3346,
+      "warm_ttft_ms_median": 134,
+      "warm_total_ms_median": 8289,
+      "tok_s_median": 9.4,
+      "vram_bytes": 0
+    }
+  },
+  "embedding": {
+    "model": "nomic-embed-text",
+    "dim": 768,
+    "cold_ms": 7434,
+    "warm_single_ms_median": 36,
+    "batch10_ms": 218
+  },
+  "provider": {
+    "health": "available: model llama3.2:3b available",
+    "deltas": 43,
+    "cpu_path_total_ms": 4201,
+    "tokens_out": 44,
+    "payload_num_gpu": 0
+  },
+  "ollama_version": "0.34.0"
+}

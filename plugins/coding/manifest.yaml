@@ -1,0 +1,51 @@
+# Coding assistant plugin (EPIC-14). Wraps the Claude Code CLI as a resumable, tool-enabled
+# session runner, distinct from `nox.ai.providers.claude_code.ClaudeCodeProvider`'s one-shot
+# REASON/CODE/BACKGROUND path (SP-01 Decision; see `11 - Spikes/SP-18 Claude Code Session
+# Wrapper.md`). `profiles: [coding]` is the structural guarantee that this plugin never runs under
+# `work` (FR-2.6, Spec v0.4 PM and Coding §6.5) - the plugin manager refuses to spawn a plugin
+# whose manifest does not list the active profile, before any subprocess exists.
+id: coding
+name: Coding Assistant
+version: 0.1.0
+api_version: 1
+entry: nox_plugin_coding:create
+profiles: [coding]
+permissions:
+  - tool: coding.session.start          # risk: medium - spawns a Claude Code CLI session scoped
+    risk: medium                        # to a workspace under filesystem_roots (target = workspace)
+  - tool: coding.session.status.read    # risk: read - snapshot of a tracked session
+    risk: read
+  - tool: coding.session.stop           # risk: low - graceful cancel, no new side effects
+    risk: low
+  - tool: coding.review.request         # risk: medium - short triage of a session's outcome
+    risk: medium
+events:
+  emits: [coding.session_started, coding.session_progress, coding.session_ended,
+          coding.session_failed]
+  listens: [security.kill_switch]       # terminate every active session (never leave one running
+                                         # unattended past a kill switch, Personality v1 B.8)
+secrets: []
+network:
+  egress: []                            # no egress of its own - the Claude Code CLI authenticates
+                                         # and talks to Anthropic itself; this plugin never calls out
+resources:
+  memory_mb: 256
+  priority: normal
+config:
+  command: "claude"
+  model: "sonnet"
+  permission_mode: "acceptEdits"        # most restrictive mode that still edits files unattended
+                                         # (SP-18 measurement); never bypassPermissions
+  allowed_tools: [Read, Edit, Write, Glob, Grep]   # never Bash/PowerShell/WebFetch/Task/... - no
+                                                    # shell, no egress beyond the CLI's own login
+                                                    # (spec §6.6; SP-18: --allowedTools alone does
+                                                    # NOT restrict the tool set, only --tools does)
+  max_turns: 30
+  max_repair_attempts: 3
+  session_timeout_s: 1800
+  # Kept in step with `config/profiles/coding.yaml`'s `permissions.filesystem_roots` by hand (no
+  # shared-config mechanism exists yet); `coding.session.start`'s workspace target must resolve
+  # under one of these or the call fails schema validation (spec §6.7), never an ambiguous confirm.
+  # Placeholder only - replaced by the user layer with the real workspace paths.
+  filesystem_roots:
+    - "%USERPROFILE%/Projects"

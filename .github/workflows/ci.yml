@@ -1,0 +1,204 @@
+# Nox CI (Plan Next Steps §2, Decision Plan B-10). Windows-only: the product only ships on Windows
+# 11 and several checks (shell tests, the e2e smoke) need a real Windows Qt/Chromium runtime.
+#
+# No secrets are used or required, and nothing here talks to a network service beyond the package
+# registries (npm/PyPI) and the loopback `ai.rules` provider inside the walking-skeleton integration
+# tests (deterministic, no model, no network) — no telemetry is sent anywhere.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python (ruff, mypy, unit + integration tests)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Sync dependencies
+        run: python -m uv sync --extra dev --extra shell --extra rl
+
+      - name: Put the project venv on PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "$pwd\.venv\Scripts"
+
+      - name: ruff check
+        run: ruff check src tests
+
+      - name: ruff format --check
+        run: ruff format --check src tests
+
+      - name: mypy
+        run: mypy src/nox
+
+      - name: generated TypeScript types are up to date (OP-9)
+        run: python scripts/gen_ts_types.py --check
+
+      - name: pytest unit
+        run: pytest tests/unit -m "not hardware and not network and not spike" -p no:cacheprovider
+
+      # The rules provider (ai/providers/rules.py) is deterministic and needs no network, so this
+      # is green with or without Ollama installed on the runner (tests already accept "rules" as a
+      # valid provider when Ollama is absent).
+      - name: pytest integration
+        run: pytest tests/integration -p no:cacheprovider
+
+  ui:
+    name: UI (${{ matrix.app }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [pet, dashboard]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: ui/${{ matrix.app }}/package-lock.json
+
+      - name: npm ci
+        working-directory: ui/${{ matrix.app }}
+        run: npm ci
+
+      - name: npm test
+        working-directory: ui/${{ matrix.app }}
+        run: npm test
+
+      - name: npm run build
+        working-directory: ui/${{ matrix.app }}
+        run: npm run build
+
+  guard-security-model:
+    name: Guard - no input-synthesis / process-memory APIs (Security Model §10)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Rocket League is observation-only (ENGINEERING.md hard rules): no input-synthesis or
+      # process-memory API may ever be imported or called for a game window. This fails the build
+      # the moment one shows up anywhere under src/ or plugins/rl/** (ST-12-01, Spec v0.3 §4/§13
+      # extends this glob to plugins/rl/**, the `rl` plugin's own package - other plugins under
+      # plugins/ are out of this guard's scope and already contain unrelated substring matches,
+      # e.g. Telegram/Twitch chat-send input *models* named `SendInput`/`ChatSendInput`, not a
+      # Win32 API call; scanning all of plugins/ would false-positive on those).
+      - name: Forbidden API scan
+        shell: bash
+        run: |
+          set -e
+          pattern='SendInput|pydirectinput|pyautogui|ReadProcessMemory|WriteProcessMemory'
+          if grep -RInE "$pattern" src/ plugins/rl/; then
+            echo "::error::Forbidden input-synthesis/process-memory API found under src/ or plugins/rl/ (Security Model §10 - Rocket League is observation only)"
+            exit 1
+          fi
+          echo "clean: no forbidden APIs under src/ or plugins/rl/"
+
+  release-hygiene:
+    name: Release hygiene (third-party license audit ST-21-02, secrets scan ST-21-07)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # secrets_scan.py needs the full git history, not the default shallow clone
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Sync dependencies
+        run: python -m uv sync --extra dev --extra shell
+
+      - name: Put the project venv on PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "$pwd\.venv\Scripts"
+
+      # Fails when a dependency's license is denied or unresolved against docs/license_policy.yaml
+      # (Spec v1.0 Public Release §4/§9, ST-21-02). Known open point as of 2026-09-14: piper-tts
+      # (voice extra) declares GPL-3.0-or-later on PyPI, which this policy denies for bundled code
+      # - this step is expected to be red until that is resolved (swap engine, or a written PO
+      # exception), not a bug in the check itself. See docs/THIRD_PARTY_LICENSES.md.
+      - name: Third-party license audit
+        run: python scripts/license_audit.py --check
+
+      # Fails on any un-accepted secret-shaped finding in the working tree or full git history
+      # (Spec v1.0 Public Release §9, ST-21-07). Exclusions/acceptances: docs/scan_policy_secrets.yaml.
+      - name: Secrets scan (working tree + full git history)
+        run: python scripts/secrets_scan.py --check
+
+      - name: Upload third-party license report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: third-party-licenses
+          path: docs/THIRD_PARTY_LICENSES.md
+
+  e2e:
+    name: E2E (Playwright live-core smoke, B-10)
+    runs-on: windows-latest
+    needs: [python, ui]
+    # B-10 is new: this is the first CI-hosted run of a real Chromium browser against the shipped
+    # UI bundles and a live headless core on this Windows runner image. Left non-blocking until it
+    # has been observed green across a few runs (runner GPU/font/timing differences from a dev
+    # machine are the likely first failure mode, not a real product bug) - see ADR follow-up in the
+    # B-10 report. Promote to a required check once that trust is established.
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Sync dependencies (with e2e extra)
+        run: python -m uv sync --extra dev --extra shell --extra e2e
+
+      - name: Put the project venv on PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "$pwd\.venv\Scripts"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: |
+            ui/pet/package-lock.json
+            ui/dashboard/package-lock.json
+
+      - name: Build pet UI
+        working-directory: ui/pet
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build dashboard UI
+        working-directory: ui/dashboard
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Playwright browsers
+        run: playwright install chromium
+
+      - name: pytest e2e
+        run: pytest tests/e2e -m e2e -p no:cacheprovider

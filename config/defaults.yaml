@@ -1,0 +1,324 @@
+# Nox default configuration (layer 1 of 4: defaults -> user -> profile/preset -> runtime override).
+# No secrets in this file. Secrets live in the Windows Credential Manager (see nox.security.secrets).
+# Every key here is validated against the JSON schema generated from nox.core.config.NoxConfig.
+
+schema_version: 1
+
+identity:
+  name: Nox
+  user_display_name: ""          # filled at first start
+  ui_language: de                # de | en
+  speech_language: auto          # de | en | auto
+  locale:
+    time_format: "24h"
+    date_format: "DD.MM.YYYY"
+    timezone: "Europe/Berlin"
+    units: metric
+
+paths:
+  data_dir: "${APPDATA}/Nox"             # vault, index, database, cache, replays, backups live below this
+  vault_dir: "${APPDATA}/Nox/vault"
+  # index_dir / database_dir / cache_dir / backups_dir default to <data_dir>/<name>; set them here
+  # only to move one of them elsewhere.
+  # %APPDATA%/Nox is used for small technical config, runtime tokens and UI state.
+  # ${VAR} / %VAR% environment references are expanded by nox.core.config.
+  runtime_dir: "${APPDATA}/Nox/runtime"
+  logs_dir: "${APPDATA}/Nox/logs"
+
+security:
+  profile: companion             # companion | coding | stream | research | work | offline
+  pin_required_for_security_changes: true
+  hard_prohibitions:             # never overridable by any profile, plugin, runtime override or LLM
+    - game.input.send
+    - game.memory.read
+    - game.process.inject
+    - anticheat.bypass
+    - stream.key.read
+    - stream.stop
+    - recording.delete
+    - security.core.modify_without_pin
+    - permission.self_elevate
+  egress_allowlist:              # global network allow-list (host, host:port, *.example.com:443);
+                                 # a profile with its own egress_allowlist replaces this list
+    - "id.twitch.tv:443"         # Twitch OAuth device-code login (nox.settings.twitch_auth):
+                                 # user-initiated only, never contacted on its own; see
+                                 # docs/PRIVACY.md. Blocked in privacy mode private/offline.
+  loopback_allowlist:            # local services still reachable in privacy mode private/offline
+    - "127.0.0.1:11434"          # Ollama; profiles may add entries (OBS in the stream profile)
+  audit:
+    enabled: true
+    retention_days_security: 730
+    retention_days_normal: 14
+
+privacy:
+  mode: balanced                 # full | balanced | private | offline
+  capture:
+    microphone: true
+    camera: false
+    screen: true
+  zones:                         # apps/windows whose content is never analyzed (titles may be known)
+    - banking
+    - password_manager
+    - email
+    - private_chats
+    - personal_documents
+    - discord
+  retention:
+    raw_transcripts_days: 7
+    logs_days: 14
+    metrics_days: 365
+    viewer_data_inactive_months: 12
+
+ipc:
+  host: 127.0.0.1
+  port: 47800                    # WebSocket hub
+  http_port: 47801               # static UI (pet renderer, dashboard) and health endpoint
+  schema_version: 1
+  auth: token                    # per-start session tokens issued by core, stored under %APPDATA%/Nox/runtime
+
+voice:
+  stt:
+    engine: faster-whisper
+    model: small
+    device: cpu
+    language: auto
+    vad: true
+    wake_word: "Nox"
+    push_to_talk_hotkey: "ctrl+alt+space"
+  tts:
+    engine: piper                # piper | kokoro (decided by SP-03)
+    voice: ""                    # engine-specific voice id, chosen after SP-03
+    rate: 1.0
+    volume: 0.8
+    streaming: true
+  channels:
+    private_device: ""           # default output device when empty
+    stream_device: ""            # e.g. VB-Audio Cable input, empty = disabled
+    routing: private             # private | stream | both | mute
+  barge_in: true
+
+ai:
+  router:
+    default_reasoner: claude_code   # validated by SP-01; degradation chain applies
+    fallback_chain: [claude_code, ollama, rules]
+    roles:                          # per-role chains; SP-01/SP-12: local Ollama answers chat in <100 ms
+      chat: [ollama, claude_code, rules]
+    background_budget_share: 0.30
+    reserve_for_stream: true
+  providers:
+    claude_code:
+      enabled: true
+      command: "claude"
+      timeout_s: 120
+      model: "sonnet"              # SP-01: same first-token latency as the CLI default, lower cost
+      health_roundtrip: true       # 1-token probe at startup/health check (set false to save quota)
+    ollama:
+      enabled: true
+      base_url: "http://127.0.0.1:11434"
+      model: "llama3.2:3b"
+      gpu_allowed_modes: [companion, coding, research, idle]   # never during rocket_league
+      timeout_s: 60
+
+pet:
+  renderer: web                  # web renderer hosted by core, shown in the Qt shell and OBS
+  default_monitor: left
+  always_on_top: true
+  click_through_when_idle: false
+  fps_target: 60
+  fps_in_game: 20
+  greeting_enabled: true          # speak the startup greeting (still gated by SpeechPolicy, OP-10)
+  quiet_in_private_modes: true    # OP-10: no unsolicited speech (greeting/proactive) while privacy
+                                   # mode is private/offline; replies to the user are never blocked
+  variant: neutral                # OP-1: chosen creature concept id (ui/pet/src/variants); "neutral"
+                                   # is the placeholder until the PO picks from the rendered gallery
+
+plugins:                         # ST-11-01: plugin workers (plugins/<id>/manifest.yaml)
+  enabled: []                    # plugin ids started at boot; empty = no plugin runs
+  dir: null                      # null = <repo>/plugins
+
+stream:                          # Spec v0.2 Stream Bot (EPIC-11); numbers are placeholders
+  funken:                        # pending approval (Spec v0.2 §3.5) - mechanism is decided, tuning is not
+    earn_per_message: 1.0        # pending approval (Spec v0.2 §3.5)
+    earn_per_sub: 50.0           # pending approval (Spec v0.2 §3.5)
+    earn_per_bit: 0.1            # pending approval (Spec v0.2 §3.5)
+    earn_per_raid: 20.0          # pending approval (Spec v0.2 §3.5)
+    earn_cooldown_s: 30.0        # anti-farming (FR-9.17)
+    tier_names: [newcomer, regular, supporter, veteran, legend]   # pending approval (Spec v0.2 §3.5)
+    tier_thresholds: [0, 100, 500, 2000, 10000]                   # pending approval (Spec v0.2 §3.5)
+  chat:
+    retain_raw_text_days: 7      # pending approval (Spec v0.2 §7); mirrors privacy.retention.raw_transcripts_days
+  relevance:
+    unsolicited_interval_s: 120.0   # ~one unsolicited chat message per 2 min (Spec v0.2 §3.3)
+    mention_cooldown_s: 5.0
+  twitch:
+    channel: ""                  # channel Nox joins; empty = the twitch plugin never joins one
+
+attention:
+  proactivity_level: 3           # 0..5 global ceiling
+  per_mode: { stream: 4, companion: 3, creative: 2, research: 2, coding: 2, rocket_league: 1, focus: 0 }
+  interruptions_per_hour: 3
+  quiet_hours: { start: "23:00", end: "08:00" }
+
+health:
+  check_interval_s: 30
+  checkpoint_interval_s: 5
+
+logging:
+  level: INFO
+  json: true
+  pii_filter: true
+  retention_days: 14             # daily rotation; overrides privacy.retention.logs_days when set
+
+supervisor:
+  restart_limit: 3
+  restart_window_s: 300
+  kill_switch_hotkey: "ctrl+alt+shift+k"
+  control_host: 127.0.0.1
+  control_port: 47799            # localhost control channel (heartbeats, kill); token in paths.runtime_dir
+  heartbeat_interval_s: 2.0
+  boot_grace_s: 90               # no missed-heartbeat accounting during a cold boot
+  missed_for_graceful: 5
+  missed_for_hard: 10
+  kill_ack_timeout_s: 2.0
+  stop_timeout_s: 6.0            # B-6: sup.stop budget for NoxCore.stop() before the supervisor terminates it
+  core_command: ["python", "-m", "nox.app"]
+  shell_command: ["python", "-m", "nox.shell"]
+  shell_enabled: true
+
+rl:                              # Rocket League Stage 1 (Spec v0.3 EPIC-12, ST-12-01..08); the
+                                  # `rl` plugin itself is opt-in (not in plugins.enabled by default)
+  detection:
+    poll_interval_s: 2.0
+    process_names: ["RocketLeague.exe"]
+  replay:
+    folder: null                 # null = resolve the OneDrive-redirected Documents special folder
+                                  # at runtime (Spec §6.5/§15); set only for a non-default install
+    backfill_batch_size: 25
+    stable_check_interval_s: 2.0
+    stable_checks: 2
+  budget:                        # FR-10.4/NFR-3 targets; ST-12-05 records the real SP-04 measurement
+    max_gpu_pct: 10.0
+    max_fps_loss_pct: 5.0
+    capture_hz: 2.0
+    min_capture_hz: 0.5
+  callouts:
+    min_per_minute: 2
+    max_per_minute: 4
+    cooldown_s: 20.0
+    boost_low_threshold: 20
+    demo_confidence_threshold: 0.75
+    min_confidence: 0.6
+  retention:                     # pending approval (Spec §7/§15)
+    events_days: 180
+    matches_days: 365
+  vision:                        # Vision Stage 2 (Spec v0.9 EPIC-18, ST-18-01..06); opt-in-by-
+                                  # default even when `rl` itself is enabled (GPU budget risk, OP-E
+                                  # undecided) - `enabled: false` is the safe starting point.
+    enabled: false
+    backend: none                 # none | opencv | onnx (onnx is a documented stub, always reports
+                                   # unavailable - onnxruntime is not an installed dependency)
+    sample_hz: 1.0
+    min_confidence: 0.5           # SP-19 open point: default not yet PO-confirmed
+    max_process_fraction: 0.5     # cost proxy: detection time / sample interval (see SP-19)
+    consecutive_over_budget: 3
+    cooldown_s: 60.0
+    detections_retain_hours: 6.0
+
+remote:                          # Mobile Companion (Spec v0.8, EPIC-17). Off until explicitly enabled.
+  enabled: false                 # no pairing, no remote kill switch, no Telegram bot without this
+  pair_code_ttl_s: 300           # one-time pairing code lifetime (Spec v0.8 §5.2, SP-14)
+  max_devices: 3
+  rate_limit_per_minute: 20      # per sender; tighter than any local client (Spec v0.8 §5.2)
+  rate_limit_burst: 5
+  chat_enabled: true             # phone chat routes through the normal orchestrator (speak=False)
+  notifications:
+    enabled: true
+    events:                      # allow-list; anything not named here is never sent to the phone
+      - security.kill_switch
+      - system.health_changed
+      - stream.started
+      - stream.ended
+      - pm.focus_changed
+
+clips:                          # Clip Pipeline (Spec v0.6, EPIC-15). Roots distinct from the OBS
+                                 # recording root (ES-03), which is read-only for this pipeline.
+  # library_root / export_root / quarantine_root default to <data_dir>/data/clips/<name>;
+  # watch_dir defaults to <data_dir>/data/clips/incoming - point it at your OBS replay-buffer
+  # output folder.
+  highlight_kinds: [goal, save, win, overtime]   # rl.event.kind values that qualify (pending calibration)
+  chat_hype_threshold: 0.75
+  cooldown_s: 15.0                # anti-double-clip, per trigger_kind (Spec v0.6 §9)
+  manual_lookback_s: 20.0         # secondary-tag lookback window for !clip/hotkey (Spec v0.6 §4.2)
+  watch_poll_interval_s: 2.0
+  watch_timeout_s: 30.0
+  quarantine_days: 30             # FR-14.1 quarantine-only deletion, never a hard delete
+
+pm:                              # EPIC-13 Project Management (ST-13-01 subset); no new plugin,
+                                  # core feature (Spec v0.4 PM and Coding §6.1)
+  epics_dir: "08 - Epics"
+  stories_dir: "09 - Stories"
+  projects_note: "Projects.md"   # single list note; this vault has no per-project folder yet
+  watch_debounce_s: 1.5
+  focus_max_items: 5
+
+creative:                        # Creative Apps (Spec v0.7, EPIC-16); pending approval - shipped
+                                  # as configurable defaults per the relayed PO sign-off
+                                  # (2026-09-14), see 00 - Inbox/Plan v0.7 Creative Apps.md.
+  hysteresis_s: 15.0             # pending approval (Spec v0.7 §11)
+  vault_folder: "16 - Creative Projects"   # pending approval (Spec v0.7 §3.4/§11)
+  app_patterns:
+    blender:
+      - { process: "blender.exe" }
+    fl_studio:
+      - { process: "fl64.exe" }
+      - { process: "fl.exe" }
+    krita:
+      - { process: "krita.exe" }
+    capcut:
+      - { process: "capcut.exe" }
+    davinci_resolve:            # not installed on the reference machine; speculative/config-only
+      - { process: "resolve.exe" }
+    browser_daw:                 # a browser-hosted DAW; window-title match (replace the
+                                  # pattern below with your own project's window title)
+      - { process: "chrome.exe", title: "*Web DAW*" }
+      - { process: "msedge.exe", title: "*Web DAW*" }
+      - { process: "firefox.exe", title: "*Web DAW*" }
+
+sensors:                         # PC Awareness Sensors (Spec v0.5 EPIC-20, ST-20-01/02/04/06/07
+                                  # subset delivered this pass; core service, no plugins/system/)
+  enabled: true
+  foreground:
+    poll_interval_s: 1.0
+  idle:
+    poll_interval_s: 5.0
+    idle_after_s: 600.0          # ~10 min (FR-14.4)
+    away_after_s: 1200.0         # ~20 min (FR-14.4)
+  resources:
+    poll_interval_s: 5.0
+    idle_poll_interval_s: 15.0   # adaptive sampling (ST-20-02): slower while nothing is pressured
+    cpu_high_watermark_pct: 80.0
+    gpu_enabled: true
+  game:
+    poll_interval_s: 5.0
+    process_names: ["RocketLeague.exe"]
+  history_len: 120
+
+proactive:                       # Personality & Proactivity (Spec v0.5 EPIC-19, ST-19-04..08).
+                                  # Quiet hours / proactivity_level / per_mode / interruptions_per_hour
+                                  # live under `attention:` above and are reused, not duplicated here.
+  enabled: true
+  notification_store_limit: 200  # in-memory ring buffer depth (no DB migration in this pass)
+  announce_before_speaking: true # A.13: say who you are before unsolicited speech
+  feedback_min_weight: 0.2       # bounded feedback-loop (ST-19-07): frequency only, never a floor
+  feedback_max_weight: 1.0       # below full for URGENT (security/data-loss bypasses weighting)
+  feedback_step: 0.05
+  timing_learner_enabled: true
+
+memory:                          # Memory & Vault (Spec v0.5 MVP, EPIC-07, ST-07-01..05). Vault
+                                  # location itself stays `paths.vault_dir` above, not duplicated.
+  embed_model: "nomic-embed-text" # via Ollama; sqlite-vec storage, FTS5 fallback when unreachable
+  vault_watch_debounce_s: 2.0    # ST-07-03 AC1: a burst of saves -> exactly one re-index
+  retrieval_max_tokens: 4000     # hard cap on retrieved context (~4 chars/token estimate)
+  retrieval_k: 8
+  full_scan_on_boot: true
+  retention_note_version_days: 30 # rollback copies (vault_note_versions) kept this long

@@ -1,0 +1,56 @@
+# Twitch chat bot plugin (ST-11-04, Spec v0.2 Stream Bot). Plain IRC over TLS to
+# irc.chat.twitch.tv:6697 (asyncio streams, no extra dependency - `tls: False` exists only so
+# tests can point the client at a plaintext fake server).
+#
+# Tool surface is deliberately narrow: one rate-limited, moderation-gated chat send and one
+# read-only connection status check. Moderation actions (`twitch.moderation.timeout/ban`) and the
+# Funken ledger itself do not exist here - this plugin never books Funken (`stream.funken_awarded`
+# is a request the core's FunkenService decides on, not a local ledger write).
+id: twitch
+name: Twitch Bot
+version: 0.1.0
+api_version: 1
+entry: nox_plugin_twitch:create
+profiles: [stream]
+permissions:
+  - tool: twitch.chat.send            # risk: low - rate-limited (20 msg/30s, >=1.5s gap) and
+    risk: low                         # passed through ModerationGate.check before every send
+  - tool: twitch.chat.status.read     # risk: read - connection/join status, never fakes "connected"
+    risk: read
+events:
+  emits: [twitch.connected, twitch.disconnected, twitch.chat_message, twitch.command_invoked,
+          stream.funken_awarded, stream.minigame_started, stream.minigame_ended]
+  listens: []
+# Secret *names* only - the values live in the OS keyring. They are filled in by the dashboard's
+# Twitch login (OAuth device code, `nox.settings.twitch_auth`), by `nox onboard`, or by hand via
+# `nox secrets set nox/twitch/oauth_token`. The channel to join is plain config, not a secret.
+secrets: [nox/twitch/oauth_token, nox/twitch/bot_username]
+network:
+  egress: ["irc.chat.twitch.tv:6697", "api.twitch.tv:443"]  # api.twitch.tv: reserved, unused today
+resources:
+  memory_mb: 128
+  priority: normal
+config:
+  # Empty on purpose: the channel is a user setting (`stream.twitch.channel`, editable in the
+  # dashboard). Set it here only to pin one instance to a fixed channel. No channel is guessed.
+  channel: ""
+  host: "irc.chat.twitch.tv"
+  port: 6697
+  tls: true  # False only for tests, against a plaintext fake IRC server
+  min_backoff_s: 1.0
+  max_backoff_s: 30.0
+  # twitch.chat.send rate limiting (Spec v0.2 §9: stays under Twitch's own 20 msg/30s mod limit).
+  rate_limit_max_messages: 20
+  rate_limit_window_s: 30.0
+  rate_limit_min_gap_s: 1.5
+  # Extra deterministic ModerationGate terms on top of the hard-coded exclusions (hate against
+  # protected groups, sexual content about viewers, doxxing, illness/death jokes, insults aimed at
+  # a viewer name - none of those can be relaxed via config).
+  moderation_blocklist: []
+  # Names/aliases the RelevanceClassifier treats as "the bot was mentioned".
+  bot_names: ["nox"]
+  relevance_cooldown_s: 20.0
+  # !rps: per-viewer cooldown and the Funken awarded on a win - pending approval (Spec v0.2 §3.5:
+  # exact Funken rates are backlog defaults, not yet a product decision).
+  rps_cooldown_s: 30.0
+  rps_win_funken: 5.0  # pending approval

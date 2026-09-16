@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Crackxsy/nox/security/advisories/new
+    about: Never in a public issue. This opens a private advisory visible only to the maintainers.
+  - name: Question or idea
+    url: https://github.com/Crackxsy/nox/discussions
+    about: Usage questions, setup help and open-ended ideas belong in Discussions.
+  - name: Setup and troubleshooting guide
+    url: https://github.com/Crackxsy/nox/blob/main/docs/USER_GUIDE.md
+    about: Install, first start, privacy modes, and the common failure modes with their fixes.

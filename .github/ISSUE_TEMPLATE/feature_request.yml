@@ -1,0 +1,65 @@
+name: Feature request
+description: Suggest a capability or a change in behaviour.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Nox has an opinionated roadmap and a set of guarantees that no feature may weaken
+        (see `CONTRIBUTING.md` → "Security rules"). Proposals that need input synthesis into a
+        game, telemetry, or a secret stored outside the Windows Credential Manager will be
+        declined regardless of how useful they are.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that Nox makes hard or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should Nox do instead? Be concrete about the user-visible behaviour.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including "do nothing" — why is that not good enough?
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - core / supervisor
+        - desktop shell / pet window
+        - dashboard
+        - voice (STT/TTS)
+        - AI providers (Claude Code / Ollama)
+        - memory / vault
+        - stream (Twitch / OBS)
+        - Rocket League
+        - coding assistant
+        - plugins
+        - installer / setup
+        - other / not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints
+      options:
+        - label: This does not require sending input to a game, reading another process's memory, or any other capability listed as hard-prohibited.
+          required: true
+        - label: This does not require telemetry or any data leaving the machine other than to a provider the user configured.
+          required: true
+        - label: I would be willing to work on this myself.
+          required: false
