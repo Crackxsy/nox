@@ -19,7 +19,7 @@ jobs:
     name: Python (ruff, mypy, unit + integration tests)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -64,7 +64,7 @@ jobs:
       matrix:
         app: [pet, dashboard]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -88,7 +88,7 @@ jobs:
     name: Guard - no input-synthesis / process-memory APIs (Security Model §10)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Rocket League is observation-only (ENGINEERING.md hard rules): no input-synthesis or
       # process-memory API may ever be imported or called for a game window. This fails the build
@@ -112,7 +112,7 @@ jobs:
     name: Release hygiene (third-party license audit ST-21-02, secrets scan ST-21-07)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # secrets_scan.py needs the full git history, not the default shallow clone
 
@@ -161,7 +161,7 @@ jobs:
     # B-10 report. Promote to a required check once that trust is established.
     continue-on-error: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
