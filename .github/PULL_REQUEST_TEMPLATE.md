@@ -1,3 +1,4 @@
+<!-- Base branch: develop (main only takes release pull requests from develop). -->
 <!-- Thanks for contributing to Nox. Keep one logical change per pull request. -->
 
 ## What and why

@@ -185,8 +185,12 @@ Branch protection and rulesets are free on **public** repositories only, which i
 comes after the repository is public.
 
 ```powershell
-pwsh -File scripts/github_branch_protection.ps1 -Repo Crackxsy/nox -Branch main -DryRun
-pwsh -File scripts/github_branch_protection.ps1 -Repo Crackxsy/nox -Branch main
+pwsh -File scripts/github_branch_protection.ps1 -Repo Crackxsy/nox -Branch develop -DryRun
+pwsh -File scripts/github_branch_protection.ps1 -Repo Crackxsy/nox -Branch develop
+pwsh -File scripts/github_branch_protection.ps1 -Repo Crackxsy/nox -Branch main -RequiredApprovals 1 -RequireCodeOwnerReview
+gh api --method PATCH repos/Crackxsy/nox -f default_branch=develop
+# main additionally requires the "Branch policy (main accepts develop only)" status check
+# (.github/workflows/branch-policy.yml); add it once the workflow ran at least once.
 ```
 
 The script requires a pull request, requires the CI jobs as status checks, requires linear history,
