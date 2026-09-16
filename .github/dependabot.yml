@@ -1,5 +1,4 @@
-# Dependency updates for Nox: security updates whenever they appear, everything else as ONE
-# grouped pull request per ecosystem per month (solo maintainer, low noise).
+# Dependency updates for Nox.
 # Docs: https://docs.github.com/code-security/dependabot/dependabot-version-updates
 version: 2
 
@@ -7,55 +6,59 @@ updates:
   - package-ecosystem: pip
     directory: "/"
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
       time: "06:00"
       timezone: Europe/Berlin
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
     labels: ["dependencies", "python"]
     groups:
-      all:
-        patterns: ["*"]
+      python-dev-tooling:
+        patterns: ["pytest*", "ruff", "mypy", "types-*", "coverage*"]
 
   - package-ecosystem: npm
     directory: "/ui/pet"
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
       time: "06:00"
       timezone: Europe/Berlin
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
     labels: ["dependencies", "ui"]
     groups:
-      all:
-        patterns: ["*"]
+      pet-dev-tooling:
+        patterns: ["@types/*", "vite*", "vitest*", "typescript", "@vitejs/*"]
 
   - package-ecosystem: npm
     directory: "/ui/dashboard"
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
       time: "06:00"
       timezone: Europe/Berlin
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
     labels: ["dependencies", "ui"]
     groups:
-      all:
-        patterns: ["*"]
+      dashboard-dev-tooling:
+        patterns: ["@types/*", "vite*", "vitest*", "typescript", "@vitejs/*"]
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
       time: "06:00"
       timezone: Europe/Berlin
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 5
     commit-message:
       prefix: "ci(deps)"
     labels: ["dependencies", "ci"]
