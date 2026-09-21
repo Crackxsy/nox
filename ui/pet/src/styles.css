@@ -148,6 +148,30 @@ body {
   color: var(--pet-chip-ink-2);
 }
 
+/* -- rigged variant ---------------------------------------------------------------------------- */
+
+/* The deformation rig draws into one canvas and owns every pixel of its own motion, so there is no
+ * CSS animation here at all — a breathing keyframe on top of a breathing mesh would beat against
+ * it. What CSS does own is the one thing the rig cannot: the creature is a white wolf and a light
+ * desktop is white, so it carries a soft contact shadow to keep its silhouette readable there. In
+ * dark mode the shadow would only dirty the fur, so it is dropped. */
+.pet-rig {
+  display: block;
+  line-height: 0;
+  filter: drop-shadow(0 2px 6px rgb(0 0 0 / 28%));
+}
+
+@media (prefers-color-scheme: dark) {
+  .pet-rig {
+    filter: none;
+  }
+}
+
+.pet-rig-canvas {
+  display: block;
+  background: transparent;
+}
+
 /* -- sprite variant ---------------------------------------------------------------------------- */
 
 .pet-sprite {

@@ -72,7 +72,14 @@ class OllamaConfig(BaseModel):
         default_factory=lambda: ["companion", "coding", "research", "idle"]
     )
     timeout_s: float = Field(default=60.0, gt=0.0)
-    keep_alive: str = "5m"
+    #: How long the server keeps the model in memory after a request. Loading `llama3.2:3b` costs
+    #: about 3.7 s of time-to-first-token, answering from a loaded one about 60 ms, so an assistant
+    #: that is spoken to a few times an hour should not have to pay that load again each time.
+    keep_alive: str = "30m"
+    #: Load the chat model as soon as the health probe finds it, and refresh its keep-alive on
+    #: every later probe, so the first thing the user says is answered by an already-warm model.
+    #: Turn it off to keep the memory free for something else; the first request then loads it.
+    preload: bool = True
 
 
 class ProvidersConfig(BaseModel):

@@ -76,25 +76,36 @@ async def test_boot_state_and_health(core: NoxCore):
         await client.close()
 
 
-async def test_chat_turn_offline_uses_rules_and_streams(core: NoxCore):
-    client = await _client(core)
+async def _chat(client, text: str) -> tuple[dict, list[str]]:
     chunks: list[str] = []
+    call = await client.request_stream("chat.send", {"text": text, "speak": False}, timeout=60)
+    async for frame in call:
+        chunks.append(str(frame.get("delta", "")))
+    return await call.result(), chunks
+
+
+async def test_chat_turn_offline_streams_and_is_recorded(core: NoxCore):
+    client = await _client(core)
     try:
-        call = await client.request_stream(
-            "chat.send", {"text": "Hallo Nox", "speak": False}, timeout=30
-        )
-        async for frame in call:
-            chunks.append(str(frame.get("delta", "")))
-        result = await call.result()
+        # A greeting is answered by the deterministic fast path - no model, no retrieval - and the
+        # provider badge says `fastpath` so the user can see that.
+        result, chunks = await _chat(client, "Hallo Nox")
         assert result["text"]
-        # OFFLINE blocks cloud providers only; Ollama on loopback stays allowed (local=True).
+        assert result["provider"] == "fastpath"
+        assert "".join(chunks) == result["text"]
+
+        # A real question takes the full path. OFFLINE blocks cloud providers only; Ollama on
+        # loopback stays allowed (local=True), and `rules` is the last resort behind it.
+        result, chunks = await _chat(client, "Erklär mir kurz, was ein Vektorindex ist.")
+        assert result["text"]
         assert result["provider"] in ("ollama", "rules")
         if result["provider"] == "rules":
             assert result["degraded"] is True
         assert "".join(chunks) == result["text"]
-        # the turn was recorded (offline mode still allows local, text-only memory)
+
+        # both turns were recorded (offline mode still allows local, text-only memory)
         rows = core.db.fetch_all("SELECT role, text FROM turns ORDER BY id")
-        assert [r["role"] for r in rows] == ["user", "assistant"]
+        assert [r["role"] for r in rows] == ["user", "assistant", "user", "assistant"]
     finally:
         await client.close()
 

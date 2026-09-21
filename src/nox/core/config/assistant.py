@@ -193,7 +193,13 @@ class MemoryConfig(StrictSection):
 
     embed_model: str = "nomic-embed-text"
     vault_watch_debounce_s: float = Field(default=2.0, gt=0.0)
-    retrieval_max_tokens: int = Field(default=4000, ge=256)
+    #: Context budget per turn. Retrieved context changes every turn, so it is never in
+    #: the model server's prompt prefix cache: on `llama3.2:3b` every token of it costs
+    #: about 2.2 ms before the first token of the answer.
+    retrieval_max_tokens: int = Field(default=600, ge=256)
+    #: Vector score below which a hit is dropped instead of padding the prompt; see
+    #: `nox.memory.retrieval.DEFAULT_MIN_SCORE`.
+    retrieval_min_score: float = Field(default=0.75, ge=0.0, le=1.0)
     retrieval_k: int = Field(default=8, ge=1, le=50)
     full_scan_on_boot: bool = True
     retention_note_version_days: int = Field(default=30, ge=1)

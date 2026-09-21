@@ -20,6 +20,7 @@ import { ConfigForm, groupId, groupsOf } from './ConfigForm';
 import { HealthHistoryTable } from './HealthHistoryTable';
 import { IntegrationsSection } from './IntegrationsSection';
 import { PersonalityTile } from './PersonalityTile';
+import { useHomeTest } from './useHomeTest';
 import { useSecrets } from './useSecrets';
 import { useSettingsData } from './useSettingsData';
 import { useTwitchDeviceFlow } from './useTwitchDeviceFlow';
@@ -49,6 +50,7 @@ export function SettingsPage({
   const data = useSettingsData(client, revision);
   const secrets = useSecrets(client, t, data.secrets, data.pinConfigured, data.reloadSecrets);
   const twitch = useTwitchDeviceFlow(client, t, twitchAuthEvent);
+  const homeTest = useHomeTest(client, t);
 
   const groups = useMemo(() => (data.config ? groupsOf(data.config) : []), [data.config]);
   const disabled = client === null;
@@ -77,6 +79,7 @@ export function SettingsPage({
         twitch={twitch}
         plugins={plugins}
         onOpenRemote={onOpenRemote}
+        homeTest={homeTest}
       />
 
       <section aria-labelledby="h-config" id="settings-config">

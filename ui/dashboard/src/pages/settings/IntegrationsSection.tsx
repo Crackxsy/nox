@@ -1,5 +1,5 @@
 /**
- * The credentials a first-time user actually needs: Twitch, OBS, Telegram.
+ * The credentials a first-time user actually needs: Twitch, OBS, Telegram, Home Assistant.
  *
  * This section is first on the page. It used to sit roughly 5000 px below thirty-five config rows,
  * which meant the one part of Settings a stranger has to reach was the one part they could not find.
@@ -11,14 +11,16 @@
 import { type Lang, type T, twitchStateLabel } from '../../i18n';
 import { type IpcClient } from '../../ipc';
 import type { StreamPluginStatus } from '../../model';
-import { StateWord, Tile, toneFor } from '../../ui';
+import { Detail, StateWord, Tile, toneFor } from '../../ui';
 import { SecretField } from './SecretField';
+import type { HomeTestController } from './useHomeTest';
 import type { SecretsController } from './useSecrets';
 import type { TwitchFlow } from './useTwitchDeviceFlow';
 
 export const TWITCH_CLIENT_ID = 'nox/twitch/client_id';
 export const OBS_PASSWORD = 'nox/obs/websocket_password';
 export const TELEGRAM_TOKEN = 'nox/telegram/bot_token';
+export const HOME_ACCESS_TOKEN = 'nox/home/access_token';
 
 export interface IntegrationsSectionProps {
   t: T;
@@ -32,6 +34,8 @@ export interface IntegrationsSectionProps {
   plugins: StreamPluginStatus;
   /** Takes the user to the Remote page's pairing tile. */
   onOpenRemote: () => void;
+  /** The Home Assistant connection test; it owns its own request and its own verdict. */
+  homeTest: HomeTestController;
 }
 
 export function IntegrationsSection({
@@ -43,6 +47,7 @@ export function IntegrationsSection({
   twitch,
   plugins,
   onOpenRemote,
+  homeTest,
 }: IntegrationsSectionProps) {
   const disabled = client === null;
   const twitchState = twitch.status?.state ?? 'idle';
@@ -179,6 +184,37 @@ export function IntegrationsSection({
                 labelKey="obs_password_label"
                 hintKey="obs_hint"
               />
+            </Tile>
+
+            <Tile level={4} id="home" title={t('settings_group_home')}>
+              <ol className="steps">
+                <li>{t('home_step_1')}</li>
+                <li>{t('home_step_2')}</li>
+                <li>{t('home_step_3')}</li>
+              </ol>
+              <SecretField
+                {...secretProps(HOME_ACCESS_TOKEN)}
+                labelKey="home_token_label"
+                hintKey="home_token_hint"
+              />
+              {homeTest.error && (
+                <p role="alert" className="alert">
+                  {homeTest.error}
+                </p>
+              )}
+              <div className="tile-actions">
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  disabled={disabled || homeTest.busy}
+                  onClick={homeTest.test}
+                >
+                  {homeTest.busy ? t('home_test_running') : t('home_test_button')}
+                </button>
+              </div>
+              <p role="status" aria-live="polite" className="hint break">
+                {homeTest.message && <Detail label={homeTest.message} detail={homeTest.detail} />}
+              </p>
             </Tile>
 
             <Tile level={4} id="telegram" title="Telegram">

@@ -5,10 +5,17 @@ Endpoints: ``/api/chat`` (NDJSON streaming), ``/api/tags`` (health), ``/api/embe
 security agent's egress guard can replace plain httpx without touching this module. GPU policy:
 ``options.num_gpu=0`` (CPU only) when ``metadata["gpu_allowed"] == "false"`` or when the request
 mode is not in ``gpu_allowed_modes`` (never during Rocket League).
+
+Warm models: an Ollama server that has unloaded the model answers the first request about 3.7 s
+later than a warm one (measured on ``llama3.2:3b``: 3793 ms to the first token cold, 59 ms warm).
+``health()`` therefore doubles as the keep-warm tick - when ``preload`` is on it fires a
+zero-message ``/api/chat`` request, which loads the model if needed and pushes its keep-alive out.
+That request costs about 130 ms against a loaded model and never blocks the health answer.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Callable
@@ -25,6 +32,10 @@ from nox.core.events import HealthStatus
 PROVIDER_ID = "ollama"
 ClientFactory = Callable[[], httpx.AsyncClient]
 
+#: Budget for the keep-warm request. Long enough to load a small model from a warm page cache,
+#: short enough that a wedged server does not leave a task hanging around.
+PRELOAD_TIMEOUT_S = 120.0
+
 log = get_logger(__name__)
 
 
@@ -35,6 +46,25 @@ def default_client_factory() -> httpx.AsyncClient:
     from nox.security.egress import shared_ssl_context  # noqa: PLC0415 - avoids an import cycle
 
     return httpx.AsyncClient(verify=shared_ssl_context(), timeout=httpx.Timeout(10.0, connect=5.0))
+
+
+def _refuse_thinking_only(message: dict[str, object]) -> None:
+    """Raise instead of returning an empty answer.
+
+    Reasoning models (qwen3, deepseek-r1 and the like) put their output in `message.thinking` and
+    leave `message.content` empty, so the caller used to receive a blank answer after a long wait
+    with nothing anywhere saying why. An unusable answer has to fail loudly so the router can try
+    the next provider.
+    """
+    thinking = message.get("thinking")
+    if isinstance(thinking, str) and thinking.strip():
+        raise ProviderError(
+            PROVIDER_ID,
+            "the model answered only in its thinking channel and left the answer empty; "
+            "reasoning models are not supported - choose a non-reasoning model",
+            retryable=False,
+        )
+    raise ProviderError(PROVIDER_ID, "the model returned an empty answer", retryable=True)
 
 
 class OllamaProvider:
@@ -60,6 +90,7 @@ class OllamaProvider:
             reason="not probed yet",
         )
         self._last: dict[str, AiResponse] = {}
+        self._warm_task: asyncio.Task[bool] | None = None
 
     @property
     def info(self) -> ProviderInfo:
@@ -95,10 +126,53 @@ class OllamaProvider:
         wanted = self._cfg.model
         if wanted in names or wanted.split(":")[0] in names:
             status, reason = HealthStatus.AVAILABLE, f"model {wanted} available"
+            self._schedule_warmup()
         else:
             status, reason = HealthStatus.LIMITED, f"model {wanted} not pulled"
         self._info = self._info.model_copy(update={"status": status, "reason": reason})
         return self._info
+
+    # -- keeping the model warm -------------------------------------------------------------------
+
+    def _schedule_warmup(self) -> None:
+        """Start a keep-warm request unless one is still running (module docstring)."""
+        if not self._cfg.preload:
+            return
+        if self._warm_task is not None and not self._warm_task.done():
+            return
+        self._warm_task = asyncio.get_running_loop().create_task(
+            self._warm(), name="nox-ollama-warmup"
+        )
+        self._warm_task.add_done_callback(self._note_warmup)
+
+    async def warmup(self) -> bool:
+        """Load the chat model and refresh its keep-alive. Returns False with a logged reason."""
+        return await self._warm()
+
+    async def _warm(self) -> bool:
+        payload = {"model": self._cfg.model, "messages": [], "keep_alive": self._cfg.keep_alive}
+        try:
+            async with self._client_factory() as client:
+                response = await client.post(
+                    self._url("/api/chat"),
+                    json=payload,
+                    timeout=httpx.Timeout(PRELOAD_TIMEOUT_S, connect=5.0),
+                )
+                self._raise_for_status(response)
+        except (httpx.HTTPError, ProviderError) as exc:
+            log.info(
+                "ai.ollama.warmup_failed",
+                model=self._cfg.model,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return False
+        return True
+
+    @staticmethod
+    def _note_warmup(task: asyncio.Task[bool]) -> None:
+        """Consume the task result so asyncio does not report an unretrieved exception."""
+        if not task.cancelled():
+            task.exception()
 
     # -- request building -----------------------------------------------------------------------
 
@@ -161,7 +235,10 @@ class OllamaProvider:
             raise ProviderError(PROVIDER_ID, f"{type(exc).__name__}: {exc}") from exc
         self._raise_for_status(response)
         data = response.json()
-        text = str(data.get("message", {}).get("content", ""))
+        message = data.get("message", {})
+        text = str(message.get("content", ""))
+        if not text.strip():
+            _refuse_thinking_only(message)
         tokens_in, tokens_out = self._usage(data)
         result = AiResponse(
             request_id=request.request_id,
@@ -178,6 +255,7 @@ class OllamaProvider:
         started = time.perf_counter()
         payload = self.build_payload(request, stream=True)
         parts: list[str] = []
+        saw_thinking = False
         tokens_in: int | None = None
         tokens_out: int | None = None
         try:
@@ -194,13 +272,18 @@ class OllamaProvider:
                     chunk = json.loads(line)
                     if "error" in chunk:
                         raise ProviderError(PROVIDER_ID, str(chunk["error"]))
-                    delta = str(chunk.get("message", {}).get("content", ""))
+                    message = chunk.get("message", {})
+                    delta = str(message.get("content", ""))
                     if delta:
                         parts.append(delta)
                         yield AiChunk(request_id=request.request_id, delta=delta, done=False)
+                    if isinstance(message.get("thinking"), str) and message["thinking"]:
+                        saw_thinking = True
                     if chunk.get("done"):
                         tokens_in, tokens_out = self._usage(chunk)
                         break
+        except ProviderError:
+            raise
         except httpx.TimeoutException as exc:
             raise ProviderTimeoutError(PROVIDER_ID, f"timeout after {request.timeout_s}s") from exc
         except httpx.ConnectError as exc:
@@ -209,6 +292,8 @@ class OllamaProvider:
             raise ProviderError(PROVIDER_ID, f"{type(exc).__name__}: {exc}") from exc
         except json.JSONDecodeError as exc:
             raise ProviderError(PROVIDER_ID, f"invalid NDJSON: {exc}") from exc
+        if not "".join(parts).strip():
+            _refuse_thinking_only({"thinking": "yes" if saw_thinking else ""})
         self._last[request.request_id] = AiResponse(
             request_id=request.request_id,
             provider=PROVIDER_ID,

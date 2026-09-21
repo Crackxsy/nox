@@ -39,6 +39,7 @@ const GROUP_ORDER = [
   'plugins',
   'remote',
   'integrations',
+  'home',
 ];
 
 export const fieldId = (path: string) => `set-${path.replace(/[^a-zA-Z0-9]+/g, '-')}`;

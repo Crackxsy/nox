@@ -15,6 +15,9 @@ const overlay = queryFlag(window.location.search, 'overlay');
 const variantId = queryString(window.location.search, 'variant');
 // Dev-only still-frame override for render_variants.py: one frame, no WebSocket.
 const still = queryFlag(window.location.search, 'still');
+// Dev-only motion preview for render_rig.py: the same state presets as `?still=1`, but with the
+// animation loop left running, which is the only way to review a rig's motion without a core.
+const animate = queryFlag(window.location.search, 'animate');
 const stillExpression = queryString(window.location.search, 'expression');
 const size = queryInt(window.location.search, 'size') ?? undefined;
 // One language per window (#43/#55): the same rule the dashboard uses, so a German desktop shows
@@ -30,6 +33,7 @@ createRoot(document.getElementById('root')!).render(
       overlay={overlay}
       variantId={variantId}
       still={still}
+      animate={animate}
       stillExpression={stillExpression}
       size={size}
     />

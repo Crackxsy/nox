@@ -26,6 +26,8 @@ export const DASHBOARD_PATTERNS = [
   'twitch.*',
   'proactive.*',
   'clip.*',
+  // The Zuhause page's live view: `home.connected`, `home.disconnected`, `home.state_changed`.
+  'home.*',
   // `plugin.failed` carries the reason a stream plugin did not load (usually the active security
   // profile). It is emitted during boot, i.e. normally before this page connects, so the Stream
   // tab only shows it for a failure that happens *during* the session — a profile switch, say.
@@ -86,6 +88,19 @@ export const api = {
   clipTag: (c: IpcClient, clipId: string, tags: string[] | null, notes: string | null = null) =>
     c.request('clip.tag', { clip_id: clipId, tags, notes }),
   clipExport: (c: IpcClient, clipId: string) => c.request('clip.export', { clip_id: clipId }),
+
+  // -- Zuhause (Home Assistant) ------------------------------------------------------------------
+  homeStatus: (c: IpcClient) => c.request('home.status', {}),
+  homeList: (c: IpcClient, area = '', domain = '') => c.request('home.list', { area, domain }),
+  homeLight: (c: IpcClient, entityIds: string[], on: boolean) =>
+    c.request('home.light', { entity_ids: entityIds, on }),
+  homeSwitch: (c: IpcClient, entityIds: string[], on: boolean) =>
+    c.request('home.switch', { entity_ids: entityIds, on }),
+  homeScene: (c: IpcClient, entityId: string) => c.request('home.scene', { entity_id: entityId }),
+  /** One sentence for the deterministic intent layer; no model is involved on a match. */
+  homeCommand: (c: IpcClient, text: string) => c.request('home.command', { text }),
+  /** The real connection test behind Settings -> Zuhause -> "Verbindung testen". */
+  homeTest: (c: IpcClient) => c.request('home.test', {}),
 
   // -- editable settings (Settings page) ---------------------------------------------------------
   configGet: (c: IpcClient) => c.request('config.get', {}),

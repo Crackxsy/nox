@@ -9,11 +9,18 @@ Writes come in two shapes: `embed_and_store` for a single text, and `embed_and_s
 whole note's chunks - one `/api/embed` request per `MAX_EMBED_BATCH` texts instead of one per
 chunk, with the sqlite-vec upserts for each batch done in one `asyncio.to_thread` pass (bulk work
 off the loop, which the connection lock makes safe - see `nox.data.db`).
+
+Scoring: vectors are stored unit-normalised, so sqlite-vec's L2 distance converts exactly to
+cosine similarity (`_cosine`). A caller can therefore compare a hit against a fixed threshold and
+mean something by it - on the benchmark corpus an on-topic chunk scores 0.75-0.82 and an unrelated
+one 0.38-0.62, a spread the previous `1 / (1 + distance)` mapping squeezed into 0.47-0.62.
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
+from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
@@ -29,6 +36,19 @@ Kind = Literal["memory_item", "vault_chunk"]
 #: chunk into one per note; the cap keeps a single request (and its timeout) bounded.
 MAX_EMBED_BATCH = 32
 
+#: Query embeddings kept in memory (LRU). An embedding is a pure function of (model, text), so a
+#: repeated question can reuse one instead of paying another round trip to the model server
+#: (measured: ~40 ms warm, ~1500 ms when the embedding model has to be loaded first). Only search
+#: queries are cached - the write path embeds each text once anyway. At 768 float32 dimensions one
+#: entry is ~3 KB, so the whole cache is well under a megabyte.
+QUERY_CACHE_SIZE = 256
+
+#: How far an embedding's length may be from 1.0 before `_pack` normalises it. `nomic-embed-text`
+#: already returns unit vectors, so this is a no-op for the current model and the stored vectors of
+#: existing installations stay valid; it is what makes the cosine score correct for a model that
+#: does not.
+_NORM_TOLERANCE = 1e-6
+
 
 class EmbedProvider(Protocol):
     async def embed(self, texts: list[str], *, model: str | None = None) -> list[list[float]]: ...
@@ -38,7 +58,10 @@ class EmbedProvider(Protocol):
 class SearchHit:
     kind: Kind
     ref_id: int
-    score: float  # higher = more relevant, whichever path produced it
+    #: For `via="vector"`: cosine similarity in [-1, 1], where 1 is identical text. For
+    #: `via="fts"`: the negated BM25 rank, which is an open-ended scale with no comparable
+    #: meaning - never compare the two against one threshold.
+    score: float
     via: Literal["vector", "fts"]
 
 
@@ -56,16 +79,29 @@ class EmbeddingService:
         *,
         dimensions: int = 768,
         model: str = "nomic-embed-text",
+        query_cache_size: int = QUERY_CACHE_SIZE,
     ) -> None:
         self._db = db
         self._provider = provider
         self._dimensions = dimensions
         self._model = model
         self._vec_ready: bool | None = None  # None = not probed yet
+        self._query_cache: OrderedDict[str, bytes] = OrderedDict()
+        self._query_cache_size = max(0, query_cache_size)
 
     @property
     def model(self) -> str:
         return self._model
+
+    def set_query_cache_size(self, size: int) -> None:
+        """Resize the query-embedding cache; 0 turns it off (a benchmark's baseline run)."""
+        self._query_cache_size = max(0, size)
+        while len(self._query_cache) > self._query_cache_size:
+            self._query_cache.popitem(last=False)
+
+    def clear_query_cache(self) -> None:
+        """Drop the cached query embeddings, e.g. after the embedding model changed."""
+        self._query_cache.clear()
 
     async def available(self) -> bool:
         """Best-effort probe: sqlite-vec loads AND Ollama answers for one short text. Cached after
@@ -179,15 +215,31 @@ class EmbeddingService:
     ) -> list[SearchHit] | None:
         if self._provider is None or not self._db.ensure_memory_vec(self._dimensions):
             return None
+        blob = await self._query_vector(self._provider, query)
+        if blob is None:
+            return None
+        return await asyncio.to_thread(self._vector_hits, blob, k=k, kind=kind)
+
+    async def _query_vector(self, provider: EmbedProvider, query: str) -> bytes | None:
+        """The packed embedding of a search query, from the LRU cache or the provider."""
+        key = " ".join(query.split()).casefold()
+        cached = self._query_cache.get(key)
+        if cached is not None:
+            self._query_cache.move_to_end(key)
+            return cached
         try:
-            vectors = await self._provider.embed([query], model=self._model)
+            vectors = await provider.embed([query], model=self._model)
         except Exception as exc:  # noqa: BLE001 - any provider failure degrades to FTS only
             log.warning("memory.search_embed_failed", error=str(exc))
             return None
         if not vectors or len(vectors[0]) != self._dimensions:
             return None
         blob = _pack(vectors[0])
-        return await asyncio.to_thread(self._vector_hits, blob, k=k, kind=kind)
+        if self._query_cache_size:
+            self._query_cache[key] = blob
+            while len(self._query_cache) > self._query_cache_size:
+                self._query_cache.popitem(last=False)
+        return blob
 
     def _vector_hits(self, blob: bytes, *, k: int, kind: Kind | None) -> list[SearchHit]:
         """The sqlite half of a vector search, in two queries and one worker thread.
@@ -221,7 +273,7 @@ class EmbeddingService:
                 SearchHit(
                     kind=hit_kind,
                     ref_id=ref_id,
-                    score=1.0 / (1.0 + float(row["distance"])),
+                    score=_cosine(float(row["distance"])),
                     via="vector",
                 )
             )
@@ -267,9 +319,23 @@ class EmbeddingService:
 
 
 def _pack(vector: list[float]) -> bytes:
-    import struct
+    """Pack an embedding for `memory_vec`, unit-normalised first (module docstring: scoring)."""
+    import struct  # noqa: PLC0415 - only the packing helpers need it
 
+    length = math.sqrt(sum(x * x for x in vector))
+    if length > 0.0 and abs(length - 1.0) > _NORM_TOLERANCE:
+        vector = [x / length for x in vector]
     return struct.pack(f"{len(vector)}f", *vector)
+
+
+def _cosine(distance: float) -> float:
+    """Cosine similarity from the squared-free L2 distance between two unit vectors.
+
+    For unit vectors ``|a - b|^2 = 2 - 2 cos(a, b)``, so the whole [-1, 1] range survives instead
+    of being squeezed into the narrow band a ``1 / (1 + distance)`` mapping produces. That matters:
+    the useful decisions here are threshold decisions, and a threshold needs a spread scale.
+    """
+    return max(-1.0, min(1.0, 1.0 - (distance * distance) / 2.0))
 
 
 def _fts_escape(query: str) -> str:

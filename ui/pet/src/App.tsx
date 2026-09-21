@@ -11,6 +11,8 @@ import {
 } from './ipc';
 import { Pet } from './Pet';
 import { INITIAL_STATE, type PetState, deriveAnim, reduceEvent, stillState, toInput } from './petState';
+import { type LoadedRig, type RigRenderer, loadRig } from './rig';
+import { RiggedPet } from './RiggedPet';
 import { SpritePet, loadImageElement } from './SpritePet';
 import { type Lang, petTranslator } from './strings';
 import { useThemeMode } from './theme';
@@ -19,6 +21,7 @@ import {
   type LoadedSprite,
   loadSprite,
   reasonOf,
+  spriteBaseUrl,
   spriteExpressionFor,
   spriteVariantId,
 } from './variants/sprite';
@@ -35,13 +38,16 @@ export interface AppProps {
   /** Dev-only still-frame override (`?still=1`): renders one frame with no WebSocket, used by
    * `scripts/render_variants.py` to screenshot each variant/expression combination headlessly. */
   still: boolean;
+  /** Dev-only motion preview (`?animate=1`): the `?still=1` state presets with the loop running,
+   * so `scripts/render_rig.py` can screenshot a rig in motion without a core behind it. */
+  animate: boolean;
   /** `?expression=` for still mode: one of petState.ts STILL_EXPRESSIONS, else falls back to `normal`. */
   stillExpression: string | null;
   /** `?size=` canvas size override in px, for exact-size screenshots (default 260). */
   size?: number;
 }
 
-export function App({ token, lang, overlay, variantId, still, stillExpression, size }: AppProps) {
+export function App({ token, lang, overlay, variantId, still, animate, stillExpression, size }: AppProps) {
   const t = useMemo(() => petTranslator(lang), [lang]);
   // The variant is state, not just a prop: `config.set pet.variant` swaps it live, without a page
   // reload (#24). `variantId` is only the value the shell put in the URL at load time.
@@ -49,12 +55,13 @@ export function App({ token, lang, overlay, variantId, still, stillExpression, s
   useEffect(() => setActiveVariant(variantId), [variantId]);
 
   const [sprite, setSprite] = useState<LoadedSprite | null>(null);
+  const [rig, setRig] = useState<LoadedRig | null>(null);
   const variant = useMemo(() => getVariant(activeVariant), [activeVariant]);
   const theme = useThemeMode();
   const [state, setState] = useState<PetState>(() =>
-    still ? stillState(stillExpression) : INITIAL_STATE,
+    still || animate ? stillState(stillExpression) : INITIAL_STATE,
   );
-  const [status, setStatus] = useState<ConnStatus>(still ? 'online' : 'offline');
+  const [status, setStatus] = useState<ConnStatus>(still || animate ? 'online' : 'offline');
   const [statusDetail, setStatusDetail] = useState<string | undefined>(undefined);
   const clientRef = useRef<IpcClient | null>(null);
 
@@ -77,7 +84,7 @@ export function App({ token, lang, overlay, variantId, still, stillExpression, s
   }, []);
 
   useEffect(() => {
-    if (still || !token) return;
+    if (still || animate || !token) return;
     let cancelled = false;
     createPetClient(token, {
       onEvent,
@@ -95,7 +102,7 @@ export function App({ token, lang, overlay, variantId, still, stillExpression, s
       clientRef.current?.close();
       clientRef.current = null;
     };
-  }, [token, still, onEvent]);
+  }, [token, still, animate, onEvent]);
 
   // Sprite variants (#19): fetch + validate + preload the whole set before showing anything. Any
   // failure logs a reason and leaves `sprite` null, which renders the procedural variant instead.
@@ -128,6 +135,45 @@ export function App({ token, lang, overlay, variantId, still, stillExpression, s
     };
   }, [activeVariant]);
 
+  // Deformation rig (`rig.json`). Strictly an upgrade on top of the sprite set: a variant without
+  // one, or with one that will not load, keeps the sprite renderer and its static frames, and the
+  // reason is logged rather than swallowed.
+  useEffect(() => {
+    const id = spriteVariantId(activeVariant);
+    if (id === null) {
+      setRig(null);
+      return;
+    }
+    let cancelled = false;
+    loadRig(id, {
+      variantBase: spriteBaseUrl(import.meta.env.BASE_URL, id),
+      fetchJson: async (url) => {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (res.status === 404) return null;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      },
+      loadImage: loadImageElement,
+    })
+      .then((loaded) => {
+        if (!cancelled) setRig(loaded);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        console.warn('pet.rig_fallback', { variant: activeVariant, reason: reasonOf(err) });
+        setRig(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeVariant]);
+
+  // A rig running on Canvas 2D is a working pet with a coarser mesh, not a failure — but it is a
+  // downgrade, and the reason for it belongs in the log rather than nowhere.
+  const onRigBackend = useCallback((backend: RigRenderer['backend'], reason: string | null) => {
+    if (reason) console.info('pet.rig_backend', backend, reason);
+  }, []);
+
   const input = useMemo(() => toInput(state), [state]);
   const params = useMemo(() => {
     const derived = deriveAnim(input, {
@@ -155,7 +201,21 @@ export function App({ token, lang, overlay, variantId, still, stillExpression, s
 
   return (
     <div className="pet-root">
-      {sprite ? (
+      {sprite && rig ? (
+        <RiggedPet
+          rig={rig}
+          input={input}
+          params={params}
+          expression={spriteExpressionFor(input)}
+          interactive={!overlay && !still}
+          onInteract={onInteract}
+          size={size}
+          still={still}
+          preview={still || animate}
+          petLabel={sprite.manifest.name}
+          onBackend={onRigBackend}
+        />
+      ) : sprite ? (
         <SpritePet
           sprite={sprite}
           expression={spriteExpressionFor(input)}

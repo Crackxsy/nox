@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 
@@ -87,7 +88,7 @@ async def test_complete_parses_text_and_usage(rec: Recorder) -> None:
         {"role": "system", "content": "Du bist Nox."},
         {"role": "user", "content": "Hallo"},
     ]
-    assert body["keep_alive"] == "5m"
+    assert body["keep_alive"] == OllamaConfig().keep_alive
     assert "num_gpu" not in body["options"]  # type: ignore[operator]
 
 
@@ -210,3 +211,79 @@ async def test_real_ollama_roundtrip() -> None:
         pytest.skip(f"ollama not reachable: {info.reason}")
     response = await p.complete(make_request("Antworte mit genau einem Wort: Hallo", timeout_s=120))
     assert response.text.strip()
+
+
+# -- keeping the model warm -----------------------------------------------------------------------
+
+
+def _chat_paths(rec: Recorder) -> list[str]:
+    return [str(r.url.path) for r in rec.requests if r.url.path == "/api/chat"]
+
+
+async def test_a_healthy_probe_loads_the_model_and_refreshes_its_keep_alive(rec: Recorder) -> None:
+    # A cold model costs about 3.7 s before the first token; the health tick is what stops the
+    # user from paying that after every idle period.
+    rec.routes["/api/tags"] = lambda _r: httpx.Response(200, json=TAGS)
+    rec.routes["/api/chat"] = lambda _r: httpx.Response(200, json={"done_reason": "load"})
+    p = provider(rec)
+    await p.health()
+    await asyncio.sleep(0)  # the warm-up runs as its own task and never blocks the probe
+    await asyncio.sleep(0)
+    assert _chat_paths(rec) == ["/api/chat"]
+    warm = json.loads(rec.requests[-1].content)
+    assert warm["messages"] == [] and warm["model"] == "llama3.2:3b"
+    assert warm["keep_alive"] == OllamaConfig().keep_alive
+
+
+async def test_preload_off_means_the_probe_touches_no_model(rec: Recorder) -> None:
+    rec.routes["/api/tags"] = lambda _r: httpx.Response(200, json=TAGS)
+    p = provider(rec, preload=False)
+    await p.health()
+    await asyncio.sleep(0)
+    assert _chat_paths(rec) == []
+
+
+async def test_a_model_that_is_not_pulled_is_never_preloaded(rec: Recorder) -> None:
+    rec.routes["/api/tags"] = lambda _r: httpx.Response(200, json=TAGS)
+    p = provider(rec, model="mistral")
+    assert (await p.health()).status is HealthStatus.LIMITED
+    await asyncio.sleep(0)
+    assert _chat_paths(rec) == []
+
+
+async def test_a_failing_warmup_is_reported_not_raised(rec: Recorder) -> None:
+    rec.routes["/api/tags"] = lambda _r: httpx.Response(200, json=TAGS)
+    rec.routes["/api/chat"] = lambda _r: httpx.Response(500, json={"error": "boom"})
+    p = provider(rec)
+    assert await p.warmup() is False
+    assert (await p.health()).status is HealthStatus.AVAILABLE  # health is unaffected
+
+
+async def test_reasoning_model_answering_only_in_thinking_fails_loudly(rec: Recorder) -> None:
+    # Arrange: qwen3 and friends fill `thinking` and leave `content` empty.
+    lines = [
+        {"message": {"content": "", "thinking": "Der Nutzer fragt nach SQL."}, "done": False},
+        {"message": {"content": ""}, "done": True, "prompt_eval_count": 7, "eval_count": 40},
+    ]
+    rec.routes["/api/chat"] = lambda _r: httpx.Response(
+        200, content="\n".join(json.dumps(x) for x in lines) + "\n"
+    )
+    p = provider(rec)
+
+    # Act / Assert: the caller must not receive a blank answer after a long wait.
+    with pytest.raises(ProviderError) as err:
+        [c async for c in p.stream(make_request())]
+    assert "thinking" in str(err.value)
+    assert not err.value.retryable
+
+
+async def test_empty_answer_without_thinking_is_reported_as_retryable(rec: Recorder) -> None:
+    rec.routes["/api/chat"] = lambda _r: httpx.Response(
+        200, json={"message": {"content": "  "}, "done": True}
+    )
+    p = provider(rec)
+
+    with pytest.raises(ProviderError) as err:
+        await p.complete(make_request())
+    assert "empty answer" in str(err.value)
+    assert err.value.retryable

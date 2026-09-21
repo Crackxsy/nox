@@ -1,10 +1,10 @@
 /**
  * Dashboard shell, built like a product site rather than an admin panel: a 48 px translucent top
- * bar carries the wordmark, the seven section links (one WAI-ARIA tablist, centred and tiny) and,
+ * bar carries the wordmark, the eight section links (one WAI-ARIA tablist, centred and tiny) and,
  * on the right, the connection indicator and the appearance control. Everything below is one
  * 1100 px content column: a display headline per section, then tiles and rails.
  *
- * Keyboard-first: skip link, roving-tabindex tablist (arrow keys, Home/End), Alt+1..7 jump to a
+ * Keyboard-first: skip link, roving-tabindex tablist (arrow keys, Home/End), Alt+1..8 jump to a
  * section from anywhere (and are skipped while a text field has focus), every control reachable and
  * labelled. A global toast panel shows `proactive.notification` events regardless of the section.
  *
@@ -36,16 +36,26 @@ import { NotificationToasts } from './NotificationToasts';
 import { AuditPage } from './pages/Audit';
 import { ChatPage } from './pages/Chat';
 import { ClipsPage } from './pages/Clips';
+import { HomePage } from './pages/Home';
 import { RemotePage } from './pages/Remote';
 import { SettingsPage } from './pages/settings/SettingsPage';
 import { StatusPage } from './pages/Status';
 import { StreamPage } from './pages/Stream';
 import { type ThemePref, applyTheme, storeTheme } from './theme';
 
-export type TabId = 'status' | 'chat' | 'stream' | 'clips' | 'remote' | 'audit' | 'settings';
+export type TabId =
+  | 'status'
+  | 'chat'
+  | 'home'
+  | 'stream'
+  | 'clips'
+  | 'remote'
+  | 'audit'
+  | 'settings';
 const TABS: { id: TabId; label: Key }[] = [
   { id: 'status', label: 'tab_status' },
   { id: 'chat', label: 'tab_chat' },
+  { id: 'home', label: 'tab_home' },
   { id: 'stream', label: 'tab_stream' },
   { id: 'clips', label: 'tab_clips' },
   { id: 'remote', label: 'tab_remote' },
@@ -196,7 +206,7 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
     const onKey = (e: KeyboardEvent) => {
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
       if (isTextEntry(e.target)) return;
-      const idx = ['1', '2', '3', '4', '5', '6', '7'].indexOf(e.key);
+      const idx = ['1', '2', '3', '4', '5', '6', '7', '8'].indexOf(e.key);
       const target = TABS[idx];
       if (idx < 0 || !target) return;
       e.preventDefault();
@@ -358,6 +368,16 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
                 onMessages={(update) => setMessages((list) => update(list))}
                 draft={chatDraft}
                 onDraft={setChatDraft}
+              />
+            )}
+            {item.id === 'home' && (
+              <HomePage
+                t={t}
+                lang={lang}
+                state={state}
+                client={liveClient}
+                onState={setState}
+                onOpenSettings={() => setTab('settings')}
               />
             )}
             {item.id === 'stream' && (

@@ -61,6 +61,14 @@ EDITABLE_PATHS: dict[str, str] = {
     "stream.twitch.rate_limit_min_gap_s": "integrations",
     "stream.twitch.min_backoff_s": "integrations",
     "stream.twitch.max_backoff_s": "integrations",
+    # The Home Assistant connection. The `home` plugin worker reads these at start, so none of
+    # them can be applied live - the same reason the Twitch knobs above are not on
+    # `LIVE_APPLY_PATHS` either. The access token is not a setting: it lives in the credential
+    # manager and is managed through `secrets.set`.
+    "home.host": "home",
+    "home.port": "home",
+    "home.tls": "home",
+    "home.areas_allowed": "home",
     "remote.enabled": "remote",
     "memory.full_scan_on_boot": "memory",
     "plugins.enabled": "plugins",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from nox.ai.prompting import (
+    ANSWER_SHAPE_BLOCK,
     DEFAULT_PERSONALITY_BLOCK,
     RULES_BLOCK,
     build_system_prompt,
@@ -46,7 +47,15 @@ def test_build_system_prompt_order_and_facts() -> None:
 
 def test_build_system_prompt_without_facts_has_no_facts_section() -> None:
     prompt = build_system_prompt("P", {})
-    assert prompt == "P\n\n" + RULES_BLOCK
+    assert prompt == "P\n\n" + RULES_BLOCK + "\n\n" + ANSWER_SHAPE_BLOCK
+
+
+def test_answer_shape_comes_after_the_rules_and_before_the_facts() -> None:
+    # Stable blocks first, so the model server's prompt prefix cache survives the next turn: the
+    # only part that changes per turn is the facts block at the end.
+    prompt = build_system_prompt(DEFAULT_PERSONALITY_BLOCK, {"mode": "companion"})
+    assert prompt.index(ANSWER_SHAPE_BLOCK) > prompt.index(RULES_BLOCK)
+    assert prompt.index("Current facts:") > prompt.index(ANSWER_SHAPE_BLOCK)
 
 
 def test_untrusted_wraps_with_provenance_and_defuses_delimiters() -> None:

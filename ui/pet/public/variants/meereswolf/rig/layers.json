@@ -1,0 +1,47 @@
+{
+  "source": "idle_1024.png",
+  "measured_background_rgb": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "erode_px": 2,
+  "before": {
+    "edge_pixels": 28587,
+    "edge_luminance": 0.10248228907585144,
+    "core_luminance": 0.3511055111885071,
+    "darkest_decile_luminance": 0.0,
+    "border_max_contrast_on_light": 16.64666175842285,
+    "body_contrast_on_light": 2.7465460300445557
+  },
+  "after": {
+    "edge_pixels": 34254,
+    "edge_luminance": 0.37813177704811096,
+    "core_luminance": 0.3522753119468689,
+    "darkest_decile_luminance": 0.07604104280471802,
+    "border_max_contrast_on_light": 15.491195678710938,
+    "body_contrast_on_light": 2.738231897354126
+  },
+  "layers": {
+    "eye_l": {
+      "file": "eye_l.png",
+      "rect": [
+        0.49414,
+        0.2168,
+        0.56836,
+        0.28223
+      ],
+      "lidPivotY": 0.27051
+    },
+    "eye_r": {
+      "file": "eye_r.png",
+      "rect": [
+        0.63477,
+        0.21484,
+        0.70312,
+        0.27832
+      ],
+      "lidPivotY": 0.2666
+    }
+  }
+}

@@ -15,6 +15,7 @@ from nox.ipc.protocol import Envelope, Kind, Source
 from nox.security.gate import SecurityChangeGate
 from nox.security.secrets import InMemorySecretStore, PinManager
 from nox.settings.install import UI_ROLES, install
+from nox.settings.secrets_ipc import KNOWN_SECRETS
 from tests.unit.fakes import FakeBus
 from tests.unit.settings.conftest import FakeAudit
 
@@ -165,7 +166,9 @@ async def test_secrets_requests_refuse_an_unknown_name(
         with pytest.raises(IpcError):
             await _call(core, "secrets.set", {"name": "nox/security/pin", "value": "1234"})
         status = await _call(core, "secrets.status", {})
-        assert [entry["present"] for entry in status["secrets"]] == [False] * 6
+        # One row per known name, all absent - derived from `KNOWN_SECRETS` rather than a literal
+        # count, so adding an integration's credential does not fail this unrelated assertion.
+        assert [entry["present"] for entry in status["secrets"]] == [False] * len(KNOWN_SECRETS)
     finally:
         await runtime.stop()
 

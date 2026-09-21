@@ -255,6 +255,7 @@ const GROUP_KEYS: Record<string, Key> = {
   memory: 'settings_group_memory',
   plugins: 'settings_group_plugins',
   remote: 'settings_group_remote',
+  home: 'settings_group_home',
 };
 
 /** Settings group heading; an unknown group name is shown verbatim. */

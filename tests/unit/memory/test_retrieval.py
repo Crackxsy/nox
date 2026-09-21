@@ -110,3 +110,75 @@ def test_format_context_empty_when_no_items() -> None:
     from nox.memory.retrieval import RetrievalResult
 
     assert format_context(RetrievalResult(query="q")) == ""
+
+
+# -- relevance floor, margin and the prompt budget ------------------------------------------------
+
+
+def _note(db: Database, ref_id: int, text: str) -> None:
+    db.execute(
+        "INSERT OR IGNORE INTO vault_index (path, mtime, hash, title, type, tags_json, indexed_at) "
+        "VALUES ('n.md', 0, 'h', 'N', '', '[]', '2026-01-01')"
+    )
+    db.execute(
+        "INSERT INTO vault_chunks (id, path, ord, text, hash) VALUES (?, 'n.md', ?, ?, 'h')",
+        (ref_id, ref_id, text),
+    )
+
+
+async def test_small_talk_retrieves_nothing_instead_of_padding_the_prompt(db: Database) -> None:
+    # Every note is "nearest" to a greeting; none of them is relevant to it, and every retrieved
+    # token costs time to the first spoken word.
+    for ref_id in (1, 2, 3):
+        _note(db, ref_id, f"Notiz {ref_id}")
+    hits = [
+        SearchHit(kind="vault_chunk", ref_id=1, score=0.44, via="vector"),
+        SearchHit(kind="vault_chunk", ref_id=2, score=0.43, via="vector"),
+        SearchHit(kind="vault_chunk", ref_id=3, score=0.41, via="vector"),
+    ]
+    result = await RetrievalService(db, FakeEmbeddings(hits)).retrieve("Hallo")
+    assert result.found is False
+    assert result.dropped == 3
+    assert result.relevance == 0.0
+    assert format_context(result) == ""
+
+
+async def test_only_the_hits_close_to_the_best_one_are_kept(db: Database) -> None:
+    _note(db, 1, "Das Projekt nutzt SQLite.")
+    _note(db, 2, "Nudelteig ruht 30 Minuten.")
+    hits = [
+        SearchHit(kind="vault_chunk", ref_id=1, score=0.81, via="vector"),
+        SearchHit(kind="vault_chunk", ref_id=2, score=0.67, via="vector"),
+    ]
+    result = await RetrievalService(db, FakeEmbeddings(hits)).retrieve("Welche Datenbank?")
+    assert [item.ref_id for item in result.items] == [1]
+    assert result.dropped == 1
+    assert result.relevance == pytest.approx(0.81)
+
+
+async def test_keyword_hits_are_never_measured_against_the_vector_floor(db: Database) -> None:
+    # BM25 ranks are an unbounded, unrelated scale; filtering them by a cosine threshold would
+    # silently empty every degraded result.
+    _note(db, 1, "Das Projekt nutzt SQLite.")
+    hits = [SearchHit(kind="vault_chunk", ref_id=1, score=0.02, via="fts")]
+    result = await RetrievalService(db, FakeEmbeddings(hits)).retrieve("Datenbank")
+    assert result.found is True
+    assert result.limited is True
+    assert result.relevance == 0.0  # "unknown", not "irrelevant"
+
+
+async def test_the_budget_can_be_retuned_at_runtime(db: Database) -> None:
+    _note(db, 1, "A" * 400)
+    _note(db, 2, "B" * 400)
+    hits = [
+        SearchHit(kind="vault_chunk", ref_id=1, score=0.81, via="vector"),
+        SearchHit(kind="vault_chunk", ref_id=2, score=0.80, via="vector"),
+    ]
+    service = RetrievalService(db, FakeEmbeddings(hits))
+    service.set_budget(max_tokens=256, min_score=0.0, score_margin=1.0)
+    assert service.max_tokens == 256
+    result = await service.retrieve("egal")
+    assert [item.ref_id for item in result.items] == [1, 2]
+    service.set_budget(max_tokens=100, min_score=0.0, score_margin=1.0)
+    result = await service.retrieve("egal")
+    assert [item.ref_id for item in result.items] == [1]  # second chunk no longer fits

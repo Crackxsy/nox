@@ -6,8 +6,16 @@ import re
 from pathlib import Path
 
 from nox.ai import prompting
-from nox.ai.prompting import DEFAULT_PERSONALITY_BLOCK, RULES_BLOCK, build_system_prompt
+from nox.ai.prompting import (
+    ANSWER_SHAPE_BLOCK,
+    DEFAULT_PERSONALITY_BLOCK,
+    RULES_BLOCK,
+    build_system_prompt,
+)
 from nox.settings.personality import PersonalityFile, render_default
+
+#: Everything `build_system_prompt` appends after the personality when there are no facts.
+_STABLE_TAIL = "\n\n" + RULES_BLOCK + "\n\n" + ANSWER_SHAPE_BLOCK
 
 
 def test_the_repo_default_is_neutral_and_carries_no_personal_data() -> None:
@@ -78,7 +86,7 @@ def test_the_prompt_builder_uses_the_configured_file(tmp_path: Path) -> None:
     prompting.set_personality_source(file.read)
     try:
         prompt = build_system_prompt(DEFAULT_PERSONALITY_BLOCK, {})
-        assert prompt == "You are Nox. From the file.\n\n" + RULES_BLOCK
+        assert prompt == "You are Nox. From the file." + _STABLE_TAIL
     finally:
         prompting.set_personality_source(None)
 
@@ -91,6 +99,6 @@ def test_an_explicit_block_is_never_replaced(tmp_path: Path) -> None:
     file.write("You are Nox. From the file.")
     prompting.set_personality_source(file.read)
     try:
-        assert build_system_prompt("A literal block", {}) == "A literal block\n\n" + RULES_BLOCK
+        assert build_system_prompt("A literal block", {}) == "A literal block" + _STABLE_TAIL
     finally:
         prompting.set_personality_source(None)

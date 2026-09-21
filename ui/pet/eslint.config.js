@@ -38,4 +38,10 @@ export default tseslint.config(
     files: ['**/__tests__/**/*.{ts,tsx}'],
     languageOptions: { globals: { ...globals.browser, ...globals.node } },
   },
+  // Authoring aids under `scripts/` run in node, not in the pet window.
+  {
+    files: ['scripts/**/*.{js,mjs}'],
+    languageOptions: { globals: { ...globals.node } },
+    rules: { 'no-console': 'off' },
+  },
 );

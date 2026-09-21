@@ -1,0 +1,941 @@
+{
+  "id": "meereswolf",
+  "base": "base.png",
+  "assetDir": "rig",
+  "mesh": {
+    "columns": 22,
+    "rows": 22
+  },
+  "bones": [
+    {
+      "name": "root",
+      "parent": null,
+      "pivot": [
+        0.57,
+        0.96
+      ],
+      "restAngle": 0,
+      "influence": {
+        "radius": 0.3,
+        "falloff": 1.0
+      }
+    },
+    {
+      "name": "body",
+      "parent": "root",
+      "pivot": [
+        0.575,
+        0.78
+      ],
+      "restAngle": -90,
+      "influence": {
+        "radius": 0.34,
+        "falloff": 1.0
+      }
+    },
+    {
+      "name": "chest",
+      "parent": "body",
+      "pivot": [
+        0.585,
+        0.6
+      ],
+      "restAngle": -90,
+      "influence": {
+        "radius": 0.27,
+        "falloff": 1.0
+      }
+    },
+    {
+      "name": "neck",
+      "parent": "chest",
+      "pivot": [
+        0.6,
+        0.475
+      ],
+      "restAngle": -90,
+      "influence": {
+        "radius": 0.17,
+        "falloff": 1.1
+      }
+    },
+    {
+      "name": "head",
+      "parent": "neck",
+      "pivot": [
+        0.6,
+        0.385
+      ],
+      "restAngle": -90,
+      "influence": {
+        "radius": 0.26,
+        "falloff": 0.9
+      }
+    },
+    {
+      "name": "muzzle",
+      "parent": "head",
+      "pivot": [
+        0.602,
+        0.325
+      ],
+      "restAngle": -90,
+      "influence": {
+        "radius": 0.1,
+        "falloff": 0.75
+      }
+    },
+    {
+      "name": "ear.l",
+      "parent": "head",
+      "pivot": [
+        0.455,
+        0.145
+      ],
+      "restAngle": -104,
+      "influence": {
+        "radius": 0.15,
+        "falloff": 0.9
+      }
+    },
+    {
+      "name": "ear.r",
+      "parent": "head",
+      "pivot": [
+        0.727,
+        0.152
+      ],
+      "restAngle": -76,
+      "influence": {
+        "radius": 0.15,
+        "falloff": 0.9
+      }
+    },
+    {
+      "name": "fin.l",
+      "parent": "head",
+      "pivot": [
+        0.44,
+        0.29
+      ],
+      "restAngle": 160,
+      "influence": {
+        "radius": 0.11,
+        "falloff": 1.6
+      }
+    },
+    {
+      "name": "fin.r",
+      "parent": "head",
+      "pivot": [
+        0.755,
+        0.285
+      ],
+      "restAngle": 20,
+      "influence": {
+        "radius": 0.11,
+        "falloff": 1.6
+      }
+    },
+    {
+      "name": "tail",
+      "parent": "body",
+      "pivot": [
+        0.37,
+        0.85
+      ],
+      "restAngle": 178,
+      "influence": {
+        "radius": 0.24,
+        "falloff": 0.9
+      }
+    },
+    {
+      "name": "lid.l",
+      "parent": "head",
+      "pivot": [
+        0.532,
+        0.2705
+      ],
+      "restAngle": 0,
+      "channelOnly": true,
+      "influence": {
+        "radius": 0.002,
+        "falloff": 1
+      }
+    },
+    {
+      "name": "lid.r",
+      "parent": "head",
+      "pivot": [
+        0.669,
+        0.2666
+      ],
+      "restAngle": 0,
+      "channelOnly": true,
+      "influence": {
+        "radius": 0.002,
+        "falloff": 1
+      }
+    }
+  ],
+  "layers": [
+    {
+      "name": "eye.l",
+      "file": "eye_l.png",
+      "rect": [
+        0.49414,
+        0.2168,
+        0.56836,
+        0.28223
+      ],
+      "grid": {
+        "columns": 3,
+        "rows": 3
+      },
+      "lid": {
+        "bone": "lid.l"
+      }
+    },
+    {
+      "name": "eye.r",
+      "file": "eye_r.png",
+      "rect": [
+        0.63477,
+        0.21484,
+        0.70313,
+        0.27832
+      ],
+      "grid": {
+        "columns": 3,
+        "rows": 3
+      },
+      "lid": {
+        "bone": "lid.r"
+      }
+    }
+  ],
+  "poses": {},
+  "clips": {
+    "breathe": {
+      "durationMs": 5000,
+      "loop": true,
+      "easing": "sine",
+      "tracks": [
+        {
+          "bone": "chest",
+          "channel": "scaleX",
+          "keys": [
+            {
+              "t": 0,
+              "value": 1.0
+            },
+            {
+              "t": 0.42,
+              "value": 1.02
+            },
+            {
+              "t": 1,
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "bone": "chest",
+          "channel": "scaleY",
+          "keys": [
+            {
+              "t": 0,
+              "value": 1.0
+            },
+            {
+              "t": 0.42,
+              "value": 1.012
+            },
+            {
+              "t": 1,
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "bone": "body",
+          "channel": "y",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0.0
+            },
+            {
+              "t": 0.42,
+              "value": -0.003
+            },
+            {
+              "t": 1,
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "bone": "neck",
+          "channel": "y",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0.0
+            },
+            {
+              "t": 0.44,
+              "value": -0.006
+            },
+            {
+              "t": 1,
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "bone": "neck",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0.0
+            },
+            {
+              "t": 0.46,
+              "value": -1.2
+            },
+            {
+              "t": 1,
+              "value": 0.0
+            }
+          ]
+        }
+      ]
+    },
+    "sleep_breathe": {
+      "durationMs": 8000,
+      "loop": true,
+      "easing": "sine",
+      "tracks": [
+        {
+          "bone": "chest",
+          "channel": "scaleX",
+          "keys": [
+            {
+              "t": 0,
+              "value": 1.0
+            },
+            {
+              "t": 0.45,
+              "value": 1.028
+            },
+            {
+              "t": 1,
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "bone": "chest",
+          "channel": "scaleY",
+          "keys": [
+            {
+              "t": 0,
+              "value": 1.0
+            },
+            {
+              "t": 0.45,
+              "value": 1.016
+            },
+            {
+              "t": 1,
+              "value": 1.0
+            }
+          ]
+        },
+        {
+          "bone": "body",
+          "channel": "y",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0.0
+            },
+            {
+              "t": 0.45,
+              "value": -0.004
+            },
+            {
+              "t": 1,
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "bone": "neck",
+          "channel": "y",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0.0
+            },
+            {
+              "t": 0.48,
+              "value": -0.01
+            },
+            {
+              "t": 1,
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "bone": "neck",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0.0
+            },
+            {
+              "t": 0.5,
+              "value": 2.0
+            },
+            {
+              "t": 1,
+              "value": 0.0
+            }
+          ]
+        }
+      ]
+    },
+    "blink": {
+      "durationMs": 190,
+      "loop": false,
+      "easing": "sine",
+      "tracks": [
+        {
+          "bone": "lid.l",
+          "channel": "scaleY",
+          "keys": [
+            {
+              "t": 0,
+              "value": 1,
+              "easing": "easeIn"
+            },
+            {
+              "t": 0.42,
+              "value": 0.07
+            },
+            {
+              "t": 0.58,
+              "value": 0.07,
+              "easing": "easeOut"
+            },
+            {
+              "t": 1,
+              "value": 1
+            }
+          ]
+        },
+        {
+          "bone": "lid.r",
+          "channel": "scaleY",
+          "keys": [
+            {
+              "t": 0,
+              "value": 1,
+              "easing": "easeIn"
+            },
+            {
+              "t": 0.45,
+              "value": 0.07
+            },
+            {
+              "t": 0.61,
+              "value": 0.07,
+              "easing": "easeOut"
+            },
+            {
+              "t": 1,
+              "value": 1
+            }
+          ]
+        }
+      ]
+    },
+    "ear_flick": {
+      "durationMs": 220,
+      "loop": false,
+      "easing": "easeOut",
+      "tracks": [
+        {
+          "bone": "ear.l",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0
+            },
+            {
+              "t": 0.25,
+              "value": -13
+            },
+            {
+              "t": 0.55,
+              "value": 5
+            },
+            {
+              "t": 1,
+              "value": 0
+            }
+          ]
+        }
+      ]
+    },
+    "ear_flick_r": {
+      "durationMs": 220,
+      "loop": false,
+      "easing": "easeOut",
+      "tracks": [
+        {
+          "bone": "ear.r",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0
+            },
+            {
+              "t": 0.25,
+              "value": 13
+            },
+            {
+              "t": 0.55,
+              "value": -5
+            },
+            {
+              "t": 1,
+              "value": 0
+            }
+          ]
+        }
+      ]
+    },
+    "head_tilt": {
+      "durationMs": 4200,
+      "loop": true,
+      "easing": "sine",
+      "tracks": [
+        {
+          "bone": "head",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0
+            },
+            {
+              "t": 0.3,
+              "value": 6
+            },
+            {
+              "t": 0.62,
+              "value": -6
+            },
+            {
+              "t": 1,
+              "value": 0
+            }
+          ]
+        }
+      ]
+    },
+    "head_turn": {
+      "durationMs": 6400,
+      "loop": true,
+      "easing": "sine",
+      "tracks": [
+        {
+          "bone": "head",
+          "channel": "scaleX",
+          "keys": [
+            {
+              "t": 0,
+              "value": 1
+            },
+            {
+              "t": 0.3,
+              "value": 0.965
+            },
+            {
+              "t": 0.7,
+              "value": 0.965
+            },
+            {
+              "t": 1,
+              "value": 1
+            }
+          ]
+        },
+        {
+          "bone": "head",
+          "channel": "x",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0
+            },
+            {
+              "t": 0.3,
+              "value": 0.016
+            },
+            {
+              "t": 0.7,
+              "value": -0.016
+            },
+            {
+              "t": 1,
+              "value": 0
+            }
+          ]
+        },
+        {
+          "bone": "muzzle",
+          "channel": "x",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0
+            },
+            {
+              "t": 0.3,
+              "value": 0.008
+            },
+            {
+              "t": 0.7,
+              "value": -0.008
+            },
+            {
+              "t": 1,
+              "value": 0
+            }
+          ]
+        }
+      ]
+    },
+    "tail_sway": {
+      "durationMs": 8000,
+      "loop": true,
+      "easing": "sine",
+      "tracks": [
+        {
+          "bone": "tail",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0
+            },
+            {
+              "t": 0.27,
+              "value": -4.5
+            },
+            {
+              "t": 0.64,
+              "value": 4.5
+            },
+            {
+              "t": 1,
+              "value": 0
+            }
+          ]
+        },
+        {
+          "bone": "tail",
+          "channel": "y",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0
+            },
+            {
+              "t": 0.45,
+              "value": -0.006
+            },
+            {
+              "t": 1,
+              "value": 0
+            }
+          ]
+        }
+      ]
+    },
+    "perk": {
+      "durationMs": 2600,
+      "loop": true,
+      "easing": "sine",
+      "tracks": [
+        {
+          "bone": "neck",
+          "channel": "y",
+          "keys": [
+            {
+              "t": 0,
+              "value": -0.006
+            },
+            {
+              "t": 0.45,
+              "value": -0.012
+            },
+            {
+              "t": 1,
+              "value": -0.006
+            }
+          ]
+        },
+        {
+          "bone": "ear.l",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": -5
+            },
+            {
+              "t": 0.45,
+              "value": -7.5
+            },
+            {
+              "t": 1,
+              "value": -5
+            }
+          ]
+        },
+        {
+          "bone": "ear.r",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": 5
+            },
+            {
+              "t": 0.45,
+              "value": 7.5
+            },
+            {
+              "t": 1,
+              "value": 5
+            }
+          ]
+        },
+        {
+          "bone": "fin.l",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": 2
+            },
+            {
+              "t": 0.5,
+              "value": 4
+            },
+            {
+              "t": 1,
+              "value": 2
+            }
+          ]
+        },
+        {
+          "bone": "fin.r",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": -2
+            },
+            {
+              "t": 0.5,
+              "value": -4
+            },
+            {
+              "t": 1,
+              "value": -2
+            }
+          ]
+        }
+      ]
+    },
+    "speak_idle": {
+      "durationMs": 620,
+      "loop": true,
+      "easing": "sine",
+      "tracks": [
+        {
+          "bone": "head",
+          "channel": "y",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0
+            },
+            {
+              "t": 0.45,
+              "value": 0.0035
+            },
+            {
+              "t": 1,
+              "value": 0
+            }
+          ]
+        },
+        {
+          "bone": "muzzle",
+          "channel": "scaleY",
+          "keys": [
+            {
+              "t": 0,
+              "value": 1
+            },
+            {
+              "t": 0.45,
+              "value": 1.03
+            },
+            {
+              "t": 1,
+              "value": 1
+            }
+          ]
+        },
+        {
+          "bone": "head",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0
+            },
+            {
+              "t": 0.5,
+              "value": -0.8
+            },
+            {
+              "t": 1,
+              "value": 0
+            }
+          ]
+        }
+      ]
+    },
+    "startle": {
+      "durationMs": 760,
+      "loop": false,
+      "easing": "easeOut",
+      "tracks": [
+        {
+          "bone": "neck",
+          "channel": "y",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0,
+              "easing": "easeOut"
+            },
+            {
+              "t": 0.16,
+              "value": 0.014
+            },
+            {
+              "t": 1,
+              "value": 0
+            }
+          ]
+        },
+        {
+          "bone": "head",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0,
+              "easing": "easeOut"
+            },
+            {
+              "t": 0.16,
+              "value": 4
+            },
+            {
+              "t": 0.45,
+              "value": -1.5
+            },
+            {
+              "t": 1,
+              "value": 0
+            }
+          ]
+        },
+        {
+          "bone": "ear.l",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0,
+              "easing": "easeOut"
+            },
+            {
+              "t": 0.16,
+              "value": 18
+            },
+            {
+              "t": 1,
+              "value": 0
+            }
+          ]
+        },
+        {
+          "bone": "ear.r",
+          "channel": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "value": 0,
+              "easing": "easeOut"
+            },
+            {
+              "t": 0.16,
+              "value": -18
+            },
+            {
+              "t": 1,
+              "value": 0
+            }
+          ]
+        },
+        {
+          "bone": "chest",
+          "channel": "scaleY",
+          "keys": [
+            {
+              "t": 0,
+              "value": 1,
+              "easing": "easeOut"
+            },
+            {
+              "t": 0.16,
+              "value": 0.985
+            },
+            {
+              "t": 1,
+              "value": 1
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

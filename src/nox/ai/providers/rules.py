@@ -12,15 +12,10 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import datetime
 
 from nox.ai.base import AiChunk, AiRequest, AiResponse, AiRole, ProviderInfo
+from nox.ai.language import Language, detect_language, render_clock, render_date
 from nox.core.events import HealthStatus
 
 PROVIDER_ID = "rules"
-
-_GERMAN_HINTS = re.compile(
-    r"\b(ich|du|bist|ist|nicht|und|wie|was|der|die|das|ein|eine|hallo|moin|servus|uhr|bitte|"
-    r"danke|geht|dir|mir|heute|jetzt)\b",
-    re.IGNORECASE,
-)
 
 # Intent rules, checked in order. Each: (intent, compiled regex).
 _INTENTS: list[tuple[str, re.Pattern[str]]] = [
@@ -86,29 +81,6 @@ _TEXTS: dict[str, dict[str, str]] = {
     },
 }
 
-_WEEKDAYS_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
-_MONTHS_DE = [
-    "Januar",
-    "Februar",
-    "März",
-    "April",
-    "Mai",
-    "Juni",
-    "Juli",
-    "August",
-    "September",
-    "Oktober",
-    "November",
-    "Dezember",
-]
-
-
-def detect_language(text: str, hint: str | None) -> str:
-    """``de`` or ``en``: the explicit hint wins, then a stop-word heuristic, default ``de``."""
-    if hint in ("de", "en"):
-        return hint
-    return "de" if _GERMAN_HINTS.search(text) else "en"
-
 
 def classify_intent(text: str) -> str:
     """Return the rule intent: identity | time | status | greeting | unknown."""
@@ -130,7 +102,7 @@ class RulesProvider:
     ) -> None:
         self._clock = clock or (lambda: datetime.now().astimezone())
         self._status_source = status_source
-        self._default_language = default_language if default_language in ("de", "en") else "de"
+        self._default_language: Language = "en" if default_language == "en" else "de"
         self._info = ProviderInfo(
             id=PROVIDER_ID,
             display_name="Rules (offline fallback)",
@@ -156,18 +128,13 @@ class RulesProvider:
                 return message.content
         return request.messages[-1].content if request.messages else ""
 
-    def _time_answer(self, language: str) -> str:
+    def _time_answer(self, language: Language) -> str:
         now = self._clock()
-        if language == "de":
-            date = (
-                f"{_WEEKDAYS_DE[now.weekday()]}, {now.day}. {_MONTHS_DE[now.month - 1]} {now.year}"
-            )
-            return _TEXTS["de"]["time"].format(time=now.strftime("%H:%M"), date=date)
-        return _TEXTS["en"]["time"].format(
-            time=now.strftime("%H:%M"), date=now.strftime("%A, %B %d, %Y")
+        return _TEXTS[language]["time"].format(
+            time=render_clock(now, language), date=render_date(now, language)
         )
 
-    def _status_answer(self, language: str) -> str:
+    def _status_answer(self, language: Language) -> str:
         base = _TEXTS[language]["status"]
         if self._status_source is None:
             return base
@@ -177,10 +144,13 @@ class RulesProvider:
     def render(self, request: AiRequest) -> str:
         """Deterministic answer text for ``request`` (also used by the tests)."""
         text = self._last_user_text(request)
-        hint = request.metadata.get("language") or self._default_language
-        language = detect_language(text, hint if request.metadata.get("language") else None)
-        if not request.metadata.get("language"):
-            language = detect_language(text, None) if text.strip() else self._default_language
+        explicit = request.metadata.get("language")
+        if explicit:
+            language: Language = detect_language(text, explicit)
+        elif text.strip():
+            language = detect_language(text, None)
+        else:
+            language = self._default_language
         intent = classify_intent(text)
         if request.role is AiRole.CLASSIFY:
             return intent

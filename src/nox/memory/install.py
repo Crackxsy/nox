@@ -14,7 +14,6 @@ unguarded.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -25,6 +24,7 @@ from nox.ai.providers.ollama import OllamaProvider
 from nox.core.events import E, Event, HealthStatus
 from nox.core.health import Check
 from nox.core.logging import get_logger
+from nox.core.orchestrator import TurnContext
 from nox.data.repos import MemoryItemRepository
 from nox.memory.embeddings import EmbeddingService
 from nox.memory.items import MemoryService
@@ -56,68 +56,52 @@ class _Core(Protocol):
 
 
 class _PromptAdapter:
-    """Appends the memory context retrieved for the current turn to the system prompt.
+    """The orchestrator's `context_provider`: retrieval results as a prompt-ready context block.
 
-    The orchestrator's `system_prompt` is a synchronous callable while retrieval is async, so the
-    context is refreshed just before a turn starts and cached for the synchronous call that
-    follows immediately after.
-
-    This adapter replaces two attributes on the live orchestrator object, because the orchestrator
-    exposes no registration seam yet. The seam it needs is one method - register an async
-    `Callable[[str], Awaitable[str]]` that the orchestrator awaits itself before building the
-    system message - at which point `install` registers through it and this class shrinks to
-    that one function. Until then, everything replaced here is restored by `uninstall`.
+    The orchestrator awaits this once per turn, before it builds the system message, and times it
+    as the turn's `context_ms`. Retrieval that outruns `timeout_s` is dropped rather than delaying
+    the answer - an ungrounded answer beats a late one, and the drop is logged.
     """
 
     def __init__(
         self, orchestrator: Any, retrieval: RetrievalService, *, k: int, timeout_s: float = 2.0
     ) -> None:
         self._orchestrator = orchestrator
-        self._base_prompt: Callable[[], str] = orchestrator.system_prompt
-        self._base_handle_text = orchestrator.handle_text
         self._retrieval = retrieval
         self._k = k
         self._timeout_s = timeout_s
-        self._context_block = ""
         self.last_result: RetrievalResult | None = None
 
     def install(self) -> None:
         if getattr(self._orchestrator, _ADAPTER_MARKER, None) is not None:
             raise RuntimeError("the orchestrator prompt is already memory-augmented")
-        self._orchestrator.system_prompt = self
-        self._orchestrator.handle_text = self._handle_text
+        self._orchestrator.context_provider = self
         setattr(self._orchestrator, _ADAPTER_MARKER, self)
 
     def uninstall(self) -> None:
         if getattr(self._orchestrator, _ADAPTER_MARKER, None) is not self:
             return
-        self._orchestrator.system_prompt = self._base_prompt
-        self._orchestrator.handle_text = self._base_handle_text
+        self._orchestrator.context_provider = None
         setattr(self._orchestrator, _ADAPTER_MARKER, None)
 
-    async def _handle_text(self, text: str, **kwargs: Any) -> Any:
-        await self.refresh(text)
-        return await self._base_handle_text(text, **kwargs)
-
-    async def refresh(self, query: str) -> None:
+    async def __call__(self, query: str) -> TurnContext:
         try:
             result = await asyncio.wait_for(
                 self._retrieval.retrieve(query, k=self._k), timeout=self._timeout_s
             )
         except TimeoutError:
             log.warning("memory.retrieval_timeout", timeout_s=self._timeout_s)
-            return
+            return TurnContext()
         except Exception as exc:  # noqa: BLE001 - a broken retrieval must not break the turn
             log.warning("memory.retrieval_failed", error=f"{type(exc).__name__}: {exc}")
-            return
+            return TurnContext()
         self.last_result = result
-        self._context_block = format_context(result)
-
-    def __call__(self) -> str:
-        base = self._base_prompt()
-        if not self._context_block:
-            return base
-        return f"{base}\n\n## Memory context (retrieved)\n{self._context_block}"
+        block = format_context(result)
+        return TurnContext(
+            block=f"## Memory context (retrieved)\n{block}" if block else "",
+            relevance=result.relevance,
+            items=len(result.items),
+        )
 
 
 @dataclass
@@ -190,7 +174,12 @@ def install(core: _Core) -> MemoryRuntime:
     provider, embeddings_unavailable = _build_embed_provider(core, cfg.embed_model)
     embeddings = EmbeddingService(core.db, provider, model=cfg.embed_model)
     memory_repo = MemoryItemRepository(core.db)
-    retrieval = RetrievalService(core.db, embeddings, max_tokens=cfg.retrieval_max_tokens)
+    retrieval = RetrievalService(
+        core.db,
+        embeddings,
+        max_tokens=cfg.retrieval_max_tokens,
+        min_score=cfg.retrieval_min_score,
+    )
 
     async def on_index_updated(path: str, chunk_count: int) -> None:
         await core.bus.publish(
