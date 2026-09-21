@@ -105,6 +105,47 @@ window's title/process name) and that detection itself never leaves the machine.
 - **Audit log**: inspectable from the dashboard; resetting it requires your PIN (it is a security
   control, not a convenience feature).
 
+## Your home
+
+Smart-home control talks to **one** address: the Home Assistant instance you configured
+(`home.host` / `home.port`). There is no vendor cloud, no manufacturer account and no bridge
+service anywhere in this feature, and no third-party smart-home library in the codebase: the
+plugin speaks Home Assistant's documented WebSocket API directly, and the "Verbindung testen"
+button is one REST request from the core through the same egress guard as everything else.
+
+**What is read.** States are read on demand: when you open the Zuhause page, when you give a
+command, and when Nox answers a question that needs them. On top of that the plugin subscribes to
+exactly one Home Assistant event type, `state_changed`, so the page can show a light that someone
+switched by hand. Only an allow-list of attributes ever leaves Home Assistant (brightness, target
+temperature, volume level, device class and similar); a media player's `media_title` — what someone
+is watching — is not on it.
+
+**What is never read.** Home Assistant's `person` and `device_tracker` domains, which say who is
+home and where a phone is, are filtered out entirely. So are `lock`, `alarm_control_panel` and
+`valve`, and any `cover` that reports itself as a garage, gate or door — those are a safety
+boundary as well as a privacy one (see below).
+
+**What is stored.** Nothing. No state of your home is written into the vault, into the memory
+index, into the audit log's details, or into a prompt sent to an AI provider — unless you asked a
+question that needs it, in which case the entities involved are part of that one request and are
+not kept afterwards. The live event stream is ephemeral: it reaches the open dashboard page and is
+never persisted.
+
+**Privacy modes cut the connection.** PRIVATE and OFFLINE mean "nothing leaves this machine except
+allow-listed local services", and smart-home control is not an exception to that. The plugin
+refuses to connect in those modes — in code, before any socket is opened — and reports itself
+`unavailable` with that reason. This holds even for a Home Assistant on loopback, which the egress
+guard alone would let through.
+
+**The hard boundary.** Nox has no tool for a door lock, an alarm panel, a water or gas valve, or a
+garage door. Those entities never appear in a listing and naming one explicitly is refused with a
+logged reason. It is enforced in `src/nox/home/boundary.py` and in the plugin that uses it, not by
+an instruction in a prompt: a control a text field can talk its way past is not a control.
+
+**Which rooms.** `home.areas_allowed` limits Nox to the rooms you name (empty = every room). It is
+checked in the plugin worker before a service call is built, so it is a real restriction rather
+than a hint to the model.
+
 ## Questions this document does not answer on its own
 
 For *why* each of these controls exists and how it is technically enforced (not just described),

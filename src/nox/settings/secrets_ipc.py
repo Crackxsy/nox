@@ -37,6 +37,7 @@ KNOWN_SECRETS: dict[str, str] = {
     "nox/twitch/client_id": "twitch",
     "nox/obs/websocket_password": "obs",
     "nox/telegram/bot_token": "telegram",
+    "nox/home/access_token": "home",
 }
 
 DEFAULT_RATE_LIMIT = 10

@@ -13,6 +13,7 @@ import {
   parseClipRecord,
 } from './clips';
 import { applyHealthChanged, parseHealthReport } from './health';
+import { applyHomeConnected, applyHomeDisconnected, applyHomeStateChanged } from './home';
 import { NOTIFICATION_LIMIT, dismiss, notificationRow } from './notifications';
 import {
   AUDIT_LIMIT,
@@ -269,6 +270,18 @@ export function reduceEvent(
         }
       }
       return state;
+    }
+    case 'home.connected': {
+      const home = applyHomeConnected(state.home, payload);
+      return home === state.home ? state : { ...state, home };
+    }
+    case 'home.disconnected': {
+      const home = applyHomeDisconnected(state.home, payload);
+      return home === state.home ? state : { ...state, home };
+    }
+    case 'home.state_changed': {
+      const home = applyHomeStateChanged(state.home, payload);
+      return home === state.home ? state : { ...state, home };
     }
     case 'clip.saved': {
       const clips = applyClipSaved(state.clips, payload, ts);

@@ -412,7 +412,15 @@ class PluginManager:
         self._audit = audit
         self._job = job
         self._health = health
-        self.tools: ToolRegistryLike = tool_registry or resolve_tool_registry()
+        # `is not None`, not `or`: `ToolRegistry` defines `__len__`, so the core's registry is
+        # falsy while it is still empty - which it always is at composition time, because the
+        # built-in tools are registered later in the boot sequence. With `or`, every injected
+        # registry was silently discarded and plugin tools were registered into a second, private
+        # one, so `ToolExecutor` (and therefore every model- or dashboard-initiated plugin tool
+        # call) reported `tool.unknown`.
+        self.tools: ToolRegistryLike = (
+            tool_registry if tool_registry is not None else resolve_tool_registry()
+        )
         self._spec_class = resolve_tool_spec()
         self._worker_command = list(worker_command or [sys.executable, "-m", "nox.worker"])
         self._cwd = cwd

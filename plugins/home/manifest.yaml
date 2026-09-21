@@ -1,0 +1,72 @@
+# Smart home plugin: one authenticated WebSocket session to the user's own Home Assistant.
+#
+# Everything goes to the address in `home.host`/`home.port` and nowhere else - no vendor cloud, no
+# manufacturer account, no bridge service. Home Assistant is the only integration that fits: it
+# runs on the user's own network and speaks one API for hundreds of device brands.
+#
+# The tool surface is deliberately narrow and, more importantly, deliberately incomplete: there is
+# no tool for Home Assistant's `lock`, `alarm_control_panel` or `valve` domains and none for a
+# `cover` that reports itself as a garage, a gate or a door. That is a hard boundary in
+# `nox.home.boundary`, not a risk level - a language model must not be able to unlock a door, and
+# "confirm first" is still a door it can ask to open. Naming such an entity is refused with a
+# logged reason; it never even appears in `home.list`.
+id: home
+name: Home Assistant
+version: 0.1.0
+api_version: 1
+entry: nox_plugin_home:create
+profiles: [companion]              # add another profile's allow-list entries before widening this
+permissions:
+  - tool: home.status.read          # risk: read - connection state and the reason when there is
+    risk: read                      # none; never fakes "connected"
+  - tool: home.list                 # risk: read - areas, devices and entities with their state
+    risk: read
+  - tool: home.state                # risk: read - one entity
+    risk: read
+  - tool: home.light                # risk: medium - on/off, brightness, colour temperature
+    risk: medium
+  - tool: home.switch               # risk: medium - on/off
+    risk: medium
+  - tool: home.scene                # risk: medium - activate a scene the user defined
+    risk: medium
+  - tool: home.media                # risk: medium - play/pause/skip/volume
+    risk: medium
+  - tool: home.climate              # risk: medium - target temperature
+    risk: medium
+  - tool: home.cover                # risk: medium - blinds and curtains only; garage/gate/door
+    risk: medium                    # covers are refused by the boundary, not by this risk level
+  - tool: home.script               # risk: high - always asks, never pre-approved: a script can
+    risk: high                      # do anything its author put in it
+  - tool: home.automation.trigger   # risk: high - same reasoning as home.script
+    risk: high
+events:
+  emits: [home.connected, home.disconnected, home.state_changed]
+  listens: [security.panic]
+# The secret *name* only - the value lives in the Windows Credential Manager. Create a long-lived
+# access token in Home Assistant (profile -> Security -> "Long-lived access tokens") and store it
+# with `nox secrets set nox/home/access_token`, or on the dashboard's Settings page.
+secrets: [nox/home/access_token]
+network:
+  # Explicit host:port, no wildcards. Two shipped entries cover the two common setups: Home
+  # Assistant in a container on this machine, and Home Assistant answering on its default mDNS
+  # name. For an instance at a fixed address, replace/extend this list with `<ip>:8123` AND add
+  # the same entry to the active profile's egress_allowlist - the core authorizes this list
+  # against the profile before the worker is spawned, so a missing entry is a clear startup
+  # failure, never a silent one.
+  egress: ["127.0.0.1:8123", "homeassistant.local:8123"]
+resources:
+  memory_mb: 128
+  priority: normal
+config:
+  # The connection itself is configuration (`home.*` in config/defaults.yaml), editable on the
+  # Settings page; the plugin reads it from there at start, because a manifest is the plugin's own
+  # declaration and the dashboard never edits one.
+  #
+  # Empty on purpose: set one of these only to pin this worker to a fixed instance - a second
+  # Home Assistant, or a test against a fake one. A value here wins over the configuration.
+  host: ""
+  port: 0
+  #
+  # Home Assistant event types this plugin subscribes to. `state_changed` is what the dashboard's
+  # live view needs; nothing else is subscribed, so no other event ever leaves Home Assistant.
+  subscribe_event_types: ["state_changed"]

@@ -297,6 +297,19 @@ pm:                              # project management, reading and writing notes
   watch_debounce_s: 1.5
   focus_max_items: 5
 
+home:                            # smart home through your own Home Assistant instance. Nothing
+                                 # here reaches a manufacturer cloud: every request goes to the
+                                 # address below and nowhere else. Inactive until you add "home"
+                                 # to plugins.enabled and store nox/home/access_token.
+  host: "127.0.0.1"              # your Home Assistant. Any host other than loopback also has to
+  port: 8123                     # be added to plugins/home/manifest.yaml (network.egress) and to
+  tls: false                     # the active profile's egress_allowlist - see the README section
+  areas_allowed: []              # rooms Nox may act in; empty = every room Home Assistant reports
+  min_backoff_s: 1.0             # reconnect delay, doubled up to max_backoff_s
+  max_backoff_s: 30.0
+  request_timeout_s: 10.0
+  max_state_events_per_s: 10.0   # ceiling on live state updates forwarded to the dashboard
+
 creative:                        # detecting creative applications. The patterns below are
                                  # deliberately narrow: not detecting an app is cheaper than
                                  # announcing a session that is not happening.
@@ -354,7 +367,12 @@ memory:                          # the vault watcher, indexer and retrieval. The
                                  # itself is paths.vault_dir above, not repeated here.
   embed_model: "nomic-embed-text" # served by the local model server; text search as a fallback
   vault_watch_debounce_s: 2.0    # a burst of saves triggers exactly one re-index
-  retrieval_max_tokens: 4000     # hard cap on retrieved context
+  retrieval_max_tokens: 600      # hard cap on retrieved context. Every token that is
+                                 # not in the model server's prefix cache costs about
+                                 # 2.2 ms before the first token on llama3.2:3b.
+  retrieval_min_score: 0.75      # cosine score below which a hit is dropped rather than
+                                 # padding the prompt with something merely on a neighbouring
+                                 # topic; a chunk that answers the question scores 0.79-0.82
   retrieval_k: 8
   full_scan_on_boot: true
   retention_note_version_days: 30 # how long rollback copies of a note are kept

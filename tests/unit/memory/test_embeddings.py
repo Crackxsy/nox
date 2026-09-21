@@ -4,13 +4,15 @@ the real provider separately)."""
 
 from __future__ import annotations
 
+import math
+import struct
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from nox.data.db import Database
-from nox.memory.embeddings import EmbeddingService
+from nox.memory.embeddings import EmbeddingService, _cosine, _pack
 
 
 class FakeProvider:
@@ -129,3 +131,66 @@ async def test_embed_and_store_many_skips_empty_texts(db: Database) -> None:
     svc = EmbeddingService(db, provider, dimensions=8)
     assert await svc.embed_and_store_many("vault_chunk", [(1, "  "), (2, "text")]) == 1
     assert provider.calls == [["text"]]
+
+
+# -- scoring and the query-embedding cache --------------------------------------------------------
+
+
+class RecordingProvider:
+    """Returns a fixed unit vector per text and counts how often it was asked."""
+
+    def __init__(self, vectors: dict[str, list[float]]) -> None:
+        self.vectors = vectors
+        self.calls: list[list[str]] = []
+
+    async def embed(self, texts: list[str], *, model: str | None = None) -> list[list[float]]:
+        self.calls.append(list(texts))
+        return [self.vectors[text] for text in texts]
+
+
+def _unit(*values: float) -> list[float]:
+    length = math.sqrt(sum(v * v for v in values))
+    return [v / length for v in values]
+
+
+def test_cosine_maps_the_whole_range_not_a_narrow_band() -> None:
+    assert _cosine(0.0) == pytest.approx(1.0)  # identical
+    assert _cosine(math.sqrt(2.0)) == pytest.approx(0.0, abs=1e-9)  # orthogonal
+    assert _cosine(2.0) == pytest.approx(-1.0)  # opposite
+    # The spread is what makes a threshold meaningful: a 60-degree angle must not look like 0.6
+    # the way `1 / (1 + distance)` made everything look.
+    assert _cosine(1.0) == pytest.approx(0.5)
+
+
+def test_packing_normalises_so_the_cosine_identity_holds(db: Database) -> None:
+    packed = _pack([3.0, 4.0])
+    restored = struct.unpack("2f", packed)
+    assert math.sqrt(sum(v * v for v in restored)) == pytest.approx(1.0)
+
+
+async def test_a_repeated_query_is_embedded_only_once(db: Database) -> None:
+    provider = RecordingProvider({"wo liegt das backup": _unit(1.0, 0.0, 0.0)})
+    svc = EmbeddingService(db, provider, dimensions=3)
+    await svc.search("wo liegt das backup", k=3)
+    await svc.search("Wo liegt das Backup", k=3)  # same question, different casing and spacing
+    await svc.search("  wo   liegt das backup ", k=3)
+    assert provider.calls == [["wo liegt das backup"]]
+
+
+async def test_turning_the_query_cache_off_embeds_every_time(db: Database) -> None:
+    provider = RecordingProvider({"wo liegt das backup": _unit(1.0, 0.0, 0.0)})
+    svc = EmbeddingService(db, provider, dimensions=3)
+    svc.set_query_cache_size(0)
+    await svc.search("wo liegt das backup", k=3)
+    await svc.search("wo liegt das backup", k=3)
+    assert len(provider.calls) == 2
+
+
+async def test_the_query_cache_stays_bounded(db: Database) -> None:
+    vectors = {f"frage {i}": _unit(float(i + 1), 1.0, 0.0) for i in range(5)}
+    provider = RecordingProvider(vectors)
+    svc = EmbeddingService(db, provider, dimensions=3, query_cache_size=2)
+    for text in vectors:
+        await svc.search(text, k=1)
+    await svc.search("frage 0", k=1)  # evicted long ago, so it is embedded again
+    assert len(provider.calls) == 6

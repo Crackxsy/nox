@@ -84,7 +84,7 @@ export const de = {
   no_token: 'Kein Sitzungs-Token. Diese Seite über die Nox-Shell öffnen (Infobereich → Dashboard).',
   unknown: 'unbekannt',
   offline_hint: 'Offline – angezeigte Werte sind der letzte bekannte Stand, nicht der aktuelle.',
-  shortcuts_hint: 'Alt+1 bis Alt+7 springen direkt in einen Bereich.',
+  shortcuts_hint: 'Alt+1 bis Alt+8 springen direkt in einen Bereich.',
 
   // -- the honest "no connection" page ------------------------------------------------------------
   offline_title: 'Kern nicht erreichbar',
@@ -506,6 +506,67 @@ export const de = {
   jump_kill: 'Zum Not-Aus',
   jump_privacy: 'Zur Privatsphäre-Szene',
   jump_pair: 'Zum Koppeln',
+
+  // -- Zuhause (Home Assistant) -------------------------------------------------------------------
+  tab_home: 'Zuhause',
+  hero_home: 'Dein Zuhause.',
+  hero_home_sub:
+    'Licht, Steckdosen und Szenen über deine eigene Home-Assistant-Instanz – ohne Hersteller-Cloud.',
+  home_title: 'Räume und Geräte',
+  home_hint: 'Alles, was Home Assistant meldet, nach Räumen sortiert.',
+  home_refresh: 'Aktualisieren',
+  home_loading: 'Lädt …',
+  home_empty: 'Home Assistant meldet keine Geräte, die Nox steuern darf.',
+  home_no_area: 'Ohne Raum',
+  home_disconnected: 'Nicht verbunden.',
+  home_disconnected_hint:
+    'Trage unter Einstellungen → Zuhause die Adresse deiner Home-Assistant-Instanz ein und hinterlege einen Zugriffstoken. Danach „Verbindung testen“.',
+  home_no_token: 'Es ist kein Zugriffstoken hinterlegt.',
+  home_refused: 'Zuhause ist für dieses Fenster nicht freigegeben.',
+  home_refused_hint:
+    'Der Kern lässt die Geräteliste für das Dashboard nicht zu. An deinen Geräten ändert das nichts.',
+  home_areas_unknown: 'Raumnamen sind unbekannt: der Token darf die Raumliste nicht lesen.',
+  home_open_settings: 'Zu den Einstellungen',
+  home_state_on: 'an',
+  home_state_off: 'aus',
+  home_state_unknown: 'unbekannt',
+  home_turn_on: 'Einschalten',
+  home_turn_off: 'Ausschalten',
+  home_scene_activate: 'Aktivieren',
+  home_pending: 'Wird geschaltet …',
+  home_failed: 'Konnte nicht geschaltet werden',
+  home_locks_note:
+    'Schlösser, Alarmanlagen, Garagentore und Ventile zeigt Nox nicht an und schaltet sie nie.',
+  home_command_title: 'Sag, was passieren soll.',
+  home_command_label: 'Befehl in eigenen Worten',
+  home_command_placeholder: 'Mach das Licht im Wohnzimmer aus',
+  home_command_send: 'Ausführen',
+  home_command_hint: 'Wird lokal erkannt – ohne Sprachmodell, wenn der Satz passt.',
+  home_command_unmatched: 'Nicht verstanden. Formulier es anders oder frag Nox im Chat.',
+  home_command_refused: 'Das macht Nox nicht.',
+  home_command_done: 'Erledigt',
+  home_command_latency: 'in {0} ms erkannt',
+
+  // Settings -> Zuhause
+  settings_group_home: 'Zuhause',
+  setting_home_host: 'Adresse',
+  setting_home_port: 'Port',
+  setting_home_tls: 'HTTPS verwenden',
+  setting_home_areas_allowed: 'Erlaubte Räume (leer = alle)',
+  home_token_label: 'Zugriffstoken',
+  home_token_hint:
+    'In Home Assistant: Profil → Sicherheit → Langlebige Zugangstoken → „Token erstellen“. Den Wert einmal kopieren, er wird danach nicht mehr angezeigt.',
+  home_test_button: 'Verbindung testen',
+  home_test_running: 'Teste …',
+  home_test_ok: 'Verbunden mit Home Assistant {0}.',
+  home_test_no_token: 'Kein Token hinterlegt.',
+  home_test_unauthorized: 'Die Adresse antwortet, lehnt den Token aber ab.',
+  home_test_unreachable: 'Unter dieser Adresse antwortet nichts.',
+  home_test_blocked: 'Der aktuelle Privatsphäre-Modus oder das Profil sperrt diese Adresse.',
+  home_test_http_error: 'Unerwartete Antwort von dieser Adresse.',
+  home_step_1: 'Home Assistant öffnen und unten links auf deinen Namen klicken.',
+  home_step_2: 'Reiter „Sicherheit“ → ganz unten „Langlebige Zugangstoken“ → „Token erstellen“.',
+  home_step_3: 'Den angezeigten Token hier einfügen und speichern.',
 } as const;
 
 export type Key = keyof typeof de;

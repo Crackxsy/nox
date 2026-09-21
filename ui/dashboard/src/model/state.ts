@@ -10,6 +10,8 @@
 import type { ClipsState } from './clips';
 import { INITIAL_CLIPS_STATE } from './clips';
 import type { HealthState } from './health';
+import type { HomeState } from './home';
+import { INITIAL_HOME_STATE } from './home';
 import type { ProactiveNotification } from './notifications';
 import type { Provider } from './providers';
 import type { StreamState } from './stream';
@@ -57,6 +59,7 @@ export interface DashboardState {
   stream: StreamState;
   notifications: ProactiveNotification[];
   clips: ClipsState;
+  home: HomeState;
   /** Bumped by every `settings.changed` event; the Settings page reloads when it moves. */
   settingsRevision: number;
   /** Last `twitch.auth.changed` state, or null while none was received on this connection. */
@@ -83,6 +86,7 @@ export const INITIAL_STATE: DashboardState = {
   stream: INITIAL_STREAM_STATE,
   notifications: [],
   clips: INITIAL_CLIPS_STATE,
+  home: INITIAL_HOME_STATE,
   settingsRevision: 0,
   twitchAuth: null,
   seq: 0,
@@ -110,5 +114,8 @@ export function setConnected(state: DashboardState, connected: boolean): Dashboa
     connected,
     capture: null,
     stream: { ...state.stream, session: { ...state.stream.session, plugins: INITIAL_PLUGIN_STATUS } },
+    // The Home Assistant session belongs to the core, not to this page: while the core is gone we
+    // do not know whether it is still connected, and the last entity states are just as stale.
+    home: { ...state.home, connected: null, reason: '' },
   };
 }

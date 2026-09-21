@@ -9,6 +9,29 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **The desktop pet is a creature, not a photograph.** A 2D deformation rig (`ui/pet/src/rig/`)
+  runs a triangulated mesh over the pet's artwork, driven by a small bone hierarchy (root, body,
+  chest, neck, head, muzzle, ears, gill fins, tail), so it breathes, tilts its head, flicks one ear
+  and sways its tail continuously instead of cutting between a handful of near-identical stills.
+  WebGL where it exists, Canvas 2D where it does not - and the downgrade is logged, not hidden. A
+  variant opts in by shipping `variants/<id>/rig.json`, a hand-editable file validated at load with
+  errors that name the field; a variant without one keeps its static frames, and any error loading
+  a rig falls back to exactly that path.
+- **The Meereswolf blinks for real.** Its eyes are now separate alpha-masked layers cut out of the
+  source photograph (`ui/pet/scripts/make_pet_layers.py`), with the sockets behind them filled with
+  surrounding fur, so a blink is an eyelid closing over an eyeball rather than a dip in brightness.
+  Ten clips are authored against the picture - `breathe`, `sleep_breathe`, `blink`, `ear_flick`,
+  `head_tilt`, `head_turn`, `tail_sway`, `perk`, `speak_idle` and a `startle` the kill switch
+  triggers - blended additively, so a blink can start mid-breath without the breath skipping. The
+  moods in `petState.ts` are carried as held postures: ears back when it is frightened, low and
+  heavy when it is sad. `prefers-reduced-motion` leaves breathing and the mood, nothing else, and a
+  hidden window stops the loop and rebases its clock rather than replaying the lost time.
+- **`rig.json` can name key poses** (`sit`, `lie`, `curl`, `eat_0..n`) that the player
+  cross-dissolves to while the mesh keeps running. The path ships working; the art for those poses
+  does not exist yet, so they are reported as missing rather than faked.
+- **`?animate=1`**, a dev-only companion to `?still=1`: the same state presets with the animation
+  loop left running and a fixed ambient schedule, so `ui/pet/scripts/render_rig.py` can film a
+  rig's motion and two review renders can be compared frame for frame.
 - One palette for both front-ends: the dashboard's Apple-style token block now lives in
   `ui/shared/tokens.css` (same names, same values, same `prefers-color-scheme` +
   `data-theme` guards) and the pet window uses it instead of its own dark-only colours. The pet
@@ -188,6 +211,19 @@ release (`docs/PUBLISHING.md`) - until then the compare links below point at tag
 yet either._
 
 ### Fixed
+- **The Meereswolf no longer has a black outline on a light desktop.** Its cut-out had been stored
+  with premultiplied colour under a straight-alpha flag, which left every soft fur edge too dark by
+  its own alpha - mean border luminance 0.102 against fur at 0.352. The matte is now repaired
+  reproducibly (measure the background off the transparent pixels, erode two pixels, divide the
+  colour back out, re-feather, lift what a second background grey left behind) and the border sits
+  at 0.378, matching the fur it belongs to. The creature also carries a contact shadow in light
+  mode, because a white wolf on a white desktop is only 2.7:1 whatever the edge does - that part
+  needs a new source image, and `ui/pet/scripts/README.md` states what one has to provide.
+- **Eleven of the Meereswolf's twelve frames were the same photograph.** `speaking-0` was
+  byte-identical to `idle`, `thinking-0` to `thinking-2`, and `blink` was the idle frame dimmed by
+  3 %, so the pet's "blink" read as a monitor flicker and its "sleeping" had both eyes wide open.
+  They are gone, and the manifest now advertises only the one drawing that exists; every state it
+  used to claim is produced by the rig instead.
 - `security.pin_required_for_security_changes` does something. It was declared in the configuration
   and read by no code at all. With a PIN configured, a change that *relaxes* protection now has to
   carry it: leaving a stricter privacy mode, switching a capture device back on, or editing a

@@ -49,6 +49,7 @@ Nox is **pre-1.0**. Honest state as of the latest release:
 | Memory: SQLite + `sqlite-vec`, vault indexing | Works; first start indexes the whole vault once |
 | Twitch chat bot, OBS scene control, Funken ledger, dashboard Stream page | Works (stream profile only) |
 | Telegram bridge | Works once a bot token is set |
+| Smart home via Home Assistant: lights, sockets, scenes, media, thermostats, blinds, dashboard Zuhause page | Works against the documented API; never tested against a real instance yet — see [Home Assistant](#home-assistant-smart-home) |
 | Rocket League coach | Stage 1: observation and replay pipeline; coaching quality is early |
 | Coding agent (Claude Code orchestration) | Works inside configured workspaces; still rough |
 | Clips, creative-app detection, mobile companion | Early, partly scaffolding |
@@ -140,6 +141,48 @@ The Twitch plugin only loads in the **stream** profile, and its egress allowlist
 Nox talks obs-websocket v5 over loopback only. Available tools: read-only status and scene
 inventory, one *confirmed* scene switch, and a privacy-scene safety action. Deleting scenes or
 sources and stopping the stream are not implemented — deliberately.
+
+### Home Assistant (smart home)
+
+Nox controls your home through **your own** [Home Assistant](https://www.home-assistant.io/)
+instance — the one integration that fits this project: it runs on your network, speaks one API for
+hundreds of device brands, and needs no manufacturer account. Nothing about your home ever reaches
+a vendor cloud; every request goes to the address you configure and nowhere else.
+
+1. In Home Assistant: click your name (bottom left) → **Security** → **Long-lived access tokens** →
+   **Create token**. Copy the value once — it is never shown again.
+2. Store it: `.venv\Scripts\python.exe -m nox.cli secrets set nox/home/access_token`
+   (or paste it in the dashboard under **Einstellungen → Zuhause**).
+3. Set the address under **Einstellungen → Zuhause** (`home.host` / `home.port`; the default is
+   `127.0.0.1:8123`, for a Home Assistant running on this machine) and press **Verbindung testen**.
+   The button reports the real result: connected, wrong token, nothing listening, or blocked by the
+   current privacy mode.
+4. Enable the plugin: add `home` to `plugins.enabled` (dashboard: **Einstellungen → Plugins**).
+
+**A Home Assistant somewhere else on the network** needs two allow-list entries, because Nox's
+network is default-deny and a plugin may only reach what its manifest declares:
+
+* `plugins/home/manifest.yaml` → `network.egress`, and
+* `config/profiles/companion.yaml` → `egress_allowlist`.
+
+The shipped manifest already covers `127.0.0.1:8123` and `homeassistant.local:8123`. For a fixed
+address add `192.168.x.y:8123` to both. A missing entry is a clear startup failure with the reason,
+never a silent one.
+
+**What Nox can do**: list areas, devices and their state; switch lights (on/off, brightness, colour
+temperature), sockets and scenes; play/pause/skip/volume on media players; set a thermostat's
+target temperature; open and close blinds. Scripts and automations can be triggered and always ask
+first.
+
+**What Nox can never do**: Home Assistant's `lock`, `alarm_control_panel` and `valve` domains, and
+any `cover` that reports itself as a garage, a gate or a door, have no tool at all. They are
+filtered out of every listing and refused by name with a logged reason. This is a hard boundary in
+code (`src/nox/home/boundary.py`), not a permission setting — a language model must not be able to
+unlock a door, and "it would ask first" is not the same guarantee.
+
+Spoken and typed commands are matched **locally** first: "mach das Licht im Wohnzimmer aus" is
+resolved against your own Home Assistant names in well under a millisecond, with no language model
+involved. Only a sentence that does not match is handed to the model.
 
 ### Telegram (mobile bridge)
 
@@ -309,6 +352,7 @@ src/nox/supervisor  independent watchdog / kill-switch path
 src/nox/shell       PySide6 desktop shell (pet window, tray, hotkeys, dialogs)
 src/nox/worker      worker runtime for services and plugins
 src/nox/plugins     plugin manager and manifest validation
+src/nox/home        smart-home boundary, deterministic intent matching, `home.*` IPC, connection probe
 plugins/            shipped plugins, each with a manifest declaring tools, secrets and egress
 ui/pet              React + TypeScript pet renderer (Vite)
 ui/dashboard        React + TypeScript dashboard (Vite)

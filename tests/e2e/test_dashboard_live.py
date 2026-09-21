@@ -203,7 +203,8 @@ def test_dashboard_auth_status_and_chat(core: NoxCore, page: Page) -> None:
     page.get_by_role("button", name="Send").click()
 
     answer = page.locator("[role=log] article").nth(1)
-    provider_pattern = re.compile(r"Provider: (rules|ollama)")
+    # `fastpath` is the deterministic answer to a greeting; `ollama`/`rules` answer everything else.
+    provider_pattern = re.compile(r"Provider: (fastpath|rules|ollama)")
     expect(answer.locator("h3")).to_contain_text(provider_pattern, timeout=30000)
     answer_text = answer.locator("p").first.inner_text()
     assert answer_text.strip(), "assistant answer must not be empty"

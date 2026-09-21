@@ -11,13 +11,70 @@ permissions:
   # api.telegram.org: the mobile companion bot. Only reachable while `remote.enabled` is
   # true and a device is paired; the plugin's own manifest allow-list is the same single host.
   # id.twitch.tv: the user-initiated Twitch OAuth device-code login (nox.settings.twitch_auth).
-  egress_allowlist: ["api.telegram.org:443", "id.twitch.tv:443"]
+  # homeassistant.local:8123: the default mDNS address of a Home Assistant instance on the same
+  # network, for the `home` plugin. It is not loopback, so privacy mode private/offline blocks it
+  # like any other host. A Home Assistant at a fixed IP goes here instead, next to the matching
+  # entry in plugins/home/manifest.yaml.
+  egress_allowlist: ["api.telegram.org:443", "id.twitch.tv:443", "homeassistant.local:8123"]
+  # 127.0.0.1:8123: a Home Assistant running on this machine (a container, usually). The entry is
+  # what authorizes the `home` plugin's declared loopback egress at spawn time; it does NOT make
+  # smart-home control survive privacy mode private/offline. The plugin refuses to connect in
+  # those modes itself, in code, and reports `unavailable` with that reason (docs/PRIVACY.md).
+  loopback_allowlist: ["127.0.0.1:8123"]
   memory_writes_allowed: true
   screenshots_to_cloud: false
   filesystem_roots: []            # empty = inherit the global read/write roots
   tools_allowed: []
-  integrations_allowed: [ollama, claude_code, telegram]
+  integrations_allowed: [ollama, claude_code, telegram, home_assistant]
   rules:
+    # Smart home. Scripts, automations and thermostats stay confirmable whatever follows: a script
+    # can do anything its author put in it, and a wrong target temperature is invisible in the room
+    # until someone notices. Reading is free, and the reversible device verbs are pre-approved -
+    # that is what makes a light switch feel like a light switch instead of a dialog. Which *rooms*
+    # Nox may act in is not expressed here but in `home.areas_allowed`, because a plugin-registered
+    # tool carries no permission target a rule could match a room against (docs/PRIVACY.md).
+    # Locks, alarm panels, garage doors and valves are absent from this list because they are
+    # absent from the plugin: a hard boundary in nox.home.boundary, not a risk level.
+    - id: companion.home.script
+      tool: "home*"
+      action: "script"
+      decision: confirm
+      reason: "a Home Assistant script can do anything its author put in it"
+    - id: companion.home.automation
+      tool: "home*"
+      action: "automation.trigger"
+      decision: confirm
+      reason: "an automation can do anything its author put in it"
+    - id: companion.home.climate
+      tool: "home*"
+      action: "climate"
+      decision: confirm
+      reason: "a target temperature is not visible in the room and stays wrong until noticed"
+    - id: companion.home.read
+      tool: "home*"
+      risk: "read"
+      decision: allow
+    - id: companion.home.light
+      tool: "home*"
+      action: "light"
+      decision: allow
+      reason: "switching a light is immediately visible and immediately reversible"
+    - id: companion.home.switch
+      tool: "home*"
+      action: "switch"
+      decision: allow
+    - id: companion.home.scene
+      tool: "home*"
+      action: "scene"
+      decision: allow
+    - id: companion.home.media
+      tool: "home*"
+      action: "media"
+      decision: allow
+    - id: companion.home.cover
+      tool: "home*"
+      action: "cover"
+      decision: allow
     - id: companion.memory.write
       tool: "memory*"
       action: "write"

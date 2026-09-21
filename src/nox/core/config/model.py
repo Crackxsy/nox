@@ -30,6 +30,7 @@ from nox.core.config.features import (
     CLIP_ROOTS,
     ClipsConfig,
     CreativeConfig,
+    HomeConfig,
     PmConfig,
     RemoteConfig,
     RlConfig,
@@ -65,6 +66,7 @@ class NoxConfig(StrictSection):
     rl: RlConfig = Field(default_factory=RlConfig)
     clips: ClipsConfig = Field(default_factory=ClipsConfig)
     pm: PmConfig = Field(default_factory=PmConfig)
+    home: HomeConfig = Field(default_factory=HomeConfig)
     creative: CreativeConfig = Field(default_factory=CreativeConfig)
     sensors: SensorsConfig = Field(default_factory=SensorsConfig)
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)

@@ -28,6 +28,7 @@ __all__ = [
     "ClipsConfig",
     "CreativeConfig",
     "FunkenConfig",
+    "HomeConfig",
     "PmConfig",
     "RelevanceConfig",
     "RemoteConfig",
@@ -281,6 +282,47 @@ class ClipsConfig(StrictSection):
     watch_timeout_s: float = Field(default=30.0, gt=0.0)
     #: Discarded clips are moved to the quarantine root and kept this long; never hard-deleted.
     quarantine_days: int = Field(default=30, ge=1)
+
+
+# ---- smart home ---------------------------------------------------------------------------------
+
+
+class HomeConfig(StrictSection):
+    """Where the user's own Home Assistant instance lives, and how far Nox may reach into it.
+
+    These are configuration rather than plugin-manifest keys, for the same reason
+    `StreamTwitchConfig` is: the dashboard has to be able to edit them, and the `home` plugin reads
+    them from here at start. The access token is not here and never will be - it lives in the
+    Windows Credential Manager under `nox/home/access_token`.
+
+    The default points at loopback because that is the one address that needs no further
+    permission: a Home Assistant somewhere else on the network has to be added to the `home`
+    plugin's `network.egress` and to the active profile's allow-list as well, and the plugin says
+    so instead of failing silently.
+    """
+
+    host: str = "127.0.0.1"
+    port: int = Field(default=8123, ge=1, le=65535)
+    #: `wss://`/`https://` instead of `ws://`/`http://`. Only turn this on for an instance that
+    #: actually serves TLS; a plain instance behind `tls: true` is a connection error, not a
+    #: fallback.
+    tls: bool = False
+    #: Rooms Nox may act in. Empty = every area Home Assistant reports. A non-empty list is
+    #: enforced in the plugin worker before a service call is built, so it is a real restriction
+    #: and not a hint to the model.
+    areas_allowed: list[str] = Field(default_factory=list)
+    #: Reconnect backoff, doubled from `min` up to `max` between two connection attempts.
+    min_backoff_s: float = Field(default=1.0, gt=0.0)
+    max_backoff_s: float = Field(default=30.0, gt=0.0)
+    request_timeout_s: float = Field(default=10.0, gt=0.0)
+    #: Ceiling on the `home.state_changed` events forwarded to the dashboard. A house with two
+    #: hundred sensors produces far more traffic than a live view needs, and none of it is worth
+    #: stalling the hub for.
+    max_state_events_per_s: float = Field(default=10.0, gt=0.0)
+
+    @model_validator(mode="after")
+    def _backoff_ordered(self) -> HomeConfig:
+        return require_ordered(self, "min_backoff_s", "max_backoff_s")
 
 
 # ---- project management, creative apps, mobile companion ----------------------------------------
