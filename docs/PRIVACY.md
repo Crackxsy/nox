@@ -65,10 +65,12 @@ cannot be hidden or disabled by configuration.
 
 ### Voice: what reaches the speech recogniser
 
-With `voice.stt.listening_mode: continuous`, microphone audio passes a local wake-word gate
+Nox defaults to `voice.stt.listening_mode: ptt_only`: the microphone is opened only while
+push-to-talk is held, so nothing is captured unless you ask for it. With `continuous`,
+microphone audio passes a local wake-word gate
 first; audio that does not pass the gate is never transcribed. Short segments still reach the
 recogniser for the voice kill-phrase watchdog, and those transcripts are discarded without
-becoming an event. With `ptt_only`, the microphone is only open while push-to-talk is held.
+becoming an event.
 
 ## Privacy modes
 

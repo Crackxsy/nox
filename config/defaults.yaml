@@ -94,7 +94,9 @@ voice:
     vad: true
     wake_word: "Nox"
     push_to_talk_hotkey: "ctrl+alt+space"
-    listening_mode: continuous   # continuous | ptt_only (ptt_only never opens the mic on its own)
+    listening_mode: ptt_only     # ptt_only | continuous. The default never opens the microphone on
+                                 # its own: hold push-to-talk to speak. Switch to continuous for
+                                 # hands-free wake-word listening (costs CPU, wants a wake model).
     # A wake-word gate sits in front of transcription. Without it every detected speech segment
     # is transcribed, which is where the 20-40 s backlog with background audio came from.
     wake_word_engine: openwakeword   # openwakeword | text; falls back to text (health: limited)

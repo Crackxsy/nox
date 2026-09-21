@@ -44,9 +44,11 @@ class SttConfig(StrictSection):
     vad: bool = True
     wake_word: str = "Nox"
     push_to_talk_hotkey: str = "ctrl+alt+space"
-    #: `continuous` keeps the microphone open behind the wake-word gate; `ptt_only` opens it only
-    #: while push-to-talk is held.
-    listening_mode: Literal["continuous", "ptt_only"] = "continuous"
+    #: `ptt_only` (the default) opens the microphone only while push-to-talk is held: nothing is
+    #: captured, let alone transcribed, unless the user asks for it. `continuous` keeps the
+    #: microphone open behind the wake-word gate, which costs CPU and needs a wake-word model to be
+    #: precise — switch to it deliberately.
+    listening_mode: Literal["continuous", "ptt_only"] = "ptt_only"
     #: `openwakeword` is used when the package and a model file are both available, and falls back
     #: to `text` - matching on the transcript - with a `limited` health reason otherwise.
     wake_word_engine: Literal["openwakeword", "text"] = "openwakeword"

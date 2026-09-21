@@ -201,8 +201,9 @@ acoustic model either, so short segments (`voice.stt.kill_watchdog_max_ms`, defa
 still transcribed to keep it working; if such a transcript is not the kill phrase it is discarded
 immediately and never becomes an event or reaches a language model.
 
-`voice.stt.listening_mode` chooses between `continuous` (default, microphone open behind the gate)
-and `ptt_only`, which never opens the microphone unless push-to-talk is held.
+`voice.stt.listening_mode` chooses between `ptt_only` (the default: the microphone stays closed
+until you hold push-to-talk) and `continuous`, which keeps it open behind the wake-word gate for
+hands-free use. Change it in the dashboard under Einstellungen.
 
 ### Profiles
 
