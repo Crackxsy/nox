@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -19,25 +19,14 @@ from nox.data.stream_repos import (
     ViewerRepository,
 )
 from nox.security.audit import SqliteAuditLog
-from tests.unit.fakes import FakeBus
+from tests.unit.fakes import FakeBus, MutableClock
 
 NOW = datetime(2026, 9, 13, 20, 0, tzinfo=UTC)
 
 
-class MutableClock:
-    def __init__(self, start: datetime = NOW) -> None:
-        self.now = start
-
-    def __call__(self) -> datetime:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += timedelta(seconds=seconds)
-
-
 @pytest.fixture
 def clock() -> MutableClock:
-    return MutableClock()
+    return MutableClock(NOW)
 
 
 @pytest.fixture

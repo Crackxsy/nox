@@ -1,4 +1,4 @@
-"""Typed view of the ``ai`` section of config/defaults.yaml (ADR-010; ADR-008 router/providers).
+"""Typed view of the ``ai`` section of config/defaults.yaml (router/providers).
 
 The core config agent owns ``nox.core.config``; these models are the AI package's own contract for
 the ``ai`` subtree so the router and providers can be constructed from a plain mapping.

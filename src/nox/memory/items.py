@@ -1,8 +1,8 @@
-"""MemoryService: the write-refusal boundary for `memory_items` (ST-07-01).
+"""MemoryService: the write-refusal boundary for `memory_items`.
 
 Wraps `MemoryItemRepository` with importance scoring, embedding writes, and `memory.created`/
 `memory.deleted` events. A write is refused - not silently downgraded - whenever
-`PrivacyGate.allows_memory_write()` is False (PRIVATE mode, an active privacy zone, or safe mode).
+`PrivacyGate.allows_memory_write` is False (PRIVATE mode, an active privacy zone, or safe mode).
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ class PrivacyGate(Protocol):
 
 
 class MemoryWriteRefusedError(RuntimeError):
-    """`PrivacyGate.allows_memory_write()` was False when `MemoryService.create()` was called."""
+    """`PrivacyGate.allows_memory_write` was False when `MemoryService.create` was called."""
 
 
 @dataclass

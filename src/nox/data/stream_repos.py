@@ -196,7 +196,7 @@ class ViewerRepository:
         return cur.rowcount == 1
 
     def delete(self, twitch_user_id: str) -> bool:
-        """Viewer-requested erasure (FR-7.9/FR-9.15): cascades `viewer_memory`/`funken_ledger`;
+        """Erasure a viewer asked for: cascades `viewer_memory` and `funken_ledger`;
         `chat_events`/`moderation_actions` keep their rows with `viewer_id` set to NULL."""
         cur = self._db.execute("DELETE FROM viewers WHERE twitch_user_id = ?", (twitch_user_id,))
         return cur.rowcount == 1
@@ -208,8 +208,10 @@ class ViewerRepository:
         return [ViewerRow.from_row(r) for r in rows]
 
     def list_top_by_balance(self, limit: int = 10) -> list[ViewerRow]:
-        """Additive (Stream Bot core, EPIC-11 ST-11-09): backs the `stream.funken.top` IPC
-        request/dashboard leaderboard. Opted-out viewers are excluded (FR-9.15)."""
+        """Backs the `stream.funken.top` request and the dashboard leaderboard.
+
+        A viewer who opted out is never listed.
+        """
         rows = self._db.fetch_all(
             "SELECT * FROM viewers WHERE opt_out = 0 ORDER BY funken_balance DESC, "
             "twitch_user_id LIMIT ?",
@@ -463,7 +465,7 @@ class ModerationActionRepository:
         return [ModerationActionRow.from_row(r) for r in rows]
 
 
-# ---- minigame sessions (reserved, pending OP-B) ------------------------------------------------
+# ---- minigame sessions (table reserved; no feature reads it yet) -------------------------------
 
 
 class MinigameSessionRow(Row):

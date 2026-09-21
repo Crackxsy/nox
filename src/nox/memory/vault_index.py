@@ -1,10 +1,10 @@
-"""Vault indexer: incremental `vault_index`/`vault_chunks` maintenance (ST-07-03, Data Model L3).
+"""Vault indexer: incremental `vault_index`/`vault_chunks` maintenance (Data Model L3).
 
-Privacy zones outrank everything (FR-7.16): a note under `nox: { ignore: true }` or a
-`privacy.zones` path is never written to `vault_index`, `vault_chunks`, or `memory_vec` - checked
-before any content leaves the file, not filtered out afterward. The vault is the source of truth;
-`full_scan()` is always safe to re-run and converges the index to exactly what full_scan would
-produce from scratch (SP-13 "drift" contract).
+Privacy zones outrank everything: a note under `nox: { ignore: true }` or a `privacy.zones` path is
+never written to `vault_index`, `vault_chunks`, or `memory_vec` - checked before any content leaves
+the file, not filtered out afterward. The vault is the source of truth; `full_scan` is always safe
+to re-run and converges the index to exactly what full_scan would produce from scratch ("drift"
+contract).
 """
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ class VaultIndexer:
             return IndexOutcome(path, "error", "outside vault_dir")
         if self._is_zoned(path, rel):
             # A previously-indexed note that just moved into a zone (or gained `nox: ignore`) must
-            # be scrubbed, not merely skipped (FR-7.16).
+            # be scrubbed, not merely skipped.
             await self.remove_path(path)
             return IndexOutcome(path, "zoned")
 
@@ -197,13 +197,25 @@ class VaultIndexer:
 
     # ---- full scan -----------------------------------------------------------------------------
 
+    def _list_notes(self) -> list[Path]:
+        """Every Markdown note in the vault, sorted. Blocking: always called through a thread."""
+        return sorted(self._vault_dir.rglob("*.md"))
+
     async def full_scan(self) -> ScanStats:
         if not self._vault_dir.is_dir():
             log.warning("memory.vault_unreachable", vault_dir=str(self._vault_dir))
             return ScanStats()
         stats = ScanStats()
         seen: set[str] = set()
-        for path in sorted(self._vault_dir.rglob("*.md")):
+        # Which notes the index already knew about, taken before anything is indexed. The pruning
+        # pass below only ever removes from this set, so a note written *during* the scan - the
+        # first thing a user tends to do while the vault is still indexing - is not deleted from
+        # the index again for the crime of not existing when the scan started.
+        known_before = {str(r["path"]) for r in self._db.fetch_all("SELECT path FROM vault_index")}
+        # The listing walks the whole vault synchronously; on the event loop that is a freeze of
+        # exactly the kind this module's own scan-yield exists to avoid.
+        notes = await asyncio.to_thread(self._list_notes)
+        for path in notes:
             stats.scanned += 1
             rel = self._rel(path)
             if rel is not None:
@@ -216,8 +228,7 @@ class VaultIndexer:
                 stats.unchanged += 1
             elif outcome.action == "zoned":
                 stats.zoned_skipped += 1
-        known = {str(r["path"]) for r in self._db.fetch_all("SELECT path FROM vault_index")}
-        for stale in known - seen:
+        for stale in known_before - seen:
             await self.remove_path(self._vault_dir / stale)
             stats.removed += 1
         return stats

@@ -1,5 +1,5 @@
-"""Secrets scan of the working tree and the full git history (ST-21-07, Spec v1.0 Public Release
-§9). No network calls; runs `git` as a subprocess against the current repository.
+"""Secrets scan of the working tree and the full git history. No network calls; runs `git` as a
+subprocess against the current repository.
 
 Patterns: generic high-entropy tokens, `sk-...` (OpenAI/Anthropic-style API keys), `oauth:...`
 (Twitch IRC OAuth tokens), `ghp_...` (GitHub tokens), a Telegram bot-token shape
@@ -225,7 +225,7 @@ def scan_history(policy: dict[str, Any]) -> list[Finding]:
 
 def render_report(tree_findings: list[Finding], history_findings: list[Finding]) -> str:
     lines: list[str] = []
-    lines.append("Secrets scan report (scripts/secrets_scan.py, ST-21-07)")
+    lines.append("Secrets scan report (scripts/secrets_scan.py)")
     lines.append("=" * 60)
     lines.append("")
 

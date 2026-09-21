@@ -1,7 +1,8 @@
 """Global hotkeys via pynput (D239): PTT press/release, mute, privacy, kill switch, show/hide pet.
 
-`HotkeyTracker` is pure (testable): it turns key press/release streams into actions. `GlobalHotkeys`
-wraps a pynput listener thread and forwards to a callback; callers must marshal into the Qt thread.
+`HotkeyTracker` is pure (testable): it turns key press/release streams into actions.
+`GlobalHotkeys` wraps a pynput listener thread and forwards to a callback; callers must marshal
+into the Qt thread.
 """
 
 from __future__ import annotations

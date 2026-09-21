@@ -1,9 +1,8 @@
 """In-memory sensor sample ring buffer.
 
-ST-20-03's persisted 24h/30d/1y `sensor_history` table needs a migration file; the migration
-namespace (`0005_memory.sql`) is reserved for another agent in this pass, so this package keeps
-samples only in memory, bounded per-sensor by `sensors.history_len` (`config/defaults.yaml`). Good
-enough for `sensors.status.read`'s live/recent view; the persisted store is a follow-up story.
+Samples live only in memory, bounded per sensor by `sensors.history_len`. That is what
+`sensors.status.read` needs for its live and recent view; a persisted long-term history would need
+its own table and retention rules, and deliberately does not exist yet.
 """
 
 from __future__ import annotations

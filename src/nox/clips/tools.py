@@ -1,9 +1,9 @@
-"""Core-side `clip.*` tools (ST-15-01/06, Spec v0.6 §9): registered directly on the shared
-`ToolRegistry`, same pattern as `nox.tools.builtin.register_v01_tools` - not through a plugin
-manifest, because they operate on the core's own `clips`/`clip_markers` tables and filesystem
-roots. `clip.export`/`clip.trim` are `medium` risk so the normal permission pipeline (confirm) and
-audit trail apply; `clip.trim` fails safely with a clear reason when no cutting backend is
-available (ffmpeg is not currently installed, Spec v0.6 §11) rather than raising or faking a cut."""
+"""Core-side `clip.*` tools: registered directly on the shared `ToolRegistry`, same pattern as
+`nox.tools.builtin.register_v01_tools` - not through a plugin manifest, because they operate on the
+core's own `clips`/`clip_markers` tables and filesystem roots. `clip.export`/`clip.trim` are
+`medium` risk so the normal permission pipeline (confirm) and audit trail apply; `clip.trim` fails
+safely with a clear reason when no cutting backend is available (ffmpeg is not currently installed)
+rather than raising or faking a cut."""
 
 from __future__ import annotations
 
@@ -161,7 +161,7 @@ def make_clip_trim_tool(
         if row is None:
             raise KeyError(f"unknown clip id {clip_id!r}")
         if not backend.available():
-            # Never raised: a clear, non-crashing result the dashboard can show as-is (ST-15-06 AC).
+            # Never raised: a clear, non-crashing result the dashboard can show as-is ( AC).
             return {"ok": False, "clip_id": None, "reason": UNAVAILABLE_REASON}
         src = Path(row.file_path)
         dest = config.library_root / f"{src.stem}_trim_{int(in_s)}-{int(out_s)}{src.suffix}"

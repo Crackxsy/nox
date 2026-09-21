@@ -1,8 +1,8 @@
-"""Shared "a clip file appeared" ingestion path (Spec v0.6 §6.3): used by both
-`ClipCaptureService` (event-triggered/manual path, file resolved by `obs.replay_buffer.save`) and
-`ClipWatcher` (files that show up in the watch folder without a `clip.requested`). Always copies
-into `config.clips.library_root` - the OBS output/watch folder and the recording root are read-only
-for this pipeline; the source file is never moved, renamed or deleted."""
+"""Shared "a clip file appeared" ingestion path: used by both `ClipCaptureService` (event-
+triggered/manual path, file resolved by `obs.replay_buffer.save`) and `ClipWatcher` (files that
+show up in the watch folder without a `clip.requested`). Always copies into
+`config.clips.library_root` - the OBS output/watch folder and the recording root are read-only for
+this pipeline; the source file is never moved, renamed or deleted."""
 
 from __future__ import annotations
 

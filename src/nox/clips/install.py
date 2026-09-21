@@ -1,20 +1,14 @@
-"""`install(core)`: wires the Clip Pipeline onto a booted `NoxCore` (ST-15-01..06, Spec v0.6 Clip
-Pipeline). Not called from `nox.app` yet - per ENGINEERING.md's shared-file rule, `src/nox/app.py`
-is not edited by this change; the integrator adds one `from nox.clips.install import install` +
-`self.clips = install(self)` call (mirroring the "10b. Stream Bot core services" block, after
-`self.tool_executor`/`self.registry` exist and before `self.plugins.start()`), or wires it through
-whatever composition point the integrator prefers.
+"""`install(core) -> ClipsRuntime`: wires the clip pipeline onto a started core.
 
-Expects `core` to expose (all present once `NoxCore.start()` has run through step "7a. tool
-registry + executor"): `.config: NoxConfig`, `.db: Database`, `.bus: EventBus`, `.tool_registry:
-ToolRegistry`, `.tool_executor: ToolExecutor`, `.registry: RequestRegistry`, `.state` (for the
-current `assistant.mode`, used as the tool-call `mode` for `clip.*` tool invocations - same
-pattern as `nox.stream.booking.FunkenBooking`)."""
+Expects `core` to expose everything on `CoreLike` below, which is what the core has once its tool
+registry and executor exist. `.state` supplies the current `assistant.mode`, which becomes the mode
+of every `clip.*` tool call this module makes on the user's behalf.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from nox.clips.ipc import register_clip_ipc
 from nox.clips.repository import ClipMarkerRepository, ClipRepository
@@ -43,12 +37,12 @@ class CoreLike(Protocol):
     tool_registry: ToolRegistry
     tool_executor: ToolExecutor
     registry: RequestRegistry
-    state: object
+    state: Any
 
 
 @dataclass(slots=True)
 class ClipsRuntime:
-    """Handles the integrator (or a test) needs to stop the background pieces on shutdown."""
+    """Handles the caller needs to stop the background pieces on shutdown."""
 
     repo: ClipRepository
     markers: ClipMarkerRepository
@@ -60,10 +54,17 @@ class ClipsRuntime:
         await self.watcher.stop()
 
 
+class _StateLike(Protocol):
+    def get(self, path: str) -> object: ...
+
+
 def _mode(core: CoreLike) -> str:
+    """Current assistant mode, defaulting to `companion` so a tool call is never left modeless."""
+    state: _StateLike = core.state
     try:
-        value = core.state.get("assistant.mode")  # type: ignore[attr-defined]
-    except Exception:  # noqa: BLE001 - never let a mode lookup break a tool call
+        value = state.get("assistant.mode")
+    except Exception as exc:  # noqa: BLE001 - never let a mode lookup break a tool call
+        log.warning("clips.mode_lookup_failed", error=f"{type(exc).__name__}: {exc}")
         return "companion"
     return str(value) if value else "companion"
 

@@ -1,10 +1,14 @@
-"""Session and one-time worker tokens for the IPC hub (IPC Model §Handshake, Process Model, ADR-3).
+"""Session and one-time worker tokens for the IPC hub.
 
 - The session token is generated once per core start and written to `<runtime>/session.token` with
-  owner-only permissions (Windows: `icacls` removes inheritance and grants only the current user).
-- Worker/plugin tokens are issued per spawn, delivered via the environment (`NOX_WORKER_TOKEN`),
-  expire after a TTL and are consumed on first successful authentication.
-- All comparisons are constant-time.
+  owner-only permissions; on Windows `icacls` removes inheritance and grants only the current
+  user. `session_file_restricted` reports whether that succeeded, and the core turns a `False`
+  into a `limited` health entry - so a token file the operating system left readable is visible
+  rather than assumed away.
+- Worker and plugin tokens are issued per spawn, delivered through the environment
+  (`NOX_WORKER_TOKEN`, never on a command line), expire after a short lifetime and are consumed by
+  the first authentication attempt, successful or not.
+- Every comparison is constant-time.
 """
 
 from __future__ import annotations

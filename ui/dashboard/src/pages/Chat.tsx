@@ -6,24 +6,50 @@
  *
  * Every turn stays an <article> with an <h3> byline (author, provider, degraded marker) and a <p>
  * bubble, so the structure screen readers and the e2e smoke test rely on is unchanged.
+ *
+ * Announcements: the transcript itself is `aria-live="off"`. A polite status region above it says
+ * "Antwort vollständig." once per turn instead — otherwise a screen reader re-reads the whole
+ * growing answer on every single delta.
+ *
+ * The transcript and the composer draft live in `App`, not here: a tab switch unmounts this
+ * component, and losing a conversation to a stray click is not an acceptable way to lose it.
  */
 
 import { useEffect, useRef, useState } from 'react';
 
-import type { T } from '../i18n';
+import { uuid } from '../../../shared/envelope';
+import { errorText } from '../../../shared/errors';
+import { type Key, type Lang, type T, providerByline } from '../i18n';
 import { type Envelope, type IpcClient, api } from '../ipc';
-import { type ChatMessage, finalAnswer, streamDelta } from '../model';
+import { type ChatMessage, type Provider, finalAnswer, providerName, streamDelta } from '../model';
 import { Hero } from '../ui';
 
 export interface ChatPageProps {
   t: T;
+  lang: Lang;
   client: IpcClient | null;
+  /** For the byline: the provider list is the only place display names exist. */
+  providers: Provider[] | null;
+  messages: ChatMessage[];
+  onMessages: (update: (list: ChatMessage[]) => ChatMessage[]) => void;
+  draft: string;
+  onDraft: (value: string) => void;
 }
 
-export function ChatPage({ t, client }: ChatPageProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [draft, setDraft] = useState('');
+const EXAMPLES: Key[] = ['chat_example_1', 'chat_example_2', 'chat_example_3'];
+
+export function ChatPage({
+  t,
+  lang,
+  client,
+  providers,
+  messages,
+  onMessages,
+  draft,
+  onDraft,
+}: ChatPageProps) {
   const [pending, setPending] = useState(false);
+  const [announcement, setAnnouncement] = useState('');
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
 
@@ -37,16 +63,15 @@ export function ChatPage({ t, client }: ChatPageProps) {
   }, [messages]);
 
   const patch = (id: string, update: Partial<ChatMessage>) =>
-    setMessages((list) => list.map((m) => (m.id === id ? { ...m, ...update } : m)));
+    onMessages((list) => list.map((m) => (m.id === id ? { ...m, ...update } : m)));
 
-  const send = async () => {
-    const text = draft.trim();
+  const send = async (text: string) => {
     if (!text || !client || pending) return;
-    const answerId = `a${Date.now()}`;
-    setMessages((list) => [
+    const answerId = `a-${uuid()}`;
+    onMessages((list) => [
       ...list,
       {
-        id: `u${Date.now()}`,
+        id: `u-${uuid()}`,
         role: 'user',
         text,
         streaming: false,
@@ -64,8 +89,9 @@ export function ChatPage({ t, client }: ChatPageProps) {
         error: null,
       },
     ]);
-    setDraft('');
+    onDraft('');
     setPending(true);
+    setAnnouncement('');
     let streamed = '';
     try {
       const result = await api.chat(client, text, (env: Envelope) => {
@@ -81,12 +107,10 @@ export function ChatPage({ t, client }: ChatPageProps) {
         degraded: final.degraded,
         error: final.text === null && streamed === '' ? t('chat_failed') : null,
       });
+      setAnnouncement(t('chat_answered'));
     } catch (e) {
-      patch(answerId, {
-        streaming: false,
-        text: streamed,
-        error: `${t('chat_failed')}: ${e instanceof Error ? e.message : String(e)}`,
-      });
+      patch(answerId, { streaming: false, text: streamed, error: errorText(t('chat_failed'), e) });
+      setAnnouncement(t('chat_failed'));
     } finally {
       setPending(false);
       inputRef.current?.focus();
@@ -104,7 +128,7 @@ export function ChatPage({ t, client }: ChatPageProps) {
           <button
             type="button"
             className="link"
-            onClick={() => setMessages([])}
+            onClick={() => onMessages(() => [])}
             disabled={messages.length === 0 || pending}
           >
             {t('chat_clear')}
@@ -113,14 +137,34 @@ export function ChatPage({ t, client }: ChatPageProps) {
       />
 
       <div className="chat">
+        <p role="status" aria-live="polite" className="sr-only">
+          {announcement}
+        </p>
         <div
           ref={logRef}
           role="log"
-          aria-live="polite"
+          aria-live="off"
           aria-label={t('chat_title')}
           className="chat-log"
         >
-          {messages.length === 0 && <p className="muted">{t('chat_empty')}</p>}
+          {messages.length === 0 && (
+            <div className="chat-empty">
+              <p className="muted">{t('chat_empty')}</p>
+              <div className="chat-examples">
+                {EXAMPLES.map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className="chip"
+                    disabled={disabled || pending}
+                    onClick={() => void send(t(key))}
+                  >
+                    {t(key)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {messages.map((m) => (
             <article key={m.id} className={`msg ${m.role === 'user' ? 'msg--user' : 'msg--nox'}`}>
               <h3 className="msg-meta">
@@ -129,7 +173,7 @@ export function ChatPage({ t, client }: ChatPageProps) {
                 {m.provider && (
                   <span>
                     {' '}
-                    · {t('chat_provider')}: {m.provider}
+                    · {providerByline(t, lang, m.provider, providerName(providers, m.provider))}
                     {m.degraded ? ` (${t('chat_degraded')})` : ''}
                   </span>
                 )}
@@ -147,7 +191,7 @@ export function ChatPage({ t, client }: ChatPageProps) {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            void send();
+            void send(draft.trim());
           }}
         >
           <label htmlFor="chat-input" className="sr-only">
@@ -163,12 +207,12 @@ export function ChatPage({ t, client }: ChatPageProps) {
               placeholder={t('chat_input_label')}
               aria-describedby="chat-hint"
               aria-keyshortcuts="Control+Enter"
-              className="textarea"
-              onChange={(e) => setDraft(e.target.value)}
+              className="textarea textarea--fixed"
+              onChange={(e) => onDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                   e.preventDefault();
-                  void send();
+                  void send(draft.trim());
                 }
               }}
             />

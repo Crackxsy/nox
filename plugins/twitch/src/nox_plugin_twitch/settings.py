@@ -1,4 +1,4 @@
-"""Where the Twitch bot's knobs come from (#26).
+"""Where the Twitch bot's knobs come from.
 
 Bot names, chat rate limits and reconnect backoff used to live in `plugins/twitch/manifest.yaml`
 only. A manifest is the plugin's own declaration - the dashboard never edits one - so those values
@@ -9,12 +9,11 @@ plugin resolves them through.
 Resolution, in order:
 
 1. Defaults + User layer, read the way the core reads them (`nox.settings.layers.
-   load_merged_config`). The Plugin API only hands a worker its *own* manifest block, so the
-   worker loads the shared layers itself - the same thing `_resolve_channel` already did for the
-   channel before this change.
-2. A manifest key that still carries one of the moved names overrides it, for one release, with a
-   deprecation log line naming the keys. That keeps an existing installation (or a test that pins
-   a value) working instead of silently changing its behaviour.
+load_merged_config`). The Plugin API only hands a worker its *own* manifest block, so the worker
+loads the shared layers itself - the same thing `_resolve_channel` already did for the channel
+before this change. 2. A manifest key that still carries one of the moved names overrides it, for
+one release, with a deprecation log line naming the keys. That keeps an existing installation (or a
+test that pins a value) working instead of silently changing its behaviour.
 
 Nothing here is fatal: an unreadable or invalid layer falls back to the shipped defaults and says
 so in the log, because a bot that cannot read a setting must still be able to connect.
@@ -29,7 +28,7 @@ from pydantic import ValidationError
 from nox.core.config import StreamTwitchConfig
 from nox.plugins.api import PluginApi
 
-#: Manifest keys that moved into `stream.twitch.*`. Deprecated since #26, honoured for one
+#: Manifest keys that moved into `stream.twitch.*`. Deprecated since, honoured for one
 #: release. `channel` is deliberately not in here: it has been in both places all along, and an
 #: explicitly pinned manifest channel stays a supported way to bind one instance to one channel.
 MOVED_KEYS: tuple[str, ...] = (

@@ -1,35 +1,55 @@
-"""Egress guard: the only way to obtain an `httpx.AsyncClient` in the core (Security Model §5,
-FR-14.2).
+"""The egress guard: the only way to obtain an `httpx.AsyncClient` inside the core.
 
-Every request passes `GuardedTransport`, which checks host:port against the privacy mode and the
-active profile's allow-list and raises `EgressDenied` before any connection is made. Every attempt
-is audited (host and port only, no path).
+Every request goes through `GuardedTransport`, which checks host and port against the privacy mode
+and the active profile's allow-list and raises `EgressDenied` before a connection is opened. Every
+attempt is audited with host and port only - never a path, never a query string.
 
-- OFFLINE and PRIVATE (OP-7 C): only loopback services on the merged loopback allow-list
-  (`security.loopback_allowlist` plus the active profile's additive `loopback_allowlist`) pass;
-  everything else, loopback included, is denied and audited.
-- FULL and BALANCED: loopback passes, other hosts need the active profile's `egress_allowlist`
-  (empty and `cloud_allowed: true` -> the global `security.egress_allowlist`; `cloud_allowed:
-  false` -> only the profile's own list; the entry "none" blocks everything).
+- **offline and private**: only loopback services on the merged loopback allow-list
+  (`security.loopback_allowlist` plus the active profile's additive entries) pass. Everything
+  else, loopback included, is denied and audited.
+- **full and balanced**: loopback passes; any other host needs the active profile's
+  `egress_allowlist`. A profile with an empty list and `cloud_allowed: true` uses the global
+  `security.egress_allowlist`; with `cloud_allowed: false` only its own list counts, and the
+  single entry `none` blocks everything.
+
+Allow-list entries are parsed by `nox.core.netloc`, the same parser that validates them when the
+configuration is read, so an entry that loads is an entry that can match.
 """
 
 from __future__ import annotations
 
 import ssl
 from collections.abc import Callable, Sequence
-from fnmatch import fnmatchcase
 from typing import Any, Protocol
 
 import httpx
 from pydantic import BaseModel, ConfigDict
 
+from nox.core.globbing import value_matches
+from nox.core.netloc import LOOPBACK_HOSTS, NetlocError, is_loopback, normalize_loopback_host
+from nox.core.netloc import split_netloc as _split_netloc
 from nox.core.state import PrivacyMode
 from nox.security._logging import get_logger
+from nox.security.audit_sink import SafeAuditLog
 from nox.security.model import AuditLog, Profile
 
 log = get_logger(__name__)
 
-LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"})
+__all__ = [
+    "LOOPBACK_HOSTS",
+    "NO_EGRESS",
+    "EgressDecision",
+    "EgressDenied",
+    "EgressGuard",
+    "GuardedTransport",
+    "default_transport",
+    "entry_matches",
+    "is_loopback",
+    "loopback_entry_matches",
+    "normalize_loopback_host",
+    "shared_ssl_context",
+]
+
 NO_EGRESS = "none"
 _FORBIDDEN_CLIENT_KWARGS = ("transport", "mounts", "proxy", "proxies")
 
@@ -75,37 +95,29 @@ class PrivacyModeSource(Protocol):
     def mode(self) -> PrivacyMode: ...
 
 
-def is_loopback(host: str) -> bool:
-    h = host.strip().lower().strip("[]")
-    return h in LOOPBACK_HOSTS or h.startswith("127.")
-
-
-def normalize_loopback_host(host: str) -> str:
-    """`localhost`/`::1` and friends denote the same machine-local address as `127.0.0.1`."""
-    h = host.strip().lower().strip("[]").rstrip(".")
-    return "127.0.0.1" if h in LOOPBACK_HOSTS else h
-
-
 def _split_entry(entry: str) -> tuple[str, str] | None:
-    """`host` / `host:port` / `scheme://host:port` -> (host, port or "*"); None for empty/"none"."""
+    """`(host, port-or-"*")` for one allow-list entry; None for an empty, `none` or broken one.
+
+    A malformed entry is rejected while the configuration is read, so reaching the warning below
+    means an entry assembled in code. It then matches nothing, rather than matching everything.
+    """
     text = entry.strip().lower()
     if not text or text == NO_EGRESS:
         return None
-    if "://" in text:
-        text = text.split("://", 1)[1].split("/", 1)[0]
-    host_part, sep, port_part = text.rpartition(":")
-    if not sep or not host_part or not (port_part.isdigit() or port_part == "*"):
-        return text, "*"
-    return host_part, port_part
+    try:
+        return _split_netloc(text)
+    except NetlocError as exc:
+        log.warning("egress.bad_allowlist_entry", entry=entry, error=str(exc))
+        return None
 
 
 def entry_matches(entry: str, host: str, port: int) -> bool:
-    """Allow-list entries: `host`, `host:port`, `*.example.com:443`, `host:*`."""
+    """Allow-list entries: `host`, `host:port`, `*.example.com:443`, `host:*`, `[::1]:443`."""
     parts = _split_entry(entry)
     if parts is None:
         return False
     host_part, port_part = parts
-    if not fnmatchcase(host.lower(), host_part):
+    if not value_matches(host, host_part):
         return False
     return port_part == "*" or int(port_part) == port
 
@@ -134,13 +146,13 @@ class EgressGuard:
     ) -> None:
         self._profile = profile
         self._privacy = privacy
-        self._audit = audit
+        self._audit = SafeAuditLog(audit, tool="network")
         self._global_allowlist = tuple(global_allowlist)
         self._loopback_allowlist = tuple(loopback_allowlist)
         self._transport_factory = transport_factory or default_transport
 
     def loopback_allowlist(self) -> tuple[str, ...]:
-        """Global loopback allow-list plus the active profile's additive entries (OP-7 C)."""
+        """The global loopback allow-list plus the active profile's additive entries."""
         return self._loopback_allowlist + tuple(self._profile().loopback_allowlist)
 
     def _check_loopback_allowlist(self, host: str, port: int, rule_id: str) -> EgressDecision:
@@ -205,18 +217,22 @@ class EgressGuard:
         )
 
     def authorize(self, host: str, port: int, *, scheme: str = "https", method: str = "") -> None:
-        """Check and audit; raises EgressDenied."""
+        """Check and audit one request; raises `EgressDenied` when it is not allowed.
+
+        This runs inside the transport, that is on the event loop, so the audit write must not
+        touch the disk here. The guard is built with a queued audit log whose `append` hands the
+        entry to a writer thread and returns: nothing is dropped, and the loop never waits on a
+        commit.
+        """
         decision = self.check(host, port)
-        if self._audit is not None:
-            self._audit.append(
-                actor="egress",
-                tool="network",
-                action="request",
-                target=f"{scheme}://{host}:{port}",
-                decision="allow" if decision.allowed else "deny",
-                result="ok" if decision.allowed else "denied",
-                details={"rule_id": decision.rule_id, "method": method},
-            )
+        self._audit.append(
+            actor="egress",
+            action="request",
+            target=f"{scheme}://{host}:{port}",
+            decision="allow" if decision.allowed else "deny",
+            result="ok" if decision.allowed else "denied",
+            details={"rule_id": decision.rule_id, "method": method},
+        )
         if not decision.allowed:
             log.warning("egress.denied", host=host, port=port, rule_id=decision.rule_id)
             raise EgressDenied(host, port, decision.rule_id, decision.reason)

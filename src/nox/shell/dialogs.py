@@ -1,6 +1,6 @@
 """Native confirmation dialog for `security.permission_requested` (Process Model, shell duties).
 
-The dialog only collects a decision; the core enforces it (ADR-007). Voice never confirms here.
+The dialog only collects a decision; the core enforces it. Voice never confirms here.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ _TEXT = {
 
 
 class PermissionDialog:
-    """Wraps a QMessageBox so tests can inspect it offscreen without exec()."""
+    """Wraps a QMessageBox so tests can inspect it offscreen without exec."""
 
     def __init__(
         self, request: dict[str, Any], *, language: str = "de", parent: QWidget | None = None

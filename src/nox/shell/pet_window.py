@@ -1,24 +1,23 @@
-"""Frameless transparent always-on-top pet window hosting the web renderer (ADR-004, SP-09, B-7).
+"""Frameless transparent always-on-top pet window hosting the web renderer.
 
-Validated in SP-09: WA_TranslucentBackground + page background transparent renders without a black
+Validated in: WA_TranslucentBackground + page background transparent renders without a black
 backing on Windows 11; click-through via WS_EX_TRANSPARENT. Dragging is done by an event filter on
 the view's render widget so a plain click still reaches the page (which sends `pet.interact`).
-
-B-7 (shell RSS reduction, ADR-004 "Measured" section): the pet view runs on a single
-process-lifetime off-the-record `QWebEngineProfile` (see `_pet_profile`) instead of Qt's default
-profile. Off-the-record means no cache, cookies, local storage, or service-worker/CacheStorage
-registration ever touches disk, which matters here specifically because the page holds the IPC
-session token in memory (never in `localStorage`, IPC Model) — this profile makes persisting it
-impossible even by accident. `PersistentCookiesPolicy.NoPersistentCookies` states that intent
-explicitly (an off-the-record profile already implies it); spellcheck, browser plugins and the
-`getDisplayMedia` screen-capture API are disabled since a kiosk-style pet window needs none of them.
+(shell RSS reduction, "Measured" section): the pet view runs on a single process-lifetime off-the-
+record `QWebEngineProfile` (see `_pet_profile`) instead of Qt's default profile. Off-the-record
+means no cache, cookies, local storage, or service-worker/CacheStorage registration ever touches
+disk, which matters here specifically because the page holds the IPC session token in memory (never
+in `localStorage`, IPC Model) — this profile makes persisting it impossible even by accident.
+`PersistentCookiesPolicy.NoPersistentCookies` states that intent explicitly (an off-the-record
+profile already implies it); spellcheck, browser plugins and the `getDisplayMedia` screen-capture
+API are disabled since a kiosk-style pet window needs none of them.
 
 GPU: hardware compositing stays on by default. Set the environment variable
 `NOX_PET_SOFTWARE_RENDER=1` before launching the shell to force Chromium's software compositor
 (`QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu-compositing`) instead — e.g. as a fallback on a machine
 where GPU compositing under a transparent, click-through, always-on-top window misbehaves. Qt reads
-`QTWEBENGINE_CHROMIUM_FLAGS` when the `QApplication` is constructed, so `nox.shell.app.run()` sets
-it before that call; this module only documents and consumes the resulting behaviour.
+`QTWEBENGINE_CHROMIUM_FLAGS` when the `QApplication` is constructed, so `nox.shell.app.run` sets it
+before that call; this module only documents and consumes the resulting behaviour.
 """
 
 from __future__ import annotations
@@ -46,7 +45,7 @@ _pet_profile_instance: QWebEngineProfile | None = None
 
 
 def _pet_profile() -> QWebEngineProfile:
-    """One off-the-record `QWebEngineProfile` shared by every pet view in this process (B-7)."""
+    """One off-the-record `QWebEngineProfile` shared by every pet view in this process."""
     global _pet_profile_instance
     if _pet_profile_instance is None:
         profile = QWebEngineProfile()  # no storageName argument -> off-the-record, no disk state
@@ -157,14 +156,40 @@ class PetWindow(QWidget):
         return False  # never swallow: the page still gets clicks for pet.interact
 
 
-OFFLINE_HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
-html,body{margin:0;background:transparent;font-family:Segoe UI,system-ui,sans-serif;color:#c8c8d4}
-.wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:10px}
-.orb{width:110px;height:96px;border-radius:50%;background:#3a3a46;border:2px solid #55555f;
- position:relative}
-.orb:before,.orb:after{content:"";position:absolute;top:36px;width:22px;height:4px;background:#0b0b12;border-radius:2px}
-.orb:before{left:24px}.orb:after{right:24px}
-.label{font-size:12px;background:rgba(11,11,18,.85);padding:4px 10px;border-radius:10px}
-</style></head><body><div class="wrap" role="status" aria-label="Nox offline">
-<div class="orb"></div><div class="label">Nox: Kern nicht erreichbar / core offline</div>
+#: The page the pet window shows when the web bundle cannot be reached at all — the one screen the
+#: shell can draw without the core. It carries the values of `ui/shared/tokens.css` inline (they
+#: cannot be imported here: this string is loaded from `about:offline`, which has no origin to
+#: resolve a stylesheet against), both schemes, so the window does not glow dark on a light desktop.
+#: German only, one sentence, and one thing to do — the old version was dark-only, bilingual
+#: ("Nox: Kern nicht erreichbar / core offline") and offered no action at all.
+OFFLINE_HTML = """<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="color-scheme" content="light dark"><style>
+:root{
+  --ink:#1d1d1f; --ink-2:#6e6e73; --chip:rgba(255,255,255,.86); --line:#86868b;
+  --body:#8e8e93; --eye:#1d1d1f;
+  --font:-apple-system,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --ink:#f5f5f7; --ink-2:#98989d; --chip:rgba(0,0,0,.84); --line:#646469;
+         --body:#6a6a70; --eye:#f5f5f7; }
+}
+html,body{margin:0;background:transparent;font-family:var(--font);color:var(--ink)}
+.wrap{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+ height:100vh;gap:10px;padding-bottom:10px;box-sizing:border-box}
+.orb{width:104px;height:92px;border-radius:50%;background:var(--body);opacity:.55;
+ position:relative;flex:0 0 auto;margin-bottom:auto;margin-top:18%}
+.orb:before,.orb:after{content:"";position:absolute;top:34px;width:20px;height:4px;
+ background:var(--eye);border-radius:2px;opacity:.8}
+.orb:before{left:22px}.orb:after{right:22px}
+.chip{background:var(--chip);border:1px solid var(--line);border-radius:10px;
+ padding:5px 10px;text-align:center;max-width:94%}
+.title{font-size:12px;line-height:16px}
+.hint{font-size:10px;line-height:14px;color:var(--ink-2)}
+</style></head>
+<body><div class="wrap" role="status">
+<div class="orb" aria-hidden="true"></div>
+<div class="chip">
+<div class="title">Nox ist gerade nicht erreichbar.</div>
+<div class="hint">Über das Nox-Symbol im Infobereich starten.</div>
+</div>
 </div></body></html>"""

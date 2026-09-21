@@ -1,13 +1,12 @@
-"""FunkenService: Funken v1 ledger - earn/spend/balance/tier (Spec v0.2 §3.5, §7 `funken_ledger`,
-§9 `twitch.funken.award`/`twitch.funken.admin_adjust`).
+"""FunkenService: Funken v1 ledger - earn/spend/balance/tier (`funken_ledger`,
+`twitch.funken.award`/`twitch.funken.admin_adjust`).
 
-Deterministic, no LLM: every change is a plain arithmetic ledger append via `FunkenLedgerRepository`
-/`ViewerRepository` (`nox.data.stream_repos`) and an audited `stream.funken_changed` event
-(`StreamFunkenChanged`, `nox.core.events`). Rates and tier thresholds come from
-`config.stream.funken.*` (placeholder numbers, pending approval per Spec v0.2 §3.5). Permission
-checks (owner-only `admin_adjust`, per-viewer rate limits on `earn`) are the caller's job - this
-service is the ledger, not the permission engine; a `ToolExecutor`-backed `twitch.funken.*` tool
-wraps it.
+Deterministic, no LLM: every change is a plain arithmetic ledger append via
+`FunkenLedgerRepository` /`ViewerRepository` (`nox.data.stream_repos`) and an audited
+`stream.funken_changed` event (`StreamFunkenChanged`, `nox.core.events`). Rates and tier thresholds
+come from `config.stream.funken.*` (placeholder numbers, pending approval). Permission checks
+(owner-only `admin_adjust`, per-viewer rate limits on `earn`) are the caller's job - this service
+is the ledger, not the permission engine; a `ToolExecutor`-backed `twitch.funken.*` tool wraps it.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ log = get_logger(__name__)
 
 Clock = Callable[[], datetime]
 
-# `earn()` cooldown (anti-farming, FR-9.17) applies to chat activity only; subs/bits/raids are
+# `earn` cooldown (anti-farming) applies to chat activity only; subs/bits/raids are
 # rate-limited by Twitch itself and are always honoured.
 _EARN_RATE_LIMITED_REASONS: frozenset[str] = frozenset({"message"})
 
@@ -45,7 +44,7 @@ class FunkenChangeResult(BaseModel):
 
 
 class InsufficientFunkenError(ValueError):
-    """`spend()` was asked to deduct more than the viewer's current balance."""
+    """`spend` was asked to deduct more than the viewer's current balance."""
 
 
 class FunkenService:
@@ -137,7 +136,7 @@ class FunkenService:
     async def admin_adjust(
         self, viewer_id: str, delta: float, *, reason: str, by: str
     ) -> FunkenChangeResult:
-        """Owner-only balance correction (Spec v0.2 §3.5.4, `twitch.funken.admin_adjust`, `high`
+        """Owner-only balance correction (`twitch.funken.admin_adjust`, `high`
         risk/`confirm` - enforced by the caller's `ToolExecutor`, not here)."""
         now = self._clock()
         result = await self._apply(viewer_id, delta, reason=reason, source="admin", now=now)

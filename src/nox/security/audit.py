@@ -1,11 +1,18 @@
-"""SQLite audit log: append-only, SHA-256 hash-chained (Security Model §8, ADR-011, Data Model
-`audit_log`).
+"""The audit log: append-only, SHA-256 hash-chained, stored in SQLite.
 
-`hash = sha256(canonical_json(entry_without_hash_and_prev_hash) + prev_hash)`; the first entry
-chains
-to `GENESIS_HASH`. Triggers make UPDATE/DELETE fail so tampering needs a deliberate DDL change,
-which
-`verify_chain()` then detects. Details under secret-like keys are redacted before they are stored.
+`hash = sha256(canonical_json(entry_without_hash_and_prev_hash) + prev_hash)`, and the first entry
+chains to `GENESIS_HASH`. Triggers make UPDATE and DELETE fail, so tampering needs a deliberate
+schema change - which `verify_chain()` then detects, because every later row's hash depends on the
+one before it.
+
+Details are redacted before they are stored: any key that names a secret is replaced, at every
+nesting level, and a nested structure is stored as redacted JSON rather than as `str(dict)`.
+
+Verification comes in two shapes. `verify_chain_detailed()` walks every row and is what a
+user-triggered check runs. Boot uses `verify_since_checkpoint()`, which walks forward from the last
+verified position and records a new checkpoint: the first boot on a database verifies everything,
+every later boot verifies only what was written since, so a log with two years of retention does
+not turn startup into a full-table scan.
 """
 
 from __future__ import annotations
@@ -30,6 +37,10 @@ GENESIS_HASH = "0" * 64
 REDACTED = "<redacted>"
 Clock = Callable[[], datetime]
 
+#: How deep `redact` walks a nested detail value before it stores a marker instead. Audit details
+#: are short by design; anything deeper is a caller passing a whole object by mistake.
+_MAX_REDACT_DEPTH = 6
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS audit_log (
     seq          INTEGER PRIMARY KEY,
@@ -49,6 +60,12 @@ CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log
 BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log
 BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+CREATE TABLE IF NOT EXISTS audit_verify_checkpoint (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    seq         INTEGER NOT NULL,
+    hash        TEXT    NOT NULL,
+    verified_at TEXT    NOT NULL
+);
 """
 
 _COLUMNS = (
@@ -131,12 +148,44 @@ class SqliteAuditLog:
         return k in cls._REDACT_KEYS or k.endswith(cls._REDACT_SUFFIXES)
 
     @classmethod
-    def redact(cls, details: Mapping[str, str] | None) -> dict[str, str]:
+    def redact(cls, details: Mapping[str, Any] | None) -> dict[str, str]:
+        """Replace every secret-like value, at any nesting depth, and flatten to strings.
+
+        A nested mapping used to be stored as `str(dict)`, which wrote `{'token': 'abc'}` into the
+        log verbatim, because only the top-level keys were inspected. Nested structures are walked
+        and re-serialised as JSON, so the redaction covers them and the stored value stays
+        readable.
+        """
         if not details:
             return {}
-        return {
-            str(k): (REDACTED if cls._is_secret_key(str(k)) else str(v)) for k, v in details.items()
-        }
+        return {str(key): cls._redact_value(str(key), value) for key, value in details.items()}
+
+    @classmethod
+    def _redact_value(cls, key: str, value: Any) -> str:
+        if cls._is_secret_key(key):
+            return REDACTED
+        scrubbed = cls._scrub(value, 0)
+        return scrubbed if isinstance(scrubbed, str) else cls.canonical_json_value(scrubbed)
+
+    @classmethod
+    def _scrub(cls, value: Any, depth: int) -> Any:
+        if depth > _MAX_REDACT_DEPTH:
+            return "[...]"
+        if isinstance(value, Mapping):
+            return {
+                str(key): (
+                    REDACTED if cls._is_secret_key(str(key)) else cls._scrub(item, depth + 1)
+                )
+                for key, item in value.items()
+            }
+        if isinstance(value, list | tuple | set | frozenset):
+            return [cls._scrub(item, depth + 1) for item in value]
+        return value if isinstance(value, str) else str(value)
+
+    @staticmethod
+    def canonical_json_value(value: Any) -> str:
+        """A deterministic JSON rendering of one already-redacted detail value."""
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
     def _last(self) -> tuple[int, str]:
         row = self._conn.execute(
@@ -217,12 +266,31 @@ class SqliteAuditLog:
 
     def verify_chain_detailed(self) -> ChainVerification:
         """Walk every row in seq order; report the first row whose hash or prev_hash is wrong."""
-        prev_hash = GENESIS_HASH
-        expected_seq = 1
+        return self._verify_from(GENESIS_HASH, 1)
+
+    def verify_since_checkpoint(self) -> ChainVerification:
+        """Verify everything written since the last successful check, then record a checkpoint.
+
+        The first call on a database has no checkpoint and therefore verifies the whole chain.
+        Later calls start from the recorded `(seq, hash)` pair, so a two-year retention window
+        does not make every start scan the entire table. Rewriting history undetected would mean
+        rewriting every later row *and* the checkpoint - the same deliberate, schema-level act the
+        append-only triggers already force.
+        """
+        checkpoint = self._checkpoint()
+        start_hash, start_seq = checkpoint if checkpoint is not None else (GENESIS_HASH, 1)
+        verification = self._verify_from(start_hash, start_seq)
+        if verification.ok:
+            self._write_checkpoint()
+        return verification
+
+    def _verify_from(self, prev_hash: str, expected_seq: int) -> ChainVerification:
         checked = 0
         with self._lock:
             cursor = self._conn.execute(
-                "SELECT " + ", ".join(_COLUMNS) + " FROM audit_log ORDER BY seq ASC"  # noqa: S608
+                # _COLUMNS is a module constant, never caller input.
+                "SELECT " + ", ".join(_COLUMNS) + " FROM audit_log WHERE seq >= ? ORDER BY seq ASC",  # noqa: S608
+                (expected_seq,),
             )
             for row in cursor:
                 entry = dict(zip(_COLUMNS, row, strict=True))
@@ -235,6 +303,30 @@ class SqliteAuditLog:
                 expected_seq = seq + 1
                 checked += 1
         return ChainVerification(ok=True, first_bad_seq=None, checked=checked)
+
+    def _checkpoint(self) -> tuple[str, int] | None:
+        """`(hash, next_seq)` to resume verification from, or None when nothing is recorded."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT seq, hash FROM audit_verify_checkpoint WHERE id = 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row[1]), int(row[0]) + 1
+
+    def _write_checkpoint(self) -> None:
+        with self._lock:
+            last_seq, last_hash = self._last()
+            if last_seq == 0:
+                return
+            self._conn.execute(
+                "INSERT INTO audit_verify_checkpoint (id, seq, hash, verified_at)"
+                " VALUES (1, ?, ?, ?)"
+                " ON CONFLICT(id) DO UPDATE SET seq = excluded.seq, hash = excluded.hash,"
+                " verified_at = excluded.verified_at",
+                (last_seq, last_hash, self._clock().isoformat()),
+            )
+            self._conn.commit()
 
     # ---- read access (dashboard, tests) ---------------------------------------------------------
 

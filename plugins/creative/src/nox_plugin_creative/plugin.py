@@ -1,13 +1,11 @@
-"""Creative Apps plugin (Spec v0.7 Creative Apps, EPIC-16, ST-16-01/02/05; pending approval - see
-`manifest.yaml` header for the relayed-sign-off note).
+"""Creative-apps plugin: notices which creative application the user is working in.
 
-Wires `sensor.foreground_changed` (v0.5 process/activity sensor, FR-14.4) through
+Wires `sensor.foreground_changed` through
 `app_detection.match_app_family` + `HysteresisDetector` to `creative.app_detected`/
-`creative.app_left` (Spec v0.7 §3.1). The actual `AssistantState.mode` switch and the
-consent-gated screenshot decision both happen core-side (`src/nox/creative/`, installed via
-`src/nox/creative/install.py`) because this plugin worker has neither IPC role to call `mode.set`
-directly nor visibility into privacy zones/Work-profile - it only emits the events those core-side
-services react to, per this task's coordination note ("no app.py edits").
+`creative.app_left`. The actual `AssistantState.mode` switch and the consent-gated screenshot
+decision both happen core-side (`src/nox/creative/`, installed via `src/nox/creative/install.py`)
+because this plugin worker has neither IPC role to call `mode.set` directly nor visibility into
+privacy zones or the Work profile - it only emits the events those core-side services react to.
 
 Two tools: `creative.artifact.inspect` (local metadata-only, `artifact.py`) and
 `creative.screenshot.analyze` (medium/confirm; round-trips through `creative.screenshot.requested`
@@ -52,6 +50,7 @@ class CreativePlugin:
         window_s = float(api.config.get("hysteresis_s", 15.0))
         self.detector = HysteresisDetector(window_s)
         self._timer_handle: asyncio.TimerHandle | None = None
+        self._transition_tasks: set[asyncio.Task[None]] = set()
         self._last_process = ""
         self._last_title = ""
         self._pending_screenshots: dict[str, asyncio.Future[dict[str, Any]]] = {}
@@ -66,6 +65,9 @@ class CreativePlugin:
         if self._timer_handle is not None:
             self._timer_handle.cancel()
             self._timer_handle = None
+        for task in list(self._transition_tasks):
+            task.cancel()
+        self._transition_tasks.clear()
         for fut in self._pending_screenshots.values():
             if not fut.done():
                 fut.cancel()
@@ -94,10 +96,27 @@ class CreativePlugin:
         self._timer_handle = loop.call_later(remaining + 0.01, self._on_timer)
 
     def _on_timer(self) -> None:
+        """The debounce timer fired: the app change is settled and can be announced.
+
+        `call_later` cannot await, so the transition runs as a task whose handle is kept and whose
+        failure is logged - a dropped handle would let the task be garbage-collected mid-flight
+        and swallow its exception.
+        """
         self._timer_handle = None
         result = self.detector.resolve()
-        if result:
-            asyncio.ensure_future(self._apply_transition(result, self._last_title))
+        if not result:
+            return
+        task = asyncio.ensure_future(self._apply_transition(result, self._last_title))
+        self._transition_tasks.add(task)
+        task.add_done_callback(self._transition_tasks.discard)
+        task.add_done_callback(self._log_transition_failure)
+
+    def _log_transition_failure(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            self.api.log.info("creative.transition_failed", error=f"{type(exc).__name__}: {exc}")
 
     async def _apply_transition(self, result: str, title: str) -> None:
         kind, _, app = result.partition(":")

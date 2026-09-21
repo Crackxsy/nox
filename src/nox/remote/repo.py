@@ -1,10 +1,10 @@
-"""SQLite repository for the remote area (migration `0008_remote.sql`, Spec v0.8 §6).
+"""SQLite repository for the remote area (migration `0008_remote.sql`).
 
 Two hashing rules are enforced here and nowhere else:
-  * a pairing code is stored as `sha256(salt + code)`,
-  * a device key is stored as `sha256(key_salt + channel + ':' + sender_id)`.
+* a pairing code is stored as `sha256(salt + code)`,
+* a device key is stored as `sha256(key_salt + channel + ':' + sender_id)`.
 Both are compared with `secrets.compare_digest`. Neither the code nor the transport identity is
-ever written to a column, a log line or an audit entry (ENGINEERING.md: no secrets in logs).
+ever written to a column, a log line or an audit entry (the project standards: no secrets in logs).
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def hash_value(salt: str, value: str) -> str:
 
 def sender_ref(channel: str, sender_id: str) -> str:
     """A stable, non-reversible pseudonym for an *unpaired* sender, so a rejected attempt can be
-    correlated in the audit trail without persisting the account id (Spec §5.3)."""
+    correlated in the audit trail without persisting the account id."""
     return hashlib.sha256(f"{channel}:{sender_id}".encode()).hexdigest()[:12]
 
 
@@ -108,7 +108,7 @@ class RemoteRepository:
 
     def mark_pairing_redeemed(self, pairing_id: str, device_id: str, when: datetime) -> bool:
         """Atomic redeem-once: the `redeemed_at IS NULL` guard means exactly one of two racing
-        redemptions of the same code updates a row (ST-17-01)."""
+        redemptions of the same code updates a row."""
         cursor = self._db.execute(
             "UPDATE remote_pairings SET redeemed_at = ?, device_id = ?"
             " WHERE id = ? AND redeemed_at IS NULL",
@@ -167,7 +167,7 @@ class RemoteRepository:
 
     def find_device_for_sender(self, channel: str, sender_id: str) -> DeviceRow | None:
         """Constant-time match of the hashed device key against every non-revoked device. A revoked
-        device is never matched, so revocation takes effect on the very next message (ST-17-03)."""
+        device is never matched, so revocation takes effect on the very next message."""
         rows = self._db.fetch_all(
             "SELECT * FROM paired_devices WHERE channel = ? AND revoked_at IS NULL", (channel,)
         )
@@ -187,7 +187,7 @@ class RemoteRepository:
         return cursor.rowcount == 1
 
     def touch_device(self, device_id: str, *, when: datetime, update_id: int) -> None:
-        """Record liveness and advance the replay watermark. `max()` keeps it monotonic even if two
+        """Record liveness and advance the replay watermark. `max` keeps it monotonic even if two
         messages are processed out of order."""
         self._db.execute(
             "UPDATE paired_devices SET last_seen_at = ?, last_update_id = max(last_update_id, ?)"

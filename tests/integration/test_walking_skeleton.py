@@ -138,7 +138,8 @@ async def test_kill_switch_enters_safe_mode_and_resume(core: NoxCore):
 
 
 async def test_audit_chain_verifies_after_activity(core: NoxCore):
-    verification = core.security.audit.verify_chain_detailed()
+    core.security.audit.flush(timeout_s=5.0)  # the writer thread, before reading the chain
+    verification = core.security.audit_store.verify_chain_detailed()
     assert verification.ok, str(verification)
 
 

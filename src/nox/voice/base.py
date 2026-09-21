@@ -1,6 +1,7 @@
-"""Voice contracts: STT, TTS, audio routing. Local-first; engines are pluggable (Piper vs Kokoro is
-SP-03, STT latency is SP-02). The voice layer is never a security boundary: it emits events and
-requests, the core decides.
+"""Voice contracts: STT, TTS, audio capture and routing.
+
+Local-first, with pluggable engines behind each protocol. The voice layer is never a security
+boundary: it emits events and requests, and the core decides what may happen.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from nox.core.events import HealthStatus
 
 class Channel(StrEnum):
     PRIVATE = "private"  # user's headphones only
-    STREAM = "stream"  # stream audio only (e.g. VB-Audio Cable)
+    STREAM = "stream"  # stream audio only (e.g. a virtual audio cable)
     BOTH = "both"
     MUTE = "mute"
 
@@ -67,7 +68,7 @@ class TtsEngine(Protocol):
 
 
 class AudioOutput(Protocol):
-    """Routes PCM to the private and/or stream device. Supports immediate stop (barge-in)."""
+    """Routes PCM to the private and/or stream device. Supports immediate stop for barge-in."""
 
     async def play(
         self,
@@ -82,18 +83,29 @@ class AudioOutput(Protocol):
 
 
 class AudioInput(Protocol):
-    """Microphone capture with VAD. Emits frames only while capture is permitted (privacy state)."""
+    """Microphone capture. Frames flow only while capture is permitted (privacy state).
+
+    `enabled` is the capture gate itself, not a filter in front of one: an implementation backed
+    by real hardware holds no open capture stream while it is False, so the operating system's
+    microphone indicator is off. Opening a device is blocking work, hence `set_enabled` is async.
+    """
 
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
     def frames(self) -> AsyncIterator[np.ndarray]: ...
     @property
     def sample_rate(self) -> int: ...
+    @property
+    def enabled(self) -> bool: ...
+    async def set_enabled(self, value: bool) -> None: ...
 
 
 class VoicePipeline(Protocol):
     """Wake word / push-to-talk -> STT -> (core decides) -> TTS -> output, with barge-in.
-    Must never capture while privacy.microphone is False or the kill switch is engaged."""
+
+    Must never capture while `privacy.microphone` is False or the kill switch is engaged;
+    `refresh_gate` is how the owner re-applies that decision after either one changes.
+    """
 
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
@@ -101,3 +113,5 @@ class VoicePipeline(Protocol):
     async def set_muted(self, muted: bool) -> None: ...
     async def say(self, request: TtsRequest) -> None: ...
     async def interrupt(self, *, reason: str) -> None: ...
+    async def refresh_gate(self) -> None: ...
+    def capture_health(self) -> tuple[HealthStatus, str]: ...

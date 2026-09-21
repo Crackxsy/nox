@@ -1,18 +1,17 @@
-"""`RemoteService` (ST-17-01/04/07, Spec v0.8 §3.3-§3.5): turns `remote.message` events from the
-transport plugin into policy decisions, executes the allowed ones and answers on the same channel.
+"""`RemoteService`: turns `remote.message` events from the transport plugin into policy decisions,
+executes the allowed ones and answers on the same channel.
 
 Everything a phone can reach goes through here, and everything that happens is audited twice: once
-in the hash-chained security audit (`AuditLog`, Security Model §8) and once in `remote_audit` with
+in the hash-chained security audit (`AuditLog`) and once in `remote_audit` with
 the command verb only. What a phone can reach is deliberately small:
 
   /status           read-only snapshot - mode, privacy mode, safe mode, pet state. Never a
                     transcript, a memory entry, a chat history or a secret.
-  /kill             `KillSwitchService.engage("telegram", ...)`. `telegram` is not in
+  /kill             `KillSwitchService.engage("telegram",...)`. `telegram` is not in
                     `SECURITY_PATH_ORIGINS`, so this is a *user* kill: resuming needs no PIN - but
                     resume is not offered here at all and `/resume` is denied explicitly, because
-                    the resume roles (`shell`, `dashboard`, `supervisor`) never include `remote`
-                    (Security Model §6, OP-6 D).
-  /privacy private|offline   allowed. Back to `full` is denied (`RemoteCommandPolicy` rule 7).
+                    the resume roles (`shell`, `dashboard`, `supervisor`) never include `remote`.
+  /privacy private|offline   allowed. Widening back to `full` from a phone is always denied.
   /pair <code>      redeem a one-time code shown locally; /unpair revokes the calling device.
   anything else     chat, routed through the normal orchestrator with `speak=False` and the same
                     personality/prompt path as the desktop - no separate or relaxed profile.
@@ -22,6 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
+from typing import Any, Protocol
 
 from nox.core.events import E, Event, EventBus, RemoteMessage
 from nox.core.logging import get_logger
@@ -42,10 +42,22 @@ StatusProvider = Callable[[], Mapping[str, str]]
 ChatHandler = Callable[[str], Awaitable[str]]
 
 
-class KillSwitchLike:  # pragma: no cover - structural documentation only
+class KillSwitchLike(Protocol):
     """The slice of `nox.security.killswitch.KillSwitchService` this service uses."""
 
     async def engage(self, origin: str, reason: str = "") -> object: ...
+
+
+class PrivacyController(Protocol):
+    """The slice of `nox.security.privacy.PrivacyService` this service uses.
+
+    Declared as a Protocol rather than resolved with `getattr` so that a wiring mistake is a type
+    error at build time instead of a phone being told its privacy mode changed when it did not.
+    """
+
+    async def set_mode(
+        self, mode: PrivacyMode, *, by: str = "user", confirmed: bool = False
+    ) -> Any: ...
 
 
 _DENY_TEXT = {
@@ -75,7 +87,7 @@ class RemoteService:
         pairing: PairingService,
         policy: RemoteCommandPolicy,
         killswitch: KillSwitchLike,
-        privacy: object,
+        privacy: PrivacyController,
         send: Sender,
         status: StatusProvider,
         chat: ChatHandler | None = None,
@@ -170,9 +182,7 @@ class RemoteService:
             )
             return
         if command == "privacy":
-            mode = decision.args[0].lower()
-            change = await self._set_privacy(mode)
-            await self._reply(message, f"Privatsphäre-Modus: {change}.")
+            await self._reply(message, await self._set_privacy(decision.args[0].lower()))
             return
         if command == "chat":
             await self._handle_chat(message, decision.args[0])
@@ -190,12 +200,21 @@ class RemoteService:
         await self._reply(message, answer or "(keine Antwort)")
 
     async def _set_privacy(self, mode: str) -> str:
-        setter = getattr(self._privacy, "set_mode", None)
-        if setter is None:  # pragma: no cover - wiring error
-            return "unverändert"
-        change = await setter(PrivacyMode(mode), by=REMOTE_KILL_ORIGIN)
+        """Switch the privacy mode and report what actually happened.
+
+        A mode change that raised is reported as a failure; the phone is never told a security
+        control moved when it did not.
+        """
+        try:
+            change = await self._privacy.set_mode(PrivacyMode(mode), by=REMOTE_KILL_ORIGIN)
+        except ValueError:
+            return "Unbekannter Modus. Nutzung: /privacy private|offline"
+        except Exception as exc:  # noqa: BLE001 - reported to the phone, never swallowed
+            log.error("remote.privacy_change_failed", mode=mode, error=str(exc))
+            return "Privatsphäre-Modus nicht geändert (Umschalten nicht möglich)."
         current = getattr(change, "current", None)
-        return str(getattr(current, "value", current or mode))
+        applied = str(getattr(current, "value", current or mode))
+        return f"Privatsphäre-Modus: {applied}."
 
     def _status_text(self) -> str:
         """Allow-list, not a denylist: only the keys the status provider hands over are rendered,

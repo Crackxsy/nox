@@ -1,5 +1,5 @@
-"""`watchdog`-based vault watcher with a ~2 s per-file debounce (ST-07-03): a burst of rapid
-saves to one note (Obsidian autosave) collapses into exactly one re-index, not N (SP-13).
+"""`watchdog`-based vault watcher with a ~2 s per-file debounce: a burst of rapid saves to one note
+(Obsidian autosave) collapses into exactly one re-index, not N.
 
 `watchdog` runs its own OS-thread observer; every callback hops back onto the owning asyncio loop
 via `call_soon_threadsafe` so the debounce timers and `VaultIndexer` calls stay single-threaded.

@@ -1,7 +1,7 @@
-"""Data shapes for the proactive/attention layer (ST-19-02/03/04/08).
+"""Data shapes for the proactive/attention layer.
 
 Kept dependency-light on purpose: this module has no import on `nox.app` or the IPC layer, so it
-can be unit-tested in isolation (ENGINEERING.md "each module gets tests").
+can be unit-tested in isolation (the project standards "each module gets tests").
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ HintPriority = Literal["low", "normal", "high"]
 
 
 class UrgentCategory(StrEnum):
-    """B.13 / F410 escalation ordering (Personality Specification v1 B.13): security/system beats
+    """/ F410 escalation ordering (Personality Specification v1): security/system beats
     backup/data-loss beats resources beats expected task results. Only `SECURITY` and `DATA_LOSS`
     may ever call `SpeechPolicy.may_speak("urgent")` (the mid-match/interrupt bypass) - `RESOURCES`
     and `TASK_RESULT` are "lesser URGENT": a visible warning, never a forced interruption."""
@@ -33,7 +33,7 @@ class UrgentCategory(StrEnum):
     TASK_RESULT = "task_result"
 
 
-#: B.13 ordering, most urgent first - used to sort a batch of pending urgent items for display.
+#: ordering, most urgent first - used to sort a batch of pending urgent items for display.
 URGENT_ORDER: tuple[UrgentCategory, ...] = (
     UrgentCategory.SECURITY,
     UrgentCategory.DATA_LOSS,
@@ -57,7 +57,7 @@ Channel = Literal["speech", "toast", "speech+toast", "suppressed"]
 
 
 class AttentionDecision(BaseModel):
-    """What `nox.proactive.notify()` decided for one call."""
+    """What `nox.proactive.notify` decided for one call."""
 
     allowed: bool
     reason: str = "ok"  # "ok" when allowed, else a `proactive.suppressed` reason
@@ -66,10 +66,10 @@ class AttentionDecision(BaseModel):
 
 
 class NotificationRecord(BaseModel):
-    """One `proactive.notify()` call, kept for `proactive.status.read` (ST-19-08's notification
-    store). Persisted via `nox.proactive.store.NotificationStore` (migration `0010_notifications`,
-    #28) so it survives a restart; `source`/`dismissed_at`/`expires_at` are additive fields every
-    existing caller of `notify()` can simply leave at their defaults."""
+    """One `proactive.notify` call, kept for `proactive.status.read` (notification
+    store). Persisted via `nox.proactive.store.NotificationStore` (migration `0010_notifications`)
+    so it survives a restart; `source`/`dismissed_at`/`expires_at` are additive fields every
+    existing caller of `notify` can simply leave at their defaults."""
 
     id: str = Field(default_factory=lambda: uuid4().hex)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

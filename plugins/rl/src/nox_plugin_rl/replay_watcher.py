@@ -1,9 +1,9 @@
-"""Replay watcher (ST-12-02): polls the replay folder read-only, waits for a file to stabilize
-(size/mtime unchanged across `stable_checks` reads) before handing it to the parser, retries with
-backoff if the folder is temporarily unreachable, and separates the pre-existing backlog (low
-priority) from newly-arrived files (normal priority). Deliberately simple polling rather than an OS
-file-system-events API: fewer moving parts to keep correct under OneDrive sync churn, and it is
-what the acceptance criteria actually require ("next scan ... fires")."""
+"""Replay watcher: polls the replay folder read-only, waits for a file to stabilize (size/mtime
+unchanged across `stable_checks` reads) before handing it to the parser, retries with backoff if
+the folder is temporarily unreachable, and separates the pre-existing backlog (low priority) from
+newly-arrived files (normal priority). Deliberately simple polling rather than an OS file-system-
+events API: fewer moving parts to keep correct under OneDrive sync churn, and it is what the
+acceptance criteria actually require ("next scan... fires")."""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ class ReplayWatcher:
         return files
 
     async def seed_backlog(self) -> list[Path]:
-        """First-time scan: everything already on disk is backlog (ST-12-02 AC), queued via
+        """First-time scan: everything already on disk is backlog, queued via
         `on_backlog_file` so the caller can give it low task-queue priority."""
         files = self.list_files()
         for f in files:
@@ -79,7 +79,7 @@ class ReplayWatcher:
 
     async def wait_stable(self, path: Path) -> bool:
         """True once `path`'s size/mtime are unchanged across `stable_checks` consecutive reads
-        (ST-12-02 AC: never parse a file still being written)."""
+        (AC: never parse a file still being written)."""
         last: tuple[int, float] | None = None
         stable = 0
         for _ in range(self._stable_checks + 3):

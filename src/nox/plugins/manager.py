@@ -1,16 +1,16 @@
 """PluginManager: discovery, validation, worker lifecycle and the core-side plugin IPC handlers.
 
-Implements the lifecycle of the Plugin Architecture
-(`discovered -> validated -> enabled -> spawned -> registered -> running -> stopping ->
-stopped | failed`) and ST-11-01: a plugin is only spawned when its manifest validates against the
-active profile (namespace, secrets, hard prohibitions, egress per ADR-013), it runs in its own
-`python -m nox.worker --plugin <id>` process with a one-time token inside the core's job object,
-crashes are restarted with backoff (3 tries / 5 min, then `failed`), and the kill switch stops
-every plugin (`plugin.stop`, 2 s, then terminate). One misconfigured plugin never blocks another.
+Implements the plugin lifecycle - `discovered -> validated -> enabled -> spawned -> registered ->
+running -> stopping -> stopped | failed`. A plugin is only spawned when its manifest validates
+against the active security profile (namespace, secrets, hard prohibitions, egress); it runs in its
+own `python -m nox.worker --plugin <id>` process with a one-time token inside the core's job
+object; crashes are restarted with backoff (three tries in five minutes, then `failed`); and the
+kill switch stops every plugin (`plugin.stop`, two seconds, then terminate). One misconfigured
+plugin never blocks another.
 
-Core IPC handlers (role `plugin` only): `plugin.register`, `plugin.secret.get`, `plugin.tool.call`.
-Registered tools are mirrored into the core's `ToolRegistry`; every call is checked by the
-permission engine first and forwarded to the owning worker as a `tool.call` request.
+Core request handlers, for the `plugin` role only: `plugin.register`, `plugin.secret.get`,
+`plugin.tool.call`. Registered tools are mirrored into the core's `ToolRegistry`; every call is
+checked by the permission engine first and then forwarded to the owning worker as a `tool.call`.
 """
 
 from __future__ import annotations
@@ -168,6 +168,50 @@ class LocalToolRegistry:
 
     def unregister(self, name: str) -> None:
         self._specs.pop(name, None)
+
+
+#: Environment variables a plugin worker process inherits from the core. Everything else stays in
+#: the core: third-party plugin code has no business reading the whole environment of the process
+#: that supervises it - the API keys of unrelated tools included. What remains is what CPython
+#: itself needs in order to start on Windows: an interpreter path, a home directory and a
+#: temporary directory.
+_INHERITED_ENV = (
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "SystemRoot",
+    "SYSTEMDRIVE",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "ALLUSERSPROFILE",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PYTHONUTF8",
+    "PYTHONIOENCODING",
+)
+
+
+def _worker_environment() -> dict[str, str]:
+    """The minimal environment a plugin worker is spawned with (see `_INHERITED_ENV`)."""
+    return {name: os.environ[name] for name in _INHERITED_ENV if name in os.environ}
+
+
+def _manifest_of(rec: PluginRecord) -> PluginManifest:
+    """The record's manifest, as a checked invariant rather than an `assert`.
+
+    Every record reachable from a request handler has one; `assert` would vanish under `python -O`
+    and turn this into an `AttributeError` on the next line.
+    """
+    if rec.manifest is None:  # pragma: no cover - a record without a manifest is never routed
+        raise IpcError(ERR_INTERNAL, f"plugin {rec.plugin_id!r} has no validated manifest")
+    return rec.manifest
 
 
 def _tools_module() -> Any | None:
@@ -589,7 +633,7 @@ class PluginManager:
         if manifest is None:
             return
         client_id = f"{PLUGIN_CLIENT_PREFIX}{rec.plugin_id}"
-        env = dict(os.environ)
+        env = _worker_environment()
         env.update(self._tokens.worker_env(client_id))
         env["NOX_HUB_URL"] = self._hub.url
         env["NOX_PLUGINS_DIR"] = str(self.plugins_dir)
@@ -693,8 +737,15 @@ class PluginManager:
 
     def _unregister_tools(self, rec: PluginRecord) -> None:
         for name in rec.tools:
-            with contextlib.suppress(Exception):
+            try:
                 self.tools.unregister(name)
+            except Exception as exc:  # noqa: BLE001 - one stuck name must not keep the others
+                log.warning(
+                    "plugin.tool_unregister_failed",
+                    plugin=rec.plugin_id,
+                    tool=name,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
         rec.tools = []
 
     async def _publish(self, name: str, rec: PluginRecord, reason: str = "") -> None:
@@ -721,8 +772,7 @@ class PluginManager:
 
     async def _h_register(self, ctx: RequestContext, p: PluginRegister) -> dict[str, Any]:
         rec = self._record_for(ctx)
-        manifest = rec.manifest
-        assert manifest is not None  # noqa: S101 - guaranteed by _record_for
+        manifest = _manifest_of(rec)
         if p.plugin_id != rec.plugin_id:
             raise IpcError(ERR_PERMISSION, "plugin_id does not match the connection")
         if rec.state not in (PluginState.SPAWNED, PluginState.REGISTERED, PluginState.RUNNING):
@@ -794,8 +844,7 @@ class PluginManager:
 
     async def _h_secret_get(self, ctx: RequestContext, p: PluginSecretGet) -> dict[str, Any]:
         rec = self._record_for(ctx)
-        manifest = rec.manifest
-        assert manifest is not None  # noqa: S101 - guaranteed by _record_for
+        manifest = _manifest_of(rec)
         if p.name not in manifest.secrets:
             self._audit_secret(rec.plugin_id, p.name, "deny", "denied")
             log.warning("plugin.secret_denied", plugin=rec.plugin_id)
@@ -804,6 +853,8 @@ class PluginManager:
             )
         try:
             value = self._secrets.get(p.name)
+        except IpcError:
+            raise
         except Exception as exc:  # noqa: BLE001 - a keyring failure is reported, never faked
             self._audit_secret(rec.plugin_id, p.name, "allow", "failed")
             raise IpcError(ERR_INTERNAL, f"secret store error: {type(exc).__name__}") from exc
@@ -813,9 +864,14 @@ class PluginManager:
         return {"name": p.name, "value": value}
 
     def _audit_secret(self, plugin_id: str, name: str, decision: str, result: str) -> None:
+        """Record one secret access on the audit chain.
+
+        Raises `IpcError` when the chain cannot record it: a secret handed to a plugin with no
+        trace of it having happened is worse than a refused one.
+        """
         if self._audit is None:
             return
-        with contextlib.suppress(Exception):
+        try:
             self._audit.append(
                 actor=f"plugin:{plugin_id}",
                 tool="secrets",
@@ -824,6 +880,16 @@ class PluginManager:
                 decision=decision,
                 result=result,
             )
+        except Exception as exc:  # noqa: BLE001 - converted into a refusal below
+            log.error(
+                "plugin.secret_audit_failed",
+                plugin=plugin_id,
+                secret=name,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise IpcError(
+                ERR_INTERNAL, "secret access could not be audited, so it is refused"
+            ) from exc
 
     async def _h_tool_call(self, ctx: RequestContext, p: PluginToolCall) -> dict[str, Any]:
         self._record_for(ctx)  # only an authenticated plugin may reach the tool bus

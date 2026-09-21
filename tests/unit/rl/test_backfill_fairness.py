@@ -49,8 +49,7 @@ async def test_backfill_parses_off_loop_and_yields_between_files(
     monkeypatch.setattr(replay_parser, "parse_replay_file", slow_parse)
     core = SimpleNamespace(db=db, bus=AsyncEventBus())
     cfg = SimpleNamespace(replay=SimpleNamespace(folder=str(folder), backfill_batch_size=2))
-    rl_install._install_backfill_task(core, cfg, RlReplayRepository(db))
-    queue = core.rl_backfill_queue
+    queue = rl_install._build_backfill_queue(core, cfg, RlReplayRepository(db))
     handler = queue._handlers[rl_install._BACKFILL_KIND]
 
     ticks = 0

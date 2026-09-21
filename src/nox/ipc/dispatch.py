@@ -1,22 +1,24 @@
-"""Request registry and role-based dispatch for the IPC hub (IPC Model §Requests, §Security).
+"""The request registry, and the role check in front of it.
 
-A request is accepted when (1) a handler is registered for its name, (2) the caller's role
-allow-list (or a service namespace declared for the connection) matches the name, and (3) the
-handler's own
-allowed_roles - if given - contains the role. Payloads are validated against the registered pydantic
-model before the handler runs. Failures become ErrorPayload codes: validation.failed, not_found,
-permission.denied, internal.
+A request is accepted when all three hold: a handler is registered for its name, the caller's role
+allow-list (or a service namespace the connection declared) matches the name, and the handler's
+own `roles` - if it named any - contains the caller's role. The payload is then validated against
+the handler's model before it runs. Every failure becomes one error code: `validation.failed`,
+`not_found`, `permission.denied` or `internal`.
+
+Name matching is the dotted, segment-aware dialect from `nox.core.globbing`: `security.*` covers
+`security.kill` but not `security.permission.reply`, which is why the latter is listed by name.
 """
 
 from __future__ import annotations
 
-import fnmatch
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
+from nox.core.globbing import name_matches, name_matches_any
 from nox.ipc._log import get_logger
 from nox.ipc.errors import (
     CORE_SOURCE,
@@ -30,30 +32,17 @@ from nox.ipc.protocol import NAME_ERROR, RESPONSE_PAYLOAD_MODELS, Envelope, Kind
 
 log = get_logger(__name__)
 
-# ---- name globbing ------------------------------------------------------------
-
 
 def match_name(pattern: str, name: str) -> bool:
-    """Dotted glob: `*` matches one segment (fnmatch inside it), `**` any number of segments."""
-    return _match_segments(pattern.split("."), name.split("."))
+    """Dotted glob match. Kept here because every IPC caller reads pattern first, name second."""
+    return name_matches(name, pattern)
 
 
-def _match_segments(pat: list[str], parts: list[str]) -> bool:
-    if not pat:
-        return not parts
-    head, rest = pat[0], pat[1:]
-    if head == "**":
-        return any(_match_segments(rest, parts[i:]) for i in range(len(parts) + 1))
-    if not parts:
-        return False
-    return fnmatch.fnmatchcase(parts[0], head) and _match_segments(rest, parts[1:])
-
-
-def matches_any(patterns: Iterable[str], name: str) -> bool:
-    return any(match_name(p, name) for p in patterns)
-
-
-# ---- role allow-lists (IPC Model §Security rules) ----------------------------------------
+# ---- role allow-lists ---------------------------------------------------------------------
+#
+# The coarse surface per role, used for a request that was registered without its own `roles`, and
+# for the namespaces a worker or plugin declares. A registered handler's own `roles` wins; see
+# `RequestRegistry.is_allowed`.
 
 _DASHBOARD: tuple[str, ...] = (
     "ipc.*",
@@ -65,16 +54,15 @@ _DASHBOARD: tuple[str, ...] = (
     "security.*",  # security.kill, security.panic (one segment: not security.permission.reply)
     "voice.mute",
     "chat.send",
-    "health.history",  # ST-08: health-history panel (nox.data.repos.HealthHistoryRepository)
-    "config.effective",  # ST-08: Settings view, read-only redacted NoxConfig
-    # EPIC-21 `nox.settings`: the writable half of the Settings page. Each handler re-checks its
-    # own roles at registration time (`roles=("shell", "dashboard")`); this list only says that
-    # the name is reachable for a UI role at all.
+    "health.history",  # the health-history panel
+    "config.effective",  # the Settings view: read-only, redacted configuration
+    # The writable half of the Settings page. Each handler re-checks its own roles at registration
+    # time; this list only says the name is reachable for a UI role at all.
     "config.get",
     "config.set",
-    # Read-only `{"configured": bool}` (#23): two segments after `security.`, so `security.*`
-    # above does not cover it and it is listed by name, like `security.permission.reply` is for
-    # the shell role.
+    # Read-only `{"configured": bool}`. Two segments after `security.`, so the `security.*` entry
+    # above does not cover it and it is listed by name, as `security.permission.reply` is for the
+    # shell role.
     "security.pin.status",
     "secrets.status",
     "secrets.set",
@@ -84,17 +72,25 @@ _DASHBOARD: tuple[str, ...] = (
     "twitch.auth.disconnect",
     "personality.get",
     "personality.set",
+    "stream.session.status",
+    "stream.funken.top",
+    "plugin.status",
 )
 
 ROLE_ALLOWLIST: Mapping[str, tuple[str, ...]] = {
     "pet": ("ipc.*", "pet.interact", "state.get"),
     "dashboard": _DASHBOARD,
     "shell": (*_DASHBOARD, "voice.ptt", "security.permission.reply"),
-    "worker": ("ipc.*", "worker.*"),  # plus declared service namespaces per connection
-    # ST-11-01: `plugin.**` covers plugin.register / plugin.secret.get / plugin.tool.call;
-    # `state.get` is the read-only state view of the Plugin API (filtered by role in the handler).
-    "plugin": ("ipc.*", "worker.*", "plugin.**", "state.get"),
-    # core, supervisor and remote never authenticate over the hub in v0.1.
+    "worker": ("ipc.*", "worker.*"),  # plus the service namespaces the connection declares
+    # `plugin.**` covers plugin.register / plugin.secret.get / plugin.tool.call; `state.get` is
+    # the read-only state view of the plugin API, filtered by role inside the handler.
+    #
+    # `worker.*` is deliberately NOT here, only the liveness ping every worker process sends. A
+    # plugin that could call `worker.register` was able to claim the `voice` service, which hands
+    # it the speech routing and returns the voice configuration. A plugin registers through
+    # `plugin.register`, which is scoped to its own manifest.
+    "plugin": ("ipc.*", "plugin.**", "state.get", "worker.heartbeat"),
+    # core, supervisor and remote never authenticate over the hub.
     "core": (),
     "supervisor": (),
     "remote": (),
@@ -107,7 +103,9 @@ def service_patterns(services: Iterable[str]) -> tuple[str, ...]:
 
 
 def role_allows(role: str, name: str, extra_patterns: Iterable[str] = ()) -> bool:
-    return matches_any(ROLE_ALLOWLIST.get(role, ()), name) or matches_any(extra_patterns, name)
+    return name_matches_any(name, ROLE_ALLOWLIST.get(role, ())) or name_matches_any(
+        name, extra_patterns
+    )
 
 
 # ---- registry -----------------------------------------------------------------------------------
@@ -172,12 +170,22 @@ class RequestRegistry:
         return self._handlers.get(name)
 
     def is_allowed(self, name: str, role: str, extra_patterns: Iterable[str] = ()) -> bool:
+        """Whether `role` may call `name`.
+
+        The roles a handler was registered with are the answer when it named any: they sit next to
+        the handler, so they cannot drift away from it. A handler that named none falls back to
+        `ROLE_ALLOWLIST` and to the service namespaces the connection declared.
+
+        This used to be an *and* of both lists, which meant every UI request had to be added in
+        two places - and a request that was only added in one of them was registered, reachable in
+        the code, and refused at the door. That is how the whole stream view became unreachable.
+        """
         reg = self._handlers.get(name)
         if reg is None:
             return False
-        if not role_allows(role, name, extra_patterns):
-            return False
-        return reg.allowed_roles is None or role in reg.allowed_roles
+        if reg.allowed_roles is not None:
+            return role in reg.allowed_roles
+        return role_allows(role, name, extra_patterns)
 
     async def dispatch(self, ctx: RequestContext, envelope: Envelope) -> Envelope:
         """Run the handler for `envelope`; always returns exactly one response or error envelope."""

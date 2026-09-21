@@ -16,17 +16,23 @@ identity:
     units: metric
 
 paths:
-  data_dir: "${APPDATA}/Nox"             # vault, index, database, cache, replays, backups live below this
-  vault_dir: "${APPDATA}/Nox/vault"
-  # index_dir / database_dir / cache_dir / backups_dir default to <data_dir>/<name>; set them here
-  # only to move one of them elsewhere.
-  # %APPDATA%/Nox is used for small technical config, runtime tokens and UI state.
-  # ${VAR} / %VAR% environment references are expanded by nox.core.config.
+  # Everything Nox stores lives below data_dir: vault, index, database, cache, backups, runtime
+  # tokens and logs. Moving this one key moves all of them.
+  data_dir: "${APPDATA}/Nox"
+  # vault_dir / index_dir / database_dir / cache_dir / backups_dir / logs_dir each default to
+  # <data_dir>/<name>. Set one here only to move that one somewhere else.
   runtime_dir: "${APPDATA}/Nox/runtime"
-  logs_dir: "${APPDATA}/Nox/logs"
+  # runtime_dir stays here on purpose: the desktop shell and the pet window look for the session
+  # token and the port file before they have read any configuration. It holds no data of yours -
+  # both files are recreated on every start.
+  # ${VAR}, $VAR, %VAR% and ~ are expanded when the configuration is read.
 
 security:
-  profile: companion             # companion | coding | stream | research | work | offline
+  # companion | coding | stream | research | work | offline | rocket_league
+  profile: companion
+  # With a PIN configured, ask for it before a change that weakens protection: leaving a stricter
+  # privacy mode, switching a capture device back on, editing a security or privacy setting, or
+  # changing a stored credential. Making Nox stricter never asks.
   pin_required_for_security_changes: true
   hard_prohibitions:             # never overridable by any profile, plugin, runtime override or LLM
     - game.input.send
@@ -40,9 +46,9 @@ security:
     - permission.self_elevate
   egress_allowlist:              # global network allow-list (host, host:port, *.example.com:443);
                                  # a profile with its own egress_allowlist replaces this list
-    - "id.twitch.tv:443"         # Twitch OAuth device-code login (nox.settings.twitch_auth):
-                                 # user-initiated only, never contacted on its own; see
-                                 # docs/PRIVACY.md. Blocked in privacy mode private/offline.
+    - "id.twitch.tv:443"         # the Twitch sign-in flow, started only by the user from the
+                                 # dashboard; never contacted on its own. See docs/PRIVACY.md.
+                                 # Blocked in privacy mode private/offline like anything else.
   loopback_allowlist:            # local services still reachable in privacy mode private/offline
     - "127.0.0.1:11434"          # Ollama; profiles may add entries (OBS in the stream profile)
   audit:
@@ -88,9 +94,11 @@ voice:
     vad: true
     wake_word: "Nox"
     push_to_talk_hotkey: "ctrl+alt+space"
-    listening_mode: continuous   # continuous | ptt_only (ptt_only never opens the mic on its own)
-    # Wake-word gate in front of Whisper (#20): without it every VAD segment is transcribed, which
-    # is where the 20-40 s queue with background audio came from.
+    listening_mode: ptt_only     # ptt_only | continuous. The default never opens the microphone on
+                                 # its own: hold push-to-talk to speak. Switch to continuous for
+                                 # hands-free wake-word listening (costs CPU, wants a wake model).
+    # A wake-word gate sits in front of transcription. Without it every detected speech segment
+    # is transcribed, which is where the 20-40 s backlog with background audio came from.
     wake_word_engine: openwakeword   # openwakeword | text; falls back to text (health: limited)
                                      # when the package or the model file is missing
     wake_word_model: ""          # file in <models_dir>/openwakeword, or an absolute path;
@@ -102,9 +110,9 @@ voice:
     kill_phrase_watchdog: true   # short segments still reach Whisper so "Nox Notaus" keeps
     kill_watchdog_max_ms: 2500   # working; non-kill transcripts are discarded, never reported
   tts:
-    engine: piper                # piper | kokoro; piper stays the default until the PO switches.
-                                 # kokoro needs the voice-kokoro extra and the model files in
-                                 # <models_dir>/kokoro (python -m nox.worker --download-kokoro).
+    engine: piper                # piper | kokoro. Kokoro needs the voice-kokoro extra and its
+                                 # model files in <models_dir>/kokoro
+                                 # (python -m nox.worker --download-kokoro).
     voice: ""                    # engine-specific voice id; empty = the engine default
                                  # (piper: de_DE-thorsten-medium, kokoro: af_heart - no German
                                  # voice exists in Kokoro v1.0, see README)
@@ -119,9 +127,9 @@ voice:
 
 ai:
   router:
-    default_reasoner: claude_code   # validated by SP-01; degradation chain applies
+    default_reasoner: claude_code   # the degradation chain below applies when it is unavailable
     fallback_chain: [claude_code, ollama, rules]
-    roles:                          # per-role chains; SP-01/SP-12: local Ollama answers chat in <100 ms
+    roles:                          # per-role chains; the local model answers chat fastest
       chat: [ollama, claude_code, rules]
     background_budget_share: 0.30
     reserve_for_stream: true
@@ -130,7 +138,7 @@ ai:
       enabled: true
       command: "claude"
       timeout_s: 120
-      model: "sonnet"              # SP-01: same first-token latency as the CLI default, lower cost
+      model: "sonnet"              # same first-token latency as the CLI default, lower cost
       health_roundtrip: true       # 1-token probe at startup/health check (set false to save quota)
     ollama:
       enabled: true
@@ -146,35 +154,36 @@ pet:
   click_through_when_idle: false
   fps_target: 60
   fps_in_game: 20
-  greeting_enabled: true          # speak the startup greeting (still gated by SpeechPolicy, OP-10)
-  quiet_in_private_modes: true    # OP-10: no unsolicited speech (greeting/proactive) while privacy
-                                   # mode is private/offline; replies to the user are never blocked
-  variant: neutral                # OP-1: chosen creature concept id (ui/pet/src/variants); "neutral"
-                                   # is the placeholder until the PO picks from the rendered gallery
+  greeting_enabled: true          # speak the startup greeting (the speech policy still decides)
+  quiet_in_private_modes: true    # no unsolicited speech (greeting, hints) while privacy mode is
+                                   # private or offline; replies to you are never blocked
+  variant: neutral                # creature shape rendered by the pet window
+                                   # (ui/pet/src/variants), or sprite:<id> for a sprite set
 
-plugins:                         # ST-11-01: plugin workers (plugins/<id>/manifest.yaml)
+plugins:                         # plugin workers (plugins/<id>/manifest.yaml)
   enabled: []                    # plugin ids started at boot; empty = no plugin runs
-  dir: null                      # null = <repo>/plugins
+  dir: null                      # null = the plugins folder shipped with Nox
 
-stream:                          # Spec v0.2 Stream Bot (EPIC-11); numbers are placeholders
-  funken:                        # pending approval (Spec v0.2 §3.5) - mechanism is decided, tuning is not
-    earn_per_message: 1.0        # pending approval (Spec v0.2 §3.5)
-    earn_per_sub: 50.0           # pending approval (Spec v0.2 §3.5)
-    earn_per_bit: 0.1            # pending approval (Spec v0.2 §3.5)
-    earn_per_raid: 20.0          # pending approval (Spec v0.2 §3.5)
-    earn_cooldown_s: 30.0        # anti-farming (FR-9.17)
-    tier_names: [newcomer, regular, supporter, veteran, legend]   # pending approval (Spec v0.2 §3.5)
-    tier_thresholds: [0, 100, 500, 2000, 10000]                   # pending approval (Spec v0.2 §3.5)
+stream:                          # the stream bot. Every rate below is a conservative starting
+                                 # value - tune them once your channel has data.
+  funken:                        # the channel currency: how viewers earn it, and the loyalty tiers
+    earn_per_message: 1.0
+    earn_per_sub: 50.0
+    earn_per_bit: 0.1
+    earn_per_raid: 20.0
+    earn_cooldown_s: 30.0        # anti-farming, between two messages of the same viewer
+    tier_names: [newcomer, regular, supporter, veteran, legend]
+    tier_thresholds: [0, 100, 500, 2000, 10000]
   chat:
-    retain_raw_text_days: 7      # pending approval (Spec v0.2 §7); mirrors privacy.retention.raw_transcripts_days
+    retain_raw_text_days: 7      # chat is speech: kept as briefly as a voice transcript
   relevance:
-    unsolicited_interval_s: 120.0   # ~one unsolicited chat message per 2 min (Spec v0.2 §3.3)
+    unsolicited_interval_s: 120.0   # roughly one unsolicited chat message every two minutes
     mention_cooldown_s: 5.0
-  twitch:                        # read by the twitch plugin (#26); editable in the dashboard
+  twitch:                        # read by the twitch plugin; editable in the dashboard
     channel: ""                  # channel Nox joins; empty = the twitch plugin never joins one
     bot_names: [nox]             # names/aliases that count as "the bot was addressed"
     relevance_cooldown_s: 20.0   # per-viewer cooldown of the relevance classifier
-    rate_limit_max_messages: 20  # chat send budget per window (Spec v0.2 §9: Twitch allows 20/30s)
+    rate_limit_max_messages: 20  # send budget per window; Twitch itself allows 20 per 30 s
     rate_limit_window_s: 30.0
     rate_limit_min_gap_s: 1.5    # minimum pause between two chat messages
     min_backoff_s: 1.0           # IRC reconnect backoff, doubled up to max_backoff_s
@@ -207,23 +216,24 @@ supervisor:
   missed_for_graceful: 5
   missed_for_hard: 10
   kill_ack_timeout_s: 2.0
-  stop_timeout_s: 6.0            # B-6: sup.stop budget for NoxCore.stop() before the supervisor terminates it
+  stop_timeout_s: 6.0            # how long a shutdown request gives the core before it is
+                                 # terminated
   core_command: ["python", "-m", "nox.app"]
   shell_command: ["python", "-m", "nox.shell"]
   shell_enabled: true
 
-rl:                              # Rocket League Stage 1 (Spec v0.3 EPIC-12, ST-12-01..08); the
-                                  # `rl` plugin itself is opt-in (not in plugins.enabled by default)
+rl:                              # Rocket League coaching. The `rl` plugin itself is opt-in and
+                                 # is not in plugins.enabled by default.
   detection:
     poll_interval_s: 2.0
     process_names: ["RocketLeague.exe"]
   replay:
-    folder: null                 # null = resolve the OneDrive-redirected Documents special folder
-                                  # at runtime (Spec §6.5/§15); set only for a non-default install
+    folder: null                 # null = find the (possibly cloud-redirected) Documents folder
+                                 # at runtime; set it only for a non-default install
     backfill_batch_size: 25
     stable_check_interval_s: 2.0
     stable_checks: 2
-  budget:                        # FR-10.4/NFR-3 targets; ST-12-05 records the real SP-04 measurement
+  budget:                        # the ceiling the game must never notice
     max_gpu_pct: 10.0
     max_fps_loss_pct: 5.0
     capture_hz: 2.0
@@ -235,27 +245,27 @@ rl:                              # Rocket League Stage 1 (Spec v0.3 EPIC-12, ST-
     boost_low_threshold: 20
     demo_confidence_threshold: 0.75
     min_confidence: 0.6
-  retention:                     # pending approval (Spec §7/§15)
+  retention:                     # coaching data is only useful across a season
     events_days: 180
     matches_days: 365
-  vision:                        # Vision Stage 2 (Spec v0.9 EPIC-18, ST-18-01..06); opt-in-by-
-                                  # default even when `rl` itself is enabled (GPU budget risk, OP-E
-                                  # undecided) - `enabled: false` is the safe starting point.
+  vision:                        # on-screen analysis during a match. Off even when `rl` is on: the
+                                 # GPU budget on an entry-level card is the binding constraint, so
+                                 # this never starts implicitly.
     enabled: false
-    backend: none                 # none | opencv | onnx (onnx is a documented stub, always reports
-                                   # unavailable - onnxruntime is not an installed dependency)
+    backend: none                 # none | opencv | onnx (onnx always reports unavailable until
+                                   # onnxruntime is installed - it is not a dependency)
     sample_hz: 1.0
-    min_confidence: 0.5           # SP-19 open point: default not yet PO-confirmed
-    max_process_fraction: 0.5     # cost proxy: detection time / sample interval (see SP-19)
+    min_confidence: 0.5           # below this, a detection is ignored rather than guessed at
+    max_process_fraction: 0.5     # cost proxy: detection time / sample interval
     consecutive_over_budget: 3
     cooldown_s: 60.0
     detections_retain_hours: 6.0
 
-remote:                          # Mobile Companion (Spec v0.8, EPIC-17). Off until explicitly enabled.
-  enabled: false                 # no pairing, no remote kill switch, no Telegram bot without this
-  pair_code_ttl_s: 300           # one-time pairing code lifetime (Spec v0.8 §5.2, SP-14)
+remote:                          # the mobile companion. Off until you turn it on.
+  enabled: false                 # no pairing, no remote kill switch, no phone bot without this
+  pair_code_ttl_s: 300           # one-time pairing code lifetime, single use
   max_devices: 3
-  rate_limit_per_minute: 20      # per sender; tighter than any local client (Spec v0.8 §5.2)
+  rate_limit_per_minute: 20      # per sender; tighter than any local client
   rate_limit_burst: 5
   chat_enabled: true             # phone chat routes through the normal orchestrator (speak=False)
   notifications:
@@ -267,32 +277,31 @@ remote:                          # Mobile Companion (Spec v0.8, EPIC-17). Off un
       - stream.ended
       - pm.focus_changed
 
-clips:                          # Clip Pipeline (Spec v0.6, EPIC-15). Roots distinct from the OBS
-                                 # recording root (ES-03), which is read-only for this pipeline.
+clips:                          # the clip pipeline. Your recording folder is only ever read
+                                 # from; Nox writes to its own roots.
   # library_root / export_root / quarantine_root default to <data_dir>/data/clips/<name>;
-  # watch_dir defaults to <data_dir>/data/clips/incoming - point it at your OBS replay-buffer
-  # output folder.
-  highlight_kinds: [goal, save, win, overtime]   # rl.event.kind values that qualify (pending calibration)
+  # watch_dir defaults to <data_dir>/data/clips/incoming - point it at the replay-buffer output
+  # folder of your recording software.
+  highlight_kinds: [goal, save, win, overtime]   # game events that qualify as a highlight
   chat_hype_threshold: 0.75
-  cooldown_s: 15.0                # anti-double-clip, per trigger_kind (Spec v0.6 §9)
-  manual_lookback_s: 20.0         # secondary-tag lookback window for !clip/hotkey (Spec v0.6 §4.2)
+  cooldown_s: 15.0                # anti-double-clip, per kind of trigger
+  manual_lookback_s: 20.0         # how far back a manual clip looks for a game event to tag
   watch_poll_interval_s: 2.0
   watch_timeout_s: 30.0
-  quarantine_days: 30             # FR-14.1 quarantine-only deletion, never a hard delete
+  quarantine_days: 30             # discarded clips are moved here, never hard-deleted
 
-pm:                              # EPIC-13 Project Management (ST-13-01 subset); no new plugin,
-                                  # core feature (Spec v0.4 PM and Coding §6.1)
+pm:                              # project management, reading and writing notes in your vault
   epics_dir: "08 - Epics"
   stories_dir: "09 - Stories"
   projects_note: "Projects.md"   # single list note; this vault has no per-project folder yet
   watch_debounce_s: 1.5
   focus_max_items: 5
 
-creative:                        # Creative Apps (Spec v0.7, EPIC-16); pending approval - shipped
-                                  # as configurable defaults per the relayed PO sign-off
-                                  # (2026-09-14), see 00 - Inbox/Plan v0.7 Creative Apps.md.
-  hysteresis_s: 15.0             # pending approval (Spec v0.7 §11)
-  vault_folder: "16 - Creative Projects"   # pending approval (Spec v0.7 §3.4/§11)
+creative:                        # detecting creative applications. The patterns below are
+                                 # deliberately narrow: not detecting an app is cheaper than
+                                 # announcing a session that is not happening.
+  hysteresis_s: 15.0             # how long a match must hold before the mode switches
+  vault_folder: "16 - Creative Projects"
   app_patterns:
     blender:
       - { process: "blender.exe" }
@@ -303,26 +312,26 @@ creative:                        # Creative Apps (Spec v0.7, EPIC-16); pending a
       - { process: "krita.exe" }
     capcut:
       - { process: "capcut.exe" }
-    davinci_resolve:            # not installed on the reference machine; speculative/config-only
+    davinci_resolve:
       - { process: "resolve.exe" }
-    browser_daw:                 # a browser-hosted DAW; window-title match (replace the
-                                  # pattern below with your own project's window title)
+    browser_daw:                 # a browser-hosted audio workstation: replace the title pattern
+                                 # below with the one your own project uses
       - { process: "chrome.exe", title: "*Web DAW*" }
       - { process: "msedge.exe", title: "*Web DAW*" }
       - { process: "firefox.exe", title: "*Web DAW*" }
 
-sensors:                         # PC Awareness Sensors (Spec v0.5 EPIC-20, ST-20-01/02/04/06/07
-                                  # subset delivered this pass; core service, no plugins/system/)
+sensors:                         # local awareness: foreground window, idle, resource load and
+                                 # the generic game-process hook
   enabled: true
   foreground:
     poll_interval_s: 1.0
   idle:
     poll_interval_s: 5.0
-    idle_after_s: 600.0          # ~10 min (FR-14.4)
-    away_after_s: 1200.0         # ~20 min (FR-14.4)
+    idle_after_s: 600.0          # ten minutes without input counts as idle
+    away_after_s: 1200.0         # twenty minutes counts as away
   resources:
     poll_interval_s: 5.0
-    idle_poll_interval_s: 15.0   # adaptive sampling (ST-20-02): slower while nothing is pressured
+    idle_poll_interval_s: 15.0   # adaptive sampling: slower while nothing is under pressure
     cpu_high_watermark_pct: 80.0
     gpu_enabled: true
   game:
@@ -330,22 +339,22 @@ sensors:                         # PC Awareness Sensors (Spec v0.5 EPIC-20, ST-2
     process_names: ["RocketLeague.exe"]
   history_len: 120
 
-proactive:                       # Personality & Proactivity (Spec v0.5 EPIC-19, ST-19-04..08).
-                                  # Quiet hours / proactivity_level / per_mode / interruptions_per_hour
-                                  # live under `attention:` above and are reused, not duplicated here.
+proactive:                       # when and how Nox speaks without being asked. Quiet hours,
+                                 # proactivity_level, per_mode and interruptions_per_hour live
+                                 # under `attention:` above and are reused, not duplicated here.
   enabled: true
-  notification_store_limit: 200  # in-memory ring buffer depth (no DB migration in this pass)
-  announce_before_speaking: true # A.13: say who you are before unsolicited speech
-  feedback_min_weight: 0.2       # bounded feedback-loop (ST-19-07): frequency only, never a floor
-  feedback_max_weight: 1.0       # below full for URGENT (security/data-loss bypasses weighting)
+  notification_store_limit: 200  # ring-buffer depth behind proactive.status.read
+  announce_before_speaking: true # say who is speaking before unsolicited speech
+  feedback_min_weight: 0.2       # learned bounds on hint frequency, never on urgent messages
+  feedback_max_weight: 1.0
   feedback_step: 0.05
   timing_learner_enabled: true
 
-memory:                          # Memory & Vault (Spec v0.5 MVP, EPIC-07, ST-07-01..05). Vault
-                                  # location itself stays `paths.vault_dir` above, not duplicated.
-  embed_model: "nomic-embed-text" # via Ollama; sqlite-vec storage, FTS5 fallback when unreachable
-  vault_watch_debounce_s: 2.0    # ST-07-03 AC1: a burst of saves -> exactly one re-index
-  retrieval_max_tokens: 4000     # hard cap on retrieved context (~4 chars/token estimate)
+memory:                          # the vault watcher, indexer and retrieval. The vault location
+                                 # itself is paths.vault_dir above, not repeated here.
+  embed_model: "nomic-embed-text" # served by the local model server; text search as a fallback
+  vault_watch_debounce_s: 2.0    # a burst of saves triggers exactly one re-index
+  retrieval_max_tokens: 4000     # hard cap on retrieved context
   retrieval_k: 8
   full_scan_on_boot: true
-  retention_note_version_days: 30 # rollback copies (vault_note_versions) kept this long
+  retention_note_version_days: 30 # how long rollback copies of a note are kept

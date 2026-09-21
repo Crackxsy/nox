@@ -1,7 +1,7 @@
 """`coding.review.request`: a short, honest triage of a tracked session's outcome - what is broken,
 why probably, and the next action. Built only from the session record's own state (outcome, error,
-repair attempts); a session with no diagnostic yet says so rather than fabricating one
-(ENGINEERING.md "no fake implementations")."""
+repair attempts); a session with no diagnostic yet says so rather than fabricating one (the project
+standards "no fake implementations")."""
 
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def format_review(record: SessionRecord | None) -> Review:
         return Review(
             what_is_broken=f"{record.repair_attempts} repair attempt(s) did not fix it: {reason}",
             why_probably="the underlying issue needs a person to look at it - Nox stopped after "
-            "the repair-attempt limit per policy (Personality v1 B.8: honesty over infinite retry)",
+            "the repair-attempt limit rather than retrying forever",
             next_action="read the full session detail on the dashboard and either fix it manually "
             "or start a new session with more context",
         )

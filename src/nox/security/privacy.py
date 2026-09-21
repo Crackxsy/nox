@@ -1,27 +1,33 @@
-"""Privacy service: modes, capture flags, zones (Security Model §5, PRD P3, FR-2.6, FR-6.9, state.py
-PrivacyState).
+"""Privacy modes, capture flags and privacy zones.
 
-Zone detection is a local sensor: `observe_foreground(window_title, process_name)` matches against
-window-title/process patterns; `path_zone()` matches paths. Window titles are never audited or
-logged.
-Switching to PRIVATE/OFFLINE is always allowed; switching to FULL needs `confirmed=True`.
+A zone is a local sensor result, not a policy: `observe_foreground(window_title, process_name)`
+matches the foreground window against title and process patterns, and `path_zone()` matches paths.
+The window title that caused a match is never logged and never audited - only the zone id, and
+only as a boolean on the bus.
+
+Tightening privacy is always allowed. Relaxing it is not: switching to FULL needs an explicit
+confirmation, and when a PIN is configured the IPC layer asks for it first.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
-from fnmatch import fnmatchcase
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from nox.core.events import CaptureChanged, E, EventBus, PrivacyModeChanged
+from nox.core.globbing import value_matches
 from nox.core.state import PrivacyMode, PrivacyState
 from nox.security._events import publish
 from nox.security._logging import get_logger
+from nox.security.audit_sink import SafeAuditLog
 from nox.security.model import AuditLog
 from nox.security.permissions import PrivacySnapshot
+
+if TYPE_CHECKING:  # avoids a runtime cycle: the config package reads the security hard list
+    from nox.core.config import PrivacyConfig
 
 log = get_logger(__name__)
 
@@ -132,10 +138,6 @@ class PrivacyModeChange(BaseModel):
     by: str = "user"
 
 
-def _glob(value: str, pattern: str) -> bool:
-    return fnmatchcase(value.lower(), pattern.lower())
-
-
 def _build_zone(item: str | Mapping[str, Any] | ZoneSpec) -> ZoneSpec:
     if isinstance(item, ZoneSpec):
         return item
@@ -170,7 +172,7 @@ class PrivacyService:
         clock: Clock | None = None,
     ) -> None:
         self._bus = bus
-        self._audit = audit
+        self._audit = SafeAuditLog(audit, tool="privacy")
         self._safe_mode: Callable[[], bool] = safe_mode or (lambda: False)
         self._clock: Clock = clock or (lambda: datetime.now(UTC))
         self._mode = mode
@@ -182,14 +184,25 @@ class PrivacyService:
         self._panic = False
 
     @classmethod
-    def from_config(cls, privacy_config: Mapping[str, Any], **kwargs: Any) -> PrivacyService:
-        """Build from the `privacy` section of NoxConfig (model_dump) or raw defaults.yaml."""
-        mode = PrivacyMode(str(privacy_config.get("mode", PrivacyMode.BALANCED.value)))
-        capture = privacy_config.get("capture") or {}
-        zones = privacy_config.get("zones") or []
-        return cls(mode=mode, capture=capture, zones=zones, **kwargs)
+    def from_config(cls, privacy_config: PrivacyConfig, **kwargs: Any) -> PrivacyService:
+        """Build from the typed `privacy` section of `NoxConfig`."""
+        return cls(
+            mode=PrivacyMode(privacy_config.mode),
+            capture=privacy_config.capture.model_dump(),
+            zones=list(privacy_config.zones),
+            **kwargs,
+        )
 
     # ---- read side -------------------------------------------------------------------------------
+
+    def set_safe_mode_source(self, is_engaged: Callable[[], bool]) -> None:
+        """Tell the privacy service how to see the kill switch.
+
+        Called once, right after the kill switch is built. The two services genuinely need each
+        other, and naming the dependency here is clearer than handing the privacy service a
+        mutable cell that is filled in later.
+        """
+        self._safe_mode = is_engaged
 
     @property
     def mode(self) -> PrivacyMode:
@@ -268,9 +281,9 @@ class PrivacyService:
         title = window_title.strip()
         process = process_name.strip()
         for zone in self._zones:
-            if title and any(_glob(title, p) for p in zone.window_titles):
+            if title and any(value_matches(title, p) for p in zone.window_titles):
                 return zone.id
-            if process and any(_glob(process, p) for p in zone.processes):
+            if process and any(value_matches(process, p) for p in zone.processes):
                 return zone.id
         return None
 
@@ -279,7 +292,7 @@ class PrivacyService:
         if not text:
             return None
         for zone in self._zones:
-            if any(_glob(text, p) for p in zone.paths):
+            if any(value_matches(text, p) for p in zone.paths):
                 return zone.id
         return None
 
@@ -293,16 +306,15 @@ class PrivacyService:
             return zone
         previous = self._active_zone
         self._active_zone = zone
-        self._audit_append(
+        self._audit.append(
             actor="sensor",
-            tool="privacy",
             action="zone.enter" if zone else "zone.leave",
             target=zone or previous or "",
             decision="allow",
             result="ok",
         )
         # Formalizes the event `PetService._on_zone` already subscribes to by this literal name
-        # (Spec v0.5 §3.5, ST-20-04): only the boolean + zone id ever go on the bus, never the
+        # Only the boolean and the zone id ever go on the bus, never the
         # window title/process that triggered the match. Published before CAPTURE_CHANGED so
         # existing callers that assert "the last published event is capture_changed" still hold.
         await publish(self._bus, E.PRIVACY_ZONE_CHANGED, {"active": zone is not None, "zone": zone})
@@ -318,9 +330,8 @@ class PrivacyService:
         mode = PrivacyMode(mode)
         previous = self._mode
         if mode is PrivacyMode.FULL and previous is not PrivacyMode.FULL and not confirmed:
-            self._audit_append(
+            self._audit.append(
                 actor=by,
-                tool="privacy",
                 action="mode.set",
                 target=mode.value,
                 decision="confirm",
@@ -336,9 +347,8 @@ class PrivacyService:
         if mode is previous:
             return PrivacyModeChange(previous=previous, current=previous, applied=False, by=by)
         self._mode = mode
-        self._audit_append(
+        self._audit.append(
             actor=by,
-            tool="privacy",
             action="mode.set",
             target=mode.value,
             decision="allow",
@@ -366,9 +376,8 @@ class PrivacyService:
         for kind, value in changes.items():
             if value is not None:
                 self._capture[kind] = bool(value)
-        self._audit_append(
+        self._audit.append(
             actor=by,
-            tool="privacy",
             action="capture.set",
             target="",
             decision="allow",
@@ -383,16 +392,11 @@ class PrivacyService:
         if active == self._panic:
             return
         self._panic = active
-        self._audit_append(
+        self._audit.append(
             actor=by,
-            tool="privacy",
             action="panic.set",
             target=str(active).lower(),
             decision="allow",
             result="ok",
         )
         await publish(self._bus, E.PRIVACY_CAPTURE_CHANGED, self.effective_capture())
-
-    def _audit_append(self, **kwargs: object) -> None:
-        if self._audit is not None:
-            self._audit.append(**kwargs)  # type: ignore[arg-type]

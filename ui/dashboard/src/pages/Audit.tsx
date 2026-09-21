@@ -3,23 +3,53 @@
  * including denied, aborted and failed ones, is auditable). This view is explicitly only the live
  * session feed — the append-only log itself lives in the core, and the page says so instead of
  * pretending to show the complete history.
+ *
+ * Every column that carries an identifier shows the word on top and the core's own value beneath
+ * it, so the table reads as German prose without losing a single machine-readable token.
+ *
+ * The row count is announced as a sentence, and only when the *filter* changes — announcing a bare
+ * number on every incoming event turned a screen reader into a ticker.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { T } from '../i18n';
+import { formatTimestamp } from '../../../shared/format';
+import {
+  type Key,
+  type Lang,
+  type T,
+  auditActionLabel,
+  auditActorLabel,
+  auditDecisionLabel,
+  auditResultLabel,
+  auditToolLabel,
+  fill,
+} from '../i18n';
 import type { AuditRow } from '../model';
-import { Hero, StateWord, Tile } from '../ui';
+import { Detail, Hero, StateWord, Tile, toneFor } from '../ui';
 
 export interface AuditPageProps {
   t: T;
+  lang: Lang;
   rows: AuditRow[];
 }
 
-export function AuditPage({ t, rows }: AuditPageProps) {
+const COLUMNS: Key[] = [
+  'audit_seq',
+  'audit_time',
+  'audit_actor',
+  'audit_tool',
+  'audit_action',
+  'audit_target',
+  'audit_decision',
+  'audit_result',
+];
+
+export function AuditPage({ t, lang, rows }: AuditPageProps) {
   const [filter, setFilter] = useState('');
   const [decisionFilter, setDecisionFilter] = useState('');
   const [resultFilter, setResultFilter] = useState('');
+  const [announcement, setAnnouncement] = useState('');
 
   const decisions = useMemo(
     () => Array.from(new Set(rows.map((r) => r.decision).filter(Boolean))).sort(),
@@ -42,7 +72,16 @@ export function AuditPage({ t, rows }: AuditPageProps) {
     });
   }, [rows, filter, decisionFilter, resultFilter]);
 
+  const count = shown.length;
   const filtered = filter !== '' || decisionFilter !== '' || resultFilter !== '';
+
+  // Announce the count when the *filter* changes, not when a new event arrives. `countRef` keeps
+  // the number out of the dependency list, so an incoming audit event does not re-announce.
+  const countRef = useRef(count);
+  countRef.current = count;
+  useEffect(() => {
+    setAnnouncement(fill(t('audit_count'), countRef.current));
+  }, [filter, decisionFilter, resultFilter, t]);
 
   const reset = () => {
     setFilter('');
@@ -63,7 +102,7 @@ export function AuditPage({ t, rows }: AuditPageProps) {
       />
 
       <div className="tiles tiles--single">
-        <Tile id="audit-filter" eyebrow={t('audit_title')} title={t('audit_filter')} lede={t('audit_hint')}>
+        <Tile id="audit-filter" title={t('audit_title')} lede={t('audit_hint')}>
           <div className="row-controls">
             <div className="field field--grow">
               <label htmlFor="audit-filter-text" className="label">
@@ -93,7 +132,7 @@ export function AuditPage({ t, rows }: AuditPageProps) {
                 <option value="">{t('audit_filter_all')}</option>
                 {decisions.map((d) => (
                   <option key={d} value={d}>
-                    {d}
+                    {auditDecisionLabel(t, d)}
                   </option>
                 ))}
               </select>
@@ -111,7 +150,7 @@ export function AuditPage({ t, rows }: AuditPageProps) {
                 <option value="">{t('audit_filter_all')}</option>
                 {results.map((r) => (
                   <option key={r} value={r}>
-                    {r}
+                    {auditResultLabel(t, r)}
                   </option>
                 ))}
               </select>
@@ -126,13 +165,14 @@ export function AuditPage({ t, rows }: AuditPageProps) {
             <h3 id="h-audit-rows" className="rail-title">
               {t('audit_title')}
             </h3>
+            <p className="rail-sub">{fill(t('audit_count'), count)}</p>
             <p role="status" aria-live="polite" className="sr-only">
-              {shown.length}
+              {announcement}
             </p>
           </div>
         </div>
 
-        {shown.length === 0 ? (
+        {count === 0 ? (
           <p className="muted">{t('audit_empty')}</p>
         ) : (
           <div className="table-scroll">
@@ -140,18 +180,7 @@ export function AuditPage({ t, rows }: AuditPageProps) {
               <caption className="sr-only">{t('audit_title')}</caption>
               <thead>
                 <tr>
-                  {(
-                    [
-                      'audit_seq',
-                      'audit_time',
-                      'audit_actor',
-                      'audit_tool',
-                      'audit_action',
-                      'audit_target',
-                      'audit_decision',
-                      'audit_result',
-                    ] as const
-                  ).map((k) => (
+                  {COLUMNS.map((k) => (
                     <th key={k} scope="col">
                       {t(k)}
                     </th>
@@ -164,14 +193,43 @@ export function AuditPage({ t, rows }: AuditPageProps) {
                     <th scope="row" className="num">
                       {r.seq}
                     </th>
-                    <td className="muted nowrap">{r.ts || '–'}</td>
-                    <td>{r.actor || '–'}</td>
-                    <td>{r.tool || '–'}</td>
-                    <td>{r.action || '–'}</td>
-                    <td className="break">{r.target || '–'}</td>
-                    <td>{r.decision || '–'}</td>
+                    <td className="muted nowrap" title={r.ts}>
+                      {formatTimestamp(r.ts, lang)}
+                    </td>
                     <td>
-                      {r.result ? <StateWord status={r.result} label={r.result} /> : '–'}
+                      {r.actor ? (
+                        <Detail label={auditActorLabel(t, r.actor)} detail={r.actor} />
+                      ) : (
+                        '–'
+                      )}
+                    </td>
+                    <td>
+                      {r.tool ? <Detail label={auditToolLabel(t, r.tool)} detail={r.tool} /> : '–'}
+                    </td>
+                    <td>
+                      {r.action ? (
+                        <Detail label={auditActionLabel(t, r.action)} detail={r.action} />
+                      ) : (
+                        '–'
+                      )}
+                    </td>
+                    <td className="break">{r.target || '–'}</td>
+                    <td>
+                      {r.decision ? (
+                        <StateWord
+                          tone={toneFor(r.decision)}
+                          label={auditDecisionLabel(t, r.decision)}
+                        />
+                      ) : (
+                        '–'
+                      )}
+                    </td>
+                    <td>
+                      {r.result ? (
+                        <StateWord tone={toneFor(r.result)} label={auditResultLabel(t, r.result)} />
+                      ) : (
+                        '–'
+                      )}
                     </td>
                   </tr>
                 ))}

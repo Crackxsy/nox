@@ -1,7 +1,7 @@
-"""Multi-stage importance scoring for memory candidates (ST-07-01, FR-7.5/FR-7.6).
+"""Multi-stage importance scoring for memory candidates.
 
-An explicit user command ("merk dir das") always outranks passive-chat heuristics; passive
-"should I remember?" checks are throttled by `PassiveThrottle` rather than firing on every turn.
+An explicit user command ("merk dir das") always outranks passive-chat heuristics; passive "should
+I remember?" checks are throttled by `PassiveThrottle` rather than firing on every turn.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ _EXPLICIT_MARKERS = (
 )
 
 
-# FR-7.5: fixed type list. Deliberately no "Health" type (health data lives in health_history, not
+#: fixed type list. Deliberately no "Health" type (health data lives in health_history, not
 # memory_items).
 class MemoryType(StrEnum):
     USER = "user"
@@ -71,7 +71,7 @@ def score_importance(
 
 @dataclass
 class PassiveThrottle:
-    """Rate-limits "should I remember?" passive checks (FR-7.6: "heavily throttled").
+    """Rate-limits "should I remember?" passive checks ("heavily throttled").
 
     `min_interval_s` between checks and `max_per_window`/`window_s` as a secondary cap.
     """

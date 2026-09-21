@@ -17,7 +17,7 @@ There were two honest options:
 - **Option B — publish a fresh repository built from a single squashed snapshot**, authored with a
   GitHub `users.noreply` address, and delete the old repository afterwards. The cost is the loss of
   the granular history and of `git blame` before the snapshot commit; the benefit is that no
-  personal e-mail address is ever published. **Chosen (product-owner decision, 2026-09-16).**
+  personal e-mail address is ever published. **Chosen (2026-09-16).**
 
 The old repository is kept, renamed, as a private archive only until the new repository's CI is
 green — then it is deleted. That deletion is deliberate and irreversible.
@@ -210,8 +210,8 @@ gh run watch --repo Crackxsy/nox
 
 All jobs must be green: `Python (ruff, mypy, unit + integration tests)`, `UI (pet)`,
 `UI (dashboard)`, `Guard - no input-synthesis / process-memory APIs (Security Model §10)`,
-`Release hygiene (third-party license audit ST-21-02, secrets scan ST-21-07)` and
-`E2E (Playwright live-core smoke, B-10)`.
+`Release hygiene (third-party license audit, secrets scan)` and
+`E2E (Playwright live-core smoke)`.
 
 Then open a throwaway pull request and confirm that merging is blocked until the checks pass — the
 protection is only proven once you have seen it block something.

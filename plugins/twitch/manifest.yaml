@@ -1,4 +1,4 @@
-# Twitch chat bot plugin (ST-11-04, Spec v0.2 Stream Bot). Plain IRC over TLS to
+# Twitch chat bot plugin (Stream Bot). Plain IRC over TLS to
 # irc.chat.twitch.tv:6697 (asyncio streams, no extra dependency - `tls: False` exists only so
 # tests can point the client at a plaintext fake server).
 #
@@ -31,7 +31,7 @@ resources:
   memory_mb: 128
   priority: normal
 config:
-  # The bot's user-facing knobs live in the configuration, not here (#26): `stream.twitch.*` in
+  # The bot's user-facing knobs live in the configuration, not here: `stream.twitch.*` in
   # config/defaults.yaml, editable on the dashboard's Settings page - channel, bot_names,
   # relevance_cooldown_s, the rate_limit_* budget and min/max_backoff_s. Keeping a copy of one of
   # those keys in this block still works for one release (the plugin logs a deprecation line and
@@ -48,7 +48,7 @@ config:
   # protected groups, sexual content about viewers, doxxing, illness/death jokes, insults aimed at
   # a viewer name - none of those can be relaxed via config).
   moderation_blocklist: []
-  # !rps: per-viewer cooldown and the Funken awarded on a win - pending approval (Spec v0.2 §3.5:
+  # !rps: per-viewer cooldown and the Funken awarded on a win - pending approval (:
   # exact Funken rates are backlog defaults, not yet a product decision).
   rps_cooldown_s: 30.0
   rps_win_funken: 5.0  # pending approval

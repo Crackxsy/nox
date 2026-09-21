@@ -1,4 +1,4 @@
-"""SP-02 STT latency: faster-whisper base vs small, CPU int8, one 3 s German utterance, 5 runs each.
+"""STT latency: faster-whisper base vs small, CPU int8, one 3 s German utterance, 5 runs each.
 
 Usage: .venv/Scripts/python.exe spikes/sp02_stt.py [--record] [--runs 5]
        [--models base,small]

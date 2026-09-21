@@ -11,10 +11,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 import nox.app as app
 from nox.ai.base import ProviderInfo
+from nox.core.boot.ai import ProviderCard
 from nox.core.config import NoxConfig
 from nox.core.events import HealthChanged, HealthStatus
 
@@ -45,26 +44,34 @@ class _Router:
         return self._infos
 
 
+#: Short enough that the slow-probe test does not wait, long enough that the fast one wins.
+PROBE_BUDGET_S = 0.05
+
+
 def make_core(router: _Router, health: dict[str, HealthChanged]) -> app.NoxCore:
+    """A core with only the three pieces the provider card reads, wired as `_build_models` does."""
     core = app.NoxCore(NoxConfig(), voice=False, extensions=False)
     core.router = router  # type: ignore[assignment]
-    core.ai_providers = [_Provider(make_info("rules")), _Provider(make_info("claude_code"))]  # type: ignore[assignment]
+    core.ai_providers = [_Provider(make_info("rules")), _Provider(make_info("claude_code"))]  # type: ignore[list-item]
     core.health = SimpleNamespace(current=lambda: health)  # type: ignore[assignment]
+    core.provider_card = ProviderCard(
+        core.ai_providers,
+        probe=core._probe_providers,
+        health_entry=core._health_entry,
+        budget_s=PROBE_BUDGET_S,
+    )
     return core
 
 
 async def test_live_probe_result_is_used_when_it_answers_in_time() -> None:
     live = [make_info("rules", HealthStatus.AVAILABLE)]
     core = make_core(_Router(live), {})
-    payload = await core._providers_json()
+    payload = await core.providers_json()
     assert [p["id"] for p in payload] == ["rules"]
     assert payload[0]["status"] == "available"
 
 
-async def test_slow_probe_falls_back_to_the_health_report_not_to_nothing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(app, "PROVIDERS_PROBE_BUDGET_S", 0.05)
+async def test_slow_probe_falls_back_to_the_health_report_not_to_nothing() -> None:
     health = {
         "ai.rules": HealthChanged(
             component="ai.rules", status=HealthStatus.AVAILABLE, reason="rule set loaded"
@@ -74,7 +81,7 @@ async def test_slow_probe_falls_back_to_the_health_report_not_to_nothing(
         ),
     }
     core = make_core(_Router([], delay_s=5.0), health)
-    payload = await core._providers_json()
+    payload = await core.providers_json()
     assert [p["id"] for p in payload] == ["rules", "claude_code"]  # never an empty list
     assert payload[0]["status"] == "available" and payload[0]["reason"] == "rule set loaded"
     assert payload[1]["status"] == "unavailable"

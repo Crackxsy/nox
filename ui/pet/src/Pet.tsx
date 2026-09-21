@@ -5,13 +5,19 @@
  * from AnimParams (petState.ts::deriveAnim) — the variant only fixes *which creature* is doing the
  * expressing, never how an expression itself looks; colour (palette) only supports it (A57/D34).
  *
- * #25: the few *chrome* colours the canvas needs — the creature's line work and the status label
- * plate under it — come from the shared design tokens via `theme.ts::readChrome` instead of the
- * hard-coded dark palette this file used to carry. The body tint still comes from the variant
- * palette through `AnimParams`, which `App.tsx` now derives per theme.
+ * The few *chrome* colours the canvas needs — the creature's line work and the status label plate
+ * under it — come from the shared design tokens via `theme.ts::readChrome`. The body tint comes
+ * from the variant palette through `AnimParams`, which `App.tsx` derives per theme.
+ *
+ * Three things the renderer has to respect and used to not:
+ *  - `prefers-reduced-motion`, which the sprite renderer and the dashboard both honour: breathing,
+ *    bobbing, jitter, blinking and the orbiting rings are clamped instead of running anyway;
+ *  - `AnimParams.paused`, the throttled-frame policy the module docstring cites — a paused frame is
+ *    not drawn at all, rather than the field being declared and ignored;
+ *  - the render phase, which React reserves for pure work. Every ref write moved into an effect.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { type AnimParams, decaySpeaking } from './petState';
 import { CHROME_FALLBACK, type PetChrome, type ThemeMode, readChrome } from './theme';
@@ -30,9 +36,12 @@ export interface PetProps {
   variant?: PetVariant;
   /** Active token theme; only the chrome colours depend on it (#25). */
   theme?: ThemeMode;
+  /** Accessible name of the creature control, from the app's language table. */
+  label?: string;
 }
 
 const TAU = Math.PI * 2;
+const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
 
 export function Pet({
   params,
@@ -43,19 +52,41 @@ export function Pet({
   size = 260,
   variant = neutral,
   theme = 'dark',
+  label,
 }: PetProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const paramsRef = useRef(params);
   const variantRef = useRef(variant);
   const chromeRef = useRef<PetChrome>(CHROME_FALLBACK[theme]);
   const levelRef = useRef(speakingLevel);
-  paramsRef.current = params;
-  variantRef.current = variant;
-  levelRef.current = Math.max(levelRef.current, speakingLevel);
+  const [reduced, setReduced] = useState(false);
+
+  // React reserves the render phase for pure work; under StrictMode a ref written there is
+  // undefined behaviour. The loop reads these one frame later, which is invisible at 60 fps.
+  useEffect(() => {
+    paramsRef.current = params;
+  }, [params]);
+
+  useEffect(() => {
+    variantRef.current = variant;
+  }, [variant]);
+
+  useEffect(() => {
+    levelRef.current = Math.max(levelRef.current, speakingLevel);
+  }, [speakingLevel]);
 
   useEffect(() => {
     chromeRef.current = readChrome(theme);
   }, [theme]);
+
+  useEffect(() => {
+    const mq = window.matchMedia?.(REDUCED_MOTION);
+    if (!mq) return;
+    const update = () => setReduced(mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -70,12 +101,15 @@ export function Pet({
     let raf = 0;
     let last = performance.now();
     let lastDraw = 0;
-    let blinkAt = last + 2500 + Math.random() * 3000;
+    // Every 4–7 s, jittered — the same rhythm the sprite renderer blinks at.
+    let blinkAt = last + 4000 + Math.random() * 3000;
     let blink = 0;
 
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame);
       const p = paramsRef.current;
+      // The throttled-frame policy (FR-4.13/A390): a paused pet is not redrawn at all.
+      if (p.paused) return;
       const minInterval = 1000 / p.fps;
       if (now - lastDraw < minInterval) return;
       const dt = now - last;
@@ -86,31 +120,61 @@ export function Pet({
         levelRef.current = decaySpeaking(levelRef.current, dt);
         if (levelRef.current === 0) onSpeakingDecay(0);
       }
-      if (now > blinkAt) {
+      if (!reduced && now > blinkAt) {
         blink = 1;
-        blinkAt = now + 2500 + Math.random() * 4000;
+        blinkAt = now + 4000 + Math.random() * 3000;
       }
       blink = Math.max(0, blink - dt / 120);
-      draw(ctx, p, variantRef.current, now / 1000, size, levelRef.current, blink, chromeRef.current);
+      draw(
+        ctx,
+        p,
+        variantRef.current,
+        now / 1000,
+        size,
+        levelRef.current,
+        blink,
+        chromeRef.current,
+        reduced,
+      );
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [size, onSpeakingDecay]);
+  }, [size, onSpeakingDecay, reduced]);
 
-  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!interactive) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    onInteract('click', Math.round(e.clientX - rect.left), Math.round(e.clientY - rect.top));
-  };
+  const name = [`Nox`, params.label, label].filter(Boolean).join(' · ');
 
+  if (!interactive) {
+    return (
+      <canvas
+        ref={canvasRef}
+        style={{ width: size, height: size, display: 'block' }}
+        role="img"
+        aria-label={name}
+      />
+    );
+  }
+
+  // The creature is a control, so it is a <button>: `pet.interact` used to be mouse-only, which
+  // left the pet's single interaction unreachable from the keyboard.
   return (
-    <canvas
-      ref={canvasRef}
-      style={{ width: size, height: size, display: 'block', cursor: interactive ? 'pointer' : 'default' }}
-      role="img"
-      aria-label={`Nox ${params.label ?? ''}`.trim()}
-      onClick={handleClick}
-    />
+    <button
+      type="button"
+      className="pet-hit"
+      aria-label={name}
+      onClick={(e) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        // A keyboard activation reports (0, 0); answer with the centre instead of a corner.
+        const x = e.clientX === 0 && e.clientY === 0 ? rect.width / 2 : e.clientX - rect.left;
+        const y = e.clientX === 0 && e.clientY === 0 ? rect.height / 2 : e.clientY - rect.top;
+        onInteract('click', Math.round(x), Math.round(y));
+      }}
+    >
+      <canvas
+        ref={canvasRef}
+        aria-hidden="true"
+        style={{ width: size, height: size, display: 'block' }}
+      />
+    </button>
   );
 }
 
@@ -127,17 +191,24 @@ function draw(
   level: number,
   blink: number,
   chrome: PetChrome = CHROME_FALLBACK.dark,
+  reduced = false,
 ) {
   ctx.clearRect(0, 0, size, size);
   const cx = size / 2;
   const cy = size * 0.56;
-  const r = size * 0.27;
-  const amp = variant.idleMotionAmplitude;
+  /**
+   * The creature's base radius. 0.27 left a fluffy tail — 1.6 r long, drawn from the body's edge —
+   * running off a 220 px canvas; 0.235 keeps the whole silhouette, ears and tail included, inside
+   * the frame at every variant's proportions.
+   */
+  const r = size * 0.235;
+  // A reduced-motion pet still breathes, barely; it does not bob, jitter or wag.
+  const amp = variant.idleMotionAmplitude * (reduced ? 0.25 : 1);
 
   const breath = 1 + p.breathAmp * amp * Math.sin(t * TAU * p.breathRate);
-  const bob = p.bob * amp * Math.sin(t * TAU * 1.6) * size * 0.02;
-  const jx = p.jitter * amp * (Math.random() - 0.5) * 2;
-  const jy = p.jitter * amp * (Math.random() - 0.5) * 2;
+  const bob = reduced ? 0 : p.bob * amp * Math.sin(t * TAU * 1.6) * size * 0.02;
+  const jx = reduced ? 0 : p.jitter * amp * (Math.random() - 0.5) * 2;
+  const jy = reduced ? 0 : p.jitter * amp * (Math.random() - 0.5) * 2;
 
   const body = hsl(p.hue, p.sat, p.light);
   const accent = hsl(variant.palette.accentHue, p.sat, Math.max(0.25, p.light - 0.14));
@@ -162,7 +233,7 @@ function draw(
   const bh = r * variant.bodyHeight;
 
   // tail (behind the body)
-  drawTail(ctx, variant, t, r, bw, bh, amp, body, accent);
+  drawTail(ctx, variant, t, r, bw, bh, amp, body, accent, reduced);
 
   // body (squash/stretch breathing) + ears + eyes + mouth, all inside the same breath scale
   ctx.save();
@@ -215,7 +286,7 @@ function draw(
   ctx.restore(); // breath scale
 
   // status ring (shape, not only colour — D238)
-  drawRing(ctx, p, t, r, chrome);
+  drawRing(ctx, p, reduced ? 0 : t, r, chrome);
   ctx.restore();
 
   // Status label: the same translucent chip material as the DOM chrome (#25), so the window reads
@@ -380,10 +451,11 @@ function drawTail(
   amp: number,
   body: string,
   accent: string,
+  reduced = false,
 ): void {
   if (variant.tailShape === 'none' || variant.tailLength <= 0) return;
   const len = r * 1.6 * variant.tailLength;
-  const wag = Math.sin(t * 1.1) * 0.22 * amp;
+  const wag = reduced ? 0 : Math.sin(t * 1.1) * 0.22 * amp;
   ctx.save();
   ctx.translate(bw * 0.5, bh * 0.5);
   ctx.rotate(0.6 + wag);

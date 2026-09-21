@@ -1,4 +1,4 @@
-"""Coding assistant plugin package (EPIC-14). Entry point: `create(api)`."""
+"""Coding assistant plugin package. Entry point: `create(api)`."""
 
 from __future__ import annotations
 

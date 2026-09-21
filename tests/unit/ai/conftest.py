@@ -3,45 +3,20 @@
 from __future__ import annotations
 
 import asyncio
-import fnmatch
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 
 import pytest
 
 from nox.ai.base import AiChunk, AiRequest, AiResponse, AiRole, Message, ProviderInfo
-from nox.core.events import Event, Handler, HealthStatus
+from nox.core.events import HealthStatus
+from tests.unit.fakes import FakeBus
 
-
-class FakeBus:
-    """Minimal EventBus: records every published event, supports glob subscriptions."""
-
-    def __init__(self) -> None:
-        self.events: list[Event] = []
-        self._subs: list[tuple[str, Handler]] = []
-
-    def subscribe(self, pattern: str, handler: Handler) -> Callable[[], None]:
-        entry = (pattern, handler)
-        self._subs.append(entry)
-        return lambda: self._subs.remove(entry)
-
-    async def publish(self, event: Event) -> None:
-        self.events.append(event)
-        for pattern, handler in list(self._subs):
-            if fnmatch.fnmatchcase(event.name, pattern):
-                result = handler(event)
-                if asyncio.iscoroutine(result):
-                    await result
-
-    async def wait_for(
-        self, name: str, *, timeout: float | None = None, corr: str | None = None
-    ) -> Event:
-        raise NotImplementedError
-
-    def names(self) -> list[str]:
-        return [e.name for e in self.events]
-
-    def of(self, name: str) -> list[Event]:
-        return [e for e in self.events if e.name == name]
+__all__ = [
+    "FakeBus",
+    "FakeProvider",
+    "bus",
+    "make_request",
+]
 
 
 class FakeProvider:

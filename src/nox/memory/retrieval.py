@@ -1,6 +1,6 @@
 """Retrieval service: `retrieve(query, k)` -> ranked memory items + vault chunks for prompt context
-(ST-07-05 fast path). Hard token cap on the returned context (`max_tokens`, ~4 chars/token); honest
-`found=False` when nothing relevant exists rather than inventing an answer (FR-8.2)."""
+(fast path). Hard token cap on the returned context (`max_tokens`, ~4 chars/token); honest
+`found=False` when nothing relevant exists rather than inventing an answer."""
 
 from __future__ import annotations
 

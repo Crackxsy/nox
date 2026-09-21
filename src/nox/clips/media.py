@@ -1,7 +1,7 @@
-"""Media helpers for the Clip Pipeline (ST-15-04, Spec v0.6 §7): checksum for dedup/integrity,
-duration probe and thumbnail generation. opencv is optional (ENGINEERING.md "no fake
-implementations") - `probe_duration_s`/`make_thumbnail` degrade to an honest "unavailable" (`0.0`/
-`None`) instead of faking a value when it is not installed."""
+"""Media helpers for the Clip Pipeline: checksum for dedup/integrity, duration probe and thumbnail
+generation. opencv is optional (the project standards "no fake implementations") -
+`probe_duration_s`/`make_thumbnail` degrade to an honest "unavailable" (`0.0`/ `None`) instead of
+faking a value when it is not installed."""
 
 from __future__ import annotations
 

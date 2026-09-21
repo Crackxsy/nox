@@ -5,7 +5,7 @@ import {
   type DashboardState,
   INITIAL_STATE,
   STREAM_CHAT_LIMIT,
-  applyClipList,
+  applyClipListResult,
   applyFunkenTop,
   applyStateSnapshot,
   applyStreamSessionStatus,
@@ -369,15 +369,15 @@ describe('clip.list / clip.saved / clip.exported (Spec v0.6 Clip Pipeline)', () 
     expect(parseClipList(undefined)).toBeNull();
   });
 
-  it('applyClipList populates state.clips.items', () => {
-    const s = applyClipList(INITIAL_STATE, {
+  it('applyClipListResult populates state.clips.items', () => {
+    const s = applyClipListResult(INITIAL_STATE, {
       clips: [{ id: 'c1', source: 'event', trigger_kind: 'rl.goal', file_path: 'a.mp4' }],
     });
     expect(s.clips.items).toHaveLength(1);
     expect(s.clips.items[0].id).toBe('c1');
   });
 
-  it('clip.saved prepends a new clip row', () => {
+  it('clip.saved announces a pending clip and invents no ClipRecord fields', () => {
     const s = reduceEvent(INITIAL_STATE, 'clip.saved', {
       clip_id: 'c2',
       file_path: 'b.mp4',
@@ -386,30 +386,32 @@ describe('clip.list / clip.saved / clip.exported (Spec v0.6 Clip Pipeline)', () 
       duration_s: 5,
       tags: ['hype'],
     });
-    expect(s.clips.items).toHaveLength(1);
-    expect(s.clips.items[0]).toMatchObject({ id: 'c2', triggerKind: 'chat_hype', status: 'new' });
+    // A `clip.saved` event carries no session id, origin event id or checksum, so it produces a
+    // `PendingClip`, not a full record with three empty strings in it.
+    expect(s.clips.items).toHaveLength(0);
+    expect(s.clips.pending).toHaveLength(1);
+    expect(s.clips.pending[0]).toMatchObject({ id: 'c2', triggerKind: 'chat_hype' });
+    expect(s.clips.pending[0]).not.toHaveProperty('checksum');
   });
 
-  it('clip.saved updates an existing row instead of duplicating it', () => {
-    let s = reduceEvent(INITIAL_STATE, 'clip.saved', {
-      clip_id: 'c2',
-      file_path: 'b.mp4',
-      trigger_kind: 'chat_hype',
-      source: 'event',
+  it('clip.saved does not announce the same clip twice', () => {
+    let s = reduceEvent(INITIAL_STATE, 'clip.saved', { clip_id: 'c2', file_path: 'b.mp4' });
+    s = reduceEvent(s, 'clip.saved', { clip_id: 'c2', file_path: 'b.mp4', duration_s: 9 });
+    expect(s.clips.pending).toHaveLength(1);
+  });
+
+  it('a clip.list answer clears the pending row it now knows in full', () => {
+    let s = reduceEvent(INITIAL_STATE, 'clip.saved', { clip_id: 'c1', file_path: 'a.mp4' });
+    expect(s.clips.pending).toHaveLength(1);
+    s = applyClipListResult(s, {
+      clips: [{ id: 'c1', source: 'event', trigger_kind: 'rl.goal', file_path: 'a.mp4' }],
     });
-    s = reduceEvent(s, 'clip.saved', {
-      clip_id: 'c2',
-      file_path: 'b.mp4',
-      trigger_kind: 'chat_hype',
-      source: 'event',
-      duration_s: 9,
-    });
+    expect(s.clips.pending).toHaveLength(0);
     expect(s.clips.items).toHaveLength(1);
-    expect(s.clips.items[0].durationS).toBe(9);
   });
 
   it('clip.exported flips an existing clip to status=exported without inventing one', () => {
-    let s = applyClipList(INITIAL_STATE, {
+    let s = applyClipListResult(INITIAL_STATE, {
       clips: [{ id: 'c1', source: 'event', trigger_kind: 'rl.goal', file_path: 'a.mp4' }],
     });
     s = reduceEvent(s, 'clip.exported', { clip_id: 'c1', export_path: '/export/a.mp4' });

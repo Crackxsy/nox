@@ -1,7 +1,7 @@
-"""Trim backend (ST-15-06, Spec v0.6 §4.4/§11): ffmpeg is not currently installed, so
-`TrimBackend.available()` probes `shutil.which("ffmpeg")` at call time rather than assuming a
-bundled binary (ENGINEERING.md "no fake implementations" - an unavailable backend must fail
-honestly, never fake a trim or silently drop the file)."""
+"""Trim backend: ffmpeg is not currently installed, so `TrimBackend.available` probes
+`shutil.which("ffmpeg")` at call time rather than assuming a bundled binary (the project standards
+"no fake implementations" - an unavailable backend must fail honestly, never fake a trim or
+silently drop the file)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ log = get_logger(__name__)
 
 UNAVAILABLE_REASON = (
     "no cutting backend available: ffmpeg is not installed and no OBS-side export fallback is "
-    "configured (Spec v0.6 §11)"
+    "configured"
 )
 
 
@@ -41,8 +41,8 @@ class TrimBackend:
 
     async def trim(self, src: Path, dst: Path, *, in_s: float, out_s: float) -> None:
         """Write `dst` as `src[in_s:out_s]`. Never touches `src`. Raises `TrimError` on a non-zero
-        ffmpeg exit; callers should check `available()` first for the "no backend" case, which is
-        not an error but a `{"ok": False, "reason": ...}` tool result."""
+        ffmpeg exit; callers should check `available` first for the "no backend" case, which is
+        not an error but a `{"ok": False, "reason":...}` tool result."""
         ffmpeg = self._resolve()
         if ffmpeg is None:
             raise TrimError(UNAVAILABLE_REASON)

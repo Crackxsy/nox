@@ -1,8 +1,7 @@
-"""ClipWatcher (ST-15-04, Spec v0.6 §4.3/§7): periodic scan of `config.clips.watch_dir` (OBS's
-replay-buffer output folder) for files not yet indexed - catches clips that appear without a
-`clip.requested` round-trip (a manual OBS hotkey save, or promoting a file after the fact). Never
-writes to, renames, or deletes anything under `watch_dir` - only reads and copies out, same as
-`ClipCaptureService`."""
+"""ClipWatcher: periodic scan of `config.clips.watch_dir` (OBS's replay-buffer output folder) for
+files not yet indexed - catches clips that appear without a `clip.requested` round-trip (a manual
+OBS hotkey save, or promoting a file after the fact). Never writes to, renames, or deletes anything
+under `watch_dir` - only reads and copies out, same as `ClipCaptureService`."""
 
 from __future__ import annotations
 

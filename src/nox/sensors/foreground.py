@@ -1,18 +1,17 @@
-"""Foreground window/process sensor and privacy-zone wiring (Spec v0.5 §3.5, ST-20-04, SP-15).
+"""Foreground window/process sensor and privacy-zone wiring.
 
-Polls `Win32Probe.foreground()`, emits `sensor.foreground_changed` only when the (title, process)
+Polls `Win32Probe.foreground`, emits `sensor.foreground_changed` only when the (title, process)
 pair actually changes, updates `user.application`/`user.window_title` in `NoxState`, and calls
-`PrivacyService.observe_foreground()` so zone enter/leave takes effect and `privacy.zone_changed`
-is published - `PrivacyService` itself owns the zone matcher (`match_zone`) and the event; this
-sensor only supplies the raw signal, on the local machine, within one poll cycle (EPIC-20 DoD #2).
-
-SP-15 finding (see the spike note's `Result`/`Decision`): `NoxState` is checkpointed to SQLite, so
-writing the raw title to `user.window_title` unconditionally would let a zoned window's title hit
-disk between the state write and the zone becoming active. This sensor checks the zone itself
+`PrivacyService.observe_foreground` so zone enter/leave takes effect and `privacy.zone_changed` is
+published - `PrivacyService` itself owns the zone matcher (`match_zone`) and the event; this sensor
+only supplies the raw signal, on the local machine, within one poll cycle (DoD). finding (see the
+spike note's `Result`/`Decision`): `NoxState` is checkpointed to SQLite, so writing the raw title
+to `user.window_title` unconditionally would let a zoned window's title hit disk between the state
+write and the zone becoming active. This sensor checks the zone itself
 (`PrivacyService.match_zone`, a pure/sync lookup) *before* deciding what to persist: while zoned,
 `user.window_title` and the `sensor.foreground_changed` payload carry an empty string - only
 `user.application` (the process/app identity, "an app was open") and the zone id ever persist, the
-title text never does, in or out of a zone check. `PrivacyService.observe_foreground()` still gets
+title text never does, in or out of a zone check. `PrivacyService.observe_foreground` still gets
 the real title (it needs it to match), but never stores or forwards it either.
 """
 
@@ -26,6 +25,7 @@ from nox.core.state import StateManager
 from nox.security.privacy import PrivacyService
 from nox.sensors.history import SensorHistoryStore
 from nox.sensors.win32 import ForegroundInfo, Win32Probe
+from nox.util.aio import poll_loop
 
 
 class ForegroundSensor:
@@ -49,6 +49,7 @@ class ForegroundSensor:
         self._safe_mode = safe_mode
         self._last: ForegroundInfo | None = None
         self._task: asyncio.Task[None] | None = None
+        self.last_error = ""
 
     @property
     def last(self) -> ForegroundInfo | None:
@@ -63,10 +64,17 @@ class ForegroundSensor:
             self._task.cancel()
             self._task = None
 
+    def _note_error(self, exc: BaseException) -> None:
+        self.last_error = f"{type(exc).__name__}: {exc}"
+
     async def _loop(self) -> None:
-        while True:
-            await self.poll()
-            await asyncio.sleep(self._interval)
+        await poll_loop(
+            self.poll,
+            self._interval,
+            name="sensor-foreground",
+            on_error=self._note_error,
+            on_success=lambda: setattr(self, "last_error", ""),
+        )
 
     async def poll(self) -> ForegroundInfo | None:
         """One sampling cycle; also callable directly (tests, `sensors.status.read` warm-up)."""
@@ -83,7 +91,7 @@ class ForegroundSensor:
             return self._last
         self._last = info
 
-        # SP-15: decide what may persist *before* writing anything - `NoxState` is checkpointed to
+        #: decide what may persist *before* writing anything - `NoxState` is checkpointed to
         # SQLite, so a zoned title must never reach it even for one write. `match_zone` is a pure
         # lookup (no side effects), safe to call ahead of the actual `observe_foreground()`.
         zoned = self._privacy.match_zone(info.title, info.process_name) is not None

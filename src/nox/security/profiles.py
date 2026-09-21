@@ -1,10 +1,11 @@
-"""Permission profiles: load `Profile` models from `config/profiles/<id>.yaml` (Security Model §3,
-ADR-010).
+"""Permission profiles: `Profile` models loaded from `config/profiles/<id>.yaml`.
 
-File layout: a profile file carries the permission profile under the top-level key `permissions`
-(so the same file can also hold config overlays merged by `nox.core.config`). A file whose top level
-is the `Profile` document itself (Security Model §3 literal layout) is accepted as well.
-A profile that would allow a hard prohibition fails to load (§4: config may only add prohibitions).
+A profile file carries the permission profile under the top-level key `permissions`, so the same
+file can also hold configuration overlays that the config loader merges. A file whose top level is
+the profile document itself is accepted too.
+
+A profile that would allow, or merely confirm, a hard prohibition fails to load: configuration may
+add prohibitions, never remove one.
 """
 
 from __future__ import annotations
@@ -17,20 +18,15 @@ import yaml
 from pydantic import ValidationError
 
 from nox.security._logging import get_logger
+from nox.security.constants import SECURITY_PROFILE_IDS
 from nox.security.model import Decision, Profile, ProfileRule
 from nox.security.prohibitions import HardProhibitionRemovedError, matching_hard_prohibition
 
 log = get_logger(__name__)
 
-PROFILE_IDS: tuple[str, ...] = (
-    "companion",
-    "coding",
-    "stream",
-    "research",
-    "work",
-    "offline",
-    "rocket_league",
-)
+#: Kept as a re-export so existing imports keep working. The ids themselves live in
+#: `nox.security.constants`, next to the `Literal` the configuration validates against.
+PROFILE_IDS: tuple[str, ...] = SECURITY_PROFILE_IDS
 PERMISSIONS_KEY = "permissions"
 
 

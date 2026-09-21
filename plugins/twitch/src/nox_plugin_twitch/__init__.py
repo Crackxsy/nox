@@ -1,4 +1,4 @@
-"""Twitch chat bot plugin package (ST-11-04, Spec v0.2 Stream Bot). Entry point: `create(api)`."""
+"""Twitch chat bot plugin package (Stream Bot). Entry point: `create(api)`."""
 
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
-"""Daily focus (`pm.focus.today`): composes the open stories worth surfacing today, ranked by
-status then priority then id - a deliberately simple stand-in for ST-13-06's full dependency-aware
-priority engine (out of this slice's scope; see this story's report Open Points).
+"""Daily focus (`pm.focus.today`): composes the open stories worth surfacing today, ranked by status
+then priority then id - a deliberately simple stand-in for full dependency-aware priority engine
+(out of this slice's scope; see this story's report Open Points).
 """
 
 from __future__ import annotations

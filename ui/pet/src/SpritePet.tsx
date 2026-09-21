@@ -37,12 +37,15 @@ export interface SpritePetProps {
   size?: number;
   /** Freeze on the first frame of the current expression (`?still=1` screenshots). */
   still?: boolean;
+  /** Accessible name of the creature control, from the app's language table. */
+  petLabel?: string;
 }
 
 /** A blink is a cut, not a crossfade: these are the milliseconds it stays down. */
 const BLINK_MS = 140;
-const BLINK_MIN_GAP_MS = 2500;
-const BLINK_EXTRA_GAP_MS = 4000;
+/** Every 4–7 s, jittered: a fixed rhythm reads as a machine, a jittered one reads as alive. */
+const BLINK_MIN_GAP_MS = 4000;
+const BLINK_EXTRA_GAP_MS = 3000;
 /** Expressions a blink may interrupt. Sleeping eyes are already shut; a talking face is busy. */
 const BLINKABLE: ReadonlySet<SpriteState> = new Set<SpriteState>(['idle', 'listening', 'thinking']);
 
@@ -69,12 +72,25 @@ export function SpritePet({
   onInteract,
   size = 260,
   still = false,
+  petLabel,
 }: SpritePetProps) {
   const slotA = useRef<HTMLImageElement | null>(null);
   const slotB = useRef<HTMLImageElement | null>(null);
   const expressionRef = useRef<SpriteState>(expression);
-  expressionRef.current = expression;
+  const fpsRef = useRef(params.fps);
+  const pausedRef = useRef(params.paused);
   const [label, setLabel] = useState<SpriteExpression>(expression);
+
+  // Refs are written in effects, not during render: React reserves the render phase for pure work
+  // and StrictMode double-invokes it.
+  useEffect(() => {
+    expressionRef.current = expression;
+  }, [expression]);
+
+  useEffect(() => {
+    fpsRef.current = params.fps;
+    pausedRef.current = params.paused;
+  }, [params.fps, params.paused]);
 
   useEffect(() => {
     const a = slotA.current;
@@ -131,8 +147,15 @@ export function SpritePet({
 
     tick(performance.now());
     if (still) return;
+    // The sprite loop honours the same frame policy the procedural renderer does (`fpsFor`, A146):
+    // it used to tick on every animation frame regardless, so the 10/15/30/60 fps sleep tiers had
+    // no effect at all on a sprite variant.
+    let lastTick = 0;
     let raf = requestAnimationFrame(function loop(now: number) {
       raf = requestAnimationFrame(loop);
+      if (pausedRef.current) return;
+      if (now - lastTick < 1000 / fpsRef.current) return;
+      lastTick = now;
       tick(now);
     });
     return () => cancelAnimationFrame(raf);
@@ -140,35 +163,60 @@ export function SpritePet({
 
   const box = size * sprite.manifest.scale;
   const [ax, ay] = sprite.manifest.anchor;
+  // Positioning lives here and only here. `.pet-sprite-frame` used to also declare `inset: 0` and
+  // `width/height: 100%`, all three of which these values override — three dead declarations that
+  // read like the layout rule but were not.
   const frameStyle: React.CSSProperties = {
     left: size / 2 - ax * box,
     top: size / 2 - ay * box,
     width: box,
     height: box,
-    inset: 'auto',
   };
 
-  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!interactive) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    onInteract('click', Math.round(e.clientX - rect.left), Math.round(e.clientY - rect.top));
-  };
-
-  return (
+  const creature = (
     <div
       className="pet-sprite"
+      data-state={label}
       style={{
         width: size,
         height: size,
-        cursor: interactive ? 'pointer' : 'default',
         ['--pet-crossfade-ms' as string]: `${CROSSFADE_MS}ms`,
       }}
-      role="img"
-      aria-label={`Nox ${params.label ?? label}`.trim()}
-      onClick={handleClick}
     >
       <img ref={slotA} className="pet-sprite-frame" style={frameStyle} alt="" data-active="false" />
       <img ref={slotB} className="pet-sprite-frame" style={frameStyle} alt="" data-active="false" />
     </div>
+  );
+
+  const name = [`Nox`, params.label ?? label, petLabel].filter(Boolean).join(' · ');
+
+  if (!interactive) {
+    return (
+      <div role="img" aria-label={name}>
+        {creature}
+      </div>
+    );
+  }
+
+  // The creature is a control, so it is a <button>: `pet.interact` was mouse-only, which left the
+  // pet's single interaction unreachable from the keyboard.
+  return (
+    <button
+      type="button"
+      className="pet-hit"
+      aria-label={name}
+      onClick={(e) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        // A keyboard activation reports (0, 0); answer with the centre instead of a corner.
+        const centred = e.clientX === 0 && e.clientY === 0;
+        onInteract(
+          'click',
+          Math.round(centred ? rect.width / 2 : e.clientX - rect.left),
+          Math.round(centred ? rect.height / 2 : e.clientY - rect.top),
+        );
+      }}
+    >
+      {creature}
+    </button>
   );
 }

@@ -1,4 +1,4 @@
-"""Clip Pipeline plugin entry point (ST-15-01/03, Spec v0.6 Clip Pipeline)."""
+"""Clip Pipeline plugin entry point."""
 
 from __future__ import annotations
 

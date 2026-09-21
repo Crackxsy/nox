@@ -1,6 +1,6 @@
-"""Pairing service (ST-17-01, Spec v0.8 §3.1/§5.2): a one-time 8-character code shown locally on
-the dashboard or shell, redeemed once from the phone within five minutes, bound to the transport's
-verified sender identity.
+"""Pairing service: a one-time 8-character code shown locally on the dashboard or shell, redeemed
+once
+from the phone within five minutes, bound to the transport's verified sender identity.
 
 What the code is *not*: it is never sent over the transport by Nox, never logged, never audited and
 never stored - only `sha256(salt + code)` reaches the database (`RemoteRepository`). Redemption is
@@ -95,7 +95,7 @@ class PairingService:
 
     async def redeem(self, code: str, *, sender_id: str) -> PairingResult:
         """Redeem a one-time code for `sender_id`. Every rejection path is audited and creates no
-        device row (ST-17-01)."""
+        device row."""
         now = self._clock()
         existing = self._repo.find_device_for_sender(self._channel, sender_id)
         if existing is not None:

@@ -1,5 +1,9 @@
-"""ST-21-03 acceptance: wizard writes only the User config layer, every step is skippable, secrets
-never land in a file, and Defaults stays byte-identical."""
+"""What the first-run wizard promises: it writes only the user layer, every step can be skipped,
+a credential never lands in a file, and `config/defaults.yaml` stays byte-identical.
+
+The interactive tests drive the real `nox onboard` command. The language question comes first and
+everything after it is in that language, so the two full-flow tests below run one language each.
+"""
 
 from __future__ import annotations
 
@@ -109,7 +113,10 @@ def test_store_secrets_empty_when_all_declined() -> None:
 def test_render_capability_summary_is_honest_about_missing_backends() -> None:
     summary = render_capability_summary(
         answers=OnboardingAnswers(
-            ai_backend="ollama", microphone_enabled=True, camera_enabled=False
+            ai_backend="ollama",
+            microphone_enabled=True,
+            camera_enabled=False,
+            ui_language="en",
         ),
         ai_probes=[
             AiProbeResult(
@@ -122,7 +129,10 @@ def test_render_capability_summary_is_honest_about_missing_backends() -> None:
     )
     assert "claude_code: unavailable (not logged in)" in summary
     assert "ollama: available (model present)" in summary
-    assert "secrets stored : none" in summary
+    assert "credentials     : none" in summary
+    # The summary has to say what to do next, not just what was written.
+    assert "nox supervisor" in summary
+    assert "http://127.0.0.1:47801/dashboard" in summary
 
 
 # ---- Defaults layer must never change --------------------------------------------------------
@@ -159,38 +169,85 @@ def _run_onboard(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stdin: str) ->
     return result.exit_code, result.output
 
 
+#: Every question in order, so a test reads as the conversation it drives.
+#: language, Nox name, your name, data folder, vault folder, Twitch by hand?, OBS?, Telegram?,
+#: microphone?, camera?, probe backends?
+SKIP_EVERYTHING = "\n" * 5 + "n\nn\nn\n" + "\n\n" + "n\n"
+
+
 def test_onboard_cli_skip_everything_writes_only_confirmed_defaults(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    stdin = "\n" * 5 + "n\nn\nn\n" + "\n\n" + "n\n"
-    exit_code, output = _run_onboard(monkeypatch, tmp_path, stdin)
+    exit_code, output = _run_onboard(monkeypatch, tmp_path, SKIP_EVERYTHING)
     assert exit_code == 0, output
 
     written = load_existing_user_layer(default_user_config_path(tmp_path / "AppData" / "Roaming"))
     assert written["identity"]["name"] == "Nox"
     assert written["identity"]["ui_language"] == "de"
     assert written["privacy"]["capture"] == {"microphone": True, "camera": False}
-    assert "ai" not in written  # AI probe declined -> Defaults layer's choice applies
-    assert "secrets stored : none" in output
+    assert "ai" not in written  # the probe was declined, so the defaults layer's choice applies
+    assert "Zugangsdaten    : keine" in output
+
+
+def test_onboard_cli_in_german_asks_and_answers_in_german_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A German run contains no English prompt, and the other way round.
+
+    Half a wizard in each language is what a first start must never look like.
+    """
+    _, german = _run_onboard(monkeypatch, tmp_path, SKIP_EVERYTHING)
+    assert "Datenordner" in german and "Vault-Ordner" in german
+    assert "So geht es weiter:" in german and "nox supervisor" in german
+    assert "Data folder" not in german and "What happens next" not in german
+
+    english_input = "en\n" + "\n" * 4 + "n\nn\nn\n" + "\n\n" + "n\n"
+    _, english = _run_onboard(monkeypatch, tmp_path, english_input)
+    assert "Data folder" in english and "Vault folder" in english
+    assert "What happens next:" in english
+    assert "Datenordner" not in english and "So geht es weiter" not in english
+
+
+def test_onboard_cli_explains_both_folders_before_asking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, output = _run_onboard(monkeypatch, tmp_path, SKIP_EVERYTHING)
+    assert "Datenbank, Modelle, Logs und Backups" in output
+    assert "deine Notizen als Markdown-Dateien" in output
+    # The explanation comes before the two questions it explains.
+    assert output.index("Nox legt zwei Ordner an") < output.index("Datenordner [")
+
+
+def test_onboard_cli_recommends_connecting_twitch_in_the_dashboard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The dashboard's code login is the recommended path, and the default answer.
+
+    Typing a token by hand is offered only as the explicit alternative.
+    """
+    _, output = _run_onboard(monkeypatch, tmp_path, SKIP_EVERYTHING)
+    assert "Einstellungen -> Twitch" in output and "Anmeldung per Code" in output
+    assert "Stattdessen jetzt schon einen Token von Hand eintragen? [y/N]" in output
 
 
 def test_onboard_cli_full_flow_stores_secrets_and_chosen_backend(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     stdin = (
+        "en\n"  # interface language, asked first
         "Kumo\n"  # nox name
         "Alex\n"  # display name
-        "en\n"  # ui language
-        "\n"  # data dir (default)
-        "\n"  # vault dir (default)
-        "y\n"  # connect twitch
+        "\n"  # data folder (default)
+        "\n"  # vault folder (default)
+        "y\n"  # enter a Twitch token by hand instead of using the dashboard
         "oauth:zzz999\n"  # twitch oauth token
-        "streambot\n"  # twitch bot username
+        "streambot\n"  # twitch bot user name
+        "\n"  # twitch client id (skipped)
         "n\n"  # obs
         "n\n"  # telegram
-        "\n"  # microphone (default True)
+        "\n"  # microphone (default yes)
         "y\n"  # camera enabled
-        "y\n"  # probe AI backends
+        "y\n"  # probe the AI backends
         "ollama\n"  # explicit backend choice
     )
     exit_code, output = _run_onboard(monkeypatch, tmp_path, stdin)
@@ -214,9 +271,9 @@ def test_onboard_cli_full_flow_stores_secrets_and_chosen_backend(
 def test_onboard_cli_is_re_runnable_and_merges(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    first = "Kumo\n" + "\n" * 4 + "n\nn\nn\n" + "\n\n" + "n\n"
+    first = "\nKumo\n" + "\n" * 3 + "n\nn\nn\n" + "\n\n" + "n\n"
     _run_onboard(monkeypatch, tmp_path, first)
-    second = "\n" + "\n" + "en\n" + "\n" * 2 + "n\nn\nn\n" + "\n\n" + "n\n"
+    second = "en\n" + "\n" * 4 + "n\nn\nn\n" + "\n\n" + "n\n"
     exit_code, output = _run_onboard(monkeypatch, tmp_path, second)
     assert exit_code == 0, output
 

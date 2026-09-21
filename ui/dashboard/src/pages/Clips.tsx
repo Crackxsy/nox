@@ -3,112 +3,115 @@
  * one tile per clip, with its tag field and the two actions. No upload button anywhere in this page
  * by design (spec §10): `clip.export` only ever copies into the configured `export_root` on local
  * disk, never calls a network API.
+ *
+ * Refusals are a designed state, not an error banner. On a shipped install the `dashboard` role is
+ * not on the core's allow-list for `clip.list`, so the *first* thing a new user saw on this tab was
+ * `Fehler: role 'dashboard' may not call 'clip.list'`. The page now says what that means and what
+ * is and is not affected, and keeps the core's own sentence in a muted second line.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
-import { type Key, type T } from '../i18n';
+import { failureKind, reasonText } from '../../../shared/errors';
+import { formatDuration } from '../../../shared/format';
+import { useIpcAction, useRefreshOnConnect } from '../hooks';
+import { type Lang, type T, clipSourceLabel, clipStatusLabel, clipTriggerLabel } from '../i18n';
 import { type IpcClient, api } from '../ipc';
-import { type ClipRecord, type DashboardState, applyClipList } from '../model';
-import { Hero, Rail, StateWord, Tile } from '../ui';
+import {
+  type ClipRecord,
+  type DashboardState,
+  applyClipListResult,
+  applyClipTagResult,
+  parseClipExportResult,
+} from '../model';
+import { Detail, Hero, Rail, StateWord, Tile, type Tone } from '../ui';
 
 export interface ClipsPageProps {
   t: T;
+  lang: Lang;
   state: DashboardState;
   /** null while offline: every request would fail, so the controls are disabled instead. */
   client: IpcClient | null;
   onState: (updater: (s: DashboardState) => DashboardState) => void;
 }
 
-const STATUS_KEYS: Record<string, Key> = {
-  new: 'clips_status_new',
-  reviewed: 'clips_status_reviewed',
-  exported: 'clips_status_exported',
-  discarded: 'clips_status_discarded',
-};
-
-const STATUS_TONE: Record<string, string> = {
-  new: 'limited',
-  exported: 'available',
+const STATUS_TONE: Record<string, Tone> = {
+  new: 'warn',
+  reviewed: 'ok',
+  exported: 'ok',
   discarded: 'off',
 };
 
-export function ClipsPage({ t, state, client, onState }: ClipsPageProps) {
+/** How the page explains itself when `clip.list` did not return a list. */
+interface Blocked {
+  title: string;
+  body: string;
+  detail: string | null;
+}
+
+export function ClipsPage({ t, lang, state, client, onState }: ClipsPageProps) {
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [blocked, setBlocked] = useState<Blocked | null>(null);
   const [editing, setEditing] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState<string | null>(null);
   const [exportMsg, setExportMsg] = useState<Record<string, string>>({});
+  const { busy, error, setError, run } = useIpcAction(client, t);
   const disabled = client === null;
 
-  const load = async (c: IpcClient) => {
+  const load = async (c: IpcClient, cancelled: () => boolean = () => false) => {
     setLoading(true);
     setError('');
     try {
       const payload = await api.clipList(c, null, 50);
-      onState((s) => applyClipList(s, payload));
+      if (cancelled()) return;
+      setBlocked(null);
+      onState((s) => applyClipListResult(s, payload));
     } catch (e) {
-      setError(`${t('error_prefix')}: ${e instanceof Error ? e.message : String(e)}`);
+      if (cancelled()) return;
+      const refused = failureKind(e) === 'refused';
+      setBlocked({
+        title: refused ? t('clips_refused') : t('clips_unavailable'),
+        body: refused ? t('clips_refused_hint') : t('clips_unavailable_hint'),
+        detail: reasonText(e) || null,
+      });
     } finally {
-      setLoading(false);
+      if (!cancelled()) setLoading(false);
     }
   };
 
-  useEffect(() => {
-    if (client) void load(client);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per (re)connect
-  }, [client]);
+  useRefreshOnConnect(client, load);
 
   const tagsText = (clip: ClipRecord) => editing[clip.id] ?? clip.tags.join(', ');
 
-  const saveTags = async (clip: ClipRecord) => {
-    if (!client) return;
-    setBusy(clip.id);
-    setError('');
-    try {
+  const saveTags = (clip: ClipRecord) =>
+    run(clip.id, async (c) => {
       const tags = tagsText(clip)
         .split(',')
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
-      const result = (await api.clipTag(client, clip.id, tags, null)) as { clip?: unknown };
-      if (result.clip) onState((s) => applyClipList(s, { clips: [result.clip] }));
+      const result = await api.clipTag(c, clip.id, tags, null);
+      onState((s) => applyClipTagResult(s, result));
       setEditing((e) => {
         const next = { ...e };
         delete next[clip.id];
         return next;
       });
-    } catch (e) {
-      setError(`${t('error_prefix')}: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setBusy(null);
-    }
-  };
+    });
 
-  const exportClip = async (clip: ClipRecord) => {
-    if (!client) return;
-    setBusy(clip.id);
-    setError('');
-    setExportMsg((m) => ({ ...m, [clip.id]: '' }));
-    try {
-      const result = (await api.clipExport(client, clip.id)) as {
-        ok: boolean;
-        export_path: string | null;
-        reason: string;
-      };
-      setExportMsg((m) => ({
-        ...m,
-        [clip.id]: result.ok
-          ? `${t('clips_export_done')}: ${result.export_path}`
-          : `${t('clips_export_failed')}: ${result.reason}`,
-      }));
-      // The authoritative status flip arrives as `clip.exported` on the live subscription; this
-      // is only the immediate confirmation for the button the user just pressed.
-    } catch (e) {
-      setError(`${t('error_prefix')}: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setBusy(null);
-    }
-  };
+  const exportClip = (clip: ClipRecord) =>
+    run(clip.id, async (c) => {
+      setExportMsg((m) => ({ ...m, [clip.id]: '' }));
+      const result = parseClipExportResult(await api.clipExport(c, clip.id));
+      // The authoritative status flip arrives as `clip.exported` on the live subscription; this is
+      // only the immediate confirmation for the button the user just pressed. `export_path` is
+      // optional in the contract, so it is never interpolated into the sentence.
+      const message =
+        result?.ok === true
+          ? t('clips_export_done')
+          : result?.reason
+            ? `${t('clips_export_failed')}: ${result.reason}`
+            : t('clips_export_failed');
+      setExportMsg((m) => ({ ...m, [clip.id]: message }));
+    });
 
   const clips = state.clips.items;
 
@@ -135,7 +138,13 @@ export function ClipsPage({ t, state, client, onState }: ClipsPageProps) {
         </p>
       )}
 
-      {clips.length === 0 ? (
+      {blocked ? (
+        <div className="tiles tiles--single">
+          <Tile id="clips-blocked" title={blocked.title} lede={blocked.body}>
+            {blocked.detail && <p className="hint break detail-sub">{blocked.detail}</p>}
+          </Tile>
+        </div>
+      ) : clips.length === 0 ? (
         <section aria-labelledby="h-clips">
           <div className="rail-head">
             <div>
@@ -151,15 +160,14 @@ export function ClipsPage({ t, state, client, onState }: ClipsPageProps) {
           {clips.map((clip) => (
             <Tile
               key={clip.id}
-              eyebrow={clip.source || t('clips_col_source')}
-              title={clip.triggerKind || t('clips_col_trigger')}
-              lede={
-                clip.durationS ? `${clip.durationS.toFixed(1)} s` : t('unknown')
-              }
+              level={4}
+              eyebrow={clip.source ? clipSourceLabel(t, clip.source) : undefined}
+              title={clip.triggerKind ? clipTriggerLabel(t, clip.triggerKind) : t('unknown')}
+              lede={clip.durationS ? formatDuration(clip.durationS, lang) : undefined}
             >
               <StateWord
-                status={STATUS_TONE[clip.status] ?? 'off'}
-                label={t(STATUS_KEYS[clip.status] ?? 'clips_status_new')}
+                tone={STATUS_TONE[clip.status] ?? 'off'}
+                label={clipStatusLabel(t, clip.status)}
               />
 
               <div className="field field--spaced">
@@ -198,7 +206,7 @@ export function ClipsPage({ t, state, client, onState }: ClipsPageProps) {
 
               {exportMsg[clip.id] && (
                 <p role="status" className="hint break">
-                  {exportMsg[clip.id]}
+                  <Detail label={exportMsg[clip.id]} detail={clip.filePath || null} />
                 </p>
               )}
             </Tile>

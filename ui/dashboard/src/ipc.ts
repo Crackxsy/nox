@@ -6,6 +6,7 @@
 
 import type { Envelope } from '../../shared/envelope';
 import { type ConnStatus, IpcClient, IpcError, resolveWsUrl } from '../../shared/ipc';
+import { CHAT_IDLE_TIMEOUT_MS } from './model/chat';
 
 export type { Envelope, ConnStatus };
 export { IpcClient, IpcError };
@@ -25,6 +26,11 @@ export const DASHBOARD_PATTERNS = [
   'twitch.*',
   'proactive.*',
   'clip.*',
+  // `plugin.failed` carries the reason a stream plugin did not load (usually the active security
+  // profile). It is emitted during boot, i.e. normally before this page connects, so the Stream
+  // tab only shows it for a failure that happens *during* the session — a profile switch, say.
+  // See the report: a `plugin.status` read request would let the page ask at connect time.
+  'plugin.*',
   // Settings page: `settings.changed {paths}` and `twitch.auth.changed {state}` (the latter is
   // already covered by `twitch.*`, listed here only so the pairing is obvious).
   'settings.*',
@@ -62,8 +68,10 @@ export const api = {
   setMode: (c: IpcClient, mode: string) => c.request('mode.set', { mode }),
   setMuted: (c: IpcClient, muted: boolean) => c.request('voice.mute', { muted }),
   kill: (c: IpcClient, reason: string) => c.request('security.kill', { reason, origin: 'ui' }),
+  // A model on a cold cache can take well past the 10 s default before the first token; the
+  // timeout is an idle timeout (`shared/ipc.ts`), so every arriving frame restarts it.
   chat: (c: IpcClient, text: string, onChunk: (env: Envelope) => void) =>
-    c.request('chat.send', { text }, onChunk),
+    c.request('chat.send', { text }, onChunk, CHAT_IDLE_TIMEOUT_MS),
   panic: (c: IpcClient) => c.request('security.panic', { origin: 'ui' }),
   streamStatus: (c: IpcClient) => c.request('stream.session.status', {}),
   funkenTop: (c: IpcClient, limit = 10) => c.request('stream.funken.top', { limit }),
@@ -73,7 +81,6 @@ export const api = {
     c.request('remote.unpair', { device_id: deviceId }),
   healthHistory: (c: IpcClient, limit = 50, component = '') =>
     c.request('health.history', { limit, component }),
-  configEffective: (c: IpcClient) => c.request('config.effective', {}),
   clipList: (c: IpcClient, status: string | null = null, limit = 50) =>
     c.request('clip.list', { status, limit }),
   clipTag: (c: IpcClient, clipId: string, tags: string[] | null, notes: string | null = null) =>

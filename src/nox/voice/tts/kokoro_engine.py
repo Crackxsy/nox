@@ -1,20 +1,20 @@
-"""Kokoro (kokoro-onnx) TtsEngine behind the same protocol as Piper (#21, SP-03).
+"""Kokoro (kokoro-onnx) TtsEngine behind the same protocol as Piper.
 
 Why it exists: Piper's dependency chain (`piper-phonemize`, espeak-ng) is GPL-3.0, which forces
 every bundled Nox build under GPL-3.0 as a whole (see `NOTICE`). Kokoro's own code and the
 `kokoro-v1.0` model are permissively licensed, so this engine is the route to an Apache-2.0-only
 installer.
 
-Two honest caveats, both surfaced through `health()` rather than hidden:
+Two honest caveats, both surfaced through `health` rather than hidden:
 
 * Kokoro v1.0 ships no German voice - the voice bank is en-us/en-gb, es, fr, hi, it, ja, pt-br and
-  zh. German text is rendered with the default English voice, which sounds like a German sentence
-  read by an English speaker. `health()` reports LIMITED whenever a configured language has no
-  native voice.
+zh. German text is rendered with the default English voice, which sounds like a German sentence
+read by an English speaker. `health` reports LIMITED whenever a configured language has no native
+voice.
 * `kokoro-onnx` still pulls `phonemizer`/espeak-ng (GPL-3.0) for grapheme-to-phoneme conversion, so
-  installing the `voice-kokoro` extra does not by itself make a bundled build Apache-2.0-only. The
-  model and the ONNX runtime are clean; the text front end is not. This is recorded in
-  `docs/license_policy.yaml` and `NOTICE` and is a decision for the product owner.
+installing the `voice-kokoro` extra does not by itself make a bundled build Apache-2.0-only. The
+model and the ONNX runtime are clean; the text front end is not. This is recorded in
+`docs/license_policy.yaml` and `NOTICE`, and choosing the engine is a deliberate decision.
 
 Model files live in `<data_dir>/models/kokoro/` and are never downloaded automatically: a missing
 file is an `unavailable` health reason that names the path and the download command.

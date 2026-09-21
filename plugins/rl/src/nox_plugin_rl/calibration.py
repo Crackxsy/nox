@@ -1,7 +1,7 @@
-"""HUD calibration (ST-12-04): one `mss` screenshot, fixed percentage-based 1920x1080 default
-region layout, self-check via the exact same recognizers ST-12-05 uses at runtime (Spec §3.5 -
-"no separate calibration-only recognizer"). Honest `calibrated`/`uncalibrated` state: perception
-never activates from unverified regions (A129, Spec §11)."""
+"""HUD calibration: one `mss` screenshot, fixed percentage-based 1920x1080 default region layout,
+self-check via the exact same recognizers uses at runtime (Spec - "no separate calibration-only
+recognizer"). Honest `calibrated`/`uncalibrated` state: perception never activates from unverified
+regions (A129, Spec)."""
 
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ import numpy as np
 from . import recognizers
 
 # Percentage-based regions (left%, top%, width%, height% of the captured frame), calibrated
-# against a 1920x1080 borderless reference layout (Spec §3.5) - scales to other resolutions since
+# against a 1920x1080 borderless reference layout (Spec) - scales to other resolutions since
 # the values are fractions, not pixels. Placeholder ratios pending ES-04's real screenshot set;
-# flagged in the ST-12-04 report, not silently presented as validated against the real HUD.
+# flagged in the report, not silently presented as validated against the real HUD.
 DEFAULT_REGIONS: dict[str, tuple[float, float, float, float]] = {
     "boost": (0.02, 0.90, 0.06, 0.06),
     "score_self": (0.44, 0.02, 0.04, 0.05),
@@ -37,7 +37,7 @@ class RegionResult:
 class CalibrationResult:
     calibrated: bool
     regions: dict[str, tuple[float, float, float, float]]
-    failures: dict[str, str]  # region -> reason (ST-12-04 AC: name the specific failing region)
+    failures: dict[str, str]  # region -> reason ( AC: name the specific failing region)
     calibrated_at: float
     screenshot_path: str = ""
 
@@ -65,7 +65,7 @@ def crop_region(frame: np.ndarray, region: tuple[float, float, float, float]) ->
 
 
 def has_hud(frame: np.ndarray) -> bool:
-    """Cheap "is this even a match HUD" gate (ST-12-04 AC: the main menu must fail with a clear
+    """Cheap "is this even a match HUD" gate (AC: the main menu must fail with a clear
     "not in a match" reason, not a misleading per-region failure). A completely blank/uniform
     capture (main menu background, black screen) never looks like a HUD."""
     return bool(np.std(frame) > 3.0)
@@ -132,7 +132,7 @@ def calibrate_from_frame(
 
 
 def capture_frame() -> np.ndarray:
-    """One `mss` screenshot of the primary monitor (Spec §3.5: "captures one screenshot")."""
+    """One `mss` screenshot of the primary monitor (Spec: "captures one screenshot")."""
     import mss  # local import: only needed on the machine actually running RL
 
     with mss.mss() as sct:
@@ -145,7 +145,7 @@ def calibrate(
     *, state_path: Path, capture: object | None = None, save_screenshot: bool = True
 ) -> CalibrationResult:
     """`nox rl calibrate` entry point: capture, self-check, persist state (overwrites any previous
-    calibration - ST-12-04 AC: recalibration replaces, never accumulates)."""
+    calibration - AC: recalibration replaces, never accumulates)."""
     frame = (capture or capture_frame)()  # type: ignore[operator]
     state_path.parent.mkdir(parents=True, exist_ok=True)
     screenshot_path = ""

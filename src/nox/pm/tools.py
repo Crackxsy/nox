@@ -1,10 +1,10 @@
-"""PM tool catalogue (subset of Spec v0.4 PM and Coding §9): list/read tools are `read` risk
-(allow by default, no confirm); `pm.story.create`/`pm.story.update_status` write to the vault and
-are `medium` risk, which the default permission table resolves to `confirm`. The full ST-13-03
-status-workflow engine (transition matrix, blocked-dependency rejection) and ST-13-05's hash-based
-write-back conflict refusal are later PM stories - this slice validates the target status against
-a fixed vocabulary and always writes through the vault (vault wins), see this story's report Open
-Points.
+"""PM tool catalogue (subset of PM and Coding): list/read tools are `read` risk (allow by default,
+no
+confirm); `pm.story.create`/`pm.story.update_status` write to the vault and are `medium` risk,
+which the default permission table resolves to `confirm`. The full status-workflow engine
+(transition matrix, blocked-dependency rejection) and hash-based write-back conflict refusal are
+later PM stories - this slice validates the target status against a fixed vocabulary and always
+writes through the vault (vault wins), see this story's report Open Points.
 """
 
 from __future__ import annotations

@@ -1,9 +1,9 @@
-"""Wake-word and local kill-phrase matching on transcripts (FR-5.1, FR-5.2, kill switch D139).
+"""Wake-word and local kill-phrase matching on transcripts (kill switch D139).
 
 Whisper spells the name in many ways ("Nox", "Knox", "Nocks", "Nocs"); the matcher normalizes the
 text, skips a leading greeting ("hey", "hallo", "ok") and fuzzy-matches the first token. The kill
-phrase ("Nox Notaus" / "Nox emergency stop") is detected here so the worker can send `security.kill`
-directly - it never travels through the LLM.
+phrase ("Nox Notaus" / "Nox emergency stop") is detected here so the worker can send
+`security.kill` directly - it never travels through the LLM.
 """
 
 from __future__ import annotations

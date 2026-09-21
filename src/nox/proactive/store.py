@@ -1,9 +1,9 @@
-"""ST-19-08 notification store, now backed by `proactive_notifications` (migration
-`0010_notifications.sql`, #28): notifications survive a restart, and `dismiss()` persists.
+"""notification store, now backed by `proactive_notifications` (migration `0010_notifications.sql`):
+notifications survive a restart, and `dismiss` persists.
 
 `db=None` keeps the original in-memory-ring-buffer behaviour (a bounded `deque`) for callers that
 construct a store without a database - every existing unit test that builds a bare
-`NotificationStore()`/`ProactiveService()` keeps working unchanged.
+`NotificationStore`/`ProactiveService` keeps working unchanged.
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ class NotificationStore:
         return items
 
     def dismiss(self, notification_id: str, *, dismissed_at: datetime | None = None) -> bool:
-        """`proactive.notification.dismiss` (#28). Returns `False` for an unknown id or one
+        """`proactive.notification.dismiss`. Returns `False` for an unknown id or one
         already dismissed (idempotent, matches `NotificationRepository.dismiss`)."""
         if self._repo is not None:
             return self._repo.dismiss(notification_id, dismissed_at=dismissed_at)

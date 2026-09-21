@@ -12,16 +12,9 @@ from nox.ai.config import RouterConfig
 from nox.ai.errors import BudgetExceededError, NoProviderAvailableError
 from nox.ai.router import DefaultRouter
 from nox.core.events import E, HealthStatus
+from tests.unit.fakes import MonotonicClock as Clock
 
 from .conftest import FakeBus, FakeProvider, make_request
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.now = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
 
 
 def build(

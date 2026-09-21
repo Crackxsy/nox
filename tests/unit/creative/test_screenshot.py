@@ -106,3 +106,22 @@ class TestEventRoundTrip:
         assert result.name == E.CREATIVE_SCREENSHOT_RESULT
         assert result.payload["corr"] == "abc123"
         assert result.payload["status"] == "unavailable"
+
+
+class TestProfileGateFailsClosed:
+    """A security engine that cannot answer must never be read as "no Work profile"."""
+
+    def test_a_failing_profile_lookup_refuses_the_capture(self, monkeypatch) -> None:
+        core = FakeCore(privacy=FakePrivacy(PrivacyMode.FULL))
+
+        def _boom() -> object:
+            raise RuntimeError("security engine not ready")
+
+        monkeypatch.setattr(core.security.engine, "active_profile", _boom)
+        service = CreativeScreenshotService(core)
+
+        status, reason, path = service.decide_and_capture("blender.exe", "Untitled.blend")
+
+        assert status == "unavailable"
+        assert "could not be read" in reason
+        assert path == ""

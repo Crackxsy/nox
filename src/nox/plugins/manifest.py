@@ -1,10 +1,10 @@
-"""Plugin manifest schema, loader and core-side authorization (Plugin Architecture, ADR-012/013).
+"""Plugin manifest schema, loader and core-side authorization (Plugin Architecture,/013).
 
 A plugin is a package plus `plugins/<id>/manifest.yaml`. Nothing is spawned before the manifest
 validates: tools must live in the `<id>.` namespace and may never name a hard prohibition
 (`nox.security.prohibitions`), secrets must be `nox/<id>/...` Credential-Manager names, and every
 `network.egress` entry must be authorized against the *active profile's* allow-lists by the core
-(ADR-013: the worker then scopes its own `EgressGuard` to exactly this list).
+(the worker then scopes its own `EgressGuard` to exactly this list).
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ class PluginEvents(_Section):
 
 
 class PluginNetwork(_Section):
-    #: `host:port` allow-list; the worker's `EgressGuard` is scoped to exactly these (ADR-013).
+    #: `host:port` allow-list; the worker's `EgressGuard` is scoped to exactly these.
     egress: list[str] = Field(default_factory=list)
 
 
@@ -228,7 +228,7 @@ def _first_error(exc: ValueError) -> str:
     return "; ".join(parts) or str(exc)
 
 
-# ---- core-side egress authorization (ADR-013) ----------------------------------------------------
+# ---- core-side egress authorization ----------------------------------------------------
 
 
 class EgressAuthorization(BaseModel):
@@ -250,7 +250,7 @@ def authorize_egress(
 ) -> list[EgressAuthorization]:
     """Decide every `network.egress` entry the way `EgressGuard` would in FULL/BALANCED.
 
-    Loopback endpoints must be on the merged loopback allow-list (OP-7 C), everything else on the
+    Loopback endpoints must be on the merged loopback allow-list, everything else on the
     profile's `egress_allowlist` (or the global list when the profile inherits it).
     """
     results: list[EgressAuthorization] = []

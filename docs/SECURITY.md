@@ -162,8 +162,8 @@ document.
 
 ## Settings, secrets and the Twitch login
 
-Settings became writable with EPIC-21 (`nox.settings`), and the write path is deliberately
-narrower than the read path:
+Settings are writable through `nox.settings`, and the write path is deliberately narrower than
+the read path:
 
 - **Configuration** — `config.set` accepts only an explicit allow-list of dotted paths
   (`nox.settings.schema.EDITABLE_PATHS`). Hard prohibitions, filesystem roots, profile rules,

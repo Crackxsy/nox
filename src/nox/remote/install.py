@@ -1,27 +1,25 @@
-"""`install(core)` - the whole Mobile Companion wiring in one function (Spec v0.8, EPIC-17).
+"""`install(core) -> RemoteRuntime`: the whole mobile-companion wiring in one place.
 
-`src/nox/app.py` is shared between agents and is deliberately *not* touched by this release: the
-integrator calls `nox.remote.install.install(core)` once, after `NoxCore.start()`, and everything
-below exists; without that call the feature is inert. It is also inert when `remote.enabled` is
-false, which is the shipped default - pairing, the remote kill switch and remote privacy switching
-never come up on their own.
+The feature is inert when `remote.enabled` is false, which is the shipped default: pairing, the
+remote kill switch and remote privacy switching never come up on their own.
 
 What this wires:
-  * `RemoteRepository` on the core database (migration `0008_remote.sql`),
+  * `RemoteRepository` on the core database,
   * `PairingService` + `RemoteCommandPolicy` + `RemoteService` on the core bus, so every
-    `remote.message` from the `telegram` plugin is policed here,
+    `remote.message` from the transport plugin is policed here,
   * outbound text through the *tool* pipeline (`telegram.send`, low risk, rate-limited in the
     plugin) - never a direct HTTP call from the core,
-  * chat through the existing `Orchestrator` with `speak=False`: same router, same prompt builder,
+  * chat through the existing orchestrator with `speak=False`: same router, same prompt builder,
     same personality as the desktop, only without a voice,
   * `RemoteNotifier` on the configured event allow-list,
-  * three IPC requests for the dashboard's "Remote" page, `shell`/`dashboard` only: `remote.pair.
-    start`, `remote.devices.list`, `remote.unpair`. The `remote` role itself is never granted any
-    of them - a phone cannot pair a second phone or revoke another device.
+  * three requests for the dashboard's "Remote" page, for the `shell` and `dashboard` roles only:
+    `remote.pair.start`, `remote.devices.list`, `remote.unpair`. The `remote` role is never
+    granted any of them - a phone cannot pair a second phone or revoke another device.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -70,9 +68,24 @@ def _device_json(device: DeviceRow) -> dict[str, Any]:
     }
 
 
-def install(core: Any) -> None:
-    """Wire the remote area into a started `NoxCore`. Safe to call once; a second call raises from
-    `RequestRegistry.register` rather than silently shadowing the first."""
+@dataclass(slots=True)
+class RemoteRuntime:
+    """Handles for the caller; `stop` detaches the service and the notifier from the bus."""
+
+    repo: RemoteRepository
+    pairing: PairingService
+    service: RemoteService
+    notifier: RemoteNotifier
+    enabled: bool
+
+    def stop(self) -> None:
+        self.notifier.stop()
+        self.service.stop()
+
+
+def install(core: Any) -> RemoteRuntime:
+    """Wire the remote area into a started core. Call it once; a second call raises from the
+    request registry rather than silently shadowing the first."""
     cfg = core.config.remote
     repo = RemoteRepository(core.db)
     pairing = PairingService(
@@ -103,8 +116,7 @@ def install(core: Any) -> None:
         return str(getattr(turn, "response", ""))
 
     def status() -> dict[str, str]:
-        """Allow-listed scalars only (Spec §3.3): never a transcript, memory entry or
-        chat history."""
+        """Allow-listed scalars only: never a transcript, memory entry or chat history."""
         privacy = core.security.privacy
         return {
             "Modus": str(core.state.get("assistant.mode")),
@@ -173,14 +185,16 @@ def install(core: Any) -> None:
     reg("remote.devices.list", EmptyRequest, h_devices, roles=LOCAL_ROLES)
     reg("remote.unpair", Unpair, h_unpair, roles=LOCAL_ROLES)
 
-    core.remote_repo = repo
-    core.remote_pairing = pairing
-    core.remote_service = service
-    core.remote_notifier = notifier
-
-    if not cfg.enabled:
-        log.info("remote.disabled", note="IPC surface registered, no bot, no notifications")
-        return
+    runtime = RemoteRuntime(
+        repo=repo, pairing=pairing, service=service, notifier=notifier, enabled=bool(cfg.enabled)
+    )
+    if not runtime.enabled:
+        log.info("remote.disabled", note="request surface registered, no bot, no notifications")
+        return runtime
     service.start()
     notifier.start()
     log.info("remote.installed", events=len(cfg.notifications.events))
+    return runtime
+
+
+__all__ = ["RemoteRuntime", "install"]

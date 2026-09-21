@@ -1,4 +1,4 @@
-"""System prompt assembly and untrusted-content wrapper (Tool Model prompt rules, FR-4.6, FR-6.7).
+"""System prompt assembly and untrusted-content wrapper (Tool Model prompt rules).
 
 The personality is *data*, not code: the shipped :data:`DEFAULT_PERSONALITY_BLOCK` is a neutral,
 generic companion character, and the running instance reads its own ``personality.md`` from the

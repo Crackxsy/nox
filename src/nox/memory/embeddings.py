@@ -1,9 +1,9 @@
 """Embedding service: `nomic-embed-text` via Ollama into sqlite-vec's `memory_vec`, with an honest
-FTS5 fallback when Ollama is unreachable (ST-07-02, Data Model L2, SP-07).
+FTS5 fallback when Ollama is unreachable.
 
-Callers never branch on availability: `search()` tries the vector path first and transparently
-falls back to FTS5, returning `limited=True` so the caller can be honest about degraded search
-rather than silently pretending vectors were used (Runtime Lifecycle "never fake availability").
+Callers never branch on availability: `search` tries the vector path first and transparently falls
+back to FTS5, returning `limited=True` so the caller can be honest about degraded search rather
+than silently pretending vectors were used.
 
 Writes come in two shapes: `embed_and_store` for a single text, and `embed_and_store_many` for a
 whole note's chunks - one `/api/embed` request per `MAX_EMBED_BATCH` texts instead of one per
@@ -113,8 +113,8 @@ class EmbeddingService:
             batch = pending[start : start + size]
             try:
                 vectors = await self._provider.embed([text for _, text in batch], model=self._model)
-            except Exception as exc:  # noqa: BLE001
-                log.info("memory.embed_failed", kind=kind, count=len(batch), error=str(exc))
+            except Exception as exc:  # noqa: BLE001 - any provider failure degrades to FTS only
+                log.warning("memory.embed_failed", kind=kind, count=len(batch), error=str(exc))
                 return stored
             if len(vectors) != len(batch):
                 log.warning("memory.embed_bad_batch", kind=kind, want=len(batch), got=len(vectors))
@@ -181,32 +181,47 @@ class EmbeddingService:
             return None
         try:
             vectors = await self._provider.embed([query], model=self._model)
-        except Exception as exc:  # noqa: BLE001
-            log.info("memory.search_embed_failed", error=str(exc))
+        except Exception as exc:  # noqa: BLE001 - any provider failure degrades to FTS only
+            log.warning("memory.search_embed_failed", error=str(exc))
             return None
         if not vectors or len(vectors[0]) != self._dimensions:
             return None
         blob = _pack(vectors[0])
+        return await asyncio.to_thread(self._vector_hits, blob, k=k, kind=kind)
+
+    def _vector_hits(self, blob: bytes, *, k: int, kind: Kind | None) -> list[SearchHit]:
+        """The sqlite half of a vector search, in two queries and one worker thread.
+
+        sqlite-vec wants its k-nearest-neighbour query on its own, so the mapping rows are then
+        fetched for the whole result set at once rather than one round trip per hit.
+        """
         rows = self._db.fetch_all(
             "SELECT rowid, distance FROM memory_vec WHERE embedding MATCH ? "
             "ORDER BY distance LIMIT ?",
             (blob, k * 4 if kind else k),  # over-fetch when filtering by kind below
         )
+        if not rows:
+            return []
+        rowids = [int(row["rowid"]) for row in rows]
+        placeholders = ",".join("?" * len(rowids))
+        mapped_rows = self._db.fetch_all(
+            f"SELECT id, kind, ref_id FROM vec_map WHERE id IN ({placeholders})",  # noqa: S608
+            tuple(rowids),
+        )
+        mapping = {int(row["id"]): (row["kind"], int(row["ref_id"])) for row in mapped_rows}
         hits: list[SearchHit] = []
         for row in rows:
-            mapped = self._db.fetch_one(
-                "SELECT kind, ref_id FROM vec_map WHERE id = ?", (row["rowid"],)
-            )
+            mapped = mapping.get(int(row["rowid"]))
             if mapped is None:
                 continue
-            if kind is not None and mapped["kind"] != kind:
+            hit_kind, ref_id = mapped
+            if kind is not None and hit_kind != kind:
                 continue
-            distance = float(row["distance"])
             hits.append(
                 SearchHit(
-                    kind=mapped["kind"],
-                    ref_id=int(mapped["ref_id"]),
-                    score=1.0 / (1.0 + distance),
+                    kind=hit_kind,
+                    ref_id=ref_id,
+                    score=1.0 / (1.0 + float(row["distance"])),
                     via="vector",
                 )
             )

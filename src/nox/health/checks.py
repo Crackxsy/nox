@@ -1,8 +1,9 @@
 """Health checks for the Failure and Recovery Model rows `HealthService` did not yet cover: disk
-full, vault unreachable, audit chain broken, config invalid (EPIC-09 Health & Recovery).
+full,
+vault unreachable, audit chain broken, config invalid (Health & Recovery).
 
 Each factory returns a `nox.core.health.Check` - a named async probe - so it plugs straight into
-the existing `HealthService.add_check()` without changing that module.
+the existing `HealthService.add_check` without changing that module.
 """
 
 from __future__ import annotations

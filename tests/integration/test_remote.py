@@ -167,7 +167,13 @@ async def test_status_from_the_phone_is_answered_through_the_tool_pipeline(
     assert "Modus" in sent[-1]["text"]
     for forbidden in ("transcript", "memory", "prompt"):
         assert forbidden not in sent[-1]["text"].lower()
-    audited = [e for e in core.security.audit.entries(limit=200) if e.tool == "telegram"]
+    # The audit log writes on its own thread; flush it, then read the same chain directly.
+    audit = core.security.audit
+    flush = getattr(audit, "flush", None)
+    if flush is not None:
+        flush(timeout_s=5.0)
+    entries = getattr(audit, "inner", audit).entries(limit=200)
+    audited = [e for e in entries if e.tool == "telegram"]
     assert audited and all(e.decision == "allow" for e in audited)
 
 

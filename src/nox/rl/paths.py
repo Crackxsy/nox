@@ -1,6 +1,9 @@
-"""Resolve the real (OneDrive-redirected) Rocket League replay folder via the Windows Documents
-special folder (ST-12-02 AC: "resolves the real path via the Windows special-folder API, not a
-hardcoded drive letter"). Falls back to `%USERPROFILE%/Documents` off-Windows/in tests."""
+"""Resolve the real, possibly OneDrive-redirected, Rocket League replay folder.
+
+The Windows Documents special folder is asked for the real path rather than assuming a drive
+letter, so a redirected Documents folder still resolves. Off Windows (and in tests) this falls back
+to `%USERPROFILE%/Documents`.
+"""
 
 from __future__ import annotations
 
@@ -30,6 +33,8 @@ def documents_dir() -> Path:
 
 
 def default_replay_folder() -> Path:
-    """`Documents/My Games/Rocket League/TAGame/DemosEpic`, resolved from the real Documents
-    location (Spec §6.5/§15 - the literal path differs per machine)."""
+    """`Documents/My Games/Rocket League/TAGame/DemosEpic`, under the real Documents folder.
+
+    The literal path differs per machine, which is why it is resolved rather than configured.
+    """
     return documents_dir().joinpath(*_REPLAY_SUBPATH)

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 
@@ -20,18 +20,9 @@ from nox.security.permissions import (
 )
 from nox.security.profiles import InMemoryProfileProvider
 from nox.tools.registry import ToolRegistry
-from tests.unit.fakes import FakeBus
+from tests.unit.fakes import FakeBus, MutableClock
 
-
-class MutableClock:
-    def __init__(self) -> None:
-        self.now = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
-
-    def __call__(self) -> datetime:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += timedelta(seconds=seconds)
+START = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
 
 
 class FakePrivacy:
@@ -76,7 +67,7 @@ class FakeKillSwitch:
 
 @pytest.fixture
 def clock() -> MutableClock:
-    return MutableClock()
+    return MutableClock(START)
 
 
 @pytest.fixture

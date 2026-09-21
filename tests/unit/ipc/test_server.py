@@ -15,6 +15,7 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from nox.core.bus import AsyncEventBus
+from nox.core.config import IpcConfig
 from nox.core.events import E, Event
 from nox.ipc.client import IpcClient
 from nox.ipc.dispatch import EmptyPayload, RequestRegistry
@@ -550,7 +551,7 @@ def test_settings_reject_non_loopback() -> None:
     with pytest.raises(ValidationError):
         HubSettings(host="192.168.1.5")
     assert (
-        HubSettings.from_config({"host": "127.0.0.1", "port": 47800, "http_port": 47801}).port
+        HubSettings.from_config(IpcConfig(host="127.0.0.1", port=47800, http_port=47801)).port
         == 47800
     )
     assert HubSettings(host="::1").host == "::1"

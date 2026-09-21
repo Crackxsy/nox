@@ -1,21 +1,21 @@
-"""Shared privacy-capture gate for the RL screen-capture loops (#27, Security Model FR-7.x).
+"""Shared privacy-capture gate for the RL screen-capture loops (Security Model FR-7.x).
 
-Both `plugins/rl/src/nox_plugin_rl/plugin.py`'s `_recognize_loop` (Stage 1, HUD template
-matching) and `_vision_loop` (Stage 2, EPIC-18) sample the screen/HUD region on a timer. Stage 2
-already stops sampling while a privacy zone is active or `privacy.capture.screen` is off
-(`RlPlugin._on_capture_changed` / `_capture_allowed`, ST-18-03 AC2's comment); Stage 1 had no
-equivalent gate - a pre-existing gap the Vision Stage 2 story flagged rather than fixed (out of
-its scope). #27 asks for that gap to be closed *by reusing Stage 2's gate*, not by giving Stage 1
-its own, separately-behaving privacy check.
+Both `plugins/rl/src/nox_plugin_rl/plugin.py`'s `_recognize_loop` (Stage 1, HUD template matching)
+and `_vision_loop` (Stage 2) sample the screen/HUD region on a timer. Stage 2 already stops
+sampling while a privacy zone is active or `privacy.capture.screen` is off
+(`RlPlugin._on_capture_changed` / `_capture_allowed`, comment); Stage 1 had no equivalent gate - a
+pre-existing gap the Vision Stage 2 story flagged rather than fixed (out of its scope). asks for
+that gap to be closed *by reusing Stage 2's gate*, not by giving Stage 1 its own, separately-
+behaving privacy check.
 
 `CaptureGate` is that one, shared gate, extracted so a loop no longer has to hand-roll its own
 "boolean flag + `_on_capture_changed` handler" pair (what Stage 2 currently does inline). Driven
 purely by the `privacy.capture_changed` event payload (`nox.core.events.CaptureChanged`:
-`microphone`/`camera`/`screen`/`cloud` booleans) `PrivacyService.effective_capture()` already
+`microphone`/`camera`/`screen`/`cloud` booleans) `PrivacyService.effective_capture` already
 publishes on every zone/mode/capture-flag/panic/safe-mode change (`nox/security/privacy.py`) -
-`screen` there already ANDs together "no active privacy zone", "`privacy.capture.screen` is
-true", "not panicked" and "not in safe mode" (`PrivacyService.allows_capture`), so a single
-boolean is enough to satisfy FR-7.x's "zone active, or PRIVATE/OFFLINE-with-capture-off, or
+`screen` there already ANDs together "no active privacy zone", "`privacy.capture.screen` is true",
+"not panicked" and "not in safe mode" (`PrivacyService.allows_capture`), so a single boolean is
+enough to satisfy FR-7.x's "zone active, or PRIVATE/OFFLINE-with-capture-off, or
 `privacy.capture.screen` false" condition correctly - this gate does not need to re-derive privacy
 state itself, only react to it. `on_zone_changed` is optional and only sharpens the logged pause
 *reason* (naming the zone instead of a generic fallback) when a caller also forwards
@@ -64,14 +64,44 @@ class CaptureGate:
         self._allowed = initially_allowed
         self._reason = "" if initially_allowed else _GENERIC_PAUSE_REASON
         self._active_zone: str | None = None
+        self._latched = False
+        self._latch_reason = ""
 
     @property
     def allowed(self) -> bool:
-        return self._allowed
+        return self._allowed and not self._latched
+
+    @property
+    def latched(self) -> bool:
+        """True once `latch` closed the gate; only `resume` opens it again."""
+        return self._latched
+
+    def latch(self, reason: str) -> None:
+        """Close the gate until someone explicitly resumes it.
+
+        This is the kill-switch and panic path: a privacy event that happens to arrive afterwards
+        must not re-open capture, and neither must the next time the game is detected. Consent to
+        capture is given again by a person, not by a state transition.
+        """
+        if self._latched:
+            return
+        self._latched = True
+        self._latch_reason = reason
+        self._log.info("rl.capture_latched", reason=reason)
+
+    def resume(self) -> None:
+        """Release a `latch`. The privacy state still decides whether capture actually runs."""
+        if not self._latched:
+            return
+        self._latched = False
+        self._latch_reason = ""
+        self._log.info("rl.capture_latch_released")
 
     @property
     def reason(self) -> str:
         """Why capture is currently paused; `""` while `allowed` is True."""
+        if self._latched:
+            return self._latch_reason
         return self._reason
 
     def on_zone_changed(self, payload: dict[str, Any]) -> None:
@@ -100,10 +130,10 @@ class CaptureGate:
 
     async def maybe_capture(self, capture_fn: Callable[[], Awaitable[T]]) -> T | None:
         """Runs `capture_fn` only while the gate is open; returns `None` (no frame grabbed, not a
-        discarded one - #27's core requirement) while paused. Never suppresses `capture_fn`'s own
+        discarded one - core requirement) while paused. Never suppresses `capture_fn`'s own
         exceptions - unchanged from how `_recognize_loop`/`_vision_loop` already handle a capture
         failure (`rl.capture_failed`/`rl.vision.capture_failed`, logged by the caller)."""
-        if not self._allowed:
+        if not self.allowed:
             return None
         return await capture_fn()
 

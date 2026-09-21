@@ -1,6 +1,6 @@
-"""Twitch chat IRC client (ST-11-04, Spec v0.2 Stream Bot §6.2). Plain `asyncio` streams over TLS
-(`ssl.create_default_context()`) - no extra dependency, matches ADR-013's "no fake implementations"
-by never widening egress on its own (the caller's `authorize` hook enforces the manifest-scoped
+"""Twitch chat IRC client (Stream Bot). Plain `asyncio` streams over TLS
+(`ssl.create_default_context`) - no extra dependency, matches "no fake implementations" by never
+widening egress on its own (the caller's `authorize` hook enforces the manifest-scoped
 `EgressGuard` before every connection attempt, same pattern as `nox_plugin_obs.ws_client`).
 
 PASS/NICK, `CAP REQ` (tags, commands, membership), `JOIN`, PING/PONG, and a reconnect-with-backoff
@@ -15,6 +15,7 @@ import ssl
 from collections.abc import Awaitable, Callable
 
 from nox.core.logging import get_logger
+from nox.plugins.reconnect import ReconnectBackoff
 
 from .protocol import ChatTags, parse_chat_tags, parse_line
 
@@ -47,7 +48,7 @@ async def _default_connector(
 
 
 class TwitchIrcClient:
-    """One Twitch IRC connection, reconnecting with exponential backoff until `stop()`."""
+    """One Twitch IRC connection, reconnecting with exponential backoff until `stop`."""
 
     def __init__(
         self,
@@ -75,7 +76,7 @@ class TwitchIrcClient:
         self._on_privmsg = on_privmsg
         self._on_connected = on_connected
         self._on_disconnected = on_disconnected
-        #: Called synchronously before every connection attempt (ADR-013: raw asyncio streams
+        #: Called synchronously before every connection attempt (: raw asyncio streams
         #: bypass `PluginApi.http()`'s automatic `EgressGuard`, so the plugin enforces it itself).
         self._authorize = authorize
         self._min_backoff = min_backoff_s
@@ -118,13 +119,15 @@ class TwitchIrcClient:
             log.debug("twitch.irc_close_failed", error=str(exc))
 
     async def _run(self) -> None:
-        backoff = self._min_backoff
+        backoff = ReconnectBackoff("twitch", min_s=self._min_backoff, max_s=self._max_backoff)
         while not self._stop.is_set():
             try:
                 await self._connect_once()
-                backoff = self._min_backoff
             except Exception as exc:  # noqa: BLE001 - the reconnect loop must never die
-                self.last_error = str(exc)
+                backoff.failed(exc)
+            else:
+                backoff.succeeded()
+            self.last_error = backoff.last_error
             was_connected = self.connected
             self.connected = False
             self.joined = False
@@ -133,12 +136,9 @@ class TwitchIrcClient:
                 await self._on_disconnected(self.last_error)
             if self._stop.is_set():
                 return
-            self.backoff_s = backoff
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=backoff)
-            except TimeoutError:
-                pass
-            backoff = min(backoff * 2, self._max_backoff)
+            self.backoff_s = backoff.current_s
+            if await backoff.sleep(self._stop):
+                return
 
     async def _connect_once(self) -> None:
         if self._authorize is not None:

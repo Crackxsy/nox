@@ -1,10 +1,10 @@
-"""OllamaProvider: local models over the Ollama HTTP API (ADR-008, FR-6.5, SP-12).
+"""OllamaProvider: local models over the Ollama HTTP API.
 
 Endpoints: ``/api/chat`` (NDJSON streaming), ``/api/tags`` (health), ``/api/embed`` with
 ``/api/embeddings`` fallback (embeddings). The HTTP client comes from an injected factory so the
-security agent's egress guard can replace plain httpx without touching this module.
-GPU policy: ``options.num_gpu=0`` (CPU only) when ``metadata["gpu_allowed"] == "false"`` or when the
-request mode is not in ``gpu_allowed_modes`` (never during Rocket League).
+security agent's egress guard can replace plain httpx without touching this module. GPU policy:
+``options.num_gpu=0`` (CPU only) when ``metadata["gpu_allowed"] == "false"`` or when the request
+mode is not in ``gpu_allowed_modes`` (never during Rocket League).
 """
 
 from __future__ import annotations
@@ -52,6 +52,8 @@ class OllamaProvider:
         self._info = ProviderInfo(
             id=PROVIDER_ID,
             display_name=f"Ollama ({config.model})",
+            # The model name carries the meaning here, and it is the same in both languages.
+            display_name_de=f"Ollama ({config.model})",
             local=True,
             roles=roles or [AiRole.CHAT, AiRole.CLASSIFY, AiRole.REASON, AiRole.BACKGROUND],
             status=HealthStatus.UNAVAILABLE,

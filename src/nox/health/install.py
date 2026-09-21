@@ -1,18 +1,18 @@
-"""`install(core) -> None`: wires the EPIC-09 Health & Recovery pieces into an already-booted
-`NoxCore` without touching `src/nox/app.py` - the four missing Failure and Recovery Model checks
-(disk full, vault unreachable, audit chain broken, config invalid) onto the existing
-`HealthService`, plus the degraded-mode matrix that reacts to them.
+"""`install(core) -> HealthRuntime`: the four cross-cutting health checks and the degraded-mode
+matrix
+that reacts to them.
 
-Self-repair: `PluginManager` already restarts crashed plugins/workers with its own backoff and
-limit (`PluginManagerSettings.restart_limit`/`restart_window_s`) - this module does not duplicate
-that. The one genuine repair action wired here is disk-full -> run the memory retention job early
-(when `nox.memory` is installed) to free space; audit-chain-broken has no code-level repair and
-instead escalates through the kill switch's existing PIN-gated security path (Failure and Recovery
-Model "require PIN to resume normal mode"), never a fake silent fix.
+The checks are disk full, vault unreachable, audit chain broken and config invalid. Self-repair is
+deliberately thin: the plugin manager already restarts crashed plugins and workers with its own
+backoff and limit, and this module does not duplicate that. The one genuine repair action wired
+here is disk-full, which runs the memory retention job early to free space when the memory
+extension is installed. A broken audit chain has no code-level repair at all and escalates through
+the kill switch's PIN-gated path instead of a silent, fake fix.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from nox.core.logging import get_logger
@@ -27,15 +27,32 @@ from nox.health.degraded import DegradedModeService, SelfRepair, SelfRepairPolic
 log = get_logger(__name__)
 
 
+class _MemoryRuntimeLike(Protocol):
+    """What disk-full repair needs from the memory extension, if it is installed at all."""
+
+    retention: Any
+
+
 class _Core(Protocol):
     config: Any
     bus: Any
     state: Any
     security: Any
     health: Any
+    extensions: dict[str, Any]
 
 
-def install(core: _Core) -> None:
+@dataclass(slots=True)
+class HealthRuntime:
+    """Handle for the caller; `stop` detaches the degraded-mode service from the bus."""
+
+    degraded: DegradedModeService
+
+    def stop(self) -> None:
+        self.degraded.stop()
+
+
+def install(core: _Core) -> HealthRuntime:
     cfg = core.config
     core.health.add_check(make_disk_full_check(cfg.paths.database_dir))
     core.health.add_check(make_vault_unreachable_check(cfg.paths.vault_dir))
@@ -43,7 +60,8 @@ def install(core: _Core) -> None:
     core.health.add_check(make_config_check(lambda: cfg.warnings))
 
     async def _repair_disk_full() -> bool:
-        memory = getattr(core, "memory", None)
+        """Free space by running memory retention early - only if memory is installed at all."""
+        memory: _MemoryRuntimeLike | None = core.extensions.get("memory")
         if memory is None:
             return False
         report = await memory.retention.run()
@@ -51,12 +69,10 @@ def install(core: _Core) -> None:
         log.info("health.disk_full_repair", freed_rows=freed)
         return freed > 0
 
-    async def _escalate_audit_chain(component: str) -> None:
-        killswitch = getattr(core.security, "killswitch", None)
-        if killswitch is None:
-            log.error("health.audit_chain_escalation_unavailable", component=component)
-            return
-        await killswitch.engage(origin="audit", reason="audit hash chain verification failed")
+    async def _escalate_audit_chain(_component: str) -> None:
+        await core.security.killswitch.engage(
+            origin="audit", reason="audit hash chain verification failed"
+        )
 
     repair = SelfRepair(
         actions={"system.disk": _repair_disk_full},
@@ -69,7 +85,7 @@ def install(core: _Core) -> None:
         escalate={"security.audit_chain": _escalate_audit_chain},
     )
     degraded.start()
+    return HealthRuntime(degraded=degraded)
 
-    # Not part of the `_Core` Protocol (kept narrow for typing); a plain attribute for tests and
-    # any later service that needs direct access, e.g. a dashboard health-view reading it.
-    core.degraded = degraded  # type: ignore[attr-defined]
+
+__all__ = ["HealthRuntime", "install"]

@@ -6,7 +6,7 @@ and small fakes for the kill switch, privacy service and outbound channel.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,21 +17,9 @@ from nox.data.db import Database
 from nox.remote.pairing import PairingService
 from nox.remote.policy import RemoteCommandPolicy, RemoteRateLimiter
 from nox.remote.repo import RemoteRepository
+from tests.unit.fakes import Clock
 
 START = datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
-
-
-class Clock:
-    """A hand-wound clock: nothing in this area may depend on real time passing."""
-
-    def __init__(self, start: datetime = START) -> None:
-        self.now = start
-
-    def __call__(self) -> datetime:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += timedelta(seconds=seconds)
 
 
 class FakeAudit:
@@ -131,7 +119,7 @@ def db(tmp_path: Path) -> Database:
 
 @pytest.fixture
 def clock() -> Clock:
-    return Clock()
+    return Clock(START)
 
 
 @pytest.fixture

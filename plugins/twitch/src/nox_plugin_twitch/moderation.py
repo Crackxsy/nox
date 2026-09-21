@@ -1,12 +1,11 @@
-"""`ModerationGate`: deterministic pre-send check for every outgoing chat message (ST-11-04, Spec
-v0.2 Stream Bot §3.4). Runs on *Nox's own* text - `twitch.chat.send` and every built-in command
-reply go through it - never on inbound viewer chat (that is untrusted data, evaluated, not acted on
-as instructions, FR-9.16).
+"""`ModerationGate`: deterministic pre-send check for every outgoing chat message (Stream Bot). Runs
+on *Nox's own* text - `twitch.chat.send` and every built-in command reply go through it - never on
+inbound viewer chat (that is untrusted data, evaluated, not acted on as instructions).
 
 The hard exclusions below are independent of chat mood/insult level and cannot be relaxed by
-config, a profile, or a "mach einfach" grant (FR-9.9): hate speech against a protected group,
-sexual content about a viewer, doxxing patterns, illness/death jokes, and insults aimed at a named
-viewer. `blocklist` is additional, configurable, non-exhaustive terms on top of those.
+config, a profile, or a "mach einfach" grant: hate speech against a protected group, sexual content
+about a viewer, doxxing patterns, illness/death jokes, and insults aimed at a named viewer.
+`blocklist` is additional, configurable, non-exhaustive terms on top of those.
 """
 
 from __future__ import annotations
@@ -132,7 +131,7 @@ _HARD_EXCLUSIONS: tuple[tuple[str, Callable[[str], bool]], ...] = (
 
 class ModerationGate:
     """`check(text) -> (ok, reason)`. Deterministic, no LLM call - a hard-list hit is never
-    something an AI call gets to reinterpret (FR-9.9)."""
+    something an AI call gets to reinterpret."""
 
     def __init__(self, blocklist: Sequence[str] = ()) -> None:
         self._blocklist = [b.strip().lower() for b in blocklist if b.strip()]

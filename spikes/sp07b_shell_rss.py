@@ -1,25 +1,25 @@
-"""SP-07b: measure the shell process-tree RSS before/after B-7 (Decision Plan B-7; Decision
-Evaluation B-7 "missing option: measure first" -- verify the number before deciding A vs B).
+"""Measure the shell process-tree RSS before/after the hardened QtWebEngine profile - verify the
+number before deciding between settings, rather than guessing.
 
-B-7 changes: a single off-the-record `QWebEngineProfile` shared by the pet view instead of Qt's
-default profile (no persistent cache/cookies/local storage/service-worker state), spellcheck and
-browser plugins disabled, `ScreenCaptureEnabled` and `ShowScrollBars` off, plus an opt-in
-`NOX_PET_SOFTWARE_RENDER=1` switch that disables GPU compositing
+The hardened-profile changes: a single off-the-record `QWebEngineProfile` shared by the pet view
+instead of Qt's default profile (no persistent cache/cookies/local storage/service-worker state),
+spellcheck and browser plugins disabled, `ScreenCaptureEnabled` and `ShowScrollBars` off, plus an
+opt-in `NOX_PET_SOFTWARE_RENDER=1` switch that disables GPU compositing
 (`QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu-compositing`), see `src/nox/shell/pet_window.py`.
 
 This spike launches the real shell (`python -m nox.shell --runtime <empty tmp dir>`) twice -- no
 core is reachable, so the pet shows the honest offline page while tray, hotkeys and the QtWebEngine
-helper processes all start normally, which is the real process tree ADR-004's ~150 MB estimate and
-the evaluator's measured ~280 MB both refer to:
+helper processes all start normally, which is the real process tree ADR-004's ~150 MB estimate
+refers to:
 
-  1. "before": default settings (GPU compositing on, hardened off-the-record profile from B-7).
-  2. "after":  `NOX_PET_SOFTWARE_RENDER=1` (software compositing) on top of the same B-7 profile.
+  1. "before": default settings (GPU compositing on, hardened off-the-record profile).
+  2. "after":  `NOX_PET_SOFTWARE_RENDER=1` (software compositing) on top of the same profile.
 
 Each run idles `IDLE_SECONDS` after a startup grace period, then sums private RSS (psutil
 `memory_info().rss`) over the shell process and every child (QtWebEngine spawns several helper
-processes; RSS is not simply additive across them, but summing is the same approximation SP-09
-already uses and is good enough to compare the two settings against each other and against the
-500 MB whole-system idle budget, F380/A389).
+processes; RSS is not simply additive across them, but summing is the same approximation the
+transparent-window spike already uses and is good enough to compare the two settings against
+each other and against a roughly 500 MB whole-system idle budget).
 
 Run: .venv/Scripts/python.exe spikes/sp07b_shell_rss.py
 """
@@ -85,7 +85,7 @@ def _run_once(*, software_render: bool) -> float:
 def main() -> int:
     print(f"idling {IDLE_SECONDS:.0f}s per run after a {STARTUP_GRACE_S:.0f}s startup grace ...")
 
-    print("run 1/2: default settings (GPU compositing, B-7 hardened profile) ...")
+    print("run 1/2: default settings (GPU compositing, hardened profile) ...")
     before = _run_once(software_render=False)
     print(f"before (GPU compositing): {before:.1f} MB")
 

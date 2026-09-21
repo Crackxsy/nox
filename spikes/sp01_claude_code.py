@@ -1,4 +1,4 @@
-"""SP-01: Claude Code CLI as chat provider - latency, streaming, logged-out behaviour.
+"""Claude Code CLI as chat provider - latency, streaming, logged-out behaviour.
 
 Run:  .venv/Scripts/python.exe spikes/sp01_claude_code.py [--runs 5] [--models sonnet,haiku]
 Writes spikes/results/sp01_results.json, prints a markdown table, and records sanitized fixtures

@@ -31,7 +31,7 @@ class Decision(StrEnum):
 
 
 class AutonomyLevel(int):
-    """L0 answer only .. L5 long-running autonomous tasks (see PRD FR-3.2)."""
+    """How much Nox may do on its own: L0 answers only, L5 runs long tasks unattended."""
 
 
 class PermissionRequest(BaseModel):
@@ -78,7 +78,7 @@ class Profile(BaseModel):
     cloud_allowed: bool = True
     egress_allowlist: list[str] = Field(default_factory=list)  # empty = inherit global allowlist
     # Additive to security.loopback_allowlist: extra loopback services this profile may reach while
-    # privacy mode is PRIVATE or OFFLINE (OP-7 C), e.g. the OBS websocket in the stream profile.
+    # privacy mode is private or offline - the recording software's control port, say.
     loopback_allowlist: list[str] = Field(default_factory=list)
     memory_writes_allowed: bool = True
     screenshots_to_cloud: bool = False

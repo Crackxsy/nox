@@ -1,12 +1,12 @@
-"""Core-side services for Rocket League Stage 1 (ST-12-01/06/07, Spec v0.3). A plugin worker has no
-SQLite/TTS access (`nox.plugins.api.PluginApi` exposes only events/tools/state/secrets/egress), so
-everything that needs the database, the voice layer or the AI router lives here and reacts to the
-events `plugins/rl` emits over the bus. Wired by `nox.rl.install.install(core)`.
+"""Core-side services for the Rocket League companion.
+
+A plugin worker has no SQLite or TTS access - the plugin API exposes only events, tools, state,
+secrets and egress - so everything that needs the database, the voice layer or the AI router lives
+here and reacts to the events the `rl` plugin emits over the bus.
 """
 
 from __future__ import annotations
 
-import contextlib
 import time
 import uuid
 from datetime import UTC, datetime
@@ -35,13 +35,17 @@ class ModeSetter(Protocol):
     def set_profile(self, profile_id: str, *, by: str) -> None: ...
 
 
-# ---- mode bridge (ST-12-01) ------------------------------------------------------------------
+# ---- mode bridge ------------------------------------------------------------------
 
 
 class RlModeBridge:
-    """`game.detected`/`game.ended` -> `system.mode_changed` (Spec §3.1). Mirrors the shape of
-    `nox.app.NoxCore._h_mode_set` (mode + profile + event), just triggered by the plugin's
-    detector instead of a dashboard/voice request."""
+    """`game.detected`/`game.ended` -> `system.mode_changed`.
+
+    Mirrors what the `mode.set` request does (mode + security profile + event), triggered by the
+    plugin's game detector instead of a dashboard or voice request. When the security profile
+    cannot be switched, the published event says so (`profile_applied=False`) instead of implying
+    that the game-mode permissions are in force.
+    """
 
     def __init__(self, bus: EventBus, state: Any, security_engine: ModeSetter) -> None:
         self._bus = bus
@@ -68,15 +72,13 @@ class RlModeBridge:
         if current != "rocket_league":
             self._previous_mode = current
         await self._state.update("assistant.mode", "rocket_league", reason="game.detected")
-        with contextlib.suppress(Exception):
-            self._security.set_profile("rocket_league", by="rl")
         await self._bus.publish(
             Event(
                 name=E.SYSTEM_MODE_CHANGED,
                 payload={
                     "previous": self._previous_mode,
                     "current": "rocket_league",
-                    "reason": "game.detected",
+                    "reason": self._mode_reason("game.detected", "rocket_league"),
                     "game_running": True,
                 },
             )
@@ -86,27 +88,44 @@ class RlModeBridge:
         if str(ev.payload.get("game", "")) != "rocket_league":
             return
         await self._state.update("assistant.mode", self._previous_mode, reason="game.ended")
-        with contextlib.suppress(Exception):
-            self._security.set_profile("companion", by="rl")
         await self._bus.publish(
             Event(
                 name=E.SYSTEM_MODE_CHANGED,
                 payload={
                     "previous": "rocket_league",
                     "current": self._previous_mode,
-                    "reason": "game.ended",
+                    "reason": self._mode_reason("game.ended", "companion"),
                     "game_running": False,
                 },
             )
         )
 
+    def _mode_reason(self, trigger: str, profile_id: str) -> str:
+        """The mode-change reason, including whether the security profile really switched.
 
-# ---- persistence (ST-12-01/02/03/05) -----------------------------------------------------------
+        A failed switch leaves the permissions of the previous profile in place, so the event says
+        so rather than implying that the new mode's permissions are in force.
+        """
+        try:
+            self._security.set_profile(profile_id, by="rl")
+        except Exception as exc:  # noqa: BLE001 - reported on the event, never swallowed
+            log.error(
+                "rl.profile_switch_failed",
+                profile=profile_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return f"{trigger}; security profile unchanged"
+        return trigger
+
+
+# ---- persistence -----------------------------------------------------------
 
 
 class RlPersistenceService:
-    """`rl.match_started/ended`, `rl.event`, `rl.replay_parsed` -> `rl_matches`/`rl_events`/
-    `rl_replays` (Spec §7). The plugin has no DB access; this is the only writer."""
+    """`rl.match_started/ended`, `rl.event`, `rl.replay_parsed` -> the `rl_*` tables.
+
+    The plugin has no database access, so this is the only writer of match, event and replay rows.
+    """
 
     def __init__(
         self,
@@ -200,7 +219,7 @@ class RlPersistenceService:
             self._matches.set_replay(active.id, row.id)
 
 
-# ---- callout engine (ST-12-06) -----------------------------------------------------------------
+# ---- callout engine -----------------------------------------------------------------
 
 
 class CalloutEngineProtocol(Protocol):
@@ -210,9 +229,13 @@ class CalloutEngineProtocol(Protocol):
 
 
 class RlCalloutService:
-    """`rl.event` -> the rule engine -> `TtsRequest(channel=PRIVATE, prepared_clip=...)` (Spec
-    §3.2/§9, FR-10.3: never through text synthesis, private channel only). Measures the
-    event-to-audio-start latency and emits `rl.callout` for transparency/debugging."""
+    """`rl.event` -> the rule engine -> `TtsRequest(channel=PRIVATE, prepared_clip=...)`.
+
+    Callouts play as pre-rendered clips on the private channel only, never through text synthesis
+    into the stream. `rl.callout` is published only for a callout the user actually heard, with
+    the measured event-to-audio-start latency; a failed or impossible playback is logged instead,
+    so the transparency log never claims a callout that did not happen.
+    """
 
     def __init__(
         self, bus: EventBus, engine: CalloutEngineProtocol, speaker: Speaker | None
@@ -240,16 +263,26 @@ class RlCalloutService:
         )
         if decision is None:
             return
+        if self._speaker is None:
+            log.info("rl.callout_unspoken", rule_id=decision.rule_id, reason="no speaker wired")
+            return
+        request = TtsRequest(
+            utterance_id=uuid.uuid4().hex,
+            text=decision.fallback_text,
+            channel=Channel.PRIVATE,
+            prepared_clip=decision.clip_id,
+        )
         t0 = time.monotonic()
-        if self._speaker is not None:
-            request = TtsRequest(
-                utterance_id=uuid.uuid4().hex,
-                text=decision.fallback_text,
-                channel=Channel.PRIVATE,
-                prepared_clip=decision.clip_id,
+        try:
+            await self._speaker.say(request)
+        except Exception as exc:  # noqa: BLE001 - one failed callout must not stop the others
+            log.warning(
+                "rl.callout_failed",
+                rule_id=decision.rule_id,
+                clip_id=decision.clip_id,
+                error=f"{type(exc).__name__}: {exc}",
             )
-            with contextlib.suppress(Exception):
-                await self._speaker.say(request)
+            return
         latency_ms = (time.monotonic() - t0) * 1000.0
         await self._bus.publish(
             Event(
@@ -264,13 +297,15 @@ class RlCalloutService:
         )
 
 
-# ---- post-match short summary (ST-12-07) ---------------------------------------------------------
+# ---- post-match short summary ---------------------------------------------------------
 
 
 class RlMatchAnnouncer:
-    """`rl.match_ended` -> a one-to-two-sentence private spoken summary within a few seconds
-    (Spec §3.3 step 2: "never a full breakdown mid-session"). Goes through normal synthesis (not
-    `prepared_clip` - the text is dynamic), still `Channel.PRIVATE` only."""
+    """`rl.match_ended` -> a one-to-two-sentence private spoken summary within a few seconds.
+
+    Never a full breakdown mid-session. The text is dynamic, so this goes through normal synthesis
+    rather than a prepared clip - still on the private channel only.
+    """
 
     def __init__(self, bus: EventBus, speaker: Speaker | None) -> None:
         self._bus = bus
@@ -290,11 +325,13 @@ class RlMatchAnnouncer:
         if not summary or self._speaker is None:
             return
         request = TtsRequest(utterance_id=uuid.uuid4().hex, text=summary, channel=Channel.PRIVATE)
-        with contextlib.suppress(Exception):
+        try:
             await self._speaker.say(request)
+        except Exception as exc:  # noqa: BLE001 - a failed summary must not break the bus handler
+            log.warning("rl.match_summary_unspoken", error=f"{type(exc).__name__}: {exc}")
 
 
-# ---- session summaries (ST-12-07) --------------------------------------------------------------
+# ---- session summaries --------------------------------------------------------------
 
 
 class AiRouterLike(Protocol):
@@ -306,10 +343,11 @@ class VaultNoteWriter(Protocol):
 
 
 class RlSessionSummaryService:
-    """Detailed session-end summary (Spec §3.3/§6.3): generated only after `rocket_league` mode has
-    fully ended ("queue and execute after", the spec's own recommendation for the open §6.3
-    question), never fabricates pattern-analysis it has no data for (FR-10.5 is out of v0.3 scope -
-    §2.2/§15), and is skipped entirely when no matches were played."""
+    """Detailed session-end summary, generated only once `rocket_league` mode has fully ended.
+
+    Queued rather than spoken mid-session, never fabricating pattern analysis it has no data for,
+    and skipped entirely when no match was played.
+    """
 
     def __init__(
         self,
@@ -349,34 +387,39 @@ class RlSessionSummaryService:
     async def _summarize_session(self, started_at: datetime) -> None:
         matches = [m for m in self._matches.list_since(started_at) if m.ended_at is not None]
         if not matches:
-            return  # nothing to summarize (Spec §3.3/ST-12-07 AC)
+            return  # no match was played: there is nothing to summarize
         wins = sum(1 for m in matches if m.result == "win")
         losses = sum(1 for m in matches if m.result == "loss")
         text = self._template_summary(matches, wins, losses)
         if self._router is not None:
-            with contextlib.suppress(Exception):
+            try:
                 text = await self._ai_summary(matches, wins, losses) or text
+            except Exception as exc:  # noqa: BLE001 - the factual template stays as the summary
+                log.warning("rl.session_summary_ai_failed", error=f"{type(exc).__name__}: {exc}")
         for match in matches:
             self._matches.set_detailed_summary(match.id, text)
         if self._vault_writer is not None:
-            with contextlib.suppress(Exception):
+            try:
                 self._vault_writer.write(
                     session_started_at=started_at, text=text, match_ids=[m.id for m in matches]
                 )
+            except Exception as exc:  # noqa: BLE001 - the summary is stored in the DB regardless
+                log.warning("rl.session_summary_note_failed", error=f"{type(exc).__name__}: {exc}")
 
     def _template_summary(self, matches: list[Any], wins: int, losses: int) -> str:
         n = len(matches)
         record = f"{wins}W-{losses}L" if wins or losses else "result unknown"
         return (
             f"{n} match{'es' if n != 1 else ''} played ({record}). "
-            "Deeper pattern analysis (recurring mistakes, MMR trend) is not yet available in this "
-            "release - only match facts and recorded events are reported (Spec v0.3 §2.2/§15)."
+            "Deeper pattern analysis (recurring mistakes, MMR trend) is not available yet - only "
+            "match facts and recorded events are reported."
         )
 
     async def _ai_summary(self, matches: list[Any], wins: int, losses: int) -> str | None:
         from nox.ai.base import AiRequest, AiRole, Message
 
-        assert self._router is not None  # only called when set (see _summarize_session)
+        if self._router is None:  # pragma: no cover - only reached on a wiring mistake
+            raise RuntimeError("no AI router wired for the session summary")
         facts = "\n".join(
             f"- match {m.id}: {m.result}, {m.score_self}-{m.score_opponent}" for m in matches
         )

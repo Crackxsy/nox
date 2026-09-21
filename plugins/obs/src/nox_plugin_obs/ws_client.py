@@ -1,11 +1,11 @@
-"""obs-websocket v5 client (ST-11-02/03, Spec v0.2 Stream Bot §6.1).
+"""obs-websocket v5 client.
 
 Implements exactly the handshake and framing obs-websocket v5 requires: Hello (op 0) -> Identify
 (op 1, SHA256 challenge/salt authentication when OBS requires a password) -> Identified (op 2),
 then Request/RequestResponse (op 6/7) correlated by `requestId`, and Event (op 5) dispatch. Uses
 only the `websockets` library (already a project dependency) - no OBS SDK, no extra deps.
 
-The connection owns its own reconnect-with-backoff loop (`start()`/`stop()`); callers observe
+The connection owns its own reconnect-with-backoff loop (`start`/`stop`); callers observe
 `connected`/`identified` and get `on_connected`/`on_disconnected` callbacks to drive honest health
 reporting one layer up (`nox_plugin_obs.plugin`).
 """
@@ -23,6 +23,7 @@ from typing import Any, Protocol
 import websockets
 
 from nox.core.logging import get_logger
+from nox.plugins.reconnect import ReconnectBackoff
 
 log = get_logger(__name__)
 
@@ -82,7 +83,7 @@ class WebSocketLike(Protocol):
 
 
 class ObsWebSocketClient:
-    """One obs-websocket v5 connection, reconnecting with exponential backoff until `stop()`."""
+    """One obs-websocket v5 connection, reconnecting with exponential backoff until `stop`."""
 
     def __init__(
         self,
@@ -105,7 +106,7 @@ class ObsWebSocketClient:
         self._on_connected = on_connected
         self._on_disconnected = on_disconnected
         self.event_subscriptions = event_subscriptions
-        #: Called synchronously before every connection attempt (ADR-013: raw websockets bypass
+        #: Called synchronously before every connection attempt (: raw websockets bypass
         #: `PluginApi.http()`'s automatic `EgressGuard`, so this plugin enforces it itself). Raises
         #: `EgressDenied` (a `PermissionError`) when the endpoint or the current privacy mode
         #: disallows it; that failure flows through the normal reconnect/backoff path like any
@@ -145,13 +146,15 @@ class ObsWebSocketClient:
         self.identified = False
 
     async def _run(self) -> None:
-        backoff = self._min_backoff
+        backoff = ReconnectBackoff("obs", min_s=self._min_backoff, max_s=self._max_backoff)
         while not self._stop.is_set():
             try:
                 await self._connect_once()
-                backoff = self._min_backoff
             except Exception as exc:  # noqa: BLE001 - the reconnect loop must never die
-                self.last_error = str(exc)
+                backoff.failed(exc)
+            else:
+                backoff.succeeded()
+            self.last_error = backoff.last_error
             was_connected = self.connected
             self.connected = False
             self.identified = False
@@ -160,12 +163,9 @@ class ObsWebSocketClient:
                 await self._on_disconnected(self.last_error)
             if self._stop.is_set():
                 return
-            self.backoff_s = backoff
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=backoff)
-            except TimeoutError:
-                pass
-            backoff = min(backoff * 2, self._max_backoff)
+            self.backoff_s = backoff.current_s
+            if await backoff.sleep(self._stop):
+                return
 
     async def _connect_once(self) -> None:
         if self._authorize is not None:

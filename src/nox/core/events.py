@@ -103,8 +103,8 @@ class E:
 
     HEALTH_REPORT = "health.report"
 
-    # Stream Bot (Spec v0.2 §8, EPIC-11); STREAM_STARTED/STREAM_ENDED were reserved earlier without
-    # a payload model - this spec defines one. GAME_EVENT stays reserved for a later phase.
+    # The stream bot. STREAM_STARTED/STREAM_ENDED were reserved before they had a payload
+    # model; GAME_EVENT is still reserved and nothing emits it yet.
     STREAM_STARTED = "stream.started"
     STREAM_ENDED = "stream.ended"
     STREAM_MODE_CHANGED = "stream.mode_changed"
@@ -121,8 +121,8 @@ class E:
     OBS_HEALTH_CHANGED = "obs.health_changed"
     OBS_CRASH_DETECTED = "obs.crash_detected"
     OBS_AUTO_RESTARTED = "obs.auto_restarted"
-    # Not in Spec v0.2 §8's table; additive for the obs plugin (ST-11-02/03) to report OBS's own
-    # recording toggle (distinct from the stream output covered by STREAM_STARTED/STREAM_ENDED).
+    # The recording software's own recording toggle, which is a different thing from the
+    # stream going live - that is STREAM_STARTED/STREAM_ENDED.
     OBS_RECORDING_CHANGED = "obs.recording_changed"
 
     TWITCH_CONNECTED = "twitch.connected"
@@ -136,7 +136,7 @@ class E:
 
     GAME_EVENT = "game.event"
 
-    # Mobile Companion (Spec v0.8 §7, EPIC-17). `remote.message` is what the telegram plugin emits
+    # The mobile companion. `remote.message` is what the phone plugin emits
     # for every inbound message from the paired phone; the rest is core-side lifecycle. No remote
     # event ever carries transcript, memory or secret content (IPC Model "Outbound filtering": the
     # `remote` role never receives `voice.transcript_*`/`ai.*`/`memory.*`).
@@ -147,9 +147,8 @@ class E:
     REMOTE_COMMAND = "remote.command"
     REMOTE_NOTIFICATION_SENT = "remote.notification_sent"
 
-    # Rocket League Stage 1 (ST-12-xx, Spec v0.3 Rocket League Stage 1). game.detected/game.ended
-    # are generic game-lifecycle events (FR-10.10's game-plugin contract); rl.* stays specific to
-    # the `rl` plugin.
+    # Rocket League coaching. `game.detected` and `game.ended` are the generic game-lifecycle
+    # events any game plugin may use; `rl.*` stays specific to the `rl` plugin.
     GAME_DETECTED = "game.detected"
     GAME_ENDED = "game.ended"
     RL_MATCH_STARTED = "rl.match_started"
@@ -158,14 +157,14 @@ class E:
     RL_REPLAY_PARSED = "rl.replay_parsed"
     RL_CALLOUT = "rl.callout"
 
-    # Vision Stage 2 (Spec v0.9 Vision Stage 2, EPIC-18, ST-18-02..06). Additive `rl.vision.*`
-    # sub-scope, unchanged observation-only boundary (FR-10.1) - a read-only model pass over frames
-    # the `rl` plugin's existing capture pipeline already produces (nox_plugin_rl/vision/*).
+    # On-screen analysis during a match. The observation-only boundary is unchanged: a
+    # read-only pass over frames the plugin's capture pipeline already produces. Nothing
+    # here reads game memory or sends input.
     RL_VISION_DETECTIONS = "rl.vision.detections"  # low-rate, confidence-gated (not audited)
     RL_VISION_DISABLED = "rl.vision.disabled"  # budget guard or manual auto/forced disable (P6)
     RL_VISION_ANALYSIS = "rl.vision.analysis"  # post-match rough rotation-position analysis
 
-    # Clip Pipeline (Spec v0.6 §8, EPIC-15). Reduced event surface for this delivery pass: the
+    # The clip pipeline. A deliberately small event surface: the
     # `clips` plugin never talks to OBS directly (no cross-plugin tool call in the Plugin API), so
     # it only emits CLIP_REQUESTED; the core-side `nox.clips` service calls `obs.replay_buffer.save`
     # through `ToolExecutor` and reports the outcome as CLIP_SAVED/CLIP_FAILED, and CLIP_EXPORTED is
@@ -176,27 +175,24 @@ class E:
     CLIP_FAILED = "clip.failed"
     CLIP_EXPORTED = "clip.exported"
 
-    # Creative Apps (Spec v0.7 Creative Apps, EPIC-16; pending approval, PO sign-off relayed
-    # 2026-09-14). SENSOR_FOREGROUND_CHANGED is the v0.5 process/activity sensor's foreground-
-    # window-change event (FR-14.4); defined defensively here because it was not yet present in
-    # this file when the `creative` plugin needed it - re-checked absent immediately before this
-    # edit. The concurrent v0.5 agent should reuse this definition rather than add a second one.
+    # Creative applications. SENSOR_FOREGROUND_CHANGED is the foreground-window change the
+    # activity sensor reports; it is defined here because the creative detection needed it
+    # first, and everything else reuses this one definition rather than adding a second.
     SENSOR_FOREGROUND_CHANGED = "sensor.foreground_changed"
     CREATIVE_APP_DETECTED = "creative.app_detected"
     CREATIVE_APP_LEFT = "creative.app_left"
     CREATIVE_NOTE_WRITTEN = "creative.note_written"
-    # Not in Spec v0.7 §6's table; additive so the plugin (no privacy-zone visibility) can ask the
-    # core-side `nox.creative` service to decide and perform a consent-gated screenshot capture.
+    # A plugin cannot see privacy zones, so it asks the core-side creative service to decide
+    # whether a screenshot may be taken, and to take it.
     CREATIVE_SCREENSHOT_REQUESTED = "creative.screenshot.requested"
     CREATIVE_SCREENSHOT_RESULT = "creative.screenshot.result"
 
-    # Project Management (Spec v0.4 PM and Coding §8, EPIC-13, ST-13-01 subset). Full spec §8 names
-    # (pm.status_changed, pm.dependency_added, pm.board_synced, pm.priority_proposed, ...) are not
-    # implemented in this pass - later PM stories, flagged in the report.
+    # Project management. Only the events something actually emits are listed; a name with no
+    # producer would be a promise the code does not keep.
     PM_ITEM_CHANGED = "pm.item_changed"
     PM_FOCUS_CHANGED = "pm.focus_changed"
 
-    # PC Awareness Sensors (Spec v0.5 §3.5, EPIC-20, ST-20-04/06/07). PRIVACY_ZONE_CHANGED
+    # The local awareness sensors. PRIVACY_ZONE_CHANGED
     # formalizes the raw string `"privacy.zone_changed"` that `PrivacyService.observe_foreground()`
     # already logs and that `PetService._on_zone` already subscribes to by that same literal -
     # this just gives it a catalog entry and a payload model, it does not rename anything.
@@ -207,8 +203,7 @@ class E:
     SENSOR_PROCESS_STARTED = "sensor.process_started"
     SENSOR_PROCESS_ENDED = "sensor.process_ended"
 
-    # Coding Assistant (Spec v0.4 PM and Coding §8, EPIC-14, `plugins/coding`). Narrowed event
-    # surface for this delivery pass (see the task brief that added these): the full spec §8 table
+    # The coding assistant (`plugins/coding`). A narrow event surface: the wider set
     # (coding.session.plan_shown/confirmation_requested/repair_attempt/rolled_back/review_ready/
     # merged/paused/resumed) is not implemented here - `coding.session_progress`'s `stage` field
     # covers plan/implement/test/repairing/review/merge, and repair attempts are visible via
@@ -218,19 +213,18 @@ class E:
     CODING_SESSION_ENDED = "coding.session_ended"
     CODING_SESSION_FAILED = "coding.session_failed"
 
-    # Personality & Proactivity (Spec v0.5 EPIC-19, ST-19-04/08): every `nox.proactive.notify()`
+    # Proactivity: every `nox.proactive.notify()`
     # decision is observable, whether it was delivered or held back - the dashboard toast panel and
     # the telegram remote plugin both consume PROACTIVE_NOTIFICATION; PROACTIVE_SUPPRESSED never
     # fires for URGENT security/data-loss cases (those always get through, per B.13).
     PROACTIVE_NOTIFICATION = "proactive.notification"
     PROACTIVE_SUPPRESSED = "proactive.suppressed"
 
-    # Memory & Vault (Spec v0.5 MVP, EPIC-07, ST-07-01/02/03). MEMORY_CREATED/MEMORY_DELETED
-    # (memory.created/memory.deleted) were reserved earlier without payload models - this pass adds
-    # them plus MEMORY_INDEX_UPDATED for the vault watcher/indexer (ST-07-03) re-indexing a note.
+    # Memory and the vault. MEMORY_CREATED and MEMORY_DELETED were reserved before they had
+    # payload models; MEMORY_INDEX_UPDATED is the watcher re-indexing one note.
     MEMORY_INDEX_UPDATED = "memory.index_updated"
 
-    # Settings (EPIC-21, `nox.settings`). SETTINGS_CHANGED names the dotted config paths a
+    # Settings (`nox.settings`). SETTINGS_CHANGED names the dotted config paths a
     # `config.set` just wrote - paths only, never values: a setting can hold a display name, a
     # channel or a hotkey, and an event payload is the wrong place for any of them. Every UI that
     # caches a setting re-reads it with `config.get` when this arrives.
@@ -384,7 +378,7 @@ class HealthReport(BaseModel):
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-# ---- Stream Bot payload models (Spec v0.2 §8) ---------------------------------------------------
+# ---- stream bot payload models -------------------------------------------------------------------
 
 
 class StreamStarted(BaseModel):
@@ -425,12 +419,12 @@ class StreamViewerSeen(BaseModel):
 
 
 class StreamFunkenAwarded(BaseModel):
-    """Spec v0.2 §8: emitted for a viewer earn event (chat activity, sub, bits, raid, ...)."""
+    """A viewer earned currency: chat activity, a subscription, bits, a raid."""
 
     viewer_id: str
     delta: float
     reason: str = ""
-    #: Additive (twitch plugin, ST-11-04): plugins never book Funken themselves, they only request
+    #: A plugin never books currency itself, it only requests
     #: an award; the core's `FunkenService` decides and knows the real balance
     #: (`StreamFunkenChanged` carries the authoritative `balance_after`). Optional here so a
     #: requesting plugin never has to fabricate a number it does not have.
@@ -494,7 +488,7 @@ class ObsAutoRestarted(BaseModel):
 
 
 class ObsRecordingChanged(BaseModel):
-    """Additive (obs plugin, ST-11-02/03): OBS's own recording toggle via `RecordStateChanged`."""
+    """The recording software's own recording toggle, as its control API reports it."""
 
     recording: bool = False
     by: str = "obs_detected"  # obs_detected | manual
@@ -516,7 +510,7 @@ class TwitchResynced(BaseModel):
 
 
 class TwitchChatMessage(BaseModel):
-    """Every inbound chat message is tagged `channel: "public"` by construction (FR-5.6/FR-9.7):
+    """Every inbound chat message is tagged `channel: "public"` by construction:
     it is never eligible for the private voice/dashboard-only channel. The IPC hub additionally
     keeps this event away from the `pet`/`remote` roles (`nox.ipc.server.REDACTED_FROM`)."""
 
@@ -524,7 +518,7 @@ class TwitchChatMessage(BaseModel):
     viewer_id: str = ""
     text: str
     channel: str = "public"
-    #: Additive (twitch plugin, ST-11-04): deterministic `RelevanceClassifier` output - how likely
+    #: The relevance classifier's deterministic output - how likely
     #: this message wants a reaction (0-1) and whether it addresses Nox directly (name mention,
     #: command, or a question scored high enough). Defaults keep old payloads valid.
     relevance: float = 0.0
@@ -547,7 +541,7 @@ class TwitchEvent(BaseModel):
 
 
 class TwitchChatMoodChanged(BaseModel):
-    category: str  # one of eight mood categories (FR-9.14); exact set is pending approval
+    category: str  # one of the eight mood categories the classifier knows
     window: str = "short"  # short | medium | long
 
 
@@ -560,7 +554,7 @@ class TwitchModerationAction(BaseModel):
 
 
 class GameDetected(BaseModel):
-    """`rl` plugin (ST-12-01, Spec v0.3 §8): a foreground game process was observed. Read-only
+    """A foreground game process was observed by the `rl` plugin. Read-only
     process/window detection - never memory-read or injection."""
 
     game: str  # e.g. "rocket_league"
@@ -585,7 +579,7 @@ class RlMatchEnded(BaseModel):
 
 
 class RlEvent(BaseModel):
-    """Spec v0.3 §8's honest per-kind capability note: `source="hud"` is real-time; `kind="save"`
+    """What each source can honestly claim: `source="hud"` is real-time; `kind="save"`
     is `source="replay"` only in Stage 1 (never emitted from HUD recognition)."""
 
     match_id: int | None = None
@@ -609,7 +603,7 @@ class RlReplayParsed(BaseModel):
 
 class RlCallout(BaseModel):
     """Emitted by the callout engine after a `prepared_clip` plays (transparency/debugging, not
-    re-spoken) - carries the measured event-to-audio-start latency (FR-10.3, "measured, not
+    re-spoken) - carries the measured event-to-audio-start latency ("measured, not
     assumed")."""
 
     match_id: int | None = None
@@ -619,7 +613,7 @@ class RlCallout(BaseModel):
 
 
 class RlVisionDetection(BaseModel):
-    """One rough bounding-box detection (fractions of the frame), Spec v0.9 §7."""
+    """One rough bounding-box detection, as fractions of the frame."""
 
     entity: str  # ball | car
     confidence: float = Field(ge=0.0, le=1.0)
@@ -631,8 +625,8 @@ class RlVisionDetection(BaseModel):
 
 
 class RlVisionDetections(BaseModel):
-    """`nox_plugin_rl.vision.FrameSampler` (ST-18-04): already confidence-gated - a detection below
-    the configured threshold never reaches this event (silence over guessing, FR-10.3)."""
+    """Already confidence-gated by the frame sampler: a detection below the configured
+    threshold never reaches this event, because silence beats guessing."""
 
     match_id: int | None = None
     backend: str = "none"  # none | opencv | onnx
@@ -640,7 +634,7 @@ class RlVisionDetections(BaseModel):
 
 
 class RlVisionDisabled(BaseModel):
-    """Budget guard auto-disable or a manual/forced disable (Spec v0.9 §4.4/§6 - audited, P6
+    """The budget guard disabled the analysis, or a person did (audited either way,
     observable-system)."""
 
     reason: str
@@ -648,7 +642,7 @@ class RlVisionDisabled(BaseModel):
 
 
 class RlVisionAnalysis(BaseModel):
-    """Post-match rough rotation-position analysis (Spec v0.9 §4.5 boundary note: this is Stage 2's
+    """Rough post-match rotation analysis (this is the analysis half's
     live-detection-derived rough signal, never Stage 3's future replay-based precise analysis)."""
 
     match_id: int | None = None
@@ -658,7 +652,7 @@ class RlVisionAnalysis(BaseModel):
     coaching_summary: str = ""
 
 
-# ---- Mobile Companion (Spec v0.8 §7, EPIC-17) --------------------------------------------------
+# ---- mobile companion ----------------------------------------------------------------------------
 
 
 class RemoteMessage(BaseModel):
@@ -676,7 +670,7 @@ class RemoteMessage(BaseModel):
 
 class RemotePairingStarted(BaseModel):
     """A one-time pairing code was issued (dashboard/shell). The code itself is never in a payload
-    or an audit entry - only its id and expiry (Spec v0.8 §6)."""
+    or an audit entry - only its id and expiry."""
 
     pairing_id: str
     expires_at: str
@@ -694,7 +688,7 @@ class RemoteRevoked(BaseModel):
 
 
 class RemoteCommand(BaseModel):
-    """Every remote command attempt, allowed or not (Spec v0.8 §5.3). `command` is the verb only;
+    """Every remote command attempt, allowed or not. `command` is the verb only;
     arguments and free chat text are never in the payload."""
 
     channel: str = "telegram"
@@ -714,7 +708,7 @@ class RemoteNotificationSent(BaseModel):
     reason: str = ""
 
 
-# ---- Clip Pipeline payload models (Spec v0.6 §8, EPIC-15) ----------------------------------------
+# ---- clip pipeline payload models ----------------------------------------------------------------
 
 
 class ClipRequested(BaseModel):
@@ -759,7 +753,7 @@ class ClipExported(BaseModel):
 
 
 class SensorForegroundChanged(BaseModel):
-    """v0.5 process/activity sensor (FR-14.4): raw foreground-window change. Defined defensively
+    """The activity sensor's raw foreground-window change. Defined here
     for the `creative` plugin's consumption - see the note on `E.SENSOR_FOREGROUND_CHANGED`."""
 
     process: str
@@ -796,7 +790,7 @@ class CreativeScreenshotResult(BaseModel):
 
 class PmItemChanged(BaseModel):
     """A Project/Epic/Story vault note was created or its indexed fields changed (watcher reindex,
-    or a `pm.story.create`/`pm.story.update_status` tool call). ST-13-01 subset - the full spec §8
+    or a `pm.story.create`/`pm.story.update_status` tool call). The wider set of names
     event catalogue (`pm.status_changed` with previous/current/by, `pm.dependency_added`,
     `pm.board_synced`, ...) is a later PM story."""
 
@@ -819,7 +813,7 @@ class PmFocusEntry(BaseModel):
 class PrivacyZoneChanged(BaseModel):
     """Payload for `E.PRIVACY_ZONE_CHANGED` (`"privacy.zone_changed"`), published by
     `PrivacyService.observe_foreground()`. `zone` is only ever a zone id (`"banking"`,
-    `"discord"`, ...), never the window title/content that triggered the match (FR-14.4)."""
+    `"discord"`, ...), never the window title or content that triggered the match."""
 
     active: bool
     zone: str | None = None
@@ -853,9 +847,11 @@ class CodingSessionStarted(BaseModel):
 
 
 class CodingSessionProgress(BaseModel):
-    """`stage` is one of plan|implement|test|repairing|review|merge (Spec v0.4 §3.5's staging,
-    narrowed for this pass); `tool_name`/`files` are populated when the progress is a Claude Code
-    tool call (SP-18: tool name plus the file(s) its `input` touched, when the tool has one)."""
+    """`stage` is one of plan, implement, test, repairing, review, merge.
+
+    `tool_name` and `files` are filled in when the progress report is a tool call: the tool's name
+    plus the files its input touched, when it has any.
+    """
 
     session_id: str
     stage: str

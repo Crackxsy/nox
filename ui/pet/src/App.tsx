@@ -12,6 +12,7 @@ import {
 import { Pet } from './Pet';
 import { INITIAL_STATE, type PetState, deriveAnim, reduceEvent, stillState, toInput } from './petState';
 import { SpritePet, loadImageElement } from './SpritePet';
+import { type Lang, petTranslator } from './strings';
 import { useThemeMode } from './theme';
 import { getVariant } from './variants';
 import {
@@ -24,6 +25,8 @@ import {
 
 export interface AppProps {
   token: string | null;
+  /** One language per window; chosen once in `main.tsx` and reflected on `<html lang>`. */
+  lang: Lang;
   /** OBS browser-source mode: no interaction, no capture indicator (PRD §20), transparent. */
   overlay: boolean;
   /** OP-1 creature concept, from `?variant=`; falls back to `neutral` for unknown/missing ids.
@@ -38,7 +41,8 @@ export interface AppProps {
   size?: number;
 }
 
-export function App({ token, overlay, variantId, still, stillExpression, size }: AppProps) {
+export function App({ token, lang, overlay, variantId, still, stillExpression, size }: AppProps) {
+  const t = useMemo(() => petTranslator(lang), [lang]);
   // The variant is state, not just a prop: `config.set pet.variant` swaps it live, without a page
   // reload (#24). `variantId` is only the value the shell put in the URL at load time.
   const [activeVariant, setActiveVariant] = useState<string | null>(variantId);
@@ -125,17 +129,17 @@ export function App({ token, overlay, variantId, still, stillExpression, size }:
   }, [activeVariant]);
 
   const input = useMemo(() => toInput(state), [state]);
-  const params = useMemo(
-    () =>
-      deriveAnim(input, {
-        hue: variant.palette.bodyHue,
-        sat: variant.palette.bodySat,
-        // #25: the window is transparent, so the creature sits on whatever the active theme paints
-        // behind it. Each variant ships a lightness tuned for each case; pick the matching one.
-        light: theme === 'dark' ? variant.palette.bodyLightOnDark : variant.palette.bodyLightOnLight,
-      }),
-    [input, variant, theme],
-  );
+  const params = useMemo(() => {
+    const derived = deriveAnim(input, {
+      hue: variant.palette.bodyHue,
+      sat: variant.palette.bodySat,
+      // #25: the window is transparent, so the creature sits on whatever the active theme paints
+      // behind it. Each variant ships a lightness tuned for each case; pick the matching one.
+      light: theme === 'dark' ? variant.palette.bodyLightOnDark : variant.palette.bodyLightOnLight,
+    });
+    // A still frame is by definition paused: `render_variants.py` wants one frame, not a loop.
+    return still ? { ...derived, paused: true } : derived;
+  }, [input, variant, theme, still]);
 
   const onSpeakingDecay = useCallback((level: number) => {
     setState((s) => (s.speakingLevel === level ? s : { ...s, speakingLevel: level }));
@@ -156,25 +160,28 @@ export function App({ token, overlay, variantId, still, stillExpression, size }:
           sprite={sprite}
           expression={spriteExpressionFor(input)}
           params={params}
-          interactive={!overlay}
+          interactive={!overlay && !still}
           onInteract={onInteract}
           size={size}
           still={still}
+          petLabel={sprite.manifest.name}
         />
       ) : (
         <Pet
           params={params}
           speakingLevel={state.speakingLevel}
           onSpeakingDecay={onSpeakingDecay}
-          interactive={!overlay}
+          interactive={!overlay && !still}
           onInteract={onInteract}
           variant={variant}
           size={size}
           theme={theme}
+          label={variant.name}
         />
       )}
       {!overlay && !still && (
         <CaptureIndicator
+          t={t}
           capture={state.capture}
           connected={state.connected}
           privacyMode={state.privacyMode}
@@ -183,12 +190,13 @@ export function App({ token, overlay, variantId, still, stillExpression, size }:
       )}
       {!overlay && !still && !token && (
         <p role="alert" className="pet-chip pet-note">
-          Kein Sitzungs-Token – Seite über die Nox-Shell öffnen / no session token, open via the Nox shell
+          {t('no_token')}
         </p>
       )}
       {!overlay && !still && status === 'auth_failed' && (
         <p role="alert" className="pet-chip pet-note">
-          Authentifizierung abgelehnt / auth denied{statusDetail ? `: ${statusDetail}` : ''}
+          {t('auth_denied')}
+          {statusDetail ? `: ${statusDetail}` : ''}
         </p>
       )}
     </div>

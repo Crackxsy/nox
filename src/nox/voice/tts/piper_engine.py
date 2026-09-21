@@ -1,5 +1,4 @@
-"""Piper TtsEngine: sentence-wise streaming PCM16 and pre-rendered clips (FR-5.3/5.4, ADR-009,
-SP-03).
+"""Piper TtsEngine: sentence-wise streaming PCM16 and pre-rendered clips.
 
 Synthesis runs in a worker thread per request; each sentence is pushed to the async consumer as
 soon as it is rendered so the first audio is heard while later sentences are still being computed.

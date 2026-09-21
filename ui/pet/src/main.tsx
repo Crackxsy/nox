@@ -1,7 +1,8 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 
-import { takeToken, queryFlag, queryInt, queryString } from '../../shared/token';
+import { pickLang } from '../../shared/lang';
+import { queryFlag, queryInt, queryString, takeToken } from '../../shared/token';
 import { App } from './App';
 // Shared design tokens + pet chrome (#25). Imported here so the whole page, including the
 // transparent window's chips and notes, follows the same palette as the dashboard.
@@ -16,11 +17,16 @@ const variantId = queryString(window.location.search, 'variant');
 const still = queryFlag(window.location.search, 'still');
 const stillExpression = queryString(window.location.search, 'expression');
 const size = queryInt(window.location.search, 'size') ?? undefined;
+// One language per window (#43/#55): the same rule the dashboard uses, so a German desktop shows
+// German in both. `<html lang>` follows, so a screen reader pronounces the words correctly.
+const lang = pickLang(window.location.search, navigator.languages ?? []);
+document.documentElement.lang = lang;
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App
       token={token}
+      lang={lang}
       overlay={overlay}
       variantId={variantId}
       still={still}

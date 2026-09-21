@@ -1,5 +1,5 @@
-"""SQLite mirror of PM vault notes (`pm_items`, migration `0004_pm.sql`): a fast-query index
-rebuilt from the vault, which always wins on conflict (Data Model "vault wins", ADR-006 layer 3).
+"""SQLite mirror of PM vault notes (`pm_items`, migration `0004_pm.sql`): a fast-query index rebuilt
+from the vault, which always wins on conflict (Data Model "vault wins", layer 3).
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def _row_to_item(row: Any) -> WorkItem:
 
 
 class PmIndex:
-    """Typed repository over `pm_items` (ADR-006, Data Model L2). Every write is a full mirror
+    """Typed repository over `pm_items` (Data Model L2). Every write is a full mirror
     refresh (`rebuild`) or a single upsert - there is no row deletion API beyond `rebuild`, since a
     note simply disappearing from the vault is how an item is removed (vault wins)."""
 

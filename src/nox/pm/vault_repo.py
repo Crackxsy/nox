@@ -1,10 +1,9 @@
-"""Vault-backed repository for Project/Epic/Story notes (ST-13-01/ST-13-05 subset): parses and
-writes Markdown notes with YAML frontmatter under the configured vault folders, preserving every
-frontmatter field and the body a write did not touch. `pyyaml` reads the frontmatter into a plain
-mapping; writing a targeted field (e.g. `status`) is done by a line-level regex replace on the
-original frontmatter text, so an unrelated field and the body stay byte-identical (ST-13-05 AC3
-"only status/updated change") without round-tripping through a YAML dumper that could reformat
-lists, quoting or key order.
+"""Vault-backed repository for Project/Epic/Story notes: parses and writes Markdown notes with YAML
+frontmatter under the configured vault folders, preserving every frontmatter field and the body a
+write did not touch. `pyyaml` reads the frontmatter into a plain mapping; writing a targeted field
+(e.g. `status`) is done by a line-level regex replace on the original frontmatter text, so an
+unrelated field and the body stay byte-identical ("only status/updated change") without round-
+tripping through a YAML dumper that could reformat lists, quoting or key order.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ _TOP_LEVEL_KEY_RE = re.compile(r"^([A-Za-z_][\w-]*):")
 _EPIC_ID_RE = re.compile(r"^(EPIC-\d+)")
 _STORY_ID_RE = re.compile(r"^(ST-\d+-\d+)")
 # PRD's conflicting `NOX-<epic>.<story>` id scheme (e.g. `NOX-13.1`), distinct from the template
-# convention (`NOX-EPIC-13`/`NOX-ST-13-01`) this repo accepts (ES-06, pending approval).
+# convention (`NOX-`/`NOX-`) this repo accepts (ES-06, pending approval).
 _PRD_DOC_ID_RE = re.compile(r"^NOX-\d+\.\d+$")
 
 _ID_RE_BY_KIND: dict[Kind, re.Pattern[str]] = {"epic": _EPIC_ID_RE, "story": _STORY_ID_RE}
@@ -150,7 +149,7 @@ def _to_work_item(note: VaultNote, *, kind: Kind, vault_dir: Path) -> WorkItem:
 class PmVaultRepo:
     """Reads/writes Project/Epic/Story notes under the configured vault folders. `pm.project.list`
     reads a single "projects list note" (this vault has no per-project folder yet, unlike Epics/
-    Stories) whose frontmatter carries a `projects: [{id, name, status, ...}]` list."""
+    Stories) whose frontmatter carries a `projects: [{id, name, status,...}]` list."""
 
     def __init__(
         self, vault_dir: Path | str, *, epics_dir: str, stories_dir: str, projects_note: str
@@ -163,7 +162,7 @@ class PmVaultRepo:
     # ---- read ----------------------------------------------------------------------------------
 
     def iter_epic_notes(self) -> Iterator[Path]:
-        """Only `EPIC-nn ...md`; an overview or map note in the same folder is not a work item."""
+        """Only `EPIC-nn...md`; an overview or map note in the same folder is not a work item."""
         if self.epics_dir.is_dir():
             yield from sorted(p for p in self.epics_dir.glob("*.md") if _EPIC_ID_RE.match(p.stem))
 
@@ -276,11 +275,12 @@ class PmVaultRepo:
             },
         }
         fm_text = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True).rstrip("\n")
+        # Empty headings, never a filled-in placeholder sentence: a section the user has not
+        # written yet should look unwritten, not like a half-finished template.
         body = (
             f"\n# {story_id} {title}\n\n"
-            "**As** … **I want** … **so that** …\n\n"
-            "## Acceptance criteria\n- [ ] Given … when … then …\n\n"
-            "## Security / privacy impact\n## Tests\n## Notes\n"
+            "## Ziel\n\n## Akzeptanzkriterien\n\n"
+            "## Sicherheit und Privatsphäre\n\n## Tests\n\n## Notizen\n"
         )
         path.write_text(render_note(fm_text, body), encoding="utf-8")
         return _to_work_item(read_note(path), kind="story", vault_dir=self.vault_dir)

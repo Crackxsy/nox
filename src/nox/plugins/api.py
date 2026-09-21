@@ -1,12 +1,12 @@
 """`PluginApi`: the surface a plugin sees inside its worker process (Plugin Architecture "Plugin
 API").
 
-Everything the plugin can reach is scoped by its own manifest: `events.emit` only names in
-`emits`, `events.on` only patterns in `listens`, `tools.register` only tools inside the `<id>.`
-namespace that the manifest declared, `secrets.get` only declared `nox/<id>/...` names (the core
-reads the keyring, the value is never persisted here), `state.get` a read-only IPC view, and
-`http()` an `httpx.AsyncClient` behind a per-plugin `EgressGuard` limited to `network.egress`
-(ADR-013). Nothing in this module can widen what the core already validated.
+Everything the plugin can reach is scoped by its own manifest: `events.emit` only names in `emits`,
+`events.on` only patterns in `listens`, `tools.register` only tools inside the `<id>.` namespace
+that the manifest declared, `secrets.get` only declared `nox/<id>/...` names (the core reads the
+keyring, the value is never persisted here), `state.get` a read-only IPC view, and `http` an
+`httpx.AsyncClient` behind a per-plugin `EgressGuard` limited to `network.egress`. Nothing in this
+module can widen what the core already validated.
 """
 
 from __future__ import annotations
@@ -79,11 +79,11 @@ class PrivacyView:
         self._mode = PrivacyMode(mode)
 
 
-# ---- scoped egress guard (ADR-013) ---------------------------------------------------------------
+# ---- scoped egress guard ---------------------------------------------------------------
 
 
 class PluginEgressGuard(EgressGuard):
-    """`EgressGuard` scoped to one manifest's `network.egress` (ADR-013).
+    """`EgressGuard` scoped to one manifest's `network.egress`.
 
     The core authorized the list against the active profile before the worker was spawned; here it
     is the *upper* bound: an endpoint that is not declared is denied before the inherited

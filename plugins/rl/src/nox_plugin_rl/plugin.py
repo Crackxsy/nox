@@ -1,6 +1,6 @@
-"""Rocket League Coach plugin (ST-12-01..08, Spec v0.3 Rocket League Stage 1). Observation only:
+"""Rocket League Coach plugin (Rocket League Stage 1). Observation only:
 game/window process-list detection, HUD-region template matching, the replay watcher/parser, and
-the calibration tool. Never sends input, never reads game process memory (Security Model §10) -
+the calibration tool. Never sends input, never reads game process memory (Security Model) -
 `nox.rl.install` owns the core-side services (mode transitions, DB persistence, the callout engine,
 session summaries) since a plugin worker has no SQLite/TTS access of its own.
 """
@@ -66,7 +66,7 @@ class RlPlugin:
         self._budget = dict(cfg.get("budget", {}))
         self._capture_fn: Any = calibration.capture_frame
 
-        # -- Vision Stage 2 (ST-18-01..06, Spec v0.9 EPIC-18) -------------------------------------
+        # -- Vision Stage 2 -------------------------------------
         vision_cfg = dict(cfg.get("vision", {}))
         self._vision_sample_hz = float(vision_cfg.get("sample_hz", 1.0))
         detector = build_detector(str(vision_cfg.get("backend", "none")))
@@ -82,9 +82,9 @@ class RlPlugin:
             emit=self._emit_vision_event,
         )
         if not bool(vision_cfg.get("enabled", False)):
-            self._vision_sampler.disable_manually()  # opt-in-by-default (Spec §12 open point)
+            self._vision_sampler.disable_manually()  # opt-in-by-default (Spec open point)
         self._vision_task: asyncio.Task[None] | None = None
-        # ST-18-03 AC2 / FR-7.16: both stages stop together when a privacy zone (or a privacy
+        # /: both stages stop together when a privacy zone (or a privacy
         # mode, or `privacy.capture.screen: false`) blocks screen capture. One gate for both loops:
         # while it is closed no frame is grabbed at all, and the transition is logged once.
         self._gate = CaptureGate(initially_allowed=True, log=self.api.log)
@@ -115,26 +115,39 @@ class RlPlugin:
     # -- security -------------------------------------------------------------------------------
 
     async def _on_stop_signal(self, _name: str, _payload: dict[str, Any]) -> None:
-        """Kill switch / panic (Spec §6.6): stop callouts/capture within the 2s ack window. This
-        plugin never had any effect on the game to begin with, so there is nothing to undo."""
-        if self._recognize_task is not None:
-            self._recognize_task.cancel()
-            self._recognize_task = None
-        if self._vision_task is not None:
-            self._vision_task.cancel()
-            self._vision_task = None
+        """Kill switch or panic: stop capture inside the two-second ack window and stay stopped.
+
+        Closing the capture gate is the point. Cancelling the two capture loops alone would let
+        the next `game.detected` edge start them again, with no new consent from anyone; a latched
+        gate keeps every frame ungrabbed until `resume_capture` is called explicitly. The plugin
+        never had any effect on the game itself, so there is nothing else to undo.
+        """
+        self._gate.latch("kill switch or panic")
+        self._cancel_capture_loops()
+        if self._detect_task is not None:
+            self._detect_task.cancel()
+            self._detect_task = None
+        self._was_running = False
+
+    def resume_capture(self) -> None:
+        """Explicit consent to capture again after a kill switch or panic."""
+        self._gate.resume()
+        if self._detect_task is None:
+            self._detect_task = asyncio.create_task(self._detect_loop(), name="rl-detect")
+
+    def _cancel_capture_loops(self) -> None:
+        for name in ("_recognize_task", "_vision_task"):
+            task = getattr(self, name)
+            if task is not None:
+                task.cancel()
+                setattr(self, name, None)
 
     async def _on_mode_changed(self, _name: str, payload: dict[str, Any]) -> None:
         if str(payload.get("current", "")) != "rocket_league":
-            if self._recognize_task is not None:
-                self._recognize_task.cancel()
-                self._recognize_task = None
-            if self._vision_task is not None:
-                self._vision_task.cancel()
-                self._vision_task = None
+            self._cancel_capture_loops()
 
     async def _on_capture_changed(self, _name: str, payload: dict[str, Any]) -> None:
-        """`privacy.capture_changed` (ST-18-03 AC2): both capture loops go through `_gate`, so
+        """`privacy.capture_changed`: both capture loops go through `_gate`, so
         they pause together within one poll interval and resume together."""
         self._gate.on_capture_changed(payload)
 
@@ -173,12 +186,12 @@ class RlPlugin:
             self._was_running = running
             await asyncio.sleep(self._poll_interval_s)
 
-    # -- HUD recognition (ST-12-05) -------------------------------------------------------------
+    # -- HUD recognition -------------------------------------------------------------
 
     async def _recognize_loop(self) -> None:
         """Captures at the configured budget rate, crops the calibrated regions only, derives
         `boost_low`/`goal` events. Overtime/demo banner classification and the live GPU/FPS budget
-        guard's automatic reduction are not implemented in this pass - see the ST-12-05 report's
+        guard's automatic reduction are not implemented in this pass - see the report's
         open points (blocked on ES-04's real HUD screenshots, Plan v0.3)."""
         assert self._calibration is not None
         capture_hz = float(self._budget.get("capture_hz", 2.0))
@@ -232,36 +245,27 @@ class RlPlugin:
             confidence = min(self_score[1], opp_score[1])
             if self._last_scores is not None:
                 if scores[0] > self._last_scores[0]:
-                    await self.api.events.emit(
-                        "rl.event",
-                        {
-                            "match_id": self._current_match_id,
-                            "kind": "goal",
-                            "source": "hud",
-                            "confidence": confidence,
-                            "payload": {
-                                "team": "self",
-                                "score_self": scores[0],
-                                "score_opponent": scores[1],
-                            },
-                        },
-                    )
+                    await self._emit_goal("self", scores, confidence)
                 elif scores[1] > self._last_scores[1]:
-                    await self.api.events.emit(
-                        "rl.event",
-                        {
-                            "match_id": self._current_match_id,
-                            "kind": "goal",
-                            "source": "hud",
-                            "confidence": confidence,
-                            "payload": {
-                                "team": "opponent",
-                                "score_self": scores[0],
-                                "score_opponent": scores[1],
-                            },
-                        },
-                    )
+                    await self._emit_goal("opponent", scores, confidence)
             self._last_scores = scores
+
+    async def _emit_goal(self, team: str, scores: tuple[int, int], confidence: float) -> None:
+        """One goal for `team` ("self" or "opponent") at the given score line."""
+        await self.api.events.emit(
+            "rl.event",
+            {
+                "match_id": self._current_match_id,
+                "kind": "goal",
+                "source": "hud",
+                "confidence": confidence,
+                "payload": {
+                    "team": team,
+                    "score_self": scores[0],
+                    "score_opponent": scores[1],
+                },
+            },
+        )
 
     async def _start_match(self) -> None:
         self._match_active = True
@@ -294,13 +298,13 @@ class RlPlugin:
         )
         self._current_match_id = None
 
-    # -- Vision Stage 2 (ST-18-01..06) -----------------------------------------------------------
+    # -- Vision Stage 2 -----------------------------------------------------------
 
     async def _vision_loop(self) -> None:
         """Runs alongside `_recognize_loop` (same lifecycle: started/cancelled together - see
         `_detect_loop`/`_on_stop_signal`/`_on_mode_changed`) but at its own, independently
-        configured `sample_hz` - a low rate, per Spec §4.2 step 2, never every frame. Reads frames
-        from the same injected `_capture_fn` Stage 1 already uses (ST-18-03: no second capture
+        configured `sample_hz` - a low rate, per Spec step 2, never every frame. Reads frames
+        from the same injected `_capture_fn` Stage 1 already uses (no second capture
         mechanism) and is a pure downstream consumer - it never touches HUD region calibration."""
         interval = 1.0 / self._vision_sample_hz if self._vision_sample_hz > 0 else 1.0
         while True:
@@ -320,7 +324,7 @@ class RlPlugin:
             payload["match_id"] = self._current_match_id
         await self.api.events.emit(name, payload)
 
-    # -- replay watcher (ST-12-02/03) -------------------------------------------------------------
+    # -- replay watcher -------------------------------------------------------------
 
     async def _on_new_replay(self, path: Path) -> None:
         parsed = await asyncio.to_thread(replay_parser.parse_replay_file, str(path))
@@ -348,7 +352,7 @@ class RlPlugin:
     # -- tools ---------------------------------------------------------------------------------
 
     async def status_read(self, _data: EmptyInput) -> dict[str, Any]:
-        """`rl.status.read` (Spec §9/ST-12-08): mode/detection/calibration/budget snapshot."""
+        """`rl.status.read` : mode/detection/calibration/budget snapshot."""
         failing_region = None
         if self._calibration is not None and not self._calibration.calibrated:
             failing_region = next(iter(self._calibration.failures), None)
@@ -391,8 +395,8 @@ class RlPlugin:
         }
 
     async def vision_status_read(self, _data: EmptyInput) -> dict[str, Any]:
-        """`rl.vision.status.read` (ST-18-06): honest state, never "active" while really running
-        `NoneDetector` or a budget/manually-disabled sampler (P10)."""
+        """`rl.vision.status.read`: honest state, never "active" while really running
+        `NoneDetector` or a budget/manually-disabled sampler."""
         state, reason = self._vision_sampler.state()
         return {
             "backend": self._vision_sampler.backend_name,
@@ -403,7 +407,7 @@ class RlPlugin:
         }
 
     async def vision_enable_tool(self, data: VisionEnableInput) -> dict[str, Any]:
-        """`rl.vision.enable` (medium risk - Spec §4.4 step 4: manual override always available)."""
+        """`rl.vision.enable` (medium risk - Spec step 4: manual override always available)."""
         if data.enabled:
             self._vision_sampler.enable_manually()
         else:
@@ -481,7 +485,7 @@ def create(api: PluginApi) -> RlPlugin:
         VisionEnableInput,
         plugin.vision_enable_tool,
         Risk.MEDIUM,
-        description="Manually enable/disable Vision Stage 2 (always available, Spec §4.4).",
+        description="Manually enable or disable HUD vision analysis.",
         side_effects=True,
         local=True,
     )

@@ -1,12 +1,10 @@
-"""Energy/zero-crossing voice activity detection and utterance segmentation in numpy (FR-5.1,
-ADR-009).
+"""Energy/zero-crossing voice activity detection and utterance segmentation in numpy.
 
 No third-party VAD (webrtcvad has no 3.13 wheels); the detector tracks an adaptive noise floor and
-flags a 30 ms frame as speech when its RMS level rises clearly above that floor and the
-zero-crossing
-rate is in the range of voiced/fricative speech rather than broadband hiss. The segmenter turns the
-per-frame decisions into utterances with pre-roll, hangover and a hard maximum length. It also
-supports a forced (push-to-talk) segment that ignores the VAD entirely.
+flags a 30 ms frame as speech when its RMS level rises clearly above that floor and the zero-
+crossing rate is in the range of voiced/fricative speech rather than broadband hiss. The segmenter
+turns the per-frame decisions into utterances with pre-roll, hangover and a hard maximum length. It
+also supports a forced (push-to-talk) segment that ignores the VAD entirely.
 """
 
 from __future__ import annotations
@@ -102,7 +100,7 @@ class Segmenter:
       included so the first phoneme is not clipped.
     - Speech ends after `end_silence_ms` without speech, or when `max_segment_ms` is reached.
     - Segments shorter than `min_segment_ms` are dropped (ABORT) to avoid transcribing clicks.
-    - `force_start()`/`force_end()` implement push-to-talk: every frame is collected until release.
+    - `force_start`/`force_end` implement push-to-talk: every frame is collected until release.
     """
 
     vad: EnergyVad = field(default_factory=EnergyVad)

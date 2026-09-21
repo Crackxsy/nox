@@ -1,4 +1,4 @@
-"""OBS Studio plugin (ST-11-02/03, Spec v0.2 Stream Bot; ST-15-02, Spec v0.6 Clip Pipeline).
+"""OBS Studio plugin.
 
 Wraps one `ObsWebSocketClient` (see `nox_plugin_obs.ws_client`) and exposes it as: seven tools
 (`obs.status.read`, `obs.scenes.list`, `obs.scene.switch`, `obs.privacy_scene.activate`,
@@ -6,15 +6,15 @@ Wraps one `ObsWebSocketClient` (see `nox_plugin_obs.ws_client`) and exposes it a
 in `manifest.yaml` (`obs.connected/disconnected`, `obs.scene_changed`, `stream.started/ended`
 derived from OBS's `StreamStateChanged`, `obs.recording_changed` from `RecordStateChanged`), and a
 `security.panic` listener that switches to the configured privacy scene without going through the
-normal confirm step (Spec v0.2 §3.6.3 - the trigger is already an explicit, audited user action;
-blocking on a confirm dialog nobody may be present to answer would defeat the point).
+normal confirm step (the trigger is already an explicit, audited user action; blocking on a confirm
+dialog nobody may be present to answer would defeat the point).
 
-Health is reported honestly by the caller via `ObsPlugin.health()`: AVAILABLE only once actually
+Health is reported honestly by the caller via `ObsPlugin.health`: AVAILABLE only once actually
 connected and identified with OBS; LIMITED when identified but `config.subscribe_events` is off (no
 event stream, so scene/stream-state changes are only ever seen on the next tool call); UNAVAILABLE
 when there is no secret to authenticate with, or OBS is simply not reachable.
 
-`obs.replay_buffer.save`/`.status.read` are the Clip Pipeline's only path into OBS (Spec v0.6 §6.1):
+`obs.replay_buffer.save`/`.status.read` are the Clip Pipeline's only path into OBS:
 the `clips` plugin has no cross-plugin tool call available in the Plugin API, so it never talks to
 OBS itself - it only emits `clip.requested`, and the core-side `nox.clips` service calls these two
 tools through `ToolExecutor`. Both are read-only/replay-buffer-only: neither can stop the stream,
@@ -43,8 +43,8 @@ from .ws_client import (
 
 OBS_PASSWORD_SECRET = "nox/obs/websocket_password"  # noqa: S105 - a secret *name*, not a value
 
-# §3.1's pre-flight items the `obs` plugin cannot observe by itself; reported "unknown" rather than
-# faked green/amber/red (ENGINEERING.md "no fake implementations").
+# pre-flight items the `obs` plugin cannot observe by itself; reported "unknown" rather than
+# faked green/amber/red (the project standards "no fake implementations").
 NON_OBS_PREFLIGHT_ITEMS = (
     "twitch_token",
     "mic_level",
@@ -61,8 +61,8 @@ class EmptyInput(BaseModel):
 
 
 class SceneSwitchInput(BaseModel):
-    """Input of `obs.scene.switch`. `target` must be a scene from `config.scene_set` (Spec v0.2
-    §9): the allow-list check runs in the handler because `scene_set` is runtime config, not a
+    """Input of `obs.scene.switch`. `target` must be a scene from `config.scene_set`: the allow-
+    list check runs in the handler because `scene_set` is runtime config, not a
     schema-time constant, but the effect is the same - an out-of-set target is a validation
     failure, not a permission decision."""
 
@@ -83,7 +83,7 @@ class ObsPlugin:
         self._streaming = False
         self._session_id = ""
         self._session_started_at = 0.0
-        #: Futures waiting on the next `ReplayBufferSaved` event (Spec v0.6 §4.1 step 4-5): OBS's
+        #: Futures waiting on the next `ReplayBufferSaved` event ( step 4-5): OBS's
         #: `SaveReplayBuffer` response carries no path, only the later event does.
         self._replay_waiters: list[asyncio.Future[str]] = []
         self._replay_save_timeout_s = float(api.config.get("replay_save_timeout_s", 10.0))
@@ -107,9 +107,9 @@ class ObsPlugin:
         return f"ws://{host}:{port}"
 
     def _authorize_egress(self, url: str) -> None:
-        """Raw `websockets` connections bypass `PluginApi.http()`'s guard, so this plugin enforces
+        """Raw `websockets` connections bypass `PluginApi.http`'s guard, so this plugin enforces
         the scoped `EgressGuard` (manifest `network.egress` + privacy mode) itself before every
-        connection attempt (ADR-013)."""
+        connection attempt."""
         parts = urlsplit(url)
         self.api.egress.authorize(parts.hostname or "", parts.port or 4455, scheme="ws")
 
@@ -197,7 +197,7 @@ class ObsPlugin:
     # -- security.panic --------------------------------------------------------------------------
 
     async def _on_panic(self, _name: str, _payload: dict[str, Any]) -> None:
-        """Spec v0.2 §3.6.3: switch to the privacy scene without the normal `confirm` step. Never
+        """: switch to the privacy scene without the normal `confirm` step. Never
         touches the stream output itself - if OBS is unreachable this only logs and reports on the
         private channel via the plugin log; `stream.stop`/`recording.delete` are hard prohibitions
         and are never attempted, here or anywhere else in this plugin."""
@@ -213,7 +213,7 @@ class ObsPlugin:
     # -- tools -------------------------------------------------------------------------------------
 
     async def status_read(self, _data: EmptyInput) -> dict[str, Any]:
-        """`obs.status.read`: full scene/source/stream-state snapshot (Spec v0.2 §9)."""
+        """`obs.status.read`: full scene/source/stream-state snapshot."""
         if not (self.client.connected and self.client.identified):
             return {"connected": False, "reason": self.client.last_error or "not connected"}
         scenes = await self.client.request("GetSceneList")
@@ -258,7 +258,7 @@ class ObsPlugin:
         return {"target": scene, "ok": True}
 
     async def preflight_check(self, _data: EmptyInput) -> dict[str, Any]:
-        """`obs.preflight.check`: draft of the §3.1 pre-flight items this plugin can actually judge;
+        """`obs.preflight.check`: draft of the pre-flight items this plugin can actually judge;
         everything else comes back "unknown" rather than a fabricated green."""
         connected = self.client.connected and self.client.identified
         items: list[dict[str, Any]] = [
@@ -302,7 +302,7 @@ class ObsPlugin:
             "detail": "all configured scenes present" if not missing else f"missing: {missing}",
         }
 
-    # -- Clip Pipeline (Spec v0.6 §6.1, ST-15-02) -----------------------------------------------
+    # -- Clip Pipeline -----------------------------------------------
 
     async def replay_buffer_status_read(self, _data: EmptyInput) -> dict[str, Any]:
         """`obs.replay_buffer.status.read`: read-only, honest about "not connected"."""
@@ -317,8 +317,8 @@ class ObsPlugin:
     async def replay_buffer_save(self, data: ReplayBufferSaveInput) -> dict[str, Any]:
         """`obs.replay_buffer.save`: triggers OBS's own replay buffer and resolves the file it
         writes. Every expected failure (not connected, buffer disabled, no event in time) is
-        returned as a structured `{"ok": False, "reason": ...}` result rather than raised, so the
-        caller (dashboard, `nox.clips` service) gets a clear, non-crashing message (ST-15-02 AC)."""
+        returned as a structured `{"ok": False, "reason":...}` result rather than raised, so the
+        caller (dashboard, `nox.clips` service) gets a clear, non-crashing message."""
         if not (self.client.connected and self.client.identified):
             return {
                 "ok": False,
@@ -401,7 +401,7 @@ def create(api: PluginApi) -> ObsPlugin:
         EmptyInput,
         plugin.preflight_check,
         Risk.READ,
-        description="Draft pre-flight check for the items OBS can answer (Spec v0.2 §3.1).",
+        description="Pre-flight check for the items OBS itself can answer.",
         side_effects=False,
         local=True,
     )

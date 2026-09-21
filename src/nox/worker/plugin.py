@@ -1,17 +1,16 @@
-"""Plugin worker process (`python -m nox.worker --plugin <id>`), the worker half of ST-11-01.
+"""Plugin worker process (`python -m nox.worker --plugin <id>`).
 
 Loads `plugins/<id>/manifest.yaml`, imports the manifest's `entry` (`package:callable`), builds a
 `PluginApi` scoped to that manifest and calls `create(api)`. Then it registers with the core
 (`plugin.register`, declaring the tools the plugin registered during `create`), heartbeats like any
-other worker, answers `tool.call` from the core and stops within the kill switch's 2 s ack window
-on `plugin.stop`. The voice worker path in `nox.worker.main` is untouched by this module.
+other worker, answers `tool.call` from the core and stops within the kill switch's two-second ack
+window on `plugin.stop`. This module owns one plugin process; it owns none of the voice path.
 """
 
 from __future__ import annotations
 
 import asyncio
 import importlib
-import inspect
 import os
 import sys
 from pathlib import Path
@@ -22,6 +21,8 @@ from nox.core.logging import get_logger
 from nox.ipc.protocol import Envelope
 from nox.plugins.api import PluginApi, PluginApiError, PrivacyView
 from nox.plugins.manifest import MANIFEST_FILE, PluginManifest, load_manifest
+from nox.util.aio import maybe_await
+from nox.worker.heartbeat import heartbeat_loop
 
 log = get_logger(__name__)
 
@@ -36,10 +37,15 @@ def plugins_dir() -> Path:
 
 
 def load_entry(manifest: PluginManifest, plugin_dir: Path) -> Any:
-    """Import `manifest.entry` (`package.module:callable`) from `plugins/<id>/src`."""
+    """Import `manifest.entry` (`package.module:callable`) from `plugins/<id>/src`.
+
+    The plugin's source directory is appended to `sys.path`, never prepended: a plugin that ships
+    `src/asyncio.py` or its own `src/nox/` must not be able to shadow the standard library or the
+    core inside its own worker process.
+    """
     src = plugin_dir / "src"
     if src.is_dir() and str(src) not in sys.path:
-        sys.path.insert(0, str(src))
+        sys.path.append(str(src))
     module_name, _, attribute = manifest.entry.partition(":")
     try:
         module = importlib.import_module(module_name)
@@ -115,19 +121,14 @@ class PluginWorker:
     # -- lifecycle ---------------------------------------------------------------------------
 
     async def _heartbeat_loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                await self.client.request(
-                    "worker.heartbeat",
-                    {"load": 0.0, "status": self.status},
-                    timeout=self.heartbeat_s,
-                )
-            except Exception as exc:  # noqa: BLE001 - the core marks us unavailable after 3 misses
-                log.warning("plugin.heartbeat_failed", plugin=self.manifest.id, error=str(exc))
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.heartbeat_s)
-            except TimeoutError:
-                continue
+        await heartbeat_loop(
+            self.client,
+            self._stop,
+            status=lambda: self.status,
+            interval_s=self.heartbeat_s,
+            log_event="plugin.heartbeat_failed",
+            plugin=self.manifest.id,
+        )
 
     async def run(self) -> None:
         self._register_handlers()
@@ -138,10 +139,7 @@ class PluginWorker:
         await self.client.subscribe(patterns)
         # `create(api)` registers tools/handlers; events may only be emitted after `plugin.register`
         # has declared the plugin's namespaces to the hub, i.e. from `start()` onwards.
-        plugin = self.factory(self.api)
-        if inspect.isawaitable(plugin):
-            plugin = await plugin
-        self.plugin = plugin
+        self.plugin = plugin = await maybe_await(self.factory(self.api))
         response = await self.client.request(
             "plugin.register",
             {
@@ -158,12 +156,20 @@ class PluginWorker:
             self._heartbeat_loop(), name=f"plugin-heartbeat-{self.manifest.id}"
         )
         self.status = "running"
-        await _maybe_await(getattr(plugin, "start", None))
+        await self._call_plugin(plugin, "start")
         log.info("plugin.worker_running", plugin=self.manifest.id, tools=self.api.tools.names())
         try:
             await self._stop.wait()
         finally:
             await self.shutdown()
+
+    @staticmethod
+    async def _call_plugin(plugin: Any, hook: str) -> None:
+        """Call an optional `start`/`stop` hook, whether the plugin defined it `def` or `async`."""
+        fn = getattr(plugin, hook, None)
+        if fn is None:
+            return
+        await maybe_await(fn())
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -173,7 +179,7 @@ class PluginWorker:
         self._stop.set()
         if self.plugin is not None:
             try:
-                await _maybe_await(getattr(self.plugin, "stop", None))
+                await self._call_plugin(self.plugin, "stop")
             except Exception as exc:  # noqa: BLE001 - a failing plugin must not block shutdown
                 log.warning("plugin.stop_failed", plugin=self.manifest.id, error=str(exc))
         if self._heartbeat_task is not None:
@@ -183,16 +189,12 @@ class PluginWorker:
         await self.client.close()
 
 
-async def _maybe_await(fn: Any) -> None:
-    if fn is None:
-        return
-    result = fn()
-    if inspect.isawaitable(result):
-        await result
-
-
 async def run_plugin_worker(plugin_id: str, hub_url: str, token: str) -> int:
-    """Process entry point for `python -m nox.worker --plugin <id>`."""
+    """Process entry point for `python -m nox.worker --plugin <id>`.
+
+    Returns 0 for a clean stop and 1 when the worker ended abnormally, so the supervisor can tell
+    a requested shutdown from a crash.
+    """
     from nox.ipc.client import IpcClient
 
     directory = plugins_dir() / plugin_id
@@ -211,4 +213,5 @@ async def run_plugin_worker(plugin_id: str, hub_url: str, token: str) -> int:
         await worker.run()
     except (KeyboardInterrupt, asyncio.CancelledError):
         await worker.shutdown()
+        return 1
     return 0

@@ -114,16 +114,19 @@ The dashboard route is the recommended one:
    the device flow, but the form requires one).
 3. Copy the **Client-ID** into the dashboard field and click **"Mit Twitch verbinden"**.
 4. Nox shows a short code; open <https://www.twitch.tv/activate>, enter it, and approve. The token
-   lands in the Credential Manager on its own.
+   lands in the Credential Manager on its own, and the dashboard refreshes to "connected" once the
+   background poll picks it up.
 
-> The device-code flow is being implemented right now. Until it ships, use the manual fallback:
-> generate a chat OAuth token for your bot account, then
-> ```powershell
-> .venv\Scripts\python.exe -m nox.cli secrets set nox/twitch/oauth_token
-> .venv\Scripts\python.exe -m nox.cli secrets set nox/twitch/bot_username
-> ```
-> Both commands read the value from a hidden prompt — never from the command line, so it does not
-> end up in your shell history.
+This is an OAuth 2.0 Device Code Grant against a public client (`chat:read chat:edit` only); Nox
+never sees your password, and the token is refreshed in the background so a long stream does not
+die of an expired token. If you prefer not to use the dashboard, the manual fallback still works:
+generate a chat OAuth token for your bot account, then
+```powershell
+.venv\Scripts\python.exe -m nox.cli secrets set nox/twitch/oauth_token
+.venv\Scripts\python.exe -m nox.cli secrets set nox/twitch/bot_username
+```
+Both commands read the value from a hidden prompt — never from the command line, so it does not
+end up in your shell history.
 
 The Twitch plugin only loads in the **stream** profile, and its egress allowlist is limited to
 `irc.chat.twitch.tv:6697` and `api.twitch.tv:443`.
@@ -198,8 +201,9 @@ acoustic model either, so short segments (`voice.stt.kill_watchdog_max_ms`, defa
 still transcribed to keep it working; if such a transcript is not the kill phrase it is discarded
 immediately and never becomes an event or reaches a language model.
 
-`voice.stt.listening_mode` chooses between `continuous` (default, microphone open behind the gate)
-and `ptt_only`, which never opens the microphone unless push-to-talk is held.
+`voice.stt.listening_mode` chooses between `ptt_only` (the default: the microphone stays closed
+until you hold push-to-talk) and `continuous`, which keeps it open behind the wake-word gate for
+hands-free use. Change it in the dashboard under Einstellungen.
 
 ### Profiles
 
@@ -352,10 +356,9 @@ the process, timelines and scope are in [`SECURITY.md`](SECURITY.md).
 
 ## Roadmap
 
-Short version, in order: finish the Twitch device-code flow and the integration settings UI →
-Rocket League coaching quality (Stage 2 vision) → project-manager and research assistant → signed
-installer with proven update/rollback → external security review → v1.0. The v1.0 gate itself is
-[`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
+Short version, in order: Rocket League coaching quality (Stage 2 vision) → project-manager and
+research assistant → signed installer with proven update/rollback → external security review →
+v1.0. The v1.0 gate itself is [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
 
 ## Support
 

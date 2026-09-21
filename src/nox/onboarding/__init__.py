@@ -1,3 +1,3 @@
-"""First-run onboarding wizard package (`nox onboard`, FR-15.1 "minimal first start", ST-21-03)."""
+"""The first-run wizard (`nox onboard`): the shortest path from install to a working Nox."""
 
 from __future__ import annotations

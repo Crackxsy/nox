@@ -1,7 +1,6 @@
-"""Minimal Telegram Bot API client: long-polling `getUpdates` plus `sendMessage`, and nothing else
-(EPIC-17, Spec v0.8). Every request goes through the `PluginApi.http()` client, whose egress guard
-is scoped to `api.telegram.org:443` by the manifest (ADR-013) - this module cannot reach any other
-host even if it tried.
+"""Minimal Telegram Bot API client: long-polling `getUpdates` plus `sendMessage`, and nothing else.
+Every request goes through the `PluginApi.http` client, whose egress guard is scoped to
+`api.telegram.org:443` by the manifest - this module cannot reach any other host even if it tried.
 
 Secret handling: the bot token is part of the Bot API's *URL path*. It is fetched per request from
 `nox.security.secrets` via the plugin API, never cached in an attribute, never put in a log line,
@@ -12,11 +11,13 @@ health check surfaces) is redacted for the same reason.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
+
+from nox.core.logging import get_logger
+from nox.plugins.reconnect import ReconnectBackoff
 
 TokenProvider = Callable[[], Awaitable[str | None]]
 ClientFactory = Callable[[], httpx.AsyncClient]
@@ -25,6 +26,8 @@ OnConnected = Callable[[], Awaitable[None]]
 OnDisconnected = Callable[[str], Awaitable[None]]
 
 #: What the health check reports when no token has been provisioned yet (ES-04).
+log = get_logger(__name__)
+
 NO_TOKEN = "no bot token configured: nox/telegram/bot_token"  # noqa: S105 - a name, not a value
 
 
@@ -60,6 +63,7 @@ class TelegramBotClient:
 
         self.connected = False
         self.last_error = ""
+        self._backoff = ReconnectBackoff("telegram", min_s=min_backoff_s, max_s=max_backoff_s)
         self.backoff_s = min_backoff_s
         #: Highest `update_id` accepted so far; the next poll asks for `offset + 1`, which is how
         #: the Bot API acknowledges updates. A replayed update is therefore never re-delivered by
@@ -81,8 +85,12 @@ class TelegramBotClient:
         self._task = None
         if task is not None and not task.done():
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
+            try:
                 await task
+            except asyncio.CancelledError:
+                pass  # expected: we just cancelled it
+            except Exception as exc:  # noqa: BLE001 - a crashed poll loop must not stay invisible
+                log.warning("telegram.poll_loop_failed", error=f"{type(exc).__name__}: {exc}")
         self.connected = False
 
     # -- requests --------------------------------------------------------------------------------
@@ -101,7 +109,9 @@ class TelegramBotClient:
                 response = await client.post(url, json=payload, timeout=timeout)
                 body = response.json()
         except Exception as exc:
-            raise TelegramApiError(self._redact(str(exc) or type(exc).__name__, token)) from exc
+            # Deliberately not chained: the bot token is part of the request URL, and `__cause__`
+            # would carry the original httpx exception - URL included - into every traceback.
+            raise TelegramApiError(self._redact(str(exc) or type(exc).__name__, token)) from None
         if not isinstance(body, dict) or not body.get("ok"):
             description = ""
             if isinstance(body, dict):
@@ -143,6 +153,8 @@ class TelegramBotClient:
             if not self.connected:
                 self.connected = True
                 self.last_error = ""
+                self._backoff.succeeded()
+                self.backoff_s = self._backoff.current_s
                 self.backoff_s = self._min_backoff_s
                 if self._on_connected is not None:
                     await self._on_connected()
@@ -169,13 +181,12 @@ class TelegramBotClient:
         await self._on_message(update_id, sender_id, chat_id, text)
 
     async def _fail(self, reason: str) -> None:
+        """One failed poll: report it, notify the plugin once, and back off before retrying."""
         was_connected = self.connected
         self.connected = False
+        self._backoff.failed(reason)
         self.last_error = reason
         if was_connected and self._on_disconnected is not None:
             await self._on_disconnected(reason)
-        try:
-            await asyncio.wait_for(self._stopping.wait(), timeout=self.backoff_s)
-        except TimeoutError:
-            pass
-        self.backoff_s = min(self._max_backoff_s, max(self._min_backoff_s, self.backoff_s * 2))
+        self.backoff_s = self._backoff.current_s
+        await self._backoff.sleep(self._stopping)

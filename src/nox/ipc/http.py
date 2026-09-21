@@ -1,14 +1,15 @@
-"""Loopback HTTP server of the core (IPC Model §Transport): /health, /pet, /dashboard, /api/*.
+"""The core's loopback HTTP server: `/health`, `/pet`, `/dashboard` and `/api/*`.
 
-Starlette app served by uvicorn programmatically inside the core loop. `/health` needs no auth and
-carries no secrets; `/api/*` requires `Authorization: Bearer <session token>`. Missing UI bundles
-are served as an explicit "UI not built" page (HTTP 503), never as a fake UI.
+A Starlette app run by uvicorn inside the core's own event loop.
+
+`/health` needs no authentication and therefore carries nothing an unauthenticated local process
+should not see: component states and reasons, no paths and no identifiers. `/api/*` requires
+`Authorization: Bearer <session token>` and is where anything more detailed lives. A missing UI
+bundle is served as an explicit "UI not built" page with status 503, never as a fake UI.
 
 Hardening: `/pet`, `/dashboard` and `/api/*` responses carry `Cache-Control: no-store`,
-`Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`; uvicorn access logging is off
-so URLs never reach logs. UI pages receive the session token via the URL *fragment*
-(`/pet#token=...`), never via the query string: fragments are not sent to the server, do not appear
-in access logs or Referer headers, and the page keeps the token in memory only (IPC Model).
+`Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`, and uvicorn's access log is
+off, so request URLs never reach a log file.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from nox.core.config import IpcConfig
 from nox.ipc._log import get_logger
 from nox.ipc.server import write_runtime_info
 from nox.ipc.tokens import constant_time_equals
@@ -96,14 +98,9 @@ class HttpSettings(BaseModel):
         raise ValueError(f"ipc.host must be a loopback address, got {value!r}")
 
     @classmethod
-    def from_config(cls, ipc: Mapping[str, Any], **overrides: Any) -> HttpSettings:
-        data: dict[str, Any] = {}
-        if "host" in ipc:
-            data["host"] = ipc["host"]
-        if "http_port" in ipc:
-            data["port"] = ipc["http_port"]
-        data.update(overrides)
-        return cls(**data)
+    def from_config(cls, ipc: IpcConfig, **overrides: Any) -> HttpSettings:
+        """Build from the typed `ipc` section of `NoxConfig`."""
+        return cls(host=ipc.host, port=ipc.http_port, **overrides)
 
 
 async def _resolve(value: JsonLike | Awaitable[JsonLike]) -> JsonLike:

@@ -1,12 +1,14 @@
-"""sounddevice implementations of AudioOutput and AudioInput (voice/base.py, ADR-009, FR-5.5/5.6).
+"""sounddevice implementations of `AudioOutput` and `AudioInput`.
 
-Output: one PortAudio callback stream per target device (private headphones, stream = VB-Audio
-Cable);
-`both` writes the same PCM to both, `mute` consumes and discards. `stop()` aborts the streams, which
-drops buffered audio immediately (well under the 200 ms barge-in budget). Input: 16 kHz mono float32
-frames of 30 ms that flow into an asyncio queue only while `enabled` is True (privacy gate). Raw
-audio
-is never written to disk here.
+Output: one PortAudio callback stream per target device - the private headphones and, when
+configured, a virtual audio cable for the stream. `both` writes the same PCM to both devices and
+`mute` consumes and discards it. `stop` aborts the streams, which drops buffered audio immediately,
+well inside the barge-in budget.
+
+Input: 16 kHz mono float32 frames of 30 ms. The capture stream exists only while `enabled` is True,
+so a closed gate means no open device and no microphone indicator, not merely discarded frames.
+Device names are resolved once and cached, because PortAudio enumeration is slow enough to be felt
+on the event loop. Raw audio is never written to disk here.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from typing import Any
 
 import numpy as np
 
+from nox.util.aio import aclose
 from nox.voice._logging import get_logger
 from nox.voice.base import Channel
 
@@ -28,7 +31,7 @@ _PREFERRED_HOSTAPIS = ("Windows WASAPI", "MME", "Windows DirectSound")
 
 
 class AudioUnavailableError(RuntimeError):
-    """No output device for the requested channel (FR-5.10: never 'speak' silently)."""
+    """No output device for the requested channel. Nox never pretends to have spoken."""
 
 
 def _sd() -> Any:
@@ -150,10 +153,9 @@ class _DevicePlayer:
             self._buf.extend(pcm)
 
     def end_of_input(self) -> None:
+        """Mark the buffer complete; the callback raises `CallbackStop` once it has drained."""
         with self._lock:
             self._eof = True
-            if not self._buf:
-                pass  # the callback raises CallbackStop on its next invocation
 
     def wait_drained(self, timeout: float) -> bool:
         return self._drained.wait(timeout)
@@ -192,7 +194,10 @@ class SoundDeviceOutput:
         self.volume = volume
         self._drain_timeout_s = drain_timeout_s
         self._players: list[_DevicePlayer] = []
-        self._stopped = threading.Event()
+        #: Incremented by every `stop()`. An utterance that started under an older generation is
+        #: cancelled, so a stop arriving while it was still queued is not lost.
+        self._stop_generation = 0
+        self._resolved: dict[str, int | None] = {}
         self._lock = asyncio.Lock()
         self.last_stop_reason: str = ""
         self.last_stop_latency_ms: float = 0.0
@@ -200,10 +205,26 @@ class SoundDeviceOutput:
     def devices(self) -> list[dict[str, str]]:
         return list_devices()
 
-    def _targets(self, channel: Channel) -> list[int | None]:
+    def forget_devices(self) -> None:
+        """Drop the resolved-device cache, e.g. after the user changed the audio configuration."""
+        self._resolved.clear()
+
+    async def _resolve(self, name: str) -> int | None:
+        """Device index for a configured name, resolved once and then cached.
+
+        `sd.query_devices` walks every host API and takes tens of milliseconds; doing that per
+        utterance, on the event loop, was a measurable stutter before every reply.
+        """
+        if name in self._resolved:
+            return self._resolved[name]
+        index = await asyncio.to_thread(resolve_device, name, kind="output")
+        self._resolved[name] = index
+        return index
+
+    async def _targets(self, channel: Channel) -> list[int | None]:
         if channel == Channel.MUTE:
             return []
-        private = resolve_device(self._private_name, kind="output")
+        private = await self._resolve(self._private_name)
         if channel == Channel.PRIVATE:
             return [private]
         if not self._stream_name:
@@ -212,7 +233,7 @@ class SoundDeviceOutput:
                     "stream channel requested but no stream device configured"
                 )
             return [private]
-        stream = resolve_device(self._stream_name, kind="output")
+        stream = await self._resolve(self._stream_name)
         if channel == Channel.STREAM:
             return [stream]
         return [private, stream] if stream != private else [private]
@@ -225,13 +246,21 @@ class SoundDeviceOutput:
         *,
         utterance_id: str,
     ) -> None:
+        # Captured before the lock: a `stop()` that lands while this utterance waits its turn
+        # must cancel it, instead of being cleared away when it finally starts.
+        generation = self._stop_generation
         async with self._lock:
-            self._stopped.clear()
-            self.last_stop_reason = ""
-            targets = self._targets(channel)
+
+            def cancelled() -> bool:
+                return self._stop_generation != generation
+
+            if cancelled():
+                await aclose(pcm_chunks)
+                return
+            targets = await self._targets(channel)
             if channel == Channel.MUTE:
                 async for _ in pcm_chunks:  # consume so synthesis threads finish cleanly
-                    if self._stopped.is_set():
+                    if cancelled():
                         break
                 return
             players = [_DevicePlayer(dev, sample_rate, self.volume) for dev in targets]
@@ -240,11 +269,11 @@ class SoundDeviceOutput:
                 for p in players:
                     await asyncio.to_thread(p.open)
                 async for chunk in pcm_chunks:
-                    if self._stopped.is_set():
+                    if cancelled():
                         break
                     for p in players:
                         p.feed(chunk)
-                if not self._stopped.is_set():
+                if not cancelled():
                     for p in players:
                         p.end_of_input()
                     for p in players:
@@ -257,7 +286,7 @@ class SoundDeviceOutput:
                     utterance_id=utterance_id,
                     channel=str(channel),
                     underruns=sum(p.underruns for p in players),
-                    stopped=self._stopped.is_set(),
+                    stopped=cancelled(),
                 )
             finally:
                 for p in players:
@@ -266,7 +295,7 @@ class SoundDeviceOutput:
 
     async def stop(self, *, reason: str) -> None:
         t0 = time.perf_counter()
-        self._stopped.set()
+        self._stop_generation += 1
         self.last_stop_reason = reason
         players = list(self._players)
         for p in players:
@@ -280,7 +309,12 @@ class SoundDeviceOutput:
 
 
 class SoundDeviceInput:
-    """AudioInput: 16 kHz mono float32 frames of `frame_ms`; frames flow only while `enabled`."""
+    """AudioInput: 16 kHz mono float32 frames of `frame_ms`.
+
+    The PortAudio capture stream is opened by `set_enabled(True)` and closed again by
+    `set_enabled(False)`, so while capture is not permitted no stream exists at all - which is
+    what `listening_mode: ptt_only` and every privacy mode rely on.
+    """
 
     def __init__(
         self,
@@ -316,13 +350,21 @@ class SoundDeviceInput:
     def enabled(self) -> bool:
         return self._enabled.is_set()
 
-    @enabled.setter
-    def enabled(self, value: bool) -> None:
+    async def set_enabled(self, value: bool) -> None:
+        """Open or close the capture stream. Opening a PortAudio device blocks, hence async."""
         if value:
+            if not self._running:
+                raise RuntimeError("SoundDeviceInput.start() not called")
+            if self._stream is None:
+                await asyncio.to_thread(self._open_stream)
             self._enabled.set()
-        else:
-            self._enabled.clear()
-            self._pending = np.zeros(0, dtype=np.float32)
+            return
+        self._enabled.clear()
+        self._pending = np.zeros(0, dtype=np.float32)
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            await asyncio.to_thread(self._close_stream, stream)
+            log.info("audio.input_closed")
 
     @property
     def running(self) -> bool:
@@ -383,11 +425,11 @@ class SoundDeviceInput:
         self._queue.put_nowait(frame)
 
     async def start(self) -> None:
+        """Prepare the frame queue. No device is opened until `set_enabled(True)`."""
         if self._running:
             return
         self._loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue()
-        await asyncio.to_thread(self._open_stream)
         self._running = True
 
     async def stop(self) -> None:

@@ -1,11 +1,11 @@
-"""Classical OpenCV backend (Spec v0.9 §4.3; SP-19 no-go on VLM/ONNX candidates for this GPU):
+"""Classical OpenCV backend (no-go on VLM/ONNX candidates for this GPU):
 colour/shape heuristics only, no ML model, no GPU inference. Ball: a bright, low-saturation blob
 found via Hough circle detection. Cars: saturated blue/orange team-colour blobs (Rocket League's
 default team colours) via contour bounding boxes. Both run only inside the calibrated arena region
-(ST-18-03: downstream of the shared capture pipeline, never a second capture mechanism). Confidence
-is deliberately conservative - a crude "how much of its own bounding box the colour mask actually
-covers" fill ratio, not a calibrated probability; SP-19 measured this to have real false-positive
-risk on synthetic frames, so callers must not treat it as more certain than it is."""
+(downstream of the shared capture pipeline, never a second capture mechanism). Confidence is
+deliberately conservative - a crude "how much of its own bounding box the colour mask actually
+covers" fill ratio, not a calibrated probability; measured this to have real false-positive risk on
+synthetic frames, so callers must not treat it as more certain than it is."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover - opencv-python-headless is in the `rl` 
 
 # HSV ranges tuned for Rocket League's default blue/orange team colours and a bright, near-white,
 # low-saturation ball under standard arena lighting - approximate, not calibrated against real
-# captures (same honesty pattern as `calibration.py`'s `DEFAULT_REGIONS`; flagged in SP-19).
+# captures (same honesty pattern as `calibration.py`'s `DEFAULT_REGIONS`; flagged in).
 _BALL_LOWER = np.array([0, 0, 200], dtype=np.uint8)
 _BALL_UPPER = np.array([180, 60, 255], dtype=np.uint8)
 _BLUE_LOWER = np.array([95, 80, 60], dtype=np.uint8)
@@ -44,7 +44,7 @@ class OpenCvDetector:
     def state(self) -> tuple[DetectorState, str]:
         if not _CV2_AVAILABLE:
             return DetectorState.UNAVAILABLE, "opencv-python-headless not installed"
-        return DetectorState.AVAILABLE, "classical colour/shape heuristics (SP-19)"
+        return DetectorState.AVAILABLE, "classical colour and shape heuristics"
 
     def detect(
         self, frame: np.ndarray, *, arena_region: tuple[float, float, float, float]

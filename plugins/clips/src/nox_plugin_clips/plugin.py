@@ -1,11 +1,11 @@
-"""Highlight candidate detector (ST-15-03, Spec v0.6 Clip Pipeline §4).
+"""Highlight candidate detector (Clip Pipeline).
 
 Scores incoming `rl.event`, `twitch.chat_mood_changed` and `twitch.command_invoked` (`!clip`)
 against configurable rules and a per-`trigger_kind` cooldown, and turns a match into a
 `clip.requested` event. This plugin never calls OBS itself: the Plugin API has no cross-plugin tool
-call (a plugin only ever sees its own `api.tools`, and this manifest declares none), so the
-core-side `nox.clips` service is the one that calls `obs.replay_buffer.save` through
-`ToolExecutor` in response to `clip.requested` (see `src/nox/clips/service.py`).
+call (a plugin only ever sees its own `api.tools`, and this manifest declares none), so the core-
+side `nox.clips` service is the one that calls `obs.replay_buffer.save` through `ToolExecutor` in
+response to `clip.requested` (see `src/nox/clips/service.py`).
 
 Thresholds and cooldowns are configuration (`config.highlight_kinds`, `.chat_hype_threshold`,
 `.cooldown_s`, `.manual_lookback_s`), never a code constant, so recalibrating needs no redeploy.
@@ -18,8 +18,8 @@ from typing import Any
 
 from nox.plugins.api import PluginApi
 
-#: `twitch.chat_mood_changed.category` values treated as a hype spike (Spec v0.6 §4.1 step 1). The
-#: event model (Spec v0.2 §8) keeps the category set itself pending approval, so this is a small,
+#: `twitch.chat_mood_changed.category` values treated as a hype spike. The
+#: event model keeps the category set itself pending approval, so this is a small,
 #: named allow-list rather than guessing at every possible category string.
 HYPE_CATEGORIES = frozenset({"hype", "hype_spike", "excited", "chaos"})
 
@@ -37,7 +37,7 @@ class ClipsPlugin:
         self._suppressed = False
         # trigger_kind -> monotonic ts of the last accepted request (anti-double-clip).
         self._last_request: dict[str, float] = {}
-        # last rl.event seen, for the manual-trigger secondary-tag lookup (Spec v0.6 §4.2).
+        # last rl.event seen, for the manual-trigger secondary-tag lookup.
         self._last_rl_event: tuple[float, str] | None = None
         self._clock = time.monotonic
 
@@ -85,7 +85,7 @@ class ClipsPlugin:
 
     async def _on_rl_event(self, _name: str, payload: dict[str, Any]) -> None:
         # Defensive: read `kind` as a plain dict field rather than importing `RlEvent` - the rl
-        # plugin (Spec v0.3, built concurrently) is the payload's owner.
+        # plugin (built concurrently) is the payload's owner.
         kind = str(payload.get("kind", "")).lower()
         if not kind or kind not in self._highlight_kinds:
             return
@@ -126,7 +126,7 @@ class ClipsPlugin:
         self._session_id = ""
 
     async def _on_suppress(self, _name: str, _payload: dict[str, Any]) -> None:
-        # Spec v0.2 §3.6.3-equivalent for this plugin: once the kill switch or panic fires, stop
+        # -equivalent for this plugin: once the kill switch or panic fires, stop
         # requesting new clips until the plugin is restarted (a fresh, explicit action) rather than
         # silently keep capturing during an emergency stop.
         self._suppressed = True

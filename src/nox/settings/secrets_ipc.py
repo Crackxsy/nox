@@ -104,8 +104,8 @@ class SecretsService:
 
     # -- write -----------------------------------------------------------------------------------
 
-    def set(self, name: str, value: str, *, pin: str | None, by: str) -> dict[str, object]:
-        self._guard(name, pin=pin, by=by, action="secret.set")
+    async def set(self, name: str, value: str, *, pin: str | None, by: str) -> dict[str, object]:
+        await self._guard(name, pin=pin, by=by, action="secret.set")
         if not value:
             raise IpcError(ERR_VALIDATION, "value must not be empty")
         self._store.set(name, value)
@@ -113,8 +113,8 @@ class SecretsService:
         log.info("secrets.set", name=name, by=by)  # name only - never the value
         return {"ok": True}
 
-    def delete(self, name: str, *, pin: str | None, by: str) -> dict[str, object]:
-        self._guard(name, pin=pin, by=by, action="secret.delete")
+    async def delete(self, name: str, *, pin: str | None, by: str) -> dict[str, object]:
+        await self._guard(name, pin=pin, by=by, action="secret.delete")
         self._store.delete(name)
         self._audit_name(name, action="secret.delete", by=by)
         log.info("secrets.deleted", name=name, by=by)
@@ -122,13 +122,19 @@ class SecretsService:
 
     # -- helpers ---------------------------------------------------------------------------------
 
-    def _guard(self, name: str, *, pin: str | None, by: str, action: str) -> None:
+    async def _guard(self, name: str, *, pin: str | None, by: str, action: str) -> None:
+        """A known name, inside the rate limit, and - when a PIN is set - verified.
+
+        Verification is deliberately expensive, so it runs in a thread rather than on the event
+        loop this handler was called from.
+        """
         if name not in KNOWN_SECRETS:
             raise IpcError(ERR_VALIDATION, f"unknown secret name {name!r}")
         self._limiter.check()
         if self._pin is None or not self._pin.is_set():
             return
-        if not pin or not self._pin.verify_pin(pin, by=by).ok:
+        verified = pin is not None and (await self._pin.verify_pin_async(pin, by=by)).ok
+        if not verified:
             self._audit_name(name, action=action, by=by, decision="deny", result="denied")
             raise IpcError(ERR_PERMISSION, "PIN required to change a stored secret")
 

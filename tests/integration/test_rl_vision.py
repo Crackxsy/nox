@@ -19,7 +19,7 @@ import pytest
 
 from nox.app import DEFAULTS_PATH, PROFILES_DIR, NoxCore
 from nox.core.config import load_config
-from nox.core.events import E, Event
+from nox.core.events import E, Event, HealthStatus
 from nox.data.rl_vision_repos import RlVisionAnalysisRepository, RlVisionFrameRepository
 from nox.voice.base import TtsRequest
 from tests._ports import free_port_base
@@ -86,13 +86,11 @@ async def test_migration_0009_vision_tables_exist(core: NoxCore) -> None:
 
 
 async def test_extension_boot_wires_vision_alongside_stage1(core: NoxCore) -> None:
-    # `nox.rl.install.install` returns `None` on success (matches every other `nox.<name>.install`
-    # module), so `core.extensions["rl"]` is `None` on BOTH success and a top-level failure -
-    # `core.rl_persistence`/`core.rl_vision_*` (set only on success) are the real signal.
-    assert "rl" in core.extensions
-    assert core.rl_persistence is not None  # type: ignore[attr-defined]
-    assert core.rl_vision_persistence is not None  # type: ignore[attr-defined]
-    assert core.rl_vision_analysis is not None  # type: ignore[attr-defined]
+    runtime = core.extensions["rl"]
+    assert runtime is not None
+    assert runtime.persistence is not None
+    assert runtime.vision_unavailable == ""
+    assert runtime.vision is not None
 
 
 async def test_detections_persist_and_post_match_analysis_fires_a_short_coaching_line(
@@ -176,8 +174,13 @@ async def test_vision_install_failure_never_breaks_stage1_install(
     core = NoxCore(cfg, voice=False, profiles_dir=PROFILES_DIR)
     await core.start()  # must not raise despite the simulated failure
     try:
-        assert "rl" in core.extensions
-        assert core.rl_persistence is not None  # type: ignore[attr-defined]
-        assert not hasattr(core, "rl_vision_persistence")
+        runtime = core.extensions["rl"]
+        assert runtime is not None
+        assert runtime.persistence is not None  # the rest of the extension is wired
+        assert runtime.vision is None
+        assert "simulated vision wiring failure" in runtime.vision_unavailable
+        status, reason = await runtime.vision_health()
+        assert status is HealthStatus.UNAVAILABLE
+        assert "simulated vision wiring failure" in reason
     finally:
         await core.stop()

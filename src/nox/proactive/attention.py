@@ -1,7 +1,7 @@
-"""Attention matrix support: effective proactivity ceiling per mode (A.16 "modes change density"),
-an hourly interruption budget (ST-19-05), and focus-mode detection - the pieces `notify()` needs
-before it ever asks `SpeechPolicy` anything. Quiet hours are `nox.core.speech_policy.in_quiet_hours`
-reused as-is (not re-implemented here).
+"""Attention matrix support: effective proactivity ceiling per mode ("modes change density"), an
+hourly interruption budget, and focus-mode detection - the pieces `notify` needs before it ever
+asks `SpeechPolicy` anything. Quiet hours are `nox.core.speech_policy.in_quiet_hours` reused as-is
+(not re-implemented here).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from nox.core.config import AttentionConfig
 
 def effective_ceiling(config: AttentionConfig, mode: str) -> int:
     """The 0..5 proactivity ceiling in force right now: the mode-specific value if one is
-    configured (A.16: "behaviour, density, tone and proactivity change per mode"), clamped to
+    configured ("behaviour, density, tone and proactivity change per mode"), clamped to
     never exceed the global ceiling; falls back to the global ceiling when the mode is unlisted."""
     global_ceiling = config.proactivity_level
     per_mode = config.per_mode.get(mode)
@@ -26,13 +26,13 @@ def effective_ceiling(config: AttentionConfig, mode: str) -> int:
 
 def is_focus_mode(config: AttentionConfig, mode: str) -> bool:
     """A ceiling of 0 - whether because `mode == "focus"` or an operator zeroed a mode's
-    ceiling directly - means no proactive hints at all; ST-19-05's "focus mode" is exactly that
+    ceiling directly - means no proactive hints at all; "focus mode" is exactly that
     state, not a separate flag to keep in sync with the mode ceiling table."""
     return effective_ceiling(config, mode) <= 0
 
 
 class InterruptionBudget:
-    """Rolling one-hour counter of proactive interruptions actually delivered (ST-19-05).
+    """Rolling one-hour counter of proactive interruptions actually delivered.
     URGENT never consumes budget - only `kind="proactive"` hints that were actually spoken do."""
 
     def __init__(self, *, clock: Callable[[], datetime] | None = None) -> None:

@@ -1,7 +1,7 @@
-"""ST-19-06: a small timing learner biasing *when* non-urgent hints are offered toward hours that
-have historically been well received. Data-sparing by construction (NFR-3/FR-14.4 spirit): the only
-signal ever recorded is `(hour_of_day, accepted)` - never message content, never a timestamp beyond
-the hour bucket - aggregated into one running acceptance rate per of the 24 hours-of-day.
+""": a small timing learner biasing *when* non-urgent hints are offered toward hours that have
+historically been well received. Data-sparing by construction (/ spirit): the only signal ever
+recorded is `(hour_of_day, accepted)` - never message content, never a timestamp beyond the hour
+bucket - aggregated into one running acceptance rate per of the 24 hours-of-day.
 """
 
 from __future__ import annotations

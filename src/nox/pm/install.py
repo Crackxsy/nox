@@ -1,12 +1,10 @@
-"""Composition entry point for EPIC-13's PM slice: `install(core)` registers the `pm.*` tools on
-`core.tool_registry` and starts the vault watcher. Deliberately not wired into `src/nox/app.py`
-here (shared file, out of this story's scope) - the integrator calls `nox.pm.install.install(core)`
-after `core.start()`.
+"""Composition entry point for the project-management slice: `install(core)` registers the `pm.*`
+tools and starts the vault watcher, and returns the runtime that owns both.
 
-The initial vault scan (184 notes, ~4 s on the product owner's machine) runs in a background task
-off the event loop, like the memory extension's full scan: `install()` returns immediately and the
-`pm` health check reports `limited` until `pm.indexed` is logged. Doing it inline blocked the loop,
-stopped the core's heartbeats, and had the supervisor treat the boot as a hang (2026-09-15).
+The initial vault scan (a few hundred notes, several seconds) runs in a background task off the
+event loop, like the memory extension's full scan: `install` returns immediately and the `pm`
+health check reports `limited` until the first scan finishes. Doing it inline blocked the loop,
+stopped the core's heartbeats, and had the supervisor treat the boot as a hang.
 """
 
 from __future__ import annotations
@@ -30,8 +28,8 @@ log = get_logger(__name__)
 
 @dataclass
 class PmRuntime:
-    """Handles for the caller (`NoxCore.extensions["pm"]`, tests). `indexed` is set once the first
-    scan has finished; until then the index is empty and `pm.*` tools answer with what they have."""
+    """Handles for the caller. `indexed` is set once the first scan has finished; until then the
+    index is empty and the `pm.*` tools answer with what they have."""
 
     repo: PmVaultRepo
     index: PmIndex
@@ -56,9 +54,9 @@ class PmRuntime:
 
 
 def install(core: Any) -> PmRuntime:
-    """`core` is a started `nox.app.NoxCore` (or anything exposing the same `config`, `db`, `bus`,
-    `state`, `tool_registry` attributes, e.g. a test double). Returns at once; the initial scan
-    runs in the background - await `PmRuntime.ready()` when a populated index is needed."""
+    """`core` is a started core, or anything exposing the same `config`, `db`, `bus`, `state` and
+    `tool_registry` attributes. Returns at once; the initial scan runs in the background - await
+    `PmRuntime.ready` when a populated index is needed."""
     cfg = core.config
     pm_cfg = cfg.pm
     repo = PmVaultRepo(
@@ -69,9 +67,8 @@ def install(core: Any) -> PmRuntime:
     )
     index = PmIndex(core.db)
     focus = FocusService(index, core.bus, limit=pm_cfg.focus_max_items)
-    state = getattr(core, "state", None)
     register_pm_tools(
-        core.tool_registry, repo=repo, index=index, focus=focus, bus=core.bus, state=state
+        core.tool_registry, repo=repo, index=index, focus=focus, bus=core.bus, state=core.state
     )
 
     watcher = PmWatcher(repo, index, core.bus, focus=focus, debounce_s=pm_cfg.watch_debounce_s)
@@ -80,11 +77,6 @@ def install(core: Any) -> PmRuntime:
         _initial_index(runtime), name="nox-pm-initial-index"
     )
     _add_health_check(core, runtime)
-
-    core.pm_watcher = watcher
-    core.pm_index = index
-    core.pm_repo = repo
-    core.pm = runtime
     return runtime
 
 
@@ -104,7 +96,7 @@ async def _initial_index(runtime: PmRuntime) -> None:
 
 
 def _add_health_check(core: Any, runtime: PmRuntime) -> None:
-    """`limited` while the first scan runs - honest, never a faked `available` (P10)."""
+    """`limited` while the first scan runs - honest, never a faked `available`."""
     health = getattr(core, "health", None)
     if health is None:
         return

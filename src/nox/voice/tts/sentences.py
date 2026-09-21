@@ -1,4 +1,4 @@
-"""Sentence splitting for streaming TTS (FR-5.4): synthesize per sentence, speak when ready."""
+"""Sentence splitting for streaming TTS: synthesize per sentence, speak when ready."""
 
 from __future__ import annotations
 

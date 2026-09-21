@@ -1,4 +1,4 @@
-"""Settings area (EPIC-21): the editable half of the dashboard's Settings page.
+"""The settings area: the editable half of the dashboard's Settings page.
 
 `config.effective` (in `nox.app`) has always been read-only - "in den Einstellungen kann man nur
 den Status lesen". This package adds the writing half, all of it behind the normal IPC registry

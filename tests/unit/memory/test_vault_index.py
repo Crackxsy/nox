@@ -1,5 +1,5 @@
-"""nox.memory.vault_index: incremental indexing, privacy-zone exclusion, `nox: ignore`, deletions
-(ST-07-03 AC1-AC5)."""
+"""`nox.memory.vault_index`: incremental indexing, privacy-zone exclusion, `nox: ignore`,
+deletions, and the pruning pass that follows a full scan."""
 
 from __future__ import annotations
 
@@ -176,3 +176,32 @@ async def test_rescan_only_embeds_the_chunks_that_changed(db: Database, vault: P
     note.write_text("---\ntitle: A\n---\n\nsecond body\n", encoding="utf-8")
     await idx.full_scan()
     assert len(embeddings.batches) == 2
+
+
+async def test_a_note_written_during_the_scan_survives_the_pruning_pass(
+    db: Database, vault: Path
+) -> None:
+    """The first thing a user does while the vault is still indexing must not be deleted again.
+
+    `full_scan` ends by removing index rows for notes it did not see. Comparing that against the
+    index as it looks *after* the scan deleted exactly the note that was written in between.
+    """
+    (vault / "existing.md").write_text("# Existing\n\nSomething.\n", encoding="utf-8")
+    indexer = VaultIndexer(db, vault)
+
+    original_index_path = indexer.index_path
+    late_note = vault / "written-during-the-scan.md"
+
+    async def index_and_write_a_new_note(path: Path):
+        outcome = await original_index_path(path)
+        if not late_note.exists():
+            late_note.write_text("# Late\n\nWritten mid-scan.\n", encoding="utf-8")
+            await original_index_path(late_note)
+        return outcome
+
+    indexer.index_path = index_and_write_a_new_note  # type: ignore[method-assign]
+    stats = await indexer.full_scan()
+
+    indexed = {str(row["path"]) for row in db.fetch_all("SELECT path FROM vault_index")}
+    assert "written-during-the-scan.md" in indexed
+    assert stats.removed == 0

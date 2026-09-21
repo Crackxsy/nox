@@ -1,4 +1,4 @@
-# Nox permission profile "stream" (Security Model §3, PRD FR-9). Scene switches confirm; never to cloud.
+# Nox permission profile "stream": scene switches are confirmed, nothing goes to the cloud.
 security:
   profile: stream
 
@@ -6,7 +6,7 @@ permissions:
   id: stream
   description: Live streaming. OBS scene switches are confirmed, scenes are never deleted, screenshots stay local.
   cloud_allowed: true
-  # Twitch IRC chat + Helix API for the twitch plugin (Spec v0.2 Stream Bot §6.2/§6.4, ST-11-04).
+  # Twitch chat and the Twitch API, for the twitch plugin.
   # Not loopback, so this only applies in FULL/BALANCED privacy mode - PRIVATE/OFFLINE still block it.
   egress_allowlist: ["irc.chat.twitch.tv:6697", "api.twitch.tv:443", "id.twitch.tv:443"]
   loopback_allowlist: ["127.0.0.1:11434", "127.0.0.1:4455"]   # Ollama and the OBS websocket
@@ -20,7 +20,7 @@ permissions:
       tool: "obs*"
       action: "scene.delete"
       decision: deny
-      reason: "existing scenes and sources are never deleted (FR-9.5)"
+      reason: "existing scenes and sources are never deleted"
     - id: stream.obs.scene_rename
       tool: "obs*"
       action: "scene.rename"
@@ -47,7 +47,7 @@ permissions:
       tool: "twitch*"
       action: "moderation.ban"
       decision: confirm
-      reason: "bans are not autonomous in the MVP (FR-9.8)"
+      reason: "a ban is never automatic"
     - id: stream.twitch.timeout
       tool: "twitch*"
       action: "moderation.timeout"

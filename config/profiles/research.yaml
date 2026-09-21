@@ -1,4 +1,4 @@
-# Nox permission profile "research" (Security Model §3, PRD FR-13). Cloud and web tools allowed.
+# Nox permission profile "research": cloud and web tools are allowed.
 security:
   profile: research
 
@@ -30,7 +30,7 @@ permissions:
       tool: "browser*"
       action: "purchase*"
       decision: deny
-      reason: "no purchases or contracts (FR-13.2)"
+      reason: "never buys anything and never signs anything"
     - id: research.browser.form_submit
       tool: "browser*"
       action: "form.submit"

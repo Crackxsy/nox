@@ -1,6 +1,6 @@
 """Logger shim for the AI package: uses nox.core.logging when it exists, else structlog directly.
 
-ENGINEERING.md prescribes ``nox.core.logging.get_logger``; that module is owned by the core
+the project standards prescribes ``nox.core.logging.get_logger``; that module is owned by the core
 agent and may not exist yet, so this shim resolves it lazily and never hard-depends on it.
 """
 

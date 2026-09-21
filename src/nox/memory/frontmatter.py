@@ -62,7 +62,7 @@ def render_note(frontmatter: dict[str, Any], body: str) -> str:
 
 
 def is_ignored(note: VaultNote) -> bool:
-    """`nox: { ignore: true }` (SP-15 / ST-07-03 AC3)."""
+    """`nox: { ignore: true }`."""
     nox = note.frontmatter.get("nox")
     return isinstance(nox, dict) and bool(nox.get("ignore", False))
 

@@ -1,8 +1,8 @@
 """Runtime files the shell reads/writes: session.token, ipc.json, supervisor.token, shell.json.
 
-Location (IPC Model handshake step 2 / D223): `%APPDATA%\\Nox\\runtime` by default, overridable with
-`NOX_RUNTIME_DIR`; `E:\\Nox\\runtime` is accepted as a second candidate (ENGINEERING.md data dirs).
-Tokens are read from files only and never logged.
+Location (IPC Model handshake step 2 / D223): `%APPDATA%\\Nox\\runtime` by default, overridable
+with `NOX_RUNTIME_DIR`; `E:\\Nox\\runtime` is accepted as a second candidate (the project standards
+data dirs). Tokens are read from files only and never logged.
 """
 
 from __future__ import annotations

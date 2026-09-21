@@ -44,7 +44,7 @@ async def core(tmp_path: Path):
     cfg = _config(tmp_path)
     nox_core = NoxCore(cfg, voice=False, profiles_dir=PROFILES_DIR, extensions=False)
     await asyncio.wait_for(nox_core.start(), timeout=60)
-    install_memory(nox_core)
+    nox_core.extensions["memory"] = install_memory(nox_core)
     try:
         yield nox_core
     finally:
@@ -131,11 +131,15 @@ async def test_vault_read_tool_reads_written_note(core: NoxCore) -> None:
 
 
 async def test_embed_provider_goes_through_the_egress_guard(core: NoxCore) -> None:
-    """B-11: the memory extension's Ollama provider must use the guarded client factory (it used
-    to build a plain httpx client per request: unguarded and one fresh SSL context per chunk)."""
+    """The memory extension's embedding provider must use the guarded client factory.
+
+    It used to build a plain httpx client per request: unguarded, and one fresh SSL context per
+    chunk on top of that.
+    """
     from nox.security.egress import GuardedTransport, shared_ssl_context
 
-    provider = core.memory.embeddings._provider  # type: ignore[attr-defined]
+    runtime = core.extensions["memory"]
+    provider = runtime.embeddings._provider  # noqa: SLF001 - the point of this test
     assert provider is not None
     client = provider._client_factory()
     try:
@@ -149,17 +153,15 @@ async def test_embed_provider_goes_through_the_egress_guard(core: NoxCore) -> No
 async def test_core_forgets_a_worker_whose_connection_closed(core: NoxCore) -> None:
     """`voice.ptt`/`tts.say` must not be routed to a dead client id after the hub dropped the
     worker (2026-09-15); a re-register brings it back."""
-    from nox.app import WorkerProcess
     from nox.core.events import E, Event
 
-    w = WorkerProcess(service="voice", process=None, client_id="worker:voice")
-    w.registered.set()
-    core._workers["voice"] = w
-    assert core._worker_client("voice") == "worker:voice"
+    worker = core.workers.attach("voice", "worker:voice")
+    worker.registered.set()
+    assert core.workers.client_id("voice") == "worker:voice"
     await core.bus.publish(
         Event(
             name=E.IPC_CLIENT_DISCONNECTED,
             payload={"client_id": "worker:voice", "role": "worker", "code": 1011},
         )
     )
-    assert core._worker_client("voice") is None and w.client_id is None
+    assert core.workers.client_id("voice") is None and worker.client_id is None

@@ -1,7 +1,7 @@
-"""Vault watcher (ST-13-02 subset): watches the configured epics/stories folders with `watchdog`,
-debounces bursty saves into one reindex pass, and emits `pm.item_changed` only for notes whose
-`note_hash` actually changed (idempotent re-index, ST-13-02 AC2/AC4) plus `pm.focus_changed` when
-the day's ranked focus list changes.
+"""Vault watcher: watches the configured epics/stories folders with `watchdog`, debounces bursty
+saves
+into one reindex pass, and emits `pm.item_changed` only for notes whose `note_hash` actually
+changed (idempotent re-index) plus `pm.focus_changed` when the day's ranked focus list changes.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ class _Handler(FileSystemEventHandler):
 class PmWatcher:
     """Runs a `watchdog.Observer` thread over the repo's watched folders; every filesystem event
     schedules (or reschedules) one debounced reindex on the asyncio loop, so a burst of saves
-    triggers exactly one `reindex_once()` call."""
+    triggers exactly one `reindex_once` call."""
 
     def __init__(
         self,
@@ -76,7 +76,7 @@ class PmWatcher:
 
     @property
     def reindex_count(self) -> int:
-        """Number of completed `reindex_once()` runs - test/observability hook."""
+        """Number of completed `reindex_once` runs - test/observability hook."""
         return self._reindex_count
 
     def seed_known_hashes(self, items: list[WorkItem]) -> None:

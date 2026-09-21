@@ -1,24 +1,33 @@
-"""nox-supervisor: independent watchdog + kill switch (Process Model §Supervisor, ADR-002, P1).
+"""The supervisor: an independent watchdog that owns the kill switch.
 
-Spawns core (`supervisor.core_command`) and shell, listens on the localhost control port
-(`supervisor.control_port`, token in `paths.runtime_dir/supervisor.token`, also passed to children
-via NOX_SUPERVISOR_* env vars - never on the command line), and applies the rules: 5 missed
-heartbeats -> graceful restart request (`sup.kill` mode=restart, a clean shutdown the supervisor
-answers by respawning - never the kill switch), 10 -> hard restart (psutil tree kill), more than
-`restart_limit` restarts per `restart_window_s` -> safe mode. Missed-heartbeat accounting only
-starts `boot_grace_s` (default 90 s) after spawn: a cold boot legitimately takes tens of seconds,
-and counting from spawn time restarted cores that were still importing. Inside the grace only the
-hard liveness check applies (the process exited -> restart). Kill switch (global
-hotkey via optional pynput, tray/shell over the channel): `sup.kill` to core, 2 s ack window, else
-terminate the tree and relaunch the shell with NOX_SAFE_MODE=1. Graceful shutdown (B-6, tray "Quit"
-or any authenticated client): `sup.stop` asks the supervisor to stop core, shell and itself - the
-core is told `sup.stop {reason}` and given `supervisor.stop_timeout_s` (default 6 s) to run
-`NoxCore.stop()` and exit 0 on its own before the supervisor terminates it via the job object.
-Every connection authenticates once (B-1): the first frame must be `sup.auth {token, role, pid}`;
-frames sent before that succeeds are dropped and logged once per connection, a wrong token closes
-the connection, and no frame after `sup.auth_ok` carries a token. All children live in one Windows
-job object so nothing outlives the supervisor. The supervisor never touches AI, network or the
-database.
+It spawns the core and the shell, listens on a localhost control port - the token is written to
+`paths.runtime_dir/supervisor.token` and passed to the children through environment variables,
+never on a command line - and applies three rules:
+
+* five missed heartbeats -> a graceful restart request, which is a clean shutdown the supervisor
+  answers by respawning, never the kill switch,
+* ten missed heartbeats -> a hard restart: the process tree is terminated,
+* more restarts than `restart_limit` inside `restart_window_s` -> safe mode, because something is
+  wrong that restarting does not fix.
+
+Missed-heartbeat accounting only starts `boot_grace_s` after a spawn. A cold boot legitimately
+takes tens of seconds, and counting from spawn time restarted cores that were still importing.
+Inside the grace only the hard liveness check applies: a process that exited is restarted.
+
+The kill switch - the global hotkey, or the tray over the control channel - sends `sup.kill` to
+the core, waits for the acknowledgement, and otherwise terminates the tree and relaunches the
+shell in safe mode. A graceful shutdown (`sup.stop`) asks the core to run its own shutdown and
+exit on its own inside `stop_timeout_s` before the supervisor terminates it.
+
+Every connection authenticates once: the first frame must be `sup.auth {token, role, pid}`, and no
+frame after that carries a token. Two things are bound to the process the supervisor actually
+spawned rather than merely to the shared token: the `core` role, which is accepted only from the
+core's own pid, and the heartbeat, which is accepted only on the core's own connection. Otherwise
+any holder of the token - the shell reads it from the same environment variable - could silence
+the watchdog by impersonating the core.
+
+All children live in one job object, so nothing outlives the supervisor. The supervisor never
+touches the models, the network or the database.
 """
 
 from __future__ import annotations
@@ -42,14 +51,16 @@ from nox.core.jobobject import JobObject
 from nox.core.logging import configure_logging, get_logger, shutdown_logging
 from nox.ipc.protocol import Envelope, Kind, Source
 from nox.ipc.tokens import constant_time_equals, generate_token, write_secret_file
+from nox.paths import resolve_config_paths
 from nox.supervisor import messages as m
 
 SRC = Source(role="supervisor", id="supervisor")
 
-#: Seconds after spawning the core during which only the hard liveness check applies. The
-#: config key `supervisor.boot_grace_s` overrides it once `NoxConfig` carries the field
-#: (`SupervisorConfig` is owned elsewhere); until then this is the effective default.
-DEFAULT_BOOT_GRACE_S = 90.0
+#: How long a connection has to send `sup.auth` before it is closed, and how many non-auth frames
+#: it may send in the meantime. The hub applies the same two limits; without them an
+#: unauthenticated connection could send frames forever and cost nothing but a single log line.
+AUTH_TIMEOUT_S = 5.0
+MAX_UNAUTHENTICATED_FRAMES = 3
 
 
 class SupervisorState(StrEnum):
@@ -71,7 +82,7 @@ class SupervisorSettings(BaseModel):
     heartbeat_interval_s: float = 2.0
     missed_for_graceful: int = 5
     missed_for_hard: int = 10
-    boot_grace_s: float = DEFAULT_BOOT_GRACE_S
+    boot_grace_s: float = 90.0
     restart_limit: int = 3
     restart_window_s: float = 300.0
     kill_ack_timeout_s: float = 2.0
@@ -94,7 +105,7 @@ class SupervisorSettings(BaseModel):
             heartbeat_interval_s=sup.heartbeat_interval_s,
             missed_for_graceful=sup.missed_for_graceful,
             missed_for_hard=sup.missed_for_hard,
-            boot_grace_s=float(getattr(sup, "boot_grace_s", DEFAULT_BOOT_GRACE_S)),
+            boot_grace_s=sup.boot_grace_s,
             restart_limit=sup.restart_limit,
             restart_window_s=sup.restart_window_s,
             kill_ack_timeout_s=sup.kill_ack_timeout_s,
@@ -137,13 +148,24 @@ class _Child:
         return self.proc.poll() is None
 
 
+async def kill_tree(pid: int, *, grace_s: float = 1.0) -> list[int]:
+    """`kill_process_tree` in a worker thread.
+
+    Terminating a tree takes up to two seconds of waiting, and the watchdog's own event loop is
+    the last thing that may block while a kill is in progress.
+    """
+    return await asyncio.to_thread(kill_process_tree, pid, grace_s=grace_s)
+
+
 def kill_process_tree(pid: int, *, grace_s: float = 1.0) -> list[int]:
-    """Terminate `pid` and all descendants (psutil); returns the pids that were killed."""
+    """Terminate `pid` and all its descendants; returns the pids that were signalled."""
     try:
         root = psutil.Process(pid)
+        # The process can exit between these two calls, and `children()` then raises for the
+        # parent it was asked about. Nothing left to kill is a success, not an error.
+        procs = [*root.children(recursive=True), root]
     except psutil.NoSuchProcess:
         return []
-    procs = [*root.children(recursive=True), root]
     for proc in procs:
         try:
             proc.terminate()
@@ -263,7 +285,7 @@ class Supervisor:
                 self._log.error("supervisor.stop_timeout", timeout_s=self._s.stop_timeout_s)
         for child in (self._core, self._shell):
             if child is not None and child.alive():
-                kill_process_tree(child.pid)
+                await kill_tree(child.pid)
         if self._job is not None:
             self._job.close()
         if self._server is not None:
@@ -291,7 +313,7 @@ class Supervisor:
             self._log.error("supervisor.kill_not_acked", timeout_s=self._s.kill_ack_timeout_s)
             for child in (self._core, self._shell):
                 if child is not None and child.alive():
-                    kill_process_tree(child.pid)
+                    await kill_tree(child.pid)
             self._core = None
             await self._close_core_writer()
             if self._s.shell_command:
@@ -308,12 +330,12 @@ class Supervisor:
             self._safe_mode_reason = ""
             self._restarts.clear()
             if self._core is not None and self._core.alive():
-                kill_process_tree(self._core.pid)
+                await kill_tree(self._core.pid)
             await self._close_core_writer()
             self._spawn_core()
             if self._s.shell_command:
                 if self._shell is not None and self._shell.alive():
-                    kill_process_tree(self._shell.pid)
+                    await kill_tree(self._shell.pid)
                 self._spawn_shell(safe_mode=False)
             self._state = SupervisorState.RUNNING
             return True
@@ -330,11 +352,11 @@ class Supervisor:
             exited = await self._send_stop_and_wait(reason=reason or "shutdown")
             if not exited and self._core is not None and self._core.alive():
                 self._log.error("supervisor.stop_timeout", timeout_s=self._s.stop_timeout_s)
-                kill_process_tree(self._core.pid)
+                await kill_tree(self._core.pid)
             self._core = None
             await self._close_core_writer()
             if self._shell is not None and self._shell.alive():
-                kill_process_tree(self._shell.pid)
+                await kill_tree(self._shell.pid)
             self._shell = None
             self.request_stop()
             return exited
@@ -451,13 +473,13 @@ class Supervisor:
             "supervisor.core_restart", reason=reason, hard=hard, count=len(self._restarts)
         )
         if self._core is not None and self._core.alive():
-            kill_process_tree(self._core.pid)
+            await kill_tree(self._core.pid)
         self._core = None
         await self._close_core_writer()
         if len(self._restarts) > self._s.restart_limit:
             self._enter_safe_mode(f"restart limit exceeded ({reason})")
             if self._s.shell_command and self._shell is not None and self._shell.alive():
-                kill_process_tree(self._shell.pid)
+                await kill_tree(self._shell.pid)
             if self._s.shell_command:
                 self._spawn_shell(safe_mode=True)
             return
@@ -475,15 +497,19 @@ class Supervisor:
     async def _on_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
-        """B-1: the first frame must be `sup.auth`; every frame after that carries no token."""
+        """The first frame must be `sup.auth`; no frame after that carries a token."""
         peer = writer.get_extra_info("peername")
         is_core = False
         authed = False
-        warned_unauth = False
+        unauthenticated_frames = 0
         try:
             while True:
+                timeout = None if authed else AUTH_TIMEOUT_S
                 try:
-                    envelope = await m.read_envelope(reader)
+                    envelope = await asyncio.wait_for(m.read_envelope(reader), timeout)
+                except TimeoutError:
+                    self._log.warning("supervisor.auth_timeout", peer=str(peer))
+                    break
                 except m.ProtocolError as exc:
                     await self._reply_error(writer, None, "validation.failed", str(exc))
                     break
@@ -491,21 +517,34 @@ class Supervisor:
                     break
                 if not authed:
                     if envelope.name != m.NAME_AUTH:
-                        if not warned_unauth:
-                            self._log.warning(
-                                "supervisor.unauthenticated_frame",
-                                peer=str(peer),
-                                name=envelope.name,
-                            )
-                            warned_unauth = True
+                        unauthenticated_frames += 1
+                        self._log.warning(
+                            "supervisor.unauthenticated_frame",
+                            peer=str(peer),
+                            name=envelope.name,
+                            count=unauthenticated_frames,
+                        )
+                        if unauthenticated_frames >= MAX_UNAUTHENTICATED_FRAMES:
+                            break
                         continue
                     token = envelope.payload.get("token")
                     if not isinstance(token, str) or not constant_time_equals(token, self._token):
                         self._log.warning("supervisor.auth_failed", peer=str(peer))
                         await self._reply_error(writer, envelope, "auth.denied", "invalid token")
                         break
-                    authed = True
                     role = str(envelope.payload.get("role") or envelope.src.role)
+                    if role == "core" and not self._is_spawned_core(envelope):
+                        self._log.warning(
+                            "supervisor.core_role_rejected",
+                            peer=str(peer),
+                            claimed_pid=envelope.payload.get("pid"),
+                            core_pid=self._core.pid if self._core else None,
+                        )
+                        await self._reply_error(
+                            writer, envelope, "auth.denied", "only the spawned core may claim it"
+                        )
+                        break
+                    authed = True
                     await self._send(writer, envelope.reply(m.NAME_AUTH_OK, {"ok": True}, SRC))
                     self._log.info("supervisor.client_authed", peer=str(peer), role=role)
                     if role == "core" and not is_core:
@@ -514,7 +553,7 @@ class Supervisor:
                         self._core_writer = writer
                         self._log.info("supervisor.core_connected", peer=str(peer))
                     continue
-                await self._handle(envelope, writer)
+                await self._handle(envelope, writer, is_core=is_core)
         except (OSError, asyncio.IncompleteReadError):
             pass
         finally:
@@ -527,9 +566,44 @@ class Supervisor:
             except OSError:
                 pass
 
-    async def _handle(self, envelope: Envelope, writer: asyncio.StreamWriter) -> None:
+    def _is_spawned_core(self, envelope: Envelope) -> bool:
+        """Whether this connection really is the core process the supervisor started.
+
+        The control token is shared with the shell, so possessing it proves nothing about which
+        process is on the other end. The pid in `sup.auth` is checked against the process the
+        supervisor spawned - or one of its descendants, because `supervisor.core_command` may name
+        a launcher that execs the real core. The shell is a sibling, never a descendant, so it
+        still cannot claim the role.
+
+        Without this check a shell could become the core connection, take over `sup.kill`, and
+        keep the watchdog quiet with forged heartbeats.
+        """
+        core = self._core
+        if core is None:
+            return False
+        claimed = envelope.payload.get("pid")
+        if not isinstance(claimed, int):
+            return False
+        if claimed == core.pid:
+            return True
+        return self._is_descendant_of(claimed, core.pid)
+
+    @staticmethod
+    def _is_descendant_of(pid: int, ancestor_pid: int) -> bool:
+        try:
+            ancestors = {p.pid for p in psutil.Process(pid).parents()}
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return False
+        return ancestor_pid in ancestors
+
+    async def _handle(
+        self, envelope: Envelope, writer: asyncio.StreamWriter, *, is_core: bool = False
+    ) -> None:
         name = envelope.name
         if name == m.NAME_HEARTBEAT:
+            if not is_core or writer is not self._core_writer:
+                self._log.warning("supervisor.heartbeat_from_non_core", name=name)
+                return
             now = self._clock()
             if not self._core_ready:
                 self._core_ready = True
@@ -691,31 +765,9 @@ def hotkey_to_pynput(hotkey: str) -> str:
 # ---- entry point ---------------------------------------------------------------------------------
 
 
-def default_config_paths() -> tuple[Path, Path | None]:
-    """(defaults.yaml, user.yaml or None). NOX_CONFIG_DEFAULTS / NOX_USER_CONFIG override."""
-    env_defaults = os.environ.get("NOX_CONFIG_DEFAULTS")
-    defaults = (
-        Path(env_defaults)
-        if env_defaults
-        else Path(__file__).resolve().parents[3] / "config" / "defaults.yaml"
-    )
-    env_user = os.environ.get("NOX_USER_CONFIG")
-    if env_user:
-        return defaults, Path(env_user)
-    appdata = os.environ.get("APPDATA")
-    candidates = []
-    if appdata:
-        candidates.append(Path(appdata) / "Nox" / "user.yaml")
-    candidates.append(defaults.parent / "user.yaml")
-    for candidate in candidates:
-        if candidate.is_file():
-            return defaults, candidate
-    return defaults, None
-
-
 def main(argv: list[str] | None = None) -> int:
     """Console entry (`python -m nox.supervisor`, `nox supervisor`). Returns the exit code."""
-    defaults, user = default_config_paths()
+    defaults, user = resolve_config_paths()
     cfg = load_config(defaults, user)
     configure_logging(
         cfg.paths.logs_dir,

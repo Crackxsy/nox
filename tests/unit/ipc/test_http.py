@@ -9,6 +9,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from nox.core.config import IpcConfig
 from nox.ipc.http import SECURITY_HEADERS, HttpServer, HttpSettings, create_app
 from nox.ipc.server import read_runtime_info
 
@@ -121,7 +122,7 @@ async def test_static_ui_served_when_built(tmp_path: Path) -> None:
 
 
 def test_settings() -> None:
-    s = HttpSettings.from_config({"host": "127.0.0.1", "port": 47800, "http_port": 47801})
+    s = HttpSettings.from_config(IpcConfig(host="127.0.0.1", port=47800, http_port=47801))
     assert s.port == 47801
     with pytest.raises(ValidationError):
         HttpSettings(host="10.0.0.1")
