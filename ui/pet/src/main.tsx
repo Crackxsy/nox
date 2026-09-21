@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client';
 
 import { takeToken, queryFlag, queryInt, queryString } from '../../shared/token';
 import { App } from './App';
+// Shared design tokens + pet chrome (#25). Imported here so the whole page, including the
+// transparent window's chips and notes, follows the same palette as the dashboard.
+import './styles.css';
 
 // Token: read once from the fragment, keep in memory only, remove from the address bar.
 const token = takeToken(window.location, window.history);

@@ -29,7 +29,6 @@ be built from here.
 from __future__ import annotations
 
 import asyncio
-import random
 import re
 import subprocess
 import sys
@@ -43,6 +42,7 @@ from playwright.sync_api import Page, expect
 from nox.app import DASHBOARD_DIST, DEFAULTS_PATH, PET_DIST, PROFILES_DIR, NoxCore
 from nox.core.config import NoxConfig, load_config
 from nox.ipc.tokens import read_session_token
+from tests._ports import free_port_base
 
 pytestmark = pytest.mark.e2e
 
@@ -88,7 +88,7 @@ def _ensure_ui_built() -> str | None:
 
 
 def _config(tmp_path: Path) -> NoxConfig:
-    base = random.randint(20000, 60000)  # noqa: S311 - port choice, not a security context
+    base = free_port_base()
     overrides = {
         "paths": {
             "data_dir": str(tmp_path / "data"),

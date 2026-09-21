@@ -6,7 +6,6 @@ turn would."""
 from __future__ import annotations
 
 import asyncio
-import random
 from pathlib import Path
 
 import pytest
@@ -16,6 +15,7 @@ from nox.core.config import load_config
 from nox.core.events import E
 from nox.pm.install import PmRuntime, install
 from nox.security.model import Decision
+from tests._ports import free_port_base
 
 pytestmark = pytest.mark.timeout(120)
 
@@ -59,7 +59,7 @@ machine-data:
 
 
 def _config(tmp_path: Path, vault_dir: Path):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     overrides = {
         "paths": {
             "data_dir": str(tmp_path / "data"),

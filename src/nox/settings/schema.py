@@ -32,6 +32,9 @@ EDITABLE_PATHS: dict[str, str] = {
     "identity.ui_language": "identity",
     "identity.speech_language": "identity",
     "voice.stt.model": "voice",
+    "voice.stt.listening_mode": "voice",
+    "voice.stt.wake_word_engine": "voice",
+    "voice.tts.engine": "voice",
     "voice.stt.language": "voice",
     "voice.stt.wake_word": "voice",
     "voice.stt.push_to_talk_hotkey": "voice",
@@ -48,6 +51,16 @@ EDITABLE_PATHS: dict[str, str] = {
     "pet.variant": "pet",
     "pet.greeting_enabled": "pet",
     "stream.twitch.channel": "integrations",
+    # #26: the Twitch bot's own knobs, moved out of `plugins/twitch/manifest.yaml`. The plugin
+    # reads them from the configuration, so editing them here is what changes its behaviour -
+    # at its next start, like every other plugin-side setting (never a live apply).
+    "stream.twitch.bot_names": "integrations",
+    "stream.twitch.relevance_cooldown_s": "integrations",
+    "stream.twitch.rate_limit_max_messages": "integrations",
+    "stream.twitch.rate_limit_window_s": "integrations",
+    "stream.twitch.rate_limit_min_gap_s": "integrations",
+    "stream.twitch.min_backoff_s": "integrations",
+    "stream.twitch.max_backoff_s": "integrations",
     "remote.enabled": "remote",
     "memory.full_scan_on_boot": "memory",
     "plugins.enabled": "plugins",

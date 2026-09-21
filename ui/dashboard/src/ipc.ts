@@ -84,9 +84,15 @@ export const api = {
   configGet: (c: IpcClient) => c.request('config.get', {}),
   configSet: (c: IpcClient, values: Record<string, unknown>) => c.request('config.set', { values }),
   secretsStatus: (c: IpcClient) => c.request('secrets.status', {}),
-  secretSet: (c: IpcClient, name: string, value: string) =>
-    c.request('secrets.set', { name, value }),
-  secretDelete: (c: IpcClient, name: string) => c.request('secrets.delete', { name }),
+  /** `{configured}` — whether a secret change has to carry a PIN (#23). */
+  pinStatus: (c: IpcClient) => c.request('security.pin.status', {}),
+  // The PIN is only ever a request field: it is passed in per call, sent when there is one, and
+  // never stored anywhere in this UI. An empty string is no PIN at all, so it is not sent —
+  // that way the core answers "PIN required" instead of "PIN wrong".
+  secretSet: (c: IpcClient, name: string, value: string, pin = '') =>
+    c.request('secrets.set', pin ? { name, value, pin } : { name, value }),
+  secretDelete: (c: IpcClient, name: string, pin = '') =>
+    c.request('secrets.delete', pin ? { name, pin } : { name }),
   twitchAuthStart: (c: IpcClient) => c.request('twitch.auth.start', {}),
   twitchAuthStatus: (c: IpcClient) => c.request('twitch.auth.status', {}),
   twitchAuthDisconnect: (c: IpcClient) => c.request('twitch.auth.disconnect', {}),

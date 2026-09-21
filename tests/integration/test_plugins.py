@@ -9,7 +9,6 @@ and the kill switch stopping every plugin worker.
 from __future__ import annotations
 
 import asyncio
-import random
 import shutil
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from nox.core.config import load_config
 from nox.core.events import Event, HealthStatus
 from nox.ipc.client import IpcClient
 from nox.plugins.manager import PluginState
+from tests._ports import free_port_base
 
 pytestmark = pytest.mark.timeout(180)
 
@@ -48,7 +48,7 @@ def _plugins_dir(tmp_path: Path) -> Path:
 
 
 def _config(tmp_path: Path):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     (tmp_path / "vault").mkdir()
     overrides = {
         "paths": {

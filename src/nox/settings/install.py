@@ -7,7 +7,9 @@ to build the services and register their IPC requests - the same shape as `nox.r
 What gets wired:
   * `ConfigEditor` on the live `NoxConfig` plus the User layer (`user.yaml`), with the live
     appliers below, so `config.get`/`config.set` work;
-  * `SecretsService` on the core's keyring store and PIN manager (`secrets.*`);
+  * `SecretsService` on the core's keyring store and PIN manager (`secrets.*`), plus
+    `security.pin.status` - the one boolean the Settings page needs to know whether a secret
+    change has to carry a PIN (#23);
   * `TwitchAuthService` on `core.security.egress.client` (`twitch.auth.*`), plus a background
     refresher so a long session never dies of an expired chat token;
   * `PersonalityFile` in the data directory (`personality.*`), installed as the prompt builder's
@@ -230,6 +232,15 @@ def _register(
     async def h_config_set(ctx: RequestContext, p: ConfigSetRequest) -> dict[str, Any]:
         return await editor.apply(p.values, by=ctx.role)
 
+    async def h_pin_status(_ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
+        """Whether a PIN is configured - never the PIN, its hash, its length or its algorithm.
+
+        The Settings page needs exactly this one boolean to know that `secrets.set`/`secrets.delete`
+        will ask for a PIN (#23). The alternatives are worse: prompting for a PIN nobody set, or
+        sending a request the core is guaranteed to refuse and calling that an error.
+        """
+        return {"configured": bool(core.security.pin.is_set())}
+
     async def h_secrets_status(_ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
         return dict(secrets.status())
 
@@ -266,6 +277,7 @@ def _register(
 
     reg("config.get", EmptyPayload, h_config_get, roles=UI_ROLES)
     reg("config.set", ConfigSetRequest, h_config_set, roles=UI_ROLES)
+    reg("security.pin.status", EmptyPayload, h_pin_status, roles=UI_ROLES)
     reg("secrets.status", EmptyPayload, h_secrets_status, roles=UI_ROLES)
     reg("secrets.set", SecretSetRequest, h_secrets_set, roles=UI_ROLES)
     reg("secrets.delete", SecretDeleteRequest, h_secrets_delete, roles=UI_ROLES)

@@ -6,7 +6,6 @@ Modelled on `tests/integration/test_obs_plugin.py`."""
 from __future__ import annotations
 
 import asyncio
-import random
 import shutil
 import sys
 from pathlib import Path
@@ -17,6 +16,7 @@ import yaml
 from nox.app import DEFAULTS_PATH, PROFILES_DIR, REPO_ROOT, NoxCore
 from nox.core.config import load_config
 from nox.plugins.manager import PluginState
+from tests._ports import free_port_base
 
 pytestmark = pytest.mark.timeout(180)
 
@@ -47,7 +47,7 @@ def _coding_plugin_dir(tmp_path: Path, *, command: Path, workspace: Path) -> Pat
 
 
 def _config(tmp_path: Path, *, plugins_dir: Path):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     (tmp_path / "vault").mkdir()
     overrides = {
         "paths": {
@@ -143,7 +143,7 @@ async def test_coding_plugin_never_registers_under_the_work_profile(tmp_path: Pa
     workspace.mkdir()
     command = _fake_claude_wrapper(tmp_path)
     plugins_dir = _coding_plugin_dir(tmp_path, command=command, workspace=workspace)
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     (tmp_path / "vault").mkdir()
     overrides = {
         "paths": {

@@ -10,6 +10,116 @@ release. See `docs/RELEASE_CHECKLIST.md` for what v1.0 itself requires.
 
 ## [Unreleased]
 
+### Added (2026-09-16, pet window — design tokens, sprite variant, live variant switch)
+- One palette for both front-ends: the dashboard's Apple-style token block now lives in
+  `ui/shared/tokens.css` (same names, same values, same `prefers-color-scheme` +
+  `data-theme` guards) and the pet window uses it instead of its own dark-only colours. The pet
+  therefore follows the OS between light and dark — chips, notes, the status label and the
+  capture indicator all do — while the window itself stays transparent, and each creature variant
+  finally uses the body lightness it already shipped for the active background (#25).
+- The pet can render a **sprite variant**: `pet.variant: sprite:<id>` loads
+  `variants/<id>/sprites.json`, validates it, preloads every frame and plays the frame sequences
+  the existing state machine selects (idle / listening / speaking / thinking / sleeping, plus
+  optional blink), with a 150 ms crossfade between expressions, idle breathing as a subtle
+  scale/translate, `prefers-reduced-motion` honoured, and a logged fallback to the procedural
+  variant when a manifest or a single frame fails to load. A generated placeholder set ships under
+  `variants/placeholder/` so the path works end to end before the real art exists (#19).
+- `config.set pet.variant` takes effect without restarting Nox: the shell reloads the pet page with
+  the new variant on `settings.changed`, and the pet page subscribes to the same event so it can
+  swap the variant in place once the core exposes the value to the `pet` role (#24).
+
+### Added (2026-09-16, voice: Kokoro TTS and a wake-word gate)
+- Kokoro (`kokoro-onnx`) as a second text-to-speech engine next to Piper, selectable with
+  `voice.tts.engine: kokoro` and the new optional extra `voice-kokoro` (#21). Same `TtsEngine`
+  contract as Piper: sentence-wise streaming, synthesis off the event loop, reported sample rate
+  (24 kHz), prepared clips. Model files are resolved from `<data_dir>/models/kokoro/` and are never
+  downloaded automatically - a missing file is an `unavailable` health reason that names the path
+  and the command, `python -m nox.worker --download-kokoro` (~354 MB, user-initiated, no core and
+  no egress guard involved). The default stays `piper`.
+- Wake-word gate in front of Whisper (#20): `voice.stt.wake_word_engine: openwakeword|text`,
+  `wake_word_model`, `wake_word_threshold`, `wake_window_s` and `conversation_window_s`. While
+  push-to-talk is not held and no conversation window is open, a speech segment only reaches
+  Whisper if the cheap always-on detector fired - background audio (a video, a game) is dropped
+  before transcription instead of filling the queue with 20-40 s of latency and inventing
+  languages in noise. Audio the user did not direct at Nox is now never transcribed at all.
+- `voice.stt.listening_mode: continuous|ptt_only` (#20). `ptt_only` never opens the microphone
+  unless push-to-talk is held; `continuous` stays the default.
+- `voice.stt.kill_phrase_watchdog` / `kill_watchdog_max_ms` (#20): because no acoustic model for
+  the kill phrase exists, short segments still reach Whisper so "Nox Notaus" keeps working. Such a
+  transcript is checked for the kill phrase and then discarded - it never becomes an event and
+  never reaches a language model.
+- `voice.models_dir`: one root for the Piper, Kokoro and openWakeWord model files (empty =
+  `<paths.data_dir>/models`).
+
+### Changed (2026-09-16, voice)
+- Voice model and clip directories are derived from the data directory instead of being hard-coded
+  absolute paths in the engine modules (#21). **Action required for existing installations whose
+  models are not below `paths.data_dir`:** set `voice.models_dir` in `user.yaml` (or move the
+  `piper/`, `faster-whisper/` folders), otherwise the engines look under
+  `%APPDATA%\Nox\models` and report their models as missing.
+- `voice.tts.engine` is validated against `piper|kokoro` instead of being a free-form string.
+- `openwakeword` was added to the `voice` extra; clip handling shared by both TTS engines moved to
+  `nox.voice.tts.clips`.
+- `NOTICE` and `docs/license_policy.yaml` record the honest license status of the Kokoro route
+  (#21): Kokoro's own code, ONNX Runtime and the model files are permissive, but `kokoro-onnx`
+  still depends on `phonemizer` and espeak-ng (GPL-3.0-or-later), so switching to Kokoro moves the
+  GPL obligation on bundled builds rather than removing it. Reaching an Apache-2.0-only installer
+  needs a permissively licensed grapheme-to-phoneme front end and remains an open decision.
+
+_No git tags exist yet; they will be created at the first public release (`docs/PUBLISHING.md`) -
+until then the compare links below point at tags that don't exist yet either._
+
+### Fixed (2026-09-16, `user.yaml` lost hand-written comments on every write — #22)
+- `nox.settings.layers.write_user_config` — the one writer behind `config.set` and `nox onboard` —
+  round-trips the User layer through `ruamel.yaml` instead of `yaml.safe_dump`: comments, key
+  order and quoting style survive a settings change, and only the keys in the patch change. What
+  is written stays plain YAML; every reader still parses it with `yaml.safe_load`. A `user.yaml`
+  that does not parse now raises `UserConfigError` and is left untouched instead of being quietly
+  replaced by a fresh document. New core dependency `ruamel.yaml` (MIT).
+
+### Added (2026-09-16, the dashboard asks for the PIN on a secret change — #23)
+- New read-only `security.pin.status {}` -> `{configured}` (roles `shell`/`dashboard`): presence
+  only, never the PIN, its hash, its length or its algorithm. The core has required a `pin` on
+  `secrets.set`/`secrets.delete` ever since a PIN is configured, but the Settings page never sent
+  one, so every credential change failed with "permission denied". The page now shows an inline
+  PIN field next to Speichern/Löschen when a PIN is configured, sends it with exactly that one
+  request, clears it afterwards and stores it nowhere, and turns a PIN refusal into the honest
+  `pin_required`/`pin_wrong` message instead of a raw error line.
+
+### Changed (2026-09-16, the Twitch bot's knobs are configuration, not manifest-only — #26)
+- `stream.twitch` gained `bot_names`, `relevance_cooldown_s`, `rate_limit_max_messages`,
+  `rate_limit_window_s`, `rate_limit_min_gap_s`, `min_backoff_s` and `max_backoff_s` — typed,
+  validated, with the manifest's own values as defaults — and all of them are editable on the
+  Settings page with de/en labels. The plugin reads them from the configuration
+  (`nox_plugin_twitch.settings.resolve_settings`); a manifest that still carries one of the moved
+  keys keeps working for one release and logs `twitch.manifest_config_deprecated`.
+
+### Fixed (2026-09-16, RL Stage 1 capture had no privacy gate — #27)
+- The Stage 1 HUD `_recognize_loop` (`plugins/rl/src/nox_plugin_rl/plugin.py`) captured the
+  screen on a timer regardless of privacy state, unlike Stage 2's `_vision_loop`, which already
+  stops while a privacy zone is active or `privacy.capture.screen` is off (ST-18-03 AC2's
+  `_capture_allowed` gate). New `nox.rl.capture_gate.CaptureGate`: a `privacy.capture_changed`-
+  driven gate (reusing `PrivacyService.effective_capture()`'s `screen` boolean - already accounts
+  for zone/mode/capture-flag/panic/safe-mode) meant to back both loops so neither hand-rolls its
+  own privacy check; logs `rl.capture_paused reason=...` / `rl.capture_resumed` exactly once per
+  transition and guarantees a paused loop grabs no frame at all via `maybe_capture()`.
+
+### Added (2026-09-16, persisted proactive notifications — #28)
+- `nox.proactive.store.NotificationStore` (ST-19-08) is now backed by a `proactive_notifications`
+  table (migration `0010_notifications`) when constructed with a database, so notification history
+  survives a restart; `db=None` keeps the original in-memory ring buffer for tests. New
+  `NotificationRepository` (`nox.data.repos`). New `proactive.notification.dismiss {id}` tool,
+  persisted like everything else in the store; expired/dismissed rows are pruned by
+  `NotificationRepository.purge_expired` (module-level `DEFAULT_NOTIFICATIONS_RETENTION_DAYS = 30`
+  default - see the report to the config owner about adding
+  `proactive.notifications_retention_days` to `ProactiveConfig`).
+
+### Fixed (2026-09-16, proactive service silently discarded an injected notification store)
+- `ProactiveService.__init__` used `store or NotificationStore(...)`; since `NotificationStore`
+  defines `__len__`, a caller-supplied store that was still empty (0 records) was falsy and got
+  replaced with a fresh, unrelated in-memory store - notably `nox.proactive.install.install`'s
+  now-db-backed store right after boot. Fixed to an explicit `is not None` check.
+
 ### Added (2026-09-16, editable settings — EPIC-21)
 - Settings are writable, not just readable (PO: "in den Einstellungen kann man nur den Status
   lesen"). New `nox.settings` package with `config.get`/`config.set` over an explicit allow-list
@@ -154,11 +264,15 @@ Repository foundation: package layout, `config/defaults.yaml`, and the interface
 modules build against (`events.py`, `state.py`, `model.py`, `protocol.py`, `base.py`). No running
 product yet.
 
-No tags exist yet (repo is pre-v1.0/private) - links below use commit hashes, not tags, and will
-move to tag-based compare links once releases are actually tagged (item 16 of
-`docs/RELEASE_CHECKLIST.md`).
+No tags exist yet (repo is pre-v1.0/private): the links below used to point at commit hashes from
+this pre-publication history, which 404 on the public repository (#29) - they now use the
+tag-based form `docs/PUBLISHING.md`'s squashed-snapshot publish is expected to create tags for
+(item 16 of `docs/RELEASE_CHECKLIST.md`), even though those tags do not exist yet either; both
+`v0.1.0` and `v0.2.0` get an actual release tag at first publish, `v0.0.0` ("Repository
+foundation") predates the tagging process and never gets one, hence the single-tag link shape
+below instead of a compare for it and for `v0.1.0` (nothing tagged to compare either against).
 
-[Unreleased]: https://github.com/Crackxsy/nox/compare/54ce00e...HEAD
-[0.2.0]: https://github.com/Crackxsy/nox/compare/8584d5c...54ce00e
-[0.1.0]: https://github.com/Crackxsy/nox/compare/b3c363e...8584d5c
-[0.0.0]: https://github.com/Crackxsy/nox/commit/b3c363e
+[Unreleased]: https://github.com/Crackxsy/nox/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Crackxsy/nox/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/Crackxsy/nox/releases/tag/v0.1.0
+[0.0.0]: https://github.com/Crackxsy/nox/releases/tag/v0.0.0

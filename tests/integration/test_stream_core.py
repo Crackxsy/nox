@@ -7,7 +7,6 @@ tool is actually invoked, and the call is audited) - end to end, no mocking of t
 
 from __future__ import annotations
 
-import random
 from pathlib import Path
 from typing import Any
 
@@ -19,10 +18,11 @@ from nox.core.config import load_config
 from nox.core.events import E, Event
 from nox.security.model import Risk
 from nox.tools.registry import ToolSpec
+from tests._ports import free_port_base
 
 
 def _config(tmp_path: Path):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     overrides = {
         "paths": {
             "data_dir": str(tmp_path / "data"),

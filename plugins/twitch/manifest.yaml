@@ -31,25 +31,23 @@ resources:
   memory_mb: 128
   priority: normal
 config:
-  # Empty on purpose: the channel is a user setting (`stream.twitch.channel`, editable in the
-  # dashboard). Set it here only to pin one instance to a fixed channel. No channel is guessed.
+  # The bot's user-facing knobs live in the configuration, not here (#26): `stream.twitch.*` in
+  # config/defaults.yaml, editable on the dashboard's Settings page - channel, bot_names,
+  # relevance_cooldown_s, the rate_limit_* budget and min/max_backoff_s. Keeping a copy of one of
+  # those keys in this block still works for one release (the plugin logs a deprecation line and
+  # uses it); new installations should leave them out.
+  #
+  # Empty on purpose: the channel is a user setting (`stream.twitch.channel`). Set it here only to
+  # pin one instance to a fixed channel. No channel is guessed.
   channel: ""
+  # Technical endpoint knobs; not a user setting and deliberately not in the configuration.
   host: "irc.chat.twitch.tv"
   port: 6697
   tls: true  # False only for tests, against a plaintext fake IRC server
-  min_backoff_s: 1.0
-  max_backoff_s: 30.0
-  # twitch.chat.send rate limiting (Spec v0.2 §9: stays under Twitch's own 20 msg/30s mod limit).
-  rate_limit_max_messages: 20
-  rate_limit_window_s: 30.0
-  rate_limit_min_gap_s: 1.5
   # Extra deterministic ModerationGate terms on top of the hard-coded exclusions (hate against
   # protected groups, sexual content about viewers, doxxing, illness/death jokes, insults aimed at
   # a viewer name - none of those can be relaxed via config).
   moderation_blocklist: []
-  # Names/aliases the RelevanceClassifier treats as "the bot was mentioned".
-  bot_names: ["nox"]
-  relevance_cooldown_s: 20.0
   # !rps: per-viewer cooldown and the Funken awarded on a win - pending approval (Spec v0.2 §3.5:
   # exact Funken rates are backlog defaults, not yet a product decision).
   rps_cooldown_s: 30.0

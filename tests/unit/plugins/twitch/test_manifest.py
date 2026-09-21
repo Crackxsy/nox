@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from nox_plugin_twitch.settings import MOVED_KEYS
+
 from nox.app import PROFILES_DIR, REPO_ROOT
 from nox.plugins.manifest import check_egress, load_manifest
 from nox.security.model import Risk
@@ -54,3 +56,17 @@ def test_twitch_manifest_egress_is_authorized_by_the_real_stream_profile() -> No
         ("irc.chat.twitch.tv:6697", True),
         ("api.twitch.tv:443", True),
     }
+
+
+def test_the_moved_knobs_are_gone_from_the_shipped_manifest() -> None:
+    """#26: bot names, rate limits and backoff are `stream.twitch.*` now, not manifest keys.
+
+    Leaving a copy here would silently win over the dashboard setting (the plugin honours a
+    manifest key for one more release), which is exactly the problem #26 is about.
+    """
+    manifest = load_manifest(TWITCH_PLUGIN_DIR)
+    assert sorted(set(manifest.config) & set(MOVED_KEYS)) == []
+    # Still manifest-only: the endpoint, the moderation extras and the (unapproved) !rps numbers.
+    assert manifest.config["channel"] == ""
+    assert manifest.config["host"] == "irc.chat.twitch.tv"
+    assert manifest.config["moderation_blocklist"] == []

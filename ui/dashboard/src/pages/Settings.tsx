@@ -7,14 +7,17 @@
  *
  * Secrets are write-only: `secrets.status` says whether a name is present, never what it holds, so
  * a stored credential shows "stored" plus Change/Delete and never a masked value that could be
- * copied out. The Twitch device flow shows the user code exactly as the core returned it and polls
+ * copied out. When a PIN is configured (`security.pin.status`), saving or deleting one asks for it
+ * inline: the PIN lives in component state for exactly that one request and is cleared afterwards
+ * — never persisted, never sent with anything but a `secrets.set`/`secrets.delete` the user just
+ * triggered. The Twitch device flow shows the user code exactly as the core returned it and polls
  * `twitch.auth.status` at the interval the core dictates.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { type Key, type T, groupLabel, settingLabel, statusLabel, twitchStateLabel } from '../i18n';
-import { type IpcClient, api } from '../ipc';
+import { type IpcClient, IpcError, api } from '../ipc';
 import {
   type ConfigSetResult,
   type EditableConfig,
@@ -27,9 +30,11 @@ import {
   parseEditableConfig,
   parseHealthHistory,
   parsePersonality,
+  parsePinConfigured,
   parseSecretStatus,
   parseTwitchAuthStatus,
   parseTwitchDeviceCode,
+  pinErrorKey,
 } from '../model';
 import { Hero, StateWord, Tile } from '../ui';
 
@@ -84,6 +89,11 @@ export function SettingsPage({ t, client, revision, twitchAuthEvent }: SettingsP
   const [secretDraft, setSecretDraft] = useState<Record<string, string>>({});
   const [secretEditing, setSecretEditing] = useState<Record<string, boolean>>({});
   const [secretBusy, setSecretBusy] = useState<string | null>(null);
+  /** `security.pin.status`: whether `secrets.set`/`secrets.delete` have to carry a PIN. */
+  const [pinConfigured, setPinConfigured] = useState(false);
+  /** The PIN the user just typed. Never written anywhere else, cleared after every attempt. */
+  const [pin, setPin] = useState('');
+  const [pinMessage, setPinMessage] = useState<Key | ''>('');
 
   const [twitch, setTwitch] = useState<TwitchAuthStatus | null>(null);
   const [twitchFailed, setTwitchFailed] = useState(false);
@@ -116,11 +126,12 @@ export function SettingsPage({ t, client, revision, twitchAuthEvent }: SettingsP
 
   const load = useCallback(
     async (c: IpcClient) => {
-      const [cfg, sec, pers, hist] = await Promise.allSettled([
+      const [cfg, sec, pers, hist, pinState] = await Promise.allSettled([
         api.configGet(c),
         api.secretsStatus(c),
         api.personalityGet(c),
         api.healthHistory(c, 30),
+        api.pinStatus(c),
       ]);
 
       const parsedConfig = cfg.status === 'fulfilled' ? parseEditableConfig(cfg.value) : null;
@@ -138,6 +149,10 @@ export function SettingsPage({ t, client, revision, twitchAuthEvent }: SettingsP
       if (parsedPersonality && personalityDraft === '') setPersonalityDraft(parsedPersonality.text);
 
       if (hist.status === 'fulfilled') setHistory(parseHealthHistory(hist.value));
+
+      // A refused or failed request means "no PIN known here": the page then sends none and the
+      // core's own refusal is what tells the user a PIN is needed.
+      setPinConfigured(pinState.status === 'fulfilled' && parsePinConfigured(pinState.value));
 
       await loadTwitchStatus(c);
     },
@@ -231,20 +246,39 @@ export function SettingsPage({ t, client, revision, twitchAuthEvent }: SettingsP
 
   const secretPresent = (name: string) => secrets?.some((s) => s.name === name && s.present) ?? false;
 
+  /**
+   * A failed secret change: a refusal that names the PIN becomes the honest PIN message, anything
+   * else keeps the core's own wording. The typed PIN is dropped either way — a wrong one is worth
+   * retyping, and a right one has done its single job.
+   */
+  const reportSecretError = (e: unknown, pinSent: boolean) => {
+    const key = e instanceof IpcError ? pinErrorKey(e.code, e.message, pinSent) : null;
+    if (key) setPinMessage(key);
+    else setError(`${t('error_prefix')}: ${e instanceof Error ? e.message : String(e)}`);
+    setPin('');
+  };
+
+  const reloadSecrets = async (c: IpcClient) => {
+    const parsed = parseSecretStatus(await api.secretsStatus(c));
+    setSecrets(parsed);
+    setSecretsFailed(parsed === null);
+  };
+
   const saveSecret = async (name: string) => {
     const value = secretDraft[name] ?? '';
     if (!client || value.trim() === '') return;
+    const sentPin = pinConfigured ? pin : '';
     setSecretBusy(name);
     setError('');
+    setPinMessage('');
     try {
-      await api.secretSet(client, name, value.trim());
+      await api.secretSet(client, name, value.trim(), sentPin);
       setSecretDraft((d) => ({ ...d, [name]: '' }));
       setSecretEditing((d) => ({ ...d, [name]: false }));
-      const parsed = parseSecretStatus(await api.secretsStatus(client));
-      setSecrets(parsed);
-      setSecretsFailed(parsed === null);
+      setPin('');
+      await reloadSecrets(client);
     } catch (e) {
-      setError(`${t('error_prefix')}: ${e instanceof Error ? e.message : String(e)}`);
+      reportSecretError(e, sentPin !== '');
     } finally {
       setSecretBusy(null);
     }
@@ -252,15 +286,16 @@ export function SettingsPage({ t, client, revision, twitchAuthEvent }: SettingsP
 
   const deleteSecret = async (name: string) => {
     if (!client) return;
+    const sentPin = pinConfigured ? pin : '';
     setSecretBusy(name);
     setError('');
+    setPinMessage('');
     try {
-      await api.secretDelete(client, name);
-      const parsed = parseSecretStatus(await api.secretsStatus(client));
-      setSecrets(parsed);
-      setSecretsFailed(parsed === null);
+      await api.secretDelete(client, name, sentPin);
+      setPin('');
+      await reloadSecrets(client);
     } catch (e) {
-      setError(`${t('error_prefix')}: ${e instanceof Error ? e.message : String(e)}`);
+      reportSecretError(e, sentPin !== '');
     } finally {
       setSecretBusy(null);
     }
@@ -398,6 +433,45 @@ export function SettingsPage({ t, client, revision, twitchAuthEvent }: SettingsP
     }
   };
 
+  /**
+   * The PIN prompt that belongs to one secret's Save/Delete buttons. Rendered only when the core
+   * says a PIN is configured; there is deliberately exactly one PIN in flight at a time (one
+   * `pin` state, cleared after every attempt) rather than a per-secret map that would keep typed
+   * PINs around for secrets the user never submitted.
+   */
+  const pinField = (name: string) => {
+    if (!pinConfigured) return null;
+    const id = `${fieldId(name)}-pin`;
+    return (
+      <div className="field">
+        <label htmlFor={id} className="label">
+          {t('pin_label')}
+        </label>
+        <input
+          id={id}
+          type="password"
+          className="input"
+          autoComplete="off"
+          disabled={disabled || secretBusy === name}
+          aria-describedby={`${id}-hint`}
+          value={pin}
+          onChange={(e) => {
+            setPin(e.target.value);
+            setPinMessage('');
+          }}
+        />
+        <p id={`${id}-hint`} className="hint">
+          {t('pin_hint')}
+        </p>
+        {pinMessage && (
+          <p role="alert" className="setting-error">
+            {t(pinMessage)}
+          </p>
+        )}
+      </div>
+    );
+  };
+
   const secretField = (name: string, labelKey: Key, hintKey?: Key) => {
     const present = secretPresent(name);
     const editing = secretEditing[name] === true;
@@ -406,6 +480,7 @@ export function SettingsPage({ t, client, revision, twitchAuthEvent }: SettingsP
       return (
         <div className="field field--spaced">
           <span className="label">{t(labelKey)}</span>
+          {pinField(name)}
           <div className="tile-actions">
             <StateWord status="available" label={t('secret_stored')} />
             <button
@@ -448,6 +523,7 @@ export function SettingsPage({ t, client, revision, twitchAuthEvent }: SettingsP
             {t(hintKey)}
           </p>
         )}
+        {pinField(name)}
         <div className="tile-actions">
           <button
             type="button"

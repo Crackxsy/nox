@@ -17,6 +17,8 @@ from __future__ import annotations
 from typing import Any, Protocol
 from uuid import uuid4
 
+from pydantic import BaseModel
+
 from nox.core.events import Event
 from nox.ipc.dispatch import EmptyPayload
 from nox.proactive.dashboard import (
@@ -25,9 +27,16 @@ from nox.proactive.dashboard import (
     make_health_history_handler,
 )
 from nox.proactive.service import ProactiveService
+from nox.proactive.store import NotificationStore
 from nox.security.model import Risk
 from nox.tools.registry import ToolRegistry, ToolSpec
 from nox.voice.base import TtsRequest
+
+
+class NotificationDismissRequest(BaseModel):
+    """`proactive.notification.dismiss {id}` (#28)."""
+
+    id: str
 
 
 class _Core(Protocol):
@@ -78,12 +87,15 @@ def install(core: _Core) -> ProactiveService:
         language = configured if configured in ("de", "en") else "de"
         speaker = _TextSpeaker(core.speaker, language=language)
 
+    pcfg = core.config.proactive
+    store = NotificationStore(limit=pcfg.notification_store_limit, db=core.db)
     service = ProactiveService(
         state=core.state,
         config=core.config,
         speech_policy=core.speech_policy,
         publish_event=publish_event,
         speaker=speaker,
+        store=store,
     )
     core.proactive = service  # type: ignore[attr-defined]
 
@@ -117,6 +129,22 @@ def install(core: _Core) -> ProactiveService:
             side_effects=False,
             local=True,
             handler=tool_handler,
+        )
+    )
+
+    async def dismiss_handler(arguments: dict[str, Any]) -> dict[str, Any]:
+        dismissed = await service.dismiss(str(arguments.get("id", "")))
+        return {"ok": dismissed}
+
+    core.tool_registry.register(
+        ToolSpec(
+            name="proactive.notification.dismiss",
+            description="Dismiss a notification by id so it stops showing as active/unread.",
+            input_model=NotificationDismissRequest,
+            risk=Risk.LOW,
+            side_effects=True,
+            local=True,
+            handler=dismiss_handler,
         )
     )
 

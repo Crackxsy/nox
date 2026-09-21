@@ -12,7 +12,6 @@ service, and the post-match analysis + coaching-speech wiring together. Modelled
 
 from __future__ import annotations
 
-import random
 from pathlib import Path
 from typing import Any
 
@@ -23,12 +22,13 @@ from nox.core.config import load_config
 from nox.core.events import E, Event
 from nox.data.rl_vision_repos import RlVisionAnalysisRepository, RlVisionFrameRepository
 from nox.voice.base import TtsRequest
+from tests._ports import free_port_base
 
 pytestmark = pytest.mark.timeout(60)
 
 
 def _config(tmp_path: Path, *, vision_enabled: bool = True):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     (tmp_path / "vault").mkdir()
     overrides = {
         "paths": {

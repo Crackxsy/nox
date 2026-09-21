@@ -1,0 +1,160 @@
+/**
+ * Pet window styling (#25). The window itself is frameless, always-on-top and *transparent*: the
+ * page paints the creature and a little chrome, the desktop shows through everywhere else. That is
+ * the one rule nothing here may break — `background: transparent` on html/body/#root stays.
+ *
+ * Colour comes from the shared token set (`ui/shared/tokens.css`, the same file the dashboard
+ * uses), so the pet follows the OS between light and dark instead of being permanently dark.
+ * Because the chrome floats over an unknown desktop rather than over `--page`, it is built from the
+ * dashboard's translucent-bar material: `--nav-bg` behind a `--hairline` edge, `--ink` on top. That
+ * is the only decoration in the window; everything loud is the creature.
+ */
+
+@import "../../shared/tokens.css";
+
+:root {
+  /* Chips: the capture indicator, the status label under the creature, the two error notes. */
+  --pet-chip-bg: var(--nav-bg);
+  --pet-chip-ink: var(--ink);
+  --pet-chip-ink-2: var(--ink-2);
+  --pet-chip-line: var(--hairline);
+  --pet-chip-radius: 10px;
+
+  /* Creature line work (eyes, brows, mouth, outline). Deliberately *not* `--ink`: the creature is
+   * drawn on the transparent window, never on `--page`, and its own body fill carries the
+   * contrast — flipping the line work to near-white in dark mode would erase the face. It stays
+   * the light-theme ink value in both themes. */
+  --pet-ink: #1d1d1f;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font);
+  color: var(--ink);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.pet-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+
+/* -- chips ------------------------------------------------------------------------------------ */
+
+.pet-chip {
+  background: var(--pet-chip-bg);
+  border: 1px solid var(--pet-chip-line);
+  border-radius: var(--pet-chip-radius);
+  color: var(--pet-chip-ink);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  backdrop-filter: saturate(180%) blur(12px);
+}
+
+.pet-note {
+  position: absolute;
+  bottom: 4px;
+  left: 8px;
+  right: 8px;
+  margin: 0;
+  padding: 3px 6px;
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.pet-capture {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 3px 5px;
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.pet-capture-dot {
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  text-align: center;
+  /* Off: a hairline ring. On: a filled square (D238 — shape carries the state, not colour alone). */
+  border: 1.5px solid var(--pet-chip-line);
+  border-radius: 7px;
+  color: var(--pet-chip-ink-2);
+  background: transparent;
+}
+
+.pet-capture-dot[data-on="true"] {
+  border-radius: 3px;
+  border-color: var(--dot);
+  background: var(--dot);
+  color: var(--page);
+}
+
+.pet-capture-offline {
+  padding-left: 2px;
+  color: var(--pet-chip-ink-2);
+}
+
+/* -- sprite variant (#19) --------------------------------------------------------------------- */
+
+.pet-sprite {
+  position: relative;
+  display: block;
+  background: transparent;
+  /* Idle breathing: one slow scale/translate on the whole creature, no bounce. */
+  animation: pet-breathe var(--pet-breath-s, 4.2s) ease-in-out infinite;
+  transform-origin: 50% 100%;
+}
+
+.pet-sprite-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: auto;
+  opacity: 0;
+  transition: opacity var(--pet-crossfade-ms, 150ms) linear;
+}
+
+.pet-sprite-frame[data-active="true"] {
+  opacity: 1;
+}
+
+@keyframes pet-breathe {
+  0%,
+  100% {
+    transform: scale(1) translateY(0);
+  }
+  50% {
+    transform: scale(1.018) translateY(-0.9%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pet-sprite {
+    animation: none;
+  }
+
+  .pet-sprite-frame {
+    transition: none;
+  }
+}

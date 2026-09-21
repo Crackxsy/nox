@@ -5,21 +5,28 @@ worker; results leave through the injected `emit(name, payload)` callback which 
 IPC events. Security gate: no frame is processed unless `capture_allowed()` is True, the pipeline is
 not muted and no kill phrase has been latched; the kill phrase is reported as `voice.kill_phrase`
 and never reaches the LLM path (no transcript event). Raw audio only ever lives in memory.
+
+Second gate (#20): between the segmenter and the STT engine sits the wake-word gate
+(`nox.voice.stt.wake_gate`). While no push-to-talk is held and no conversation window is open, a
+segment only reaches Whisper when the cheap acoustic detector fired recently - otherwise it is
+dropped without being transcribed at all. `listening_mode: ptt_only` goes one step further and
+never enables the microphone unless push-to-talk is held.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from pydantic import BaseModel, Field
 
-from nox.core.events import E, TranscriptReady, TtsStarted, VoiceKillPhrase
+from nox.core.events import E, HealthStatus, TranscriptReady, TtsStarted, VoiceKillPhrase
 from nox.voice._logging import get_logger
 from nox.voice.audio import AudioUnavailableError
 from nox.voice.base import AudioInput, AudioOutput, SttEngine, TtsEngine, TtsRequest
+from nox.voice.stt.wake_gate import GateDecision, WakeGate
 from nox.voice.stt.wake_word import WakeWordMatcher
 from nox.voice.vad import EnergyVad, Segmenter, SegmentEvent, SegmentKind
 
@@ -37,6 +44,9 @@ class PipelineConfig(BaseModel):
     max_utterance_ms: int = Field(default=15000, ge=1000)
     min_utterance_ms: int = Field(default=250, ge=0)
     require_wake_word: bool = False  # True: speech without wake word / PTT is not reported at all
+    #: `continuous` keeps the microphone open and relies on the wake-word gate; `ptt_only` never
+    #: opens it unless push-to-talk is held (#20).
+    listening_mode: Literal["continuous", "ptt_only"] = "continuous"
 
 
 class DefaultVoicePipeline:
@@ -51,6 +61,7 @@ class DefaultVoicePipeline:
         capture_allowed: CaptureAllowed,
         config: PipelineConfig | None = None,
         segmenter: Segmenter | None = None,
+        wake_gate: WakeGate | None = None,
     ) -> None:
         self._audio_in = audio_in
         self._audio_out = audio_out
@@ -67,6 +78,8 @@ class DefaultVoicePipeline:
             min_segment_ms=self.config.min_utterance_ms,
         )
         self._wake = WakeWordMatcher(self.config.wake_word)
+        # No gate passed in = the text fallback, i.e. exactly the pre-#20 behaviour.
+        self._gate = wake_gate or WakeGate()
         self._muted = False
         self._kill_latched = False
         self._stopped = False
@@ -80,6 +93,7 @@ class DefaultVoicePipeline:
         self._current_audio: AsyncIterator[bytes] | None = None
         self.frames_seen = 0
         self.utterances = 0
+        self.gated_out = 0  # segments dropped before Whisper saw them
 
     # ---- state -----------------------------------------------------------------------------------
 
@@ -95,18 +109,35 @@ class DefaultVoicePipeline:
     def kill_latched(self) -> bool:
         return self._kill_latched
 
+    @property
+    def wake_gate(self) -> WakeGate:
+        return self._gate
+
+    def wake_gate_health(self) -> tuple[HealthStatus, str]:
+        return self._gate.health()
+
     def gate_open(self) -> bool:
         """True when capture is permitted right now (privacy state, mute, kill latch, running)."""
         if self._stopped or self._muted or self._kill_latched:
             return False
         return bool(self._capture_allowed())
 
+    def capture_active(self) -> bool:
+        """`gate_open()` plus the listening mode: `ptt_only` only captures while PTT is held."""
+        if not self.gate_open():
+            return False
+        if self.config.listening_mode == "ptt_only":
+            return self._ptt_active
+        return True
+
     def refresh_gate(self) -> None:
         """Re-evaluate the capture gate (call after privacy/kill state changes)."""
-        allowed = self.gate_open()
-        self._set_input_enabled(allowed)
-        if not allowed and self._segmenter.active:
+        active = self.capture_active()
+        self._set_input_enabled(active)
+        if not active and self._segmenter.active:
             self._segmenter.reset()
+        if not active:
+            self._gate.reset()
 
     def _set_input_enabled(self, value: bool) -> None:
         setter = getattr(self._audio_in, "enabled", None)
@@ -128,7 +159,14 @@ class DefaultVoicePipeline:
         await self._audio_in.start()
         self.refresh_gate()
         self._listen_task = asyncio.create_task(self._listen(), name="voice-listen")
-        log.info("voice.pipeline_started", gate_open=self.gate_open())
+        status, reason = self._gate.health()
+        log.info(
+            "voice.pipeline_started",
+            gate_open=self.gate_open(),
+            listening_mode=self.config.listening_mode,
+            wake_word_engine=self._gate.detector.id,
+            wake_word_health=f"{status}: {reason}",
+        )
 
     async def stop(self) -> None:
         self._stopped = True
@@ -154,13 +192,16 @@ class DefaultVoicePipeline:
         async for frame in self._audio_in.frames():
             if self._stopped:
                 return
-            if not self.gate_open():
+            if not self.capture_active():
                 # Defense in depth: even if the input still delivers frames, drop them here.
                 self._set_input_enabled(False)
                 if self._segmenter.active:
                     self._segmenter.reset()
                 continue
             self.frames_seen += 1
+            # The detector runs on every frame so a wake word spoken *before* the segment opened
+            # still counts; it is a few hundred kB of ONNX, orders of magnitude below Whisper.
+            self._gate.feed(frame)
             event = self._segmenter.push(frame)
             if event is not None:
                 await self._on_segment(event)
@@ -172,7 +213,11 @@ class DefaultVoicePipeline:
                 await self.interrupt(reason="barge_in")
         elif event.kind == SegmentKind.END and event.audio is not None:
             await self._emit(E.VOICE_INPUT_STOPPED, {"duration_ms": event.duration_ms})
-            self._spawn(self._process_utterance(event.audio, forced=event.forced))
+            self._spawn(
+                self._process_utterance(
+                    event.audio, forced=event.forced, duration_ms=event.duration_ms
+                )
+            )
         elif event.kind == SegmentKind.ABORT:
             await self._emit(
                 E.VOICE_INPUT_STOPPED, {"duration_ms": event.duration_ms, "dropped": True}
@@ -183,8 +228,17 @@ class DefaultVoicePipeline:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _process_utterance(self, audio: np.ndarray, *, forced: bool) -> None:
+    async def _process_utterance(
+        self, audio: np.ndarray, *, forced: bool, duration_ms: int = 0
+    ) -> None:
         if not self.gate_open() and not forced:
+            return
+        decision = self._gate.decide(duration_ms=duration_ms, ptt=forced or self._ptt_active)
+        if decision is GateDecision.DROP:
+            # #20: Whisper never sees this audio. No transcript, no event, and no log line with
+            # content - only the fact that a segment was dropped.
+            self.gated_out += 1
+            log.debug("voice.gated_out", duration_ms=duration_ms)
             return
         self.utterances += 1
         try:
@@ -198,6 +252,12 @@ class DefaultVoicePipeline:
         if not text:
             return
         match = self._wake.match(text)
+        if decision.watchdog_only and not match.kill:
+            # The segment only got through so the kill phrase stays reachable without an acoustic
+            # model for it; anything else is discarded here and never becomes an event.
+            self.gated_out += 1
+            log.debug("voice.watchdog_discarded", duration_ms=transcript.duration_ms)
+            return
         if match.kill:
             self._kill_latched = True
             self.refresh_gate()
@@ -208,10 +268,13 @@ class DefaultVoicePipeline:
             await self._emit(E.VOICE_KILL_PHRASE, payload)
             log.warning("voice.kill_phrase")
             return
-        addressed = forced or match.addressed
+        addressed = forced or match.addressed or decision is GateDecision.WAKE
         if not addressed and self.config.require_wake_word:
             log.debug("voice.unaddressed_dropped", duration_ms=transcript.duration_ms)
             return
+        if addressed:
+            # Follow-up questions may skip the wake word while the conversation window is open.
+            self._gate.note_addressed()
         ready = TranscriptReady(
             text=match.remainder if match.addressed else text,
             language=transcript.language,
@@ -230,6 +293,8 @@ class DefaultVoicePipeline:
             if self._ptt_active:
                 return
             self._ptt_active = True
+            # `ptt_only` keeps the microphone closed until exactly here.
+            self.refresh_gate()
             await self._emit(E.VOICE_PTT_PRESSED, {})
             event = self._segmenter.force_start()
             if event is not None:
@@ -244,6 +309,7 @@ class DefaultVoicePipeline:
         event = self._segmenter.force_end()
         if event is not None:
             await self._on_segment(event)
+        self.refresh_gate()  # closes the microphone again in `ptt_only`
 
     async def set_muted(self, muted: bool) -> None:
         if muted == self._muted:

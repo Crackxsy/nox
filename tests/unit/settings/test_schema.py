@@ -74,3 +74,36 @@ def test_install_provides_an_applier_for_every_live_apply_path() -> None:
         security = None
 
     assert set(build_appliers(_Core())) == set(LIVE_APPLY_PATHS)
+
+
+def test_the_twitch_bot_knobs_are_editable_typed_and_bounded() -> None:
+    """#26: what used to be manifest-only is a setting the dashboard can render."""
+    assert describe("stream.twitch.bot_names").type == "list[str]"
+    assert describe("stream.twitch.channel").type == "string"
+
+    messages = describe("stream.twitch.rate_limit_max_messages")
+    assert messages.type == "int"
+    assert (messages.min, messages.max) == (1.0, 100.0)  # ge=1, le=100
+
+    for path in (
+        "stream.twitch.relevance_cooldown_s",
+        "stream.twitch.rate_limit_window_s",
+        "stream.twitch.rate_limit_min_gap_s",
+        "stream.twitch.min_backoff_s",
+        "stream.twitch.max_backoff_s",
+    ):
+        spec = describe(path)
+        assert spec.type == "float"
+        assert spec.group == "integrations"
+        # The plugin worker reads them at start, so none of them can be applied live.
+        assert spec.restart_required is True
+
+
+def test_the_defaults_layer_carries_every_twitch_knob(config: NoxConfig) -> None:
+    """`config/defaults.yaml` is the documented layer; a setting missing there is invisible."""
+    twitch = config.stream.twitch
+    assert twitch.bot_names == ["nox"]
+    assert (twitch.rate_limit_max_messages, twitch.rate_limit_window_s) == (20, 30.0)
+    assert twitch.rate_limit_min_gap_s == 1.5
+    assert (twitch.min_backoff_s, twitch.max_backoff_s) == (1.0, 30.0)
+    assert twitch.relevance_cooldown_s == 20.0

@@ -22,5 +22,16 @@ GPL-3.0 work, but not the reverse. Therefore:
     as a whole under the terms of GPL-3.0-or-later, including the corresponding-source
     obligations for the GPL-licensed parts.
 
-Replacing Piper with a permissively licensed text-to-speech engine (Kokoro/ONNX) so that
-bundled builds can also ship under Apache-2.0 alone is tracked for wave 2.
+Status of the Kokoro replacement (issue #21)
+-------------------------------------------
+Nox now ships a second text-to-speech engine, Kokoro (`voice.tts.engine: kokoro`, optional
+extra `voice-kokoro`). Kokoro's own code, the ONNX Runtime it uses and the `kokoro-v1.0`
+model files are permissively licensed. The `kokoro-onnx` package, however, still declares a
+hard dependency on `phonemizer` (GPL-3.0-or-later) and `espeakng-loader` (which ships
+espeak-ng, GPL-3.0-or-later) for its grapheme-to-phoneme front end.
+
+Selecting Kokoro therefore removes Piper, but it does NOT by itself make a bundled build
+Apache-2.0-only: the GPL obligations above apply unchanged to any distribution that includes
+the `voice-kokoro` extra. Reaching an Apache-2.0-only installer needs a permissively licensed
+grapheme-to-phoneme front end (or a Kokoro front end that accepts phonemes produced by one).
+This is an open decision for the project, not a solved problem.

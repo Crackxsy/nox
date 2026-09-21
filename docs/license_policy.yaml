@@ -86,6 +86,47 @@ package_exceptions:
       that must be distributed under GPL-3.0 terms as a whole; `NOTICE` states this. A checkout
       without `--extra voice`, and the source distribution of Nox itself, stay pure Apache-2.0.
       Replacing Piper with a permissively licensed engine (Kokoro/ONNX) is tracked for wave 2.
+  - name: kokoro-onnx
+    ecosystem: python
+    category: allow
+    reason: >
+      MIT (the package declares no SPDX expression on PyPI; verified against the project's own
+      LICENSE file, MIT). Optional dependency of the `voice-kokoro` extra only. Its own code and
+      the `kokoro-v1.0` model files it loads are permissive - but see the `phonemizer` and
+      `espeakng-loader` entries below: the package pulls a GPL-3.0 grapheme-to-phoneme front end,
+      so selecting Kokoro does not on its own make a bundled build Apache-2.0-only (#21, NOTICE).
+  - name: onnxruntime
+    ecosystem: python
+    category: allow
+    reason: >
+      MIT (Microsoft). Inference runtime for the Kokoro TTS model (`voice-kokoro` extra) and for
+      openWakeWord (`voice` extra); used unmodified as a PyPI wheel.
+  - name: openwakeword
+    ecosystem: python
+    category: allow
+    reason: >
+      Apache-2.0 (OSI classifier; the PyPI `license` field is empty). Tiny always-on wake-word
+      detector in front of Whisper (#20), used unmodified with ONNX Runtime. Its pre-trained
+      models are separate downloads and fall under the "Not covered" model section of this audit.
+  - name: phonemizer
+    ecosystem: python
+    category: allow_with_note
+    reason: >
+      GPL-3.0-or-later, and a hard install dependency of `kokoro-onnx` (the `voice-kokoro` extra);
+      the same applies to `phonemizer-fork` in older kokoro-onnx releases. The reasoning is the
+      same as for `piper-tts`: Nox's own code is Apache-2.0, which is one-way compatible with
+      GPL-3.0, so a checkout without the extra and the source distribution of Nox stay Apache-2.0,
+      while any bundled distribution that includes the extra is a combined work that must be
+      distributed under GPL-3.0 terms as a whole. IMPORTANT (#21): this means switching from Piper
+      to Kokoro does NOT by itself remove the GPL obligation on the installer - it moves it from
+      `piper-phonemize` to `phonemizer`. `NOTICE` states this; resolving it needs a permissively
+      licensed grapheme-to-phoneme front end and is an open PO decision.
+  - name: espeakng-loader
+    ecosystem: python
+    category: allow_with_note
+    reason: >
+      Ships the espeak-ng shared library (GPL-3.0-or-later) for `phonemizer`; dependency of the
+      `voice-kokoro` extra only. Same combined-work reasoning as the `phonemizer` entry above.
   - name: pynput
     ecosystem: python
     category: allow_with_note

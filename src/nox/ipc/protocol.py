@@ -330,6 +330,15 @@ class SecretsStatus(BaseModel):
     secrets: list[SecretStatus] = Field(default_factory=list)
 
 
+class PinStatus(BaseModel):
+    """`security.pin.status {}` response: whether a PIN is configured, and nothing else about it.
+
+    The Settings page needs it to know that a PIN-gated call (`secrets.set`, `secrets.delete`) has
+    to carry a PIN. Its length, its hash and the algorithm never leave the core."""
+
+    configured: bool = False
+
+
 class SettingsOk(BaseModel):
     """`secrets.set`/`secrets.delete`/`twitch.auth.disconnect`/`personality.set` acknowledgement."""
 
@@ -379,6 +388,7 @@ RESPONSE_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "config.effective": ConfigEffective,
     "config.get": ConfigSnapshot,
     "config.set": ConfigSetResult,
+    "security.pin.status": PinStatus,
     "secrets.status": SecretsStatus,
     "secrets.set": SettingsOk,
     "secrets.delete": SettingsOk,

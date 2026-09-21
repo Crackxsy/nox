@@ -10,8 +10,8 @@ PATTERNS = {
     "fl_studio": [{"process": "fl64.exe"}, {"process": "fl.exe"}],
     "krita": [{"process": "krita.exe"}],
     "browser_daw": [
-        {"process": "chrome.exe", "title": "*musikstudio*"},
-        {"process": "msedge.exe", "title": "*musikstudio*"},
+        {"process": "chrome.exe", "title": "*webdaw*"},
+        {"process": "msedge.exe", "title": "*webdaw*"},
     ],
 }
 
@@ -30,14 +30,14 @@ class TestMatchAppFamily:
         # Right process, wrong title: a random chrome tab is not the browser DAW.
         assert match_app_family("chrome.exe", "GitHub - my-repo", PATTERNS) is None
         # Right process, right title: matches.
-        assert match_app_family("chrome.exe", "musikstudio - Chrome", PATTERNS) == "browser_daw"
+        assert match_app_family("chrome.exe", "webdaw - Chrome", PATTERNS) == "browser_daw"
         # Right title, wrong process: not a browser at all.
-        assert match_app_family("notepad.exe", "musikstudio notes", PATTERNS) is None
+        assert match_app_family("notepad.exe", "webdaw notes", PATTERNS) is None
 
     def test_conservative_false_negative_over_false_positive(self) -> None:
-        # An unrelated process with a title that happens to contain "musikstudio" text but is not
+        # An unrelated process with a title that happens to contain "webdaw" text but is not
         # one of the configured browser processes must not match (Spec v0.7 §11 risk note).
-        assert match_app_family("explorer.exe", "musikstudio - File Explorer", PATTERNS) is None
+        assert match_app_family("explorer.exe", "webdaw - File Explorer", PATTERNS) is None
 
 
 class FakeClock:

@@ -7,7 +7,6 @@ transition, and a synthetic replay fixture dropped into the watched folder produ
 from __future__ import annotations
 
 import asyncio
-import random
 import shutil
 import struct
 import sys
@@ -20,6 +19,7 @@ from nox.app import DEFAULTS_PATH, PROFILES_DIR, REPO_ROOT, NoxCore
 from nox.core.config import load_config
 from nox.core.events import E, Event
 from nox.plugins.manager import PluginState
+from tests._ports import free_port_base
 
 pytestmark = pytest.mark.timeout(120)
 
@@ -91,7 +91,7 @@ def _rl_plugin_dir(
 
 
 def _config(tmp_path: Path, *, plugins_dir: Path):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     (tmp_path / "vault").mkdir()
     overrides = {
         "paths": {

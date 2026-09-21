@@ -225,6 +225,10 @@ export interface SecretsStatus {
   secrets?: SecretStatus[];
 }
 
+export interface PinStatus {
+  configured?: boolean;
+}
+
 export interface SettingsOk {
   ok?: boolean;
 }
