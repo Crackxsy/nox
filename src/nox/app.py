@@ -671,13 +671,21 @@ class NoxCore:
         )
 
     def health_json(self) -> dict[str, Any]:
-        """The `/health` body and the `health.get` response."""
+        """The `/health` body and the `health.get` response.
+
+        `ws_port` is published here so a page this core serves can find the hub instead of guessing:
+        the browser clients fall back to the default port when it is missing, which leaves the pet
+        window silently offline on any non-default port.
+        """
         components = self.health.current().items() if self.health is not None else ()
-        return {
+        payload: dict[str, Any] = {
             "version": nox.__version__,
             "level": str(self.state.get("system.level")) if self.state else "starting",
             "components": {k: v.model_dump(mode="json") for k, v in components},
         }
+        if self.hub is not None:
+            payload["ws_port"] = self.hub.port
+        return payload
 
     def state_json(self, path: str | None = None) -> dict[str, Any]:
         """The authenticated `/api/state` body: the whole snapshot, or one path from it."""
