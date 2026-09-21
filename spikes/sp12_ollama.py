@@ -1,4 +1,4 @@
-"""SP-12: Ollama local models - TTFT, tokens/s, GPU vs CPU-only, embedding latency.
+"""Ollama local models - TTFT, tokens/s, GPU vs CPU-only, embedding latency.
 
 Run:  .venv/Scripts/python.exe spikes/sp12_ollama.py [--models a,b] [--warm 3]
 Writes spikes/results/sp12_results.json and prints markdown tables. Each model is unloaded

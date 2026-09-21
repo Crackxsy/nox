@@ -1,4 +1,4 @@
-"""Pre-rendered WAV clips shared by every TTS engine (FR-5.3/5.4).
+"""Pre-rendered WAV clips shared by every TTS engine.
 
 `TtsRequest.prepared_clip` bypasses synthesis and plays `<clips_dir>/<id>.wav`. Clip ids come from
 the core and are validated against a strict pattern before they touch the filesystem - no path

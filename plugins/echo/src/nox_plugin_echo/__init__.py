@@ -1,4 +1,4 @@
-"""Echo: the reference plugin for the plugin runtime (ST-11-01, Plugin Architecture).
+"""Echo: the reference plugin for the plugin runtime (Plugin Architecture).
 
 Registers the `echo.ping` tool, emits `echo.pong` and listens for `system.mode_changed`. It needs
 no secrets and no network egress, so it is the smallest end-to-end proof that manifest -> worker ->

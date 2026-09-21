@@ -83,6 +83,7 @@ def build(
     enabled: Sequence[str] = ("demo",),
     engine: FakeEngine | None = None,
     secrets: FakeSecrets | None = None,
+    audit: Any = None,
     clock: Callable[[], float] | None = None,
     **settings: Any,
 ) -> Harness:
@@ -104,6 +105,7 @@ def build(
         registry=RequestRegistry(),
         engine=engine or FakeEngine(),
         secrets=secrets or FakeSecrets(),
+        audit=audit,
         settings=harness_settings,
         **({"clock": clock} if clock is not None else {}),
     )
@@ -485,3 +487,25 @@ async def test_nothing_is_spawned_while_the_kill_switch_is_engaged(plugins_dir: 
         assert len(built.processes) == 1
     finally:
         await built.manager.stop("test")
+
+
+class BrokenAudit:
+    """An audit chain that cannot record - a full disk, a corrupt chain, a closed database."""
+
+    def append(self, **_kwargs: Any) -> int:
+        raise RuntimeError("audit chain unavailable")
+
+
+async def test_a_secret_is_refused_when_the_access_cannot_be_audited(plugins_dir: Path) -> None:
+    """A secret handed out with no trace of it is worse than a secret refused."""
+    write_manifest(plugins_dir, "demo", secrets=["nox/demo/token"])
+    secrets = FakeSecrets({"nox/demo/token": "s3cret"})
+    built = build(plugins_dir, secrets=secrets, audit=BrokenAudit())
+    manager = built.manager
+    try:
+        await manager.start()
+        await built.register()
+        with pytest.raises(IpcError, match="could not be audited"):
+            await manager._h_secret_get(built.context(), PluginSecretGet(name="nox/demo/token"))
+    finally:
+        await manager.stop("test")

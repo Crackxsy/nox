@@ -1,7 +1,7 @@
-"""`RateLimiter` for `telegram.send` (Spec v0.8 §5.2). Same shape as the twitch plugin's limiter:
-at most `max_messages` per `window_s` and at least `min_gap_s` between two sends. Defaults
-(20 msg/min, >=1 s gap) stay far under the Bot API's own limits and keep a looping caller from
-turning the paired phone into a notification firehose.
+"""`RateLimiter` for `telegram.send`. Same shape as the twitch plugin's limiter:
+at most `max_messages` per `window_s` and at least `min_gap_s` between two sends. Defaults (20
+msg/min, >=1 s gap) stay far under the Bot API's own limits and keep a looping caller from turning
+the paired phone into a notification firehose.
 """
 
 from __future__ import annotations

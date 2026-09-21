@@ -1,18 +1,18 @@
-"""Core-side Vision Stage 2 (Spec v0.9 Vision Stage 2, EPIC-18, ST-18-01..06). A plugin worker has
+"""Core-side Vision Stage 2 (Vision Stage 2). A plugin worker has
 no SQLite/TTS access, so - mirroring `nox.rl.services`'s pattern for Stage 1 - this module owns:
 
 - `RlVisionPersistenceService`: `rl.vision.detections` -> `rl_vision_frames` (migration
-  `0009_vision.sql`), short-retention rows (`rl.vision.detections_retain_hours`).
+`0009_vision.sql`), short-retention rows (`rl.vision.detections_retain_hours`).
 - `RlVisionAnalysisService`: `rl.match_ended` -> a rough, post-match rotation-position analysis over
-  that match's stored frames (blended with the matched replay's header data where available) ->
-  `rl.vision.analysis` and a short private spoken line queued right after the match (Personality v1
-  B.9: "right after the match very short, at session end detailed" - the detailed path stays
-  `RlSessionSummaryService`'s job, this module never duplicates it).
+that match's stored frames (blended with the matched replay's header data where available) ->
+`rl.vision.analysis` and a short private spoken line queued right after the match ("right after the
+match very short, at session end detailed" - the detailed path stays `RlSessionSummaryService`'s
+job, this module never duplicates it).
 
-This is explicitly *rough*: a noisy signal from Stage 2's classical detector (Spec §3 "Not in
-scope": no precise rotation, no shot prediction) - Stage 3's future replay-based analysis is a
-separate, unbuilt flow (SP-17-gated). When a match produced no usable frames, nothing is persisted
-and nothing is spoken - no fabricated insight (P10)."""
+This is explicitly *rough*: a noisy signal from Stage 2's classical detector (Spec "Not in scope":
+no precise rotation, no shot prediction) - Stage 3's future replay-based analysis is a separate,
+unbuilt flow (gated). When a match produced no usable frames, nothing is persisted and nothing is
+spoken - no fabricated insight."""
 
 from __future__ import annotations
 
@@ -38,15 +38,15 @@ class Speaker(Protocol):
     async def say(self, request: TtsRequest) -> None: ...
 
 
-# ---- persistence (ST-18-06) --------------------------------------------------------------------
+# ---- persistence --------------------------------------------------------------------
 
 
 class RlVisionPersistenceService:
     """`rl.vision.detections` -> `rl_vision_frames`. Resolves the DB match id via
-    `RlMatchRepository.active()` at write time (a detection only ever arrives while `rl`'s vision
+    `RlMatchRepository.active` at write time (a detection only ever arrives while `rl`'s vision
     loop believes a match is active - see `nox_plugin_rl.plugin.RlPlugin._vision_loop`); a
     detection that somehow arrives outside an active match is still stored with `match_id=None`
-    rather than dropped, since Stage 2 metrics (ST-18-06) aggregate across matches too."""
+    rather than dropped, since Stage 2 metrics aggregate across matches too."""
 
     def __init__(
         self,
@@ -90,7 +90,7 @@ class RlVisionPersistenceService:
             )
 
 
-# ---- rotation analysis (ST-18-06) ---------------------------------------------------------------
+# ---- rotation analysis ---------------------------------------------------------------
 
 
 @runtime_checkable
@@ -123,16 +123,16 @@ class RotationAnalysis:
 
 
 def compute_rotation_analysis(frames: list[FrameLike]) -> RotationAnalysis:
-    """Rough, honest rotation-position signal from a match's Stage-2 detections (Spec §3: never
+    """Rough, honest rotation-position signal from a match's Stage-2 detections (Spec: never
     precise rotation, never shot prediction - Stage 3's future replay-based analysis is the real
     thing). Every metric is a best-effort approximation over noisy, independently-timestamped
     per-entity detections, not a synchronized multi-object track - documented here, and in the
-    generated coaching text, rather than presented as more certain than it is (P10)."""
+    generated coaching text, rather than presented as more certain than it is."""
     # "frames_analyzed" counts stored detection rows (one `rl_vision_frames` row per detected
     # entity, not one row per captured video frame - a single sampled frame can yield zero to
     # several rows) - deliberately counts ALL of them, including entities the metrics below cannot
     # use (e.g. opponent-only cars), so a match that ran Stage 2 but had nothing worth saying is
-    # still recorded as "ran, no signal" rather than indistinguishable from "never ran" (P10).
+    # still recorded as "ran, no signal" rather than indistinguishable from "never ran".
     frames_analyzed = len(frames)
     balls = [f for f in frames if f.entity == "ball"]
     self_cars = [f for f in frames if f.entity == "car" and f.team == "self"]
@@ -170,7 +170,7 @@ def compute_rotation_analysis(frames: list[FrameLike]) -> RotationAnalysis:
 def _coaching_text(
     frames_analyzed: int, ball_side_ratio: float | None, avg_distance: float | None
 ) -> str:
-    """Personality v1 B.9: right after the match, very short - rather silent than wrong (D69)."""
+    """right after the match, very short - rather silent than wrong (D69)."""
     if frames_analyzed == 0:
         return ""
     bits: list[str] = []
@@ -187,7 +187,7 @@ class RlVisionAnalysisService:
     """`rl.match_ended` -> `compute_rotation_analysis` over that match's stored frames ->
     `rl_vision_analysis` + `rl.vision.analysis` + a short private spoken line. Skipped entirely
     (no row, no event, no speech) when the match produced zero Stage-2 frames - no fabricated
-    insight (P10), matching `RlSessionSummaryService`'s "skipped when no matches" pattern."""
+    insight, matching `RlSessionSummaryService`'s "skipped when no matches" pattern."""
 
     def __init__(
         self,
@@ -259,6 +259,8 @@ class RlVisionAnalysisService:
 
 
 class RlVisionRuntime:
+    """Handles for the two vision services, so the caller can stop both in one call."""
+
     def __init__(
         self, persistence: RlVisionPersistenceService, analysis: RlVisionAnalysisService
     ) -> None:
@@ -271,23 +273,23 @@ class RlVisionRuntime:
 
 
 def install_vision(core: Any) -> RlVisionRuntime:
-    """`core` is a started `nox.app.NoxCore` (or a test double exposing `config`/`db`/`bus`/
-    `speaker`). Called from `nox.rl.install.install(core)`, guarded there so a Vision Stage 2
-    wiring failure never breaks Stage 1."""
+    """`core` is a started core, or a test double exposing `config`, `db`, `bus` and `speaker`.
+
+    Called from `nox.rl.install.install(core)`, which reports a failure here as an unavailable
+    `rl.vision` health check rather than letting it take the rest of the extension down.
+    """
     matches = RlMatchRepository(core.db)
     frames = RlVisionFrameRepository(core.db)
     analysis_repo = RlVisionAnalysisRepository(core.db)
-    retain_hours = float(getattr(core.config.rl.vision, "detections_retain_hours", 6.0))
+    retain_hours = float(core.config.rl.vision.detections_retain_hours)
 
     persistence = RlVisionPersistenceService(core.bus, frames, matches, retain_hours=retain_hours)
     persistence.start()
 
-    speaker = getattr(core, "speaker", None)
-    analysis = RlVisionAnalysisService(core.bus, frames, analysis_repo, matches, speaker=speaker)
+    analysis = RlVisionAnalysisService(
+        core.bus, frames, analysis_repo, matches, speaker=core.speaker
+    )
     analysis.start()
-
-    core.rl_vision_persistence = persistence
-    core.rl_vision_analysis = analysis
     return RlVisionRuntime(persistence, analysis)
 
 

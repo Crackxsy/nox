@@ -1,8 +1,8 @@
-"""StreamSessionService: session lifecycle bridge to the `stream_sessions`/`chat_events` tables
-(Spec v0.2 §7/§8, EPIC-11) - opens/closes DB rows on `stream.started`/`stream.ended`, persists
-inbound Twitch chat with retention driven by `stream.chat.retain_raw_text_days`, tracks the
-connected-plugin/scene picture from `obs.*`/`twitch.*` events, and answers the
-`stream.session.status` IPC request (dashboard/shell).
+"""StreamSessionService: session lifecycle bridge to the `stream_sessions`/`chat_events` tables -
+opens/closes DB rows on `stream.started`/`stream.ended`, persists inbound Twitch chat with
+retention driven by `stream.chat.retain_raw_text_days`, tracks the connected-plugin/scene picture
+from `obs.*`/`twitch.*` events, and answers the `stream.session.status` IPC request
+(dashboard/shell).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ Unsubscribe = Callable[[], None]
 
 
 class StreamSessionService:
-    """Owns no I/O of its own beyond the two repositories; `start()`/`stop()` (un)subscribe from
+    """Owns no I/O of its own beyond the two repositories; `start`/`stop` (un)subscribe from
     the bus, matching the lifecycle of every other core service wired in `nox.app`."""
 
     def __init__(
@@ -111,7 +111,7 @@ class StreamSessionService:
             self._viewers.touch(viewer_id)
         days = self._chat_config.retain_raw_text_days
         if days <= 0:
-            # Metadata only (Spec v0.2 §7): keep the row (viewer/session/timestamp) for counts and
+            # Metadata only: keep the row (viewer/session/timestamp) for counts and
             # moderation history, but never persist the raw text itself.
             stored_text = ""
             retain_until = None

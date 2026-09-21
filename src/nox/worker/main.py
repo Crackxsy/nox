@@ -1,14 +1,16 @@
 """Voice worker process: hosts STT + TTS + audio devices and talks to the core hub over IPC.
 
-Implements the worker side of the Process Model / IPC Model (worker.register, worker.heartbeat every
-2 s, inbound `tts.speak`, `tts.stop`, `stt.transcribe`, `voice.ptt`, `voice.mute`; subscribes to
-`security.*` and `privacy.*` to stop or gate capture). `--service stt|tts|voice` selects which
-engines are loaded; v0.1 runs everything in one `voice` worker. The worker token comes from the
-environment (`NOX_WORKER_TOKEN`), never from the command line, and is never logged.
-`--selftest` validates devices, models, playback and a 3 s microphone transcription without a hub;
-`--download-kokoro` fetches the Kokoro TTS model files (user-initiated, never automatic).
-`--plugin <id>` runs this process as a plugin worker instead (ST-11-01, implemented in
-`nox.worker.plugin`); it shares only token and hub-url handling with the voice path.
+The worker side of the process model: `worker.register`, a heartbeat every two seconds, the inbound
+requests `tts.speak`, `tts.stop`, `stt.transcribe`, `voice.ptt` and `voice.mute`, and a
+subscription to `security.*` and `privacy.*` so capture stops or re-gates when the core says so.
+`--service stt|tts|voice` selects which engines are loaded; the shipped configuration runs
+everything in one `voice` worker. The worker token comes from the environment (`NOX_WORKER_TOKEN`),
+never from the command line, and is never logged.
+
+`--selftest` validates devices, models, playback and a three-second microphone transcription
+without a hub; `--download-kokoro` fetches the Kokoro TTS model files, always user-initiated.
+`--plugin <id>` runs this process as a plugin worker instead (`nox.worker.plugin`); it shares only
+token and hub-url handling with the voice path.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import sys
 import time
 import wave
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -36,6 +39,7 @@ from nox.voice._logging import get_logger
 from nox.voice.base import Transcript, TtsRequest, VoicePipeline
 from nox.voice.pipeline import DefaultVoicePipeline, Emit, PipelineConfig
 from nox.voice.stt.wake_gate import WakeGate
+from nox.worker.heartbeat import heartbeat_loop
 
 log = get_logger(__name__)
 
@@ -77,7 +81,10 @@ class WorkerStatus(BaseModel):
 
 
 def decode_audio_ref(payload: Mapping[str, Any]) -> tuple[np.ndarray, int]:
-    """`stt.transcribe` payload -> (float32 mono, sample_rate): a WAV path or base64 PCM16."""
+    """`stt.transcribe` payload -> (float32 mono, sample_rate): a WAV path or base64 PCM16.
+
+    Blocking: reads the whole file, so callers on the event loop go through `asyncio.to_thread`.
+    """
     ref = str(payload.get("audio_ref", "") or "")
     if ref:
         path = Path(ref)
@@ -110,7 +117,7 @@ class VoiceWorker:
         stt: Any = None,
         tts: Any = None,
         heartbeat_s: float = HEARTBEAT_S,
-        load_fn: Callable[[], float] | None = None,
+        load_fn: Callable[[], float | None] | None = None,
         default_config: VoiceConfig | None = None,
         component_loader: ComponentLoader | None = None,
         connect_deadline_s: float = CONNECT_DEADLINE_S,
@@ -128,17 +135,18 @@ class VoiceWorker:
         self.stt = stt
         self.tts = tts
         self.heartbeat_s = heartbeat_s
-        self._load_fn = load_fn or (lambda: 0.0)
+        self._load_fn = load_fn or (lambda: None)
         self.status = WorkerStatus(service=service)
         self._stop = asyncio.Event()
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._say_tasks: set[asyncio.Task[None]] = set()
+        self._emit_tasks: set[asyncio.Task[None]] = set()
         self._pipeline_factory = pipeline_factory
         self._component_loader = component_loader
         self.default_config = default_config or VoiceConfig()
         self.voice_config: VoiceConfig = self.default_config
-        # Built only inside run(), after `worker.register` has returned the core's merged config
-        # (B-8: register first, apply config, only then build/load engines) — never before.
+        # Built only inside run(), after `worker.register` has returned the core's merged config:
+        # register first, apply the config, only then build and load engines - never before.
         self.pipeline: VoicePipeline | None = None
         self.register_response: dict[str, Any] = {}
 
@@ -173,7 +181,7 @@ class VoiceWorker:
         self.client.on(E.SYSTEM_STOPPING, self._on_system_stopping)
 
     def _pipeline_ready(self) -> VoicePipeline:
-        """The pipeline is only built in `run()`, after `worker.register`/config are settled."""
+        """The pipeline is only built in `run`, after `worker.register`/config are settled."""
         if self.pipeline is None:
             raise RuntimeError("voice pipeline not ready (worker has not finished registering)")
         return self.pipeline
@@ -189,7 +197,33 @@ class VoiceWorker:
         task = asyncio.create_task(pipeline.say(request), name=f"say-{request.utterance_id}")
         self._say_tasks.add(task)
         task.add_done_callback(self._say_tasks.discard)
+        task.add_done_callback(lambda done: self._say_task_done(request.utterance_id, done))
         return {"ok": True, "utterance_id": request.utterance_id, "accepted": True}
+
+    def _say_task_done(self, utterance_id: str, task: asyncio.Task[None]) -> None:
+        """Report a say-task that died before the pipeline could emit its own terminal event.
+
+        `tts.speak` answers `accepted` immediately, so the caller waits for `tts.finished`. A
+        crashed task that never emits one leaves it waiting forever.
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        log.error(
+            "worker.say_failed", utterance_id=utterance_id, error=f"{type(exc).__name__}: {exc}"
+        )
+        self._spawn_emit(
+            E.TTS_FINISHED,
+            {"utterance_id": utterance_id, "ok": False, "reason": type(exc).__name__},
+        )
+
+    def _spawn_emit(self, name: str, payload: dict[str, Any]) -> None:
+        """Emit from a done-callback, which cannot await."""
+        task = asyncio.get_running_loop().create_task(self.emit(name, payload), name="worker-emit")
+        self._emit_tasks.add(task)
+        task.add_done_callback(self._emit_tasks.discard)
 
     async def _on_tts_stop(self, payload: dict[str, Any], _req: Any = None) -> dict[str, Any]:
         await self._pipeline_ready().interrupt(reason=str(payload.get("reason", "stop")))
@@ -198,7 +232,9 @@ class VoiceWorker:
     async def _on_stt_transcribe(self, payload: dict[str, Any], _req: Any = None) -> dict[str, Any]:
         if self.stt is None:
             raise RuntimeError("stt engine not loaded")
-        audio, rate = decode_audio_ref(payload)
+        # Reading and decoding a WAV file is blocking I/O; the worker's loop also carries the
+        # audio path, so it never does that itself.
+        audio, rate = await asyncio.to_thread(decode_audio_ref, payload)
         language = str(payload.get("language", "auto") or "auto")
         transcript: Transcript = await self.stt.transcribe(audio, rate, language=language)
         return transcript.model_dump(mode="json")
@@ -225,19 +261,15 @@ class VoiceWorker:
         self.status.microphone_allowed = False
         if self.pipeline is not None:
             await self.pipeline.interrupt(reason="panic")
-        self._refresh_gate()
+            await self.pipeline.refresh_gate()
 
     async def _on_capture_changed(self, env: Envelope) -> None:
         self.status.microphone_allowed = bool(env.payload.get("microphone", False))
-        self._refresh_gate()
+        if self.pipeline is not None:
+            await self.pipeline.refresh_gate()
 
     async def _on_system_stopping(self, _env: Envelope) -> None:
         self._stop.set()
-
-    def _refresh_gate(self) -> None:
-        refresh = getattr(self.pipeline, "refresh_gate", None)
-        if refresh is not None:
-            refresh()
 
     # ---- lifecycle -------------------------------------------------------------------------------
 
@@ -265,22 +297,17 @@ class VoiceWorker:
             return self.default_config
 
     async def _heartbeat_loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                await self.client.request(
-                    "worker.heartbeat",
-                    {"load": float(self._load_fn()), "status": self.status.status},
-                    timeout=self.heartbeat_s,
-                )
-            except Exception as exc:  # noqa: BLE001 - the core marks us unavailable after 3 misses
-                log.warning("worker.heartbeat_failed", error=str(exc))
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.heartbeat_s)
-            except TimeoutError:
-                continue
+        await heartbeat_loop(
+            self.client,
+            self._stop,
+            status=lambda: self.status.status,
+            interval_s=self.heartbeat_s,
+            load=self._load_fn,
+            service=self.service,
+        )
 
     async def run(self) -> None:
-        # B-8: connect -> worker.register -> apply the core's config -> only then build/load the
+        # connect -> worker.register -> apply the core's config -> only then build and load the
         # engines -> worker.ready. Health reports us `limited` ("worker starting") in between.
         self._register_handlers()
         await self._connect_with_retry()
@@ -306,6 +333,11 @@ class VoiceWorker:
         us (restart, stalled hub) the new session knows nothing about this worker: register again
         and, if the pipeline already runs, report ready again."""
         if not connected or not self._ran_once:
+            return
+        pending = self._reregister_task
+        if pending is not None and not pending.done():
+            # Rapid reconnects would otherwise race two `worker.register` calls against each
+            # other; the one already in flight covers this reconnect too.
             return
         self._reregister_task = asyncio.get_running_loop().create_task(
             self._reregister(), name="worker-reregister"
@@ -347,8 +379,13 @@ class VoiceWorker:
         self._stop.set()
         if self.pipeline is not None:
             await self.pipeline.stop()
-        for task in list(self._say_tasks):
+        # Awaited, not just cancelled: a playback task still writing to the IPC channel while it
+        # closes underneath produces exactly the kind of shutdown error nobody can reproduce.
+        outstanding = [*self._say_tasks, *self._emit_tasks]
+        for task in outstanding:
             task.cancel()
+        if outstanding:
+            await asyncio.gather(*outstanding, return_exceptions=True)
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
             await asyncio.gather(self._heartbeat_task, return_exceptions=True)
@@ -371,13 +408,19 @@ def raise_priority() -> None:
         log.warning("worker.priority_failed", error=str(exc))
 
 
-def process_load() -> float:
+def process_load() -> float | None:
+    """This process's CPU load as a fraction, or None when psutil cannot measure it.
+
+    None omits the field from the heartbeat. Returning 0.0 instead would report a broken worker
+    as a perfectly idle one.
+    """
     try:
         import psutil
 
         return float(psutil.Process().cpu_percent(interval=None)) / 100.0
-    except Exception:  # noqa: BLE001
-        return 0.0
+    except Exception as exc:  # noqa: BLE001 - load is diagnostic, never a reason to fail
+        log.info("worker.load_unavailable", error=f"{type(exc).__name__}: {exc}")
+        return None
 
 
 def pipeline_config_from(voice: VoiceConfig) -> PipelineConfig:
@@ -390,7 +433,7 @@ def pipeline_config_from(voice: VoiceConfig) -> PipelineConfig:
 
 
 def build_wake_gate(voice: VoiceConfig) -> WakeGate:
-    """The acoustic gate in front of Whisper (#20); degrades to text matching on its own."""
+    """The acoustic gate in front of Whisper; degrades to text matching on its own."""
     from nox.voice.models import engine_models_dir
     from nox.voice.stt.wake_gate import WakeGateConfig, build_detector
 
@@ -482,16 +525,31 @@ class _NoEngine:
         raise RuntimeError("tts is not hosted by this worker")
 
 
+@dataclass(slots=True)
+class _Devices:
+    """The audio devices `load_components` built, handed to the pipeline factory that follows it.
+
+    The two run at different points of the worker's boot (devices before `worker.register`
+    resolves, the pipeline after), so the factory needs somewhere to pick them up.
+    """
+
+    audio_in: Any = None
+    audio_out: Any = None
+
+
 async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceConfig) -> int:
-    """`connect -> worker.register -> apply config -> build/load engines -> worker.ready` (B-8).
+    """`connect -> worker.register -> apply config -> build and load engines -> worker.ready`.
 
     Engines are built from whatever `VoiceConfig` the core hands back on `worker.register`
-    (falling back to `voice_cfg`, the local default, if that config is missing/invalid) - never
-    from `voice_cfg` directly - so devices/models always reflect the core's merged config.
+    (falling back to `voice_cfg`, the local default, if that config is missing or invalid) - never
+    from `voice_cfg` directly - so devices and models always reflect the core's merged config.
+
+    Returns 0 for a clean stop and 1 when the worker ended abnormally, so the supervisor can tell
+    a requested shutdown from a crash.
     """
     from nox.ipc.client import IpcClient
 
-    built: dict[str, Any] = {}
+    devices = _Devices()
 
     async def load_components(cfg: VoiceConfig) -> tuple[Any, Any]:
         components = build_components(cfg, service=service)
@@ -499,14 +557,16 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
         tts = components["tts"] or _NoEngine()
         await stt.load()
         await tts.load()
-        built["audio_in"] = components["audio_in"]
-        built["audio_out"] = components["audio_out"]
+        devices.audio_in = components["audio_in"]
+        devices.audio_out = components["audio_out"]
         return stt, tts
 
     def factory(emit: Emit, capture_allowed: Callable[[], bool], cfg: VoiceConfig) -> VoicePipeline:
+        if devices.audio_in is None or devices.audio_out is None:
+            raise RuntimeError("pipeline factory called before the audio devices were built")
         return DefaultVoicePipeline(
-            audio_in=built["audio_in"],
-            audio_out=built["audio_out"],
+            audio_in=devices.audio_in,
+            audio_out=devices.audio_out,
             stt=worker.stt,
             tts=worker.tts,
             emit=emit,
@@ -536,6 +596,7 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
         await worker.run()
     except (KeyboardInterrupt, asyncio.CancelledError):
         await worker.shutdown()
+        return 1
     return 0
 
 
@@ -601,7 +662,7 @@ async def run_selftest(voice_cfg: VoiceConfig, *, seconds: float = 3.0) -> int:
     echo(f"  spoken in {time.perf_counter() - t0:.2f} s")
     echo(f"== stt: speak now ({seconds:.0f} s) ==")
     await audio_in.start()
-    audio_in.enabled = True
+    await audio_in.set_enabled(True)
     frames: list[np.ndarray] = []
     deadline = time.perf_counter() + seconds
     async for frame in audio_in.frames():
@@ -656,7 +717,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="download the Kokoro TTS model files (~354 MB) into <models_dir>/kokoro",
     )
     ap.add_argument("--models-dir", default=None, help="override voice.models_dir for this run")
-    ap.add_argument("--plugin", default=None, help="run as the worker of plugins/<id> (ST-11-01)")
+    ap.add_argument("--plugin", default=None, help="run as the worker of plugins/<id>")
     ap.add_argument("--stt-model", default=None, help="override voice.stt.model (base|small|...)")
     ap.add_argument("--tts-engine", default=None, choices=["piper", "kokoro"])
     return ap.parse_args(argv)

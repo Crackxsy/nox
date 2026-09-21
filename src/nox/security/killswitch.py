@@ -1,14 +1,17 @@
-"""Kill switch and panic mode (Security Model §6, model.py KillSwitch/PanicMode, PRD P11).
+"""The kill switch and panic mode.
 
-`engage()` flips the safe-mode flag first (the permission engine and privacy service read it), emits
-`security.kill_switch` before anything else, then runs every registered stop hook in parallel with a
-per-hook timeout, and audits. It never raises. `panic()` = engage + privacy OFFLINE + panic flag +
-`security.panic` (hide pet).
+`engage()` flips the safe-mode flag first, because the permission engine and the privacy service
+read it on every decision. It then audits the engagement, emits `security.kill_switch`, and runs
+every registered stop hook in parallel with a per-hook timeout. The audit entry is written before
+the hooks run, so a hook that fails cannot cost us the record that the kill happened; the hook
+results are appended in a second entry. `engage()` never raises.
 
-`resume()` follows OP-6 D: a kill engaged by the security path (tamper, audit-chain break, panic,
-supervisor tamper) needs `pin_ok=True`; a user-initiated kill (tray, hotkey, UI, dashboard, voice,
-supervisor) resumes on an explicit action alone. Every resume is audited with `origin` and
-`security_path`.
+`panic()` is `engage()` plus privacy offline, the panic flag and `security.panic`, which hides the
+pet.
+
+`resume()` needs `pin_ok=True` after a security-path kill - tamper, a broken audit chain, panic.
+After a user-initiated kill (tray, hotkey, UI, dashboard, voice) the explicit request is enough.
+Both outcomes are audited with the origin and whether it was a security-path kill.
 """
 
 from __future__ import annotations
@@ -24,6 +27,8 @@ from nox.core.events import KillSwitch as KillSwitchPayload
 from nox.core.state import PrivacyMode
 from nox.security._events import publish
 from nox.security._logging import get_logger
+from nox.security.audit_sink import SafeAuditLog
+from nox.security.constants import SECURITY_PATH_ORIGINS
 from nox.security.model import AuditLog
 from nox.security.privacy import PrivacyService
 
@@ -32,10 +37,12 @@ log = get_logger(__name__)
 StopHook = Callable[[], Awaitable[None]]
 Clock = Callable[[], datetime]
 
-#: Origins that make the kill a security-path event; resuming from one requires the PIN (OP-6 D).
-#: Everything else (`ui`, `shell`, `dashboard`, `hotkey`, `tray`, `voice`, `supervisor`) is a
-#: user-initiated kill and resumes on an explicit, audited action.
-SECURITY_PATH_ORIGINS: frozenset[str] = frozenset({"tamper", "audit", "panic", "supervisor-tamper"})
+__all__ = [
+    "SECURITY_PATH_ORIGINS",
+    "KillReport",
+    "KillSwitchService",
+    "PanicModeService",
+]
 
 
 class KillReport(BaseModel):
@@ -44,8 +51,11 @@ class KillReport(BaseModel):
     already_engaged: bool = False
     origin: str = ""
     reason: str = ""
-    security_path: bool = False  # True -> resume needs the PIN (OP-6 D)
+    security_path: bool = False  # True -> resuming needs the PIN
     hooks: dict[str, str] = Field(default_factory=dict)  # name -> ok | timeout | error:<ExcType>
+    #: Empty when the engagement completed; otherwise what went wrong while publishing or running
+    #: the stop hooks. The switch is engaged either way - this says the report is incomplete.
+    partial_failure: str = ""
 
 
 class KillSwitchService:
@@ -61,7 +71,7 @@ class KillSwitchService:
         clock: Clock | None = None,
     ) -> None:
         self._bus = bus
-        self._audit = audit
+        self._audit = SafeAuditLog(audit)
         self._privacy = privacy
         self._hook_timeout = hook_timeout_s
         self._clock: Clock = clock or (lambda: datetime.now(UTC))
@@ -121,27 +131,44 @@ class KillSwitchService:
             reason=reason,
             security_path=self._security_path,
         )
+        failure = ""
+        # The event goes out first: the permission engine, the UI and the workers all react to it,
+        # and every millisecond here is a millisecond in which something may still act.
         try:
             await publish(
                 self._bus, E.SECURITY_KILL_SWITCH, KillSwitchPayload(by=origin, reason=reason)
             )
+        except Exception as exc:  # noqa: BLE001 - the kill switch must never raise
+            failure = f"{type(exc).__name__}: {exc}"
+            log.exception("security.kill_switch_publish_error")
+        # Audited before the hooks run, and unconditionally: a kill that happened must be in the
+        # log even when a stop hook then fails. Previously the audit sat after the hooks inside
+        # the same `try`, so a failure anywhere above it cost the record entirely.
+        self._audit.append(
+            actor=origin,
+            action="kill_switch.engage",
+            details={
+                "reason": reason,
+                "already_engaged": str(already).lower(),
+                "security_path": str(self._security_path).lower(),
+                "publish_error": failure,
+            },
+        )
+        hooks: dict[str, str] = {}
+        try:
             hooks = await self._run_hooks()
-            report = report.model_copy(update={"hooks": hooks})
-            self._audit_safe(
-                actor=origin,
-                action="kill_switch.engage",
-                target="",
-                details={
-                    "reason": reason,
-                    "already_engaged": str(already).lower(),
-                    "security_path": str(self._security_path).lower(),
-                    **{f"hook.{k}": v for k, v in hooks.items()},
-                },
-            )
             log.critical("security.kill_switch_engaged", by=origin, reason=reason, hooks=hooks)
-        except Exception:  # noqa: BLE001 - the kill switch must never raise
-            log.exception("security.kill_switch_engage_error")
-        return report
+        except Exception as exc:  # noqa: BLE001 - the kill switch must never raise
+            failure = f"{failure}; {type(exc).__name__}: {exc}".lstrip("; ")
+            log.exception("security.kill_switch_hooks_error")
+        self._audit.append(
+            actor=origin,
+            action="kill_switch.hooks",
+            decision="allow" if not failure else "deny",
+            result="ok" if not failure else "failed",
+            details={**{f"hook.{k}": v for k, v in hooks.items()}, "error": failure},
+        )
+        return report.model_copy(update={"hooks": hooks, "partial_failure": failure})
 
     async def _run_hooks(self) -> dict[str, str]:
         names = list(self._hooks)
@@ -165,14 +192,17 @@ class KillSwitchService:
         return "ok"
 
     async def resume(self, *, pin_ok: bool, by: str = "user") -> bool:
-        """OP-6 D: the PIN is required only after a security-path kill; otherwise the explicit
-        request counts. Both outcomes are audited with `origin` and `security_path`."""
+        """Leave safe mode.
+
+        The PIN is required only after a security-path kill; otherwise the explicit request is the
+        authorisation. Both outcomes are audited with the origin and the security-path flag.
+        """
         if not self._engaged:
             return True
         security_path = self._security_path
         origin = self._origin
         if security_path and not pin_ok:
-            self._audit_safe(
+            self._audit.append(
                 actor=by,
                 action="kill_switch.resume",
                 target="",
@@ -196,7 +226,7 @@ class KillSwitchService:
                 await self._privacy.set_panic(False, by=by)
         except Exception:  # noqa: BLE001
             log.exception("security.resume_privacy_error")
-        self._audit_safe(
+        self._audit.append(
             actor=by,
             action="kill_switch.resume",
             target="",
@@ -214,35 +244,12 @@ class KillSwitchService:
             await publish(
                 self._bus, E.SECURITY_PANIC, {"by": by, "reason": reason, "hide_pet": True}
             )
-            self._audit_safe(actor=by, action="panic.engage", target="", details={"reason": reason})
+            self._audit.append(
+                actor=by, action="panic.engage", target="", details={"reason": reason}
+            )
         except Exception:  # noqa: BLE001 - panic must never raise
             log.exception("security.panic_error")
         return report
-
-    def _audit_safe(
-        self,
-        *,
-        actor: str,
-        action: str,
-        target: str,
-        decision: str = "allow",
-        result: str = "ok",
-        details: dict[str, str] | None = None,
-    ) -> None:
-        if self._audit is None:
-            return
-        try:
-            self._audit.append(
-                actor=actor,
-                tool="security",
-                action=action,
-                target=target,
-                decision=decision,
-                result=result,
-                details=details,
-            )
-        except Exception:  # noqa: BLE001
-            log.exception("security.audit_write_failed", action=action)
 
 
 class PanicModeService:

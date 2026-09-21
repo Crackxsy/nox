@@ -1,17 +1,16 @@
-"""Outbound notifications to the paired phone (Spec v0.8 §7, FR-12.4/FR-12.5, ST-17-06).
+"""Outbound notifications to the paired phone.
 
 Three gates, in this order, and the first one that says no wins:
 
-  1. **Allow-list.** Only the event names in `remote.notifications.events` are considered at all.
-     An event that is not named there is never forwarded - a denylist would silently start leaking
-     the next event someone adds to `E`.
-  2. **Privacy zones.** While a privacy zone is active nothing but a critical event leaves the
-     machine, and the text is built from *metadata only* (event name plus a handful of allow-listed
-     scalar fields). Zone content is never described, quoted or summarised - the zone check runs
-     before any text is composed, mirroring the zone-gate-before-draft ordering FR-12.5 requires.
-  3. **Quiet hours.** The same `attention.quiet_hours` window the local `SpeechPolicy` uses
-     (23:00-08:00 by default); critical events (the kill switch) still pass, everything else is
-     suppressed and counted as `quiet_hours`.
+1. **Allow-list.** Only the event names in `remote.notifications.events` are considered at all. An
+event that is not named there is never forwarded - a denylist would silently start leaking the next
+event someone adds to `E`. 2. **Privacy zones.** While a privacy zone is active nothing but a
+critical event leaves the machine, and the text is built from *metadata only* (event name plus a
+handful of allow-listed scalar fields). Zone content is never described, quoted or summarised - the
+zone check runs before any text is composed, mirroring the zone-gate-before-draft ordering
+requires. 3. **Quiet hours.** The same `attention.quiet_hours` window the local `SpeechPolicy` uses
+(23:00-08:00 by default); critical events (the kill switch) still pass, everything else is
+suppressed and counted as `quiet_hours`.
 
 `security.audit`, `voice.transcript_*`, `ai.*` and `memory.*` can never be configured into this
 path: `_render` has no formatter for them, so they would produce no text even if allow-listed.
@@ -30,7 +29,7 @@ from nox.core.speech_policy import in_quiet_hours
 
 log = get_logger(__name__)
 
-#: Events that pass the quiet-hours gate anyway (PRD FR-12.4: URGENT still gets through).
+#: Events that pass the quiet-hours gate anyway (PRD: URGENT still gets through).
 CRITICAL_EVENTS: frozenset[str] = frozenset({E.SECURITY_KILL_SWITCH, E.SECURITY_PANIC})
 
 Notify = Callable[[str], Awaitable[None]]

@@ -142,7 +142,7 @@ async def test_focus_today_runs_through_tool_executor(core: NoxCore) -> None:
 
 
 async def test_update_status_confirmed_writes_vault_index_and_project_state(core: NoxCore) -> None:
-    await installed(core)
+    runtime = await installed(core)
 
     async def _confirm_when_requested() -> None:
         event = await core.bus.wait_for(E.SECURITY_PERMISSION_REQUESTED)
@@ -159,7 +159,7 @@ async def test_update_status_confirmed_writes_vault_index_and_project_state(core
     )
     assert result.ok is True, result.error
     assert result.data["item"]["status"] == "in_progress"
-    assert core.pm_index.get("ST-13-01").status == "in_progress"
+    assert runtime.index.get("ST-13-01").status == "in_progress"
     assert core.state.get("project.active_story") == "ST-13-01"
 
     on_disk = (core.config.paths.vault_dir / "09 - Stories" / "ST-13-01 Todo Story.md").read_text(

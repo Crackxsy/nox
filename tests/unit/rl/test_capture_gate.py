@@ -1,7 +1,8 @@
-"""#27: the shared RL screen-capture privacy gate. Stage 1's `_recognize_loop` and Stage 2's
-`_vision_loop` (`plugins/rl/src/nox_plugin_rl/plugin.py`) are meant to both drive one of these from
-`privacy.capture_changed` (mirroring `nox.rl.vision`'s "core owns the DB/policy-shaped logic, the
-plugin only reacts to events" split) instead of each hand-rolling their own boolean flag."""
+"""The shared screen-capture gate both Rocket League capture loops go through.
+
+Both the HUD recognizer and the vision sampler drive the same gate from `privacy.capture_changed`,
+so one privacy decision stops both, and neither hand-rolls its own boolean flag.
+"""
 
 from __future__ import annotations
 
@@ -156,3 +157,35 @@ def test_missing_screen_key_defaults_to_allowed() -> None:
     gate = CaptureGate(initially_allowed=False)
     gate.on_capture_changed({})
     assert gate.allowed is True
+
+
+def test_a_latched_gate_stays_closed_until_it_is_resumed() -> None:
+    """The kill switch must not be undone by the next privacy event or the next game start."""
+    gate = CaptureGate(initially_allowed=True)
+
+    gate.latch("kill switch or panic")
+    assert gate.allowed is False
+    assert gate.latched is True
+
+    # A privacy event that would normally open the gate cannot re-open a latched one.
+    gate.on_capture_changed({"screen": True})
+    assert gate.allowed is False
+    assert "kill switch" in gate.reason
+
+    gate.resume()
+    assert gate.allowed is True
+    assert gate.reason == ""
+
+
+async def test_a_latched_gate_grabs_no_frame() -> None:
+    gate = CaptureGate(initially_allowed=True)
+    gate.latch("kill switch or panic")
+    captured = False
+
+    async def capture() -> str:
+        nonlocal captured
+        captured = True
+        return "frame"
+
+    assert await gate.maybe_capture(capture) is None
+    assert captured is False

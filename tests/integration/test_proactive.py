@@ -15,6 +15,7 @@ import pytest
 from nox.app import DEFAULTS_PATH, PROFILES_DIR, NoxCore
 from nox.core.config import load_config
 from nox.proactive.install import install as install_proactive
+from nox.proactive.service import ProactiveService
 
 pytestmark = pytest.mark.timeout(120)
 
@@ -41,34 +42,34 @@ def _config(tmp_path: Path):
     return load_config(DEFAULTS_PATH, None, None, overrides)
 
 
-async def _boot(tmp_path: Path) -> NoxCore:
+async def _boot(tmp_path: Path) -> tuple[NoxCore, ProactiveService]:
+    """A booted core plus the proactive service the extension returned."""
     cfg = _config(tmp_path)
     core = NoxCore(cfg, voice=False, profiles_dir=PROFILES_DIR, extensions=False)
     await asyncio.wait_for(core.start(), timeout=60)
-    install_proactive(core)
-    return core
+    return core, install_proactive(core).service
 
 
 async def test_notification_and_dismissal_survive_a_restart(tmp_path: Path) -> None:
-    first = await _boot(tmp_path)
+    first, first_proactive = await _boot(tmp_path)
     try:
         # "urgent"/"security" bypasses zone/privacy-mode/quiet-hours gating (B.13) - keeps this
         # test deterministic regardless of the wall-clock time it happens to run at.
-        kept = await first.proactive.notify("urgent", "security", "You have 3 new emails")
+        kept = await first_proactive.notify("urgent", "security", "You have 3 new emails")
         assert kept.allowed is True
-        dismissed_decision = await first.proactive.notify("urgent", "resources", "GPU at 95C")
+        dismissed_decision = await first_proactive.notify("urgent", "resources", "GPU at 95C")
         assert dismissed_decision.allowed is True
 
-        status_before = first.proactive.status()
+        status_before = first_proactive.status()
         assert [r.text for r in status_before.recent] == ["GPU at 95C", "You have 3 new emails"]
         dismissed_id = status_before.recent[0].id
-        assert await first.proactive.dismiss(dismissed_id) is True
+        assert await first_proactive.dismiss(dismissed_id) is True
     finally:
         await asyncio.wait_for(first.stop(), timeout=30)
 
-    second = await _boot(tmp_path)
+    second, second_proactive = await _boot(tmp_path)
     try:
-        status_after = second.proactive.status()
+        status_after = second_proactive.status()
         by_text = {r.text: r for r in status_after.recent}
         assert set(by_text) == {"You have 3 new emails", "GPU at 95C"}
         assert by_text["You have 3 new emails"].dismissed_at is None
@@ -79,9 +80,9 @@ async def test_notification_and_dismissal_survive_a_restart(tmp_path: Path) -> N
 
 
 async def test_notification_store_is_db_backed_when_installed(tmp_path: Path) -> None:
-    core = await _boot(tmp_path)
+    core, proactive = await _boot(tmp_path)
     try:
-        # `install()` wires `db=core.db` into the store (#28) rather than leaving it in-memory.
-        assert core.proactive.store._repo is not None  # noqa: SLF001 - the point of this test
+        # `install()` wires the core database into the store rather than leaving it in memory.
+        assert proactive.store._repo is not None  # noqa: SLF001 - the point of this test
     finally:
         await asyncio.wait_for(core.stop(), timeout=30)

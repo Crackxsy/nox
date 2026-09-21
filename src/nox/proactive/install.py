@@ -1,19 +1,13 @@
-"""Composition-root glue for the proactive/attention layer and its two EPIC-08 dashboard requests.
+"""Composition root for the proactive/attention layer and its two dashboard requests.
 
-`install(core)` is the single call the integrator adds to `app.py` (this package never imports or
-edits `app.py` itself, per the task's shared-file rule) - one line after `self._register_handlers()`
-in `NoxApp.start()`:
-
-    from nox.proactive.install import install
-    install(self)
-
-`core` only needs to duck-type the attributes used below (`bus`, `state`, `config`, `speech_policy`,
-`registry`, `tool_registry`, `db`, and optionally `speaker`) - exactly what `NoxApp` already
-exposes after `_register_handlers()` runs (see `nox.app.NoxApp.start`).
+`install(core)` registers the `health.history` and `config.effective` requests, the two
+`proactive.*` tools, and returns the runtime holding the service. `core` needs the attributes on
+`_Core` below; they all exist once the core has finished registering its own handlers.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -34,13 +28,13 @@ from nox.voice.base import TtsRequest
 
 
 class NotificationDismissRequest(BaseModel):
-    """`proactive.notification.dismiss {id}` (#28)."""
+    """Payload of `proactive.notification.dismiss`."""
 
     id: str
 
 
 class _Core(Protocol):
-    """Duck-typed subset of `NoxApp` this module needs (see module docstring)."""
+    """The subset of the core this module needs."""
 
     bus: Any
     state: Any
@@ -52,10 +46,21 @@ class _Core(Protocol):
     speaker: Any
 
 
+@dataclass(slots=True)
+class ProactiveRuntime:
+    """Handle for the caller. Nothing here runs in the background: the service reacts to calls
+    and the registered requests live on the core's registry, so `stop` has nothing to undo and
+    exists so every extension is shut down the same way."""
+
+    service: ProactiveService
+
+    def stop(self) -> None:
+        return None
+
+
 class _TextSpeaker:
-    """Adapts `nox.app.WorkerSpeaker` (which speaks a `TtsRequest`) to the plain-text
-    `nox.proactive.service.Speaker` protocol, so this package stays decoupled from the voice
-    contract's exact request shape."""
+    """Adapts the core's speaker (which speaks a `TtsRequest`) to the plain-text `Speaker`
+    protocol this package uses, so `nox.proactive` stays decoupled from the voice request shape."""
 
     def __init__(self, speaker: Any, *, language: str) -> None:
         self._speaker = speaker
@@ -71,16 +76,20 @@ class _TextSpeaker:
         )
 
 
-def install(core: _Core) -> ProactiveService:
-    """Wire `ProactiveService` into `core` and register its dashboard requests/tool. Returns the
-    service so callers (or tests) can also reach it via the return value, not only `core.proactive`.
-    """
+def install(core: _Core) -> ProactiveRuntime:
+    """Wire the proactive service into `core`, register its requests and tools, and return it."""
+    service = _build_service(core)
+    _register_requests(core)
+    _register_tools(core, service)
+    return ProactiveRuntime(service=service)
 
+
+def _build_service(core: _Core) -> ProactiveService:
     async def publish_event(name: str, payload: dict[str, Any]) -> None:
         await core.bus.publish(Event(name=name, payload=payload))
 
     speaker = None
-    if getattr(core, "speaker", None) is not None:
+    if core.speaker is not None:
         configured = core.config.identity.speech_language
         # TtsRequest wants a concrete "de"/"en"; "auto" (language-of-the-message) has no meaning
         # for a proactive utterance with no preceding user message to detect it from.
@@ -88,17 +97,17 @@ def install(core: _Core) -> ProactiveService:
         speaker = _TextSpeaker(core.speaker, language=language)
 
     pcfg = core.config.proactive
-    store = NotificationStore(limit=pcfg.notification_store_limit, db=core.db)
-    service = ProactiveService(
+    return ProactiveService(
         state=core.state,
         config=core.config,
         speech_policy=core.speech_policy,
         publish_event=publish_event,
         speaker=speaker,
-        store=store,
+        store=NotificationStore(limit=pcfg.notification_store_limit, db=core.db),
     )
-    core.proactive = service  # type: ignore[attr-defined]
 
+
+def _register_requests(core: _Core) -> None:
     reg = core.registry.register
     reg(
         "health.history",
@@ -113,6 +122,8 @@ def install(core: _Core) -> ProactiveService:
         roles=("shell", "dashboard"),
     )
 
+
+def _register_tools(core: _Core, service: ProactiveService) -> None:
     async def tool_handler(_arguments: dict[str, Any]) -> dict[str, Any]:
         return service.status().model_dump(mode="json")
 
@@ -148,7 +159,5 @@ def install(core: _Core) -> ProactiveService:
         )
     )
 
-    return service
 
-
-__all__ = ["install"]
+__all__ = ["ProactiveRuntime", "install"]

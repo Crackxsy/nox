@@ -1,5 +1,5 @@
-"""Game detection (ST-12-01): read-only process-list polling for Rocket League. No window-handle
-API, no memory read, no injection - `psutil.process_iter` only (Security Model §10)."""
+"""Game detection: read-only process-list polling for Rocket League. No window-handle API, no memory
+read, no injection - `psutil.process_iter` only (Security Model)."""
 
 from __future__ import annotations
 

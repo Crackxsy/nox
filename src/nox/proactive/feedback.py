@@ -1,6 +1,7 @@
-"""ST-19-07: a bounded, traceable feedback loop. Learning may only turn hint *frequency* down (or
-back up) per event-type/context key - it can never be applied to URGENT security/data-loss cases,
-which is enforced by callers simply never looking a weight up for those (see `service.notify`).
+""": a bounded, traceable feedback loop. Learning may only turn hint *frequency* down (or back up)
+per
+event-type/context key - it can never be applied to URGENT security/data-loss cases, which is
+enforced by callers simply never looking a weight up for those (see `service.notify`).
 
 "Bounded": every weight is clamped to `[config.feedback_min_weight, config.feedback_max_weight]`.
 "Traceable": every adjustment is appended to a capped in-memory log with the key, delta and

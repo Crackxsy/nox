@@ -155,7 +155,7 @@ async def test_dispatch_handler_ipc_error_passthrough() -> None:
 
 
 async def test_dispatch_response_validated_against_registered_model() -> None:
-    """OP-9: `chat.send` responses are checked against `ChatSendResult`; a handler bug that
+    """`chat.send` responses are checked against `ChatSendResult`; a handler bug that
     returns the wrong shape becomes `internal`, never a silently malformed response.
     """
     reg = RequestRegistry()
@@ -177,7 +177,13 @@ async def test_dispatch_rejects_non_request_kind() -> None:
     assert reply.payload["code"] == ERR_VALIDATION
 
 
-async def test_explicit_roles_intersect_with_policy() -> None:
+async def test_registration_roles_are_the_authority() -> None:
+    """A handler's own `roles` decide, because they sit next to the handler.
+
+    They used to be intersected with the coarse per-role table, which meant a request had to be
+    listed in two places - and one that was only listed in one of them was registered, reachable
+    in the code, and refused at the door. That is how the stream view became unreachable.
+    """
     reg = RequestRegistry()
 
     async def h(ctx: RequestContext, p: BaseModel) -> dict[str, Any]:
@@ -185,9 +191,21 @@ async def test_explicit_roles_intersect_with_policy() -> None:
 
     reg.register("state.get", ModeSet.__mro__[1], h, roles={"dashboard"})  # BaseModel accepts {}
     assert reg.is_allowed("state.get", "dashboard")
-    assert not reg.is_allowed("state.get", "shell")  # policy allows, handler does not
-    # handler roles can never widen the policy:
-    reg.register("mode.set", ModeSet, h, roles={"pet"})
+    assert not reg.is_allowed("state.get", "shell")  # registered for dashboard only
+    # A name the coarse table never lists is still reachable for the roles it was registered for.
+    reg.register("stream.session.status", ModeSet.__mro__[1], h, roles={"dashboard", "shell"})
+    assert reg.is_allowed("stream.session.status", "dashboard")
+    assert not reg.is_allowed("stream.session.status", "plugin")
+
+
+async def test_without_explicit_roles_the_per_role_table_decides() -> None:
+    reg = RequestRegistry()
+
+    async def h(ctx: RequestContext, p: BaseModel) -> dict[str, Any]:
+        return {"ok": True}
+
+    reg.register("mode.set", ModeSet, h)
+    assert reg.is_allowed("mode.set", "dashboard")
     assert not reg.is_allowed("mode.set", "pet")
 
 

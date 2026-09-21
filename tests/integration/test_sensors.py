@@ -66,11 +66,11 @@ async def core(tmp_path: Path):
     cfg = _config(tmp_path)
     core = NoxCore(cfg, voice=False, profiles_dir=PROFILES_DIR, extensions=False)
     await core.start()
-    install(core)
+    core.extensions["sensors"] = install(core)
     try:
         yield core
     finally:
-        await core.sensors.stop()
+        await core.extensions["sensors"].stop()
         await core.stop()
 
 
@@ -79,7 +79,7 @@ async def test_install_registers_sensors_status_read_tool(core: NoxCore) -> None
 
 
 async def test_zoned_foreground_window_reaches_privacy_and_pet(core: NoxCore) -> None:
-    sensor = core.sensors.foreground
+    sensor = core.extensions["sensors"].foreground
     # This test host is Windows (ENGINEERING.md), so install() built a RealWin32Probe.
     assert sensor is not None
 

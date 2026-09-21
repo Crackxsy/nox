@@ -1,10 +1,10 @@
-"""Shell composition root (Component Model: `nox.shell.app` wires everything).
+"""Shell composition root (the component model: `nox.shell.app` wires everything).
 
-Flow: read runtime files -> create IPC bridge (role shell) -> pet window + tray + hotkeys ->
-ping loop decides `connected` -> events update ShellModel -> tray/pet refresh. Every user action
-is a typed request; when the core is offline the kill switch goes to the supervisor control port.
-"Quit" (B-6) always goes through the supervisor (`sup.stop`), not just a local exit: the supervisor
-stops the core gracefully, then the shell process, then itself.
+Flow: read runtime files -> create IPC bridge (role shell) -> pet window + tray + hotkeys -> ping
+loop decides `connected` -> events update ShellModel -> tray/pet refresh. Every user action is a
+typed request; when the core is offline the kill switch goes to the supervisor control port. "Quit"
+always goes through the supervisor (`sup.stop`), not just a local exit: the supervisor stops the
+core gracefully, then the shell process, then itself.
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ SUBSCRIPTIONS = [
     "system.*",
     "voice.*",
     "state.changed",
-    # #24: `config.set pet.variant` publishes this; the shell reloads the pet page with the new
+    #: `config.set pet.variant` publishes this; the shell reloads the pet page with the new
     # variant so the setting takes effect without restarting Nox.
     "settings.changed",
 ]
@@ -82,7 +82,7 @@ class _Signals(QObject):
 
 
 class ShellApp:
-    """Runs inside an existing QApplication. Construct, `start()`, then run the Qt loop."""
+    """Runs inside an existing QApplication. Construct, `start`, then run the Qt loop."""
 
     def __init__(
         self,
@@ -175,7 +175,7 @@ class ShellApp:
         log.info("shell.started", runtime_dir=str(self.runtime_dir), connected=self.model.connected)
 
     def quit(self) -> None:
-        """B-6: ask the supervisor to stop core, shell and itself before this process exits."""
+        """: ask the supervisor to stop core, shell and itself before this process exits."""
         self._request_supervisor_stop()
         self._ping_timer.stop()
         self._reconnect_timer.stop()
@@ -320,7 +320,7 @@ class ShellApp:
             self.tray.notify("Nox", "Kill switch engaged – safe mode", critical=True)
 
     def _apply_settings_changed(self, payload: dict[str, Any]) -> None:
-        """#24: apply a changed `pet.variant` by reloading the pet page with the new variant.
+        """: apply a changed `pet.variant` by reloading the pet page with the new variant.
 
         `settings.changed` carries paths only, never values (Event Model), so the value is re-read
         from the configuration. The pet page subscribes to the same event and swaps the variant in
@@ -370,10 +370,18 @@ class ShellApp:
     # -- actions ---------------------------------------------------------------------------------
 
     def set_privacy(self, mode: PrivacyMode) -> None:
-        self._request("privacy.set", {"mode": mode.value})
+        self._request(
+            "privacy.set",
+            {"mode": mode.value},
+            failure_text="Privatsphäre-Modus nicht geändert",
+        )
 
     def toggle_mute(self) -> None:
-        self._request("voice.mute", {"muted": not self.model.muted})
+        self._request(
+            "voice.mute",
+            {"muted": not self.model.muted},
+            failure_text="Mikrofon nicht umgeschaltet",
+        )
 
     def ptt(self, pressed: bool) -> None:
         self._request("voice.ptt", {"pressed": pressed})
@@ -403,7 +411,11 @@ class ShellApp:
         """Kill via core when connected, else via supervisor. Returns the path used."""
         path = kill_path(self.model)
         if path == "core":
-            self._request("security.kill", {"reason": "user", "origin": origin})
+            self._request(
+                "security.kill",
+                {"reason": "user", "origin": origin},
+                failure_text="Not-Aus nicht ausgelöst",
+            )
             return path
         sup_token = read_supervisor_token(self.runtime_dir)
         host = self.endpoints.host if self.endpoints else "127.0.0.1"
@@ -431,7 +443,7 @@ class ShellApp:
         return send_supervisor_kill(host, port, token, reason="user", origin="shell")
 
     def _request_supervisor_stop(self) -> None:
-        """B-6: "Quit" always asks the supervisor, whether or not the core is reachable."""
+        """: "Quit" always asks the supervisor, whether or not the core is reachable."""
         sup_token = read_supervisor_token(self.runtime_dir)
         if sup_token is None:
             log.warning("shell.quit_no_supervisor_token")
@@ -475,24 +487,40 @@ class ShellApp:
 
     # -- helpers ---------------------------------------------------------------------------------
 
-    def _request(self, name: str, payload: dict[str, Any]) -> Future[Any] | None:
+    def _request(
+        self, name: str, payload: dict[str, Any], *, failure_text: str = ""
+    ) -> Future[Any] | None:
+        """Send a request to the core. Returns None when it could not even be sent.
+
+        `failure_text` is what the user is told when the request cannot be sent or comes back as
+        an error. A user action that quietly does nothing is the failure mode this exists to
+        prevent; background traffic passes no text and stays in the log.
+        """
         self.calls.append((name, payload))
         if self.bridge is None:
             log.warning("shell.request_dropped_offline", name=name)
+            self._notify_failure(failure_text, "Kern nicht erreichbar")
             return None
         try:
             fut = self.bridge.call(name, payload)
         except Exception:
             log.exception("shell.request_failed", name=name)
+            self._notify_failure(failure_text, "Anfrage nicht möglich")
             return None
-        fut.add_done_callback(lambda f: self._log_result(name, f))
+        fut.add_done_callback(lambda f: self._on_result(name, f, failure_text))
         return fut
 
-    @staticmethod
-    def _log_result(name: str, fut: Future[Any]) -> None:
+    def _notify_failure(self, failure_text: str, detail: str) -> None:
+        if not failure_text:
+            return
+        self.tray.notify("Nox", f"{failure_text}: {detail}")
+
+    def _on_result(self, name: str, fut: Future[Any], failure_text: str) -> None:
         exc = fut.exception() if fut.done() else None
-        if exc is not None:
-            log.warning("shell.request_error", name=name, error=type(exc).__name__)
+        if exc is None:
+            return
+        log.warning("shell.request_error", name=name, error=type(exc).__name__)
+        self._notify_failure(failure_text, type(exc).__name__)
 
     def _on_pet_moved(self, x: int, y: int) -> None:
         self.state.x, self.state.y = x, y
@@ -511,7 +539,7 @@ def run(argv: list[str] | None = None, *, runtime_dir: Path | None = None) -> in
     import os
     import sys
 
-    # B-7/pet_window.py docstring: force Chromium's software compositor when requested. Must be set
+    # /pet_window.py docstring: force Chromium's software compositor when requested. Must be set
     # before QApplication() is constructed, which is why this lives here and not in pet_window.py.
     if os.environ.get("NOX_PET_SOFTWARE_RENDER") == "1":
         flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")

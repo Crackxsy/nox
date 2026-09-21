@@ -1,7 +1,7 @@
-; SP-16 / ST-10-02: Inno Setup script for Nox. Installs the embedded-Python payload produced by
+; Inno Setup script for Nox. Installs the embedded-Python payload produced by
 ; `installer/build.py` (build/app/ + build/runtime/) into a per-user LOCALAPPDATA location, with a
-; Start-menu shortcut and an optional autostart entry. Never touches E:\Nox\vault (or any existing
-; vault path); uninstall removes only the program files it installed.
+; Start-menu shortcut and an optional autostart entry. Never touches the user's vault (or any
+; existing vault path); uninstall removes only the program files it installed.
 ;
 ; Build with (once Inno Setup is installed):
 ;   "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\nox.iss
@@ -20,7 +20,7 @@ AppId={{6F2F6C6E-2B6E-4B5B-9C2E-3B9E6B2C6A1D}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-; Per-user, no elevation: LOCALAPPDATA install per SP-16 outline / FR-15.4 (no admin rights needed).
+; Per-user, no elevation: LOCALAPPDATA install (no admin rights needed).
 DefaultDirName={localappdata}\Programs\Nox
 DefaultGroupName=Nox
 DisableProgramGroupPage=yes
@@ -31,7 +31,7 @@ Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-; No telemetry, no phone-home ever (FR-15.4) - this installer does not touch the network itself;
+; No telemetry, no phone-home ever - this installer does not touch the network itself;
 ; `build.py` already fetched everything it needs before ISCC ever runs.
 DisableWelcomePage=no
 WizardStyle=modern
@@ -62,13 +62,13 @@ Name: "{userstartup}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: "-
 Filename: "{app}\runtime\pythonw.exe"; Parameters: "-m nox.supervisor"; WorkingDir: "{app}\app"; Description: "{cm:LaunchProgram,Nox}"; Flags: nowait postinstall skipifsilent unchecked
 
 [UninstallDelete]
-; Belt-and-braces: only ever delete inside {app} (program files). E:\Nox\vault, E:\Nox\database,
-; E:\Nox\data and any user config outside {app} are never named here and are never touched -
-; uninstall must leave the vault and all user data exactly as it was (FR-15.4).
+; Belt-and-braces: only ever delete inside {app} (program files). The user's vault, database,
+; data folder and any config outside {app} are never named here and are never touched -
+; uninstall must leave the vault and all user data exactly as it was.
 Type: filesandordirs; Name: "{app}\runtime"
 Type: filesandordirs; Name: "{app}\app\__pycache__"
 
 [Code]
 { No vault path is ever written or read by the installer itself - first-start config (vault path,
-  name, language, optional Twitch/mic-camera/AI backend) is handled by nox's own first-start flow
-  (ST-10-03), not by this script, so the installer stays honest about what it actually configures. }
+  name, language, optional Twitch/mic-camera/AI backend) is handled by nox's own first-start flow,
+  not by this script, so the installer stays honest about what it actually configures. }

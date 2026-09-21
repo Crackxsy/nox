@@ -108,9 +108,11 @@ async def test_addressed_chat_message_reaches_twitch_chat_send_through_the_execu
     # The permission check and the tool execution each audit their own entry (`nox.security.
     # permissions.DefaultPermissionEngine._record` and `nox.tools.executor.ToolExecutor._finish`)
     # - assert on presence/outcome, not on the exact count of internal audit points.
+    # The audit log writes on its own thread; drain it, then read the chain directly.
+    core.security.audit.flush(timeout_s=5.0)
     audited = [
         e
-        for e in core.security.audit.entries(limit=200)
+        for e in core.security.audit_store.entries(limit=200)
         if e.tool == "twitch" and e.action == "chat.send"
     ]
     assert audited

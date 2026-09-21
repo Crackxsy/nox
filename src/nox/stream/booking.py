@@ -1,11 +1,11 @@
-"""FunkenBooking: bridges Stream Bot events to `FunkenService` (Spec v0.2 §3.5/§8/§9, EPIC-11).
+"""FunkenBooking: bridges Stream Bot events to `FunkenService`.
 
-Plugins never book Funken themselves (see `nox.stream.funken` module docstring) - they only
-publish `stream.funken_awarded` requests; this is the core-side subscriber that turns those into
-ledger earns, gated by a per-viewer daily cap (`stream.funken.earn_daily_cap`) and by "only while a
-stream session is active" (no farming Funken outside a stream). It also answers the viewer-facing
+Plugins never book Funken themselves (see `nox.stream.funken` module docstring) - they only publish
+`stream.funken_awarded` requests; this is the core-side subscriber that turns those into ledger
+earns, gated by a per-viewer daily cap (`stream.funken.earn_daily_cap`) and by "only while a stream
+session is active" (no farming Funken outside a stream). It also answers the viewer-facing
 `!funken` chat command (`twitch.command_invoked` with `command="funken"`) - exclusively through
-`ToolExecutor.call("twitch.chat.send", ...)`, never by talking to the Twitch plugin directly - and
+`ToolExecutor.call("twitch.chat.send",...)`, never by talking to the Twitch plugin directly - and
 serves the `stream.funken.top` IPC request (leaderboard).
 """
 

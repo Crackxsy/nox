@@ -33,7 +33,10 @@ async def test_engage_sets_flag_and_emits_event_before_hooks_run(
     report = await ks.engage("hotkey", "test")
     assert report.engaged and report.hooks == {"voice": "ok"} and not report.already_engaged
     assert seen["engaged_during_hook"] is True
-    assert seen["events_before_hook"] == [E.SECURITY_KILL_SWITCH]
+    # The kill event goes out first, so everything listening stops at once; the audit entry is
+    # written immediately after it and before any hook runs, so a hook that fails cannot cost us
+    # the record that the kill happened.
+    assert seen["events_before_hook"] == [E.SECURITY_KILL_SWITCH, E.SECURITY_AUDIT]
     assert bus.published[0].payload == {"by": "hotkey", "reason": "test"}
     rows = [e for e in audit.entries() if e.action == "kill_switch.engage"]
     assert rows and rows[0].actor == "hotkey"

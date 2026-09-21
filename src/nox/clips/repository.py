@@ -1,6 +1,6 @@
-"""Typed repository over the `clips`/`clip_markers` tables (migration `0006_clips.sql`, Spec v0.6
-§7, ST-15-01). Mirrors `nox.data.stream_repos`'s conventions: frozen pydantic rows, ISO-8601 UTC
-timestamps, JSON-encoded list columns."""
+"""Typed repository over the `clips`/`clip_markers` tables (migration `0006_clips.sql`). Mirrors
+`nox.data.stream_repos`'s conventions: frozen pydantic rows, ISO-8601 UTC timestamps, JSON-encoded
+list columns."""
 
 from __future__ import annotations
 

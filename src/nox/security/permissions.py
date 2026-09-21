@@ -1,14 +1,16 @@
-"""Default permission engine (Security Model §2, ADR-007, Tool Model pipeline step 4).
+"""The permission engine: every tool call passes through it before it runs.
 
-Evaluation order in `check()`: hard prohibitions -> safe mode -> privacy constraints -> critical
-risk
-(PIN only) -> temporary grants -> profile restrictions and rules (first match wins) -> default by
-risk.
-`check()` is pure given (request, profile, privacy snapshot, grants, clock) and audits every
-decision.
-Confirmations: `request_confirmation()` returns a grant_id, `reply()` resolves it,
-`await_confirmation()`
-waits (timeout = deny); `remember=True` creates a session-scoped `TemporaryGrant` for tool/action.
+`evaluate()` is the whole policy, and it is pure - given a request, the active profile, a privacy
+snapshot, the live grants and the time, it always returns the same decision, with no I/O and no
+events. The guards in `EVALUATION_GUARDS` run in order and the first one that answers wins: hard
+prohibitions, safe mode, the privacy constraints, critical risk, temporary grants, the profile's
+restrictions, the profile's rules, and finally the default for the request's risk level. A new
+rule is a new guard function in that list, not another branch in a long function.
+
+`check()` wraps `evaluate()` with auditing. Confirmation is a second step:
+`request_confirmation()` registers the question and emits it, `reply()` answers it, and
+`await_confirmation()` waits (a timeout denies). `remember=True` turns an allow into a
+session-scoped grant for that tool and action.
 """
 
 from __future__ import annotations
@@ -20,15 +22,16 @@ import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from fnmatch import fnmatchcase
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
 from nox.core.events import E, EventBus, PermissionDecided, PermissionRequested
+from nox.core.globbing import value_matches, value_matches_any
 from nox.core.state import PrivacyMode
 from nox.security._events import publish, publish_nowait
 from nox.security._logging import get_logger
+from nox.security.audit_sink import SafeAuditLog
 from nox.security.model import (
     AuditLog,
     Decision,
@@ -219,18 +222,8 @@ class RepositoryGrantStore(InMemoryGrantStore):
 # ---- matching helpers ----------------------------------------------------------------------------
 
 
-def glob_match(value: str, pattern: str) -> bool:
-    """Case-insensitive glob; "*" matches everything including the empty string."""
-    if pattern == "*":
-        return True
-    return fnmatchcase(value.lower(), pattern.lower())
-
-
-def matches_any(value: str, patterns: Sequence[str]) -> bool:
-    return any(glob_match(value, p) for p in patterns)
-
-
 def normalise_path(value: str) -> str:
+    """Fold a filesystem target onto one comparable form: forward slashes, lowercase, no `..`."""
     text = value.strip().replace("\\", "/").lower()
     if not text:
         return ""
@@ -251,40 +244,60 @@ def under_roots(target: str, roots: Sequence[str]) -> bool:
     return False
 
 
+def target_matches(target: str, pattern: str) -> bool:
+    """Match a rule's `target` glob, normalising both sides when the target is a filesystem path.
+
+    Without the normalisation, `C:/Users/me/../../Windows/System32` matched a rule scoped to
+    `C:/Users/*` - the very traversal `under_roots` has always normalised away. URLs keep their
+    literal form, because collapsing `https://` would break every host rule.
+    """
+    if looks_like_path(target) and not target.lower().startswith(("http://", "https://")):
+        return value_matches(normalise_path(target), normalise_path(pattern))
+    return value_matches(target.replace("\\", "/"), pattern.replace("\\", "/"))
+
+
 def rule_matches(rule: ProfileRule, request: PermissionRequest) -> bool:
-    target = request.target.replace("\\", "/")
     return (
-        glob_match(request.agent, rule.agent)
-        and glob_match(request.tool, rule.tool)
-        and glob_match(request.action, rule.action)
-        and glob_match(request.mode, rule.mode)
-        and glob_match(request.risk.value, rule.risk)
-        and glob_match(target, rule.target.replace("\\", "/"))
+        value_matches(request.agent, rule.agent)
+        and value_matches(request.tool, rule.tool)
+        and value_matches(request.action, rule.action)
+        and value_matches(request.mode, rule.mode)
+        and value_matches(request.risk.value, rule.risk)
+        and target_matches(request.target, rule.target)
     )
 
 
 def is_memory_write(request: PermissionRequest) -> bool:
     return (
-        matches_any(request.tool, MEMORY_TOOL_PATTERNS)
+        value_matches_any(request.tool, MEMORY_TOOL_PATTERNS)
         and request.risk is not Risk.READ
         and request.action.lower() not in READ_ACTIONS
     )
 
 
 def is_capture(request: PermissionRequest) -> bool:
-    return matches_any(request.tool, CAPTURE_TOOL_PATTERNS)
+    return value_matches_any(request.tool, CAPTURE_TOOL_PATTERNS)
 
 
 def is_filesystem(request: PermissionRequest) -> bool:
-    return matches_any(request.tool, FILESYSTEM_TOOL_PATTERNS)
+    return value_matches_any(request.tool, FILESYSTEM_TOOL_PATTERNS)
 
 
 def is_screenshot_to_cloud(request: PermissionRequest) -> bool:
-    if not matches_any(request.tool, SCREENSHOT_TOOL_PATTERNS):
+    if not value_matches_any(request.tool, SCREENSHOT_TOOL_PATTERNS):
         return False
-    return matches_any(request.action, CLOUD_ACTION_PATTERNS) or request.target.lower().startswith(
-        "http"
-    )
+    return value_matches_any(
+        request.action, CLOUD_ACTION_PATTERNS
+    ) or request.target.lower().startswith("http")
+
+
+def is_scoped_prefix(value: str, prefix: str) -> bool:
+    """`value` is `prefix` itself or lies below it - never merely starts with the same letters.
+
+    A grant scoped to project `a` used to match every target beginning with `a`, `api-keys`
+    included.
+    """
+    return bool(prefix) and (value == prefix or value.startswith(prefix + "/"))
 
 
 def grant_matches(grant: TemporaryGrant, request: PermissionRequest, now: datetime) -> bool:
@@ -299,15 +312,194 @@ def grant_matches(grant: TemporaryGrant, request: PermissionRequest, now: dateti
     if kind == "task":
         return request.task_id == value
     if kind == "project":
-        return request.target.startswith(value) or (request.task_id or "").startswith(value)
+        return is_scoped_prefix(request.target, value) or is_scoped_prefix(
+            request.task_id or "", value
+        )
     if kind == "repo":
         return looks_like_path(request.target) and under_roots(request.target, [value])
     if kind == "session":
         tool_glob, _, action_glob = value.partition("/")
-        return glob_match(request.tool, tool_glob) and glob_match(
+        return value_matches(request.tool, tool_glob) and value_matches(
             request.action, action_glob or "*"
         )
     return False
+
+
+# ---- evaluation guards ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationContext:
+    """Everything a guard may look at. Frozen, so a guard cannot influence the ones after it."""
+
+    request: PermissionRequest
+    profile: Profile
+    snapshot: PrivacySnapshot
+    grants: Sequence[TemporaryGrant]
+    now: datetime
+    #: Pre-computed, because four guards ask the same two questions.
+    cloud: bool
+    memory_write: bool
+
+
+#: A guard answers the request, or returns None to let the next one decide.
+Guard = Callable[[EvaluationContext], PermissionResult | None]
+
+
+def _hard_prohibition(ctx: EvaluationContext) -> PermissionResult | None:
+    hard = hard_prohibition_for(ctx.request.tool, ctx.request.action)
+    if hard is None:
+        return None
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id=f"hard.{hard}",
+        reason="hard prohibition; not overridable by any layer",
+    )
+
+
+def _safe_mode(ctx: EvaluationContext) -> PermissionResult | None:
+    if not (ctx.snapshot.safe_mode or ctx.snapshot.panic) or ctx.request.risk is Risk.READ:
+        return None
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id="safe_mode",
+        reason="kill switch engaged: no side effects until manual resume",
+    )
+
+
+def _privacy_cloud(ctx: EvaluationContext) -> PermissionResult | None:
+    mode = ctx.snapshot.mode
+    if mode not in (PrivacyMode.PRIVATE, PrivacyMode.OFFLINE) or not ctx.cloud:
+        return None
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id=f"privacy.{mode.value}.cloud",
+        reason=f"cloud tools are disabled in privacy mode {mode.value}",
+    )
+
+
+def _privacy_memory_write(ctx: EvaluationContext) -> PermissionResult | None:
+    if ctx.snapshot.mode is not PrivacyMode.PRIVATE or not ctx.memory_write:
+        return None
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id="privacy.private.memory_write",
+        reason="PRIVATE mode keeps everything session-only",
+    )
+
+
+def _privacy_zone(ctx: EvaluationContext) -> PermissionResult | None:
+    if not ctx.snapshot.zone_active or not (is_capture(ctx.request) or ctx.memory_write):
+        return None
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id="privacy.zone_active",
+        reason="a privacy zone is in the foreground",
+    )
+
+
+def _critical_risk(ctx: EvaluationContext) -> PermissionResult | None:
+    if ctx.request.risk is not Risk.CRITICAL:
+        return None
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id="risk.critical",
+        requires_pin=True,
+        reason="critical actions need the PIN flow, never a tool call",
+    )
+
+
+def _temporary_grant(ctx: EvaluationContext) -> PermissionResult | None:
+    for grant in ctx.grants:
+        if grant_matches(grant, ctx.request, ctx.now):
+            return PermissionResult(
+                decision=Decision.ALLOW,
+                rule_id=f"grant.{grant.scope}",
+                reason="temporary grant",
+                grant_id=grant.grant_id,
+            )
+    return None
+
+
+def _profile_cloud(ctx: EvaluationContext) -> PermissionResult | None:
+    if ctx.profile.cloud_allowed or not ctx.cloud:
+        return None
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id=f"{ctx.profile.id}.cloud_disabled",
+        reason="profile forbids cloud tools",
+    )
+
+
+def _profile_memory_writes(ctx: EvaluationContext) -> PermissionResult | None:
+    if ctx.profile.memory_writes_allowed or not ctx.memory_write:
+        return None
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id=f"{ctx.profile.id}.memory_writes_disabled",
+        reason="profile forbids memory and vault writes",
+    )
+
+
+def _profile_screenshots_to_cloud(ctx: EvaluationContext) -> PermissionResult | None:
+    if ctx.profile.screenshots_to_cloud or not is_screenshot_to_cloud(ctx.request):
+        return None
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id=f"{ctx.profile.id}.screenshots_to_cloud",
+        reason="profile forbids sending screenshots to the cloud",
+    )
+
+
+def _profile_tool_allowlist(ctx: EvaluationContext) -> PermissionResult | None:
+    allowed = ctx.profile.tools_allowed
+    if not allowed or value_matches_any(ctx.request.tool, allowed):
+        return None
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id=f"{ctx.profile.id}.tool_not_allowed",
+        reason="tool is not in the profile allow-list",
+    )
+
+
+def _profile_filesystem_roots(ctx: EvaluationContext) -> PermissionResult | None:
+    roots = ctx.profile.filesystem_roots
+    target = ctx.request.target
+    if not roots or not is_filesystem(ctx.request) or not looks_like_path(target):
+        return None
+    if under_roots(target, roots):
+        return None
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id=f"{ctx.profile.id}.filesystem_roots",
+        reason="target is outside the profile's filesystem roots",
+    )
+
+
+def _profile_rules(ctx: EvaluationContext) -> PermissionResult | None:
+    for rule in ctx.profile.rules:
+        if rule_matches(rule, ctx.request):
+            return PermissionResult(decision=rule.decision, rule_id=rule.id, reason=rule.reason)
+    return None
+
+
+#: The policy, in order. The first guard that answers decides; if none does, the request falls
+#: through to `DEFAULT_BY_RISK`.
+EVALUATION_GUARDS: tuple[Guard, ...] = (
+    _hard_prohibition,
+    _safe_mode,
+    _privacy_cloud,
+    _privacy_memory_write,
+    _privacy_zone,
+    _critical_risk,
+    _temporary_grant,
+    _profile_cloud,
+    _profile_memory_writes,
+    _profile_screenshots_to_cloud,
+    _profile_tool_allowlist,
+    _profile_filesystem_roots,
+    _profile_rules,
+)
 
 
 # ---- engine --------------------------------------------------------------------------------------
@@ -341,7 +533,7 @@ class DefaultPermissionEngine:
         self._profiles = profiles
         self._privacy = privacy
         self._grants: GrantStore = grants if grants is not None else InMemoryGrantStore()
-        self._audit = audit
+        self._audit = SafeAuditLog(audit)
         self._bus = bus
         self._clock: Clock = clock or (lambda: datetime.now(UTC))
         self._confirm_timeout_s = confirm_timeout_s
@@ -367,7 +559,7 @@ class DefaultPermissionEngine:
         profile = self._profiles.get(profile_id)  # KeyError / ProfileError propagate
         previous = self._profile.id
         self._profile = profile
-        self._audit_append(
+        self._audit.append(
             actor=by,
             tool="security",
             action="profile.set",
@@ -382,7 +574,7 @@ class DefaultPermissionEngine:
         if grant.max_risk is Risk.CRITICAL:
             raise ValueError("temporary grants can never cover critical risk")
         self._grants.add(grant)
-        self._audit_append(
+        self._audit.append(
             actor=grant.granted_by,
             tool="security",
             action="grant.create",
@@ -398,7 +590,7 @@ class DefaultPermissionEngine:
 
     def revoke(self, grant_id: str) -> None:
         removed = self._grants.remove(grant_id)
-        self._audit_append(
+        self._audit.append(
             actor="user",
             tool="security",
             action="grant.revoke",
@@ -410,7 +602,7 @@ class DefaultPermissionEngine:
     # ---- pure evaluation -------------------------------------------------------------------------
 
     def is_cloud_tool(self, request: PermissionRequest) -> bool:
-        return matches_any(request.tool, self._cloud_tool_patterns) or matches_any(
+        return value_matches_any(request.tool, self._cloud_tool_patterns) or value_matches_any(
             request.action, CLOUD_ACTION_PATTERNS
         )
 
@@ -422,103 +614,24 @@ class DefaultPermissionEngine:
         grants: Sequence[TemporaryGrant],
         now: datetime,
     ) -> PermissionResult:
-        """Deterministic decision; no I/O, no events (see module docstring for the order)."""
-        hard = hard_prohibition_for(request.tool, request.action)
-        if hard is not None:
-            return PermissionResult(
-                decision=Decision.DENY,
-                rule_id=f"hard.{hard}",
-                reason="hard prohibition; not overridable by any layer",
-            )
-
-        if (snapshot.safe_mode or snapshot.panic) and request.risk is not Risk.READ:
-            return PermissionResult(
-                decision=Decision.DENY,
-                rule_id="safe_mode",
-                reason="kill switch engaged: no side effects until manual resume",
-            )
-
-        cloud = self.is_cloud_tool(request)
-        memory_write = is_memory_write(request)
-        if snapshot.mode in (PrivacyMode.PRIVATE, PrivacyMode.OFFLINE) and cloud:
-            return PermissionResult(
-                decision=Decision.DENY,
-                rule_id=f"privacy.{snapshot.mode.value}.cloud",
-                reason=f"cloud tools are disabled in privacy mode {snapshot.mode.value}",
-            )
-        if snapshot.mode is PrivacyMode.PRIVATE and memory_write:
-            return PermissionResult(
-                decision=Decision.DENY,
-                rule_id="privacy.private.memory_write",
-                reason="PRIVATE mode keeps everything session-only",
-            )
-        if snapshot.zone_active and (is_capture(request) or memory_write):
-            return PermissionResult(
-                decision=Decision.DENY,
-                rule_id="privacy.zone_active",
-                reason="a privacy zone is in the foreground",
-            )
-
-        if request.risk is Risk.CRITICAL:
-            return PermissionResult(
-                decision=Decision.DENY,
-                rule_id="risk.critical",
-                requires_pin=True,
-                reason="critical actions need the PIN flow, never a tool call",
-            )
-
-        for grant in grants:
-            if grant_matches(grant, request, now):
-                return PermissionResult(
-                    decision=Decision.ALLOW,
-                    rule_id=f"grant.{grant.scope}",
-                    reason="temporary grant",
-                    grant_id=grant.grant_id,
-                )
-
-        if not profile.cloud_allowed and cloud:
-            return PermissionResult(
-                decision=Decision.DENY,
-                rule_id=f"{profile.id}.cloud_disabled",
-                reason="profile forbids cloud tools",
-            )
-        if not profile.memory_writes_allowed and memory_write:
-            return PermissionResult(
-                decision=Decision.DENY,
-                rule_id=f"{profile.id}.memory_writes_disabled",
-                reason="profile forbids memory and vault writes",
-            )
-        if not profile.screenshots_to_cloud and is_screenshot_to_cloud(request):
-            return PermissionResult(
-                decision=Decision.DENY,
-                rule_id=f"{profile.id}.screenshots_to_cloud",
-                reason="profile forbids sending screenshots to the cloud",
-            )
-        if profile.tools_allowed and not matches_any(request.tool, profile.tools_allowed):
-            return PermissionResult(
-                decision=Decision.DENY,
-                rule_id=f"{profile.id}.tool_not_allowed",
-                reason="tool is not in the profile allow-list",
-            )
-        if (
-            profile.filesystem_roots
-            and is_filesystem(request)
-            and looks_like_path(request.target)
-            and not under_roots(request.target, profile.filesystem_roots)
-        ):
-            return PermissionResult(
-                decision=Decision.DENY,
-                rule_id=f"{profile.id}.filesystem_roots",
-                reason="target is outside the profile's filesystem roots",
-            )
-
-        for rule in profile.rules:
-            if rule_matches(rule, request):
-                return PermissionResult(decision=rule.decision, rule_id=rule.id, reason=rule.reason)
-
-        decision = DEFAULT_BY_RISK[request.risk]
+        """Deterministic decision; no I/O, no events. Guards run in `EVALUATION_GUARDS` order."""
+        context = EvaluationContext(
+            request=request,
+            profile=profile,
+            snapshot=snapshot,
+            grants=grants,
+            now=now,
+            cloud=self.is_cloud_tool(request),
+            memory_write=is_memory_write(request),
+        )
+        for guard in EVALUATION_GUARDS:
+            result = guard(context)
+            if result is not None:
+                return result
         return PermissionResult(
-            decision=decision, rule_id=f"default.{request.risk.value}", reason="default by risk"
+            decision=DEFAULT_BY_RISK[request.risk],
+            rule_id=f"default.{request.risk.value}",
+            reason="default by risk",
         )
 
     # ---- confirmation flow -----------------------------------------------------------------------
@@ -616,7 +729,7 @@ class DefaultPermissionEngine:
         """Revoke every session-scoped grant ("remember for this session")."""
         removed = self._grants.remove_scope_prefix("session:")
         if removed:
-            self._audit_append(
+            self._audit.append(
                 actor="system",
                 tool="security",
                 action="grant.session_end",
@@ -628,11 +741,6 @@ class DefaultPermissionEngine:
         return removed
 
     # ---- recording -------------------------------------------------------------------------------
-
-    def _audit_append(self, **kwargs: object) -> None:
-        if self._audit is None:
-            return
-        self._audit.append(**kwargs)  # type: ignore[arg-type]
 
     def _record(
         self,
@@ -647,7 +755,7 @@ class DefaultPermissionEngine:
             result.decision
         ]
         target = "<redacted>" if snapshot.zone_active else request.target
-        self._audit_append(
+        self._audit.append(
             actor=request.agent,
             tool=request.tool,
             action=request.action,

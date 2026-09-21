@@ -1,7 +1,7 @@
-"""Nightly forgetting job (ST-07-01/ST-07-07 subset): purges expired `memory_items` and
-`vault_note_versions` rows, every deletion audited (Data Model "Retention" - "deletion is
-audited"). Turn retention is `nox.data.repos.TurnRepository.purge_expired`, already shipped in
-v0.1 and out of this job's scope; this job only owns the memory-item side EPIC-07 adds.
+"""Nightly forgetting job: purges expired `memory_items` and `vault_note_versions` rows, every
+deletion audited (Data Model "Retention" - "deletion is audited"). Turn retention is
+`nox.data.repos.TurnRepository.purge_expired`, already shipped in v0.1 and out of this job's scope;
+this job only owns the memory-item side adds.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ class RetentionReport:
 
 
 class RetentionJob:
-    """`await run()` once, e.g. from a nightly scheduler (maintenance window is EPIC-09's
+    """`await run` once, e.g. from a nightly scheduler (maintenance window is
     concern; this job is idempotent and cheap enough to also run at boot)."""
 
     def __init__(

@@ -1,4 +1,4 @@
-# License compatibility policy for Nox's third-party dependency audit (ST-21-02, scripts/license_audit.py).
+# License compatibility policy for Nox's third-party dependency audit (scripts/license_audit.py).
 #
 # Categories:
 #   allow            - compatible with a permissively-licensed public release, no action needed.
@@ -72,16 +72,16 @@ package_exceptions:
       SPDX expression "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only" (Qt for open source). Nox
       uses the LGPL-3.0 alternative and installs PySide6 as an unmodified PyPI wheel dependency
       (dynamic linking, no static link, no PySide6 source modification) - the common LGPL-compatible
-      path (see `NOTICE`). OPEN POINT (spec §4/§13): a named person must sign off that
-      Nox's actual packaging (embedded-Python installer, FR-15.4) preserves the user's LGPL right to
-      replace the PySide6/Qt libraries; this is flagged, not resolved, by this audit.
+      path (see `NOTICE`). OPEN POINT: a named person must sign off that Nox's actual packaging
+      (embedded-Python installer) preserves the user's LGPL right to replace the PySide6/Qt
+      libraries; this is flagged, not resolved, by this audit.
   - name: piper-tts
     ecosystem: python
     category: allow_with_note
     reason: >
       GPL-3.0-or-later, and it is an optional dependency of the `voice` extra only - it is never
-      imported by, linked into or shipped with the Apache-2.0 core. PO decision 2026-09-16 (closes
-      OP-D): Nox's own code is Apache-2.0, which is one-way compatible with GPL-3.0, so any
+      imported by, linked into or shipped with the Apache-2.0 core. Decision, 2026-09-16:
+      Nox's own code is Apache-2.0, which is one-way compatible with GPL-3.0, so any
       distribution that bundles the voice extra (e.g. the Inno Setup installer) is a combined work
       that must be distributed under GPL-3.0 terms as a whole; `NOTICE` states this. A checkout
       without `--extra voice`, and the source distribution of Nox itself, stay pure Apache-2.0.
@@ -120,7 +120,7 @@ package_exceptions:
       distributed under GPL-3.0 terms as a whole. IMPORTANT (#21): this means switching from Piper
       to Kokoro does NOT by itself remove the GPL obligation on the installer - it moves it from
       `piper-phonemize` to `phonemizer`. `NOTICE` states this; resolving it needs a permissively
-      licensed grapheme-to-phoneme front end and is an open PO decision.
+      licensed grapheme-to-phoneme front end and remains an open decision.
   - name: espeakng-loader
     ecosystem: python
     category: allow_with_note
@@ -172,3 +172,15 @@ package_exceptions:
     ecosystem: ui/dashboard
     category: allow
     reason: "Same as ui/pet/caniuse-lite - build-time-only browserslist data, not shipped in dist/."
+  - name: axe-core
+    ecosystem: ui/pet
+    category: allow
+    reason: >
+      MPL-2.0, a transitive accessibility-testing devDependency (WCAG audits in the test suite,
+      per docs/CODE_STANDARDS.md §7); used unmodified and never imported by, bundled into or
+      shipped with the built `dist/` UI - same "unmodified dependency, MPL obligations don't
+      reach Nox's own code" reasoning as tqdm/certifi above.
+  - name: axe-core
+    ecosystem: ui/dashboard
+    category: allow
+    reason: "Same as ui/pet/axe-core - test-only devDependency, never shipped in dist/."

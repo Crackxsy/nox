@@ -2,8 +2,8 @@
  * cat: a sleek cat-like shadow — quiet, precise, faintly glowing. A slender body, close-set
  * triangular ears, a slim curling tail and narrow slit eyes with a thin sharp outline give it a
  * "shadow creature" read distinct from the impish variant despite sharing the slit eye style
- * (differentiated by silhouette, palette and motion, not by eye shape alone). Near-black
- * violet-shadow body with a faint violet-glow accent; the second-lowest idle amplitude of the four
+ * (differentiated by silhouette, palette and motion, not by eye shape alone). Deep plum body with a faint
+ * magenta-glow accent; the second-lowest idle amplitude of the four
  * (composed, deliberate movement) with all 21 expressions carried through posture (D34).
  */
 
@@ -24,10 +24,10 @@ export const cat: PetVariant = {
   outlineWeight: 1,
   idleMotionAmplitude: 0.95,
   palette: {
-    bodyHue: 276,
+    bodyHue: 291,
     bodySat: 0.45,
     bodyLightOnLight: 0.3,
     bodyLightOnDark: 0.5,
-    accentHue: 292,
+    accentHue: 318,
   },
 };

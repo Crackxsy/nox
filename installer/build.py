@@ -1,5 +1,5 @@
-"""SP-16 / ST-10-01: reproducible build pipeline. Produces `build/app/` - a self-contained,
-embedded-Python payload the Inno Setup script (`installer/nox.iss`) turns into an installer.
+"""Reproducible build pipeline. Produces `build/app/` - a self-contained, embedded-Python payload
+the Inno Setup script (`installer/nox.iss`) turns into an installer.
 
 Steps (in order, each idempotent - re-running `build.py` from a clean `build/` is the normal case):
 1. Download the official Python 3.13 embeddable zip (pinned version, matches the dev venv) and
@@ -13,8 +13,8 @@ Steps (in order, each idempotent - re-running `build.py` from a clean `build/` i
    and `pip install` everything in it except the `-e .` self-reference (nox's own source is copied
    in step 5, not pip-installed, so the payload has no build backend / editable-install machinery).
 5. Copy `src/nox`, `config/`, `plugins/`, `ui/pet/dist`, `ui/dashboard/dist` into `build/app/`.
-6. Record sizes into `build/app/BUILD_INFO.txt` (installer size target: FR-15.4, SP-16 "< 400 MB
-   without models").
+6. Record sizes into `build/app/BUILD_INFO.txt` (installer size target: "< 400 MB without
+   models").
 
 Run with the **system** Python (`uv` lives there per ENGINEERING.md), not `.venv`:
     python installer/build.py
@@ -96,11 +96,10 @@ def step_download_runtime(python_version: str, *, skip_download: bool) -> Path:
 def _isolated_env() -> dict[str, str]:
     """`PYTHONNOUSERSITE=1` is not optional: once `._pth` enables `import site`, an embeddable
     Python resolves the OS-standard per-user site-packages path purely from the Python version+
-    arch tag - which, on this machine, is the *same* path the system/Store Python 3.13 already
-    uses for its own per-user packages. Without this, pip's "already installed elsewhere on
-    sys.path" dedup logic uninstalls (and can leave uninstalled) packages from that unrelated,
-    shared location - a real incident hit during this task's own build run, restored by hand
-    (see the SP-16 note's Result section) - never again silently."""
+    arch tag - which, on a machine that also has a matching system/Store Python installed, is the
+    *same* path that Python already uses for its own per-user packages. Without this, pip's
+    "already installed elsewhere on sys.path" dedup logic can uninstall packages from that
+    unrelated, shared location - silently, and without restoring them. Set unconditionally."""
     env = dict(os.environ)
     env["PYTHONNOUSERSITE"] = "1"
     return env
@@ -191,7 +190,7 @@ def _dir_size_mb(path: Path) -> float:
 
 
 def step_record_sizes(python_version: str) -> None:
-    """Step 6: honest size accounting against the SP-16 "< 400 MB without models" target."""
+    """Step 6: honest size accounting against the "< 400 MB without models" target."""
     runtime_mb = _dir_size_mb(RUNTIME_DIR)
     app_mb = _dir_size_mb(APP_DIR)
     total_mb = runtime_mb + app_mb
@@ -201,7 +200,7 @@ def step_record_sizes(python_version: str) -> None:
         f"runtime_mb={runtime_mb:.1f}\n"
         f"app_mb={app_mb:.1f}\n"
         f"total_mb={total_mb:.1f}\n"
-        f"target_mb=400 (FR-15.4 / SP-16, no models bundled)\n"
+        f"target_mb=400 (no models bundled)\n"
     )
     (APP_DIR / "BUILD_INFO.txt").write_text(info, encoding="utf-8")
     log(info.replace("\n", " | "))

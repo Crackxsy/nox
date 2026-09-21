@@ -1,7 +1,7 @@
-"""`!rps` - deterministic rock/paper/scissors (ST-11-04, Spec v0.2 Stream Bot §3.5/§9). The game
-resolution logic is pure and deterministic given both choices; the bot's own choice comes from an
-injectable `choice_provider` (defaults to `random.choice`, overridden by tests for determinism).
-Per-viewer cooldown lives here too, one round at a time.
+"""`!rps` - deterministic rock/paper/scissors (Stream Bot). The game resolution logic is pure and
+deterministic given both choices; the bot's own choice comes from an injectable `choice_provider`
+(defaults to `random.choice`, overridden by tests for determinism). Per-viewer cooldown lives here
+too, one round at a time.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ class RockPaperScissors:
 
     def play(self, viewer_id: str, viewer_choice: Choice) -> RpsResult:
         """Resolve one round and record the viewer's cooldown. Caller must validate `viewer_choice`
-        is one of `ALIASES.values()` and check `cooldown_remaining` first."""
+        is one of `ALIASES.values` and check `cooldown_remaining` first."""
         self._last_played[viewer_id] = self._clock()
         bot_choice = self._choice_provider()
         if bot_choice == viewer_choice:

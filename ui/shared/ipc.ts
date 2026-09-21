@@ -37,6 +37,8 @@ interface Pending {
   reject: (err: Error) => void;
   onStream?: (env: Envelope) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** Restart the idle timer. Called for every stream frame, so a long answer is never cut off. */
+  extend: () => void;
 }
 
 export class IpcError extends Error {
@@ -163,12 +165,17 @@ export class IpcClient {
     const p = this.pending.get(env.corr);
     if (!p) return;
     if (env.kind === 'stream') {
-      p.onStream?.(env);
       if (env.payload.done === true) {
         clearTimeout(p.timer);
         this.pending.delete(env.corr);
+        p.onStream?.(env);
         p.resolve(env.payload);
+        return;
       }
+      // The timeout is an *idle* timeout, not a budget for the whole answer: a chat reply that
+      // streams for a minute is healthy, a stream that goes silent for ten seconds is not.
+      p.extend();
+      p.onStream?.(env);
       return;
     }
     clearTimeout(p.timer);
@@ -194,23 +201,42 @@ export class IpcClient {
     }
   }
 
-  /** Send a request; resolves with the response payload (or the final `done` stream frame). */
+  /**
+   * Send a request; resolves with the response payload (or the final `done` stream frame).
+   *
+   * `timeoutMs` overrides the client-wide idle timeout for this one call — used for requests the
+   * core itself may take longer to *start* answering (a cold provider probe, the first chat turn).
+   * Once frames arrive the timer restarts on each of them, so the limit is always "silence for
+   * this long", never "the whole answer must fit in this long".
+   */
   request(
     name: string,
     payload: Record<string, unknown> = {},
     onStream?: (env: Envelope) => void,
+    timeoutMs?: number,
   ): Promise<Record<string, unknown>> {
     const env = makeEnvelope('request', name, this.src, payload);
+    const idleMs = timeoutMs ?? this.opts.requestTimeoutMs ?? 10000;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const expire = () => {
         this.pending.delete(env.id);
         reject(new IpcError('timeout', `${name} timed out`, true));
-      }, this.opts.requestTimeoutMs ?? 10000);
-      this.pending.set(env.id, { resolve, reject, onStream, timer });
+      };
+      const pending: Pending = {
+        resolve,
+        reject,
+        onStream,
+        timer: setTimeout(expire, idleMs),
+        extend: () => {
+          clearTimeout(pending.timer);
+          pending.timer = setTimeout(expire, idleMs);
+        },
+      };
+      this.pending.set(env.id, pending);
       try {
         this.raw(env);
       } catch (e) {
-        clearTimeout(timer);
+        clearTimeout(pending.timer);
         this.pending.delete(env.id);
         reject(e instanceof Error ? e : new Error(String(e)));
       }
@@ -218,25 +244,42 @@ export class IpcClient {
   }
 }
 
-/** ws URL: `/health` may publish `ws_port`; else `?ws=` query (non-secret); else config default. */
+/** How long `/health` may take before `resolveWsUrl` stops waiting and uses the default port. */
+export const HEALTH_PROBE_TIMEOUT_MS = 2000;
+
+/**
+ * ws URL: `/health` may publish `ws_port`; else `?ws=` query (non-secret); else config default.
+ *
+ * The probe is bounded: a core that accepts the TCP connection but never answers used to leave the
+ * page in "verbinde …" with no way out, so the fetch is aborted after `HEALTH_PROBE_TIMEOUT_MS` and
+ * the default port is tried instead — a wrong port fails loudly, a hang does not fail at all.
+ */
 export async function resolveWsUrl(
   loc: { hostname: string; search: string; origin: string },
   fetchImpl: typeof fetch | null = typeof fetch === 'function' ? fetch : null,
   defaultPort = 47800,
+  timeoutMs = HEALTH_PROBE_TIMEOUT_MS,
 ): Promise<string> {
   const host = loc.hostname || '127.0.0.1';
   const q = new URLSearchParams(loc.search).get('ws');
   const qPort = q ? Number.parseInt(q, 10) : NaN;
   if (Number.isFinite(qPort) && qPort > 0) return `ws://${host}:${qPort}/ws`;
   if (fetchImpl && loc.origin.startsWith('http')) {
+    const abort = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = setTimeout(() => abort?.abort(), timeoutMs);
     try {
-      const res = await fetchImpl(`${loc.origin}/health`, { cache: 'no-store' });
+      const res = await fetchImpl(`${loc.origin}/health`, {
+        cache: 'no-store',
+        signal: abort?.signal,
+      });
       if (res.ok) {
         const data = (await res.json()) as { ws_port?: unknown };
         if (typeof data.ws_port === 'number' && data.ws_port > 0) return `ws://${host}:${data.ws_port}/ws`;
       }
     } catch {
-      /* fall through to default */
+      /* aborted, offline or malformed: fall through to the configured default */
+    } finally {
+      clearTimeout(timer);
     }
   }
   return `ws://${host}:${defaultPort}/ws`;

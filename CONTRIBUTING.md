@@ -88,8 +88,10 @@ manifest can never turn them off. A pull request that weakens one of them will b
    clipboard reads and memory writes stop while a privacy zone is active; the capture indicator
    cannot be hidden by configuration.
 
-See [`docs/ENGINEERING.md`](docs/ENGINEERING.md) for the code conventions and
-[`docs/SECURITY.md`](docs/SECURITY.md) for the model these rules come from.
+See [`docs/ENGINEERING.md`](docs/ENGINEERING.md) for the code conventions,
+[`docs/CODE_STANDARDS.md`](docs/CODE_STANDARDS.md) for the readability/design bar every change is
+reviewed against, and [`docs/SECURITY.md`](docs/SECURITY.md) for the model these security rules
+come from.
 
 ## Plugins
 

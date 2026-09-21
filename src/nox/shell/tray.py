@@ -11,6 +11,16 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 from nox.core.state import PrivacyMode
 from nox.shell.logic import TRAY_COLOURS, ShellModel, TrayTint, tray_tint, tray_tooltip
 
+#: Privacy modes as words, `(de, en)`. The menu used to show `mode.value.capitalize()`, i.e. the raw
+#: enum values "Full / Balanced / Private / Offline", while the dashboard said "Offline – keine
+#: Cloud" for the same setting. These are the dashboard's wording, so one concept has one name.
+PRIVACY_LABELS: dict[PrivacyMode, tuple[str, str]] = {
+    PrivacyMode.FULL: ("Alles erlaubt", "Everything allowed"),
+    PrivacyMode.BALANCED: ("Standard", "Standard"),
+    PrivacyMode.PRIVATE: ("Nur lokal", "Local only"),
+    PrivacyMode.OFFLINE: ("Keine Cloud", "No cloud"),
+}
+
 
 def make_tray_icon(tint: TrayTint, size: int = 32) -> QIcon:
     """Filled circle in the tint colour; inner glyph differs per tint, not colour-only (D238)."""
@@ -58,7 +68,7 @@ class TrayController:
         self.menu = QMenu()
         self._tint: TrayTint | None = None
 
-        self.action_toggle_pet = QAction("Pet anzeigen/verbergen" if de else "Show/hide pet")
+        self.action_toggle_pet = QAction("Nox anzeigen/verbergen" if de else "Show/hide Nox")
         self.action_toggle_pet.triggered.connect(on_toggle_pet)
         self.menu.addAction(self.action_toggle_pet)
 
@@ -67,12 +77,12 @@ class TrayController:
         self.action_click_through.toggled.connect(on_click_through)
         self.menu.addAction(self.action_click_through)
 
-        privacy_menu = self.menu.addMenu("Privacy")
+        privacy_menu = self.menu.addMenu("Privatsphäre" if de else "Privacy")
         self._privacy_group = QActionGroup(self.menu)
         self._privacy_group.setExclusive(True)
         self.privacy_actions: dict[PrivacyMode, QAction] = {}
         for mode in PrivacyMode:
-            act = QAction(mode.value.capitalize())
+            act = QAction(PRIVACY_LABELS[mode][0 if de else 1])
             act.setCheckable(True)
             act.setData(mode.value)
             act.triggered.connect(lambda _checked=False, m=mode: on_privacy(m))
@@ -91,12 +101,14 @@ class TrayController:
         self.menu.addAction(self.action_dashboard)
 
         self.menu.addSeparator()
-        self.action_kill = QAction("Notaus (Kill switch)" if de else "Kill switch")
+        # "Not-Aus" everywhere — the tray said "Notaus (Kill switch)", the dashboard "Not-Aus" and
+        # the README "Kill switch", which is three names for one control.
+        self.action_kill = QAction("Not-Aus" if de else "Kill switch")
         self.action_kill.triggered.connect(on_kill)
         self.menu.addAction(self.action_kill)
 
         self.action_quit = QAction("Beenden" if de else "Quit")
-        self.action_quit.triggered.connect(on_quit)  # ShellApp.quit(): sup.stop, B-6, not a kill
+        self.action_quit.triggered.connect(on_quit)  # ShellApp.quit: sup.stop,, not a kill
         self.menu.addAction(self.action_quit)
 
         self.tray.setContextMenu(self.menu)

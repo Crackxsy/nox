@@ -1,16 +1,16 @@
-"""Coding assistant plugin (EPIC-14, `coding` profile only, `plugins/coding/manifest.yaml`).
+"""Coding assistant plugin (`coding` profile only, `plugins/coding/manifest.yaml`).
 
 Wraps `SessionRunner` (`.session`, a resumable, tool-enabled Claude Code CLI session) as four tools
 - `coding.session.start`, `coding.session.status.read`, `coding.session.stop`,
-`coding.review.request` - and terminates every active session on `security.kill_switch`
-(Personality v1 B.8: never leave a session running unattended). No `network.egress`: the Claude Code
-CLI authenticates and talks to Anthropic itself; this plugin makes no HTTP calls of its own.
+`coding.review.request` - and terminates every active session on `security.kill_switch` (never
+leave a session running unattended). No `network.egress`: the Claude Code CLI authenticates and
+talks to Anthropic itself; this plugin makes no HTTP calls of its own.
 
 `coding.session.start`'s `target` (the workspace root) must resolve under one of the manifest's
-configured `filesystem_roots` (kept in step with `config/profiles/coding.yaml` by hand) - an
-out-of-root target fails in the tool handler as a `ValueError`, the same "schema validation
-failure, not an ambiguous confirm" pattern `obs.scene.switch` uses for its allow-listed `target`
-(Spec v0.4 PM and Coding §6.7).
+configured `filesystem_roots` (kept in step with `config/profiles/coding.yaml` by hand) - an out-
+of-root target fails in the tool handler as a `ValueError`, the same "schema validation failure,
+not an ambiguous confirm" pattern `obs.scene.switch` uses for its allow-listed `target` (PM and
+Coding).
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ class ReviewRequestInput(BaseModel):
 
 
 def _under_any_root(target: str, roots: list[str]) -> bool:
-    """Same allow-list pattern as `obs.scene.switch`'s `scene_set` check (spec §6.7): a runtime
+    """Same allow-list pattern as `obs.scene.switch`'s `scene_set` check : a runtime
     config list, checked in the handler, an out-of-list target is a validation failure."""
     if not roots:
         return False
@@ -117,7 +117,7 @@ class CodingPlugin:
 
     async def _on_kill_switch(self, _name: str, _payload: dict[str, Any]) -> None:
         """Terminate every active session's subprocess immediately; report each one as failed so
-        nothing is left silently dangling (Personality v1 B.8). Must never raise into the event
+        nothing is left silently dangling. Must never raise into the event
         bus - a failing report here must not block the kill switch itself."""
         terminated = await self.runner.terminate_all(reason="kill_switch")
         for record in terminated:

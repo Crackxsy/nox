@@ -1,14 +1,15 @@
-"""ClaudeCodeProvider: Claude Code CLI as text provider via ``claude -p`` (ADR-008, FR-6.3, SP-01).
+"""ClaudeCodeProvider: Claude Code CLI as text provider via ``claude -p``.
 
 Verified against Claude Code 2.1.266 on this machine:
-``claude -p --output-format stream-json --verbose --include-partial-messages`` reads the prompt from
-stdin and writes NDJSON lines: ``system/init``, ``stream_event`` (Anthropic message stream events,
-``content_block_delta`` carries text), ``assistant`` (complete message), ``rate_limit_event`` and a
-final ``result`` line with ``usage``, ``total_cost_usd``, ``duration_ms`` and ``is_error``.
-``--safe-mode`` disables the user's hooks/plugins/MCP for Nox requests but keeps the CLI login;
-``--bare`` is NOT used because it ignores OAuth logins. Tools are disabled (``--tools ""``); agentic
-coding sessions (FR-11.10) are a separate wrapper, not this provider. No secrets are passed: the CLI
-authenticates itself. The child process is killed when the request is cancelled (kill switch).
+``claude -p --output-format stream-json --verbose --include-partial-messages`` reads the prompt
+from stdin and writes NDJSON lines: ``system/init``, ``stream_event`` (Anthropic message stream
+events, ``content_block_delta`` carries text), ``assistant`` (complete message),
+``rate_limit_event`` and a final ``result`` line with ``usage``, ``total_cost_usd``,
+``duration_ms`` and ``is_error``. ``--safe-mode`` disables the user's hooks/plugins/MCP for Nox
+requests but keeps the CLI login; ``--bare`` is NOT used because it ignores OAuth logins. Tools are
+disabled (``--tools ""``); agentic coding sessions are a separate wrapper, not this provider. No
+secrets are passed: the CLI authenticates itself. The child process is killed when the request is
+cancelled (kill switch).
 """
 
 from __future__ import annotations
@@ -208,6 +209,7 @@ class ClaudeCodeProvider:
         self._info = ProviderInfo(
             id=PROVIDER_ID,
             display_name="Claude Code CLI",
+            display_name_de="Claude Code CLI",  # a product name: the same in both languages
             local=False,
             roles=roles or [AiRole.CHAT, AiRole.REASON, AiRole.CODE, AiRole.BACKGROUND],
             status=HealthStatus.UNAVAILABLE,
@@ -228,7 +230,7 @@ class ClaudeCodeProvider:
     # -- command line ---------------------------------------------------------------------------
 
     def executable(self) -> list[str]:
-        """Resolve the CLI once (``shutil.which`` handles .exe/.cmd on Windows)."""
+        """Resolve the CLI once (``shutil.which`` handles.exe/.cmd on Windows)."""
         if self._command_override:
             return list(self._command_override)
         if self._resolved is None:

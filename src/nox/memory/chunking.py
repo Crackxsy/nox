@@ -1,6 +1,6 @@
-"""Markdown chunking for vault indexing (ST-07-03): splits a note body into retrieval-sized chunks
-along heading/paragraph boundaries, each with a stable content hash so the indexer can diff
-unchanged chunks instead of re-embedding everything on every save."""
+"""Markdown chunking for vault indexing: splits a note body into retrieval-sized chunks along
+heading/paragraph boundaries, each with a stable content hash so the indexer can diff unchanged
+chunks instead of re-embedding everything on every save."""
 
 from __future__ import annotations
 

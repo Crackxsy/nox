@@ -4,7 +4,7 @@ under `tmp_path` - no test in here ever touches a real keyring, a real data dir 
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +12,7 @@ import pytest
 
 from nox.core.config import NoxConfig, load_config
 from nox.security.secrets import InMemorySecretStore
-from tests.unit.fakes import FakeBus
+from tests.unit.fakes import Clock, FakeBus
 
 DEFAULTS_PATH = Path(__file__).resolve().parents[3] / "config" / "defaults.yaml"
 START = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
@@ -34,17 +34,6 @@ class FakeAudit:
     def blob(self) -> str:
         """Everything that was ever audited, as one string - for "no value leaked" assertions."""
         return repr(self.entries)
-
-
-class Clock:
-    def __init__(self, start: datetime = START) -> None:
-        self.now = start
-
-    def __call__(self) -> datetime:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += timedelta(seconds=seconds)
 
 
 @pytest.fixture
@@ -79,4 +68,4 @@ def secrets() -> InMemorySecretStore:
 
 @pytest.fixture
 def clock() -> Clock:
-    return Clock()
+    return Clock(START)

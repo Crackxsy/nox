@@ -1,4 +1,4 @@
-# Nox permission profile "coding" (Security Model §3, PRD FR-11). Filesystem limited to workspaces.
+# Nox permission profile "coding": file access limited to the configured workspaces.
 security:
   profile: coding
 
@@ -9,7 +9,7 @@ permissions:
   egress_allowlist: []
   memory_writes_allowed: true
   screenshots_to_cloud: false
-  # Configured workspaces (FR-11.14). Placeholders only: the user layer (see docs/USER_GUIDE.md)
+  # Your workspaces. Placeholders only: the user layer (see docs/USER_GUIDE.md)
   # replaces this list with the real workspace paths on the machine. Employer/work folders never
   # belong here. The list must stay non-empty - an empty list would inherit the global roots.
   filesystem_roots:
@@ -31,7 +31,7 @@ permissions:
       tool: "git*"
       action: "force_push"
       decision: deny
-      reason: "never destructive (FR-11.15)"
+      reason: "never destructive"
     - id: coding.git.reset_hard
       tool: "git*"
       action: "reset_hard"
@@ -40,7 +40,7 @@ permissions:
       tool: "git*"
       action: "commit"
       decision: allow
-      reason: "autonomous local commits after checks (FR-11.15)"
+      reason: "local commits are allowed once the checks pass; nothing is pushed"
     - id: coding.git.push
       tool: "git*"
       action: "push*"

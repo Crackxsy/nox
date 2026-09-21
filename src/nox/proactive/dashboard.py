@@ -1,9 +1,9 @@
-"""EPIC-08 dashboard request handlers wired in by `nox.proactive.install.install` (see that
-module's docstring for why these live here instead of `app.py`): `health.history` (health-history
-panel) and `config.effective` (Settings view, read-only). Neither is about proactivity itself -
-they are bundled into this task's one `install(core)` integration point because the task that added
-them also owns EPIC-19's wiring; a future change can move them to their own module without changing
-behaviour.
+"""dashboard request handlers wired in by `nox.proactive.install.install` (see that module's
+docstring
+for why these live here instead of `app.py`): `health.history` (health-history panel) and
+`config.effective` (Settings view, read-only). Neither is about proactivity itself - they are
+bundled into this task's one `install(core)` integration point because the task that added them
+also owns wiring; a future change can move them to their own module without changing behaviour.
 """
 
 from __future__ import annotations
@@ -22,7 +22,8 @@ from nox.ipc.dispatch import RequestContext
 from nox.ipc.protocol import ConfigEffective, HealthHistoryEntry, HealthHistoryResult
 
 #: Any dotted key matching this is redacted in `config.effective` (defence in depth: `NoxConfig`
-#: must never carry secrets per ENGINEERING.md, but the schema is not guaranteed to stay that way).
+# must never carry secrets per the project standards, but the schema is not guaranteed to stay that
+# way).
 _SECRET_KEY = re.compile(r"(token|secret|password|api_key)", re.IGNORECASE)
 
 

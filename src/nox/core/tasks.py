@@ -1,4 +1,4 @@
-"""TaskQueue: minimal prioritised, checkpointed background task queue (Data Model `tasks`, FR-10.4).
+"""TaskQueue: a small prioritised, checkpointed queue for background work.
 
 Tasks are persisted through `TaskRepository` before they run, so a crash never loses them; a handler
 receives a `checkpoint(dict)` callback and RUNNING tasks are reset to PENDING at startup with their

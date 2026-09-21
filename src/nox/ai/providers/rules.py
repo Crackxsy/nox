@@ -1,4 +1,4 @@
-"""RulesProvider: deterministic offline answers, last link of the degradation chain (ADR-008, FR-6).
+"""RulesProvider: deterministic offline answers, last link of the degradation chain (FR-6).
 
 It never pretends to be a language model: every response is ``degraded=True`` with
 ``degraded_reason="rules"``. Roles: classify (intent label), chat and background (canned answers).
@@ -134,6 +134,7 @@ class RulesProvider:
         self._info = ProviderInfo(
             id=PROVIDER_ID,
             display_name="Rules (offline fallback)",
+            display_name_de="Regeln (Offline-Notfall)",
             local=True,
             roles=[AiRole.CLASSIFY, AiRole.CHAT, AiRole.BACKGROUND],
             status=HealthStatus.AVAILABLE,

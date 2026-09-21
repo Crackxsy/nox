@@ -437,7 +437,7 @@ class TemporaryGrantRepository:
         return int(cur.rowcount)
 
 
-# ---- memory items (ST-07-01, Data Model L2 `memory_items`) ---------------------------------------
+# ---- memory items (the `memory_items` table) -----------------------------------------------------
 
 
 class MemoryItemRow(Row):
@@ -542,7 +542,7 @@ class MemoryItemRepository:
         return int(cur.rowcount)
 
 
-# ---- proactive notifications (EPIC-19 ST-19-08 follow-up, migration 0010_notifications.sql) ------
+# ---- proactive notifications (the `proactive_notifications` table) -------------------------------
 
 #: Fallback for `NotificationRepository.purge_expired`'s `retention_days` when the caller has none
 #: configured. `nox.proactive.store` re-exports this so `ProactiveConfig` can grow a matching

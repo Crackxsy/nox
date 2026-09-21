@@ -8,6 +8,7 @@ import sqlite3
 import pytest
 import yaml
 
+from nox.core.config import NoxConfig
 from nox.core.state import PrivacyMode
 from nox.security.model import Decision, Risk
 from nox.security.prohibitions import HardProhibitionRemovedError
@@ -19,15 +20,15 @@ from .conftest import DEFAULTS_YAML, PROFILES_DIR, MutableClock, req
 
 
 @pytest.fixture
-def config() -> dict:  # type: ignore[type-arg]
-    data: dict = yaml.safe_load(DEFAULTS_YAML.read_text(encoding="utf-8"))  # type: ignore[type-arg]
-    return data
+def config() -> NoxConfig:
+    """The shipped defaults, validated - which is what a running core hands to the builder."""
+    return NoxConfig.model_validate(yaml.safe_load(DEFAULTS_YAML.read_text(encoding="utf-8")))
 
 
 async def test_build_and_boot(
-    config: dict,
+    config: NoxConfig,
     conn: sqlite3.Connection,
-    bus: FakeBus,  # type: ignore[type-arg]
+    bus: FakeBus,
     clock: MutableClock,
 ) -> None:
     ctx = SecurityContext.build(
@@ -50,23 +51,22 @@ async def test_build_and_boot(
     assert not ctx.privacy.allows_cloud() and not ctx.egress.check("api.anthropic.com", 443).allowed
     assert await ctx.killswitch.resume(pin_ok=True)
     assert ctx.engine.check(req("pet", "express", Risk.LOW)).decision is Decision.ALLOW
-    assert ctx.audit.verify_chain()
+    assert ctx.audit_store.verify_chain()
 
 
 async def test_build_wires_both_egress_allowlists_from_the_config(
-    config: dict,  # type: ignore[type-arg]
+    config: NoxConfig,
     conn: sqlite3.Connection,
 ) -> None:
-    """B-11/OP-7 C: `security.egress_allowlist` and `security.loopback_allowlist` reach the
-    guard."""
-    config["security"]["egress_allowlist"] = ["api.example.com:443"]
-    # The global list only applies to a profile that inherits it; since EPIC-17 `companion` has its
-    # own entry (api.telegram.org:443), so this test switches to `coding`, which still inherits.
-    config["security"]["profile"] = "coding"
+    """Both `security.egress_allowlist` and `security.loopback_allowlist` reach the guard."""
+    config.security.egress_allowlist = ["api.example.com:443"]
+    # The global list only applies to a profile that inherits it. `companion` has an entry of its
+    # own for the mobile companion, so this test uses `coding`, which still inherits.
+    config.security.profile = "coding"
     ctx = SecurityContext.build(
         config, conn=conn, profiles_dir=PROFILES_DIR, secret_store=InMemorySecretStore()
     )
-    assert config["security"]["loopback_allowlist"] == ["127.0.0.1:11434"]  # from defaults.yaml
+    assert config.security.loopback_allowlist == ["127.0.0.1:11434"]  # from defaults.yaml
     assert ctx.egress.check("api.example.com", 443).allowed  # BALANCED: the global list applies
     assert not ctx.egress.check("api.anthropic.com", 443).allowed
     await ctx.privacy.set_mode(PrivacyMode.OFFLINE)
@@ -76,23 +76,29 @@ async def test_build_wires_both_egress_allowlists_from_the_config(
 
 
 def test_build_rejects_config_that_drops_a_hard_prohibition(
-    config: dict, conn: sqlite3.Connection
-) -> None:  # type: ignore[type-arg]
-    config["security"]["hard_prohibitions"].remove("stream.stop")
+    config: NoxConfig, conn: sqlite3.Connection
+) -> None:
+    # `SecurityConfig` refuses a short list on validation, so a dropped prohibition can only reach
+    # the builder by being removed afterwards - which is exactly what this guards against.
+    config.security.hard_prohibitions.remove("stream.stop")
     with pytest.raises(HardProhibitionRemovedError):
         SecurityContext.build(
             config, conn=conn, profiles_dir=PROFILES_DIR, secret_store=InMemorySecretStore()
         )
 
 
-def test_verify_boot_reports_broken_chain(config: dict, conn: sqlite3.Connection) -> None:  # type: ignore[type-arg]
+def test_verify_boot_reports_broken_chain(config: NoxConfig, conn: sqlite3.Connection) -> None:
     ctx = SecurityContext.build(
         config, conn=conn, profiles_dir=PROFILES_DIR, secret_store=InMemorySecretStore()
     )
-    ctx.audit.append(actor="a", tool="t", action="x", target="", decision="allow", result="ok")
+    # Written through the store, not the queue: this row has to be on disk before it is tampered
+    # with, and `audit_store` is the synchronous path boot and shutdown already use.
+    ctx.audit_store.append(
+        actor="a", tool="t", action="x", target="", decision="allow", result="ok"
+    )
     conn.execute("DROP TRIGGER audit_log_no_update")
     conn.execute("UPDATE audit_log SET actor = 'evil' WHERE seq = 1")
     conn.commit()
     v = ctx.verify_boot()
     assert not v.ok and v.first_bad_seq == 1
-    assert ctx.audit.entries()[-1].action == "audit.verify"
+    assert ctx.audit_store.entries()[-1].action == "audit.verify"

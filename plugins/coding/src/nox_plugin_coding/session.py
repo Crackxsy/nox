@@ -1,34 +1,32 @@
 """Story-coding session runner: a resumable, tool-enabled Claude Code CLI subprocess per session.
 
-Deliberately separate from `nox.ai.providers.claude_code.ClaudeCodeProvider.build_args()`, which is
+Deliberately separate from `nox.ai.providers.claude_code.ClaudeCodeProvider.build_args`, which is
 fixed to the one-shot REASON/CODE/BACKGROUND path (`--tools "" --max-turns 1
---no-session-persistence`, SP-01 Decision) - ST-14-02 calls the agentic, resumable case "a separate
+--no-session-persistence`, Decision) - calls the agentic, resumable case "a separate
 wrapper". This module reuses only `ClaudeStreamParser` (text/result/status parsing) from
-`claude_code.py`; it does not call or depend on `build_args()`.
+`claude_code.py`; it does not call or depend on `build_args`.
 
-Verified against Claude Code CLI 2.1.270 (`11 - Spikes/SP-18 Claude Code Session Wrapper.md`):
+Verified against Claude Code CLI 2.1.270 (`11 - Spikes/ Claude Code Session Wrapper.md`):
 - `--tools <list>` (never `--allowedTools`, which does not narrow the usable tool set at all) is
-  what keeps the session out of `Bash`/`PowerShell`/`WebFetch`/`Task`/... - no raw shell, no egress
-  beyond the CLI's own login (spec §6.6).
+what keeps the session out of `Bash`/`PowerShell`/`WebFetch`/`Task`/... - no raw shell, no egress
+beyond the CLI's own login.
 - `--permission-mode acceptEdits` edits files without an interactive prompt while still being more
-  restrictive than `bypassPermissions` - the most restrictive mode that still edits.
+restrictive than `bypassPermissions` - the most restrictive mode that still edits.
 - `--resume <session_id>` continues the same session id and does not replay already-executed tool
-  calls.
+calls.
 - A turn-limit stop is `result.subtype == "error_max_turns"`,
-  `result.terminal_reason == "max_turns"` - distinct from a genuine failure; the repair loop below
-  does not treat it as "fixable".
+`result.terminal_reason == "max_turns"` - distinct from a genuine failure; the repair loop below
+does not treat it as "fixable".
 - `ClaudeStreamParser` never surfaces `tool_use` content blocks (it only tracks text), so
-  `extract_tool_use` below does a small, separate pass over the same raw NDJSON line for progress
-  reporting (tool name, file touched).
+`extract_tool_use` below does a small, separate pass over the same raw NDJSON line for progress
+reporting (tool name, file touched).
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import os
 import shutil
-import sys
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -36,9 +34,14 @@ from enum import StrEnum
 from typing import Any
 
 from nox.ai.providers.claude_code import ClaudeStreamParser, StreamItem
+from nox.core.logging import get_logger
+from nox.util.aio import maybe_await
+from nox.util.proc import creation_flags
+
+log = get_logger(__name__)
 
 #: Built-in Claude Code tools the session wrapper ever allows - no shell, no web egress, no
-#: cross-session messaging. Nox's own tool layer mediates everything else (spec §6.6).
+#: cross-session messaging. Nox's own tool layer mediates everything else (spec).
 DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = ("Read", "Edit", "Write", "Glob", "Grep")
 DEFAULT_PERMISSION_MODE = "acceptEdits"
 DEFAULT_MAX_TURNS = 30
@@ -84,7 +87,7 @@ class SessionUnavailableError(RuntimeError):
 
 @dataclass(slots=True)
 class ToolUseEvent:
-    """One `tool_use` content block pulled out of a raw NDJSON line (SP-18)."""
+    """One `tool_use` content block pulled out of a raw NDJSON line."""
 
     tool_name: str
     tool_input: dict[str, Any] = field(default_factory=dict)
@@ -113,6 +116,8 @@ class SessionRecord:
     files_touched: list[str] = field(default_factory=list)
     last_error: str = ""
     last_result_text: str = ""
+    #: Tail of the run's stderr, kept so a failed session can say what the CLI complained about.
+    stderr_tail: str = ""
     process: asyncio.subprocess.Process | None = None
 
     def record_tool_use(self, event: ToolUseEvent) -> None:
@@ -137,7 +142,7 @@ def build_session_args(
     system_prompt: str = "",
 ) -> list[str]:
     """Argument set for the agentic session wrapper - independent of
-    `ClaudeCodeProvider.build_args()` (SP-18 Decision)."""
+    `ClaudeCodeProvider.build_args`."""
     args = [
         "-p",
         "--output-format",
@@ -165,7 +170,7 @@ def build_session_args(
 
 def extract_tool_use(raw_line: str) -> ToolUseEvent | None:
     """Pull a `tool_use` content block (name + input) out of one raw NDJSON line: the complete
-    `assistant` message always carries the final `input` dict (SP-18); the partial
+    `assistant` message always carries the final `input` dict; the partial
     `stream_event.content_block_start` only carries the tool name with an empty `input`, so it is
     used only as a fallback when no name has been seen yet for that block."""
     line = raw_line.strip()
@@ -255,7 +260,7 @@ class SessionRunner:
         record = SessionRecord(session_id=session_id, workspace=workspace)
         self.sessions[session_id] = record
         if on_started is not None:
-            await _maybe_await(on_started(record))
+            await maybe_await(on_started(record))
         await self._run(
             record,
             prompt=prompt,
@@ -277,7 +282,7 @@ class SessionRunner:
         on_progress: ProgressHandler | None = None,
     ) -> SessionRecord:
         """Start a session; on a fixable-looking CLI failure, resume with a repair prompt up to
-        `max_repair_attempts` times, then stop and report (Personality v1 B.8: no infinite retry,
+        `max_repair_attempts` times, then stop and report (no infinite retry,
         no silent stall)."""
         record = await self.start(
             workspace=workspace,
@@ -295,7 +300,7 @@ class SessionRunner:
             record.repair_attempts += 1
             record.stage = SessionStage.REPAIRING
             if on_progress is not None:
-                await _maybe_await(on_progress(record, SessionStage.REPAIRING, None))
+                await maybe_await(on_progress(record, SessionStage.REPAIRING, None))
             repair_prompt = (
                 f"The previous attempt failed: {record.last_error}\n"
                 "Diagnose the cause and fix it. Make the smallest change that resolves it."
@@ -348,7 +353,7 @@ class SessionRunner:
 
     async def terminate_all(self, *, reason: str = "kill_switch") -> list[SessionRecord]:
         """`security.kill_switch`: kill every active subprocess, never leave one running
-        unattended (Personality v1 B.8)."""
+        unattended."""
         terminated: list[SessionRecord] = []
         for record in self.sessions.values():
             if record.outcome is SessionOutcome.RUNNING:
@@ -386,7 +391,13 @@ class SessionRunner:
         record.stage = SessionStage.IMPLEMENT
         proc = await self._spawn(args, cwd=record.workspace)
         record.process = proc
-        assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
+        if proc.stdin is None or proc.stdout is None or proc.stderr is None:
+            # `_spawn` asks for all three pipes; without them there is no session to run, and an
+            # `assert` here would vanish under `python -O` and fail on the next line instead.
+            await _kill(proc)
+            raise SessionError(
+                record.session_id, "the Claude CLI process has no stdin/stdout/stderr pipe"
+            )
         stderr_task = asyncio.ensure_future(proc.stderr.read(STDERR_CAPTURE_BYTES))
         parser = ClaudeStreamParser()
         result: StreamItem | None = None
@@ -403,7 +414,7 @@ class SessionRunner:
                 if tool_event is not None and tool_event.tool_name:
                     record.record_tool_use(tool_event)
                     if on_progress is not None:
-                        await _maybe_await(on_progress(record, record.stage, tool_event))
+                        await maybe_await(on_progress(record, record.stage, tool_event))
                 item = parser.feed(text)
                 if item is None:
                     continue
@@ -414,11 +425,10 @@ class SessionRunner:
                     break
             await asyncio.wait_for(proc.wait(), timeout=10.0)
         except TimeoutError:
-            pass
+            log.warning("session.exit_timeout", session=record.session_id, pid=proc.pid)
         finally:
             await _kill(proc)
-            if not stderr_task.done():
-                stderr_task.cancel()
+            record.stderr_tail = await _collect_stderr(stderr_task, session_id=record.session_id)
         self._finish(record, result)
 
     def _finish(self, record: SessionRecord, result: StreamItem | None) -> None:
@@ -453,7 +463,7 @@ class SessionRunner:
                 cwd=cwd,
                 env=self._env if self._env is not None else None,
                 limit=STDOUT_LINE_LIMIT,
-                creationflags=_creationflags(),
+                creationflags=creation_flags(),
             )
         except FileNotFoundError as exc:
             raise SessionUnavailableError(f"cannot start {args[0]}: {exc}") from exc
@@ -461,18 +471,29 @@ class SessionRunner:
             raise SessionError("", f"cannot start {args[0]}: {exc}") from exc
 
 
-async def _maybe_await(result: Any) -> None:
-    if hasattr(result, "__await__"):
-        await result
+async def _collect_stderr(task: asyncio.Future[bytes], *, session_id: str) -> str:
+    """The captured stderr of the run - the only diagnostic a failed coding session leaves.
 
-
-def _creationflags() -> int:
-    if sys.platform == "win32":
-        return int(getattr(os, "CREATE_NO_WINDOW", 0x08000000))
-    return 0
+    It used to be cancelled without ever being read, which threw away exactly the output someone
+    would need to understand why the run failed.
+    """
+    if not task.done():
+        task.cancel()
+    try:
+        raw = await task
+    except asyncio.CancelledError:
+        return ""
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not replace the real failure
+        log.warning("session.stderr_unavailable", session=session_id, error=type(exc).__name__)
+        return ""
+    text = raw.decode("utf-8", "replace").strip()
+    if text:
+        log.info("session.stderr", session=session_id, tail=text[-500:])
+    return text
 
 
 async def _kill(proc: asyncio.subprocess.Process) -> None:
+    """Kill the child if it is still running, and say so when it refuses to die."""
     if proc.returncode is not None:
         return
     try:
@@ -482,4 +503,4 @@ async def _kill(proc: asyncio.subprocess.Process) -> None:
     try:
         await asyncio.wait_for(proc.wait(), timeout=5.0)
     except TimeoutError:
-        pass
+        log.error("session.kill_timeout", pid=proc.pid)

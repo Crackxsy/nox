@@ -1,13 +1,19 @@
 /**
- * Pet window styling (#25). The window itself is frameless, always-on-top and *transparent*: the
- * page paints the creature and a little chrome, the desktop shows through everywhere else. That is
- * the one rule nothing here may break — `background: transparent` on html/body/#root stays.
+ * Pet window styling. The window itself is frameless, always-on-top and *transparent*: the page
+ * paints the creature and a little chrome, the desktop shows through everywhere else. That is the
+ * one rule nothing here may break — `background: transparent` on html/body/#root stays.
  *
  * Colour comes from the shared token set (`ui/shared/tokens.css`, the same file the dashboard
  * uses), so the pet follows the OS between light and dark instead of being permanently dark.
  * Because the chrome floats over an unknown desktop rather than over `--page`, it is built from the
  * dashboard's translucent-bar material: `--nav-bg` behind a `--hairline` edge, `--ink` on top. That
  * is the only decoration in the window; everything loud is the creature.
+ *
+ * Motion. The creature is alive, so it breathes — one 5 s cycle, under 2 % scale, from the feet up.
+ * Nothing else loops. Listening lifts the head a little, so the state reads at a glance and not
+ * only in the chip; sleeping slows the breath to 8 s and dims slightly. There is no bounce and no
+ * rotation anywhere: a desk companion that springs is a toy. All of it sits behind
+ * `prefers-reduced-motion` at the bottom of this file.
  */
 
 @import "../../shared/tokens.css";
@@ -20,10 +26,10 @@
   --pet-chip-line: var(--hairline);
   --pet-chip-radius: 10px;
 
-  /* Creature line work (eyes, brows, mouth, outline). Deliberately *not* `--ink`: the creature is
-   * drawn on the transparent window, never on `--page`, and its own body fill carries the
-   * contrast — flipping the line work to near-white in dark mode would erase the face. It stays
-   * the light-theme ink value in both themes. */
+  /* Creature line work (eyes, brows, mouth, outline) for the procedural renderer. Deliberately
+   * *not* `--ink`: the creature is drawn on the transparent window, never on `--page`, and its own
+   * body fill carries the contrast — flipping the line work to near-white in dark mode would erase
+   * the face. It stays the light-theme ink value in both themes. */
   --pet-ink: #1d1d1f;
 }
 
@@ -52,7 +58,28 @@ body {
   background: transparent;
 }
 
-/* -- chips ------------------------------------------------------------------------------------ */
+/* -- the creature as a control ----------------------------------------------------------------- */
+
+/**
+ * `pet.interact` is the pet's one interaction and it has to be reachable from the keyboard, so the
+ * creature is a real <button>: no chrome, no padding, the artwork is the control.
+ */
+.pet-hit {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--pet-chip-radius);
+}
+
+.pet-hit:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+/* -- chips ------------------------------------------------------------------------------------- */
 
 .pet-chip {
   background: var(--pet-chip-bg);
@@ -99,6 +126,10 @@ body {
   border-radius: 7px;
   color: var(--pet-chip-ink-2);
   background: transparent;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    border-radius var(--dur-fast) var(--ease);
 }
 
 .pet-capture-dot[data-on="true"] {
@@ -108,27 +139,44 @@ body {
   color: var(--page);
 }
 
+/* A letter is a glance; the word next to it is the explanation. */
+.pet-capture-word,
 .pet-capture-offline {
   padding-left: 2px;
+  font-weight: 400;
+  letter-spacing: 0;
   color: var(--pet-chip-ink-2);
 }
 
-/* -- sprite variant (#19) --------------------------------------------------------------------- */
+/* -- sprite variant ---------------------------------------------------------------------------- */
 
 .pet-sprite {
   position: relative;
   display: block;
   background: transparent;
-  /* Idle breathing: one slow scale/translate on the whole creature, no bounce. */
-  animation: pet-breathe var(--pet-breath-s, 4.2s) ease-in-out infinite;
+  /* The frames are drawn to the window box exactly; clip anything a derived state pushes past it. */
+  overflow: hidden;
+  /* Idle breathing: one slow scale from the feet up, no bounce, under 2 %. */
+  animation: pet-breathe 5s var(--ease) infinite;
   transform-origin: 50% 100%;
 }
 
+/* Listening: the head lifts a little. Same curve, same origin, just a touch more travel. */
+.pet-sprite[data-state="listening"] {
+  animation: pet-perk 2.6s var(--ease) infinite;
+}
+
+/* Sleeping: slower and slightly dimmer, so "asleep" reads without a label. */
+.pet-sprite[data-state="sleeping"] {
+  animation: pet-breathe 8s var(--ease) infinite;
+  opacity: 0.88;
+  transition: opacity var(--dur-slow) var(--ease);
+}
+
+/* Thinking and speaking play their own frames; the body keeps the resting breath. */
+
 .pet-sprite-frame {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
   object-fit: contain;
   image-rendering: auto;
   opacity: 0;
@@ -149,12 +197,25 @@ body {
   }
 }
 
+@keyframes pet-perk {
+  0%,
+  100% {
+    transform: scale(1) translateY(0);
+  }
+  45% {
+    transform: scale(1.022) translateY(-1.8%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .pet-sprite {
+  .pet-sprite,
+  .pet-sprite[data-state="listening"],
+  .pet-sprite[data-state="sleeping"] {
     animation: none;
   }
 
-  .pet-sprite-frame {
+  .pet-sprite-frame,
+  .pet-capture-dot {
     transition: none;
   }
 }

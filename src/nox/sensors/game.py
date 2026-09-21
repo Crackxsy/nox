@@ -1,8 +1,8 @@
-"""Generic game/process-lifecycle hook (Spec v0.5 §3.5; feeds ST-12's `rl` plugin instead of it
-polling `psutil` itself). Polls the running-process list for `sensors.game.process_names`
-(`config/defaults.yaml`, e.g. `RocketLeague.exe`) and publishes `sensor.process_started` /
-`sensor.process_ended` on the bus - observation only; no input synthesis, memory reads or injection
-(Security Model §10; this module never imports anything beyond `psutil.process_iter`).
+"""Generic game/process-lifecycle hook (feeds ST-12's `rl` plugin instead of it polling `psutil`
+itself). Polls the running-process list for `sensors.game.process_names` (`config/defaults.yaml`,
+e.g. `RocketLeague.exe`) and publishes `sensor.process_started` / `sensor.process_ended` on the bus
+- observation only; no input synthesis, memory reads or injection (Security Model; this module
+never imports anything beyond `psutil.process_iter`).
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from typing import Protocol
 
 from nox.core.events import E, Event, EventBus
 from nox.sensors.history import SensorHistoryStore
+from nox.util.aio import poll_loop
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ class GameProcessSensor:
         self._safe_mode = safe_mode
         self._running: dict[str, tuple[float, str]] = {}  # lower(name) -> (start time, real name)
         self._task: asyncio.Task[None] | None = None
+        self.last_error = ""
 
     async def start(self) -> None:
         if self._task is None:
@@ -68,10 +70,17 @@ class GameProcessSensor:
             self._task.cancel()
             self._task = None
 
+    def _note_error(self, exc: BaseException) -> None:
+        self.last_error = f"{type(exc).__name__}: {exc}"
+
     async def _loop(self) -> None:
-        while True:
-            await self.poll()
-            await asyncio.sleep(self._interval)
+        await poll_loop(
+            self.poll,
+            self._interval,
+            name="sensor-game",
+            on_error=self._note_error,
+            on_success=lambda: setattr(self, "last_error", ""),
+        )
 
     async def poll(self) -> None:
         if self._safe_mode() or not self._watched:

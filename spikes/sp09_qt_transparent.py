@@ -1,4 +1,4 @@
-"""SP-09: frameless transparent always-on-top QWebEngineView on Windows 11 (ADR-004 validation).
+"""Frameless transparent always-on-top QWebEngineView on Windows 11 (ADR-004 validation).
 
 Shows a transparent HTML page with an idle-breathing canvas pet for a few seconds and prints
 measurements: transparency (screen pixels behind the window unchanged), click-through

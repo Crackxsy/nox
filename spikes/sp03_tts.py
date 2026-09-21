@@ -1,4 +1,4 @@
-"""SP-03 TTS engine: Piper (thorsten-medium / lessac-medium) vs Kokoro (kokoro-onnx, EN only).
+"""TTS engine: Piper (thorsten-medium / lessac-medium) vs Kokoro (kokoro-onnx, EN only).
 
 Measures load time, time-to-first-audio (TTFA: first PCM chunk available to the output) and
 real-time factor (synthesis wall time / audio duration) for a 2-sentence text, 5 runs per engine

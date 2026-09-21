@@ -34,18 +34,34 @@ def frames_of(signal: np.ndarray, frame: int = FRAME) -> list[np.ndarray]:
 
 
 class FakeAudioInput:
-    """Frames are pushed by the test; only delivered while `enabled` (like SoundDeviceInput)."""
+    """Frames are pushed by the test and only delivered while enabled, like `SoundDeviceInput`.
+
+    `opens` counts how often capture was switched on, which is what the `ptt_only` tests assert:
+    the real input opens no device until then.
+    """
 
     def __init__(self) -> None:
         self.queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue()
-        self.enabled = False
+        self._enabled = False
         self.started = False
         self.stopped = False
         self.delivered = 0
+        self.opens = 0
+        #: Set by a test to make the frame loop fail, like a device disappearing mid-session.
+        self.fail_with: Exception | None = None
 
     @property
     def sample_rate(self) -> int:
         return SR
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    async def set_enabled(self, value: bool) -> None:
+        if value and not self._enabled:
+            self.opens += 1
+        self._enabled = value
 
     async def start(self) -> None:
         self.started = True
@@ -66,6 +82,8 @@ class FakeAudioInput:
     async def frames(self) -> AsyncIterator[np.ndarray]:
         while True:
             frame = await self.queue.get()
+            if self.fail_with is not None:
+                raise self.fail_with
             if frame is None:
                 return
             yield frame

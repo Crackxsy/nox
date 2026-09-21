@@ -1,13 +1,13 @@
-"""Twitch chat bot plugin (ST-11-04, Spec v0.2 Stream Bot).
+"""Twitch chat bot plugin (Stream Bot).
 
 Wraps one `TwitchIrcClient` (see `nox_plugin_twitch.irc_client`) and exposes it as: two tools
 (`twitch.chat.send`, `twitch.chat.status.read`), the events named in `manifest.yaml`
 (`twitch.connected/disconnected`, `twitch.chat_message` scored by a `RelevanceClassifier`,
-`twitch.command_invoked`, `stream.funken_awarded`, `stream.minigame_started/ended`), and the
-built-in `!rps`/`!funken`/`!hilfe`/`!help` chat commands, all answered through the same
-`_send` path as the `twitch.chat.send` tool (rate limiter + `ModerationGate`, never bypassed).
+`twitch.command_invoked`, `stream.funken_awarded`, `stream.minigame_started/ended`), and the built-
+in `!rps`/`!funken`/`!hilfe`/`!help` chat commands, all answered through the same `_send` path as
+the `twitch.chat.send` tool (rate limiter + `ModerationGate`, never bypassed).
 
-Health is reported honestly by `TwitchPlugin.health()`: AVAILABLE only once actually connected and
+Health is reported honestly by `TwitchPlugin.health`: AVAILABLE only once actually connected and
 joined; UNAVAILABLE when the plugin has no `nox/twitch/oauth_token`/`nox/twitch/bot_username`
 secret yet (ES-01: no bot account exists until the operator creates one) or Twitch is unreachable.
 """
@@ -57,7 +57,7 @@ class TwitchPlugin:
         self.api = api
         self._chat_event_id = 0
         #: `stream.twitch.*` from the configuration, with the deprecated manifest keys still
-        #: honoured for one release (#26, see `nox_plugin_twitch.settings`).
+        #: honoured for one release (see `nox_plugin_twitch.settings`).
         self.settings = resolve_settings(api)
         self._channel = self.settings.channel
 
@@ -190,10 +190,10 @@ class TwitchPlugin:
         await self._send(_help_text("de"))
 
     async def _cmd_funken(self, _viewer_id: str, _args: list[str]) -> None:
-        """Balances live in the core's Funken ledger, not here (Spec v0.2 §3.5: plugins never book
+        """Balances live in the core's Funken ledger, not here (plugins never book
         Funken). `twitch.command_invoked` was already emitted by `_handle_command`; the core answers
         `!funken` later through its own `twitch.chat.send` call. Faking a balance here would violate
-        ENGINEERING.md's "no fake implementations", so this is intentionally a no-op."""
+        the project standards' "no fake implementations", so this is intentionally a no-op."""
         return
 
     async def _cmd_rps(self, viewer_id: str, args: list[str]) -> None:

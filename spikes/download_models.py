@@ -1,19 +1,24 @@
-"""Download the voice models used by Nox into E:\\Nox\\models (git-ignored, see ADR-009).
+"""Download the voice models used by Nox into a local, git-ignored models directory (see ADR-009).
 
 Piper voices come from Hugging Face rhasspy/piper-voices via httpx; faster-whisper models are
 fetched through the library's own downloader (huggingface_hub) with download_root set here.
 Usage: .venv/Scripts/python.exe spikes/download_models.py [--whisper base,small]
+Set NOX_SPIKE_MODELS_DIR to use a different directory than the default (`spikes/out/models/`,
+already covered by `.gitignore`).
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 import httpx
 
-MODELS_DIR = Path(r"E:\Nox\models")
+MODELS_DIR = Path(
+    os.environ.get("NOX_SPIKE_MODELS_DIR", Path(__file__).resolve().parent / "out" / "models")
+)
 PIPER_DIR = MODELS_DIR / "piper"
 WHISPER_DIR = MODELS_DIR / "faster-whisper"
 

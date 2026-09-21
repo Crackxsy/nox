@@ -1,28 +1,28 @@
-"""`install(core)`: the whole Settings area in one function (EPIC-21).
+"""`install(core)`: the whole Settings area, wired onto a running core.
 
-`src/nox/app.py` already runs `("settings", True)` in its extension loop, so this module only has
-to build the services and register their IPC requests - the same shape as `nox.remote.install` and
-`nox.clips.install`.
+The core installs this like any other extension (see `nox.core.extension`), so this module only
+builds the services and registers their IPC requests.
 
 What gets wired:
-  * `ConfigEditor` on the live `NoxConfig` plus the User layer (`user.yaml`), with the live
-    appliers below, so `config.get`/`config.set` work;
-  * `SecretsService` on the core's keyring store and PIN manager (`secrets.*`), plus
-    `security.pin.status` - the one boolean the Settings page needs to know whether a secret
-    change has to carry a PIN (#23);
-  * `TwitchAuthService` on `core.security.egress.client` (`twitch.auth.*`), plus a background
-    refresher so a long session never dies of an expired chat token;
-  * `PersonalityFile` in the data directory (`personality.*`), installed as the prompt builder's
-    personality source so `nox.app`'s existing `build_system_prompt(...)` call reads it.
 
-Every request is registered for `("shell", "dashboard")` only. Nothing here is reachable from a
-plugin, a worker, the pet renderer or a paired phone.
+* `ConfigEditor` on the live configuration plus the user layer (`user.yaml`), with the live
+  appliers below, so `config.get` and `config.set` work - and with the security PIN gate, so a
+  change to a `security.*` or `privacy.*` setting carries the PIN when one is configured;
+* `SecretsService` on the core's keyring store and PIN manager (`secrets.*`), plus
+  `security.pin.status` - the one boolean the Settings page needs in order to know whether a
+  credential change will ask for a PIN;
+* `TwitchAuthService` on the guarded HTTP client (`twitch.auth.*`), plus a background refresher so
+  a long session never dies of an expired chat token;
+* `PersonalityFile` in the data directory (`personality.*`), installed as the prompt builder's
+  personality source, so the system prompt reads it.
+
+Every request is registered for the two UI roles only. Nothing here is reachable from a plugin, a
+worker, the pet renderer or a paired phone.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 
 from nox.core.logging import get_logger
 from nox.ipc.dispatch import EmptyPayload, RequestContext
+from nox.ipc.errors import ERR_PERMISSION, IpcError
 from nox.settings.editor import Applier, ConfigEditor
 from nox.settings.layers import resolve_defaults_path, resolve_user_config_path
 from nox.settings.personality import PERSONALITY_FILENAME, PersonalityFile
@@ -46,6 +47,11 @@ UI_ROLES = ("shell", "dashboard")
 
 #: How often the background task checks whether the Twitch token is close to expiring.
 TOKEN_REFRESH_INTERVAL_S = 300.0
+
+#: Consecutive refresh failures after which the chat connection is reported as limited. A token
+#: that cannot be refreshed will expire, and a silent retry loop would let that happen
+#: unannounced.
+TOKEN_FAILURES_BEFORE_LIMITED = 3
 
 
 class _Core(Protocol):
@@ -63,6 +69,8 @@ class _Core(Protocol):
 
 class ConfigSetRequest(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
+    #: Required when the batch touches a `security.*` or `privacy.*` setting and a PIN is set.
+    pin: str | None = None
 
 
 class SecretSetRequest(BaseModel):
@@ -101,9 +109,10 @@ def build_appliers(core: _Core) -> dict[str, Applier]:
 
     async def set_ui_language(value: Any) -> None:
         config.identity.ui_language = str(value)
-        orchestrator = getattr(core, "orchestrator", None)
-        if orchestrator is not None:
-            orchestrator.config.default_language = str(value)
+        # The orchestrator holds the language a spoken answer uses, so the running conversation
+        # follows the setting without a restart. It is None only in a test that never built one.
+        if core.orchestrator is not None:
+            core.orchestrator.config.default_language = str(value)
 
     async def set_pet_variant(value: Any) -> None:
         # The renderer takes the variant as a query flag, so the shell re-points the pet page when
@@ -132,6 +141,31 @@ def build_appliers(core: _Core) -> dict[str, Applier]:
 
 
 @dataclass(slots=True)
+class TokenHealth:
+    """Consecutive Twitch token-refresh failures, and the last reason."""
+
+    consecutive_failures: int = 0
+    last_error: str = ""
+
+    @property
+    def limited(self) -> bool:
+        return self.consecutive_failures >= TOKEN_FAILURES_BEFORE_LIMITED
+
+    def succeeded(self) -> None:
+        self.consecutive_failures = 0
+        self.last_error = ""
+
+    def failed(self, exc: BaseException) -> None:
+        self.consecutive_failures += 1
+        self.last_error = f"{type(exc).__name__}: {exc}"
+        log.warning(
+            "settings.twitch_token_refresh_failed",
+            error=self.last_error,
+            consecutive=self.consecutive_failures,
+        )
+
+
+@dataclass(slots=True)
 class SettingsRuntime:
     """Handles the integrator (or a test) needs; `stop()` is called by `NoxCore.stop()`."""
 
@@ -139,16 +173,25 @@ class SettingsRuntime:
     secrets: SecretsService
     twitch_auth: TwitchAuthService
     personality: PersonalityFile
+    token_health: TokenHealth
     _tasks: list[asyncio.Task[None]]
 
     async def stop(self) -> None:
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
-            with contextlib.suppress(asyncio.CancelledError, Exception):
+            try:
                 await task
+            except asyncio.CancelledError:
+                pass  # the cancellation above; nothing to report
+            except Exception as exc:  # noqa: BLE001 - shutdown continues, but says what broke
+                log.warning(
+                    "settings.task_stop_failed",
+                    task=task.get_name(),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
         await self.twitch_auth.stop()
-        from nox.ai import prompting
+        from nox.ai import prompting  # noqa: PLC0415 - avoids an import cycle at module level
 
         prompting.set_personality_source(None)
 
@@ -169,6 +212,7 @@ def install(core: _Core) -> SettingsRuntime:
         appliers=appliers,
         audit=security.audit,
         bus=core.bus,
+        gate=security.gate,
     )
     secrets = SecretsService(security.secrets, pin=security.pin, audit=security.audit)
     twitch_auth = TwitchAuthService(
@@ -184,36 +228,46 @@ def install(core: _Core) -> SettingsRuntime:
     )
     personality.ensure()
 
-    # `nox.app` and `nox.stream.responder` both call `build_system_prompt(DECIDED_PERSONALITY_
-    # BLOCK, ...)`; installing the source here is what turns that into "read personality.md".
-    from nox.ai import prompting
+    # The core and the chat responder both build their system prompt from the personality block;
+    # installing the source here is what turns that into "read personality.md".
+    from nox.ai import prompting  # noqa: PLC0415 - avoids an import cycle at module level
 
     prompting.set_personality_source(personality.read)
 
-    _register(core, editor, secrets, twitch_auth, personality)
+    token_health = TokenHealth()
+    _register(core, editor, secrets, twitch_auth, personality, token_health)
 
     tasks = [
-        asyncio.create_task(_twitch_token_loop(twitch_auth), name="twitch-token-refresh"),
+        asyncio.create_task(
+            _twitch_token_loop(twitch_auth, token_health), name="twitch-token-refresh"
+        ),
     ]
     log.info("settings.installed", personality=str(personality.path))
-    return SettingsRuntime(editor, secrets, twitch_auth, personality, tasks)
+    return SettingsRuntime(editor, secrets, twitch_auth, personality, token_health, tasks)
 
 
-async def _twitch_token_loop(auth: TwitchAuthService) -> None:
-    """Keep the stored chat token fresh.
+async def _twitch_token_loop(auth: TwitchAuthService, health: TokenHealth) -> None:
+    """Keep the stored chat token fresh, and say so when it cannot be kept fresh.
 
-    The Twitch plugin runs in a worker process whose Plugin API can *read* a secret but never write
-    one, so the refresh has to happen here. It re-reads `nox/twitch/oauth_token` on every connect
-    attempt, and its IRC client reconnects with backoff, so a token renewed here is picked up
-    without the plugin knowing anything about OAuth.
+    The Twitch plugin runs in a worker process whose API can read a credential but never write
+    one, so the refresh has to happen here. The plugin re-reads the token on every connect attempt
+    and reconnects with backoff, so a token renewed here is picked up without the plugin knowing
+    anything about the login flow.
+
+    A failure is logged with its type and counted. After a few in a row the integration reports
+    itself as limited: a refresh that keeps failing ends in an expired token, and finding that out
+    when the chat goes quiet is worse than being told now.
     """
     try:
         await auth.refresh_state_from_secrets()
     except Exception as exc:  # noqa: BLE001 - an unreachable keyring must not kill the task
         log.warning("settings.twitch_state_unavailable", error=type(exc).__name__)
     while True:
-        with contextlib.suppress(Exception):
+        try:
             await auth.ensure_fresh_token()
+            health.succeeded()
+        except Exception as exc:  # noqa: BLE001 - the loop outlives any single failure
+            health.failed(exc)
         await asyncio.sleep(TOKEN_REFRESH_INTERVAL_S)
 
 
@@ -223,6 +277,7 @@ def _register(
     secrets: SecretsService,
     twitch_auth: TwitchAuthService,
     personality: PersonalityFile,
+    health: TokenHealth,
 ) -> None:
     reg = core.registry.register
 
@@ -230,7 +285,10 @@ def _register(
         return editor.snapshot()
 
     async def h_config_set(ctx: RequestContext, p: ConfigSetRequest) -> dict[str, Any]:
-        return await editor.apply(p.values, by=ctx.role)
+        try:
+            return await editor.apply(p.values, by=ctx.role, pin=p.pin)
+        except PermissionError as exc:
+            raise IpcError(ERR_PERMISSION, str(exc)) from exc
 
     async def h_pin_status(_ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
         """Whether a PIN is configured - never the PIN, its hash, its length or its algorithm.
@@ -245,16 +303,21 @@ def _register(
         return dict(secrets.status())
 
     async def h_secrets_set(ctx: RequestContext, p: SecretSetRequest) -> dict[str, Any]:
-        return dict(secrets.set(p.name, p.value, pin=p.pin, by=ctx.role))
+        return dict(await secrets.set(p.name, p.value, pin=p.pin, by=ctx.role))
 
     async def h_secrets_delete(ctx: RequestContext, p: SecretDeleteRequest) -> dict[str, Any]:
-        return dict(secrets.delete(p.name, pin=p.pin, by=ctx.role))
+        return dict(await secrets.delete(p.name, pin=p.pin, by=ctx.role))
 
     async def h_twitch_start(_ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
         return await twitch_auth.start()
 
     async def h_twitch_status(_ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
-        return twitch_auth.status()
+        """The login state, plus the refresher's own health when it keeps failing."""
+        status = dict(twitch_auth.status())
+        if health.limited:
+            status["refresh_state"] = "limited"
+            status["refresh_error"] = health.last_error
+        return status
 
     async def h_twitch_disconnect(_ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
         return await twitch_auth.disconnect()

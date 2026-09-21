@@ -1,7 +1,6 @@
-"""`RateLimiter` for `twitch.chat.send` (ST-11-04, Spec v0.2 Stream Bot §9): at most
-`max_messages` per `window_s`, and at least `min_gap_s` between any two sends. Defaults (20 msg /
-30 s, >=1.5 s gap) stay under Twitch's own moderator chat limit with margin. Configurable via the
-plugin's `rate_limit_*` config keys.
+"""`RateLimiter` for `twitch.chat.send` (Stream Bot): at most `max_messages` per `window_s`, and at
+least `min_gap_s` between any two sends. Defaults (20 msg / 30 s, >=1.5 s gap) stay under Twitch's
+own moderator chat limit with margin. Configurable via the plugin's `rate_limit_*` config keys.
 """
 
 from __future__ import annotations

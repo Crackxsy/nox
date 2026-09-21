@@ -138,7 +138,7 @@ async def core(tmp_path: Path):
     )
     cfg = _config(tmp_path, plugins_dir=plugins_dir)
     core = NoxCore(cfg, voice=False, profiles_dir=PROFILES_DIR, extensions=False)
-    core.rl_replay_folder = replay_folder  # type: ignore[attr-defined]
+    core.extensions["rl_replay_folder"] = replay_folder
     await asyncio.wait_for(core.start(), timeout=60)
     try:
         yield core
@@ -175,7 +175,7 @@ async def test_new_replay_file_is_parsed_and_emits_rl_replay_parsed(core: NoxCor
     seen: list[Event] = []
     unsub = core.bus.subscribe(E.RL_REPLAY_PARSED, lambda ev: seen.append(ev))
     try:
-        fixture_path = core.rl_replay_folder / "fixture.replay"  # type: ignore[attr-defined]
+        fixture_path = core.extensions["rl_replay_folder"] / "fixture.replay"
         fixture_path.write_bytes(_build_fixture_replay())
         await asyncio.wait_for(_wait_for(lambda: bool(seen)), timeout=45)
     finally:

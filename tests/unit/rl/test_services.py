@@ -235,4 +235,78 @@ async def test_session_summary_writes_a_templated_summary_without_fabricating_pa
     )
     updated = matches.get(row.id)
     assert updated is not None
-    assert "not yet available" in updated.summary_detailed
+    assert "not available yet" in updated.summary_detailed
+    # No internal identifiers ever reach text the user reads or hears.
+    assert "Spec" not in updated.summary_detailed
+
+
+# -- fail-closed security -------------------------------------------------------------------------
+
+
+class BrokenSecurityEngine:
+    """A security engine whose profile switch fails, as a misconfigured profile set would."""
+
+    def set_profile(self, profile_id: str, *, by: str) -> None:
+        raise RuntimeError(f"profile {profile_id!r} cannot be applied")
+
+
+async def test_failed_profile_switch_is_reported_on_the_mode_event(bus: AsyncEventBus) -> None:
+    """The mode may still change, but nobody is told the game-mode permissions are in force."""
+    state = NoxStateManager(bus, StateCheckpointRepository(Database(":memory:")), state=NoxState())
+    bridge = RlModeBridge(bus, state, BrokenSecurityEngine())
+    bridge.start()
+    seen: list[Event] = []
+    bus.subscribe(E.SYSTEM_MODE_CHANGED, lambda ev: seen.append(ev))
+
+    await bus.publish(Event(name=E.GAME_DETECTED, payload={"game": "rocket_league"}))
+
+    assert seen[-1].payload["current"] == "rocket_league"
+    assert seen[-1].payload["reason"] == "game.detected; security profile unchanged"
+
+
+async def test_successful_profile_switch_says_so(bus: AsyncEventBus) -> None:
+    state = NoxStateManager(bus, StateCheckpointRepository(Database(":memory:")), state=NoxState())
+    bridge = RlModeBridge(bus, state, FakeSecurityEngine())
+    bridge.start()
+    seen: list[Event] = []
+    bus.subscribe(E.SYSTEM_MODE_CHANGED, lambda ev: seen.append(ev))
+
+    await bus.publish(Event(name=E.GAME_DETECTED, payload={"game": "rocket_league"}))
+
+    assert seen[-1].payload["reason"] == "game.detected"
+
+
+class SilentSpeaker:
+    """A speaker whose playback fails, e.g. because the private output device is gone."""
+
+    async def say(self, request: TtsRequest) -> None:
+        raise RuntimeError("no output device")
+
+
+async def test_a_callout_nobody_heard_is_not_published_as_a_callout(
+    bus: AsyncEventBus, db: Database
+) -> None:
+    service = RlCalloutService(bus, FakeEngine(), SilentSpeaker())
+    service.start()
+    callouts: list[Event] = []
+    bus.subscribe(E.RL_CALLOUT, lambda ev: callouts.append(ev))
+
+    await bus.publish(
+        Event(name=E.RL_EVENT, payload={"kind": "goal", "source": "hud", "confidence": 0.9})
+    )
+
+    assert callouts == []
+
+
+async def test_a_spoken_callout_is_published(bus: AsyncEventBus) -> None:
+    service = RlCalloutService(bus, FakeEngine(), FakeSpeaker())
+    service.start()
+    callouts: list[Event] = []
+    bus.subscribe(E.RL_CALLOUT, lambda ev: callouts.append(ev))
+
+    await bus.publish(
+        Event(name=E.RL_EVENT, payload={"kind": "goal", "source": "hud", "confidence": 0.9})
+    )
+
+    assert len(callouts) == 1
+    assert callouts[0].payload["clip_id"] == "test_clip"

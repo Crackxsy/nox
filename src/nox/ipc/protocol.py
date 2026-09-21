@@ -95,7 +95,7 @@ NAME_ERROR = "ipc.error"
 NAME_SUBSCRIBE = "ipc.subscribe"  # payload: {"patterns": ["voice.*", "state.changed"]}
 
 
-# ---- chat.send stream/response contract (OP-9: fixed shape, no tolerant field guessing) ---------
+# ---- chat.send stream and response contract: a fixed shape, never a guessed field ---------------
 
 
 class ChatStreamFrame(BaseModel):
@@ -117,7 +117,7 @@ class ChatSendResult(BaseModel):
     degraded: bool
 
 
-# ---- Stream Bot core response contracts (Spec v0.2 §8/§9, EPIC-11, ST-11-09) --------------------
+# ---- stream bot response contracts ---------------------------------------------------------------
 
 
 class StreamPluginStatus(BaseModel):
@@ -134,6 +134,28 @@ class StreamSessionStatus(BaseModel):
     started_at: str | None = None
     scene: str | None = None
     plugins: StreamPluginStatus = Field(default_factory=StreamPluginStatus)
+
+
+class PluginStatusEntry(BaseModel):
+    """One plugin, as the dashboard shows it."""
+
+    id: str
+    #: discovered | validated | starting | running | stopped | failed | disabled
+    state: str
+    #: Why it is in that state, in the words the user needs. For a plugin the active profile
+    #: refuses, this is the profile rule that refused it.
+    reason: str = ""
+
+
+class PluginStatusList(BaseModel):
+    """`plugin.status {}` response.
+
+    A plugin that fails validation does so during boot, before any UI has connected, so the
+    `plugin.failed` event is long gone by the time the dashboard opens. This request is how it
+    finds out anyway, instead of showing an empty panel with no explanation.
+    """
+
+    plugins: list[PluginStatusEntry] = Field(default_factory=list)
 
 
 class FunkenTopEntry(BaseModel):
@@ -155,12 +177,12 @@ STREAM_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "chat.send": ChatStreamFrame,
 }
 
-# ---- Mobile Companion (Spec v0.8 §7/§8, EPIC-17, ST-17-01/03) ----------------------------------
+# ---- mobile companion ------------------------------------------------------------------------
 
 
 class RemoteDevice(BaseModel):
     """One row of the dashboard's "Remote" page. No key material is ever part of this model - the
-    hashed device key never leaves `paired_devices` (ST-17-03)."""
+    hashed device key never leaves the `paired_devices` table."""
 
     id: str
     name: str = ""
@@ -195,7 +217,7 @@ class RemoteUnpairResult(BaseModel):
     device_id: str = ""
 
 
-# ---- Clip Pipeline (Spec v0.6, EPIC-15, ST-15-01/05/06) ----------------------------------------
+# ---- clip pipeline ---------------------------------------------------------------------------
 
 
 class ClipRecord(BaseModel):
@@ -247,7 +269,7 @@ class ClipTrimResult(BaseModel):
     reason: str = ""
 
 
-# ---- Dashboard EPIC-08: health history and effective-config views ------------------------------
+# ---- dashboard: health history and the effective-configuration view ----------------------------
 
 
 class HealthHistoryEntry(BaseModel):
@@ -278,7 +300,7 @@ class ConfigEffective(BaseModel):
     schema_version: int = SCHEMA_VERSION
 
 
-# ---- Settings (EPIC-21, `nox.settings`) --------------------------------------------------------
+# ---- settings (`nox.settings`) -----------------------------------------------------------------
 
 
 class ConfigFieldSchema(BaseModel):
@@ -375,6 +397,7 @@ class PersonalityText(BaseModel):
 # name -> payload model, checked by the dispatcher against every handler's RESPONSE payload.
 RESPONSE_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "chat.send": ChatSendResult,
+    "plugin.status": PluginStatusList,
     "stream.session.status": StreamSessionStatus,
     "stream.funken.top": FunkenTop,
     "remote.pair.start": RemotePairCode,

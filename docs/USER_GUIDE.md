@@ -10,7 +10,7 @@ assistant. This guide covers install, first start, day-to-day use, and troublesh
 
 ## 1. Install
 
-Nox ships as a signed Windows installer (Inno Setup, FR-15.4) with an embedded Python runtime —
+Nox ships as a signed Windows installer (Inno Setup) with an embedded Python runtime —
 you do not need Python installed separately. The installer:
 
 - installs the program under `%ProgramFiles%\Nox` (or a folder you choose),
@@ -95,7 +95,7 @@ cannot be turned off or hidden by configuration — if something is being captur
   never sends input to the game and never reads or injects into its process memory; this is a
   hard, code-level boundary (see `SECURITY.md` §Rocket League boundary), not a setting.
 - **Project manager / coding assistant**, **research/creative assistant**: planned, not part of
-  this release — see the PRD roadmap.
+  this release.
 
 ## 6. Troubleshooting
 

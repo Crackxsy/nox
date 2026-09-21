@@ -1,11 +1,11 @@
-"""Thin Win32 probe layer (FR-14.4): foreground window/process and system idle time.
+"""Thin Win32 probe layer: foreground window/process and system idle time.
 
 `ForegroundInfo` is the raw signal (title, process name, pid) - never persisted itself, only fed to
-`PrivacyService.match_zone`/`observe_foreground` and the sensor's own change-detection. `Win32Probe`
-is a `Protocol` so every sensor takes one by dependency injection; tests use a plain fake object,
-never the real ctypes calls. `RealWin32Probe` is the only place in this package that touches
-`ctypes.windll` - per ENGINEERING.md this repo targets Windows 11 with normal user rights, so no
-elevation is ever requested (ST-20-01 AC3): a missing/failing Win32 call degrades to an empty/zero
+`PrivacyService.match_zone`/`observe_foreground` and the sensor's own change-detection.
+`Win32Probe` is a `Protocol` so every sensor takes one by dependency injection; tests use a plain
+fake object, never the real ctypes calls. `RealWin32Probe` is the only place in this package that
+touches `ctypes.windll` - per the project standards this repo targets Windows 11 with normal user
+rights, so no elevation is ever requested: a missing/failing Win32 call degrades to an empty/zero
 reading rather than raising.
 """
 

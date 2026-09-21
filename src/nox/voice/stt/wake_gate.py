@@ -1,4 +1,4 @@
-"""Acoustic wake-word gate in front of Whisper (#20).
+"""Acoustic wake-word gate in front of Whisper.
 
 Continuous listening used to hand every VAD segment to Whisper `small` on CPU. With a game or a
 video running, that queue grew to 20-40 s and Whisper happily "recognised" Dutch or English in
@@ -22,6 +22,15 @@ matching on the text - and reports `limited` with that reason. The kill phrase i
 it has no acoustic model, so the watchdog in (d) still needs Whisper for short segments. Those
 transcripts are examined for the kill phrase and then discarded; they never become an event and
 never reach the language model.
+
+Honest limitation, second part: that watchdog has a length ceiling
+(`WakeGateConfig.kill_watchdog_max_ms`, 2.5 s by default). A kill phrase spoken *inside* a longer
+utterance, with no wake word and no open conversation window, is dropped with the rest of that
+utterance and never transcribed. The ceiling is what keeps "everything is transcribed anyway" from
+coming back in through the watchdog, and the kill phrase remains reachable at any length through
+push-to-talk, through the wake word and inside an open conversation window. Raising the ceiling
+widens both the CPU cost and the amount of undirected speech that gets transcribed, so it is a
+deliberate setting rather than a default to grow.
 """
 
 from __future__ import annotations
@@ -206,6 +215,9 @@ class WakeGateConfig:
     wake_window_s: float = 8.0
     conversation_window_s: float = 20.0
     kill_watchdog: bool = True
+    #: Longest segment the kill-phrase watchdog will still hand to Whisper. Longer undirected
+    #: speech is dropped untranscribed, so a kill phrase buried in a long sentence is not heard;
+    #: see the module docstring for why this ceiling exists and what it costs.
     kill_watchdog_max_ms: int = 2500
 
 
@@ -220,7 +232,24 @@ class WakeGate:
     _last_fire: float = field(default=-1e9, init=False)
     _conversation_until: float = field(default=-1e9, init=False)
     fires: int = field(default=0, init=False)
-    dropped: int = field(default=0, init=False)
+    #: Why segments never became a transcript event, by reason. One counter, so a health or stats
+    #: readout cannot mix "dropped before Whisper" with "transcribed only for the watchdog".
+    drops: dict[str, int] = field(default_factory=dict, init=False)
+
+    @property
+    def dropped(self) -> int:
+        """Segments dropped before Whisper saw them."""
+        return self.drops.get("gated_out", 0)
+
+    @property
+    def not_reported(self) -> int:
+        """Every segment that did not become a transcript event, for any gate reason."""
+        return sum(self.drops.values())
+
+    def note_not_reported(self, reason: str) -> None:
+        """Record why a segment did not become a transcript event (`gated_out`,
+        `watchdog_discarded`)."""
+        self.drops[reason] = self.drops.get(reason, 0) + 1
 
     @property
     def acoustic(self) -> bool:
@@ -231,9 +260,20 @@ class WakeGate:
 
     def feed(self, frame: np.ndarray) -> bool:
         """Push one 16 kHz mono frame through the detector. True when the wake word just fired."""
-        if not self.detector.acoustic:
+        return self.feed_many([frame])
+
+    def feed_many(self, frames: list[np.ndarray]) -> bool:
+        """Push several consecutive frames at once. True when the wake word just fired.
+
+        The pipeline batches whatever frames queued up while the previous inference ran, so the
+        detector is invoked once per batch in a worker thread instead of once per 30 ms frame on
+        the event loop. The detector keeps its own 80 ms block buffer, so batching does not change
+        what it sees - only how often it is called.
+        """
+        if not self.detector.acoustic or not frames:
             return False
-        score = self.detector.push(frame)
+        block = frames[0] if len(frames) == 1 else np.concatenate(frames)
+        score = self.detector.push(block)
         if score < self.config.threshold:
             return False
         # A detection usually spans several 80 ms blocks; count and log the start of it, not every
@@ -269,7 +309,7 @@ class WakeGate:
             return GateDecision.CONVERSATION
         if self.config.kill_watchdog and duration_ms <= self.config.kill_watchdog_max_ms:
             return GateDecision.KILL_WATCHDOG
-        self.dropped += 1
+        self.note_not_reported("gated_out")
         return GateDecision.DROP
 
     def reset(self) -> None:

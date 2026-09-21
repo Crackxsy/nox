@@ -102,8 +102,7 @@ own code.
   any other Python entry point; it does not share memory with the core.
 - Declare real dependencies in your own package (`pyproject.toml`/equivalent inside your plugin's
   `src/`) — Nox does not currently vendor third-party plugin dependencies into the core venv for
-  you (packaging story is still evolving; check the current PRD FR-15.2 status before assuming
-  otherwise).
+  you; that packaging story is not built yet, so don't assume it.
 - Ship tests alongside your plugin the same way the built-in `obs`/`twitch` plugins do
   (`tests/unit/plugins/<id>/`, `tests/integration/test_<id>_plugin.py`) — a fake/in-process double
   for whatever external service you talk to (see `plugins/obs`'s `FakeObsServer` pattern), never a
@@ -126,8 +125,8 @@ own code.
 
 ## 6. How a plugin is reviewed and approved
 
-There is no public plugin marketplace yet. Until FR-15.2's third-party plugin ecosystem plan
-ships, a plugin runs only if it is listed in `plugins.enabled` in your own config — nothing is
+There is no public plugin marketplace yet, and no third-party plugin ecosystem tooling has shipped.
+A plugin runs only if it is listed in `plugins.enabled` in your own config — nothing is
 auto-discovered or auto-enabled from a directory drop-in alone. For a plugin you intend to
 contribute back to the Nox repository itself, open a pull request; review focuses on exactly the
 manifest boundaries above (namespace, hard prohibitions, secrets, egress) plus normal code review

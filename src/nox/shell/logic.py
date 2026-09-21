@@ -241,7 +241,7 @@ def pet_url(
     overlay: bool = False,
     variant: str = "neutral",
 ) -> str:
-    """Token in the fragment (see dashboard_url); `overlay=1` and `variant=<id>` (OP-1, from
+    """Token in the fragment (see dashboard_url); `overlay=1` and `variant=<id>` (from
     `config.pet.variant`) are plain query flags — neither is a secret. `variant="neutral"` (the
     default) is omitted from the URL so existing/neutral setups produce the same URL as before.
     """

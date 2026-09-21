@@ -1,4 +1,4 @@
-"""Exceptions of the AI layer (ADR-008): providers raise ProviderError, the router RouterError."""
+"""Exceptions of the AI layer: providers raise ProviderError, the router RouterError."""
 
 from __future__ import annotations
 

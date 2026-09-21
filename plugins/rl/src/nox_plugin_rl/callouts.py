@@ -1,13 +1,13 @@
-"""Prepared-clip callout engine (ST-12-06): priority (danger > tactical_error > pattern >
-opportunity > rare_praise, F131), cooldown + 2-4/minute rate cap (A131), silence-on-low-confidence
-(A129). Only wires rules whose trigger is satisfiable from the `rl.event` kinds Stage 1 actually
-produces (goal, overtime, boost_low, demo - `save` is replay-only, never real-time; ST-12-06 AC).
+"""Prepared-clip callout engine: priority (danger > tactical_error > pattern > opportunity >
+rare_praise, F131), cooldown + 2-4/minute rate cap (A131), silence-on-low-confidence (A129). Only
+wires rules whose trigger is satisfiable from the `rl.event` kinds Stage 1 actually produces (goal,
+overtime, boost_low, demo - `save` is replay-only, never real-time; AC).
 
-The initial A130 clip list ("Don't challenge, you're last.", "Rotate back post.", ...) is mostly
+The initial A130 clip list ("Don't challenge, you're last.", "Rotate back post.",...) is mostly
 position-based and therefore *not* reachable in Stage 1 (no object detection until v0.9's Stage 2,
-Spec §2.2) - this engine registers only the HUD-derivable subset plus reasonable additions for
+Spec) - this engine registers only the HUD-derivable subset plus reasonable additions for
 goal/overtime, and leaves the rest as an explicit, documented gap rather than registering
-unreachable rules (ST-12-06 AC)."""
+unreachable rules."""
 
 from __future__ import annotations
 
@@ -48,8 +48,8 @@ def _team_scored(payload: dict[str, Any], team: str) -> bool:
     return str(payload.get("team", "")) == team
 
 
-#: Stage 1's reachable rule set (Spec §8's honest per-kind note; ST-12-06 AC). Kickoff-only-with-
-#: value (Spec §3.2/A131) is not wired: ST-12-05's event catalogue has no distinct `kickoff` kind
+#: Stage 1's reachable rule set (Spec honest per-kind note; AC). Kickoff-only-with-
+#: value (Spec/A131) is not wired: event catalogue has no distinct `kickoff` kind
 #: (only a "kickoff/replay camera" banner category, folded into no emitted `rl.event` kind) -
 #: flagged as an open point rather than guessed at.
 DEFAULT_RULES: tuple[CalloutRule, ...] = (
@@ -127,7 +127,7 @@ class CalloutEngine:
         if confidence < self._min_confidence:
             return None  # silence over guessing (A129)
         if kind == "save" and source != "replay":
-            return None  # Spec §8: `save` is never real-time in Stage 1
+            return None  # Spec: `save` is never real-time in Stage 1
         payload = payload or {}
         candidates = [r for r in self._rules if r.kind == kind and r.condition(payload)]
         if not candidates:

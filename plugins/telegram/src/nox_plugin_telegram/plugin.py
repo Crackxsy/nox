@@ -1,4 +1,4 @@
-"""Telegram companion plugin (EPIC-17, Spec v0.8 Mobile Companion).
+"""Telegram companion plugin (Mobile Companion).
 
 Wraps one `TelegramBotClient` and exposes it as: one inbound event (`remote.message`, one per
 message from the phone, carrying the Telegram sender id), two lifecycle events
@@ -8,7 +8,7 @@ message from the phone, carrying the Telegram sender id), two lifecycle events
 Trust boundary: this plugin decides *nothing*. It does not know which sender is paired, it never
 looks at a command, and it has no access to transcripts, memory or the kill switch - it listens to
 no events at all. `src/nox/remote` is where a message becomes a decision, so the security rules
-live below the AI layer and cannot be talked out of a plugin (Security Model §2, ENGINEERING.md).
+live below the AI layer and cannot be talked out of a plugin (Security Model).
 
 Health is reported honestly: AVAILABLE only while long polling is actually connected, UNAVAILABLE
 with the secret's *name* when no `nox/telegram/bot_token` exists yet (ES-04) - never a fake "ok".

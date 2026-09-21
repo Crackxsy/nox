@@ -1,6 +1,6 @@
-"""`sensors.status.read` tool (Tool Model `system_info` surface, ST-20-01..07): a read-only
-snapshot of the latest sample from each running sensor. `risk=READ`, `local=True`, no side
-effects - stays available in PRIVATE/OFFLINE and safe mode like `state.read`/`health.read`.
+"""`sensors.status.read` tool (Tool Model `system_info` surface): a read-only snapshot of the latest
+sample from each running sensor. `risk=READ`, `local=True`, no side effects - stays available in
+PRIVATE/OFFLINE and safe mode like `state.read`/`health.read`.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ def make_sensors_status_read_tool(history: SensorHistoryStore) -> ToolSpec:
     return ToolSpec(
         name="sensors.status.read",
         description="Latest sample from one PC-awareness sensor (or all of them): rates/levels/"
-        "presence only, never window content (FR-14.4/NFR-8).",
+        "presence only, never window content.",
         input_model=SensorsStatusReadInput,
         risk=Risk.READ,
         side_effects=False,

@@ -1,12 +1,12 @@
 """DefaultRouter: provider chain per role, privacy filter, health cache, fallbacks, events, budget.
 
-Implements the ``Router`` contract of ``nox.ai.base`` and ADR-008 / FR-6.1, FR-6.3, FR-6.6.
-Budget (v0.1, in-memory; persistence is v0.2): tokens are counted per day, role and locality.
-Background requests may not push the *cloud* background share above
-``ai.router.background_budget_share`` of today's cloud tokens; when it is exceeded, cloud providers
-are skipped for background requests (local ones still run, marked degraded) and the request is
-refused only if no local provider remains. Below ``budget_warmup_tokens`` cloud tokens the share is
-not enforced, so the first requests of the day are never blocked.
+Implements the ``Router`` contract of ``nox.ai.base`` and /,,. Budget (v0.1, in-memory; persistence
+is v0.2): tokens are counted per day, role and locality. Background requests may not push the
+*cloud* background share above ``ai.router.background_budget_share`` of today's cloud tokens; when
+it is exceeded, cloud providers are skipped for background requests (local ones still run, marked
+degraded) and the request is refused only if no local provider remains. Below
+``budget_warmup_tokens`` cloud tokens the share is not enforced, so the first requests of the day
+are never blocked.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from nox.ai.errors import (
     ProviderTimeoutError,
 )
 from nox.core.events import E, Event, EventBus, HealthStatus
+from nox.util.aio import aclose
 
 CLOUD_BLOCKING_MODES = frozenset({"private", "offline"})
 log = get_logger(__name__)
@@ -41,7 +42,7 @@ class _HasLastResponse(Protocol):
 
 
 class Decision(BaseModel):
-    """One routing decision, kept for ``explain()``."""
+    """One routing decision, kept for ``explain``."""
 
     request_id: str
     role: str
@@ -144,7 +145,9 @@ class DefaultRouter:
             except Exception as exc:  # noqa: BLE001 - every provider failure must fall through
                 last_error = self._as_error(exc, pid, timeout_s)
                 self._mark_unavailable(provider, str(last_error))
-                await self._emit_failed(request, pid, str(last_error), candidates, index, decision)
+                await self._emit_failed(
+                    request, pid, str(last_error), candidates[index + 1 :], decision
+                )
                 continue
             response = self._finalize(response, decision, index, candidates)
             self._account(request.role, provider, response)
@@ -190,10 +193,10 @@ class DefaultRouter:
                 last_error = self._as_error(exc, pid, request.timeout_s)
                 self._mark_unavailable(provider, str(last_error))
                 fallback_ok = not yielded
-                remaining_chain = candidates if fallback_ok else []
-                await self._emit_failed(
-                    request, pid, str(last_error), remaining_chain, index, decision
-                )
+                # The providers after this one - never the one that just failed, and none at all
+                # once chunks have already been delivered.
+                remaining_chain = candidates[index + 1 :] if fallback_ok else []
+                await self._emit_failed(request, pid, str(last_error), remaining_chain, decision)
                 if not fallback_ok:
                     decision.notes.append(f"{pid}: failed after streaming started, no fallback")
                     self._decisions.append(decision)
@@ -416,11 +419,11 @@ class DefaultRouter:
         request: AiRequest,
         pid: str,
         error: str,
-        candidates: Sequence[AiProvider],
-        index: int,
+        remaining: Sequence[AiProvider],
         decision: Decision,
     ) -> None:
-        fallback_to = candidates[index + 1].info.id if index + 1 < len(candidates) else None
+        """`remaining` is the chain *after* the failed provider; its head is the fallback."""
+        fallback_to = remaining[0].info.id if remaining else None
         decision.notes.append(f"{pid}: failed ({error[:120]})")
         await self._bus.publish(
             Event(
@@ -452,9 +455,8 @@ class DefaultRouter:
 
 
 async def _aclose(iterator: AsyncIterator[AiChunk]) -> None:
-    aclose = getattr(iterator, "aclose", None)
-    if aclose is not None:
-        try:
-            await aclose()
-        except Exception:  # noqa: BLE001 - closing a broken generator must not mask the error
-            log.debug("ai.router.aclose_failed")
+    """Close an abandoned provider stream without masking the error that abandoned it."""
+    try:
+        await aclose(iterator)
+    except Exception:  # noqa: BLE001 - closing a broken generator must not mask the error
+        log.debug("ai.router.aclose_failed")

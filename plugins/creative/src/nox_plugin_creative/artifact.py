@@ -1,11 +1,11 @@
-"""`creative.artifact.inspect`: local, metadata-only inspection of an exported artefact (Spec v0.7
-Creative Apps §3.3/§6, ST-16-03/04, narrowed for this pass to file/header metadata - no audio
-decode, no video decode, no Blender subprocess).
+"""`creative.artifact.inspect`: local, metadata-only inspection of an exported artefact (Creative
+Apps,/04, narrowed for this pass to file/header metadata - no audio decode, no video decode, no
+Blender subprocess).
 
 Every extractor uses the stdlib first and an optional third-party library only if already
-importable; a missing optional dependency is reported honestly as `"unavailable"`
-(ENGINEERING.md "no fake implementations" - never a fabricated number). Nothing here makes a
-network call.
+importable; a missing optional dependency is reported honestly as `"unavailable"` (the project
+standards "no fake implementations" - never a fabricated number). Nothing here makes a network
+call.
 """
 
 from __future__ import annotations
@@ -109,9 +109,8 @@ def _inspect_audio(p: Path) -> dict[str, Any]:
         )
         confidence = "low"
     notes.append(
-        "loudness/mix/structure analysis is out of scope for this pass (metadata-only artefact "
-        "inspection; the resource-budget spike for decode-based analysis is deferred, Spec v0.7 "
-        "§10/§11)"
+        "loudness/mix/structure analysis is out of scope for this pass: metadata-only artefact "
+        "inspection, because decoding the file has no resource budget here yet"
     )
     return {
         "ok": True,
@@ -189,8 +188,8 @@ def _inspect_video(p: Path) -> dict[str, Any]:
         "metadata": meta,
         "confidence": "medium",
         "notes": [
-            "cut-rhythm/color/audio-sync analysis is out of scope for this pass (metadata-only "
-            "artefact inspection; resource-budget spike deferred, Spec v0.7 §10/§11)"
+            "cut-rhythm/color/audio-sync analysis is out of scope for this pass: metadata-only "
+            "artefact inspection, because decoding the file has no resource budget here yet"
         ],
     }
 
@@ -261,10 +260,12 @@ def _png_dimensions(p: Path) -> tuple[int, int] | None:
 
 
 def _inspect_blend(p: Path) -> dict[str, Any]:
-    """Header-only, read-only `.blend` inspection (Spec v0.7 §5/§3.3): magic bytes + declared
-    Blender version, never opens Blender itself. Object/material/light/scene counts are Blender's
-    Python API's job (Spec §3.3 item 4) - deliberately not attempted here (see Open Points in the
-    implementing agent's report); this stays honest about that rather than faking scene stats."""
+    """Header-only, read-only `.blend` inspection: magic bytes plus the declared Blender version.
+
+    Blender itself is never started. Object, material, light and scene counts would need Blender's
+    own Python API, which this deliberately does not reach for - an honest "not inspected" beats
+    fabricated scene statistics.
+    """
     meta = _base_stat(p)
     notes = [
         "scene/object/material/light/render-settings stats require Blender's Python API "

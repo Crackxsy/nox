@@ -85,3 +85,20 @@ class TestCreativeModeService:
         await core.bus.fire(E.CREATIVE_APP_DETECTED, {"app": "blender", "window_title": "x"})
 
         assert core.state.get("assistant.mode") == "companion"
+
+
+async def test_a_failing_profile_lookup_suppresses_the_mode_switch(monkeypatch) -> None:
+    """Without a readable profile we cannot know the Work profile is off, so we do not switch."""
+    core = FakeCore()
+
+    def _boom() -> object:
+        raise RuntimeError("security engine not ready")
+
+    monkeypatch.setattr(core.security.engine, "active_profile", _boom)
+    service = CreativeModeService(core)
+    service.start()
+
+    await core.bus.fire(E.CREATIVE_APP_DETECTED, {"app": "blender.exe", "window_title": "x"})
+
+    assert core.state.get("assistant.mode") == "companion"
+    assert E.SYSTEM_MODE_CHANGED not in [e.name for e in core.bus.published]

@@ -1,46 +1,57 @@
-"""Composition root of the core process (`python -m nox.app`, `nox core`, `nox dev`).
+"""The composition root of the core process.
 
-Wires config → logging → database → security → bus/state → IPC hub + HTTP → AI router → health →
-pet service → orchestrator → voice worker, in the order of the Runtime Lifecycle note. Nothing in
-here decides anything on its own: it only constructs and connects the components.
+`NoxCore` owns the components and nothing else: it constructs them in order, connects them, and
+shuts them down again. Every decision lives in the component that makes it. The boot steps
+themselves are in `nox.core.boot`, one module per area, and each is a named method here - so the
+order of the boot is readable in `start()` without scrolling through the twelve things it does.
+
+The order is deliberate:
+
+1. directories and logging, so everything after this is observable,
+2. the supervisor client, before anything slow - the heartbeat has to exist, or the watchdog
+   counts the boot itself as a hang,
+3. the database, in a worker thread: migrations and the vector extension take seconds on a cold
+   disk and are synchronous by design,
+4. bus and state, then security on top of them,
+5. the IPC hub and the HTTP server, so a UI can attach while the rest still comes up,
+6. tools, the plugin manager, the language models, health, the assistant and the stream services,
+7. the voice worker, the extensions, and finally the plugins - a plugin sees a fully booted core.
+
+During shutdown a component that fails is logged with its name, and a component that was never
+built is skipped. The two used to be indistinguishable, because every attribute only existed once
+`start()` had got far enough to create it.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import importlib
-import os
-import signal
-import subprocess
 import sys
 import uuid
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from collections.abc import Awaitable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import httpx
-from pydantic import BaseModel
-
 import nox
-from nox.ai.base import AiProvider, ProviderInfo
+from nox.ai.base import AiProvider
 from nox.ai.config import AiConfig
 from nox.ai.prompting import DECIDED_PERSONALITY_BLOCK, build_system_prompt
-from nox.ai.providers.claude_code import ClaudeCodeProvider
-from nox.ai.providers.ollama import OllamaProvider
-from nox.ai.providers.rules import RulesProvider
 from nox.ai.router import DefaultRouter
+from nox.core.boot.ai import ProviderCard, build_providers, build_router
+from nox.core.boot.extensions import DEFAULT_EXTENSIONS, install_extensions, stop_extensions
+from nox.core.boot.health import core_health_checks
+from nox.core.boot.persistence import DbTurnStore, open_database
+from nox.core.boot.workers import WorkerProcess, WorkerSpeaker, WorkerSupervisor
 from nox.core.bus import AsyncEventBus
-from nox.core.config import ConfigError, NoxConfig, load_config
-from nox.core.events import E, Event, HealthStatus
+from nox.core.config import NoxConfig
+from nox.core.events import E, Event
+from nox.core.extension import ExtensionRuntime
 from nox.core.health import Check, HealthService
 from nox.core.jobobject import JobObject
 from nox.core.logging import configure_logging, get_logger, shutdown_logging
 from nox.core.orchestrator import Orchestrator, OrchestratorConfig
 from nox.core.speech_policy import SpeechPolicy
-from nox.core.state import Mode, PetFunctional, PrivacyMode, SystemLevel
+from nox.core.state import PetFunctional, SystemLevel
 from nox.core.statemgr import NoxStateManager
 from nox.data.db import Database
 from nox.data.repos import (
@@ -55,14 +66,15 @@ from nox.data.stream_repos import (
     StreamSessionRepository,
     ViewerRepository,
 )
-from nox.ipc.dispatch import EmptyPayload, RequestContext, RequestRegistry
-from nox.ipc.errors import ERR_PERMISSION, IpcError
+from nox.ipc.dispatch import RequestRegistry
+from nox.ipc.handlers.core import register_core_handlers
 from nox.ipc.http import HttpServer, HttpSettings, create_app
 from nox.ipc.server import HubSettings, IpcHub
 from nox.ipc.tokens import TokenStore
+from nox.paths import DASHBOARD_DIST, DEFAULTS_PATH, PET_DIST, PLUGINS_DIR, PROFILES_DIR, REPO_ROOT
 from nox.pet.service import PetService
 from nox.plugins.manager import PluginManager, PluginManagerSettings
-from nox.security.model import Decision
+from nox.security.killswitch import KillReport
 from nox.security.service import SecurityContext
 from nox.stream.booking import FunkenBooking
 from nox.stream.funken import FunkenService
@@ -76,187 +88,30 @@ from nox.voice.base import Channel, TtsRequest
 
 log = get_logger(__name__)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULTS_PATH = REPO_ROOT / "config" / "defaults.yaml"
-PROFILES_DIR = REPO_ROOT / "config" / "profiles"
-PLUGINS_DIR = REPO_ROOT / "plugins"
-PET_DIST = REPO_ROOT / "ui" / "pet" / "dist"
-DASHBOARD_DIST = REPO_ROOT / "ui" / "dashboard" / "dist"
+#: Re-exported: these are the defaults `NoxCore` is constructed with, and a caller that builds a
+#: core - the entry points, the tests - takes them from here rather than recomputing the layout.
+__all__ = [
+    "DASHBOARD_DIST",
+    "DEFAULTS_PATH",
+    "GREETING",
+    "PET_DIST",
+    "PLUGINS_DIR",
+    "PROFILES_DIR",
+    "REPO_ROOT",
+    "NoxCore",
+    "WorkerProcess",
+]
+
 GREETING = {"de": "Hallo, ich bin Nox. Ich bin bereit.", "en": "Hi, I am Nox. I am ready."}
-#: Budget for the live provider probe behind `ai.providers`, chosen well below the UI clients'
-#: 10 s request timeout (`ui/shared/ipc.ts`); a slower probe is answered from health instead.
-PROVIDERS_PROBE_BUDGET_S = 3.0
 
-
-def _retrieve_exception(task: asyncio.Task[Any]) -> None:
-    """Consume a background task's exception so asyncio does not report it as never retrieved."""
-    if not task.cancelled():
-        task.exception()
-
-
-def decide_greeting(policy: SpeechPolicy) -> bool:
-    """OP-10: may the startup greeting be spoken right now?
-
-    A standalone wrapper around `SpeechPolicy.may_speak("greeting")` so the greeting decision is
-    testable without booting a `NoxCore` (`_greet_when_voice_ready` calls `may_speak` directly
-    instead, since it also needs the denial reason for its log line).
-    """
-    allowed, _reason = policy.may_speak("greeting")
-    return allowed
-
-
-# ---- IPC payload models ------------------------------------------------------------------------
-
-
-class StateGet(BaseModel):
-    path: str | None = None
-
-
-class ModeSet(BaseModel):
-    mode: Mode
-
-
-class PrivacySet(BaseModel):
-    mode: PrivacyMode | None = None
-    microphone: bool | None = None
-    screen: bool | None = None
-    camera: bool | None = None
-    confirmed: bool = False
-
-
-class SecurityKill(BaseModel):
-    reason: str = ""
-    origin: str = "ui"
-
-
-class SecurityPanic(BaseModel):
-    origin: str = "ui"
-
-
-#: Roles that may resume from safe mode (OP-6 D); `supervisor` is the tray/hotkey path.
-RESUME_ROLES: frozenset[str] = frozenset({"shell", "dashboard", "supervisor"})
-USER_KILL_ORIGINS: frozenset[str] = frozenset(
-    {"ui", "shell", "dashboard", "hotkey", "tray", "voice", "supervisor", "pet"}
-)
-
-
-class SecurityResume(BaseModel):
-    pin: str | None = None
-
-
-class PermissionReply(BaseModel):
-    grant_id: str
-    decision: Decision
-    remember: bool = False
-
-
-class VoicePtt(BaseModel):
-    pressed: bool
-
-
-class VoiceMute(BaseModel):
-    muted: bool
-
-
-class ChatSend(BaseModel):
-    text: str
-    session_id: str | None = None
-    speak: bool = True
-    language: str | None = None
-
-
-class PetInteract(BaseModel):
-    type: str = "click"
-    x: float | None = None
-    y: float | None = None
-
-
-class WorkerRegister(BaseModel):
-    service: str
-    capabilities: list[str] = []
-    pid: int
-
-
-class WorkerReady(BaseModel):
-    service: str
-
-
-class WorkerHeartbeat(BaseModel):
-    load: float = 0.0
-    status: str = "running"
-
-
-class FunkenTopRequest(BaseModel):
-    limit: int = 10
-
-
-# ---- adapters ----------------------------------------------------------------------------------
-
-
-class WorkerSpeaker:
-    """Orchestrator `Speaker` that forwards TTS to the connected voice worker over the hub."""
-
-    def __init__(self, hub: IpcHub, client_id: Callable[[], str | None]) -> None:
-        self._hub = hub
-        self._client_id = client_id
-
-    async def say(self, request: TtsRequest) -> None:
-        cid = self._client_id()
-        if cid is None:
-            log.info("speaker.no_voice_worker", utterance_id=request.utterance_id)
-            return
-        await self._hub.request(cid, "tts.speak", request.model_dump(mode="json"), timeout=120.0)
-
-    async def interrupt(self, *, reason: str) -> None:
-        cid = self._client_id()
-        if cid is None:
-            return
-        with contextlib.suppress(IpcError):
-            await self._hub.request(cid, "tts.stop", {"reason": reason}, timeout=2.0)
-
-
-class DbTurnStore:
-    """Orchestrator `TurnStore` on the SQLite repositories (text only, retention via privacy)."""
-
-    def __init__(self, turns: TurnRepository, retention_days: int | None) -> None:
-        self._turns = turns
-        self._retention_days = retention_days
-
-    async def record(
-        self, session_id: str, role: str, text: str, *, provider: str = "", latency_ms: int = 0
-    ) -> None:
-        retain_until = None
-        if self._retention_days:
-            from datetime import timedelta
-
-            retain_until = datetime.now(UTC) + timedelta(days=self._retention_days)
-        await asyncio.to_thread(
-            self._turns.add,
-            session_id,
-            role,
-            text,
-            provider=provider,
-            latency_ms=latency_ms or None,
-            retain_until=retain_until,
-        )
-
-    async def recent(self, session_id: str, limit: int) -> list[tuple[str, str]]:
-        rows = await asyncio.to_thread(self._turns.list_for_session, session_id, 1000)
-        return [(r.role, r.text) for r in rows[-limit:]]
-
-
-@dataclass
-class WorkerProcess:
-    service: str
-    process: subprocess.Popen[bytes] | None
-    client_id: str | None = None
-    registered: asyncio.Event = field(default_factory=asyncio.Event)
-
-
-# ---- the core ----------------------------------------------------------------------------------
+#: How long the greeting waits for the voice worker to finish loading its engines before it gives
+#: up and settles into a silent idle expression instead.
+VOICE_READY_TIMEOUT_S = 90.0
 
 
 class NoxCore:
+    """Everything one running Nox consists of."""
+
     def __init__(
         self,
         config: NoxConfig,
@@ -274,89 +129,179 @@ class NoxCore:
         self.pet_dist = pet_dist
         self.dashboard_dist = dashboard_dist
         self.worker_command = worker_command or [sys.executable, "-m", "nox.worker"]
-        self.auto_extensions = extensions  # tests that call install() themselves pass False
+        #: A test that installs extensions itself passes False.
+        self.auto_extensions = extensions
         self.session_id = uuid.uuid4().hex
         self.stopped = asyncio.Event()
-        self.shutdown_requested = asyncio.Event()  # set by sup.stop (B-6); _run() waits on it too
-        self._started = False
-        self._workers: dict[str, WorkerProcess] = {}
-        self._job = JobObject("nox-core-workers")
-        self._tasks: set[asyncio.Task[Any]] = set()
-        self._providers_probe: asyncio.Task[list[ProviderInfo]] | None = None
+        #: Set by the supervisor's stop request. The entry point waits on it as well as on an OS
+        #: signal, and calls `stop()` for whichever arrives first.
+        self.shutdown_requested = asyncio.Event()
 
-    # -- boot -------------------------------------------------------------------------------------
+        # Components, in build order. Declared here so a half-booted core holds `None` rather than
+        # a missing attribute - that is what `stop()` and the supervisor callbacks read.
+        self.supervisor: SupervisorClient | None = None
+        self.db: Database | None = None
+        self.bus: AsyncEventBus | None = None
+        self.state: NoxStateManager | None = None
+        self.security: SecurityContext | None = None
+        self.tokens: TokenStore | None = None
+        self.registry: RequestRegistry | None = None
+        self.hub: IpcHub | None = None
+        self.http: HttpServer | None = None
+        self.tool_registry: ToolRegistry | None = None
+        self.tool_executor: ToolExecutor | None = None
+        self.plugins: PluginManager | None = None
+        self.ai_providers: list[AiProvider] = []
+        self.router: DefaultRouter | None = None
+        self.provider_card: ProviderCard | None = None
+        self.health: HealthService | None = None
+        self.pet: PetService | None = None
+        self.speech_policy: SpeechPolicy | None = None
+        self.sessions: SessionRepository | None = None
+        self.speaker: WorkerSpeaker | None = None
+        self.orchestrator: Orchestrator | None = None
+        self.stream_sessions: StreamSessionService | None = None
+        self.funken: FunkenService | None = None
+        self.funken_booking: FunkenBooking | None = None
+        self.stream_responder: StreamResponder | None = None
+        self.extensions: dict[str, ExtensionRuntime] = {}
+
+        self.job = JobObject("nox-core-workers")
+        self.workers = WorkerSupervisor(
+            job=self.job,
+            command=self.worker_command,
+            cwd=REPO_ROOT,
+            hub_url=lambda: self.hub.url if self.hub is not None else "",
+            data_dir=Path(config.paths.data_dir),
+        )
+        self._started = False
+        self._tasks: set[asyncio.Task[Any]] = set()
+
+    # ---- boot ------------------------------------------------------------------------------------
+
     async def start(self) -> None:
-        cfg = self.config
-        paths = cfg.paths
-        for d in (paths.runtime_dir, paths.logs_dir, paths.database_dir, paths.data_dir):
-            Path(d).mkdir(parents=True, exist_ok=True)
+        """Build every component, in order. See the module docstring for why this order."""
+        self._prepare_filesystem_and_logging()
+        self._build_supervisor_client()
+        await asyncio.sleep(0)  # let the first heartbeat go out before the heavy steps
+        await self._open_database()
+        self._build_bus_and_state()
+        await self._restore_state()
+        await self._build_security()
+        await self._build_ipc()
+        self._build_tools_and_plugins()
+        self._build_models()
+        await self._build_health()
+        await self._build_assistant_services()
+        self._register_kill_switch_hooks()
+        self._build_stream_services()
+        self._start_voice_worker()
+        await self._install_extensions()
+        await self._announce_started()
+        await self._start_plugins()
+
+    def _prepare_filesystem_and_logging(self) -> None:
+        paths = self.config.paths
+        for directory in (paths.runtime_dir, paths.logs_dir, paths.database_dir, paths.data_dir):
+            Path(directory).mkdir(parents=True, exist_ok=True)
         configure_logging(
             Path(paths.logs_dir),
-            level=cfg.logging.level,
-            json_file=cfg.logging.json_output,
-            pii=cfg.logging.pii_filter,
-            retention_days=cfg.log_retention_days,
+            level=self.config.logging.level,
+            json_file=self.config.logging.json_output,
+            pii=self.config.logging.pii_filter,
+            retention_days=self.config.log_retention_days,
         )
-        for w in cfg.warnings:
-            log.warning("config.layer_rejected", **w.model_dump())
+        for warning in self.config.warnings:
+            log.warning("config.layer_rejected", **warning.model_dump())
         log.info(
-            "core.boot", version=nox.__version__, profile=cfg.profile_id or cfg.security.profile
+            "core.boot",
+            version=nox.__version__,
+            profile=self.config.profile_id or self.config.security.profile,
         )
 
-        # 2. supervisor client - deliberately the first thing after logging: every step below can
-        # take seconds on a cold start, and the heartbeat task has to exist before them or the
-        # watchdog counts the boot itself as a hang (Runtime Lifecycle step 8, moved up 2026-09-16).
+    def _build_supervisor_client(self) -> None:
+        """Connect to the watchdog first.
+
+        Every step below can take seconds on a cold start, and the heartbeat has to be running
+        before them, or the watchdog counts the boot as a hang.
+        """
         self.supervisor = SupervisorClient.from_env(
             on_kill=self._on_supervisor_kill,
             on_stop=self._request_shutdown,
             on_restart=self._on_supervisor_restart,
             status_provider=self._supervisor_status,
-            interval_s=cfg.supervisor.heartbeat_interval_s,
+            interval_s=self.config.supervisor.heartbeat_interval_s,
         )
-        if self.supervisor is not None:
-            self.supervisor.start()
-        else:
+        if self.supervisor is None:
             log.warning("supervisor.absent", note="running standalone (dev mode)")
-        await asyncio.sleep(0)  # let the heartbeat go out before the heavy steps
+            return
+        self.supervisor.start()
 
-        # 3. database (migrations + the sqlite-vec extension: seconds on a cold disk, and
-        # synchronous by design - see `nox.data.db`), so it runs in a worker thread.
-        self.db = await asyncio.to_thread(self._open_database, Path(paths.database_dir) / "nox.db")
+    async def _open_database(self) -> None:
+        path = Path(self.config.paths.database_dir) / "nox.db"
+        self.db = await asyncio.to_thread(open_database, path)
         await asyncio.to_thread(self.db.load_sqlite_vec)
 
-        # 6. bus + state
+    def _build_bus_and_state(self) -> None:
+        assert self.db is not None
         self.bus = AsyncEventBus()
         self.state = NoxStateManager(
             self.bus,
             StateCheckpointRepository(self.db),
-            checkpoint_interval_s=cfg.health.checkpoint_interval_s,
+            checkpoint_interval_s=self.config.health.checkpoint_interval_s,
         )
+
+    async def _restore_state(self) -> None:
+        assert self.state is not None
         restored = await self.state.restore_latest()
         log.info("state.restored" if restored else "state.fresh")
 
-        # 5. security (mandatory)
+    async def _build_security(self) -> None:
+        """Build the security core, and verify the audit chain before anything can act.
+
+        A broken chain puts Nox into safe mode rather than stopping the boot. Refusing to start
+        would leave the user with no UI at all: no way to read the reason and no way to resume.
+        Safe mode denies every action with a side effect, keeps the audit entry, needs the PIN to
+        leave, and says on screen what happened. Carrying on as normal is the one option that is
+        not available.
+        """
+        assert self.db is not None and self.bus is not None and self.state is not None
         await asyncio.sleep(0)
         self.security = SecurityContext.build(
-            cfg.model_dump(mode="json", by_alias=True),
+            self.config,
             conn=self.db.connection,
             profiles_dir=self.profiles_dir,
             bus=self.bus,
             session_id=self.session_id,
         )
         verification = await asyncio.to_thread(self.security.verify_boot)
-        if not getattr(verification, "ok", True):
-            log.error("audit.chain_broken", detail=str(verification))
         await self.state.update("privacy.mode", self.security.privacy.mode.value, reason="boot")
-        await self.state.update("system.level", SystemLevel.RUNNING.value, reason="boot")
+        if verification.ok:
+            await self.state.update("system.level", SystemLevel.RUNNING.value, reason="boot")
+            return
+        log.critical(
+            "audit.chain_broken",
+            first_bad_seq=verification.first_bad_seq,
+            checked=verification.checked,
+            note="entering safe mode; leaving it needs the PIN",
+        )
+        await self.security.killswitch.engage(
+            "audit", f"audit chain broken at entry {verification.first_bad_seq}"
+        )
+        await self.state.update(
+            "system.level", SystemLevel.SAFE_MODE.value, reason="audit.chain_broken"
+        )
 
-        # 7. IPC hub + HTTP
+    async def _build_ipc(self) -> None:
+        assert self.bus is not None
+        paths = self.config.paths
         self.tokens = TokenStore()
         self.tokens.write_session_token(Path(paths.runtime_dir))
+        self.workers.use_tokens(self.tokens)
         self.registry = RequestRegistry()
-        self._register_handlers()
-        ipc_cfg = cfg.ipc.model_dump()
+        register_core_handlers(self)
         self.hub = IpcHub(
-            HubSettings.from_config(ipc_cfg),
+            HubSettings.from_config(self.config.ipc),
             self.tokens,
             self.registry,
             self.bus,
@@ -365,22 +310,29 @@ class NoxCore:
         await self.hub.start()
         self.http = HttpServer(
             create_app(
-                health=self._health_json,
-                state=self._state_json_for,
-                providers=self._providers_json,
-                session_token=lambda: self.tokens.session_token,
+                health=self.health_json,
+                state=self.state_json,
+                providers=self.providers_json,
+                session_token=lambda: self.tokens.session_token if self.tokens else "",
                 pet_dist=self.pet_dist if self.pet_dist.exists() else None,
                 dashboard_dist=self.dashboard_dist if self.dashboard_dist.exists() else None,
             ),
             HttpSettings.from_config(
-                ipc_cfg, pet_dist=self.pet_dist, dashboard_dist=self.dashboard_dist
+                self.config.ipc, pet_dist=self.pet_dist, dashboard_dist=self.dashboard_dist
             ),
             runtime_dir=Path(paths.runtime_dir),
         )
         await self.http.start()
         log.info("ipc.ready", ws=self.hub.url, http=self.http.url)
 
-        # 7a. tool registry + executor (Tool Model): one catalogue shared by core and plugins
+    def _build_tools_and_plugins(self) -> None:
+        """One tool catalogue shared by core and plugins, and the manager that runs them.
+
+        The plugin manager is built here, after security and IPC exist, but started last, so a
+        plugin never sees a half-built core.
+        """
+        assert self.security is not None and self.bus is not None and self.hub is not None
+        assert self.tokens is not None and self.registry is not None
         self.tool_registry = ToolRegistry()
         self.tool_executor = ToolExecutor(
             self.tool_registry,
@@ -389,11 +341,10 @@ class NoxCore:
             self.bus,
             self.security.killswitch,
         )
-
-        # 7b. plugin manager (built after security + IPC, started after `system.started`)
+        plugins_dir = Path(self.config.plugins.dir) if self.config.plugins.dir else PLUGINS_DIR
         self.plugins = PluginManager(
             tool_registry=self.tool_registry,
-            plugins_dir=Path(cfg.plugins.dir) if cfg.plugins.dir else PLUGINS_DIR,
+            plugins_dir=plugins_dir,
             bus=self.bus,
             hub=self.hub,
             tokens=self.tokens,
@@ -401,123 +352,131 @@ class NoxCore:
             engine=self.security.engine,
             secrets=self.security.secrets,
             audit=self.security.audit,
-            job=self._job,
-            settings=PluginManagerSettings(enabled=list(cfg.plugins.enabled)),
+            job=self.job,
+            settings=PluginManagerSettings(enabled=list(self.config.plugins.enabled)),
             worker_command=self.worker_command,
             cwd=REPO_ROOT,
-            mode=lambda: str(self.state.get("assistant.mode")),
+            mode=self._current_mode,
             safe_mode=self.security.killswitch.is_engaged,
-            global_egress_allowlist=tuple(cfg.security.egress_allowlist),
-            loopback_allowlist=tuple(cfg.security.loopback_allowlist),
+            global_egress_allowlist=tuple(self.config.security.egress_allowlist),
+            loopback_allowlist=tuple(self.config.security.loopback_allowlist),
         )
         self.plugins.register_handlers()
 
-        # 10. AI router
-        ai_cfg = AiConfig.from_mapping(cfg.ai.model_dump())
-        # Every HTTP client in the core goes through the egress guard (Security Model §5): the
-        # loopback allow-list decides whether Ollama is reachable in PRIVATE/OFFLINE.
-        egress = self.security.egress
-        providers: list[AiProvider] = [
-            RulesProvider(status_source=lambda: dict(self.state.get("system.health"))),
-            OllamaProvider(
-                ai_cfg.providers.ollama,
-                client_factory=lambda: egress.client(timeout=httpx.Timeout(10.0, connect=5.0)),
-            ),
-            ClaudeCodeProvider(ai_cfg.providers.claude_code),
-        ]
-        self.router = DefaultRouter(
-            providers,
-            self.bus,
-            ai_cfg.router,
+    def _build_models(self) -> None:
+        """Every language-model client goes through the egress guard; see `nox.core.boot.ai`."""
+        assert self.security is not None and self.bus is not None
+        ai_config = AiConfig.from_mapping(self.config.ai.model_dump())
+        self.ai_providers = build_providers(
+            ai_config, egress=self.security.egress, status_source=self._health_state
+        )
+        self.router = build_router(
+            self.ai_providers,
+            ai_config,
+            bus=self.bus,
             cloud_allowed=self.security.privacy.allows_cloud,
         )
-        self.ai_providers = providers  # for `ai.providers` when a live probe runs long
+        self.provider_card = ProviderCard(
+            self.ai_providers, probe=self._probe_providers, health_entry=self._health_entry
+        )
 
-        # 9. health
+    async def _build_health(self) -> None:
+        assert self.db is not None and self.bus is not None and self.state is not None
+        assert self.tool_registry is not None
         self.health = HealthService(
             self.bus,
             HealthHistoryRepository(self.db),
-            self._health_checks(providers),
-            interval_s=cfg.health.check_interval_s,
+            self._health_checks(),
+            interval_s=self.config.health.check_interval_s,
             state_manager=self.state,
         )
         await self.health.run_once()
         self.health.start()
         register_v01_tools(self.tool_registry, state=self.state, health=self.health)
 
-        # 10. services
+    async def _build_assistant_services(self) -> None:
+        assert self.bus is not None and self.state is not None and self.security is not None
+        assert self.db is not None and self.hub is not None and self.router is not None
+        config = self.config
         self.pet = PetService(self.bus, self.state)
         await self.pet.start()
         self.speech_policy = SpeechPolicy(
             state=self.state,
-            config=cfg,
-            active_zone=lambda: self.security.privacy.active_zone,
-            privacy_mode=lambda: self.security.privacy.mode.value,
+            config=config,
+            active_zone=self._active_zone,
+            privacy_mode=self._privacy_mode,
         )
         self.sessions = SessionRepository(self.db)
         await asyncio.to_thread(
             self.sessions.create,
-            str(self.state.get("assistant.mode")),
+            self._current_mode(),
             self.security.privacy.mode.value,
             session_id=self.session_id,
         )
-        self.speaker = WorkerSpeaker(self.hub, lambda: self._worker_client("voice"))
-        retention = cfg.privacy.retention.raw_transcripts_days or None
+        self.speaker = WorkerSpeaker(self.hub, lambda: self.workers.client_id("voice"))
         self.orchestrator = Orchestrator(
             bus=self.bus,
             state=self.state,
             router=self.router,
             speaker=self.speaker,
-            turns=DbTurnStore(TurnRepository(self.db), retention),
+            turns=DbTurnStore(
+                TurnRepository(self.db), config.privacy.retention.raw_transcripts_days or None
+            ),
             memory_policy=self.security.privacy,
             system_prompt=self._system_prompt,
             config=OrchestratorConfig(
-                default_language=cfg.identity.ui_language,
-                channel=Channel(cfg.voice.channels.routing),
+                default_language=config.identity.ui_language,
+                channel=Channel(config.voice.channels.routing),
             ),
             session_id=self.session_id,
         )
         await self.orchestrator.start()
 
-        # kill switch hooks (below the AI layer)
-        ks = self.security.killswitch
-        ks.register_stop_hook("orchestrator", lambda: self.orchestrator.cancel(reason="kill"))
-        ks.register_stop_hook("voice.stop", self._stop_voice_output)
-        ks.register_stop_hook("workers.terminate", self._terminate_workers)
-        # Plugin Architecture: every plugin gets `plugin.stop`, then it is terminated. The ack
-        # window is kept below the kill switch's own 2 s hook budget so the hook always completes.
-        ks.register_stop_hook(
-            "plugins.stop", lambda: self.plugins.stop_all("kill_switch", ack_timeout_s=1.5)
-        )
+    def _register_kill_switch_hooks(self) -> None:
+        """What has to stop when the kill switch fires, below the model layer."""
+        assert self.security is not None and self.bus is not None
+        killswitch = self.security.killswitch
+        killswitch.register_stop_hook("orchestrator", self._cancel_orchestrator)
+        killswitch.register_stop_hook("voice.stop", self._stop_voice_output)
+        killswitch.register_stop_hook("workers.terminate", self.workers.terminate_all)
+        # Every plugin is asked to stop and is then terminated. The acknowledgement window stays
+        # below the kill switch's own 2 s hook budget, so the hook always finishes inside it.
+        killswitch.register_stop_hook("plugins.stop", self._stop_plugins_for_kill)
         self.bus.subscribe(E.VOICE_KILL_PHRASE, self._on_kill_phrase)
         self.bus.subscribe(E.SECURITY_KILL_SWITCH, self._on_kill_event)
         self.bus.subscribe(E.IPC_CLIENT_DISCONNECTED, self._on_client_disconnected)
 
-        # 10b. Stream Bot core services (Spec v0.2, EPIC-11): session lifecycle, Funken booking,
-        # chat responder. Subscribed before plugins start (step 13) so they see every obs.*/
-        # twitch.*/stream.* event from the plugins' very first one.
-        stream_viewers = ViewerRepository(self.db)
+    def _build_stream_services(self) -> None:
+        """Session lifecycle, the channel currency and the chat responder.
+
+        Subscribed before the plugins start, so they see every stream event from the plugins' very
+        first one.
+        """
+        assert self.db is not None and self.bus is not None and self.security is not None
+        assert self.router is not None and self.tool_executor is not None
+        config = self.config
+        viewers = ViewerRepository(self.db)
         self.stream_sessions = StreamSessionService(
             self.bus,
             StreamSessionRepository(self.db),
             ChatEventRepository(self.db),
-            cfg.stream.chat,
-            stream_viewers,
+            config.stream.chat,
+            viewers,
         )
         self.stream_sessions.start()
         self.funken = FunkenService(
-            stream_viewers,
+            viewers,
             FunkenLedgerRepository(self.db),
-            cfg.stream.funken,
+            config.stream.funken,
             bus=self.bus,
             audit=self.security.audit,
         )
         self.funken_booking = FunkenBooking(
             self.bus,
             self.funken,
-            stream_viewers,
+            viewers,
             self.tool_executor,
-            cfg.stream.funken,
+            config.stream.funken,
             is_session_active=self.stream_sessions.is_active,
         )
         self.funken_booking.start()
@@ -525,113 +484,109 @@ class NoxCore:
             self.bus,
             self.router,
             self.tool_executor,
-            cfg.stream.relevance,
+            config.stream.relevance,
             self.security.killswitch,
             facts=self._stream_facts,
         )
         self.stream_responder.start()
 
-        # 11. voice worker
+    def _start_voice_worker(self) -> None:
         if self.voice_enabled:
-            self._spawn_worker("voice")
+            self.workers.spawn("voice")
 
-        # 11b. release extensions (v0.3–v0.9): each module exposes `install(core)`; a failing
-        # extension is reported as unavailable and never aborts the boot (P10: no fake capability).
-        # The *import* is the expensive half (`rl` pulls in OpenCV: ~6 s cold) and it is plain
-        # blocking CPU/IO, so it runs in a worker thread; `install(core)` itself stays on the loop
-        # because it wires bus subscriptions and tasks. Without this the whole loop froze for
-        # ~10 s here and the supervisor counted the boot as missed heartbeats (2026-09-15).
-        self.extensions: dict[str, Any] = {}
-        for name, enabled in (
-            ()
-            if not self.auto_extensions
-            else (
-                ("sensors", True),
-                ("memory", True),
-                ("health", True),
-                ("proactive", True),
-                ("pm", True),
-                ("rl", True),
-                ("clips", True),
-                ("creative", True),
-                ("settings", True),
-                ("remote", bool(getattr(getattr(cfg, "remote", None), "enabled", False))),
-            )
-        ):
-            if not enabled:
-                continue
-            try:
-                module = await asyncio.to_thread(importlib.import_module, f"nox.{name}.install")
-                self.extensions[name] = module.install(self)
-                log.info("extension.installed", extension=name)
-            except Exception as exc:  # noqa: BLE001 - degraded, not fatal
-                log.error("extension.failed", extension=name, error=str(exc))
-                self.extensions[name] = None
-            await asyncio.sleep(0)  # one extension per loop iteration
+    async def _install_extensions(self) -> None:
+        if not self.auto_extensions:
+            return
+        names = [
+            name for name in DEFAULT_EXTENSIONS if name != "remote" or self.config.remote.enabled
+        ]
+        self.extensions = await install_extensions(self, names)
 
-        # 12. started
+    async def _announce_started(self) -> None:
+        assert self.bus is not None
         self._started = True
         await self.bus.publish(
             Event(name=E.SYSTEM_STARTED, payload={"session_id": self.session_id})
         )
-        self._spawn_task(self._greet_when_voice_ready())
+        self.spawn_task(self._greet_when_voice_ready())
 
-        # 13. plugins (after system.started, so a plugin sees a fully booted core)
+    async def _start_plugins(self) -> None:
+        assert self.plugins is not None and self.health is not None
         await self.plugins.start()
         for check in self.plugins.health_checks():
             self.health.add_check(check)
         log.info("core.started", session_id=self.session_id)
 
-    # -- shutdown ----------------------------------------------------------------------------------
+    # ---- shutdown --------------------------------------------------------------------------------
+
     async def stop(self, reason: str = "shutdown") -> None:
-        """Graceful shutdown (B-6): orchestrator cancel, workers stop 2 s then kill, final
-        checkpoint, audit `system.stopped`. Budgeted at 6 s by the supervisor's `sup.stop`
-        timeout; called directly here regardless of who asked (signal, sup.stop, or a test)."""
+        """Shut down in reverse build order.
+
+        The supervisor allows six seconds for this. A component that was never built is skipped; a
+        component that fails to stop is named in the log, because "was never there" and "would not
+        go down" are different problems and used to look the same.
+        """
         if not self._started:
             return
         self._started = False
         log.info("core.stopping", reason=reason)
-        await self.state.update("system.level", SystemLevel.STOPPING.value, reason="stop")
-        await self.bus.publish(Event(name=E.SYSTEM_STOPPING))
-        for t in list(self._tasks):
-            t.cancel()
-        for name, runtime in reversed(list(getattr(self, "extensions", {}).items())):
-            stop = getattr(runtime, "stop", None)
-            if stop is None:
+        if self.state is not None:
+            await self.state.update("system.level", SystemLevel.STOPPING.value, reason="stop")
+        if self.bus is not None:
+            await self.bus.publish(Event(name=E.SYSTEM_STOPPING))
+        for task in list(self._tasks):
+            task.cancel()
+        if self.provider_card is not None:
+            await self.provider_card.cancel()
+        await stop_extensions(self.extensions)
+        for name, component in self._stoppable():
+            if component is None:
                 continue
             try:
-                result = stop()
-                if asyncio.iscoroutine(result):
-                    await asyncio.wait_for(result, timeout=2.0)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("extension.stop_failed", extension=name, error=str(exc))
-        with contextlib.suppress(Exception):
-            await self.orchestrator.stop()
-        with contextlib.suppress(Exception):
-            await self.stream_responder.stop()
-        with contextlib.suppress(Exception):
-            await self.funken_booking.stop()
-        with contextlib.suppress(Exception):
-            await self.stream_sessions.stop()
-        with contextlib.suppress(Exception):
-            await self.pet.stop()
-        with contextlib.suppress(Exception):
-            await self.health.stop()
-        with contextlib.suppress(Exception):
-            await self.plugins.stop(reason)
-        await self._terminate_workers()
-        if self.supervisor is not None:
-            with contextlib.suppress(Exception):
-                await self.supervisor.stop()
-        with contextlib.suppress(Exception):
-            await self.http.stop()
-        with contextlib.suppress(Exception):
-            await self.hub.stop()
-        with contextlib.suppress(Exception):
-            await self.state.checkpoint(immediate=True, reason="shutdown")
-            await self.state.close()
-        with contextlib.suppress(Exception):
-            self.security.audit.append(
+                await component.stop()
+            except Exception as exc:  # noqa: BLE001 - one component must not block the rest
+                log.warning(
+                    "core.component_stop_failed",
+                    component=name,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+        await self.workers.terminate_all()
+        await self._close_session(reason)
+        if self.tokens is not None:
+            self.tokens.remove_session_token()
+        if self.db is not None:
+            self.db.close()
+        self.job.close()
+        shutdown_logging()
+        self.stopped.set()
+
+    def _stoppable(self) -> tuple[tuple[str, Any], ...]:
+        """The components with a `stop()`, in shutdown order: the reverse of how they are built."""
+        return (
+            ("orchestrator", self.orchestrator),
+            ("stream_responder", self.stream_responder),
+            ("funken_booking", self.funken_booking),
+            ("stream_sessions", self.stream_sessions),
+            ("pet", self.pet),
+            ("health", self.health),
+            ("plugins", self.plugins),
+            ("supervisor", self.supervisor),
+            ("http", self.http),
+            ("hub", self.hub),
+        )
+
+    async def _close_session(self, reason: str) -> None:
+        """The final checkpoint, the `system.stopped` audit entry, and the session row."""
+        if self.state is not None:
+            # The state manager is closed here rather than in `_stoppable`, because it needs its
+            # final checkpoint written first and `close()` is what flushes the rest.
+            try:
+                await self.state.checkpoint(immediate=True, reason="shutdown")
+                await self.state.close()
+            except Exception as exc:  # noqa: BLE001 - a lost checkpoint must not block shutdown
+                log.warning("core.state_close_failed", error=f"{type(exc).__name__}: {exc}")
+        if self.security is not None:
+            self.security.audit_store.append(
                 actor="system",
                 tool="core",
                 action="system.stopped",
@@ -640,599 +595,195 @@ class NoxCore:
                 result="ok",
                 details={"reason": reason},
             )
-        with contextlib.suppress(Exception):
-            await asyncio.to_thread(self.sessions.end, self.session_id)
-        self.tokens.remove_session_token()
-        self.db.close()
-        self._job.close()
-        shutdown_logging()
-        self.stopped.set()
+            if not self.security.close():
+                log.error("audit.pending_entries_on_shutdown")
+        if self.sessions is not None:
+            try:
+                await asyncio.to_thread(self.sessions.end, self.session_id)
+            except Exception as exc:  # noqa: BLE001 - the process is going down either way
+                log.warning("core.session_close_failed", error=f"{type(exc).__name__}: {exc}")
 
-    # -- helpers -----------------------------------------------------------------------------------
-    def _open_database(self, path: Path) -> Database:
-        db = Database(path)
-        if not db.integrity_check():
-            db.close()
-            corrupt = path.with_name(f"{path.name}.corrupt-{datetime.now(UTC):%Y%m%d%H%M%S}")
-            path.rename(corrupt)
-            log.error("db.corrupt_renamed", path=str(corrupt))
-            db = Database(path)
-        applied = db.migrate()
-        if applied:
-            log.info("db.migrated", migrations=applied)
-        return db
+    # ---- shared helpers --------------------------------------------------------------------------
 
-    def _spawn_task(self, coro: Awaitable[Any]) -> None:
+    def spawn_task(self, coro: Awaitable[Any]) -> None:
+        """Run `coro` in the background, holding a reference until it completes."""
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def ensure_voice_worker(self) -> None:
+        """Spawn the voice worker if it is enabled and not running (used when resuming)."""
+        if self.voice_enabled and "voice" not in self.workers:
+            self.workers.spawn("voice")
+
+    def _current_mode(self) -> str:
+        return str(self.state.get("assistant.mode")) if self.state is not None else ""
+
+    def _privacy_mode(self) -> str:
+        return self.security.privacy.mode.value if self.security is not None else ""
+
+    def _active_zone(self) -> str | None:
+        return self.security.privacy.active_zone if self.security is not None else None
+
+    def _health_state(self) -> dict[str, Any]:
+        return dict(self.state.get("system.health")) if self.state is not None else {}
+
+    def _health_entry(self, name: str) -> Any:
+        return self.health.current().get(name) if self.health is not None else None
+
+    async def _probe_providers(self) -> Any:
+        return await self.router.providers() if self.router is not None else []
+
+    async def _stop_plugins_for_kill(self) -> None:
+        if self.plugins is not None:
+            await self.plugins.stop_all("kill_switch", ack_timeout_s=1.5)
+
     def _system_prompt(self) -> str:
-        facts = {
-            "mode": str(self.state.get("assistant.mode")),
-            "privacy_mode": self.security.privacy.mode.value,
-            "user": self.config.identity.user_display_name or "the user",
-            "time": datetime.now().astimezone().isoformat(timespec="minutes"),
-        }
-        return build_system_prompt(DECIDED_PERSONALITY_BLOCK, facts)
+        return build_system_prompt(DECIDED_PERSONALITY_BLOCK, self._facts(mode=None))
 
     def _stream_facts(self) -> dict[str, object]:
-        """Facts for `StreamResponder`'s system prompt (`nox.stream.responder`); mirrors
-        `_system_prompt`'s but fixes `mode` to "stream" regardless of `assistant.mode` - a chat
-        answer is always in the stream persona even if the assistant itself is in another mode."""
+        """Facts for the chat responder's prompt.
+
+        The same shape as the assistant's, but the mode is fixed to "stream": a chat answer is
+        always in the stream persona, even while the assistant itself is in another mode.
+        """
+        return self._facts(mode="stream")
+
+    def _facts(self, *, mode: str | None) -> dict[str, object]:
         return {
-            "mode": "stream",
-            "privacy_mode": self.security.privacy.mode.value,
+            "mode": mode if mode is not None else self._current_mode(),
+            "privacy_mode": self._privacy_mode(),
             "user": self.config.identity.user_display_name or "the user",
             "time": datetime.now().astimezone().isoformat(timespec="minutes"),
         }
 
-    def _health_checks(self, providers: list[AiProvider]) -> list[Check]:
-        async def db_check() -> tuple[HealthStatus, str]:
-            ok = await asyncio.to_thread(self.db.integrity_check)
-            return (HealthStatus.AVAILABLE, "ok") if ok else (HealthStatus.UNAVAILABLE, "corrupt")
+    # ---- health and HTTP payloads ----------------------------------------------------------------
 
-        async def vault_check() -> tuple[HealthStatus, str]:
-            p = Path(self.config.paths.vault_dir)
-            return (
-                (HealthStatus.AVAILABLE, str(p))
-                if p.exists()
-                else (HealthStatus.UNAVAILABLE, "missing")
-            )
+    def _health_checks(self) -> list[Check]:
+        """The core's own checks; see `nox.core.boot.health`. Extensions add theirs on install."""
+        return core_health_checks(
+            database=lambda: self.db,
+            vault_dir=lambda: Path(self.config.paths.vault_dir),
+            workers=self.workers,
+            voice_enabled=self.voice_enabled,
+            tokens=lambda: self.tokens,
+            providers=lambda: self.ai_providers,
+        )
 
-        async def voice_check() -> tuple[HealthStatus, str]:
-            if not self.voice_enabled:
-                return HealthStatus.UNAVAILABLE, "disabled"
-            w = self._workers.get("voice")
-            if w is None or (w.process is not None and w.process.poll() is not None):
-                return HealthStatus.UNAVAILABLE, "worker not running"
-            return (
-                (HealthStatus.AVAILABLE, "worker registered")
-                if w.registered.is_set()
-                else (HealthStatus.LIMITED, "worker starting")
-            )
-
-        checks = [
-            Check("db", db_check),
-            Check("vault", vault_check),
-            Check("voice", voice_check),
-        ]
-        for prov in providers:
-
-            async def probe(p: AiProvider = prov) -> tuple[HealthStatus, str]:
-                info = await p.health()
-                return info.status, info.reason
-
-            checks.append(Check(f"ai.{prov.info.id}", probe, timeout_s=15.0))
-        return checks
-
-    def _health_json(self) -> dict[str, Any]:
+    def health_json(self) -> dict[str, Any]:
+        """The `/health` body and the `health.get` response."""
+        components = self.health.current().items() if self.health is not None else ()
         return {
             "version": nox.__version__,
-            "level": str(self.state.get("system.level")),
-            "components": {k: v.model_dump(mode="json") for k, v in self.health.current().items()},
+            "level": str(self.state.get("system.level")) if self.state else "starting",
+            "components": {k: v.model_dump(mode="json") for k, v in components},
         }
 
-    def _state_json(self) -> dict[str, Any]:
-        return self.state.snapshot()
-
-    def _state_json_for(self, path: str | None = None) -> dict[str, Any]:
-        snap = self.state.snapshot()
+    def state_json(self, path: str | None = None) -> dict[str, Any]:
+        """The authenticated `/api/state` body: the whole snapshot, or one path from it."""
+        if self.state is None:
+            return {}
         if path:
             return {"path": path, "value": self.state.get(path)}
-        return snap
+        return self.state.snapshot()
 
-    async def _providers_json(self) -> list[dict[str, Any]]:
-        """`ai.providers` for the dashboard and `/health`.
+    async def providers_json(self) -> list[dict[str, Any]]:
+        """The `ai.providers` payload; see `nox.core.boot.ai.ProviderCard`."""
+        if self.provider_card is None:
+            return []
+        return await self.provider_card.read()
 
-        `DefaultRouter.providers()` probes every provider live, and a busy machine makes that
-        slow: `claude_code` alone is allowed 15 s, well past the UI's 10 s request timeout, so the
-        card sat on "no provider list received" while health had the very same providers listed as
-        available (2026-09-15). The live probe therefore gets a short budget, and whatever it does
-        not deliver in time is answered from the health service's last observation (the same
-        probes, at most one interval old) rather than with nothing.
-        """
-        probe = self._providers_probe
-        if probe is None or probe.done():
-            # Shielded and kept running: a probe that misses the budget still finishes and fills
-            # the router's health cache, so the next request is answered from live data.
-            probe = asyncio.ensure_future(self.router.providers())
-            probe.add_done_callback(_retrieve_exception)
-            self._providers_probe = probe
-            self._tasks.add(probe)
-            probe.add_done_callback(self._tasks.discard)
-        try:
-            infos = await asyncio.wait_for(asyncio.shield(probe), PROVIDERS_PROBE_BUDGET_S)
-        except TimeoutError:
-            log.warning("ai.providers_probe_slow", budget_s=PROVIDERS_PROBE_BUDGET_S)
-            infos = [self._provider_info_from_health(p) for p in self.ai_providers]
-        except Exception as exc:  # noqa: BLE001 - a broken probe must still answer the UI
-            log.warning("ai.providers_probe_failed", error=f"{type(exc).__name__}: {exc}")
-            infos = [self._provider_info_from_health(p) for p in self.ai_providers]
-        return [info.model_dump(mode="json") for info in infos]
+    # ---- worker and voice callbacks --------------------------------------------------------------
 
-    def _provider_info_from_health(self, provider: AiProvider) -> ProviderInfo:
-        """The provider's static info plus the last `ai.<id>` health result, or its own status."""
-        entry = self.health.current().get(f"ai.{provider.info.id}")
-        if entry is None:
-            return provider.info
-        return provider.info.model_copy(update={"status": entry.status, "reason": entry.reason})
+    async def _on_client_disconnected(self, event: Event) -> None:
+        client_id = str(event.payload.get("client_id", ""))
+        if self.workers.detach(client_id) is not None and self.health is not None:
+            self.spawn_task(self.health.run_once())
 
-    # -- workers -----------------------------------------------------------------------------------
-    async def _on_client_disconnected(self, ev: Event) -> None:
-        """A worker whose hub connection closed is unavailable until it registers again; without
-        this the core kept routing `voice.ptt`/`tts.say` to a dead client id (2026-09-15)."""
-        client_id = str(ev.payload.get("client_id", ""))
-        for w in self._workers.values():
-            if w.client_id == client_id:
-                w.client_id = None
-                w.registered.clear()
-                log.warning("worker.disconnected", service=w.service, client=client_id)
-                self._spawn_task(self.health.run_once())
-
-    def _worker_client(self, service: str) -> str | None:
-        w = self._workers.get(service)
-        return w.client_id if w and w.registered.is_set() else None
-
-    def _spawn_worker(self, service: str) -> None:
-        env = dict(os.environ)
-        env.update(self.tokens.worker_env(f"worker:{service}"))
-        env["NOX_HUB_URL"] = self.hub.url
-        env["NOX_DATA_DIR"] = str(self.config.paths.data_dir)  # models live below it
-        cmd = [*self.worker_command, "--service", service]
-        try:
-            proc = subprocess.Popen(cmd, env=env, cwd=str(REPO_ROOT))  # noqa: S603
-        except OSError as exc:
-            log.error("worker.spawn_failed", service=service, error=str(exc))
-            return
-        self._job.assign(proc.pid)
-        self._workers[service] = WorkerProcess(service=service, process=proc)
-        log.info("worker.spawned", service=service, pid=proc.pid)
-
-    async def _terminate_workers(self) -> None:
-        for w in list(self._workers.values()):
-            if w.process is not None and w.process.poll() is None:
-                w.process.terminate()
-                try:
-                    await asyncio.wait_for(asyncio.to_thread(w.process.wait), timeout=2.0)
-                except TimeoutError:
-                    w.process.kill()
-            w.registered.clear()
-            w.client_id = None
-        self._workers.clear()
+    async def _cancel_orchestrator(self) -> None:
+        if self.orchestrator is not None:
+            await self.orchestrator.cancel(reason="kill")
 
     async def _stop_voice_output(self) -> None:
-        await self.speaker.interrupt(reason="kill_switch")
+        if self.speaker is not None:
+            await self.speaker.interrupt(reason="kill_switch")
 
     async def _greet_when_voice_ready(self) -> None:
-        w = self._workers.get("voice")
-        if w is None:
+        worker = self.workers.get("voice")
+        if worker is None or self.speaker is None or self.orchestrator is None:
             return
         try:
-            await asyncio.wait_for(w.registered.wait(), timeout=90.0)
+            await asyncio.wait_for(worker.registered.wait(), timeout=VOICE_READY_TIMEOUT_S)
         except TimeoutError:
             log.warning("voice.worker_not_ready", note="no spoken greeting")
             return
-        allowed, reason = self.speech_policy.may_speak("greeting")
+        allowed, reason = (
+            self.speech_policy.may_speak("greeting")
+            if self.speech_policy is not None
+            else (False, "no speech policy")
+        )
         if not allowed:
             log.info("voice.greeting_suppressed", reason=reason)
-            # Silent path: just settle into an idle expression, no TTS.
-            await self.pet.set_functional(PetFunctional.IDLE, reason="ready-silent")
+            if self.pet is not None:  # the silent path: settle into idle, no speech
+                await self.pet.set_functional(PetFunctional.IDLE, reason="ready-silent")
             return
-        lang = self.orchestrator.config.default_language
+        language = self.orchestrator.config.default_language
         await self.speaker.say(
             TtsRequest(
                 utterance_id=f"greeting:{uuid.uuid4().hex[:8]}",
-                text=GREETING.get(lang, GREETING["en"]),
-                language=lang,
+                text=GREETING.get(language, GREETING["en"]),
+                language=language,
                 channel=self.orchestrator.config.channel,
             )
         )
 
-    # -- kill switch -------------------------------------------------------------------------------
-    async def _on_kill_phrase(self, ev: Event) -> None:
-        await self.security.killswitch.engage("voice", ev.payload.get("reason", "kill phrase"))
+    # ---- kill switch and supervisor --------------------------------------------------------------
+
+    async def _on_kill_phrase(self, event: Event) -> None:
+        if self.security is not None:
+            await self.security.killswitch.engage(
+                "voice", str(event.payload.get("reason", "kill phrase"))
+            )
 
     async def _on_kill_event(self, _: Event) -> None:
-        await self.state.update("system.level", SystemLevel.SAFE_MODE.value, reason="kill_switch")
+        if self.state is not None:
+            await self.state.update(
+                "system.level", SystemLevel.SAFE_MODE.value, reason="kill_switch"
+            )
+
+    async def panic_report(self, *, by: str) -> KillReport:
+        """`security.panic`: engage the kill switch, force privacy offline and hide the pet."""
+        assert self.security is not None
+        return await self.security.killswitch.panic(by=by)
 
     async def _on_supervisor_kill(self, reason: str, by: str) -> None:
-        """`sup.kill` in any mode but `restart` (kill switch, panic, safe mode)."""
-        security = getattr(self, "security", None)
-        if security is None:  # a kill during the first boot steps: nothing to stop yet
+        """`sup.kill` in any mode but `restart`: the kill switch, panic, safe mode."""
+        if self.security is None:  # a kill during the first boot steps: nothing to stop yet
             log.warning("supervisor.kill_before_security", reason=reason, by=by)
             self._request_shutdown(reason or by)
             return
-        await security.killswitch.engage("supervisor", reason or by)
+        await self.security.killswitch.engage("supervisor", reason or by)
 
     def _on_supervisor_restart(self, reason: str) -> None:
-        """`sup.kill mode=restart`: the watchdog wants a fresh core, not safe mode. Shut down
-        cleanly (exit 0) and let the supervisor respawn - engaging the kill switch here left Nox
-        mute in safe mode with nothing restarted (the product owner's log, 2026-09-15)."""
+        """`sup.kill mode=restart`: the watchdog wants a fresh core, not safe mode.
+
+        Shut down cleanly and let the supervisor respawn. Engaging the kill switch here left Nox
+        mute in safe mode with nothing restarted.
+        """
         log.warning("core.restart_requested", reason=reason or "supervisor")
         self._request_shutdown(reason or "supervisor restart")
 
     def _request_shutdown(self, reason: str) -> None:
-        """B-6: `sup.stop`; `_run()` waits on this to call `stop()` and exit 0."""
+        """`sup.stop`: the entry point waits on this, calls `stop()` and exits cleanly."""
         log.warning("core.shutdown_requested", reason=reason or "supervisor")
         self.shutdown_requested.set()
 
     def _supervisor_status(self) -> dict[str, Any]:
-        """Heartbeat decoration. Runs from the very first heartbeat, which the core now sends
-        before the state manager exists, so every field is optional."""
-        state = getattr(self, "state", None)
-        return {"level": str(state.get("system.level")) if state is not None else "starting"}
-
-    # -- IPC request handlers ----------------------------------------------------------------------
-    def _register_handlers(self) -> None:
-        reg = self.registry.register
-        ui = ("shell", "dashboard")
-        reg(
-            "state.get",
-            StateGet,
-            self._h_state_get,
-            roles=("shell", "dashboard", "pet", "plugin"),
-        )
-        reg("health.get", EmptyPayload, self._h_health_get, roles=ui)
-        reg("mode.set", ModeSet, self._h_mode_set, roles=ui)
-        reg("privacy.set", PrivacySet, self._h_privacy_set, roles=(*ui, "supervisor"))
-        reg("security.kill", SecurityKill, self._h_kill, roles=(*ui, "supervisor"))
-        reg("security.panic", SecurityPanic, self._h_panic, roles=(*ui, "supervisor"))
-        reg("security.resume", SecurityResume, self._h_resume, roles=(*ui, "supervisor"))
-        reg(
-            "security.permission.reply", PermissionReply, self._h_permission_reply, roles=("shell",)
-        )
-        reg("voice.ptt", VoicePtt, self._h_voice_ptt, roles=("shell",))
-        reg("voice.mute", VoiceMute, self._h_voice_mute, roles=ui)
-        reg("chat.send", ChatSend, self._h_chat_send, roles=ui)
-        reg("ai.providers", EmptyPayload, self._h_ai_providers, roles=ui)
-        reg("pet.interact", PetInteract, self._h_pet_interact, roles=("pet", "shell"))
-        reg("worker.register", WorkerRegister, self._h_worker_register, roles=("worker", "plugin"))
-        reg("worker.ready", WorkerReady, self._h_worker_ready, roles=("worker", "plugin"))
-        reg(
-            "worker.heartbeat",
-            WorkerHeartbeat,
-            self._h_worker_heartbeat,
-            roles=("worker", "plugin"),
-        )
-        reg("stream.session.status", EmptyPayload, self._h_stream_session_status, roles=ui)
-        reg("stream.funken.top", FunkenTopRequest, self._h_stream_funken_top, roles=ui)
-
-    async def _h_state_get(self, ctx: RequestContext, p: StateGet) -> dict[str, Any]:
-        snap = self.state.snapshot()
-        # pet sees only what it renders; a plugin only the non-private subtree (Plugin API)
-        if ctx.role in ("pet", "plugin"):
-            public = {
-                "assistant": snap["assistant"],
-                "privacy": snap["privacy"],
-                "system": snap["system"],
-            }
-            if ctx.role == "plugin" and p.path:
-                root = p.path.split(".", 1)[0]
-                if root not in public:
-                    raise IpcError(ERR_PERMISSION, f"plugins may not read {p.path!r}")
-                return {"path": p.path, "value": self.state.get(p.path)}
-            return public
-        if p.path:
-            return {"path": p.path, "value": self.state.get(p.path)}
-        return snap
-
-    async def _h_health_get(self, ctx: RequestContext, _: EmptyPayload) -> dict[str, Any]:
-        return self._health_json()
-
-    async def _h_mode_set(self, ctx: RequestContext, p: ModeSet) -> dict[str, Any]:
-        previous = str(self.state.get("assistant.mode"))
-        await self.state.update("assistant.mode", p.mode.value, reason=f"mode.set by {ctx.role}")
-        profile_for_mode = {
-            Mode.CODING: "coding",
-            Mode.STREAM: "stream",
-            Mode.RESEARCH: "research",
-        }
-        profile = profile_for_mode.get(p.mode, "companion")
-        with contextlib.suppress(Exception):
-            self.security.engine.set_profile(profile, by=ctx.role)
-        await self.bus.publish(
-            Event(
-                name=E.SYSTEM_MODE_CHANGED,
-                payload={"previous": previous, "current": p.mode.value, "reason": ctx.role},
-            )
-        )
-        return {"ok": True, "mode": p.mode.value, "profile": profile}
-
-    async def _h_privacy_set(self, ctx: RequestContext, p: PrivacySet) -> dict[str, Any]:
-        priv = self.security.privacy
-        if p.mode is not None:
-            await priv.set_mode(p.mode, by=ctx.role, confirmed=p.confirmed)
-        if any(v is not None for v in (p.microphone, p.screen, p.camera)):
-            await priv.set_capture(
-                microphone=p.microphone, screen=p.screen, camera=p.camera, by=ctx.role
-            )
-        await self.state.update("privacy.mode", priv.mode.value, reason="privacy.set")
-        result: dict[str, Any] = priv.state.model_dump(mode="json")
-        return result
-
-    async def _h_kill(self, ctx: RequestContext, p: SecurityKill) -> dict[str, Any]:
-        # A UI client may only name user origins; anything else (e.g. "tamper") is clamped to the
-        # caller's role so a client cannot turn its own kill into a PIN-gated security-path kill.
-        origin = p.origin if p.origin in USER_KILL_ORIGINS else ctx.role
-        report = await self.security.killswitch.engage(origin, p.reason)
-        return {"ok": True, "report": report.model_dump(mode="json")}
-
-    async def _h_panic(self, ctx: RequestContext, p: SecurityPanic) -> dict[str, Any]:
-        report = await self.security.killswitch.panic(by=p.origin or ctx.role)
-        return {"ok": True, "report": report.model_dump(mode="json")}
-
-    async def _h_resume(self, ctx: RequestContext, p: SecurityResume) -> dict[str, Any]:
-        # OP-6 D: resume is accepted only from the user-controlled paths (tray/hotkey via the
-        # supervisor, shell, dashboard) - never from `pet`, `worker` or a plugin. The PIN is
-        # required only after a security-path kill (tamper, audit-chain break, panic); without a
-        # PIN configured (fresh install) the explicit request counts and is audited as such.
-        if ctx.role not in RESUME_ROLES:
-            raise IpcError(ERR_PERMISSION, f"role {ctx.role!r} may not resume from safe mode")
-        killswitch = self.security.killswitch
-        pin = self.security.pin
-        if killswitch.security_path and pin.is_set():
-            pin_ok = bool(p.pin) and pin.verify_pin(p.pin or "", by=ctx.role).ok
-        else:
-            pin_ok = True
-        ok = await killswitch.resume(pin_ok=pin_ok, by=ctx.role)
-        if ok:
-            await self.state.update("system.level", SystemLevel.RUNNING.value, reason="resume")
-            await self.bus.publish(Event(name=E.SYSTEM_STARTED, payload={"resumed": True}))
-            if self.voice_enabled and "voice" not in self._workers:
-                self._spawn_worker("voice")
-        return {"ok": ok}
-
-    async def _h_permission_reply(self, ctx: RequestContext, p: PermissionReply) -> dict[str, Any]:
-        ok = self.security.engine.reply(p.grant_id, p.decision, remember=p.remember, by="user")
-        return {"ok": ok}
-
-    async def _h_voice_ptt(self, ctx: RequestContext, p: VoicePtt) -> dict[str, Any]:
-        cid = self._worker_client("voice")
-        if cid is None:
-            return {"ok": False, "reason": "voice worker unavailable"}
-        await self.hub.request(cid, "voice.ptt", {"pressed": p.pressed}, timeout=2.0)
-        return {"ok": True}
-
-    async def _h_voice_mute(self, ctx: RequestContext, p: VoiceMute) -> dict[str, Any]:
-        await self.state.update("assistant.muted", p.muted, reason="voice.mute")
-        cid = self._worker_client("voice")
-        if cid is not None:
-            with contextlib.suppress(IpcError):
-                await self.hub.request(cid, "voice.mute", {"muted": p.muted}, timeout=2.0)
-        else:
-            await self.bus.publish(Event(name=E.VOICE_MUTED, payload={"muted": p.muted}))
-        return {"ok": True, "muted": p.muted}
-
-    async def _h_chat_send(self, ctx: RequestContext, p: ChatSend) -> dict[str, Any]:
-        async def on_chunk(delta: str) -> None:
-            await ctx.stream({"delta": delta}, False)
-
-        turn = await self.orchestrator.handle_text(
-            p.text, language=p.language, speak=p.speak, on_chunk=on_chunk
-        )
-        return {
-            "request_id": turn.request_id,
-            "text": turn.response,
-            "provider": turn.provider,
-            "degraded": turn.degraded,
-        }
-
-    async def _h_ai_providers(self, ctx: RequestContext, _: EmptyPayload) -> dict[str, Any]:
-        return {"providers": await self._providers_json()}
-
-    async def _h_pet_interact(self, ctx: RequestContext, p: PetInteract) -> dict[str, Any]:
-        await self.bus.publish(
-            Event(name=E.PET_INTERACTION, payload=p.model_dump(), source=ctx.client_id)
-        )
-        return {"ok": True}
-
-    async def _h_worker_register(self, ctx: RequestContext, p: WorkerRegister) -> dict[str, Any]:
-        services = (
-            {p.service, "voice", "tts", "stt"}
-            if p.service in ("voice", "stt", "tts")
-            else {p.service}
-        )
-        self.hub.declare_services(ctx.client_id, services)
-        w = self._workers.get(p.service)
-        if w is None:
-            w = WorkerProcess(service=p.service, process=None)
-            self._workers[p.service] = w
-        w.client_id = ctx.client_id
-        # `registered` (health: AVAILABLE) is only set by `worker.ready` (B-8): between register
-        # and ready the worker is still loading its engines, so health reports it as LIMITED.
-        log.info("worker.registered", service=p.service, client=ctx.client_id, pid=p.pid)
-        self._spawn_task(self.health.run_once())
-        return {"ok": True, "config": self.config.voice.model_dump(mode="json")}
-
-    async def _h_worker_ready(self, ctx: RequestContext, p: WorkerReady) -> dict[str, Any]:
-        w = self._workers.get(p.service)
-        if w is None:
-            w = WorkerProcess(service=p.service, process=None)
-            self._workers[p.service] = w
-        w.client_id = ctx.client_id
-        w.registered.set()
-        log.info("worker.ready", service=p.service, client=ctx.client_id)
-        self._spawn_task(self.health.run_once())
-        return {"ok": True}
-
-    async def _h_worker_heartbeat(self, ctx: RequestContext, p: WorkerHeartbeat) -> dict[str, Any]:
-        return {"ok": True}
-
-    async def _h_stream_session_status(
-        self, ctx: RequestContext, _: EmptyPayload
-    ) -> dict[str, Any]:
-        return self.stream_sessions.status()
-
-    async def _h_stream_funken_top(
-        self, ctx: RequestContext, p: FunkenTopRequest
-    ) -> dict[str, Any]:
-        return {"viewers": self.funken_booking.top(p.limit)}
+        """Heartbeat decoration. The first heartbeat goes out before the state manager exists."""
+        return {"level": str(self.state.get("system.level")) if self.state else "starting"}
 
 
-# ---- entry points ------------------------------------------------------------------------------
+if __name__ == "__main__":  # `python -m nox.app`
+    from nox.entrypoints import main
 
-
-def build_config(profile: str | None, user_config: Path | None) -> NoxConfig:
-    user = user_config
-    if user is None:
-        env_user = os.environ.get("NOX_USER_CONFIG")
-        if env_user:
-            user = Path(env_user)
-        else:
-            appdata = os.environ.get("APPDATA")
-            candidate = Path(appdata) / "Nox" / "user.yaml" if appdata else None
-            user = candidate if candidate and candidate.exists() else None
-    defaults = Path(os.environ.get("NOX_CONFIG_DEFAULTS", DEFAULTS_PATH))
-    return load_config(defaults, user, profile)
-
-
-async def _run(core: NoxCore) -> int:
-    loop = asyncio.get_running_loop()
-    stop = asyncio.Event()
-
-    def _request_stop(*_: Any) -> None:
-        stop.set()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        with contextlib.suppress(NotImplementedError, ValueError):
-            loop.add_signal_handler(sig, _request_stop)
-    if sys.platform == "win32":
-        signal.signal(signal.SIGINT, _request_stop)
-    try:
-        await core.start()
-    except Exception as exc:
-        log.error("core.boot_failed", error=str(exc), type=type(exc).__name__)
-        with contextlib.suppress(Exception):
-            await core.stop()
-        return 1
-    try:
-        # B-6: exit on whichever comes first - an OS signal, or the supervisor's sup.stop.
-        stop_task = asyncio.ensure_future(stop.wait())
-        shutdown_task = asyncio.ensure_future(core.shutdown_requested.wait())
-        try:
-            await asyncio.wait({stop_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            for pending in (stop_task, shutdown_task):
-                pending.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await pending
-    finally:
-        await core.stop()
-    return 0
-
-
-async def run_core(
-    *, profile: str | None = None, voice: bool = True, user_config: Path | None = None
-) -> int:
-    try:
-        config = build_config(profile, user_config)
-    except ConfigError as exc:
-        print(f"config error: {exc}", file=sys.stderr)  # noqa: T201
-        return 2
-    return await _run(NoxCore(config, voice=voice))
-
-
-async def run_dev(*, voice: bool = True, shell: bool = True, profile: str | None = None) -> int:
-    config = build_config(profile, None)
-    core = NoxCore(config, voice=voice)
-    shell_proc: subprocess.Popen[bytes] | None = None
-    if shell:
-        env = dict(os.environ)
-        env["NOX_RUNTIME_DIR"] = str(config.paths.runtime_dir)
-        shell_proc = subprocess.Popen(
-            [sys.executable, "-m", "nox.shell"], env=env, cwd=str(REPO_ROOT)
-        )  # noqa: S603
-    try:
-        return await _run(core)
-    finally:
-        if shell_proc is not None and shell_proc.poll() is None:
-            shell_proc.terminate()
-
-
-def store_python_note() -> str | None:
-    """Microsoft-Store Python (MSIX) virtualizes `%APPDATA%` writes into its package LocalCache;
-    tools outside the package (`icacls`, Explorer, an editor) do not see those files. Nox works,
-    but config and tokens are not where the docs say (observed 2026-09-15: `token_acl_failed`)."""
-    if sys.platform != "win32" or "WindowsApps" not in sys.base_prefix:
-        return None
-    return (
-        "python from the Microsoft Store: %APPDATA% writes are virtualized into the package "
-        "LocalCache, so the config/token paths above are not their real location. Install "
-        "python.org Python and recreate .venv to avoid this."
-    )
-
-
-async def run_doctor() -> int:
-    """Environment report without starting servers: config, db, providers, vault, voice extras."""
-    print(f"nox {nox.__version__} on {sys.platform}, python {sys.version.split()[0]}")  # noqa: T201
-    try:
-        config = build_config(None, None)
-    except ConfigError as exc:
-        print(f"[FAIL] config: {exc}")  # noqa: T201
-        return 1
-    print(f"[ ok ] config loaded (profile={config.profile_id or config.security.profile})")  # noqa: T201
-    if (store_note := store_python_note()) is not None:
-        print(f"[warn] {store_note}")  # noqa: T201
-    for w in config.warnings:
-        print(f"[warn] {w.model_dump()}")  # noqa: T201
-    for name, p in (("vault", config.paths.vault_dir), ("database_dir", config.paths.database_dir)):
-        print(f"[{' ok ' if Path(p).exists() else 'warn'}] {name}: {p}")  # noqa: T201
-    ai_cfg = AiConfig.from_mapping(config.ai.model_dump())
-    for prov in (
-        RulesProvider(),
-        OllamaProvider(ai_cfg.providers.ollama),
-        ClaudeCodeProvider(ai_cfg.providers.claude_code),
-    ):
-        info = await prov.health()
-        mark = " ok " if info.status is HealthStatus.AVAILABLE else "warn"
-        print(f"[{mark}] ai.{info.id}: {info.status.value} ({info.reason})")
-    for mod in ("faster_whisper", "sounddevice", "piper", "PySide6"):
-        try:
-            __import__(mod)
-            print(f"[ ok ] {mod} importable")  # noqa: T201
-        except Exception as exc:  # noqa: BLE001
-            print(f"[warn] {mod}: {exc}")  # noqa: T201
-    return 0
-
-
-def main() -> None:
-    import argparse
-
-    ap = argparse.ArgumentParser(prog="python -m nox.app")
-    ap.add_argument("--profile", default=None)
-    ap.add_argument("--no-voice", action="store_true")
-    ap.add_argument("--user-config", default=None)
-    args = ap.parse_args()
-    code = asyncio.run(
-        run_core(
-            profile=args.profile,
-            voice=not args.no_voice,
-            user_config=Path(args.user_config) if args.user_config else None,
-        )
-    )
-    raise SystemExit(code)
-
-
-if __name__ == "__main__":
     main()

@@ -12,6 +12,7 @@ from nox.core.state import PrivacyMode
 from nox.ipc.dispatch import RequestRegistry, role_allows
 from nox.ipc.errors import ERR_PERMISSION, IpcError
 from nox.ipc.protocol import Envelope, Kind, Source
+from nox.security.gate import SecurityChangeGate
 from nox.security.secrets import InMemorySecretStore, PinManager
 from nox.settings.install import UI_ROLES, install
 from tests.unit.fakes import FakeBus
@@ -54,6 +55,8 @@ class FakeSecurity:
         self.pin = PinManager(secrets)
         self.privacy = FakePrivacy()
         self.egress = FakeEgress()
+        # The settings editor asks the gate before it writes a security or privacy setting.
+        self.gate = SecurityChangeGate(self.pin, required=True, audit=audit)
 
 
 class FakeOrchestratorConfig:

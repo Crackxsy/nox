@@ -1,13 +1,16 @@
 /**
  * The handful of shapes every page is built from: the hero (one display headline, one grey
- * subline, one or two text links), the rounded tile, and the horizontal snap rail with its two
- * round chevron buttons. Nothing here holds state about the core — these are layout primitives.
+ * subline, one or two text links), the rounded tile, the horizontal snap rail with its two round
+ * chevron buttons, and the two small primitives that keep identifiers off the screen — a state word
+ * and a "label on top, machine detail underneath" pair.
+ *
+ * Nothing here holds state about the core; these are layout primitives.
  *
  * The only icons in the dashboard are the two chevrons below, drawn inline as SVG paths: the CSP
  * forbids external assets, and an emoji arrow would not match the type.
  */
 
-import { Children, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { Children, type ReactNode, useEffect, useRef, useState } from 'react';
 
 import type { T } from './i18n';
 
@@ -20,7 +23,7 @@ export interface HeroProps {
   links?: ReactNode;
   /** The Status hero — and only that one — carries the soft gradient glow. */
   glow?: boolean;
-  /** Extra content below the subline (the Status hero shows its "as of" line there). */
+  /** Extra content below the subline (the Settings hero shows its storage note there). */
   children?: ReactNode;
 }
 
@@ -43,27 +46,43 @@ export interface TileProps {
   title: string;
   /** One sentence under the title. */
   lede?: string;
-  /** Black tile instead of white; used for the one feature tile per page. */
+  /** Black tile instead of white (in dark mode: the bright one); one feature tile per page. */
   feature?: boolean;
   /** Spans the full tile grid. */
   wide?: boolean;
+  /**
+   * Heading level of the tile title. A tile inside a `<section>` that already has an H3 heading
+   * passes 4, so the accessibility tree nests instead of listing the tile as a sibling of the page.
+   */
+  level?: 3 | 4;
   id?: string;
   className?: string;
   children?: ReactNode;
 }
 
-export function Tile({ eyebrow, title, lede, feature, wide, id, className, children }: TileProps) {
+export function Tile({
+  eyebrow,
+  title,
+  lede,
+  feature,
+  wide,
+  level = 3,
+  id,
+  className,
+  children,
+}: TileProps) {
   const headingId = id ? `${id}-title` : undefined;
   const classes = ['tile'];
   if (feature) classes.push('tile--feature');
   if (wide) classes.push('tile--wide');
   if (className) classes.push(className);
+  const Heading = level === 4 ? 'h4' : 'h3';
   return (
     <section id={id} className={classes.join(' ')} aria-labelledby={headingId}>
       {eyebrow && <span className="eyebrow">{eyebrow}</span>}
-      <h3 id={headingId} className="tile-title">
+      <Heading id={headingId} className="tile-title">
         {title}
-      </h3>
+      </Heading>
       {lede && <p className="tile-lede">{lede}</p>}
       {children && <div className="tile-body">{children}</div>}
     </section>
@@ -87,6 +106,15 @@ function Chevron({ back }: { back?: boolean }) {
   );
 }
 
+function nudge(track: HTMLDivElement | null, direction: 1 | -1): void {
+  if (!track) return;
+  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+  track.scrollBy({
+    left: direction * Math.max(260, track.clientWidth * 0.8),
+    behavior: reduce ? 'auto' : 'smooth',
+  });
+}
+
 export interface RailProps {
   t: T;
   title: string;
@@ -100,6 +128,7 @@ export interface RailProps {
 export function Rail({ t, title, sub, label, children }: RailProps) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [scrollable, setScrollable] = useState(false);
+  const count = Children.count(children);
 
   // Three tiles fill the column exactly; with nothing to scroll the chevrons say so by being off.
   useEffect(() => {
@@ -107,21 +136,12 @@ export function Rail({ t, title, sub, label, children }: RailProps) {
     if (!track) return;
     const update = () => setScrollable(track.scrollWidth - track.clientWidth > 4);
     update();
+    if (typeof ResizeObserver !== 'function') return;
     const observer = new ResizeObserver(update);
     observer.observe(track);
     return () => observer.disconnect();
     // Re-measure when the number of tiles changes, not on every parent render.
-  }, [Children.count(children)]);
-
-  const nudge = useCallback((direction: 1 | -1) => {
-    const track = trackRef.current;
-    if (!track) return;
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    track.scrollBy({
-      left: direction * Math.max(260, track.clientWidth * 0.8),
-      behavior: reduce ? 'auto' : 'smooth',
-    });
-  }, []);
+  }, [count]);
 
   return (
     <section className="rail-section">
@@ -136,7 +156,7 @@ export function Rail({ t, title, sub, label, children }: RailProps) {
             className="rail-btn"
             aria-label={t('rail_prev')}
             disabled={!scrollable}
-            onClick={() => nudge(-1)}
+            onClick={() => nudge(trackRef.current, -1)}
           >
             <Chevron back />
           </button>
@@ -145,7 +165,7 @@ export function Rail({ t, title, sub, label, children }: RailProps) {
             className="rail-btn"
             aria-label={t('rail_next')}
             disabled={!scrollable}
-            onClick={() => nudge(1)}
+            onClick={() => nudge(trackRef.current, 1)}
           >
             <Chevron />
           </button>
@@ -166,18 +186,51 @@ export function Rail({ t, title, sub, label, children }: RailProps) {
 
 /* ------------------------------------------------------------------ state - */
 
-const STATE_TONE: Record<string, string> = {
-  available: 'state--ok',
-  connected: 'state--ok',
-  ok: 'state--ok',
-  limited: 'state--warn',
-  degraded: 'state--warn',
-  denied: 'state--warn',
-  unavailable: 'state--danger',
-  failed: 'state--danger',
+export type Tone = 'ok' | 'warn' | 'danger' | 'off';
+
+const HEALTH_TONE: Record<string, Tone> = {
+  available: 'ok',
+  connected: 'ok',
+  ok: 'ok',
+  limited: 'warn',
+  degraded: 'warn',
+  denied: 'warn',
+  confirm: 'warn',
+  unavailable: 'danger',
+  failed: 'danger',
+  deny: 'danger',
 };
 
-/** Status word with a small dot; the dot is a `::before`, so the cell's text stays the word alone. */
-export function StateWord({ status, label }: { status: string; label: string }) {
-  return <span className={`state ${STATE_TONE[status] ?? 'state--off'}`}>{label}</span>;
+/** The tone a health/plugin status word carries. Anything unknown reads as neutral, not as bad. */
+export function toneFor(status: string): Tone {
+  return HEALTH_TONE[status] ?? 'off';
+}
+
+/**
+ * Status word with a small dot; the dot is a `::before`, so the cell's text stays the word alone.
+ *
+ * `tone` is explicit. A control that is merely *on* is not the same thing as a subsystem that is
+ * *degraded*, and the two used to share the amber "limited" colour because it happened to look
+ * right.
+ */
+export function StateWord({ tone, label }: { tone: Tone; label: string }) {
+  return <span className={`state state--${tone}`}>{label}</span>;
+}
+
+/* ----------------------------------------------------------------- detail - */
+
+/**
+ * A word for people, with the machine's own string underneath in a muted line.
+ *
+ * This is the shape §7 asks for wherever the core sends an identifier, a path or an untranslated
+ * reason: the label is what the screen says, the detail is what an operator needs in order to look
+ * it up. Nothing is hidden and nothing raw is promoted to a headline.
+ */
+export function Detail({ label, detail }: { label: ReactNode; detail?: string | null }) {
+  return (
+    <span className="detail">
+      <span className="detail-main">{label}</span>
+      {detail ? <span className="detail-sub break">{detail}</span> : null}
+    </span>
+  );
 }

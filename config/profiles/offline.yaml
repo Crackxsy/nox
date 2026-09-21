@@ -1,5 +1,5 @@
 # Nox permission profile "offline" (Security Model §3). No network egress; the allow-listed local
-# services (Ollama) stay reachable so the decided offline baseline works (A165/D89, OP-7 C).
+# services stay reachable, so the local model can still answer while offline.
 security:
   profile: offline
 privacy:
@@ -10,7 +10,7 @@ permissions:
   description: Fully offline. No network egress, local models and tools only.
   cloud_allowed: false
   egress_allowlist: []             # no host outside loopback is reachable
-  loopback_allowlist: ["127.0.0.1:11434"]   # local chat via Ollama must work offline (A165/D89)
+  loopback_allowlist: ["127.0.0.1:11434"]   # local chat must keep working offline
   memory_writes_allowed: true
   screenshots_to_cloud: false
   filesystem_roots: []

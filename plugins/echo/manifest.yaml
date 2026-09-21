@@ -1,4 +1,4 @@
-# Example plugin shipped with Nox and used by the plugin-runtime tests (ST-11-01).
+# Example plugin shipped with Nox and used by the plugin-runtime tests.
 # It is the smallest manifest that exercises every boundary: one tool inside its own namespace,
 # one emitted event, no secrets, no network egress.
 id: echo

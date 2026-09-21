@@ -1,15 +1,16 @@
-"""Stage-1 HUD recognizers (ST-12-04/05, executes SP-04): cropped-region template matching for
-boost/score/clock digits via opencv - no OCR/Tesseract dependency (Spec §12.1/ST-12-05 AC).
+"""Stage-1 HUD recognizers: cropped-region template matching for boost/score/clock digits via
+opencv -
+no OCR/Tesseract dependency.
 
 Real HUD pixel templates need ES-04 (the PO's screenshot set, Plan v0.3 - "not provided yet" as of
 this release); this module ships a synthetic digit-template set rendered with `cv2.putText` on a
-fixed monospace-style cell grid, so the matcher and every self-check/unit test are real and
-CI-safe today. Both the templates and `render_digits`'s fixtures use the same per-cell renderer
+fixed monospace-style cell grid, so the matcher and every self-check/unit test are real and CI-safe
+today. Both the templates and `render_digits`'s fixtures use the same per-cell renderer
 (`_render_glyph`), so cell boundaries always line up exactly - real HUD digits are also fixed-width
 in Rocket League's HUD font, so `read_digits`'s fixed-cell-grid approach carries over unchanged;
 only the template source (`render_digit_templates` vs. a real-crop loader) needs to change once
-ES-04 lands - flagged as an open point in the ST-12-04/05 report, not silently pretended to be
-validated against the real game.
+ES-04 lands - flagged as an open point in the/05 report, not silently pretended to be validated
+against the real game.
 """
 
 from __future__ import annotations
@@ -88,7 +89,7 @@ def read_digits(
 
 
 def parse_boost(crop: np.ndarray, templates: dict[str, np.ndarray]) -> tuple[int, float] | None:
-    """Boost must read as an integer 0-100 (Spec §3.5/ST-12-04 self-check)."""
+    """Boost must read as an integer 0-100."""
     match = read_digits(crop, templates, max_digits=3)
     if match is None or not match.text.isdigit():
         return None
@@ -99,7 +100,7 @@ def parse_boost(crop: np.ndarray, templates: dict[str, np.ndarray]) -> tuple[int
 
 
 def parse_score(crop: np.ndarray, templates: dict[str, np.ndarray]) -> tuple[int, float] | None:
-    """A single small integer score (Spec §3.5: "two small integers", one crop per team here)."""
+    """A single small integer score (Spec: "two small integers", one crop per team here)."""
     match = read_digits(crop, templates, max_digits=2)
     if match is None or not match.text.isdigit():
         return None
@@ -113,8 +114,8 @@ def parse_clock(
     crop: np.ndarray, templates: dict[str, np.ndarray], *, minute_digits: int = 1
 ) -> tuple[str, float] | None:
     """`M:SS` from a crop laid out as `minute_digits` cells + a 2-cell seconds group starting right
-    after (the colon glyph between them is simply skipped, not matched). Overtime is banner-based
-    (Spec §8), not handled here."""
+    after (the colon glyph between them is simply skipped, not matched). Overtime is banner-based,
+    not handled here."""
     h, w = CELL
     gap = w  # one cell width reserved for the colon glyph, not matched
     minutes = read_digits(crop[:, : minute_digits * w], templates, max_digits=minute_digits)

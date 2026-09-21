@@ -4,8 +4,8 @@
  * Source of truth: `src/nox/ipc/protocol.py` and `src/nox/core/events.py` (PAYLOAD_MODELS).
  * Regenerate with:
  *   .venv/Scripts/python.exe scripts/gen_ts_types.py
- * `scripts/gen_ts_types.py --check` fails CI when this file is stale (OP-9, Decision Plan
- * 2026-09-11: the pydantic models are authoritative, the TypeScript types are derived).
+ * `scripts/gen_ts_types.py --check` fails CI when this file is stale: the pydantic models are
+ * authoritative, the TypeScript types are derived.
  */
 
 export type HealthStatus = "available" | "limited" | "unavailable";
@@ -85,6 +85,16 @@ export interface ChatSendResult {
   text: string;
   provider: string;
   degraded: boolean;
+}
+
+export interface PluginStatusEntry {
+  id: string;
+  state: string;
+  reason?: string;
+}
+
+export interface PluginStatusList {
+  plugins?: PluginStatusEntry[];
 }
 
 export interface StreamPluginStatus {

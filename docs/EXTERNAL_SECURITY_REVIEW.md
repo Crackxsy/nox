@@ -1,20 +1,20 @@
 # External security review — readiness package
 
 This document is what an external reviewer needs to start immediately, without reverse-engineering
-scope or threat model from the code first (Spec v1.0 Public Release §8, ST-21-06). **Who performs
-the review is not decided** — this is a template/checklist for that reviewer, not the review
-itself, and not a statement that one has been arranged.
+scope or threat model from the code first. **Who performs the review is not decided** — this is a
+template/checklist for that reviewer, not the review itself, and not a statement that one has been
+arranged.
 
 ## 1. What the reviewer gets, up front
 
 - Repository access (public repo once released, or a private invite before then).
-- A reproducible install: `README.md` "Development" section, or the signed installer once
-  ST-21-04 is complete.
+- A reproducible install: `README.md` "Development" section, or the signed installer once that
+  work is complete.
 - This document, plus:
   - `docs/SECURITY.md` (permission model, hard prohibitions, kill switch, Rocket League boundary,
     audit logging, secrets handling, plugin sandboxing, IPC auth — summarized for a reviewer).
   - On request, the full internal Security Model document that `docs/SECURITY.md` summarizes
-    (private product archive; shared with the reviewer under NDA if one is in place).
+    (shared with the reviewer under NDA if one is in place).
   - `docs/PRIVACY.md` (what the product claims about capture/storage/egress — useful as a claim to
     verify, not just background).
   - `docs/PLUGIN_AUTHORING.md` (the plugin sandboxing boundary from the author's side).
@@ -59,7 +59,7 @@ The review should cover, at minimum:
    the *wrong role* attempting a role-restricted request (e.g. `pet` attempting a kill-switch
    resume).
 
-## 4. Security Model §11 negative-test suite — confirmed green, not left for the reviewer to find
+## 4. Security negative-test suite — confirmed green, not left for the reviewer to find
 
 The following negative-path tests must be run and shown green as review *input*, not discovered
 missing by the reviewer: a denied tool, a hard-prohibition bypass attempt via config removal,
@@ -69,7 +69,7 @@ line, an unauthenticated IPC client, and a wrong-role request. Paste the actual 
 (`tests/unit/security`, plus wherever the kill-switch/audit/IPC-role tests live) into the package
 handed to the reviewer — a claim of "these exist" without a run is not sufficient.
 
-## 5. Repo hygiene findings, provided as input (ST-21-07)
+## 5. Repo hygiene findings, provided as input
 
 Run immediately before handing off, and include the actual output (not a summary claiming
 "clean"):
@@ -105,17 +105,17 @@ just read the code that claims them:
 Every finding gets one of two outcomes before release, tracked in writing (not a silent skip):
 
 - **Fixed** — linked commit/PR.
-- **Accepted risk** — a written reason and who (the product owner) accepted it.
+- **Accepted risk** — a written reason and who accepted it.
 
-No finding may remain in neither state at release time — this mirrors the "no silently open
-pending-approval item" discipline already used elsewhere in this project
-(the stream-bot plan's Definition of Done, item 6).
+No finding may remain in neither state at release time — "silently open, pending approval" is not
+an acceptable end state for a finding.
 
 ## 8. Open points
 
 - **Reviewer identity** — person, paid service, or community volunteer: not decided. This is the
-  plan's second-highest-priority open item after OP-D (the license decision).
+  release checklist's second-highest-priority open item after the license decision
+  (`docs/RELEASE_CHECKLIST.md` item 1).
 - **Budget/timeline**, if a paid service is chosen — not decided.
-- If no reviewer can be arranged in a reasonable window, PRD §32's "no known critical security
-  vulnerabilities" criterion still applies without external validation — that requires an explicit
-  PO-accepted risk acceptance from the product owner, not a silent skip of this whole story.
+- If no reviewer can be arranged in a reasonable window, the "no known critical security
+  vulnerabilities" release criterion still applies without external validation — that requires an
+  explicit, written risk acceptance, not a silent skip of this whole item.

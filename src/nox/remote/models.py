@@ -1,4 +1,4 @@
-"""Row and result types for the remote (Mobile Companion) area, Spec v0.8 §6/§7.
+"""Row and result types for the remote (Mobile Companion) area,.
 
 Nothing here carries a secret: a pairing code exists only in `PairingStart.code`, which is returned
 once to the local caller of `remote.pair.start` (dashboard/shell) and never stored, logged, audited
@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class DeviceRow(BaseModel):
     """A row of `paired_devices`. `public_key` (the hashed device key) is never part of this model -
-    the dashboard must not be able to display key material (ST-17-03)."""
+    the dashboard must not be able to display key material."""
 
     model_config = ConfigDict(frozen=True)
 

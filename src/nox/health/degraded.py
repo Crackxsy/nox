@@ -1,7 +1,7 @@
-"""Degraded-mode matrix (EPIC-09 Health & Recovery): watches `system.health_changed` for a fixed
-set of critical components, keeps `NoxState.system.level` honest (`degraded` while any of them is
-not `available`, `running` again once they all recover), and attempts a rate-limited self-repair
-action per component before falling back to just reporting the degradation.
+"""Degraded-mode matrix (Health & Recovery): watches `system.health_changed` for a fixed set of
+critical components, keeps `NoxState.system.level` honest (`degraded` while any of them is not
+`available`, `running` again once they all recover), and attempts a rate-limited self-repair action
+per component before falling back to just reporting the degradation.
 
 Never touches `safe_mode`/`stopping` - those are the security path (kill switch) and shutdown, both
 outside this service's authority; it only ever moves between `running` and `degraded`.
@@ -19,6 +19,10 @@ from nox.core.logging import get_logger
 from nox.core.state import StateManager, SystemLevel
 
 log = get_logger(__name__)
+
+#: Component name this service publishes its own level changes under. It is never treated as an
+#: incoming health signal - see _on_health_changed.
+_SYSTEM_LEVEL_COMPONENT = "system.level"
 
 #: The Failure and Recovery Model rows this service reacts to (disk full, vault unreachable,
 #: audit chain broken, config invalid - see `nox.health.checks`).
@@ -42,7 +46,7 @@ class Clock(Protocol):
 
 @dataclass
 class SelfRepair:
-    """Rate-limited dispatch to a `RepairAction` per component (ST-09's "self-repair actions ...
+    """Rate-limited dispatch to a `RepairAction` per component (ST-09's "self-repair actions...
     with limits"): at most `policy.max_attempts` tries within `policy.window_s`, then it gives up
     and lets the degraded state stand until the component recovers on its own or a human acts."""
 
@@ -104,6 +108,11 @@ class DegradedModeService:
 
     async def _on_health_changed(self, event: Event) -> None:
         component = str(event.payload.get("component", ""))
+        if component == _SYSTEM_LEVEL_COMPONENT:
+            # Our own announcement, coming back through the bus. Reacting to it would make this
+            # service its own input; the exclusion is here rather than left to whoever configures
+            # `critical_components`.
+            return
         if component not in self._critical:
             return
         status = str(event.payload.get("status", ""))
@@ -138,7 +147,7 @@ class DegradedModeService:
             Event(
                 name=E.SYSTEM_HEALTH_CHANGED,
                 payload={
-                    "component": "system.level",
+                    "component": _SYSTEM_LEVEL_COMPONENT,
                     "status": HealthStatus.LIMITED.value
                     if target is SystemLevel.DEGRADED
                     else HealthStatus.AVAILABLE.value,

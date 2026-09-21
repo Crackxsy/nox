@@ -195,10 +195,10 @@ async def test_privacy_change_refresh_gate(
     p, _, gate = make_pipeline(audio_in, audio_out)
     await p.start()
     gate["allowed"] = False
-    p.refresh_gate()
+    await p.refresh_gate()
     assert audio_in.enabled is False
     gate["allowed"] = True
-    p.refresh_gate()
+    await p.refresh_gate()
     assert audio_in.enabled is True
     await p.stop()
 

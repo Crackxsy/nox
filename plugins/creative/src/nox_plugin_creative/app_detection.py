@@ -1,15 +1,15 @@
-"""App-family pattern matching and mode-switch hysteresis (Spec v0.7 Creative Apps §3.1, ST-16-01).
+"""App-family pattern matching and mode-switch hysteresis (Creative Apps).
 
 Two independent, unit-testable pieces:
 
 - `match_app_family` turns one `(process, title)` sample into a configured app-family id (or
-  `None`), using `config.creative.app_patterns` (`nox.core.config.CreativeConfig`) - conservative
-  by design (Spec v0.7 §11: a false negative is safer than a false positive).
+`None`), using `config.creative.app_patterns` (`nox.core.config.CreativeConfig`) - conservative by
+design (a false negative is safer than a false positive).
 - `HysteresisDetector` debounces a stream of family samples so a short alt-tab away from (and back
-  to) a creative app never fires a spurious `creative.app_left`/`creative.app_detected` pair
-  (Spec v0.7 §3.1 step 3/4, default window 15s - `config.creative.hysteresis_s`, pending approval).
-  It is pure (an injectable clock, no asyncio) so the debounce logic itself is fully deterministic
-  to test; the plugin drives it from real time via `nox_plugin_creative.plugin`.
+to) a creative app never fires a spurious `creative.app_left`/`creative.app_detected` pair (step
+3/4, default window 15s - `config.creative.hysteresis_s`, pending approval). It is pure (an
+injectable clock, no asyncio) so the debounce logic itself is fully deterministic to test; the
+plugin drives it from real time via `nox_plugin_creative.plugin`.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ class HysteresisDetector:
 
     def sample(self, family: str | None, *, now: float | None = None) -> str | None:
         """Feed one observation. Returns `"enter:<app>"` / `"leave:<app>"` if this sample itself
-        crosses the hysteresis window (rare - usually `resolve()` via the scheduled timer does),
+        crosses the hysteresis window (rare - usually `resolve` via the scheduled timer does),
         else `None`.
 
         `_pending_since is None` is the sole "nothing in progress" flag, checked *before*
@@ -104,7 +104,7 @@ class HysteresisDetector:
         return f"leave:{previous}"
 
     def seconds_until_resolve(self, *, now: float | None = None) -> float | None:
-        """How long until a scheduled `resolve()` call would apply the pending transition, or
+        """How long until a scheduled `resolve` call would apply the pending transition, or
         `None` if there is nothing pending."""
         if self._pending_since is None:
             return None

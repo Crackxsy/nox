@@ -296,3 +296,29 @@ async def test_a_failing_send_never_breaks_the_handler(service, pairing, channel
     decision = await service.handle(msg("/kill", update_id=2))
 
     assert decision.allowed and killswitch.engaged
+
+
+async def test_a_privacy_switch_that_failed_is_reported_as_failed(
+    service, pairing, privacy, channel
+):
+    """A security control that did nothing must never be reported as if it had worked."""
+    await pair(service, pairing)
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("privacy service not wired")
+
+    privacy.set_mode = _boom
+
+    decision = await service.handle(msg("/privacy private", update_id=2))
+
+    assert decision.allowed  # the policy allowed it; the execution is what failed
+    assert "nicht geändert" in channel.texts[-1]
+    assert "private" not in channel.texts[-1]
+
+
+async def test_an_applied_privacy_switch_reports_the_new_mode(service, pairing, channel):
+    await pair(service, pairing)
+
+    await service.handle(msg("/privacy offline", update_id=2))
+
+    assert "offline" in channel.texts[-1]

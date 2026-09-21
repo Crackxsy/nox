@@ -1,14 +1,15 @@
 # v1.0 public release checklist
 
-Checkable form of the v1.0 public-release acceptance criteria (EPIC-21). Check an item only once
-its "Evidence" actually exists and has been looked at — not because the related code merged. The
-license decision itself (OP-D) was the product owner's call and is now closed; everything else here
-is process this repository's tooling can verify.
+Checkable form of the v1.0 public-release acceptance criteria. Check an item only once its
+"Evidence" actually exists and has been looked at — not because the related code merged. The
+license decision itself was a maintainer call and is now closed; everything else here is process
+this repository's tooling can verify.
 
-- [x] **1. License decided and applied** — **OP-D closed 2026-09-16: Apache-2.0 for the code; the
-      voice extra carries a GPL notice; a Kokoro/ONNX replacement for Piper is tracked for wave 2.**
-      `LICENSE` (full Apache-2.0 text) and `NOTICE` present at repo root, `pyproject.toml` and both
-      `ui/*/package.json` declare `Apache-2.0`, `README.md`'s license section matches.
+- [x] **1. License decided and applied** — **Closed 2026-09-16: Apache-2.0 for the code; the
+      voice extra carries a GPL notice; a Kokoro/ONNX replacement for Piper is tracked for a later
+      release.** `LICENSE` (full Apache-2.0 text) and `NOTICE` present at repo root,
+      `pyproject.toml` and both `ui/*/package.json` declare `Apache-2.0`, `README.md`'s license
+      section matches.
       _Evidence: `LICENSE`, `NOTICE`, README license section._
 - [x] **2. `LICENSE-PENDING.md` removed or superseded** — deleted 2026-09-16; no remaining
       "pending" license reference anywhere in the repo.
@@ -19,13 +20,13 @@ is process this repository's tooling can verify.
       output._
 - [ ] **4. No dependency/model license blocks the chosen project license or redistribution** —
       `python scripts/license_audit.py --check` exits 0 against `docs/license_policy.yaml`.
-      **Resolved 2026-09-16** by a written PO exception in `docs/license_policy.yaml`: `piper-tts`
+      **Resolved 2026-09-16** by a documented exception in `docs/license_policy.yaml`: `piper-tts`
       (the `voice` extra) declares `GPL-3.0-or-later`; Apache-2.0 is one-way compatible with
       GPL-3.0, so a build bundling the voice extra ships under GPL-3.0 terms as a combined work
       (stated in `NOTICE`), while the source distribution stays Apache-2.0. A permissively licensed
-      TTS engine (Kokoro/ONNX) is tracked for wave 2.
+      TTS engine (Kokoro/ONNX) is tracked for a later release.
       _Evidence: `docs/THIRD_PARTY_LICENSES.md` "DENIED" section is empty; policy sign-off note._
-- [ ] **5. Onboarding wizard covers all seven FR-15.1 items, skippable/re-runnable** — name,
+- [ ] **5. Onboarding wizard covers every required setup item, skippable/re-runnable** — name,
       language, data/vault paths, optional Twitch, mic/camera consent, AI backend, each declinable
       with a safe default and re-runnable via `nox onboard`. _Evidence: manual walkthrough,
       `tests/unit/onboarding` green._
@@ -35,10 +36,10 @@ is process this repository's tooling can verify.
 - [ ] **7. Clean install + onboarding on a machine that is not the dev machine** — not yet
       performed as of this writing; needs a non-dev Windows 11 machine or VM.
       _Evidence: test log, screenshots._
-- [ ] **8. Update, smoke test, rollback proven under injected failure** — ST-21-04, not yet
-      performed. _Evidence: integration test log._
-- [ ] **9. Uninstall separates program/data; vault never deleted silently** — ST-21-04, not yet
-      performed. _Evidence: manual test log._
+- [ ] **8. Update, smoke test, rollback proven under injected failure** — not yet performed.
+      _Evidence: integration test log._
+- [ ] **9. Uninstall separates program/data; vault never deleted silently** — not yet performed.
+      _Evidence: manual test log._
 - [ ] **10. Documentation set published** — `docs/USER_GUIDE.md`, `docs/PRIVACY.md`,
       `docs/SECURITY.md`, `docs/PLUGIN_AUTHORING.md` all present and linked from `README.md`
       (links added 2026-09-16, verified by `scripts/check_links.py`).
@@ -70,7 +71,7 @@ is process this repository's tooling can verify.
 - [x] **17. Support policy published** — see `README.md` "Support" section and the note below.
       _Evidence: doc link._
 - [ ] **18. No known critical security vulnerability remains** — ties to items 11/12; cannot be
-      checked until the external review (or its explicit PO-accepted deferral) lands.
+      checked until the external review (or an explicitly accepted deferral of it) lands.
 - [ ] **19. No secrets, personal data, or vault contents in the published repo or its history** —
       ties to item 13; **verified 2026-09-14 for the current history** (0 open findings) and the
       working tree was scrubbed of personal data on 2026-09-16. The published *history* is handled
@@ -81,7 +82,7 @@ is process this repository's tooling can verify.
       branch protection via `scripts/github_branch_protection.ps1`, CI green, archive deleted.
       _Evidence: the new repository, a green CI run, `gh repo list` without the archive._
 
-## Support policy (per Spec v1.0 §10; PO-approved tone)
+## Support policy
 
 Nox is a solo/small-project open-source release. Support channel: GitHub Issues. There is no
 guaranteed response time and no paid support tier — issues are triaged as time allows, security

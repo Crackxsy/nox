@@ -4,12 +4,11 @@ actually use (`_CoreLike` protocols in `service.py`/`screenshot.py`)."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from nox.core.events import Event
 from nox.core.state import PrivacyMode
+from tests.unit.fakes import FakeBus
 
 
 class FakeProfile:
@@ -60,30 +59,6 @@ class FakePaths:
 class FakeConfig:
     def __init__(self, runtime_dir: Path) -> None:
         self.paths = FakePaths(runtime_dir)
-
-
-class FakeBus:
-    def __init__(self) -> None:
-        self.subscriptions: dict[str, list[Callable[[Event], Any]]] = {}
-        self.published: list[Event] = []
-
-    def subscribe(self, pattern: str, handler: Callable[[Event], Any]) -> Callable[[], None]:
-        self.subscriptions.setdefault(pattern, []).append(handler)
-
-        def _unsub() -> None:
-            self.subscriptions[pattern].remove(handler)
-
-        return _unsub
-
-    async def publish(self, event: Event) -> None:
-        self.published.append(event)
-        for handler in list(self.subscriptions.get(event.name, [])):
-            result = handler(event)
-            if result is not None:
-                await result
-
-    async def fire(self, name: str, payload: dict[str, Any]) -> None:
-        await self.publish(Event(name=name, payload=payload))
 
 
 class FakeState:

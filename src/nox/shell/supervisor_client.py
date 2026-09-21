@@ -1,10 +1,9 @@
 """Second kill-switch path: newline-delimited JSON to the supervisor control port (Process Model).
 
 Used only when the core is unreachable; otherwise `security.kill` goes over the IPC hub. Also the
-only path for "Quit" (B-6): the shell asks the supervisor to `sup.stop`, which stops the core
-gracefully, then the shell process, then itself. The control channel authenticates once per
-connection (B-1): `sup.auth {token, role, pid}` -> `sup.auth_ok`; the actual request that follows
-carries no token.
+only path for "Quit": the shell asks the supervisor to `sup.stop`, which stops the core gracefully,
+then the shell process, then itself. The control channel authenticates once per connection:
+`sup.auth {token, role, pid}` -> `sup.auth_ok`; the actual request that follows carries no token.
 """
 
 from __future__ import annotations
@@ -35,7 +34,7 @@ def _envelope(name: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_auth_message(token: str, *, pid: int | None = None) -> dict[str, Any]:
-    """`sup.auth` frame (B-1): the only message on this channel that carries the token."""
+    """`sup.auth` frame: the only message on this channel that carries the token."""
     return _envelope("sup.auth", {"token": token, "role": "shell", "pid": pid or os.getpid()})
 
 
@@ -45,14 +44,14 @@ def build_kill_message(*, reason: str, origin: str) -> dict[str, Any]:
 
 
 def build_stop_message(*, reason: str) -> dict[str, Any]:
-    """Envelope-shaped `sup.stop` request (B-6): the supervisor stops core, shell and itself."""
+    """Envelope-shaped `sup.stop` request: the supervisor stops core, shell and itself."""
     return _envelope("sup.stop", {"reason": reason})
 
 
 def _send_after_handshake(
     host: str, port: int, token: str, request: dict[str, Any], *, timeout: float
 ) -> dict[str, Any]:
-    """Authenticate once (B-1), then send `request` and return the first reply line."""
+    """Authenticate once, then send `request` and return the first reply line."""
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
             sock.sendall((json.dumps(build_auth_message(token)) + "\n").encode("utf-8"))
@@ -96,7 +95,7 @@ def send_supervisor_kill(
 def send_supervisor_stop(
     host: str, port: int, token: str, *, reason: str, timeout: float = 2.0
 ) -> dict[str, Any]:
-    """Authenticate, then send `sup.stop` (B-6): the supervisor stops core, shell and itself."""
+    """Authenticate, then send `sup.stop`: the supervisor stops core, shell and itself."""
     return _send_after_handshake(
         host, port, token, build_stop_message(reason=reason), timeout=timeout
     )

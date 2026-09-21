@@ -1,9 +1,9 @@
-"""Idle/away sensor (Spec v0.5 §3.5, ST-20-06): two-stage away detection (~10/20 min) from
-`Win32Probe.idle_seconds()` (Windows' own last-input timestamp - never keystroke/clipboard
-content). Updates `user.present`, `user.last_input_at` and, only while transitioning into/out of
-an idle/away stage, `user.activity` - it saves whatever activity value was live before going idle
-and restores exactly that on resume, so it never clobbers a value another sensor/service set
-(e.g. "coding", "playing") while the user was genuinely active.
+"""Idle/away sensor: two-stage away detection (~10/20 min) from `Win32Probe.idle_seconds` (Windows'
+own last-input timestamp - never keystroke/clipboard content). Updates `user.present`,
+`user.last_input_at` and, only while transitioning into/out of an idle/away stage, `user.activity`
+- it saves whatever activity value was live before going idle and restores exactly that on resume,
+so it never clobbers a value another sensor/service set (e.g. "coding", "playing") while the user
+was genuinely active.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from nox.core.state import StateManager
 from nox.sensors.history import SensorHistoryStore
 from nox.sensors.win32 import Win32Probe
+from nox.util.aio import poll_loop
 
 Stage = str  # "active" | "idle" | "away"
 
@@ -46,6 +47,7 @@ class IdleSensor:
         self._saved_activity: str | None = None
         self._last_input_at: datetime | None = None
         self._task: asyncio.Task[None] | None = None
+        self.last_error = ""
 
     @property
     def stage(self) -> Stage:
@@ -60,10 +62,17 @@ class IdleSensor:
             self._task.cancel()
             self._task = None
 
+    def _note_error(self, exc: BaseException) -> None:
+        self.last_error = f"{type(exc).__name__}: {exc}"
+
     async def _loop(self) -> None:
-        while True:
-            await self.poll()
-            await asyncio.sleep(self._interval)
+        await poll_loop(
+            self.poll,
+            self._interval,
+            name="sensor-idle",
+            on_error=self._note_error,
+            on_success=lambda: setattr(self, "last_error", ""),
+        )
 
     async def poll(self) -> Stage:
         if self._safe_mode():

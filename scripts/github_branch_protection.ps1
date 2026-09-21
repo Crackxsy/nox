@@ -55,8 +55,8 @@ param(
         'UI (pet)',
         'UI (dashboard)',
         'Guard - no input-synthesis / process-memory APIs (Security Model §10)',
-        'Release hygiene (third-party license audit ST-21-02, secrets scan ST-21-07)',
-        'E2E (Playwright live-core smoke, B-10)',
+        'Release hygiene (third-party license audit, secrets scan)',
+        'E2E (Playwright live-core smoke)',
         'Docs (relative links)'
     ),
     [switch]$NoStrict,

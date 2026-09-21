@@ -6,6 +6,7 @@ import pytest
 
 from nox.core.events import E
 from nox.core.state import PrivacyMode
+from nox.security.audit import SqliteAuditLog
 from nox.security.privacy import BUILTIN_ZONES, PrivacyService, ZoneSpec
 from tests.unit.fakes import FakeBus
 
@@ -117,9 +118,8 @@ def test_custom_zone_and_builtin_extension() -> None:
 async def test_zone_active_blocks_capture_and_memory_but_never_leaks_title(
     privacy: PrivacyService,
     bus: FakeBus,
+    audit: SqliteAuditLog,
 ) -> None:
-    from nox.security.audit import SqliteAuditLog
-
     zone = await privacy.observe_foreground("PayPal - Zahlung an Max", "chrome.exe")
     assert zone == "banking" and privacy.active_zone == "banking"
     assert not privacy.allows_capture("screen") and not privacy.allows_memory_write()
@@ -129,8 +129,7 @@ async def test_zone_active_blocks_capture_and_memory_but_never_leaks_title(
         bus.published[-1].name == E.PRIVACY_CAPTURE_CHANGED
         and bus.published[-1].payload["screen"] is False
     )
-    audit = privacy._audit
-    assert isinstance(audit, SqliteAuditLog)
+    # The zone id is audited; the window title that matched it never is.
     rows = audit.entries()
     assert all("PayPal" not in e.target and "Max" not in e.target for e in rows)
     assert await privacy.observe_foreground("Notepad", "notepad.exe") is None
@@ -153,10 +152,12 @@ async def test_safe_mode_and_panic_cut_capture_and_cloud(
 def test_from_config_reads_defaults_yaml() -> None:
     import yaml
 
+    from nox.core.config import NoxConfig
+
     from .conftest import DEFAULTS_YAML
 
-    cfg = yaml.safe_load(DEFAULTS_YAML.read_text(encoding="utf-8"))
-    svc = PrivacyService.from_config(cfg["privacy"])
+    cfg = NoxConfig.model_validate(yaml.safe_load(DEFAULTS_YAML.read_text(encoding="utf-8")))
+    svc = PrivacyService.from_config(cfg.privacy)
     assert svc.mode is PrivacyMode.BALANCED
     assert len(svc.zones) == 6
     assert svc.allows_capture("screen") and not svc.allows_capture("camera")

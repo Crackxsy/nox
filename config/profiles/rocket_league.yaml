@@ -1,5 +1,5 @@
-# Nox permission profile "rocket_league" (Spec v0.3 Rocket League Stage 1 §6.5, ST-12-01). No
-# egress of any kind while Rocket League is in the foreground (FR-10.4's resource-order intent);
+# Nox permission profile "rocket_league". No
+# egress of any kind while the game is in the foreground, so nothing competes with it;
 # observation only (Security Model §10). `security:` here mirrors `stream.yaml`'s convention
 # (informational alongside `permissions:`, which is what `nox.security.profiles.load_profile`
 # actually parses).
@@ -37,5 +37,5 @@ permissions:
       tool: "rl*"
       action: "vision.enable"
       decision: confirm
-      reason: "Vision Stage 2 on/off is a deliberate dashboard action (Spec v0.9 §4.4 step 4: manual
+      reason: "turning the on-screen analysis on or off is a deliberate dashboard action (manual
         override always available), same pattern as rl.calibrate"

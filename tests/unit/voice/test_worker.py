@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from nox.core.config import VoiceConfig
-from nox.core.events import E
+from nox.core.events import E, HealthStatus
 from nox.voice.base import TtsRequest, VoicePipeline
 from nox.voice.pipeline import DefaultVoicePipeline, PipelineConfig
 from nox.worker.main import SERVICES, VoiceWorker, decode_audio_ref, parse_args
@@ -55,8 +55,11 @@ class SpyPipeline:
     async def interrupt(self, *, reason: str) -> None:
         self.calls.append(("interrupt", reason))
 
-    def refresh_gate(self) -> None:
+    async def refresh_gate(self) -> None:
         self.refreshes += 1
+
+    def capture_health(self) -> tuple[HealthStatus, str]:
+        return HealthStatus.AVAILABLE, "spy pipeline"
 
 
 def spy_factory(emit: Any, capture_allowed: Any, _config: Any = None) -> VoicePipeline:

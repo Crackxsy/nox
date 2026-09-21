@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -14,22 +15,12 @@ from nox.security.model import PermissionRequest, Risk
 from nox.security.permissions import DefaultPermissionEngine, InMemoryGrantStore
 from nox.security.privacy import PrivacyService
 from nox.security.profiles import YamlProfileProvider
-from tests.unit.fakes import FakeBus
+from tests.unit.fakes import FakeBus, MutableClock
 
 REPO = Path(__file__).resolve().parents[3]
 PROFILES_DIR = REPO / "config" / "profiles"
 DEFAULTS_YAML = REPO / "config" / "defaults.yaml"
-
-
-class MutableClock:
-    def __init__(self) -> None:
-        self.now = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
-
-    def __call__(self) -> datetime:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += timedelta(seconds=seconds)
+START = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
 
 
 def req(tool: str, action: str = "", risk: Risk = Risk.LOW, **kw: object) -> PermissionRequest:
@@ -46,7 +37,7 @@ def req(tool: str, action: str = "", risk: Risk = Risk.LOW, **kw: object) -> Per
 
 @pytest.fixture
 def clock() -> MutableClock:
-    return MutableClock()
+    return MutableClock(START)
 
 
 @pytest.fixture
@@ -55,10 +46,17 @@ def bus() -> FakeBus:
 
 
 @pytest.fixture
-def conn() -> sqlite3.Connection:
-    c = sqlite3.connect(":memory:")
-    yield c
-    c.close()
+def conn() -> Iterator[sqlite3.Connection]:
+    """A connection with the same threading settings the real database uses.
+
+    `nox.data.db` opens its connection with `check_same_thread=False`, because the audit log is
+    written from a background thread and every repository call goes through a worker thread. A
+    test connection without that flag is stricter than production and fails on writes that are
+    perfectly safe there - the audit log serialises its own access with a lock.
+    """
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    yield connection
+    connection.close()
 
 
 @pytest.fixture

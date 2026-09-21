@@ -1,14 +1,14 @@
-"""Frame sampler + budget guard (Spec v0.9 §4.4, ST-18-04/05): runs the configured detector at a
-low, configurable rate downstream of the shared capture pipeline (it never captures a frame itself -
-the caller drives frames in via `sample()`, mirroring `RlPlugin._recognize_loop`'s injected-capture
-pattern so tests never need a real screen). Confidence-gates detections before they ever reach the
-event bus (silence over guessing, FR-10.3) and measures its OWN processing time each sample - the
-only budget signal available without a live GPU counter or PresentMon (SP-05 gates that; SP-19 folds
-its measured CPU/GPU cost on synthetic 1080p frames into this guard's default budget). Crossing the
-configured budget for `consecutive_over_budget` samples in a row disables Stage 2 automatically,
-before ever touching Stage 1's own capture/recognize loop (FR-10.4 priority order); re-enable
-requires the budget to stay clear for a full cooldown window (anti-flapping, Spec §4.4 step 4). A
-manual disable always overrides everything and never auto-recovers on its own."""
+"""Frame sampler + budget guard: runs the configured detector at a low, configurable rate downstream
+of the shared capture pipeline (it never captures a frame itself - the caller drives frames in via
+`sample`, mirroring `RlPlugin._recognize_loop`'s injected-capture pattern so tests never need a
+real screen). Confidence-gates detections before they ever reach the event bus (silence over
+guessing) and measures its OWN processing time each sample - the only budget signal available
+without a live GPU counter or PresentMon (gates that; folds its measured CPU/GPU cost on synthetic
+1080p frames into this guard's default budget). Crossing the configured budget for
+`consecutive_over_budget` samples in a row disables Stage 2 automatically, before ever touching
+Stage 1's own capture/recognize loop (priority order); re-enable requires the budget to stay clear
+for a full cooldown window (anti-flapping, Spec step 4). A manual disable always overrides
+everything and never auto-recovers on its own."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ class VisionBudgetConfig:
 
 class FrameSampler:
     """Owns the sample loop's *decision* logic (whether to run the detector this tick, when to
-    auto-disable/auto-recover); the plugin's own asyncio loop calls `sample()` once per tick."""
+    auto-disable/auto-recover); the plugin's own asyncio loop calls `sample` once per tick."""
 
     def __init__(
         self,
@@ -70,7 +70,7 @@ class FrameSampler:
         self._manual_disabled = True
 
     def enable_manually(self) -> None:
-        """Clears BOTH the manual override and any budget-guard disable (Spec §4.4: re-enable is
+        """Clears BOTH the manual override and any budget-guard disable (Spec: re-enable is
         available, subject to the cooldown already having been honoured by the budget guard
         itself - a manual re-enable while still mid-cooldown simply resumes sampling immediately,
         matching the spec's "manual override... remains available at all times" - P1 user control

@@ -1,7 +1,7 @@
-"""Typed work-item model for EPIC-13's PM index (ST-13-01 subset): Project/Epic/Story frontmatter
-mapped to one consistent shape. Deliberately small - dependency edges, the status-workflow engine,
-ADRs/bugs/portfolio (ST-13-03/04/08) are later PM stories, not built here (see this story's report
-Open Points).
+"""Typed work-item model for PM index: Project/Epic/Story frontmatter mapped to one consistent
+shape.
+Deliberately small - dependency edges, the status-workflow engine, ADRs/bugs/portfolio are later PM
+stories, not built here (see this story's report Open Points).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ Kind = Literal["project", "epic", "story"]
 # Required frontmatter keys per kind, mirroring `15 - Templates/{Epic,Story} Template.md`. `status`
 # is intentionally free-text (not a closed enum) - this vault's real epics already use values like
 # "proposed"/"active"/"pending approval" alongside the story workflow's "todo" (P8 dogfooding,
-# ST-13-01 AC4: existing notes must round-trip without data loss).
+#: existing notes must round-trip without data loss).
 REQUIRED_FIELDS: dict[Kind, tuple[str, ...]] = {
     "epic": ("title", "type", "status", "priority", "created", "updated", "tags"),
     "story": (
@@ -34,8 +34,8 @@ REQUIRED_FIELDS: dict[Kind, tuple[str, ...]] = {
 
 
 class WorkItemValidationError(ValueError):
-    """A vault note failed schema validation. `field` names the offending frontmatter key, per
-    ST-13-01 AC2 ("a specific field-level error, not a generic parse failure")."""
+    """A vault note failed schema validation. `field` names the offending frontmatter key, ("a
+    specific field-level error, not a generic parse failure")."""
 
     def __init__(self, field: str, message: str, *, note_path: str = "") -> None:
         self.field = field
@@ -46,8 +46,8 @@ class WorkItemValidationError(ValueError):
 
 class WorkItem(BaseModel):
     """One row of the PM index (`pm_items`), mirrored from a vault note or a `projects` list
-    entry. `id` is the filename-prefix id already used throughout this vault (`EPIC-13`,
-    `ST-13-01`) - the template convention ST-13-01 accepts over the PRD's conflicting
+    entry. `id` is the filename-prefix id already used throughout this vault (``,
+    ``) - the template convention accepts over the PRD's conflicting
     `NOX-<epic>.<story>` form (ES-06, pending approval)."""
 
     model_config = ConfigDict(frozen=True)

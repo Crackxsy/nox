@@ -1,4 +1,4 @@
-"""Windows extended window styles for click-through (WS_EX_TRANSPARENT), ctypes only. FR-4.4."""
+"""Windows extended window styles for click-through (WS_EX_TRANSPARENT), ctypes only.."""
 
 from __future__ import annotations
 

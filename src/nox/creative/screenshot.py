@@ -1,19 +1,19 @@
-"""Consent-gated creative-app screenshot capture, decided and performed core-side (Spec v0.7
-Creative Apps §3.2/§5, ST-16-05).
+"""Consent-gated creative-app screenshot capture, decided and performed core-side.
 
-The `creative` plugin worker has no visibility into privacy zones or the Work profile (`PluginApi`
-exposes only `PrivacyView.mode`, not zones - see CP-Security "Do NOT load ... except where privacy
-zones intersect capture"), so it emits `creative.screenshot.requested` and this service decides:
+The `creative` plugin worker has no visibility into privacy zones or the Work profile - the plugin
+API exposes the current privacy mode but never the zone definitions - so the worker only emits
+`creative.screenshot.requested` and this service decides:
 
-- Work profile active -> refused (Spec v0.7 §5).
-- privacy mode not in {FULL, BALANCED} -> refused (never PRIVATE/OFFLINE, FR-6.9/spec line 446).
-- the app's window is inside an active privacy zone (`PrivacyService.zone_active`) -> refused.
+- Work profile active, or the profile cannot be read at all -> refused.
+- privacy mode not in {FULL, BALANCED} -> refused; PRIVATE and OFFLINE never capture the screen.
+- the app's window is inside an active privacy zone -> refused.
 - `PrivacyService.allows_capture("screen")` false (kill switch/safe mode/panic/zone) -> refused.
-- optional `mss` package not installed -> honest `unavailable` (ENGINEERING.md "no fake
-  implementations" - this is the only sanctioned capture path; there is no PIL/other fallback).
+- optional `mss` package not installed -> honest `unavailable`. This is the only sanctioned
+  capture path; there is deliberately no second implementation to silently fall back to.
 - otherwise: exactly one screenshot, saved under `paths.runtime_dir/creative/screenshots/`.
 
-Wired in by `nox.creative.install.install`, not by `app.py`.
+This module owns the decision and the capture. It does not own the plugin side of the exchange and
+never captures without going through the checks above.
 """
 
 from __future__ import annotations
@@ -89,12 +89,24 @@ class CreativeScreenshotService:
                 self._unsub()
             self._unsub = None
 
-    def _work_profile_active(self) -> bool:
+    def _profile_refusal(self) -> tuple[str, str] | None:
+        """Refusal for the security-profile gate, or `None` when the gate permits a capture.
+
+        A profile lookup that raises is a refusal, not a permission: an unreadable security engine
+        cannot tell us the Work profile is inactive, so the capture is denied.
+        """
         try:
-            return str(self._core.security.engine.active_profile().id) == WORK_PROFILE_ID
-        except Exception:
-            log.debug("creative.profile_lookup_failed", exc_info=True)
-            return False
+            active = str(self._core.security.engine.active_profile().id)
+        except Exception as exc:  # noqa: BLE001 - any failure denies, and the reason is reported
+            log.warning("creative.profile_lookup_failed", error=str(exc), exc_info=True)
+            return (
+                "unavailable",
+                "the active security profile could not be read, so screenshots stay disabled "
+                f"({type(exc).__name__})",
+            )
+        if active == WORK_PROFILE_ID:
+            return "refused", "Work profile is active: creative screenshots are disabled"
+        return None
 
     async def _on_request(self, ev: Event) -> None:
         corr = str(ev.payload.get("corr", ""))
@@ -112,8 +124,10 @@ class CreativeScreenshotService:
         """Pure decision + capture, split out from the event handler so it is directly unit
         testable without an event bus."""
         privacy = self._core.security.privacy
-        if self._work_profile_active():
-            return "refused", "Work profile is active: creative screenshots are disabled", ""
+        profile_refusal = self._profile_refusal()
+        if profile_refusal is not None:
+            status, reason = profile_refusal
+            return status, reason, ""
         if privacy.mode not in (PrivacyMode.FULL, PrivacyMode.BALANCED):
             return (
                 "refused",

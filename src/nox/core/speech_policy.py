@@ -1,12 +1,12 @@
 """OP-10: the single gate every unsolicited-speech caller (greeting now, proactive speech later,
-FR-16.x) must go through, so the rule lives in one place instead of being re-implemented per
+must go through, so the rule lives in one place instead of being re-implemented per
 caller. Implements the decided policy (Decision Plan 2026-09-11 OP-10, matching A480/A482,
-FR-1.8, FR-16.12, FR-5.9): speak a greeting/proactive utterance only when the assistant is not
+speak a greeting or a proactive utterance only when the assistant is not
 muted, no privacy zone is active, the privacy mode does not forbid it, `pet.greeting_enabled` (for
 greetings) is on, and it is outside quiet hours. A `reply` is a direct answer to something the
 user just said or asked for - it is blocked only by mute.
 
-ST-19-03 (ProSpec v0.5, Personality Specification v1 B.13): a fourth kind, `"urgent"`, bypasses
+A fourth kind, `"urgent"`, bypasses
 zone/privacy-mode/quiet-hours (never mute) for the genuine safety/data-loss class of interruption
 - callers in `nox.proactive` decide, per B.13's category ordering, which categories are allowed to
 call `may_speak("urgent")` at all (security/system and backup/data-loss only); lesser urgent

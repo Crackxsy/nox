@@ -1,9 +1,9 @@
 """`RelevanceClassifier`: deterministic 0-1 relevance score and `addressed_to_nox` flag for every
-inbound `twitch.chat_message` (ST-11-04, Spec v0.2 Stream Bot §3.3). No LLM call - the classifier
-only decides whether *something downstream* should look closer, never what to say.
+inbound `twitch.chat_message` (Stream Bot). No LLM call - the classifier only decides whether
+*something downstream* should look closer, never what to say.
 
-Signals: a bot-name mention, the message being a question, a `!command`, a greeting, and a
-per-viewer cooldown that damps score for a viewer who was just scored (keeps a chatty viewer from
+Signals: a bot-name mention, the message being a question, a `!command`, a greeting, and a per-
+viewer cooldown that damps score for a viewer who was just scored (keeps a chatty viewer from
 repeatedly registering as "addressed" for ordinary chatter; an explicit `!command` always bypasses
 the cooldown damping).
 """

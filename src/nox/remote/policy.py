@@ -1,21 +1,18 @@
-"""Remote command policy (ST-17-02/04/07, Spec v0.8 §3.4/§5). Pure decision logic: given an
-inbound `remote.message` it says which command was asked for and whether this sender may have it.
-Executing the decision is `RemoteService`'s job, so every rule here is unit-testable without a
-kill switch, a database or a transport.
+"""Remote command policy. Pure decision logic: given an inbound `remote.message` it says which
+command
+was asked for and whether this sender may have it. Executing the decision is `RemoteService`'s job,
+so every rule here is unit-testable without a kill switch, a database or a transport.
 
 The rules, in the order they are applied:
-  1. unknown/unsupported verb                     -> deny `unknown_command`
-  2. `/pair <code>` from any sender               -> allow (the only command an unpaired sender has)
-  3. any other command from an unpaired sender    -> deny `not_paired` (and it is audited)
-  4. stale or reused `update_id`                  -> deny `replay`
-  5. sender over its command budget               -> deny `rate_limited`
-  6. `/resume`                                    -> deny `resume_not_remote`, always. Resume stays
-     local-only (Security Model §6: `remote` is never an accepted resume origin), so it is a named,
-     audited denial rather than an unknown verb.
-  7. `/privacy <mode>`: `private`/`offline` allow, anything else (including back to `full`) ->
-     deny `privacy_upgrade_denied`. Conservative and pending approval: a phone may make Nox more
-     private, never less (Spec §3.4, Security Model §5).
-  8. `/kill`, `/status`, `/unpair`, plain chat    -> allow for a paired sender.
+1. unknown/unsupported verb -> deny `unknown_command` 2. `/pair <code>` from any sender -> allow
+(the only command an unpaired sender has) 3. any other command from an unpaired sender -> deny
+`not_paired` (and it is audited) 4. stale or reused `update_id` -> deny `replay` 5. sender over its
+command budget -> deny `rate_limited` 6. `/resume` -> deny `resume_not_remote`, always. Resume
+stays local-only (Security Model: `remote` is never an accepted resume origin), so it is a named,
+audited denial rather than an unknown verb. 7. `/privacy <mode>`: `private`/`offline` allow,
+anything else (including back to `full`) -> deny `privacy_upgrade_denied`. Conservative and pending
+approval: a phone may make Nox more private, never less (Spec, Security Model). 8. `/kill`,
+`/status`, `/unpair`, plain chat -> allow for a paired sender.
 """
 
 from __future__ import annotations
@@ -56,7 +53,7 @@ def parse_command(text: str) -> tuple[str, list[str]]:
 
 
 class RemoteRateLimiter:
-    """Per-sender command budget (Spec §5.2: tighter than any local client). Token bucket: at most
+    """Per-sender command budget (Spec: tighter than any local client). Token bucket: at most
     `burst` commands back to back, refilled at `per_minute`/60 per second."""
 
     def __init__(
@@ -105,7 +102,7 @@ class RemoteCommandPolicy:
             return deny("unknown_command")
         if device is None:
             if command not in UNPAIRED_COMMANDS:
-                # Rule 3: an unpaired sender is ignored - but never silently (Spec §5.3).
+                # Rule 3: an unpaired sender is ignored - but never silently (Spec).
                 return deny("not_paired")
             if not self._rate.try_acquire(f"{message.channel}:{message.sender_id}"):
                 return deny("rate_limited")

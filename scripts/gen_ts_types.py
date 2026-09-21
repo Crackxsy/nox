@@ -1,9 +1,9 @@
 """Generate `ui/shared/generated/ipc.ts` from the pydantic models in `src/nox/ipc/protocol.py`
 and the event payload models in `src/nox/core/events.py` (`PAYLOAD_MODELS`).
 
-OP-9 (Decision Plan 2026-09-11): the Python payload models are the single source of truth for the
-wire contract; the TypeScript side must never hand-guess a shape (that is exactly the `chunk`/
-`delta`/`text` drift this generator exists to prevent). Conversion is JSON-Schema -> TypeScript via
+The Python payload models are the single source of truth for the wire contract; the TypeScript
+side must never hand-guess a shape (that is exactly the `chunk`/`delta`/`text` drift this
+generator exists to prevent). Conversion is JSON-Schema -> TypeScript via
 `BaseModel.model_json_schema()`, using a small dependency-free converter (no
 `json-schema-to-typescript`/`datamodel-code-generator`) covering the shapes these models actually
 use: string, number, boolean, array, object (interface or `Record<string, T>`), enum, optional
@@ -34,8 +34,8 @@ HEADER = """/**
  * Source of truth: `src/nox/ipc/protocol.py` and `src/nox/core/events.py` (PAYLOAD_MODELS).
  * Regenerate with:
  *   .venv/Scripts/python.exe scripts/gen_ts_types.py
- * `scripts/gen_ts_types.py --check` fails CI when this file is stale (OP-9, Decision Plan
- * 2026-09-11: the pydantic models are authoritative, the TypeScript types are derived).
+ * `scripts/gen_ts_types.py --check` fails CI when this file is stale: the pydantic models are
+ * authoritative, the TypeScript types are derived.
  */
 """
 
@@ -67,6 +67,8 @@ def _ordered_models() -> list[type[BaseModel]]:
         HealthHistoryResult,
         PersonalityText,
         PinStatus,
+        PluginStatusEntry,
+        PluginStatusList,
         RemoteDevice,
         RemoteDevices,
         RemotePairCode,
@@ -87,6 +89,8 @@ def _ordered_models() -> list[type[BaseModel]]:
         ErrorPayload,
         ChatStreamFrame,
         ChatSendResult,
+        PluginStatusEntry,
+        PluginStatusList,
         StreamPluginStatus,
         StreamSessionStatus,
         FunkenTopEntry,

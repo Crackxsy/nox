@@ -51,12 +51,12 @@ desktop.ini
 .vscode/
 *.swp
 
-# Spike outputs (measurements are documented in the vault, raw outputs stay local)
+# Spike outputs (raw logs/measurements are throwaway; keep results out of the tracked tree)
 /spikes/out/
 
-# Installer (ST-10-01/02, SP-16): build.py's downloaded runtime cache and ISCC's compiled output
-# are large, machine-specific artifacts, never committed. `installer/requirements.lock` IS tracked
-# (it is the reproducible, reviewable dependency lock - not a build byproduct).
+# Installer: build.py's downloaded runtime cache and ISCC's compiled output are large,
+# machine-specific artifacts, never committed. `installer/requirements.lock` IS tracked (it is the
+# reproducible, reviewable dependency lock - not a build byproduct).
 installer/out/
 installer/build/
 installer/.cache/

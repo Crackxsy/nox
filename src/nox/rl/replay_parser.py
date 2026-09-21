@@ -1,20 +1,15 @@
-"""Pure-Python Rocket League replay header/property-tree parser (ST-12-03, executes SP-17, Spec
-v0.3 §3.4/§13). Reads only the replay's header block - engine/licensee/net version, game type, and
-the property tree (playlist/map/team size/duration/per-player summary stats/result) - never the
-full network-frame body (SP-17's deliberate scope cut, §13). No input synthesis, no process/memory
-access: this only reads bytes the caller already has (a local `.replay` file), the same
-observation-only posture as the rest of `rl`.
+"""Pure-Python Rocket League replay header/property-tree parser (executes). Reads only the replay's
+header block - engine/licensee/net version, game type, and the property tree (playlist/map/team
+size/duration/per-player summary stats/result) - never the full network-frame body (deliberate
+scope cut). No input synthesis, no process/memory access: this only reads bytes the caller already
+has (a local `.replay` file), the same observation-only posture as the rest of `rl`.
 
 Binary layout (reverse-engineered and validated against the user's real replay batch - see
-`ST-12-03`'s report and the SP-17 spike note for the measured success rate):
+``'s report and the spike note for the measured success rate):
 
-    int32  header_size
-    uint32 header_crc
-    int32  engine_version
-    int32  licensee_version
-    int32  net_version            (only if engine_version >= 868 and licensee_version >= 18)
-    String game_type
-    Properties                    (name/type/size/array_index/value tuples, terminated by "None")
+int32 header_size uint32 header_crc int32 engine_version int32 licensee_version int32 net_version
+(only if engine_version >= 868 and licensee_version >= 18) String game_type Properties
+(name/type/size/array_index/value tuples, terminated by "None")
 
 Property encoding is `name:String, type:String, size:int32, array_index:int32, value` where `value`
 is read according to `type` (Int/Float/QWord/Str/Name/Bool/Byte-enum/Array-of-Properties/Struct).
@@ -23,8 +18,8 @@ is read according to `type` (Int/Float/QWord/Str/Name/Bool/Byte-enum/Array-of-Pr
 unreliably `0` for `BoolProperty` even though one byte is still on the wire. This parser therefore
 never repositions the cursor from `size` for a type it understands; only `StructProperty` (whose
 platform-specific payload - e.g. `PlayerID`'s platform id - is irrelevant to Stage 1) and any
-wholly unrecognised property type are skipped using `size`, measured from just after their
-sub-header, which is the only way to skip a value this parser does not need to interpret.
+wholly unrecognised property type are skipped using `size`, measured from just after their sub-
+header, which is the only way to skip a value this parser does not need to interpret.
 """
 
 from __future__ import annotations
@@ -38,7 +33,7 @@ PARSER_VERSION = "0.1.0"
 #: Engine-native structs with a fixed, non-property-list binary layout (N little-endian floats).
 _RAW_STRUCTS: dict[str, int] = {"Vector": 3, "Rotator": 3, "Vector2D": 2}
 
-#: Header property names copied verbatim into the header_json returned by the parser (Spec §7).
+#: Header property names copied verbatim into the header_json returned by the parser (Spec).
 _WANTED_SCALAR_KEYS = (
     "TeamSize",
     "UnfairTeamSize",
@@ -60,7 +55,7 @@ _WANTED_SCALAR_KEYS = (
 
 
 class ReplayParseError(RuntimeError):
-    """A field-attributed parse failure (Spec §12.2/ST-12-03 AC: attribute to a specific field
+    """A field-attributed parse failure (Spec/ AC: attribute to a specific field
     where possible, never an opaque single failure)."""
 
     def __init__(self, field_name: str, detail: str) -> None:
@@ -253,7 +248,7 @@ class ParsedReplayHeader:
     header_size: int | None = None
 
     def summary(self) -> dict[str, Any]:
-        """Extract the Spec §7/ST-12-03 header_json fields the summary/dashboard needs, from the
+        """Extract the Spec/ header_json fields the summary/dashboard needs, from the
         raw property tree. Missing fields are simply absent (never fabricated)."""
         p = self.properties
         out: dict[str, Any] = {}

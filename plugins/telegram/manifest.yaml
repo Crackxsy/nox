@@ -1,11 +1,11 @@
-# Telegram bot plugin (EPIC-17, Spec v0.8 Mobile Companion). Bot API long polling over the
-# plugin's guarded `http()` client - `api.telegram.org:443` is the only host it may reach, and the
-# egress guard enforces that independently of anything this code does (ADR-013).
+# Telegram bot plugin (Mobile Companion). Bot API long polling over the
+# plugin's guarded `http` client - `api.telegram.org:443` is the only host it may reach, and the
+# egress guard enforces that independently of anything this code does.
 #
 # The plugin is a *transport*, nothing more. It forwards inbound messages as `remote.message`
 # events carrying the Telegram sender id, and it sends what the core hands it through one tool.
 # It makes no trust decision: whether a sender is paired, whether a kill switch may be engaged and
-# whether a privacy mode may change is decided in `src/nox/remote` (Security Model §2 - security
+# whether a privacy mode may change is decided in `src/nox/remote` (Security Model - security
 # below the AI layer, never in a plugin and never in a prompt).
 #
 # It listens to no events at all (`listens: []`): transcripts, AI responses and memory content are
@@ -24,7 +24,7 @@ permissions:
 events:
   emits: [remote.message, telegram.connected, telegram.disconnected]
   listens: []
-# The secret *name* only (ENGINEERING.md): set with `nox secrets set nox/telegram/bot_token` after
+# The secret *name* only: set with `nox secrets set nox/telegram/bot_token` after
 # creating a bot with BotFather (ES-04). Without it the plugin reports UNAVAILABLE and polls nothing.
 secrets: [nox/telegram/bot_token]
 network:

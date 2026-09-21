@@ -74,6 +74,11 @@ export interface AnimParams {
   glow: number;
   ring: Ring;
   label: string | null;
+  /**
+   * Skip drawing entirely (FR-4.13/A390 "… or paused when throttled"). `deriveAnim` never sets it
+   * — no core state means "stop animating" — but `App.tsx` does for `?still=1`, where exactly one
+   * frame is wanted, and `Pet.tsx` honours it in its animation loop.
+   */
   paused: boolean;
 }
 
@@ -93,13 +98,29 @@ interface ExpressionDelta {
   eyeOpen?: number;
   mouthCurve?: number;
   tilt?: number;
+  /** Relative hue nudge in degrees, scaled by intensity. Use for "a little warmer/cooler". */
   hueShift?: number;
+  /**
+   * Absolute hue in degrees the expression pulls *towards*, blended by intensity along the shorter
+   * way round the colour wheel. Use whenever the expression means a specific colour ("angry is
+   * red"), because a relative shift only lands on that colour for one body hue: `-255°` from the
+   * neutral 255° violet is red, but from the imp's 320° it is yellow-green and from the cat's 276°
+   * it is orange. Alarm states have to look the same on every variant (D238 — never colour alone,
+   * but when colour speaks it must not lie).
+   */
+  hueTarget?: number;
   energy?: number;
   brow?: number;
   eyeLift?: number;
   pupil?: number;
   glow?: number;
   bob?: number;
+}
+
+/** Blend `from` towards `to` by `k` (0..1) along the shorter arc of the hue circle. */
+export function blendHue(from: number, to: number, k: number): number {
+  const delta = (((to - from) % 360) + 540) % 360 - 180;
+  return (((from + delta * clamp(k)) % 360) + 360) % 360;
 }
 
 /** Per-expression deltas at full intensity. Mimicry/posture first; hue only as support (D34). */
@@ -113,7 +134,7 @@ export const EXPRESSION_TABLE: Record<Expression, ExpressionDelta> = {
   proud: { mouthCurve: 0.5, eyeLift: 0.2, eyeOpen: -0.2, glow: 0.3 },
   shy: { tilt: -0.2, eyeOpen: -0.3, mouthCurve: 0.2, hueShift: 30, eyeLift: -0.2 },
   scared: { eyeOpen: 0.4, mouthCurve: -0.5, energy: 0.4, pupil: -0.4, hueShift: -20 },
-  angry: { brow: 0.9, mouthCurve: -0.6, eyeOpen: -0.2, hueShift: -255, energy: 0.3 },
+  angry: { brow: 0.9, mouthCurve: -0.6, eyeOpen: -0.2, hueTarget: 2, energy: 0.3 },
   sad: { mouthCurve: -0.8, eyeOpen: -0.35, eyeLift: -0.3, hueShift: -40, energy: -0.4 },
   coding: { eyeOpen: -0.15, pupil: 0.2, mouthCurve: 0.1, energy: 0.1 },
   working: { eyeOpen: -0.1, mouthCurve: 0.0, energy: 0.2 },
@@ -122,7 +143,7 @@ export const EXPRESSION_TABLE: Record<Expression, ExpressionDelta> = {
   streaming: { mouthCurve: 0.5, eyeOpen: 0.1, glow: 0.4, energy: 0.3 },
   celebrating: { mouthCurve: 1.0, eyeOpen: 0.2, glow: 0.7, bob: 1.0, energy: 0.7 },
   sleeping: { eyeOpen: -1.0, mouthCurve: 0.1, energy: -0.9 },
-  tilted: { tilt: 0.45, brow: 0.6, mouthCurve: -0.4, hueShift: -230, energy: 0.2 },
+  tilted: { tilt: 0.45, brow: 0.6, mouthCurve: -0.4, hueTarget: 22, energy: 0.2 },
   hype: { mouthCurve: 0.9, eyeOpen: 0.3, glow: 0.8, bob: 1.0, energy: 0.9, hueShift: 40 },
   smug: { mouthCurve: 0.4, eyeOpen: -0.45, tilt: -0.1, brow: 0.3 },
 };
@@ -182,7 +203,10 @@ export function deriveAnim(input: PetInput, palette: BasePalette = NEUTRAL_PALET
     browAngle: d(delta.brow),
     mouthOpen: 0,
     mouthCurve: clamp((mood.mood - 0.5) * 0.6 + d(delta.mouthCurve), -1, 1),
-    hue: (palette.hue + d(delta.hueShift) + 360) % 360,
+    hue:
+      delta.hueTarget === undefined
+        ? (palette.hue + d(delta.hueShift) + 360) % 360
+        : blendHue(palette.hue, delta.hueTarget, intensity),
     sat: palette.sat,
     light: palette.light,
     glow: clamp(0.15 + d(delta.glow) + (mood.affection - 0.5) * 0.2),

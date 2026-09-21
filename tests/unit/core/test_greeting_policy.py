@@ -1,6 +1,8 @@
-"""OP-10: the startup-greeting path goes through `SpeechPolicy` (via `decide_greeting`) - it must
-speak exactly once when allowed and never when muted. Deliberately does not boot a `NoxCore`
-(too heavy for this decision); it wires only the minimal pieces `_greet_when_voice_ready` uses.
+"""The startup greeting must be spoken exactly once when it is allowed, and never when it is not.
+
+The decision itself belongs to `SpeechPolicy.may_speak("greeting")`, which is what the core calls.
+This test wires only the pieces the greeting path uses rather than booting a whole core, and
+mirrors the speak-or-stay-silent branch of `NoxCore._greet_when_voice_ready`.
 """
 
 from __future__ import annotations
@@ -8,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from nox.app import GREETING, decide_greeting
+from nox.app import GREETING
 from nox.core.config import NoxConfig
 from nox.core.speech_policy import SpeechPolicy
 from nox.voice.base import TtsRequest
@@ -32,8 +34,9 @@ def make_policy(*, muted: bool, config: NoxConfig | None = None) -> SpeechPolicy
 async def greet_if_allowed(
     policy: SpeechPolicy, speaker: FakeSpeaker, *, language: str = "de"
 ) -> None:
-    """The speak-or-not branch of `NoxCore._greet_when_voice_ready`, minus the worker-ready wait."""
-    if not decide_greeting(policy):
+    """The speak-or-not branch of the core's greeting path, minus the worker-ready wait."""
+    allowed, _reason = policy.may_speak("greeting")
+    if not allowed:
         return
     await speaker.say(
         TtsRequest(

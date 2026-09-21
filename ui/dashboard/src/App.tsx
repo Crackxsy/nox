@@ -5,8 +5,13 @@
  * 1100 px content column: a display headline per section, then tiles and rails.
  *
  * Keyboard-first: skip link, roving-tabindex tablist (arrow keys, Home/End), Alt+1..7 jump to a
- * section from anywhere, every control reachable and labelled. A global toast panel (ST-19/
- * ST-08-01) shows `proactive.notification` events regardless of the active section.
+ * section from anywhere (and are skipped while a text field has focus), every control reachable and
+ * labelled. A global toast panel shows `proactive.notification` events regardless of the section.
+ *
+ * Tab panels stay **mounted**. Unmounting them destroyed a chat transcript, an unsaved config
+ * draft, a clip's tag edit and a Twitch device code on every stray click; `hidden` on the panel is
+ * enough to take a section out of the accessibility tree and the tab order. The chat transcript and
+ * its draft live here rather than in the page, so they also survive a remount.
  *
  * Below 720 px the link row becomes a horizontal scroll strip; it stays the same single tablist in
  * the DOM, so assistive technology never sees duplicates.
@@ -14,9 +19,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { type Key, type Lang, type T, translator } from './i18n';
 import { type ConnStatus, type Envelope, type IpcClient, api, createDashboardClient } from './ipc';
-import { type Key, type Lang, translator } from './i18n';
 import {
+  type ChatMessage,
   type DashboardState,
   INITIAL_STATE,
   applyStateSnapshot,
@@ -31,7 +37,7 @@ import { AuditPage } from './pages/Audit';
 import { ChatPage } from './pages/Chat';
 import { ClipsPage } from './pages/Clips';
 import { RemotePage } from './pages/Remote';
-import { SettingsPage } from './pages/Settings';
+import { SettingsPage } from './pages/settings/SettingsPage';
 import { StatusPage } from './pages/Status';
 import { StreamPage } from './pages/Stream';
 import { type ThemePref, applyTheme, storeTheme } from './theme';
@@ -69,8 +75,15 @@ export interface AppProps {
   theme: ThemePref;
 }
 
+/** Typing in a field must not be swallowed by a global accelerator. */
+function isTextEntry(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+}
+
 export function App({ token, lang, theme: initialTheme }: AppProps) {
-  const t = useMemo(() => translator(lang), [lang]);
+  const t: T = useMemo(() => translator(lang), [lang]);
   const [tab, setTab] = useState<TabId>('status');
   const [state, setState] = useState<DashboardState>(INITIAL_STATE);
   const [status, setStatus] = useState<ConnStatus>(token ? 'connecting' : 'offline');
@@ -78,6 +91,8 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
   const [client, setClient] = useState<IpcClient | null>(null);
   const [theme, setTheme] = useState<ThemePref>(initialTheme);
   const [providersFailed, setProvidersFailed] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatDraft, setChatDraft] = useState('');
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const pickTheme = (next: ThemePref) => {
@@ -97,11 +112,19 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
         setStatusDetail(detail ?? '');
         setState((prev) => setConnected(prev, s === 'online'));
       },
-    }).then((c) => {
-      live = c;
-      if (cancelled) c.close();
-      else setClient(c);
-    });
+    })
+      .then((c) => {
+        live = c;
+        if (cancelled) c.close();
+        else setClient(c);
+      })
+      .catch((e: unknown) => {
+        // §3: availability is never faked. A client that could not even be built means offline,
+        // and the banner says so rather than leaving the page on "verbinde …" forever.
+        if (cancelled) return;
+        setStatus('offline');
+        setStatusDetail(e instanceof Error ? e.message : String(e));
+      });
     return () => {
       cancelled = true;
       live?.close();
@@ -159,7 +182,7 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
     };
   }, [client, status, refresh, loadProviders]);
 
-  /** The Status page's "Refresh" link: one fresh snapshot plus one more go at the provider list. */
+  /** The Status page's "Aktualisieren" link: one fresh snapshot plus one more go at the providers. */
   const refreshAll = useCallback(() => {
     if (!client) return;
     setProvidersFailed(false);
@@ -172,10 +195,12 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
+      if (isTextEntry(e.target)) return;
       const idx = ['1', '2', '3', '4', '5', '6', '7'].indexOf(e.key);
-      if (idx < 0) return;
+      const target = TABS[idx];
+      if (idx < 0 || !target) return;
       e.preventDefault();
-      setTab(TABS[idx].id);
+      setTab(target.id);
       tabRefs.current[idx]?.focus();
     };
     window.addEventListener('keydown', onKey);
@@ -197,13 +222,15 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
       End: last,
     };
     const next = map[e.key];
-    if (next === undefined) return;
+    const target = next === undefined ? undefined : TABS[next];
+    if (next === undefined || !target) return;
     e.preventDefault();
-    setTab(TABS[next].id);
+    setTab(target.id);
     tabRefs.current[next]?.focus();
   };
 
   const online = status === 'online';
+  const liveClient = online ? client : null;
   const connLabel: Key =
     status === 'online'
       ? 'conn_online'
@@ -233,6 +260,7 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
               role="tablist"
               aria-label={t('nav')}
               aria-orientation="horizontal"
+              aria-describedby="nav-shortcuts"
               className="tablist"
             >
               {TABS.map((item, i) => {
@@ -258,6 +286,9 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
                 );
               })}
             </div>
+            <p id="nav-shortcuts" className="sr-only">
+              {t('shortcuts_hint')}
+            </p>
           </nav>
 
           <div className="nav-aside">
@@ -307,34 +338,59 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
             aria-labelledby={`tab-${item.id}`}
             hidden={tab !== item.id}
           >
-            {tab === item.id && item.id === 'status' && (
+            {item.id === 'status' && (
               <StatusPage
                 t={t}
+                lang={lang}
                 state={state}
-                client={online ? client : null}
+                client={liveClient}
                 providersFailed={providersFailed}
                 onRefresh={refreshAll}
               />
             )}
-            {tab === item.id && item.id === 'chat' && (
-              <ChatPage t={t} client={online ? client : null} />
+            {item.id === 'chat' && (
+              <ChatPage
+                t={t}
+                lang={lang}
+                client={liveClient}
+                providers={state.providers}
+                messages={messages}
+                onMessages={(update) => setMessages((list) => update(list))}
+                draft={chatDraft}
+                onDraft={setChatDraft}
+              />
             )}
-            {tab === item.id && item.id === 'stream' && (
-              <StreamPage t={t} state={state} client={online ? client : null} onState={setState} />
+            {item.id === 'stream' && (
+              <StreamPage
+                t={t}
+                lang={lang}
+                state={state}
+                client={liveClient}
+                onState={setState}
+                onOpenSettings={() => setTab('settings')}
+              />
             )}
-            {tab === item.id && item.id === 'clips' && (
-              <ClipsPage t={t} state={state} client={online ? client : null} onState={setState} />
+            {item.id === 'clips' && (
+              <ClipsPage t={t} lang={lang} state={state} client={liveClient} onState={setState} />
             )}
-            {tab === item.id && item.id === 'remote' && (
-              <RemotePage t={t} client={online ? client : null} />
+            {item.id === 'remote' && (
+              <RemotePage
+                t={t}
+                lang={lang}
+                client={liveClient}
+                onOpenSettings={() => setTab('settings')}
+              />
             )}
-            {tab === item.id && item.id === 'audit' && <AuditPage t={t} rows={state.audit} />}
-            {tab === item.id && item.id === 'settings' && (
+            {item.id === 'audit' && <AuditPage t={t} lang={lang} rows={state.audit} />}
+            {item.id === 'settings' && (
               <SettingsPage
                 t={t}
-                client={online ? client : null}
+                lang={lang}
+                client={liveClient}
                 revision={state.settingsRevision}
                 twitchAuthEvent={state.twitchAuth}
+                plugins={state.stream.session.plugins}
+                onOpenRemote={() => setTab('remote')}
               />
             )}
           </div>

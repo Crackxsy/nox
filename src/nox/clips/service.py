@@ -1,9 +1,10 @@
-"""ClipCaptureService (ST-15-02/03, Spec v0.6 §4.1/§4.2): the core-side subscriber to
-`clip.requested`. The `clips` plugin never talks to OBS itself (no cross-plugin tool call in the
-Plugin API) - this service is the one that calls `obs.replay_buffer.save` through `ToolExecutor`,
-copies the resolved file into the clip library, indexes it (`clips` row, `status="new"`) and
-reports the outcome as `clip.saved`/`clip.failed`. A second, defensive cooldown runs here too (the
-detector already gates per `trigger_kind`, but this is the point that actually spends OBS calls)."""
+"""ClipCaptureService: the core-side subscriber to `clip.requested`. The `clips` plugin never talks
+to
+OBS itself (no cross-plugin tool call in the Plugin API) - this service is the one that calls
+`obs.replay_buffer.save` through `ToolExecutor`, copies the resolved file into the clip library,
+indexes it (`clips` row, `status="new"`) and reports the outcome as `clip.saved`/`clip.failed`. A
+second, defensive cooldown runs here too (the detector already gates per `trigger_kind`, but this
+is the point that actually spends OBS calls)."""
 
 from __future__ import annotations
 

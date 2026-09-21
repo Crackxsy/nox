@@ -1,4 +1,4 @@
-"""AI providers (ADR-008): claude_code (subprocess), ollama (HTTP), rules (deterministic)."""
+"""AI providers: claude_code (subprocess), ollama (HTTP), rules (deterministic)."""
 
 from nox.ai.providers.claude_code import ClaudeCodeProvider, ClaudeStreamParser
 from nox.ai.providers.ollama import OllamaProvider

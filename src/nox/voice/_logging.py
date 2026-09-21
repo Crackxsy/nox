@@ -1,7 +1,8 @@
 """Logger lookup for the voice package: uses nox.core.logging when present, structlog otherwise.
 
 nox.core.logging is owned by the core agent and may not exist yet in this checkout; the voice
-package must not depend on its import timing (ENGINEERING.md: structured logging via structlog).
+package must not depend on its import timing (the project standards: structured logging via
+structlog).
 """
 
 from __future__ import annotations

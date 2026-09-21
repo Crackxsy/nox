@@ -1,4 +1,4 @@
-# Nox permission profile "work" (Security Model §3, PRD FR-2.6). Restrictive: local only, no memory.
+# Nox permission profile "work": local only, and nothing is remembered.
 # Work code stays local; no cloud transfer, no screenshots of work content to the cloud, no entries
 # in the normal vault or memory. Enforced by the permission engine and egress guard, not by prompt.
 security:
@@ -22,12 +22,12 @@ permissions:
       tool: "memory*"
       action: "write"
       decision: deny
-      reason: "no entries in the normal memory (FR-2.6)"
+      reason: "work sessions leave no memory entries"
     - id: work.vault.write
       tool: "vault*"
       action: "write"
       decision: deny
-      reason: "no entries in the normal vault (FR-2.6)"
+      reason: "work sessions leave no vault entries"
     - id: work.vault.inbox
       tool: "vault*"
       action: "append_inbox"

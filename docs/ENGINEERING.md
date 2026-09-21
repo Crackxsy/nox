@@ -3,11 +3,10 @@
 The working brief every contributor (human or agent) follows in this repository. It is deliberately
 short; the hard rules below are not negotiable.
 
-Binding sources, in order of precedence:
-1. The product interview log (product decisions D0–D256, principle P1) — private product archive, not part of this repository.
-2. The Product Requirements Document (PRD 0.1.1, working baseline; approval pending) — private product archive.
-3. Architecture contracts (architecture, data model, event model, tool model, security model, ADRs) — private product archive.
-4. Code contracts in this repo — the only binding sources an outside contributor needs: `src/nox/core/events.py`, `src/nox/core/state.py`, `src/nox/security/model.py`, `src/nox/ipc/protocol.py`, `src/nox/ai/base.py`, `src/nox/voice/base.py`, plus `SECURITY.md` and `PRIVACY.md` in this folder.
+Binding sources for any contribution: the code contracts in this repo —
+`src/nox/core/events.py`, `src/nox/core/state.py`, `src/nox/security/model.py`,
+`src/nox/ipc/protocol.py`, `src/nox/ai/base.py`, `src/nox/voice/base.py` — plus `SECURITY.md` and
+`PRIVACY.md` in this folder. There is no other document an outside contributor needs to consult.
 
 ## Environment
 - Windows 11, PowerShell or Git Bash. Work from the repository checkout; the project venv is `.venv` (Python 3.13.x from python.org, **not** the Microsoft Store build — see `USER_GUIDE.md` §6).
@@ -37,15 +36,3 @@ Binding sources, in order of precedence:
 
 ## Contributing
 Branch and pull-request flow: `../CONTRIBUTING.md`. Reporting a vulnerability: `../SECURITY.md`.
-
-## Report format for project-internal agents — keep it short
-```
-## Result      1–3 sentences
-## Changed     files, one half-sentence each (contract changes marked)
-## Tests       command → result (summary line only)
-## Open Points only genuine ones (product decisions, blockers)
-```
-Project-internal agents start from the context map in the private product archive and the
-`CP-<Area>.md` package for their area, then open only the REQUIRED sources listed there.
-Measurements, decisions and gotchas that matter beyond a single task go into the product archive
-(spike note, ADR, context package), not only into the report.

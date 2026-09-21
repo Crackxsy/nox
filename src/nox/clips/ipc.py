@@ -1,7 +1,8 @@
-"""Dashboard/shell-facing `clip.*` IPC requests (ST-15-05/06): thin passthroughs to the `clip.*`
-tools registered in `nox.clips.tools`, routed through the real `ToolExecutor` so every dashboard
-action still gets the normal permission check (confirm on `clip.export`/`clip.trim`, `medium` risk)
-and audit trail - not a shortcut around it."""
+"""Dashboard/shell-facing `clip.*` IPC requests: thin passthroughs to the `clip.*` tools registered
+in
+`nox.clips.tools`, routed through the real `ToolExecutor` so every dashboard action still gets the
+normal permission check (confirm on `clip.export`/`clip.trim`, `medium` risk) and audit trail - not
+a shortcut around it."""
 
 from __future__ import annotations
 

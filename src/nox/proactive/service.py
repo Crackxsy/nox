@@ -1,14 +1,13 @@
 """`ProactiveService.notify(kind, priority, text)`: the one place every unsolicited-notification
-caller in Nox goes through (mirrors `SpeechPolicy`'s "one gate" shape for OP-10). Routes to TTS (via
-the orchestrator's `Speaker`), a pet expression nudge (via `NoxState.update`), a dashboard toast
-(`proactive.notification` event) and the remote channel (same event - the telegram plugin, EPIC-17,
-decides on its own allow-list whether to forward it; that decision is out of this package's scope).
-
-B.13 hard floor: `UrgentCategory.SECURITY` / `DATA_LOSS` always produce a visible toast even when
-speech is muted - "never mute" in the epic summary means the *visual* channel is never filtered,
-not that a mute setting is silently overridden for audio (that would violate the "Klappe halten" F11
-hard-stop). Only audio is gated by `SpeechPolicy.may_speak("urgent")`, and that call denies only on
-mute (see `nox.core.speech_policy`).
+caller in Nox goes through (mirrors `SpeechPolicy`'s "one gate" shape for). Routes to TTS (via the
+orchestrator's `Speaker`), a pet expression nudge (via `NoxState.update`), a dashboard toast
+(`proactive.notification` event) and the remote channel (same event - the telegram plugin,, decides
+on its own allow-list whether to forward it; that decision is out of this package's scope). hard
+floor: `UrgentCategory.SECURITY` / `DATA_LOSS` always produce a visible toast even when speech is
+muted - "never mute" in the epic summary means the *visual* channel is never filtered, not that a
+mute setting is silently overridden for audio (that would violate the "Klappe halten" F11 hard-
+stop). Only audio is gated by `SpeechPolicy.may_speak("urgent")`, and that call denies only on mute
+(see `nox.core.speech_policy`).
 """
 
 from __future__ import annotations
@@ -82,7 +81,7 @@ class ProactiveService:
         # `store or ...` used to silently replace a freshly-constructed, still-empty `store` here:
         # `NotificationStore` has `__len__`, so a caller-supplied store with 0 records so far (e.g.
         # `nox.proactive.install.install`'s db-backed store, right after boot) was falsy and got
-        # swapped for a brand-new in-memory one - #28.
+        # swapped for a brand-new in-memory one -.
         self._store = (
             store if store is not None else NotificationStore(limit=pcfg.notification_store_limit)
         )
@@ -102,7 +101,7 @@ class ProactiveService:
         return self._store
 
     async def dismiss(self, notification_id: str) -> bool:
-        """`proactive.notification.dismiss` (#28). Publishes `proactive.notification.dismissed`
+        """`proactive.notification.dismiss`. Publishes `proactive.notification.dismissed`
         only on an actual state change (unknown id / already-dismissed id -> no event, matching
         `_gate_hint`'s "no event for a no-op" shape elsewhere in this service)."""
         dismissed = self._store.dismiss(notification_id)
@@ -140,7 +139,7 @@ class ProactiveService:
             return await self._notify_lesser_urgent(category, text, context_key)
         return await self._notify_hint(priority, text, context_key)
 
-    # ---- URGENT: security / data-loss (may interrupt, per B.13) ---------------------------
+    # ---- URGENT: security / data-loss (may interrupt) ---------------------------
 
     async def _notify_interrupt_eligible(
         self, category: UrgentCategory, text: str
@@ -148,7 +147,7 @@ class ProactiveService:
         speak_allowed, _reason = self._speech_policy.may_speak("urgent")
         spoken = False
         if speak_allowed and self._speaker is not None:
-            # A.13 exemption: URGENT itself is not announced first - it IS the time-critical
+            # exemption: URGENT itself is not announced first - it IS the time-critical
             # callout the announce rule exists to make way for.
             await self._speaker.say(text)
             spoken = True
@@ -191,7 +190,7 @@ class ProactiveService:
         )
         await self._touch_pet_expression(urgent=False)
         await self._publish_notification(record)
-        # A "lesser URGENT" is, by definition (B.13), always at least a visible warning - never
+        # A "lesser URGENT" is, by definition, always at least a visible warning - never
         # fully suppressed, only its speech may be held back.
         return AttentionDecision(allowed=True, reason="ok", channel=channel, announced=announced)
 
@@ -199,7 +198,7 @@ class ProactiveService:
 
     async def _notify_hint(self, priority: str, text: str, context_key: str) -> AttentionDecision:
         """`priority` is expected to be one of `nox.proactive.models.HintPriority`
-        (`"low" | "normal" | "high"`); kept as `str` here so `notify()` has one signature for both
+        (`"low" | "normal" | "high"`); kept as `str` here so `notify` has one signature for both
         the URGENT-category and plain-hint-priority domains."""
         _ceiling, allow_speech, reason = self._gate_hint(context_key)
         if not allow_speech:
@@ -233,10 +232,10 @@ class ProactiveService:
     # ---- shared gating / plumbing -----------------------------------------------------------
 
     def _gate_hint(self, context_key: str) -> tuple[int, bool, str]:
-        """Returns `(density_ceiling, allowed, reason)`. `density_ceiling` (0..5, A.16's per-mode
-        dial) only decides focus-mode (0 = no proactive hints at all, ST-19-05); the actual hourly
-        interruption cap is the separate `attention.interruptions_per_hour` count (ST-19-05's
-        "interruption budget"), not the 0..5 dial - the two are different units."""
+        """Returns `(density_ceiling, allowed, reason)`. `density_ceiling` (0..5, per-mode
+        dial) only decides focus-mode (0 = no proactive hints at all); the actual hourly
+        interruption cap is the separate `attention.interruptions_per_hour` count ("interruption
+        budget"), not the 0..5 dial - the two are different units."""
         mode = str(self._state.get("assistant.mode"))
         density = effective_ceiling(self._config.attention, mode)
         allowed, reason = self._speech_policy.may_speak("proactive")

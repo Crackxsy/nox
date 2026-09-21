@@ -1,10 +1,13 @@
-"""IpcHub: loopback WebSocket hub of the core (IPC Model, Process Model §Core-worker, ADR-003).
+"""`IpcHub`: the core's loopback WebSocket hub.
 
-Implements the handshake (first frame `ipc.auth` within 3 s, else close 1008), role-scoped request
-dispatch through a RequestRegistry, `ipc.ping`/`ipc.subscribe`, stream frames, per-client rate
-limiting (token bucket), 1 MiB frame limit, event fan-out from the injected EventBus with per-role
-redaction (Event Model §Outbound filtering), and outbound requests to connected workers.
-The hub never forwards raw frames between clients.
+It implements the handshake - the first frame must be `ipc.auth` within three seconds, else the
+connection is closed with a policy violation - role-scoped request dispatch through a
+`RequestRegistry`, `ipc.ping` and `ipc.subscribe`, stream frames, a per-client token-bucket rate
+limit, a 1 MiB frame limit, event fan-out from the injected event bus with per-role redaction, and
+outbound requests to connected workers.
+
+The hub never forwards a raw frame from one client to another: everything a client sees is either
+its own answer or an event the core published.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ import os
 import re
 import time
 import uuid
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http import HTTPStatus
@@ -29,12 +32,15 @@ from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
 import nox
+from nox.core.config import IpcConfig
 from nox.core.events import E, Event, EventBus
+from nox.core.globbing import name_matches, name_matches_any
 from nox.ipc._log import get_logger
-from nox.ipc.dispatch import RequestContext, RequestRegistry, matches_any, service_patterns
+from nox.ipc.dispatch import RequestContext, RequestRegistry, service_patterns
 from nox.ipc.errors import (
     CORE_SOURCE,
     ERR_AUTH_DENIED,
+    ERR_INTERNAL,
     ERR_PERMISSION,
     ERR_RATE_LIMITED,
     ERR_TIMEOUT,
@@ -68,13 +74,18 @@ DEFAULT_SUBSCRIPTIONS: tuple[str, ...] = ("system.*",)
 CLOSE_POLICY_VIOLATION = 1008
 CLOSE_GOING_AWAY = 1001
 
-# Event Model §Outbound filtering: (pattern, roles that must NOT receive it)
+#: Outbound event filtering: (pattern, the roles that must NOT receive it).
+#:
+#: `plugin` is on every one of these lists. A plugin's `state.get` is carefully filtered to a
+#: public subtree, and letting the same plugin subscribe to `voice.transcript_*` would have handed
+#: it the raw speech that subtree exists to keep away from it. Raw chat text is blocked for the
+#: same reason: the separation between the private and the stream channel is enforced here, not
+#: only inside the plugin that produces it.
 REDACTED_FROM: tuple[tuple[str, frozenset[str]], ...] = (
-    ("voice.transcript_*", frozenset({"pet", "remote"})),
-    ("ai.response_*", frozenset({"pet", "remote"})),
-    ("memory.*", frozenset({"pet", "remote"})),
-    # Spec v0.2 §3.3/§9.7: raw Twitch chat text never reaches pet/remote (private/stream channel
-    # separation is enforced here, not only by the twitch plugin's own output boundary).
+    ("voice.transcript_*", frozenset({"pet", "remote", "plugin"})),
+    ("ai.response_*", frozenset({"pet", "remote", "plugin"})),
+    ("memory.*", frozenset({"pet", "remote", "plugin"})),
+    ("chat.*", frozenset({"pet", "remote", "plugin"})),
     ("twitch.chat_message", frozenset({"pet", "remote"})),
 )
 # (pattern, the only roles that may receive it)
@@ -84,11 +95,12 @@ RESTRICTED_TO: tuple[tuple[str, frozenset[str]], ...] = (
 
 
 def role_may_see(role: str, name: str) -> bool:
+    """Whether an event named `name` may be delivered to a client in `role`."""
     for pattern, blocked in REDACTED_FROM:
-        if role in blocked and matches_any((pattern,), name):
+        if role in blocked and name_matches(name, pattern):
             return False
     for pattern, allowed in RESTRICTED_TO:
-        if role not in allowed and matches_any((pattern,), name):
+        if role not in allowed and name_matches(name, pattern):
             return False
     return True
 
@@ -113,6 +125,9 @@ class HubSettings(BaseModel):
     rate_per_s: float = 50.0
     rate_burst: int = 200
     send_queue_size: int = 1000
+    #: Inbound events one client may have in flight. Bounded for the same reason the outbound
+    #: queue is: a client inside its rate limit could otherwise grow this without limit.
+    event_queue_size: int = 1000
     request_timeout_s: float = 10.0
     core_version: str = nox.__version__
 
@@ -130,15 +145,9 @@ class HubSettings(BaseModel):
         return value
 
     @classmethod
-    def from_config(cls, ipc: Mapping[str, Any], **overrides: Any) -> HubSettings:
-        """Build from the `ipc` section of the configuration (config/defaults.yaml)."""
-        data: dict[str, Any] = {}
-        if "host" in ipc:
-            data["host"] = ipc["host"]
-        if "port" in ipc:
-            data["port"] = ipc["port"]
-        data.update(overrides)
-        return cls(**data)
+    def from_config(cls, ipc: IpcConfig, **overrides: Any) -> HubSettings:
+        """Build from the typed `ipc` section of `NoxConfig`."""
+        return cls(host=ipc.host, port=ipc.port, **overrides)
 
 
 class SubscribeRequest(BaseModel):
@@ -228,7 +237,7 @@ def error_envelope(
 
 def _validate_stream_payload(name: str, payload: Mapping[str, Any]) -> None:
     """Validate one STREAM frame body against `STREAM_PAYLOAD_MODELS` when `name` is registered
-    (OP-9): an unregistered name passes through unchanged, e.g. worker progress frames.
+    An unregistered name passes through unchanged - a worker's own progress frames, say.
     """
     model = STREAM_PAYLOAD_MODELS.get(name)
     if model is None:
@@ -337,6 +346,9 @@ class IpcHub:
         self._clients: dict[str, ClientSession] = {}
         self._unsubscribe: Callable[[], None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        #: Hub-owned background tasks. A task nobody holds a reference to can be garbage-collected
+        #: mid-flight, and its exception is then never retrieved.
+        self._tasks: set[asyncio.Task[None]] = set()
 
     # -- lifecycle ------------------------------------------------------------------------------
 
@@ -603,6 +615,7 @@ class IpcHub:
             conn=conn,
             bucket=TokenBucket(s.rate_per_s, s.rate_burst, self._clock),
             queue=asyncio.Queue(maxsize=s.send_queue_size),
+            events=asyncio.Queue(maxsize=s.event_queue_size),
         )
         response = AuthResponse(ok=True, session_id=session_id, core_version=s.core_version)
         await conn.send(
@@ -654,10 +667,14 @@ class IpcHub:
             if handler is not None:
                 await _maybe_await(handler(env.payload))
         elif env.kind is Kind.EVENT:
-            client.events.put_nowait(env)
-            backlog = client.events.qsize()
-            if backlog in (64, 256, 1024):
-                log.warning("ipc_event_backlog", client=client.client_id, backlog=backlog)
+            try:
+                client.events.put_nowait(env)
+            except asyncio.QueueFull:
+                # The same rule the outbound queue follows: a client that produces faster than the
+                # core can consume is disconnected, not buffered without limit.
+                log.warning("ipc_event_backlog_full", client=client.client_id, role=client.role)
+                await self._close_client(client, CLOSE_POLICY_VIOLATION, "event backlog")
+                return False
         return True
 
     async def _event_pump(self, client: ClientSession) -> None:
@@ -673,6 +690,7 @@ class IpcHub:
                 )
 
     async def _handle_request(self, client: ClientSession, env: Envelope) -> None:
+        """Answer exactly one request with exactly one frame, whatever happens inside it."""
         client.inflight[env.id] = env.name
         try:
             if env.name == NAME_AUTH:
@@ -696,6 +714,14 @@ class IpcHub:
                 reply = await self._registry.dispatch(ctx, env)
         except asyncio.CancelledError:
             raise
+        except Exception as exc:  # noqa: BLE001 - a caller must never wait out its own timeout
+            log.exception("ipc_request_crashed", client=client.client_id, name=env.name)
+            reply = error_envelope(
+                ERR_INTERNAL,
+                f"{env.name} failed inside the hub",
+                corr=env.id,
+                details={"type": type(exc).__name__},
+            )
         finally:
             client.inflight.pop(env.id, None)
         self._enqueue(client, reply)
@@ -730,8 +756,8 @@ class IpcHub:
         return env.reply(NAME_SUBSCRIBE, {"patterns": list(client.subscriptions)}, CORE_SOURCE)
 
     async def _handle_inbound_event(self, client: ClientSession, env: Envelope) -> None:
-        allowed = client.role in ("worker", "plugin") and matches_any(
-            service_patterns(client.services), env.name
+        allowed = client.role in ("worker", "plugin") and name_matches_any(
+            env.name, service_patterns(client.services)
         )
         if not allowed:
             self._enqueue(
@@ -764,7 +790,7 @@ class IpcHub:
         for client in list(self._clients.values()):
             if client.closing or not role_may_see(client.role, event.name):
                 continue
-            if not matches_any(client.subscriptions, event.name):
+            if not name_matches_any(event.name, client.subscriptions):
                 continue
             if serialized is None:
                 serialized = Envelope(
@@ -779,7 +805,7 @@ class IpcHub:
     async def _publish(self, name: str, payload: dict[str, Any]) -> None:
         try:
             await self._bus.publish(Event(name=name, payload=payload, source="ipc"))
-        except Exception:
+        except Exception:  # noqa: BLE001 - a connection notice must not break the connection
             log.exception("ipc_event_publish_failed", name=name)
 
     # -- sending ------------------------------------------------------------
@@ -796,9 +822,13 @@ class IpcHub:
             log.warning("ipc_slow_consumer", client=client.client_id, role=client.role)
             client.closing = True
             if self._loop is not None:
-                self._loop.create_task(
-                    self._close_client(client, CLOSE_POLICY_VIOLATION, "slow consumer")
-                )
+                self._spawn(self._close_client(client, CLOSE_POLICY_VIOLATION, "slow consumer"))
+
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Run `coro` in the background, holding a reference until it finishes."""
+        task = asyncio.ensure_future(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _send_now(self, client: ClientSession, env: Envelope) -> None:
         try:
@@ -832,5 +862,5 @@ async def _maybe_await(value: Any) -> None:
 def _peer(conn: ServerConnection) -> str:
     try:
         return str(conn.remote_address)
-    except Exception:  # noqa: BLE001 - diagnostics only
-        return "?"
+    except OSError as exc:  # a closed socket has no peer; this string only reaches a log line
+        return f"?({type(exc).__name__})"

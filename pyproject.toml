@@ -6,6 +6,19 @@ readme = "README.md"
 requires-python = ">=3.13"
 license = "Apache-2.0"
 authors = [{ name = "Nox Project" }]
+keywords = ["desktop-pet", "voice-assistant", "local-first", "privacy", "windows"]
+classifiers = [
+    # No "License ::" trove classifier: PEP 639's SPDX `license` string above is authoritative
+    # and current packaging guidance says not to duplicate it as a classifier.
+    "Development Status :: 3 - Alpha",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Desktop Environment",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
 dependencies = [
     "pydantic>=2.9",
     "pyyaml>=6.0",
@@ -47,6 +60,12 @@ rl = ["mss>=9.0", "opencv-python-headless>=4.10", "numpy>=2.0"]
 
 [project.scripts]
 nox = "nox.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Crackxsy/nox"
+Repository = "https://github.com/Crackxsy/nox"
+Issues = "https://github.com/Crackxsy/nox/issues"
+Changelog = "https://github.com/Crackxsy/nox/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling>=1.27"]  # >=1.27: PEP 639 `license = "Apache-2.0"` string support
@@ -100,5 +119,5 @@ markers = [
     "spike: measurement/feasibility tests that need real hardware or services (deselect in CI)",
     "hardware: needs microphone/speaker/GPU",
     "network: needs network or external services",
-    "e2e: browser smoke test against a live NoxCore (Playwright, B-10); needs ui/*/dist built",
+    "e2e: browser smoke test against a live NoxCore (Playwright); needs ui/*/dist built",
 ]

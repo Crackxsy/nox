@@ -1,6 +1,6 @@
 """AI provider abstraction. No vendor is hard-wired; the router chooses by task role, latency,
-privacy mode, budget, load and availability (PRD FR-6.1). Claude Code's operational model is
-validated in SP-01.
+privacy
+mode, budget, load and availability (PRD). Claude Code's operational model is validated in.
 """
 
 from __future__ import annotations
@@ -55,12 +55,16 @@ class AiResponse(BaseModel):
     tokens_out: int | None = None
     degraded: bool = False
     degraded_reason: str = ""
-    cost_usd: float | None = None  # provider-reported cost equivalent (FR-6.6); None if unknown
+    cost_usd: float | None = None  # provider-reported cost equivalent; None if unknown
 
 
 class ProviderInfo(BaseModel):
     id: str  # claude_code | ollama | gemini | groq | rules
     display_name: str
+    #: The same name in German, for the German user interface. Empty means the English name is
+    #: already the German one too (a product name like "Claude Code" is not translated), and the
+    #: user interface falls back to `display_name`.
+    display_name_de: str = ""
     local: bool  # True = never leaves the machine
     roles: list[AiRole]
     status: HealthStatus = HealthStatus.UNAVAILABLE

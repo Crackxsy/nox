@@ -17,7 +17,8 @@ log is explicitly designed to hold no private content.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from pydantic import ValidationError
 from nox.core.config import NoxConfig, read_yaml_layer
 from nox.core.events import E, Event, EventBus
 from nox.core.logging import get_logger
+from nox.security.gate import SECURITY_SETTING_PREFIXES, PinRequiredError, SecurityChangeGate
 from nox.security.model import AuditLog
 from nox.settings.layers import deep_merge, load_existing_user_layer, write_user_config
 from nox.settings.schema import (
@@ -54,6 +56,11 @@ def _error_for(path: str, exc: ValidationError) -> str:
     return "; ".join(messages) or "invalid value"
 
 
+def security_paths(values: Mapping[str, Any] | Sequence[str]) -> list[str]:
+    """The submitted paths that belong to the security or privacy area, in submitted order."""
+    return [path for path in values if path.startswith(SECURITY_SETTING_PREFIXES)]
+
+
 class ConfigEditor:
     """Reads and writes the allow-listed settings of one running core."""
 
@@ -66,6 +73,7 @@ class ConfigEditor:
         appliers: Mapping[str, Applier] | None = None,
         audit: AuditLog | None = None,
         bus: EventBus | None = None,
+        gate: SecurityChangeGate | None = None,
     ) -> None:
         self._config = config
         self._defaults_path = defaults_path
@@ -73,6 +81,7 @@ class ConfigEditor:
         self._appliers: dict[str, Applier] = dict(appliers or {})
         self._audit = audit
         self._bus = bus
+        self._gate = gate
 
     # -- read ------------------------------------------------------------------------------------
 
@@ -93,10 +102,16 @@ class ConfigEditor:
 
     # -- write -----------------------------------------------------------------------------------
 
-    async def apply(self, values: Mapping[str, Any], *, by: str = "dashboard") -> dict[str, Any]:
-        """Validate, persist and (where possible) live-apply a batch of settings."""
-        defaults = read_yaml_layer(self._defaults_path)
-        existing = load_existing_user_layer(self._user_config_path)
+    async def apply(
+        self, values: Mapping[str, Any], *, by: str = "dashboard", pin: str | None = None
+    ) -> dict[str, Any]:
+        """Validate, persist and - where the running core can - live-apply a batch of settings.
+
+        Reading the two layers and writing the file are blocking disk work and run in a thread:
+        this is an async IPC handler, and a settings form should not stall the event loop.
+        """
+        await self._authorize(values, by=by, pin=pin)
+        defaults, existing = await asyncio.to_thread(self._read_layers)
 
         patch: dict[str, Any] = {}
         accepted: dict[str, Any] = {}
@@ -119,7 +134,7 @@ class ConfigEditor:
         if not accepted:
             return {"ok": not errors, "applied": [], "restart_required": [], "errors": errors}
 
-        write_user_config(self._user_config_path, patch)
+        await asyncio.to_thread(write_user_config, self._user_config_path, patch)
 
         applied: list[str] = []
         restart_required: list[str] = []
@@ -149,6 +164,28 @@ class ConfigEditor:
         }
 
     # -- helpers ---------------------------------------------------------------------------------
+
+    def _read_layers(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The two layers a candidate is validated against, read in one thread hop."""
+        return read_yaml_layer(self._defaults_path), load_existing_user_layer(
+            self._user_config_path
+        )
+
+    async def _authorize(self, values: Mapping[str, Any], *, by: str, pin: str | None) -> None:
+        """A security or privacy setting needs the PIN, when one is configured.
+
+        These are the paths that can weaken what protects the user: the security profile, the
+        capture devices. The gate itself decides whether a PIN is required at all; see
+        `nox.security.gate`.
+        """
+        if self._gate is None or not self._gate.is_required():
+            return
+        if not security_paths(values):
+            return
+        try:
+            await self._gate.require(pin, action="config.set", by=by)
+        except PinRequiredError as exc:
+            raise PermissionError(exc.reason) from exc
 
     def _coerce(self, path: str, value: Any) -> Any:
         """Reject a non-editable path early; the value itself is validated by `NoxConfig`."""

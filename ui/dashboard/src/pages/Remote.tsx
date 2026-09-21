@@ -5,78 +5,70 @@
  * - the one-time code is shown exactly as the core returned it and never re-requested or cached;
  *   it is not stored anywhere, so leaving the page loses it and a new one must be generated;
  * - no key material is ever rendered — the core's `RemoteDevice` model has no such field;
- * - when `remote.enabled` is false the core answers `unavailable`, and the page says so instead of
- *   pretending the buttons would work.
+ * - when the feature is off the page says so *and disables the form*. `remote.enabled` is false by
+ *   default, and the core then never installs the `remote.*` requests at all, so the honest answer
+ *   is "not found", not a red error banner over a form that still looks usable.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 
-import type { RemoteDevice, RemotePairCode } from '../../../shared/generated/ipc';
-import type { T } from '../i18n';
+import { formatTimestamp } from '../../../shared/format';
+import { useIpcAction, useRefreshOnConnect } from '../hooks';
+import type { Lang, T } from '../i18n';
 import { type IpcClient, api } from '../ipc';
+import { type RemoteDevice, type RemotePairCode, parsePairCode, parseRemoteDevices } from '../model';
 import { Hero, StateWord, Tile } from '../ui';
 
 export interface RemotePageProps {
   t: T;
+  lang: Lang;
   /** null while offline: every request would fail, so the controls are disabled instead. */
   client: IpcClient | null;
+  /** Takes the user to the `remote.enabled` switch on the Settings tab. */
+  onOpenSettings: () => void;
 }
 
-export function RemotePage({ t, client }: RemotePageProps) {
+export function RemotePage({ t, lang, client, onOpenSettings }: RemotePageProps) {
   const [devices, setDevices] = useState<RemoteDevice[]>([]);
+  /** `null` only until the first answer; a failed request means "off", never "unknown forever". */
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [code, setCode] = useState<RemotePairCode | null>(null);
   const [name, setName] = useState('');
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState('');
-  const disabled = client === null;
+  const { busy, error, setError, run } = useIpcAction(client, t);
 
-  const refresh = useCallback(
-    async (c: IpcClient) => {
-      try {
-        const payload = await api.remoteDevices(c);
-        setDevices(
-          Array.isArray(payload.devices) ? (payload.devices as unknown as RemoteDevice[]) : [],
-        );
-        setEnabled(payload.enabled === true);
-      } catch (e) {
-        setError(`${t('error_prefix')}: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    },
-    [t],
-  );
-
-  useEffect(() => {
-    if (client) void refresh(client);
-  }, [client, refresh]);
-
-  const pair = async () => {
-    if (!client) return;
-    setBusy('pair');
-    setError('');
+  const refresh = async (c: IpcClient, cancelled: () => boolean = () => false) => {
     try {
-      setCode((await api.remotePairStart(client, name)) as unknown as RemotePairCode);
-      await refresh(client);
-    } catch (e) {
-      setError(`${t('error_prefix')}: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setBusy(null);
+      const parsed = parseRemoteDevices(await api.remoteDevices(c));
+      if (cancelled()) return;
+      setDevices(parsed?.devices ?? []);
+      setEnabled(parsed?.enabled === true);
+      setError('');
+    } catch {
+      // Unknown request, refused, or `remote.enabled: false` — from this page they are one fact:
+      // there is nothing to pair. Saying that is more use than repeating the core's wording.
+      if (cancelled()) return;
+      setDevices([]);
+      setEnabled(false);
+      setError('');
     }
   };
 
-  const revoke = async (deviceId: string) => {
-    if (!client) return;
-    setBusy(deviceId);
-    setError('');
-    try {
-      await api.remoteUnpair(client, deviceId);
-      await refresh(client);
-    } catch (e) {
-      setError(`${t('error_prefix')}: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setBusy(null);
-    }
-  };
+  useRefreshOnConnect(client, refresh);
+
+  const pair = () =>
+    run('pair', async (c) => {
+      setCode(parsePairCode(await api.remotePairStart(c, name)));
+      await refresh(c);
+    });
+
+  const revoke = (deviceId: string) =>
+    run(deviceId, async (c) => {
+      await api.remoteUnpair(c, deviceId);
+      await refresh(c);
+    });
+
+  const off = enabled === false;
+  const disabled = client === null || off;
 
   return (
     <div className="page wrap">
@@ -100,42 +92,59 @@ export function RemotePage({ t, client }: RemotePageProps) {
         <Tile
           feature
           id="pair"
-          eyebrow={enabled === false ? t('remote_disabled') : t('tab_remote')}
-          title={t('remote_pair_button')}
-          lede={t('remote_hint')}
+          eyebrow={off ? t('remote_unavailable') : undefined}
+          title={t('remote_tile_title')}
+          lede={off ? t('remote_disabled') : t('remote_hint')}
         >
-          <div className="row-controls">
-            <div className="field field--grow">
-              <label htmlFor="remote-name" className="label">
-                {t('remote_pair_name')}
-              </label>
-              <input
-                id="remote-name"
-                className="input"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                maxLength={64}
-              />
+          {off ? (
+            <div className="tile-actions">
+              <button type="button" className="link" onClick={onOpenSettings}>
+                {t('remote_settings_link')}
+              </button>
             </div>
-            <button
-              type="button"
-              className="btn"
-              disabled={disabled || enabled === false || busy === 'pair'}
-              onClick={() => void pair()}
-            >
-              {t('remote_pair_button')}
-            </button>
-          </div>
+          ) : (
+            <>
+              <div className="row-controls">
+                <div className="field field--grow">
+                  <label htmlFor="remote-name" className="label">
+                    {t('remote_pair_name')}
+                  </label>
+                  <input
+                    id="remote-name"
+                    className="input"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    maxLength={64}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={disabled || busy === 'pair'}
+                  onClick={() => void pair()}
+                >
+                  {t('remote_pair_button')}
+                </button>
+              </div>
 
-          {code && (
-            <div role="status" aria-live="polite" className="field field--spaced">
-              <p className="label">{t('remote_code_label')}</p>
-              <p className="code-display">{code.code}</p>
-              <p className="hint">{t('remote_code_hint')}</p>
-              <p className="hint">
-                {t('remote_expires_at')}: {code.expires_at}
-              </p>
-            </div>
+              {code && (
+                <div role="status" aria-live="polite" className="field field--spaced">
+                  <p className="label">{t('remote_code_label')}</p>
+                  <p className="code-display">{code.code}</p>
+                  <p className="hint">{t('remote_code_hint')}</p>
+                  <p className="hint">
+                    {t('remote_expires_at')}:{' '}
+                    <span title={code.expiresAt}>{formatTimestamp(code.expiresAt, lang)}</span>
+                  </p>
+                </div>
+              )}
+
+              <div className="tile-actions">
+                <button type="button" className="link" onClick={onOpenSettings}>
+                  {t('remote_telegram_link')}
+                </button>
+              </div>
+            </>
           )}
         </Tile>
       </div>
@@ -164,23 +173,29 @@ export function RemotePage({ t, client }: RemotePageProps) {
               </thead>
               <tbody>
                 {devices.map((device) => {
-                  const revoked = Boolean(device.revoked_at);
+                  const revoked = device.revokedAt !== null;
                   return (
                     <tr key={device.id}>
                       <th scope="row">{device.name || t('unknown')}</th>
                       <td>
                         <StateWord
-                          status={revoked ? 'off' : 'available'}
+                          tone={revoked ? 'off' : 'ok'}
                           label={revoked ? t('remote_state_revoked') : t('remote_state_active')}
                         />
                       </td>
-                      <td className="muted nowrap">{device.paired_at}</td>
-                      <td className="muted nowrap">{device.last_seen_at ?? t('remote_never')}</td>
+                      <td className="muted nowrap" title={device.pairedAt}>
+                        {formatTimestamp(device.pairedAt, lang)}
+                      </td>
+                      <td className="muted nowrap" title={device.lastSeenAt ?? undefined}>
+                        {device.lastSeenAt === null
+                          ? t('remote_never')
+                          : formatTimestamp(device.lastSeenAt, lang)}
+                      </td>
                       <td>
                         {!revoked && (
                           <button
                             type="button"
-                            className="link"
+                            className="link link--plain"
                             disabled={disabled || busy === device.id}
                             onClick={() => void revoke(device.id)}
                           >

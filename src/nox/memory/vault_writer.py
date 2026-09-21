@@ -1,13 +1,12 @@
-"""Vault writer: ownership-aware writes with rollback (ST-07-04, Data Model L3).
+"""Vault writer: ownership-aware writes with rollback (Data Model L3).
 
 Ownership rule: a note with `owner: nox` may be rewritten directly; every other note is never
-silently overwritten - Nox appends under a `## Nox` section instead. A write with no explicit,
-Nox-owned target goes to `00 - Inbox` with `nox: { written: true, source, confidence }`
+silently overwritten - Nox appends under a `## Nox` section instead. A write with no explicit, Nox-
+owned target goes to `00 - Inbox` with `nox: { written: true, source, confidence }`
 frontmatter. A concurrent edit (the file changed on disk since Nox last read it) never loses data:
 both versions are kept, one as a `.conflict-<ts>.md` sibling. Every rewrite of an existing note
-saves the prior content to `vault_note_versions` first, so `rollback()` can restore it (git
-bundling is out of scope here - this vault is not a git repository, see ST-07-04 Notes in the
-report).
+saves the prior content to `vault_note_versions` first, so `rollback` can restore it (git bundling
+is out of scope here - this vault is not a git repository, Notes in the report).
 """
 
 from __future__ import annotations
@@ -31,8 +30,8 @@ NOX_SECTION_HEADING = "## Nox"
 
 
 class VaultWriteRefusedError(RuntimeError):
-    """A privacy zone or `allows_memory_write() is False` refused this write (never silently
-    downgraded, per ST-07-01/ST-07-03)."""
+    """A privacy zone or `allows_memory_write is False` refused this write (never silently
+    downgraded)."""
 
 
 @dataclass(frozen=True, slots=True)

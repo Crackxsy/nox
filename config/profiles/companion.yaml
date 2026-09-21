@@ -1,6 +1,6 @@
 # Nox permission profile "companion" (Security Model §3). Default everyday profile.
 # `permissions` is read by nox.security.profiles; every other top-level key is a config overlay
-# merged by nox.core.config (ADR-010 layer 3). Hard prohibitions cannot be lifted here (§4).
+# merged as the third configuration layer. Hard prohibitions can never be lifted here.
 security:
   profile: companion
 
@@ -8,13 +8,13 @@ permissions:
   id: companion
   description: Local-first everyday companion. Cloud per privacy mode, confirm for medium/high risk.
   cloud_allowed: true
-  # api.telegram.org: the Mobile Companion bot (EPIC-17). Only reachable while `remote.enabled` is
+  # api.telegram.org: the mobile companion bot. Only reachable while `remote.enabled` is
   # true and a device is paired; the plugin's own manifest allow-list is the same single host.
   # id.twitch.tv: the user-initiated Twitch OAuth device-code login (nox.settings.twitch_auth).
   egress_allowlist: ["api.telegram.org:443", "id.twitch.tv:443"]
   memory_writes_allowed: true
   screenshots_to_cloud: false
-  filesystem_roots: []            # empty = inherit global read/write roots (FR-14.1)
+  filesystem_roots: []            # empty = inherit the global read/write roots
   tools_allowed: []
   integrations_allowed: [ollama, claude_code, telegram]
   rules:
@@ -30,11 +30,11 @@ permissions:
       tool: "filesystem*"
       action: "delete*"
       decision: confirm
-      reason: "deletion is quarantine-only and always confirmed (FR-14.1)"
+      reason: "deletion moves to quarantine and is always confirmed"
     - id: companion.shell
       tool: "shell*"
       decision: confirm
-      reason: "terminal commands are allow-listed and confirmed outside coding (FR-14.2)"
+      reason: "outside coding, terminal commands are allow-listed and confirmed"
     - id: companion.git.push
       tool: "git*"
       action: "push*"

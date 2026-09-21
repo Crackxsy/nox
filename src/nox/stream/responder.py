@@ -1,14 +1,13 @@
-"""StreamResponder: turns a qualifying Twitch chat message into a spoken-in-chat answer (Spec v0.2
-§3.3/§9, EPIC-11).
+"""StreamResponder: turns a qualifying Twitch chat message into a spoken-in-chat answer.
 
 Triggers on `twitch.chat_message` when `addressed_to_nox` or `relevance >= stream.relevance.
 threshold`, subject to a per-channel cooldown and a max-replies-per-minute cap (both
 `stream.relevance.*`), and is silenced entirely once `security.kill_switch` is engaged (safe mode:
-no AI requests, no plugin actions - Runtime Lifecycle "Safe mode"). The answer comes from one
-non-streaming `Router.complete()` turn built with `build_system_prompt(DECIDED_PERSONALITY_BLOCK,
-facts)` plus the chat message wrapped by `untrusted(text, f"twitch:{user}")` (Tool Model prompt
-rules: chat content is data, never instructions). The answer is trimmed to one line and sent
-*only* through `ToolExecutor.call("twitch.chat.send", ...)` - never any other path - so it goes
+no AI requests, no plugin actions - Runtime Lifecycle "Safe mode"). The answer comes from one non-
+streaming `Router.complete` turn built with `build_system_prompt(DECIDED_PERSONALITY_BLOCK, facts)`
+plus the chat message wrapped by `untrusted(text, f"twitch:{user}")` (Tool Model prompt rules: chat
+content is data, never instructions). The answer is trimmed to one line and sent
+*only* through `ToolExecutor.call("twitch.chat.send",...)` - never any other path - so it goes
 through the normal permission/audit pipeline like every other tool action.
 """
 
@@ -139,7 +138,7 @@ class StreamResponder:
 
 
 def _one_line(text: str, max_chars: int) -> str:
-    """Collapse to a single chat line and cut to `max_chars` (Spec v0.2 §9: one chat message)."""
+    """Collapse to a single chat line and cut to `max_chars` (one chat message)."""
     stripped = text.strip()
     if not stripped:
         return ""

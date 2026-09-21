@@ -1,16 +1,16 @@
-"""Where voice model files live, and how the user gets the Kokoro ones (#21).
+"""Where voice model files live, and how the user gets the Kokoro ones.
 
-Nox never downloads a model on its own. Engines resolve their files below a models root and, when
-a file is missing, report `unavailable` with the exact path plus the command that fetches it - the
+Nox never downloads a model on its own. Engines resolve their files below a models root and, when a
+file is missing, report `unavailable` with the exact path plus the command that fetches it - the
 decision to pull ~354 MB over the network stays with the user (`nox voice download-kokoro`, i.e.
 `python -m nox.worker --download-kokoro`).
 
 Resolution order for the models root:
-  1. `voice.models_dir` from the configuration, when set;
-  2. `$NOX_DATA_DIR/models`, when the process was started with that variable;
-  3. `%APPDATA%/Nox/models`, which mirrors the `paths.data_dir` default in `config/defaults.yaml`.
-A deployment that moved `paths.data_dir` elsewhere sets `voice.models_dir` explicitly - the voice
-worker only ever receives the `voice` section of the configuration, never `paths`.
+1. `voice.models_dir` from the configuration, when set; 2. `$NOX_DATA_DIR/models`, when the process
+was started with that variable; 3. `%APPDATA%/Nox/models`, which mirrors the `paths.data_dir`
+default in `config/defaults.yaml`. A deployment that moved `paths.data_dir` elsewhere sets
+`voice.models_dir` explicitly - the voice worker only ever receives the `voice` section of the
+configuration, never `paths`.
 """
 
 from __future__ import annotations

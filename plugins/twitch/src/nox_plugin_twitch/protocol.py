@@ -1,4 +1,4 @@
-"""Twitch IRC wire parsing (ST-11-04, Spec v0.2 Stream Bot §6.2).
+"""Twitch IRC wire parsing (Stream Bot).
 
 Pure functions/dataclasses only - no sockets here. Twitch's IRC server speaks a subset of
 RFC1459/IRCv3: an optional leading `@tag=value;...` block, an optional `:prefix`, a command, and

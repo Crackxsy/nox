@@ -1,6 +1,7 @@
-"""Always-empty, zero-cost detector (ST-18-02 AC: "always returns no detections and consumes no
-GPU/measurable resources"). The safe default when Stage 2 is off (`rl.vision.backend: none`) or
-when a real backend has not been selected."""
+"""Always-empty, zero-cost detector (AC: "always returns no detections and consumes no
+GPU/measurable
+resources"). The safe default when Stage 2 is off (`rl.vision.backend: none`) or when a real
+backend has not been selected."""
 
 from __future__ import annotations
 
