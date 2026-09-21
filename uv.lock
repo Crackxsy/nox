@@ -1111,7 +1111,7 @@ voice-kokoro = [
 
 [package.metadata]
 requires-dist = [
-    { name = "faster-whisper", marker = "extra == 'voice'", specifier = ">=1.1" },
+    { name = "faster-whisper", marker = "extra == 'voice'", specifier = ">=1.2.1" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "keyring", specifier = ">=25.7.0" },
     { name = "kokoro-onnx", marker = "extra == 'voice-kokoro'", specifier = ">=0.6" },
@@ -1120,14 +1120,14 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "numpy", marker = "extra == 'rl'", specifier = ">=2.0" },
     { name = "onnxruntime", marker = "extra == 'voice-kokoro'", specifier = ">=1.20" },
-    { name = "opencv-python-headless", marker = "extra == 'rl'", specifier = ">=4.10" },
+    { name = "opencv-python-headless", marker = "extra == 'rl'", specifier = ">=5.0.0.93" },
     { name = "openwakeword", marker = "extra == 'voice'", specifier = ">=0.6" },
-    { name = "piper-tts", marker = "extra == 'voice'", specifier = ">=1.2" },
+    { name = "piper-tts", marker = "extra == 'voice'", specifier = ">=1.8.0" },
     { name = "playwright", marker = "extra == 'e2e'", specifier = ">=1.62.0" },
     { name = "psutil", specifier = ">=6.0" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pynput", marker = "extra == 'shell'", specifier = ">=1.8.2" },
-    { name = "pyside6", marker = "extra == 'shell'", specifier = ">=6.8" },
+    { name = "pyside6", marker = "extra == 'shell'", specifier = ">=6.11.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
