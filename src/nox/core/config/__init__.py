@@ -77,6 +77,13 @@ from nox.core.config.loader import (
     read_yaml_layer,
 )
 from nox.core.config.model import NoxConfig
+from nox.core.config.presets import (
+    PresetActionConfig,
+    PresetConfig,
+    PresetsConfig,
+    PresetStep,
+    PresetTriggerConfig,
+)
 from nox.core.config.security import (
     DEFAULT_LOOPBACK_ALLOWLIST,
     SECURITY_PROFILE_IDS,
@@ -132,6 +139,11 @@ __all__ = [
     "PetConfig",
     "PluginsConfig",
     "PmConfig",
+    "PresetActionConfig",
+    "PresetConfig",
+    "PresetStep",
+    "PresetTriggerConfig",
+    "PresetsConfig",
     "PrivacyConfig",
     "ProactiveConfig",
     "QuietHoursConfig",

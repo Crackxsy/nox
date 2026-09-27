@@ -29,6 +29,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from nox.core.config import PresetsConfig
 from nox.core.logging import get_logger
 from nox.ipc.dispatch import EmptyPayload, RequestContext
 from nox.ipc.errors import ERR_PERMISSION, IpcError
@@ -114,6 +115,27 @@ def build_appliers(core: _Core) -> dict[str, Applier]:
         if core.orchestrator is not None:
             core.orchestrator.config.default_language = str(value)
 
+    def replace_presets(**changes: Any) -> None:
+        """Swap in a new presets section, revalidated as a whole.
+
+        A preset refers to actions by name, so changing either list has to be checked against the
+        other - validating the section rather than the single field is what catches a preset left
+        pointing at an action that was just deleted. The runner reads `config.presets` on every
+        activation, so the next spoken phrase already uses the new list.
+        """
+        config.presets = PresetsConfig.model_validate(
+            {**config.presets.model_dump(), **changes}
+        )
+
+    async def set_presets_enabled(value: Any) -> None:
+        replace_presets(enabled=bool(value))
+
+    async def set_presets_actions(value: Any) -> None:
+        replace_presets(actions=value)
+
+    async def set_presets_items(value: Any) -> None:
+        replace_presets(items=value)
+
     async def set_pet_variant(value: Any) -> None:
         # The renderer takes the variant as a query flag, so the shell re-points the pet page when
         # it sees `settings.changed`; the core-side value is what it re-reads.
@@ -134,6 +156,9 @@ def build_appliers(core: _Core) -> dict[str, Applier]:
         "privacy.capture.microphone": capture_applier("microphone"),
         "privacy.capture.camera": capture_applier("camera"),
         "privacy.capture.screen": capture_applier("screen"),
+        "presets.enabled": set_presets_enabled,
+        "presets.actions": set_presets_actions,
+        "presets.items": set_presets_items,
     }
 
 

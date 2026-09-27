@@ -72,6 +72,13 @@ EDITABLE_PATHS: dict[str, str] = {
     "remote.enabled": "remote",
     "memory.full_scan_on_boot": "memory",
     "plugins.enabled": "plugins",
+    # Presets are lists of models, not scalars, so they carry the "structured" kind: the
+    # generic settings form skips them and the Presets page edits them with a form that
+    # understands steps. The write path is the same one every other setting uses, which is
+    # what gives them the same validation against `NoxConfig` and the same audit entry.
+    "presets.enabled": "presets",
+    "presets.actions": "presets",
+    "presets.items": "presets",
 }
 
 #: Paths the running core adopts immediately (see `nox.settings.editor` for what each one does).
@@ -85,12 +92,17 @@ LIVE_APPLY_PATHS: frozenset[str] = frozenset(
         "privacy.capture.camera",
         "privacy.capture.screen",
         "pet.variant",
+        "presets.enabled",
+        "presets.actions",
+        "presets.items",
     }
 )
 
 #: The value kinds the dashboard knows how to render. Anything a model expresses that does not map
 #: onto one of these is simply not offered for editing (it never reaches `EDITABLE_PATHS`).
-ValueKind = Literal["string", "int", "float", "bool", "enum", "list[str]"]
+ValueKind = Literal[
+    "string", "int", "float", "bool", "enum", "list[str]", "structured"
+]
 
 
 class UnknownSettingError(KeyError):
@@ -143,6 +155,8 @@ def _kind_and_options(annotation: Any) -> tuple[ValueKind, list[str] | None]:
         args = get_args(annotation)
         if args and args[0] is str:
             return "list[str]", None
+        if args:
+            return "structured", None
         raise UnknownSettingError("unsupported list element type")
     if annotation is bool:
         return "bool", None
