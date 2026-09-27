@@ -60,6 +60,9 @@ their internals without notice, and an integration built on those internals brea
 
 What works today, with any hardware:
 
+Ready-made starting points, including a mouse-sensitivity script for both AutoHotkey versions,
+are in [`examples/presets/`](../examples/presets/README.md).
+
 1. Make the change once with the tool you already have - a profile, a macro, a small script.
 2. Find a way to trigger it from the command line. Most vendor tools can export a profile, and
    [AutoHotkey](https://www.autohotkey.com/) can drive almost anything that has a hotkey.
