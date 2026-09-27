@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from nox.data.db import Database
-from nox.data.repos import Row
+from nox.data.repos import Row, written_row
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -84,9 +84,10 @@ class RlVisionFrameRepository:
                 _iso(retain_until),
             ),
         )
-        row = self.get(int(cur.lastrowid or 0))
-        assert row is not None
-        return row
+        row_id = cur.lastrowid
+        if row_id is None:  # pragma: no cover - SQLite reports an id for every INSERT
+            raise LookupError("rl_vision_frames: the insert reported no row id")
+        return written_row(self.get(row_id), "rl_vision_frames", row_id)
 
     def get(self, frame_id: int) -> RlVisionFrameRow | None:
         row = self._db.fetch_one("SELECT * FROM rl_vision_frames WHERE id = ?", (frame_id,))
@@ -146,9 +147,10 @@ class RlVisionAnalysisRepository:
                 coaching_summary,
             ),
         )
-        row = self.get(int(cur.lastrowid or 0))
-        assert row is not None
-        return row
+        row_id = cur.lastrowid
+        if row_id is None:  # pragma: no cover - SQLite reports an id for every INSERT
+            raise LookupError("rl_vision_analysis: the insert reported no row id")
+        return written_row(self.get(row_id), "rl_vision_analysis", row_id)
 
     def get(self, analysis_id: int) -> RlVisionAnalysisRow | None:
         row = self._db.fetch_one("SELECT * FROM rl_vision_analysis WHERE id = ?", (analysis_id,))

@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from nox.data.db import Database
-from nox.data.repos import Row
+from nox.data.repos import Row, written_row
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -69,9 +69,7 @@ class RlReplayRepository:
                 json.dumps(header),
             ),
         )
-        row = self.get_by_path(file_path)
-        assert row is not None
-        return row
+        return written_row(self.get_by_path(file_path), "rl_replays", file_path)
 
     def get(self, replay_id: int) -> RlReplayRow | None:
         row = self._db.fetch_one("SELECT * FROM rl_replays WHERE id = ?", (replay_id,))
@@ -124,9 +122,10 @@ class RlMatchRepository:
         cur = self._db.execute(
             "INSERT INTO rl_matches (started_at) VALUES (?)", (_iso(started_at or _now()),)
         )
-        row = self.get(int(cur.lastrowid or 0))
-        assert row is not None
-        return row
+        row_id = cur.lastrowid
+        if row_id is None:  # pragma: no cover - SQLite reports an id for every INSERT
+            raise LookupError("rl_matches: the insert reported no row id")
+        return written_row(self.get(row_id), "rl_matches", row_id)
 
     def get(self, match_id: int) -> RlMatchRow | None:
         row = self._db.fetch_one("SELECT * FROM rl_matches WHERE id = ?", (match_id,))
@@ -228,9 +227,10 @@ class RlEventRepository:
                 _iso(retain_until),
             ),
         )
-        row = self.get(int(cur.lastrowid or 0))
-        assert row is not None
-        return row
+        row_id = cur.lastrowid
+        if row_id is None:  # pragma: no cover - SQLite reports an id for every INSERT
+            raise LookupError("rl_events: the insert reported no row id")
+        return written_row(self.get(row_id), "rl_events", row_id)
 
     def get(self, event_id: int) -> RlEventRow | None:
         row = self._db.fetch_one("SELECT * FROM rl_events WHERE id = ?", (event_id,))

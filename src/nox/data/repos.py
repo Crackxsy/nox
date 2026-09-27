@@ -41,7 +41,7 @@ class Row(BaseModel):
 # ---- state checkpoints ---------------------------------------------------------------------------
 
 
-def _written[RowT: Row](row: RowT | None, table: str, key: object) -> RowT:
+def written_row[RowT: Row](row: RowT | None, table: str, key: object) -> RowT:
     """Return the row that was just written, or say which one went missing.
 
     Every `add`/`create` here writes a row and reads it back to return it. That read cannot fail
@@ -191,7 +191,7 @@ class SessionRepository:
             "INSERT INTO sessions (id, started_at, mode, privacy_mode) VALUES (?, ?, ?, ?)",
             (sid, _iso(started), mode, privacy_mode),
         )
-        return _written(self.get(sid), "sessions", sid)
+        return written_row(self.get(sid), "sessions", sid)
 
     def get(self, session_id: str) -> SessionRow | None:
         row = self._db.fetch_one("SELECT * FROM sessions WHERE id = ?", (session_id,))
@@ -314,7 +314,7 @@ class TaskRepository:
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (tid, kind, priority, TaskStatus.PENDING, json.dumps(payload or {}), now, now),
         )
-        return _written(self.get(tid), "tasks", tid)
+        return written_row(self.get(tid), "tasks", tid)
 
     def get(self, task_id: str) -> TaskRow | None:
         row = self._db.fetch_one("SELECT * FROM tasks WHERE id = ?", (task_id,))
@@ -414,7 +414,7 @@ class TemporaryGrantRepository:
                 _iso(_now()),
             ),
         )
-        return _written(self.get(gid), "temporary_grants", gid)
+        return written_row(self.get(gid), "temporary_grants", gid)
 
     def get(self, grant_id: str) -> TemporaryGrantRow | None:
         row = self._db.fetch_one("SELECT * FROM temporary_grants WHERE grant_id = ?", (grant_id,))
@@ -498,7 +498,7 @@ class MemoryItemRepository:
         row_id = cur.lastrowid
         if row_id is None:  # pragma: no cover - SQLite reports an id for every INSERT
             raise LookupError("memory_items: the insert reported no row id")
-        return _written(self.get(row_id), "memory_items", row_id)
+        return written_row(self.get(row_id), "memory_items", row_id)
 
     def get(self, item_id: int) -> MemoryItemRow | None:
         row = self._db.fetch_one("SELECT * FROM memory_items WHERE id = ?", (item_id,))
@@ -620,7 +620,7 @@ class NotificationRepository:
                 _iso(expires_at),
             ),
         )
-        return _written(self.get(id), "notifications", id)
+        return written_row(self.get(id), "proactive_notifications", id)
 
     def get(self, notification_id: str) -> NotificationRow | None:
         row = self._db.fetch_one(

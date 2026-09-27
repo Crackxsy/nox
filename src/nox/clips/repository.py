@@ -12,7 +12,7 @@ from typing import Any
 from pydantic import Field
 
 from nox.data.db import Database
-from nox.data.repos import Row
+from nox.data.repos import Row, written_row
 
 STATUSES = ("new", "reviewed", "exported", "discarded")
 
@@ -102,9 +102,7 @@ class ClipRepository:
                 notes,
             ),
         )
-        row = self.get(clip_id)
-        assert row is not None
-        return row
+        return written_row(self.get(clip_id), "clips", clip_id)
 
     def get(self, clip_id: str) -> ClipRow | None:
         row = self._db.fetch_one("SELECT * FROM clips WHERE id = ?", (clip_id,))
@@ -170,9 +168,7 @@ class ClipMarkerRepository:
             "VALUES (?, ?, ?, ?, ?)",
             (marker_id, session_id, timestamp_s, reason, created_at),
         )
-        row = self.get(marker_id)
-        assert row is not None
-        return row
+        return written_row(self.get(marker_id), "clip_markers", marker_id)
 
     def get(self, marker_id: str) -> ClipMarkerRow | None:
         row = self._db.fetch_one("SELECT * FROM clip_markers WHERE id = ?", (marker_id,))
