@@ -480,10 +480,10 @@ class MemoryItemRepository:
         retain_until: datetime | None = None,
         created_at: datetime | None = None,
     ) -> MemoryItemRow:
-        cur = self._db.execute(
+        row = self._db.insert_returning(
             "INSERT INTO memory_items "
             "(type, text, importance, source, vault_path, created_at, retain_until, privacy_class) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
             (
                 type,
                 text,
@@ -495,10 +495,7 @@ class MemoryItemRepository:
                 privacy_class,
             ),
         )
-        row_id = cur.lastrowid
-        if row_id is None:  # pragma: no cover - SQLite reports an id for every INSERT
-            raise LookupError("memory_items: the insert reported no row id")
-        return written_row(self.get(row_id), "memory_items", row_id)
+        return MemoryItemRow(**dict(row))
 
     def get(self, item_id: int) -> MemoryItemRow | None:
         row = self._db.fetch_one("SELECT * FROM memory_items WHERE id = ?", (item_id,))
