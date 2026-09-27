@@ -123,9 +123,7 @@ def build_appliers(core: _Core) -> dict[str, Applier]:
         pointing at an action that was just deleted. The runner reads `config.presets` on every
         activation, so the next spoken phrase already uses the new list.
         """
-        config.presets = PresetsConfig.model_validate(
-            {**config.presets.model_dump(), **changes}
-        )
+        config.presets = PresetsConfig.model_validate({**config.presets.model_dump(), **changes})
 
     async def set_presets_enabled(value: Any) -> None:
         replace_presets(enabled=bool(value))

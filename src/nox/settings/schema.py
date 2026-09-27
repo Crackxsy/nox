@@ -100,9 +100,7 @@ LIVE_APPLY_PATHS: frozenset[str] = frozenset(
 
 #: The value kinds the dashboard knows how to render. Anything a model expresses that does not map
 #: onto one of these is simply not offered for editing (it never reaches `EDITABLE_PATHS`).
-ValueKind = Literal[
-    "string", "int", "float", "bool", "enum", "list[str]", "structured"
-]
+ValueKind = Literal["string", "int", "float", "bool", "enum", "list[str]", "structured"]
 
 
 class UnknownSettingError(KeyError):
