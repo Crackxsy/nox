@@ -3,8 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+from pytest import MonkeyPatch
+
 from nox.shell.runtime import (
     ShellState,
+    candidate_runtime_dirs,
     load_config,
     load_shell_state,
     read_ipc_endpoints,
@@ -68,3 +72,58 @@ def test_load_config(tmp_path: Path) -> None:
     assert load_config(cfg) == {}
     # repo defaults are found without an explicit path
     assert "ipc" in load_config()
+
+
+def test_candidates_follow_the_configured_runtime_dir(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """The shell has to look where the core actually wrote, not where it usually writes."""
+    moved = tmp_path / "somewhere" / "else"
+    config = tmp_path / "user.yaml"
+    config.write_text(f"paths:\n  runtime_dir: {moved.as_posix()}\n", encoding="utf-8")
+    monkeypatch.setenv("NOX_USER_CONFIG", str(config))
+    monkeypatch.delenv("NOX_RUNTIME_DIR", raising=False)
+
+    candidates = candidate_runtime_dirs()
+
+    assert moved in candidates
+
+
+def test_the_environment_override_still_wins(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    config = tmp_path / "user.yaml"
+    config.write_text(f"paths:\n  runtime_dir: {(tmp_path / 'cfg').as_posix()}\n", encoding="utf-8")
+    monkeypatch.setenv("NOX_USER_CONFIG", str(config))
+    monkeypatch.setenv("NOX_RUNTIME_DIR", str(tmp_path / "env"))
+
+    assert candidate_runtime_dirs()[0] == tmp_path / "env"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "not: [valid",  # broken YAML
+        "paths: 'a string, not a section'",
+        "paths:\n  runtime_dir: ''",
+        "",
+    ],
+)
+def test_an_unusable_configuration_leaves_the_default_in_place(
+    tmp_path: Path, monkeypatch: MonkeyPatch, content: str
+) -> None:
+    """A malformed configuration is a reason to fall back, never a reason not to start."""
+    config = tmp_path / "user.yaml"
+    config.write_text(content, encoding="utf-8")
+    monkeypatch.setenv("NOX_USER_CONFIG", str(config))
+    monkeypatch.delenv("NOX_RUNTIME_DIR", raising=False)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+
+    assert candidate_runtime_dirs() == [tmp_path / "appdata" / "Nox" / "runtime"]
+
+
+def test_no_candidate_list_is_ever_empty(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    """`resolve_runtime_dir` indexes into this list; an empty one would be an IndexError."""
+    monkeypatch.delenv("NOX_RUNTIME_DIR", raising=False)
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setenv("NOX_USER_CONFIG", str(tmp_path / "missing.yaml"))
+
+    assert candidate_runtime_dirs() != []
