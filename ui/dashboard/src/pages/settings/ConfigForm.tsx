@@ -59,6 +59,9 @@ function asText(value: unknown): string {
 export function groupsOf(config: EditableConfig): { group: string; specs: SettingSpec[] }[] {
   const byGroup = new Map<string, SettingSpec[]>();
   for (const spec of config.schema) {
+    // Structured settings (presets and their programs) are lists of models. They are edited on
+    // the Presets page, which knows what a step is; a generic control could only mangle them.
+    if (spec.type === 'structured') continue;
     const list = byGroup.get(spec.group);
     if (list) list.push(spec);
     else byGroup.set(spec.group, [spec]);

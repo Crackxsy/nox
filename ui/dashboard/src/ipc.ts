@@ -102,6 +102,14 @@ export const api = {
   /** The real connection test behind Settings -> Zuhause -> "Verbindung testen". */
   homeTest: (c: IpcClient) => c.request('home.test', {}),
 
+  // -- presets ---------------------------------------------------------------------------------
+  presetsList: (c: IpcClient) => c.request('presets.list', {}),
+  /** Runs every step of one preset; the result says which step failed, if any. */
+  presetsActivate: (c: IpcClient, preset: string) => c.request('presets.activate', { preset }),
+  /** Starts one registered program on its own, through the same starter a step uses. */
+  presetsTestAction: (c: IpcClient, action: string) =>
+    c.request('presets.test_action', { action }),
+
   // -- editable settings (Settings page) ---------------------------------------------------------
   configGet: (c: IpcClient) => c.request('config.get', {}),
   configSet: (c: IpcClient, values: Record<string, unknown>) => c.request('config.set', { values }),
