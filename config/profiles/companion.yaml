@@ -27,6 +27,18 @@ permissions:
   tools_allowed: []
   integrations_allowed: [ollama, claude_code, telegram, home_assistant]
   rules:
+    # A preset step that starts a program the user registered. The decision turns on who is
+    # asking, which is the whole point of the split: `agent: presets` is the core carrying out
+    # steps from the user's own configuration, reached by their own phrase, schedule or button -
+    # the program, the preset and the trigger are all theirs, and a dialog would only ask them to
+    # confirm what they already wrote down. A model asking for `presets.run_action` itself does
+    # not match this rule and falls to the default for high risk, which is confirm.
+    - id: companion.presets.run_action
+      agent: presets
+      tool: "presets"
+      action: "run_action"
+      decision: allow
+      reason: "the program, the preset and the trigger were all configured by the user"
     # Smart home. Scripts, automations and thermostats stay confirmable whatever follows: a script
     # can do anything its author put in it, and a wrong target temperature is invisible in the room
     # until someone notices. Reading is free, and the reversible device verbs are pre-approved -

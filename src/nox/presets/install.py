@@ -32,9 +32,11 @@ log = get_logger(__name__)
 
 __all__ = ["PresetsRuntime", "install"]
 
-#: Presets act for the user, not for a plugin, so their tool calls carry the companion agent -
-#: the same one the dashboard uses when a person presses a button.
-_AGENT = "companion"
+#: Steps run under their own agent name, and that is what makes the permission rules able to
+#: tell the two cases apart. `presets` means: the core is carrying out steps the user wrote into
+#: a preset, triggered by their own phrase, schedule or button. A language model asking for the
+#: same tool directly arrives as `companion` and gets the ordinary treatment for its risk level.
+_AGENT = "presets"
 
 DEFAULT_MODE = Mode.COMPANION.value
 
