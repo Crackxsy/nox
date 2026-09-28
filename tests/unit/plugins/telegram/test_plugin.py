@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import pytest
 from nox_plugin_telegram.plugin import TelegramSendInput
+from pydantic import ValidationError
 
 from nox.ipc.errors import ERR_RATE_LIMITED, ERR_UNAVAILABLE, IpcError
+from nox.plugins.api import PluginApiError
 from nox.plugins.manifest import load_manifest
 from nox.security.egress import EgressDenied
 from nox.security.model import Risk
@@ -91,21 +93,24 @@ async def test_plugin_never_answers_a_command_itself(
 # -- outbound -----------------------------------------------------------------------------------
 
 
-async def test_send_uses_the_last_inbound_chat_when_none_is_given(telegram: FakeTelegram, plugin):
-    telegram.queue_message("hallo", chat_id="77")
+async def test_send_never_falls_back_to_whoever_wrote_last(telegram: FakeTelegram, plugin):
+    """A stranger who finds the bot and says "hi" must not become the notification target."""
+    telegram.queue_message("hi", sender_id="666", chat_id="666")
     for update in await plugin.client.get_updates():
         await plugin.client._dispatch(update)
 
-    await plugin.send(TelegramSendInput(text="Not-Aus aktiv."))
+    with pytest.raises(ValidationError):
+        TelegramSendInput(text="Not-Aus aktiv.")
+    with pytest.raises(PluginApiError):
+        await plugin.api.tools.call("telegram.send", {"text": "Not-Aus aktiv."})
 
-    assert telegram.sent == [("77", "Not-Aus aktiv.")]
+    assert telegram.sent == []
 
 
-async def test_send_without_any_chat_is_refused_not_faked(plugin):
-    with pytest.raises(IpcError) as exc:
-        await plugin.send(TelegramSendInput(text="hallo"))
-
-    assert exc.value.code == ERR_UNAVAILABLE
+@pytest.mark.parametrize("chat_id", ["", "@channel", "77; DROP", "1" * 21])
+def test_a_chat_id_must_be_a_telegram_chat_number(chat_id: str) -> None:
+    with pytest.raises(ValidationError):
+        TelegramSendInput(text="hallo", chat_id=chat_id)
 
 
 async def test_send_is_rate_limited(telegram: FakeTelegram, plugin):

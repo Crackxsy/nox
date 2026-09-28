@@ -91,6 +91,16 @@ def test_an_older_update_id_is_rejected_as_replay(policy: RemoteCommandPolicy):
     assert not decision.allowed and decision.reason == "replay"
 
 
+@pytest.mark.parametrize("last", [0, 5])
+def test_a_message_without_an_update_id_cannot_prove_freshness(
+    policy: RemoteCommandPolicy, last: int
+):
+    """`update_id == 0` used to skip the replay check entirely (a falsy test)."""
+    decision = policy.decide(message("/kill", update_id=0), device(last_update_id=last))
+
+    assert not decision.allowed and decision.reason == "replay"
+
+
 def test_a_newer_update_id_passes(policy: RemoteCommandPolicy):
     assert policy.decide(message("/kill", update_id=6), device(last_update_id=5)).allowed
 

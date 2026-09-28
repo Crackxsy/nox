@@ -1,7 +1,9 @@
 """SupervisorClient: the core's side of the control channel (Runtime Lifecycle step 8).
 
-Authenticates once per connection (B-1): sends `sup.auth {token, role, pid}` as the first frame and
-waits for `sup.auth_ok` before doing anything else; every frame after that (`sup.heartbeat`,
+Authenticates once per connection (B-1): sends `sup.auth {token, role, pid, core_secret}` as the
+first frame - the secret is the one the supervisor generated for this spawn, which is what makes
+the supervisor accept this connection as the core - and waits for `sup.auth_ok` before doing
+anything else; every frame after that (`sup.heartbeat`,
 `sup.ack`) carries no token. Sends `sup.heartbeat` every `interval_s` and answers `sup.kill` with
 `sup.ack` immediately - the ack means "received and acting", which is what the supervisor's 2 s
 window measures - then dispatches on the frame's `mode`: `mode=restart` (the watchdog's graceful
@@ -68,6 +70,7 @@ class SupervisorClient:
         max_reconnect_delay_s: float = 10.0,
         client_id: str = "core",
         pid: int | None = None,
+        core_secret: str | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -81,6 +84,7 @@ class SupervisorClient:
         self._max_reconnect_delay = max_reconnect_delay_s
         self._src = Source(role="core", id=client_id)
         self._pid = pid or os.getpid()
+        self._core_secret = core_secret
         self._log = get_logger(__name__)
         self._task: asyncio.Task[None] | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -94,12 +98,19 @@ class SupervisorClient:
 
     @classmethod
     def from_env(cls, **kwargs: Any) -> SupervisorClient | None:
-        """Build from NOX_SUPERVISOR_{HOST,PORT,TOKEN}; None when not spawned by a supervisor."""
+        """Build from NOX_SUPERVISOR_{HOST,PORT,TOKEN,CORE_SECRET}; None when not spawned by a
+        supervisor.
+
+        The token and the spawn secret are removed from the process environment here, once read:
+        every worker, plugin and tool the core starts copies the environment, and none of them may
+        be able to talk to the supervisor, least of all as the core.
+        """
         settings = m.env_settings()
         if settings is None:
             return None
         host, port, token = settings
-        return cls(host, port, token, **kwargs)
+        core_secret = m.take_core_credentials()
+        return cls(host, port, token, core_secret=core_secret, **kwargs)
 
     @property
     def connected(self) -> bool:
@@ -188,7 +199,14 @@ class SupervisorClient:
     ) -> None:
         """B-1: send `sup.auth` first and require `sup.auth_ok` before anything else."""
         await self._send(
-            writer, m.auth_frame(self._token, role="core", pid=self._pid, src=self._src)
+            writer,
+            m.auth_frame(
+                self._token,
+                role="core",
+                pid=self._pid,
+                src=self._src,
+                core_secret=self._core_secret,
+            ),
         )
         reply = await m.read_envelope(reader)
         if reply is None or reply.name != m.NAME_AUTH_OK:

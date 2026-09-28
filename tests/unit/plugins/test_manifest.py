@@ -207,11 +207,70 @@ def test_validate_tool_and_secret_names() -> None:
         validate_secret_name(manifest, "nox/demo/other")
 
 
-def test_event_namespaces_cover_id_and_declared_emit_prefixes() -> None:
+@pytest.mark.parametrize(
+    "event",
+    [
+        "privacy.capture_changed",
+        "security.kill_switch",
+        "system.started",
+        "sup.kill",
+        "worker.registered",
+        "ipc.client_connected",
+        "plugin.started",
+        "voice.kill_phrase",
+        "memory.written",
+    ],
+)
+def test_a_manifest_cannot_emit_into_a_namespace_the_core_reserves(event: str) -> None:
+    with pytest.raises(ManifestError, match="only the core may publish"):
+        parse_manifest({**VALID_MANIFEST, "events": {"emits": [event], "listens": []}})
+
+
+def test_emitted_events_must_be_exact_names_not_patterns() -> None:
+    with pytest.raises(ManifestError, match="exact name"):
+        parse_manifest({**VALID_MANIFEST, "events": {"emits": ["demo.*"], "listens": []}})
+
+
+def test_events_outside_the_own_namespace_stay_possible_when_declared() -> None:
     manifest = parse_manifest(
         {**VALID_MANIFEST, "events": {"emits": ["demo.pong", "stream.started"], "listens": []}}
     )
-    assert manifest.event_namespaces() == frozenset({"demo", "stream"})
+    assert manifest.events.emits == ["demo.pong", "stream.started"]
+
+
+def test_required_tools_are_exact_and_never_hard_prohibited() -> None:
+    manifest = parse_manifest({**VALID_MANIFEST, "requires": {"tools": ["memory.search"]}})
+    assert manifest.requires.tools == ["memory.search"]
+    with pytest.raises(ManifestError, match="exact dotted"):
+        parse_manifest({**VALID_MANIFEST, "requires": {"tools": ["memory.*"]}})
+    with pytest.raises(ManifestError, match="hard-prohibited"):
+        parse_manifest({**VALID_MANIFEST, "requires": {"tools": ["game.input.send"]}})
+
+
+def test_a_preflight_must_be_a_declared_read_tool_of_the_same_plugin() -> None:
+    permissions = [
+        {"tool": "demo.act", "risk": "medium", "preflight": "demo.check"},
+        {"tool": "demo.check", "risk": "read"},
+    ]
+    manifest = parse_manifest({**VALID_MANIFEST, "permissions": permissions})
+    assert manifest.permissions[0].preflight == "demo.check"
+    with pytest.raises(ManifestError, match="not a tool this manifest declares"):
+        parse_manifest(
+            {
+                **VALID_MANIFEST,
+                "permissions": [{"tool": "demo.act", "risk": "medium", "preflight": "x.check"}],
+            }
+        )
+    with pytest.raises(ManifestError, match="read-risk"):
+        parse_manifest(
+            {
+                **VALID_MANIFEST,
+                "permissions": [
+                    {"tool": "demo.act", "risk": "medium", "preflight": "demo.check"},
+                    {"tool": "demo.check", "risk": "low"},
+                ],
+            }
+        )
 
 
 def test_discovery_lists_only_directories_with_a_manifest(plugins_dir: Path) -> None:

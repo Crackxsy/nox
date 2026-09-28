@@ -33,3 +33,7 @@ config:
   #: A manual trigger (`!clip`/hotkey) attaches any `rl.event` seen in this preceding window as a
   #: secondary tag.
   manual_lookback_s: 20.0
+  #: One `!clip` per viewer per this many seconds, and at most this many manual clips an hour for
+  #: the whole chat: every accepted `!clip` writes a replay file to disk.
+  viewer_clip_cooldown_s: 300.0
+  max_manual_clips_per_hour: 12

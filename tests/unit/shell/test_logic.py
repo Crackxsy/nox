@@ -9,7 +9,7 @@ from nox.shell.logic import (
     HotkeyAction,
     ShellModel,
     TrayTint,
-    dashboard_url,
+    dashboard_open_url,
     hotkey_map,
     kill_path,
     parse_hotkey,
@@ -153,8 +153,12 @@ def test_permission_reply_payload() -> None:
         permission_reply({"agent": "x"}, allow=True, remember=False)
 
 
+def test_the_dashboard_link_carries_a_one_time_ticket_never_a_token() -> None:
+    assert dashboard_open_url(47801, "tkt") == "http://127.0.0.1:47801/open?ticket=tkt"
+    assert "token" not in dashboard_open_url(47801, "tkt")
+
+
 def test_urls_keep_token_out_of_query() -> None:
-    assert dashboard_url(47801, "tok") == "http://127.0.0.1:47801/dashboard/#token=tok"
     assert pet_url(47801, "tok") == "http://127.0.0.1:47801/pet/#token=tok"
     assert pet_url(47801, "tok", overlay=True) == "http://127.0.0.1:47801/pet/?overlay=1#token=tok"
     # OP-1: variant is a plain, non-secret query flag; "neutral" (the default) is omitted so
@@ -168,7 +172,6 @@ def test_urls_keep_token_out_of_query() -> None:
         == "http://127.0.0.1:47801/pet/?overlay=1&variant=fox#token=tok"
     )
     for url in (
-        dashboard_url(1, "tok"),
         pet_url(1, "tok", overlay=True),
         pet_url(1, "tok", overlay=True, variant="fox"),
     ):

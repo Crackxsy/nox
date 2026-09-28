@@ -27,10 +27,11 @@ limit, or a kill the core never acknowledged), a `sup.resume` from the tray star
 
 Every connection authenticates once: the first frame must be `sup.auth {token, role, pid}`, and no
 frame after that carries a token. Two things are bound to the process the supervisor actually
-spawned rather than merely to the shared token: the `core` role, which is accepted only from the
-core's own pid, and the heartbeat, which is accepted only on the core's own connection. Otherwise
-any holder of the token - the shell reads it from the same environment variable - could silence
-the watchdog by impersonating the core.
+spawned rather than merely to the shared token: the `core` role, which is accepted only with the
+secret generated for that one spawn (`NOX_SUPERVISOR_CORE_SECRET`, in the core's environment and
+nowhere else - a pid, which any process can claim, proves nothing), and the heartbeat, which is
+accepted only on the core's own connection. Otherwise any holder of the token - the shell reads it
+from the same environment variable - could silence the watchdog by impersonating the core.
 
 All children live in one job object, so nothing outlives the supervisor. The supervisor never
 touches the models, the network or the database.
@@ -206,6 +207,8 @@ class Supervisor:
         self._server: asyncio.AbstractServer | None = None
         self._job = JobObject("nox-supervisor") if settings.use_job_object else None
         self._core: _Child | None = None
+        #: The secret of the current core spawn; a new one for every spawn, see `_spawn_core`.
+        self._core_secret: str | None = None
         self._shell: _Child | None = None
         self._core_writer: asyncio.StreamWriter | None = None
         self._last_heartbeat: float | None = None
@@ -422,12 +425,17 @@ class Supervisor:
 
     # ---- children ----------------------------------------------------------------------------
 
-    def _child_env(self, *, safe_mode: bool = False) -> dict[str, str]:
+    def _child_env(
+        self, *, safe_mode: bool = False, core_secret: str | None = None
+    ) -> dict[str, str]:
         env = dict(os.environ)
         env.update(self._s.extra_env)
         env[m.ENV_HOST] = self._s.control_host
         env[m.ENV_PORT] = str(self._s.control_port)
         env[m.ENV_TOKEN] = self._token
+        env.pop(m.ENV_CORE_SECRET, None)
+        if core_secret is not None:
+            env[m.ENV_CORE_SECRET] = core_secret
         env.update(parent_env())  # off Windows, core and shell end themselves when this is gone
         if safe_mode:
             env[m.ENV_SAFE_MODE] = "1"
@@ -435,10 +443,18 @@ class Supervisor:
             env.pop(m.ENV_SAFE_MODE, None)
         return env
 
-    def _spawn(self, name: str, command: list[str], *, safe_mode: bool = False) -> _Child | None:
+    def _spawn(
+        self,
+        name: str,
+        command: list[str],
+        *,
+        safe_mode: bool = False,
+        core_secret: str | None = None,
+    ) -> _Child | None:
+        env = self._child_env(safe_mode=safe_mode, core_secret=core_secret)
         try:
             proc: subprocess.Popen[bytes] = subprocess.Popen(  # noqa: S603 - fixed argv from config
-                command, env=self._child_env(safe_mode=safe_mode)
+                command, env=env
             )
         except OSError as exc:
             self._log.error("supervisor.spawn_failed", child=name, error=str(exc))
@@ -449,7 +465,9 @@ class Supervisor:
         return _Child(name, proc)
 
     def _spawn_core(self) -> None:
-        self._core = self._spawn("core", self._s.core_command)
+        # A fresh secret per spawn: a core the supervisor has replaced cannot come back as "core".
+        self._core_secret = generate_token()
+        self._core = self._spawn("core", self._s.core_command, core_secret=self._core_secret)
         self._core_spawned_at = self._clock()
         self._last_heartbeat = None  # nothing is counted before the first real heartbeat
         self._core_ready = False
@@ -615,7 +633,10 @@ class Supervisor:
                             core_pid=self._core.pid if self._core else None,
                         )
                         await self._reply_error(
-                            writer, envelope, "auth.denied", "only the spawned core may claim it"
+                            writer,
+                            envelope,
+                            "auth.denied",
+                            "only the core this supervisor spawned may claim the core role",
                         )
                         break
                     authed = True
@@ -641,34 +662,22 @@ class Supervisor:
                 pass
 
     def _is_spawned_core(self, envelope: Envelope) -> bool:
-        """Whether this connection really is the core process the supervisor started.
+        """Whether this connection presents the secret of the core this supervisor last spawned.
 
         The control token is shared with the shell, so possessing it proves nothing about which
-        process is on the other end. The pid in `sup.auth` is checked against the process the
-        supervisor spawned - or one of its descendants, because `supervisor.core_command` may name
-        a launcher that execs the real core. The shell is a sibling, never a descendant, so it
-        still cannot claim the role.
+        process is on the other end, and neither does a pid in the payload: any process can name
+        the core's pid, which `sup.status` even reports. The secret is generated per spawn and
+        handed only to that child, which drops it from its environment right away, so the shell,
+        the core's own workers and anything they start never see it.
 
         Without this check a shell could become the core connection, take over `sup.kill`, and
         keep the watchdog quiet with forged heartbeats.
         """
-        core = self._core
-        if core is None:
+        expected = self._core_secret
+        if self._core is None or expected is None:
             return False
-        claimed = envelope.payload.get("pid")
-        if not isinstance(claimed, int):
-            return False
-        if claimed == core.pid:
-            return True
-        return self._is_descendant_of(claimed, core.pid)
-
-    @staticmethod
-    def _is_descendant_of(pid: int, ancestor_pid: int) -> bool:
-        try:
-            ancestors = {p.pid for p in psutil.Process(pid).parents()}
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            return False
-        return ancestor_pid in ancestors
+        claimed = envelope.payload.get("core_secret")
+        return isinstance(claimed, str) and constant_time_equals(claimed, expected)
 
     async def _handle(
         self, envelope: Envelope, writer: asyncio.StreamWriter, *, is_core: bool = False

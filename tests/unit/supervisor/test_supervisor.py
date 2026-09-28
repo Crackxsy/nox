@@ -28,6 +28,7 @@ from nox.supervisor.main import (
     hotkey_blocked_reason,
     hotkey_to_pynput,
     kill_process_tree,
+    kill_tree,
     resolve_command,
 )
 
@@ -130,6 +131,66 @@ async def test_healthy_core_keeps_running(
     await sup.stop()
     assert not psutil.pid_exists(st.core_pid)
     assert not m.token_path(tmp_path / "runtime").exists()
+
+
+def _claim_core(port: int, token: str, payload: dict[str, object]) -> dict[str, object]:
+    auth = m.make(
+        m.NAME_AUTH,
+        {"token": token, "role": "core", **payload},
+        Source(role="core", id="impostor"),
+        kind=Kind.REQUEST,
+    )
+    with socket.create_connection(("127.0.0.1", port), timeout=2) as s:
+        s.sendall(m.encode(auth))
+        return dict(json.loads(s.makefile("rb").readline()))
+
+
+async def test_a_token_holder_naming_the_core_pid_cannot_become_the_core(
+    sup_factory: Callable[..., Supervisor],
+) -> None:
+    """The shell has the token and `sup.status` names the core's pid: neither is proof."""
+    sup = sup_factory("--interval", "0.05")
+    await sup.start()
+    await wait_until(lambda: sup.status().core_connected, 5.0)
+    core_pid = sup.status().core_pid
+    assert core_pid is not None
+
+    no_secret = await asyncio.to_thread(_claim_core, sup.port, sup.token, {"pid": core_pid})
+    wrong_secret = await asyncio.to_thread(
+        _claim_core, sup.port, sup.token, {"pid": core_pid, "core_secret": "x" * 43}
+    )
+
+    for reply in (no_secret, wrong_secret):
+        assert reply["name"] == m.NAME_ERROR
+        assert reply["payload"]["code"] == "auth.denied"  # type: ignore[index]
+    await asyncio.sleep(0.3)
+    status = sup.status()
+    assert status.core_connected and status.missed_heartbeats == 0  # the real core still counts
+
+
+async def test_the_core_secret_reaches_only_the_core_and_changes_every_spawn(
+    sup_factory: Callable[..., Supervisor], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(m.ENV_CORE_SECRET, "inherited-from-a-parent")
+    sup = sup_factory()
+    shell_env = sup._child_env()
+    assert m.ENV_CORE_SECRET not in shell_env  # never inherited, never handed to the shell
+    assert shell_env[m.ENV_TOKEN] == sup.token
+
+    await sup.start()
+    first = sup._core_secret
+    assert first is not None and sup._child_env(core_secret=first)[m.ENV_CORE_SECRET] == first
+    await wait_until(lambda: sup.status().core_connected, 5.0)
+    old_pid = sup.status().core_pid
+    assert old_pid is not None
+    await kill_tree(old_pid)  # the next spawn replaces it; nothing may be left running
+    sup._spawn_core()
+    assert sup._core_secret not in (None, first)
+
+    stale = await asyncio.to_thread(
+        _claim_core, sup.port, sup.token, {"pid": 0, "core_secret": first}
+    )
+    assert stale["name"] == m.NAME_ERROR  # the previous spawn's secret is worthless now
 
 
 async def test_hung_core_is_restarted_then_safe_mode(

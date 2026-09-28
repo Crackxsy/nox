@@ -142,6 +142,36 @@ async def test_hub_rejects_events_outside_a_plugins_namespaces(core: NoxCore):
         unsubscribe()
 
 
+async def test_the_real_worker_is_held_to_its_manifest_by_the_core(core: NoxCore):
+    """The echo worker asks for `security.*` and `privacy.*` like every worker; the hub narrows
+    that to the lifecycle events plus its manifest, and a forged reserved event goes nowhere."""
+    await _wait_state(core, "echo", PluginState.RUNNING)
+    info = core.hub.find_client("plugin:echo")
+    assert info is not None
+    assert set(info.subscriptions) <= {
+        "security.kill_switch",
+        "security.panic",
+        "privacy.mode_changed",
+        "privacy.capture_changed",
+        "system.stopping",
+        "system.mode_changed",  # the one event echo's manifest listens to
+    }
+    assert "security.kill_switch" in info.subscriptions
+
+    seen: list[Event] = []
+    unsubscribe = core.bus.subscribe("system.started", seen.append)
+    token = core.tokens.issue_worker_token("plugin:echo-impostor")
+    rogue = IpcClient(core.hub.url, token, "plugin", "plugin:echo-impostor", client_version="0.1.0")
+    await rogue.connect()
+    try:
+        await rogue.send_event("system.started", {})
+        await asyncio.sleep(0.5)
+        assert seen == []
+    finally:
+        await rogue.close()
+        unsubscribe()
+
+
 async def test_plugin_health_is_reported_honestly(core: NoxCore):
     await _wait_state(core, "echo", PluginState.RUNNING)
     await core.health.run_once()

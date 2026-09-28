@@ -4,6 +4,7 @@ afterwards, kill is acked and dispatched, sup.stop calls on_stop, standalone mod
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
 from collections.abc import AsyncIterator
 
@@ -29,6 +30,7 @@ class FakeSupervisor:
     def __init__(self, *, accept_token: str | None = TOKEN) -> None:
         self.accept_token = accept_token
         self.received: list[Envelope] = []
+        self.auth_payloads: list[dict[str, object]] = []
         self.writer: asyncio.StreamWriter | None = None
         self.got_first = asyncio.Event()
         #: The ack payload for `sup.resume`; None answers nothing at all (a hung supervisor).
@@ -39,6 +41,7 @@ class FakeSupervisor:
             auth = await m.read_envelope(reader)
             if auth is None or auth.name != m.NAME_AUTH:
                 return
+            self.auth_payloads.append(dict(auth.payload))
             if self.accept_token is None or auth.payload.get("token") != self.accept_token:
                 writer.write(m.encode(auth.reply(m.NAME_ERROR, {"code": "auth.denied"}, SUP_SRC)))
                 await writer.drain()
@@ -179,6 +182,30 @@ def test_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(m.ENV_TOKEN, TOKEN)
     client = SupervisorClient.from_env(interval_s=1.0)
     assert client is not None and not client.connected
+
+
+async def test_the_core_presents_its_spawn_secret_and_hides_it_from_its_children(
+    server: tuple[FakeSupervisor, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake, port = server
+    secret = "spawn-secret-" + "s" * 30
+    monkeypatch.setenv(m.ENV_PORT, str(port))
+    monkeypatch.setenv(m.ENV_TOKEN, TOKEN)
+    monkeypatch.setenv(m.ENV_CORE_SECRET, secret)
+
+    client = SupervisorClient.from_env(interval_s=0.05)
+
+    assert client is not None
+    # A worker, plugin or CLI tool the core spawns copies os.environ: neither credential is left.
+    assert m.ENV_CORE_SECRET not in os.environ
+    assert m.ENV_TOKEN not in os.environ
+    client.start()
+    try:
+        assert await client.wait_connected(2.0)
+    finally:
+        await client.stop()
+    assert fake.auth_payloads[0]["core_secret"] == secret
+    assert fake.auth_payloads[0]["role"] == "core"
 
 
 async def test_kill_mode_restart_calls_on_restart_not_on_kill(

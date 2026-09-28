@@ -39,7 +39,11 @@ def default_states() -> list[dict[str, Any]]:
         _state("media_player.wz", "playing", {"friendly_name": "Fernseher", "volume_level": 0.4}),
         _state("climate.bad", "heat", {"friendly_name": "Heizung Bad", "current_temperature": 19}),
         _state("cover.wz_rollo", "open", {"friendly_name": "Rollladen", "device_class": "blind"}),
-        _state("scene.kino", "unknown", {"friendly_name": "Kinoabend"}),
+        _state(
+            "scene.kino",
+            "unknown",
+            {"friendly_name": "Kinoabend", "entity_id": ["light.wz_decke", "media_player.wz"]},
+        ),
         _state("script.gute_nacht", "off", {"friendly_name": "Gute Nacht"}),
         _state("automation.morgens", "on", {"friendly_name": "Morgenroutine"}),
         _state(
@@ -54,6 +58,71 @@ def default_states() -> list[dict[str, Any]]:
         _state("cover.garage", "closed", {"friendly_name": "Garagentor", "device_class": "garage"}),
         _state("person.someone", "home", {"friendly_name": "Jemand"}),
     ]
+
+
+def effect_states() -> list[dict[str, Any]]:
+    """`default_states()` plus the awkward cases of the effect check: scenes that set a lock or a
+    garage door, a scene that does not list its members, a garage relay that is a plain switch
+    and a cover that does not say what it is."""
+    return [
+        *default_states(),
+        _state(
+            "scene.abschied",
+            "unknown",
+            {"friendly_name": "Abschied", "entity_id": ["light.kueche", "lock.haustuer"]},
+        ),
+        _state(
+            "scene.garage_auf",
+            "unknown",
+            {"friendly_name": "Garage auf", "entity_id": ["cover.garage"]},
+        ),
+        _state("scene.hue_relax", "unknown", {"friendly_name": "Entspannen"}),
+        _state(
+            "scene.hof",
+            "unknown",
+            {"friendly_name": "Hof", "entity_id": ["light.kueche", "switch.hoftor"]},
+        ),
+        _state("switch.hoftor", "off", {"friendly_name": "Hoftor"}),
+        _state("switch.relais_2", "off", {"friendly_name": "Garagentoröffner"}),
+        _state("cover.markise", "open", {"friendly_name": "Markise", "device_class": "awning"}),
+        _state("cover.unklar", "closed", {"friendly_name": "Rolltor Werkstatt"}),
+        _state("script.aufsperren", "off", {"friendly_name": "Aufsperren"}),
+        _state("script.alles_aus", "off", {"friendly_name": "Alles aus"}),
+        _state("automation.abends", "on", {"friendly_name": "Abendroutine"}),
+    ]
+
+
+def default_definitions() -> dict[str, dict[str, Any]]:
+    """What `script/config` and `automation/config` return, per entity id."""
+    return {
+        "script.gute_nacht": {
+            "alias": "Gute Nacht",
+            "sequence": [
+                {"action": "light.turn_off", "target": {"entity_id": "light.wz_decke"}},
+                {"service": "media_player.media_pause", "entity_id": ["media_player.wz"]},
+            ],
+        },
+        "script.aufsperren": {
+            "alias": "Aufsperren",
+            "sequence": [{"service": "lock.unlock", "target": {"entity_id": "lock.haustuer"}}],
+        },
+        "script.alles_aus": {
+            "alias": "Alles aus",
+            "sequence": [{"action": "light.turn_off", "target": {"area_id": "wz"}}],
+        },
+        "automation.morgens": {
+            "alias": "Morgenroutine",
+            "trigger": [{"platform": "time", "at": "07:00:00"}],
+            "action": [{"action": "light.turn_on", "target": {"entity_id": "light.kueche"}}],
+        },
+        "automation.abends": {
+            "alias": "Abendroutine",
+            "trigger": [{"platform": "sun", "event": "sunset"}],
+            "action": [
+                {"device_id": "abc123", "domain": "lock", "type": "unlock"},
+            ],
+        },
+    }
 
 
 def _state(entity_id: str, state: str, attributes: dict[str, Any]) -> dict[str, Any]:
@@ -93,9 +162,13 @@ class FakeHomeAssistant:
         self.auth_count = 0
         self.service_calls: list[dict[str, Any]] = []
         self.subscriptions: list[str] = []
+        self.definitions: dict[str, dict[str, Any]] = default_definitions()
+        self.definition_reads: list[str] = []
         self.responses: dict[str, Any] = {
             "get_states": lambda _d: default_states(),
             "call_service": lambda _d: {"context": {"id": "ctx"}},
+            "script/config": self._definition,
+            "automation/config": self._definition,
         }
         if admin:
             for name, rows in default_registries().items():
@@ -146,6 +219,13 @@ class FakeHomeAssistant:
                 await ws.send(message)
             except websockets.ConnectionClosed:  # pragma: no cover - a racing disconnect
                 pass
+
+    def _definition(self, frame: dict[str, Any]) -> Any:
+        entity_id = str(frame.get("entity_id", ""))
+        self.definition_reads.append(entity_id)
+        if not self.admin or entity_id not in self.definitions:
+            return RuntimeError(f"cannot read {entity_id}")
+        return {"config": self.definitions[entity_id]}
 
     # -- protocol ------------------------------------------------------------------------------
 
@@ -208,6 +288,20 @@ class FakeHomeAssistant:
             )
             return
         result = scripted(frame) if callable(scripted) else scripted
+        if isinstance(result, Exception):
+            scripted = result
+        if isinstance(scripted, Exception):
+            await ws.send(
+                json.dumps(
+                    {
+                        "id": command_id,
+                        "type": "result",
+                        "success": False,
+                        "error": {"code": "failed", "message": str(scripted)},
+                    }
+                )
+            )
+            return
         await ws.send(
             json.dumps({"id": command_id, "type": "result", "success": True, "result": result})
         )

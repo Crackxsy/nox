@@ -1,11 +1,11 @@
 """Supervisor control-channel protocol: newline-delimited JSON `Envelope`s over localhost TCP.
 
 Names (Process Model §Supervisor): `sup.auth` (first frame on every connection: `{token, role,
-pid}`), `sup.auth_ok` (response), `sup.heartbeat` (core -> supervisor, event), `sup.kill`
-(supervisor -> core request; also shell/tray -> supervisor request), `sup.stop` (shell/tray ->
-supervisor request, and supervisor -> core request: `{reason}`, B-6 graceful shutdown), `sup.ack`
-(response), `sup.status` (request/response), `sup.resume` (request: leave safe mode), `sup.error`
-(error).
+pid}`, plus `core_secret` from the core), `sup.auth_ok` (response), `sup.heartbeat` (core ->
+supervisor, event), `sup.kill` (supervisor -> core request; also shell/tray -> supervisor
+request), `sup.stop` (shell/tray -> supervisor request, and supervisor -> core request:
+`{reason}`, B-6 graceful shutdown), `sup.ack` (response), `sup.status` (request/response),
+`sup.resume` (request: leave safe mode), `sup.error` (error).
 
 B-1 (handshake-once auth): a connection authenticates exactly once, with the first frame it sends.
 That frame must be `sup.auth`; the supervisor checks `payload.token` and replies `sup.auth_ok` (or
@@ -40,6 +40,9 @@ TOKEN_FILE = "supervisor.token"  # noqa: S105 - file name, not a secret
 ENV_HOST = "NOX_SUPERVISOR_HOST"
 ENV_PORT = "NOX_SUPERVISOR_PORT"
 ENV_TOKEN = "NOX_SUPERVISOR_TOKEN"  # noqa: S105 - env var name, not a secret
+#: The per-spawn secret that proves "I am the core this supervisor started". Only the core's own
+#: environment carries it, and the core removes it from its environment as soon as it has read it.
+ENV_CORE_SECRET = "NOX_SUPERVISOR_CORE_SECRET"  # noqa: S105 - env var name, not a secret
 ENV_SAFE_MODE = "NOX_SAFE_MODE"
 
 MAX_LINE = 64 * 1024
@@ -60,9 +63,14 @@ def make(
     return Envelope(kind=kind, name=name, payload=payload, src=src, corr=corr)
 
 
-def auth_frame(token: str, *, role: str, pid: int, src: Source) -> Envelope:
-    """The one frame per connection that carries a token (B-1)."""
-    return make(NAME_AUTH, {"token": token, "role": role, "pid": pid}, src, kind=Kind.REQUEST)
+def auth_frame(
+    token: str, *, role: str, pid: int, src: Source, core_secret: str | None = None
+) -> Envelope:
+    """The one frame per connection that carries a token (B-1); the core adds its spawn secret."""
+    payload: dict[str, Any] = {"token": token, "role": role, "pid": pid}
+    if core_secret:
+        payload["core_secret"] = core_secret
+    return make(NAME_AUTH, payload, src, kind=Kind.REQUEST)
 
 
 def encode(envelope: Envelope) -> bytes:
@@ -107,6 +115,16 @@ def read_token(runtime_dir: Path) -> str:
     if len(token) < 16:
         raise ValueError("supervisor token file is empty or too short")
     return token
+
+
+def take_core_credentials() -> str | None:
+    """Read the core's spawn secret and remove it - and the control token - from this process's
+    environment, so no worker, plugin or tool the core starts later inherits either of them.
+
+    Returns the secret, or `None` when this process was not started as the supervisor's core.
+    """
+    os.environ.pop(ENV_TOKEN, None)
+    return os.environ.pop(ENV_CORE_SECRET, None) or None
 
 
 def env_settings() -> tuple[str, int, str] | None:

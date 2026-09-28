@@ -314,6 +314,8 @@ home:                            # smart home through your own Home Assistant in
   host: "127.0.0.1"              # your Home Assistant. Any host other than loopback also has to
   port: 8123                     # be added to plugins/home/manifest.yaml (network.egress) and to
   tls: false                     # the active profile's egress_allowlist - see the README section
+  allow_insecure: false          # true = send the access token over plain ws:// to a host that is
+                                 # not this machine. Leave false and turn on tls instead.
   areas_allowed: []              # rooms Nox may act in; empty = every room Home Assistant reports
   min_backoff_s: 1.0             # reconnect delay, doubled up to max_backoff_s
   max_backoff_s: 30.0

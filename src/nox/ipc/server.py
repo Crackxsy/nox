@@ -7,7 +7,10 @@ limit, a 1 MiB frame limit, event fan-out from the injected event bus with per-r
 outbound requests to connected workers.
 
 The hub never forwards a raw frame from one client to another: everything a client sees is either
-its own answer or an event the core published.
+its own answer or an event the core published. A plugin connection is additionally held to its
+manifest here, on the core's side of the socket (`nox.ipc.plugin_scope`): its subscriptions are
+narrowed to the events the manifest lists, and it may publish only the exact names the manifest
+emits, never into a namespace the core reserves for itself.
 
 Before the handshake the opening HTTP request is checked like every request to the HTTP server
 (`nox.ipc.origin`): the Host header must name this machine on the hub's port, and a browser must
@@ -54,6 +57,7 @@ from nox.ipc.errors import (
     IpcError,
 )
 from nox.ipc.origin import host_header_allowed, origin_allowed
+from nox.ipc.plugin_scope import NO_SCOPE, PluginScope
 from nox.ipc.protocol import (
     NAME_AUTH,
     NAME_ERROR,
@@ -72,6 +76,13 @@ from nox.ipc.protocol import (
 from nox.ipc.tokens import TokenStore
 
 log = get_logger(__name__)
+
+#: `(client_id, what, name)` for a request a plugin connection was refused - `what` is `subscribe`
+#: or `emit`. The core wires it to the audit log, so a plugin testing its boundary leaves a trace.
+BoundaryAudit = Callable[[str, str, str], None]
+#: Boundary refusals audited per connection; the rest are only counted in the log, so a plugin
+#: that hammers its boundary cannot flood the audit chain.
+MAX_AUDITED_VIOLATIONS = 20
 
 RUNTIME_INFO_FILE = "ipc.json"
 WS_PATH = "/ws"
@@ -305,6 +316,7 @@ class ClientSession:
     events: asyncio.Queue[Envelope] = field(default_factory=asyncio.Queue)
     event_pump: asyncio.Task[None] | None = None
     closing: bool = False
+    boundary_violations: int = 0
 
     @property
     def client_id(self) -> str:
@@ -340,6 +352,7 @@ class IpcHub:
         runtime_dir: Path,
         *,
         clock: Callable[[], float] = time.monotonic,
+        boundary_audit: BoundaryAudit | None = None,
     ) -> None:
         self._settings = settings
         self._tokens = tokens
@@ -350,6 +363,9 @@ class IpcHub:
         self._server: Server | None = None
         self._port: int | None = None
         self._clients: dict[str, ClientSession] = {}
+        #: client id -> the manifest boundary of the plugin the core spawned under that id.
+        self._plugin_scopes: dict[str, PluginScope] = {}
+        self._boundary_audit = boundary_audit
         self._unsubscribe: Callable[[], None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         #: Hub-owned background tasks. A task nobody holds a reference to can be garbage-collected
@@ -455,6 +471,19 @@ class IpcHub:
         if c is None:
             raise IpcError(ERR_UNAVAILABLE, f"client {client_id!r} is not connected")
         c.services.update(services)
+
+    def set_plugin_scope(self, client_id: str, scope: PluginScope) -> None:
+        """Hold the plugin connection `client_id` to `scope`.
+
+        Called before the worker process is spawned, so the scope is in place when the worker
+        subscribes. Delivery and publishing always consult the current scope, so a later call
+        applies to a live connection too.
+        """
+        self._plugin_scopes[client_id] = scope
+
+    def plugin_scope(self, client_id: str) -> PluginScope:
+        """The boundary a plugin connection is held to; `NO_SCOPE` when the core registered none."""
+        return self._plugin_scopes.get(client_id, NO_SCOPE)
 
     async def stream(
         self,
@@ -655,6 +684,9 @@ class IpcHub:
             queue=asyncio.Queue(maxsize=s.send_queue_size),
             events=asyncio.Queue(maxsize=s.event_queue_size),
         )
+        if client.role == "plugin":
+            granted, _ = self._narrow_plugin_subscriptions(client, DEFAULT_SUBSCRIPTIONS)
+            client.subscriptions = granted
         response = AuthResponse(
             ok=True,
             session_id=session_id,
@@ -795,13 +827,60 @@ class IpcHub:
                 corr=env.id,
                 details={"errors": exc.error_count()},
             )
-        client.subscriptions = list(dict.fromkeys([*DEFAULT_SUBSCRIPTIONS, *req.patterns]))
-        return env.reply(NAME_SUBSCRIBE, {"patterns": list(client.subscriptions)}, CORE_SOURCE)
+        requested = list(dict.fromkeys([*DEFAULT_SUBSCRIPTIONS, *req.patterns]))
+        if client.role != "plugin":
+            client.subscriptions = requested
+            return env.reply(NAME_SUBSCRIBE, {"patterns": list(client.subscriptions)}, CORE_SOURCE)
+        granted, denied = self._narrow_plugin_subscriptions(client, requested)
+        client.subscriptions = granted
+        for pattern in denied:
+            self._boundary_violation(client, "subscribe", pattern)
+        return env.reply(NAME_SUBSCRIBE, {"patterns": list(granted), "denied": denied}, CORE_SOURCE)
+
+    def _narrow_plugin_subscriptions(
+        self, client: ClientSession, patterns: Iterable[str]
+    ) -> tuple[list[str], list[str]]:
+        """(granted, denied): each requested pattern reduced to what the plugin's scope allows.
+
+        `DEFAULT_SUBSCRIPTIONS` is not reported as denied when it narrows to nothing: the client did
+        not ask for it, every session starts with it.
+        """
+        scope = self.plugin_scope(client.client_id)
+        granted: list[str] = []
+        denied: list[str] = []
+        for pattern in patterns:
+            covered = scope.narrow(pattern)
+            if covered:
+                granted.extend(covered)
+            elif pattern not in DEFAULT_SUBSCRIPTIONS:
+                denied.append(pattern)
+        return list(dict.fromkeys(granted)), denied
+
+    def _boundary_violation(self, client: ClientSession, what: str, name: str) -> None:
+        client.boundary_violations += 1
+        log.warning(
+            "ipc_plugin_boundary_denied",
+            client=client.client_id,
+            what=what,
+            name=name,
+            count=client.boundary_violations,
+        )
+        if self._boundary_audit is None or client.boundary_violations > MAX_AUDITED_VIOLATIONS:
+            return
+        try:
+            self._boundary_audit(client.client_id, what, name)
+        except Exception as exc:  # noqa: BLE001 - a failed audit write must not end the connection
+            log.error("ipc_boundary_audit_failed", error=f"{type(exc).__name__}: {exc}")
 
     async def _handle_inbound_event(self, client: ClientSession, env: Envelope) -> None:
-        allowed = client.role in ("worker", "plugin") and name_matches_any(
-            env.name, service_patterns(client.services)
-        )
+        if client.role == "plugin":
+            allowed = self.plugin_scope(client.client_id).may_emit(env.name)
+            if not allowed:
+                self._boundary_violation(client, "emit", env.name)
+        else:
+            allowed = client.role == "worker" and name_matches_any(
+                env.name, service_patterns(client.services)
+            )
         if not allowed:
             self._enqueue(
                 client,
@@ -832,6 +911,10 @@ class IpcHub:
         serialized: str | None = None
         for client in list(self._clients.values()):
             if client.closing or not role_may_see(client.role, event.name):
+                continue
+            if client.role == "plugin" and not self.plugin_scope(client.client_id).may_receive(
+                event.name
+            ):
                 continue
             if not name_matches_any(event.name, client.subscriptions):
                 continue

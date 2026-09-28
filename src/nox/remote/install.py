@@ -144,13 +144,18 @@ def install(core: Any) -> RemoteRuntime:
         audit=core.security.audit,
     )
 
+    async def notify(text: str) -> None:
+        """A notification goes to every paired device's own chat, and nowhere else."""
+        for chat_id in service.paired_chat_ids():
+            await send(chat_id, text)
+
     notifier = RemoteNotifier(
         bus=core.bus,
-        send=lambda text: send("", text),
+        send=notify,
         events=cfg.notifications.events,
         quiet_hours=core.config.attention.quiet_hours,
         active_zone=lambda: core.security.privacy.active_zone,
-        has_device=lambda: any(not d.revoked for d in repo.list_devices()),
+        has_device=lambda: bool(service.paired_chat_ids()),
         enabled=cfg.notifications.enabled,
     )
 

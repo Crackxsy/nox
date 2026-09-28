@@ -8,12 +8,14 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import httpx
 import pytest
 
 from nox.app import DEFAULTS_PATH, PROFILES_DIR, NoxCore
 from nox.core.config import load_config
 from nox.ipc.client import IpcClient
 from nox.ipc.errors import IpcError
+from nox.ipc.role_tokens import derive_role_token
 from nox.ipc.tokens import read_session_token
 from tests._ports import free_port_base
 
@@ -52,7 +54,9 @@ async def core(tmp_path: Path):
 
 
 async def _client(core: NoxCore, role: str = "dashboard") -> IpcClient:
-    token = read_session_token(Path(core.config.paths.runtime_dir))
+    # The shell reads session.token; the pet page and the dashboard get their own role token.
+    session = read_session_token(Path(core.config.paths.runtime_dir))
+    token = derive_role_token(session, role)
     client = IpcClient(core.hub.url, token, role, f"test-{role}", client_version="0.1.0")
     await client.connect()
     return client
@@ -119,6 +123,38 @@ async def test_pet_role_is_restricted(core: NoxCore):
             await pet.request("security.kill", {"reason": "nope"})
     finally:
         await pet.close()
+
+
+async def test_a_page_token_can_never_connect_as_the_shell(core: NoxCore):
+    """Only the shell may answer a permission confirmation; its token never reaches a page."""
+    session = read_session_token(Path(core.config.paths.runtime_dir))
+    for page in ("pet", "dashboard"):
+        impostor = IpcClient(
+            core.hub.url,
+            derive_role_token(session, page),
+            "shell",
+            f"{page}-as-shell",
+            client_version="0.1.0",
+        )
+        with pytest.raises(IpcError):
+            await impostor.connect()
+
+
+async def test_the_dashboard_opens_through_a_one_time_ticket(core: NoxCore):
+    from nox.shell.runtime import request_dashboard_ticket
+
+    session = read_session_token(Path(core.config.paths.runtime_dir))
+    assert core.http is not None
+    ticket = await asyncio.to_thread(request_dashboard_ticket, core.http.port, "127.0.0.1", session)
+    async with httpx.AsyncClient(base_url=core.http.url) as http:
+        opened = await http.get("/open", params={"ticket": ticket})
+        reused = await http.get("/open", params={"ticket": ticket})
+    assert opened.status_code == 303 and reused.status_code == 403
+    token = opened.headers["location"].split("#token=", 1)[1]
+    assert token != session
+    dashboard = IpcClient(core.hub.url, token, "dashboard", "dash-t", client_version="0.1.0")
+    await dashboard.connect()
+    await dashboard.close()
 
 
 async def test_unauthenticated_or_wrong_token_is_rejected(core: NoxCore):

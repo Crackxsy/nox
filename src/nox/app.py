@@ -356,6 +356,7 @@ class NoxCore:
             self.registry,
             self.bus,
             Path(paths.runtime_dir),
+            boundary_audit=self._audit_plugin_boundary,
         )
         await self.hub.start()
         self.http = HttpServer(
@@ -364,6 +365,7 @@ class NoxCore:
                 state=self.state_json,
                 providers=self.providers_json,
                 session_token=lambda: self.tokens.session_token if self.tokens else "",
+                dashboard_token=lambda: self.tokens.role_token("dashboard") if self.tokens else "",
                 pet_dist=self.pet_dist if self.pet_dist.exists() else None,
                 dashboard_dist=self.dashboard_dist if self.dashboard_dist.exists() else None,
                 origin_hosts=(self.config.ipc.host,),
@@ -378,6 +380,19 @@ class NoxCore:
         # origins the hub lets in (the Qt shell and the workers send no Origin at all).
         self.hub.allow_browser_origins(ui_origins(self.http.port, (self.config.ipc.host,)))
         log.info("ipc.ready", ws=self.hub.url, http=self.http.url)
+
+    def _audit_plugin_boundary(self, client_id: str, what: str, name: str) -> None:
+        """A plugin connection asked the hub for more than its manifest allows (`IpcHub`)."""
+        if self.security is None:
+            return
+        self.security.audit.append(
+            actor=client_id,
+            tool="plugin",
+            action=f"boundary.{what}",
+            target=name,
+            decision="deny",
+            result="denied",
+        )
 
     def _build_tools_and_plugins(self) -> None:
         """One tool catalogue shared by core and plugins, and the manager that runs them.
@@ -398,6 +413,7 @@ class NoxCore:
         plugins_dir = Path(self.config.plugins.dir) if self.config.plugins.dir else PLUGINS_DIR
         self.plugins = PluginManager(
             tool_registry=self.tool_registry,
+            executor=self.tool_executor,
             plugins_dir=plugins_dir,
             bus=self.bus,
             hub=self.hub,

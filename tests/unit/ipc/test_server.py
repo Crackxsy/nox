@@ -493,7 +493,7 @@ async def test_hub_request_timeout(hub: IpcHub, tokens: TokenStore) -> None:
 
 
 async def test_hub_stream_helper(hub: IpcHub, tokens: TokenStore) -> None:
-    client = IpcClient(hub.url, tokens.session_token, "dashboard", "dash:1")
+    client = IpcClient(hub.url, tokens.role_token("dashboard"), "dashboard", "dash:1")
     await client.connect()
     call = await client.request_stream("chat.send", {"text": "a b"})
     seen = [chunk async for chunk in call]

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from nox.ai.base import AiRequest, AiResponse, ProviderInfo
 from nox.core.config import RelevanceConfig
 from nox.core.events import Event
@@ -110,6 +112,19 @@ async def test_addressed_message_triggers_an_answer(
     user_message = next(m for m in request.messages if m.role == "user")
     assert "[[DATA" in user_message.content and "twitch:v1" in user_message.content
     assert "hey nox, wie gehts?" in user_message.content
+
+
+@pytest.mark.parametrize("text", ["!rps stein", "!help", " !funken", "!discord"])
+async def test_a_chat_command_never_gets_an_llm_reply_on_top(
+    bus: FakeBus, relevance_config: RelevanceConfig, clock: MutableClock, text: str
+) -> None:
+    """Even flagged as addressed by an older plugin build: a command has its own handler."""
+    router = FakeCompleteRouter()
+    executor = FakeExecutor()
+    make_responder(bus, router, executor, relevance_config, FakeKillSwitch(), clock)
+    await _message(bus, text=text, addressed=True, relevance=1.0)
+    assert executor.calls == []
+    assert router.requests == []
 
 
 async def test_below_threshold_and_not_addressed_is_ignored(

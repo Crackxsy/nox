@@ -127,3 +127,65 @@ async def test_panic_suppresses_further_requests(fake_client: FakeClient) -> Non
         "twitch.command_invoked", {"chat_event_id": 4, "command": "clip", "args": []}
     )
     assert fake_client.events == []
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def _clip(fake_client: FakeClient, viewer: str, event_id: int) -> None:
+    await fake_client.fire(
+        "twitch.command_invoked",
+        {"chat_event_id": event_id, "viewer_id": viewer, "command": "clip", "args": []},
+    )
+
+
+async def test_one_viewer_cannot_spam_clip(fake_client: FakeClient) -> None:
+    api, plugin = await _plugin(fake_client, cooldown_s=0.0, viewer_clip_cooldown_s=300.0)
+    clock = _Clock()
+    plugin._clock = clock
+
+    await _clip(fake_client, "v1", 1)
+    clock.now += 60
+    await _clip(fake_client, "v1", 2)  # inside this viewer's cooldown
+    await _clip(fake_client, "v2", 3)  # another viewer is not blocked by v1
+    clock.now += 300
+    await _clip(fake_client, "v1", 4)
+
+    assert [p["origin_event_id"] for _, p in fake_client.events] == ["1", "3", "4"]
+
+
+async def test_the_whole_chat_has_an_hourly_clip_budget(fake_client: FakeClient) -> None:
+    """A raid of distinct viewers must not fill the disk one replay every few seconds."""
+    api, plugin = await _plugin(fake_client, cooldown_s=0.0, max_manual_clips_per_hour=3)
+    clock = _Clock()
+    plugin._clock = clock
+
+    for index in range(10):
+        clock.now += 20
+        await _clip(fake_client, f"viewer{index}", index)
+    assert len(fake_client.events) == 3
+
+    clock.now += 3600
+    await _clip(fake_client, "late", 99)
+    assert len(fake_client.events) == 4
+
+
+async def test_a_clip_refused_by_the_kind_cooldown_does_not_use_up_the_viewer(
+    fake_client: FakeClient,
+) -> None:
+    api, plugin = await _plugin(fake_client, cooldown_s=15.0, viewer_clip_cooldown_s=300.0)
+    clock = _Clock()
+    plugin._clock = clock
+
+    await _clip(fake_client, "v1", 1)
+    clock.now += 1
+    await _clip(fake_client, "v2", 2)  # the per-kind cooldown drops this one
+    clock.now += 20
+    await _clip(fake_client, "v2", 3)  # v2 was not charged for the dropped one
+
+    assert [p["origin_event_id"] for _, p in fake_client.events] == ["1", "3"]

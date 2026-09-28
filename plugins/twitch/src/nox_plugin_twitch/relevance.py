@@ -2,10 +2,13 @@
 inbound `twitch.chat_message` (Stream Bot). No LLM call - the classifier only decides whether
 *something downstream* should look closer, never what to say.
 
-Signals: a bot-name mention, the message being a question, a `!command`, a greeting, and a per-
-viewer cooldown that damps score for a viewer who was just scored (keeps a chatty viewer from
-repeatedly registering as "addressed" for ordinary chatter; an explicit `!command` always bypasses
-the cooldown damping).
+Signals: a bot-name mention, the message being a question, a greeting, and a per-viewer cooldown
+that damps score for a viewer who was just scored (keeps a chatty viewer from repeatedly
+registering as "addressed" for ordinary chatter).
+
+A `!command` is never addressed to the conversation and scores zero: it is answered by a command
+handler - one of this plugin's built-ins, the core's `!funken`, or another bot's `!discord` - and
+an LLM reply on top of that would answer every `!rps rock` twice.
 """
 
 from __future__ import annotations
@@ -31,10 +34,14 @@ _GREETINGS = ("hi", "hello", "hey", "hallo", "servus", "moin")
 
 _MENTION_SCORE = 0.6
 _QUESTION_SCORE = 0.2
-_COMMAND_SCORE = 0.5
 _GREETING_SCORE = 0.2
 _COOLDOWN_DAMPING = 0.3
 _ADDRESSED_THRESHOLD = 0.5
+
+
+def is_chat_command(text: str) -> bool:
+    """`!rps rock`, `!help`: a command for a bot, not a line of conversation."""
+    return text.lstrip().startswith("!")
 
 
 class RelevanceClassifier:
@@ -52,8 +59,9 @@ class RelevanceClassifier:
 
     def classify(self, viewer_id: str, text: str) -> tuple[float, bool]:
         lowered = text.strip().lower()
+        if is_chat_command(lowered):
+            return 0.0, False
         mentions_bot = any(name in lowered for name in self._bot_names)
-        is_command = lowered.startswith("!")
         is_question = lowered.endswith("?") or any(
             lowered.startswith(w + " ") for w in _QUESTION_WORDS
         )
@@ -64,18 +72,16 @@ class RelevanceClassifier:
             score += _MENTION_SCORE
         if is_question:
             score += _QUESTION_SCORE
-        if is_command:
-            score += _COMMAND_SCORE
         if is_greeting:
             score += _GREETING_SCORE
 
         now = self._clock()
         last = self._last_seen.get(viewer_id)
         on_cooldown = last is not None and (now - last) < self._cooldown_s
-        if on_cooldown and not is_command:
+        if on_cooldown:
             score *= _COOLDOWN_DAMPING
         self._last_seen[viewer_id] = now
 
         score = max(0.0, min(1.0, score))
-        addressed = mentions_bot or is_command or score >= _ADDRESSED_THRESHOLD
+        addressed = mentions_bot or score >= _ADDRESSED_THRESHOLD
         return score, addressed

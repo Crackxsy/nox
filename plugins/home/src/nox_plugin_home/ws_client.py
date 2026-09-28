@@ -18,6 +18,7 @@ knows the other.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
@@ -40,6 +41,12 @@ TYPE_EVENT = "event"
 
 #: Home Assistant closes the socket after `auth_invalid`, so the loop must not retry instantly.
 AUTH_FAILURE_BACKOFF_S = 30.0
+
+#: Largest frame accepted from Home Assistant. `get_states` and the entity registry arrive as one
+#: frame each; on an install with a thousand entities that is well past the `websockets` default
+#: of 1 MiB, which closed the connection (code 1009) on every inventory refresh. 16 MiB covers a
+#: very large install and still bounds what a misbehaving server can make this process buffer.
+MAX_FRAME_BYTES = 16 * 1024 * 1024
 
 
 class HomeProtocolError(RuntimeError):
@@ -100,7 +107,9 @@ class HomeAssistantClient:
         self._min_backoff = min_backoff_s
         self._max_backoff = max_backoff_s
         self._request_timeout = request_timeout_s
-        self._connector = connector or websockets.connect
+        self._connector = connector or functools.partial(
+            websockets.connect, max_size=MAX_FRAME_BYTES
+        )
         #: Called synchronously before every connection attempt: raw `websockets` connections
         #: bypass `PluginApi.http()`'s automatic guard, so this client enforces the plugin's scoped
         #: `EgressGuard` - and the privacy mode with it - itself.

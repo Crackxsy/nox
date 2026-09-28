@@ -403,3 +403,72 @@ def test_the_resume_entry_is_offered_only_when_it_can_do_something(
     qapp.processEvents()
     assert app.tray.action_resume.isEnabled() is True
     app.quit()
+
+
+def _dashboard_app(tmp_path: Path, factory: Any, ticket: Any) -> tuple[ShellApp, list[str]]:
+    opened: list[str] = []
+    app = ShellApp(
+        runtime_dir=make_runtime(tmp_path),
+        config=CONFIG,
+        bridge_factory=factory,
+        enable_hotkeys=False,
+        create_pet_window=False,
+        open_url=opened.append,
+        dashboard_ticket=ticket,
+    )
+    return app, opened
+
+
+def test_the_dashboard_opens_through_a_one_time_ticket_never_with_a_token(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    """The URL becomes the browser's command line - readable by every local user on Linux/macOS."""
+    factory, _ = fake_bridge_factory
+    asked: list[tuple[int, str, str]] = []
+
+    def ticket(port: int, host: str, token: str) -> str:
+        asked.append((port, host, token))
+        return "one-time-ticket"
+
+    app, opened = _dashboard_app(tmp_path, factory, ticket)
+    app.open_dashboard()
+
+    assert asked == [(47801, "127.0.0.1", "session-token-1234567890")]
+    assert opened == ["http://127.0.0.1:47801/open?ticket=one-time-ticket"]
+    assert "session-token" not in opened[0] and "token=" not in opened[0]
+
+
+def test_without_a_ticket_the_dashboard_is_not_opened_at_all(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nox.shell.runtime import DashboardTicketError
+
+    factory, _ = fake_bridge_factory
+
+    def refuse(_port: int, _host: str, _token: str) -> str:
+        raise DashboardTicketError("core offline")
+
+    app, opened = _dashboard_app(tmp_path, factory, refuse)
+    notes: list[str] = []
+    monkeypatch.setattr(app.tray, "notify", lambda _title, text, critical=False: notes.append(text))
+    app.open_dashboard()
+
+    assert opened == []
+    assert notes and "Dashboard unavailable" in notes[0]
+
+
+def test_the_pet_page_gets_the_pet_token_not_the_shell_token(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    from types import SimpleNamespace
+
+    from nox.ipc.role_tokens import derive_role_token
+
+    factory, _ = fake_bridge_factory
+    app = make_app(make_runtime(tmp_path), factory)
+    loads: list[str] = []
+    app.pet = SimpleNamespace(load=loads.append, show_offline_page=lambda: None)  # type: ignore[assignment]
+    app._load_pet_page()
+
+    assert loads[0].endswith("#token=" + derive_role_token("session-token-1234567890", "pet"))
+    assert "session-token-1234567890" not in loads[0]

@@ -35,10 +35,15 @@ integration: example                 # the name a profile's integrations_allowed
 cloud: false                         # true if a process of yours talks to a cloud service itself
 permissions:
   - tool: myplugin.do_thing          # must start with "<id>." and be dotted lowercase
-    risk: read                       # read | low | medium | high | critical
+    risk: medium                     # read | low | medium | high | critical
+    preflight: myplugin.check        # optional: a read tool of yours the core asks first (§3)
+  - tool: myplugin.check
+    risk: read
 events:
   emits: [myplugin.something_happened]
   listens: [security.panic]
+requires:
+  tools: [time.now]                  # tools of other components you call via plugin.tool.call
 secrets: [nox/myplugin/api_key]      # must be "nox/<id>/..." - nothing else resolves
 network:
   egress: ["api.example.com:443"]    # explicit host:port only, no wildcards
@@ -59,7 +64,11 @@ is never spawned:
   `anticheat.bypass`, `stream.key.read`, `stream.stop`, `recording.delete`,
   `security.core.modify_without_pin`, `permission.self_elevate`) — declaring one of these fails
   validation outright, it is never merely denied at runtime.
-- Every `events.emits`/`events.listens` entry is dotted lowercase.
+- Every `events.emits`/`events.listens` entry is dotted lowercase. `emits` entries are exact names
+  (no `*`) and never lie in a namespace the core publishes into: `privacy`, `security`, `system`,
+  `sup`, `worker`, `ipc`, `plugin`, `voice`, `memory`.
+- Every `requires.tools` entry is an exact tool name and not hard-prohibited.
+- A `preflight` names a `read` tool the same manifest declares.
 - Every `secrets[]` entry matches `nox/<id>/<key>` — a name outside your own `nox/<id>/` prefix
   fails validation.
 - Every `network.egress[]` entry is `host:port` (no scheme wildcards, no bare hostnames) **and**
@@ -93,6 +102,22 @@ One `PluginApi` instance per plugin worker process, built from your validated ma
   your handler ever runs.
 - **`plugin_api.events.emit(name, payload)`** — `name` must be in your manifest's `events.emits`.
   **`plugin_api.events.on(pattern, handler)`** — `pattern` must be in your `events.listens`.
+  The core enforces both again on its side of the connection: the hub narrows your worker's
+  subscriptions to `events.listens` plus the lifecycle events every worker gets
+  (`security.kill_switch`, `security.panic`, `privacy.mode_changed`, `privacy.capture_changed`,
+  `system.stopping`), and refuses - and audits - any event you send that is not an exact
+  `events.emits` name. Skipping the API gains nothing.
+- **`plugin.tool.call`** (the `plugin.tool.call` IPC request) — calls a tool of another component,
+  but only one listed under `requires.tools`. It runs through the core's `ToolExecutor` exactly like
+  a user's or the model's call: validation, the permission engine (a `confirm` decision asks the
+  user), the kill switch, the timeout, and an audit entry with `plugin:<id>` as the actor.
+- **Preflight** — when a tool of yours can reach further than its input says (a scene changes other
+  entities, a relay may open a gate), give it a `preflight:` read tool. Before every call the core
+  sends that tool `{"tool": <name>, "input": <validated input>}` and expects
+  `{"decision": "allow" | "confirm" | "deny", "targets": [...], "reason": "..."}`. `deny` refuses
+  the call, `confirm` turns an allow into a confirmation that names the `targets`, and an error or
+  timeout refuses it. A preflight can only make the decision stricter. `plugins/home` is the
+  worked example (`home.effect`).
 - **`plugin_api.state.get(path=None)`** — a read-only view of the non-private state tree (the core
   filters what your role can see).
 - **`plugin_api.secrets.get(name)`** — `name` must be one of your declared `nox/<id>/...` secrets;
@@ -102,7 +127,10 @@ One `PluginApi` instance per plugin worker process, built from your validated ma
   manifest-scoped `EgressGuard` (`PluginEgressGuard`): an endpoint not in your own
   `network.egress` is denied *before* the inherited privacy-mode rules (OFFLINE/PRIVATE → allow-
   listed loopback only) even run. Raises `PluginApiError` at construction if your manifest
-  declares no `network.egress` at all.
+  declares no `network.egress` at all. Before opening a raw socket or WebSocket yourself, call
+  `plugin_api.egress.authorize(host, port, scheme=...)`: every decision it makes - allowed or
+  denied - is reported to the core (`plugin.egress.report`) and lands in the audit log with your
+  plugin as the actor.
 - **`plugin_api.privacy.mode`** — the worker's live copy of the core's current privacy mode; your
   own egress guard consults it on every request.
 - **`plugin_api.config`** — your manifest's static `config:` block (never secrets).
@@ -110,8 +138,11 @@ One `PluginApi` instance per plugin worker process, built from your validated ma
   secrets/transcripts/memory content at INFO" rule applies to plugin code.
 
 Every one of these calls raises `PluginApiError` (a `RuntimeError`) if you ask for something your
-manifest did not declare — there is no silent fallback and no way to widen scope from inside your
-own code.
+manifest did not declare — there is no silent fallback. Events, tool calls and secrets are also
+enforced by the core, so bypassing the API does not widen them. Two things are not: a plugin
+worker is an ordinary process, so it can open a socket without asking its egress guard (nothing is
+then reported or audited) and read any file its user can. That is why a plugin runs only when you
+list it in `plugins.enabled`, and why review (§6) reads the code, not only the manifest.
 
 ## 4. Packaging
 

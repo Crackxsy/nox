@@ -95,6 +95,16 @@ def _raise_for(result: Any) -> None:
     raise IpcError(ERR_INTERNAL, result.error or "home tool call failed")
 
 
+def _boundary_refusal(result: Any) -> dict[str, Any] | None:
+    """A call the home boundary refused before it ran (the tool preflight: a scene that would set
+    a lock, say), in the same structured shape the plugin uses for a refused entity - the
+    dashboard shows the reason, it is not an error."""
+    data = result.data or {}
+    if result.error != ERR_PERMISSION_DENIED or not data.get("refused"):
+        return None
+    return {"ok": False, "connected": True, "reason": str(data.get("reason", "")), "refused": True}
+
+
 def register_home_ipc(
     registry: RequestRegistry,
     executor: ToolExecutor,
@@ -109,6 +119,9 @@ def register_home_ipc(
     async def call(ctx: RequestContext, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         result = await executor.call(agent=ctx.role, name=name, arguments=arguments, mode=mode())
         if not result.ok:
+            refusal = _boundary_refusal(result)
+            if refusal is not None:
+                return refusal
             _raise_for(result)
         return result.data or {}
 

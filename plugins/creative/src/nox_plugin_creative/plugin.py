@@ -25,7 +25,7 @@ from nox.plugins.api import PluginApi
 from nox.security.model import Risk
 
 from .app_detection import HysteresisDetector, match_app_family
-from .artifact import inspect_artifact
+from .artifact import inspect_artifact, refused, resolve_within_roots
 
 #: How long a `creative.screenshot.analyze` call waits for the core-side decision before
 #: reporting an honest "unavailable" (e.g. `nox.creative.install.install` was never called).
@@ -169,8 +169,14 @@ class CreativePlugin:
     # -- artefact --------------------------------------------------------------------------------
 
     async def artifact_inspect(self, data: ArtifactInspectInput) -> dict[str, Any]:
-        """`creative.artifact.inspect`: local metadata-only, never touches the network."""
-        return inspect_artifact(data.path)
+        """`creative.artifact.inspect`: local metadata-only, never touches the network, and only
+        inside `artifact_roots`."""
+        roots = [str(root) for root in self.api.config.get("artifact_roots") or []]
+        resolved = resolve_within_roots(data.path, roots)
+        if resolved is None:
+            self.api.log.warning("creative.artifact_path_refused")
+            return refused(data.path)
+        return inspect_artifact(str(resolved))
 
 
 def create(api: PluginApi) -> CreativePlugin:

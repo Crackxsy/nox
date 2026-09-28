@@ -7,10 +7,16 @@ that the manifest declared, `secrets.get` only declared `nox/<id>/...` names (th
 keyring, the value is never persisted here), `state.get` a read-only IPC view, and `http` an
 `httpx.AsyncClient` behind a per-plugin `EgressGuard` limited to `network.egress`. Nothing in this
 module can widen what the core already validated.
+
+These checks run inside the plugin process, so they are a convenience for honest plugins, not the
+boundary itself: the core enforces the manifest again on its side (`nox.plugins.manager`,
+`nox.ipc.plugin_scope`). Every decision of the scoped egress guard is reported to the core
+(`plugin.egress.report`), which writes it to the audit log with the plugin as the actor.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -30,6 +36,7 @@ from nox.plugins.manifest import (
 )
 from nox.security.egress import (
     EgressDecision,
+    EgressDenied,
     EgressGuard,
     entry_matches,
     is_loopback,
@@ -42,6 +49,7 @@ CAPTURE_KINDS: tuple[str, ...] = ("microphone", "camera", "screen", "cloud")
 
 SECRET_GET = "plugin.secret.get"  # noqa: S105 - an IPC request name, not a secret
 STATE_GET = "state.get"
+EGRESS_REPORT = "plugin.egress.report"
 
 
 class PluginApiError(RuntimeError):
@@ -63,6 +71,8 @@ class PluginClient(Protocol):
 
 EventHandler = Callable[[str, dict[str, Any]], Awaitable[None] | None]
 ToolHandler = Callable[[Any], Awaitable[Mapping[str, Any]]]
+#: Receives every egress decision of a plugin's guard: `(host, port, scheme, decision)`.
+EgressReporter = Callable[[str, int, str, EgressDecision], None]
 
 
 # ---- privacy view --------------------------------------------------------------------------------
@@ -151,6 +161,7 @@ class PluginEgressGuard(EgressGuard):
         allowlist: Sequence[str],
         privacy: PrivacyView,
         transport_factory: Callable[[], httpx.AsyncBaseTransport] | None = None,
+        reporter: EgressReporter | None = None,
     ) -> None:
         declared = [entry.strip().lower() for entry in allowlist if entry.strip()]
         loopback = [e for e in declared if is_loopback(split_endpoint(e)[0])]
@@ -172,6 +183,7 @@ class PluginEgressGuard(EgressGuard):
         )
         self.plugin_id = plugin_id
         self.declared = tuple(declared)
+        self._reporter = reporter
 
     def _declared(self, host: str, port: int) -> bool:
         for entry in self.declared:
@@ -188,6 +200,61 @@ class PluginEgressGuard(EgressGuard):
                 reason="host:port is not in the plugin manifest's network.egress list",
             )
         return super().check(host, port)
+
+    def authorize(self, host: str, port: int, *, scheme: str = "https", method: str = "") -> None:
+        """Decide one connection attempt, report the decision to the core, raise when denied.
+
+        Used by `http()` for every request and called by plugins themselves before they open a raw
+        socket or WebSocket.
+        """
+        decision = self.check(host, port)
+        if self._reporter is not None:
+            self._reporter(host, port, scheme, decision)
+        if not decision.allowed:
+            raise EgressDenied(host, port, decision.rule_id, decision.reason)
+
+
+class CoreEgressReporter:
+    """Sends each egress decision to the core as `plugin.egress.report`, off the caller's path.
+
+    `authorize` is synchronous and runs in the middle of a connect, so the report is a background
+    task; the task set keeps a reference until it finishes. A report that cannot be delivered is
+    logged, never raised: the decision itself has already been enforced in this process.
+    """
+
+    def __init__(self, client: PluginClient, *, logger: Any, timeout_s: float = 5.0) -> None:
+        self._client = client
+        self._log = logger
+        self._timeout = timeout_s
+        self._tasks: set[asyncio.Task[None]] = set()
+
+    def __call__(self, host: str, port: int, scheme: str, decision: EgressDecision) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._log.warning("plugin.egress_report_skipped", reason="no running event loop")
+            return
+        payload = {
+            "host": host,
+            "port": port,
+            "scheme": scheme,
+            "allowed": decision.allowed,
+            "rule_id": decision.rule_id,
+        }
+        task = loop.create_task(self._send(payload))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _send(self, payload: dict[str, Any]) -> None:
+        try:
+            await self._client.request(EGRESS_REPORT, payload, timeout=self._timeout)
+        except Exception as exc:  # noqa: BLE001 - reporting must never break the plugin
+            self._log.warning("plugin.egress_report_failed", error=type(exc).__name__)
+
+    async def drain(self) -> None:
+        """Wait for reports still in flight (tests, and a clean worker shutdown)."""
+        if self._tasks:
+            await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
 
 # ---- tools ---------------------------------------------------------------------------------------
@@ -376,11 +443,15 @@ class PluginApi:
         self.tools = PluginToolsApi(manifest)
         self.state = PluginStateApi(client, timeout_s=request_timeout_s)
         self.secrets = PluginSecretsApi(manifest, client, timeout_s=request_timeout_s)
+        self.egress_reports = CoreEgressReporter(
+            client, logger=self.log, timeout_s=request_timeout_s
+        )
         self.egress = PluginEgressGuard(
             plugin_id=manifest.id,
             allowlist=manifest.network.egress,
             privacy=self.privacy,
             transport_factory=transport_factory,
+            reporter=self.egress_reports,
         )
 
     def http(self, **kwargs: Any) -> httpx.AsyncClient:

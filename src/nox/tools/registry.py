@@ -12,12 +12,30 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
-from nox.security.model import Risk
+from nox.security.model import Decision, Risk
 
 Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 Targets = Callable[[dict[str, Any]], str]
+
+
+class PreflightVerdict(BaseModel):
+    """What a tool's preflight found out about one call before the permission engine decides.
+
+    `allow` leaves the engine's decision as it is; `confirm` turns an `allow` into a confirmation;
+    `deny` refuses the call outright. `targets` is what the call would really touch (the members
+    of a scene, the relay behind a switch) and becomes the permission request's target, so the
+    confirmation names it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    decision: Decision = Decision.ALLOW
+    targets: list[str] = Field(default_factory=list, max_length=64)
+    reason: str = Field(default="", max_length=500)
+
+
+Preflight = Callable[[dict[str, Any]], Awaitable[PreflightVerdict]]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -25,7 +43,9 @@ class ToolSpec:
     """One row of the tool catalogue (Tool Model table).
 
     `targets` derives the permission `target` (path, scene name, host, ...) from the validated
-    input; `None` means the tool carries no meaningful target (e.g. `time.now`). `local=True` means
+    input; `None` means the tool carries no meaningful target (e.g. `time.now`). `preflight`, when
+    set, is asked what a call would actually affect before the permission check, and can only
+    make that check stricter (see `PreflightVerdict`). `local=True` means
     the tool never leaves the machine (dashboard/description metadata only - the permission engine
     itself classifies "cloud" tools by name pattern, see `nox.security.permissions`).
     """
@@ -38,6 +58,7 @@ class ToolSpec:
     side_effects: bool = True
     local: bool = True
     targets: Targets | None = None
+    preflight: Preflight | None = None
 
 
 class ToolDescription(BaseModel):

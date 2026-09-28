@@ -14,6 +14,10 @@ matter more than the join:
 * it degrades honestly. The three registries need an admin token; without one the join falls back
   to friendly names with no area, and the caller reports `areas_available: false` rather than
   inventing rooms.
+
+It also keeps, privately, what the effect check (`nox.home.boundary.entity_effect`) needs for
+entities a scene or script could touch, the hidden ones included: each entity's device class and
+name, and each scene's member list. None of that is ever reported upwards.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
-from nox.home.boundary import forbidden_reason, is_exposed
+from nox.home.boundary import domain_of, forbidden_reason, is_exposed
 
 #: Entity attributes that may leave Home Assistant. Everything else stays there - an allow-list,
 #: because the interesting failure is the attribute nobody thought about.
@@ -58,6 +62,9 @@ class EntityRow:
     area: str
     state: str
     attributes: dict[str, Any] = field(default_factory=dict)
+    #: For a scene: the entities it sets (Home Assistant's `entity_id` attribute); `None` when the
+    #: scene does not say, which is the case for scenes an integration such as Hue provides.
+    members: tuple[str, ...] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -82,6 +89,11 @@ class Inventory:
     #: them is ever reported upwards; this exists so a caller that names one explicitly gets the
     #: real reason ("that is a garage door") instead of "unknown entity".
     hidden: Mapping[str, str] = field(default_factory=dict)
+    #: `entity_id -> {"device_class": ...}` for every entity Home Assistant reported, hidden ones
+    #: included - what the effect check needs to tell a blind from a garage door.
+    effect_attributes: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: `entity_id -> friendly name` for every entity, hidden ones included (for the same check).
+    names: Mapping[str, str] = field(default_factory=dict)
 
     def by_id(self, entity_id: str) -> EntityRow | None:
         for row in self.entities:
@@ -168,18 +180,23 @@ def build_inventory(
     rows: list[EntityRow] = []
     used_areas: dict[str, None] = {}
     hidden: dict[str, str] = {}
+    effect_attributes: dict[str, dict[str, Any]] = {}
+    names: dict[str, str] = {}
     for state in states:
         entity_id = str(state.get("entity_id", ""))
         attributes = state.get("attributes") or {}
         if not entity_id:
             continue
+        entry = registry.get(entity_id)
+        names[entity_id] = _friendly_name(state, entry.name if entry else "", entity_id)
+        if attributes.get("device_class") is not None:
+            effect_attributes[entity_id] = {"device_class": attributes["device_class"]}
         reason = forbidden_reason(entity_id, attributes)
         if reason is not None:
             hidden[entity_id] = reason
             continue
         if not is_exposed(entity_id, attributes):
             continue
-        entry = registry.get(entity_id)
         area_id = entry.area_id if entry is not None else ""
         if not area_id and entry is not None and entry.device_id:
             area_id = device_area.get(entry.device_id, "")
@@ -189,10 +206,11 @@ def build_inventory(
         rows.append(
             EntityRow(
                 entity_id=entity_id,
-                name=_friendly_name(state, entry.name if entry else "", entity_id),
+                name=names[entity_id],
                 area=area,
                 state=str(state.get("state", "")),
                 attributes=filter_attributes(attributes),
+                members=_scene_members(entity_id, attributes),
             )
         )
     rows.sort(key=lambda row: (row.area, row.name, row.entity_id))
@@ -201,4 +219,18 @@ def build_inventory(
         areas=tuple(sorted(used_areas)),
         areas_available=available,
         hidden=hidden,
+        effect_attributes=effect_attributes,
+        names=names,
     )
+
+
+def _scene_members(entity_id: str, attributes: Mapping[str, Any]) -> tuple[str, ...] | None:
+    """The entities a scene sets, from its `entity_id` attribute; `None` when it does not say."""
+    if domain_of(entity_id) != "scene":
+        return None
+    members = attributes.get("entity_id")
+    if isinstance(members, str):
+        return (members,)
+    if isinstance(members, list) and members:
+        return tuple(str(member) for member in members)
+    return None

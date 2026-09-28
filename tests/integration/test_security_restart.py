@@ -20,6 +20,7 @@ from nox.core.config import load_config
 from nox.core.state import PrivacyMode
 from nox.ipc.client import IpcClient
 from nox.ipc.errors import IpcError
+from nox.ipc.role_tokens import derive_role_token
 from nox.ipc.tokens import read_session_token
 from tests._ports import free_port_base
 
@@ -66,7 +67,9 @@ async def running(config: Any) -> AsyncIterator[NoxCore]:
 
 async def _client(core: NoxCore) -> IpcClient:
     assert core.hub is not None
-    token = read_session_token(Path(core.config.paths.runtime_dir))
+    session = read_session_token(Path(core.config.paths.runtime_dir))
+    # The dashboard's own role token; the shell's session token is refused for any other role.
+    token = derive_role_token(session, "dashboard")
     client = IpcClient(core.hub.url, token, "dashboard", "test-dashboard", client_version="0.1.0")
     await client.connect()
     return client

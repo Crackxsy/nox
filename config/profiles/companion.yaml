@@ -67,6 +67,10 @@ permissions:
       tool: "home*"
       action: "scene"
       decision: allow
+      reason: >-
+        only after the home plugin's effect check: a scene that would set a lock, an alarm panel,
+        a valve or a garage door is refused, and one whose members Home Assistant does not list
+        needs a confirmation naming it (tool preflight, nox.home.boundary)
     - id: companion.home.media
       tool: "home*"
       action: "media"

@@ -254,9 +254,41 @@ garage door. Those entities never appear in a listing and naming one explicitly 
 logged reason. It is enforced in `src/nox/home/boundary.py` and in the plugin that uses it, not by
 an instruction in a prompt: a control a text field can talk its way past is not a control.
 
+**Judged by what a call really changes.** A scene, a script or an automation names one entity and
+changes others, and a garage opener is often wired as a plain switch. So before any scene, script,
+automation, switch or cover call runs, the plugin looks at what it would actually touch - a
+scene's member list, a script's or automation's definition (read from Home Assistant and kept for
+a minute), a switch's or cover's device class and name:
+
+- one that would change a lock, an alarm panel, a valve or a garage door is **refused**, like the
+  entity itself;
+- one that cannot be pinned down - a scene Home Assistant does not list members for (Hue scenes,
+  for example), a script that targets a whole area or a device, a definition the access token may
+  not read - and a switch whose name or device class suggests a garage, gate or door relay, or a
+  cover that does not say it is a blind, shutter, shade, curtain or awning, **needs your
+  confirmation**, and the confirmation names the entities.
+
+Recognising a relay by its name is a heuristic: a garage opener called `relay_3` is not caught.
+Name such entities so they say what they are, or keep their room out of Nox's reach with
+`home.areas_allowed`.
+
+**The access token stays encrypted on the network.** The long-lived token has administrator
+rights over your whole house. A Home Assistant that is not on this machine is reached over `wss://`
+(`home.tls: true`); over plain `ws://` the plugin refuses to connect and says why, unless you set
+`home.allow_insecure: true` by hand in your `user.yaml` - deliberately not a switch on the
+Settings page.
+
 **Which rooms.** `home.areas_allowed` limits Nox to the rooms you name (empty = every room). It is
 checked in the plugin worker before a service call is built, so it is a real restriction rather
 than a hint to the model.
+
+## Your phone
+
+The Mobile Companion (Telegram) sends notifications and replies only to the chat of a paired
+device - the chat that device last wrote from - never to "whoever wrote to the bot last". A
+stranger who finds the bot and writes to it gets no answer and receives nothing afterwards. Nox
+keeps that chat number in memory only; the device table stores a salted hash of the sender, not an
+address. After a restart, notifications resume once the paired phone has written again.
 
 ## Questions this document does not answer on its own
 

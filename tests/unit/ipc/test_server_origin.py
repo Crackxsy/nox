@@ -17,6 +17,7 @@ from websockets.typing import Origin
 
 from nox.ipc.origin import ui_origins
 from nox.ipc.protocol import Kind, Source
+from nox.ipc.role_tokens import derive_role_token
 from nox.ipc.server import IpcHub
 from nox.ipc.tokens import TokenStore
 
@@ -110,7 +111,8 @@ async def test_the_cores_own_pages_connect_and_authenticate(
 ) -> None:
     async with connect(ui_hub.url, origin=Origin(origin), open_timeout=5) as conn:
         client = RawClient(conn, Source(role="dashboard", id="dashboard:1"))
-        reply = await client.auth(tokens.session_token)
+        # The dashboard's own role token: the shell's session token is refused for any other role.
+        reply = await client.auth(derive_role_token(tokens.session_token, "dashboard"))
         assert reply.kind is Kind.RESPONSE
 
 

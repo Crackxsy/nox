@@ -307,6 +307,10 @@ class HomeConfig(StrictSection):
     #: actually serves TLS; a plain instance behind `tls: true` is a connection error, not a
     #: fallback.
     tls: bool = False
+    #: Allow `ws://` to a Home Assistant that is not on this machine. Off by default: without TLS
+    #: the long-lived access token - full administrator rights over the house - crosses the network
+    #: in the clear. Deliberately not editable from the dashboard; set it in `user.yaml` by hand.
+    allow_insecure: bool = False
     #: Rooms Nox may act in. Empty = every area Home Assistant reports. A non-empty list is
     #: enforced in the plugin worker before a service call is built, so it is a real restriction
     #: and not a hint to the model.

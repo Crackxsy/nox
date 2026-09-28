@@ -24,10 +24,9 @@ from nox.plugins.manager import (
     PluginRegister,
     PluginSecretGet,
     PluginState,
-    PluginToolCall,
     PluginToolDeclaration,
 )
-from nox.security.model import Decision, Risk
+from nox.security.model import Risk
 from tests.unit.fakes import FakeBus
 from tests.unit.plugins.conftest import (
     FakeEngine,
@@ -157,7 +156,8 @@ async def test_full_lifecycle_transitions(harness: Harness) -> None:
     response = await harness.register()
     assert response["ok"] is True and response["tools"] == ["demo.ping"]
     assert record.history[-2:] == [PluginState.REGISTERED, PluginState.RUNNING]
-    assert harness.hub.services["plugin:demo"] == {"demo"}
+    scope = harness.hub.scopes["plugin:demo"]
+    assert scope.listens == ("system.mode_changed",) and scope.emits == {"demo.pong"}
     assert manager.tools.names() == ["demo.ping"]
     started = [e for e in harness.bus.published if e.name == E.PLUGIN_STARTED]
     assert started and started[0].payload["plugin_id"] == "demo"
@@ -396,57 +396,17 @@ async def test_register_from_a_foreign_client_id_is_refused(harness: Harness) ->
         await manager._h_register(harness.context("ghost"), PluginRegister(plugin_id="ghost"))
 
 
-async def test_tool_call_is_permission_checked_and_forwarded(harness: Harness) -> None:
-    manager = harness.manager
-    harness.hub.responses["tool.call"] = {"text": "pong"}
-    await manager.start()
-    await harness.register()
-    result = await manager._h_tool_call(
-        harness.context(), PluginToolCall(name="demo.ping", input={"text": "hi"})
-    )
-    assert result == {"ok": True, "result": {"text": "pong"}}
-    forwarded = [r for r in harness.hub.requests if r[1] == "tool.call"]
-    assert forwarded == [
-        ("plugin:demo", "tool.call", {"name": "demo.ping", "input": {"text": "hi"}})
-    ]
-
-
-async def test_tool_call_denied_by_the_permission_engine(plugins_dir: Path) -> None:
-    write_manifest(plugins_dir, "demo")
-    built = build(plugins_dir, engine=FakeEngine(decision=Decision.DENY))
-    try:
-        await built.manager.start()
-        await built.register()
-        with pytest.raises(IpcError) as exc:
-            await built.manager._h_tool_call(
-                built.context(), PluginToolCall(name="demo.ping", input={})
-            )
-        assert exc.value.code == "permission.denied"
-        assert [r for r in built.hub.requests if r[1] == "tool.call"] == []
-    finally:
-        await built.manager.stop("test")
-
-
-async def test_tool_call_requiring_confirmation_is_not_faked(plugins_dir: Path) -> None:
-    write_manifest(plugins_dir, "demo")
-    built = build(plugins_dir, engine=FakeEngine(decision=Decision.CONFIRM))
-    try:
-        await built.manager.start()
-        await built.register()
-        with pytest.raises(IpcError, match="not implemented"):
-            await built.manager._h_tool_call(
-                built.context(), PluginToolCall(name="demo.ping", input={})
-            )
-    finally:
-        await built.manager.stop("test")
-
-
 async def test_handlers_are_registered_for_the_plugin_role_only(plugins_dir: Path) -> None:
     write_manifest(plugins_dir, "demo")
     built = build(plugins_dir)
     registry = built.manager._registry
     built.manager.register_handlers()
-    for name in ("plugin.register", "plugin.secret.get", "plugin.tool.call"):
+    for name in (
+        "plugin.register",
+        "plugin.secret.get",
+        "plugin.tool.call",
+        "plugin.egress.report",
+    ):
         registration = registry.get(name)
         assert registration is not None and registration.allowed_roles == frozenset({"plugin"})
         assert registry.is_allowed(name, "plugin") is True

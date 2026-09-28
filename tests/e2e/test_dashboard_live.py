@@ -41,6 +41,7 @@ from playwright.sync_api import Page, expect
 
 from nox.app import DASHBOARD_DIST, DEFAULTS_PATH, PET_DIST, PROFILES_DIR, NoxCore
 from nox.core.config import NoxConfig, load_config
+from nox.ipc.role_tokens import derive_role_token
 from nox.ipc.tokens import read_session_token
 from tests._ports import free_port_base
 
@@ -175,8 +176,9 @@ def core(tmp_path: Path) -> Iterator[NoxCore]:
 
 def _page_url(core: NoxCore, page_name: str) -> str:
     """`?ws=` picks the hub port explicitly (see module docstring); `#token=` is the auth token."""
-    token = read_session_token(Path(core.config.paths.runtime_dir))
-    assert token
+    session = read_session_token(Path(core.config.paths.runtime_dir))
+    assert session
+    token = derive_role_token(session, page_name)  # each page gets its own role's token
     return f"{core.http.url}/{page_name}/?ws={core.hub.port}&lang=en#token={token}"
 
 

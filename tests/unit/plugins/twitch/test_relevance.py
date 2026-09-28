@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from nox_plugin_twitch.relevance import RelevanceClassifier
 
 
@@ -19,11 +20,13 @@ def test_bot_name_mention_is_addressed() -> None:
     assert score > 0.5
 
 
-def test_command_is_always_addressed() -> None:
+@pytest.mark.parametrize("text", ["!rps rock", "!help", "!funken", "!discord", "!nox hi?"])
+def test_a_command_is_never_addressed_to_the_conversation(text: str) -> None:
+    """A built-in (or another bot) answers it; an LLM reply on top would answer it twice."""
     clf = RelevanceClassifier(["nox"])
-    score, addressed = clf.classify("v1", "!rps rock")
-    assert addressed is True
-    assert score > 0.0
+    score, addressed = clf.classify("v1", text)
+    assert addressed is False
+    assert score == 0.0
 
 
 def test_question_raises_score() -> None:
@@ -47,15 +50,6 @@ def test_per_viewer_cooldown_dampens_repeat_chatter() -> None:
     now[0] = 1.0  # well within the 10s cooldown
     second, _ = clf.classify("v1", "hello nox")
     assert second < first
-
-
-def test_cooldown_does_not_suppress_commands() -> None:
-    now = [0.0]
-    clf = RelevanceClassifier(["nox"], cooldown_s=10.0, clock=lambda: now[0])
-    clf.classify("v1", "hello nox")
-    now[0] = 1.0
-    _score, addressed = clf.classify("v1", "!funken")
-    assert addressed is True
 
 
 def test_cooldown_expires() -> None:

@@ -83,6 +83,8 @@ class ObsPlugin:
         self._streaming = False
         self._session_id = ""
         self._session_started_at = 0.0
+        #: Background state resyncs; held so a task is never garbage-collected mid-flight.
+        self._tasks: set[asyncio.Task[None]] = set()
         #: Futures waiting on the next `ReplayBufferSaved` event ( step 4-5): OBS's
         #: `SaveReplayBuffer` response carries no path, only the later event does.
         self._replay_waiters: list[asyncio.Future[str]] = []
@@ -123,6 +125,9 @@ class ObsPlugin:
         self.client.start()
 
     async def stop(self) -> None:
+        for task in list(self._tasks):
+            task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
         await self.client.stop()
 
     # -- health --------------------------------------------------------------------------------
@@ -140,6 +145,24 @@ class ObsPlugin:
 
     async def _on_obs_connected(self) -> None:
         await self.api.events.emit("obs.connected", {"reason": ""})
+        # OBS only sends `StreamStateChanged` on a change. A stream that was already live when
+        # Nox started - or that ended while OBS was gone - is learned by asking. In the
+        # background: this hook runs before the connection's read loop, which is what delivers
+        # the answer.
+        task = asyncio.create_task(self._resync_stream_state(), name="obs-state-resync")
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _resync_stream_state(self) -> None:
+        """Level-triggered start: open (or close) the stream session to match OBS right now."""
+        try:
+            status = await self.client.request("GetStreamStatus")
+            scene = await self.client.request("GetCurrentProgramScene")
+        except Exception as exc:  # noqa: BLE001 - a failed resync is logged; events still flow
+            self.api.log.warning("obs.state_resync_failed", error=str(exc))
+            return
+        self._current_scene = str(scene.get("currentProgramSceneName", self._current_scene))
+        await self._on_stream_state(bool(status.get("outputActive", False)))
 
     async def _on_obs_disconnected(self, reason: str) -> None:
         await self.api.events.emit(

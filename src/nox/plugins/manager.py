@@ -12,8 +12,16 @@ kill switch stops every plugin (`plugin.stop`, two seconds, then terminate). One
 plugin never blocks another.
 
 Core request handlers, for the `plugin` role only: `plugin.register`, `plugin.secret.get`,
-`plugin.tool.call`. Registered tools are mirrored into the core's `ToolRegistry`; every call is
-checked by the permission engine first and then forwarded to the owning worker as a `tool.call`.
+`plugin.tool.call` and `plugin.egress.report`. Registered tools are mirrored into the core's
+`ToolRegistry`; every call is checked by the permission engine first and then forwarded to the
+owning worker as a `tool.call`.
+
+The manifest is enforced here, in the core, and not only by the plugin's own API: before a worker
+is spawned its listen/emit boundary is registered with the hub (`nox.ipc.plugin_scope`);
+`plugin.tool.call` reaches only the tools the manifest lists under `requires.tools` and runs them
+through the `ToolExecutor` - permission engine, confirmation, kill switch, timeout and audit - with
+the plugin as the actor; and every egress decision the plugin's guard reports is written to the
+audit log, marked when it names an endpoint the manifest never declared.
 """
 
 from __future__ import annotations
@@ -38,23 +46,43 @@ from nox.core.health import Check
 from nox.core.logging import get_logger
 from nox.core.parent_watch import parent_env
 from nox.ipc.dispatch import RequestContext, RequestRegistry
-from nox.ipc.errors import ERR_INTERNAL, ERR_NOT_FOUND, ERR_PERMISSION, ERR_UNAVAILABLE, IpcError
+from nox.ipc.errors import (
+    ERR_INTERNAL,
+    ERR_NOT_FOUND,
+    ERR_PERMISSION,
+    ERR_UNAVAILABLE,
+    ERR_VALIDATION,
+    IpcError,
+)
+from nox.ipc.plugin_scope import PluginScope
+from nox.plugins.egress_audit import EgressReport, EgressReportAuditor
 from nox.plugins.manifest import (
     ManifestError,
     PluginManifest,
+    PluginPermission,
     check_egress,
     discover_manifest_paths,
     load_manifest,
     validate_tool_name,
 )
 from nox.security.constants import fail_closed_connect_state
-from nox.security.model import Decision, PermissionRequest, Profile, Risk
+from nox.security.model import PermissionRequest, Profile, Risk
+from nox.tools.registry import PreflightVerdict
 
 log = get_logger(__name__)
 
 PLUGIN_CLIENT_PREFIX = "plugin:"
 WORKER_STOP_REQUEST = "plugin.stop"
 WORKER_TOOL_CALL = "tool.call"
+#: Refused `plugin.tool.call` requests audited per plugin; later ones are only logged, so a plugin
+#: that keeps trying cannot flood the audit chain.
+MAX_AUDITED_TOOL_CALL_DENIALS = 20
+#: `ToolExecutor` error codes (`nox.tools.executor`) -> the IPC error a plugin receives.
+_TOOL_ERROR_CODES: Mapping[str, str] = {
+    "permission.denied": ERR_PERMISSION,
+    "tool.unknown": ERR_NOT_FOUND,
+    "tool.invalid_input": ERR_VALIDATION,
+}
 
 
 # ---- structural dependencies ---------------------------------------------------------------------
@@ -65,6 +93,7 @@ class HubLike(Protocol):
     def url(self) -> str: ...
     def declare_services(self, client_id: str, services: Iterable[str]) -> None: ...
     def find_client(self, client_id: str) -> Any: ...
+    def set_plugin_scope(self, client_id: str, scope: PluginScope) -> None: ...
     async def request(
         self,
         client_id: str,
@@ -74,6 +103,30 @@ class HubLike(Protocol):
         timeout: float | None = None,
         on_stream: Callable[[dict[str, Any]], Any] | None = None,
     ) -> dict[str, Any]: ...
+
+
+class ToolResultLike(Protocol):
+    @property
+    def ok(self) -> bool: ...
+    @property
+    def data(self) -> dict[str, Any] | None: ...
+    @property
+    def error(self) -> str | None: ...
+
+
+class ToolExecutorLike(Protocol):
+    """`nox.tools.executor.ToolExecutor.call`: validation, permission, confirm, timeout, audit."""
+
+    async def call(
+        self,
+        agent: str,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        mode: str,
+        task_id: str | None = None,
+        origin: str = "chat",
+    ) -> ToolResultLike: ...
 
 
 class TokenIssuer(Protocol):
@@ -152,6 +205,7 @@ class PluginToolSpec:
     local: bool
     targets: Callable[[dict[str, Any]], str] | None
     handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+    preflight: Callable[[dict[str, Any]], Awaitable[PreflightVerdict]] | None = None
 
 
 class ToolRegistryLike(Protocol):
@@ -341,6 +395,8 @@ class PluginRecord:
     registered: asyncio.Event = field(default_factory=asyncio.Event)
     #: False while the worker has lost its hub connection and is reconnecting.
     connected: bool = True
+    #: `plugin.tool.call` requests refused because the manifest does not require the tool.
+    tool_call_denials: int = 0
 
     @property
     def version(self) -> str:
@@ -423,6 +479,7 @@ class PluginManager:
         job: JobLike | None = None,
         health: HealthRegistrar | None = None,
         tool_registry: ToolRegistryLike | None = None,
+        executor: ToolExecutorLike | None = None,
         worker_command: Sequence[str] | None = None,
         cwd: Path | None = None,
         mode: Callable[[], str] = lambda: "companion",
@@ -455,6 +512,8 @@ class PluginManager:
             tool_registry if tool_registry is not None else resolve_tool_registry()
         )
         self._spec_class = resolve_tool_spec()
+        #: Runs `plugin.tool.call`; without one that request is refused, never run unchecked.
+        self._executor = executor
         self._worker_command = list(worker_command or [sys.executable, "-m", "nox.worker"])
         self._cwd = cwd
         self._mode = mode
@@ -469,6 +528,7 @@ class PluginManager:
         self._process_factory = process_factory or self._default_process_factory
         self._clock = clock
         self._start_policy = start_policy
+        self._egress_reports = EgressReportAuditor(audit, clock=clock)
         self._records: dict[str, PluginRecord] = {}
         self._closing = False
         self._handlers_registered = False
@@ -486,8 +546,12 @@ class PluginManager:
         rec = self._records.get(plugin_id)
         return rec.state if rec is not None else None
 
+    def use_executor(self, executor: ToolExecutorLike) -> None:
+        """Wire the `ToolExecutor` that `plugin.tool.call` runs through (composition root)."""
+        self._executor = executor
+
     def register_handlers(self) -> None:
-        """Register the three core-side plugin requests (role `plugin` only). Idempotent."""
+        """Register the core-side plugin requests (role `plugin` only). Idempotent."""
         if self._handlers_registered:
             return
         self._registry.register(
@@ -498,6 +562,9 @@ class PluginManager:
         )
         self._registry.register(
             "plugin.tool.call", PluginToolCall, self._h_tool_call, roles=("plugin",)
+        )
+        self._registry.register(
+            "plugin.egress.report", EgressReport, self._h_egress_report, roles=("plugin",)
         )
         self._handlers_registered = True
 
@@ -734,6 +801,10 @@ class PluginManager:
             return
         client_id = f"{PLUGIN_CLIENT_PREFIX}{rec.plugin_id}"
         self._tokens.revoke_worker(client_id)  # nothing issued to an earlier process stays valid
+        # Before the process exists: the worker subscribes right after it connects.
+        self._hub.set_plugin_scope(
+            client_id, PluginScope.of(listens=manifest.events.listens, emits=manifest.events.emits)
+        )
         env = _worker_environment()
         env.update(self._tokens.worker_env(client_id))
         env["NOX_HUB_URL"] = self._hub.url
@@ -891,7 +962,6 @@ class PluginManager:
         rec.client_id = ctx.client_id
         rec.connected = True
         self._transition(rec, PluginState.REGISTERED)
-        self._hub.declare_services(ctx.client_id, sorted(manifest.event_namespaces()))
         self._unregister_tools(rec)
         try:
             self._register_tools(rec, manifest, p.tools)
@@ -936,6 +1006,7 @@ class PluginManager:
                 local=declaration.local,
                 targets=None,
                 handler=self._forwarding_handler(rec.plugin_id, declaration.name),
+                preflight=self._preflight_for(rec.plugin_id, permission),
             )
             self.tools.register(spec)
             rec.tools.append(declaration.name)
@@ -957,6 +1028,33 @@ class PluginManager:
             )
 
         return handler
+
+    def _preflight_for(
+        self, plugin_id: str, permission: PluginPermission
+    ) -> Callable[[dict[str, Any]], Awaitable[PreflightVerdict]] | None:
+        """The core-side preflight of a tool whose manifest entry names one, else `None`.
+
+        It asks the plugin's declared read tool what the call would touch. Any failure - the
+        plugin is gone, the answer does not parse - propagates, and the executor refuses the call.
+        """
+        check = permission.preflight
+        if check is None:
+            return None
+        tool_name = permission.tool
+
+        async def preflight(payload: dict[str, Any]) -> PreflightVerdict:
+            rec = self._records.get(plugin_id)
+            if rec is None or rec.state is not PluginState.RUNNING or rec.client_id is None:
+                raise IpcError(ERR_UNAVAILABLE, f"plugin {plugin_id!r} is not running")
+            answer = await self._hub.request(
+                rec.client_id,
+                WORKER_TOOL_CALL,
+                {"name": check, "input": {"tool": tool_name, "input": payload}},
+                timeout=self.settings.tool_timeout_s,
+            )
+            return PreflightVerdict.model_validate(answer)
+
+        return preflight
 
     async def _h_secret_get(self, ctx: RequestContext, p: PluginSecretGet) -> dict[str, Any]:
         rec = self._record_for(ctx)
@@ -1008,30 +1106,51 @@ class PluginManager:
             ) from exc
 
     async def _h_tool_call(self, ctx: RequestContext, p: PluginToolCall) -> dict[str, Any]:
-        self._record_for(ctx)  # only an authenticated plugin may reach the tool bus
-        spec = self.tools.get(p.name)
-        if spec is None:
-            raise IpcError(ERR_NOT_FOUND, f"unknown tool {p.name!r}")
-        tool, _, action = p.name.partition(".")
-        decision = self._engine.check(
-            PermissionRequest(
-                agent="plugin",
-                tool=tool,
-                action=action,
-                mode=self._mode(),
-                risk=Risk(spec.risk),
-                target=str(p.input.get("target", "")),
-                origin="plugin",
-            )
-        )
-        if decision.decision is Decision.DENY:
-            raise IpcError(ERR_PERMISSION, f"{p.name}: {decision.reason or decision.rule_id}")
-        if decision.decision is Decision.CONFIRM:
-            # No plugin-initiated confirmation flow exists yet; reported honestly, never faked.
+        """Run another component's tool for a plugin - only one its manifest requires.
+
+        The call goes through the same `ToolExecutor` a user- or model-initiated call does, so the
+        permission engine, a confirmation, the kill switch, the timeout and the audit entry all
+        apply, with `plugin:<id>` as the actor. The plugin never chooses the permission target.
+        """
+        rec = self._record_for(ctx)
+        manifest = _manifest_of(rec)
+        actor = f"{PLUGIN_CLIENT_PREFIX}{rec.plugin_id}"
+        if p.name not in manifest.requires.tools:
+            rec.tool_call_denials += 1
+            if rec.tool_call_denials <= MAX_AUDITED_TOOL_CALL_DENIALS:
+                self._audit_boundary(actor, "plugin.tool.call", p.name, "not_required")
+            log.warning("plugin.tool_call_denied", plugin=rec.plugin_id, tool=p.name)
             raise IpcError(
                 ERR_PERMISSION,
-                f"{p.name} requires confirmation ({decision.rule_id}); "
-                "plugin-initiated confirmations are not implemented",
+                f"tool {p.name!r} is not listed in requires.tools of plugin {rec.plugin_id!r}",
             )
-        result = await spec.handler(dict(p.input))
-        return {"ok": True, "result": dict(result or {})}
+        if self._executor is None:
+            raise IpcError(ERR_UNAVAILABLE, "tool execution is not available in this core")
+        result = await self._executor.call(
+            actor, p.name, dict(p.input), mode=self._mode(), origin="plugin"
+        )
+        if not result.ok:
+            code = _TOOL_ERROR_CODES.get(result.error or "", ERR_INTERNAL)
+            raise IpcError(code, f"{p.name}: {result.error or 'failed'}")
+        return {"ok": True, "result": dict(result.data or {})}
+
+    async def _h_egress_report(self, ctx: RequestContext, p: EgressReport) -> dict[str, Any]:
+        """Audit one decision of the plugin's own egress guard (`nox.plugins.egress_audit`)."""
+        rec = self._record_for(ctx)
+        self._egress_reports.record(rec.plugin_id, _manifest_of(rec), p)
+        return {"ok": True}
+
+    def _audit_boundary(self, actor: str, action: str, target: str, result: str) -> None:
+        if self._audit is None:
+            return
+        try:
+            self._audit.append(
+                actor=actor,
+                tool="plugin",
+                action=action,
+                target=target,
+                decision="deny",
+                result=result,
+            )
+        except Exception as exc:  # noqa: BLE001 - the refusal stands whether or not it was logged
+            log.error("plugin.boundary_audit_failed", error=f"{type(exc).__name__}: {exc}")
