@@ -414,10 +414,11 @@ Where Nox honestly stands is in [`docs/CAPABILITY_ANALYSIS.md`](docs/CAPABILITY_
 the proposed path from here is [`docs/SPEC_V3.5_V4.5.md`](docs/SPEC_V3.5_V4.5.md): **v3.5 Truth**
 (every security and privacy claim holds, across crashes and restarts) → **v4.0 Agency** (a bounded,
 permission-checked tool loop, reminders, real memory) → **v4.5 Proof** (real-service lab, soak
-tests, installer with update and rollback, external review) → v1.0 → **v5.0 Room** (a 3D model of
-your room, objects remembered, tidy hints and a tidy game - camera frames never leave the machine)
-→ **v6.0 Workshop** (design printable objects and gifts, Blender and CAD, print after
-confirmation). The v1.0 gate itself is [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
+tests, installer with update and rollback, external review) → v1.0 → **v5.0 Rig** ("optimise my PC
+for gaming": power, priority, lighting, fans, mouse and GPU per platform, exact revert to normal) →
+**v6.0 Room** (a 3D model of your room, objects remembered, tidy hints and a tidy game - camera
+frames never leave the machine) → **v7.0 Workshop** (design printable objects and gifts, Blender
+and CAD, print after confirmation). The v1.0 gate itself is [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
 
 ## Support
 

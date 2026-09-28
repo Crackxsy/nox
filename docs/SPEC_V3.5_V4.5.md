@@ -1,4 +1,4 @@
-# Specification: Nox v3.5 – v6.0
+# Specification: Nox v3.5 – v7.0
 
 Status: **proposal**, for the maintainer to accept, change or reject. Grounded in
 [`CAPABILITY_ANALYSIS.md`](CAPABILITY_ANALYSIS.md); finding IDs (G1, R3, D4, …) refer to its
@@ -13,8 +13,9 @@ register.
 > | **v4.0 „Handeln"** | Nox kann etwas tun, nicht nur reden. | Agent-Schleife: Modell wählt Werkzeug → Permission-Engine prüft → Ergebnis zurück → weiter. Erinnerungen, echtes Gedächtnis, alle vorhandenen Tools erreichbar | eine deutsche Aufgaben-Suite wird zu ≥ 90 % korrekt erledigt und **keine** Aktion mit Seiteneffekt passiert ohne Freigabe |
 > | **v4.5 „Beweis"** | Es hält im echten Leben. | Echte Dienste in CI (Home Assistant im Container), Soak- und Chaos-Tests, Installer mit Update/Rollback, externes Security-Review | die v1.0-Release-Checkliste ist vollständig mit Belegen abgehakt |
 >
-> | **v5.0 „Raum"** | Nox kennt dein Zimmer. | 3D-Modell des Zimmers, Objekte erkennen und merken, „unaufgeräumt"-Hinweise mit Plan *was wann wohin*, Aufräum-Spiel | Positionen auf ±30 cm, höchstens ein Fehlalarm pro Woche, kein einziges Kamerabild gespeichert oder versendet |
-> | **v6.0 „Werkstatt"** | Nox baut mit dir Dinge. | Parametrische 3D-Modelle aus Beschreibungen, Blender-Anbindung, Druckbarkeits-Prüfung, STL/3MF-Export, Druckauftrag mit Freigabe, Geschenk-Assistent | 80 % von 20 Referenz-Objekten sind ohne Nacharbeit druckbar |
+> | **v5.0 „Rig"** | Ein Satz stellt den ganzen PC um. | Profile „Gaming" / „Normal" / „Leise": Energieplan, Spielmodus, Prozess-Priorität, Lichtszene und RGB, Lüfterkurven, Maus, GPU-Power-Limit - pro Betriebssystem so weit, wie die Hardware es erlaubt; „Normal" stellt exakt die vorherigen Werte wieder her | 100 Wechsel Gaming↔Normal hinterlassen keine einzige Abweichung; ein Absturz stellt Lüfter und GPU binnen 10 s zurück |
+> | **v6.0 „Raum"** | Nox kennt dein Zimmer. | 3D-Modell des Zimmers, Objekte erkennen und merken, „unaufgeräumt"-Hinweise mit Plan *was wann wohin*, Aufräum-Spiel | Positionen auf ±30 cm, höchstens ein Fehlalarm pro Woche, kein einziges Kamerabild gespeichert oder versendet |
+> | **v7.0 „Werkstatt"** | Nox baut mit dir Dinge. | Parametrische 3D-Modelle aus Beschreibungen, Blender-Anbindung, Druckbarkeits-Prüfung, STL/3MF-Export, Druckauftrag mit Freigabe, Geschenk-Assistent | 80 % von 20 Referenz-Objekten sind ohne Nacharbeit druckbar |
 >
 > „Alles können" ist bewusst **kein** Ziel. Wachstum kommt aus *einem* kontrollierten Mechanismus
 > (Werkzeuge unter der Permission-Engine), nicht aus Einzel-Features. Was Nox nie tun soll (Eingaben
@@ -32,12 +33,15 @@ releases:
 | **v3.5** | `0.3.0` | Truth - every claim holds |
 | **v4.0** | `0.4.0` | Agency - Nox can act, under the permission engine |
 | **v4.5** | `0.5.0` → `1.0.0-rc` | Proof - real environments, delivery, review |
-| **v5.0** | `1.1.0` | Room - spatial memory, tidy help, tidy game |
-| **v6.0** | `1.2.0` | Workshop - design and 3D-print objects, gift help |
+| **v5.0** | `1.1.0` | Rig - one sentence switches the whole PC between gaming, normal and quiet |
+| **v6.0** | `1.2.0` | Room - spatial memory, tidy help, tidy game |
+| **v7.0** | `1.3.0` | Workshop - design and 3D-print objects, gift help |
 
 Wave names mark the big leaps; release numbers follow SemVer, where a new capability that breaks
-nothing is a minor release. v5.0 and v6.0 depend on the v4.0 agent loop and on v4.5's real-world
-proof: a room camera and a printer are the two most consequential devices Nox would touch.
+nothing is a minor release. v5.0 to v7.0 depend on the v4.0 agent loop and on v4.5's real-world
+proof: fans and GPU power, a room camera and a printer are the most consequential things Nox would
+touch. Rig comes first because it builds on what exists (game detection, Home Assistant scenes,
+sensors, modes) and is less privacy-sensitive than a camera in the room.
 
 One version number for everything: `pyproject.toml`, `nox.__version__`, both UIs'
 `clientVersion` (generated, not hand-written) and the installer are the same value (fixes R9).
@@ -62,7 +66,8 @@ closes.
 - State is **level-triggered at connect**: every consumer asks for the current state when it
   starts or reconnects; events only carry changes after that.
 - No fake capabilities: the model is never told it can do something it cannot.
-- Permanent non-goals: input synthesis or memory access for games; unlocking doors, disarming
+- Permanent non-goals: input synthesis or memory access for games; overclocking or
+  undervolting; unlocking doors, disarming
   alarms, opening valves or garages; stopping a stream or deleting OBS scenes; telemetry; camera
   frames leaving the machine.
 
@@ -193,8 +198,8 @@ These are product decisions, not engineering ones.
 | 4 | Rocket League coaching | open - recommendation: freeze at replay summaries until v4.5 |
 | 5 | Release numbering | open - recommendation: as in §1 |
 | 6 | Platforms for the installer | open - recommendation: Windows only in v4.5 |
-| 7 | v5.0 room capture method | open - recommendation: import a scan from any phone scanning app (glTF/PLY/OBJ) first; own reconstruction later (see §10) |
-| 8 | v6.0 modelling engine | open - recommendation: parametric CAD (build123d, Apache-2.0) for printable parts, Blender for visual and organic work (see §11) |
+| 7 | v6.0 room capture method | open - recommendation: import a scan from any phone scanning app (glTF/PLY/OBJ) first; own reconstruction later (see §11) |
+| 8 | v7.0 modelling engine | open - recommendation: parametric CAD (build123d, Apache-2.0) for printable parts, Blender for visual and organic work (see §12) |
 
 ## 9. Risks
 
@@ -206,13 +211,58 @@ These are product decisions, not engineering ones.
 | No Windows/macOS hardware in the loop for contributors | regressions found late | required CI on all three OSes (v3.5), lab and soak on real machines (v4.5) |
 | Single maintainer | the plan stalls | waves are independent enough to ship partially; each work item is a self-contained pull request |
 
-## 10. v5.0 - Room
+## 10. v5.0 - Rig
+
+**Goal:** one sentence - "Nox, optimier meinen PC fürs Gaming" - switches the machine into a state
+made for play: power, priority, lighting, cooling, input and GPU; "Normalbetrieb" or "leise"
+switches it back, quieter fans included. Asked for by the owner.
+
+### 10.1 What is feasible, honestly
+
+No operating system has one interface for all of this, and some of it is locked by the hardware
+vendor. Nox does per platform what the platform allows, reports the rest as `unavailable` with the
+reason, and never installs a kernel driver of its own (the common Windows fan driver, WinRing0, has
+a known privilege-escalation flaw and is blocked by Microsoft Defender).
+
+| Action | Windows 11 | Linux | macOS | Rights |
+| --- | --- | --- | --- | --- |
+| Power plan / profile | `powercfg` | `powerprofilesctl`, Feral GameMode | ❌ needs root; not attempted | user |
+| OS game mode, do-not-disturb | Game Mode, Focus | GameMode, desktop DND | Focus | user |
+| Game process priority; pause Nox's own load (indexing, model keep-warm) | ✅ | ✅ | ✅ | user |
+| Display refresh rate | ✅ | X11 `xrandr`; Wayland compositor-specific | ◐ | user |
+| Room lighting | Home Assistant scenes (exists) | same | same | user |
+| PC RGB | OpenRGB SDK over loopback | OpenRGB | OpenRGB, limited | user |
+| Pointer speed | ✅ | ✅ | ✅ | user |
+| Hardware mouse DPI | only through the vendor's own profile switching | libratbag (many mice) | ❌ | user |
+| Fans | liquidctl (AIO coolers, fan hubs); a fan tool the user installed | liquidctl, hwmon PWM | ❌ Apple does not allow it | helper |
+| GPU power limit | NVIDIA `nvidia-smi` within vendor bounds | NVIDIA the same; AMD sysfs | ❌ | helper |
+| Overclocking / undervolting | ❌ non-goal | ❌ | ❌ | - |
+
+### 10.2 Work items
+
+| ID | Requirement | Acceptance criteria |
+| --- | --- | --- |
+| X-01 | **System profiles** | Declarative profiles (`gaming`, `normal`, `quiet`, user-defined) listing actions per platform; switched by voice, chat, dashboard, or automatically when a game starts or ends (existing game detection). |
+| X-02 | **Exact revert** | Before applying, Nox snapshots every value it will change; `normal` restores the snapshot, never guessed defaults. The snapshot survives a Nox crash and is restored at the next start. |
+| X-03 | **Unprivileged actions** | Every "user" row above, tested per platform against a fake of the OS tool. |
+| X-04 | **Privileged helper** | Optional, separately installed service (Windows service, systemd unit, launchd daemon) with an allow-listed command set only - set a fan curve from a validated schema, set a GPU power limit inside the vendor's min/max, set hwmon PWM - authenticated to the core, every action audited, automatic revert to the snapshot when the core disconnects. Nox itself stays unprivileged. |
+| X-05 | **Thermal safety** | A watchdog in the helper forces a safe fan curve when temperatures exceed configured limits, independent of the core; a minimum fan duty floor; tested with fake sensors. |
+| X-06 | **Measured, not claimed** | Nox reports what it changed and what it measured before and after (temperatures, fan speed, GPU clocks; frame times where PresentMon or MangoHud is installed) - no "optimal" without a measurement. |
+| X-07 | **Confirmation** | The first switch into a profile lists every change and asks once; later switches follow the profile rule, except helper actions, which need the PIN once per session. |
+
+### 10.3 Exit gate
+
+100 automated switches gaming ↔ normal leave an empty diff between the before and after snapshots
+on every platform in CI (fakes) and on one real machine per platform; killing Nox while `gaming` is
+active restores fans and GPU within 10 s; the thermal watchdog wins against any profile in tests.
+
+## 11. v6.0 - Room
 
 **Goal:** Nox knows the user's room - a 3D model, the things in it, where each thing belongs and
 where it was last seen - and helps keep it tidy: it says when something is out of place, proposes
 *what goes where, and when*, and can turn tidying into a game. Asked for by the owner.
 
-### 10.1 What is feasible, honestly
+### 11.1 What is feasible, honestly
 
 - **One fixed webcam cannot produce a 3D model**: it sees one side of the room from one point.
   A 3D model needs views from many positions. The reliable route is a **one-time scan** (walking
@@ -232,7 +282,7 @@ where it was last seen - and helps keep it tidy: it says when something is out o
   reference the user defines: each thing's home place ("Soll-Platz") and tidy-state snapshots per
   area (floor, desk, bed).
 
-### 10.2 Work items
+### 11.2 Work items
 
 | ID | Requirement | Acceptance criteria |
 | --- | --- | --- |
@@ -245,20 +295,20 @@ where it was last seen - and helps keep it tidy: it says when something is out o
 | S-07 | **Nudges and plan** | Proactive hints respect quiet hours and privacy; "Was soll ich aufräumen?" gives an ordered plan (what, where to, estimated minutes) and can schedule it as reminders (A-06). |
 | S-08 | **Tidy game** | Opt-in missions ("Bring 5 Dinge zurück an ihren Platz"), timer challenges, points, streaks; completion verified by a fresh snapshot; the pet reacts. |
 
-### 10.3 Exit gate
+### 11.3 Exit gate
 
 Two-week trial in a real room with a labelled test set: detection precision ≥ 0.9 and recall ≥ 0.7
 for the user's 30 most common things; median position error ≤ 30 cm; at most one false "untidy"
 nudge per week; automated tests prove that no frame is written to disk or sent over the network.
 
-## 11. v6.0 - Workshop
+## 12. v7.0 - Workshop
 
 **Goal:** Nox designs printable objects with the user - tools, holders, replacement parts,
 personalised gifts - checks that they will print, exports them, and sends them to the printer
 after confirmation. Asked for by the owner ("in Blender 3D-Tools bauen und für den 3D-Drucker
 exportieren", "Geschenke machen").
 
-### 11.1 What is feasible, honestly
+### 12.1 What is feasible, honestly
 
 - For **functional, printable parts**, a parametric CAD library is the better engine than Blender:
   build123d or CadQuery (Apache-2.0) produce exact solids and STEP/STL/3MF with real dimensions.
@@ -273,7 +323,7 @@ exportieren", "Geschenke machen").
   Slicing uses the user's installed slicer (PrusaSlicer/OrcaSlicer CLI, AGPL - called, never
   bundled).
 
-### 11.2 Work items
+### 12.2 Work items
 
 | ID | Requirement | Acceptance criteria |
 | --- | --- | --- |
@@ -284,7 +334,7 @@ exportieren", "Geschenke machen").
 | W-05 | **Preview** | 3D preview in the dashboard (shared viewer with S-02). |
 | W-06 | **Gift assistant** | Ideas from what Nox remembers about a person (only what the user told it), budget and deadline; personalised printable designs (name plates, key rings, lithophanes from a user-supplied photo processed locally); reminders before the date; card texts. |
 
-### 11.3 Exit gate
+### 12.3 Exit gate
 
 20 reference objects described in German (functional parts and gifts): ≥ 80 % pass the
 printability check and print without manual repair on a reference printer; no design worker can
