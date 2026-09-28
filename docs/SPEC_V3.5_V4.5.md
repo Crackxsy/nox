@@ -1,4 +1,4 @@
-# Specification: Nox v3.5 – v4.5
+# Specification: Nox v3.5 – v6.0
 
 Status: **proposal**, for the maintainer to accept, change or reject. Grounded in
 [`CAPABILITY_ANALYSIS.md`](CAPABILITY_ANALYSIS.md); finding IDs (G1, R3, D4, …) refer to its
@@ -12,6 +12,9 @@ register.
 > | **v3.5 „Wahrheit"** | Was Nox behauptet, stimmt. | PIN einrichtbar; Profile wirklich durchgesetzt; Zustand übersteht Neustarts; Worker kommen nach Absturz zurück; Datenlöschung läuft; Doku ohne Übertreibung | jede Garantie aus SECURITY/PRIVACY hat einen Negativtest in CI und ist im Code wahr |
 > | **v4.0 „Handeln"** | Nox kann etwas tun, nicht nur reden. | Agent-Schleife: Modell wählt Werkzeug → Permission-Engine prüft → Ergebnis zurück → weiter. Erinnerungen, echtes Gedächtnis, alle vorhandenen Tools erreichbar | eine deutsche Aufgaben-Suite wird zu ≥ 90 % korrekt erledigt und **keine** Aktion mit Seiteneffekt passiert ohne Freigabe |
 > | **v4.5 „Beweis"** | Es hält im echten Leben. | Echte Dienste in CI (Home Assistant im Container), Soak- und Chaos-Tests, Installer mit Update/Rollback, externes Security-Review | die v1.0-Release-Checkliste ist vollständig mit Belegen abgehakt |
+>
+> | **v5.0 „Raum"** | Nox kennt dein Zimmer. | 3D-Modell des Zimmers, Objekte erkennen und merken, „unaufgeräumt"-Hinweise mit Plan *was wann wohin*, Aufräum-Spiel | Positionen auf ±30 cm, höchstens ein Fehlalarm pro Woche, kein einziges Kamerabild gespeichert oder versendet |
+> | **v6.0 „Werkstatt"** | Nox baut mit dir Dinge. | Parametrische 3D-Modelle aus Beschreibungen, Blender-Anbindung, Druckbarkeits-Prüfung, STL/3MF-Export, Druckauftrag mit Freigabe, Geschenk-Assistent | 80 % von 20 Referenz-Objekten sind ohne Nacharbeit druckbar |
 >
 > „Alles können" ist bewusst **kein** Ziel. Wachstum kommt aus *einem* kontrollierten Mechanismus
 > (Werkzeuge unter der Permission-Engine), nicht aus Einzel-Features. Was Nox nie tun soll (Eingaben
@@ -29,6 +32,12 @@ releases:
 | **v3.5** | `0.3.0` | Truth - every claim holds |
 | **v4.0** | `0.4.0` | Agency - Nox can act, under the permission engine |
 | **v4.5** | `0.5.0` → `1.0.0-rc` | Proof - real environments, delivery, review |
+| **v5.0** | `1.1.0` | Room - spatial memory, tidy help, tidy game |
+| **v6.0** | `1.2.0` | Workshop - design and 3D-print objects, gift help |
+
+Wave names mark the big leaps; release numbers follow SemVer, where a new capability that breaks
+nothing is a minor release. v5.0 and v6.0 depend on the v4.0 agent loop and on v4.5's real-world
+proof: a room camera and a printer are the two most consequential devices Nox would touch.
 
 One version number for everything: `pyproject.toml`, `nox.__version__`, both UIs'
 `clientVersion` (generated, not hand-written) and the installer are the same value (fixes R9).
@@ -54,7 +63,8 @@ closes.
   starts or reconnects; events only carry changes after that.
 - No fake capabilities: the model is never told it can do something it cannot.
 - Permanent non-goals: input synthesis or memory access for games; unlocking doors, disarming
-  alarms, opening valves or garages; stopping a stream or deleting OBS scenes; telemetry.
+  alarms, opening valves or garages; stopping a stream or deleting OBS scenes; telemetry; camera
+  frames leaving the machine.
 
 ## 4. v3.5 - Truth
 
@@ -162,7 +172,7 @@ installed, updated and rolled back by someone who is not a developer.
 `docs/RELEASE_CHECKLIST.md` complete with evidence for every item, the soak report and lab results
 attached to the release, and the external review closed → tag `1.0.0-rc1`.
 
-## 7. Cross-cutting rules for all three waves
+## 7. Cross-cutting rules for all waves
 
 - Every work item lands with its tests in the same pull request; a fixed bug comes with a test that
   fails before the fix (as on this branch).
@@ -173,16 +183,18 @@ attached to the release, and the external review closed → tag `1.0.0-rc1`.
 
 ## 8. Decisions the maintainer has to make
 
-These are product decisions, not engineering ones. Each has a recommendation.
+These are product decisions, not engineering ones.
 
-| # | Decision | Options | Recommendation |
-| --- | --- | --- | --- |
-| 1 | Microphone under Wayland (today: closed by the fail-closed zone) | keep closed · allow an explicit, PIN-gated opt-in that exempts only the microphone | Opt-in, PIN-gated, off by default, shown permanently in the pet status. Screen and memory stay closed. |
-| 2 | How the cloud model uses tools (A-02) | Claude Code CLI + local MCP bridge · direct Anthropic API with a key in the credential store | MCP bridge: keeps the existing "no API key of our own" model and puts every call through `ToolExecutor`. |
-| 3 | Funken economy | build it out (spend, earn events) · reduce to what works and delete dead config | Reduce now (v3.5), revisit when streaming is a focus again. |
-| 4 | Rocket League coaching | invest in real HUD recognition/model · freeze at replay summaries | Freeze at replay summaries until v4.5; the current HUD stage is scaffolding. |
-| 5 | Release numbering | as in §1 · keep wave names only | As in §1: waves stay the working names, releases follow SemVer. |
-| 6 | Platforms for the installer | Windows only · also macOS/Linux packages | Windows only in v4.5; macOS/Linux stay source installs until someone owns them. |
+| # | Decision | Status |
+| --- | --- | --- |
+| 1 | Microphone under Wayland | **Decided by the owner ("Wayland darf").** New setting `privacy.unobservable_policy`, default `screen_only`: while the active window cannot be observed, the microphone and memory writes are allowed; screen capture, camera, clipboard reads and screenshots stay closed. `strict` keeps everything closed. A real zone (banking, password manager …) still closes everything. |
+| 2 | How the model uses tools (A-02) | **Decided by the owner: Nox may use tools.** Mechanism as recommended: Ollama native tool calling; Claude Code only through a local MCP bridge into `ToolExecutor`; no API key of Nox's own. |
+| 3 | Funken economy | open - recommendation: reduce to what works now, revisit when streaming is a focus |
+| 4 | Rocket League coaching | open - recommendation: freeze at replay summaries until v4.5 |
+| 5 | Release numbering | open - recommendation: as in §1 |
+| 6 | Platforms for the installer | open - recommendation: Windows only in v4.5 |
+| 7 | v5.0 room capture method | open - recommendation: import a scan from any phone scanning app (glTF/PLY/OBJ) first; own reconstruction later (see §10) |
+| 8 | v6.0 modelling engine | open - recommendation: parametric CAD (build123d, Apache-2.0) for printable parts, Blender for visual and organic work (see §11) |
 
 ## 9. Risks
 
@@ -193,3 +205,87 @@ These are product decisions, not engineering ones. Each has a recommendation.
 | v3.5 looks like "no progress" to users | pressure to skip to features | v3.5 visibly adds PIN setup, a Resume button and conversation history - the prerequisites that are also user-facing |
 | No Windows/macOS hardware in the loop for contributors | regressions found late | required CI on all three OSes (v3.5), lab and soak on real machines (v4.5) |
 | Single maintainer | the plan stalls | waves are independent enough to ship partially; each work item is a self-contained pull request |
+
+## 10. v5.0 - Room
+
+**Goal:** Nox knows the user's room - a 3D model, the things in it, where each thing belongs and
+where it was last seen - and helps keep it tidy: it says when something is out of place, proposes
+*what goes where, and when*, and can turn tidying into a game. Asked for by the owner.
+
+### 10.1 What is feasible, honestly
+
+- **One fixed webcam cannot produce a 3D model**: it sees one side of the room from one point.
+  A 3D model needs views from many positions. The reliable route is a **one-time scan** (walking
+  the room with a phone; many free apps export glTF/PLY/OBJ), imported into Nox. Nox's own
+  reconstruction from a video (photogrammetry or Gaussian splatting) is possible locally but needs a
+  GPU and is a later add-on, not the first step.
+- **Continuous observation** then comes from one or more fixed cameras whose position is
+  registered once against the model (the user clicks a few matching points in the camera image and
+  the model; OpenCV `solvePnP`). A detection in the camera image is projected onto the model's
+  surfaces to get a 3D position.
+- **Recognising objects** uses a local open-vocabulary detector ("Tasse", "Pullover",
+  "Ladekabel") through ONNX Runtime. Candidates must be licence-compatible (Apache-2.0 models such
+  as OWLv2 or Grounding DINO - *not* AGPL/GPL detectors). Small or hidden objects, darkness and
+  clutter behind other things will be missed; the specification treats that as a measured limit,
+  not a bug to hide.
+- **"Unaufgeräumt" is not something a model can know on its own.** It is a comparison against a
+  reference the user defines: each thing's home place ("Soll-Platz") and tidy-state snapshots per
+  area (floor, desk, bed).
+
+### 10.2 Work items
+
+| ID | Requirement | Acceptance criteria |
+| --- | --- | --- |
+| S-01 | **Room model import** | glTF/GLB, PLY and OBJ scans import into the data folder; scale is checked (a known distance entered by the user); the model is stored locally only. |
+| S-02 | **3D view in the dashboard** | three.js (MIT) viewer: orbit, areas, markers for things with their name, home place and last-seen time; works on a mid-range laptop at ≥ 30 fps for a 2-million-triangle scan (decimated on import). |
+| S-03 | **Camera registration** | For each fixed camera the user marks ≥ 6 point pairs; reprojection error is shown and must be under a threshold before the camera is used. |
+| S-04 | **Observation, privacy first** | Snapshots on schedule or on request, never continuous recording. Frames are processed in memory and discarded; only labels, boxes and 3D positions are stored. A person in the frame discards the frame. Camera frames never leave the machine (hard prohibition in code, like the game input rule), and the camera indicator is always shown. Runs only when `privacy.capture.camera` is on and outside privacy modes PRIVATE/OFFLINE. |
+| S-05 | **Object memory** | Things have a name, a home place, a last-seen position and time, and a history; the user can correct a detection by voice, chat or in the 3D view, and corrections improve later matching. "Wo ist mein Ladekabel?" answers with the last seen place and time, and shows it in the 3D view. |
+| S-06 | **Tidy assessment** | Per area: things away from their home place, things on the floor, count against the tidy snapshot → a tidy score with reasons ("Die Tasse steht seit Dienstag auf dem Schreibtisch; sie gehört in die Küche"). |
+| S-07 | **Nudges and plan** | Proactive hints respect quiet hours and privacy; "Was soll ich aufräumen?" gives an ordered plan (what, where to, estimated minutes) and can schedule it as reminders (A-06). |
+| S-08 | **Tidy game** | Opt-in missions ("Bring 5 Dinge zurück an ihren Platz"), timer challenges, points, streaks; completion verified by a fresh snapshot; the pet reacts. |
+
+### 10.3 Exit gate
+
+Two-week trial in a real room with a labelled test set: detection precision ≥ 0.9 and recall ≥ 0.7
+for the user's 30 most common things; median position error ≤ 30 cm; at most one false "untidy"
+nudge per week; automated tests prove that no frame is written to disk or sent over the network.
+
+## 11. v6.0 - Workshop
+
+**Goal:** Nox designs printable objects with the user - tools, holders, replacement parts,
+personalised gifts - checks that they will print, exports them, and sends them to the printer
+after confirmation. Asked for by the owner ("in Blender 3D-Tools bauen und für den 3D-Drucker
+exportieren", "Geschenke machen").
+
+### 11.1 What is feasible, honestly
+
+- For **functional, printable parts**, a parametric CAD library is the better engine than Blender:
+  build123d or CadQuery (Apache-2.0) produce exact solids and STEP/STL/3MF with real dimensions.
+  **Blender** (headless, `blender --background`) is the right engine for visual and organic work -
+  figurines, embossed names, renders for a gift preview. Both are external programs Nox drives; it
+  bundles neither.
+- A model writing CAD or Blender code is **code execution**. It runs in a separate worker process
+  with no network, confined to a work folder, with CPU/time limits - and the model composes from a
+  vetted library of operations (box, cylinder, fillet, text, boolean, pattern …) rather than
+  arbitrary Python wherever that is enough.
+- Printability is checkable: watertight mesh, minimum wall thickness, overhang angles, bed size.
+  Slicing uses the user's installed slicer (PrusaSlicer/OrcaSlicer CLI, AGPL - called, never
+  bundled).
+
+### 11.2 Work items
+
+| ID | Requirement | Acceptance criteria |
+| --- | --- | --- |
+| W-01 | **Parametric design from a description** | "Ein Halter für mein Ladekabel, 12 mm Kabel, an die Tischkante mit 25 mm" → a parametric model with named dimensions the user can change by voice or in the dashboard. |
+| W-02 | **Blender bridge** | Plugin driving headless Blender for visual/organic work and renders; same sandbox rules as W-01. |
+| W-03 | **Printability check** | Every export is checked (watertight, wall ≥ nozzle × 2, overhangs, fits the configured printer); failures are explained and a fix is proposed. |
+| W-04 | **Export and print** | STL/3MF/STEP export into the work folder; sending to the printer (OctoPrint or Moonraker API, allow-listed host) is a confirmed side effect showing the file, material estimate and time. |
+| W-05 | **Preview** | 3D preview in the dashboard (shared viewer with S-02). |
+| W-06 | **Gift assistant** | Ideas from what Nox remembers about a person (only what the user told it), budget and deadline; personalised printable designs (name plates, key rings, lithophanes from a user-supplied photo processed locally); reminders before the date; card texts. |
+
+### 11.3 Exit gate
+
+20 reference objects described in German (functional parts and gifts): ≥ 80 % pass the
+printability check and print without manual repair on a reference printer; no design worker can
+reach the network or write outside its work folder (negative tests).
