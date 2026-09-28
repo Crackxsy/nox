@@ -51,6 +51,7 @@ _DASHBOARD: tuple[str, ...] = (
     "ai.providers",
     "mode.set",
     "privacy.set",
+    "privacy.status",  # the effective privacy/capture/mute picture a UI starts from
     "security.*",  # security.kill, security.panic (one segment: not security.permission.reply)
     "voice.mute",
     "chat.send",

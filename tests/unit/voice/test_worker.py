@@ -61,6 +61,9 @@ class SpyPipeline:
     def capture_health(self) -> tuple[HealthStatus, str]:
         return HealthStatus.AVAILABLE, "spy pipeline"
 
+    def health_report(self) -> dict[str, tuple[HealthStatus, str]]:
+        return {"capture": self.capture_health()}
+
 
 def spy_factory(emit: Any, capture_allowed: Any, _config: Any = None) -> VoicePipeline:
     return SpyPipeline(emit, capture_allowed)

@@ -266,8 +266,14 @@ class SoundDeviceOutput:
             players = [_DevicePlayer(dev, sample_rate, self.volume) for dev in targets]
             self._players = players
             try:
-                for p in players:
-                    await asyncio.to_thread(p.open)
+                try:
+                    for p in players:
+                        await asyncio.to_thread(p.open)
+                except Exception as exc:
+                    # A device that was unplugged or renumbered must be looked up again next
+                    # time, not served from the cache that now points at the wrong index.
+                    self.forget_devices()
+                    raise AudioUnavailableError(f"cannot open the output device: {exc}") from exc
                 async for chunk in pcm_chunks:
                     if cancelled():
                         break
@@ -336,6 +342,8 @@ class SoundDeviceInput:
         self._running = False
         self._device_rate = sample_rate
         self._pending = np.zeros(0, dtype=np.float32)
+        #: `_pending` is filled on the PortAudio thread and cleared on the event loop.
+        self._pending_lock = threading.Lock()
         self.dropped_frames = 0
 
     @property
@@ -360,7 +368,8 @@ class SoundDeviceInput:
             self._enabled.set()
             return
         self._enabled.clear()
-        self._pending = np.zeros(0, dtype=np.float32)
+        with self._pending_lock:
+            self._pending = np.zeros(0, dtype=np.float32)
         stream, self._stream = self._stream, None
         if stream is not None:
             await asyncio.to_thread(self._close_stream, stream)
@@ -405,13 +414,14 @@ class SoundDeviceInput:
         mono = indata[:, 0].astype(np.float32, copy=True)
         if self._device_rate != self._sample_rate:
             mono = resample_linear(mono, self._device_rate, self._sample_rate)
-        data = np.concatenate([self._pending, mono]) if self._pending.size else mono
         n = self._frame_len
-        full = data.size // n
+        with self._pending_lock:
+            data = np.concatenate([self._pending, mono]) if self._pending.size else mono
+            full = data.size // n
+            self._pending = data[full * n :]
         for i in range(full):
             frame = data[i * n : (i + 1) * n]
             self._loop.call_soon_threadsafe(self._enqueue, frame)
-        self._pending = data[full * n :]
 
     def _enqueue(self, frame: np.ndarray) -> None:
         if self._queue is None:

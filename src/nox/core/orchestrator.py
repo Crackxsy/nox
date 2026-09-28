@@ -373,6 +373,8 @@ class Orchestrator:
         await self.speaker.say(
             TtsRequest(
                 utterance_id=f"{request_id}:{uuid.uuid4().hex[:8]}",
+                # One turn per reply: a barge-in then cancels every sentence of it, not just one.
+                turn_id=request_id,
                 text=sentence,
                 language=language,
                 channel=self.config.channel,

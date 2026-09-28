@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-from nox.core.events import E, Event
+from nox.core.events import E, Event, HealthStatus, VoicePttRefused
 from nox.core.logging import get_logger
 from nox.core.state import Mode, PrivacyMode, SystemLevel
 from nox.ipc.dispatch import EmptyPayload, RequestContext
@@ -46,6 +46,7 @@ __all__ = [
     "PermissionReply",
     "PetInteract",
     "PrivacySet",
+    "PrivacyStatus",
     "SecurityKill",
     "SecurityPanic",
     "SecurityResume",
@@ -108,6 +109,10 @@ class PrivacySet(BaseModel):
     pin: str | None = None
 
 
+class PrivacyStatus(BaseModel):
+    """No fields: `privacy.status` reads the effective state, it never changes it."""
+
+
 class SecurityKill(BaseModel):
     reason: str = ""
     origin: str = "ui"
@@ -158,9 +163,16 @@ class WorkerReady(BaseModel):
     service: str
 
 
+class ComponentHealth(BaseModel):
+    status: HealthStatus
+    reason: str = ""
+
+
 class WorkerHeartbeat(BaseModel):
     load: float = 0.0
     status: str = "running"
+    #: The worker's own view of its components (voice: capture, wake gate, echo, stt, tts).
+    health: dict[str, ComponentHealth] = {}
 
 
 class WorkerFailed(BaseModel):
@@ -196,6 +208,7 @@ class CoreHandlers:
         reg("health.get", EmptyPayload, self.health_get, roles=ui)
         reg("mode.set", ModeSet, self.mode_set, roles=ui)
         reg("privacy.set", PrivacySet, self.privacy_set, roles=(*ui, "supervisor"))
+        reg("privacy.status", PrivacyStatus, self.privacy_status, roles=ui)
         reg("security.kill", SecurityKill, self.kill, roles=(*ui, "supervisor"))
         reg("security.panic", SecurityPanic, self.panic, roles=(*ui, "supervisor"))
         reg("security.resume", SecurityResume, self.resume, roles=(*ui, "supervisor"))
@@ -279,6 +292,24 @@ class CoreHandlers:
         result: dict[str, Any] = privacy.state.model_dump(mode="json")
         return result
 
+    async def privacy_status(self, _ctx: RequestContext, _p: PrivacyStatus) -> dict[str, Any]:
+        """The effective privacy picture a UI starts from after it (re)connects.
+
+        Events only carry changes; a tray that connected after a zone was entered, or after Nox
+        was muted, would otherwise show the defaults until the next change.
+        """
+        core = self._core
+        assert core.security is not None and core.state is not None
+        privacy = core.security.privacy
+        return {
+            "mode": privacy.mode.value,
+            "capture": privacy.effective_capture().model_dump(mode="json"),
+            "zone_active": privacy.active_zone is not None,
+            "panic": privacy.panic,
+            "safe_mode": core.security.killswitch.is_engaged(),
+            "muted": bool(core.state.get("assistant.muted")),
+        }
+
     async def _authorize_privacy_change(self, ctx: RequestContext, p: PrivacySet) -> None:
         """Ask for the PIN when the request would give Nox more freedom than it has now."""
         core = self._core
@@ -346,13 +377,51 @@ class CoreHandlers:
     # ---- voice, chat, pet ------------------------------------------------------------------------
 
     async def voice_ptt(self, _ctx: RequestContext, p: VoicePtt) -> dict[str, Any]:
+        """Forward push-to-talk, or say why the microphone stays closed.
+
+        A refused press is published as `voice.ptt_refused`, so the shell can tell the user - a
+        key that silently does nothing (a privacy zone matched the window title) looks broken.
+        """
         core = self._core
         assert core.hub is not None
+        refusal = self._ptt_refusal() if p.pressed else None
         client_id = core.workers.client_id("voice")
+        if refusal is None and client_id is None and p.pressed:
+            refusal = VoicePttRefused(reason="voice_unavailable")
+        if refusal is not None:
+            await self._publish_ptt_refused(refusal)
+            return {"ok": False, **refusal.model_dump(mode="json")}
         if client_id is None:
-            return {"ok": False, "reason": "voice worker unavailable"}
+            return {"ok": False, "reason": "voice_unavailable"}
         await core.hub.request(client_id, "voice.ptt", {"pressed": p.pressed}, timeout=2.0)
         return {"ok": True}
+
+    def _ptt_refusal(self) -> VoicePttRefused | None:
+        """Why the microphone would not open for push-to-talk right now, or None."""
+        core = self._core
+        security = core.security
+        if security is None:
+            return VoicePttRefused(reason="voice_unavailable")
+        privacy = security.privacy
+        if security.killswitch.is_engaged():
+            return VoicePttRefused(reason="safe_mode")
+        if privacy.panic:
+            return VoicePttRefused(reason="panic")
+        if privacy.active_zone is not None:
+            return VoicePttRefused(reason="privacy_zone", zone=privacy.active_zone)
+        if not privacy.allows_capture("microphone"):
+            return VoicePttRefused(reason="microphone_off")
+        if core.state is not None and bool(core.state.get("assistant.muted")):
+            return VoicePttRefused(reason="muted")
+        return None
+
+    async def _publish_ptt_refused(self, refusal: VoicePttRefused) -> None:
+        core = self._core
+        log.info("voice.ptt_refused", reason=refusal.reason, zone=refusal.zone)
+        if core.bus is not None:
+            await core.bus.publish(
+                Event(name=E.VOICE_PTT_REFUSED, payload=refusal.model_dump(mode="json"))
+            )
 
     async def voice_mute(self, _ctx: RequestContext, p: VoiceMute) -> dict[str, Any]:
         core = self._core
@@ -365,7 +434,8 @@ class CoreHandlers:
         try:
             await core.hub.request(client_id, "voice.mute", {"muted": p.muted}, timeout=2.0)
         except IpcError as exc:
-            # The state change stands; the worker picks the flag up when it reconnects.
+            # The state change stands; `worker.register` hands the flag to the worker when it
+            # reconnects or restarts.
             log.warning("voice.mute_not_delivered", code=exc.code, muted=p.muted)
         return {"ok": True, "muted": p.muted}
 
@@ -436,6 +506,8 @@ class CoreHandlers:
                 else {"microphone": False, "camera": False, "screen": False, "cloud": False}
             ),
             "safe_mode": security.killswitch.is_engaged() if security is not None else True,
+            # The core owns the mute flag; a restarted worker must not come back unmuted.
+            "muted": bool(core.state.get("assistant.muted")) if core.state is not None else False,
         }
 
     async def worker_ready(self, ctx: RequestContext, p: WorkerReady) -> dict[str, Any]:
@@ -449,7 +521,16 @@ class CoreHandlers:
         core.spawn_task(core.health.run_once())
         return {"ok": True}
 
-    async def worker_heartbeat(self, _ctx: RequestContext, _p: WorkerHeartbeat) -> dict[str, Any]:
+    async def worker_heartbeat(self, ctx: RequestContext, p: WorkerHeartbeat) -> dict[str, Any]:
+        """Liveness, plus the voice worker's own health report for the `voice` check."""
+        core = self._core
+        voice = core.workers.get("voice")
+        if p.health and voice is not None and voice.client_id == ctx.client_id:
+            changed = core.voice_report.update(
+                {name: (entry.status, entry.reason) for name, entry in p.health.items()}
+            )
+            if changed and core.health is not None:
+                core.spawn_task(core.health.run_once())
         return {"ok": True}
 
     async def worker_failed(self, ctx: RequestContext, p: WorkerFailed) -> dict[str, Any]:

@@ -60,3 +60,17 @@ async def test_kill_switch_pauses_polling(bus: FakeBus) -> None:
     await sensor.poll()
 
     assert bus.published == []
+
+
+async def test_the_process_walk_runs_off_the_event_loop(bus: FakeBus) -> None:
+    import threading
+
+    threads: list[int] = []
+
+    def lister() -> list[RunningProcess]:
+        threads.append(threading.get_ident())
+        return []
+
+    sensor = GameProcessSensor(lister, bus, process_names=["RocketLeague.exe"])
+    await sensor.poll()
+    assert threads and threads[0] != threading.get_ident()

@@ -17,6 +17,19 @@ from nox.sensors.probe import DesktopProbe, ForegroundInfo
 #: Former name of `DesktopProbe`, from when Windows was the only platform with a probe.
 Win32Probe = DesktopProbe
 
+_TICK_MASK = 0xFFFFFFFF
+
+
+def idle_millis(tick_count: int, last_input_tick: int) -> int:
+    """Milliseconds since the last input, from two 32-bit millisecond tick counts.
+
+    `GetTickCount` and `LASTINPUTINFO.dwTime` are both unsigned 32-bit and wrap every 49.7 days;
+    their difference modulo 2**32 is the idle time across a wrap as well. A tick read as a signed
+    value (ctypes' default `c_int` return type) turns negative after 24.9 days of uptime - which
+    Windows Fast Startup makes common - and must not read as "just active".
+    """
+    return (tick_count - last_input_tick) & _TICK_MASK
+
 
 class RealWin32Probe:
     """`user32.GetForegroundWindow`/`GetWindowTextW`/`GetWindowThreadProcessId` for the active
@@ -34,6 +47,7 @@ class RealWin32Probe:
             raise RuntimeError("RealWin32Probe requires Windows (ctypes.windll)")
         self._user32 = ctypes.windll.user32
         self._kernel32 = ctypes.windll.kernel32
+        self._kernel32.GetTickCount.restype = ctypes.c_uint32
 
         class _LastInputInfo(ctypes.Structure):
             _fields_ = (("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint))
@@ -58,10 +72,7 @@ class RealWin32Probe:
         if not self._user32.GetLastInputInfo(ctypes.byref(info)):
             return 0.0
         tick: int = self._kernel32.GetTickCount()
-        millis: int = tick - info.dwTime
-        if millis < 0:  # GetTickCount wrapped (49.7 days uptime) - treat as "just active"
-            return 0.0
-        return float(millis) / 1000.0
+        return float(idle_millis(tick, int(info.dwTime))) / 1000.0
 
     @staticmethod
     def _process_name(pid: int) -> str:

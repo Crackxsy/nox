@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from nox.voice.stt.wake_word import WakeWordMatcher, normalize
+from nox.voice.stt.wake_word import WakeWordMatcher, mentions_kill_phrase, normalize
 
 
 @pytest.fixture
@@ -47,27 +47,81 @@ def test_not_addressed(matcher: WakeWordMatcher, text: str) -> None:
     assert not m.kill
 
 
+#: (utterance, is the kill phrase). The phrase must *be* the utterance - modulo greetings, filler
+#: words and punctuation - and start with the wake word; quoting or discussing it never counts.
+KILL_CASES: list[tuple[str, bool]] = [
+    # the phrase itself, in the spellings Whisper produces
+    ("Nox Notaus", True),
+    ("Nox, Not-Aus!", True),
+    ("nox not aus", True),
+    ("Knox Notaus.", True),
+    ("Nox Nottaus", True),
+    ("Nox Notauss", True),
+    ("Nox, Nota aus", True),
+    ("Nuks Notaus", True),
+    ("Nocks, Notaus!", True),
+    ("NoxNotaus", True),
+    ("Nox Nothalt", True),
+    ("Nox, Not-Halt", True),
+    # filler words and greetings around it
+    ("Nox bitte Notaus", True),
+    ("Nox... ähm Notaus", True),
+    ("Hey Nox, Notaus!", True),
+    ("Äh, Nox, Notaus, sofort!", True),
+    ("Nox Notaus jetzt", True),
+    ("Nox, Notaus, Notaus!", True),
+    ("Nox Nox Notaus", True),
+    # English phrase, and German "Notaus" transcribed as English
+    ("Nox emergency stop", True),
+    ("Nox, emergency stop now", True),
+    ("Nox, emergency shutdown please", True),
+    ("Nox, not house.", True),
+    ("Knox not out", True),
+    ("Knox, note out!", True),
+    # quoting or talking about the phrase
+    ("Sag einfach Nox Notaus", False),
+    ("Was macht der Notaus-Knopf?", False),
+    ("Nox, Notaus-Knopf erklären", False),
+    ("Nox, was bedeutet Notaus?", False),
+    ("Alles klar. Nox Notaus.", False),
+    ("Wenn du Nox Notaus sagst, stoppt alles", False),
+    ("Nox Notaus ist ein gutes Wort", False),
+    ("Man sagt Nox, Notaus.", False),
+    # incomplete or different phrases
+    ("Notaus", False),
+    ("emergency stop", False),
+    ("Nox, bitte nicht ausmachen", False),
+    ("Nox stop", False),
+    ("Nox, not now", False),
+    ("Nox Notar", False),
+    ("Nox, Notruf", False),
+    ("Nox not out of the woods yet", False),
+    ("", False),
+]
+
+
+@pytest.mark.parametrize(("text", "kill"), KILL_CASES)
+def test_kill_phrase_table(matcher: WakeWordMatcher, text: str, kill: bool) -> None:
+    assert matcher.match(text).kill is kill
+
+
+def test_the_kill_table_covers_both_sides() -> None:
+    assert sum(1 for _, kill in KILL_CASES if kill) >= 15
+    assert sum(1 for _, kill in KILL_CASES if not kill) >= 15
+
+
 @pytest.mark.parametrize(
-    "text",
+    ("text", "mentions"),
     [
-        "Nox Notaus",
-        "Nox, Not-Aus!",
-        "nox not aus",
-        "Knox Notaus.",
-        "Nox emergency stop",
-        "Nox, emergency stop now",
-        "Alles klar. Nox Notaus.",  # kill phrase later in the utterance still counts
+        ("Sag einfach Nox Notaus, dann stoppe ich.", True),
+        ("Der Not-Aus stoppt alles.", True),
+        ("Say Nox emergency stop to stop me.", True),
+        ("Ich bin Nox und helfe dir gern.", False),
+        ("Es ist nicht aus.", False),
     ],
 )
-def test_kill_phrase(matcher: WakeWordMatcher, text: str) -> None:
-    assert matcher.match(text).kill
-
-
-@pytest.mark.parametrize(
-    "text", ["Notaus", "emergency stop", "Nox, bitte nicht ausmachen", "Nox stop"]
-)
-def test_no_kill_without_full_phrase(matcher: WakeWordMatcher, text: str) -> None:
-    assert not matcher.match(text).kill
+def test_mentions_kill_phrase_is_the_loose_check(text: str, mentions: bool) -> None:
+    assert mentions_kill_phrase(text) is mentions
 
 
 def test_normalize() -> None:

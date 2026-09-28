@@ -267,10 +267,10 @@ async def test_stop_interrupts_everything(
     assert "stop" in audio_out.stops
     assert audio_in.stopped and audio_in.enabled is False
     assert rec.last(E.TTS_INTERRUPTED)["reason"] == "stop"
-    # After stop, say() is a no-op and nothing is emitted.
+    # After stop, say() speaks nothing, but still ends the utterance with its one event.
     before = len(rec.events)
     await p.say(TtsRequest(utterance_id="u5", text="Nachzügler."))
-    assert len(rec.events) == before
+    assert rec.events[before:] == [(E.TTS_INTERRUPTED, {"utterance_id": "u5", "reason": "stopped"})]
 
 
 async def test_audio_unavailable_reports_not_speaking(

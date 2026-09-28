@@ -42,6 +42,7 @@ from nox.core.boot.extensions import DEFAULT_EXTENSIONS, install_extensions, sto
 from nox.core.boot.health import DatabaseProbe, core_health_checks
 from nox.core.boot.persistence import DbTurnStore, OpenedDatabase, open_database
 from nox.core.boot.retention import RetentionService, retention_rules
+from nox.core.boot.voice_health import VoiceHealthReport
 from nox.core.boot.workers import WorkerProcess, WorkerSpeaker, WorkerSupervisor
 from nox.core.bus import AsyncEventBus
 from nox.core.config import NoxConfig
@@ -137,6 +138,8 @@ class NoxCore:
         #: Set by the supervisor's stop request. The entry point waits on it as well as on an OS
         #: signal, and calls `stop()` for whichever arrives first.
         self.shutdown_requested = asyncio.Event()
+        #: What the voice worker last said about its own health (heartbeat), for `voice_check`.
+        self.voice_report = VoiceHealthReport()
 
         # Components, in build order. Declared here so a half-booted core holds `None` rather than
         # a missing attribute - that is what `stop()` and the supervisor callbacks read.
@@ -739,6 +742,7 @@ class NoxCore:
             secrets=lambda: self.security.secrets if self.security is not None else None,
             database_probe=DatabaseProbe(lambda: self.db, lambda: self.db_opened),
             provider_health=self._provider_health,
+            voice_report=lambda: self.voice_report,
         )
 
     async def _provider_health(self, provider: AiProvider) -> ProviderInfo:
@@ -784,7 +788,10 @@ class NoxCore:
         client_id = str(event.payload.get("client_id", ""))
         if self.hub is not None and self.hub.find_client(client_id) is not None:
             return  # the worker has already reconnected; this is its old connection's goodbye
-        if self.workers.detach(client_id) is not None and self.health is not None:
+        detached = self.workers.detach(client_id)
+        if detached is not None and detached.service == "voice":
+            self.voice_report.clear()
+        if detached is not None and self.health is not None:
             self.spawn_task(self.health.run_once())
 
     async def _cancel_orchestrator(self) -> None:

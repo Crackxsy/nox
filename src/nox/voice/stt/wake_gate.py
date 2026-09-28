@@ -7,7 +7,8 @@ between the segmenter and the STT engine: a segment only reaches Whisper when
 
   (a) push-to-talk is held, or
   (b) the detector fired within the last `wake_window_s` seconds, or
-  (c) a conversation window is still open (Nox was addressed a moment ago), or
+  (c) a conversation window is still open (Nox was addressed a moment ago, or has just finished
+      answering), or
   (d) the kill-phrase watchdog wants to look at a short segment.
 
 Everything else is dropped before any transcription happens - which is a privacy property as much
@@ -302,6 +303,10 @@ class WakeGate:
         if ptt:
             return GateDecision.PTT
         if not self.detector.acoustic:
+            # Everything is transcribed anyway; the window only decides whether a follow-up
+            # without the wake word counts as addressed to Nox.
+            if self.conversation_open:
+                return GateDecision.CONVERSATION
             return GateDecision.TEXT_FALLBACK
         if self.clock() - self._last_fire <= self.config.wake_window_s:
             return GateDecision.WAKE

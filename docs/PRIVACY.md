@@ -111,7 +111,13 @@ push-to-talk is held, so nothing is captured unless you ask for it. With `contin
 microphone audio passes a local wake-word gate
 first; audio that does not pass the gate is never transcribed. Short segments still reach the
 recogniser for the voice kill-phrase watchdog, and those transcripts are discarded without
-becoming an event.
+becoming an event. While Nox itself is talking, speech that is not louder than its playback is
+treated as Nox's own echo and is not transcribed either. Within the conversation window after you
+addressed Nox, what you say next is treated as addressed to Nox without the wake word
+(`voice.stt.conversation_window_s`, 0 turns it off).
+
+No speech model is downloaded without you asking: the Whisper and Kokoro models are fetched only
+by `python -m nox.worker --download-whisper` / `--download-kokoro`, which you run yourself.
 
 ## Privacy modes
 
@@ -130,7 +136,9 @@ private.
 
 You can mark apps/windows (by process name or title pattern) as zones Nox should never look at —
 banking, password managers, email, private chats, personal documents, and Discord are zoned by
-default. While a zone is the foreground window: no capture, no screenshot, no clipboard read, and
+default. The built-in title patterns match whole words and known names ("Bank", "Online-Banking",
+"Sparkasse", "KeePass"), not every word that contains them, so "Datenbank" or "Steuerung" is not
+a zone; your own patterns keep exactly the meaning you give them. While a zone is the foreground window: no capture, no screenshot, no clipboard read, and
 no memory write referencing it. Zone detection happens locally (it only looks at the foreground
 window's title/process name) and that detection itself never leaves the machine.
 

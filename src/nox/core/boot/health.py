@@ -15,6 +15,7 @@ from pathlib import Path
 
 from nox.ai.base import AiProvider, ProviderInfo
 from nox.core.boot.persistence import OpenedDatabase
+from nox.core.boot.voice_health import VoiceHealthReport
 from nox.core.boot.workers import WorkerSupervisor
 from nox.core.events import HealthStatus
 from nox.core.health import Check
@@ -127,6 +128,7 @@ def core_health_checks(
     secrets: Callable[[], SecretStore | None] = lambda: None,
     database_probe: DatabaseProbe | None = None,
     provider_health: ProviderHealth | None = None,
+    voice_report: Callable[[], VoiceHealthReport | None] = lambda: None,
 ) -> list[Check]:
     """Build the core's checks. Everything is read through a callable, because the components are
     built in order and a check may be created before the thing it asks about exists.
@@ -145,7 +147,15 @@ def core_health_checks(
     async def voice_check() -> tuple[HealthStatus, str]:
         if not voice_enabled:
             return HealthStatus.UNAVAILABLE, "disabled"
-        return workers.health("voice")
+        # The process first (running, restarting, given up - with the exit reason), then, once it
+        # is ready, what the worker itself reports: a silent microphone, a missing model, text-only
+        # wake word or no echo cancellation is the answer, not the fact that it connected.
+        status, reason = workers.health("voice")
+        if status is not HealthStatus.AVAILABLE:
+            return status, reason
+        report = voice_report()
+        summary = report.summary() if report is not None else None
+        return summary or (status, reason)
 
     async def tokens_check() -> tuple[HealthStatus, str]:
         # The session token file is a secret on disk. When its permissions could not be tightened,

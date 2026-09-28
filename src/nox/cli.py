@@ -173,7 +173,7 @@ def _register_voice_commands() -> None:
     typo in the command name.
     """
     try:
-        from nox.worker.main import voice_app  # noqa: PLC0415 - optional extra
+        from nox.worker.voice_cli import voice_app  # noqa: PLC0415 - optional extra
     except ImportError as exc:
         missing = exc.name or "the speech extras"
 

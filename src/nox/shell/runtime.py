@@ -16,7 +16,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, ValidationError
 
-from nox.paths import app_dir
+from nox.paths import app_dir, defaults_path, resolve_config_paths
 
 SESSION_TOKEN_FILE = "session.token"  # noqa: S105 - file name, not a secret
 SUPERVISOR_TOKEN_FILE = "supervisor.token"  # noqa: S105
@@ -102,9 +102,13 @@ def save_shell_state(runtime_dir: Path, state: ShellState) -> None:
 
 
 def load_config(path: Path | None = None) -> dict[str, Any]:
-    """Read the YAML config tree (defaults only; the core owns the full 4-layer merge).
+    """The configuration tree the shell works from.
 
-    Order: explicit path, `NOX_CONFIG`, `<repo>/config/defaults.yaml`. Missing file -> {}.
+    An explicit path or `NOX_CONFIG` is read as it is. Otherwise the shell resolves the same
+    layers the core does - `defaults.yaml` plus the user's `user.yaml` (`nox.paths`) - so a
+    push-to-talk hotkey changed in the dashboard is the one the shell listens for. A user layer the
+    core would reject is rejected here too; if even the defaults cannot be read, the shipped file
+    is read raw. Missing file -> {}.
     """
     candidates: list[Path] = []
     if path:
@@ -112,7 +116,11 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     env = os.environ.get("NOX_CONFIG")
     if env:
         candidates.append(Path(env))
-    candidates.append(Path(__file__).resolve().parents[3] / "config" / "defaults.yaml")
+    if not candidates:
+        effective = _effective_config()
+        if effective is not None:
+            return effective
+    candidates.append(defaults_path())
     for c in candidates:
         try:
             data = yaml.safe_load(c.read_text(encoding="utf-8"))
@@ -122,3 +130,16 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
             return {}
         return data if isinstance(data, dict) else {}
     return {}
+
+
+def _effective_config() -> dict[str, Any] | None:
+    """Defaults merged with the user layer, validated like the core validates it; None on error."""
+    from nox.core.config import ConfigError
+    from nox.core.config import load_config as load_layers
+
+    try:
+        config = load_layers(*resolve_config_paths())
+    except (ConfigError, OSError, ValueError):
+        return None
+    dumped: dict[str, Any] = config.model_dump(mode="json")
+    return dumped
