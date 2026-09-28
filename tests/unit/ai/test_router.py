@@ -7,7 +7,7 @@ from datetime import date
 
 import pytest
 
-from nox.ai.base import AiRole
+from nox.ai.base import AiRole, ProviderInfo
 from nox.ai.config import RouterConfig
 from nox.ai.errors import BudgetExceededError, NoProviderAvailableError
 from nox.ai.router import DefaultRouter
@@ -15,6 +15,12 @@ from nox.core.events import E, HealthStatus
 from tests.unit.fakes import MonotonicClock as Clock
 
 from .conftest import FakeBus, FakeProvider, make_request
+
+
+async def _settle() -> None:
+    """Let background health refreshes finish."""
+    for _ in range(5):
+        await asyncio.sleep(0)
 
 
 def build(
@@ -115,7 +121,12 @@ async def test_unavailable_health_is_skipped_and_reprobed_after_ttl(bus: FakeBus
     flaky.status = HealthStatus.AVAILABLE
     clock.now += 61
     third = await router.complete(make_request(request_id="c"))
-    assert third.provider == "ollama" and flaky.health_calls == 2
+    # A stale entry is answered from the cache while the refresh runs behind the turn.
+    assert third.provider == "rules"
+    await _settle()
+    assert flaky.health_calls == 2
+    fourth = await router.complete(make_request(request_id="d"))
+    assert fourth.provider == "ollama"
 
 
 async def test_failed_provider_is_marked_unavailable_until_reprobe(bus: FakeBus) -> None:
@@ -130,7 +141,9 @@ async def test_failed_provider_is_marked_unavailable_until_reprobe(bus: FakeBus)
     assert "unavailable" in router.explain("b")
     cloud.error = None
     clock.now += 61
-    response = await router.complete(make_request(request_id="c"))
+    await router.complete(make_request(request_id="c"))  # still skipped; refresh started
+    await _settle()
+    response = await router.complete(make_request(request_id="d"))
     assert response.provider == "claude_code"
 
 
@@ -308,3 +321,57 @@ async def test_usage_resets_on_new_day(bus: FakeBus) -> None:
     assert router.usage_today()["all"] == {"chat": 100}
     day["value"] = date(2026, 9, 10)
     assert router.usage_today()["all"] == {}
+
+
+class SlowHealthProvider(FakeProvider):
+    """A provider whose health probe blocks until the test releases it."""
+
+    def __init__(self, pid: str, **kwargs: object) -> None:
+        super().__init__(pid, **kwargs)  # type: ignore[arg-type]
+        self.release = asyncio.Event()
+        self.block = False
+
+    async def health(self) -> ProviderInfo:
+        if self.block:
+            await self.release.wait()
+        return await super().health()
+
+
+async def test_a_turn_after_the_cache_expired_does_not_wait_for_a_probe(bus: FakeBus) -> None:
+    clock = Clock()
+    cloud = SlowHealthProvider("claude_code", local=False, text="cloud")
+    router = build(bus, cloud, clock=clock)
+    assert (await router.complete(make_request(request_id="a"))).provider == "claude_code"
+    cloud.block = True
+    clock.now += 61
+
+    response = await asyncio.wait_for(router.complete(make_request(request_id="b")), 1.0)
+
+    assert response.provider == "claude_code"  # answered from the stale entry
+    cloud.release.set()
+    await _settle()
+    assert cloud.health_calls == 2  # the refresh ran behind the turn
+    await router.stop()
+
+
+async def test_a_cloud_provider_is_never_probed_while_cloud_is_blocked(bus: FakeBus) -> None:
+    cloud = FakeProvider("claude_code", local=False)
+    local = FakeProvider("ollama")
+    router = build(bus, cloud, local, cloud_allowed=False)
+
+    infos = await router.providers()
+    health = await router.health(cloud)
+    await router.complete(make_request())
+
+    assert cloud.health_calls == 0
+    assert health.status is HealthStatus.UNAVAILABLE and "blocked" in health.reason
+    assert {i.id: i.status for i in infos}["ollama"] is HealthStatus.AVAILABLE
+
+
+async def test_health_uses_the_routing_cache(bus: FakeBus) -> None:
+    local = FakeProvider("ollama")
+    router = build(bus, local)
+    await router.health(local)
+    await router.health(local)
+    await router.complete(make_request())
+    assert local.health_calls == 1

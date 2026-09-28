@@ -26,9 +26,11 @@ from nox.ai.config import AiConfig
 from nox.ai.providers.claude_code import ClaudeCodeProvider
 from nox.ai.providers.ollama import OllamaProvider
 from nox.ai.providers.rules import RulesProvider
+from nox.ai.router import CLOUD_BLOCKING_MODES
 from nox.app import NoxCore
 from nox.core.config import ConfigError, NoxConfig, load_config
 from nox.core.events import HealthStatus
+from nox.core.instance_lock import AlreadyRunningError, InstanceLock
 from nox.core.logging import get_logger
 from nox.core.parent_watch import bind_to_parent
 from nox.core.state import PrivacyMode
@@ -51,6 +53,12 @@ __all__ = [
 #: Where `run_doctor` sends a line. The default writes to standard output.
 Reporter = Callable[[str], None]
 
+#: Exit code of a core that found another core already running on the same runtime directory.
+EXIT_ALREADY_RUNNING = 3
+
+#: How long a starting core waits for the previous one to release the single-instance lock.
+CORE_LOCK_WAIT_S = 10.0
+
 #: The optional speech packages `nox doctor` reports on. A missing one is a warning, never an
 #: error: Nox runs without speech, it just says so.
 VOICE_MODULES: tuple[str, ...] = ("faster_whisper", "sounddevice", "piper", "PySide6")
@@ -63,7 +71,26 @@ def build_config(profile: str | None, user_config: Path | None) -> NoxConfig:
 
 
 async def _run(core: NoxCore) -> int:
-    """Start `core`, wait for a signal or a stop request, and shut it down again."""
+    """Start `core`, wait for a signal or a stop request, and shut it down again.
+
+    Nothing happens before the single-instance lock is held: a second core would overwrite the
+    running one's session token and port file and append to the same audit chain. The lock waits a
+    few seconds, because a restart can overlap the last moments of the previous core's shutdown.
+    """
+    lock = InstanceLock(Path(core.config.paths.runtime_dir), "core")
+    try:
+        await asyncio.to_thread(lock.acquire, wait_s=CORE_LOCK_WAIT_S)
+    except AlreadyRunningError as exc:
+        log.error("core.already_running", note="this instance exits, nothing was changed")
+        print(f"Nox is already running: {exc}", file=sys.stderr)  # noqa: T201 - console path
+        return EXIT_ALREADY_RUNNING
+    try:
+        return await _run_locked(core)
+    finally:
+        lock.release()
+
+
+async def _run_locked(core: NoxCore) -> int:
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
 
@@ -207,7 +234,14 @@ async def _report_providers(config: NoxConfig, report: Reporter) -> None:
         OllamaProvider(ai_config.providers.ollama, client_factory=guard.client),
         ClaudeCodeProvider(ai_config.providers.claude_code),
     ]
+    cloud_blocked = config.privacy.mode in CLOUD_BLOCKING_MODES
     for provider in providers:
+        if cloud_blocked and not provider.info.local:
+            report(
+                f"[warn] ai.{provider.info.id}: not probed "
+                f"(privacy mode {config.privacy.mode} blocks cloud models)"
+            )
+            continue
         info = await provider.health()
         mark = " ok " if info.status is HealthStatus.AVAILABLE else "warn"
         report(f"[{mark}] ai.{info.id}: {info.status.value} ({info.reason})")

@@ -66,6 +66,7 @@ export interface AuthResponse {
   core_version: string;
   schema_version?: number;
   reason?: string;
+  reconnect_token?: string;
 }
 
 export interface ErrorPayload {

@@ -1,5 +1,11 @@
 """DefaultRouter: provider chain per role, privacy filter, health cache, fallbacks, events, budget.
 
+Health is cached per provider for ``health_ttl_s``. Routing never waits for a stale entry: it uses
+the last known state and refreshes it in the background, so the first turn after the cache expired
+does not sit behind a provider's probe. Only a provider the router has never seen is probed inline.
+A cloud provider is never probed while the privacy mode or profile blocks cloud models - not for
+routing, not for the provider card, not for the core's health check.
+
 Implements the ``Router`` contract of ``nox.ai.base`` and /,,. Budget (v0.1, in-memory; persistence
 is v0.2): tokens are counted per day, role and locality. Background requests may not push the
 *cloud* background share above ``ai.router.background_budget_share`` of today's cloud tokens; when
@@ -12,6 +18,7 @@ are never blocked.
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -100,6 +107,7 @@ class DefaultRouter:
         self._clock = clock
         self._today = today
         self._health: dict[str, tuple[float, ProviderInfo]] = {}
+        self._refreshing: dict[str, asyncio.Task[ProviderInfo]] = {}
         self._decisions: deque[Decision] = deque(maxlen=max_decisions)
         self._usage = _Usage(day=today())
 
@@ -122,8 +130,32 @@ class DefaultRouter:
     async def providers(self) -> list[ProviderInfo]:
         infos = []
         for provider in self._providers.values():
-            infos.append(await self._probe(provider))
+            infos.append(await self.health(provider))
         return infos
+
+    async def health(self, provider: AiProvider) -> ProviderInfo:
+        """`provider`'s health for the core's health check and the provider card.
+
+        Cached like routing's; a cloud provider is reported blocked instead of probed while cloud
+        models are not allowed, because even a local CLI probe is a step toward the cloud the user
+        switched off.
+        """
+        if not provider.info.local and not self._cloud_allowed():
+            return provider.info.model_copy(
+                update={
+                    "status": HealthStatus.UNAVAILABLE,
+                    "reason": "not probed: cloud models are blocked by the privacy mode or profile",
+                }
+            )
+        return await self._probe(provider)
+
+    async def stop(self) -> None:
+        """Cancel background health refreshes (core shutdown)."""
+        tasks = list(self._refreshing.values())
+        self._refreshing.clear()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     def explain(self, request_id: str) -> str:
         for decision in reversed(self._decisions):
@@ -239,7 +271,7 @@ class DefaultRouter:
             if not info.local and budget_blocked:
                 decision.notes.append(f"{pid}: skipped ({budget_blocked})")
                 continue
-            health = await self._probe(provider)
+            health = await self._routing_health(provider)
             if health.status is HealthStatus.UNAVAILABLE:
                 decision.notes.append(f"{pid}: skipped (unavailable: {health.reason})")
                 continue
@@ -286,6 +318,30 @@ class DefaultRouter:
                 f"{self._cfg.background_budget_share:.0%})"
             )
         return ""
+
+    async def _routing_health(self, provider: AiProvider) -> ProviderInfo:
+        """The cached health, refreshed in the background once stale; inline only the first time."""
+        cached = self._health.get(provider.info.id)
+        if cached is None:
+            return await self._probe(provider)
+        if self._clock() - cached[0] >= self._cfg.health_ttl_s:
+            self._refresh_in_background(provider)
+        return cached[1]
+
+    def _refresh_in_background(self, provider: AiProvider) -> None:
+        pid = provider.info.id
+        running = self._refreshing.get(pid)
+        if running is not None and not running.done():
+            return
+        task = asyncio.ensure_future(self._probe(provider))
+        self._refreshing[pid] = task
+        task.add_done_callback(functools.partial(self._refresh_done, pid))
+
+    def _refresh_done(self, pid: str, task: asyncio.Task[ProviderInfo]) -> None:
+        if self._refreshing.get(pid) is task:
+            del self._refreshing[pid]
+        if not task.cancelled() and task.exception() is not None:
+            log.warning("ai.health_refresh_failed", provider=pid, error=str(task.exception()))
 
     async def _probe(self, provider: AiProvider) -> ProviderInfo:
         pid = provider.info.id

@@ -50,6 +50,8 @@ class FakeHub:
         self.services: dict[str, set[str]] = {}
         self.requests: list[tuple[str, str, dict[str, Any]]] = []
         self.responses: dict[str, Any] = {}
+        #: Client ids `find_client` reports as connected right now.
+        self.connected: set[str] = set()
 
     @property
     def url(self) -> str:
@@ -57,6 +59,9 @@ class FakeHub:
 
     def declare_services(self, client_id: str, services: Iterable[str]) -> None:
         self.services.setdefault(client_id, set()).update(services)
+
+    def find_client(self, client_id: str) -> Any:
+        return client_id if client_id in self.connected else None
 
     async def request(
         self,
@@ -93,10 +98,18 @@ class FakeEngine:
 class FakeTokens:
     def __init__(self) -> None:
         self.issued: list[str] = []
+        self.bound: list[tuple[str, int]] = []
+        self.revoked: list[str] = []
 
     def worker_env(self, worker_id: str, *, ttl_s: float | None = None) -> Mapping[str, str]:
         self.issued.append(worker_id)
         return {"NOX_WORKER_TOKEN": "t" * 40}
+
+    def bind_worker_process(self, worker_id: str, pid: int) -> None:
+        self.bound.append((worker_id, pid))
+
+    def revoke_worker(self, worker_id: str) -> None:
+        self.revoked.append(worker_id)
 
 
 class FakeProcess:

@@ -47,6 +47,7 @@ import psutil
 from pydantic import BaseModel, ConfigDict, Field
 
 from nox.core.config import NoxConfig, load_config
+from nox.core.instance_lock import AlreadyRunningError, InstanceLock
 from nox.core.jobobject import JobObject
 from nox.core.logging import configure_logging, get_logger, shutdown_logging
 from nox.core.parent_watch import parent_env
@@ -62,6 +63,9 @@ SRC = Source(role="supervisor", id="supervisor")
 #: unauthenticated connection could send frames forever and cost nothing but a single log line.
 AUTH_TIMEOUT_S = 5.0
 MAX_UNAUTHENTICATED_FRAMES = 3
+
+#: Exit code of a supervisor that found another one already running.
+EXIT_ALREADY_RUNNING = 3
 
 
 class SupervisorState(StrEnum):
@@ -217,6 +221,9 @@ class Supervisor:
         self._stop_requested = False
         self._lock = asyncio.Lock()
         self._bg: set[asyncio.Task[None]] = set()
+        self._instance = InstanceLock(settings.runtime_dir, "supervisor")
+        #: Only the supervisor that wrote the token file may delete it again.
+        self._token_written = False
 
     # ---- public API --------------------------------------------------------------------------
 
@@ -250,11 +257,19 @@ class Supervisor:
         )
 
     async def start(self) -> None:
+        """Take the single-instance lock, bind the control port, write the token, spawn.
+
+        In that order: a second supervisor must fail before it touches anything the running one
+        owns - its token file above all, which the tray reads at kill time. `AlreadyRunningError`
+        and a busy port both leave the running supervisor's files as they were.
+        """
         self._s.runtime_dir.mkdir(parents=True, exist_ok=True)
-        write_secret_file(m.token_path(self._s.runtime_dir), self._token)
+        self._instance.acquire()
         self._server = await asyncio.start_server(
             self._on_connection, self._s.control_host, self._s.control_port, limit=m.MAX_LINE
         )
+        write_secret_file(m.token_path(self._s.runtime_dir), self._token)
+        self._token_written = True
         self._start_hotkey()
         self._spawn_core()
         if self._s.shell_command:
@@ -269,7 +284,11 @@ class Supervisor:
         )
 
     async def run(self) -> None:
-        await self.start()
+        try:
+            await self.start()
+        except BaseException:
+            await self.stop()  # releases what start() took; never another instance's files
+            raise
         try:
             await self._stopped.wait()
         finally:
@@ -302,7 +321,10 @@ class Supervisor:
             await self._server.wait_closed()
             self._server = None
         await self._close_core_writer()
-        m.token_path(self._s.runtime_dir).unlink(missing_ok=True)
+        if self._token_written:
+            m.token_path(self._s.runtime_dir).unlink(missing_ok=True)
+            self._token_written = False
+        self._instance.release()
         self._log.info("supervisor.stopped")
 
     def request_stop(self) -> None:
@@ -853,6 +875,10 @@ def main(argv: list[str] | None = None) -> int:
     supervisor = Supervisor(settings)
     try:
         asyncio.run(supervisor.run())
+    except AlreadyRunningError as exc:
+        log.error("supervisor.already_running", note="this instance exits, nothing was changed")
+        print(f"Nox is already running: {exc}", file=sys.stderr)  # noqa: T201 - console entry
+        return EXIT_ALREADY_RUNNING
     except KeyboardInterrupt:
         return 130
     finally:

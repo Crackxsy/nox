@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from nox.core.events import HealthStatus
@@ -11,14 +12,20 @@ from nox.health.checks import (
     make_disk_full_check,
     make_vault_unreachable_check,
 )
+from nox.security.audit import ChainVerification
 
 
 class FakeAudit:
     def __init__(self, ok: bool) -> None:
         self.ok = ok
+        self.threads: list[int] = []
+
+    def verify_incremental(self) -> ChainVerification:
+        self.threads.append(threading.get_ident())
+        return ChainVerification(ok=self.ok, first_bad_seq=None if self.ok else 7)
 
     def verify_chain(self) -> bool:
-        return self.ok
+        raise AssertionError("the periodic probe must never re-hash the whole chain")
 
 
 async def test_disk_full_check_available_with_plenty_of_space(tmp_path: Path) -> None:
@@ -63,7 +70,13 @@ async def test_audit_chain_check_broken(tmp_path: Path) -> None:
     check = make_audit_chain_check(FakeAudit(ok=False))
     status, reason = await check.probe()
     assert status is HealthStatus.UNAVAILABLE
-    assert "broken" in reason
+    assert "broken at entry 7" in reason
+
+
+async def test_audit_chain_check_verifies_off_the_event_loop() -> None:
+    audit = FakeAudit(ok=True)
+    await make_audit_chain_check(audit).probe()
+    assert audit.threads and audit.threads[0] != threading.get_ident()
 
 
 async def test_config_check_no_warnings() -> None:
@@ -76,4 +89,4 @@ async def test_config_check_with_warnings() -> None:
     check = make_config_check(lambda: ["bad profile layer"])
     status, reason = await check.probe()
     assert status is HealthStatus.LIMITED
-    assert "1 config layer" in reason
+    assert "1 configuration problem" in reason

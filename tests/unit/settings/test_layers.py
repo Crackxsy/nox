@@ -175,3 +175,37 @@ def test_what_was_written_still_validates_as_a_user_layer(
     merged["stream"]["twitch"] = {**merged["stream"]["twitch"], **user["stream"]["twitch"]}
     config = NoxConfig.model_validate(merged)
     assert config.stream.twitch.channel == "otherchannel"
+
+
+def test_a_write_that_fails_half_way_leaves_the_previous_file_intact(
+    user_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(user_config, COMMENTED_USER_CONFIG)
+
+    def half_written(self: Path, data: str, *args: object, **kwargs: object) -> int:
+        with open(self, "w", encoding="utf-8") as handle:  # the non-atomic way: truncate first
+            handle.write(data[: len(data) // 2])
+        raise OSError("no space left on device")
+
+    def crash_before_replace(*_args: object) -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(Path, "write_text", half_written)
+    monkeypatch.setattr("os.replace", crash_before_replace)
+
+    with pytest.raises(OSError, match="no space"):
+        write_user_config(user_config, {"identity": {"name": "Luna"}})
+
+    monkeypatch.undo()
+    assert read(user_config) == COMMENTED_USER_CONFIG
+    assert sorted(p.name for p in user_config.parent.iterdir()) == [user_config.name]
+
+
+def test_an_atomic_write_keeps_the_file_permissions(user_config: Path) -> None:
+    write(user_config, COMMENTED_USER_CONFIG)
+    user_config.chmod(0o600)
+
+    write_user_config(user_config, {"identity": {"name": "Luna"}})
+
+    assert user_config.stat().st_mode & 0o777 == 0o600
+    assert 'name: "Luna"' in read(user_config)

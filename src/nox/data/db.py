@@ -69,6 +69,16 @@ class Database:
         self._conn = sqlite3.connect(
             str(path), timeout=timeout_s, check_same_thread=False, isolation_level=None
         )
+        try:
+            self._configure(timeout_s)
+        except sqlite3.Error:
+            # A file with a damaged header fails here ("file is not a database"). The connection is
+            # closed before the error propagates: an open handle would keep the caller from
+            # renaming the damaged file aside on Windows.
+            self._conn.close()
+            raise
+
+    def _configure(self, timeout_s: float) -> None:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.execute(f"PRAGMA busy_timeout={int(timeout_s * 1000)}")
@@ -172,6 +182,28 @@ class Database:
             int(r["id"]) for r in self.fetch_all("SELECT id FROM schema_migrations ORDER BY id")
         ]
 
+    def pending_migrations(self, migrations_dir: Path | None = None) -> list[str]:
+        """The `NNNN_name` of every migration `migrate()` would apply, in order."""
+        applied = set(self.applied_migrations())
+        return [
+            f"{mig_id:04d}_{name}"
+            for mig_id, name, _file in self.list_migrations(migrations_dir or MIGRATIONS_DIR)
+            if mig_id not in applied
+        ]
+
+    def backup_to(self, target: Path) -> None:
+        """Copy the whole database to `target` with SQLite's online backup API.
+
+        Consistent even while the WAL holds uncommitted pages, which a plain file copy is not.
+        """
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            destination = sqlite3.connect(str(target))
+            try:
+                self._conn.backup(destination)
+            finally:
+                destination.close()
+
     def migrate(self, migrations_dir: Path | None = None) -> list[str]:
         """Apply pending migrations in order. Returns the names applied in this call."""
         directory = migrations_dir or MIGRATIONS_DIR
@@ -198,18 +230,32 @@ class Database:
     # ---- health ------------------------------------------------------------------------------
 
     def integrity_check(self) -> bool:
-        """`PRAGMA integrity_check` == ok.
+        """`PRAGMA integrity_check` == ok: every page, index and constraint.
 
-        Corrupt databases are renamed by the lifecycle, not here.
+        Reads the whole file under the connection lock, so it runs at boot and on a slow schedule,
+        never on every health round. Corrupt databases are renamed by the lifecycle, not here.
         """
+        return self._check("integrity_check")
+
+    def quick_check(self) -> bool:
+        """`PRAGMA quick_check` == ok: the page structure without the index cross-checks.
+
+        Several times cheaper than `integrity_check`, which is why the periodic health probe uses
+        it between two full checks.
+        """
+        return self._check("quick_check")
+
+    def _check(self, pragma: str) -> bool:
         try:
-            row = self.fetch_one("PRAGMA integrity_check")
+            row = self.fetch_one(f"PRAGMA {pragma}")
         except sqlite3.DatabaseError as exc:
-            self._log.error("db.integrity_error", error=str(exc))
+            self._log.error("db.integrity_error", check=pragma, error=str(exc))
             return False
         ok = row is not None and str(row[0]).lower() == "ok"
         if not ok:
-            self._log.error("db.integrity_failed", result=None if row is None else str(row[0]))
+            self._log.error(
+                "db.integrity_failed", check=pragma, result=None if row is None else str(row[0])
+            )
         return ok
 
     def table_names(self) -> list[str]:

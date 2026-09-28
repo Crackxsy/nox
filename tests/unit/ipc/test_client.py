@@ -105,7 +105,39 @@ async def test_client_reconnects_after_hub_restart(
         await hub2.stop()
 
 
-async def test_client_reconnect_stops_on_auth_denied(
+async def test_a_worker_reconnects_with_its_reconnect_credential_after_the_hub_dropped_it(
+    hub_factory: HubFactory, registry: Any, bus: SimpleBus, runtime_dir: Path
+) -> None:
+    tokens = TokenStore()
+    hub = IpcHub(HubSettings(port=0), tokens, registry, bus, runtime_dir)
+    await hub.start()
+    port = hub.port
+    worker = IpcClient(
+        hub.url,
+        tokens.issue_worker_token("worker:stt"),
+        "worker",
+        "worker:stt",
+        reconnect=True,
+        backoff_initial_s=0.05,
+    )
+    await worker.connect()
+    assert worker.auth is not None and worker.auth.reconnect_token == ""  # never kept in public
+    await hub.stop()  # the connection is gone; the core (and its token store) lives on
+    hub2 = IpcHub(HubSettings(port=port), tokens, registry, bus, runtime_dir)
+    await hub2.start()
+    try:
+        for _ in range(100):
+            if worker.connected:
+                break
+            await asyncio.sleep(0.05)
+        assert worker.connected  # the one-time spawn token is spent; the credential is not
+        assert hub2.find_client("worker:stt") is not None
+    finally:
+        await worker.close()
+        await hub2.stop()
+
+
+async def test_client_reconnect_stops_when_a_restarted_core_denies_it(
     hub_factory: HubFactory, registry: Any, bus: SimpleBus, runtime_dir: Path
 ) -> None:
     tokens = TokenStore()
@@ -122,11 +154,11 @@ async def test_client_reconnect_stops_on_auth_denied(
     )
     await worker.connect()
     await hub.stop()
-    hub2 = IpcHub(HubSettings(port=port), tokens, registry, bus, runtime_dir)
+    hub2 = IpcHub(HubSettings(port=port), TokenStore(), registry, bus, runtime_dir)
     await hub2.start()
     try:
         await asyncio.sleep(0.5)
-        assert not worker.connected  # one-time token is consumed: reconnect is denied and stops
+        assert not worker.connected  # a new core never honours an old core's credential
         assert worker._reconnector is not None and worker._reconnector.done()
     finally:
         await worker.close()

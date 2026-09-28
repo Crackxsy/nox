@@ -165,6 +165,23 @@ requests are checked against a per-role allow-list plus rate limits, not just "a
 trusted". Security-sensitive requests (e.g. kill-switch resume) further restrict which roles may
 even attempt them, regardless of token validity — see "Kill switch" above for a concrete example.
 
+Workers and plugins do not use the session token. Each spawn gets a one-time token through its
+environment, bound to the one client id it was spawned as and consumed by the first authentication
+attempt. A successful first authentication returns a **reconnect credential** in the `ipc.auth`
+response — never in an environment variable or on a command line — so only the process that won
+the spawn token holds it. It is bound to that client id and to the spawned process (pid and start
+time), it lets the worker authenticate again after a lost connection, and it is revoked as soon as
+the core terminates the worker, sees it exit, or spawns a replacement; a restarted core never
+honours an earlier core's credential. A worker the core refuses, or that cannot reconnect within
+its deadline (30 s for a plugin, 60 s for the voice worker), shuts down and exits rather than keep
+its device or network connections open unsupervised.
+
+**One instance.** The supervisor and the core each take an exclusive OS lock
+(`<runtime_dir>/supervisor.lock`, `<runtime_dir>/core.lock`) before they touch anything. A second
+instance exits with "Nox is already running" and changes nothing: it never overwrites or deletes
+the running instance's token files, port file or audit chain. The lock is released by the kernel
+when the process ends, so a crash never leaves a stale lock.
+
 ## Security test obligations
 
 Every control above has negative tests, not just positive/happy-path coverage: a denied tool, a

@@ -60,6 +60,7 @@ class HubLike(Protocol):
     @property
     def url(self) -> str: ...
     def declare_services(self, client_id: str, services: Iterable[str]) -> None: ...
+    def find_client(self, client_id: str) -> Any: ...
     async def request(
         self,
         client_id: str,
@@ -73,6 +74,8 @@ class HubLike(Protocol):
 
 class TokenIssuer(Protocol):
     def worker_env(self, worker_id: str, *, ttl_s: float | None = None) -> Mapping[str, str]: ...
+    def bind_worker_process(self, worker_id: str, pid: int) -> None: ...
+    def revoke_worker(self, worker_id: str) -> None: ...
 
 
 class PermissionEngineLike(Protocol):
@@ -326,6 +329,8 @@ class PluginRecord:
     stopping: bool = False
     monitor: asyncio.Task[None] | None = None
     registered: asyncio.Event = field(default_factory=asyncio.Event)
+    #: False while the worker has lost its hub connection and is reconnecting.
+    connected: bool = True
 
     @property
     def version(self) -> str:
@@ -450,6 +455,7 @@ class PluginManager:
         self._closing = False
         self._handlers_registered = False
         self._unsubscribe: Callable[[], None] | None = None
+        self._unsubscribe_disconnect: Callable[[], None] | None = None
 
     # -- public API --------------------------------------------------------------------------
 
@@ -485,6 +491,10 @@ class PluginManager:
         if self._unsubscribe is None:
             # AC 3: a profile switch must start/stop profile-gated plugins without a core restart.
             self._unsubscribe = self._bus.subscribe(E.SYSTEM_MODE_CHANGED, self._on_mode_changed)
+        if self._unsubscribe_disconnect is None:
+            self._unsubscribe_disconnect = self._bus.subscribe(
+                E.IPC_CLIENT_DISCONNECTED, self._on_client_disconnected
+            )
         await self.discover()
         for rec in list(self._records.values()):
             if rec.enabled:
@@ -520,6 +530,9 @@ class PluginManager:
         if self._unsubscribe is not None:
             self._unsubscribe()
             self._unsubscribe = None
+        if self._unsubscribe_disconnect is not None:
+            self._unsubscribe_disconnect()
+            self._unsubscribe_disconnect = None
         await self.stop_all(reason)
         for rec in self._records.values():
             if rec.monitor is not None:
@@ -542,6 +555,25 @@ class PluginManager:
 
     async def _on_mode_changed(self, _event: Event) -> None:
         await self.apply_profile()
+
+    async def _on_client_disconnected(self, event: Event) -> None:
+        """A plugin's hub connection closed: it is reconnecting, not running.
+
+        The worker registers again when it is back, or exits after its deadline and is restarted
+        from `_monitor` - either way health says what is going on meanwhile.
+        """
+        client_id = str(event.payload.get("client_id", ""))
+        if not client_id.startswith(PLUGIN_CLIENT_PREFIX):
+            return
+        rec = self._records.get(client_id[len(PLUGIN_CLIENT_PREFIX) :])
+        if (
+            rec is None
+            or rec.client_id != client_id
+            or self._hub.find_client(client_id) is not None
+        ):
+            return
+        rec.connected = False
+        log.warning("plugin.disconnected", plugin=rec.plugin_id, note="waiting for it to reconnect")
 
     async def apply_profile(self) -> None:
         """Re-apply the profile gate after a profile/mode switch: spawn newcomers, stop leavers.
@@ -589,6 +621,8 @@ class PluginManager:
         if rec.state is PluginState.RUNNING:
             if rec.process is not None and rec.process.poll() is not None:
                 return HealthStatus.UNAVAILABLE, "worker process gone"
+            if not rec.connected:
+                return HealthStatus.LIMITED, "lost its connection to the core, reconnecting"
             return HealthStatus.AVAILABLE, f"running ({len(rec.tools)} tools)"
         if rec.state in (PluginState.SPAWNED, PluginState.REGISTERED, PluginState.STOPPING):
             return HealthStatus.LIMITED, rec.state.value
@@ -657,6 +691,7 @@ class PluginManager:
         if manifest is None:
             return
         client_id = f"{PLUGIN_CLIENT_PREFIX}{rec.plugin_id}"
+        self._tokens.revoke_worker(client_id)  # nothing issued to an earlier process stays valid
         env = _worker_environment()
         env.update(self._tokens.worker_env(client_id))
         env["NOX_HUB_URL"] = self._hub.url
@@ -672,6 +707,8 @@ class PluginManager:
             return
         if self._job is not None:
             self._job.assign(rec.process.pid)
+        self._tokens.bind_worker_process(client_id, rec.process.pid)
+        rec.connected = True
         self._transition(rec, PluginState.SPAWNED)
         log.info("plugin.spawned", plugin=rec.plugin_id, pid=rec.process.pid)
         rec.monitor = asyncio.create_task(
@@ -696,6 +733,7 @@ class PluginManager:
     async def _on_crash(self, rec: PluginRecord, code: int) -> None:
         self._unregister_tools(rec)
         rec.client_id = None
+        self._tokens.revoke_worker(f"{PLUGIN_CLIENT_PREFIX}{rec.plugin_id}")
         now = self._clock()
         window = self.settings.restart_window_s
         rec.restart_times = [t for t in rec.restart_times if now - t <= window]
@@ -744,6 +782,7 @@ class PluginManager:
         self._unregister_tools(rec)
         rec.client_id = None
         rec.registered.clear()
+        self._tokens.revoke_worker(f"{PLUGIN_CLIENT_PREFIX}{rec.plugin_id}")
         self._transition(rec, PluginState.STOPPED, reason)
         await self._publish(E.PLUGIN_STOPPED, rec, reason)
 
@@ -803,6 +842,7 @@ class PluginManager:
         if rec.state not in (PluginState.SPAWNED, PluginState.REGISTERED, PluginState.RUNNING):
             raise IpcError(ERR_PERMISSION, f"plugin {rec.plugin_id!r} is {rec.state.value}")
         rec.client_id = ctx.client_id
+        rec.connected = True
         self._transition(rec, PluginState.REGISTERED)
         self._hub.declare_services(ctx.client_id, sorted(manifest.event_namespaces()))
         self._unregister_tools(rec)

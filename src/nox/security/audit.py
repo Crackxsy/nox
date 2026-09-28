@@ -8,11 +8,13 @@ one before it.
 Details are redacted before they are stored: any key that names a secret is replaced, at every
 nesting level, and a nested structure is stored as redacted JSON rather than as `str(dict)`.
 
-Verification comes in two shapes. `verify_chain_detailed()` walks every row and is what a
+Verification comes in three shapes. `verify_chain_detailed()` walks every row and is what a
 user-triggered check runs. Boot uses `verify_since_checkpoint()`, which walks forward from the last
 verified position and records a new checkpoint: the first boot on a database verifies everything,
 every later boot verifies only what was written since, so a log with two years of retention does
-not turn startup into a full-table scan.
+not turn startup into a full-table scan. The periodic health probe uses `verify_incremental()`,
+which remembers in memory how far it got and only hashes the rows appended since - after first
+re-checking that the last row it verified is still there, unchanged.
 """
 
 from __future__ import annotations
@@ -138,6 +140,8 @@ class SqliteAuditLog:
         self._bus = bus
         self._clock = clock or (lambda: datetime.now(UTC))
         self._lock = lock if lock is not None else threading.RLock()
+        #: `(seq, hash)` of the last row `verify_incremental` found intact; None until it ran.
+        self._verified_head: tuple[int, str] | None = None
         with self._lock:
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
@@ -295,7 +299,38 @@ class SqliteAuditLog:
             self._write_checkpoint()
         return verification
 
+    def verify_incremental(self) -> ChainVerification:
+        """Verify only the rows appended since the last call, cheap enough for a periodic probe.
+
+        The first call starts from the boot checkpoint (or the genesis). Every later call first
+        checks that the row it stopped at still exists with the same hash - a truncated or
+        rewritten tail is reported there - and then hashes just the new rows. Runs in a worker
+        thread: it takes the connection lock for the few rows it reads.
+        """
+        head = self._verified_head
+        if head is None:
+            checkpoint = self._checkpoint()
+            start_hash, start_seq = checkpoint if checkpoint is not None else (GENESIS_HASH, 1)
+        else:
+            seq, digest = head
+            if seq > 0 and self._hash_at(seq) != digest:
+                return ChainVerification(ok=False, first_bad_seq=seq, checked=0)
+            start_hash, start_seq = digest, seq + 1
+        verification, last_hash = self._walk(start_hash, start_seq)
+        if verification.ok:
+            self._verified_head = (start_seq - 1 + verification.checked, last_hash)
+        return verification
+
+    def _hash_at(self, seq: int) -> str | None:
+        with self._lock:
+            row = self._conn.execute("SELECT hash FROM audit_log WHERE seq = ?", (seq,)).fetchone()
+        return None if row is None else str(row[0])
+
     def _verify_from(self, prev_hash: str, expected_seq: int) -> ChainVerification:
+        return self._walk(prev_hash, expected_seq)[0]
+
+    def _walk(self, prev_hash: str, expected_seq: int) -> tuple[ChainVerification, str]:
+        """Verify from `expected_seq` on; also returns the hash of the last intact row."""
         checked = 0
         with self._lock:
             cursor = self._conn.execute(
@@ -307,13 +342,17 @@ class SqliteAuditLog:
                 entry = dict(zip(_COLUMNS, row, strict=True))
                 seq = int(entry["seq"])
                 if seq != expected_seq or entry["prev_hash"] != prev_hash:
-                    return ChainVerification(ok=False, first_bad_seq=seq, checked=checked)
+                    return ChainVerification(
+                        ok=False, first_bad_seq=seq, checked=checked
+                    ), prev_hash
                 if self.compute_hash(entry, prev_hash) != entry["hash"]:
-                    return ChainVerification(ok=False, first_bad_seq=seq, checked=checked)
+                    return ChainVerification(
+                        ok=False, first_bad_seq=seq, checked=checked
+                    ), prev_hash
                 prev_hash = str(entry["hash"])
                 expected_seq = seq + 1
                 checked += 1
-        return ChainVerification(ok=True, first_bad_seq=None, checked=checked)
+        return ChainVerification(ok=True, first_bad_seq=None, checked=checked), prev_hash
 
     def _checkpoint(self) -> tuple[str, int] | None:
         """`(hash, next_seq)` to resume verification from, or None when nothing is recorded."""

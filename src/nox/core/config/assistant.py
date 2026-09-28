@@ -112,7 +112,6 @@ class ClaudeCodeProviderConfig(StrictSection):
     model: str = ""  # empty = the CLI default; an alias (sonnet, haiku) or a full id
     safe_mode: bool = True  # no user hooks, plugins or tool servers in Nox's requests
     max_budget_usd: float = Field(default=0.0, ge=0.0)
-    health_roundtrip: bool = True  # health() does a one-token request, which costs quota
 
 
 class OllamaProviderConfig(StrictSection):

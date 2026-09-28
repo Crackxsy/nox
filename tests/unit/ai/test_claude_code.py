@@ -180,6 +180,15 @@ args = sys.argv[1:]
 if "--version" in args:
     print("9.9.9 (fake)"); sys.exit(0)
 mode = os.environ.get("FAKE_CLI_MODE", "ok")
+if args[:2] == ["auth", "status"]:
+    if mode == "old_cli":
+        sys.stderr.write("error: unknown command 'auth'\n"); sys.exit(1)
+    logged_in = mode != "logged_out"
+    print(json.dumps({"loggedIn": logged_in, "authMethod": "oauth_token"}))
+    sys.exit(0 if logged_in else 1)
+calls = os.environ.get("FAKE_CLI_CALLS")
+if calls:
+    open(calls, "a").write("model request\n")
 prompt = sys.stdin.read()
 pidfile = os.environ.get("FAKE_CLI_PIDFILE")
 if pidfile:
@@ -279,15 +288,34 @@ async def test_cancel_kills_child(fake_cli: Path, tmp_path: Path) -> None:
     assert not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
 
 
-async def test_health_with_fake_cli(fake_cli: Path) -> None:
-    p = fake_provider(fake_cli, {"FAKE_CLI_MODE": "ok"})
+async def test_health_checks_cli_and_login_without_a_model_request(
+    fake_cli: Path, tmp_path: Path
+) -> None:
+    calls = tmp_path / "calls"
+    p = fake_provider(fake_cli, {"FAKE_CLI_MODE": "ok", "FAKE_CLI_CALLS": str(calls)})
+
     info = await p.health()
+
     assert info.status is HealthStatus.AVAILABLE and p.version == "9.9.9 (fake)"
-    p2 = fake_provider(fake_cli, {"FAKE_CLI_MODE": "logged_out"})
-    info2 = await p2.health()
-    assert info2.status is HealthStatus.UNAVAILABLE and "logged in" in info2.reason
-    p3 = fake_provider(fake_cli, {"FAKE_CLI_MODE": "ok"}, health_roundtrip=False)
-    assert (await p3.health()).status is HealthStatus.LIMITED
+    assert "logged in" in info.reason
+    assert not calls.exists()  # no paid round trip, no cloud contact
+
+
+async def test_health_reports_a_logged_out_cli_with_what_to_do(fake_cli: Path) -> None:
+    p = fake_provider(fake_cli, {"FAKE_CLI_MODE": "logged_out"})
+
+    info = await p.health()
+
+    assert info.status is HealthStatus.UNAVAILABLE
+    assert "not logged in" in info.reason and "auth login" in info.reason
+
+
+async def test_health_of_a_cli_without_auth_status_says_login_not_verified(fake_cli: Path) -> None:
+    p = fake_provider(fake_cli, {"FAKE_CLI_MODE": "old_cli"})
+
+    info = await p.health()
+
+    assert info.status is HealthStatus.LIMITED and "login not verified" in info.reason
 
 
 async def test_missing_command_is_unavailable() -> None:

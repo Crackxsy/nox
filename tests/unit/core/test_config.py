@@ -96,10 +96,12 @@ def test_invalid_user_yaml_falls_back_with_warning(tmp_path: Path) -> None:
     assert "YAML" in cfg.warnings[0].message
 
 
-def test_unknown_key_rejects_layer_with_path(tmp_path: Path) -> None:
+def test_unknown_key_is_rejected_alone_with_its_path(tmp_path: Path) -> None:
     user = write_yaml(tmp_path / "user.yaml", {"ipc": {"port": 50000, "bogus": 1}})
     cfg = load_config(DEFAULTS, user)
-    assert cfg.ipc.port == 47800  # whole layer rejected, not partially applied
+    assert cfg.ipc.port == 50000  # the valid sibling still applies
+    assert len(cfg.warnings) == 1
+    assert cfg.warnings[0].key == "ipc.bogus"
     assert "ipc.bogus" in cfg.warnings[0].message
 
 

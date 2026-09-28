@@ -55,7 +55,6 @@ class ClaudeCodeConfig(BaseModel):
     model: str = ""  # empty = CLI default; alias (sonnet, haiku) or full id
     safe_mode: bool = True  # --safe-mode: no user hooks/plugins/MCP in Nox requests
     max_budget_usd: float = Field(default=0.0, ge=0.0)  # 0 = no per-request cap
-    health_roundtrip: bool = True  # health() also does a 1-token request (costs quota)
 
 
 class OllamaConfig(BaseModel):

@@ -617,7 +617,12 @@ class IpcHub:
             queue=asyncio.Queue(maxsize=s.send_queue_size),
             events=asyncio.Queue(maxsize=s.event_queue_size),
         )
-        response = AuthResponse(ok=True, session_id=session_id, core_version=s.core_version)
+        response = AuthResponse(
+            ok=True,
+            session_id=session_id,
+            core_version=s.core_version,
+            reconnect_token=decision.reconnect_token,
+        )
         await conn.send(
             env.reply(NAME_AUTH, response.model_dump(mode="json"), CORE_SOURCE).model_dump_json()
         )

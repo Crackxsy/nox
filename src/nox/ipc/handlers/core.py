@@ -17,9 +17,10 @@ Two boundaries are enforced in this module rather than left to the caller:
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from nox.core.events import E, Event
 from nox.core.logging import get_logger
@@ -51,11 +52,25 @@ __all__ = [
     "StateGet",
     "VoiceMute",
     "VoicePtt",
+    "WorkerFailed",
     "WorkerHeartbeat",
     "WorkerReady",
     "WorkerRegister",
     "register_core_handlers",
+    "without_paths",
 ]
+
+#: How much of a worker's failure reason health shows.
+MAX_WORKER_REASON_CHARS = 300
+
+#: An absolute POSIX or Windows path; group 1 is its last component.
+_ABSOLUTE_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|/)(?:[^\s'\"<>|:;,\\/]+[\\/])+([^\s'\"<>|:;,\\/]*)")
+
+
+def without_paths(text: str) -> str:
+    """`text` with every absolute path shortened to its file name."""
+    return _ABSOLUTE_PATH.sub(lambda match: match.group(1) or "<path>", text)
+
 
 #: The state subtrees a pet renderer or a plugin may read. Everything else - conversations,
 #: memory, stream data - is outside what either of them needs to do its job.
@@ -148,6 +163,13 @@ class WorkerHeartbeat(BaseModel):
     status: str = "running"
 
 
+class WorkerFailed(BaseModel):
+    """`worker.failed`: a worker says why it is about to exit (a model it could not load)."""
+
+    service: str
+    reason: str = Field(max_length=2000)
+
+
 class FunkenTopRequest(BaseModel):
     limit: int = 10
 
@@ -187,6 +209,7 @@ class CoreHandlers:
         reg("worker.register", WorkerRegister, self.worker_register, roles=("worker",))
         reg("worker.ready", WorkerReady, self.worker_ready, roles=("worker",))
         reg("worker.heartbeat", WorkerHeartbeat, self.worker_heartbeat, roles=("worker", "plugin"))
+        reg("worker.failed", WorkerFailed, self.worker_failed, roles=("worker",))
         reg("plugin.status", EmptyPayload, self.plugin_status, roles=ui)
         reg("stream.session.status", EmptyPayload, self.stream_session_status, roles=ui)
         reg("stream.funken.top", FunkenTopRequest, self.stream_funken_top, roles=ui)
@@ -427,6 +450,21 @@ class CoreHandlers:
         return {"ok": True}
 
     async def worker_heartbeat(self, _ctx: RequestContext, _p: WorkerHeartbeat) -> dict[str, Any]:
+        return {"ok": True}
+
+    async def worker_failed(self, ctx: RequestContext, p: WorkerFailed) -> dict[str, Any]:
+        """Keep a worker's own account of its failure for health, once the process has exited.
+
+        Only for the service the connection was spawned as, and without file system paths:
+        `/health` is readable without a token.
+        """
+        if ctx.client_id != f"worker:{p.service}":
+            raise IpcError(
+                ERR_PERMISSION, f"client {ctx.client_id!r} is not the {p.service!r} worker"
+            )
+        reason = without_paths(p.reason)[:MAX_WORKER_REASON_CHARS]
+        self._core.workers.report_failure(p.service, reason)
+        log.error("worker.reported_failure", service=p.service, reason=reason)
         return {"ok": True}
 
     # ---- plugins ---------------------------------------------------------------------------------

@@ -126,3 +126,90 @@ def test_unknown_roles_never_authenticate() -> None:
     store = TokenStore()
     for role in ("core", "supervisor", "remote", "bogus"):
         assert not store.authenticate(store.session_token, role, "x").ok
+
+
+# ---- reconnect credentials -------------------------------------------------------------------
+
+
+def test_first_worker_auth_yields_a_reconnect_credential_that_works_again() -> None:
+    store = TokenStore()
+    first = store.authenticate(store.issue_worker_token("worker:voice"), "worker", "worker:voice")
+    assert first.ok and first.reconnect_token
+
+    again = store.authenticate(first.reconnect_token, "worker", "worker:voice")
+    third = store.authenticate(first.reconnect_token, "worker", "worker:voice")
+
+    assert again.ok and again.kind == "worker"
+    assert third.ok  # valid for the whole process lifetime, not once
+    assert again.reconnect_token == ""  # nothing new is handed out on a reconnect
+
+
+def test_the_spawn_token_itself_stays_single_use() -> None:
+    store = TokenStore()
+    spawn = store.issue_worker_token("worker:voice")
+    assert store.authenticate(spawn, "worker", "worker:voice").ok
+    assert not store.authenticate(spawn, "worker", "worker:voice").ok
+
+
+def test_a_reconnect_credential_is_bound_to_its_worker_id() -> None:
+    store = TokenStore()
+    secret = store.authenticate(
+        store.issue_worker_token("plugin:twitch"), "plugin", "plugin:twitch"
+    ).reconnect_token
+
+    decision = store.authenticate(secret, "plugin", "plugin:home")
+
+    assert not decision.ok and "different worker" in decision.reason
+    assert not store.authenticate(secret, "shell", "shell:1").ok  # never a session role
+
+
+def test_a_reconnect_credential_dies_with_its_process() -> None:
+    alive = {"yes": True}
+    store = TokenStore(alive=lambda _pid, _created: alive["yes"])
+    store.bind_worker_process("worker:voice", 4242)
+    secret = store.authenticate(
+        store.issue_worker_token("worker:voice"), "worker", "worker:voice"
+    ).reconnect_token
+    assert store.authenticate(secret, "worker", "worker:voice").ok
+
+    alive["yes"] = False
+    decision = store.authenticate(secret, "worker", "worker:voice")
+
+    assert not decision.ok and "gone" in decision.reason
+    assert not store.has_reconnect_credential("worker:voice")
+
+
+def test_revoking_a_worker_invalidates_its_credential_and_pending_spawn_tokens() -> None:
+    store = TokenStore()
+    secret = store.authenticate(
+        store.issue_worker_token("worker:voice"), "worker", "worker:voice"
+    ).reconnect_token
+    pending = store.issue_worker_token("worker:voice")
+
+    store.revoke_worker("worker:voice")
+
+    assert not store.authenticate(secret, "worker", "worker:voice").ok
+    assert not store.authenticate(pending, "worker", "worker:voice").ok
+
+
+def test_a_new_spawn_replaces_the_previous_process_credential() -> None:
+    store = TokenStore()
+    old = store.authenticate(
+        store.issue_worker_token("worker:voice"), "worker", "worker:voice"
+    ).reconnect_token
+    new = store.authenticate(
+        store.issue_worker_token("worker:voice"), "worker", "worker:voice"
+    ).reconnect_token
+
+    assert not store.authenticate(old, "worker", "worker:voice").ok
+    assert store.authenticate(new, "worker", "worker:voice").ok
+
+
+def test_a_reconnect_credential_never_survives_a_core_restart() -> None:
+    before = TokenStore()
+    secret = before.authenticate(
+        before.issue_worker_token("worker:voice"), "worker", "worker:voice"
+    ).reconnect_token
+    after = TokenStore()  # a new core process: a new store
+
+    assert not after.authenticate(secret, "worker", "worker:voice").ok

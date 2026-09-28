@@ -11,6 +11,12 @@ never from the command line, and is never logged.
 without a hub; `--download-kokoro` fetches the Kokoro TTS model files, always user-initiated.
 `--plugin <id>` runs this process as a plugin worker instead (`nox.worker.plugin`); it shares only
 token and hub-url handling with the voice path.
+
+When the engines cannot be loaded - a model file missing, a device gone - the worker says why with
+`worker.failed` before it exits, so the core's health names the cause instead of a bare exit code.
+A lost hub connection is re-established with the reconnect credential; a worker that cannot get
+back within `HUB_LOSS_DEADLINE_S`, or that the core refuses, exits with `EXIT_HUB_LOST` and the
+core starts a new one.
 """
 
 from __future__ import annotations
@@ -41,12 +47,19 @@ from nox.voice.base import Transcript, TtsRequest, VoicePipeline
 from nox.voice.pipeline import DefaultVoicePipeline, Emit, PipelineConfig
 from nox.voice.stt.wake_gate import WakeGate
 from nox.worker.heartbeat import heartbeat_loop
+from nox.worker.hub_loss import EXIT_HUB_LOST, HubLossGuard
 
 log = get_logger(__name__)
 
 DEFAULT_HUB_URL = "ws://127.0.0.1:47800/ws"
 CONNECT_DEADLINE_S = 60.0
 HEARTBEAT_S = 2.0
+#: How long the voice worker waits for its hub connection to come back before it exits.
+HUB_LOSS_DEADLINE_S = 60.0
+#: Exit code of a worker whose engines could not be loaded.
+EXIT_STARTUP_FAILED = 1
+#: How long `worker.failed` may take; the worker exits either way.
+FAILURE_REPORT_TIMEOUT_S = 2.0
 SERVICES: dict[str, tuple[str, ...]] = {
     "stt": ("stt", "voice"),
     "tts": ("tts", "voice"),
@@ -72,6 +85,10 @@ class WorkerClient(Protocol):
 
 PipelineFactory = Callable[[Emit, Callable[[], bool], VoiceConfig], VoicePipeline]
 ComponentLoader = Callable[[VoiceConfig], Awaitable[tuple[Any, Any]]]
+
+
+class WorkerStartupError(RuntimeError):
+    """The worker's engines or pipeline could not be started; the reason went to the core."""
 
 
 class WorkerStatus(BaseModel):
@@ -123,6 +140,8 @@ class VoiceWorker:
         component_loader: ComponentLoader | None = None,
         connect_deadline_s: float = CONNECT_DEADLINE_S,
         connect_backoff_s: float = 0.5,
+        hub_loss_deadline_s: float = HUB_LOSS_DEADLINE_S,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if service not in SERVICES:
             raise ValueError(f"unknown service {service!r}")
@@ -150,6 +169,9 @@ class VoiceWorker:
         # register first, apply the config, only then build and load engines - never before.
         self.pipeline: VoicePipeline | None = None
         self.register_response: dict[str, Any] = {}
+        #: 0 for a requested stop; `EXIT_HUB_LOST` when the core could not be reached again.
+        self.exit_code = 0
+        self.hub_loss = HubLossGuard(self._on_hub_lost, deadline_s=hub_loss_deadline_s, sleep=sleep)
 
     # ---- gate + emit -----------------------------------------------------------------------------
 
@@ -334,11 +356,14 @@ class VoiceWorker:
         self._ran_once = True
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="worker-heartbeat")
         self.voice_config = self._resolve_config(self.register_response.get("config"))
-        if self._component_loader is not None:
-            self.stt, self.tts = await self._component_loader(self.voice_config)
-        self.pipeline = self._pipeline_factory(self.emit, self.capture_allowed, self.voice_config)
-        self.status.status = "running"
-        await self.pipeline.start()
+        try:
+            await self._start_engines()
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            log.error("worker.startup_failed", service=self.service, reason=reason)
+            await self._report_failure(reason)
+            await self.shutdown()
+            raise WorkerStartupError(reason) from exc
         await self.client.request("worker.ready", {"service": self.service})
         log.info("worker.running", service=self.service, capabilities=list(self.capabilities))
         try:
@@ -346,10 +371,38 @@ class VoiceWorker:
         finally:
             await self.shutdown()
 
+    async def _start_engines(self) -> None:
+        """Load the engines and start the pipeline, from the config the core returned."""
+        if self._component_loader is not None:
+            self.stt, self.tts = await self._component_loader(self.voice_config)
+        self.pipeline = self._pipeline_factory(self.emit, self.capture_allowed, self.voice_config)
+        self.status.status = "running"
+        await self.pipeline.start()
+
+    async def _report_failure(self, reason: str) -> None:
+        """Tell the core why this worker is about to exit; best effort, it exits either way."""
+        try:
+            await self.client.request(
+                "worker.failed",
+                {"service": self.service, "reason": reason[:2000]},
+                timeout=FAILURE_REPORT_TIMEOUT_S,
+            )
+        except Exception as exc:  # noqa: BLE001 - the exit code still tells the core it failed
+            log.warning("worker.failure_not_reported", error=str(exc))
+
+    def _on_hub_lost(self, _reason: str) -> None:
+        self.exit_code = EXIT_HUB_LOST
+        self.request_stop()
+
+    def on_reconnect_refused(self, error: IpcError) -> None:
+        self.hub_loss.refused(error)
+
     def on_connection_change(self, connected: bool) -> None:
         """IpcClient reconnect hook (sync, called from the client's loop). After the core dropped
         us (restart, stalled hub) the new session knows nothing about this worker: register again
-        and, if the pipeline already runs, report ready again."""
+        and, if the pipeline already runs, report ready again. A connection that stays gone past
+        the deadline ends the worker (`HubLossGuard`)."""
+        self.hub_loss.connection_changed(connected)
         if not connected or not self._ran_once:
             return
         pending = self._reregister_task
@@ -395,6 +448,7 @@ class VoiceWorker:
     async def shutdown(self) -> None:
         self.status.status = "stopping"
         self._stop.set()
+        self.hub_loss.cancel()
         if self.pipeline is not None:
             await self.pipeline.stop()
         # Awaited, not just cancelled: a playback task still writing to the IPC channel while it
@@ -562,8 +616,9 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
     (falling back to `voice_cfg`, the local default, if that config is missing or invalid) - never
     from `voice_cfg` directly - so devices and models always reflect the core's merged config.
 
-    Returns 0 for a clean stop and 1 when the worker ended abnormally, so the supervisor can tell
-    a requested shutdown from a crash.
+    Returns 0 for a clean stop, `EXIT_STARTUP_FAILED` when the engines could not be loaded (the
+    reason went to the core first), `EXIT_HUB_LOST` when the core could not be reached again, and 1
+    when the worker was interrupted - so the core can tell a requested shutdown from a crash.
     """
     from nox.ipc.client import IpcClient
 
@@ -601,6 +656,7 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
         client_version="0.1.0",
         reconnect=True,
         on_connection_change=lambda connected: worker.on_connection_change(connected),
+        on_reconnect_refused=lambda error: worker.on_reconnect_refused(error),
     )
     worker = VoiceWorker(
         client=client,
@@ -612,10 +668,12 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
     )
     try:
         await worker.run()
+    except WorkerStartupError:
+        return EXIT_STARTUP_FAILED
     except (KeyboardInterrupt, asyncio.CancelledError):
         await worker.shutdown()
         return 1
-    return 0
+    return worker.exit_code
 
 
 async def run_selftest(voice_cfg: VoiceConfig, *, seconds: float = 3.0) -> int:

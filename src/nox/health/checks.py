@@ -8,6 +8,7 @@ the existing `HealthService.add_check` without changing that module.
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -28,8 +29,15 @@ DEFAULT_DISK_WARN_MB = 1024.0
 DEFAULT_DISK_CRITICAL_MB = 200.0
 
 
+class ChainCheck(Protocol):
+    """What the probe reads from a verification: `ChainVerification` has both."""
+
+    ok: bool
+    first_bad_seq: int | None
+
+
 class AuditVerifier(Protocol):
-    def verify_chain(self) -> bool: ...
+    def verify_incremental(self) -> ChainCheck: ...
 
 
 def make_disk_full_check(
@@ -88,18 +96,20 @@ def make_vault_unreachable_check(vault_dir: Path, *, name: str = VAULT_COMPONENT
 def make_audit_chain_check(audit: AuditVerifier, *, name: str = AUDIT_CHAIN_COMPONENT) -> Check:
     """Failure Model "Audit chain broken": logged, kept, a new chain starts, and normal mode needs
     the PIN to resume - `DegradedModeService` is what actually engages the kill switch on this
-    probe going UNAVAILABLE; this probe only reports honestly."""
+    probe going UNAVAILABLE; this probe only reports honestly.
+
+    Every round hashes only the rows appended since the previous one, in a worker thread: the full
+    chain grows without bound and re-hashing it on the event loop every 30 s stalled everything
+    else the loop does."""
 
     async def probe() -> tuple[HealthStatus, str]:
         try:
-            ok = audit.verify_chain()
+            result = await asyncio.to_thread(audit.verify_incremental)
         except Exception as exc:  # noqa: BLE001 - a broken verifier is itself UNAVAILABLE, not a crash
             return HealthStatus.UNAVAILABLE, f"audit chain verify error: {exc}"
-        return (
-            (HealthStatus.AVAILABLE, "")
-            if ok
-            else (HealthStatus.UNAVAILABLE, "audit hash chain broken")
-        )
+        if result.ok:
+            return HealthStatus.AVAILABLE, ""
+        return HealthStatus.UNAVAILABLE, f"audit hash chain broken at entry {result.first_bad_seq}"
 
     return Check(name=name, probe=probe)
 
@@ -113,7 +123,11 @@ def make_config_check(
     async def probe() -> tuple[HealthStatus, str]:
         found = warnings()
         if found:
-            return HealthStatus.LIMITED, f"{len(found)} config layer(s) rejected, using defaults"
+            return (
+                HealthStatus.LIMITED,
+                f"{len(found)} configuration problem(s): rejected values use their default or, "
+                "for a protective setting, its strictest value",
+            )
         return HealthStatus.AVAILABLE, ""
 
     return Check(name=name, probe=probe)
