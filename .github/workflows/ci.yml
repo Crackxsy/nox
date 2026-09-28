@@ -127,13 +127,39 @@ jobs:
         working-directory: ui/${{ matrix.app }}
         run: npm ci
 
+      - name: npm run lint
+        working-directory: ui/${{ matrix.app }}
+        run: npm run lint
+
       - name: npm test
         working-directory: ui/${{ matrix.app }}
         run: npm test
 
+      - name: npm audit (production dependencies, high and critical)
+        working-directory: ui/${{ matrix.app }}
+        run: npm audit --audit-level=high --omit=dev
+
       - name: npm run build
         working-directory: ui/${{ matrix.app }}
         run: npm run build
+
+  dependency-audit:
+    name: Dependency vulnerability scan (Python, every extra)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        run: python3 -m pip install uv
+
+      # The lock file pins every version, so pip-audit checks exactly what `uv sync` installs,
+      # across all extras (voice, rl, shell) - the installer bundles the voice extra.
+      - name: Export the locked requirements
+        run: python3 -m uv export --frozen --no-hashes --no-emit-project --extra dev --extra shell --extra voice --extra voice-kokoro --extra rl > requirements-audit.txt
+
+      - name: pip-audit
+        run: python3 -m uv tool run --python 3.13 pip-audit -r requirements-audit.txt --no-deps --disable-pip --progress-spinner off
 
   guard-security-model:
     name: Guard - no input-synthesis / process-memory APIs (Security Model §10)
