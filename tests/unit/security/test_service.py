@@ -4,6 +4,8 @@ engine."""
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
 import yaml
@@ -17,6 +19,29 @@ from nox.security.service import SecurityContext
 from tests.unit.fakes import FakeBus
 
 from .conftest import DEFAULTS_YAML, PROFILES_DIR, MutableClock, req
+
+
+@pytest.fixture(autouse=True)
+def _stop_audit_writers(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
+    """Stop every audit writer thread a test built before its connection closes.
+
+    Depending on `conn` makes this fixture tear down first. A writer still running when the
+    connection closes writes into freed SQLite memory - which crashed the whole test process.
+    """
+    built: list[SecurityContext] = []
+    original = SecurityContext.build
+
+    def build(*args: Any, **kwargs: Any) -> SecurityContext:
+        ctx = original(*args, **kwargs)
+        built.append(ctx)
+        return ctx
+
+    monkeypatch.setattr(SecurityContext, "build", build)
+    yield
+    for ctx in built:
+        assert ctx.close(), "audit writer did not drain"
 
 
 @pytest.fixture

@@ -175,6 +175,8 @@ class NoxCore:
             data_dir=Path(config.paths.data_dir),
         )
         self._started = False
+        #: True unless the audit writer was still running when shutdown drained it.
+        self._audit_drained = True
         self._tasks: set[asyncio.Task[Any]] = set()
 
     # ---- boot ------------------------------------------------------------------------------------
@@ -270,6 +272,7 @@ class NoxCore:
         self.security = SecurityContext.build(
             self.config,
             conn=self.db.connection,
+            db_lock=self.db.lock,
             profiles_dir=self.profiles_dir,
             bus=self.bus,
             session_id=self.session_id,
@@ -555,7 +558,13 @@ class NoxCore:
         if self.tokens is not None:
             self.tokens.remove_session_token()
         if self.db is not None:
-            self.db.close()
+            if self._audit_drained:
+                self.db.close()
+            else:
+                # The audit writer thread is still inside the connection. Closing it underneath
+                # that thread is a use-after-close in SQLite's C code - a crash, not an exception.
+                # Leaving it open for the exiting process is safe: every committed row is on disk.
+                log.error("core.database_left_open", reason="audit writer still draining")
         self.job.close()
         shutdown_logging()
         self.stopped.set()
@@ -595,7 +604,8 @@ class NoxCore:
                 result="ok",
                 details={"reason": reason},
             )
-            if not self.security.close():
+            self._audit_drained = self.security.close()
+            if not self._audit_drained:
                 log.error("audit.pending_entries_on_shutdown")
         if self.sessions is not None:
             try:
@@ -668,6 +678,7 @@ class NoxCore:
             voice_enabled=self.voice_enabled,
             tokens=lambda: self.tokens,
             providers=lambda: self.ai_providers,
+            secrets=lambda: self.security.secrets if self.security is not None else None,
         )
 
     def health_json(self) -> dict[str, Any]:

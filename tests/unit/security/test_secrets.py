@@ -17,6 +17,7 @@ from nox.security.secrets import (
     KeyringSecretStore,
     PinManager,
     SecretNameError,
+    SecretStoreUnavailableError,
 )
 
 from .conftest import MutableClock
@@ -161,3 +162,25 @@ def test_pin_hash_format_and_argon2_fallback_report() -> None:
     assert not PinManager(store, prefer_argon2=False).verify_pin("4711").ok
     pin.clear_pin()
     assert not pin.is_set()
+
+
+def test_a_missing_credential_store_is_an_error_never_a_missing_secret() -> None:
+    """A PIN that cannot be read must not look like no PIN at all (fail closed)."""
+
+    class NoKeyringError(RuntimeError):
+        pass
+
+    class NoBackend:
+        def get_password(self, service: str, name: str) -> str | None:
+            raise NoKeyringError("No recommended backend was available.")
+
+        def set_password(self, service: str, name: str, value: str) -> None:
+            raise NoKeyringError("No recommended backend was available.")
+
+    store = KeyringSecretStore(backend=NoBackend())
+    with pytest.raises(SecretStoreUnavailableError, match="Secret Service"):
+        store.get("nox/security/pin")
+    with pytest.raises(SecretStoreUnavailableError):
+        store.set("nox/telegram/bot_token", SECRET)
+    with pytest.raises(SecretStoreUnavailableError):
+        PinManager(store).is_set()

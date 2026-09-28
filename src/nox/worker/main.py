@@ -33,6 +33,7 @@ from pydantic import BaseModel, ValidationError
 
 from nox.core.config import VoiceConfig
 from nox.core.events import E
+from nox.core.parent_watch import bind_to_parent
 from nox.ipc.errors import IpcError
 from nox.ipc.protocol import Envelope
 from nox.voice._logging import get_logger
@@ -725,6 +726,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    bind_to_parent()  # a worker the core spawned stops when the core is gone
     if args.plugin:
         # Plugin mode: no audio devices, no priority change, nothing of the voice path is touched.
         from nox.worker.plugin import run_plugin_worker

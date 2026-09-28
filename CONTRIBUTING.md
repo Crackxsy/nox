@@ -1,6 +1,7 @@
 # Contributing to Nox
 
-Thanks for taking a look. Nox is a Windows-only, local-first desktop companion; the parts of it
+Thanks for taking a look. Nox is a local-first desktop companion, Windows 11 first with macOS and
+Linux from source ([`docs/PLATFORMS.md`](docs/PLATFORMS.md)); the parts of it
 that touch a microphone, the screen, a game window or the network have hard rules that a pull
 request cannot relax. Everything else is open to discussion.
 

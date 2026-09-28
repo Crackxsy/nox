@@ -21,6 +21,7 @@ from nox.supervisor.main import (
     Supervisor,
     SupervisorSettings,
     SupervisorState,
+    hotkey_blocked_reason,
     hotkey_to_pynput,
     kill_process_tree,
     resolve_command,
@@ -133,8 +134,12 @@ async def test_hung_core_is_restarted_then_safe_mode(
     sup = sup_factory("--beats", "3")  # 3 heartbeats, then silent (ignores sup.kill)
     await sup.start()
     first_pid = sup.status().core_pid
-    await wait_until(lambda: sup.status().restarts_in_window >= 1, 10.0)
-    assert first_pid is not None and not psutil.pid_exists(first_pid)
+    assert first_pid is not None
+    # The restart is counted when it begins; the hung process is terminated in a worker thread
+    # right after, so "counted" and "gone" are two moments and the test waits for both.
+    await wait_until(
+        lambda: sup.status().restarts_in_window >= 1 and not psutil.pid_exists(first_pid), 10.0
+    )
     await wait_until(lambda: sup.status().state is SupervisorState.SAFE_MODE, 15.0)
     st = sup.status()
     assert st.core_pid is None and "restart limit" in st.safe_mode_reason
@@ -339,3 +344,37 @@ async def test_shell_quit_sends_sup_stop(sup_factory: Callable[..., Supervisor])
     assert reply["name"] == m.NAME_ACK and reply["payload"]["ok"] is True
     await wait_until(lambda: not psutil.pid_exists(pid), 5.0)
     assert sup.status().core_pid is None
+
+
+def test_hotkey_is_not_claimed_where_the_desktop_cannot_deliver_it() -> None:
+    """A kill switch that only fires in some windows must not be reported as armed."""
+    assert "Wayland" in hotkey_blocked_reason(
+        "linux", {"XDG_SESSION_TYPE": "wayland", "DISPLAY": ":0"}
+    )
+    assert hotkey_blocked_reason("linux", {"WAYLAND_DISPLAY": "wayland-0"})
+    assert hotkey_blocked_reason("linux", {}) == "no graphical session"
+    assert hotkey_blocked_reason("linux", {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"}) == ""
+    assert hotkey_blocked_reason("win32", {}) == ""
+    assert hotkey_blocked_reason("darwin", {}) == ""
+
+
+async def test_status_reports_the_hotkey_state(sup_factory: Callable[..., Supervisor]) -> None:
+    sup = sup_factory("--ack")
+    assert sup.status().hotkey == "disabled"  # the test settings turn it off
+
+
+async def test_a_requested_stop_is_never_answered_with_a_fresh_core(
+    sup_factory: Callable[..., Supervisor],
+) -> None:
+    """After the shell's Quit the watchdog used to see "core gone, state running" and spawn a new
+    core, which `stop()` then had to kill in the middle of its boot."""
+    sup = sup_factory("--stop-ack")
+    await sup.start()
+    await wait_until(lambda: sup.status().core_connected, 5.0)
+
+    assert await sup.graceful_stop(reason="user_quit") is True
+    await sup._tick()  # the watchdog's next look, forced instead of raced
+
+    status = sup.status()
+    assert status.core_pid is None
+    assert status.restarts_in_window == 0

@@ -509,3 +509,21 @@ async def test_a_secret_is_refused_when_the_access_cannot_be_audited(plugins_dir
             await manager._h_secret_get(built.context(), PluginSecretGet(name="nox/demo/token"))
     finally:
         await manager.stop("test")
+
+
+def test_worker_environment_keeps_what_a_posix_interpreter_needs_and_drops_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nox.plugins.manager import _worker_environment
+
+    monkeypatch.setenv("HOME", "/home/someone")
+    monkeypatch.setenv("TMPDIR", "/tmp/someone")
+    monkeypatch.setenv("LANG", "de_DE.UTF-8")
+    monkeypatch.setenv("NOX_APP_DIR", "/data/nox")
+    monkeypatch.setenv("SOME_TOOL_API_KEY", "not-for-plugins")
+    env = _worker_environment()
+    assert env["HOME"] == "/home/someone"
+    assert env["TMPDIR"] == "/tmp/someone"
+    assert env["LANG"] == "de_DE.UTF-8"
+    assert env["NOX_APP_DIR"] == "/data/nox"
+    assert "SOME_TOOL_API_KEY" not in env

@@ -67,9 +67,10 @@ class InMemoryPinAttemptStore:
 class SqlitePinAttemptStore:
     """Keeps the counter in the Nox database, so a restart does not reset a lockout."""
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: sqlite3.Connection, *, lock: threading.RLock | None = None) -> None:
+        """`lock`: the one every other user of `conn` holds (see `SqliteAuditLog`)."""
         self._conn = conn
-        self._lock = threading.RLock()
+        self._lock = lock if lock is not None else threading.RLock()
         with self._lock:
             self._conn.executescript(_SCHEMA)
             self._conn.commit()

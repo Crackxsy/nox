@@ -7,7 +7,7 @@ import pytest
 
 from nox.core.state import PrivacyMode
 from nox.security.privacy import PrivacyService
-from nox.sensors.win32 import ForegroundInfo
+from nox.sensors.probe import ForegroundInfo
 from tests.unit.fakes import FakeBus, FakeState
 
 
@@ -26,6 +26,9 @@ class FakeWin32Probe:
 
     def set_foreground(self, title: str, process: str, pid: int = 1) -> None:
         self._foreground = ForegroundInfo(title, process, pid)
+
+    def set_unobservable(self, reason: str, process: str = "") -> None:
+        self._foreground = ForegroundInfo("", process, 0, limitation=reason)
 
     def set_idle_seconds(self, seconds: float) -> None:
         self._idle_seconds = seconds

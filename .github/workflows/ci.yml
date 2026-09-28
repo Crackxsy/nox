@@ -1,5 +1,7 @@
-# Nox CI. Windows-only: the product only ships on Windows 11 and several checks (shell tests, the
-# e2e smoke) need a real Windows Qt/Chromium runtime.
+# Nox CI. Windows 11 is the primary platform: every job runs there, including the e2e smoke that
+# needs a real Windows Qt/Chromium runtime. `python-posix` runs the Python suites on Linux and
+# macOS as well, so the platform layer (paths, desktop probes, process containment, keyring) cannot
+# silently regress there.
 #
 # No secrets are used or required, and nothing here talks to a network service beyond the package
 # registries (npm/PyPI) and the loopback `ai.rules` provider inside the walking-skeleton integration
@@ -54,6 +56,53 @@ jobs:
       # The rules provider (ai/providers/rules.py) is deterministic and needs no network, so this
       # is green with or without Ollama installed on the runner (tests already accept "rules" as a
       # valid provider when Ollama is absent).
+      - name: pytest integration
+        run: pytest tests/integration -p no:cacheprovider
+
+  python-posix:
+    name: Python on ${{ matrix.os }} (mypy, unit + integration tests)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    # macOS has not had a green run yet: it reports, but does not block, until it has. Linux blocks.
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      # Qt and QtWebEngine without a display: the shell tests build real widgets off-screen.
+      QT_QPA_PLATFORM: offscreen
+      QTWEBENGINE_CHROMIUM_FLAGS: --no-sandbox
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Qt runtime libraries (Linux)
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update -q && sudo apt-get install -y -q
+          libegl1 libgl1 libnss3 libxkbcommon0 libxkbcommon-x11-0 libxcomposite1 libxdamage1
+          libxrandr2 libxtst6 libxkbfile1 libasound2t64 libfontconfig1 libdbus-1-3 libxshmfence1
+          libgbm1 libxcb-cursor0
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Sync dependencies
+        run: python -m uv sync --extra dev --extra shell --extra rl
+
+      - name: Put the project venv on PATH
+        run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: mypy
+        run: mypy src/nox
+
+      - name: pytest unit
+        run: pytest tests/unit -m "not hardware and not network and not spike" -p no:cacheprovider
+
       - name: pytest integration
         run: pytest tests/integration -p no:cacheprovider
 

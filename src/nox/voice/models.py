@@ -7,8 +7,9 @@ decision to pull ~354 MB over the network stays with the user (`nox voice downlo
 
 Resolution order for the models root:
 1. `voice.models_dir` from the configuration, when set; 2. `$NOX_DATA_DIR/models`, when the process
-was started with that variable; 3. `%APPDATA%/Nox/models`, which mirrors the `paths.data_dir`
-default in `config/defaults.yaml`. A deployment that moved `paths.data_dir` elsewhere sets
+was started with that variable; 3. `<app_dir>/models` (`nox.paths.app_dir`: `%APPDATA%/Nox` on
+Windows, the platform's application folder elsewhere), which mirrors the `paths.data_dir` default
+in `config/defaults.yaml`. A deployment that moved `paths.data_dir` elsewhere sets
 `voice.models_dir` explicitly - the voice worker only ever receives the `voice` section of the
 configuration, never `paths`.
 """
@@ -19,6 +20,7 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
+from nox.paths import app_dir
 from nox.voice._logging import get_logger
 
 log = get_logger(__name__)
@@ -39,9 +41,7 @@ def default_data_dir() -> Path:
     data_dir = os.environ.get("NOX_DATA_DIR", "").strip()
     if data_dir:
         return Path(os.path.expandvars(data_dir)).expanduser()
-    appdata = os.environ.get("APPDATA", "").strip()
-    base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
-    return base / "Nox"
+    return app_dir()
 
 
 def default_models_root() -> Path:

@@ -112,3 +112,21 @@ async def test_kill_switch_pauses_polling(
     assert sensor.last is None
     assert state.updates == []
     assert bus.published == []
+
+
+async def test_unobservable_reading_fails_closed_and_persists_no_title(
+    probe: FakeWin32Probe, bus: FakeBus, state: FakeState, privacy: PrivacyService
+) -> None:
+    sensor = ForegroundSensor(probe, bus, state, privacy)
+    probe.set_unobservable("Wayland hides the active window", process="firefox")
+
+    await sensor.poll()
+
+    assert privacy.active_zone == "unobservable"
+    assert state.get("user.window_title") == ""
+    assert sensor.limitation == "Wayland hides the active window"
+
+    probe.set_foreground("Notepad", "notepad.exe")
+    await sensor.poll()
+    assert privacy.active_zone is None
+    assert sensor.limitation == ""

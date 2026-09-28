@@ -17,7 +17,6 @@ keyring and never makes a network or subprocess call.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,7 +26,7 @@ import typer
 
 from nox.ai.config import AiConfig, load_ai_config
 from nox.core.events import HealthStatus
-from nox.paths import DEFAULTS_PATH
+from nox.paths import DEFAULTS_PATH, app_dir
 
 # The user-layer reader and writer live in `nox.settings.layers`, so this wizard and the
 # dashboard's `config.set` write the very same file the very same way. Re-exported below, because
@@ -471,15 +470,12 @@ def _prompt_answers() -> OnboardingAnswers:
     answers.user_display_name = display_name or None
 
     typer.echo(t["folders_intro"])
-    appdata = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
+    home = app_dir()
     answers.data_dir = Path(
-        typer.prompt(t["data_dir"], default=existing_paths.get("data_dir", str(appdata / "Nox")))
+        typer.prompt(t["data_dir"], default=existing_paths.get("data_dir", str(home)))
     )
     answers.vault_dir = Path(
-        typer.prompt(
-            t["vault_dir"],
-            default=existing_paths.get("vault_dir", str(appdata / "Nox" / "vault")),
-        )
+        typer.prompt(t["vault_dir"], default=existing_paths.get("vault_dir", str(home / "vault")))
     )
 
     _ask_twitch(t, answers)
@@ -530,7 +526,7 @@ async def run_onboarding_cli(
     else:
         answers.ai_backend = None  # declined: the defaults layer's choice applies, untouched
 
-    user_config_path = default_user_config_path(appdata)
+    user_config_path = default_user_config_path()
     write_user_config(user_config_path, build_user_layer_patch(answers))
     stored = store_secrets(answers, store)
 

@@ -22,6 +22,7 @@ before that call; this module only documents and consumes the resulting behaviou
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QUrl
@@ -117,10 +118,26 @@ class PetWindow(QWidget):
         return self._click_through
 
     def set_click_through(self, enabled: bool) -> bool:
-        """Toggle WS_EX_TRANSPARENT. Returns the effective state (False if unsupported)."""
-        applied = win32.set_click_through(int(self.winId()), enabled)
-        self._click_through = enabled if applied else False
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, self._click_through)
+        """Let clicks pass through the pet to what is underneath. Returns the effective state.
+
+        Windows toggles WS_EX_TRANSPARENT on the native window. Elsewhere Qt's
+        `WindowTransparentForInput` flag does the same; changing a window flag re-creates the
+        native window, which hides it, so a pet that was visible is shown again straight away.
+        """
+        if sys.platform == "win32":
+            applied = win32.set_click_through(int(self.winId()), enabled)
+            self._click_through = enabled if applied else False
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, self._click_through)
+            return self._click_through
+        visible = self.isVisible()
+        # Qt mirrors this attribute of a top-level window into `WindowTransparentForInput`, so it
+        # has to change first: set afterwards, a still-true attribute re-applies the flag that is
+        # being cleared, and the pet could never be clicked again.
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
+        self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, enabled)
+        if visible:
+            self.show()
+        self._click_through = enabled
         return self._click_through
 
     # -- drag ------------------------------------------------------------------------------------

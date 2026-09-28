@@ -3,13 +3,14 @@
 [![CI](https://github.com/Crackxsy/nox/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Crackxsy/nox/actions/workflows/ci.yml)
 [![Status: pre-1.0](https://img.shields.io/badge/status-pre--1.0-orange)](CHANGELOG.md)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Platform: Windows 11](https://img.shields.io/badge/platform-Windows%2011-0078d4)](#requirements)
+[![Platforms: Windows 11 · macOS · Linux](https://img.shields.io/badge/platforms-Windows%2011%20%C2%B7%20macOS%20%C2%B7%20Linux-0078d4)](docs/PLATFORMS.md)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-3776ab)](#requirements)
 
-A local-first AI companion that lives on your Windows desktop — one entity with a stable
-personality, not a chat window with a mascot on top.
+A local-first AI companion that lives on your desktop — one entity with a stable personality, not
+a chat window with a mascot on top. Windows 11 first; macOS and Linux run from source.
 
-> **Kurzfassung (Deutsch):** Nox ist ein lokaler KI-Begleiter für Windows: ein Desktop-Pet mit
+> **Kurzfassung (Deutsch):** Nox ist ein lokaler KI-Begleiter für Windows 11 (macOS und Linux
+> laufen aus dem Quellcode, siehe [`docs/PLATFORMS.md`](docs/PLATFORMS.md)): ein Desktop-Pet mit
 > Stimme, ein Twitch-/OBS-Streambot, ein Rocket-League-Coach (nur Beobachtung, niemals
 > Eingaben ins Spiel) und ein Coding-Agent. Alles läuft so weit wie möglich auf dem eigenen
 > Rechner, es gibt keine Telemetrie, und Kill-Switch, Privacy-Modi und Berechtigungen sind
@@ -60,11 +61,14 @@ See [`CHANGELOG.md`](CHANGELOG.md) for what shipped when.
 
 ## Requirements
 
-- **Windows 11.** Nox is Windows-only by design (Qt shell, Windows Credential Manager, per-window
-  privacy zones). There is no Linux or macOS build and none is planned.
-- **Python 3.13 from [python.org](https://www.python.org/downloads/)** — *not* the Microsoft Store
-  build: Store Python virtualises `%APPDATA%`, so Nox's runtime token files end up somewhere other
-  tools cannot read and startup fails with `token_acl_failed`.
+- **Windows 11** (primary platform), **macOS** or **Linux**. On macOS and Linux Nox runs from
+  source, and what the desktop will not reveal is handled on the safe side: under Wayland, or on
+  macOS without the Accessibility permission, privacy zones cannot see the active window and stay
+  *closed* (no screen capture, no memory writes). The full per-platform picture, including what is
+  not yet verified on real hardware, is in [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
+- **Python 3.13.** On Windows use the [python.org](https://www.python.org/downloads/) build, *not*
+  the Microsoft Store one: Store Python virtualises `%APPDATA%`, so Nox's runtime token files end
+  up somewhere other tools cannot read and startup fails with `token_acl_failed`.
 - **Node.js 20 or newer** to build the two UIs (the core serves the built bundles).
 - **[Ollama](https://ollama.com) (optional)** for fully local language models and embeddings.
 - **[Claude Code CLI](https://claude.com/claude-code) (optional)** for cloud-grade reasoning and
@@ -72,6 +76,8 @@ See [`CHANGELOG.md`](CHANGELOG.md) for what shipped when.
 - A microphone if you want voice. A GPU is not required.
 
 ## Install (from source)
+
+Windows (PowerShell) - for macOS and Linux see [`docs/PLATFORMS.md`](docs/PLATFORMS.md#install-on-macos-or-linux):
 
 ```powershell
 git clone https://github.com/Crackxsy/nox.git
@@ -93,16 +99,19 @@ Other entry points: `nox dev` (core + shell in one console, no supervisor), `nox
 models, TTS, wake-word gate, a 3-second microphone check) and
 `python -m nox.worker --download-kokoro` (Kokoro TTS model files).
 
-Runtime files live in `%APPDATA%\Nox\runtime\{session.token,ipc.json,supervisor.token}`, logs in
-`%APPDATA%\Nox\logs`. Your data and vault folders are chosen during onboarding and are never inside
+Runtime files live in `<app dir>/runtime/{session.token,ipc.json,supervisor.token}`, logs in
+`<app dir>/logs`, where the app dir is `%APPDATA%\Nox` on Windows,
+`~/Library/Application Support/Nox` on macOS and `~/.local/share/nox` on Linux (`NOX_APP_DIR`
+moves it). Your data and vault folders are chosen during onboarding and are never inside
 the program folder. Open the dashboard from the tray menu — the access token travels in the URL
 fragment, never in a query string. Kill switch: `ctrl+alt+shift+k`, the tray, the dashboard, the
 pet's own menu, or the spoken phrase "Nox, Notaus".
 
 ## Setting up the integrations
 
-Every integration is optional and off until you configure it. Secrets always go into the **Windows
-Credential Manager** — never into a file in this repository, never into a log, never into a prompt.
+Every integration is optional and off until you configure it. Secrets always go into the operating
+system's credential store - the **Windows Credential Manager**, the macOS Keychain or a Linux Secret
+Service - never into a file in this repository, never into a log, never into a prompt.
 `nox onboard` walks through the same steps interactively; the commands below are the manual route.
 
 ### Twitch (chat bot)
@@ -287,8 +296,9 @@ Details: [`docs/PRIVACY.md`](docs/PRIVACY.md).
   prohibitions are enforced in code, so no prompt and no plugin manifest can talk its way past them.
 - **Games are observation-only.** No input synthesis, no process-memory access; a CI job fails the
   build if such an API ever appears in `src/` or `plugins/rl/`.
-- **Secrets only in the Windows Credential Manager** — never in code, config, logs or prompts. CI
-  scans the working tree *and* the full git history on every run.
+- **Secrets only in the OS credential store** (Windows Credential Manager, macOS Keychain, Linux
+  Secret Service) — never in code, config, logs or prompts. CI scans the working tree *and* the
+  full git history on every run.
 - **All egress goes through a guard** with a per-profile, per-plugin allowlist; plugins run as
   separate, manifest-constrained worker processes.
 - **Tamper-evident audit log** (hash-chained) for every security-relevant event; a kill triggered by

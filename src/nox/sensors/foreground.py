@@ -1,6 +1,6 @@
 """Foreground window/process sensor and privacy-zone wiring.
 
-Polls `Win32Probe.foreground`, emits `sensor.foreground_changed` only when the (title, process)
+Polls `DesktopProbe.foreground`, emits `sensor.foreground_changed` only when the (title, process)
 pair actually changes, updates `user.application`/`user.window_title` in `NoxState`, and calls
 `PrivacyService.observe_foreground` so zone enter/leave takes effect and `privacy.zone_changed` is
 published - `PrivacyService` itself owns the zone matcher (`match_zone`) and the event; this sensor
@@ -13,6 +13,10 @@ write and the zone becoming active. This sensor checks the zone itself
 `user.application` (the process/app identity, "an app was open") and the zone id ever persist, the
 title text never does, in or out of a zone check. `PrivacyService.observe_foreground` still gets
 the real title (it needs it to match), but never stores or forwards it either.
+
+A reading whose title could not be observed (`ForegroundInfo.limitation`) goes to
+`PrivacyService.observe_foreground_unobservable` instead, which fails closed; the reason is kept in
+`limitation` for the `sensors` health check.
 """
 
 from __future__ import annotations
@@ -24,14 +28,14 @@ from nox.core.events import E, Event, EventBus
 from nox.core.state import StateManager
 from nox.security.privacy import PrivacyService
 from nox.sensors.history import SensorHistoryStore
-from nox.sensors.win32 import ForegroundInfo, Win32Probe
+from nox.sensors.probe import DesktopProbe, ForegroundInfo
 from nox.util.aio import poll_loop
 
 
 class ForegroundSensor:
     def __init__(
         self,
-        probe: Win32Probe,
+        probe: DesktopProbe,
         bus: EventBus,
         state: StateManager,
         privacy: PrivacyService,
@@ -50,6 +54,8 @@ class ForegroundSensor:
         self._last: ForegroundInfo | None = None
         self._task: asyncio.Task[None] | None = None
         self.last_error = ""
+        #: Why the latest reading could not see the window title; empty while it could.
+        self.limitation = ""
 
     @property
     def last(self) -> ForegroundInfo | None:
@@ -80,21 +86,22 @@ class ForegroundSensor:
         """One sampling cycle; also callable directly (tests, `sensors.status.read` warm-up)."""
         if self._safe_mode():
             return self._last
-        info = self._probe.foreground()
+        # Off the loop: on Linux and macOS the probe runs an external tool.
+        info = await asyncio.to_thread(self._probe.foreground)
+        self.limitation = info.limitation
         if self._history is not None:
             self._history.record("foreground", {"process": info.process_name, "changed": False})
-        if (
-            self._last is not None
-            and info.title == self._last.title
-            and (info.process_name == self._last.process_name)
-        ):
+        if self._last is not None and _same_window(info, self._last):
             return self._last
         self._last = info
 
         #: decide what may persist *before* writing anything - `NoxState` is checkpointed to
         # SQLite, so a zoned title must never reach it even for one write. `match_zone` is a pure
-        # lookup (no side effects), safe to call ahead of the actual `observe_foreground()`.
-        zoned = self._privacy.match_zone(info.title, info.process_name) is not None
+        # lookup (no side effects), safe to call ahead of the actual `observe_foreground()`. An
+        # unobservable reading has no title to persist and always ends in a zone (fail closed).
+        zoned = info.limitation != "" or (
+            self._privacy.match_zone(info.title, info.process_name) is not None
+        )
         visible_title = "" if zoned else info.title
 
         await self._state.update("user.application", info.process_name, reason="sensor.foreground")
@@ -108,7 +115,10 @@ class ForegroundSensor:
         )
         # PrivacyService owns the zone matcher and publishes `privacy.zone_changed` itself; give
         # it the real title only to match against - it never stores or forwards it either.
-        await self._privacy.observe_foreground(info.title, info.process_name)
+        if info.limitation:
+            await self._privacy.observe_foreground_unobservable(info.process_name)
+        else:
+            await self._privacy.observe_foreground(info.title, info.process_name)
         if self._history is not None:
             self._history.record(
                 "foreground",
@@ -119,3 +129,8 @@ class ForegroundSensor:
                 },
             )
         return info
+
+
+def _same_window(a: ForegroundInfo, b: ForegroundInfo) -> bool:
+    """Same title, process and observability - a new pid alone is not a new window."""
+    return (a.title, a.process_name, a.limitation) == (b.title, b.process_name, b.limitation)

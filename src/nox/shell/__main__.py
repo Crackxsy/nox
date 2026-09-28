@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from nox.core.parent_watch import bind_to_parent
 from nox.shell.app import run
 
 
@@ -12,6 +13,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="nox.shell", description="Nox desktop shell")
     parser.add_argument("--runtime", type=Path, default=None, help="runtime dir with session.token")
     args = parser.parse_args()
+    bind_to_parent()  # a shell the supervisor spawned stops when the supervisor is gone
     return run(runtime_dir=args.runtime)
 
 

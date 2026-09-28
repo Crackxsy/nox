@@ -23,7 +23,8 @@ import hmac
 import importlib
 import re
 import secrets as _secrets
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -45,6 +46,21 @@ Clock = Callable[[], datetime]
 
 class SecretNameError(ValueError):
     """Secret names must look like nox/<component>/<key> (lowercase)."""
+
+
+class SecretStoreUnavailableError(RuntimeError):
+    """The operating system's credential store cannot be reached.
+
+    Raised, never turned into "no such secret": a PIN that cannot be read is not a PIN that was
+    never set, and treating it as one would let a PIN-protected change through unasked.
+    """
+
+
+#: What to do when no credential store is running - Windows and macOS always have one.
+KEYRING_UNAVAILABLE_HINT = (
+    "no credential store is available: on Linux, run a Secret Service provider "
+    "(GNOME Keyring or KWallet) in your desktop session"
+)
 
 
 def validate_name(name: str) -> str:
@@ -83,17 +99,22 @@ class KeyringSecretStore:
         self._keyring = backend if backend is not None else importlib.import_module("keyring")
 
     def get(self, name: str) -> str | None:
-        value = self._keyring.get_password(self._service, validate_name(name))
+        name = validate_name(name)
+        with _backend_errors():
+            value = self._keyring.get_password(self._service, name)
         return None if value is None else str(value)
 
     def set(self, name: str, value: str) -> None:
-        self._keyring.set_password(self._service, validate_name(name), value)
+        name = validate_name(name)
+        with _backend_errors():
+            self._keyring.set_password(self._service, name, value)
         log.debug("secrets.set", name=name)
 
     def delete(self, name: str) -> None:
         validate_name(name)
         try:
-            self._keyring.delete_password(self._service, name)
+            with _backend_errors():
+                self._keyring.delete_password(self._service, name)
         except Exception as exc:  # noqa: BLE001 - keyring raises backend-specific errors for "not found"
             if type(exc).__name__ != "PasswordDeleteError":
                 raise
@@ -101,6 +122,20 @@ class KeyringSecretStore:
 
     def __repr__(self) -> str:
         return f"KeyringSecretStore(service={self._service!r})"
+
+
+@contextmanager
+def _backend_errors() -> Iterator[None]:
+    """Turn keyring's "no backend" into `SecretStoreUnavailableError` with an actionable reason.
+
+    Matched by name, because the error class lives in the optional `keyring` import.
+    """
+    try:
+        yield
+    except Exception as exc:
+        if type(exc).__name__ in {"NoKeyringError", "InitError"}:
+            raise SecretStoreUnavailableError(KEYRING_UNAVAILABLE_HINT) from exc
+        raise
 
 
 # ---- PIN -----------------------------------------------------------------------------------------

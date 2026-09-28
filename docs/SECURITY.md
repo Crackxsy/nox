@@ -73,7 +73,9 @@ permission.self_elevate
 ## Kill switch and panic mode
 
 - **Trigger points**: the supervisor hotkey `ctrl+alt+shift+k` (works even if the core has hung —
-  this path does not depend on the core process), the tray, the dashboard, the pet's own menu, and
+  this path does not depend on the core process; not available under a Linux Wayland session,
+  which forbids global hotkeys, and on macOS only with the Input Monitoring permission - the
+  supervisor reports `hotkey: unavailable: <reason>` instead of claiming it is armed), the tray, the dashboard, the pet's own menu, and
   the spoken phrase "Nox, Notaus" (matched locally by the STT worker and forwarded as a
   `security.kill` request — it never goes through the LLM).
 - **Effect**: SAFE_MODE. Every in-flight AI request is cancelled, TTS stops in under 200 ms,
@@ -103,8 +105,8 @@ matter which module introduced it.
 
 ## Secrets handling
 
-`SecretStore`, backed by the `keyring` package (Windows Credential Manager on the platform Nox
-ships for), names shaped `nox/<component>/<key>` (e.g. `nox/twitch/oauth_token`,
+`SecretStore`, backed by the `keyring` package (Windows Credential Manager, macOS Keychain, or a
+Linux Secret Service such as GNOME Keyring or KWallet), names shaped `nox/<component>/<key>` (e.g. `nox/twitch/oauth_token`,
 `nox/obs/websocket_password`). Set via `nox secrets set <name>` (value read from a hidden prompt,
 never a command-line argument) or the onboarding wizard's equivalent prompts; a dashboard UI is
 planned. Values are never logged, never included in a `repr()`, never audited, and never placed in
@@ -112,7 +114,13 @@ a prompt sent to an AI provider — the prompt builder excludes the secret store
 only ever see the exact `nox/<their-id>/...` names their own manifest declares (see
 `PLUGIN_AUTHORING.md`); the core reads the keyring on their behalf, so a plugin process never holds
 a persistent handle to the store itself. Automated tests use an in-memory backend and never touch
-the real Windows Credential Manager or a real credential.
+the real credential store or a real credential (a suite-wide fixture enforces it).
+
+When the credential store cannot be reached at all (a Linux session without a Secret Service), a
+read raises `SecretStoreUnavailableError` - it is never turned into "no such secret". Nox still
+boots, the `secrets` health check reports `unavailable` with the reason, and because it can no
+longer tell whether a PIN is set, every change that would relax security is refused until the
+store is back.
 
 ## Audit logging
 
@@ -140,6 +148,11 @@ the plugin process beyond the call), and reach only the `host:port` entries in i
 the worker is ever spawned, then enforced a second time inside the worker by its own scoped
 `EgressGuard`. Nothing a plugin does can widen what the core already validated. See
 `PLUGIN_AUTHORING.md` for the manifest schema and full detail.
+
+No process Nox starts outlives the process that started it. On Windows each child is placed in a
+job object with kill-on-close. On macOS and Linux each child watches the exact parent it was given
+(`NOX_PARENT_PID`, checked by pid and start time) and ends itself when that parent is gone, so a
+crashed supervisor or core cannot leave a plugin or the voice worker running unsupervised.
 
 ## IPC authentication
 

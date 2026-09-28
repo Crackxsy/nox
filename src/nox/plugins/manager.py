@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, create_model
 from nox.core.events import E, Event, EventBus, HealthStatus, PluginLifecycle
 from nox.core.health import Check
 from nox.core.logging import get_logger
+from nox.core.parent_watch import parent_env
 from nox.ipc.dispatch import RequestContext, RequestRegistry
 from nox.ipc.errors import ERR_INTERNAL, ERR_NOT_FOUND, ERR_PERMISSION, ERR_UNAVAILABLE, IpcError
 from nox.plugins.manifest import (
@@ -173,8 +174,12 @@ class LocalToolRegistry:
 #: Environment variables a plugin worker process inherits from the core. Everything else stays in
 #: the core: third-party plugin code has no business reading the whole environment of the process
 #: that supervises it - the API keys of unrelated tools included. What remains is what CPython
-#: itself needs in order to start on Windows: an interpreter path, a home directory and a
-#: temporary directory.
+#: itself needs in order to start: an interpreter path, a home directory, a temporary directory
+#: and, on Linux and macOS, the locale (without it the worker's text encoding falls back to ASCII).
+#: `NOX_APP_DIR` / `XDG_*` keep a worker's default paths identical to the core's. `DISPLAY`,
+#: `WAYLAND_DISPLAY` and `XAUTHORITY` let an observation plugin reach the screen on Linux - the
+#: same access a Windows worker has by default, since this list is an environment filter, not an
+#: OS sandbox. None of these names holds a credential.
 _INHERITED_ENV = (
     "PATH",
     "PATHEXT",
@@ -191,6 +196,17 @@ _INHERITED_ENV = (
     "LOCALAPPDATA",
     "PROGRAMDATA",
     "ALLUSERSPROFILE",
+    "HOME",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "XDG_DATA_HOME",
+    "XDG_RUNTIME_DIR",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XAUTHORITY",
+    "NOX_APP_DIR",
     "PYTHONHOME",
     "PYTHONPATH",
     "PYTHONUTF8",
@@ -645,6 +661,7 @@ class PluginManager:
         env.update(self._tokens.worker_env(client_id))
         env["NOX_HUB_URL"] = self._hub.url
         env["NOX_PLUGINS_DIR"] = str(self.plugins_dir)
+        env.update(parent_env())  # off Windows, the plugin ends itself when the core is gone
         command = [*self._worker_command, "--plugin", rec.plugin_id]
         rec.stopping = False
         rec.registered = asyncio.Event()

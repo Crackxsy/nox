@@ -7,7 +7,7 @@ import pytest
 from nox.core.events import E
 from nox.core.state import PrivacyMode
 from nox.security.audit import SqliteAuditLog
-from nox.security.privacy import BUILTIN_ZONES, PrivacyService, ZoneSpec
+from nox.security.privacy import BUILTIN_ZONES, UNOBSERVABLE_ZONE, PrivacyService, ZoneSpec
 from tests.unit.fakes import FakeBus
 
 
@@ -161,3 +161,33 @@ def test_from_config_reads_defaults_yaml() -> None:
     assert svc.mode is PrivacyMode.BALANCED
     assert len(svc.zones) == 6
     assert svc.allows_capture("screen") and not svc.allows_capture("camera")
+
+
+async def test_unobservable_foreground_closes_every_gate_a_zone_closes(
+    privacy: PrivacyService, bus: FakeBus
+) -> None:
+    """A desktop that cannot report its active window (Wayland, a missing permission) must not
+    read as "no sensitive window is open"."""
+    zone = await privacy.observe_foreground_unobservable()
+    assert zone == UNOBSERVABLE_ZONE and privacy.active_zone == UNOBSERVABLE_ZONE
+    assert not privacy.allows_capture("screen")
+    assert not privacy.allows_memory_write()
+    assert not privacy.allows_screenshot_to_cloud()
+    assert privacy.snapshot().zone_active
+    zone_events = [e.payload for e in bus.published if e.name == E.PRIVACY_ZONE_CHANGED]
+    assert zone_events[-1] == {"active": True, "zone": UNOBSERVABLE_ZONE}
+
+    # The first real observation that shows nothing sensitive opens the gates again.
+    assert await privacy.observe_foreground("Notepad", "notepad.exe") is None
+    assert privacy.allows_capture("screen")
+
+
+async def test_unobservable_title_still_names_a_zone_its_process_matches(
+    privacy: PrivacyService,
+) -> None:
+    assert await privacy.observe_foreground_unobservable("KeePassXC") == "password_manager"
+
+
+def test_the_unobservable_zone_id_cannot_be_configured() -> None:
+    with pytest.raises(ValueError, match="reserved"):
+        PrivacyService(zones=[{"id": UNOBSERVABLE_ZONE, "window_titles": ["*"]}])

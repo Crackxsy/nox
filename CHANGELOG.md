@@ -9,6 +9,28 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Nox runs on macOS and Linux**, from source, next to Windows 11. What changes per platform, and
+  what is not yet confirmed on real hardware, is in `docs/PLATFORMS.md`. Windows behaviour is
+  unchanged.
+- One application folder per platform, resolved in one place (`nox.paths.app_dir`):
+  `%APPDATA%\Nox`, `~/Library/Application Support/Nox`, or `$XDG_DATA_HOME/nox`. `NOX_APP_DIR`
+  moves it; the shipped defaults are written as `${NOX_APP_DIR}` and resolve on every platform.
+- Foreground-window and idle probes for Linux X11 (`xprop`, `xprintidle`) and macOS (System
+  Events, `ioreg`), selected per platform by `nox.sensors.probe.select_probe`.
+- **Privacy zones fail closed where the active window cannot be seen** - a Wayland session, macOS
+  without the Accessibility permission, a machine without a display. Such a reading enters the
+  reserved `unobservable` zone, which closes every gate a real zone closes, and the `sensors`
+  health check says why.
+- Orphan protection off Windows: every child process watches the exact parent that started it
+  (`NOX_PARENT_PID`, pid and start time) and ends itself when that parent is gone - the POSIX
+  counterpart of the job object.
+- `secrets` health check, and `SecretStoreUnavailableError` for a credential store that cannot be
+  reached. Nox boots without one, and refuses every change that would relax security, because it
+  can no longer tell whether a PIN is set.
+- `sup.status` reports the kill-switch hotkey as `registered`, `disabled` or
+  `unavailable: <reason>`; under Wayland it is never claimed as armed.
+- CI runs mypy and the unit and integration suites on Ubuntu (blocking) and macOS (reporting,
+  until its first green run).
 - **The desktop pet is a creature, not a photograph.** A 2D deformation rig (`ui/pet/src/rig/`)
   runs a triangulated mesh over the pet's artwork, driven by a small bone hierarchy (root, body,
   chest, neck, head, muzzle, ears, gill fins, tail), so it breathes, tilts its head, flicks one ear
@@ -211,6 +233,23 @@ release (`docs/PUBLISHING.md`) - until then the compare links below point at tag
 yet either._
 
 ### Fixed
+- **The audit writer no longer commits into another thread's transaction.** It shared the core's
+  one SQLite connection but guarded it with a lock of its own, so its `COMMIT` could land inside a
+  transaction another thread had open - making half of that transaction permanent, or failing with
+  "cannot commit - SQL statements in progress". The audit log and the PIN attempt counter now hold
+  the database's lock.
+- Shutdown leaves the database open instead of closing it under an audit writer that is still
+  draining; closing it there crashed the process in SQLite's C code.
+- Quitting from the shell no longer starts a new core. After `sup.stop` the watchdog saw "core
+  gone, still running" and spawned a fresh one, which the supervisor's own shutdown then killed
+  in the middle of its boot. A requested stop now ends all restarts.
+- The supervisor collects the exit status of a core it stopped in safe mode, so the process no
+  longer lingers as a zombie on Linux and macOS.
+- Test isolation: every test gets an in-memory keyring and a temporary application folder, and
+  sensors read a deterministic desktop. Integration tests used to read the developer's real
+  credential store and the real foreground window, and could write below the real `%APPDATA%`.
+- A token file whose permissions cannot be tightened on a POSIX file system is reported as
+  degraded instead of aborting the boot.
 - **The Meereswolf no longer has a black outline on a light desktop.** Its cut-out had been stored
   with premultiplied colour under a straight-alpha flag, which left every soft fur edge too dark by
   its own alpha - mean border luminance 0.102 against fur at 0.352. The matte is now repaired

@@ -1,8 +1,9 @@
 """Runtime files the shell reads/writes: session.token, ipc.json, supervisor.token, shell.json.
 
-Location (IPC Model handshake step 2 / D223): `%APPDATA%\\Nox\\runtime` by default, overridable
-with `NOX_RUNTIME_DIR`; `E:\\Nox\\runtime` is accepted as a second candidate (the project standards
-data dirs). Tokens are read from files only and never logged.
+Location: `<app_dir>/runtime` by default (`nox.paths.app_dir`: `%APPDATA%\\Nox` on Windows, the
+platform's application folder elsewhere), overridable with `NOX_RUNTIME_DIR`. It matches the
+`paths.runtime_dir` default, which deliberately does not follow `paths.data_dir`. Tokens are read
+from files only and never logged.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError
+
+from nox.paths import app_dir
 
 SESSION_TOKEN_FILE = "session.token"  # noqa: S105 - file name, not a secret
 SUPERVISOR_TOKEN_FILE = "supervisor.token"  # noqa: S105
@@ -30,7 +33,7 @@ class IpcEndpoints(BaseModel):
 
 
 class ShellState(BaseModel):
-    """Persisted UI state (D223: UI state lives in AppData, never secrets)."""
+    """Persisted UI state: lives in the runtime directory, never holds secrets."""
 
     x: int | None = None
     y: int | None = None
@@ -45,10 +48,7 @@ def candidate_runtime_dirs() -> list[Path]:
     env = os.environ.get("NOX_RUNTIME_DIR")
     if env:
         dirs.append(Path(env))
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        dirs.append(Path(appdata) / "Nox" / "runtime")
-    dirs.append(Path(r"E:\Nox\runtime"))
+    dirs.append(app_dir() / "runtime")
     return dirs
 
 

@@ -38,7 +38,7 @@ import subprocess
 import sys
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -49,6 +49,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from nox.core.config import NoxConfig, load_config
 from nox.core.jobobject import JobObject
 from nox.core.logging import configure_logging, get_logger, shutdown_logging
+from nox.core.parent_watch import parent_env
 from nox.ipc.protocol import Envelope, Kind, Source
 from nox.ipc.tokens import constant_time_equals, generate_token, write_secret_file
 from nox.paths import resolve_config_paths
@@ -132,6 +133,9 @@ class SupervisorStatus(BaseModel):
     restarts_in_window: int = 0
     safe_mode_reason: str = ""
     kill_switch_engaged: bool = False
+    #: `registered`, `disabled`, or `unavailable: <reason>` - the kill-switch hotkey is a safety
+    #: path, so a desktop that cannot deliver it must say so rather than look armed.
+    hotkey: str = "disabled"
 
 
 class _Child:
@@ -207,6 +211,10 @@ class Supervisor:
         self._watch_task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
         self._hotkey: Any = None
+        self._hotkey_state = "disabled"
+        #: Set once a shutdown is under way. From then on the watchdog restarts nothing: a core
+        #: that exits because it was told to stop is not a crash.
+        self._stop_requested = False
         self._lock = asyncio.Lock()
         self._bg: set[asyncio.Task[None]] = set()
 
@@ -238,6 +246,7 @@ class Supervisor:
             restarts_in_window=len(self._restarts),
             safe_mode_reason=self._safe_mode_reason,
             kill_switch_engaged=self._kill_engaged,
+            hotkey=self._hotkey_state,
         )
 
     async def start(self) -> None:
@@ -297,6 +306,7 @@ class Supervisor:
         self._log.info("supervisor.stopped")
 
     def request_stop(self) -> None:
+        self._stop_requested = True
         self._stopped.set()
 
     async def kill_switch(self, *, by: str, reason: str = "") -> bool:
@@ -348,6 +358,9 @@ class Supervisor:
         Returns True when the core exited on its own, False when it had to be terminated.
         """
         async with self._lock:
+            # Before the core is told to stop: its exit must not look like a crash to the watchdog,
+            # which would otherwise spawn a fresh core between this and `stop()`.
+            self._stop_requested = True
             self._log.warning("supervisor.graceful_stop", by=by, reason=reason)
             exited = await self._send_stop_and_wait(reason=reason or "shutdown")
             if not exited and self._core is not None and self._core.alive():
@@ -369,6 +382,7 @@ class Supervisor:
         env[m.ENV_HOST] = self._s.control_host
         env[m.ENV_PORT] = str(self._s.control_port)
         env[m.ENV_TOKEN] = self._token
+        env.update(parent_env())  # off Windows, core and shell end themselves when this is gone
         if safe_mode:
             env[m.ENV_SAFE_MODE] = "1"
         else:
@@ -438,6 +452,9 @@ class Supervisor:
     async def _tick(self) -> None:
         if self._state in (SupervisorState.STOPPED, SupervisorState.STARTING):
             return
+        self._reap()
+        if self._stop_requested:
+            return
         now = self._clock()
         if self._shell is not None and not self._shell.alive() and self._s.shell_command:
             self._prune_restarts(now)
@@ -448,7 +465,7 @@ class Supervisor:
         if self._state == SupervisorState.SAFE_MODE:
             return
         async with self._lock:
-            if self._state != SupervisorState.RUNNING:
+            if self._state != SupervisorState.RUNNING or self._stop_requested:
                 return
             if self._core is None or not self._core.alive():
                 code = None if self._core is None else self._core.proc.returncode
@@ -464,6 +481,17 @@ class Supervisor:
                 if acked:
                     await self._wait_exit(self._core, self._s.shutdown_grace_s)
                     await self._restart_core(reason="graceful restart", hard=False)
+
+    def _reap(self) -> None:
+        """Collect the exit status of every child that has ended, in every state.
+
+        On Linux and macOS an ended child stays a zombie - listed, and counted by `pid_exists` -
+        until its parent asks for its status. Safe mode deliberately restarts nothing, so without
+        this the core it stopped would linger as one for as long as the supervisor runs.
+        """
+        for child in (self._core, self._shell):
+            if child is not None:
+                child.proc.poll()
 
     async def _restart_core(self, *, reason: str, hard: bool) -> None:
         now = self._clock()
@@ -715,13 +743,21 @@ class Supervisor:
 
     # ---- hotkey ------------------------------------------------------------------------------
 
+    def _hotkey_unavailable(self, reason: str) -> None:
+        self._hotkey_state = f"unavailable: {reason}"
+        self._log.warning("supervisor.hotkey_unavailable", reason=reason)
+
     def _start_hotkey(self) -> None:
         if not self._s.hotkey_enabled or not self._s.kill_switch_hotkey:
+            return
+        blocked = hotkey_blocked_reason(sys.platform, os.environ)
+        if blocked:
+            self._hotkey_unavailable(blocked)
             return
         try:
             from pynput import keyboard  # noqa: PLC0415 - optional dependency
         except ImportError:
-            self._log.warning("supervisor.hotkey_unavailable", reason="pynput not installed")
+            self._hotkey_unavailable("pynput not installed")
             return
         loop = asyncio.get_running_loop()
         combo = hotkey_to_pynput(self._s.kill_switch_hotkey)
@@ -734,10 +770,17 @@ class Supervisor:
         try:
             self._hotkey = keyboard.GlobalHotKeys({combo: _fire})
             self._hotkey.start()
-            self._log.info("supervisor.hotkey_registered", hotkey=combo)
         except Exception as exc:  # noqa: BLE001 - hotkey failure never blocks the watchdog
-            self._log.warning("supervisor.hotkey_failed", error=str(exc))
             self._hotkey = None
+            self._hotkey_unavailable(f"could not register: {exc}")
+            return
+        # macOS starts the listener either way and then delivers nothing unless the process has
+        # been granted Input Monitoring; pynput reports that as `IS_TRUSTED`.
+        if sys.platform == "darwin" and not getattr(self._hotkey, "IS_TRUSTED", True):
+            self._hotkey_unavailable(MAC_HOTKEY_PERMISSION)
+            return
+        self._hotkey_state = "registered"
+        self._log.info("supervisor.hotkey_registered", hotkey=combo)
 
     def _stop_hotkey(self) -> None:
         if self._hotkey is not None:
@@ -746,6 +789,30 @@ class Supervisor:
             except Exception:  # noqa: BLE001, S110 - best effort
                 pass
             self._hotkey = None
+
+
+WAYLAND_HOTKEY_REASON = (
+    "Wayland does not let applications register global hotkeys; use the tray, the dashboard or "
+    "the spoken phrase instead"
+)
+MAC_HOTKEY_PERMISSION = (
+    "grant Nox (or the Python it runs on) Input Monitoring in System Settings > Privacy & Security"
+)
+
+
+def hotkey_blocked_reason(platform: str, environ: Mapping[str, str]) -> str:
+    """Why a global hotkey cannot work on this desktop at all, or "" when it can be tried.
+
+    Under Wayland pynput still "registers" through XWayland and then only sees keys pressed in X11
+    windows - a kill switch that fires sometimes. Refusing to claim it is the honest answer.
+    """
+    if platform.startswith("linux") or "bsd" in platform:
+        session = environ.get("XDG_SESSION_TYPE", "").strip().lower()
+        if session == "wayland" or (environ.get("WAYLAND_DISPLAY") and not environ.get("DISPLAY")):
+            return WAYLAND_HOTKEY_REASON
+        if not environ.get("DISPLAY"):
+            return "no graphical session"
+    return ""
 
 
 def hotkey_to_pynput(hotkey: str) -> str:

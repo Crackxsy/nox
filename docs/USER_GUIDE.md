@@ -4,6 +4,11 @@ Nox is a local-first personal companion for Windows: a desktop pet with a voice,
 stream companion, a Rocket League coach (observation only), and (later) a project/coding
 assistant. This guide covers install, first start, day-to-day use, and troubleshooting.
 
+> Paths and steps below are written for **Windows 11**, the primary platform. On macOS and Linux
+> Nox runs from source, keeps its files in `~/Library/Application Support/Nox` or
+> `~/.local/share/nox` instead of `%APPDATA%\Nox`, and some desktop features depend on the
+> session and on permissions - see [`PLATFORMS.md`](PLATFORMS.md).
+
 > Nox is pre-v1.0. Some features described in the Product Requirements Document are not built yet
 > (project manager/coding assistant, research/creative assistant). This guide only documents what
 > exists in the current release — see `CHANGELOG.md` for what shipped when.
@@ -43,7 +48,7 @@ The first time Nox runs, `nox onboard` (or the installer's first-run step) walks
 Every step has a safe default and can be skipped; skipped steps simply keep whatever
 `config/defaults.yaml` already specifies. The wizard only ever writes to your personal
 `%APPDATA%\Nox\user.yaml` — it never touches the shipped defaults, and it never writes a secret
-into that file (secrets go to the Windows Credential Manager only). Run `nox onboard` again any
+into that file (secrets go to the OS credential store only). Run `nox onboard` again any
 time to change these answers.
 
 ## 3. Starting and stopping Nox

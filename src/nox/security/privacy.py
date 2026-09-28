@@ -2,6 +2,9 @@
 
 A zone is a local sensor result, not a policy: `observe_foreground(window_title, process_name)`
 matches the foreground window against title and process patterns, and `path_zone()` matches paths.
+When the foreground window cannot be observed at all (a Wayland session, a missing permission),
+`observe_foreground_unobservable()` enters the reserved `unobservable` zone: every gate that a
+real zone closes stays closed, because "cannot see a banking window" is not "no banking window".
 The window title that caused a match is never logged and never audited - only the zone id, and
 only as a boolean on the bus.
 
@@ -34,6 +37,10 @@ log = get_logger(__name__)
 CaptureKind = Literal["microphone", "camera", "screen"]
 CAPTURE_KINDS: tuple[CaptureKind, ...] = ("microphone", "camera", "screen")
 Clock = Callable[[], datetime]
+
+#: The zone in force while the foreground window cannot be read. Reserved: a configured zone with
+#: this id is rejected, so the fail-closed state can never be confused with a user-defined one.
+UNOBSERVABLE_ZONE = "unobservable"
 
 
 class ZoneSpec(BaseModel):
@@ -148,6 +155,8 @@ def _build_zone(item: str | Mapping[str, Any] | ZoneSpec) -> ZoneSpec:
         return spec
     data = dict(item)
     zone_id = str(data.get("id", "")).strip().lower()
+    if zone_id == UNOBSERVABLE_ZONE:
+        raise ValueError(f"privacy zone id {UNOBSERVABLE_ZONE!r} is reserved")
     base = BUILTIN_ZONES.get(zone_id)
     if base is not None:
         merged = base.model_dump()
@@ -301,7 +310,19 @@ class PrivacyService:
 
     async def observe_foreground(self, window_title: str, process_name: str = "") -> str | None:
         """Update the active zone from the foreground window; emits capture_changed on change."""
-        zone = self.match_zone(window_title, process_name)
+        return await self._enter_zone(self.match_zone(window_title, process_name))
+
+    async def observe_foreground_unobservable(self, process_name: str = "") -> str:
+        """The foreground window's title could not be read: fail closed.
+
+        A process pattern that matches still names its own zone (it is the more specific answer);
+        otherwise the reserved `UNOBSERVABLE_ZONE` applies. Either way a zone is active.
+        """
+        zone = self.match_zone("", process_name) or UNOBSERVABLE_ZONE
+        await self._enter_zone(zone)
+        return zone
+
+    async def _enter_zone(self, zone: str | None) -> str | None:
         if zone == self._active_zone:
             return zone
         previous = self._active_zone

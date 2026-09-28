@@ -6,16 +6,58 @@ this module, so they cannot disagree about which `defaults.yaml` or `user.yaml` 
 locations are derived from this file's own position rather than from the working directory,
 because a plugin worker, a test and a service start all run with a different one.
 
+It also owns the one answer to "where does this installation keep its own files" (`app_dir`), so
+the core, the shell, the voice worker, the settings writer and the onboarding wizard cannot each
+guess differently on a platform they were not written for.
+
 Nothing here reads or validates a file; `nox.core.config` does that.
 """
 
 from __future__ import annotations
 
 import os
+import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 #: `<...>/src/nox`
 PACKAGE_DIR = Path(__file__).resolve().parent
+
+#: Overrides `app_dir()` on every platform, and is also the `${NOX_APP_DIR}` the shipped
+#: configuration defaults are written against.
+APP_DIR_ENV = "NOX_APP_DIR"
+
+
+def platform_app_dir(platform: str, environ: Mapping[str, str], home: Path) -> Path:
+    """The per-user application directory each operating system expects, without overrides.
+
+    Windows: `%APPDATA%\\Nox` (the location every earlier release used). macOS:
+    `~/Library/Application Support/Nox`. Everything else: `$XDG_DATA_HOME/nox`, which the XDG base
+    directory specification defines as `~/.local/share` when unset or not absolute.
+
+    One directory per installation on every platform - config layer, data and the runtime
+    rendezvous files - so the layout below it is the same everywhere and only its root differs.
+    """
+    if platform == "win32":
+        appdata = environ.get("APPDATA")
+        base = Path(appdata) if appdata else home / "AppData" / "Roaming"
+        return base / "Nox"
+    if platform == "darwin":
+        return home / "Library" / "Application Support" / "Nox"
+    xdg_data = environ.get("XDG_DATA_HOME", "")
+    base = Path(xdg_data) if xdg_data and Path(xdg_data).is_absolute() else home / ".local/share"
+    return base / "nox"
+
+
+def app_dir() -> Path:
+    """Where this installation keeps `user.yaml`, its data and its runtime files by default.
+
+    `NOX_APP_DIR` wins on every platform; otherwise see `platform_app_dir`.
+    """
+    override = os.environ.get(APP_DIR_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
+    return platform_app_dir(sys.platform, os.environ, Path.home())
 
 
 def repo_root() -> Path:
@@ -55,21 +97,18 @@ def defaults_path() -> Path:
 def user_config_path() -> Path:
     """Where the user layer is *written*; it need not exist yet.
 
-    `NOX_USER_CONFIG` wins, otherwise `%APPDATA%\\Nox\\user.yaml`, falling back to the equivalent
-    under the home directory when `APPDATA` is not set.
+    `NOX_USER_CONFIG` wins, otherwise `<app_dir>/user.yaml`.
     """
     env = os.environ.get("NOX_USER_CONFIG")
     if env:
         return Path(env)
-    appdata = os.environ.get("APPDATA")
-    base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
-    return base / "Nox" / USER_CONFIG_FILENAME
+    return app_dir() / USER_CONFIG_FILENAME
 
 
 def resolve_config_paths(user_config: Path | None = None) -> tuple[Path, Path | None]:
     """`(defaults, user or None)` for `nox.core.config.load_config`.
 
-    An explicit `user_config` wins, then `NOX_USER_CONFIG`, then `%APPDATA%\\Nox\\user.yaml`, then
+    An explicit `user_config` wins, then `NOX_USER_CONFIG`, then `<app_dir>/user.yaml`, then
     a `user.yaml` next to the defaults file, which is the layout a checkout uses. The second
     element is None when no user layer exists, which the loader reads as "defaults only".
 
@@ -82,11 +121,7 @@ def resolve_config_paths(user_config: Path | None = None) -> tuple[Path, Path | 
     env_user = os.environ.get("NOX_USER_CONFIG")
     if env_user:
         return defaults, Path(env_user)
-    candidates: list[Path] = []
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        candidates.append(Path(appdata) / "Nox" / USER_CONFIG_FILENAME)
-    candidates.append(defaults.parent / USER_CONFIG_FILENAME)
+    candidates = [app_dir() / USER_CONFIG_FILENAME, defaults.parent / USER_CONFIG_FILENAME]
     for candidate in candidates:
         if candidate.is_file():
             return defaults, candidate

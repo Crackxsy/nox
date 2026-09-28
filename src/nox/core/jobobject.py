@@ -11,6 +11,7 @@ from __future__ import annotations
 import ctypes
 import sys
 from ctypes import wintypes
+from typing import Any
 
 from nox.core.logging import get_logger
 
@@ -56,9 +57,20 @@ class _ExtendedLimitInformation(ctypes.Structure):
     ]
 
 
+def _last_error() -> int:
+    """The calling thread's last Win32 error; 0 elsewhere (and to a type checker on POSIX)."""
+    if sys.platform == "win32":
+        return ctypes.get_last_error()
+    return 0
+
+
 class JobObject:
     """Create with `JobObject(name)`; `assign(pid)` processes; `close()` kills everything
     assigned."""
+
+    # Declared here because the Windows-only assignment below is unreachable for a type checker
+    # running on another platform, which would otherwise leave the attribute without a type.
+    _k32: Any
 
     def __init__(self, name: str | None = None) -> None:
         self._log = get_logger(__name__)
@@ -86,7 +98,7 @@ class JobObject:
 
         handle = kernel32.CreateJobObjectW(None, name)
         if not handle:
-            self._log.warning("jobobject.create_failed", error=ctypes.get_last_error())
+            self._log.warning("jobobject.create_failed", error=_last_error())
             return
         info = _ExtendedLimitInformation()
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
@@ -94,7 +106,7 @@ class JobObject:
             handle, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(info), ctypes.sizeof(info)
         )
         if not ok:
-            self._log.warning("jobobject.limit_failed", error=ctypes.get_last_error())
+            self._log.warning("jobobject.limit_failed", error=_last_error())
             kernel32.CloseHandle(handle)
             return
         self._handle = int(handle)
@@ -113,11 +125,11 @@ class JobObject:
             return False
         proc = self._k32.OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, False, pid)
         if not proc:
-            self._log.warning("jobobject.open_failed", pid=pid, error=ctypes.get_last_error())
+            self._log.warning("jobobject.open_failed", pid=pid, error=_last_error())
             return False
         try:
             if not self._k32.AssignProcessToJobObject(self._handle, proc):
-                self._log.warning("jobobject.assign_failed", pid=pid, error=ctypes.get_last_error())
+                self._log.warning("jobobject.assign_failed", pid=pid, error=_last_error())
                 return False
         finally:
             self._k32.CloseHandle(proc)

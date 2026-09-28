@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 from pathlib import Path
 
 _REPLAY_SUBPATH = ("My Games", "Rocket League", "TAGame", "DemosEpic")
@@ -22,7 +23,7 @@ def documents_dir() -> Path:
     """The user's real Documents folder, following OneDrive Known Folder redirection when the
     registry points there (`SHGetFolderPathW`, read-only Win32 API call - no injection, no
     memory read of another process)."""
-    if os.name == "nt":
+    if sys.platform == "win32":
         buf = ctypes.create_unicode_buffer(1024)
         result = ctypes.windll.shell32.SHGetFolderPathW(
             None, _CSIDL_PERSONAL, None, _SHGFP_TYPE_CURRENT, buf

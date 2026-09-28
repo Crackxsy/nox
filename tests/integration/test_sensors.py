@@ -1,6 +1,6 @@
 """PC Awareness Sensors integration (SP-15/ST-20-04): boots the real `NoxCore` headless, wires the
-sensors with `nox.sensors.install.install(core)`, then swaps the real `RealWin32Probe` the
-foreground sensor got wired with for a fake one (no ctypes/real desktop dependency in a test) and
+sensors with `nox.sensors.install.install(core)`, then swaps the platform probe the foreground
+sensor got wired with for a fake one (no ctypes/real desktop dependency in a test) and
 drives one poll cycle with a window title matching a configured privacy zone. Asserts the zone
 reaches the real `PrivacyService` and, end to end through the real bus, the real `PetService`
 (`privacy.zone_changed` -> `PetFunctional.PRIVACY`) - no mocking of the wiring itself.
@@ -17,7 +17,7 @@ from nox.core.config import load_config
 from nox.core.events import E
 from nox.core.state import PetFunctional
 from nox.sensors.install import install
-from nox.sensors.win32 import ForegroundInfo
+from nox.sensors.probe import ForegroundInfo, UnobservableProbe
 from tests._ports import free_port_base
 
 
@@ -80,10 +80,10 @@ async def test_install_registers_sensors_status_read_tool(core: NoxCore) -> None
 
 async def test_zoned_foreground_window_reaches_privacy_and_pet(core: NoxCore) -> None:
     sensor = core.extensions["sensors"].foreground
-    # This test host is Windows (ENGINEERING.md), so install() built a RealWin32Probe.
+    # install() always builds the foreground sensor, whatever probe this host got.
     assert sensor is not None
 
-    # Swap the ctypes probe for a deterministic fake; the rest of the wiring stays real.
+    # Swap the platform probe for a deterministic fake; the rest of the wiring stays real.
     fake = FakeWin32Probe()
     sensor._probe = fake
 
@@ -109,3 +109,23 @@ async def test_zoned_foreground_window_reaches_privacy_and_pet(core: NoxCore) ->
     await sensor.poll()
     assert core.security.privacy.active_zone is None
     assert core.pet.functional is not PetFunctional.PRIVACY
+
+
+async def test_unobservable_foreground_fails_closed_end_to_end(core: NoxCore) -> None:
+    """A host that cannot read the active window must not look like one with nothing open."""
+    runtime = core.extensions["sensors"]
+    sensor = runtime.foreground
+    assert sensor is not None
+    sensor._probe = UnobservableProbe("test host cannot read the active window")
+
+    await sensor.poll()
+
+    privacy = core.security.privacy
+    assert privacy.active_zone == "unobservable"
+    assert privacy.allows_capture("screen") is False
+    assert privacy.allows_memory_write() is False
+    assert core.pet.functional is PetFunctional.PRIVACY
+    status, reason = await runtime.health()
+    assert status.value == "limited"
+    assert "cannot read the active window" in reason
+    assert "fail closed" in reason

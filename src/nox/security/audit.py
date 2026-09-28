@@ -121,12 +121,23 @@ class SqliteAuditLog:
     _REDACT_SUFFIXES: ClassVar[tuple[str, ...]] = ("_token", "_secret", "_key", "_password", "_pin")
 
     def __init__(
-        self, conn: sqlite3.Connection, *, bus: EventBus | None = None, clock: Clock | None = None
+        self,
+        conn: sqlite3.Connection,
+        *,
+        bus: EventBus | None = None,
+        clock: Clock | None = None,
+        lock: threading.RLock | None = None,
     ) -> None:
+        """`lock` must be the lock every other user of `conn` holds - `Database.lock` in the core.
+
+        The audit writer runs on its own thread. With a lock of its own it could commit in the
+        middle of another thread's transaction on the same connection, committing that one's
+        half-written rows with it or failing with "cannot commit - SQL statements in progress".
+        """
         self._conn = conn
         self._bus = bus
         self._clock = clock or (lambda: datetime.now(UTC))
-        self._lock = threading.RLock()
+        self._lock = lock if lock is not None else threading.RLock()
         with self._lock:
             self._conn.executescript(_SCHEMA)
             self._conn.commit()

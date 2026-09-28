@@ -7,6 +7,12 @@ start when the config enables them. Every sensor's poll checks the kill switch e
 ops while it is engaged, so safe mode really does stop the observation, not just the reporting. A
 sensor whose poll keeps failing is reported by the `sensors` health check as `limited` with the
 error - a frozen history is never served as if it were live.
+
+The foreground and idle signals come from the probe `nox.sensors.probe.select_probe` picks for the
+platform. Where the foreground window cannot be read (Wayland, no display, a missing macOS
+permission), the foreground sensor still runs - its readings put privacy into the fail-closed
+`unobservable` zone - and the health check says `limited` with the reason. Where idle time cannot
+be measured, no idle sensor runs and the health check names what is missing.
 """
 
 from __future__ import annotations
@@ -25,9 +31,9 @@ from nox.sensors.foreground import ForegroundSensor
 from nox.sensors.game import GameProcessSensor, psutil_process_lister
 from nox.sensors.history import SensorHistoryStore
 from nox.sensors.idle import IdleSensor
+from nox.sensors.probe import select_probe
 from nox.sensors.resources import NvidiaSmiGpuProbe, ResourceSensor
 from nox.sensors.tools import make_sensors_status_read_tool
-from nox.sensors.win32 import RealWin32Probe, Win32Probe
 
 log = get_logger(__name__)
 
@@ -58,6 +64,9 @@ class SensorsRuntime:
     """Handles for the caller: the shared history plus whichever sensors this host supports."""
 
     history: SensorHistoryStore
+    #: Signals this host cannot provide at all, with the reason (e.g. "idle: xprintidle not
+    #: installed"). Reported as `limited`, never hidden.
+    unsupported: list[str] = field(default_factory=list)
     foreground: ForegroundSensor | None = None
     idle: IdleSensor | None = None
     resources: ResourceSensor | None = None
@@ -88,6 +97,9 @@ class SensorsRuntime:
         if not running:
             return HealthStatus.UNAVAILABLE, "no sensor runs on this host"
         failing = [f"{name}: {sensor.last_error}" for name, sensor in running if sensor.last_error]
+        if self.foreground is not None and self.foreground.limitation:
+            failing.append(f"foreground: {self.foreground.limitation} (privacy zones fail closed)")
+        failing.extend(self.unsupported)
         if failing:
             return HealthStatus.LIMITED, "; ".join(failing)
         return HealthStatus.AVAILABLE, f"{len(running)} sensors polling"
@@ -121,22 +133,22 @@ def _build_sensors(core: _Core, runtime: SensorsRuntime) -> None:
     cfg: Any = core.config.sensors
     safe_mode = core.security.killswitch.is_engaged
 
-    probe: Win32Probe | None
-    try:
-        probe = RealWin32Probe()
-    except RuntimeError:
-        probe = None  # non-Windows dev/test host: no foreground/idle sensor this run
-
-    if probe is not None:
-        runtime.foreground = ForegroundSensor(
-            probe,
-            core.bus,
-            core.state,
-            core.security.privacy,
-            history=runtime.history,
-            poll_interval_s=cfg.foreground.poll_interval_s,
-            safe_mode=safe_mode,
-        )
+    selection = select_probe()
+    probe = selection.probe
+    # Always built: on a host that cannot see the foreground window, its readings are what put
+    # privacy into the fail-closed zone. Without it, zones would silently never activate.
+    runtime.foreground = ForegroundSensor(
+        probe,
+        core.bus,
+        core.state,
+        core.security.privacy,
+        history=runtime.history,
+        poll_interval_s=cfg.foreground.poll_interval_s,
+        safe_mode=safe_mode,
+    )
+    if selection.idle_limitation:
+        runtime.unsupported.append(f"idle: {selection.idle_limitation}")
+    else:
         runtime.idle = IdleSensor(
             probe,
             core.state,

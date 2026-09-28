@@ -36,8 +36,8 @@ def test_default_user_config_path_uses_appdata_param() -> None:
     assert default_user_config_path(Path("C:/tmp/appdata")) == Path("C:/tmp/appdata/Nox/user.yaml")
 
 
-def test_default_user_config_path_uses_environ(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("APPDATA", "C:/env/appdata")
+def test_default_user_config_path_uses_the_app_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NOX_APP_DIR", "C:/env/appdata/Nox")
     assert default_user_config_path() == Path("C:/env/appdata/Nox/user.yaml")
 
 
@@ -160,6 +160,7 @@ async def _fake_probe() -> list[AiProbeResult]:
 def _run_onboard(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stdin: str) -> tuple[int, str]:
     appdata = tmp_path / "AppData" / "Roaming"
     monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setenv("NOX_APP_DIR", str(appdata / "Nox"))
     monkeypatch.setattr(wizard, "default_secret_store", lambda: InMemorySecretStore())
     monkeypatch.setattr(wizard, "probe_ai_backends", _fake_probe)
 

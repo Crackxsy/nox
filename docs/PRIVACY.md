@@ -93,15 +93,23 @@ default. While a zone is the foreground window: no capture, no screenshot, no cl
 no memory write referencing it. Zone detection happens locally (it only looks at the foreground
 window's title/process name) and that detection itself never leaves the machine.
 
+When Nox **cannot see** the foreground window, it assumes the worst rather than the best: it
+enters the reserved `unobservable` zone, which closes exactly the gates a real zone closes. That
+is permanent under a Linux Wayland session (Wayland lets no application read the active window),
+lasts on macOS until you grant the Accessibility permission, and applies on any machine without a
+graphical session. The dashboard's health page names the reason. Details per platform:
+[`PLATFORMS.md`](PLATFORMS.md).
+
 ## How to inspect or delete your data
 
 - **Vault**: it is a folder of plain files you already own — open it in any editor, or delete
   individual notes yourself. Nox never deletes vault content silently.
 - **Transcripts, logs, cache, database**: all under your configured data folder
-  (`%APPDATA%\Nox` by default); delete the folder (while Nox is stopped) to reset to a clean
-  state without touching the vault.
-- **Secrets**: `nox secrets delete <name>`, or remove them directly from Windows Credential
-  Manager.
+  (`%APPDATA%\Nox` on Windows, `~/Library/Application Support/Nox` on macOS, `~/.local/share/nox`
+  on Linux, by default); delete the folder (while Nox is stopped) to reset to a clean state
+  without touching the vault.
+- **Secrets**: `nox secrets delete <name>`, or remove them directly from the Windows Credential
+  Manager, the macOS Keychain or your Linux keyring (entries under the service name `nox`).
 - **Audit log**: inspectable from the dashboard; resetting it requires your PIN (it is a security
   control, not a convenience feature).
 

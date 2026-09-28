@@ -20,6 +20,10 @@ What counts as relaxing, and what deliberately does not:
 Without a PIN configured - a fresh install - nothing is gated: there is no secret to prove, and a
 gate that cannot be satisfied is a lock-out, not a protection. `nox onboard` and the Settings page
 are where a PIN is set.
+
+When the operating system's credential store cannot be read (a Linux session without a Secret
+Service), whether a PIN exists is unknown. Relaxing changes are then refused with that reason -
+"cannot tell" is never treated as "no PIN".
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ from nox.core.state import PrivacyMode
 from nox.security._logging import get_logger
 from nox.security.audit_sink import SafeAuditLog
 from nox.security.model import AuditLog
-from nox.security.secrets import PinManager
+from nox.security.secrets import PinManager, SecretStoreUnavailableError
 
 log = get_logger(__name__)
 
@@ -85,8 +89,22 @@ class SecurityChangeGate:
         return self._required
 
     def is_required(self) -> bool:
-        """Whether a relaxing change needs a PIN right now."""
-        return self._required and self._pin.is_set()
+        """Whether a relaxing change needs a PIN right now. Unknown counts as yes."""
+        if not self._required:
+            return False
+        try:
+            return self._pin.is_set()
+        except SecretStoreUnavailableError:
+            return True
+
+    def describe(self) -> str:
+        """`on`, `off` or `unknown` (credential store unreadable), for logs and status."""
+        if not self._required:
+            return "off"
+        try:
+            return "on" if self._pin.is_set() else "off"
+        except SecretStoreUnavailableError:
+            return "unknown"
 
     async def require(self, pin: str | None, *, action: str, by: str) -> None:
         """Raise `PinRequiredError` unless `pin` unlocks `action`.
@@ -96,6 +114,11 @@ class SecurityChangeGate:
         """
         if not self.is_required():
             return
+        if self.describe() == "unknown":
+            self._deny(action, by, "credential store unavailable")
+            raise PinRequiredError(
+                action, f"{action} denied: the credential store holding the PIN cannot be read"
+            )
         if not pin:
             self._deny(action, by, "no PIN supplied")
             raise PinRequiredError(action, f"{action} requires the security PIN")

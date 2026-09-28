@@ -1,6 +1,7 @@
 """Coding plugin, end to end: a real `NoxCore` (headless) in the `coding` profile spawns the real
-`nox_plugin_coding` worker subprocess against a fake `claude` executable (`.cmd` wrapper around
-`tests/unit/plugins/coding/fake_claude.py`, resolved via `shutil.which` exactly like production).
+`nox_plugin_coding` worker subprocess against a fake `claude` executable (a `.cmd` or shell
+wrapper around `tests/unit/plugins/coding/fake_claude.py`, resolved via `shutil.which` exactly
+like production).
 Modelled on `tests/integration/test_obs_plugin.py`."""
 
 from __future__ import annotations
@@ -24,12 +25,20 @@ FAKE_CLAUDE_SCRIPT = REPO_ROOT / "tests" / "unit" / "plugins" / "coding" / "fake
 
 
 def _fake_claude_wrapper(tmp_path: Path) -> Path:
-    """A `.cmd` wrapper so `shutil.which` resolution (an absolute path ending in a `PATHEXT`
-    extension) finds a real, spawnable executable on Windows without touching PATH."""
-    wrapper = tmp_path / "fake_claude.cmd"
+    """A spawnable `claude` stand-in that `shutil.which` resolves without touching PATH: a `.cmd`
+    wrapper on Windows (an absolute path ending in a `PATHEXT` extension), an executable shell
+    script elsewhere."""
+    if sys.platform == "win32":
+        wrapper = tmp_path / "fake_claude.cmd"
+        wrapper.write_text(
+            f'@echo off\r\n"{sys.executable}" "{FAKE_CLAUDE_SCRIPT}" %*\r\n', encoding="utf-8"
+        )
+        return wrapper
+    wrapper = tmp_path / "fake_claude"
     wrapper.write_text(
-        f'@echo off\r\n"{sys.executable}" "{FAKE_CLAUDE_SCRIPT}" %*\r\n', encoding="utf-8"
+        f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_CLAUDE_SCRIPT}" "$@"\n', encoding="utf-8"
     )
+    wrapper.chmod(0o755)
     return wrapper
 
 

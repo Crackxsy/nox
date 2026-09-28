@@ -18,6 +18,7 @@ from pathlib import Path
 
 from nox.core.jobobject import JobObject
 from nox.core.logging import get_logger
+from nox.core.parent_watch import parent_env
 from nox.ipc.errors import IpcError
 from nox.ipc.server import IpcHub
 from nox.ipc.tokens import TokenStore
@@ -120,6 +121,7 @@ class WorkerSupervisor:
         env.update(self._tokens.worker_env(f"worker:{service}"))
         env["NOX_HUB_URL"] = self._hub_url()
         env["NOX_DATA_DIR"] = str(self._data_dir)  # the model files live below it
+        env.update(parent_env())  # off Windows, the worker ends itself when the core is gone
         command = [*self._command, "--service", service]
         try:
             process = subprocess.Popen(  # noqa: S603 - fixed argv, never a shell

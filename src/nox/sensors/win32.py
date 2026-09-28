@@ -1,36 +1,33 @@
-"""Thin Win32 probe layer: foreground window/process and system idle time.
+"""The Windows `DesktopProbe`: foreground window/process and system idle time via user32.
 
-`ForegroundInfo` is the raw signal (title, process name, pid) - never persisted itself, only fed to
-`PrivacyService.match_zone`/`observe_foreground` and the sensor's own change-detection.
-`Win32Probe` is a `Protocol` so every sensor takes one by dependency injection; tests use a plain
-fake object, never the real ctypes calls. `RealWin32Probe` is the only place in this package that
-touches `ctypes.windll` - per the project standards this repo targets Windows 11 with normal user
-rights, so no elevation is ever requested: a missing/failing Win32 call degrades to an empty/zero
-reading rather than raising.
+`RealWin32Probe` is the only place in this package that touches `ctypes.windll`. It runs with
+normal user rights - no elevation is ever requested - and a failing Win32 call degrades to an
+empty/zero reading rather than raising. The shared types live in `nox.sensors.probe`; `Win32Probe`
+is kept as that protocol's former name.
 """
 
 from __future__ import annotations
 
 import ctypes
 import sys
-from typing import NamedTuple, Protocol
+from typing import Any
 
+from nox.sensors.probe import DesktopProbe, ForegroundInfo
 
-class ForegroundInfo(NamedTuple):
-    title: str
-    process_name: str
-    pid: int
-
-
-class Win32Probe(Protocol):
-    def foreground(self) -> ForegroundInfo: ...
-    def idle_seconds(self) -> float: ...
+#: Former name of `DesktopProbe`, from when Windows was the only platform with a probe.
+Win32Probe = DesktopProbe
 
 
 class RealWin32Probe:
     """`user32.GetForegroundWindow`/`GetWindowTextW`/`GetWindowThreadProcessId` for the active
     window, `user32.GetLastInputInfo` for idle time. Windows-only; constructing this on another
     platform raises immediately so the mistake is loud rather than a silent no-op sensor."""
+
+    # Declared here because the assignments below are unreachable for a type checker running on
+    # another platform, which would otherwise leave these attributes without a type.
+    _user32: Any
+    _kernel32: Any
+    _LastInputInfo: type[ctypes.Structure]
 
     def __init__(self) -> None:
         if sys.platform != "win32":

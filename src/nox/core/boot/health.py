@@ -18,6 +18,8 @@ from nox.core.events import HealthStatus
 from nox.core.health import Check
 from nox.data.db import Database
 from nox.ipc.tokens import TokenStore
+from nox.security.model import SecretStore
+from nox.security.secrets import PIN_SECRET_NAME, SecretStoreUnavailableError
 
 __all__ = ["core_health_checks"]
 
@@ -34,6 +36,7 @@ def core_health_checks(
     voice_enabled: bool,
     tokens: Callable[[], TokenStore | None],
     providers: Callable[[], list[AiProvider]],
+    secrets: Callable[[], SecretStore | None] = lambda: None,
 ) -> list[Check]:
     """Build the core's checks. Everything is read through a callable, because the components are
     built in order and a check may be created before the thing it asks about exists."""
@@ -79,11 +82,24 @@ def core_health_checks(
             return HealthStatus.AVAILABLE, "owner-only"
         return HealthStatus.LIMITED, "could not restrict the token file to this account"
 
+    async def secrets_check() -> tuple[HealthStatus, str]:
+        # One read of a known entry answers "can Nox reach the credential store at all". The value
+        # never leaves this function; only whether the read worked does.
+        store = secrets()
+        if store is None:
+            return HealthStatus.UNAVAILABLE, "not built"
+        try:
+            await asyncio.to_thread(store.get, PIN_SECRET_NAME)
+        except SecretStoreUnavailableError as exc:
+            return HealthStatus.UNAVAILABLE, str(exc)
+        return HealthStatus.AVAILABLE, "ok"
+
     checks = [
         Check("db", db_check),
         Check("vault", vault_check),
         Check("voice", voice_check),
         Check("tokens", tokens_check),
+        Check("secrets", secrets_check),
     ]
     for provider in providers():
 

@@ -16,6 +16,8 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict
 
+from nox.paths import APP_DIR_ENV, app_dir
+
 __all__ = [
     "ConfigError",
     "ConfigWarning",
@@ -65,10 +67,10 @@ class StrictSection(BaseModel):
 
 _VAR = re.compile(r"\$\{(\w+)\}|\$(\w+)|%(\w+)%")
 
-#: Windows locations that a non-Windows run - a test box, a contributor's machine - has no
-#: environment variable for. Substituting them keeps the shipped defaults loadable everywhere. Any
-#: other unresolved variable is an error, because guessing would put user data somewhere nobody
-#: asked for.
+#: Windows locations that a non-Windows run has no environment variable for. The shipped defaults
+#: use `${NOX_APP_DIR}` (resolved per platform below) and no longer need these; they remain so a
+#: `user.yaml` written on Windows still loads elsewhere. Any other unresolved variable is an error,
+#: because guessing would put user data somewhere nobody asked for.
 _FALLBACKS: dict[str, Path] = {
     "APPDATA": Path.home() / "AppData" / "Roaming",
     "LOCALAPPDATA": Path.home() / "AppData" / "Local",
@@ -90,6 +92,8 @@ def expand_path(value: str) -> Path:
         from_environment = os.environ.get(name)
         if from_environment:
             return from_environment
+        if name == APP_DIR_ENV:
+            return str(app_dir())
         fallback = _FALLBACKS.get(name.upper())
         if fallback is not None:
             return str(fallback)

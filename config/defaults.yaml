@@ -18,14 +18,16 @@ identity:
 paths:
   # Everything Nox stores lives below data_dir: vault, index, database, cache, backups, runtime
   # tokens and logs. Moving this one key moves all of them.
-  data_dir: "${APPDATA}/Nox"
+  data_dir: "${NOX_APP_DIR}"
   # vault_dir / index_dir / database_dir / cache_dir / backups_dir / logs_dir each default to
   # <data_dir>/<name>. Set one here only to move that one somewhere else.
-  runtime_dir: "${APPDATA}/Nox/runtime"
+  runtime_dir: "${NOX_APP_DIR}/runtime"
   # runtime_dir stays here on purpose: the desktop shell and the pet window look for the session
   # token and the port file before they have read any configuration. It holds no data of yours -
   # both files are recreated on every start.
-  # ${VAR}, $VAR, %VAR% and ~ are expanded when the configuration is read.
+  # ${VAR}, $VAR, %VAR% and ~ are expanded when the configuration is read. ${NOX_APP_DIR} is the
+  # per-user application folder: %APPDATA%\Nox on Windows, ~/Library/Application Support/Nox on
+  # macOS, $XDG_DATA_HOME/nox (~/.local/share/nox) on Linux. Setting NOX_APP_DIR moves it.
 
 security:
   # companion | coding | stream | research | work | offline | rocket_league
@@ -80,7 +82,7 @@ ipc:
   port: 47800                    # WebSocket hub
   http_port: 47801               # static UI (pet renderer, dashboard) and health endpoint
   schema_version: 1
-  auth: token                    # per-start session tokens issued by core, stored under %APPDATA%/Nox/runtime
+  auth: token                    # per-start session tokens issued by core, stored under <runtime_dir>
 
 voice:
   models_dir: ""                 # root for piper/kokoro/openwakeword model files;

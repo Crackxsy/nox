@@ -6,14 +6,18 @@ readme = "README.md"
 requires-python = ">=3.13"
 license = "Apache-2.0"
 authors = [{ name = "Nox Project" }]
-keywords = ["desktop-pet", "voice-assistant", "local-first", "privacy", "windows"]
+keywords = ["desktop-pet", "voice-assistant", "local-first", "privacy", "windows", "macos", "linux"]
 classifiers = [
     # No "License ::" trove classifier: PEP 639's SPDX `license` string above is authoritative
     # and current packaging guidance says not to duplicate it as a classifier.
     "Development Status :: 3 - Alpha",
     "Environment :: Win32 (MS Windows)",
+    "Environment :: MacOS X",
+    "Environment :: X11 Applications :: Qt",
     "Intended Audience :: End Users/Desktop",
     "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13",
     "Topic :: Desktop Environment",

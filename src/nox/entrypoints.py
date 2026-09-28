@@ -30,6 +30,7 @@ from nox.app import NoxCore
 from nox.core.config import ConfigError, NoxConfig, load_config
 from nox.core.events import HealthStatus
 from nox.core.logging import get_logger
+from nox.core.parent_watch import bind_to_parent
 from nox.core.state import PrivacyMode
 from nox.paths import PROFILES_DIR, REPO_ROOT, resolve_config_paths
 from nox.security.egress import EgressGuard
@@ -114,6 +115,7 @@ async def run_core(
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)  # noqa: T201 - there is no logger yet
         return 2
+    bind_to_parent()  # a core the supervisor spawned stops when the supervisor is gone
     return await _run(NoxCore(config, voice=voice))
 
 

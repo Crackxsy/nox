@@ -31,3 +31,25 @@ def test_pet_windows_share_the_same_profile(qapp: Any) -> None:
     assert w1.view.page().profile() is w2.view.page().profile()
     assert w1.view.page().profile() is _pet_profile()
     assert w1.view.settings().testAttribute(QWebEngineSettings.WebAttribute.ShowScrollBars) is False
+
+
+def test_click_through_works_off_windows_through_the_qt_input_flag(
+    qapp: Any, monkeypatch: Any
+) -> None:
+    """On macOS and Linux the pet lets clicks through via Qt, instead of reporting "unsupported"."""
+    from PySide6.QtCore import Qt
+
+    import nox.shell.pet_window as pet_window
+
+    monkeypatch.setattr(pet_window.sys, "platform", "linux")
+    window = PetWindow(ShellState())
+    window.show()
+
+    assert window.set_click_through(True) is True
+    assert window.click_through is True
+    assert window.windowFlags() & Qt.WindowType.WindowTransparentForInput
+    assert window.isVisible()  # re-creating the native window must not hide the pet
+
+    assert window.set_click_through(False) is False
+    assert not window.windowFlags() & Qt.WindowType.WindowTransparentForInput
+    window.close()

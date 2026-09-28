@@ -53,7 +53,7 @@ class IdentityConfig(StrictSection):
 # ---- paths --------------------------------------------------------------------------------------
 
 #: Where an installation keeps everything unless the user moves it.
-DEFAULT_DATA_DIR = "${APPDATA}/Nox"
+DEFAULT_DATA_DIR = "${NOX_APP_DIR}"
 
 #: Every directory below `data_dir` and the sub-directory it gets. Setting one of these keys
 #: explicitly moves just that one; setting `data_dir` moves all of them, which is what the
@@ -78,7 +78,7 @@ DATA_SUBDIRECTORIES: Mapping[str, str] = {
 #: It holds no user data - a per-start token and a port file, both recreated on every boot - so
 #: keeping it in the fixed application-data location costs nothing and removes the disagreement.
 #: Set `paths.runtime_dir` explicitly to move it anyway.
-DEFAULT_RUNTIME_DIR = "${APPDATA}/Nox/runtime"
+DEFAULT_RUNTIME_DIR = "${NOX_APP_DIR}/runtime"
 
 
 class PathsConfig(StrictSection):

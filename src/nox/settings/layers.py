@@ -24,6 +24,7 @@ from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
 from nox.core.config import NoxConfig, load_config
+from nox.paths import USER_CONFIG_FILENAME, app_dir, user_config_path
 
 #: `<repo>/config/defaults.yaml` - resolved from this module, not from the working directory, so
 #: a plugin worker or a test with a different cwd finds the same file the core uses.
@@ -47,9 +48,15 @@ class UserConfigError(ValueError):
 
 
 def default_user_config_path(appdata: Path | str | None = None) -> Path:
-    """`%APPDATA%\\Nox\\user.yaml` - the same default `nox.app.build_config` falls back to."""
-    base = Path(appdata) if appdata is not None else Path(os.environ["APPDATA"])
-    return base / "Nox" / "user.yaml"
+    """`<app_dir>/user.yaml` - the same default `nox.app.build_config` falls back to.
+
+    `appdata` names the parent of a Windows-style `Nox` folder explicitly
+    (`<appdata>/Nox/user.yaml`); without it the platform's application directory from
+    `nox.paths.app_dir` is used.
+    """
+    if appdata is not None:
+        return Path(appdata) / "Nox" / USER_CONFIG_FILENAME
+    return app_dir() / USER_CONFIG_FILENAME
 
 
 def resolve_defaults_path() -> Path:
@@ -58,17 +65,12 @@ def resolve_defaults_path() -> Path:
 
 
 def resolve_user_config_path() -> Path:
-    """Where `config.set` writes: `NOX_USER_CONFIG` if set, else `%APPDATA%\\Nox\\user.yaml`.
+    """Where `config.set` writes: `NOX_USER_CONFIG` if set, else `<app_dir>/user.yaml`.
 
     Unlike `nox.app.build_config` this returns the path even when the file does not exist yet -
     the point of a writer is to create it.
     """
-    env_user = os.environ.get("NOX_USER_CONFIG")
-    if env_user:
-        return Path(env_user)
-    appdata = os.environ.get("APPDATA")
-    base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
-    return base / "Nox" / "user.yaml"
+    return user_config_path()
 
 
 def deep_merge(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]:

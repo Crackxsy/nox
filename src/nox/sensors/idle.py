@@ -1,5 +1,5 @@
-"""Idle/away sensor: two-stage away detection (~10/20 min) from `Win32Probe.idle_seconds` (Windows'
-own last-input timestamp - never keystroke/clipboard content). Updates `user.present`,
+"""Idle/away sensor: two-stage away detection (~10/20 min) from `DesktopProbe.idle_seconds` (the
+system's own last-input timestamp - never keystroke/clipboard content). Updates `user.present`,
 `user.last_input_at` and, only while transitioning into/out of an idle/away stage, `user.activity`
 - it saves whatever activity value was live before going idle and restores exactly that on resume,
 so it never clobbers a value another sensor/service set (e.g. "coding", "playing") while the user
@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 from nox.core.state import StateManager
 from nox.sensors.history import SensorHistoryStore
-from nox.sensors.win32 import Win32Probe
+from nox.sensors.probe import DesktopProbe
 from nox.util.aio import poll_loop
 
 Stage = str  # "active" | "idle" | "away"
@@ -23,7 +23,7 @@ Stage = str  # "active" | "idle" | "away"
 class IdleSensor:
     def __init__(
         self,
-        probe: Win32Probe,
+        probe: DesktopProbe,
         state: StateManager,
         *,
         history: SensorHistoryStore | None = None,
@@ -77,7 +77,8 @@ class IdleSensor:
     async def poll(self) -> Stage:
         if self._safe_mode():
             return self._stage
-        idle_s = max(0.0, self._probe.idle_seconds())
+        # Off the loop: on Linux and macOS the probe runs an external tool.
+        idle_s = max(0.0, await asyncio.to_thread(self._probe.idle_seconds))
         now = self._clock()
         stage: Stage = "active"
         if idle_s >= self._away_after_s:

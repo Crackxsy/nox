@@ -56,7 +56,11 @@ def restrict_to_owner(path: Path) -> bool:
     (logged as a warning; the caller reports the token file as degraded in that case).
     """
     if sys.platform != "win32":
-        os.chmod(path, 0o600)
+        try:
+            os.chmod(path, 0o600)
+        except OSError as exc:  # e.g. a file system without POSIX permissions
+            log.warning("token_acl_failed", error=str(exc))
+            return False
         return True
     user = os.environ.get("USERNAME")
     if not user:

@@ -244,7 +244,7 @@ class RlConfig(StrictSection):
 
 #: Standalone default for the clip roots. `NoxConfig` re-derives them from the real
 #: `paths.data_dir` whenever the user has not set them explicitly.
-DEFAULT_CLIPS_ROOT = "${APPDATA}/Nox/data/clips"
+DEFAULT_CLIPS_ROOT = "${NOX_APP_DIR}/data/clips"
 
 #: Clip root -> sub-directory of `<paths.data_dir>/data/clips`.
 CLIP_ROOTS: dict[str, str] = {

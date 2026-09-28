@@ -30,18 +30,19 @@ def test_models_root_follows_the_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert engine_models_dir("openwakeword") == tmp_path / "data" / "models" / "openwakeword"
 
 
-def test_models_root_falls_back_to_appdata(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_models_root_falls_back_to_the_app_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.delenv("NOX_DATA_DIR", raising=False)
-    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setenv("NOX_APP_DIR", str(tmp_path / "Nox"))
     assert default_models_root() == tmp_path / "Nox" / "models"
 
 
 def test_no_absolute_machine_path_is_baked_in(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression guard for the public repository: no developer path in the defaults."""
     monkeypatch.delenv("NOX_DATA_DIR", raising=False)
-    monkeypatch.setenv("APPDATA", r"C:\Users\someone\AppData\Roaming")
-    assert "Nox" in str(default_models_root())
-    assert str(default_models_root()).startswith(r"C:\Users\someone")
+    monkeypatch.delenv("NOX_APP_DIR", raising=False)
+    assert str(default_models_root()).startswith(str(Path.home()))
 
 
 def test_missing_files_lists_what_is_absent(tmp_path: Path) -> None:

@@ -18,6 +18,7 @@ repairs anything; the composition root turns a failure into safe mode.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -82,6 +83,7 @@ class SecurityContext:
         *,
         conn: sqlite3.Connection,
         profiles_dir: Path,
+        db_lock: threading.RLock | None = None,
         bus: EventBus | None = None,
         secret_store: SecretStore | None = None,
         grants: GrantStore | None = None,
@@ -92,7 +94,7 @@ class SecurityContext:
         security = config.security
         hard = effective_hard_prohibitions(security.hard_prohibitions)
 
-        audit_store = SqliteAuditLog(conn, bus=bus, clock=clock)
+        audit_store = SqliteAuditLog(conn, bus=bus, clock=clock, lock=db_lock)
         audit = QueuedAuditLog(audit_store)
 
         # The privacy service needs to know whether the kill switch is engaged, and the kill
@@ -127,7 +129,9 @@ class SecurityContext:
             loopback_allowlist=tuple(security.loopback_allowlist),
         )
         secrets = secret_store if secret_store is not None else KeyringSecretStore()
-        pin = PinManager(secrets, audit=audit, clock=clock, attempts=SqlitePinAttemptStore(conn))
+        pin = PinManager(
+            secrets, audit=audit, clock=clock, attempts=SqlitePinAttemptStore(conn, lock=db_lock)
+        )
         gate = SecurityChangeGate(
             pin, required=security.pin_required_for_security_changes, audit=audit
         )
@@ -136,7 +140,7 @@ class SecurityContext:
             profile=engine.active_profile().id,
             privacy=privacy.mode.value,
             hard_prohibitions=len(hard),
-            pin_gate=gate.is_required(),
+            pin_gate=gate.describe(),
             pin_algorithm=pin.algorithm,
         )
         return cls(
