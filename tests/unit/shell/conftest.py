@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -23,6 +23,10 @@ def qapp() -> Iterator[Any]:
 class FakeBridge:
     """Implements the IpcClientThread interface; records calls, lets tests push events."""
 
+    #: Copied into every new bridge's `responses` (a test that needs the answer to exist before
+    #: the shell creates its bridge sets it here, through `monkeypatch`).
+    default_responses: ClassVar[dict[str, Any]] = {}
+
     def __init__(self, url: str, token: str, role: str, client_id: str) -> None:
         self.url, self.token, self.role, self.client_id = url, token, role, client_id
         self.started = False
@@ -30,6 +34,8 @@ class FakeBridge:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self._callbacks: list[Callable[[dict[str, Any]], None]] = []
         self.fail_calls = False
+        #: What a request answers with, by name; `{"ok": True}` for anything not listed.
+        self.responses: dict[str, Any] = dict(FakeBridge.default_responses)
 
     def start(self) -> None:
         self.started = True
@@ -43,7 +49,7 @@ class FakeBridge:
         if self.fail_calls:
             fut.set_exception(ConnectionError("down"))
         else:
-            fut.set_result({"ok": True})
+            fut.set_result(self.responses.get(name, {"ok": True}))
         return fut
 
     def on_event(self, callback: Callable[[dict[str, Any]], None]) -> None:

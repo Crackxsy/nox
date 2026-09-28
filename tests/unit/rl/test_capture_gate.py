@@ -30,10 +30,12 @@ class FakeCapture:
         return "frame"
 
 
-def test_starts_allowed_matching_stage_2s_existing_default() -> None:
+def test_starts_closed_until_the_core_state_opens_it() -> None:
+    """Events only carry changes, so a gate that started open would grab frames while a zone or
+    `privacy.capture.screen: false` set before the plugin connected is still in force."""
     gate = CaptureGate()
-    assert gate.allowed is True
-    assert gate.reason == ""
+    assert gate.allowed is False
+    assert gate.reason == "privacy.capture.screen_off"
 
 
 async def test_gate_closed_capture_function_never_called() -> None:
@@ -60,7 +62,7 @@ async def test_reopen_resumes_capture() -> None:
 
 
 async def test_open_gate_still_captures() -> None:
-    gate = CaptureGate()
+    gate = CaptureGate(initially_allowed=True)
     capture = FakeCapture()
 
     result = await gate.maybe_capture(capture)
@@ -71,7 +73,7 @@ async def test_open_gate_still_captures() -> None:
 
 def test_transitions_logged_once_pause_then_resume() -> None:
     log = FakeLog()
-    gate = CaptureGate(log=log)
+    gate = CaptureGate(initially_allowed=True, log=log)
 
     gate.on_capture_changed({"screen": False})
     gate.on_capture_changed({"screen": False})  # repeat: no new transition
@@ -88,7 +90,7 @@ def test_transitions_logged_once_pause_then_resume() -> None:
 
 def test_pause_reason_is_logged() -> None:
     log = FakeLog()
-    gate = CaptureGate(log=log)
+    gate = CaptureGate(initially_allowed=True, log=log)
     gate.on_capture_changed({"screen": False})
 
     assert gate.reason
@@ -97,7 +99,7 @@ def test_pause_reason_is_logged() -> None:
 
 def test_pause_reason_names_the_active_zone_when_known() -> None:
     log = FakeLog()
-    gate = CaptureGate(log=log)
+    gate = CaptureGate(initially_allowed=True, log=log)
     gate.on_zone_changed({"active": True, "zone": "banking"})
 
     gate.on_capture_changed({"screen": False})
@@ -150,13 +152,11 @@ def test_defaults_paused_when_constructed_closed() -> None:
     assert gate.reason == "privacy.capture.screen_off"
 
 
-def test_missing_screen_key_defaults_to_allowed() -> None:
-    """`payload.get("screen", True)`: a payload missing `screen` entirely (shouldn't happen for a
-    real `CaptureChanged`, but keeps this gate defensive like `nox.rl.vision`'s event handlers)
-    never surprises a caller by silently pausing."""
-    gate = CaptureGate(initially_allowed=False)
+def test_missing_screen_key_closes_the_gate() -> None:
+    """A payload without `screen` says nothing about the screen being allowed, so it closes."""
+    gate = CaptureGate(initially_allowed=True)
     gate.on_capture_changed({})
-    assert gate.allowed is True
+    assert gate.allowed is False
 
 
 def test_a_latched_gate_stays_closed_until_it_is_resumed() -> None:

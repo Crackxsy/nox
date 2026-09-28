@@ -15,7 +15,8 @@ from typing import Any
 
 import pytest
 
-from nox.plugins.api import PluginApi
+from nox.core.state import PrivacyMode
+from nox.plugins.api import PluginApi, PrivacyView
 from nox.plugins.manifest import load_manifest
 
 from .fake_telegram import BOT_TOKEN, FakeTelegram
@@ -63,6 +64,9 @@ def make_api(client: FakeClient, telegram: FakeTelegram, **config_overrides: Any
         manifest=manifest,
         client=client,
         config=config,
+        # What the core reports at registration in the default configuration; a bare view is
+        # closed (OFFLINE) until a core has said otherwise.
+        privacy=PrivacyView(PrivacyMode.BALANCED),
         transport_factory=telegram.transport,
     )
 

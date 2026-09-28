@@ -85,6 +85,13 @@ Switching to a *more* private mode (e.g. FULL → PRIVATE) is always immediate, 
 Switching back toward FULL always asks you to confirm first — Nox never silently becomes less
 private.
 
+The mode you choose (and panic, which forces OFFLINE) is saved in Nox's database the moment it
+changes and restored when Nox starts again - after a crash or a restart by the watchdog Nox comes
+back in the mode it was in, not in the one from your configuration. If that saved state cannot
+be read, Nox uses the stricter of the saved and the configured mode and starts in safe mode. Every
+background part of Nox (the voice worker, each plugin) is told the current mode and capture
+settings when it connects, so none of them starts out assuming more than you allowed.
+
 ## Privacy zones
 
 You can mark apps/windows (by process name or title pattern) as zones Nox should never look at —

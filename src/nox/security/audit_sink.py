@@ -11,13 +11,20 @@ is an audit log with holes in it.
 write break the caller" wrappers that had grown in the permission engine, the privacy service, the
 kill switch and the PIN manager. It keeps the real keyword signature, so the two `type: ignore`
 comments those wrappers needed are gone.
+
+Best effort is right for a *record* - a decision, a denial, an outcome. It is wrong for the entry
+that authorises a side effect: an action that cannot be audited must not happen. `append_durably`
+is that path. It waits (without blocking the event loop) until the row is committed and raises
+`AuditUnavailableError` when it was not; the caller refuses the action.
 """
 
 from __future__ import annotations
 
+import asyncio
 import queue
 import threading
 import time
+from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass
 
 from nox.security._logging import get_logger
@@ -25,7 +32,7 @@ from nox.security.model import AuditLog
 
 log = get_logger(__name__)
 
-__all__ = ["QueuedAuditLog", "SafeAuditLog"]
+__all__ = ["AuditUnavailableError", "QueuedAuditLog", "SafeAuditLog", "append_durably"]
 
 #: Entries the queue holds before a writer starts paying for its own entries inline. About one
 #: second of a very busy permission path; past that, back-pressure is more honest than a backlog.
@@ -35,9 +42,13 @@ DEFAULT_QUEUE_SIZE = 2048
 DEFAULT_DRAIN_TIMEOUT_S = 5.0
 
 
+class AuditUnavailableError(RuntimeError):
+    """The entry that would authorise a side effect could not be written; refuse the action."""
+
+
 @dataclass(frozen=True, slots=True)
 class _Entry:
-    """One queued `AuditLog.append` call."""
+    """One queued `AuditLog.append` call; `done` is set when the caller waits for the commit."""
 
     actor: str
     tool: str
@@ -47,6 +58,7 @@ class _Entry:
     result: str
     task_id: str | None
     details: dict[str, str] | None
+    done: Future[int] | None = None
 
 
 class QueuedAuditLog:
@@ -110,6 +122,50 @@ class QueuedAuditLog:
     def verify_chain(self) -> bool:
         return self._inner.verify_chain()
 
+    async def append_durable(
+        self,
+        *,
+        actor: str,
+        tool: str,
+        action: str,
+        target: str,
+        decision: str,
+        result: str,
+        task_id: str | None = None,
+        details: dict[str, str] | None = None,
+    ) -> int:
+        """Append through the queue and wait until the row is committed.
+
+        The entry keeps its place in the queue, so the chain order is the order of the calls.
+        Raises `AuditUnavailableError` when the write failed, the writer is gone or the row did
+        not land within the drain timeout.
+        """
+        done: Future[int] = Future()
+        entry = _Entry(
+            actor=actor,
+            tool=tool,
+            action=action,
+            target=target,
+            decision=decision,
+            result=result,
+            task_id=task_id,
+            details=details,
+            done=done,
+        )
+        if self._stopped.is_set() or not self._thread.is_alive():
+            await asyncio.to_thread(self._write, entry)
+        else:
+            try:
+                self._queue.put_nowait(entry)
+            except queue.Full:
+                log.warning("audit.queue_full", action=action, note="writing inline")
+                await asyncio.to_thread(self._write, entry)
+        try:
+            return await asyncio.wait_for(asyncio.wrap_future(done), self._drain_timeout_s)
+        except TimeoutError as exc:
+            message = f"audit entry for {action!r} was not written in time"
+            raise AuditUnavailableError(message) from exc
+
     def flush(self, timeout_s: float | None = None) -> bool:
         """Block until the backlog is written. False when it was still draining."""
         deadline = timeout_s if timeout_s is not None else self._drain_timeout_s
@@ -141,7 +197,7 @@ class QueuedAuditLog:
 
     def _write(self, entry: _Entry) -> int:
         try:
-            return self._inner.append(
+            seq = self._inner.append(
                 actor=entry.actor,
                 tool=entry.tool,
                 action=entry.action,
@@ -155,7 +211,70 @@ class QueuedAuditLog:
             log.error(
                 "audit.write_failed", action=entry.action, error=f"{type(exc).__name__}: {exc}"
             )
+            _settle(
+                entry.done,
+                error=AuditUnavailableError(f"audit write failed: {type(exc).__name__}: {exc}"),
+            )
             return 0
+        _settle(entry.done, seq=seq)
+        return seq
+
+
+def _settle(done: Future[int] | None, *, seq: int = 0, error: Exception | None = None) -> None:
+    """Resolve a waiting caller's future; one that already gave up (timed out) is left alone."""
+    if done is None:
+        return
+    try:
+        if error is not None:
+            done.set_exception(error)
+        else:
+            done.set_result(seq)
+    except InvalidStateError:
+        log.debug("audit.waiter_gone")
+
+
+async def append_durably(
+    audit: AuditLog,
+    *,
+    actor: str,
+    tool: str,
+    action: str,
+    target: str,
+    decision: str,
+    result: str,
+    task_id: str | None = None,
+    details: dict[str, str] | None = None,
+) -> int:
+    """Write the entry that authorises a side effect, or raise `AuditUnavailableError`.
+
+    A queued log waits for its writer thread; any other log is written directly (in tests, and in
+    tools that have no queue), where a raising `append` is the failure.
+    """
+    if isinstance(audit, QueuedAuditLog):
+        return await audit.append_durable(
+            actor=actor,
+            tool=tool,
+            action=action,
+            target=target,
+            decision=decision,
+            result=result,
+            task_id=task_id,
+            details=details,
+        )
+    try:
+        return audit.append(
+            actor=actor,
+            tool=tool,
+            action=action,
+            target=target,
+            decision=decision,
+            result=result,
+            task_id=task_id,
+            details=details,
+        )
+    except Exception as exc:  # noqa: BLE001 - every failure means the same: not audited
+        log.error("audit.write_failed", action=action, error=f"{type(exc).__name__}: {exc}")
+        raise AuditUnavailableError(f"audit write failed: {type(exc).__name__}: {exc}") from exc
 
 
 class SafeAuditLog:

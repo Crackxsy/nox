@@ -6,6 +6,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from nox.core.state import PrivacyMode, SystemLevel
+from nox.shell.logic import TrayTint, tray_tint
+from tests.unit.shell.conftest import FakeBridge
 from tests.unit.shell.test_app import make_app, make_runtime
 
 
@@ -100,3 +105,27 @@ def test_pet_page_is_reloaded_when_the_session_token_changed(
     assert len(loads) == 2
     app._ping_timer.stop()
     app._reconnect_timer.stop()
+
+
+def test_safe_mode_and_privacy_set_before_the_shell_connected_reach_the_tray(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Level-triggered: the kill switch (a broken audit chain at boot, a kill restored after a
+    restart) and the privacy mode were set before this shell existed; no event will repeat them."""
+    monkeypatch.setattr(
+        FakeBridge,
+        "default_responses",
+        {"state.get": {"system": {"level": "safe_mode"}, "privacy": {"mode": "offline"}}},
+    )
+    factory, created = fake_bridge_factory
+    app = make_app(make_runtime(tmp_path), factory)
+    app.start()
+    qapp.processEvents()
+    app._ping()
+    qapp.processEvents()
+
+    assert ("state.get", {}) in created[0].calls
+    assert app.model.system_level is SystemLevel.SAFE_MODE
+    assert app.model.privacy_mode is PrivacyMode.OFFLINE
+    assert tray_tint(app.model) is TrayTint.SAFE_MODE
+    app.quit()

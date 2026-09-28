@@ -41,6 +41,7 @@ __all__ = [
     "PinRequiredError",
     "SecurityChangeGate",
     "relaxes_privacy",
+    "strictest_privacy_mode",
 ]
 
 #: Configuration paths whose change is a security change.
@@ -67,6 +68,13 @@ class PinRequiredError(PermissionError):
 def relaxes_privacy(current: PrivacyMode, target: PrivacyMode) -> bool:
     """Whether moving from `current` to `target` gives Nox more freedom than it has now."""
     return _MODE_ORDER.index(target) > _MODE_ORDER.index(current)
+
+
+def strictest_privacy_mode(*modes: PrivacyMode) -> PrivacyMode:
+    """The most protective of `modes`; OFFLINE when none is given (nothing known is strictest)."""
+    if not modes:
+        return PrivacyMode.OFFLINE
+    return min(modes, key=_MODE_ORDER.index)
 
 
 class SecurityChangeGate:

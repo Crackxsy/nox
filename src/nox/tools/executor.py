@@ -6,6 +6,11 @@ name/target -> `PermissionEngine.check()` (deny -> tool error; confirm -> `reque
 and wait, 60 s timeout = deny; allow -> run) -> execution with a timeout and cancellation on
 `security.kill_switch` -> every outcome is audited (actor/tool/action/target/decision/duration,
 never the tool's input or output - those may carry private content).
+
+A tool with side effects is audited *before* it runs as well: its `started` entry has to be
+committed first, and when the audit log cannot take it the call is refused with
+`audit.unavailable` instead of running unrecorded. The outcome entry afterwards is a record, and
+records are best effort - a failure there is logged, never raised into the caller.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from nox.core.events import E, EventBus
 from nox.core.logging import get_logger
+from nox.security.audit_sink import AuditUnavailableError, append_durably
 from nox.security.model import AuditLog, Decision, KillSwitch, PermissionRequest, PermissionResult
 from nox.tools.registry import ToolRegistry, ToolSpec
 
@@ -34,6 +40,7 @@ ERR_PERMISSION_DENIED = "permission.denied"
 ERR_TIMEOUT = "tool.timeout"
 ERR_CANCELLED = "tool.cancelled"
 ERR_FAILED = "tool.error"
+ERR_AUDIT_UNAVAILABLE = "audit.unavailable"
 
 
 class ConfirmingPermissionEngine(Protocol):
@@ -189,6 +196,33 @@ class ToolExecutor:
                 error=ERR_PERMISSION_DENIED,
             )
 
+        if spec.side_effects:
+            try:
+                await append_durably(
+                    self._audit,
+                    actor=agent,
+                    tool=tool,
+                    action=action,
+                    target=target,
+                    decision=Decision.ALLOW.value,
+                    result="started",
+                    task_id=task_id,
+                )
+            except AuditUnavailableError as exc:
+                log.error("tools.call_refused_unaudited", tool=name, error=str(exc))
+                return self._finish(
+                    agent=agent,
+                    tool=tool,
+                    action=action,
+                    target=target,
+                    task_id=task_id,
+                    decision=Decision.DENY,
+                    started=started,
+                    result="refused",
+                    ok=False,
+                    error=ERR_AUDIT_UNAVAILABLE,
+                )
+
         try:
             data = await self._run(spec, payload)
         except ToolCancelledError:
@@ -297,16 +331,25 @@ class ToolExecutor:
         data: dict[str, Any] | None = None,
     ) -> ToolResult:
         duration_ms = (self._clock() - started) * 1000
-        self._audit.append(
-            actor=agent,
-            tool=tool,
-            action=action,
-            target=target,
-            decision=decision.value,
-            result=result,
-            task_id=task_id,
-            details={"duration_ms": f"{duration_ms:.1f}"},
-        )
+        try:
+            self._audit.append(
+                actor=agent,
+                tool=tool,
+                action=action,
+                target=target,
+                decision=decision.value,
+                result=result,
+                task_id=task_id,
+                details={"duration_ms": f"{duration_ms:.1f}"},
+            )
+        except Exception as exc:  # noqa: BLE001 - a record is best effort; the result stands
+            log.error(
+                "tools.outcome_audit_failed",
+                tool=tool,
+                action=action,
+                result=result,
+                error=f"{type(exc).__name__}: {exc}",
+            )
         return ToolResult(
             ok=ok, data=data, error=error, decision=decision.value, duration_ms=duration_ms
         )

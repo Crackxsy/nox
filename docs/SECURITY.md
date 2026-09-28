@@ -26,7 +26,7 @@ requests.
 | Stream accidents (wrong scene, leaking screen, stream stopped by mistake) | Hard prohibitions (`stream.stop`, `stream.key.read`); scene switches require confirmation in the stream profile; privacy zones hide windows from capture. |
 | Anti-cheat / game integrity | No input-synthesis, no process injection, no memory reads exist anywhere in the codebase; hard prohibitions; sensors are observation-only. |
 | A runaway or hung AI | Kill switch lives below the AI layer, in the supervisor; panic mode; budget limits. |
-| Tampering with audit or security config | Hash-chain verified at boot; changes to the security core require a PIN; config changes are themselves audited. |
+| Tampering with audit or security config | Hash-chain verified at boot, with the head anchored outside the database so deleted rows or a replaced database are detected too; changes to the security core require a PIN; config changes are themselves audited. |
 | Data loss | Checkpoints; the vault is the source of truth; Nox-written notes can be rolled back. |
 
 **Out of scope**: an attacker with local admin on the machine, physical access, or a compromised
@@ -93,6 +93,20 @@ permission.self_elevate
   or denied, is audited with its origin and whether a security-path PIN was required.
 - **Panic mode** = kill switch + privacy forced to OFFLINE + pet hidden + stream-safe behavior
   (an OBS privacy-scene request in v0.2+). Panic never deletes anything.
+- **Survives a restart**: the privacy mode, panic and the kill switch (engaged, its origin and
+  whether it came from the security path) are written to the database on every change - a move to
+  a stricter mode before it is announced - and restored at boot before anything can act. A core
+  that crashes or is restarted by the watchdog comes back in the same mode and, if the kill switch
+  was engaged, in safe mode; leaving it takes the normal resume path, PIN included after a
+  security-path kill. If the stored state cannot be read, the boot uses the strictest of the
+  stored and the configured privacy mode and starts in safe mode (origin `state`, security path).
+- **Every consumer starts from the current state**: a worker or plugin that registers receives the
+  privacy mode, the effective capture flags and whether the kill switch is engaged, and applies
+  them before it does anything; events only carry changes after that. A plugin whose kill switch
+  is already engaged is not started, and a plugin worker that has not heard from the core yet
+  treats everything as closed (OFFLINE, no capture). The orchestrator, the egress guard (safe mode
+  allows only allow-listed loopback services) and the pet read the kill switch directly instead of
+  mirroring events, so a kill engaged at boot is never lifted by the boot's own `system.started`.
 
 ## Rocket League observation-only boundary
 
@@ -127,10 +141,43 @@ store is back.
 ## Audit logging
 
 Append-only, hash-chained (`prev_hash`/`hash`, SHA-256 over the canonical JSON of each entry plus
-the previous hash) — `verify_chain()` runs at boot and on demand from the dashboard, so tampering
-is detectable, not just discouraged. Logged: every security decision, mode/privacy change,
-kill/panic event, config change, tool execution with side effects, memory deletion, and plugin
-lifecycle event. The audit log itself is designed to never contain secrets or raw private content.
+the previous hash). Logged: every security decision, mode/privacy change, kill/panic event, config
+change, tool execution with side effects, memory deletion, and plugin lifecycle event. The audit
+log itself is designed to never contain secrets or raw private content.
+
+**Complete, not only consistent.** A hash chain shows that the rows it has belong together; it
+cannot show that rows are missing. The boot check therefore also looks backwards:
+
+- **Head anchor outside the database.** The last sequence number and its hash are kept in a small
+  file in the runtime folder (`audit_head-<digest of the database path>.json`, replaced atomically
+  after every row) and in the credential store (`nox/security/audit_head`, written at boot and at
+  shutdown). A database whose head is behind an anchor (rows deleted from the end), a database
+  that is new while an anchor exists (the file was deleted or replaced), or an anchored row that
+  now has another hash is a broken chain. An anchor that exists but cannot be read counts as
+  broken too. No anchor at all is a fresh install and passes. On a machine without a credential
+  store the file anchor is the only one, and the boot log says so
+  (`security.audit_anchor_unavailable`).
+- **Monotonic checkpoint.** Boot verification walks forward from the last verified `(seq, hash)`
+  checkpoint so a long log does not make every start a full scan. The checkpoint only ever moves
+  forward; a head behind it, or a checkpoint row whose hash changed, is a rollback.
+- **A break engages safe mode** (origin `audit`, security path: resuming needs the PIN when one is
+  set), with an `audit.verify` entry that names the reason (`chain`, `truncated`, `deleted`,
+  `rollback`, `rewritten`, `anchor_unreadable`). Neither the checkpoint nor an anchor moves past a
+  break, so every boot finds it again until a person resumes: the resume records an
+  `audit.break_acknowledged` entry and anchors the chain afresh from its current head.
+- **No side effect without a record.** The entry that allows a tool with side effects to run, and
+  the entry for every outbound HTTP request, is committed *before* the action; when the audit log
+  cannot take it (a full disk, a broken database) the tool call is refused with
+  `audit.unavailable` and the request with the egress rule `audit.unavailable`. Records of
+  decisions and outcomes stay best effort: a failure there is logged, never silently dropped.
+
+What this does not cover: the chain is unkeyed, so someone who can rewrite the database, the
+runtime folder and the credential store together - as the same user - can produce a consistent
+forgery; that is inside the "already owns your account" boundary above. The anchor file is not
+flushed to disk on every row (the database is not either), so after a power cut the log can in
+rare cases look truncated; Nox then starts in safe mode once, and the resume acknowledges it.
+Raw-socket connections that plugins open themselves are checked by the plugin's own guard but not
+audited in the core yet.
 
 ## PIN
 

@@ -12,6 +12,11 @@ pet.
 `resume()` needs `pin_ok=True` after a security-path kill - tamper, a broken audit chain, panic.
 After a user-initiated kill (tray, hotkey, UI, dashboard, voice) the explicit request is enough.
 Both outcomes are audited with the origin and whether it was a security-path kill.
+
+The engaged state survives a restart. `restore()` re-engages a switch that was engaged when the
+core went down - without hooks, since nothing is running yet at boot - and every engage and
+resume is handed to the listener set with `set_change_listener`, which persists it. A kill that
+came back after a restart therefore still needs the normal resume path, PIN included.
 """
 
 from __future__ import annotations
@@ -35,6 +40,8 @@ from nox.security.privacy import PrivacyService
 log = get_logger(__name__)
 
 StopHook = Callable[[], Awaitable[None]]
+#: Called after the switch engaged or resumed, with a short reason; persists the new state.
+ChangeListener = Callable[[str], Awaitable[object]]
 Clock = Callable[[], datetime]
 
 __all__ = [
@@ -81,6 +88,45 @@ class KillSwitchService:
         self._origin = ""
         self._reason = ""
         self._security_path = False
+        self._on_change: ChangeListener | None = None
+
+    def set_change_listener(self, listener: ChangeListener) -> None:
+        """Who persists an engage or a resume. Called once, when the security core is wired."""
+        self._on_change = listener
+
+    def restore(self, *, origin: str, reason: str, security_path: bool) -> None:
+        """Boot only: re-engage a kill switch that was engaged before the restart.
+
+        No hooks run and no event is published: nothing that could be stopped exists yet, and
+        every consumer reads the engaged state when it connects. The restore is audited.
+        """
+        self._engaged = True
+        self._engaged_at = self._clock()
+        self._origin = origin
+        self._reason = reason
+        self._security_path = security_path
+        self._audit.append(
+            actor="system",
+            action="kill_switch.restore",
+            details={
+                "origin": origin,
+                "reason": reason,
+                "security_path": str(security_path).lower(),
+            },
+        )
+        log.critical("security.kill_switch_restored", origin=origin, security_path=security_path)
+
+    @property
+    def reason(self) -> str:
+        return self._reason
+
+    async def _changed(self, reason: str) -> None:
+        if self._on_change is None:
+            return
+        try:
+            await self._on_change(reason)
+        except Exception:  # noqa: BLE001 - neither engage nor resume may raise
+            log.exception("security.kill_switch_persist_error")
 
     def register_stop_hook(self, name: str, hook: StopHook) -> Callable[[], None]:
         self._hooks[name] = hook
@@ -141,6 +187,8 @@ class KillSwitchService:
         except Exception as exc:  # noqa: BLE001 - the kill switch must never raise
             failure = f"{type(exc).__name__}: {exc}"
             log.exception("security.kill_switch_publish_error")
+        # Persisted right after the announcement: a crash from here on comes back engaged.
+        await self._changed("kill_switch.engage")
         # Audited before the hooks run, and unconditionally: a kill that happened must be in the
         # log even when a stop hook then fails. Previously the audit sat after the hooks inside
         # the same `try`, so a failure anywhere above it cost the record entirely.
@@ -221,6 +269,7 @@ class KillSwitchService:
         self._origin = ""
         self._reason = ""
         self._security_path = False
+        await self._changed("kill_switch.resume")
         try:
             if self._privacy is not None:
                 await self._privacy.set_panic(False, by=by)
