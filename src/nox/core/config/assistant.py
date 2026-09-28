@@ -37,13 +37,19 @@ __all__ = [
 
 
 class SttConfig(StrictSection):
-    engine: str = "faster-whisper"
+    #: `engine` (faster-whisper is the only one) and `vad` (always on) were never read.
+    RETIRED_KEYS = frozenset({"engine", "vad"})
+
+    #: faster-whisper model, loaded from `<models_dir>/faster-whisper/<model>` only; fetch it
+    #: once with `python -m nox.worker --download-whisper`. Nothing is downloaded on its own.
     model: str = "small"
     device: str = "cpu"
     language: str = "auto"
-    vad: bool = True
     wake_word: str = "Nox"
     push_to_talk_hotkey: str = "ctrl+alt+space"
+    #: Push-to-talk ends on its own after this long, so a key release the shell never saw (the
+    #: screen locked while the combo was held) cannot leave the microphone open.
+    push_to_talk_max_hold_s: float = Field(default=60.0, ge=5.0, le=600.0)
     #: `ptt_only` (the default) opens the microphone only while push-to-talk is held: nothing is
     #: captured, let alone transcribed, unless the user asks for it. `continuous` keeps the
     #: microphone open behind the wake-word gate, which costs CPU and needs a wake-word model to be
@@ -64,14 +70,21 @@ class SttConfig(StrictSection):
     #: still transcribed, checked for the kill phrase and then discarded, never reported.
     kill_phrase_watchdog: bool = True
     kill_watchdog_max_ms: int = Field(default=2500, ge=0)
+    #: Continuous listening without echo cancellation: while Nox is audible, speech only counts
+    #: as the user (barge-in, transcription) when it is `half_duplex_margin_db` louder than the
+    #: playback. Off, Nox's own voice from speakers interrupts it; health says so either way.
+    half_duplex: bool = True
+    half_duplex_margin_db: float = Field(default=0.0, ge=-30.0, le=30.0)
 
 
 class TtsConfig(StrictSection):
+    #: `streaming` was never read: synthesis always streams sentence by sentence.
+    RETIRED_KEYS = frozenset({"streaming"})
+
     engine: Literal["piper", "kokoro"] = "piper"
     voice: str = ""
     rate: float = Field(default=1.0, gt=0.0, le=4.0)
     volume: float = Field(default=0.8, ge=0.0, le=1.0)
-    streaming: bool = True
 
 
 class VoiceChannelsConfig(StrictSection):
@@ -146,12 +159,13 @@ class AiConfig(StrictSection):
 
 
 class PetConfig(StrictSection):
+    #: Never read: the pet window is always on top, click-through is the tray's toggle, the
+    #: renderer paces itself, and a pet with no usable saved position starts on the primary screen.
+    RETIRED_KEYS = frozenset(
+        {"default_monitor", "always_on_top", "click_through_when_idle", "fps_target", "fps_in_game"}
+    )
+
     renderer: Literal["web"] = "web"
-    default_monitor: str = "left"
-    always_on_top: bool = True
-    click_through_when_idle: bool = False
-    fps_target: int = Field(default=60, ge=1, le=240)
-    fps_in_game: int = Field(default=20, ge=1, le=240)
     greeting_enabled: bool = True
     #: Block unsolicited speech - the greeting and proactive hints, never a reply to the user -
     #: while privacy mode is private or offline: the pet stays silent and just shows it is ready.

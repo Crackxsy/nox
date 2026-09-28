@@ -241,7 +241,9 @@ def test_hotkeys_map_to_requests(qapp: Any, tmp_path: Path, fake_bridge_factory:
     app.apply_hotkey(HotkeyAction.MUTE, False)  # release ignored
     app.apply_hotkey(HotkeyAction.PRIVACY, True)
     app.apply_hotkey(HotkeyAction.TOGGLE_PET, True)
-    reqs = [c for c in created[0].calls if c[0] not in ("ipc.subscribe", "ipc.ping")]
+    reqs = [
+        c for c in created[0].calls if c[0] not in ("ipc.subscribe", "ipc.ping", "privacy.status")
+    ]
     assert reqs == [
         ("voice.ptt", {"pressed": True}),
         ("voice.ptt", {"pressed": False}),

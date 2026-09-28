@@ -66,7 +66,11 @@ time to change these answers.
   - the dashboard,
   - the pet's own menu,
   - the spoken phrase **"Nox, Notaus"** (matched locally by the voice worker, never routed through
-    the AI).
+    the AI). Say it on its own - "Nox, äh, Notaus!" works, "sag einfach Nox Notaus" or a question
+    about the Notaus button does not. With the default `ptt_only` listening mode the microphone is
+    only open while push-to-talk is held, so hold it while you say the phrase; while a privacy
+    zone is in front the microphone is off and only the hotkey works. Nox quoting the phrase in
+    its own reply never triggers it.
   A kill you triggered yourself resumes with a normal click/hotkey. A kill the security layer
   triggered on its own (tamper detection, a broken audit chain, panic mode) requires your PIN to
   resume — this is deliberate, not a bug.
@@ -81,7 +85,11 @@ does.
 **Privacy zones** are apps/windows Nox is configured to never look at (banking, password
 managers, email, private chats, personal documents, Discord by default) — while one is in the
 foreground, capture, screenshots, clipboard reads and memory writes about it are all off, and the
-pet shows a `privacy` state.
+pet shows a `privacy` state. The built-in title patterns match whole words and known app or bank
+names ("Meine Bank", "Online-Banking", "Sparkasse"), so a file called `datenbank.py` or
+`signal_handler.py` in your editor is not a zone. If you press push-to-talk while a zone (or a
+switched-off microphone, mute, or the kill switch) keeps the microphone closed, the tray tells you
+why instead of doing nothing.
 
 The **capture indicator** in the shell always shows the real microphone/screen/camera state. It
 cannot be turned off or hidden by configuration — if something is being captured, you will see it.
@@ -90,8 +98,20 @@ cannot be turned off or hidden by configuration — if something is being captur
 
 - **Desktop pet**: a small always-on-top window with a stable personality, mood, and voice
   (local TTS/STT by default; barge-in supported).
-- **Voice**: push-to-talk (`ctrl+alt+space` by default) or the wake word "Nox"; local
-  speech-to-text (faster-whisper) and text-to-speech (Piper).
+- **Voice**: push-to-talk (`ctrl+alt+space` by default; change it in the dashboard, the shell
+  picks it up without a restart) or the wake word "Nox"; local speech-to-text (faster-whisper) and
+  text-to-speech (Piper). After you addressed Nox, a follow-up question within
+  `voice.stt.conversation_window_s` (20 s after Nox finished answering) needs no wake word.
+  Speaking or pressing push-to-talk while Nox talks stops the whole answer, not just the current
+  sentence. Push-to-talk lets go on its own after `voice.stt.push_to_talk_max_hold_s` (60 s), so
+  locking the screen while holding the keys cannot leave the microphone open.
+- **Speech models are never downloaded on their own.** Fetch the Whisper model once with
+  `python -m nox.worker --download-whisper` (or `nox voice download-whisper`; the configured
+  `voice.stt.model` by default) - until then the dashboard's voice health says which folder is
+  empty and names this command. Kokoro works the same way (`--download-kokoro`).
+- **Speakers vs. headphones**: Nox has no echo cancellation. In `continuous` listening, while Nox
+  is talking only speech louder than its own playback (or push-to-talk) counts as you; health
+  shows this as "half-duplex (no echo cancellation)". Headphones avoid the problem entirely.
 - **Stream companion** (Twitch/OBS, opt-in at onboarding): chat responses, a "Funken" viewer
   currency/loyalty system, scene-aware behavior via a narrow, read-mostly OBS tool surface (scene
   switching is a confirmed action; there is no scene/source-delete or stream-stop tool — see

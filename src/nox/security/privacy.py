@@ -14,6 +14,7 @@ confirmation, and when a PIN is configured the IPC layer asks for it first.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -53,22 +54,37 @@ class ZoneSpec(BaseModel):
     paths: list[str] = Field(default_factory=list)
 
 
+#: The built-in zones. Title patterns are matched against the raw title *and* against its words
+#: (`title_words`: lowercase, split on anything that is not a letter, digit or underscore, padded
+#: with a space at each end), so `"* bank *"` matches the word "Bank" in "Meine Bank - Übersicht"
+#: but not "Datenbank", and `"* depot *"` matches "Depot" but not "depot_tools". Brand names that
+#: are never an ordinary word ("sparkasse", "keepass") stay substring patterns. A pattern without
+#: spaces behaves exactly as before, so a user's own `*bank*` still means what it says.
 BUILTIN_ZONES: dict[str, ZoneSpec] = {
     "banking": ZoneSpec(
         id="banking",
         window_titles=[
-            "*bank*",
+            "* bank *",
+            "* banking *",
+            "*onlinebanking*",
+            "*internetbanking*",
             "*sparkasse*",
             "*volksbank*",
-            "*paypal*",
-            "*n26*",
-            "*ing-diba*",
+            "*raiffeisen*",
+            "*commerzbank*",
+            "*postbank*",
+            "*consorsbank*",
+            "*targobank*",
+            "*hypovereinsbank*",
+            "* dkb *",
             "*comdirect*",
+            "*ing-diba*",
+            "* n26 *",
+            "*paypal*",
             "*trade republic*",
-            "*online-banking*",
-            "*onlinebanking*",
-            "*finanzen*",
-            "*depot*",
+            "* finanzen *",
+            "* depot *",
+            "*wertpapierdepot*",
         ],
     ),
     "password_manager": ZoneSpec(
@@ -79,8 +95,11 @@ BUILTIN_ZONES: dict[str, ZoneSpec] = {
             "*1password*",
             "*lastpass*",
             "*dashlane*",
-            "*passwort*",
-            "*password*",
+            "* passwort *",
+            "* passwörter *",
+            "*passwortmanager*",
+            "* password *",
+            "* passwords *",
         ],
         processes=["keepass*", "bitwarden*", "1password*", "lastpass*", "dashlane*"],
     ),
@@ -93,7 +112,7 @@ BUILTIN_ZONES: dict[str, ZoneSpec] = {
             "*posteingang*",
             "*proton mail*",
             "*protonmail*",
-            "*gmx*",
+            "* gmx *",
             "*web.de*",
             "*e-mail*",
         ],
@@ -103,10 +122,16 @@ BUILTIN_ZONES: dict[str, ZoneSpec] = {
         id="private_chats",
         window_titles=[
             "*whatsapp*",
-            "*signal*",
-            "*telegram*",
+            # The Signal and Messenger apps title their window with the bare name; "signal" or
+            # "messenger" inside a longer title is usually code ("signal.py") or prose.
+            "signal",
+            "signal (*",
+            "* telegram *",
             "*threema*",
-            "*messenger*",
+            "messenger",
+            "messenger |*",
+            "*| messenger",
+            "*facebook messenger*",
             "*imessage*",
         ],
         processes=["whatsapp*", "signal*", "telegram*", "threema*"],
@@ -114,7 +139,12 @@ BUILTIN_ZONES: dict[str, ZoneSpec] = {
     "personal_documents": ZoneSpec(
         id="personal_documents",
         window_titles=[
-            "*steuer*",
+            "* steuer *",
+            "*steuererklärung*",
+            "*steuerbescheid*",
+            "*einkommensteuer*",
+            "*lohnsteuer*",
+            "* elster *",
             "*versicherung*",
             "*lohnabrechnung*",
             "*gehaltsabrechnung*",
@@ -126,7 +156,9 @@ BUILTIN_ZONES: dict[str, ZoneSpec] = {
             "*/documents/private/*",
             "*/persönlich/*",
             "*/personal/*",
-            "*/steuer*",
+            "*/steuer/*",
+            "*/steuern/*",
+            "*/steuererklärung*",
             "*/versicherung*",
             "*/gesundheit/*",
             "*/health/*",
@@ -134,6 +166,18 @@ BUILTIN_ZONES: dict[str, ZoneSpec] = {
     ),
     "discord": ZoneSpec(id="discord", window_titles=["*discord*"], processes=["discord*"]),
 }
+
+_NOT_A_WORD = re.compile(r"[^\w]+", re.UNICODE)
+
+
+def title_words(title: str) -> str:
+    """`" meine bank übersicht "`: the title as lowercase words, padded, for word patterns."""
+    return f" {_NOT_A_WORD.sub(' ', title.lower()).strip()} "
+
+
+def title_matches(title: str, pattern: str) -> bool:
+    """A title pattern matches the raw title, or - for word patterns - the title's words."""
+    return value_matches(title, pattern) or value_matches(title_words(title), pattern)
 
 
 class PrivacyModeChange(BaseModel):
@@ -290,7 +334,7 @@ class PrivacyService:
         title = window_title.strip()
         process = process_name.strip()
         for zone in self._zones:
-            if title and any(value_matches(title, p) for p in zone.window_titles):
+            if title and any(title_matches(title, p) for p in zone.window_titles):
                 return zone.id
             if process and any(value_matches(process, p) for p in zone.processes):
                 return zone.id

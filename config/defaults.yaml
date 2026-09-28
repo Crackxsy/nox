@@ -89,13 +89,14 @@ voice:
                                  # empty = <paths.data_dir>/models. The voice worker only receives
                                  # this section, so repeat the path here if paths.data_dir moved.
   stt:
-    engine: faster-whisper
-    model: small
+    model: small                 # faster-whisper model, read from <models_dir>/faster-whisper/small
+                                 # only - fetch it once: python -m nox.worker --download-whisper
     device: cpu
     language: auto
-    vad: true
     wake_word: "Nox"
     push_to_talk_hotkey: "ctrl+alt+space"
+    push_to_talk_max_hold_s: 60  # push-to-talk ends on its own after this long (a key release
+                                 # lost to a locked screen must not leave the microphone open)
     listening_mode: ptt_only     # ptt_only | continuous. The default never opens the microphone on
                                  # its own: hold push-to-talk to speak. Switch to continuous for
                                  # hands-free wake-word listening (costs CPU, wants a wake model).
@@ -111,6 +112,11 @@ voice:
     conversation_window_s: 20    # follow-up questions may skip the wake word for this long
     kill_phrase_watchdog: true   # short segments still reach Whisper so "Nox Notaus" keeps
     kill_watchdog_max_ms: 2500   # working; non-kill transcripts are discarded, never reported
+    # No echo cancellation: in continuous listening, speech while Nox is audible only counts as
+    # you (interrupts, gets transcribed) when it is louder than the playback by this margin.
+    # Push-to-talk always counts. Health reports it as "half-duplex" either way.
+    half_duplex: true
+    half_duplex_margin_db: 0
   tts:
     engine: piper                # piper | kokoro. Kokoro needs the voice-kokoro extra and its
                                  # model files in <models_dir>/kokoro
@@ -120,7 +126,6 @@ voice:
                                  # voice exists in Kokoro v1.0, see README)
     rate: 1.0
     volume: 0.8
-    streaming: true
   channels:
     private_device: ""           # default output device when empty
     stream_device: ""            # e.g. VB-Audio Cable input, empty = disabled
@@ -151,11 +156,6 @@ ai:
 
 pet:
   renderer: web                  # web renderer hosted by core, shown in the Qt shell and OBS
-  default_monitor: left
-  always_on_top: true
-  click_through_when_idle: false
-  fps_target: 60
-  fps_in_game: 20
   greeting_enabled: true          # speak the startup greeting (the speech policy still decides)
   quiet_in_private_modes: true    # no unsolicited speech (greeting, hints) while privacy mode is
                                    # private or offline; replies to you are never blocked

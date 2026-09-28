@@ -26,12 +26,13 @@ import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QUrl
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QGuiApplication, QMouseEvent
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget
 
 from nox.shell import win32
+from nox.shell.logic import Rect, pet_position
 from nox.shell.logutil import get_logger
 from nox.shell.runtime import ShellState
 
@@ -63,6 +64,19 @@ def _pet_profile() -> QWebEngineProfile:
     return _pet_profile_instance
 
 
+def _screen_rects() -> tuple[list[Rect], Rect]:
+    """The usable area of every connected screen, and of the primary one."""
+    rects: list[Rect] = []
+    for screen in QGuiApplication.screens():
+        area = screen.availableGeometry()
+        rects.append((area.x(), area.y(), area.width(), area.height()))
+    primary_screen = QGuiApplication.primaryScreen()
+    if primary_screen is None:
+        return rects, rects[0] if rects else (0, 0, 1280, 720)
+    area = primary_screen.availableGeometry()
+    return rects, (area.x(), area.y(), area.width(), area.height())
+
+
 class PetWindow(QWidget):
     def __init__(
         self,
@@ -84,8 +98,8 @@ class PetWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setWindowTitle("Nox")
         self.resize(state.width, state.height)
-        if state.x is not None and state.y is not None:
-            self.move(state.x, state.y)
+        saved = (state.x, state.y) if state.x is not None and state.y is not None else None
+        self.move(*pet_position(saved, (state.width, state.height), *_screen_rects()))
 
         self.view = QWebEngineView(self)
         self.view.setPage(QWebEnginePage(_pet_profile(), self.view))

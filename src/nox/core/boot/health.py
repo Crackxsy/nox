@@ -13,6 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from nox.ai.base import AiProvider
+from nox.core.boot.voice_health import VoiceHealthReport
 from nox.core.boot.workers import WorkerSupervisor
 from nox.core.events import HealthStatus
 from nox.core.health import Check
@@ -37,6 +38,7 @@ def core_health_checks(
     tokens: Callable[[], TokenStore | None],
     providers: Callable[[], list[AiProvider]],
     secrets: Callable[[], SecretStore | None] = lambda: None,
+    voice_report: Callable[[], VoiceHealthReport | None] = lambda: None,
 ) -> list[Check]:
     """Build the core's checks. Everything is read through a callable, because the components are
     built in order and a check may be created before the thing it asks about exists."""
@@ -63,11 +65,13 @@ def core_health_checks(
             return HealthStatus.UNAVAILABLE, "worker not running"
         # Registered but not yet ready means the engines are still loading: `limited`, not
         # `available`, because nothing can be spoken yet.
-        return (
-            (HealthStatus.AVAILABLE, "worker registered")
-            if worker.registered.is_set()
-            else (HealthStatus.LIMITED, "worker starting")
-        )
+        if not worker.registered.is_set():
+            return HealthStatus.LIMITED, "worker starting"
+        # Ready: what the worker itself reports (a silent microphone, a missing model, text-only
+        # wake word, no echo cancellation) is the answer, not the fact that it connected.
+        report = voice_report()
+        summary = report.summary() if report is not None else None
+        return summary or (HealthStatus.AVAILABLE, "worker registered")
 
     async def tokens_check() -> tuple[HealthStatus, str]:
         # The session token file is a secret on disk. When its permissions could not be tightened,

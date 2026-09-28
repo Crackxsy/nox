@@ -7,6 +7,7 @@ into the Qt thread.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -51,6 +52,10 @@ class HotkeyTracker:
         self._active: dict[HotkeyAction, frozenset[str]] = {}
 
     @property
+    def mapping(self) -> dict[frozenset[str], HotkeyAction]:
+        return dict(self._mapping)
+
+    @property
     def pressed_keys(self) -> frozenset[str]:
         return frozenset(self._down)
 
@@ -81,22 +86,40 @@ class HotkeyTracker:
                     fired.append((action, False))
         return fired
 
-    def reset(self) -> None:
-        """Forget everything (e.g. after focus loss so PTT cannot stick)."""
-        released = [(a, False) for a in self._active if a == HotkeyAction.PTT]
+    def reset(self) -> list[tuple[HotkeyAction, bool]]:
+        """Forget every held key and return the PTT release that is owed.
+
+        A key-up the listener never saw (the screen locked, a UAC prompt took the keyboard while
+        the combo was held) leaves keys "down" forever: PTT stays held, and a stale Ctrl turns
+        Alt+Shift+K into the kill switch. Resetting clears that state.
+        """
+        released: list[tuple[HotkeyAction, bool]] = [
+            (a, False) for a in self._active if a == HotkeyAction.PTT
+        ]
         self._down.clear()
         self._active.clear()
         if released:
-            log.debug("hotkeys.reset_released_ptt")
+            log.info("hotkeys.reset_released_ptt")
+        return released
+
+    def set_mapping(
+        self, mapping: dict[frozenset[str], HotkeyAction]
+    ) -> list[tuple[HotkeyAction, bool]]:
+        """Switch to new combos (a hotkey edited in the dashboard); held keys are forgotten."""
+        released = self.reset()
+        self._mapping = mapping
+        return released
 
 
 class GlobalHotkeys:
-    """pynput keyboard listener feeding a HotkeyTracker. Runs on pynput's own thread."""
+    """pynput keyboard listener feeding a HotkeyTracker. Runs on pynput's own thread; `reset`
+    and `remap` come from the Qt thread, so every tracker call holds one lock."""
 
     def __init__(self, tracker: HotkeyTracker, callback: HotkeyCallback) -> None:
         self._tracker = tracker
         self._callback = callback
         self._listener: Any = None
+        self._lock = threading.Lock()
 
     def start(self) -> bool:
         try:
@@ -115,25 +138,46 @@ class GlobalHotkeys:
             self._listener.stop()
             self._listener = None
 
+    def reset(self) -> None:
+        """Forget held keys; a PTT that was still held is released through the callback."""
+        with self._lock:
+            fired = self._tracker.reset()
+        self._dispatch(fired)
+
+    def remap(self, mapping: dict[frozenset[str], HotkeyAction]) -> None:
+        with self._lock:
+            fired = self._tracker.set_mapping(mapping)
+        self._dispatch(fired)
+
     @staticmethod
     def _key_name(key: Any) -> str | None:
         name = getattr(key, "name", None)
         if name:
             return str(name)
         char = getattr(key, "char", None)
-        if char:
-            return str(char)
         vk = getattr(key, "vk", None)
+        # With Ctrl held, pynput reports a letter as its control character ("k" arrives as
+        # "\x0b"); the virtual-key code still names the key, so it wins for those.
+        if char and not (len(char) == 1 and ord(char) < 0x20):
+            return str(char)
         if isinstance(vk, int) and 0x30 <= vk <= 0x5A:  # digits/letters while modifiers are held
             return chr(vk).lower()
+        if char and len(char) == 1 and 1 <= ord(char) <= 26:
+            return chr(ord(char) + 0x60)  # Ctrl+A..Ctrl+Z without a virtual-key code
         return None
 
     def _on_press(self, key: Any) -> None:
-        for action, pressed in self._tracker.press(self._key_name(key)):
-            self._safe_callback(action, pressed)
+        with self._lock:
+            fired = self._tracker.press(self._key_name(key))
+        self._dispatch(fired)
 
     def _on_release(self, key: Any) -> None:
-        for action, pressed in self._tracker.release(self._key_name(key)):
+        with self._lock:
+            fired = self._tracker.release(self._key_name(key))
+        self._dispatch(fired)
+
+    def _dispatch(self, fired: list[tuple[HotkeyAction, bool]]) -> None:
+        for action, pressed in fired:
             self._safe_callback(action, pressed)
 
     def _safe_callback(self, action: HotkeyAction, pressed: bool) -> None:

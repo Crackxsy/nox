@@ -57,11 +57,11 @@ class E:
 
     VOICE_INPUT_STARTED = "voice.input_started"
     VOICE_INPUT_STOPPED = "voice.input_stopped"
-    VOICE_TRANSCRIPT_PARTIAL = "voice.transcript_partial"
     VOICE_TRANSCRIPT_READY = "voice.transcript_ready"
     VOICE_PTT_PRESSED = "voice.ptt_pressed"
     VOICE_PTT_RELEASED = "voice.ptt_released"
     VOICE_MUTED = "voice.muted"
+    VOICE_PTT_REFUSED = "voice.ptt_refused"  # push-to-talk pressed, but the microphone stays closed
     VOICE_KILL_PHRASE = (
         "voice.kill_phrase"  # local kill phrase heard; core maps it to security.kill
     )
@@ -277,6 +277,18 @@ class VoiceKillPhrase(BaseModel):
     by: str = "voice"
     reason: str = "kill phrase"
     language: str = ""
+
+
+class VoicePttRefused(BaseModel):
+    """Push-to-talk was pressed and the microphone stayed closed; the shell tells the user why.
+
+    `reason` is one of `privacy_zone`, `microphone_off`, `panic`, `safe_mode`, `muted`,
+    `voice_unavailable`, `microphone_unavailable` or `capture_closed`. `zone` is a zone id
+    (`"banking"`), never the window title that matched it.
+    """
+
+    reason: str
+    zone: str | None = None
 
 
 class TtsStarted(BaseModel):
@@ -940,6 +952,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     E.STATE_CHANGED: StateChanged,
     E.VOICE_TRANSCRIPT_READY: TranscriptReady,
     E.VOICE_KILL_PHRASE: VoiceKillPhrase,
+    E.VOICE_PTT_REFUSED: VoicePttRefused,
     E.TTS_STARTED: TtsStarted,
     E.AI_REQUEST_STARTED: AiRequestStarted,
     E.AI_RESPONSE_READY: AiResponseReady,

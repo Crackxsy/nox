@@ -299,6 +299,11 @@ export interface VoiceKillPhrase {
   language?: string;
 }
 
+export interface VoicePttRefused {
+  reason: string;
+  zone?: string | null;
+}
+
 export interface TtsStarted {
   text: string;
   channel: string;

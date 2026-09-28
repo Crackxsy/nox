@@ -29,7 +29,6 @@ class Transcript(BaseModel):
     confidence: float
     duration_ms: int
     latency_ms: int
-    partial: bool = False
 
 
 class SttEngine(Protocol):
@@ -45,6 +44,10 @@ class SttEngine(Protocol):
 
 class TtsRequest(BaseModel):
     utterance_id: str
+    #: The reply this sentence belongs to. A barge-in or `tts.stop` cancels the whole turn: the
+    #: sentence playing, the ones already queued, and any that arrive for it later. Empty means
+    #: the utterance is its own turn.
+    turn_id: str = ""
     text: str
     language: str = "de"
     voice: str = ""
@@ -115,3 +118,6 @@ class VoicePipeline(Protocol):
     async def interrupt(self, *, reason: str) -> None: ...
     async def refresh_gate(self) -> None: ...
     def capture_health(self) -> tuple[HealthStatus, str]: ...
+    def health_report(self) -> dict[str, tuple[HealthStatus, str]]:
+        """Capture, and in continuous listening the wake gate and echo handling, by component."""
+        ...

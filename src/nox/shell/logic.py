@@ -6,6 +6,7 @@ Implements the shell responsibilities from the Process Model and IPC Model reque
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
 
@@ -121,6 +122,28 @@ class ShellModel(BaseModel):
         elif path.startswith("privacy.") and path.split(".")[1] in CaptureFlags.model_fields:
             setattr(self.capture, path.split(".")[1], bool(new))
 
+    def apply_status(self, status: Mapping[str, Any]) -> set[str]:
+        """Apply a `privacy.status` snapshot: the level-triggered start after (re)connecting.
+
+        Events only carry changes, so without this the tray showed its defaults - balanced,
+        unmuted, not capturing, running - until the next change happened to arrive.
+        """
+        before = self.model_dump()
+        mode = status.get("mode")
+        if isinstance(mode, str) and mode in PrivacyMode.__members__.values():
+            self.set_privacy(PrivacyMode(mode))
+        capture = status.get("capture")
+        if isinstance(capture, Mapping):
+            self.capture = CaptureFlags.model_validate(dict(capture))
+        if "muted" in status:
+            self.muted = bool(status["muted"])
+        if status.get("safe_mode"):
+            self.system_level = SystemLevel.SAFE_MODE
+        elif self.system_level is SystemLevel.SAFE_MODE:
+            self.system_level = SystemLevel.RUNNING
+        after = self.model_dump()
+        return {k for k in after if after[k] != before[k]}
+
     def set_privacy(self, mode: PrivacyMode) -> None:
         if self.privacy_mode in (PrivacyMode.FULL, PrivacyMode.BALANCED):
             self.previous_normal_privacy = self.privacy_mode
@@ -205,6 +228,88 @@ def hotkey_map(config: dict[str, Any] | None = None) -> dict[frozenset[str], Hot
             )
         mapping[parsed] = HotkeyAction(action_name)
     return mapping
+
+
+def hotkey_map_or_defaults(
+    config: dict[str, Any] | None,
+) -> tuple[dict[frozenset[str], HotkeyAction], str]:
+    """`hotkey_map`, or the built-in combos plus the reason when the configured ones conflict.
+
+    Two actions on one combo used to raise inside the shell's constructor, which put the shell
+    into a crash loop under the supervisor; the user now gets working defaults and a message.
+    """
+    try:
+        return hotkey_map(config), ""
+    except ValueError as exc:
+        return hotkey_map(None), str(exc)
+
+
+#: `voice.ptt_refused` reasons as the user reads them, `(de, en)`.
+PTT_REFUSAL_TEXT: dict[str, tuple[str, str]] = {
+    "privacy_zone": (
+        "Mikrofon bleibt aus: Datenschutzzone „{zone}“ ist aktiv.",
+        "Microphone stays off: privacy zone “{zone}” is active.",
+    ),
+    "microphone_off": (
+        "Mikrofon ist in den Privatsphäre-Einstellungen ausgeschaltet.",
+        "The microphone is switched off in the privacy settings.",
+    ),
+    "muted": ("Nox ist stummgeschaltet.", "Nox is muted."),
+    "panic": ("Panik-Modus: alle Aufnahmen sind aus.", "Panic mode: all capture is off."),
+    "safe_mode": ("Not-Aus ist aktiv - Nox hört nicht zu.", "Kill switch engaged - not listening."),
+    "voice_unavailable": (
+        "Die Spracherkennung läuft gerade nicht.",
+        "Speech recognition is not running right now.",
+    ),
+    "microphone_unavailable": (
+        "Das Mikrofon lässt sich nicht öffnen.",
+        "The microphone cannot be opened.",
+    ),
+}
+_PTT_REFUSAL_FALLBACK = ("Das Mikrofon ist gerade geschlossen.", "The microphone is closed.")
+
+
+def ptt_refusal_text(payload: Mapping[str, Any], language: str = "de") -> str:
+    """Why push-to-talk did nothing, in one sentence the user can act on."""
+    de, en = PTT_REFUSAL_TEXT.get(str(payload.get("reason", "")), _PTT_REFUSAL_FALLBACK)
+    text = de if language.startswith("de") else en
+    prefix = "Push-to-Talk: " if language.startswith("de") else "Push-to-talk: "
+    return prefix + text.format(zone=str(payload.get("zone") or "?"))
+
+
+#: Settings whose change means the hotkey listener must be rebuilt.
+HOTKEY_SETTINGS = frozenset({"voice.stt.push_to_talk_hotkey", "supervisor.kill_switch_hotkey"})
+
+
+#: `(x, y, width, height)` of a screen's usable area, in Qt's virtual desktop coordinates.
+Rect = tuple[int, int, int, int]
+#: At least this much of the pet must be on a screen for a saved position to count as visible.
+PET_MIN_VISIBLE_PX = 48
+PET_SCREEN_MARGIN_PX = 24
+
+
+def pet_position(
+    saved: tuple[int, int] | None, size: tuple[int, int], screens: list[Rect], primary: Rect
+) -> tuple[int, int]:
+    """Where the pet window opens: the saved position when it is on a screen that still exists,
+    otherwise the bottom-right corner of the primary screen.
+
+    Restoring blindly put the pet off-screen after undocking a laptop or unplugging a monitor,
+    and nothing in the tray could bring it back.
+    """
+    width, height = size
+    if saved is not None:
+        x, y = saved
+        for sx, sy, sw, sh in screens:
+            overlap_w = min(x + width, sx + sw) - max(x, sx)
+            overlap_h = min(y + height, sy + sh) - max(y, sy)
+            if overlap_w >= PET_MIN_VISIBLE_PX and overlap_h >= PET_MIN_VISIBLE_PX:
+                return x, y
+    px, py, pw, ph = primary
+    return (
+        max(px, px + pw - width - PET_SCREEN_MARGIN_PX),
+        max(py, py + ph - height - PET_SCREEN_MARGIN_PX),
+    )
 
 
 def permission_reply(request: dict[str, Any], *, allow: bool, remember: bool) -> dict[str, Any]:

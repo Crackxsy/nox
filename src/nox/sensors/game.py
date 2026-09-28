@@ -86,7 +86,10 @@ class GameProcessSensor:
         if self._safe_mode() or not self._watched:
             return
         seen: dict[str, RunningProcess] = {}
-        for proc in self._lister():
+        # Off the loop: walking every process takes tens of milliseconds on Windows, long enough
+        # to stall IPC delivery every poll.
+        processes = await asyncio.to_thread(lambda: list(self._lister()))
+        for proc in processes:
             key = proc.name.lower()
             if key in self._watched:
                 seen[key] = proc

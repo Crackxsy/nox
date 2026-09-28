@@ -1,4 +1,9 @@
-"""faster-whisper SttEngine on CPU int8 (model size decided by).
+"""faster-whisper SttEngine on CPU int8.
+
+The model is read from disk only: `<models_dir>/faster-whisper/<model>` (or a model an earlier
+release left in the Hugging Face cache layout below the same folder), always with
+`local_files_only`. A missing model is `unavailable` with the path and the command that fetches it
+- the engine never downloads on its own, not even on first start.
 
 Language handling: `auto` restricts detection to the configured languages (DE primary, EN
 secondary):
@@ -21,7 +26,7 @@ from nox.core.events import HealthStatus
 from nox.voice._logging import get_logger
 from nox.voice.audio import resample_linear
 from nox.voice.base import Transcript
-from nox.voice.models import engine_models_dir
+from nox.voice.models import engine_models_dir, find_whisper_model, whisper_download_hint
 
 log = get_logger(__name__)
 
@@ -60,26 +65,42 @@ class FasterWhisperStt:
             return HealthStatus.AVAILABLE, f"{self.model_size}/{self.compute_type} on {self.device}"
         if self._error:
             return HealthStatus.UNAVAILABLE, self._error
+        if self.model_path() is None:
+            return HealthStatus.UNAVAILABLE, self.missing_reason()
         return HealthStatus.UNAVAILABLE, "not loaded"
 
+    def model_path(self) -> Path | None:
+        return find_whisper_model(Path(self.models_dir), self.model_size)
+
+    def missing_reason(self) -> str:
+        return (
+            f"Whisper model {self.model_size!r} not found in "
+            f"{Path(self.models_dir) / self.model_size} - {whisper_download_hint(self.model_size)}"
+        )
+
     def _load_sync(self) -> None:
+        path = self.model_path()
+        if path is None:
+            self._error = self.missing_reason()
+            raise FileNotFoundError(self._error)
         from faster_whisper import WhisperModel
 
-        Path(self.models_dir).mkdir(parents=True, exist_ok=True)
         t0 = time.perf_counter()
         self._model = WhisperModel(
-            self.model_size,
+            str(path),
             device=self.device,
             compute_type=self.compute_type,
-            download_root=self.models_dir,
             cpu_threads=self.cpu_threads,
-            local_files_only=False,
+            local_files_only=True,
         )
         self.load_time_ms = (time.perf_counter() - t0) * 1000.0
 
     async def load(self) -> None:
         try:
             await asyncio.to_thread(self._load_sync)
+        except FileNotFoundError:
+            log.error("stt.model_missing", model=self.model_size, error=self._error)
+            raise
         except Exception as exc:
             self._error = f"{type(exc).__name__}: {exc}"
             log.error("stt.load_failed", model=self.model_size, error=self._error)

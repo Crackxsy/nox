@@ -41,6 +41,7 @@ from nox.core.boot.ai import ProviderCard, build_providers, build_router
 from nox.core.boot.extensions import DEFAULT_EXTENSIONS, install_extensions, stop_extensions
 from nox.core.boot.health import core_health_checks
 from nox.core.boot.persistence import DbTurnStore, open_database
+from nox.core.boot.voice_health import VoiceHealthReport
 from nox.core.boot.workers import WorkerProcess, WorkerSpeaker, WorkerSupervisor
 from nox.core.bus import AsyncEventBus
 from nox.core.config import NoxConfig
@@ -136,6 +137,8 @@ class NoxCore:
         #: Set by the supervisor's stop request. The entry point waits on it as well as on an OS
         #: signal, and calls `stop()` for whichever arrives first.
         self.shutdown_requested = asyncio.Event()
+        #: What the voice worker last said about its own health (heartbeat), for `voice_check`.
+        self.voice_report = VoiceHealthReport()
 
         # Components, in build order. Declared here so a half-booted core holds `None` rather than
         # a missing attribute - that is what `stop()` and the supervisor callbacks read.
@@ -679,6 +682,7 @@ class NoxCore:
             tokens=lambda: self.tokens,
             providers=lambda: self.ai_providers,
             secrets=lambda: self.security.secrets if self.security is not None else None,
+            voice_report=lambda: self.voice_report,
         )
 
     def health_json(self) -> dict[str, Any]:
@@ -716,7 +720,10 @@ class NoxCore:
 
     async def _on_client_disconnected(self, event: Event) -> None:
         client_id = str(event.payload.get("client_id", ""))
-        if self.workers.detach(client_id) is not None and self.health is not None:
+        detached = self.workers.detach(client_id)
+        if detached is not None and detached.service == "voice":
+            self.voice_report.clear()
+        if detached is not None and self.health is not None:
             self.spawn_task(self.health.run_once())
 
     async def _cancel_orchestrator(self) -> None:

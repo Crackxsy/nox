@@ -7,8 +7,14 @@ subscription to `security.*` and `privacy.*` so capture stops or re-gates when t
 everything in one `voice` worker. The worker token comes from the environment (`NOX_WORKER_TOKEN`),
 never from the command line, and is never logged.
 
+The heartbeat carries the worker's health by component - capture, the wake gate and echo handling
+in continuous listening, and the STT and TTS engines - which the core maps onto its `voice` health
+check. A missing Whisper model does not stop the worker: speech output keeps working and health
+names the missing path and the command that fetches it.
+
 `--selftest` validates devices, models, playback and a three-second microphone transcription
-without a hub; `--download-kokoro` fetches the Kokoro TTS model files, always user-initiated.
+without a hub; `--download-kokoro` and `--download-whisper` fetch model files, always
+user-initiated - nothing is ever downloaded on its own.
 `--plugin <id>` runs this process as a plugin worker instead (`nox.worker.plugin`); it shares only
 token and hub-url handling with the voice path.
 """
@@ -20,7 +26,6 @@ import asyncio
 import base64
 import os
 import sys
-import time
 import wave
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -32,7 +37,7 @@ import typer
 from pydantic import BaseModel, ValidationError
 
 from nox.core.config import VoiceConfig
-from nox.core.events import E
+from nox.core.events import E, HealthStatus
 from nox.core.parent_watch import bind_to_parent
 from nox.ipc.errors import IpcError
 from nox.ipc.protocol import Envelope
@@ -150,6 +155,8 @@ class VoiceWorker:
         # register first, apply the config, only then build and load engines - never before.
         self.pipeline: VoicePipeline | None = None
         self.register_response: dict[str, Any] = {}
+        #: The core's mute flag, the source of truth across reconnects and restarts.
+        self._core_muted = False
 
     # ---- gate + emit -----------------------------------------------------------------------------
 
@@ -285,11 +292,12 @@ class VoiceWorker:
         return self.register_response
 
     async def _apply_core_state(self, response: Mapping[str, Any]) -> None:
-        """Start from the core's current capture and kill-switch state, on every (re)register.
+        """Start from the core's current capture, mute and kill-switch state, on every
+        (re)register.
 
-        Subscriptions deliver changes only, so a zone entered or a microphone switched off before
-        this connection existed would never arrive. A core that sends no capture state leaves the
-        microphone closed.
+        Subscriptions deliver changes only, so a zone entered, a microphone switched off or Nox
+        muted before this connection existed would never arrive. A core that sends no capture
+        state leaves the microphone closed.
         """
         capture = response.get("capture")
         self.status.microphone_allowed = isinstance(capture, Mapping) and bool(
@@ -297,7 +305,9 @@ class VoiceWorker:
         )
         if response.get("safe_mode"):
             self.status.killed = True
+        self._core_muted = bool(response.get("muted", False))
         if self.pipeline is not None:
+            await self.pipeline.set_muted(self._core_muted)
             await self.pipeline.refresh_gate()
 
     def _resolve_config(self, raw: Any) -> VoiceConfig:
@@ -314,6 +324,31 @@ class VoiceWorker:
             log.warning("worker.config_invalid", error=str(exc))
             return self.default_config
 
+    async def health_report(self) -> dict[str, dict[str, str]]:
+        """What the heartbeat carries: every component's status and reason.
+
+        Empty until the pipeline exists; the core reports "worker starting" until then anyway.
+        """
+        report: dict[str, tuple[HealthStatus, str]] = {}
+        if self.pipeline is not None:
+            report.update(self.pipeline.health_report())
+            if "stt" in self.capabilities and self.stt is not None:
+                report["stt"] = await self._engine_health(self.stt)
+            if "tts" in self.capabilities and self.tts is not None:
+                report["tts"] = await self._engine_health(self.tts)
+        return {
+            name: {"status": str(status), "reason": reason}
+            for name, (status, reason) in report.items()
+        }
+
+    @staticmethod
+    async def _engine_health(engine: Any) -> tuple[HealthStatus, str]:
+        try:
+            status, reason = await engine.health()
+        except Exception as exc:  # noqa: BLE001 - a broken health probe is itself the answer
+            return HealthStatus.UNAVAILABLE, f"health check failed: {type(exc).__name__}: {exc}"
+        return HealthStatus(status), str(reason)
+
     async def _heartbeat_loop(self) -> None:
         await heartbeat_loop(
             self.client,
@@ -321,6 +356,7 @@ class VoiceWorker:
             status=lambda: self.status.status,
             interval_s=self.heartbeat_s,
             load=self._load_fn,
+            health=self.health_report,
             service=self.service,
         )
 
@@ -338,6 +374,9 @@ class VoiceWorker:
             self.stt, self.tts = await self._component_loader(self.voice_config)
         self.pipeline = self._pipeline_factory(self.emit, self.capture_allowed, self.voice_config)
         self.status.status = "running"
+        # Before start: a worker that comes back while Nox is muted must not open the mic first.
+        if self._core_muted:
+            await self.pipeline.set_muted(True)
         await self.pipeline.start()
         await self.client.request("worker.ready", {"service": self.service})
         log.info("worker.running", service=self.service, capabilities=list(self.capabilities))
@@ -447,6 +486,9 @@ def pipeline_config_from(voice: VoiceConfig) -> PipelineConfig:
         language=voice.stt.language,
         barge_in=voice.barge_in,
         listening_mode=voice.stt.listening_mode,
+        half_duplex=voice.stt.half_duplex,
+        half_duplex_margin_db=voice.stt.half_duplex_margin_db,
+        ptt_max_hold_s=voice.stt.push_to_talk_max_hold_s,
     )
 
 
@@ -543,6 +585,16 @@ class _NoEngine:
         raise RuntimeError("tts is not hosted by this worker")
 
 
+async def load_engines(stt: Any, tts: Any) -> None:
+    """Load both engines. A Whisper model that is not on disk is not fatal: Nox can still speak,
+    and the heartbeat's STT health names the missing path and the command that fetches it."""
+    try:
+        await stt.load()
+    except FileNotFoundError as exc:
+        log.error("worker.stt_model_missing", error=str(exc))
+    await tts.load()
+
+
 @dataclass(slots=True)
 class _Devices:
     """The audio devices `load_components` built, handed to the pipeline factory that follows it.
@@ -573,8 +625,7 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
         components = build_components(cfg, service=service)
         stt = components["stt"] or _NoEngine()
         tts = components["tts"] or _NoEngine()
-        await stt.load()
-        await tts.load()
+        await load_engines(stt, tts)
         devices.audio_in = components["audio_in"]
         devices.audio_out = components["audio_out"]
         return stt, tts
@@ -618,110 +669,6 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
     return 0
 
 
-async def run_selftest(voice_cfg: VoiceConfig, *, seconds: float = 3.0) -> int:
-    """Manual validation: devices, model load, TTS to the default device, 3 s mic transcription."""
-    from nox.voice.audio import list_devices
-
-    echo = typer.echo
-    echo("== devices ==")
-    for dev in list_devices():
-        if dev["hostapi"] != "Windows WASAPI":
-            continue
-        flags = ("IN " if dev["inputs"] != "0" else "   ") + (
-            "OUT" if dev["outputs"] != "0" else "   "
-        )
-        default = (
-            " (default)"
-            if dev["default_input"] == "True" or dev["default_output"] == "True"
-            else ""
-        )
-        echo(f"  [{dev['index']:>2}] {flags} {dev['name']}{default}")
-    components = build_components(voice_cfg, service="voice")
-    stt, tts = components["stt"], components["tts"]
-    audio_in, audio_out = components["audio_in"], components["audio_out"]
-    echo("== models ==")
-    t0 = time.perf_counter()
-    await stt.load()
-    echo(f"  stt {stt.id} {stt.model_size}: {stt.load_time_ms:.0f} ms")
-    await tts.load()
-    echo(
-        f"  tts {tts.id} {tts.loaded_voices}: {tts.load_time_ms:.0f} ms "
-        f"(total {time.perf_counter() - t0:.1f} s)"
-    )
-    for name, engine in (("stt", stt), ("tts", tts)):
-        status, reason = await engine.health()
-        echo(f"  {name} health: {status} ({reason})")
-    gate = build_wake_gate(voice_cfg)
-    gate_status, gate_reason = gate.health()
-    echo(f"  wake gate: {gate.detector.id} -> {gate_status} ({gate_reason})")
-    echo(f"  listening mode: {voice_cfg.stt.listening_mode}")
-
-    events: list[tuple[str, dict[str, Any]]] = []
-
-    async def emit(name: str, payload: dict[str, Any]) -> None:
-        events.append((name, payload))
-        echo(f"  event {name} {payload if name != E.VOICE_TRANSCRIPT_READY else payload['text']!r}")
-
-    pipeline = DefaultVoicePipeline(
-        audio_in=audio_in,
-        audio_out=audio_out,
-        stt=stt,
-        tts=tts,
-        emit=emit,
-        capture_allowed=lambda: True,
-        config=pipeline_config_from(voice_cfg),
-        wake_gate=gate,
-    )
-    echo("== tts ==")
-    t0 = time.perf_counter()
-    await pipeline.say(
-        TtsRequest(utterance_id="selftest", text="Hallo, ich bin Nox.", language="de")
-    )
-    echo(f"  spoken in {time.perf_counter() - t0:.2f} s")
-    echo(f"== stt: speak now ({seconds:.0f} s) ==")
-    await audio_in.start()
-    await audio_in.set_enabled(True)
-    frames: list[np.ndarray] = []
-    deadline = time.perf_counter() + seconds
-    async for frame in audio_in.frames():
-        frames.append(frame)
-        if time.perf_counter() >= deadline:
-            break
-    await audio_in.stop()
-    audio = np.concatenate(frames) if frames else np.zeros(0, dtype=np.float32)
-    transcript = await stt.transcribe(audio, audio_in.sample_rate, language=voice_cfg.stt.language)
-    echo(
-        f"  {transcript.duration_ms} ms audio -> {transcript.latency_ms} ms, "
-        f"lang={transcript.language}, "
-        f"conf={transcript.confidence:.2f}: {transcript.text!r}"
-    )
-    await stt.unload()
-    await tts.unload()
-    return 0
-
-
-#: Mounted by the top-level CLI as `nox voice ...` (`app.add_typer(voice_app, name="voice")`).
-voice_app = typer.Typer(help="Voice models and self-test.", no_args_is_help=True)
-
-
-@voice_app.command("download-kokoro")
-def voice_download_kokoro(
-    models_dir: str = typer.Option("", help="override voice.models_dir"),
-    force: bool = typer.Option(False, "--force", help="re-download even if the files exist"),
-) -> None:
-    """Download the Kokoro v1.0 TTS model files (~354 MB). Never happens automatically."""
-    from nox.voice.models import download_kokoro, engine_models_dir
-
-    code = download_kokoro(engine_models_dir("kokoro", models_dir), echo=typer.echo, force=force)
-    raise typer.Exit(code)
-
-
-@voice_app.command("selftest")
-def voice_selftest() -> None:
-    """Devices, model load, TTS playback and a 3 s microphone transcription (no hub)."""
-    raise typer.Exit(asyncio.run(run_selftest(VoiceConfig())))
-
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="python -m nox.worker", description="Nox voice worker")
     ap.add_argument("--service", choices=sorted(SERVICES), default="voice")
@@ -733,6 +680,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--download-kokoro",
         action="store_true",
         help="download the Kokoro TTS model files (~354 MB) into <models_dir>/kokoro",
+    )
+    ap.add_argument(
+        "--download-whisper",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="MODEL",
+        help="download a Whisper model (default: voice.stt.model) into "
+        "<models_dir>/faster-whisper/<MODEL>",
     )
     ap.add_argument("--models-dir", default=None, help="override voice.models_dir for this run")
     ap.add_argument("--plugin", default=None, help="run as the worker of plugins/<id>")
@@ -753,7 +709,15 @@ def main(argv: list[str] | None = None) -> int:
             typer.echo("NOX_WORKER_TOKEN missing (plugins are spawned by the core)", err=True)
             return 2
         return asyncio.run(run_plugin_worker(args.plugin, args.hub_url, plugin_token))
-    voice_cfg = VoiceConfig()
+    user_action = args.selftest or args.download_kokoro or args.download_whisper is not None
+    if user_action:
+        from nox.worker import voice_cli
+
+        # Run by hand: check and fill what the user configured, not the shipped defaults.
+        voice_cfg = voice_cli.local_voice_config()
+    else:
+        # Spawned by the core, which sends the merged configuration on `worker.register`.
+        voice_cfg = VoiceConfig()
     if args.models_dir:
         voice_cfg = voice_cfg.model_copy(update={"models_dir": args.models_dir})
     if args.download_kokoro:
@@ -761,6 +725,8 @@ def main(argv: list[str] | None = None) -> int:
         from nox.voice.models import download_kokoro, engine_models_dir
 
         return download_kokoro(engine_models_dir("kokoro", voice_cfg.models_dir), echo=typer.echo)
+    if args.download_whisper is not None:
+        return voice_cli.download_whisper_model(voice_cfg, args.download_whisper)
     if args.stt_model:
         voice_cfg = voice_cfg.model_copy(
             update={"stt": voice_cfg.stt.model_copy(update={"model": args.stt_model})}
@@ -771,7 +737,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     raise_priority()
     if args.selftest:
-        return asyncio.run(run_selftest(voice_cfg))
+        return asyncio.run(voice_cli.run_selftest(voice_cfg))
     token = os.environ.get("NOX_WORKER_TOKEN", "")
     if len(token) < 16:
         typer.echo("NOX_WORKER_TOKEN missing (workers are spawned by the core)", err=True)

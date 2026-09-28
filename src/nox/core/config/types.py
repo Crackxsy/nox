@@ -12,11 +12,14 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, ClassVar
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict
+from pydantic import BaseModel, BeforeValidator, ConfigDict, model_validator
 
+from nox.core.logging import get_logger
 from nox.paths import APP_DIR_ENV, app_dir
+
+log = get_logger(__name__)
 
 __all__ = [
     "ConfigError",
@@ -58,9 +61,25 @@ class StrictSection(BaseModel):
     Unknown keys are errors, so a typo is reported with its dotted path instead of being ignored
     until someone wonders why a setting has no effect. Defaults are validated too, so a default
     that violates its own bound fails the test suite rather than a user's first start.
+
+    `RETIRED_KEYS` names keys a section used to accept and no longer reads. A `user.yaml` written
+    by an older release may still carry them; they are dropped with a log line instead of turning
+    the whole user layer invalid, and they have no effect.
     """
 
     model_config = ConfigDict(extra="forbid", validate_default=True)
+    RETIRED_KEYS: ClassVar[frozenset[str]] = frozenset()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_retired_keys(cls, data: Any) -> Any:
+        if not cls.RETIRED_KEYS or not isinstance(data, dict):
+            return data
+        retired = sorted(cls.RETIRED_KEYS & data.keys())
+        if not retired:
+            return data
+        log.info("config.retired_keys_ignored", section=cls.__name__, keys=retired)
+        return {key: value for key, value in data.items() if key not in cls.RETIRED_KEYS}
 
 
 # ---- path expansion -----------------------------------------------------------------------------

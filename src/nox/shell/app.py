@@ -1,10 +1,14 @@
 """Shell composition root (the component model: `nox.shell.app` wires everything).
 
 Flow: read runtime files -> create IPC bridge (role shell) -> pet window + tray + hotkeys -> ping
-loop decides `connected` -> events update ShellModel -> tray/pet refresh. Every user action is a
-typed request; when the core is offline the kill switch goes to the supervisor control port. "Quit"
-always goes through the supervisor (`sup.stop`), not just a local exit: the supervisor stops the
-core gracefully, then the shell process, then itself.
+loop decides `connected` -> `privacy.status` sets the starting picture -> events update ShellModel
+-> tray/pet refresh. Every user action is a typed request; when the core is offline the kill switch
+goes to the supervisor control port. "Quit" always goes through the supervisor (`sup.stop`), not
+just a local exit: the supervisor stops the core gracefully, then the shell process, then itself.
+
+The hotkeys come from the same configuration layers the core reads (defaults plus `user.yaml`),
+and are rebuilt when the dashboard changes one. A push-to-talk the microphone refused is told to
+the user (`voice.ptt_refused`), never dropped in silence.
 """
 
 from __future__ import annotations
@@ -23,12 +27,14 @@ from nox.shell.dialogs import PermissionDialog
 from nox.shell.hotkeys import GlobalHotkeys, HotkeyTracker
 from nox.shell.ipc_bridge import BridgeFactory, BridgeUnavailableError, IpcBridge, create_bridge
 from nox.shell.logic import (
+    HOTKEY_SETTINGS,
     HotkeyAction,
     ShellModel,
     dashboard_url,
-    hotkey_map,
+    hotkey_map_or_defaults,
     kill_path,
     pet_url,
+    ptt_refusal_text,
     toggle_privacy,
     ws_url,
 )
@@ -79,6 +85,7 @@ class _Signals(QObject):
     event_received = Signal(object)  # envelope dict, emitted from the bridge thread
     hotkey = Signal(object, bool)  # (HotkeyAction, pressed), emitted from pynput thread
     ping = Signal(bool)
+    status = Signal(object)  # `privacy.status` response, emitted from the bridge thread
 
 
 class ShellApp:
@@ -122,6 +129,7 @@ class ShellApp:
         self._signals.event_received.connect(self._on_event_main)
         self._signals.hotkey.connect(self._on_hotkey_main)
         self._signals.ping.connect(self._on_ping_result)
+        self._signals.status.connect(self._on_status_main)
 
         self.tray = TrayController(
             on_toggle_pet=self.toggle_pet,
@@ -138,9 +146,11 @@ class ShellApp:
             self.pet = PetWindow(self.state, on_moved=self._on_pet_moved)
 
         self._hotkeys: GlobalHotkeys | None = None
+        mapping, self._hotkey_conflict = hotkey_map_or_defaults(self.config)
+        if self._hotkey_conflict:
+            log.warning("shell.hotkey_conflict", reason=self._hotkey_conflict)
         if enable_hotkeys:
-            tracker = HotkeyTracker(hotkey_map(self.config))
-            self._hotkeys = GlobalHotkeys(tracker, self._on_hotkey_thread)
+            self._hotkeys = GlobalHotkeys(HotkeyTracker(mapping), self._on_hotkey_thread)
 
         self._ping_timer = QTimer()
         self._ping_timer.setInterval(PING_INTERVAL_MS)
@@ -169,6 +179,8 @@ class ShellApp:
                 self.model.click_through = self.pet.set_click_through(True)
         if self._hotkeys is not None and not self._hotkeys.start():
             self.tray.notify("Nox", "Hotkeys unavailable (pynput missing)")
+        if self._hotkey_conflict:
+            self._notify_hotkey_conflict(self._hotkey_conflict)
         self._ping_timer.start()
         self._ping()
         self.tray.refresh(self.model)
@@ -290,6 +302,27 @@ class ShellApp:
             log.info("shell.connection_changed", connected=connected)
             if connected:
                 self._subscribe()
+                self._resync_state()
+            self.tray.refresh(self.model)
+
+    def _resync_state(self) -> None:
+        """Ask the core for the current privacy, capture, mute and kill state.
+
+        Events carry changes only: after a (re)connect the tray would otherwise show defaults
+        until the next change - "not capturing" inside a zone, "unmuted" while muted.
+        """
+        fut = self._request("privacy.status", {})
+        if fut is not None:
+            fut.add_done_callback(self._status_done)
+
+    def _status_done(self, fut: Future[Any]) -> None:
+        if fut.exception() is not None:
+            log.warning("shell.status_unavailable", error=type(fut.exception()).__name__)
+            return
+        self._signals.status.emit(fut.result())
+
+    def _on_status_main(self, status: object) -> None:
+        if isinstance(status, dict) and self.model.apply_status(status):
             self.tray.refresh(self.model)
 
     # -- events ----------------------------------------------------------------------------------
@@ -318,6 +351,12 @@ class ShellApp:
             self.tray.refresh(self.model)
         if name == "security.kill_switch":
             self.tray.notify("Nox", "Kill switch engaged – safe mode", critical=True)
+        elif name == "voice.ptt_refused":
+            self.tray.notify("Nox", ptt_refusal_text(payload, self.language))
+        elif name == "voice.ptt_released" and payload.get("reason") and self._hotkeys is not None:
+            # The worker let go of a push-to-talk nobody released (a key-up lost to a locked
+            # screen); the listener still believes the keys are down.
+            self._hotkeys.reset()
 
     def _apply_settings_changed(self, payload: dict[str, Any]) -> None:
         """: apply a changed `pet.variant` by reloading the pet page with the new variant.
@@ -329,14 +368,32 @@ class ShellApp:
         placeholder.
         """
         paths = payload.get("paths")
-        if not isinstance(paths, list) or "pet.variant" not in paths:
+        if not isinstance(paths, list):
+            return
+        hotkeys_changed = bool(HOTKEY_SETTINGS & set(paths))
+        if "pet.variant" not in paths and not hotkeys_changed:
             return
         if self._config_from_disk:
             self.config = load_config()
-        if self.pet is None:
+        if hotkeys_changed:
+            self._apply_hotkeys()
+        if self.pet is None or "pet.variant" not in paths:
             return
         log.info("shell.pet_variant_changed", variant=self._pet_variant())
         self._load_pet_page()
+
+    def _apply_hotkeys(self) -> None:
+        """Listen for the combos the configuration now names (edited in the dashboard)."""
+        mapping, conflict = hotkey_map_or_defaults(self.config)
+        if conflict:
+            log.warning("shell.hotkey_conflict", reason=conflict)
+            self._notify_hotkey_conflict(conflict)
+        if self._hotkeys is not None:
+            self._hotkeys.remap(mapping)
+        log.info("shell.hotkeys_changed")
+
+    def _notify_hotkey_conflict(self, reason: str) -> None:
+        self.tray.notify("Nox", f"Tastenkürzel-Konflikt, die Standardkürzel gelten: {reason}")
 
     def _pet_variant(self) -> str:
         pet = self.config.get("pet")
@@ -418,12 +475,7 @@ class ShellApp:
             )
             return path
         sup_token = read_supervisor_token(self.runtime_dir)
-        host = self.endpoints.host if self.endpoints else "127.0.0.1"
-        port = (
-            self.endpoints.supervisor_port
-            if self.endpoints
-            else IpcEndpoints.model_fields["supervisor_port"].default
-        )
+        host, port = self._supervisor_address()
         if sup_token is None:
             log.error("shell.kill_no_supervisor_token")
             self.tray.notify("Nox", "Kill switch failed: no supervisor token", critical=True)
@@ -435,6 +487,11 @@ class ShellApp:
             self.tray.notify("Nox", "Kill switch failed: supervisor unreachable", critical=True)
             return "failed"
         return path
+
+    def _supervisor_address(self) -> tuple[str, int]:
+        if self.endpoints is not None:
+            return self.endpoints.host, self.endpoints.supervisor_port
+        return "127.0.0.1", IpcEndpoints.model_fields["supervisor_port"].default
 
     def _kill_from_tray(self) -> None:
         self.kill_switch("tray")
@@ -448,12 +505,7 @@ class ShellApp:
         if sup_token is None:
             log.warning("shell.quit_no_supervisor_token")
             return
-        host = self.endpoints.host if self.endpoints else "127.0.0.1"
-        port = (
-            self.endpoints.supervisor_port
-            if self.endpoints
-            else IpcEndpoints.model_fields["supervisor_port"].default
-        )
+        host, port = self._supervisor_address()
         try:
             self._supervisor_stop(host, port, sup_token)
         except SupervisorUnavailableError as exc:
