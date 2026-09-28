@@ -13,7 +13,8 @@
  *   remote.ts         paired devices and the one-time pairing code
  *   settings.ts       config, secrets, PIN, Twitch device flow, personality
  *   notifications.ts  the toast rows
- *   chat.ts           chat turns and the kill-switch confirm machine
+ *   chat.ts           chat turns, persisted history and the kill-switch confirm machine
+ *   security.ts       PIN status and refusals, resume, relaxing privacy
  *   reduce.ts         `reduceEvent`, the only writer of `DashboardState`
  *   wire.ts           the compile-time link to `shared/generated/ipc.ts`
  */
@@ -25,6 +26,7 @@ export * from './home';
 export * from './notifications';
 export * from './providers';
 export * from './reduce';
+export * from './security';
 export * from './remote';
 export * from './settings';
 export * from './state';

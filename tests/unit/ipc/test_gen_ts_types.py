@@ -87,7 +87,56 @@ def test_check_returns_1_when_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     stale = tmp_path / "ipc.ts"
     stale.write_text("stale content", encoding="utf-8")
     monkeypatch.setattr(gen_ts_types, "OUTPUT_PATH", stale)
+    monkeypatch.setattr(gen_ts_types, "VERSION_OUTPUT_PATH", tmp_path / "version.ts")
     assert gen_ts_types.main(["--check"]) == 1
     assert gen_ts_types.main([]) == 0
     assert stale.read_text(encoding="utf-8") == gen_ts_types.generate()
     assert gen_ts_types.main(["--check"]) == 0
+
+
+# ---- the version both UIs send -----------------------------------------------------------------
+
+
+def test_the_ui_client_version_is_generated_from_the_package_version() -> None:
+    """A hand-kept '0.1.0' in the UIs would one day be refused by a 1.x core (major check)."""
+    import nox
+
+    version = gen_ts_types.package_version()
+    assert version == nox.__version__  # one version number for the whole product
+    assert gen_ts_types.VERSION_OUTPUT_PATH.read_text(encoding="utf-8") == (
+        gen_ts_types.generate_version()
+    )
+    assert f'export const NOX_VERSION = "{version}";' in gen_ts_types.generate_version()
+
+
+def test_the_hub_accepts_the_generated_client_version() -> None:
+    from nox.ipc.server import major_version
+
+    assert major_version(gen_ts_types.package_version()) == major_version(
+        __import__("nox").__version__
+    )
+
+
+def test_no_ui_hand_writes_a_client_version() -> None:
+    """Both clients import `NOX_VERSION`; a literal version string in them is the old bug."""
+    for path in (
+        REPO_ROOT / "ui" / "dashboard" / "src" / "ipc.ts",
+        REPO_ROOT / "ui" / "pet" / "src" / "ipc.ts",
+        REPO_ROOT / "ui" / "shared" / "ipc.ts",
+    ):
+        text = path.read_text(encoding="utf-8")
+        assert "'0.1.0'" not in text and '"0.1.0"' not in text, path
+    for path in (
+        REPO_ROOT / "ui" / "dashboard" / "src" / "ipc.ts",
+        REPO_ROOT / "ui" / "pet" / "src" / "ipc.ts",
+    ):
+        assert "clientVersion: NOX_VERSION" in path.read_text(encoding="utf-8"), path
+
+
+def test_check_fails_when_the_version_file_is_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stale = tmp_path / "version.ts"
+    stale.write_text('export const NOX_VERSION = "0.1.0";\n', encoding="utf-8")
+    monkeypatch.setattr(gen_ts_types, "VERSION_OUTPUT_PATH", stale)
+    assert gen_ts_types.main(["--check"]) == 1

@@ -36,6 +36,8 @@ class FakeBridge:
         self.fail_calls = False
         #: What a request answers with, by name; `{"ok": True}` for anything not listed.
         self.responses: dict[str, Any] = dict(FakeBridge.default_responses)
+        #: The same answers under the name some tests use.
+        self.results = self.responses
 
     def start(self) -> None:
         self.started = True

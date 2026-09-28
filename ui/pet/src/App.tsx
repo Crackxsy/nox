@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { CaptureIndicator } from './CaptureIndicator';
+import { ConnectionNote } from './ConnectionNote';
 import {
   type ConnStatus,
   type Envelope,
@@ -248,16 +249,8 @@ export function App({ token, lang, overlay, variantId, still, animate, stillExpr
           muted={state.muted}
         />
       )}
-      {!overlay && !still && !token && (
-        <p role="alert" className="pet-chip pet-note">
-          {t('no_token')}
-        </p>
-      )}
-      {!overlay && !still && status === 'auth_failed' && (
-        <p role="alert" className="pet-chip pet-note">
-          {t('auth_denied')}
-          {statusDetail ? `: ${statusDetail}` : ''}
-        </p>
+      {!overlay && !still && (
+        <ConnectionNote t={t} hasToken={token !== null} status={status} detail={statusDetail} />
       )}
     </div>
   );

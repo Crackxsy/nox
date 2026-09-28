@@ -18,8 +18,8 @@ What counts as relaxing, and what deliberately does not:
   teach the user to type it without reading.
 
 Without a PIN configured - a fresh install - nothing is gated: there is no secret to prove, and a
-gate that cannot be satisfied is a lock-out, not a protection. `nox onboard` and the Settings page
-are where a PIN is set.
+gate that cannot be satisfied is a lock-out, not a protection. `nox onboard`, `nox pin set` and the
+dashboard's Settings page are where a PIN is set (all three through `nox.security.pin_setup`).
 
 When the operating system's credential store cannot be read (a Linux session without a Secret
 Service), whether a PIN exists is unknown. Relaxing changes are then refused with that reason -
@@ -28,10 +28,13 @@ Service), whether a PIN exists is unknown. Relaxing changes are then refused wit
 
 from __future__ import annotations
 
+from typing import Any
+
 from nox.core.state import PrivacyMode
 from nox.security._logging import get_logger
 from nox.security.audit_sink import SafeAuditLog
 from nox.security.model import AuditLog
+from nox.security.pin_setup import pin_error_from_status
 from nox.security.secrets import PinManager, SecretStoreUnavailableError
 
 log = get_logger(__name__)
@@ -57,12 +60,18 @@ _MODE_ORDER: tuple[PrivacyMode, ...] = (
 
 
 class PinRequiredError(PermissionError):
-    """A security-relevant change was attempted without the PIN it needs."""
+    """A security-relevant change was attempted without the PIN it needs.
 
-    def __init__(self, action: str, reason: str) -> None:
+    `details` carries the stable `reason` code (`pin_required`, `pin_wrong`, `locked`,
+    `invalid_entry`, `store_unavailable`) and the facts that go with it, so a UI can say exactly
+    what happened instead of pattern-matching the English sentence.
+    """
+
+    def __init__(self, action: str, reason: str, details: dict[str, Any] | None = None) -> None:
         super().__init__(reason)
         self.action = action
         self.reason = reason
+        self.details: dict[str, Any] = dict(details or {"reason": "pin_required"})
 
 
 def relaxes_privacy(current: PrivacyMode, target: PrivacyMode) -> bool:
@@ -125,7 +134,9 @@ class SecurityChangeGate:
         if self.describe() == "unknown":
             self._deny(action, by, "credential store unavailable")
             raise PinRequiredError(
-                action, f"{action} denied: the credential store holding the PIN cannot be read"
+                action,
+                f"{action} denied: the credential store holding the PIN cannot be read",
+                {"reason": "store_unavailable"},
             )
         if not pin:
             self._deny(action, by, "no PIN supplied")
@@ -134,7 +145,8 @@ class SecurityChangeGate:
         if status.ok:
             return
         self._deny(action, by, status.reason)
-        raise PinRequiredError(action, f"{action} denied: {status.reason}")
+        refusal = pin_error_from_status(status, action=action)
+        raise PinRequiredError(action, refusal.message, refusal.payload())
 
     def _deny(self, action: str, by: str, reason: str) -> None:
         log.warning("security.pin_gate_denied", action=action, by=by, reason=reason)

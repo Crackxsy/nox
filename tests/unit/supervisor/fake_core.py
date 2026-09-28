@@ -6,7 +6,10 @@ with sup.ack and exit), --restart-ack (ack every sup.kill but exit 0 only for `m
 simulating the core's clean shutdown so the supervisor respawns it), --stop-ack (exit 0 on
 sup.stop, simulating a graceful NoxCore.stop(); when absent, sup.stop is received and ignored -
 simulating a hung core), --boot-delay S (sleep before connecting at all, simulating a slow cold
-boot), --exit-after S (exit with code 3 without connecting).
+boot), --exit-after S (exit with code 3 without connecting), --ack-stay (ack sup.kill and keep
+running, the way the real core stays up in safe mode), --resume-after S (S seconds after a kill,
+send `sup.resume {rearm: true}` the way the core does once the user resumed; with --rearm-file P
+the ack's payload is written to P as JSON).
 
 B-1: authenticates once per connection (`sup.auth` -> `sup.auth_ok`) before doing anything else;
 every frame after that carries no token.
@@ -60,6 +63,9 @@ async def main() -> int:
     parser.add_argument("--stop-ack", action="store_true")
     parser.add_argument("--boot-delay", type=float, default=0.0)
     parser.add_argument("--exit-after", type=float, default=None)
+    parser.add_argument("--ack-stay", action="store_true")
+    parser.add_argument("--resume-after", type=float, default=None)
+    parser.add_argument("--rearm-file", default=None)
     args = parser.parse_args()
 
     if args.exit_after is not None:
@@ -76,6 +82,17 @@ async def main() -> int:
     if not await authenticate(reader, writer, token):
         return 2
 
+    resume_id: list[str] = []
+
+    async def resume_later() -> None:
+        await asyncio.sleep(args.resume_after)
+        request = envelope("sup.resume", "request", {"by": "dashboard", "rearm": True})
+        resume_id.append(json.loads(request)["id"])
+        writer.write(request)
+        await writer.drain()
+
+    background: set[asyncio.Task[None]] = set()
+
     async def read_loop() -> None:
         while True:
             line = await reader.readline()
@@ -83,6 +100,20 @@ async def main() -> int:
                 return
             msg = json.loads(line)
             name = msg.get("name")
+            if name == "sup.ack" and resume_id and msg.get("corr") == resume_id[0]:
+                if args.rearm_file:
+                    # A tiny write from a throwaway test child: blocking the loop here is harmless.
+                    with open(args.rearm_file, "w", encoding="utf-8") as fh:  # noqa: ASYNC230
+                        json.dump(msg.get("payload", {}), fh)
+                continue
+            if name == "sup.kill" and args.ack_stay:
+                writer.write(envelope("sup.ack", "response", {"ok": True}, corr=msg["id"]))
+                await writer.drain()
+                if args.resume_after is not None:
+                    task = asyncio.create_task(resume_later())
+                    background.add(task)
+                    task.add_done_callback(background.discard)
+                continue
             if name == "sup.kill" and (args.ack or args.restart_ack):
                 writer.write(envelope("sup.ack", "response", {"ok": True}, corr=msg["id"]))
                 await writer.drain()

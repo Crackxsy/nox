@@ -2,8 +2,11 @@
 
 Used only when the core is unreachable; otherwise `security.kill` goes over the IPC hub. Also the
 only path for "Quit": the shell asks the supervisor to `sup.stop`, which stops the core gracefully,
-then the shell process, then itself. The control channel authenticates once per connection:
-`sup.auth {token, role, pid}` -> `sup.auth_ok`; the actual request that follows carries no token.
+then the shell process, then itself. "Resume" comes here only while the core is unreachable
+(`sup.resume` starts a fresh core); with a core running it goes through `security.resume`, the one
+place that can check the PIN a security-path kill requires. The control channel authenticates once
+per connection: `sup.auth {token, role, pid}` -> `sup.auth_ok`; the actual request that follows
+carries no token.
 """
 
 from __future__ import annotations
@@ -46,6 +49,11 @@ def build_kill_message(*, reason: str, origin: str) -> dict[str, Any]:
 def build_stop_message(*, reason: str) -> dict[str, Any]:
     """Envelope-shaped `sup.stop` request: the supervisor stops core, shell and itself."""
     return _envelope("sup.stop", {"reason": reason})
+
+
+def build_resume_message() -> dict[str, Any]:
+    """Envelope-shaped `sup.resume` request: leave safe mode by starting a fresh core."""
+    return _envelope("sup.resume", {"by": "tray"})
 
 
 def _send_after_handshake(
@@ -99,6 +107,13 @@ def send_supervisor_stop(
     return _send_after_handshake(
         host, port, token, build_stop_message(reason=reason), timeout=timeout
     )
+
+
+def send_supervisor_resume(
+    host: str, port: int, token: str, *, timeout: float = 2.0
+) -> dict[str, Any]:
+    """Authenticate, then send `sup.resume`; the answer's payload has `ok` and, if not, `reason`."""
+    return _send_after_handshake(host, port, token, build_resume_message(), timeout=timeout)
 
 
 def _read_line(sock: socket.socket, timeout: float) -> str:

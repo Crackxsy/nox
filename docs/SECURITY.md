@@ -107,6 +107,16 @@ permission.self_elevate
   tamper detection, an audit-chain break, panic mode, or supervisor tamper. A user-initiated kill
   (hotkey, tray, voice, shell, dashboard) resumes without a PIN. Every engage and resume, allowed
   or denied, is audited with its origin and whether a security-path PIN was required.
+- **Where resuming happens**: the dashboard's Status page ("Fortsetzen", with a PIN field when the
+  core asks for one) and the tray menu ("Fortsetzen") both send `security.resume` to the core,
+  which is the only place that checks the PIN. Once the core has let go of the kill switch, it
+  tells the supervisor over its own authenticated control connection (`sup.resume {rearm: true}`),
+  so the watchdog that a hotkey or tray kill put into safe mode restarts a crashed core again; the
+  core is not restarted for this. The supervisor accepts that re-arm only from the spawned core's
+  connection. A `sup.resume` from any other client (the tray while the core is unreachable) is
+  honoured only while no core is connected - after the restart limit, or after a kill the core
+  never acknowledged - and then starts a fresh core; while a core is connected it is refused with
+  `core_running`, because restarting the core from outside would step around its PIN check.
 - **Panic mode** = kill switch + privacy forced to OFFLINE + pet hidden + stream-safe behavior
   (an OBS privacy-scene request in v0.2+). Panic never deletes anything.
 - **Survives a restart**: the privacy mode, panic and the kill switch (engaged, its origin and
@@ -197,10 +207,31 @@ audited in the core yet.
 
 ## PIN
 
-Protects: hard-prohibition-adjacent settings, profile rule edits, an audit-log reset, and resuming
-after a *security-path* kill (see "Kill switch" above — a user-initiated kill needs no PIN).
-Stored as an Argon2id hash in the keyring (`nox/security/pin`); 5 failed attempts trigger a 15
-minute lockout, itself audited.
+Protects: relaxing the privacy mode or switching a capture device back on, edits to `security.*`
+and `privacy.*` settings from the dashboard, changing a stored credential, and resuming after a
+*security-path* kill (see "Kill switch" above — a user-initiated kill needs no PIN). There is no
+audit-log reset feature for it to protect. Without a PIN set, none of these ask; with the
+credential store unreadable, all of them are refused.
+
+- **Setting it**: `nox onboard` (optional step, hidden prompt, typed twice), `nox pin set` /
+  `nox pin clear` / `nox pin status`, or Settings → "Sicherheits-PIN" in the dashboard
+  (`security.pin.set` / `security.pin.clear`, UI roles only, 5 changes per minute, every refusal
+  audited). All three follow one set of rules (`nox.security.pin_setup`): the first PIN needs
+  nothing, changing or removing it needs the current one, and a PIN has 6 to 64 characters.
+- **Storage**: an Argon2id hash in the keyring under `nox/security/pin` (`argon2-cffi` is a
+  dependency). A PBKDF2-SHA256 hash written by an earlier version is still verified and is
+  re-hashed to Argon2id on its next successful verification. The PIN itself, its hash and its
+  length never leave the core; `security.pin.status` reports only whether one is set and which
+  changes will ask for it.
+- **A raw value is never a PIN**: `nox secrets set nox/security/pin` is refused and points to
+  `nox pin set`. An entry that is not a PIN hash (left by an older version) fails every check with
+  the reason "PIN entry is not a Nox PIN hash - set it again with `nox pin set`", is reported by
+  the `secrets` health check and `nox doctor`, and does not count as a wrong guess. The dashboard
+  will not touch such an entry; `nox pin set` on the local machine replaces it.
+- **Lockout**: 5 failed attempts trigger a 15 minute lockout, persisted in the database so a
+  restart does not reset it, and audited. Verifications are serialised, so concurrent requests
+  cannot spend several guesses on one count. A PIN change made with `nox pin` is not in the audit
+  log: only the core writes its hash chain.
 
 ## Plugin sandboxing boundary
 

@@ -31,6 +31,8 @@ class FakeSupervisor:
         self.received: list[Envelope] = []
         self.writer: asyncio.StreamWriter | None = None
         self.got_first = asyncio.Event()
+        #: The ack payload for `sup.resume`; None answers nothing at all (a hung supervisor).
+        self.resume_reply: dict[str, object] | None = {"ok": True, "reason": ""}
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
@@ -50,6 +52,9 @@ class FakeSupervisor:
                     return
                 self.received.append(env)
                 self.got_first.set()
+                if env.name == m.NAME_RESUME and self.resume_reply is not None:
+                    writer.write(m.encode(env.reply(m.NAME_ACK, self.resume_reply, SUP_SRC)))
+                    await writer.drain()
         finally:
             # Python 3.13: Server.wait_closed() waits for every accepted connection to actually
             # close, not just for the listening socket - an unclosed writer here hangs the
@@ -248,3 +253,56 @@ async def test_kill_without_mode_still_engages_the_kill_switch(
             break
     assert kills == [("panic", "tray")] and restarts == []
     await client.stop()
+
+
+# ---- notify_resumed: the core tells the supervisor the user resumed ---------------------------
+
+
+async def _connected_client(port: int) -> SupervisorClient:
+    client = SupervisorClient("127.0.0.1", port, TOKEN, interval_s=0.05)
+    client.start()
+    assert await client.wait_connected(5.0)
+    return client
+
+
+async def test_notify_resumed_asks_the_supervisor_to_rearm(
+    server: tuple[FakeSupervisor, int],
+) -> None:
+    fake, port = server
+    client = await _connected_client(port)
+    try:
+        assert await client.notify_resumed(by="dashboard") == "rearmed"
+        request = next(env for env in fake.received if env.name == m.NAME_RESUME)
+        assert request.payload == {"by": "dashboard", "rearm": True}
+        assert "token" not in request.payload  # B-1: only `sup.auth` carries the token
+    finally:
+        await client.stop()
+
+
+async def test_notify_resumed_reports_a_supervisor_that_was_not_in_safe_mode(
+    server: tuple[FakeSupervisor, int],
+) -> None:
+    fake, port = server
+    fake.resume_reply = {"ok": False, "reason": "not_in_safe_mode"}
+    client = await _connected_client(port)
+    try:
+        assert await client.notify_resumed(by="shell") == "not_in_safe_mode"
+    finally:
+        await client.stop()
+
+
+async def test_notify_resumed_never_hangs_on_a_silent_supervisor(
+    server: tuple[FakeSupervisor, int],
+) -> None:
+    fake, port = server
+    fake.resume_reply = None
+    client = await _connected_client(port)
+    try:
+        assert await client.notify_resumed(by="shell", timeout_s=0.2) == "unreachable"
+    finally:
+        await client.stop()
+
+
+async def test_notify_resumed_without_a_connection_is_unreachable() -> None:
+    client = SupervisorClient("127.0.0.1", free_port(), TOKEN)
+    assert await client.notify_resumed(by="dashboard") == "unreachable"

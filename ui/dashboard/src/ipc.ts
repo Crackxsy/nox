@@ -5,6 +5,7 @@
  */
 
 import type { Envelope } from '../../shared/envelope';
+import { NOX_VERSION } from '../../shared/generated/version';
 import { type ConnStatus, IpcClient, IpcError, resolveWsUrl } from '../../shared/ipc';
 import { CHAT_IDLE_TIMEOUT_MS } from './model/chat';
 
@@ -54,7 +55,7 @@ export async function createDashboardClient(
     role: 'dashboard',
     id: `dashboard:${Math.random().toString(36).slice(2, 8)}`,
     patterns: DASHBOARD_PATTERNS,
-    clientVersion: '0.1.0',
+    clientVersion: NOX_VERSION,
     onEvent: handlers.onEvent,
     onStatus: handlers.onStatus,
   });
@@ -66,14 +67,28 @@ export const api = {
   stateGet: (c: IpcClient) => c.request('state.get', {}),
   healthGet: (c: IpcClient) => c.request('health.get', {}),
   providers: (c: IpcClient) => c.request('ai.providers', {}),
-  setPrivacy: (c: IpcClient, mode: string) => c.request('privacy.set', { mode }),
+  /**
+   * `confirmed` is the dialog's answer for a move to FULL; `pin` goes along only when the core
+   * asks for one (a relaxing change while a PIN is set). An empty PIN is not sent.
+   */
+  setPrivacy: (c: IpcClient, mode: string, opts: { confirmed?: boolean; pin?: string } = {}) =>
+    c.request('privacy.set', {
+      mode,
+      ...(opts.confirmed ? { confirmed: true } : {}),
+      ...(opts.pin ? { pin: opts.pin } : {}),
+    }),
   setMode: (c: IpcClient, mode: string) => c.request('mode.set', { mode }),
   setMuted: (c: IpcClient, muted: boolean) => c.request('voice.mute', { muted }),
   kill: (c: IpcClient, reason: string) => c.request('security.kill', { reason, origin: 'ui' }),
+  /** Leave safe mode; the core checks the PIN after a security-path kill and re-arms the watchdog. */
+  resume: (c: IpcClient, pin = '') => c.request('security.resume', pin ? { pin } : {}),
   // A model on a cold cache can take well past the 10 s default before the first token; the
   // timeout is an idle timeout (`shared/ipc.ts`), so every arriving frame restarts it.
   chat: (c: IpcClient, text: string, onChunk: (env: Envelope) => void) =>
     c.request('chat.send', { text }, onChunk, CHAT_IDLE_TIMEOUT_MS),
+  /** Persisted turns across sessions, oldest first; `before` pages backwards by turn id. */
+  chatHistory: (c: IpcClient, limit: number, before: number | null = null) =>
+    c.request('chat.history', before === null ? { limit } : { limit, before }),
   panic: (c: IpcClient) => c.request('security.panic', { origin: 'ui' }),
   streamStatus: (c: IpcClient) => c.request('stream.session.status', {}),
   funkenTop: (c: IpcClient, limit = 10) => c.request('stream.funken.top', { limit }),
@@ -106,8 +121,13 @@ export const api = {
   configGet: (c: IpcClient) => c.request('config.get', {}),
   configSet: (c: IpcClient, values: Record<string, unknown>) => c.request('config.set', { values }),
   secretsStatus: (c: IpcClient) => c.request('secrets.status', {}),
-  /** `{configured}` — whether a secret change has to carry a PIN (#23). */
+  /** `PinStatus`: whether a PIN is set and which changes will ask for it - never the PIN. */
   pinStatus: (c: IpcClient) => c.request('security.pin.status', {}),
+  /** Set the first PIN, or change it (`current` required then). */
+  pinSet: (c: IpcClient, pin: string, current = '') =>
+    c.request('security.pin.set', current ? { pin, current_pin: current } : { pin }),
+  pinClear: (c: IpcClient, current: string) =>
+    c.request('security.pin.clear', { current_pin: current }),
   // The PIN is only ever a request field: it is passed in per call, sent when there is one, and
   // never stored anywhere in this UI. An empty string is no PIN at all, so it is not sent —
   // that way the core answers "PIN required" instead of "PIN wrong".

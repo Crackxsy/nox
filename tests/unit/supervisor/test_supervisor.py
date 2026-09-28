@@ -15,7 +15,11 @@ import psutil
 import pytest
 
 from nox.ipc.protocol import Kind, Source
-from nox.shell.supervisor_client import send_supervisor_kill, send_supervisor_stop
+from nox.shell.supervisor_client import (
+    send_supervisor_kill,
+    send_supervisor_resume,
+    send_supervisor_stop,
+)
 from nox.supervisor import messages as m
 from nox.supervisor.main import (
     Supervisor,
@@ -378,3 +382,90 @@ async def test_a_requested_stop_is_never_answered_with_a_fresh_core(
     status = sup.status()
     assert status.core_pid is None
     assert status.restarts_in_window == 0
+
+
+# ---- leaving safe mode: the core's rearm and a shell's resume ----------------------------------
+
+
+async def test_a_resumed_core_rearms_the_watchdog_without_a_restart(
+    sup_factory: Callable[..., Supervisor], tmp_path: Path
+) -> None:
+    """A hotkey kill held the supervisor in safe mode forever: the user resumed in the dashboard,
+    the core carried on, and a later crash of that core was never restarted again."""
+    rearm_file = tmp_path / "rearm.json"
+    sup = sup_factory(
+        "--ack-stay", "--resume-after", "0.3", "--rearm-file", str(rearm_file), restart_limit=5
+    )
+    await sup.start()
+    await wait_until(lambda: sup.status().core_connected, 5.0)
+    pid = sup.status().core_pid
+
+    assert await sup.kill_switch(by="hotkey", reason="test") is True
+    assert sup.status().state is SupervisorState.SAFE_MODE
+
+    await wait_until(lambda: sup.status().state is SupervisorState.RUNNING, 5.0)
+    st = sup.status()
+    assert st.core_pid == pid  # the resumed core keeps running: re-armed, not restarted
+    assert not st.kill_switch_engaged and st.safe_mode_reason == ""
+    await wait_until(rearm_file.exists, 5.0)
+    assert json.loads(rearm_file.read_text(encoding="utf-8")) == {"ok": True, "reason": ""}
+
+    # The actual bug: after the resume, a crash has to be answered with a fresh core again.
+    assert pid is not None
+    psutil.Process(pid).kill()
+    await wait_until(
+        lambda: sup.status().core_pid not in (None, pid) and sup.status().core_connected, 10.0
+    )
+    assert sup.status().state is SupervisorState.RUNNING
+
+
+async def test_only_the_core_may_rearm_the_watchdog(sup_factory: Callable[..., Supervisor]) -> None:
+    """The shell holds the same control token; it must not be able to talk the supervisor out of
+    safe mode while the core - the one place that checks the PIN - stays in it."""
+    sup = sup_factory("--ack-stay")
+    await sup.start()
+    await wait_until(lambda: sup.status().core_connected, 5.0)
+    assert await sup.kill_switch(by="hotkey") is True
+
+    reply = await asyncio.to_thread(
+        _auth_and_request, sup.port, sup.token, m.NAME_RESUME, {"by": "shell", "rearm": True}
+    )
+
+    assert reply["payload"] == {"ok": False, "reason": "not_core"}
+    assert sup.status().state is SupervisorState.SAFE_MODE
+
+
+async def test_a_shell_resume_goes_through_a_running_core(
+    sup_factory: Callable[..., Supervisor],
+) -> None:
+    """With a core connected, restarting it from the supervisor would step around its PIN check
+    after a security-path kill; the shell is told to resume through the core instead."""
+    sup = sup_factory("--ack-stay")
+    await sup.start()
+    await wait_until(lambda: sup.status().core_connected, 5.0)
+    pid = sup.status().core_pid
+    assert await sup.kill_switch(by="tray") is True
+
+    reply = await asyncio.to_thread(send_supervisor_resume, "127.0.0.1", sup.port, sup.token)
+
+    assert reply["name"] == m.NAME_ACK
+    assert reply["payload"] == {"ok": False, "reason": "core_running"}
+    assert sup.status().state is SupervisorState.SAFE_MODE and sup.status().core_pid == pid
+
+
+async def test_a_shell_resume_restarts_a_core_that_is_gone(
+    sup_factory: Callable[..., Supervisor],
+) -> None:
+    """After a kill the core never acknowledged, the tree is gone; the tray's `sup.resume` is the
+    way back, and it starts a fresh core."""
+    sup = sup_factory()  # never acks: the supervisor terminates it
+    await sup.start()
+    await wait_until(lambda: sup.status().core_connected, 5.0)
+    assert await sup.kill_switch(by="hotkey") is False
+    assert sup.status().state is SupervisorState.SAFE_MODE
+
+    reply = await asyncio.to_thread(send_supervisor_resume, "127.0.0.1", sup.port, sup.token)
+
+    assert reply["payload"] == {"ok": True, "reason": ""}
+    await wait_until(lambda: sup.status().core_connected, 5.0)
+    assert sup.status().state is SupervisorState.RUNNING

@@ -10,3 +10,4 @@
 
 export * from './core';
 export * from './labels';
+export * from './security';

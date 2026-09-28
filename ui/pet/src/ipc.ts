@@ -10,6 +10,7 @@
  */
 
 import type { Envelope } from '../../shared/envelope';
+import { NOX_VERSION } from '../../shared/generated/version';
 import { type ConnStatus, IpcClient, resolveWsUrl } from '../../shared/ipc';
 
 export type { Envelope, ConnStatus };
@@ -67,7 +68,7 @@ export async function createPetClient(token: string, handlers: PetIpcHandlers): 
     role: 'pet',
     id: `pet:${Math.random().toString(36).slice(2, 8)}`,
     patterns: PET_PATTERNS,
-    clientVersion: '0.1.0',
+    clientVersion: NOX_VERSION,
     onEvent: handlers.onEvent,
     onStatus: handlers.onStatus,
   });

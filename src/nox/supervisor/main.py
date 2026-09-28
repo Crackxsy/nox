@@ -19,6 +19,12 @@ the core, waits for the acknowledgement, and otherwise terminates the tree and r
 shell in safe mode. A graceful shutdown (`sup.stop`) asks the core to run its own shutdown and
 exit on its own inside `stop_timeout_s` before the supervisor terminates it.
 
+Safe mode ends in one of two ways. Normally the user resumes in the core (`security.resume`, which
+checks the PIN after a security-path kill) and the core re-arms the watchdog with
+`sup.resume {rearm: true}` on its own connection - without that, a hotkey kill left the supervisor
+in safe mode for good and a later crash was never restarted. With no core connected (the restart
+limit, or a kill the core never acknowledged), a `sup.resume` from the tray starts a fresh core.
+
 Every connection authenticates once: the first frame must be `sup.auth {token, role, pid}`, and no
 frame after that carries a token. Two things are bound to the process the supervisor actually
 spawned rather than merely to the shared token: the `core` role, which is accepted only from the
@@ -372,6 +378,24 @@ class Supervisor:
             self._state = SupervisorState.RUNNING
             return True
 
+    async def rearm(self, *, by: str) -> bool:
+        """The core left safe mode on the user's request: watch it again, without a restart.
+
+        Only the core's own connection may ask (see `_answer_resume`), and the core only asks
+        after `security.resume` accepted the request - including the PIN after a security-path
+        kill. The restart history is cleared, as on `resume`, so an old crash does not count.
+        """
+        async with self._lock:
+            if self._state != SupervisorState.SAFE_MODE:
+                return False
+            self._log.info("supervisor.rearmed", by=by, reason=self._safe_mode_reason)
+            self._kill_engaged = False
+            self._safe_mode_reason = ""
+            self._restarts.clear()
+            self._graceful_requested = False
+            self._state = SupervisorState.RUNNING
+            return True
+
     async def graceful_stop(self, *, reason: str = "", by: str = "shell") -> bool:
         """B-6: `sup.stop` from an authenticated client. Core, shell and the supervisor all stop.
 
@@ -680,8 +704,10 @@ class Supervisor:
                 writer, envelope.reply(m.NAME_STATUS, self.status().model_dump(mode="json"), SRC)
             )
         elif name == m.NAME_RESUME:
-            ok = await self.resume(by=str(envelope.payload.get("by") or envelope.src.role))
-            await self._send(writer, envelope.reply(m.NAME_ACK, {"ok": ok}, SRC))
+            # Answered from a background task: `kill_switch` holds the lock while it waits for the
+            # core's ack on this very connection, and awaiting the lock here would stall the read
+            # loop that ack has to come through.
+            self._spawn_bg(self._answer_resume(envelope, writer, is_core=is_core))
         elif name == m.NAME_STOP:
             reason = str(envelope.payload.get("reason", ""))
             by = str(envelope.payload.get("origin") or envelope.src.role)
@@ -691,6 +717,37 @@ class Supervisor:
             self._spawn_bg(self.graceful_stop(by=by, reason=reason))
         else:
             await self._reply_error(writer, envelope, "not_found", f"unknown message {name}")
+
+    async def _answer_resume(
+        self, envelope: Envelope, writer: asyncio.StreamWriter, *, is_core: bool
+    ) -> None:
+        """`sup.resume`: re-arm after the core resumed, or restart a core that is gone.
+
+        * `rearm: true` is accepted only on the spawned core's own connection: the core sends it
+          after `security.resume` succeeded, and it leaves the core running.
+        * Any other client may ask only while no core is connected - after the restart limit, or
+          after a kill the core never acknowledged. Then the only way out is a fresh core. While a
+          core is connected, resuming goes through it, because only the core can check the PIN a
+          security-path kill requires; restarting it from here would step around that check.
+        """
+        by = str(envelope.payload.get("by") or envelope.src.role)
+        payload: dict[str, Any]
+        if envelope.payload.get("rearm") is True:
+            if not is_core or writer is not self._core_writer:
+                self._log.warning("supervisor.rearm_rejected", by=by, role=envelope.src.role)
+                payload = {"ok": False, "reason": "not_core"}
+            else:
+                ok = await self.rearm(by=by)
+                payload = {"ok": ok, "reason": "" if ok else "not_in_safe_mode"}
+        elif self._core_writer is not None:
+            payload = {"ok": False, "reason": "core_running"}
+        else:
+            ok = await self.resume(by=by)
+            payload = {"ok": ok, "reason": "" if ok else "not_in_safe_mode"}
+        try:
+            await self._send(writer, envelope.reply(m.NAME_ACK, payload, SRC))
+        except OSError:
+            self._log.debug("supervisor.resume_reply_failed", by=by)
 
     def _spawn_bg(self, coro: Any) -> None:
         task: asyncio.Task[None] = asyncio.create_task(coro)

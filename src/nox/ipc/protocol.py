@@ -120,6 +120,29 @@ class ChatSendResult(BaseModel):
     degraded: bool
 
 
+class ChatHistoryTurn(BaseModel):
+    """One persisted conversation turn in `chat.history`. `role` is `user` or `assistant`."""
+
+    id: int
+    session_id: str
+    ts: str
+    role: str
+    text: str
+    provider: str = ""
+
+
+class ChatHistoryResult(BaseModel):
+    """`chat.history {limit, before?}` response: turns oldest first, across sessions.
+
+    `has_more` says whether turns older than the first one exist; the next page is asked for with
+    `before` set to the first turn's `id`. Turns recorded while memory writes were not allowed
+    (private mode, a privacy zone, safe mode) do not exist, so they cannot appear here.
+    """
+
+    turns: list[ChatHistoryTurn] = Field(default_factory=list)
+    has_more: bool = False
+
+
 # ---- stream bot response contracts ---------------------------------------------------------------
 
 
@@ -356,12 +379,48 @@ class SecretsStatus(BaseModel):
 
 
 class PinStatus(BaseModel):
-    """`security.pin.status {}` response: whether a PIN is configured, and nothing else about it.
+    """`security.pin.status {}` response: which changes will ask for a PIN, nothing about the PIN.
 
-    The Settings page needs it to know that a PIN-gated call (`secrets.set`, `secrets.delete`) has
-    to carry a PIN. Its length, its hash and the algorithm never leave the core."""
+    `configured` means "a PIN-gated call (`secrets.set`, `secrets.delete`) has to carry a PIN"; it
+    is also true when the entry cannot be read or verified (`state` says which), failing closed.
+    `gate_required`: a relaxing privacy change needs the PIN. `resume_requires_pin`: leaving the
+    current safe mode needs it. `locked_until` is set while failed attempts lock the PIN. Its
+    length, its hash and the algorithm never leave the core."""
 
     configured: bool = False
+    state: Literal["not_set", "valid", "invalid", "unavailable"] = "not_set"
+    min_length: int = 6
+    gate_required: bool = False
+    resume_requires_pin: bool = False
+    locked_until: str | None = None
+
+
+class PinChangeResult(BaseModel):
+    """`security.pin.set` / `security.pin.clear` acknowledgement; `state` is the new entry state.
+
+    A refusal is an error frame whose `details.reason` is one of `pin_required`, `pin_wrong`,
+    `locked`, `too_short`, `too_long`, `not_set`, `invalid_entry`, `store_unavailable`,
+    `backend_missing`, with `remaining_attempts`, `locked_until` or `min_length` where they apply.
+    """
+
+    ok: bool = True
+    state: Literal["not_set", "valid"] = "valid"
+
+
+class SecurityResumeResult(BaseModel):
+    """`security.resume {pin?}` response.
+
+    `reason` is empty on success; otherwise `pin_required`, `pin_wrong`, `locked`,
+    `invalid_entry` or `backend_missing`, with `remaining_attempts`/`locked_until` where they
+    apply. `supervisor` says whether the watchdog was told: `rearmed`, `not_in_safe_mode`,
+    `unreachable` or `standalone` (no supervisor, as in `nox dev`).
+    """
+
+    ok: bool
+    reason: str = ""
+    remaining_attempts: int | None = None
+    locked_until: str | None = None
+    supervisor: str = ""
 
 
 class SettingsOk(BaseModel):

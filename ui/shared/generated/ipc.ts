@@ -88,6 +88,28 @@ export interface ChatSendResult {
   degraded: boolean;
 }
 
+export interface ChatHistoryTurn {
+  id: number;
+  session_id: string;
+  ts: string;
+  role: string;
+  text: string;
+  provider?: string;
+}
+
+export interface ChatHistoryResult {
+  turns?: ChatHistoryTurn[];
+  has_more?: boolean;
+}
+
+export interface SecurityResumeResult {
+  ok: boolean;
+  reason?: string;
+  remaining_attempts?: number | null;
+  locked_until?: string | null;
+  supervisor?: string;
+}
+
 export interface PluginStatusEntry {
   id: string;
   state: string;
@@ -238,6 +260,16 @@ export interface SecretsStatus {
 
 export interface PinStatus {
   configured?: boolean;
+  state?: "not_set" | "valid" | "invalid" | "unavailable";
+  min_length?: number;
+  gate_required?: boolean;
+  resume_requires_pin?: boolean;
+  locked_until?: string | null;
+}
+
+export interface PinChangeResult {
+  ok?: boolean;
+  state?: "not_set" | "valid";
 }
 
 export interface SettingsOk {

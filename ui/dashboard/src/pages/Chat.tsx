@@ -13,16 +13,23 @@
  *
  * The transcript and the composer draft live in `App`, not here: a tab switch unmounts this
  * component, and losing a conversation to a stray click is not an acceptable way to lose it.
+ *
+ * Above this window's own messages sits the persisted conversation (`chat.history`, across
+ * sessions), with its own designed states: a skeleton while it is fetched, a sentence and a retry
+ * when it could not be, a note on what is never stored when there is nothing. "Ansicht leeren"
+ * clears the screen only - the stored turns stay, and one click shows them again.
  */
 
 import { useEffect, useRef, useState } from 'react';
 
 import { uuid } from '../../../shared/envelope';
 import { errorText } from '../../../shared/errors';
+import { formatTimestamp } from '../../../shared/format';
 import { type Key, type Lang, type T, providerByline } from '../i18n';
 import { type Envelope, type IpcClient, api } from '../ipc';
 import { type ChatMessage, type Provider, finalAnswer, providerName, streamDelta } from '../model';
 import { Hero } from '../ui';
+import type { ChatHistory } from './useChatHistory';
 
 export interface ChatPageProps {
   t: T;
@@ -34,6 +41,8 @@ export interface ChatPageProps {
   onMessages: (update: (list: ChatMessage[]) => ChatMessage[]) => void;
   draft: string;
   onDraft: (value: string) => void;
+  /** The persisted conversation shown above this window's messages. */
+  history: ChatHistory;
 }
 
 const EXAMPLES: Key[] = ['chat_example_1', 'chat_example_2', 'chat_example_3'];
@@ -47,6 +56,7 @@ export function ChatPage({
   onMessages,
   draft,
   onDraft,
+  history,
 }: ChatPageProps) {
   const [pending, setPending] = useState(false);
   const [announcement, setAnnouncement] = useState('');
@@ -57,10 +67,11 @@ export function ChatPage({
     inputRef.current?.focus();
   }, []);
 
+  // Follow new live messages; an older history page landing on top must not yank the view.
   useEffect(() => {
     const el = logRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  }, [messages, history.status]);
 
   const patch = (id: string, update: Partial<ChatMessage>) =>
     onMessages((list) => list.map((m) => (m.id === id ? { ...m, ...update } : m)));
@@ -118,6 +129,39 @@ export function ChatPage({
   };
 
   const disabled = client === null;
+  const nothingYet =
+    messages.length === 0 && history.messages.length === 0 && history.status !== 'loading';
+
+  const renderMessage = (m: ChatMessage) => (
+    <article
+      key={m.id}
+      className={`msg ${m.role === 'user' ? 'msg--user' : 'msg--nox'}${m.at ? ' msg--history' : ''}`}
+    >
+      <h3 className="msg-meta">
+        {m.role === 'user' ? t('chat_you') : t('chat_nox')}
+        {m.at && (
+          <span>
+            {' '}
+            · <time dateTime={m.at}>{formatTimestamp(m.at, lang)}</time>
+          </span>
+        )}
+        {m.streaming && <span> · {t('chat_sending')}</span>}
+        {m.provider && (
+          <span>
+            {' '}
+            · {providerByline(t, lang, m.provider, providerName(providers, m.provider))}
+            {m.degraded ? ` (${t('chat_degraded')})` : ''}
+          </span>
+        )}
+      </h3>
+      <p className="msg-text">{m.text}</p>
+      {m.error && (
+        <p role="alert" className="msg-error">
+          {m.error}
+        </p>
+      )}
+    </article>
+  );
 
   return (
     <div className="page wrap">
@@ -128,8 +172,11 @@ export function ChatPage({
           <button
             type="button"
             className="link"
-            onClick={() => onMessages(() => [])}
-            disabled={messages.length === 0 || pending}
+            onClick={() => {
+              onMessages(() => []);
+              history.hide();
+            }}
+            disabled={(messages.length === 0 && history.messages.length === 0) || pending}
           >
             {t('chat_clear')}
           </button>
@@ -145,9 +192,17 @@ export function ChatPage({
           role="log"
           aria-live="off"
           aria-label={t('chat_title')}
+          aria-busy={history.status === 'loading'}
           className="chat-log"
         >
-          {messages.length === 0 && (
+          <HistoryHead t={t} history={history} disabled={disabled} />
+          {history.messages.map(renderMessage)}
+          {history.messages.length > 0 && messages.length > 0 && (
+            <p className="chat-divider">
+              <span>{t('chat_history_new')}</span>
+            </p>
+          )}
+          {nothingYet && (
             <div className="chat-empty">
               <p className="muted">{t('chat_empty')}</p>
               <div className="chat-examples">
@@ -163,29 +218,10 @@ export function ChatPage({
                   </button>
                 ))}
               </div>
+              {history.status === 'ready' && <p className="hint">{t('chat_history_note')}</p>}
             </div>
           )}
-          {messages.map((m) => (
-            <article key={m.id} className={`msg ${m.role === 'user' ? 'msg--user' : 'msg--nox'}`}>
-              <h3 className="msg-meta">
-                {m.role === 'user' ? t('chat_you') : t('chat_nox')}
-                {m.streaming && <span> · {t('chat_sending')}</span>}
-                {m.provider && (
-                  <span>
-                    {' '}
-                    · {providerByline(t, lang, m.provider, providerName(providers, m.provider))}
-                    {m.degraded ? ` (${t('chat_degraded')})` : ''}
-                  </span>
-                )}
-              </h3>
-              <p className="msg-text">{m.text}</p>
-              {m.error && (
-                <p role="alert" className="msg-error">
-                  {m.error}
-                </p>
-              )}
-            </article>
-          ))}
+          {messages.map(renderMessage)}
         </div>
 
         <form
@@ -233,4 +269,65 @@ export function ChatPage({
       </div>
     </div>
   );
+}
+
+/**
+ * What sits above the stored turns: a skeleton while they are fetched, a sentence and a retry when
+ * they could not be, "load older" while there are more, "show again" after the view was cleared.
+ */
+function HistoryHead({
+  t,
+  history,
+  disabled,
+}: {
+  t: T;
+  history: ChatHistory;
+  disabled: boolean;
+}) {
+  if (history.status === 'loading') {
+    return (
+      <div className="chat-history-head">
+        <span className="sr-only">{t('chat_history_loading')}</span>
+        <div aria-hidden="true">
+          <div className="skeleton skeleton-row" />
+          <div className="skeleton skeleton-row" />
+        </div>
+      </div>
+    );
+  }
+  if (history.status === 'failed') {
+    return (
+      <div className="chat-history-head">
+        <p className="muted">{t('chat_history_failed')}</p>
+        <button type="button" className="link" disabled={disabled} onClick={history.reload}>
+          {t('chat_history_retry')}
+        </button>
+      </div>
+    );
+  }
+  if (history.status === 'hidden') {
+    return (
+      <div className="chat-history-head">
+        <button type="button" className="link" disabled={disabled} onClick={history.reload}>
+          {t('chat_history_show')}
+        </button>
+      </div>
+    );
+  }
+  if (history.status === 'ready' && history.hasMore) {
+    return (
+      <div className="chat-history-head">
+        <button
+          type="button"
+          className="link"
+          disabled={disabled || history.loadingOlder}
+          onClick={history.loadOlder}
+        >
+          {t('chat_history_older')}
+        </button>
+        {history.olderFailed && <p className="muted">{t('chat_history_failed')}</p>}
+      </div>
+    );
+  }
+  return null;
 }

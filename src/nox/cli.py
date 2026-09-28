@@ -141,8 +141,16 @@ def secrets_set(
     name: str = typer.Argument(..., help="Secret name, e.g. nox/obs/websocket_password"),
 ) -> None:
     """Store a secret. The value is read from a hidden prompt, never from the command line."""
-    from nox.security.secrets import KeyringSecretStore  # noqa: PLC0415
+    from nox.security.secrets import PIN_SECRET_NAME, KeyringSecretStore  # noqa: PLC0415
 
+    if name == PIN_SECRET_NAME:
+        # A raw value here is not a PIN hash: every PIN check would then fail for good.
+        typer.echo(
+            f"{PIN_SECRET_NAME} holds the hash of the security PIN, not a value to type in.\n"
+            "Use `nox pin set` to set or change the PIN.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     value = typer.prompt("Value", hide_input=True)
     KeyringSecretStore().set(name, value)
     typer.echo(f"stored {name}")
@@ -163,6 +171,50 @@ def secrets_check(name: str = typer.Argument(..., help="Secret name to look for.
     from nox.security.secrets import KeyringSecretStore  # noqa: PLC0415
 
     typer.echo("present" if KeyringSecretStore().get(name) is not None else "missing")
+
+
+pin_app = typer.Typer(help="The security PIN that protects relaxing privacy and security changes.")
+app.add_typer(pin_app, name="pin")
+
+
+def _pin_database_dir() -> Path | None:
+    """Where the core counts failed PIN attempts; None when the configuration cannot be read."""
+    from nox.core.config import ConfigError, load_config  # noqa: PLC0415
+    from nox.paths import resolve_config_paths  # noqa: PLC0415
+
+    try:
+        defaults, user = resolve_config_paths(None)
+        return Path(load_config(defaults, user, None).paths.database_dir)
+    except (ConfigError, OSError) as exc:
+        typer.echo(f"configuration not readable ({exc}); failed attempts are not persisted")
+        return None
+
+
+@pin_app.command("set")
+def pin_set() -> None:
+    """Set the PIN, or change it (asks for the current one). Typed into a hidden prompt, twice."""
+    from nox.onboarding import pin_step  # noqa: PLC0415
+
+    with pin_step.local_pin_manager(_pin_database_dir()) as pin:
+        raise typer.Exit(code=pin_step.cli_pin_set(pin, pin_step.typer_pin_prompt, typer.echo))
+
+
+@pin_app.command("clear")
+def pin_clear() -> None:
+    """Remove the PIN (asks for the current one)."""
+    from nox.onboarding import pin_step  # noqa: PLC0415
+
+    with pin_step.local_pin_manager(_pin_database_dir()) as pin:
+        raise typer.Exit(code=pin_step.cli_pin_clear(pin, pin_step.typer_pin_prompt, typer.echo))
+
+
+@pin_app.command("status")
+def pin_status() -> None:
+    """Say whether a PIN is set, and whether it is locked. Never shows the PIN or its hash."""
+    from nox.onboarding import pin_step  # noqa: PLC0415
+
+    with pin_step.local_pin_manager(_pin_database_dir()) as pin:
+        raise typer.Exit(code=pin_step.cli_pin_status(pin, typer.echo))
 
 
 def _register_voice_commands() -> None:

@@ -168,6 +168,8 @@ class NoxCore:
         self.speech_policy: SpeechPolicy | None = None
         self.sessions: SessionRepository | None = None
         self.speaker: WorkerSpeaker | None = None
+        #: The conversation store: the orchestrator records into it, `chat.history` reads from it.
+        self.turn_store: DbTurnStore | None = None
         self.orchestrator: Orchestrator | None = None
         self.stream_sessions: StreamSessionService | None = None
         self.funken: FunkenService | None = None
@@ -481,14 +483,16 @@ class NoxCore:
             session_id=self.session_id,
         )
         self.speaker = WorkerSpeaker(self.hub, lambda: self.workers.client_id("voice"))
+        self.turn_store = DbTurnStore(
+            TurnRepository(self.db), config.privacy.retention.raw_transcripts_days or None
+        )
         self.orchestrator = Orchestrator(
             bus=self.bus,
             state=self.state,
             router=self.router,
             speaker=self.speaker,
-            turns=DbTurnStore(
-                TurnRepository(self.db), config.privacy.retention.raw_transcripts_days or None
-            ),
+            turns=self.turn_store,
+            # Profile x privacy: a `work` profile remembers nothing even in BALANCED mode.
             memory_policy=self.security.policy,
             system_prompt=self._system_prompt,
             safe_mode=self.security.killswitch.is_engaged,
@@ -883,6 +887,15 @@ class NoxCore:
             self._request_shutdown(reason or by)
             return
         await self.security.killswitch.engage("supervisor", reason or by)
+
+    async def notify_supervisor_resumed(self, *, by: str) -> str:
+        """After a resume: let the supervisor leave its own safe mode and watch the core again.
+
+        `standalone` without a supervisor (`nox dev`); otherwise what the supervisor answered.
+        """
+        if self.supervisor is None:
+            return "standalone"
+        return await self.supervisor.notify_resumed(by=by)
 
     def _on_supervisor_restart(self, reason: str) -> None:
         """`sup.kill mode=restart`: the watchdog wants a fresh core, not safe mode.

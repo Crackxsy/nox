@@ -2,8 +2,12 @@
 
 It asks, in this order: the interface language (so everything after it is in one language), what
 Nox should be called, who the user is, where the data folder and the vault live, whether to
-connect a streaming account, microphone and camera consent, and which AI backend to use - the last
-one behind a live probe of the real providers, never an assumption.
+connect a streaming account, an optional security PIN, microphone and camera consent, and which AI
+backend to use - the last one behind a live probe of the real providers, never an assumption.
+
+The PIN is typed into a hidden prompt, twice, and stored only as a hash in the OS keyring, through
+the same rules as `nox pin set` and the dashboard (`nox.security.pin_setup`). An existing PIN is
+never replaced here: changing one needs the current PIN, which is `nox pin set`'s job.
 
 Every step has a safe default and can be skipped. A skipped step writes nothing, so the value from
 `config/defaults.yaml` keeps applying. The wizard only ever writes the user layer
@@ -18,15 +22,24 @@ keyring and never makes a network or subprocess call.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import typer
 
 from nox.ai.config import AiConfig, load_ai_config
 from nox.core.events import HealthStatus
+from nox.onboarding.pin_step import prompt_new_pin, typer_pin_prompt
 from nox.paths import DEFAULTS_PATH, app_dir
+from nox.security.model import SecretStore
+from nox.security.pin_setup import PinSetup
+from nox.security.secrets import (
+    MIN_PIN_LENGTH,
+    PinEntryState,
+    PinManager,
+    SecretStoreUnavailableError,
+)
 
 # The user-layer reader and writer live in `nox.settings.layers`, so this wizard and the
 # dashboard's `config.set` write the very same file the very same way. Re-exported below, because
@@ -97,6 +110,24 @@ TEXTS: dict[str, dict[str, str]] = {
         "obs_value": "OBS-Websocket-Passwort",
         "telegram_ask": "Telegram-Bot-Token jetzt hinterlegen?",
         "telegram_value": "Telegram-Bot-Token",
+        "pin_intro": (
+            "\nEine Sicherheits-PIN schützt alles, was Nox weniger vorsichtig macht: Privatsphäre "
+            "lockern, gespeicherte Zugangsdaten ändern, nach einem Sicherheitsstopp fortsetzen.\n"
+            "Ohne PIN reicht dafür ein Klick. Empfohlen; ändern oder entfernen später mit "
+            "`nox pin set` / `nox pin clear` oder im Dashboard."
+        ),
+        "pin_ask": "Sicherheits-PIN jetzt festlegen?",
+        "pin_exists": "Es ist schon eine PIN gesetzt. Ändern mit `nox pin set`.",
+        "pin_invalid": (
+            "Unter nox/security/pin liegt keine gültige PIN, sondern ein anderer Wert. "
+            "Neu setzen mit `nox pin set`."
+        ),
+        "pin_unavailable": "Der Anmeldeinformationsspeicher ist nicht erreichbar: {reason}",
+        "pin_new": f"Neue PIN (mindestens {MIN_PIN_LENGTH} Zeichen, Enter überspringt)",
+        "pin_repeat": "PIN wiederholen",
+        "pin_mismatch": "Die beiden Eingaben unterscheiden sich. Bitte noch einmal.",
+        "pin_too_short": "Die PIN braucht mindestens {min} Zeichen.",
+        "pin_gave_up": "Keine PIN gesetzt.",
         "microphone": "Mikrofon verwenden?",
         "camera": "Kamera verwenden?",
         "probe_ask": "AI-Backends jetzt prüfen (Claude Code / Ollama)?",
@@ -114,6 +145,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "summary_secrets": "Zugangsdaten",
         "summary_secrets_none": "keine",
         "summary_secrets_note": "nur im Windows-Anmeldeinformationsspeicher",
+        "summary_pin": "Sicherheits-PIN",
+        "pin_set": "gesetzt",
+        "pin_not_set": "keine",
         "enabled": "an",
         "disabled": "aus",
         "installed": "vorhanden",
@@ -153,6 +187,24 @@ TEXTS: dict[str, dict[str, str]] = {
         "obs_value": "OBS websocket password",
         "telegram_ask": "Store a Telegram bot token now?",
         "telegram_value": "Telegram bot token",
+        "pin_intro": (
+            "\nA security PIN protects everything that makes Nox less careful: relaxing privacy, "
+            "changing stored credentials, resuming after a security stop.\n"
+            "Without a PIN one click is enough. Recommended; change or remove it later with "
+            "`nox pin set` / `nox pin clear` or in the dashboard."
+        ),
+        "pin_ask": "Set a security PIN now?",
+        "pin_exists": "A PIN is already set. Change it with `nox pin set`.",
+        "pin_invalid": (
+            "nox/security/pin holds something that is not a Nox PIN. Set it again with "
+            "`nox pin set`."
+        ),
+        "pin_unavailable": "The credential store is not reachable: {reason}",
+        "pin_new": f"New PIN (at least {MIN_PIN_LENGTH} characters, Enter skips)",
+        "pin_repeat": "Repeat the PIN",
+        "pin_mismatch": "The two entries differ; please try again.",
+        "pin_too_short": "The PIN needs at least {min} characters.",
+        "pin_gave_up": "No PIN set.",
         "microphone": "Use the microphone?",
         "camera": "Use the camera?",
         "probe_ask": "Check the AI backends now (Claude Code / Ollama)?",
@@ -170,6 +222,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "summary_secrets": "credentials",
         "summary_secrets_none": "none",
         "summary_secrets_note": "in the Windows credential store only",
+        "summary_pin": "security PIN",
+        "pin_set": "set",
+        "pin_not_set": "none",
         "enabled": "on",
         "disabled": "off",
         "installed": "installed",
@@ -192,10 +247,6 @@ def texts(language: str | None) -> dict[str, str]:
 
 
 # ---- secret store -------------------------------------------------------------------------------
-
-
-class SecretStore(Protocol):
-    def set(self, name: str, value: str) -> None: ...
 
 
 def default_secret_store() -> SecretStore:
@@ -273,6 +324,10 @@ class OnboardingAnswers:
     twitch_client_id: str | None = None
     obs_password: str | None = None
     telegram_bot_token: str | None = None
+    #: The new PIN, held only until it is hashed into the keyring; never in a repr.
+    pin: str | None = field(default=None, repr=False)
+    #: What the summary says about the PIN: set now, already set before, or none.
+    pin_state: str = "not_set"
 
 
 # ---- pure config-layer helpers ------------------------------------------------------------------
@@ -407,6 +462,7 @@ def render_capability_summary(
         row(t["summary_secrets"], f"{', '.join(stored_secret_names)} ({t['summary_secrets_note']})")
     else:
         row(t["summary_secrets"], t["summary_secrets_none"])
+    row(t["summary_pin"], t["pin_set"] if answers.pin_state == "valid" else t["pin_not_set"])
 
     lines += [
         "",
@@ -447,7 +503,31 @@ def _ask_twitch(t: dict[str, str], answers: OnboardingAnswers) -> None:
     )
 
 
-def _prompt_answers() -> OnboardingAnswers:
+def _ask_pin(t: dict[str, str], answers: OnboardingAnswers, pin: PinManager) -> None:
+    """The optional PIN, typed twice into a hidden prompt.
+
+    An existing entry is never replaced here: changing a PIN needs the current one, which is what
+    `nox pin set` asks for. An entry that is not a PIN hash is named, with the same way out.
+    """
+    typer.echo(t["pin_intro"])
+    try:
+        state = pin.entry_state()
+    except SecretStoreUnavailableError as exc:
+        typer.echo(t["pin_unavailable"].format(reason=exc))
+        return
+    answers.pin_state = state.value
+    if state is PinEntryState.VALID:
+        typer.echo(t["pin_exists"])
+        return
+    if state is PinEntryState.INVALID:
+        typer.echo(t["pin_invalid"])
+        return
+    if not typer.confirm(t["pin_ask"], default=False):
+        return
+    answers.pin = prompt_new_pin(typer_pin_prompt, typer.echo, t)
+
+
+def _prompt_answers(pin: PinManager) -> OnboardingAnswers:
     """Ask every question, in one language, and collect the answers.
 
     A re-run defaults each step to what is already configured rather than silently resetting it;
@@ -484,6 +564,8 @@ def _prompt_answers() -> OnboardingAnswers:
     if typer.confirm(t["telegram_ask"], default=False):
         answers.telegram_bot_token = typer.prompt(t["telegram_value"], hide_input=True)
 
+    _ask_pin(t, answers, pin)
+
     answers.microphone_enabled = typer.confirm(t["microphone"], default=True)
     answers.camera_enabled = typer.confirm(t["camera"], default=False)
 
@@ -505,8 +587,9 @@ async def run_onboarding_cli(
     """
     store = secret_store or default_secret_store()
     probe = probe_fn or probe_ai_backends
+    pin = PinManager(store)
 
-    answers = _prompt_answers()
+    answers = _prompt_answers(pin)
     t = texts(answers.ui_language)
 
     ai_probes: list[AiProbeResult] = []
@@ -529,6 +612,10 @@ async def run_onboarding_cli(
     user_config_path = default_user_config_path()
     write_user_config(user_config_path, build_user_layer_patch(answers))
     stored = store_secrets(answers, store)
+    if answers.pin is not None:
+        await PinSetup(pin).set(answers.pin, current_pin=None, by="onboarding")
+        answers.pin = None  # hashed into the keyring; nothing keeps the PIN itself
+        answers.pin_state = PinEntryState.VALID.value
 
     typer.echo(
         render_capability_summary(

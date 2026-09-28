@@ -24,7 +24,7 @@ from nox.onboarding.wizard import (
     store_secrets,
     write_user_config,
 )
-from nox.security.secrets import InMemorySecretStore
+from nox.security.secrets import PIN_SECRET_NAME, InMemorySecretStore, PinManager
 
 runner = CliRunner()
 
@@ -172,8 +172,8 @@ def _run_onboard(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stdin: str) ->
 
 #: Every question in order, so a test reads as the conversation it drives.
 #: language, Nox name, your name, data folder, vault folder, Twitch by hand?, OBS?, Telegram?,
-#: microphone?, camera?, probe backends?
-SKIP_EVERYTHING = "\n" * 5 + "n\nn\nn\n" + "\n\n" + "n\n"
+#: security PIN?, microphone?, camera?, probe backends?
+SKIP_EVERYTHING = "\n" * 5 + "n\nn\nn\n" + "n\n" + "\n\n" + "n\n"
 
 
 def test_onboard_cli_skip_everything_writes_only_confirmed_defaults(
@@ -202,7 +202,7 @@ def test_onboard_cli_in_german_asks_and_answers_in_german_only(
     assert "So geht es weiter:" in german and "nox supervisor" in german
     assert "Data folder" not in german and "What happens next" not in german
 
-    english_input = "en\n" + "\n" * 4 + "n\nn\nn\n" + "\n\n" + "n\n"
+    english_input = "en\n" + "\n" * 4 + "n\nn\nn\n" + "n\n" + "\n\n" + "n\n"
     _, english = _run_onboard(monkeypatch, tmp_path, english_input)
     assert "Data folder" in english and "Vault folder" in english
     assert "What happens next:" in english
@@ -246,6 +246,7 @@ def test_onboard_cli_full_flow_stores_secrets_and_chosen_backend(
         "\n"  # twitch client id (skipped)
         "n\n"  # obs
         "n\n"  # telegram
+        "n\n"  # no security PIN now
         "\n"  # microphone (default yes)
         "y\n"  # camera enabled
         "y\n"  # probe the AI backends
@@ -272,12 +273,95 @@ def test_onboard_cli_full_flow_stores_secrets_and_chosen_backend(
 def test_onboard_cli_is_re_runnable_and_merges(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    first = "\nKumo\n" + "\n" * 3 + "n\nn\nn\n" + "\n\n" + "n\n"
+    first = "\nKumo\n" + "\n" * 3 + "n\nn\nn\n" + "n\n" + "\n\n" + "n\n"
     _run_onboard(monkeypatch, tmp_path, first)
-    second = "en\n" + "\n" * 4 + "n\nn\nn\n" + "\n\n" + "n\n"
+    second = "en\n" + "\n" * 4 + "n\nn\nn\n" + "n\n" + "\n\n" + "n\n"
     exit_code, output = _run_onboard(monkeypatch, tmp_path, second)
     assert exit_code == 0, output
 
     written = load_existing_user_layer(default_user_config_path(tmp_path / "AppData" / "Roaming"))
     assert written["identity"]["name"] == "Kumo"  # kept from the first run
     assert written["identity"]["ui_language"] == "en"  # updated by the second run
+
+
+# ---- the security PIN step ---------------------------------------------------------------------
+
+
+def _run_with_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stdin: str, store: InMemorySecretStore
+) -> tuple[int, str]:
+    monkeypatch.setattr(wizard, "default_secret_store", lambda: store)
+    appdata = tmp_path / "AppData" / "Roaming"
+    monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setenv("NOX_APP_DIR", str(appdata / "Nox"))
+    monkeypatch.setattr(wizard, "probe_ai_backends", _fake_probe)
+    from nox.cli import app
+
+    result = runner.invoke(app, ["onboard"], input=stdin)
+    return result.exit_code, result.output
+
+
+#: Everything up to and including the Telegram question, skipped.
+BEFORE_PIN = "\n" * 5 + "n\nn\nn\n"
+AFTER_PIN = "\n\n" + "n\n"
+
+
+def test_onboard_sets_an_optional_pin_typed_twice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = InMemorySecretStore()
+    stdin = BEFORE_PIN + "y\n" + "1234\n" + "471108\n471108\n" + AFTER_PIN
+
+    exit_code, output = _run_with_store(monkeypatch, tmp_path, stdin, store)
+
+    assert exit_code == 0, output
+    assert "Eine Sicherheits-PIN schützt" in output
+    assert "mindestens 6 Zeichen" in output  # the too-short attempt was refused, then retried
+    assert "Sicherheits-PIN : gesetzt" in output
+    stored = store.get(PIN_SECRET_NAME) or ""
+    assert stored.startswith("argon2id$") and "471108" not in output
+    assert PinManager(store).verify_pin("471108").ok
+
+
+def test_onboard_in_english_asks_for_the_pin_in_english(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = InMemorySecretStore()
+    stdin = "en\n" + "\n" * 4 + "n\nn\nn\n" + "y\n" + "471108\n471109\n471108\n471108\n"
+    stdin += AFTER_PIN
+
+    exit_code, output = _run_with_store(monkeypatch, tmp_path, stdin, store)
+
+    assert exit_code == 0, output
+    assert "Set a security PIN now?" in output and "Repeat the PIN" in output
+    assert "The two entries differ" in output
+    assert "security PIN    : set" in output
+    assert "Sicherheits-PIN" not in output
+
+
+def test_onboard_never_replaces_an_existing_pin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = InMemorySecretStore()
+    PinManager(store).set_pin("471108")
+    stdin = BEFORE_PIN + AFTER_PIN  # no PIN question is asked at all
+
+    exit_code, output = _run_with_store(monkeypatch, tmp_path, stdin, store)
+
+    assert exit_code == 0, output
+    assert "Es ist schon eine PIN gesetzt" in output and "nox pin set" in output
+    assert PinManager(store).verify_pin("471108").ok
+
+
+def test_onboard_names_a_raw_pin_entry_instead_of_accepting_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = InMemorySecretStore()
+    store.set(PIN_SECRET_NAME, "471108")
+    stdin = BEFORE_PIN + AFTER_PIN
+
+    exit_code, output = _run_with_store(monkeypatch, tmp_path, stdin, store)
+
+    assert exit_code == 0, output
+    assert "keine gültige PIN" in output and "nox pin set" in output
+    assert "Sicherheits-PIN : keine" in output

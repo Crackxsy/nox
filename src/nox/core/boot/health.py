@@ -22,7 +22,12 @@ from nox.core.health import Check
 from nox.data.db import Database
 from nox.ipc.tokens import TokenStore
 from nox.security.model import SecretStore
-from nox.security.secrets import PIN_SECRET_NAME, SecretStoreUnavailableError
+from nox.security.secrets import (
+    INVALID_PIN_ENTRY_REASON,
+    PIN_SECRET_NAME,
+    SecretStoreUnavailableError,
+    looks_like_pin_hash,
+)
 
 __all__ = [
     "DB_INTEGRITY_CHECK_INTERVAL_S",
@@ -172,14 +177,18 @@ def core_health_checks(
 
     async def secrets_check() -> tuple[HealthStatus, str]:
         # One read of a known entry answers "can Nox reach the credential store at all". The value
-        # never leaves this function; only whether the read worked does.
+        # never leaves this function; only whether the read worked, and whether the PIN entry is
+        # a hash Nox wrote, does. A raw value there fails every PIN check for good, and nothing
+        # else would ever say why.
         store = secrets()
         if store is None:
             return HealthStatus.UNAVAILABLE, "not built"
         try:
-            await asyncio.to_thread(store.get, PIN_SECRET_NAME)
+            stored = await asyncio.to_thread(store.get, PIN_SECRET_NAME)
         except SecretStoreUnavailableError as exc:
             return HealthStatus.UNAVAILABLE, str(exc)
+        if stored is not None and not looks_like_pin_hash(stored):
+            return HealthStatus.LIMITED, INVALID_PIN_ENTRY_REASON
         return HealthStatus.AVAILABLE, "ok"
 
     checks = [

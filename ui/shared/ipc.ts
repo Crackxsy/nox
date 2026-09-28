@@ -1,11 +1,25 @@
 /**
  * WebSocket IPC client for pet and dashboard (IPC Model: handshake, subscribe, request/response,
  * stream frames). Reconnects with backoff; never retries after `auth.denied`. Token only in memory.
+ *
+ * A refused handshake ends in one of two states, and the difference matters to the person reading
+ * the screen:
+ *  - `auth_failed`: the token was never accepted (a stale link, a version the core refuses);
+ *  - `session_expired`: the token *was* accepted on this page and is refused now - the core has
+ *    restarted and issued a new session token. The page cannot fetch it (it only ever arrives in
+ *    the URL fragment), so the honest answer is to say how to reopen, not to retry forever.
+ * Neither state retries: a reconnect loop against a token that can never work again is a retry
+ * storm with no way out.
+ *
+ * `client_version` is `NOX_VERSION`, generated from `pyproject.toml` (`scripts/gen_ts_types.py`):
+ * the hub refuses a different major version, so a hand-kept copy here would lock a new core out of
+ * its own UIs.
  */
 
 import { type Envelope, type Role, makeEnvelope, parseEnvelope } from './envelope';
+import { NOX_VERSION } from './generated/version';
 
-export type ConnStatus = 'connecting' | 'online' | 'offline' | 'auth_failed';
+export type ConnStatus = 'connecting' | 'online' | 'offline' | 'auth_failed' | 'session_expired';
 
 export interface WebSocketLike {
   readyState: number;
@@ -42,7 +56,17 @@ interface Pending {
 }
 
 export class IpcError extends Error {
-  constructor(public code: string, message: string, public retryable = false) {
+  /**
+   * `details` is the error frame's machine-readable half (`ErrorPayload.details`), e.g.
+   * `{reason: 'pin_wrong', remaining_attempts: 3}` - what a page translates instead of the English
+   * `message`.
+   */
+  constructor(
+    public code: string,
+    message: string,
+    public retryable = false,
+    public details: Record<string, unknown> = {},
+  ) {
     super(message);
     this.name = 'IpcError';
   }
@@ -55,6 +79,8 @@ export class IpcClient {
   private backoff = 1000;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private authId: string | null = null;
+  /** True once a handshake on this page succeeded: a later refusal means the session expired. */
+  private everOnline = false;
   status: ConnStatus = 'offline';
   sessionId: string | null = null;
 
@@ -105,13 +131,18 @@ export class IpcClient {
     ws.onclose = () => {
       if (this.ws === ws) this.ws = null;
       this.failAll(new IpcError('unavailable', 'socket closed', true));
-      if (this.status !== 'auth_failed') this.setStatus('offline');
+      if (!this.refused()) this.setStatus('offline');
       this.scheduleReconnect();
     };
   }
 
+  /** The handshake was refused for good; see the module comment. */
+  private refused(): boolean {
+    return this.status === 'auth_failed' || this.status === 'session_expired';
+  }
+
   private scheduleReconnect(): void {
-    if (this.closedByUser || this.status === 'auth_failed' || this.reconnectTimer) return;
+    if (this.closedByUser || this.refused() || this.reconnectTimer) return;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.open();
@@ -124,7 +155,7 @@ export class IpcClient {
       token: this.opts.token,
       role: this.opts.role,
       id: this.opts.id,
-      client_version: this.opts.clientVersion ?? '0.1.0',
+      client_version: this.opts.clientVersion ?? NOX_VERSION,
     });
     this.authId = env.id;
     this.raw(env);
@@ -146,12 +177,16 @@ export class IpcClient {
       if (env.kind === 'response' && env.payload.ok === true) {
         this.sessionId = typeof env.payload.session_id === 'string' ? env.payload.session_id : null;
         this.backoff = 1000;
+        this.everOnline = true;
         this.setStatus('online');
         this.request('ipc.subscribe', { patterns: this.opts.patterns }).catch((e) =>
           console.warn('ipc: subscribe failed', e),
         );
       } else {
-        this.setStatus('auth_failed', String(env.payload.message ?? env.payload.reason ?? 'auth denied'));
+        this.setStatus(
+          this.everOnline ? 'session_expired' : 'auth_failed',
+          String(env.payload.message ?? env.payload.reason ?? 'auth denied'),
+        );
         this.closedByUser = true;
         this.ws?.close(1000, 'auth failed');
       }
@@ -181,11 +216,15 @@ export class IpcClient {
     clearTimeout(p.timer);
     this.pending.delete(env.corr);
     if (env.kind === 'error') {
+      const details = env.payload.details;
       p.reject(
         new IpcError(
           String(env.payload.code ?? 'internal'),
           String(env.payload.message ?? 'error'),
           env.payload.retryable === true,
+          typeof details === 'object' && details !== null && !Array.isArray(details)
+            ? (details as Record<string, unknown>)
+            : {},
         ),
       );
     } else {
