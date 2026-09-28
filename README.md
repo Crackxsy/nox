@@ -410,9 +410,12 @@ the process, timelines and scope are in [`SECURITY.md`](SECURITY.md).
 
 ## Roadmap
 
-Short version, in order: Rocket League coaching quality (Stage 2 vision) → project-manager and
-research assistant → signed installer with proven update/rollback → external security review →
-v1.0. The v1.0 gate itself is [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
+Where Nox honestly stands is in [`docs/CAPABILITY_ANALYSIS.md`](docs/CAPABILITY_ANALYSIS.md);
+the proposed path from here is [`docs/SPEC_V3.5_V4.5.md`](docs/SPEC_V3.5_V4.5.md): **v3.5 Truth**
+(every security and privacy claim holds, across crashes and restarts) → **v4.0 Agency** (a bounded,
+permission-checked tool loop, reminders, real memory) → **v4.5 Proof** (real-service lab, soak
+tests, installer with update and rollback, external review) → v1.0. The v1.0 gate itself is
+[`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
 
 ## Support
 

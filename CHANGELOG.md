@@ -9,6 +9,10 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- `docs/CAPABILITY_ANALYSIS.md`: what Nox can really do today, per area and with evidence, and a
+  register of the guarantees, recovery paths and documentation claims that do not hold yet (six
+  subsystem audits in `docs/analysis/`). `docs/SPEC_V3.5_V4.5.md`: the proposed next three waves -
+  v3.5 Truth, v4.0 Agency, v4.5 Proof - each with acceptance criteria and an exit gate.
 - **Nox runs on macOS and Linux**, from source, next to Windows 11. What changes per platform, and
   what is not yet confirmed on real hardware, is in `docs/PLATFORMS.md`. Windows behaviour is
   unchanged.
