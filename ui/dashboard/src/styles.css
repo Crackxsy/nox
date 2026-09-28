@@ -1158,6 +1158,56 @@ a:hover {
   color: var(--danger);
 }
 
+/* Stored turns keep full contrast; the timestamp in their byline is what sets them apart, and the
+   divider below them marks where this window's conversation starts. */
+.msg--history .msg-meta time {
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-history-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.chat-history-head > div {
+  align-self: stretch;
+}
+
+/* "Neu in diesem Fenster": a hairline with the words on it, between stored and live turns. */
+.chat-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.chat-divider::before,
+.chat-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--hairline);
+}
+
+/* A decision that needs a second look (FULL privacy, removing the PIN): framed, never a modal. */
+.confirm-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin-top: var(--s-4);
+  padding: var(--s-4) var(--s-5);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-field);
+  background: var(--page-soft);
+}
+
+.confirm-box-title {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
 .composer {
   margin-top: 28px;
   padding: var(--s-4) var(--s-4) var(--s-3) var(--s-5);

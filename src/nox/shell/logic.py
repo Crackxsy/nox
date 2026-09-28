@@ -256,3 +256,25 @@ def pet_url(
 
 def ws_url(ws_port: int, host: str = "127.0.0.1") -> str:
     return f"ws://{host}:{ws_port}/ws"
+
+
+#: What the tray says after "Fortsetzen", by the refusal reason `security.resume` or `sup.resume`
+#: gave. German, like every other tray notice; the dashboard has the full, translated wording.
+RESUME_NOTICES: dict[str, str] = {
+    "ok": "Nox läuft wieder",
+    "pin_required": "Fortsetzen braucht die PIN - bitte im Dashboard fortsetzen",
+    "pin_wrong": "PIN falsch - bitte im Dashboard fortsetzen",
+    "locked": "PIN gesperrt - später im Dashboard fortsetzen",
+    "invalid_entry": "PIN-Eintrag ungültig - mit `nox pin set` neu setzen",
+    "not_in_safe_mode": "Nox ist nicht im Sicherheitsmodus",
+    "core_running": "Kern läuft - bitte im Dashboard fortsetzen",
+}
+RESUME_NOTICE_FALLBACK = "Fortsetzen nicht möglich"
+
+
+def resume_notice(payload: dict[str, Any]) -> str:
+    """The tray line for a `security.resume` / `sup.resume` answer."""
+    if payload.get("ok") is True:
+        return RESUME_NOTICES["ok"]
+    reason = str(payload.get("reason") or "")
+    return RESUME_NOTICES.get(reason, f"{RESUME_NOTICE_FALLBACK}: {reason or 'abgelehnt'}")

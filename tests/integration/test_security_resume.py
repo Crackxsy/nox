@@ -14,14 +14,16 @@ from pathlib import Path
 import pytest
 
 from nox.app import PROFILES_DIR, NoxCore
+from nox.core.state import PrivacyMode
 from nox.ipc.dispatch import RequestContext
 from nox.ipc.errors import ERR_PERMISSION, IpcError
-from nox.ipc.handlers.core import CoreHandlers, SecurityKill, SecurityResume
+from nox.ipc.handlers.core import CoreHandlers, PrivacySet, SecurityKill, SecurityResume
 from nox.ipc.protocol import Envelope, Kind, Source
+from nox.security.gate import SecurityChangeGate
 from nox.security.secrets import InMemorySecretStore, PinManager
 from tests.integration.test_walking_skeleton import _config
 
-PIN = "2707"
+PIN = "270712"
 
 
 @pytest.fixture
@@ -33,6 +35,9 @@ async def core(tmp_path: Path) -> AsyncIterator[NoxCore]:
     instance.security.secrets = InMemorySecretStore()
     instance.security.pin = PinManager(
         instance.security.secrets, audit=instance.security.audit, prefer_argon2=False
+    )
+    instance.security.gate = SecurityChangeGate(
+        instance.security.pin, required=True, audit=instance.security.audit
     )
     try:
         yield instance
@@ -70,7 +75,8 @@ async def test_user_kill_resumes_without_a_pin(core: NoxCore) -> None:
 
     result = await _handlers(core).resume(_ctx("dashboard"), SecurityResume())
 
-    assert result == {"ok": True}
+    # No supervisor in this test: the core runs standalone, and says so.
+    assert result == {"ok": True, "supervisor": "standalone"}
     assert not core.security.killswitch.is_engaged()
     entry = next(e for e in _audit_entries(core) if e.action == "kill_switch.resume")
     assert entry.result == "ok"
@@ -85,11 +91,22 @@ async def test_panic_needs_the_pin_to_resume(core: NoxCore) -> None:
     await core.security.killswitch.panic(by="hotkey")
     assert core.security.killswitch.security_path is True
 
-    assert await _handlers(core).resume(_ctx("shell"), SecurityResume()) == {"ok": False}
-    assert await _handlers(core).resume(_ctx("shell"), SecurityResume(pin="0000")) == {"ok": False}
+    # A refusal says why, so the dashboard can ask for the PIN instead of showing a bare "no".
+    assert await _handlers(core).resume(_ctx("shell"), SecurityResume()) == {
+        "ok": False,
+        "reason": "pin_required",
+    }
+    assert await _handlers(core).resume(_ctx("shell"), SecurityResume(pin="000000")) == {
+        "ok": False,
+        "reason": "pin_wrong",
+        "remaining_attempts": 4,
+    }
     assert core.security.killswitch.is_engaged()
 
-    assert await _handlers(core).resume(_ctx("shell"), SecurityResume(pin=PIN)) == {"ok": True}
+    assert await _handlers(core).resume(_ctx("shell"), SecurityResume(pin=PIN)) == {
+        "ok": True,
+        "supervisor": "standalone",
+    }
     assert not core.security.killswitch.is_engaged()
     denied = [
         e for e in _audit_entries(core) if e.action == "kill_switch.resume" and e.result == "denied"
@@ -105,7 +122,10 @@ async def test_security_path_kill_without_a_configured_pin_still_resumes_explici
     assert not core.security.pin.is_set()
     await core.security.killswitch.engage("tamper", "hard prohibition touched")
 
-    assert await _handlers(core).resume(_ctx("supervisor"), SecurityResume()) == {"ok": True}
+    assert await _handlers(core).resume(_ctx("supervisor"), SecurityResume()) == {
+        "ok": True,
+        "supervisor": "standalone",
+    }
     entry = next(e for e in _audit_entries(core) if e.action == "kill_switch.resume")
     assert core.security.audit_store.details(entry.seq) == {
         "security_path": "true",
@@ -142,4 +162,83 @@ async def test_ui_supplied_kill_origin_cannot_become_a_security_path_kill(core: 
     assert result["report"]["security_path"] is False
     assert core.security.killswitch.origin == "dashboard"
     # ... and therefore resumes without the PIN, as a user kill should
-    assert (await _handlers(core).resume(_ctx("dashboard"), SecurityResume())) == {"ok": True}
+    assert (await _handlers(core).resume(_ctx("dashboard"), SecurityResume()))["ok"] is True
+
+
+async def test_a_locked_pin_says_until_when(core: NoxCore) -> None:
+    core.security.pin.set_pin(PIN, by="test")
+    await core.security.killswitch.panic(by="hotkey")
+    for _ in range(4):
+        await _handlers(core).resume(_ctx("dashboard"), SecurityResume(pin="000000"))
+
+    locked = await _handlers(core).resume(_ctx("dashboard"), SecurityResume(pin="000000"))
+
+    assert locked["ok"] is False and locked["reason"] == "locked"
+    assert locked["locked_until"]
+    right_but_locked = await _handlers(core).resume(_ctx("dashboard"), SecurityResume(pin=PIN))
+    assert right_but_locked["reason"] == "locked"
+    assert core.security.killswitch.is_engaged()
+
+
+async def test_resume_tells_the_supervisor_only_after_the_kill_switch_let_go(
+    core: NoxCore,
+) -> None:
+    """A hotkey kill holds the supervisor in safe mode too; resuming must re-arm it - and a
+    refused resume must not."""
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def notify_resumed(self, *, by: str) -> str:
+            self.calls.append(by)
+            return "rearmed"
+
+    supervisor = FakeSupervisor()
+    core.supervisor = supervisor  # type: ignore[assignment]
+    core.security.pin.set_pin(PIN, by="test")
+    await core.security.killswitch.panic(by="hotkey")
+
+    assert (await _handlers(core).resume(_ctx("dashboard"), SecurityResume()))["ok"] is False
+    assert supervisor.calls == []
+
+    result = await _handlers(core).resume(_ctx("dashboard"), SecurityResume(pin=PIN))
+    assert result == {"ok": True, "supervisor": "rearmed"}
+    assert supervisor.calls == ["dashboard"]
+    core.supervisor = None
+
+
+# ---- privacy mode FULL from the dashboard -------------------------------------------------------
+
+
+async def test_full_privacy_without_confirmation_says_it_was_not_applied(core: NoxCore) -> None:
+    """The dashboard used to send `{mode: full}` and read the unchanged state as success."""
+    handlers = _handlers(core)
+    before = core.security.privacy.mode
+
+    unconfirmed = await handlers.privacy_set(_ctx("dashboard"), PrivacySet(mode=PrivacyMode.FULL))
+    assert unconfirmed["applied"] is False and unconfirmed["requires_confirmation"] is True
+    assert unconfirmed["mode"] == before.value
+
+    confirmed = await handlers.privacy_set(
+        _ctx("dashboard"), PrivacySet(mode=PrivacyMode.FULL, confirmed=True)
+    )
+    assert confirmed["applied"] is True and confirmed["mode"] == "full"
+
+
+async def test_relaxing_privacy_with_a_pin_set_refuses_with_a_reason(core: NoxCore) -> None:
+    core.security.pin.set_pin(PIN, by="test")
+    handlers = _handlers(core)
+    relax = PrivacySet(mode=PrivacyMode.FULL, confirmed=True)
+
+    with pytest.raises(IpcError) as missing:
+        await handlers.privacy_set(_ctx("dashboard"), relax)
+    assert missing.value.code == ERR_PERMISSION
+    assert missing.value.details == {"reason": "pin_required"}
+
+    with pytest.raises(IpcError) as wrong:
+        await handlers.privacy_set(_ctx("dashboard"), relax.model_copy(update={"pin": "000000"}))
+    assert wrong.value.details == {"reason": "pin_wrong", "remaining_attempts": 4}
+
+    applied = await handlers.privacy_set(_ctx("dashboard"), relax.model_copy(update={"pin": PIN}))
+    assert applied["mode"] == "full" and applied["applied"] is True

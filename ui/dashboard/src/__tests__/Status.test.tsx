@@ -24,7 +24,8 @@ function fakeClient(): { client: IpcClient; sent: { name: string; payload: unkno
   const sent: { name: string; payload: unknown }[] = [];
   const client = {
     request: (name: string, payload: Record<string, unknown>) => {
-      sent.push({ name, payload });
+      // The page reads the PIN status on connect; these tests count what the user's presses send.
+      if (name !== 'security.pin.status') sent.push({ name, payload });
       return Promise.resolve({ ok: true });
     },
   } as unknown as IpcClient;

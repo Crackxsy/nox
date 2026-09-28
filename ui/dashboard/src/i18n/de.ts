@@ -501,7 +501,7 @@ export const de = {
   status_refresh: 'Aktualisieren',
   providers_failed: 'Anbieterliste konnte nicht geladen werden.',
   providers_retry: 'Erneut versuchen',
-  chat_clear: 'Verlauf leeren',
+  chat_clear: 'Ansicht leeren',
   audit_reset: 'Filter zurücksetzen',
   jump_kill: 'Zum Not-Aus',
   jump_privacy: 'Zur Privatsphäre-Szene',
@@ -567,6 +567,87 @@ export const de = {
   home_step_1: 'Home Assistant öffnen und unten links auf deinen Namen klicken.',
   home_step_2: 'Reiter „Sicherheit“ → ganz unten „Langlebige Zugangstoken“ → „Token erstellen“.',
   home_step_3: 'Den angezeigten Token hier einfügen und speichern.',
+
+  // -- session: the core restarted under this page --------------------------------------------------
+  conn_session_expired: 'Sitzung abgelaufen',
+  session_expired:
+    'Nox wurde neu gestartet – bitte das Dashboard über das Tray-Symbol (Infobereich → Dashboard öffnen) neu öffnen.',
+  auth_failed_hint:
+    'Dieser Link wird nicht (mehr) angenommen – bitte das Dashboard über das Tray-Symbol (Infobereich → Dashboard öffnen) neu öffnen.',
+
+  // -- resume from safe mode ------------------------------------------------------------------------
+  resume_title: 'Sicherheitsmodus beenden',
+  resume_explain:
+    'Nox steht still: keine Aufnahme, keine KI, keine Aktionen. Fortsetzen startet alles wieder und lässt den Wächter einen abgestürzten Kern wieder neu starten.',
+  resume_explain_pin: 'Der Stopp hatte einen Sicherheitsgrund. Zum Fortsetzen braucht es die PIN.',
+  resume_button: 'Fortsetzen',
+  resume_pin_label: 'PIN zum Fortsetzen',
+  resume_done: 'Nox läuft wieder.',
+  resume_watchdog_unreachable:
+    'Nox läuft wieder, aber der Wächter hat es nicht bestätigt. Ein Absturz wird bis zum nächsten Start von Nox nicht automatisch behoben.',
+
+  // -- PIN refusals (shared by Status and Settings) ------------------------------------------------
+  pin_refusal_required: 'PIN nötig – bitte eingeben.',
+  pin_refusal_wrong: 'PIN falsch – nichts wurde geändert. Noch {0} Versuche, dann ist die PIN 15 Minuten gesperrt.',
+  pin_refusal_wrong_plain: 'PIN falsch – nichts wurde geändert.',
+  pin_refusal_locked: 'Zu viele falsche Versuche – die PIN ist gesperrt bis {0}.',
+  pin_refusal_locked_plain: 'Zu viele falsche Versuche – die PIN ist vorübergehend gesperrt.',
+  pin_refusal_too_short: 'Die PIN braucht mindestens {0} Zeichen.',
+  pin_refusal_too_long: 'Die PIN darf höchstens {0} Zeichen haben.',
+  pin_refusal_not_set: 'Es ist keine PIN gesetzt.',
+  pin_refusal_invalid_entry:
+    'Der gespeicherte PIN-Eintrag ist keine gültige PIN. Neu setzen im Terminal mit „nox pin set“.',
+  pin_refusal_store_unavailable:
+    'Der Anmeldeinformationsspeicher ist nicht erreichbar – ohne ihn lässt sich die PIN weder prüfen noch ändern.',
+  pin_refusal_backend_missing:
+    'Das Prüfverfahren für die PIN fehlt (argon2-cffi). Nox bitte neu installieren.',
+
+  // -- Settings: the security PIN -------------------------------------------------------------------
+  pin_section_title: 'Sicherheits-PIN',
+  pin_section_lede:
+    'Die PIN schützt alles, was Nox weniger vorsichtig macht: Privatsphäre lockern, Zugangsdaten ändern, nach einem Sicherheitsstopp fortsetzen.',
+  pin_state_valid: 'PIN ist gesetzt.',
+  pin_state_not_set: 'Keine PIN gesetzt – solche Änderungen gehen ohne Rückfrage durch.',
+  pin_state_invalid:
+    'Unter dem PIN-Eintrag liegt keine gültige PIN. Neu setzen im Terminal mit „nox pin set“.',
+  pin_state_unavailable:
+    'Der Anmeldeinformationsspeicher ist nicht erreichbar – ob eine PIN gesetzt ist, lässt sich nicht sagen.',
+  pin_state_failed: 'Der PIN-Status konnte nicht geladen werden.',
+  pin_state_locked: 'Gesperrt bis {0} (zu viele falsche Versuche).',
+  pin_current_label: 'Aktuelle PIN',
+  pin_new_label: 'Neue PIN',
+  pin_confirm_label: 'Neue PIN wiederholen',
+  pin_new_hint: 'Mindestens {0} Zeichen. Nox speichert nur einen Hash, nie die PIN selbst.',
+  pin_mismatch: 'Die beiden Eingaben stimmen nicht überein.',
+  pin_set_button: 'PIN festlegen',
+  pin_change_button: 'PIN ändern',
+  pin_remove_button: 'PIN entfernen',
+  pin_remove_confirm_button: 'Entfernen bestätigen',
+  pin_remove_explain: 'Ohne PIN gehen Lockerungen der Privatsphäre wieder mit einem Klick durch.',
+  pin_saved: 'PIN gespeichert.',
+  pin_removed: 'PIN entfernt.',
+
+  // -- privacy mode "everything allowed" ----------------------------------------------------------
+  privacy_full_confirm_title: 'Wirklich alles erlauben?',
+  privacy_full_confirm_text:
+    '„Alles erlaubt“ schickt Gespräche an Cloud-Anbieter und erlaubt Bildschirm- und Kameraaufnahmen, soweit sie eingeschaltet sind.',
+  privacy_full_confirm_button: 'Ja, alles erlauben',
+  privacy_cancel: 'Abbrechen',
+  privacy_pin_label: 'PIN für weniger Privatsphäre',
+  privacy_pin_hint: 'Weniger Privatsphäre braucht die Sicherheits-PIN. Mehr Privatsphäre nie.',
+  privacy_not_applied: 'Nicht übernommen – der Modus ist unverändert.',
+  privacy_applied: 'Privatsphäre-Modus geändert.',
+
+  // -- chat history -------------------------------------------------------------------------------
+  chat_history_title: 'Frühere Gespräche',
+  chat_history_loading: 'Frühere Gespräche werden abgerufen',
+  chat_history_failed: 'Frühere Gespräche konnten nicht geladen werden.',
+  chat_history_retry: 'Erneut versuchen',
+  chat_history_older: 'Ältere Nachrichten laden',
+  chat_history_show: 'Frühere Gespräche anzeigen',
+  chat_history_new: 'Neu in diesem Fenster',
+  chat_history_note:
+    'Gespeichert wird nur, was nicht im Modus „Nur lokal“, in einer Privatsphäre-Zone oder im Sicherheitsmodus gesagt wurde.',
 } as const;
 
 export type Key = keyof typeof de;

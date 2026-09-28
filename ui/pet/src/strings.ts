@@ -1,5 +1,5 @@
 /**
- * The pet window's eight strings.
+ * The pet window's strings.
  *
  * They used to be inline and bilingual ("Kein Sitzungs-Token – … / no session token …"), which
  * showed both languages to everyone and matched neither the dashboard's dictionary nor its tone.
@@ -15,6 +15,8 @@ export { pickLang };
 const DE = {
   no_token: 'Kein Sitzungs-Token. Nox-Fenster über das Infobereich-Symbol öffnen.',
   auth_denied: 'Authentifizierung abgelehnt',
+  session_expired:
+    'Nox wurde neu gestartet. Die Figur verbindet sich gleich neu; sonst Nox über das Infobereich-Symbol neu öffnen.',
   capture_unknown: 'Nox ist nicht erreichbar – Aufnahmestatus unbekannt',
   capture_none: 'Keine Aufnahme',
   capture_active: 'Aktiv',
@@ -32,6 +34,8 @@ export type PetKey = keyof typeof DE;
 const EN: Record<PetKey, string> = {
   no_token: 'No session token. Open the Nox window from the tray icon.',
   auth_denied: 'Authentication denied',
+  session_expired:
+    'Nox was restarted. The pet reconnects in a moment; otherwise reopen Nox from the tray icon.',
   capture_unknown: 'Nox is unreachable – capture state unknown',
   capture_none: 'No capture',
   capture_active: 'Active',

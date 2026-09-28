@@ -11,6 +11,8 @@ Scope: every installed Python package (`importlib.metadata` against the project 
 | annotated-doc | 0.0.5 | MIT | allow | MIT |
 | annotated-types | 0.8.0 | MIT | allow | MIT |
 | anyio | 4.15.1 | MIT | allow | MIT |
+| argon2-cffi | 25.1.0 | MIT | allow | MIT |
+| argon2-cffi-bindings | 26.1.0 | MIT | allow | MIT |
 | ast_serialize | 0.11.1 | MIT | allow | MIT |
 | av | 18.1.0 | BSD-3-Clause | allow | BSD-3-Clause |
 | certifi | 2026.7.22 | MPL-2.0 | allow | [package exception] MPL-2.0 (Mozilla Public License, file-level copyleft). Used unmodified as an httpx/requests CA-bundle dependency; MPL-2.0 imposes no obligation on code that merely depends on an unmodified MPL file, only on modifications to MPL-licensed files themselves. |

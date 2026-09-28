@@ -2,7 +2,8 @@
  * Settings: the page layout and the order things appear in.
  *
  * Order is the main design decision here. Credentials come first, because they are what a
- * first-time user has to reach; then the editable configuration with a jump list over it, because
+ * first-time user has to reach; then the security PIN that guards them and every relaxing change;
+ * then the editable configuration with a jump list over it, because
  * thirty-five rows across nine groups is a lot of scrolling without one; then personality, then the
  * health history. Everything else lives in the small components next to this file, each owning its
  * own requests, its own busy flag and its own error slot — a failure now appears next to the
@@ -18,8 +19,10 @@ import type { StreamPluginStatus } from '../../model';
 import { Hero } from '../../ui';
 import { ConfigForm, groupId, groupsOf } from './ConfigForm';
 import { HealthHistoryTable } from './HealthHistoryTable';
+import { usePinStatus } from '../usePinStatus';
 import { IntegrationsSection } from './IntegrationsSection';
 import { PersonalityTile } from './PersonalityTile';
+import { PinSection } from './PinSection';
 import { useHomeTest } from './useHomeTest';
 import { useSecrets } from './useSecrets';
 import { useSettingsData } from './useSettingsData';
@@ -51,6 +54,7 @@ export function SettingsPage({
   const secrets = useSecrets(client, t, data.secrets, data.pinConfigured, data.reloadSecrets);
   const twitch = useTwitchDeviceFlow(client, t, twitchAuthEvent);
   const homeTest = useHomeTest(client, t);
+  const pinStatus = usePinStatus(client, revision);
 
   const groups = useMemo(() => (data.config ? groupsOf(data.config) : []), [data.config]);
   const disabled = client === null;
@@ -81,6 +85,10 @@ export function SettingsPage({
         onOpenRemote={onOpenRemote}
         homeTest={homeTest}
       />
+
+      <div className="tiles tiles--single">
+        <PinSection t={t} lang={lang} client={client} status={pinStatus} onChanged={data.reload} />
+      </div>
 
       <section aria-labelledby="h-config" id="settings-config">
         <div className="rail-head">

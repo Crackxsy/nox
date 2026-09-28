@@ -14,6 +14,11 @@ not a kill - engaging the kill switch for one left Nox mute in safe mode with no
 hook, which only needs to signal the core's own shutdown path - `NoxCore.stop()` runs from the
 process's normal run loop, not from here, so no ack is sent or expected. Reconnects with backoff;
 when no supervisor answers the core keeps running standalone (dev mode) and logs a warning once.
+
+`notify_resumed` is the one request the core sends: `sup.resume {by, rearm: true}` after the user
+left safe mode through `security.resume` (PIN-checked there). A kill from the hotkey or the tray
+puts the supervisor into safe mode as well, where its watchdog restarts nothing; this is what takes
+it out again, without restarting the core that just resumed.
 """
 
 from __future__ import annotations
@@ -34,6 +39,13 @@ StatusProvider = Callable[[], dict[str, Any]]
 
 #: `sup.kill` mode that asks for a clean shutdown + respawn instead of the kill switch.
 MODE_RESTART = "restart"
+
+#: How long `notify_resumed` waits for the supervisor's answer.
+RESUME_ACK_TIMEOUT_S = 2.0
+#: `notify_resumed` outcomes, reported in the user-facing `security.resume` response.
+RESUME_REARMED = "rearmed"
+RESUME_NOT_IN_SAFE_MODE = "not_in_safe_mode"
+RESUME_UNREACHABLE = "unreachable"
 
 
 class AuthError(RuntimeError):
@@ -78,6 +90,7 @@ class SupervisorClient:
         self.kills_received = 0
         self.restarts_requested = 0
         self._kill_tasks: set[asyncio.Task[None]] = set()
+        self._pending: dict[str, asyncio.Future[Envelope]] = {}
 
     @classmethod
     def from_env(cls, **kwargs: Any) -> SupervisorClient | None:
@@ -204,7 +217,39 @@ class SupervisorClient:
         self.heartbeats_sent += 1
         return True
 
+    async def notify_resumed(self, *, by: str, timeout_s: float = RESUME_ACK_TIMEOUT_S) -> str:
+        """Tell the supervisor the user resumed, so it leaves safe mode and watches again.
+
+        Returns `rearmed`, `not_in_safe_mode` (it was not in safe mode - a kill from the dashboard
+        never reached it) or `unreachable`. Never raises: the core has resumed either way, and the
+        answer is reported, not acted on.
+        """
+        writer = self._writer
+        if writer is None or not self.connected:
+            self._log.warning("supervisor.resume_not_delivered", reason="not connected", by=by)
+            return RESUME_UNREACHABLE
+        request = m.make(m.NAME_RESUME, {"by": by, "rearm": True}, self._src, kind=Kind.REQUEST)
+        reply: asyncio.Future[Envelope] = asyncio.get_running_loop().create_future()
+        self._pending[request.id] = reply
+        try:
+            await self._send(writer, request)
+            answer = await asyncio.wait_for(reply, timeout_s)
+        except (TimeoutError, OSError) as exc:
+            self._log.warning("supervisor.resume_not_delivered", reason=type(exc).__name__, by=by)
+            return RESUME_UNREACHABLE
+        finally:
+            self._pending.pop(request.id, None)
+        if answer.payload.get("ok") is True:
+            self._log.info("supervisor.rearmed", by=by)
+            return RESUME_REARMED
+        return str(answer.payload.get("reason") or RESUME_NOT_IN_SAFE_MODE)
+
     async def _handle(self, envelope: Envelope, writer: asyncio.StreamWriter) -> None:
+        pending = self._pending.pop(envelope.corr, None) if envelope.corr else None
+        if pending is not None:
+            if not pending.done():
+                pending.set_result(envelope)
+            return
         if envelope.name == m.NAME_KILL:
             reason = str(envelope.payload.get("reason", ""))
             by = str(envelope.payload.get("by", "supervisor"))

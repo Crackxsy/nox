@@ -14,8 +14,21 @@ import { translator } from '../i18n';
 import type { Envelope, IpcClient } from '../ipc';
 import type { ChatMessage } from '../model';
 import { ChatPage } from '../pages/Chat';
+import type { ChatHistory } from '../pages/useChatHistory';
 
 const t = translator('de');
+
+/** Nothing stored yet: the page behaves exactly as it did before there was a history. */
+const EMPTY_HISTORY: ChatHistory = {
+  status: 'ready',
+  messages: [],
+  hasMore: false,
+  loadingOlder: false,
+  olderFailed: false,
+  loadOlder: () => undefined,
+  reload: () => undefined,
+  hide: () => undefined,
+};
 
 function frame(delta: string): Envelope {
   return {
@@ -83,6 +96,7 @@ function renderChat(options: FakeChat = {}, lang: 'de' | 'en' = 'de') {
         view.rerender(tree());
       }}
       draft={draft}
+      history={EMPTY_HISTORY}
       onDraft={(value) => {
         draft = value;
         view.rerender(tree());
@@ -111,6 +125,7 @@ function renderChat(options: FakeChat = {}, lang: 'de' | 'en' = 'de') {
           view.rerender(tree());
         }}
         draft={draft}
+        history={EMPTY_HISTORY}
         onDraft={(value) => {
           draft = value;
           view.rerender(tree());
@@ -180,6 +195,7 @@ describe('the chat composer', () => {
         onMessages={() => undefined}
         draft=""
         onDraft={() => undefined}
+        history={EMPTY_HISTORY}
       />,
     );
     expect(screen.getByLabelText(t('chat_input_label')).hasAttribute('disabled')).toBe(true);

@@ -34,7 +34,13 @@ from nox.core.parent_watch import bind_to_parent
 from nox.core.state import PrivacyMode
 from nox.paths import PROFILES_DIR, REPO_ROOT, resolve_config_paths
 from nox.security.egress import EgressGuard
+from nox.security.model import SecretStore
 from nox.security.profiles import YamlProfileProvider
+from nox.security.secrets import (
+    INVALID_PIN_ENTRY_REASON,
+    PinEntryState,
+    SecretStoreUnavailableError,
+)
 
 log = get_logger(__name__)
 
@@ -176,9 +182,31 @@ async def run_doctor(report: Reporter = _stdout) -> int:
     for line in await asyncio.to_thread(_folder_lines, config):
         report(line)
     await _report_providers(config, report)
+    report(await asyncio.to_thread(pin_line))
     for module in VOICE_MODULES:
         report(_import_line(module))
     return 0
+
+
+def pin_line(store: SecretStore | None = None) -> str:
+    """The security PIN, as `nox doctor` reports it: set, not set, broken or unreadable.
+
+    Reads the credential store, so the caller runs it in a thread. Never shows the PIN or its hash.
+    """
+    from nox.security.secrets import KeyringSecretStore, PinManager  # noqa: PLC0415
+
+    pin = PinManager(store if store is not None else KeyringSecretStore())
+    try:
+        state = pin.entry_state()
+    except SecretStoreUnavailableError as exc:
+        return f"[warn] security PIN: unknown - {exc}"
+    if state is PinEntryState.INVALID:
+        return f"[FAIL] security PIN: {INVALID_PIN_ENTRY_REASON}"
+    if state is PinEntryState.NOT_SET:
+        return "[warn] security PIN: not set - relaxing changes need no PIN; `nox pin set`"
+    if pin.algorithm != "argon2id":
+        return f"[warn] security PIN: set, but Argon2id is unavailable ({pin.hash_backend_reason})"
+    return "[ ok ] security PIN: set"
 
 
 def _folder_lines(config: NoxConfig) -> list[str]:

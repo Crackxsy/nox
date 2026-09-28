@@ -78,7 +78,7 @@ async def test_a_configured_pin_gates_writes(
     secrets: InMemorySecretStore, audit: FakeAudit
 ) -> None:
     pin = PinManager(secrets)
-    pin.set_pin("4711")
+    pin.set_pin("471108")
     service = SecretsService(secrets, pin=pin, audit=audit)
 
     with pytest.raises(IpcError) as missing:
@@ -86,11 +86,11 @@ async def test_a_configured_pin_gates_writes(
     assert missing.value.code == ERR_PERMISSION
 
     with pytest.raises(IpcError) as wrong:
-        await service.set("nox/twitch/client_id", "abc", pin="0000", by="dashboard")
+        await service.set("nox/twitch/client_id", "abc", pin="000000", by="dashboard")
     assert wrong.value.code == ERR_PERMISSION
     assert secrets.get("nox/twitch/client_id") is None
 
-    assert await service.set("nox/twitch/client_id", "abc", pin="4711", by="dashboard") == {
+    assert await service.set("nox/twitch/client_id", "abc", pin="471108", by="dashboard") == {
         "ok": True
     }
     assert secrets.get("nox/twitch/client_id") == "abc"

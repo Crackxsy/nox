@@ -238,6 +238,23 @@ class TurnRepository:
         )
         return [TurnRow(**dict(r)) for r in rows]
 
+    def list_history(
+        self, limit: int, *, before_id: int | None = None, now: datetime | None = None
+    ) -> tuple[list[TurnRow], bool]:
+        """`(turns, has_more)`: the newest `limit` turns across sessions, returned oldest first.
+
+        `before_id` pages backwards. A turn whose `retain_until` has passed is left out even before
+        `purge_expired` has deleted it: its retention promise is kept from the moment it expires.
+        """
+        rows = self._db.fetch_all(
+            "SELECT * FROM turns WHERE (retain_until IS NULL OR retain_until > ?) "
+            "AND (? IS NULL OR id < ?) ORDER BY id DESC LIMIT ?",
+            (_iso(now or _now()), before_id, before_id, limit + 1),
+        )
+        turns = [TurnRow(**dict(r)) for r in rows[:limit]]
+        turns.reverse()
+        return turns, len(rows) > limit
+
     def purge_expired(self, now: datetime | None = None) -> int:
         """Delete turns whose `retain_until` has passed.
 

@@ -36,10 +36,12 @@ import {
   KILL_CONFIRM_MS,
   type KillPhase,
   MODES,
-  PRIVACY_MODES,
+  killAfterLevel,
   killNext,
 } from '../model';
 import { Detail, Hero, Rail, StateWord, Tile, toneFor } from '../ui';
+import { PrivacyTile, ResumeTile } from './SafetyTiles';
+import { usePinStatus } from './usePinStatus';
 
 export interface StatusPageProps {
   t: T;
@@ -89,11 +91,25 @@ const CAPTURE_LABEL: Record<keyof CaptureFlags, Key> = {
 export function StatusPage({ t, lang, state, client, providersFailed, onRefresh }: StatusPageProps) {
   const { busy, error, run } = useIpcAction(client, t);
   /** Only an explicit choice lives here; `null` means "show whatever the core last reported". */
-  const [privacyChoice, setPrivacyChoice] = useState<string | null>(null);
   const [modeChoice, setModeChoice] = useState<string | null>(null);
   const [killPhase, setKillPhase] = useState<KillPhase>('idle');
   const [killReason, setKillReason] = useState('');
   const killTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** What the supervisor said after the last resume from this page; '' before any. */
+  const [resumed, setResumed] = useState<string | null>(null);
+  // Whether a PIN is set, and whether leaving the current safe mode needs it, changes with the
+  // system level; it is re-read then.
+  const pinStatus = usePinStatus(client, state.systemLevel);
+
+  // Leaving safe mode - from here, the tray or the shell - re-arms the kill button. This is the
+  // "adjust state while rendering" pattern: the level is compared with the last one this component
+  // saw, without an effect and without a render that shows the stale button first.
+  const [seenLevel, setSeenLevel] = useState(state.systemLevel);
+  if (state.systemLevel !== seenLevel) {
+    setSeenLevel(state.systemLevel);
+    setKillPhase((phase) => killAfterLevel(phase, seenLevel, state.systemLevel));
+    if (state.systemLevel === 'safe_mode') setResumed(null);
+  }
 
   useEffect(
     () => () => {
@@ -104,8 +120,8 @@ export function StatusPage({ t, lang, state, client, providersFailed, onRefresh 
 
   /**
    * Two presses, and only two. `killNext` makes `sent` terminal, so the second branch below cannot
-   * fire again after a kill; the button then renders as a disabled "ausgelöst" state, because
-   * resuming from safe mode is deliberately not a dashboard action.
+   * fire again after a kill; the button renders as a disabled "ausgelöst" state until the core
+   * leaves safe mode (`killAfterLevel` above), and the Resume tile is the way out.
    */
   const armKill = () => {
     const next = killNext(killPhase, 'press');
@@ -131,7 +147,6 @@ export function StatusPage({ t, lang, state, client, providersFailed, onRefresh 
   const safeMode = state.systemLevel === 'safe_mode';
   const killed = killPhase === 'sent' || safeMode;
   const unknown = t('unknown');
-  const privacyValue = privacyChoice ?? state.privacyMode ?? '';
   const modeValue = modeChoice ?? state.mode ?? '';
 
   return (
@@ -295,43 +310,13 @@ export function StatusPage({ t, lang, state, client, providersFailed, onRefresh 
       )}
 
       <div className="tiles">
-        <Tile id="privacy" title={t('privacy_title')}>
-          <div className="field">
-            <label htmlFor="privacy-mode" className="label">
-              {t('privacy_mode')}
-            </label>
-            <select
-              id="privacy-mode"
-              className="select"
-              value={privacyValue}
-              disabled={disabled}
-              onChange={(e) => setPrivacyChoice(e.target.value)}
-            >
-              {state.privacyMode === null && <option value="">{unknown}</option>}
-              {PRIVACY_MODES.map((m) => (
-                <option key={m} value={m}>
-                  {privacyLabel(t, m)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="tile-actions">
-            <button
-              type="button"
-              className="btn"
-              disabled={
-                disabled || busy === 'privacy' || !privacyValue || privacyValue === state.privacyMode
-              }
-              onClick={() => {
-                void run('privacy', (c) => api.setPrivacy(c, privacyValue)).then(() =>
-                  setPrivacyChoice(null),
-                );
-              }}
-            >
-              {t('privacy_apply')}
-            </button>
-          </div>
-        </Tile>
+        <PrivacyTile
+          t={t}
+          lang={lang}
+          client={client}
+          current={state.privacyMode}
+          pin={pinStatus.pin}
+        />
 
         <Tile id="mode" title={t('mode_title')}>
           <div className="field">
@@ -397,6 +382,23 @@ export function StatusPage({ t, lang, state, client, providersFailed, onRefresh 
           </div>
         </Tile>
       </div>
+
+      {safeMode && (
+        <div className="tiles tiles--single">
+          <ResumeTile
+            t={t}
+            lang={lang}
+            client={client}
+            pin={pinStatus.pin}
+            onResumed={(supervisor) => setResumed(supervisor)}
+          />
+        </div>
+      )}
+      {!safeMode && resumed !== null && (
+        <p role="status" className={resumed === 'unreachable' ? 'hint' : 'ok-note'}>
+          {resumed === 'unreachable' ? t('resume_watchdog_unreachable') : t('resume_done')}
+        </p>
+      )}
 
       <div className="tiles tiles--single">
         <Tile

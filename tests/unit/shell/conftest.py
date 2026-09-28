@@ -30,6 +30,8 @@ class FakeBridge:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self._callbacks: list[Callable[[dict[str, Any]], None]] = []
         self.fail_calls = False
+        #: Per-request answers; anything not listed answers `{"ok": True}`.
+        self.results: dict[str, dict[str, Any]] = {}
 
     def start(self) -> None:
         self.started = True
@@ -43,7 +45,7 @@ class FakeBridge:
         if self.fail_calls:
             fut.set_exception(ConnectionError("down"))
         else:
-            fut.set_result({"ok": True})
+            fut.set_result(self.results.get(name, {"ok": True}))
         return fut
 
     def on_event(self, callback: Callable[[dict[str, Any]], None]) -> None:

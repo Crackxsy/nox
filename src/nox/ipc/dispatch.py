@@ -54,6 +54,8 @@ _DASHBOARD: tuple[str, ...] = (
     "security.*",  # security.kill, security.panic (one segment: not security.permission.reply)
     "voice.mute",
     "chat.send",
+    # Persisted conversation turns across sessions, read-only, for the Chat page.
+    "chat.history",
     "health.history",  # the health-history panel
     "config.effective",  # the Settings view: read-only, redacted configuration
     # The writable half of the Settings page. Each handler re-checks its own roles at registration
@@ -64,6 +66,9 @@ _DASHBOARD: tuple[str, ...] = (
     # above does not cover it and it is listed by name, as `security.permission.reply` is for the
     # shell role.
     "security.pin.status",
+    # Setting, changing and removing the PIN; the handlers verify the current PIN themselves.
+    "security.pin.set",
+    "security.pin.clear",
     "secrets.status",
     "secrets.set",
     "secrets.delete",

@@ -41,6 +41,7 @@ import { RemotePage } from './pages/Remote';
 import { SettingsPage } from './pages/settings/SettingsPage';
 import { StatusPage } from './pages/Status';
 import { StreamPage } from './pages/Stream';
+import { useChatHistory } from './pages/useChatHistory';
 import { type ThemePref, applyTheme, storeTheme } from './theme';
 
 export type TabId =
@@ -241,6 +242,9 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
 
   const online = status === 'online';
   const liveClient = online ? client : null;
+  const chatHistory = useChatHistory(liveClient);
+  /** The handshake was refused for good: no retry, and the page says how to get back. */
+  const refused = status === 'auth_failed' || status === 'session_expired';
   const connLabel: Key =
     status === 'online'
       ? 'conn_online'
@@ -248,12 +252,10 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
         ? 'conn_connecting'
         : status === 'auth_failed'
           ? 'conn_auth_failed'
-          : 'conn_offline';
-  const connClass = online
-    ? 'conn--online'
-    : status === 'auth_failed'
-      ? 'conn--error'
-      : 'conn--warn';
+          : status === 'session_expired'
+            ? 'conn_session_expired'
+            : 'conn_offline';
+  const connClass = online ? 'conn--online' : refused ? 'conn--error' : 'conn--warn';
 
   return (
     <div className="app">
@@ -333,7 +335,22 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
           {t('no_token')}
         </p>
       )}
-      {token && !online && status !== 'connecting' && (
+      {/*
+        After a core restart the token this page holds is gone for good: the page cannot fetch the
+        new one (it only ever arrives in the link the tray opens), so it says how to reopen instead
+        of showing "offline" and retrying forever.
+      */}
+      {token && status === 'session_expired' && (
+        <p role="alert" className="banner banner--error">
+          {t('session_expired')}
+        </p>
+      )}
+      {token && status === 'auth_failed' && (
+        <p role="alert" className="banner banner--error">
+          {t('auth_failed_hint')}
+        </p>
+      )}
+      {token && !online && !refused && status !== 'connecting' && (
         <p role="alert" className="banner">
           {t('offline_hint')}
         </p>
@@ -368,6 +385,7 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
                 onMessages={(update) => setMessages((list) => update(list))}
                 draft={chatDraft}
                 onDraft={setChatDraft}
+                history={chatHistory}
               />
             )}
             {item.id === 'home' && (

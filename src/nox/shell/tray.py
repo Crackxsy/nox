@@ -8,7 +8,7 @@ from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QAction, QActionGroup, QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
-from nox.core.state import PrivacyMode
+from nox.core.state import PrivacyMode, SystemLevel
 from nox.shell.logic import TRAY_COLOURS, ShellModel, TrayTint, tray_tint, tray_tooltip
 
 #: Privacy modes as words, `(de, en)`. The menu used to show `mode.value.capitalize()`, i.e. the raw
@@ -58,6 +58,7 @@ class TrayController:
         on_mute: Callable[[], None],
         on_dashboard: Callable[[], None],
         on_kill: Callable[[], None],
+        on_resume: Callable[[], None],
         on_quit: Callable[[], None],
         on_click_through: Callable[[bool], None],
         language: str = "de",
@@ -107,6 +108,13 @@ class TrayController:
         self.action_kill.triggered.connect(on_kill)
         self.menu.addAction(self.action_kill)
 
+        # The way out of safe mode. Enabled while safe mode is on, and while the core is
+        # unreachable - then the tray cannot know whether the supervisor holds it in safe mode, and
+        # the supervisor answers honestly either way.
+        self.action_resume = QAction("Fortsetzen" if de else "Resume")
+        self.action_resume.triggered.connect(on_resume)
+        self.menu.addAction(self.action_resume)
+
         self.action_quit = QAction("Beenden" if de else "Quit")
         self.action_quit.triggered.connect(on_quit)  # ShellApp.quit: sup.stop,, not a kill
         self.menu.addAction(self.action_quit)
@@ -145,6 +153,9 @@ class TrayController:
         self.action_click_through.setChecked(model.click_through)
         self.action_click_through.blockSignals(False)
         self.action_dashboard.setEnabled(model.connected)
+        self.action_resume.setEnabled(
+            not model.connected or model.system_level == SystemLevel.SAFE_MODE
+        )
         return tint
 
     def notify(self, title: str, text: str, critical: bool = False) -> None:

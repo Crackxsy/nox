@@ -23,12 +23,14 @@ from nox.shell.dialogs import PermissionDialog
 from nox.shell.hotkeys import GlobalHotkeys, HotkeyTracker
 from nox.shell.ipc_bridge import BridgeFactory, BridgeUnavailableError, IpcBridge, create_bridge
 from nox.shell.logic import (
+    RESUME_NOTICE_FALLBACK,
     HotkeyAction,
     ShellModel,
     dashboard_url,
     hotkey_map,
     kill_path,
     pet_url,
+    resume_notice,
     toggle_privacy,
     ws_url,
 )
@@ -48,6 +50,7 @@ from nox.shell.runtime import (
 from nox.shell.supervisor_client import (
     SupervisorUnavailableError,
     send_supervisor_kill,
+    send_supervisor_resume,
     send_supervisor_stop,
 )
 from nox.shell.tray import TrayController
@@ -73,12 +76,14 @@ CLIENT_ID = "shell:main"
 PermissionHandler = Callable[[dict[str, Any]], dict[str, Any] | None]
 SupervisorKill = Callable[[str, int, str], dict[str, Any]]
 SupervisorStop = Callable[[str, int, str], dict[str, Any]]
+SupervisorResume = Callable[[str, int, str], dict[str, Any]]
 
 
 class _Signals(QObject):
     event_received = Signal(object)  # envelope dict, emitted from the bridge thread
     hotkey = Signal(object, bool)  # (HotkeyAction, pressed), emitted from pynput thread
     ping = Signal(bool)
+    notice = Signal(str, bool)  # (text, critical), emitted from the bridge thread
 
 
 class ShellApp:
@@ -93,6 +98,7 @@ class ShellApp:
         permission_handler: PermissionHandler | None = None,
         supervisor_kill: SupervisorKill | None = None,
         supervisor_stop: SupervisorStop | None = None,
+        supervisor_resume: SupervisorResume | None = None,
         open_url: Callable[[str], object] = webbrowser.open,
         enable_hotkeys: bool = True,
         create_pet_window: bool = True,
@@ -114,6 +120,7 @@ class ShellApp:
         self._permission_handler = permission_handler or self._native_permission_dialog
         self._supervisor_kill = supervisor_kill or self._default_supervisor_kill
         self._supervisor_stop = supervisor_stop or self._default_supervisor_stop
+        self._supervisor_resume = supervisor_resume or self._default_supervisor_resume
         self._open_url = open_url
         self._session_permissions: dict[tuple[str, str, str], bool] = {}
         self.calls: list[tuple[str, dict[str, Any]]] = []  # last requests (debug/tests)
@@ -122,6 +129,7 @@ class ShellApp:
         self._signals.event_received.connect(self._on_event_main)
         self._signals.hotkey.connect(self._on_hotkey_main)
         self._signals.ping.connect(self._on_ping_result)
+        self._signals.notice.connect(self._show_notice)
 
         self.tray = TrayController(
             on_toggle_pet=self.toggle_pet,
@@ -129,6 +137,7 @@ class ShellApp:
             on_mute=self.toggle_mute,
             on_dashboard=self.open_dashboard,
             on_kill=self._kill_from_tray,
+            on_resume=self._resume_from_tray,
             on_quit=self.quit,
             on_click_through=self.set_click_through,
             language=self.language,
@@ -418,12 +427,7 @@ class ShellApp:
             )
             return path
         sup_token = read_supervisor_token(self.runtime_dir)
-        host = self.endpoints.host if self.endpoints else "127.0.0.1"
-        port = (
-            self.endpoints.supervisor_port
-            if self.endpoints
-            else IpcEndpoints.model_fields["supervisor_port"].default
-        )
+        host, port = self._supervisor_address()
         if sup_token is None:
             log.error("shell.kill_no_supervisor_token")
             self.tray.notify("Nox", "Kill switch failed: no supervisor token", critical=True)
@@ -435,6 +439,59 @@ class ShellApp:
             self.tray.notify("Nox", "Kill switch failed: supervisor unreachable", critical=True)
             return "failed"
         return path
+
+    def resume(self) -> str:
+        """Leave safe mode from the tray. Returns the path used: `core`, `supervisor` or `failed`.
+
+        With the core reachable this is `security.resume`, which checks the PIN after a
+        security-path kill and then tells the supervisor itself. Only with the core unreachable
+        does the tray ask the supervisor for a fresh core. The tray has no PIN field; when one is
+        needed, the notice says to resume in the dashboard.
+        """
+        if self.model.connected:
+            fut = self._request("security.resume", {}, failure_text="Fortsetzen nicht möglich")
+            if fut is not None:
+                fut.add_done_callback(self._resume_done)
+            return "core"
+        sup_token = read_supervisor_token(self.runtime_dir)
+        if sup_token is None:
+            self.tray.notify("Nox", f"{RESUME_NOTICE_FALLBACK}: kein Supervisor-Token")
+            return "failed"
+        host, port = self._supervisor_address()
+        try:
+            reply = self._supervisor_resume(host, port, sup_token)
+        except SupervisorUnavailableError as exc:
+            log.error("shell.resume_supervisor_unreachable", reason=str(exc))
+            self.tray.notify("Nox", f"{RESUME_NOTICE_FALLBACK}: Supervisor nicht erreichbar")
+            return "failed"
+        payload = reply.get("payload") if isinstance(reply.get("payload"), dict) else {}
+        self.tray.notify("Nox", resume_notice(payload or {}))
+        return "supervisor"
+
+    def _resume_done(self, fut: Future[Any]) -> None:
+        if fut.exception() is not None:
+            return  # `_on_result` has already told the user
+        result = fut.result()
+        self._signals.notice.emit(resume_notice(result if isinstance(result, dict) else {}), False)
+
+    def _supervisor_address(self) -> tuple[str, int]:
+        host = self.endpoints.host if self.endpoints else "127.0.0.1"
+        port = (
+            self.endpoints.supervisor_port
+            if self.endpoints
+            else IpcEndpoints.model_fields["supervisor_port"].default
+        )
+        return host, int(port)
+
+    def _default_supervisor_resume(self, host: str, port: int, token: str) -> dict[str, Any]:
+        return send_supervisor_resume(host, port, token)
+
+    def _resume_from_tray(self) -> None:
+        self.resume()
+
+    def _show_notice(self, text: str, critical: bool) -> None:
+        """Main-thread end of `_Signals.notice`: a tray message from a bridge-thread callback."""
+        self.tray.notify("Nox", text, critical)
 
     def _kill_from_tray(self) -> None:
         self.kill_switch("tray")
@@ -448,12 +505,7 @@ class ShellApp:
         if sup_token is None:
             log.warning("shell.quit_no_supervisor_token")
             return
-        host = self.endpoints.host if self.endpoints else "127.0.0.1"
-        port = (
-            self.endpoints.supervisor_port
-            if self.endpoints
-            else IpcEndpoints.model_fields["supervisor_port"].default
-        )
+        host, port = self._supervisor_address()
         try:
             self._supervisor_stop(host, port, sup_token)
         except SupervisorUnavailableError as exc:

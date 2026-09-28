@@ -24,6 +24,7 @@ from collections.abc import Callable
 from nox.core.logging import get_logger
 from nox.ipc.errors import ERR_PERMISSION, ERR_RATE_LIMITED, ERR_VALIDATION, IpcError
 from nox.security.model import AuditLog, SecretStore
+from nox.security.pin_setup import pin_error_from_status
 from nox.security.secrets import PinManager
 
 log = get_logger(__name__)
@@ -44,18 +45,25 @@ DEFAULT_RATE_LIMIT = 10
 DEFAULT_RATE_WINDOW_S = 60.0
 
 
-class _RateLimiter:
-    """A sliding window over write attempts; shared by `secrets.set` and `secrets.delete`."""
+class RateLimiter:
+    """A sliding window over write attempts.
+
+    One instance is shared by `secrets.set` and `secrets.delete`; the PIN requests have their own
+    (`nox.settings.pin_ipc`). `what` names the counted action in the refusal.
+    """
 
     def __init__(
         self,
         max_calls: int = DEFAULT_RATE_LIMIT,
         window_s: float = DEFAULT_RATE_WINDOW_S,
         clock: Callable[[], float] | None = None,
+        *,
+        what: str = "secret changes",
     ) -> None:
         self._max = max_calls
         self._window = window_s
         self._clock = clock or time.monotonic
+        self._what = what
         self._calls: deque[float] = deque()
 
     def check(self) -> None:
@@ -65,7 +73,7 @@ class _RateLimiter:
         if len(self._calls) >= self._max:
             raise IpcError(
                 ERR_RATE_LIMITED,
-                f"at most {self._max} secret changes per {self._window:.0f}s",
+                f"at most {self._max} {self._what} per {self._window:.0f}s",
                 retryable=True,
             )
         self._calls.append(now)
@@ -87,7 +95,7 @@ class SecretsService:
         self._store = store
         self._pin = pin
         self._audit = audit
-        self._limiter = _RateLimiter(max_calls, window_s, clock)
+        self._limiter = RateLimiter(max_calls, window_s, clock)
 
     # -- read ------------------------------------------------------------------------------------
 
@@ -134,10 +142,17 @@ class SecretsService:
         self._limiter.check()
         if self._pin is None or not self._pin.is_set():
             return
-        verified = pin is not None and (await self._pin.verify_pin_async(pin, by=by)).ok
-        if not verified:
+        status = await self._pin.verify_pin_async(pin, by=by) if pin else None
+        if status is None or not status.ok:
             self._audit_name(name, action=action, by=by, decision="deny", result="denied")
-            raise IpcError(ERR_PERMISSION, "PIN required to change a stored secret")
+            details = (
+                {"reason": "pin_required"}
+                if status is None
+                else pin_error_from_status(status, action=action).payload()
+            )
+            raise IpcError(
+                ERR_PERMISSION, "PIN required to change a stored secret", details=details
+            )
 
     def _audit_name(
         self,

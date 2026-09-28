@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from nox.core.events import E, Event
 from nox.core.logging import get_logger
@@ -29,6 +29,8 @@ from nox.ipc.errors import ERR_PERMISSION, ERR_UNAVAILABLE, IpcError
 from nox.security.constants import RESUME_ROLES, USER_KILL_ORIGINS
 from nox.security.gate import PinRequiredError, relaxes_privacy
 from nox.security.model import Decision
+from nox.security.pin_setup import pin_error_from_status
+from nox.security.secrets import SecretStoreUnavailableError
 
 if TYPE_CHECKING:
     from nox.app import NoxCore
@@ -38,6 +40,7 @@ log = get_logger(__name__)
 __all__ = [
     "PROFILE_FOR_MODE",
     "PUBLIC_STATE_ROOTS",
+    "ChatHistoryRequest",
     "ChatSend",
     "CoreHandlers",
     "FunkenTopRequest",
@@ -70,6 +73,9 @@ PROFILE_FOR_MODE: dict[Mode, str] = {
 DEFAULT_PROFILE = "companion"
 
 UI_ROLES: tuple[str, ...] = ("shell", "dashboard")
+
+#: The largest page `chat.history` returns at once.
+CHAT_HISTORY_MAX_LIMIT = 200
 
 
 # ---- payload models -----------------------------------------------------------------------------
@@ -127,6 +133,13 @@ class ChatSend(BaseModel):
     language: str | None = None
 
 
+class ChatHistoryRequest(BaseModel):
+    #: At most this many turns, newest first before `before`, returned oldest first.
+    limit: int = Field(default=50, ge=1, le=CHAT_HISTORY_MAX_LIMIT)
+    #: Only turns with an id below this one: the cursor for "load older turns".
+    before: int | None = Field(default=None, ge=1)
+
+
 class PetInteract(BaseModel):
     type: str = "click"
     x: float | None = None
@@ -181,6 +194,7 @@ class CoreHandlers:
         reg("voice.ptt", VoicePtt, self.voice_ptt, roles=("shell",))
         reg("voice.mute", VoiceMute, self.voice_mute, roles=ui)
         reg("chat.send", ChatSend, self.chat_send, roles=ui)
+        reg("chat.history", ChatHistoryRequest, self.chat_history, roles=("dashboard",))
         reg("ai.providers", EmptyPayload, self.ai_providers, roles=ui)
         reg("pet.interact", PetInteract, self.pet_interact, roles=("pet", "shell"))
         # Worker registration is for spawned workers only; see the module docstring.
@@ -246,14 +260,20 @@ class CoreHandlers:
         assert core.security is not None and core.state is not None
         privacy = core.security.privacy
         await self._authorize_privacy_change(ctx, p)
+        change = None
         if p.mode is not None:
-            await privacy.set_mode(p.mode, by=ctx.role, confirmed=p.confirmed)
+            change = await privacy.set_mode(p.mode, by=ctx.role, confirmed=p.confirmed)
         if any(value is not None for value in (p.microphone, p.screen, p.camera)):
             await privacy.set_capture(
                 microphone=p.microphone, screen=p.screen, camera=p.camera, by=ctx.role
             )
         await core.state.update("privacy.mode", privacy.mode.value, reason="privacy.set")
         result: dict[str, Any] = privacy.state.model_dump(mode="json")
+        # A mode change that was not applied - FULL without `confirmed` - used to come back as the
+        # unchanged state, which a UI could only read as success. It now says so.
+        needs_confirmation = change is not None and change.requires_confirmation
+        result["applied"] = not needs_confirmation
+        result["requires_confirmation"] = needs_confirmation
         return result
 
     async def _authorize_privacy_change(self, ctx: RequestContext, p: PrivacySet) -> None:
@@ -271,7 +291,7 @@ class CoreHandlers:
         try:
             await gate.require(p.pin, action="privacy.set", by=ctx.role)
         except PinRequiredError as exc:
-            raise IpcError(ERR_PERMISSION, exc.reason) from exc
+            raise IpcError(ERR_PERMISSION, exc.reason, details=exc.details) from exc
 
     # ---- kill switch -----------------------------------------------------------------------------
 
@@ -288,30 +308,51 @@ class CoreHandlers:
         return {"ok": True, "report": report.model_dump(mode="json")}
 
     async def resume(self, ctx: RequestContext, p: SecurityResume) -> dict[str, Any]:
-        """Leave safe mode.
+        """Leave safe mode, and tell the supervisor so its watchdog restarts a crashed core again.
 
         Only the user-controlled surfaces may ask: the shell, the dashboard, and the tray or
         hotkey path that reaches the core through the supervisor. The PIN is required after a
         security-path kill - tamper, a broken audit chain, panic; without a PIN configured the
         explicit request is the authorisation, and it is audited as such.
+
+        The supervisor is told only after the kill switch really let go, over the core's own
+        authenticated control connection: a hotkey kill put the supervisor into safe mode too, and
+        without this it stayed there - never restarting a crashed core again. A refusal says why
+        (`reason`), so the dashboard can ask for the PIN instead of showing a bare "no".
         """
         core = self._core
         assert core.security is not None and core.state is not None and core.bus is not None
         if ctx.role not in RESUME_ROLES:
             raise IpcError(ERR_PERMISSION, f"role {ctx.role!r} may not resume from safe mode")
         killswitch = core.security.killswitch
-        pin = core.security.pin
-        if killswitch.security_path and pin.is_set():
-            status = await pin.verify_pin_async(p.pin, by=ctx.role) if p.pin else None
-            pin_ok = status is not None and status.ok
-        else:
-            pin_ok = True
+        pin_ok, refusal = await self._resume_pin_check(p.pin, by=ctx.role)
         ok = await killswitch.resume(pin_ok=pin_ok, by=ctx.role)
-        if ok:
-            await core.state.update("system.level", SystemLevel.RUNNING.value, reason="resume")
-            await core.bus.publish(Event(name=E.SYSTEM_STARTED, payload={"resumed": True}))
-            core.ensure_voice_worker()
-        return {"ok": ok}
+        if not ok:
+            return {"ok": False, **refusal}
+        await core.state.update("system.level", SystemLevel.RUNNING.value, reason="resume")
+        await core.bus.publish(Event(name=E.SYSTEM_STARTED, payload={"resumed": True}))
+        core.ensure_voice_worker()
+        supervisor = await core.notify_supervisor_resumed(by=ctx.role)
+        return {"ok": True, "supervisor": supervisor}
+
+    async def _resume_pin_check(self, pin: str | None, *, by: str) -> tuple[bool, dict[str, Any]]:
+        """`(pin_ok, refusal)`: the PIN is checked only after a security-path kill."""
+        security = self._core.security
+        assert security is not None
+        if not security.killswitch.security_path:
+            return True, {}
+        try:
+            pin_set = security.pin.is_set()
+        except SecretStoreUnavailableError:
+            return False, {"reason": "store_unavailable"}
+        if not pin_set:
+            return True, {}
+        if not pin:
+            return False, {"reason": "pin_required"}
+        status = await security.pin.verify_pin_async(pin, by=by)
+        if status.ok:
+            return True, {}
+        return False, pin_error_from_status(status, action="security.resume").payload()
 
     async def permission_reply(self, _ctx: RequestContext, p: PermissionReply) -> dict[str, Any]:
         assert self._core.security is not None
@@ -361,6 +402,19 @@ class CoreHandlers:
             "provider": turn.provider,
             "degraded": turn.degraded,
         }
+
+    async def chat_history(self, _ctx: RequestContext, p: ChatHistoryRequest) -> dict[str, Any]:
+        """Persisted turns across sessions, oldest first, for the dashboard's Chat page.
+
+        Only what was recorded can come back: the orchestrator records nothing while memory writes
+        are not allowed (private mode, a privacy zone, safe mode), and a turn past its retention
+        date is left out even before the retention job has deleted it.
+        """
+        store = self._core.turn_store
+        if store is None:
+            raise IpcError(ERR_UNAVAILABLE, "the conversation store is not running")
+        turns, has_more = await store.history(p.limit, before=p.before)
+        return {"turns": [turn.model_dump(mode="json") for turn in turns], "has_more": has_more}
 
     async def pet_interact(self, ctx: RequestContext, p: PetInteract) -> dict[str, Any]:
         assert self._core.bus is not None

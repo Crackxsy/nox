@@ -14,6 +14,7 @@ from pathlib import Path
 from nox.core.logging import get_logger
 from nox.data.db import Database
 from nox.data.repos import TurnRepository
+from nox.ipc.protocol import ChatHistoryTurn
 
 log = get_logger(__name__)
 
@@ -71,3 +72,21 @@ class DbTurnStore:
     async def recent(self, session_id: str, limit: int) -> list[tuple[str, str]]:
         rows = await asyncio.to_thread(self._turns.list_for_session, session_id, 1000)
         return [(row.role, row.text) for row in rows[-limit:]]
+
+    async def history(
+        self, limit: int, *, before: int | None = None
+    ) -> tuple[list[ChatHistoryTurn], bool]:
+        """`chat.history`: persisted turns across sessions, oldest first, plus "older exist"."""
+        rows, has_more = await asyncio.to_thread(self._turns.list_history, limit, before_id=before)
+        turns = [
+            ChatHistoryTurn(
+                id=row.id,
+                session_id=row.session_id,
+                ts=row.ts.isoformat(),
+                role=row.role,
+                text=row.text,
+                provider=row.provider,
+            )
+            for row in rows
+        ]
+        return turns, has_more

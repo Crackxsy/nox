@@ -39,9 +39,16 @@ The first time Nox runs, `nox onboard` (or the installer's first-run step) walks
    websocket connection for scene control, or a Telegram bridge. Declining any of these just means
    that integration stays off; you can run `nox onboard` again later, or use `nox secrets set
    <name>` directly, to add one.
-5. **Microphone and camera consent** — explicit, separate yes/no for each. Neither is silently
+5. **Security PIN (optional, recommended)** — typed into a hidden prompt, twice, at least 6
+   characters. Without a PIN, relaxing privacy, changing stored credentials and resuming after a
+   security stop all go through with one click. The wizard never replaces a PIN that is already
+   set; change or remove it later with `nox pin set` / `nox pin clear`, or in the dashboard under
+   Settings → "Sicherheits-PIN" (both ask for the current PIN). `nox pin status` tells you whether
+   one is set. Do not store the PIN with `nox secrets set` - that is refused, because the entry
+   holds a hash, not the PIN.
+6. **Microphone and camera consent** — explicit, separate yes/no for each. Neither is silently
    turned on; the capture indicator (see §4) always reflects the real state and cannot be hidden.
-6. **AI backend** — Claude Code (cloud reasoning, with local Ollama as a fallback) or an
+7. **AI backend** — Claude Code (cloud reasoning, with local Ollama as a fallback) or an
    Ollama-only local setup. The wizard actually probes both backends before you choose (not a
    guess) and shows you which one is really available on your machine right now.
 
@@ -67,16 +74,21 @@ time to change these answers.
   - the pet's own menu,
   - the spoken phrase **"Nox, Notaus"** (matched locally by the voice worker, never routed through
     the AI).
-  A kill you triggered yourself resumes with a normal click/hotkey. A kill the security layer
-  triggered on its own (tamper detection, a broken audit chain, panic mode) requires your PIN to
-  resume — this is deliberate, not a bug.
+  To resume, press **"Fortsetzen"** on the dashboard's Status page or in the tray menu. A kill you
+  triggered yourself resumes with that one click. A kill the security layer triggered on its own
+  (tamper detection, a broken audit chain, panic mode) requires your PIN to resume — the dashboard
+  shows a PIN field then, and the tray tells you to resume in the dashboard. This is deliberate,
+  not a bug. Resuming also re-arms the supervisor's watchdog, so a crash after that is restarted
+  again as usual; the kill switch button is usable again right away.
 
 ## 4. Privacy modes, zones, and the capture indicator
 
 Nox has four privacy modes: **FULL**, **BALANCED** (default), **PRIVATE**, **OFFLINE** — see
 `PRIVACY.md` for exactly what each one changes. Switch modes from the tray, the dashboard, or the
-hotkey. Moving to a *more* private mode never asks for confirmation; moving back to FULL always
-does.
+hotkey. Moving to a *more* private mode never asks for confirmation; moving to FULL in the
+dashboard always shows a confirmation first, and with a PIN set, every move to a *less* private
+mode asks for the PIN. If the core did not apply a change, the dashboard says "Nicht übernommen"
+instead of pretending it worked.
 
 **Privacy zones** are apps/windows Nox is configured to never look at (banking, password
 managers, email, private chats, personal documents, Discord by default) — while one is in the
@@ -127,6 +139,16 @@ cannot be turned off or hidden by configuration — if something is being captur
 - **Shell shows "Website nicht erreichbar" / stays offline**: the core was not up yet (or was
   restarted by the supervisor). The shell retries every 3 s and reloads the pet page with the new
   session token on its own; if it never connects, check the core log for a boot error.
+- **Dashboard says "Nox wurde neu gestartet"**: the core restarted and issued a new session token,
+  which a browser tab cannot pick up on its own (the token only ever travels in the link the tray
+  opens). Open the dashboard again from the tray menu; the old tab stops retrying.
+- **Chat shows earlier conversations**: the Chat page loads the stored conversation, across
+  restarts, above the new messages. Nothing said in "Nur lokal" (PRIVATE) mode, inside a privacy
+  zone or in safe mode is stored, so it never shows up there; stored turns expire with the
+  transcript retention setting. "Ansicht leeren" only clears the screen.
+- **PIN refused with "PIN entry is not a Nox PIN hash"**: an older version let `nox secrets set`
+  store the PIN itself. Run `nox pin set` once to replace it; `nox doctor` and the health view
+  report this state.
 
 ## 7. Where your data lives
 

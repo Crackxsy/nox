@@ -10,9 +10,14 @@ use: string, number, boolean, array, object (interface or `Record<string, T>`), 
 (JSON Schema `required`) and nullable (`anyOf [T, null]`). Anything else degrades to `unknown`
 rather than guessing.
 
+It also writes `ui/shared/generated/version.ts`: the package version from `pyproject.toml`, which
+both UIs send as `client_version` in `ipc.auth`. The hub refuses a client whose major version
+differs from its own, so a hand-maintained copy in the UIs would one day lock a new core out of its
+own dashboard; generating it makes the version one number everywhere.
+
 Usage:
-    python scripts/gen_ts_types.py            # (re)write ui/shared/generated/ipc.ts
-    python scripts/gen_ts_types.py --check     # exit 1 if the committed file is stale (CI)
+    python scripts/gen_ts_types.py            # (re)write both generated files
+    python scripts/gen_ts_types.py --check     # exit 1 if a committed file is stale (CI)
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +33,17 @@ from pydantic import BaseModel
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_PATH = REPO_ROOT / "ui" / "shared" / "generated" / "ipc.ts"
+VERSION_OUTPUT_PATH = REPO_ROOT / "ui" / "shared" / "generated" / "version.ts"
+PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
+
+VERSION_HEADER = """/**
+ * GENERATED — do not edit by hand.
+ *
+ * Source of truth: `[project].version` in `pyproject.toml`. Regenerate with
+ * `scripts/gen_ts_types.py`; `--check` fails CI when this file is stale. Both UIs send this as
+ * `client_version` in `ipc.auth`, and the hub refuses a client whose major version differs.
+ */
+"""
 
 HEADER = """/**
  * GENERATED — do not edit by hand.
@@ -48,6 +65,8 @@ def _ordered_models() -> list[type[BaseModel]]:
     from nox.ipc.protocol import (
         AuthRequest,
         AuthResponse,
+        ChatHistoryResult,
+        ChatHistoryTurn,
         ChatSendResult,
         ChatStreamFrame,
         ClipExportResult,
@@ -66,6 +85,7 @@ def _ordered_models() -> list[type[BaseModel]]:
         HealthHistoryEntry,
         HealthHistoryResult,
         PersonalityText,
+        PinChangeResult,
         PinStatus,
         PluginStatusEntry,
         PluginStatusList,
@@ -75,6 +95,7 @@ def _ordered_models() -> list[type[BaseModel]]:
         RemoteUnpairResult,
         SecretsStatus,
         SecretStatus,
+        SecurityResumeResult,
         SettingsOk,
         StreamPluginStatus,
         StreamSessionStatus,
@@ -89,6 +110,9 @@ def _ordered_models() -> list[type[BaseModel]]:
         ErrorPayload,
         ChatStreamFrame,
         ChatSendResult,
+        ChatHistoryTurn,
+        ChatHistoryResult,
+        SecurityResumeResult,
         PluginStatusEntry,
         PluginStatusList,
         StreamPluginStatus,
@@ -113,6 +137,7 @@ def _ordered_models() -> list[type[BaseModel]]:
         SecretStatus,
         SecretsStatus,
         PinStatus,
+        PinChangeResult,
         SettingsOk,
         TwitchDeviceCode,
         TwitchAuthStatus,
@@ -240,6 +265,19 @@ def generate() -> str:
     return "\n\n".join(blocks) + "\n"
 
 
+def package_version(pyproject: Path = PYPROJECT_PATH) -> str:
+    """`[project].version` from `pyproject.toml` - the one version number of the whole product."""
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    version = data.get("project", {}).get("version")
+    if not isinstance(version, str) or not version:
+        raise ValueError(f"{pyproject} has no [project].version")
+    return version
+
+
+def generate_version() -> str:
+    return f"{VERSION_HEADER}\nexport const NOX_VERSION = {json.dumps(package_version())};\n"
+
+
 def _display(path: Path) -> str:
     try:
         return str(path.relative_to(REPO_ROOT))
@@ -256,19 +294,29 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    content = generate()
-    label = _display(OUTPUT_PATH)
+    outputs = ((OUTPUT_PATH, generate()), (VERSION_OUTPUT_PATH, generate_version()))
 
     if args.check:
-        if not OUTPUT_PATH.exists() or OUTPUT_PATH.read_text(encoding="utf-8") != content:
-            print(f"{label} is stale; run `python scripts/gen_ts_types.py`", file=sys.stderr)
+        stale = [
+            path
+            for path, content in outputs
+            if not path.exists() or path.read_text(encoding="utf-8") != content
+        ]
+        for path in stale:
+            print(
+                f"{_display(path)} is stale; run `python scripts/gen_ts_types.py`",
+                file=sys.stderr,
+            )
+        if stale:
             return 1
-        print(f"{label} is up to date")
+        for path, _content in outputs:
+            print(f"{_display(path)} is up to date")
         return 0
 
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(content, encoding="utf-8")
-    print(f"wrote {label}")
+    for path, content in outputs:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        print(f"wrote {_display(path)}")
     return 0
 
 

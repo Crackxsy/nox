@@ -8,9 +8,10 @@ What gets wired:
 * `ConfigEditor` on the live configuration plus the user layer (`user.yaml`), with the live
   appliers below, so `config.get` and `config.set` work - and with the security PIN gate, so a
   change to a `security.*` or `privacy.*` setting carries the PIN when one is configured;
-* `SecretsService` on the core's keyring store and PIN manager (`secrets.*`), plus
-  `security.pin.status` - the one boolean the Settings page needs in order to know whether a
-  credential change will ask for a PIN;
+* `SecretsService` on the core's keyring store and PIN manager (`secrets.*`);
+* `PinService` (`security.pin.status`, `security.pin.set`, `security.pin.clear`): whether a PIN is
+  configured and which changes will ask for it, and setting, changing or removing it - the only
+  place outside `nox pin` and `nox onboard` where a PIN can be set;
 * `TwitchAuthService` on the guarded HTTP client (`twitch.auth.*`), plus a background refresher so
   a long session never dies of an expired chat token;
 * `PersonalityFile` in the data directory (`personality.*`), installed as the prompt builder's
@@ -35,6 +36,7 @@ from nox.ipc.errors import ERR_PERMISSION, IpcError
 from nox.settings.editor import Applier, ConfigEditor
 from nox.settings.layers import resolve_defaults_path, resolve_user_config_path
 from nox.settings.personality import PERSONALITY_FILENAME, PersonalityFile
+from nox.settings.pin_ipc import PinService
 from nox.settings.schema import LIVE_APPLY_PATHS
 from nox.settings.secrets_ipc import SecretsService
 from nox.settings.twitch_auth import TwitchAuthService
@@ -83,6 +85,18 @@ class SecretSetRequest(BaseModel):
 class SecretDeleteRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     pin: str | None = None
+
+
+class PinSetRequest(BaseModel):
+    #: The new PIN. Length rules are checked by `nox.security.pin_setup`, so the refusal carries a
+    #: reason the dashboard can translate instead of a generic validation error.
+    pin: str = Field(min_length=1, max_length=128)
+    #: Required when a PIN is already set: changing it needs the current one.
+    current_pin: str | None = Field(default=None, max_length=128)
+
+
+class PinClearRequest(BaseModel):
+    current_pin: str | None = Field(default=None, max_length=128)
 
 
 class PersonalitySetRequest(BaseModel):
@@ -171,6 +185,7 @@ class SettingsRuntime:
 
     editor: ConfigEditor
     secrets: SecretsService
+    pin: PinService
     twitch_auth: TwitchAuthService
     personality: PersonalityFile
     token_health: TokenHealth
@@ -215,6 +230,12 @@ def install(core: _Core) -> SettingsRuntime:
         gate=security.gate,
     )
     secrets = SecretsService(security.secrets, pin=security.pin, audit=security.audit)
+    pin = PinService(
+        security.pin,
+        audit=security.audit,
+        gate_required=security.gate.is_required,
+        resume_requires_pin=lambda: _resume_requires_pin(security),
+    )
     twitch_auth = TwitchAuthService(
         secrets=security.secrets,
         client_factory=security.egress.client,
@@ -235,7 +256,7 @@ def install(core: _Core) -> SettingsRuntime:
     prompting.set_personality_source(personality.read)
 
     token_health = TokenHealth()
-    _register(core, editor, secrets, twitch_auth, personality, token_health)
+    _register(core, editor, secrets, pin, twitch_auth, personality, token_health)
 
     tasks = [
         asyncio.create_task(
@@ -243,7 +264,21 @@ def install(core: _Core) -> SettingsRuntime:
         ),
     ]
     log.info("settings.installed", personality=str(personality.path))
-    return SettingsRuntime(editor, secrets, twitch_auth, personality, token_health, tasks)
+    return SettingsRuntime(editor, secrets, pin, twitch_auth, personality, token_health, tasks)
+
+
+def _resume_requires_pin(security: Any) -> bool:
+    """Whether leaving safe mode right now needs the PIN - the rule `security.resume` applies.
+
+    An unreadable credential store counts as "a PIN may exist": fail closed.
+    """
+    killswitch = security.killswitch
+    if not killswitch.is_engaged() or not killswitch.security_path:
+        return False
+    try:
+        return bool(security.pin.is_set())
+    except Exception:  # noqa: BLE001 - unreadable store: assume the PIN is needed
+        return True
 
 
 async def _twitch_token_loop(auth: TwitchAuthService, health: TokenHealth) -> None:
@@ -275,6 +310,7 @@ def _register(
     core: _Core,
     editor: ConfigEditor,
     secrets: SecretsService,
+    pin: PinService,
     twitch_auth: TwitchAuthService,
     personality: PersonalityFile,
     health: TokenHealth,
@@ -291,13 +327,19 @@ def _register(
             raise IpcError(ERR_PERMISSION, str(exc)) from exc
 
     async def h_pin_status(_ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
-        """Whether a PIN is configured - never the PIN, its hash, its length or its algorithm.
+        """Whether a PIN is configured and which changes will ask for it - never the PIN, its
+        hash, its length or its algorithm (see `PinService.status`).
 
-        The Settings page needs exactly this one boolean to know that `secrets.set`/`secrets.delete`
-        will ask for a PIN (#23). The alternatives are worse: prompting for a PIN nobody set, or
-        sending a request the core is guaranteed to refuse and calling that an error.
+        Prompting for a PIN nobody set, or sending a request the core is guaranteed to refuse and
+        calling that an error, are the alternatives this exists to avoid.
         """
-        return {"configured": bool(core.security.pin.is_set())}
+        return pin.status()
+
+    async def h_pin_set(ctx: RequestContext, p: PinSetRequest) -> dict[str, Any]:
+        return await pin.set(p.pin, current_pin=p.current_pin, by=ctx.role)
+
+    async def h_pin_clear(ctx: RequestContext, p: PinClearRequest) -> dict[str, Any]:
+        return await pin.clear(current_pin=p.current_pin, by=ctx.role)
 
     async def h_secrets_status(_ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
         return dict(secrets.status())
@@ -341,6 +383,8 @@ def _register(
     reg("config.get", EmptyPayload, h_config_get, roles=UI_ROLES)
     reg("config.set", ConfigSetRequest, h_config_set, roles=UI_ROLES)
     reg("security.pin.status", EmptyPayload, h_pin_status, roles=UI_ROLES)
+    reg("security.pin.set", PinSetRequest, h_pin_set, roles=UI_ROLES)
+    reg("security.pin.clear", PinClearRequest, h_pin_clear, roles=UI_ROLES)
     reg("secrets.status", EmptyPayload, h_secrets_status, roles=UI_ROLES)
     reg("secrets.set", SecretSetRequest, h_secrets_set, roles=UI_ROLES)
     reg("secrets.delete", SecretDeleteRequest, h_secrets_delete, roles=UI_ROLES)

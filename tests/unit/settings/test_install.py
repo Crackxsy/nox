@@ -13,6 +13,7 @@ from nox.ipc.dispatch import RequestRegistry, role_allows
 from nox.ipc.errors import ERR_PERMISSION, IpcError
 from nox.ipc.protocol import Envelope, Kind, Source
 from nox.security.gate import SecurityChangeGate
+from nox.security.killswitch import KillSwitchService
 from nox.security.secrets import InMemorySecretStore, PinManager
 from nox.settings.install import UI_ROLES, install
 from nox.settings.secrets_ipc import KNOWN_SECRETS
@@ -23,6 +24,8 @@ SETTINGS_REQUESTS = (
     "config.get",
     "config.set",
     "security.pin.status",
+    "security.pin.set",
+    "security.pin.clear",
     "secrets.status",
     "secrets.set",
     "secrets.delete",
@@ -56,6 +59,7 @@ class FakeSecurity:
         self.pin = PinManager(secrets)
         self.privacy = FakePrivacy()
         self.egress = FakeEgress()
+        self.killswitch = KillSwitchService()
         # The settings editor asks the gate before it writes a security or privacy setting.
         self.gate = SecurityChangeGate(self.pin, required=True, audit=audit)
 
@@ -164,7 +168,7 @@ async def test_secrets_requests_refuse_an_unknown_name(
     runtime = install(core)
     try:
         with pytest.raises(IpcError):
-            await _call(core, "secrets.set", {"name": "nox/security/pin", "value": "1234"})
+            await _call(core, "secrets.set", {"name": "nox/security/pin", "value": "123456"})
         status = await _call(core, "secrets.status", {})
         # One row per known name, all absent - derived from `KNOWN_SECRETS` rather than a literal
         # count, so adding an integration's credential does not fail this unrelated assertion.
@@ -180,14 +184,75 @@ async def test_pin_status_reports_whether_a_pin_is_configured_and_nothing_else(
     monkeypatch.setenv("NOX_USER_CONFIG", str(tmp_path / "user.yaml"))
     runtime = install(core)
     try:
-        assert await _call(core, "security.pin.status", {}) == {"configured": False}
+        assert await _call(core, "security.pin.status", {}) == {
+            "state": "not_set",
+            "configured": False,
+            "min_length": 6,
+            "gate_required": False,
+            "resume_requires_pin": False,
+            "locked_until": None,
+        }
 
-        core.security.pin.set_pin("4711", by="test")
+        core.security.pin.set_pin("471108", by="test")
 
         answer = await _call(core, "security.pin.status", {})
-        assert answer == {"configured": True}
-        # Presence only: no hash, no length, no algorithm, and certainly no PIN.
-        assert "4711" not in repr(answer)
+        assert answer["configured"] is True and answer["state"] == "valid"
+        assert answer["gate_required"] is True  # the gate is on and now has a PIN to ask for
+        # No hash, no length, no algorithm, and certainly no PIN.
+        assert "471108" not in repr(answer) and "argon2" not in repr(answer)
+        assert set(answer) == {
+            "state",
+            "configured",
+            "min_length",
+            "gate_required",
+            "resume_requires_pin",
+            "locked_until",
+        }
+    finally:
+        await runtime.stop()
+
+
+async def test_pin_status_says_when_resuming_needs_the_pin(
+    core: FakeCore, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The Status page shows a PIN field on the Resume tile exactly when `security.resume` wants
+    one: a security-path kill while a PIN is set - never after a user's own kill."""
+    monkeypatch.setenv("NOX_USER_CONFIG", str(tmp_path / "user.yaml"))
+    runtime = install(core)
+    try:
+        core.security.pin.set_pin("471108", by="test")
+        await core.security.killswitch.engage("ui", "user stop")
+        assert (await _call(core, "security.pin.status", {}))["resume_requires_pin"] is False
+
+        await core.security.killswitch.engage("panic", "stream panic")
+        assert (await _call(core, "security.pin.status", {}))["resume_requires_pin"] is True
+    finally:
+        await runtime.stop()
+
+
+async def test_the_pin_can_be_set_changed_and_removed_over_ipc(
+    core: FakeCore, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The one shipped path the dashboard has: first PIN free, change and removal need the old."""
+    monkeypatch.setenv("NOX_USER_CONFIG", str(tmp_path / "user.yaml"))
+    runtime = install(core)
+    try:
+        assert await _call(core, "security.pin.set", {"pin": "471108"}) == {
+            "ok": True,
+            "state": "valid",
+        }
+        assert core.security.pin.verify_pin("471108").ok
+
+        with pytest.raises(IpcError) as without_current:
+            await _call(core, "security.pin.set", {"pin": "902211"})
+        assert without_current.value.code == ERR_PERMISSION
+        assert without_current.value.details["reason"] == "pin_required"
+
+        await _call(core, "security.pin.set", {"pin": "902211", "current_pin": "471108"})
+        assert core.security.pin.verify_pin("902211").ok
+
+        await _call(core, "security.pin.clear", {"current_pin": "902211"})
+        assert not core.security.pin.is_set()
     finally:
         await runtime.stop()
 
@@ -199,7 +264,7 @@ async def test_a_secret_change_needs_the_pin_once_one_is_configured(
     monkeypatch.setenv("NOX_USER_CONFIG", str(tmp_path / "user.yaml"))
     runtime = install(core)
     try:
-        core.security.pin.set_pin("4711", by="test")
+        core.security.pin.set_pin("471108", by="test")
         name = "nox/obs/websocket_password"
 
         with pytest.raises(IpcError) as without_pin:
@@ -208,16 +273,16 @@ async def test_a_secret_change_needs_the_pin_once_one_is_configured(
         assert "PIN" in without_pin.value.message
 
         with pytest.raises(IpcError):
-            await _call(core, "secrets.set", {"name": name, "value": "pw", "pin": "0000"})
+            await _call(core, "secrets.set", {"name": name, "value": "pw", "pin": "000000"})
 
-        assert await _call(core, "secrets.set", {"name": name, "value": "pw", "pin": "4711"}) == {
+        assert await _call(core, "secrets.set", {"name": name, "value": "pw", "pin": "471108"}) == {
             "ok": True
         }
         assert core.security.secrets.get(name) == "pw"
 
         with pytest.raises(IpcError):
             await _call(core, "secrets.delete", {"name": name})
-        assert await _call(core, "secrets.delete", {"name": name, "pin": "4711"}) == {"ok": True}
+        assert await _call(core, "secrets.delete", {"name": name, "pin": "471108"}) == {"ok": True}
         assert core.security.secrets.get(name) is None
     finally:
         await runtime.stop()

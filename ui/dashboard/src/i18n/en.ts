@@ -473,7 +473,7 @@ export const en: Record<Key, string> = {
   status_refresh: 'Refresh',
   providers_failed: 'The provider list could not be loaded.',
   providers_retry: 'Try again',
-  chat_clear: 'Clear transcript',
+  chat_clear: 'Clear view',
   audit_reset: 'Reset filters',
   jump_kill: 'To the kill switch',
   jump_privacy: 'To the privacy scene',
@@ -537,4 +537,79 @@ export const en: Record<Key, string> = {
   home_step_1: 'Open Home Assistant and click your name in the bottom left.',
   home_step_2: 'The "Security" tab → at the very bottom "Long-lived access tokens" → "Create token".',
   home_step_3: 'Paste the token here and save it.',
+
+  conn_session_expired: 'session expired',
+  session_expired:
+    'Nox was restarted – please reopen the dashboard from the tray icon (notification area → Open dashboard).',
+  auth_failed_hint:
+    'This link is not (or no longer) accepted – please reopen the dashboard from the tray icon (notification area → Open dashboard).',
+
+  resume_title: 'Leave safe mode',
+  resume_explain:
+    'Nox is stopped: no capture, no AI, no actions. Resuming starts everything again and lets the watchdog restart a crashed core again.',
+  resume_explain_pin: 'The stop had a security reason. Resuming needs the PIN.',
+  resume_button: 'Resume',
+  resume_pin_label: 'PIN to resume',
+  resume_done: 'Nox is running again.',
+  resume_watchdog_unreachable:
+    'Nox is running again, but the watchdog did not confirm it. A crash will not be recovered automatically until Nox is started again.',
+
+  pin_refusal_required: 'PIN required — please enter it.',
+  pin_refusal_wrong: 'Wrong PIN — nothing was changed. {0} attempts left before the PIN is locked for 15 minutes.',
+  pin_refusal_wrong_plain: 'Wrong PIN — nothing was changed.',
+  pin_refusal_locked: 'Too many wrong attempts — the PIN is locked until {0}.',
+  pin_refusal_locked_plain: 'Too many wrong attempts — the PIN is locked for now.',
+  pin_refusal_too_short: 'The PIN needs at least {0} characters.',
+  pin_refusal_too_long: 'The PIN may have at most {0} characters.',
+  pin_refusal_not_set: 'No PIN is set.',
+  pin_refusal_invalid_entry:
+    'The stored PIN entry is not a valid PIN. Set it again in a terminal with "nox pin set".',
+  pin_refusal_store_unavailable:
+    'The credential store is not reachable — without it the PIN can be neither checked nor changed.',
+  pin_refusal_backend_missing:
+    'The PIN hashing backend is missing (argon2-cffi). Please reinstall Nox.',
+
+  pin_section_title: 'Security PIN',
+  pin_section_lede:
+    'The PIN protects everything that makes Nox less careful: relaxing privacy, changing credentials, resuming after a security stop.',
+  pin_state_valid: 'A PIN is set.',
+  pin_state_not_set: 'No PIN set — such changes go through without asking.',
+  pin_state_invalid:
+    'The PIN entry does not hold a valid PIN. Set it again in a terminal with "nox pin set".',
+  pin_state_unavailable:
+    'The credential store is not reachable — whether a PIN is set cannot be told.',
+  pin_state_failed: 'The PIN status could not be loaded.',
+  pin_state_locked: 'Locked until {0} (too many wrong attempts).',
+  pin_current_label: 'Current PIN',
+  pin_new_label: 'New PIN',
+  pin_confirm_label: 'Repeat the new PIN',
+  pin_new_hint: 'At least {0} characters. Nox stores only a hash, never the PIN itself.',
+  pin_mismatch: 'The two entries do not match.',
+  pin_set_button: 'Set PIN',
+  pin_change_button: 'Change PIN',
+  pin_remove_button: 'Remove PIN',
+  pin_remove_confirm_button: 'Confirm removal',
+  pin_remove_explain: 'Without a PIN, relaxing privacy goes through with one click again.',
+  pin_saved: 'PIN saved.',
+  pin_removed: 'PIN removed.',
+
+  privacy_full_confirm_title: 'Really allow everything?',
+  privacy_full_confirm_text:
+    '"Everything allowed" sends conversations to cloud providers and allows screen and camera capture where they are switched on.',
+  privacy_full_confirm_button: 'Yes, allow everything',
+  privacy_cancel: 'Cancel',
+  privacy_pin_label: 'PIN for less privacy',
+  privacy_pin_hint: 'Less privacy needs the security PIN. More privacy never does.',
+  privacy_not_applied: 'Not applied — the mode is unchanged.',
+  privacy_applied: 'Privacy mode changed.',
+
+  chat_history_title: 'Earlier conversations',
+  chat_history_loading: 'Fetching earlier conversations',
+  chat_history_failed: 'Earlier conversations could not be loaded.',
+  chat_history_retry: 'Try again',
+  chat_history_older: 'Load older messages',
+  chat_history_show: 'Show earlier conversations',
+  chat_history_new: 'New in this window',
+  chat_history_note:
+    'Only what was said outside "Local only", a privacy zone or safe mode is stored.',
 };

@@ -306,3 +306,99 @@ def test_settings_changed_reloads_the_pet_page_with_the_new_variant(
     assert len(loads) == 2
     app._ping_timer.stop()
     app._reconnect_timer.stop()
+
+
+# ---- "Fortsetzen" from the tray -----------------------------------------------------------------
+
+
+def _notices(app: ShellApp) -> list[str]:
+    seen: list[str] = []
+    app.tray.notify = lambda _title, text, critical=False: seen.append(text)  # type: ignore[method-assign]
+    return seen
+
+
+def test_tray_resume_goes_through_the_core_when_it_is_reachable(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    factory, created = fake_bridge_factory
+    app = make_app(make_runtime(tmp_path), factory)
+    app.start()
+    qapp.processEvents()
+    seen = _notices(app)
+    created[0].results["security.resume"] = {"ok": True, "supervisor": "rearmed"}
+
+    assert app.resume() == "core"
+    qapp.processEvents()
+
+    assert ("security.resume", {}) in created[0].calls
+    assert seen == ["Nox läuft wieder"]
+    app.quit()
+
+
+def test_tray_resume_points_to_the_dashboard_when_the_pin_is_needed(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    """The tray has no PIN field: it says where to resume instead of failing silently."""
+    factory, created = fake_bridge_factory
+    app = make_app(make_runtime(tmp_path), factory)
+    app.start()
+    qapp.processEvents()
+    seen = _notices(app)
+    created[0].results["security.resume"] = {"ok": False, "reason": "pin_required"}
+
+    app.resume()
+    qapp.processEvents()
+
+    assert seen and "PIN" in seen[0] and "Dashboard" in seen[0]
+    app.quit()
+
+
+def test_tray_resume_asks_the_supervisor_while_the_core_is_gone(qapp: Any, tmp_path: Path) -> None:
+    sent: list[tuple[str, int, str]] = []
+
+    def sup_resume(host: str, port: int, token: str) -> dict[str, Any]:
+        sent.append((host, port, token))
+        return {"name": "sup.ack", "payload": {"ok": True, "reason": ""}}
+
+    def factory(*_a: Any) -> Any:
+        raise BridgeUnavailableError("no client")
+
+    app = make_app(make_runtime(tmp_path), factory, supervisor_resume=sup_resume)
+    app.start()
+    seen = _notices(app)
+
+    assert app.resume() == "supervisor"
+    assert sent == [("127.0.0.1", 47799, "sup-token")]
+    assert seen == ["Nox läuft wieder"]
+    app.quit()
+
+
+def test_tray_resume_reports_an_unreachable_supervisor(qapp: Any, tmp_path: Path) -> None:
+    def sup_resume(host: str, port: int, token: str) -> dict[str, Any]:
+        raise SupervisorUnavailableError("down")
+
+    def factory(*_a: Any) -> Any:
+        raise BridgeUnavailableError("no client")
+
+    app = make_app(make_runtime(tmp_path), factory, supervisor_resume=sup_resume)
+    app.start()
+    seen = _notices(app)
+
+    assert app.resume() == "failed"
+    assert seen and "nicht erreichbar" in seen[0]
+    app.quit()
+
+
+def test_the_resume_entry_is_offered_only_when_it_can_do_something(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    factory, created = fake_bridge_factory
+    app = make_app(make_runtime(tmp_path), factory)
+    app.start()
+    qapp.processEvents()
+    assert app.tray.action_resume.isEnabled() is False  # running normally: nothing to resume
+
+    created[0].emit("security.kill_switch", {"by": "hotkey", "reason": "test"})
+    qapp.processEvents()
+    assert app.tray.action_resume.isEnabled() is True
+    app.quit()
