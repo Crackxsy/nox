@@ -26,7 +26,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from nox.ai._log import get_logger
-from nox.ai.base import AiChunk, AiRequest, AiResponse, AiRole, Message, ProviderInfo
+from nox.ai.base import AiChunk, AiRequest, AiResponse, AiRole, ProviderInfo
 from nox.ai.config import ClaudeCodeConfig
 from nox.ai.errors import ProviderError, ProviderTimeoutError, ProviderUnavailableError
 from nox.core.events import HealthStatus
@@ -34,6 +34,8 @@ from nox.core.events import HealthStatus
 PROVIDER_ID = "claude_code"
 STDOUT_LINE_LIMIT = 4 * 1024 * 1024
 STDERR_CAPTURE_BYTES = 16 * 1024
+#: `--version` and `auth status` are local commands; anything slower than this is a broken CLI.
+HEALTH_COMMAND_TIMEOUT_S = 15.0
 
 log = get_logger(__name__)
 
@@ -276,62 +278,54 @@ class ClaudeCodeProvider:
     # -- health -------------------------------------------------------------------------------
 
     async def health(self) -> ProviderInfo:
-        """``claude --version`` plus (if configured) a 1-token round-trip that verifies the login.
-        The round-trip costs quota (about 0.005 USD equivalent on sonnet); the router caches it."""
+        """Is the CLI installed and logged in: ``claude --version`` and ``claude auth status``.
+
+        Never a model request. A health probe runs every few minutes, in every privacy mode, and a
+        one-token completion there cost quota around the clock and sent a request to the cloud while
+        the user had chosen `offline`. A CLI too old to have ``auth status`` is reported `limited`
+        with "login not verified" - the honest answer when the login cannot be checked locally.
+        """
         if not self._cfg.enabled:
-            self._info = self._info.model_copy(
-                update={"status": HealthStatus.UNAVAILABLE, "reason": "disabled in config"}
-            )
-            return self._info
+            return self._set_health(HealthStatus.UNAVAILABLE, "disabled in config")
         try:
             exe = self.executable()
         except ProviderUnavailableError as exc:
-            self._info = self._info.model_copy(
-                update={"status": HealthStatus.UNAVAILABLE, "reason": exc.message}
-            )
-            return self._info
+            return self._set_health(HealthStatus.UNAVAILABLE, exc.message)
         try:
-            version = await self._run_simple([*exe, "--version"], timeout_s=15.0)
-        except ProviderError as exc:
-            self._info = self._info.model_copy(
-                update={
-                    "status": HealthStatus.UNAVAILABLE,
-                    "reason": f"--version failed: {exc.message}",
-                }
+            version = await self._run_simple(
+                [*exe, "--version"], timeout_s=HEALTH_COMMAND_TIMEOUT_S
             )
-            return self._info
+        except ProviderError as exc:
+            return self._set_health(HealthStatus.UNAVAILABLE, f"--version failed: {exc.message}")
         self.version = version.strip()
-        if not self._cfg.health_roundtrip:
-            self._info = self._info.model_copy(
-                update={
-                    "status": HealthStatus.LIMITED,
-                    "reason": f"{self.version}; login not verified",
-                }
+        logged_in = await self._login_state(exe)
+        if logged_in is None:
+            return self._set_health(HealthStatus.LIMITED, f"{self.version}; login not verified")
+        if not logged_in:
+            return self._set_health(
+                HealthStatus.UNAVAILABLE,
+                f"{self.version}; not logged in - run `{self._cfg.command} auth login`",
             )
-            return self._info
-        probe = AiRequest(
-            request_id="health-probe",
-            role=AiRole.CHAT,
-            messages=[Message(role="user", content="Reply with exactly: OK")],
-            max_tokens=5,
-            timeout_s=45.0,
-        )
+        return self._set_health(HealthStatus.AVAILABLE, f"{self.version}; logged in")
+
+    async def _login_state(self, exe: list[str]) -> bool | None:
+        """`loggedIn` from ``auth status`` (JSON), or None when the CLI cannot say."""
         try:
-            response = await self.complete(probe, model=self._cfg.model or "haiku")
-        except ProviderError as exc:
-            self._info = self._info.model_copy(
-                update={
-                    "status": HealthStatus.UNAVAILABLE,
-                    "reason": f"{self.version}; {exc.message}",
-                }
+            _code, out = await self._run_capture(
+                [*exe, "auth", "status"], timeout_s=HEALTH_COMMAND_TIMEOUT_S
             )
-            return self._info
-        self._info = self._info.model_copy(
-            update={
-                "status": HealthStatus.AVAILABLE,
-                "reason": f"{self.version}; round-trip {response.latency_ms} ms",
-            }
-        )
+        except ProviderError as exc:
+            log.info("claude_code.auth_status_unavailable", error=exc.message)
+            return None
+        try:
+            data = json.loads(out)
+        except ValueError:
+            return None
+        logged_in = data.get("loggedIn") if isinstance(data, dict) else None
+        return logged_in if isinstance(logged_in, bool) else None
+
+    def _set_health(self, status: HealthStatus, reason: str) -> ProviderInfo:
+        self._info = self._info.model_copy(update={"status": status, "reason": reason})
         return self._info
 
     # -- AiProvider -----------------------------------------------------------------------------
@@ -475,18 +469,31 @@ class ClaudeCodeProvider:
 
     async def _run_simple(self, args: list[str], *, timeout_s: float) -> str:
         proc = await self._spawn(args)
-        try:
-            out, err = await asyncio.wait_for(proc.communicate(b""), timeout=timeout_s)
-        except TimeoutError as exc:
-            await _kill(proc)
-            raise ProviderTimeoutError(PROVIDER_ID, f"{args[1:]} timed out") from exc
-        finally:
-            await _kill(proc)
+        out, err = await self._communicate(proc, args, timeout_s)
         if proc.returncode != 0:
             raise ProviderError(
                 PROVIDER_ID, f"exit {proc.returncode}: {err.decode('utf-8', 'replace')[:200]}"
             )
         return out.decode("utf-8", "replace")
+
+    async def _run_capture(self, args: list[str], *, timeout_s: float) -> tuple[int, str]:
+        """`(exit code, stdout)`, whatever the exit code: ``auth status`` exits non-zero when
+        logged out but still says so on stdout."""
+        proc = await self._spawn(args)
+        out, _err = await self._communicate(proc, args, timeout_s)
+        return int(proc.returncode or 0), out.decode("utf-8", "replace")
+
+    @staticmethod
+    async def _communicate(
+        proc: asyncio.subprocess.Process, args: list[str], timeout_s: float
+    ) -> tuple[bytes, bytes]:
+        try:
+            return await asyncio.wait_for(proc.communicate(b""), timeout=timeout_s)
+        except TimeoutError as exc:
+            await _kill(proc)
+            raise ProviderTimeoutError(PROVIDER_ID, f"{args[1:]} timed out") from exc
+        finally:
+            await _kill(proc)
 
 
 def _creationflags() -> int:

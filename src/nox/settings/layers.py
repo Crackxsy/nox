@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import io
 import os
+import stat
+import tempfile
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 from typing import Any, cast
@@ -172,9 +174,32 @@ def write_user_config(path: Path, patch: Mapping[str, Any]) -> dict[str, Any]:
 
     buffer = io.StringIO()
     editor.dump(document, buffer)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(header + buffer.getvalue(), encoding="utf-8")
+    write_text_atomic(path, header + buffer.getvalue())
     return cast(dict[str, Any], document)
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """Replace `path` with `text` so that a reader only ever sees the old or the new file.
+
+    The text goes to a temporary file in the same directory, is flushed to disk, and is then moved
+    over the original in one `os.replace`. A crash or a full disk half way through leaves the old
+    file untouched: a truncated `user.yaml` used to cost the user every setting in it. The old
+    file's permission bits are carried over.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temp = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if path.exists():
+            os.chmod(temp, stat.S_IMODE(path.stat().st_mode))
+        os.replace(temp, path)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
 
 
 def load_merged_config(profile_id: str | None = None) -> NoxConfig:

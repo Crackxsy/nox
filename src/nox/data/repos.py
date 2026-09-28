@@ -249,6 +249,16 @@ class TurnRepository:
         )
         return int(cur.rowcount)
 
+    def purge_older_than(self, days: int, now: datetime | None = None) -> int:
+        """Delete turns written more than `days` days ago, whatever their own `retain_until`.
+
+        Makes the current retention setting authoritative: a turn written while retention was
+        longer, or switched off, does not outlive a shorter setting.
+        """
+        cutoff = _iso((now or _now()) - timedelta(days=days))
+        cur = self._db.execute("DELETE FROM turns WHERE ts < ?", (cutoff,))
+        return int(cur.rowcount)
+
 
 # ---- tasks ---------------------------------------------------------------------------------------
 

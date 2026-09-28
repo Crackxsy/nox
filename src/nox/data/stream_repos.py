@@ -226,6 +226,16 @@ class ViewerRepository:
         )
         return int(cur.rowcount)
 
+    def purge_inactive(self, months: int, now: datetime | None = None) -> int:
+        """Delete viewers not seen for `months` (`privacy.retention.viewer_data_inactive_months`).
+
+        Their notes and Funken ledger go with them (`ON DELETE CASCADE`); chat rows and moderation
+        records keep the row with the viewer reference cleared.
+        """
+        cutoff = _iso((now or _now()) - timedelta(days=30 * months))
+        cur = self._db.execute("DELETE FROM viewers WHERE last_seen_at < ?", (cutoff,))
+        return int(cur.rowcount)
+
 
 # ---- viewer memory ----------------------------------------------------------------------------
 

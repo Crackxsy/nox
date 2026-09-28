@@ -5,6 +5,12 @@ Loads `plugins/<id>/manifest.yaml`, imports the manifest's `entry` (`package:cal
 (`plugin.register`, declaring the tools the plugin registered during `create`), heartbeats like any
 other worker, answers `tool.call` from the core and stops within the kill switch's two-second ack
 window on `plugin.stop`. This module owns one plugin process; it owns none of the voice path.
+
+A lost hub connection is not the end: the client reconnects with the worker's reconnect credential
+and the worker registers again, because the new connection knows nothing about it. A worker that
+cannot get back within `HUB_LOSS_DEADLINE_S`, or that the core refuses, shuts its plugin down and
+exits with `EXIT_HUB_LOST` - never a zombie holding its chat or smart-home connection - and the
+plugin manager's restart policy takes over.
 """
 
 from __future__ import annotations
@@ -13,20 +19,26 @@ import asyncio
 import importlib
 import os
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 from nox.core.events import E
 from nox.core.logging import get_logger
+from nox.ipc.errors import IpcError
 from nox.ipc.protocol import Envelope
 from nox.plugins.api import PluginApi, PluginApiError, PrivacyView
 from nox.plugins.manifest import MANIFEST_FILE, PluginManifest, load_manifest
 from nox.util.aio import maybe_await
 from nox.worker.heartbeat import heartbeat_loop
+from nox.worker.hub_loss import EXIT_HUB_LOST, HubLossGuard
 
 log = get_logger(__name__)
 
 HEARTBEAT_S = 2.0
+
+#: How long a plugin worker waits for its hub connection to come back before it exits.
+HUB_LOSS_DEADLINE_S = 30.0
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -68,6 +80,8 @@ class PluginWorker:
         factory: Any,
         heartbeat_s: float = HEARTBEAT_S,
         api: PluginApi | None = None,
+        hub_loss_deadline_s: float = HUB_LOSS_DEADLINE_S,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.client = client
         self.manifest = manifest
@@ -79,6 +93,11 @@ class PluginWorker:
         self.status = "starting"
         self._stop = asyncio.Event()
         self._heartbeat_task: asyncio.Task[None] | None = None
+        #: 0 for a requested stop; `EXIT_HUB_LOST` when the core could not be reached again.
+        self.exit_code = 0
+        self._registered_once = False
+        self._reregister_task: asyncio.Task[None] | None = None
+        self.hub_loss = HubLossGuard(self._on_hub_lost, deadline_s=hub_loss_deadline_s, sleep=sleep)
 
     # -- inbound -----------------------------------------------------------------------------
 
@@ -118,6 +137,51 @@ class PluginWorker:
     async def _on_system_stopping(self, _env: Envelope) -> None:
         self._stop.set()
 
+    # -- connection ----------------------------------------------------------------------------
+
+    def on_connection_change(self, connected: bool) -> None:
+        """IpcClient hook (sync): arm or disarm the hub-loss deadline, register again on return."""
+        self.hub_loss.connection_changed(connected)
+        if not connected or not self._registered_once:
+            return
+        pending = self._reregister_task
+        if pending is not None and not pending.done():
+            return
+        self._reregister_task = asyncio.get_running_loop().create_task(
+            self._reregister(), name=f"plugin-reregister-{self.manifest.id}"
+        )
+
+    def on_reconnect_refused(self, error: IpcError) -> None:
+        self.hub_loss.refused(error)
+
+    def _on_hub_lost(self, _reason: str) -> None:
+        self.exit_code = EXIT_HUB_LOST
+        self.status = "stopping"
+        self._stop.set()
+
+    async def _reregister(self) -> None:
+        try:
+            await self._register()
+        except Exception as exc:  # noqa: BLE001 - the next reconnect tries again
+            log.warning("plugin.reregister_failed", plugin=self.manifest.id, error=str(exc))
+            return
+        log.info("plugin.reregistered", plugin=self.manifest.id)
+
+    async def _register(self) -> dict[str, Any]:
+        response = await self.client.request(
+            "plugin.register",
+            {
+                "plugin_id": self.manifest.id,
+                "version": self.manifest.version,
+                "pid": os.getpid(),
+                "tools": self.api.tools.declarations(),
+            },
+        )
+        config = response.get("config")
+        if isinstance(config, dict):
+            self.api.config.update(config)
+        return dict(response)
+
     # -- lifecycle ---------------------------------------------------------------------------
 
     async def _heartbeat_loop(self) -> None:
@@ -140,18 +204,8 @@ class PluginWorker:
         # `create(api)` registers tools/handlers; events may only be emitted after `plugin.register`
         # has declared the plugin's namespaces to the hub, i.e. from `start()` onwards.
         self.plugin = plugin = await maybe_await(self.factory(self.api))
-        response = await self.client.request(
-            "plugin.register",
-            {
-                "plugin_id": self.manifest.id,
-                "version": self.manifest.version,
-                "pid": os.getpid(),
-                "tools": self.api.tools.declarations(),
-            },
-        )
-        config = response.get("config")
-        if isinstance(config, dict):
-            self.api.config.update(config)
+        await self._register()
+        self._registered_once = True
         self._heartbeat_task = asyncio.create_task(
             self._heartbeat_loop(), name=f"plugin-heartbeat-{self.manifest.id}"
         )
@@ -177,6 +231,10 @@ class PluginWorker:
     async def shutdown(self) -> None:
         self.status = "stopping"
         self._stop.set()
+        self.hub_loss.cancel()
+        if self._reregister_task is not None:
+            self._reregister_task.cancel()
+            await asyncio.gather(self._reregister_task, return_exceptions=True)
         if self.plugin is not None:
             try:
                 await self._call_plugin(self.plugin, "stop")
@@ -192,8 +250,8 @@ class PluginWorker:
 async def run_plugin_worker(plugin_id: str, hub_url: str, token: str) -> int:
     """Process entry point for `python -m nox.worker --plugin <id>`.
 
-    Returns 0 for a clean stop and 1 when the worker ended abnormally, so the supervisor can tell
-    a requested shutdown from a crash.
+    Returns 0 for a clean stop, `EXIT_HUB_LOST` when the core could not be reached again and 1
+    when the worker ended abnormally, so the plugin manager can tell them apart.
     """
     from nox.ipc.client import IpcClient
 
@@ -207,6 +265,9 @@ async def run_plugin_worker(plugin_id: str, hub_url: str, token: str) -> int:
         f"plugin:{plugin_id}",
         client_version="0.1.0",
         request_timeout_s=30.0,
+        reconnect=True,
+        on_connection_change=lambda connected: worker.on_connection_change(connected),
+        on_reconnect_refused=lambda error: worker.on_reconnect_refused(error),
     )
     worker = PluginWorker(client=client, manifest=manifest, factory=factory)
     try:
@@ -214,4 +275,4 @@ async def run_plugin_worker(plugin_id: str, hub_url: str, token: str) -> int:
     except (KeyboardInterrupt, asyncio.CancelledError):
         await worker.shutdown()
         return 1
-    return 0
+    return worker.exit_code

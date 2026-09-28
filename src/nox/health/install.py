@@ -56,7 +56,7 @@ def install(core: _Core) -> HealthRuntime:
     cfg = core.config
     core.health.add_check(make_disk_full_check(cfg.paths.database_dir))
     core.health.add_check(make_vault_unreachable_check(cfg.paths.vault_dir))
-    core.health.add_check(make_audit_chain_check(core.security.audit))
+    core.health.add_check(make_audit_chain_check(core.security.audit_store))
     core.health.add_check(make_config_check(lambda: cfg.warnings))
 
     async def _repair_disk_full() -> bool:

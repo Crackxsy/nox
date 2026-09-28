@@ -32,8 +32,8 @@ cannot be hidden or disabled by configuration.
 ## What is stored, and for how long
 
 - **Transcripts** (from voice) — kept locally, subject to a retention window (7 days by default,
-  configurable) — never uploaded anywhere except as part of a request to whichever AI provider you
-  chose, under the rules below.
+  configurable, see the table below) — never uploaded anywhere except as part of a request to
+  whichever AI provider you chose, under the rules below.
 - **Logs** — local, JSON-structured, filtered for personally-identifying content and secrets
   before being written, rotated (14 days by default).
 - **Memory / vault notes** — local files in your chosen vault folder, meant to be yours: readable,
@@ -47,6 +47,47 @@ cannot be hidden or disabled by configuration.
   (mode/privacy changes, kill switch, permission decisions, config changes, tool executions with
   side effects, memory deletions, plugin lifecycle). The audit log itself never contains secrets
   or raw private content.
+
+### Retention, table by table
+
+A retention job in the core deletes expired rows a minute after every start and then every six
+hours; each run is recorded in the audit log, and the dashboard's health page shows the last
+successful run as `retention`. Changing a setting applies from the next run. The database lives
+in `<data_dir>/database/nox.db`.
+
+| What (table) | Kept for | Setting |
+|---|---|---|
+| Conversation turns (`turns`) | 7 days after they were said; also every turn older than the current setting | `privacy.retention.raw_transcripts_days` (`0` = no expiry) |
+| Stream chat (`chat_events`) | 7 days | `stream.chat.retain_raw_text_days`, applied when the message is stored |
+| Viewers (`viewers`), with their notes (`viewer_memory`) and Funken ledger (`funken_ledger`) | 12 months after the viewer was last seen | `privacy.retention.viewer_data_inactive_months` |
+| Health history (`health_history`) | 365 days | `privacy.retention.metrics_days` |
+| Proactive notifications (`proactive_notifications`) | until their own expiry; dismissed ones 30 days | `proactive.notifications_retention_days` |
+| Memory items (`memory_items`) | until you delete them; an item stored with its own expiry is removed after it | per item |
+| Note rollback copies (`vault_note_versions`) | 30 days | `memory.retention_note_version_days` |
+| Rocket League events (`rl_events`) | 180 days | `rl.retention.events_days`, applied when recorded |
+| Rocket League matches (`rl_matches`) | 365 days after the match | `rl.retention.matches_days` |
+| Rocket League vision detections (`rl_vision_frames`) | 6 hours | `rl.vision.detections_retain_hours`, applied when recorded |
+| Temporary permission grants (`temporary_grants`) | until they expire or are revoked | each grant's own expiry |
+| Phone pairing codes (`remote_pairings`) | until the code expires (5 minutes) | `remote.pair_code_ttl_s` |
+| State checkpoints (`state_checkpoints`) | the newest 200 | fixed |
+| Database backups taken before an upgrade (`<data_dir>/backups`) | the newest five, and none older than 30 days | fixed |
+| Log files | 14 days, rotated daily | `logging.retention_days`, else `privacy.retention.logs_days` |
+
+Kept on purpose, never deleted by the retention job:
+
+- **The audit log** (`audit_log`) — append-only and hash-chained; deleting from it is exactly the
+  tampering it exists to detect. `security.audit.retention_days_*` are not applied yet. The record
+  of commands from a paired phone (`remote_audit`, the command verb only) is kept as well.
+- **Replay files and their index** (`rl_replays`), **match analyses** (`rl_vision_analysis`),
+  **sessions, tasks and stream sessions** — deleted only when you delete them.
+
+A backup is a full copy of the database at the moment it was taken, so until it is deleted it can
+still hold rows the retention job has since removed from the live database - at most 30 days.
+
+If Nox finds its database damaged at start, it renames the file (and its `-wal` journal) to
+`nox.db.corrupt-<time>` next to the original, starts with an empty one, and reports it in health
+and as the first entry of the new audit log. The damaged file is kept for you to inspect or
+delete; Nox never deletes it.
 
 ## What ever leaves your device, and under what conditions
 

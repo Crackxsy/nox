@@ -33,14 +33,15 @@ from pathlib import Path
 from typing import Any
 
 import nox
-from nox.ai.base import AiProvider
+from nox.ai.base import AiProvider, ProviderInfo
 from nox.ai.config import AiConfig
 from nox.ai.prompting import DECIDED_PERSONALITY_BLOCK, build_system_prompt
 from nox.ai.router import DefaultRouter
 from nox.core.boot.ai import ProviderCard, build_providers, build_router
 from nox.core.boot.extensions import DEFAULT_EXTENSIONS, install_extensions, stop_extensions
-from nox.core.boot.health import core_health_checks
-from nox.core.boot.persistence import DbTurnStore, open_database
+from nox.core.boot.health import DatabaseProbe, core_health_checks
+from nox.core.boot.persistence import DbTurnStore, OpenedDatabase, open_database
+from nox.core.boot.retention import RetentionService, retention_rules
 from nox.core.boot.workers import WorkerProcess, WorkerSpeaker, WorkerSupervisor
 from nox.core.bus import AsyncEventBus
 from nox.core.config import NoxConfig
@@ -141,6 +142,8 @@ class NoxCore:
         # a missing attribute - that is what `stop()` and the supervisor callbacks read.
         self.supervisor: SupervisorClient | None = None
         self.db: Database | None = None
+        #: What opening the database took: a damaged file set aside, a backup written.
+        self.db_opened: OpenedDatabase | None = None
         self.bus: AsyncEventBus | None = None
         self.state: NoxStateManager | None = None
         self.security: SecurityContext | None = None
@@ -155,6 +158,7 @@ class NoxCore:
         self.router: DefaultRouter | None = None
         self.provider_card: ProviderCard | None = None
         self.health: HealthService | None = None
+        self.retention: RetentionService | None = None
         self.pet: PetService | None = None
         self.speech_policy: SpeechPolicy | None = None
         self.sessions: SessionRepository | None = None
@@ -240,8 +244,13 @@ class NoxCore:
         self.supervisor.start()
 
     async def _open_database(self) -> None:
-        path = Path(self.config.paths.database_dir) / "nox.db"
-        self.db = await asyncio.to_thread(open_database, path)
+        paths = self.config.paths
+        self.db_opened = await asyncio.to_thread(
+            open_database,
+            Path(paths.database_dir) / "nox.db",
+            backups_dir=Path(paths.backups_dir),
+        )
+        self.db = self.db_opened.db
         await asyncio.to_thread(self.db.load_sqlite_vec)
 
     def _build_bus_and_state(self) -> None:
@@ -278,6 +287,7 @@ class NoxCore:
             session_id=self.session_id,
         )
         verification = await asyncio.to_thread(self.security.verify_boot)
+        self._audit_database_recovery()
         await self.state.update("privacy.mode", self.security.privacy.mode.value, reason="boot")
         if verification.ok:
             await self.state.update("system.level", SystemLevel.RUNNING.value, reason="boot")
@@ -293,6 +303,21 @@ class NoxCore:
         )
         await self.state.update(
             "system.level", SystemLevel.SAFE_MODE.value, reason="audit.chain_broken"
+        )
+
+    def _audit_database_recovery(self) -> None:
+        """A damaged database set aside at boot is the first entry of the new audit chain."""
+        recovery = self.db_opened.recovery if self.db_opened is not None else None
+        if recovery is None or self.security is None:
+            return
+        self.security.audit_store.append(
+            actor="system",
+            tool="core",
+            action="db.recovered",
+            target=recovery.moved_to.name,
+            decision="allow",
+            result="recovered",
+            details={"reason": recovery.reason},
         )
 
     async def _build_ipc(self) -> None:
@@ -393,8 +418,19 @@ class NoxCore:
             interval_s=self.config.health.check_interval_s,
             state_manager=self.state,
         )
+        self.retention = RetentionService(
+            retention_rules(
+                self.db,
+                self.config,
+                memory=self._memory_retention,
+                audit=self.security.audit if self.security is not None else None,
+            ),
+            audit=self.security.audit if self.security is not None else None,
+        )
+        self.health.add_check(Check("retention", self.retention.health))
         await self.health.run_once()
         self.health.start()
+        self.retention.start()
         register_v01_tools(self.tool_registry, state=self.state, health=self.health)
 
     async def _build_assistant_services(self) -> None:
@@ -494,8 +530,11 @@ class NoxCore:
         self.stream_responder.start()
 
     def _start_voice_worker(self) -> None:
-        if self.voice_enabled:
-            self.workers.spawn("voice")
+        if not self.voice_enabled:
+            return
+        self.workers.use_respawn_gate(self._may_respawn_workers, self._refresh_health)
+        self.workers.spawn("voice")
+        self.spawn_task(self.workers.watch())
 
     async def _install_extensions(self) -> None:
         if not self.auto_extensions:
@@ -577,7 +616,9 @@ class NoxCore:
             ("funken_booking", self.funken_booking),
             ("stream_sessions", self.stream_sessions),
             ("pet", self.pet),
+            ("retention", self.retention),
             ("health", self.health),
+            ("router", self.router),
             ("plugins", self.plugins),
             ("supervisor", self.supervisor),
             ("http", self.http),
@@ -622,9 +663,26 @@ class NoxCore:
         task.add_done_callback(self._tasks.discard)
 
     def ensure_voice_worker(self) -> None:
-        """Spawn the voice worker if it is enabled and not running (used when resuming)."""
-        if self.voice_enabled and "voice" not in self.workers:
-            self.workers.spawn("voice")
+        """Spawn the voice worker if it is enabled and not running (used when resuming).
+
+        Earlier failures are forgotten: resuming is the user asking for a fresh attempt.
+        """
+        if self.voice_enabled:
+            self.workers.restart_fresh("voice")
+
+    def _may_respawn_workers(self) -> bool:
+        """No worker comes back during safe mode or while the core shuts down."""
+        engaged = self.security is not None and self.security.killswitch.is_engaged()
+        return self._started and not engaged
+
+    def _refresh_health(self) -> None:
+        if self.health is not None:
+            self.spawn_task(self.health.run_once())
+
+    def _memory_retention(self) -> Any:
+        """The memory extension's retention job, when that extension is installed."""
+        memory: Any = self.extensions.get("memory")
+        return memory.retention if memory is not None else None
 
     def _current_mode(self) -> str:
         return str(self.state.get("assistant.mode")) if self.state is not None else ""
@@ -679,7 +737,15 @@ class NoxCore:
             tokens=lambda: self.tokens,
             providers=lambda: self.ai_providers,
             secrets=lambda: self.security.secrets if self.security is not None else None,
+            database_probe=DatabaseProbe(lambda: self.db, lambda: self.db_opened),
+            provider_health=self._provider_health,
         )
+
+    async def _provider_health(self, provider: AiProvider) -> ProviderInfo:
+        """Through the router: its cache, and no probe of a cloud provider privacy has blocked."""
+        if self.router is None:
+            return await provider.health()
+        return await self.router.health(provider)
 
     def health_json(self) -> dict[str, Any]:
         """The `/health` body and the `health.get` response.
@@ -716,6 +782,8 @@ class NoxCore:
 
     async def _on_client_disconnected(self, event: Event) -> None:
         client_id = str(event.payload.get("client_id", ""))
+        if self.hub is not None and self.hub.find_client(client_id) is not None:
+            return  # the worker has already reconnected; this is its old connection's goodbye
         if self.workers.detach(client_id) is not None and self.health is not None:
             self.spawn_task(self.health.run_once())
 

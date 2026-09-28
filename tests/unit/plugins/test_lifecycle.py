@@ -527,3 +527,64 @@ def test_worker_environment_keeps_what_a_posix_interpreter_needs_and_drops_the_r
     assert env["LANG"] == "de_DE.UTF-8"
     assert env["NOX_APP_DIR"] == "/data/nox"
     assert "SOME_TOOL_API_KEY" not in env
+
+
+# ---- hub connection and reconnect credentials ----------------------------------------------------
+
+
+async def test_a_plugin_that_lost_its_hub_connection_is_not_reported_available(
+    harness: Harness,
+) -> None:
+    manager = harness.manager
+    await manager.start()
+    await harness.register()
+    assert manager.health_of("demo")[0] is HealthStatus.AVAILABLE
+
+    await harness.bus.fire(
+        E.IPC_CLIENT_DISCONNECTED, {"client_id": "plugin:demo", "role": "plugin"}
+    )
+
+    status, reason = manager.health_of("demo")
+    assert status is HealthStatus.LIMITED and "reconnecting" in reason
+    await harness.register()  # the worker is back and registered again
+    assert manager.health_of("demo")[0] is HealthStatus.AVAILABLE
+
+
+async def test_the_goodbye_of_an_old_connection_does_not_mark_a_reconnected_plugin(
+    harness: Harness,
+) -> None:
+    manager = harness.manager
+    await manager.start()
+    await harness.register()
+    harness.hub.connected.add("plugin:demo")  # the new connection is already up
+
+    await harness.bus.fire(
+        E.IPC_CLIENT_DISCONNECTED, {"client_id": "plugin:demo", "role": "plugin"}
+    )
+
+    assert manager.health_of("demo")[0] is HealthStatus.AVAILABLE
+
+
+async def test_every_spawn_binds_the_process_and_every_end_revokes_its_credential(
+    plugins_dir: Path,
+) -> None:
+    write_manifest(plugins_dir, "demo")
+    tokens = FakeTokens()
+    built = build(plugins_dir, restart_limit=2, restart_window_s=60.0)
+    built.manager._tokens = tokens  # noqa: SLF001 - observe what the manager issues and revokes
+    manager = built.manager
+    try:
+        await manager.start()
+        assert tokens.bound == [("plugin:demo", built.processes[0].pid)]
+        assert tokens.revoked == ["plugin:demo"]  # before the first spawn token, for a clean slate
+
+        built.processes[-1].exit(1)
+        await wait_until(lambda: len(built.processes) == 2)
+        assert tokens.revoked.count("plugin:demo") >= 3  # crash + before the respawn
+        assert tokens.bound[-1] == ("plugin:demo", built.processes[1].pid)
+
+        revoked_before_stop = len(tokens.revoked)
+        await manager.stop_all("shutdown")
+        assert len(tokens.revoked) > revoked_before_stop
+    finally:
+        await manager.stop("test")

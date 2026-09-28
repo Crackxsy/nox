@@ -144,6 +144,7 @@ class IpcClient:
         backoff_max_s: float = 5.0,
         request_timeout_s: float = 10.0,
         on_connection_change: Callable[[bool], Any] | None = None,
+        on_reconnect_refused: Callable[[IpcError], Any] | None = None,
     ) -> None:
         self.url = url
         self._token = token
@@ -154,6 +155,7 @@ class IpcClient:
         self._backoff_max = backoff_max_s
         self._timeout = request_timeout_s
         self._on_connection_change = on_connection_change
+        self._on_reconnect_refused = on_reconnect_refused
         self._conn: ClientConnection | None = None
         self._reader: asyncio.Task[None] | None = None
         self._reconnector: asyncio.Task[None] | None = None
@@ -210,6 +212,12 @@ class IpcClient:
         if not response.ok:
             await conn.close()
             raise IpcError(ERR_AUTH_DENIED, response.reason or "auth rejected")
+        if response.reconnect_token:
+            # The spawn token is used up; from now on this client proves itself with the
+            # reconnect credential the core bound to this process. It is kept here only, never in
+            # the public `auth` attribute, where it could end up in a log.
+            self._token = response.reconnect_token
+            response = response.model_copy(update={"reconnect_token": ""})
         self._conn = conn
         self.auth = response
         self.session_id = response.session_id
@@ -418,6 +426,11 @@ class IpcClient:
             except IpcError as exc:
                 if exc.code == ERR_AUTH_DENIED:
                     log.error("ipc_reconnect_denied", client=self.source.id, reason=exc.message)
+                    if self._on_reconnect_refused is not None:
+                        try:
+                            self._on_reconnect_refused(exc)
+                        except Exception:
+                            log.exception("ipc_reconnect_refused_callback_failed")
                     return
                 log.debug("ipc_reconnect_failed", client=self.source.id, delay=delay)
                 delay = min(delay * 2, self._backoff_max)

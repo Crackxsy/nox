@@ -40,13 +40,15 @@ class ConfigError(Exception):
 class ConfigWarning(BaseModel):
     """A non-fatal problem with one configuration layer.
 
-    `layer` is one of `defaults`, `user`, `profile`, `override`.
+    `layer` is one of `defaults`, `user`, `profile`, `override`. `key` is the dotted path of the one
+    value that was rejected, or empty when the problem concerns the layer as a whole.
     """
 
     model_config = ConfigDict(frozen=True)
     layer: str
     source: str
     message: str
+    key: str = ""
 
     def __str__(self) -> str:
         return f"[{self.layer}] {self.source}: {self.message}"

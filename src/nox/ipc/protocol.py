@@ -85,6 +85,9 @@ class AuthResponse(BaseModel):
     core_version: str
     schema_version: int = SCHEMA_VERSION
     reason: str = ""
+    #: Workers and plugins only, on their first authentication: the secret to authenticate with
+    #: again after a lost connection, valid while their process lives. Empty for everyone else.
+    reconnect_token: str = ""
 
 
 # Well-known message names that every component must understand.

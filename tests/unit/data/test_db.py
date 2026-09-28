@@ -215,3 +215,8 @@ def test_integrity_check_detects_corruption(tmp_path: Path) -> None:
     broken = Database(path)
     assert broken.integrity_check() is False
     broken.close()
+
+
+def test_quick_check_passes_a_healthy_database(db: Database) -> None:
+    db.migrate()
+    assert db.quick_check() is True

@@ -7,7 +7,7 @@ timestamps, `purge_expired` for the nightly retention job. `rl_replays` rows are
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from nox.data.db import Database
@@ -185,6 +185,16 @@ class RlMatchRepository:
         )
         return [RlMatchRow(**dict(r)) for r in rows]
 
+    def purge_older_than(self, days: int, *, now: datetime | None = None) -> int:
+        """Delete matches that started more than `days` days ago (`rl.retention.matches_days`).
+
+        Their events and vision analyses keep their rows with `match_id` set to NULL (the foreign
+        keys say `ON DELETE SET NULL`); replays are never deleted here.
+        """
+        cutoff = _iso((now or _now()) - timedelta(days=days))
+        cur = self._db.execute("DELETE FROM rl_matches WHERE started_at < ?", (cutoff,))
+        return int(cur.rowcount)
+
 
 # ---- events --------------------------------------------------------------------------------------
 
@@ -257,6 +267,4 @@ class RlEventRepository:
 def default_retain_until(days: int, *, now: datetime | None = None) -> datetime | None:
     if days <= 0:
         return None
-    from datetime import timedelta
-
     return (now or _now()) + timedelta(days=days)

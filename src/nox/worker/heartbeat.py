@@ -1,7 +1,9 @@
 """The heartbeat every worker process sends to the core, in one place.
 
-The core marks a worker unavailable after three missed heartbeats, so a failing send is logged and
-retried rather than escalated: the supervisor, not the worker, decides what a dead worker means.
+A failing send is logged and retried rather than escalated. The heartbeat is not what keeps a
+worker honest: a lost connection is handled by the IPC client's reconnect and, when that cannot
+succeed, by `nox.worker.hub_loss.HubLossGuard`, which ends the worker; the core watches the
+process itself and restarts it.
 """
 
 from __future__ import annotations

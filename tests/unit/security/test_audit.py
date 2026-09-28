@@ -195,3 +195,80 @@ def test_standalone_creates_table_and_survives_reopen(tmp_path) -> None:  # type
     with pytest.raises(KeyError):
         a2.details(99)
     c2.close()
+
+
+def _count_hashes(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Record the seq of every row `compute_hash` is asked to hash."""
+    seen: list[int] = []
+    original = SqliteAuditLog.compute_hash.__func__  # type: ignore[attr-defined]
+
+    def counting(cls: type[SqliteAuditLog], entry: dict[str, object], prev_hash: str) -> str:
+        seen.append(int(entry["seq"]))  # type: ignore[call-overload]
+        return str(original(cls, entry, prev_hash))
+
+    monkeypatch.setattr(SqliteAuditLog, "compute_hash", classmethod(counting))
+    return seen
+
+
+def test_incremental_verification_hashes_only_the_rows_appended_since(
+    audit: SqliteAuditLog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _append_three(audit)
+    assert audit.verify_incremental().ok
+    seen = _count_hashes(monkeypatch)
+    audit.append(actor="a", tool="t", action="x", target="", decision="allow", result="ok")
+    seen.clear()
+
+    verification = audit.verify_incremental()
+
+    assert verification.ok and verification.checked == 1
+    assert seen == [4]
+    seen.clear()
+    assert audit.verify_incremental().ok
+    assert seen == []  # nothing new, nothing re-hashed
+
+
+def test_incremental_verification_on_an_empty_log_stays_ok(audit: SqliteAuditLog) -> None:
+    assert audit.verify_incremental().ok
+    assert audit.verify_incremental().ok
+    audit.append(actor="a", tool="t", action="x", target="", decision="allow", result="ok")
+    assert audit.verify_incremental().ok
+
+
+def test_incremental_verification_detects_a_rewritten_last_verified_row(
+    conn: sqlite3.Connection, audit: SqliteAuditLog
+) -> None:
+    _append_three(audit)
+    assert audit.verify_incremental().ok
+    conn.execute("DROP TRIGGER audit_log_no_update")
+    conn.execute("UPDATE audit_log SET hash = 'forged' WHERE seq = 3")
+    conn.commit()
+
+    verification = audit.verify_incremental()
+
+    assert not verification.ok and verification.first_bad_seq == 3
+
+
+def test_incremental_verification_detects_a_truncated_tail(
+    conn: sqlite3.Connection, audit: SqliteAuditLog
+) -> None:
+    _append_three(audit)
+    assert audit.verify_incremental().ok
+    conn.execute("DROP TRIGGER audit_log_no_delete")
+    conn.execute("DELETE FROM audit_log WHERE seq = 3")
+    conn.commit()
+
+    assert audit.verify_incremental().first_bad_seq == 3
+
+
+def test_incremental_verification_detects_a_tampered_new_row(
+    conn: sqlite3.Connection, audit: SqliteAuditLog
+) -> None:
+    _append_three(audit)
+    assert audit.verify_incremental().ok
+    audit.append(actor="a", tool="t", action="x", target="", decision="deny", result="denied")
+    conn.execute("DROP TRIGGER audit_log_no_update")
+    conn.execute("UPDATE audit_log SET decision = 'allow' WHERE seq = 4")
+    conn.commit()
+
+    assert audit.verify_incremental().first_bad_seq == 4

@@ -8,6 +8,13 @@
 - Worker and plugin tokens are issued per spawn, delivered through the environment
   (`NOX_WORKER_TOKEN`, never on a command line), expire after a short lifetime and are consumed by
   the first authentication attempt, successful or not.
+- A successful first authentication hands the worker a **reconnect credential**: a second secret,
+  returned only in the `ipc.auth` response and so known only to the process that won the spawn
+  token. It is bound to the worker id and - once the spawner reports it - to the process id and
+  start time, and it stays valid while that process lives. A worker that loses the hub (a stalled
+  loop, a full send queue) authenticates again with it; without it the one-time token left every
+  dropped worker locked out for good. It is revoked when the core forgets the worker, spawns a
+  replacement, or sees the process gone, and it never survives a core restart.
 - Every comparison is constant-time.
 """
 
@@ -23,6 +30,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+
+import psutil
 
 from nox.ipc._log import get_logger
 
@@ -112,6 +121,35 @@ class AuthDecision:
     ok: bool
     kind: TokenKind | None = None
     reason: str = ""
+    #: Set on a worker's first successful authentication: the secret it reconnects with.
+    reconnect_token: str = ""
+
+
+@dataclass(frozen=True)
+class _ProcessBinding:
+    pid: int
+    created: float | None
+
+
+ProcessAlive = Callable[[int, "float | None"], bool]
+
+
+def process_alive(pid: int, created: float | None) -> bool:
+    """True while `pid` runs and - when `created` is known - is still the same process."""
+    try:
+        proc = psutil.Process(pid)
+        if proc.status() == psutil.STATUS_ZOMBIE:
+            return False
+        return created is None or abs(proc.create_time() - created) < 0.01
+    except (psutil.Error, OSError):
+        return False
+
+
+def _process_created(pid: int) -> float | None:
+    try:
+        return float(psutil.Process(pid).create_time())
+    except (psutil.Error, OSError):
+        return None
 
 
 class TokenStore:
@@ -123,11 +161,17 @@ class TokenStore:
         *,
         worker_ttl_s: float = DEFAULT_WORKER_TOKEN_TTL_S,
         clock: Callable[[], float] = time.monotonic,
+        alive: ProcessAlive = process_alive,
     ) -> None:
         self._session = session_token or generate_token()
         self._worker_ttl_s = worker_ttl_s
         self._clock = clock
         self._worker: dict[str, WorkerToken] = {}
+        #: worker id -> the reconnect secret of the process that authenticated as it.
+        self._reconnect: dict[str, str] = {}
+        #: worker id -> the process the spawner started for it.
+        self._processes: dict[str, _ProcessBinding] = {}
+        self._process_alive = alive
         self._session_file: Path | None = None
         self._session_file_restricted: bool | None = None
 
@@ -171,6 +215,24 @@ class TokenStore:
         """Environment additions for a worker spawn (never pass the token on the command line)."""
         return {WORKER_TOKEN_ENV: self.issue_worker_token(worker_id, ttl_s=ttl_s)}
 
+    def bind_worker_process(self, worker_id: str, pid: int) -> None:
+        """Tie `worker_id`'s reconnect credential to the process the spawner just started."""
+        self._processes[worker_id] = _ProcessBinding(pid=pid, created=_process_created(pid))
+
+    def revoke_worker(self, worker_id: str) -> None:
+        """Forget everything issued for `worker_id`: spawn tokens, reconnect credential, process.
+
+        Called when the core terminates a worker, sees it exit, or spawns a replacement; a
+        credential must never outlive the process it was handed to.
+        """
+        self._reconnect.pop(worker_id, None)
+        self._processes.pop(worker_id, None)
+        for token in [t for t, meta in self._worker.items() if meta.worker_id == worker_id]:
+            del self._worker[token]
+
+    def has_reconnect_credential(self, worker_id: str) -> bool:
+        return worker_id in self._reconnect
+
     def outstanding_worker_tokens(self) -> int:
         self.purge_expired()
         return len(self._worker)
@@ -202,10 +264,27 @@ class TokenStore:
             if constant_time_equals(token, candidate):
                 matched = candidate
         if matched is None:
-            return AuthDecision(ok=False, reason="invalid token")
+            return self._authenticate_reconnect(token, client_id)
         meta = self._worker.pop(matched)  # consumed on first use, valid or not
         if meta.expires_at <= now:
             return AuthDecision(ok=False, reason="token expired")
         if meta.worker_id != client_id:
             return AuthDecision(ok=False, reason="token was issued for a different worker id")
+        secret = generate_token()
+        self._reconnect[client_id] = secret  # replaces any credential of an earlier process
+        return AuthDecision(ok=True, kind="worker", reconnect_token=secret)
+
+    def _authenticate_reconnect(self, token: str, client_id: str) -> AuthDecision:
+        owner: str | None = None
+        for worker_id, secret in list(self._reconnect.items()):
+            if constant_time_equals(token, secret):
+                owner = worker_id
+        if owner is None:
+            return AuthDecision(ok=False, reason="invalid token")
+        if owner != client_id:
+            return AuthDecision(ok=False, reason="credential was issued for a different worker id")
+        binding = self._processes.get(owner)
+        if binding is not None and not self._process_alive(binding.pid, binding.created):
+            self.revoke_worker(owner)
+            return AuthDecision(ok=False, reason="the worker process this was issued to is gone")
         return AuthDecision(ok=True, kind="worker")
