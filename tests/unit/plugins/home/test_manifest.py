@@ -19,6 +19,7 @@ EXPECTED_TOOLS = {
     "home.status.read": Risk.READ,
     "home.list": Risk.READ,
     "home.state": Risk.READ,
+    "home.effect": Risk.READ,
     "home.light": Risk.MEDIUM,
     "home.switch": Risk.MEDIUM,
     "home.scene": Risk.MEDIUM,
@@ -37,6 +38,19 @@ def test_home_manifest_loads_and_declares_exactly_the_expected_tools() -> None:
     assert manifest.matches_profile("companion") is True
     assert manifest.matches_profile("stream") is False
     assert {p.tool: p.risk for p in manifest.permissions} == EXPECTED_TOOLS
+
+
+def test_every_tool_that_can_reach_beyond_its_named_entity_has_the_effect_preflight() -> None:
+    """Scenes, scripts, automations, switches and covers are judged by what they really change."""
+    manifest = load_manifest(HOME_PLUGIN_DIR)
+    preflights = {p.tool: p.preflight for p in manifest.permissions if p.preflight}
+    assert preflights == {
+        "home.switch": "home.effect",
+        "home.scene": "home.effect",
+        "home.cover": "home.effect",
+        "home.script": "home.effect",
+        "home.automation.trigger": "home.effect",
+    }
 
 
 def test_home_manifest_has_no_tool_for_a_domain_that_secures_the_building() -> None:

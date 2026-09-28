@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from nox_plugin_twitch.irc_client import TwitchIrcClient
+from nox_plugin_twitch.irc_client import MAX_MESSAGE_CHARS, TwitchIrcClient, sanitize_line
 from nox_plugin_twitch.protocol import ChatTags
 
 from .fake_irc_server import FakeIrcServer
@@ -137,6 +137,60 @@ async def test_reconnects_with_backoff_after_disconnect(irc_server: FakeIrcServe
         await _wait_until(lambda: not client.connected)
         await _wait_until(lambda: client.joined, timeout=5.0)  # reconnected and rejoined
         assert irc_server.received_lines.count("NICK noxbot") >= 2
+    finally:
+        await client.stop()
+
+
+async def test_a_chat_message_cannot_inject_an_irc_command(irc_server: FakeIrcServer) -> None:
+    client = _make_client(irc_server)
+    client.start()
+    try:
+        await _wait_until(lambda: client.joined)
+        before = len(irc_server.received_lines)
+        await client.send_privmsg("hi\r\nJOIN #victim\rPRIVMSG #victim :spam\x00\x03")
+        await _wait_until(lambda: len(irc_server.received_lines) > before)
+        await asyncio.sleep(0.05)
+        sent = irc_server.received_lines[before:]
+        assert sent == ["PRIVMSG #testchannel :hi JOIN #victim PRIVMSG #victim :spam"]
+        assert irc_server.joined_channel == "#testchannel"
+    finally:
+        await client.stop()
+
+
+def test_sanitize_line_removes_every_control_character_and_caps_the_length() -> None:
+    assert sanitize_line("a\r\nb") == "a b"
+    assert sanitize_line("\x02bold\x02 \x0304red") == "bold 04red"
+    assert sanitize_line("x\u2028y\x85z") == "x y z"
+    assert sanitize_line("\r\n") == ""
+    assert len(sanitize_line("a" * 600)) == MAX_MESSAGE_CHARS
+
+
+async def test_a_message_that_is_only_control_characters_is_refused(
+    irc_server: FakeIrcServer,
+) -> None:
+    client = _make_client(irc_server)
+    client.start()
+    try:
+        await _wait_until(lambda: client.joined)
+        with pytest.raises(ValueError, match="empty"):
+            await client.send_privmsg("\r\n\x00")
+    finally:
+        await client.stop()
+
+
+async def test_backoff_resets_after_a_connection_that_worked(irc_server: FakeIrcServer) -> None:
+    """A stream that drops now and then must reconnect after the minimum delay every time."""
+    client = _make_client(irc_server)
+    client.start()
+    try:
+        for round_ in range(3):
+            await _wait_until(lambda: client.joined)
+            await irc_server.disconnect_all()
+            await _wait_until(lambda: not client.joined)
+            await _wait_until(
+                lambda n=round_: irc_server.received_lines.count("NICK noxbot") >= n + 2
+            )
+            assert client.backoff_s == pytest.approx(0.05)
     finally:
         await client.stop()
 

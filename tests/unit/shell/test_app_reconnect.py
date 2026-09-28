@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from nox.ipc.role_tokens import derive_role_token
 from tests.unit.shell.test_app import make_app, make_runtime
 
 
@@ -89,12 +90,16 @@ def test_pet_page_is_reloaded_when_the_session_token_changed(
     loads: list[str] = []
     app.pet = SimpleNamespace(load=loads.append, show_offline_page=lambda: loads.append("offline"))
     app._load_pet_page()  # what start() does first, with the token read at construction
-    assert len(loads) == 1 and "session-token-1234567890" in loads[0]
+    first_pet_token = derive_role_token("session-token-1234567890", "pet")
+    assert len(loads) == 1 and loads[0].endswith(f"#token={first_pet_token}")
 
     # the core (re)started in the meantime and wrote a new token
     (tmp_path / "session.token").write_text("session-token-2-abcdefghij", encoding="utf-8")
     app._connect_bridge()
-    assert len(loads) == 2 and "session-token-2-abcdefghij" in loads[1]
+    second_pet_token = derive_role_token("session-token-2-abcdefghij", "pet")
+    assert len(loads) == 2 and loads[1].endswith(f"#token={second_pet_token}")
+    # the page never holds the shell's own token
+    assert not any("session-token" in url for url in loads)
     app.bridge = None
     app._connect_bridge()
     assert len(loads) == 2

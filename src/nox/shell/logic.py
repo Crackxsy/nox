@@ -228,9 +228,11 @@ def toggle_privacy(model: ShellModel) -> PrivacyMode:
     return PrivacyMode.PRIVATE
 
 
-def dashboard_url(http_port: int, token: str, host: str = "127.0.0.1") -> str:
-    """Token in the fragment: fragments never reach HTTP access logs or Referer headers."""
-    return f"http://{host}:{http_port}/dashboard/#token={token}"
+def dashboard_open_url(http_port: int, ticket: str, host: str = "127.0.0.1") -> str:
+    """The one-time dashboard link. No token: the URL becomes the browser's command line, which
+    every local user can read on Linux and macOS; the ticket works once, for 30 seconds, and the
+    core answers it with the dashboard's own token in a fragment (`nox.ipc.http`)."""
+    return f"http://{host}:{http_port}/open?ticket={ticket}"
 
 
 def pet_url(
@@ -241,7 +243,9 @@ def pet_url(
     overlay: bool = False,
     variant: str = "neutral",
 ) -> str:
-    """Token in the fragment (see dashboard_url); `overlay=1` and `variant=<id>` (from
+    """The pet role's token in the fragment - fragments never reach HTTP access logs or Referer
+    headers, and the shell hands this URL to its own web view, never to a command line.
+    `overlay=1` and `variant=<id>` (from
     `config.pet.variant`) are plain query flags — neither is a secret. `variant="neutral"` (the
     default) is omitted from the URL so existing/neutral setups produce the same URL as before.
     """

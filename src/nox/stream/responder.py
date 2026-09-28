@@ -71,6 +71,10 @@ class StreamResponder:
     # ---- gating -------------------------------------------------------------------------------
 
     def _qualifies(self, payload: dict[str, Any]) -> bool:
+        if str(payload.get("text", "")).lstrip().startswith("!"):
+            # A `!command` is answered by a command handler (the Twitch plugin's built-ins, the
+            # core's `!funken`, another bot), never by the conversation as well.
+            return False
         if bool(payload.get("addressed_to_nox", False)):
             return True
         relevance = payload.get("relevance", 0.0)

@@ -5,7 +5,13 @@ widening egress on its own (the caller's `authorize` hook enforces the manifest-
 
 PASS/NICK, `CAP REQ` (tags, commands, membership), `JOIN`, PING/PONG, and a reconnect-with-backoff
 loop identical in shape to `ObsWebSocketClient._run`. `connected`/`joined` are reported honestly:
-`joined` only flips once the server echoes back our own JOIN.
+`joined` only flips once the server echoes back our own JOIN, and a connection that got that far
+resets the backoff - a stream that drops once an hour reconnects after the minimum delay, not the
+maximum reached during some earlier outage.
+
+Every outgoing line passes :func:`sanitize_line`: a CR or LF inside a chat message would otherwise
+end the IRC line early and let the rest of the text run as a raw command (`JOIN #other`,
+`PRIVMSG #victim :...`) under the bot's account.
 """
 
 from __future__ import annotations
@@ -22,6 +28,23 @@ from .protocol import ChatTags, parse_chat_tags, parse_line
 log = get_logger(__name__)
 
 REQUESTED_CAPS = "twitch.tv/tags twitch.tv/commands twitch.tv/membership"
+
+#: Twitch's limit for one chat message, in characters.
+MAX_MESSAGE_CHARS = 500
+
+
+def sanitize_line(text: str) -> str:
+    """One line of chat text that cannot smuggle an IRC command.
+
+    CR, LF, NUL and every other C0/C1 control character (IRC colour and formatting codes
+    included) become a space; the result is trimmed to `MAX_MESSAGE_CHARS`.
+    """
+    cleaned = "".join(
+        " " if (ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F or ch in "\u2028\u2029") else ch
+        for ch in text
+    )
+    return " ".join(cleaned.split())[:MAX_MESSAGE_CHARS]
+
 
 PrivmsgHandler = Callable[[ChatTags, str, str, str], Awaitable[None] | None]
 ConnectedHook = Callable[[], Awaitable[None]]
@@ -124,6 +147,11 @@ class TwitchIrcClient:
             try:
                 await self._connect_once()
             except Exception as exc:  # noqa: BLE001 - the reconnect loop must never die
+                if self.joined:
+                    # This attempt worked - authenticated and in the channel - and ended later.
+                    # Counting it as one more failure in a streak is what left every reconnect of
+                    # a long-running stream at the maximum delay.
+                    backoff.succeeded()
                 backoff.failed(exc)
             else:
                 backoff.succeeded()
@@ -198,18 +226,25 @@ class TwitchIrcClient:
     async def send_privmsg(self, text: str) -> None:
         if self._writer is None or not self.connected:
             raise ConnectionError(f"not connected to Twitch ({self.last_error or 'no session'})")
-        await self._send_raw(f"PRIVMSG #{self.channel} :{text}")
+        line = sanitize_line(text)
+        if not line:
+            raise ValueError("chat message is empty once control characters are removed")
+        await self._send_raw(f"PRIVMSG #{self.channel} :{line}")
 
     async def _send_raw(self, line: str) -> None:
         writer = self._writer
         if writer is None:
             raise ConnectionError("not connected")
+        if any(ch in line for ch in "\r\n\0"):
+            raise ValueError("an IRC line must not contain CR, LF or NUL")
         writer.write((line + "\r\n").encode("utf-8"))
         await writer.drain()
 
 
 __all__ = [
+    "MAX_MESSAGE_CHARS",
     "TwitchAuthError",
     "TwitchCredentialsMissingError",
     "TwitchIrcClient",
+    "sanitize_line",
 ]

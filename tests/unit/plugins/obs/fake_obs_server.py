@@ -55,6 +55,7 @@ class FakeObsServer:
         self.responses: dict[str, Any] = {
             "GetSceneList": lambda _d: default_scene_list(["Start", "Live"], "Start"),
             "GetStreamStatus": lambda _d: {"outputActive": False},
+            "GetCurrentProgramScene": lambda _d: {"currentProgramSceneName": "Start"},
             "GetRecordStatus": lambda _d: {"outputActive": False},
             "SetCurrentProgramScene": lambda _d: {},
             # ST-15-02: replay buffer defaults to "on" so a test only needs to override the one
@@ -90,6 +91,11 @@ class FakeObsServer:
                 await ws.send(message)
             except websockets.ConnectionClosed:
                 pass
+
+    async def disconnect_all(self) -> None:
+        """Drop every client, the way an OBS crash or restart does."""
+        for ws in list(self._clients):
+            await ws.close()
 
     def set_response(self, request_type: str, value: Callable[[dict[str, Any]], Any] | Any) -> None:
         self.responses[request_type] = value

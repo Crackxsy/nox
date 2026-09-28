@@ -9,11 +9,16 @@ response to `clip.requested` (see `src/nox/clips/service.py`).
 
 Thresholds and cooldowns are configuration (`config.highlight_kinds`, `.chat_hype_threshold`,
 `.cooldown_s`, `.manual_lookback_s`), never a code constant, so recalibrating needs no redeploy.
+
+`!clip` comes from any viewer, and every accepted one writes a replay file to disk. So on top of
+the per-kind cooldown each viewer gets one `!clip` per `viewer_clip_cooldown_s`, and the whole chat
+at most `max_manual_clips_per_hour` - a raid cannot fill the disk one clip every 15 seconds.
 """
 
 from __future__ import annotations
 
 import time
+from collections import deque
 from typing import Any
 
 from nox.plugins.api import PluginApi
@@ -22,6 +27,9 @@ from nox.plugins.api import PluginApi
 #: event model keeps the category set itself pending approval, so this is a small,
 #: named allow-list rather than guessing at every possible category string.
 HYPE_CATEGORIES = frozenset({"hype", "hype_spike", "excited", "chaos"})
+
+#: The window `max_manual_clips_per_hour` counts over.
+MANUAL_CLIP_WINDOW_S = 3600.0
 
 
 class ClipsPlugin:
@@ -33,6 +41,12 @@ class ClipsPlugin:
         self._hype_threshold = float(api.config.get("chat_hype_threshold", 0.75))
         self._cooldown_s = float(api.config.get("cooldown_s", 15.0))
         self._manual_lookback_s = float(api.config.get("manual_lookback_s", 20.0))
+        self._viewer_cooldown_s = float(api.config.get("viewer_clip_cooldown_s", 300.0))
+        self._max_manual_per_hour = int(api.config.get("max_manual_clips_per_hour", 12))
+        # viewer id -> monotonic ts of that viewer's last accepted `!clip`.
+        self._viewer_last_clip: dict[str, float] = {}
+        # monotonic ts of every accepted `!clip` inside the last hour, oldest first.
+        self._manual_clips: deque[float] = deque()
         self._session_id = ""
         self._suppressed = False
         # trigger_kind -> monotonic ts of the last accepted request (anti-double-clip).
@@ -66,9 +80,10 @@ class ClipsPlugin:
         source: str,
         origin_event_id: str = "",
         tags: list[str] | None = None,
-    ) -> None:
+    ) -> bool:
+        """Emit `clip.requested` unless suppressed or on cooldown; True when it was emitted."""
         if self._suppressed or self._on_cooldown(trigger_kind):
-            return
+            return False
         self._last_request[trigger_kind] = self._clock()
         await self.api.events.emit(
             "clip.requested",
@@ -80,6 +95,19 @@ class ClipsPlugin:
                 "tags": tags or [],
             },
         )
+        return True
+
+    def _manual_refusal(self, viewer_id: str) -> str | None:
+        """Why this viewer's `!clip` is not accepted now, or `None` when it may go ahead."""
+        now = self._clock()
+        while self._manual_clips and now - self._manual_clips[0] >= MANUAL_CLIP_WINDOW_S:
+            self._manual_clips.popleft()
+        if len(self._manual_clips) >= self._max_manual_per_hour:
+            return "hourly_limit"
+        last = self._viewer_last_clip.get(viewer_id)
+        if last is not None and now - last < self._viewer_cooldown_s:
+            return "viewer_cooldown"
+        return None
 
     # -- event handlers ---------------------------------------------------------------------------
 
@@ -113,11 +141,20 @@ class ClipsPlugin:
             ts, kind = self._last_rl_event
             if (self._clock() - ts) <= self._manual_lookback_s:
                 tags.append(f"rl.{kind}")
+        viewer_id = str(payload.get("viewer_id", ""))
+        refusal = self._manual_refusal(viewer_id)
+        if refusal is not None:
+            self.api.log.info("clips.manual_clip_limited", reason=refusal)
+            return
         chat_event_id = payload.get("chat_event_id")
         origin = str(chat_event_id) if chat_event_id is not None else ""
-        await self._request(
+        accepted = await self._request(
             trigger_kind="user_marker", source="manual", origin_event_id=origin, tags=tags
         )
+        if accepted:
+            now = self._clock()
+            self._viewer_last_clip[viewer_id] = now
+            self._manual_clips.append(now)
 
     async def _on_stream_started(self, _name: str, payload: dict[str, Any]) -> None:
         self._session_id = str(payload.get("session_id", ""))

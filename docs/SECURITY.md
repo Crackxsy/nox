@@ -21,7 +21,8 @@ requests.
 |---|---|
 | LLM proposes a harmful/unwanted action (hallucination, prompt injection via chat/files/web) | Tool pipeline with permission checks; untrusted input is data, never free-form execution; medium+ risk actions require confirmation. |
 | Cloud leakage of private content | Privacy modes/zones enforced at the transport level; egress allow-list per profile; screenshots to cloud only in FULL and outside zones. |
-| A local process talks to the Nox hub | Loopback-only IPC, per-client tokens, roles, rate limits, a request allow-list per role. |
+| A local process talks to the Nox hub | Loopback-only IPC, per-client tokens whose role is fixed by the token, rate limits, a request allow-list per role. |
+| A malicious or compromised plugin | Manifest enforced by the core: narrowed subscriptions, exact emitted names outside core namespaces, `plugin.tool.call` only for declared tools and through the permission engine, audited egress decisions. Not an OS sandbox (see "Plugin sandboxing boundary"). |
 | Secrets in code/config/logs/prompts | Keyring-only storage; secrets are never serialized; a log/PII filter; the prompt builder excludes the secret store entirely. |
 | Stream accidents (wrong scene, leaking screen, stream stopped by mistake) | Hard prohibitions (`stream.stop`, `stream.key.read`); scene switches require confirmation in the stream profile; privacy zones hide windows from capture. |
 | Anti-cheat / game integrity | No input-synthesis, no process injection, no memory reads exist anywhere in the codebase; hard prohibitions; sensors are observation-only. |
@@ -142,14 +143,36 @@ minute lockout, itself audited.
 ## Plugin sandboxing boundary
 
 A plugin is a manifest (`plugins/<id>/manifest.yaml`) plus a worker process; nothing is spawned
-before its manifest validates. A plugin can only: register tools inside its own `<id>.` namespace
-(never a hard-prohibited name), emit/listen to the exact event names its manifest lists, read the
-exact `nox/<id>/...` secret names it declared (the core resolves them; the value never persists in
-the plugin process beyond the call), and reach only the `host:port` entries in its own
-`network.egress` list — authorized against the *active profile's* allow-lists by the core before
-the worker is ever spawned, then enforced a second time inside the worker by its own scoped
-`EgressGuard`. Nothing a plugin does can widen what the core already validated. See
-`PLUGIN_AUTHORING.md` for the manifest schema and full detail.
+before its manifest validates. What the manifest allows is enforced **by the core**, on its side of
+the hub connection, not only by the plugin's own API inside the plugin process:
+
+- **Listening.** The hub narrows every subscription of a plugin connection to the event names its
+  manifest lists under `events.listens`, plus the lifecycle events every worker needs
+  (`security.kill_switch`, `security.panic`, `privacy.mode_changed`, `privacy.capture_changed`,
+  `system.stopping`). A subscription to `**` becomes exactly that list; one outside it is refused
+  and audited (`boundary.subscribe`). Every event is checked again on delivery.
+- **Emitting.** Only the exact names in `events.emits`, never a pattern, and never a name in a
+  namespace the core reserves for itself: `privacy`, `security`, `system`, `sup`, `worker`, `ipc`,
+  `plugin`, `voice`, `memory`. A manifest that declares one fails validation; an event a plugin
+  sends anyway is refused and audited (`boundary.emit`).
+- **Calling tools.** `plugin.tool.call` reaches only the tools a manifest lists under
+  `requires.tools`, and runs them through the same `ToolExecutor` as any other call: permission
+  engine (the plugin never picks the permission target), confirmation, kill switch, timeout, and an
+  audit entry with `plugin:<id>` as the actor.
+- **Secrets** are read only for the exact `nox/<id>/...` names the plugin declared (the core
+  resolves them; the value never persists in the plugin process beyond the call).
+- **Network.** The `host:port` entries in `network.egress` are authorized against the *active
+  profile's* allow-lists before the worker is spawned; inside the worker every connection attempt
+  passes the plugin's scoped `EgressGuard`, and every one of its decisions - allowed or denied - is
+  reported to the core and written to the audit log (`plugin.egress`, actor `plugin:<id>`). A
+  report of an allowed connection to an endpoint the manifest never declared is marked
+  `undeclared`.
+
+**What this does not cover.** A plugin is a separate process with a filtered environment, not an
+operating-system sandbox. Egress reporting is cooperative: plugin code that opens a raw socket
+without asking its guard reports nothing, and no per-process firewall rule (Windows Firewall per
+executable, AppContainer) stops it yet. The same process can read any file its user can. Review a
+plugin's code before you enable it; `PLUGIN_AUTHORING.md` has the manifest schema and full detail.
 
 No process Nox starts outlives the process that started it. On Windows each child is placed in a
 job object with kill-on-close. On macOS and Linux each child watches the exact parent it was given
@@ -158,12 +181,35 @@ crashed supervisor or core cannot leave a plugin or the voice worker running uns
 
 ## IPC authentication
 
-The local WebSocket hub is loopback-only, versioned, and requires a per-client session token
-(issued by the core at startup, stored under `%APPDATA%\Nox\runtime`) — every connecting client is
-assigned a role (`supervisor`, `shell`, `dashboard`, `pet`, `worker`, `plugin`, `remote`), and
-requests are checked against a per-role allow-list plus rate limits, not just "authenticated =
-trusted". Security-sensitive requests (e.g. kill-switch resume) further restrict which roles may
-even attempt them, regardless of token validity — see "Kill switch" above for a concrete example.
+The local WebSocket hub is loopback-only, versioned, and requires a token on every connection -
+every connecting client is assigned a role (`supervisor`, `shell`, `dashboard`, `pet`, `worker`,
+`plugin`, `remote`), and requests are checked against a per-role allow-list plus rate limits, not
+just "authenticated = trusted". Security-sensitive requests (e.g. kill-switch resume) further
+restrict which roles may even attempt them, regardless of token validity — see "Kill switch" above
+for a concrete example.
+
+**The token decides the role; a client cannot choose it.** The session token the core writes to
+the runtime folder at startup (owner-only file permissions) is the `shell`'s token. The pet page
+and the dashboard get their own tokens, derived from it with HMAC-SHA256 and fixed to their role
+(`nox.ipc.role_tokens`): a pet or dashboard token presented as `shell` is refused. That matters
+because only the shell may answer a permission confirmation (`security.permission.reply`) - a bug
+in a web page, or a browser extension on `127.0.0.1`, cannot approve one. Workers and plugins get a
+one-time token per spawn through their environment, bound to their client id.
+
+**No token on a command line.** On Linux and macOS every local user can read another process's
+command line. The shell therefore never opens `…/dashboard/#token=…` in the browser: it trades its
+own token for a **one-time ticket** (`POST /api/ui/dashboard-ticket`), opens
+`http://127.0.0.1:<port>/open?ticket=…`, and the core answers that URL - once, within 30 seconds -
+with a redirect to the dashboard carrying the dashboard's own token in the fragment. The ticket
+does appear on the browser's command line; another local user who reads it and redeems it first
+gets a dashboard session (never the shell's), and the owner's browser then shows "link expired".
+The pet page's token goes straight into the shell's own web view and never through a command line.
+
+**Supervisor and core.** The supervisor accepts the `core` role on its control channel only from
+the process that presents the secret it generated for that one spawn (`NOX_SUPERVISOR_CORE_SECRET`,
+handed only to the core it started). The core removes that secret and the supervisor token from its
+own environment as soon as it has read them, so no worker, plugin or tool it starts inherits them.
+A pid is not proof of anything: any process can name the core's pid.
 
 ## Security test obligations
 

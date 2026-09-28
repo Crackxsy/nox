@@ -90,6 +90,33 @@ async def test_the_audit_row_holds_a_pseudonym_not_the_account_id(service, db):
     assert len(str(row["sender_ref"])) == 12
 
 
+async def test_notifications_go_only_to_the_paired_chat_never_to_a_stranger(service, pairing):
+    await pair(service, pairing)
+    await service.handle(RemoteMessage(sender_id=STRANGER, chat_id="666", update_id=9, text="hi"))
+    await service.handle(
+        RemoteMessage(sender_id=STRANGER, chat_id="666", update_id=10, text="/status")
+    )
+
+    assert service.paired_chat_ids() == ["77"]
+
+
+async def test_an_unpaired_device_leaves_the_notification_list(service, pairing):
+    await pair(service, pairing)
+    await service.handle(msg("/unpair", update_id=2))
+
+    assert service.paired_chat_ids() == []
+
+
+async def test_a_device_revoked_from_the_dashboard_gets_no_more_notifications(
+    service, pairing, repo
+):
+    await pair(service, pairing)
+    device = repo.list_devices()[0]
+    await pairing.revoke(device.id, reason="dashboard")
+
+    assert service.paired_chat_ids() == []
+
+
 async def test_an_unpaired_sender_cannot_kill(service, killswitch):
     await service.handle(msg("/kill", sender_id=STRANGER))
 

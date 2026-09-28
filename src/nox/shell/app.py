@@ -19,13 +19,14 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication
 
 from nox.core.state import PrivacyMode
+from nox.ipc.role_tokens import derive_role_token
 from nox.shell.dialogs import PermissionDialog
 from nox.shell.hotkeys import GlobalHotkeys, HotkeyTracker
 from nox.shell.ipc_bridge import BridgeFactory, BridgeUnavailableError, IpcBridge, create_bridge
 from nox.shell.logic import (
     HotkeyAction,
     ShellModel,
-    dashboard_url,
+    dashboard_open_url,
     hotkey_map,
     kill_path,
     pet_url,
@@ -35,6 +36,7 @@ from nox.shell.logic import (
 from nox.shell.logutil import get_logger
 from nox.shell.pet_window import PetWindow
 from nox.shell.runtime import (
+    DashboardTicketError,
     IpcEndpoints,
     ShellState,
     load_config,
@@ -42,6 +44,7 @@ from nox.shell.runtime import (
     read_ipc_endpoints,
     read_session_token,
     read_supervisor_token,
+    request_dashboard_ticket,
     resolve_runtime_dir,
     save_shell_state,
 )
@@ -94,6 +97,7 @@ class ShellApp:
         supervisor_kill: SupervisorKill | None = None,
         supervisor_stop: SupervisorStop | None = None,
         open_url: Callable[[str], object] = webbrowser.open,
+        dashboard_ticket: Callable[[int, str, str], str] = request_dashboard_ticket,
         enable_hotkeys: bool = True,
         create_pet_window: bool = True,
     ) -> None:
@@ -115,6 +119,7 @@ class ShellApp:
         self._supervisor_kill = supervisor_kill or self._default_supervisor_kill
         self._supervisor_stop = supervisor_stop or self._default_supervisor_stop
         self._open_url = open_url
+        self._dashboard_ticket = dashboard_ticket
         self._session_permissions: dict[tuple[str, str, str], bool] = {}
         self.calls: list[tuple[str, dict[str, Any]]] = []  # last requests (debug/tests)
 
@@ -250,8 +255,11 @@ class ShellApp:
         assert self.pet is not None
         if self.token is not None and self.endpoints is not None:
             variant = self._pet_variant()
+            # The page gets the pet role's own token, never the shell's: with the shell token a
+            # page could answer permission confirmations (`nox.ipc.role_tokens`).
+            pet_token = derive_role_token(self.token, "pet")
             self.pet.load(
-                pet_url(self.endpoints.http_port, self.token, self.endpoints.host, variant=variant)
+                pet_url(self.endpoints.http_port, pet_token, self.endpoints.host, variant=variant)
             )
             self._pet_page_stale = False
             self._pet_page_token = self.token
@@ -405,7 +413,15 @@ class ShellApp:
         if self.token is None or self.endpoints is None:
             self.tray.notify("Nox", "Dashboard unavailable: core offline")
             return
-        self._open_url(dashboard_url(self.endpoints.http_port, self.token, self.endpoints.host))
+        try:
+            ticket = self._dashboard_ticket(
+                self.endpoints.http_port, self.endpoints.host, self.token
+            )
+        except DashboardTicketError as exc:
+            log.warning("shell.dashboard_ticket_failed", reason=str(exc))
+            self.tray.notify("Nox", "Dashboard unavailable: core did not answer")
+            return
+        self._open_url(dashboard_open_url(self.endpoints.http_port, ticket, self.endpoints.host))
 
     def kill_switch(self, origin: str) -> str:
         """Kill via core when connected, else via supervisor. Returns the path used."""

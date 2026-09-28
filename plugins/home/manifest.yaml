@@ -23,22 +23,29 @@ permissions:
     risk: read
   - tool: home.state                # risk: read - one entity
     risk: read
+  - tool: home.effect               # risk: read - what a scene/script/automation/switch/cover call
+    risk: read                      # would really change; the core asks it before those run
   - tool: home.light                # risk: medium - on/off, brightness, colour temperature
     risk: medium
-  - tool: home.switch               # risk: medium - on/off
-    risk: medium
-  - tool: home.scene                # risk: medium - activate a scene the user defined
-    risk: medium
+  - tool: home.switch               # risk: medium - on/off; a switch that looks like a garage,
+    risk: medium                    # gate or door relay needs a confirmation naming it
+    preflight: home.effect
+  - tool: home.scene                # risk: medium - activate a scene the user defined; one that
+    risk: medium                    # sets a lock/alarm/valve/garage door is refused, one whose
+    preflight: home.effect          # members Home Assistant does not list needs a confirmation
   - tool: home.media                # risk: medium - play/pause/skip/volume
     risk: medium
   - tool: home.climate              # risk: medium - target temperature
     risk: medium
   - tool: home.cover                # risk: medium - blinds and curtains only; garage/gate/door
-    risk: medium                    # covers are refused by the boundary, not by this risk level
+    risk: medium                    # covers are refused by the boundary, not by this risk level,
+    preflight: home.effect          # and a cover without a window-covering class is confirmed
   - tool: home.script               # risk: high - always asks, never pre-approved: a script can
-    risk: high                      # do anything its author put in it
+    risk: high                      # do anything its author put in it - except touch a lock:
+    preflight: home.effect          # a script whose definition does is refused
   - tool: home.automation.trigger   # risk: high - same reasoning as home.script
     risk: high
+    preflight: home.effect
 events:
   emits: [home.connected, home.disconnected, home.state_changed]
   listens: [security.panic]

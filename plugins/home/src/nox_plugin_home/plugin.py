@@ -1,4 +1,4 @@
-"""The `home` plugin: eleven tools over one authenticated Home Assistant session.
+"""The `home` plugin: twelve tools over one authenticated Home Assistant session.
 
 Three properties are worth reading the code for:
 
@@ -7,6 +7,14 @@ Three properties are worth reading the code for:
   `nox.home.boundary`. An entity that is not in that inventory is refused with a logged reason -
   so a lock, an alarm panel, a valve or a garage-door cover is unreachable even if some caller
   hands the tool a perfectly well-formed entity id for one.
+* **The boundary is judged by effect, too.** A scene, script or automation that would change a
+  lock or a garage door is refused; one whose contents cannot be read, and a switch or cover that
+  may open an entrance, needs a confirmation that names the entities. The core asks `home.effect`
+  before those calls run (`nox_plugin_home.effects`), and the forbidden case is checked again here
+  right before the service call.
+* **The token never crosses the network in the clear by accident.** A Home Assistant that is not
+  on this machine is reached over `wss://` unless the user set `home.allow_insecure: true` by hand
+  in `user.yaml`; the plugin refuses to connect otherwise and health says why.
 * **Privacy modes cut the connection.** `private` and `offline` mean "nothing leaves this machine
   except allow-listed local services", and smart-home control is not an exception. The connection
   loop refuses to dial in those modes and health says exactly that, rather than the plugin
@@ -27,11 +35,19 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from nox.core.events import HealthStatus
+from nox.core.netloc import is_loopback
 from nox.core.state import PrivacyMode
-from nox.home.boundary import ForbiddenEntityError, domain_of, forbidden_reason, require_allowed
+from nox.home.boundary import (
+    Effect,
+    ForbiddenEntityError,
+    domain_of,
+    forbidden_reason,
+    require_allowed,
+)
 from nox.plugins.api import PluginApi
 from nox.security.model import Risk
 
+from .effects import DefinitionCache, EffectChecker, EffectInput, refusal, verdict
 from .inventory import EntityRow, Inventory, build_inventory, filter_attributes
 from .models import (
     ClimateInput,
@@ -70,6 +86,10 @@ class PrivacyBlockedError(PermissionError):
     """The active privacy mode forbids reaching Home Assistant."""
 
 
+class InsecureTransportError(PermissionError):
+    """The access token would travel unencrypted to another machine."""
+
+
 class HomePlugin:
     def __init__(self, api: PluginApi) -> None:
         self.api = api
@@ -93,6 +113,7 @@ class HomePlugin:
             request_timeout_s=self.settings.request_timeout_s,
             authorize=lambda: self._authorize(url),
         )
+        self.effects = EffectChecker(DefinitionCache(self.client.command))
 
     # -- guards --------------------------------------------------------------------------------
 
@@ -109,6 +130,12 @@ class HomePlugin:
                 f"privacy mode {self.api.privacy.mode.value} blocks the Home Assistant connection"
             )
         parts = urlsplit(url)
+        host = parts.hostname or ""
+        if parts.scheme == "ws" and not is_loopback(host) and not self.settings.allow_insecure:
+            raise InsecureTransportError(
+                f"Home Assistant at {host} would receive the access token unencrypted (ws://); "
+                "turn on home.tls, or set home.allow_insecure: true if this network is trusted"
+            )
         self.api.egress.authorize(
             parts.hostname or "", parts.port or self.settings.port, scheme=parts.scheme or "ws"
         )
@@ -158,6 +185,7 @@ class HomePlugin:
 
     async def _on_connected(self) -> None:
         self._inventory_at = 0.0
+        self.effects.definitions.clear()
         await self.api.events.emit("home.connected", {"ha_version": self.client.ha_version})
 
     async def _on_disconnected(self, reason: str) -> None:
@@ -290,6 +318,44 @@ class HomePlugin:
 
     # -- tools -------------------------------------------------------------------------------------
 
+    async def effect(self, data: EffectInput) -> dict[str, Any]:
+        """`home.effect`: what a pending call would really touch (the core's preflight)."""
+        if not self.client.authenticated:
+            return refusal(self._not_connected()["reason"])
+        try:
+            inventory = await self._refresh_inventory()
+            finding, subject = await self.effects.check(data.tool, data.input, inventory)
+        except (HomeCommandError, ConnectionError, TimeoutError, ValueError) as exc:
+            return refusal(str(exc))
+        if finding.effect is not Effect.SAFE:
+            self.api.log.info(
+                "home.effect",
+                tool=data.tool,
+                effect=finding.effect.value,
+                entities=finding.entities,
+            )
+        return verdict(finding, subject)
+
+    async def _refuse_forbidden_effect(
+        self, tool: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """The last check before a scene, script or automation runs: a refusal, or `None`.
+
+        The core's preflight already refused this call if it touches a forbidden entity; this is
+        the same check once more, here, so no caller that skipped the core can get past it.
+        """
+        if not self.client.authenticated:
+            return None  # `_act` reports the missing connection
+        try:
+            inventory = await self._refresh_inventory()
+            finding, _ = await self.effects.check(tool, payload, inventory)
+        except (HomeCommandError, ConnectionError, TimeoutError, ValueError) as exc:
+            return {"ok": False, "connected": True, "reason": str(exc)}
+        if finding.effect is not Effect.FORBIDDEN:
+            return None
+        self.api.log.warning("home.effect_refused", tool=tool, entities=finding.entities)
+        return {"ok": False, "connected": True, "reason": finding.reason, "refused": True}
+
     async def status_read(self, _data: EmptyInput) -> dict[str, Any]:
         """`home.status.read`: honest connection state, and what to do when there is none."""
         if self.api.privacy.mode in BLOCKED_PRIVACY_MODES:
@@ -382,7 +448,10 @@ class HomePlugin:
         return await self._act("switch", service, data.entity_ids, {})
 
     async def scene(self, data: SceneInput) -> dict[str, Any]:
-        """`home.scene`: activate one of the user's own scenes."""
+        """`home.scene`: activate one of the user's own scenes - never one that sets a lock."""
+        refused = await self._refuse_forbidden_effect("home.scene", data.model_dump())
+        if refused is not None:
+            return refused
         return await self._act("scene", "turn_on", [data.entity_id], {})
 
     async def media(self, data: MediaInput) -> dict[str, Any]:
@@ -402,11 +471,18 @@ class HomePlugin:
         return await self._act("cover", service, data.entity_ids, payload)
 
     async def script(self, data: ScriptInput) -> dict[str, Any]:
-        """`home.script`: high risk, always confirmed. A script can do anything its author wrote."""
+        """`home.script`: high risk, always confirmed. A script can do anything its author wrote,
+        except what the boundary forbids: one that touches a lock is refused."""
+        refused = await self._refuse_forbidden_effect("home.script", data.model_dump())
+        if refused is not None:
+            return refused
         return await self._act("script", "turn_on", [data.entity_id], {})
 
     async def automation_trigger(self, data: ScriptInput) -> dict[str, Any]:
         """`home.automation.trigger`: high risk, always confirmed. Conditions are NOT skipped."""
+        refused = await self._refuse_forbidden_effect("home.automation.trigger", data.model_dump())
+        if refused is not None:
+            return refused
         return await self._act("automation", "trigger", [data.entity_id], {"skip_condition": False})
 
 
@@ -436,6 +512,15 @@ def create(api: PluginApi) -> HomePlugin:
         plugin.read_state,
         Risk.READ,
         description="Read the current state of one entity.",
+        side_effects=False,
+        local=True,
+    )
+    api.tools.register(
+        "home.effect",
+        EffectInput,
+        plugin.effect,
+        Risk.READ,
+        description="What a scene, script, automation, switch or cover call would really change.",
         side_effects=False,
         local=True,
     )

@@ -3,13 +3,14 @@ permission engine. No real process, no real socket, no real keyring."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
 
+from nox.ipc.plugin_scope import PluginScope
 from nox.security.model import Decision, PermissionRequest, PermissionResult, Profile
 
 VALID_MANIFEST: dict[str, Any] = {
@@ -43,11 +44,11 @@ def make_profile(profile_id: str = "companion", **overrides: Any) -> Profile:
 
 
 class FakeHub:
-    """Records `declare_services` and answers `request` from a scripted map."""
+    """Records the plugin scopes it is given and answers `request` from a scripted map."""
 
     def __init__(self, url: str = "ws://127.0.0.1:47800/ws") -> None:
         self._url = url
-        self.services: dict[str, set[str]] = {}
+        self.scopes: dict[str, PluginScope] = {}
         self.requests: list[tuple[str, str, dict[str, Any]]] = []
         self.responses: dict[str, Any] = {}
 
@@ -55,8 +56,8 @@ class FakeHub:
     def url(self) -> str:
         return self._url
 
-    def declare_services(self, client_id: str, services: Iterable[str]) -> None:
-        self.services.setdefault(client_id, set()).update(services)
+    def set_plugin_scope(self, client_id: str, scope: PluginScope) -> None:
+        self.scopes[client_id] = scope
 
     async def request(
         self,

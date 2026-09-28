@@ -6,6 +6,10 @@ Every extractor uses the stdlib first and an optional third-party library only i
 importable; a missing optional dependency is reported honestly as `"unavailable"` (the project
 standards "no fake implementations" - never a fabricated number). Nothing here makes a network
 call.
+
+The tool only looks inside the folders the manifest names under `artifact_roots`
+(:func:`resolve_within_roots`); any other path - `~/.ssh/id_ed25519`, the Nox database, a symlink
+that leads out of a root - is refused before a single byte is read, and no roots means no reads.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import contextlib
 import importlib.util
 import struct
 import wave
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +26,37 @@ AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif"}
 BLEND_EXTENSIONS = {".blend"}
+
+
+def resolve_within_roots(path: str, roots: Sequence[str]) -> Path | None:
+    """`path` with symlinks resolved, when it lies inside one of `roots`; else `None`.
+
+    Resolving first is the point: `<root>/link` that points at `/etc` is judged by where it
+    leads, and `<root>/../x` by where it ends up.
+    """
+    if not roots:
+        return None
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        return None
+    resolved = candidate.resolve(strict=False)
+    for root in roots:
+        base = Path(root).expanduser()
+        if base.is_absolute() and resolved.is_relative_to(base.resolve(strict=False)):
+            return resolved
+    return None
+
+
+def refused(path: str) -> dict[str, Any]:
+    """The honest answer for a path outside every configured root."""
+    return {
+        "ok": False,
+        "artefact_type": "unknown",
+        "metadata": {},
+        "confidence": "none",
+        "refused": True,
+        "notes": [f"{path} is outside the folders configured in artifact_roots"],
+    }
 
 
 def _optional_available(module: str) -> bool:

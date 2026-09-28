@@ -1,9 +1,12 @@
 """ToolExecutor: the permission-checked execution pipeline (Tool Model "Execution pipeline").
 
 Steps, in order: registry lookup (unknown -> refused) -> input validation against the tool's
-`input_model` (invalid -> tool error, never executed) -> `PermissionRequest` built from the tool
-name/target -> `PermissionEngine.check()` (deny -> tool error; confirm -> `request_confirmation()`
-and wait, 60 s timeout = deny; allow -> run) -> execution with a timeout and cancellation on
+`input_model` (invalid -> tool error, never executed) -> the tool's optional preflight, which says
+what the call would really touch and may only tighten the decision (deny -> refused; confirm ->
+an `allow` becomes a confirmation naming those targets; a preflight that fails -> refused) ->
+`PermissionRequest` built from the tool name/target -> `PermissionEngine.check()` (deny -> tool
+error; confirm -> `request_confirmation()` and wait, 60 s timeout = deny; allow -> run) ->
+execution with a timeout and cancellation on
 `security.kill_switch` -> every outcome is audited (actor/tool/action/target/decision/duration,
 never the tool's input or output - those may carry private content).
 """
@@ -21,11 +24,15 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from nox.core.events import E, EventBus
 from nox.core.logging import get_logger
 from nox.security.model import AuditLog, Decision, KillSwitch, PermissionRequest, PermissionResult
-from nox.tools.registry import ToolRegistry, ToolSpec
+from nox.tools.registry import PreflightVerdict, ToolRegistry, ToolSpec
 
 log = get_logger(__name__)
 
 DEFAULT_TIMEOUT_S = 30.0
+#: How long a tool's preflight may take before the call is refused as "effect unknown".
+PREFLIGHT_TIMEOUT_S = 10.0
+#: Upper bound for the target text a preflight puts into a permission request and the audit log.
+MAX_TARGET_CHARS = 300
 
 # Tool-error codes returned to the model/orchestrator (never a raised exception).
 ERR_UNKNOWN_TOOL = "tool.unknown"
@@ -142,6 +149,24 @@ class ToolExecutor:
 
         payload = validated.model_dump(mode="json")
         target = spec.targets(payload) if spec.targets is not None else ""
+        verdict = await self._preflight(spec, payload)
+        if verdict is not None and verdict.targets:
+            target = ", ".join(verdict.targets)[:MAX_TARGET_CHARS]
+        if verdict is not None and verdict.decision is Decision.DENY:
+            log.warning("tools.call_refused_by_preflight", tool=name, reason=verdict.reason)
+            return self._finish(
+                agent=agent,
+                tool=tool,
+                action=action,
+                target=target,
+                task_id=task_id,
+                decision=Decision.DENY,
+                started=started,
+                result="refused",
+                ok=False,
+                error=ERR_PERMISSION_DENIED,
+                data={"reason": verdict.reason, "refused": True},
+            )
         request = PermissionRequest(
             agent=agent,
             tool=tool,
@@ -155,6 +180,12 @@ class ToolExecutor:
 
         result = self._permission_engine.check(request)
         decision = result.decision
+        if (
+            verdict is not None
+            and verdict.decision is Decision.CONFIRM
+            and decision is Decision.ALLOW
+        ):
+            decision = Decision.CONFIRM
         if decision is Decision.CONFIRM:
             grant_id = self._permission_engine.request_confirmation(request)
             confirmed = await self._permission_engine.await_confirmation(grant_id)
@@ -244,6 +275,31 @@ class ToolExecutor:
             ok=True,
             data=data,
         )
+
+    # ---- preflight ------------------------------------------------------------------------------
+
+    async def _preflight(self, spec: ToolSpec, payload: dict[str, Any]) -> PreflightVerdict | None:
+        """The tool's own account of what this call would touch; `None` when it has no preflight.
+
+        Fails closed: a preflight that raises, times out or answers nonsense refuses the call,
+        because "could not tell what this touches" must never read as "touches nothing".
+        """
+        if spec.preflight is None:
+            return None
+        try:
+            verdict = await asyncio.wait_for(spec.preflight(payload), PREFLIGHT_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 - converted into a refusal below
+            log.warning(
+                "tools.preflight_failed", tool=spec.name, error=f"{type(exc).__name__}: {exc}"
+            )
+            return PreflightVerdict(
+                decision=Decision.DENY, reason="what this call would affect could not be checked"
+            )
+        if not isinstance(verdict, PreflightVerdict):
+            return PreflightVerdict(
+                decision=Decision.DENY, reason="the preflight returned no usable verdict"
+            )
+        return verdict
 
     # ---- execution with timeout + kill-switch cancellation ---------------------------------------
 

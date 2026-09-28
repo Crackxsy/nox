@@ -220,3 +220,44 @@ def test_egress_client_cannot_be_given_its_own_transport() -> None:
     api, _ = make_guarded_api(["api.example.com:443"], PrivacyView())
     with pytest.raises(ValueError, match="transport"):
         api.http(transport=httpx.AsyncHTTPTransport())
+
+
+async def test_every_egress_decision_is_reported_to_the_core() -> None:
+    client = FakeClient()
+    manifest = parse_manifest({**VALID_MANIFEST, "network": {"egress": ["127.0.0.1:4455"]}})
+    api = PluginApi(manifest=manifest, client=client, privacy=PrivacyView(PrivacyMode.BALANCED))
+
+    api.egress.authorize("127.0.0.1", 4455, scheme="ws")
+    with pytest.raises(EgressDenied):
+        api.egress.authorize("evil.example", 443, scheme="wss")
+    await api.egress_reports.drain()
+
+    reports = [payload for name, payload in client.requests if name == "plugin.egress.report"]
+    assert reports == [
+        {"host": "127.0.0.1", "port": 4455, "scheme": "ws", "allowed": True, "rule_id": "loopback"},
+        {
+            "host": "evil.example",
+            "port": 443,
+            "scheme": "wss",
+            "allowed": False,
+            "rule_id": "plugin.demo.not_declared",
+        },
+    ]
+
+
+async def test_a_failed_egress_report_never_breaks_the_plugin() -> None:
+    class BrokenClient(FakeClient):
+        async def request(
+            self,
+            name: str,
+            payload: Mapping[str, Any] | None = None,
+            *,
+            timeout: float | None = None,
+        ) -> dict[str, Any]:
+            raise ConnectionError("hub gone")
+
+    manifest = parse_manifest({**VALID_MANIFEST, "network": {"egress": ["127.0.0.1:4455"]}})
+    api = PluginApi(manifest=manifest, client=BrokenClient())
+
+    api.egress.authorize("127.0.0.1", 4455, scheme="ws")
+    await api.egress_reports.drain()

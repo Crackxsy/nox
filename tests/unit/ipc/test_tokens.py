@@ -64,11 +64,38 @@ def test_read_session_token_rejects_short_file(tmp_path: Path) -> None:
         read_session_token(tmp_path)
 
 
-def test_session_roles_use_session_token() -> None:
+def test_each_session_role_has_its_own_token() -> None:
     store = TokenStore()
+    assert store.role_token("shell") == store.session_token
     for role in ("shell", "pet", "dashboard"):
-        assert store.authenticate(store.session_token, role, f"{role}:1").ok
+        assert store.authenticate(store.role_token(role), role, f"{role}:1").ok
         assert not store.authenticate(generate_token(), role, f"{role}:1").ok
+
+
+@pytest.mark.parametrize(
+    ("presented", "claimed"),
+    [
+        ("pet", "shell"),
+        ("dashboard", "shell"),
+        ("pet", "dashboard"),
+        ("dashboard", "pet"),
+    ],
+)
+def test_a_ui_token_cannot_claim_another_role(presented: str, claimed: str) -> None:
+    """The pet page or a dashboard tab must never connect as the shell, which alone may answer a
+    permission confirmation (`security.permission.reply`)."""
+    store = TokenStore()
+    assert not store.authenticate(store.role_token(presented), claimed, f"{claimed}:1").ok
+
+
+def test_role_tokens_change_with_the_session_token_and_reveal_nothing_of_it() -> None:
+    first, second = TokenStore(), TokenStore()
+    for role in ("pet", "dashboard"):
+        token = first.role_token(role)
+        assert token != first.session_token and first.session_token not in token
+        assert token != second.role_token(role)
+        assert len(token) >= 43  # 256 bits, URL-safe
+    assert first.role_token("pet") != first.role_token("dashboard")
 
 
 def test_worker_cannot_use_session_token_and_shell_cannot_use_worker_token() -> None:

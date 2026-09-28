@@ -275,7 +275,7 @@ async def authed(
     raw: Callable[..., Awaitable[RawClient]], tokens: TokenStore, role: str, id: str
 ) -> RawClient:
     c = await raw(role, id)
-    reply = await c.auth(tokens.session_token)
+    reply = await c.auth(tokens.role_token(role))
     assert reply.kind is Kind.RESPONSE, reply.payload
     return c
 

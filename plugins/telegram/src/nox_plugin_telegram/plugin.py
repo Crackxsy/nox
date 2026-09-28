@@ -41,15 +41,16 @@ class TelegramSendInput(BaseModel):
     structured field."""
 
     text: str = Field(..., min_length=1, max_length=4096)
-    #: Empty = the chat the last inbound message came from (the paired phone's own chat).
-    chat_id: str = Field(default="", max_length=64)
+    #: The chat to send to - always explicit. There is deliberately no "the chat that wrote last"
+    #: default: that chat can be a stranger's, and this plugin does not know who is paired. The
+    #: core does (`nox.remote`), and names a paired device's chat on every call.
+    chat_id: str = Field(..., min_length=1, max_length=64, pattern=r"^-?[0-9]{1,20}$")
 
 
 class TelegramPlugin:
     def __init__(self, api: PluginApi) -> None:
         self.api = api
         self._max_chars = int(api.config.get("max_message_chars", 3500))
-        self._last_chat_id = ""
         self.rate_limiter = RateLimiter(
             max_messages=int(api.config.get("rate_limit_max_messages", 20)),
             window_s=float(api.config.get("rate_limit_window_s", 60.0)),
@@ -99,7 +100,6 @@ class TelegramPlugin:
     async def _on_message(self, update_id: int, sender_id: str, chat_id: str, text: str) -> None:
         """One inbound message -> one `remote.message`. No parsing, no filtering, no reply: the
         core decides whether this sender is paired and what the message means."""
-        self._last_chat_id = chat_id
         await self.api.events.emit(
             "remote.message",
             {
@@ -120,9 +120,7 @@ class TelegramPlugin:
             # `IpcError`, not a bare exception: only a typed error survives the worker's IPC hop
             # with its message intact (see the twitch plugin's `_send` for the same reasoning).
             raise IpcError(ERR_RATE_LIMITED, f"rate limited: {reason}")
-        chat_id = data.chat_id or self._last_chat_id
-        if not chat_id:
-            raise IpcError(ERR_UNAVAILABLE, "no chat to send to yet (no inbound message seen)")
+        chat_id = data.chat_id
         text = data.text
         if len(text) > self._max_chars:
             text = text[: self._max_chars] + " …"

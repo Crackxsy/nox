@@ -111,8 +111,9 @@ class RemoteCommandPolicy:
         if command == "pair":
             return deny("already_paired")
         # Rule 4: the transport's own sequence number must strictly advance. A captured message
-        # replayed later carries an `update_id` we have already seen.
-        if message.update_id and message.update_id <= device.last_update_id:
+        # replayed later carries an `update_id` we have already seen, and one without any
+        # (`0`, the default of a payload that never came from Telegram) cannot prove freshness.
+        if message.update_id <= device.last_update_id:
             return deny("replay")
         if not self._rate.try_acquire(f"{message.channel}:{device.id}"):
             return deny("rate_limited")

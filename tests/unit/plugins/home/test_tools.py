@@ -45,7 +45,7 @@ async def _plugin(
     return api, plugin
 
 
-async def test_registers_exactly_the_eleven_declared_tools(
+async def test_registers_exactly_the_twelve_declared_tools(
     ha_server: FakeHomeAssistant, fake_client: FakeClient, home_config: Path
 ) -> None:
     api, plugin = await _plugin(ha_server, fake_client, home_config)
@@ -55,6 +55,7 @@ async def test_registers_exactly_the_eleven_declared_tools(
                 "home.automation.trigger",
                 "home.climate",
                 "home.cover",
+                "home.effect",
                 "home.light",
                 "home.list",
                 "home.media",

@@ -40,9 +40,13 @@ def envelope(name: str, kind: str, payload: dict[str, object], corr: str | None 
 async def authenticate(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter, token: str
 ) -> bool:
-    writer.write(
-        envelope("sup.auth", "request", {"token": token, "role": "core", "pid": os.getpid()})
-    )
+    payload = {
+        "token": token,
+        "role": "core",
+        "pid": os.getpid(),
+        "core_secret": os.environ.get("NOX_SUPERVISOR_CORE_SECRET", ""),
+    }
+    writer.write(envelope("sup.auth", "request", payload))
     await writer.drain()
     line = await reader.readline()
     if not line:

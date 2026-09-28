@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,40 @@ def read_session_token(runtime_dir: Path) -> str | None:
 
 def read_supervisor_token(runtime_dir: Path) -> str | None:
     return _read_token(runtime_dir / SUPERVISOR_TOKEN_FILE)
+
+
+class DashboardTicketError(RuntimeError):
+    """The core did not hand out a dashboard ticket (offline, or it refused the token)."""
+
+
+#: The core's endpoint for one-time dashboard tickets (`nox.ipc.http`).
+DASHBOARD_TICKET_PATH = "/api/ui/dashboard-ticket"
+
+
+def request_dashboard_ticket(
+    http_port: int, host: str, session_token: str, *, timeout_s: float = 2.0
+) -> str:
+    """Ask the core for a one-time dashboard ticket, with the shell's token as bearer.
+
+    Loopback only and never through a proxy: `urllib` would otherwise honour `HTTP_PROXY` and send
+    the session token to whatever proxy the environment names.
+    """
+    request = urllib.request.Request(  # noqa: S310 - fixed http://<loopback> URL built here
+        f"http://{host}:{http_port}{DASHBOARD_TICKET_PATH}",
+        method="POST",
+        headers={"Authorization": f"Bearer {session_token}"},
+        data=b"",
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=timeout_s) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError) as exc:
+        raise DashboardTicketError(f"no dashboard ticket: {type(exc).__name__}") from exc
+    ticket = body.get("ticket") if isinstance(body, dict) else None
+    if not isinstance(ticket, str) or not ticket:
+        raise DashboardTicketError("the core answered without a ticket")
+    return ticket
 
 
 def read_ipc_endpoints(runtime_dir: Path) -> IpcEndpoints | None:

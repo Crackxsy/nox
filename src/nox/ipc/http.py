@@ -4,8 +4,16 @@ A Starlette app run by uvicorn inside the core's own event loop.
 
 `/health` needs no authentication and therefore carries nothing an unauthenticated local process
 should not see: component states and reasons, no paths and no identifiers. `/api/*` requires
-`Authorization: Bearer <session token>` and is where anything more detailed lives. A missing UI
-bundle is served as an explicit "UI not built" page with status 503, never as a fake UI.
+`Authorization: Bearer <session token>` and is where anything more detailed lives.
+
+Opening the dashboard never puts a token on a command line, where on Linux and macOS every local
+user can read it (`/proc/<pid>/cmdline`, `ps`). The shell asks for a one-time ticket
+(`POST /api/ui/dashboard-ticket`, session token as bearer) and opens `/open?ticket=<ticket>`; that
+ticket works once, for 30 seconds, and is answered with a redirect to `/dashboard/#token=<the
+dashboard's own role token>` - a fragment, so it never reaches a log or a `Referer` header.
+
+A missing UI bundle is served as an explicit "UI not built" page with status 503, never as a fake
+UI.
 
 Hardening: `/pet`, `/dashboard` and `/api/*` responses carry `Cache-Control: no-store`,
 `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`, and uvicorn's access log is
@@ -19,7 +27,9 @@ import contextlib
 import html
 import inspect
 import ipaddress
+import secrets
 import socket
+import time
 from collections.abc import Awaitable, Callable, Generator, Mapping
 from pathlib import Path
 from typing import Any
@@ -30,7 +40,7 @@ from starlette.applications import Starlette
 from starlette.datastructures import MutableHeaders
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -53,7 +63,12 @@ SECURITY_HEADERS: dict[str, str] = {
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
 }
-_HARDENED_PREFIXES = ("/pet", "/dashboard", "/api")
+_HARDENED_PREFIXES = ("/pet", "/dashboard", "/api", "/open")
+
+#: How long a dashboard ticket stays redeemable, and how many may be outstanding at once.
+DASHBOARD_TICKET_TTL_S = 30.0
+MAX_OUTSTANDING_TICKETS = 8
+DASHBOARD_TICKET_PATH = "/api/ui/dashboard-ticket"
 
 
 class _SecurityHeaders:
@@ -76,6 +91,51 @@ class _SecurityHeaders:
             await send(message)
 
         await self._app(scope, receive, send_with_headers)
+
+
+class OneTimeTickets:
+    """Short-lived, single-use tickets that stand in for a token on a command line.
+
+    A ticket is redeemed at most once - whoever presents it first wins, and the shell's browser
+    presents it within a second - and expires after `ttl_s` whether used or not.
+    """
+
+    def __init__(
+        self,
+        *,
+        ttl_s: float = DASHBOARD_TICKET_TTL_S,
+        max_outstanding: int = MAX_OUTSTANDING_TICKETS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._ttl_s = ttl_s
+        self._max = max_outstanding
+        self._clock = clock
+        self._tickets: dict[str, float] = {}
+
+    def issue(self) -> str:
+        self._purge()
+        while len(self._tickets) >= self._max:  # the oldest goes first
+            self._tickets.pop(next(iter(self._tickets)))
+        ticket = secrets.token_urlsafe(24)
+        self._tickets[ticket] = self._clock() + self._ttl_s
+        return ticket
+
+    def redeem(self, ticket: str) -> bool:
+        self._purge()
+        matched = None
+        for candidate in list(self._tickets):  # constant-time compare against every ticket
+            if constant_time_equals(ticket, candidate):
+                matched = candidate
+        if matched is None:
+            return False
+        del self._tickets[matched]
+        return True
+
+    def _purge(self) -> None:
+        now = self._clock()
+        for ticket, expires_at in list(self._tickets.items()):
+            if expires_at <= now:
+                del self._tickets[ticket]
 
 
 class HttpSettings(BaseModel):
@@ -107,6 +167,19 @@ async def _resolve(value: JsonLike | Awaitable[JsonLike]) -> JsonLike:
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+_EXPIRED_TICKET_PAGE = (
+    "<!doctype html><html lang='de'><head><meta charset='utf-8'>"
+    "<title>Nox: Link abgelaufen</title>"
+    "<style>body{font-family:system-ui,sans-serif;margin:3rem;max-width:40rem}</style></head><body>"
+    "<h1>Dieser Link gilt nicht mehr</h1>"
+    "<p>Ein Dashboard-Link funktioniert genau einmal und nur 30 Sekunden lang. "
+    "Öffne das Dashboard erneut über das Nox-Symbol in der Taskleiste.</p>"
+    "<p lang='en'>This dashboard link works once and for 30 seconds only. "
+    "Open the dashboard again from the Nox tray icon.</p>"
+    "</body></html>"
+)
 
 
 def _placeholder(name: str, expected: Path | None) -> Callable[[Request], Awaitable[Response]]:
@@ -142,10 +215,14 @@ def create_app(
     state: StateProvider,
     providers: Provider,
     session_token: TokenGetter,
+    dashboard_token: TokenGetter | None = None,
+    tickets: OneTimeTickets | None = None,
     pet_dist: Path | None = None,
     dashboard_dist: Path | None = None,
 ) -> Starlette:
-    """Build the Starlette app. Callables are injected by the core; they must not return secrets."""
+    """Build the Starlette app. Callables are injected by the core; they must not return secrets,
+    except `dashboard_token`, which only ever leaves through a redeemed one-time ticket."""
+    ticket_store = tickets or OneTimeTickets()
 
     def authorized(request: Request) -> bool:
         header = request.headers.get("authorization", "")
@@ -175,6 +252,29 @@ def create_app(
             return unauthorized()
         return JSONResponse(await _resolve(providers()), headers=_NO_STORE)
 
+    async def dashboard_ticket_endpoint(request: Request) -> Response:
+        if not authorized(request):
+            return unauthorized()
+        if dashboard_token is None:
+            return JSONResponse(
+                {"error": "unavailable", "message": "dashboard tokens are not issued here"},
+                status_code=503,
+                headers=_NO_STORE,
+            )
+        return JSONResponse(
+            {"ticket": ticket_store.issue(), "expires_in_s": DASHBOARD_TICKET_TTL_S},
+            headers=_NO_STORE,
+        )
+
+    async def open_endpoint(request: Request) -> Response:
+        ticket = request.query_params.get("ticket", "")
+        if dashboard_token is None or not ticket or not ticket_store.redeem(ticket):
+            log.warning("dashboard_ticket_rejected")
+            return HTMLResponse(_EXPIRED_TICKET_PAGE, status_code=403, headers=_NO_STORE)
+        return RedirectResponse(
+            f"/dashboard/#token={dashboard_token()}", status_code=303, headers=_NO_STORE
+        )
+
     async def api_fallback(request: Request) -> Response:
         if not authorized(request):
             return unauthorized()
@@ -186,7 +286,9 @@ def create_app(
         Route("/health", health_endpoint, methods=["GET"]),
         Route("/api/state", state_endpoint, methods=["GET"]),
         Route("/api/providers", providers_endpoint, methods=["GET"]),
+        Route(DASHBOARD_TICKET_PATH, dashboard_ticket_endpoint, methods=["POST"]),
         Route("/api/{rest:path}", api_fallback),
+        Route("/open", open_endpoint, methods=["GET"]),
         _ui_route("/pet", "pet", pet_dist),
         _ui_route("/dashboard", "dashboard", dashboard_dist),
     ]

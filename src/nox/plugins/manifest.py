@@ -2,7 +2,9 @@
 
 A plugin is a package plus `plugins/<id>/manifest.yaml`. Nothing is spawned before the manifest
 validates: tools must live in the `<id>.` namespace and may never name a hard prohibition
-(`nox.security.prohibitions`), secrets must be `nox/<id>/...` Credential-Manager names, and every
+(`nox.security.prohibitions`), emitted events are exact names outside the namespaces the core
+reserves for itself (`nox.ipc.plugin_scope`), tools of other components are reachable only when
+listed under `requires.tools`, secrets must be `nox/<id>/...` Credential-Manager names, and every
 `network.egress` entry must be authorized against the *active profile's* allow-lists by the core
 (the worker then scopes its own `EgressGuard` to exactly this list).
 """
@@ -17,6 +19,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from nox.ipc.plugin_scope import RESERVED_EVENT_NAMESPACES, is_reserved_event
 from nox.security.egress import NO_EGRESS, entry_matches, is_loopback, loopback_entry_matches
 from nox.security.model import Profile, Risk
 from nox.security.prohibitions import is_hard_prohibited
@@ -69,11 +72,22 @@ class PluginPermission(_Section):
     tool: str
     #: Conservative default: an undeclared risk is never treated as `read`.
     risk: Risk = Risk.MEDIUM
+    #: A `read` tool of this plugin the core calls with `{"tool", "input"}` before this one runs,
+    #: to learn what the call would actually touch. Its verdict can only make the permission
+    #: decision stricter - confirm with the real target shown, or refuse - never looser
+    #: (`nox.tools.executor`).
+    preflight: str | None = None
 
 
 class PluginEvents(_Section):
     emits: list[str] = Field(default_factory=list)
     listens: list[str] = Field(default_factory=list)
+
+
+class PluginRequires(_Section):
+    #: Tools of other components this plugin may call through `plugin.tool.call`. Every call still
+    #: goes through the permission engine and the audit log, with the plugin as the actor.
+    tools: list[str] = Field(default_factory=list)
 
 
 class PluginNetwork(_Section):
@@ -99,6 +113,7 @@ class PluginManifest(BaseModel):
     profiles: list[str] = Field(default_factory=list)  # empty = every profile
     permissions: list[PluginPermission] = Field(default_factory=list)
     events: PluginEvents = Field(default_factory=PluginEvents)
+    requires: PluginRequires = Field(default_factory=PluginRequires)
     secrets: list[str] = Field(default_factory=list)
     network: PluginNetwork = Field(default_factory=PluginNetwork)
     resources: PluginResources = Field(default_factory=PluginResources)
@@ -121,19 +136,23 @@ class PluginManifest(BaseModel):
                 return permission
         return None
 
-    def event_namespaces(self) -> frozenset[str]:
-        """Service namespaces the hub must grant this plugin: its id plus every emitted prefix.
-
-        The hub's inbound-event gate works on namespaces (`<ns>.**`); the exact `emits` list is
-        enforced by `PluginApi.events.emit` on top of it. Only namespaces the manifest itself
-        declares are granted, so a plugin can never publish outside what was validated here.
-        """
-        return frozenset({self.id, *(name.split(".", 1)[0] for name in self.events.emits)})
-
     def matches_profile(self, profile_id: str) -> bool:
         return not self.profiles or profile_id in self.profiles
 
     # -- validation ------------------------------------------------------------------------------
+
+    def _validate_preflights(self) -> None:
+        for permission in self.permissions:
+            if permission.preflight is None:
+                continue
+            check = self.declares_tool(permission.preflight)
+            if check is None:
+                raise ValueError(
+                    f"preflight {permission.preflight!r} of {permission.tool!r} is not a tool "
+                    "this manifest declares"
+                )
+            if check.risk is not Risk.READ:
+                raise ValueError(f"preflight {permission.preflight!r} must be a read-risk tool")
 
     @model_validator(mode="after")
     def _validate_boundaries(self) -> PluginManifest:
@@ -159,6 +178,20 @@ class PluginManifest(BaseModel):
         for name in (*self.events.emits, *self.events.listens):
             if not _DOTTED_RE.match(name):
                 raise ValueError(f"event name {name!r} must be dotted lowercase")
+        for name in self.events.emits:
+            if "*" in name:
+                raise ValueError(f"emitted event {name!r} must be an exact name, not a pattern")
+            if is_reserved_event(name):
+                raise ValueError(
+                    f"emitted event {name!r} is in a namespace only the core may publish into "
+                    f"({', '.join(sorted(RESERVED_EVENT_NAMESPACES))})"
+                )
+        for tool in self.requires.tools:
+            if not _DOTTED_RE.match(tool) or "*" in tool:
+                raise ValueError(f"required tool {tool!r} must be an exact dotted lowercase name")
+            if is_hard_prohibited(tool):
+                raise ValueError(f"required tool {tool!r} is hard-prohibited")
+        self._validate_preflights()
         for secret in self.secrets:
             if not SECRET_NAME_RE.match(secret):
                 raise ValueError(f"secret name {secret!r} must look like nox/<component>/<key>")

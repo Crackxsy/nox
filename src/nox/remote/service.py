@@ -109,6 +109,10 @@ class RemoteService:
         self._channel = channel
         self._clock = clock or (lambda: datetime.now(UTC))
         self._unsub: Callable[[], None] | None = None
+        #: device id -> the chat a paired device last wrote from. Kept in memory only: the device
+        #: table stores a salted hash of the sender, never an address, and notifications go to a
+        #: chat only after its paired device has written from it (after a restart: once again).
+        self._chats: dict[str, str] = {}
 
     # -- lifecycle -------------------------------------------------------------------------------
 
@@ -129,6 +133,19 @@ class RemoteService:
             return
         await self.handle(message)
 
+    def paired_chat_ids(self) -> list[str]:
+        """The chats of paired, non-revoked devices - the only place a notification may go.
+
+        Never "whoever wrote last": a stranger who finds the bot's public name and says "hi" must
+        not start receiving the kill-switch and stream notifications.
+        """
+        active = {device.id for device in self._repo.list_devices(include_revoked=False)}
+        return list(
+            dict.fromkeys(
+                chat for device_id, chat in self._chats.items() if device_id in active and chat
+            )
+        )
+
     # -- the one entry point ---------------------------------------------------------------------
 
     async def handle(self, message: RemoteMessage) -> RemoteDecision:
@@ -142,8 +159,10 @@ class RemoteService:
                 await self._reply(message, _DENY_TEXT.get(decision.reason, "Abgelehnt."))
             return decision
 
-        if device is not None and message.update_id:
+        if device is not None:
             self._repo.touch_device(device.id, when=self._clock(), update_id=message.update_id)
+            if message.chat_id:
+                self._chats[device.id] = message.chat_id
         await self._execute(message, decision, device)
         return decision
 
@@ -154,6 +173,8 @@ class RemoteService:
         if command == "pair":
             code = decision.args[0] if decision.args else ""
             result = await self._pairing.redeem(code, sender_id=message.sender_id)
+            if result.ok and message.chat_id:
+                self._chats[result.device_id] = message.chat_id
             text = (
                 f"Gekoppelt als „{result.name}“."
                 if result.ok
@@ -165,6 +186,7 @@ class RemoteService:
             return
         if command == "unpair":
             await self._pairing.revoke(device.id, reason="phone")
+            self._chats.pop(device.id, None)
             await self._reply(message, "Gerät entkoppelt. Weitere Befehle werden abgelehnt.")
             return
         if command == "status":

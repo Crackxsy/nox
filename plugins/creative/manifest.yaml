@@ -55,5 +55,9 @@ config:
   # FL Studio feedback is scoped to rendered audio exports; there is deliberately no `.flp`
   # project parser.
   fl_studio_project_parsing: false
+  # Absolute folders (`~` allowed) `creative.artifact.inspect` may read from; a path outside them,
+  # or a symlink leading out of them, is refused. Empty = the tool reads nothing at all. Set your
+  # export folders here - never in the shipped file, which must not name a real machine path.
+  artifact_roots: []
   # `creative.artifact.inspect` reads metadata only - no loudness, structure or decode work - so
   # it needs no resource budget of its own.

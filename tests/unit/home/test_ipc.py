@@ -129,6 +129,23 @@ async def test_a_denied_tool_call_becomes_a_permission_error_not_a_crash() -> No
     assert excinfo.value.code == ERR_PERMISSION
 
 
+async def test_a_scene_refused_by_its_effect_says_why() -> None:
+    refused = ToolResult(
+        ok=False,
+        error=ERR_PERMISSION_DENIED,
+        decision="deny",
+        data={"reason": "it would set lock.haustuer", "refused": True},
+    )
+    registry = _registry(FakeExecutor({"home.scene": refused}))
+    result = await _call(registry, "home.scene", {"entity_id": "scene.abschied"})
+    assert result == {
+        "ok": False,
+        "connected": True,
+        "reason": "it would set lock.haustuer",
+        "refused": True,
+    }
+
+
 async def test_a_plugin_that_is_not_enabled_says_so_instead_of_failing_internally() -> None:
     """The ordinary state of a fresh installation, and the one the Zuhause page has to explain."""
     executor = FakeExecutor(

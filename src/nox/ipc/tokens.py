@@ -8,6 +8,8 @@
 - Worker and plugin tokens are issued per spawn, delivered through the environment
   (`NOX_WORKER_TOKEN`, never on a command line), expire after a short lifetime and are consumed by
   the first authentication attempt, successful or not.
+- The session token is the `shell` role's token. The pet page and the dashboard present their
+  own tokens, derived from it (`nox.ipc.role_tokens`): no client picks its role any more.
 - Every comparison is constant-time.
 """
 
@@ -25,6 +27,7 @@ from pathlib import Path
 from typing import Literal
 
 from nox.ipc._log import get_logger
+from nox.ipc.role_tokens import derive_role_token
 
 log = get_logger(__name__)
 
@@ -135,6 +138,10 @@ class TokenStore:
     def session_token(self) -> str:
         return self._session
 
+    def role_token(self, role: str) -> str:
+        """The token a `shell`, `pet` or `dashboard` client must present (`nox.ipc.role_tokens`)."""
+        return derive_role_token(self._session, role)
+
     @property
     def session_file(self) -> Path | None:
         return self._session_file
@@ -187,7 +194,7 @@ class TokenStore:
     def authenticate(self, token: str, role: str, client_id: str) -> AuthDecision:
         """Check `token` for a connection claiming `role`/`client_id`; worker tokens are used up."""
         if role in SESSION_ROLES:
-            if constant_time_equals(token, self._session):
+            if constant_time_equals(token, derive_role_token(self._session, role)):
                 return AuthDecision(ok=True, kind="session")
             return AuthDecision(ok=False, reason="invalid token")
         if role in WORKER_ROLES:
