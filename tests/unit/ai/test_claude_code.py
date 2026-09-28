@@ -318,6 +318,37 @@ async def test_health_of_a_cli_without_auth_status_says_login_not_verified(fake_
     assert info.status is HealthStatus.LIMITED and "login not verified" in info.reason
 
 
+async def test_a_blocked_cloud_never_starts_the_cli(fake_cli: Path, tmp_path: Path) -> None:
+    """The CLI talks to the cloud outside the egress guard, so the policy has to stop it here:
+    no request and no paid login round-trip while the profile or the privacy mode forbids it."""
+    pidfile = tmp_path / "pid"
+    p = ClaudeCodeProvider(
+        ClaudeCodeConfig(),
+        env={"PYTHONIOENCODING": "utf-8", "FAKE_CLI_PIDFILE": str(pidfile)},
+        command_override=[sys.executable, str(fake_cli)],
+        block_reason=lambda: "cloud blocked by profile work",
+    )
+    with pytest.raises(ProviderUnavailableError, match="profile work"):
+        await p.complete(make_request())
+    info = await p.health()
+    assert info.status is HealthStatus.UNAVAILABLE and "profile work" in info.reason
+    assert not pidfile.exists()  # `--version` ran, but no prompt ever reached a CLI process
+
+
+async def test_the_block_is_read_per_request_so_a_switch_applies_at_once(fake_cli: Path) -> None:
+    blocked = {"reason": "cloud blocked by privacy mode offline"}
+    p = ClaudeCodeProvider(
+        ClaudeCodeConfig(),
+        env={"PYTHONIOENCODING": "utf-8"},
+        command_override=[sys.executable, str(fake_cli)],
+        block_reason=lambda: blocked["reason"],
+    )
+    with pytest.raises(ProviderUnavailableError):
+        await p.complete(make_request())
+    blocked["reason"] = ""
+    assert (await p.complete(make_request(request_id="r2"))).provider == "claude_code"
+
+
 async def test_missing_command_is_unavailable() -> None:
     p = ClaudeCodeProvider(ClaudeCodeConfig(command="definitely-not-a-real-cli-xyz"))
     info = await p.health()

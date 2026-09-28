@@ -203,7 +203,11 @@ class PetService:
         await self._emit(reason=f"pet.interaction:{kind}")
 
     async def _on_zone(self, ev: Event) -> None:
-        self._privacy_zone = bool(ev.payload.get("active", False))
+        # A screen-only zone (the window in front cannot be seen, the microphone stays open)
+        # leaves Nox able to listen and speak, so the pet does not pretend otherwise; the capture
+        # indicator still shows the screen as closed.
+        active = bool(ev.payload.get("active", False))
+        self._privacy_zone = active and not bool(ev.payload.get("screen_only", False))
         await self._recompute("privacy.zone_changed")
 
     # -- internals ---------------------------------------------------------------------------------

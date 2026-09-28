@@ -45,6 +45,10 @@ EDITABLE_PATHS: dict[str, str] = {
     "privacy.capture.microphone": "privacy",
     "privacy.capture.camera": "privacy",
     "privacy.capture.screen": "privacy",
+    # Both relax privacy when changed one way, so the `privacy.*` PIN gate covers them. Neither is
+    # live: the zone sensor and the privacy service read them once, at boot.
+    "privacy.zones_enabled": "privacy",
+    "privacy.unobservable_policy": "privacy",
     "security.profile": "privacy",
     "ai.router.default_reasoner": "ai",
     "ai.router.fallback_chain": "ai",

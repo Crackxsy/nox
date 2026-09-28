@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
@@ -104,6 +104,9 @@ CAPTURE_TOOL_PATTERNS: tuple[str, ...] = (
     "vision",
     "vision.*",
 )
+#: The one capture class the fail-closed `unobservable` zone leaves open under
+#: `privacy.unobservable_policy: screen_only`.
+MICROPHONE_TOOL_PATTERNS: tuple[str, ...] = ("microphone", "microphone.*")
 SCREENSHOT_TOOL_PATTERNS: tuple[str, ...] = (
     "screenshot",
     "screenshot.*",
@@ -128,6 +131,14 @@ READ_ACTIONS: frozenset[str] = frozenset(
 
 _DRIVE = re.compile(r"^[a-zA-Z]:[/\\]")
 
+#: What a privacy zone can close: the three capture kinds, and writes to memory and the vault.
+ZoneGate = Literal["microphone", "camera", "screen", "memory"]
+#: The gates the fail-closed `unobservable` zone leaves open under `privacy.unobservable_policy:
+#: screen_only`. Everything else stays closed - the screen and the camera, and with them
+#: screenshots to the cloud and clipboard reads. `PrivacyService` and the zone guard below both
+#: read this one set.
+SCREEN_ONLY_OPEN_GATES: frozenset[ZoneGate] = frozenset({"microphone", "memory"})
+
 
 # ---- injected state -----------------------------------------------------------------------------
 
@@ -138,6 +149,10 @@ class PrivacySnapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
     mode: PrivacyMode = PrivacyMode.BALANCED
     zone_active: bool = False
+    #: The zone in force is the fail-closed `unobservable` one under `unobservable_policy:
+    #: screen_only`: it closes screen-side capture (screen, camera, screenshots, clipboard) but
+    #: neither the microphone nor memory writes. Meaningless while `zone_active` is False.
+    zone_screen_only: bool = False
     safe_mode: bool = False
     panic: bool = False
 
@@ -279,6 +294,10 @@ def is_capture(request: PermissionRequest) -> bool:
     return value_matches_any(request.tool, CAPTURE_TOOL_PATTERNS)
 
 
+def is_microphone(request: PermissionRequest) -> bool:
+    return value_matches_any(request.tool, MICROPHONE_TOOL_PATTERNS)
+
+
 def is_filesystem(request: PermissionRequest) -> bool:
     return value_matches_any(request.tool, FILESYSTEM_TOOL_PATTERNS)
 
@@ -389,7 +408,22 @@ def _privacy_memory_write(ctx: EvaluationContext) -> PermissionResult | None:
 
 
 def _privacy_zone(ctx: EvaluationContext) -> PermissionResult | None:
-    if not ctx.snapshot.zone_active or not (is_capture(ctx.request) or ctx.memory_write):
+    snapshot = ctx.snapshot
+    if not snapshot.zone_active:
+        return None
+    if snapshot.zone_screen_only:
+        # The window in front cannot be seen, and the policy closes only what shows the screen.
+        microphone_open = "microphone" in SCREEN_ONLY_OPEN_GATES and is_microphone(ctx.request)
+        capture_closed = is_capture(ctx.request) and not microphone_open
+        memory_closed = ctx.memory_write and "memory" not in SCREEN_ONLY_OPEN_GATES
+        if not (capture_closed or memory_closed):
+            return None
+        return PermissionResult(
+            decision=Decision.DENY,
+            rule_id="privacy.zone_active",
+            reason="the foreground window cannot be observed; screen-side capture stays closed",
+        )
+    if not (is_capture(ctx.request) or ctx.memory_write):
         return None
     return PermissionResult(
         decision=Decision.DENY,

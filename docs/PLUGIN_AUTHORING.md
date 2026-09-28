@@ -31,6 +31,8 @@ version: 0.1.0
 api_version: 1                       # only 1 is supported today
 entry: my_plugin_pkg:create          # "module.path:callable", called as create(plugin_api)
 profiles: [stream]                   # security profiles this plugin runs under; empty = every profile
+integration: example                 # the name a profile's integrations_allowed must list (optional)
+cloud: false                         # true if a process of yours talks to a cloud service itself
 permissions:
   - tool: myplugin.do_thing          # must start with "<id>." and be dotted lowercase
     risk: read                       # read | low | medium | high | critical
@@ -64,6 +66,21 @@ is never spawned:
   is authorized against the *active security profile's* allow-lists by the core before your worker
   is spawned (`nox.plugins.manifest.authorize_egress`/`check_egress`) — loopback entries against
   the merged loopback allow-list, everything else against the profile's `egress_allowlist`.
+  "Loopback" means an IP literal in 127.0.0.0/8 or `::1`, or exactly `localhost`; a name like
+  `127.example.com` is a remote host.
+- `integration`, when set, is lowercase `[a-z][a-z0-9_]*`.
+
+Whether a validated plugin may *start* is decided on top of that by the core's effective policy
+(`nox.security.policy`), and re-decided on every profile switch and every privacy-mode change:
+
+- A plugin is an **integration** when it sets `integration:` or declares any `network.egress`
+  (it is then named by its id). The active profile's `integrations_allowed` must list that name,
+  unless the list is empty. A local-only plugin without `integration:` is not gated by it.
+- A plugin whose `network.egress` names any host beyond this machine does not run in privacy mode
+  PRIVATE or OFFLINE: the core stops it on the switch and starts it again afterwards.
+- `cloud: true` - for a plugin that hands data to a cloud service through a process of its own,
+  outside the egress guard (the coding plugin drives the Claude Code CLI) - additionally needs the
+  profile's `cloud_allowed` and a privacy mode that allows the cloud.
 
 ## 3. The Plugin API (`PluginApi`, what `create(plugin_api)` receives)
 

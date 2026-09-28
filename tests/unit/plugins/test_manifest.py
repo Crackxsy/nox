@@ -43,6 +43,46 @@ def test_profile_gate_is_manifest_driven() -> None:
     assert manifest.matches_profile("companion") is False
 
 
+def test_a_network_plugin_is_an_integration_named_by_its_id_unless_it_says_otherwise() -> None:
+    local = parse_manifest(VALID_MANIFEST)
+    assert local.integration_id == "" and not local.reaches_network
+    remote = parse_manifest({**VALID_MANIFEST, "network": {"egress": ["api.example.com:443"]}})
+    assert remote.integration_id == "demo" and remote.reaches_network
+    loopback = parse_manifest(
+        {**VALID_MANIFEST, "integration": "obs", "network": {"egress": ["127.0.0.1:4455"]}}
+    )
+    assert loopback.integration_id == "obs" and not loopback.reaches_network
+    # A look-alike loopback name is a remote host like any other.
+    rebinding = parse_manifest({**VALID_MANIFEST, "network": {"egress": ["127.evil.example:80"]}})
+    assert rebinding.reaches_network
+    cloud = parse_manifest({**VALID_MANIFEST, "integration": "claude_code", "cloud": True})
+    assert cloud.integration_id == "claude_code" and cloud.cloud
+
+
+def test_a_malformed_integration_name_is_rejected() -> None:
+    with pytest.raises(ManifestError, match="integration"):
+        parse_manifest({**VALID_MANIFEST, "integration": "Home Assistant"})
+
+
+def test_the_shipped_manifests_name_the_integrations_the_profiles_list() -> None:
+    root = Path(__file__).resolve().parents[3] / "plugins"
+    ids = {
+        path.parent.name: load_manifest(path).integration_id
+        for path in root.glob("*/manifest.yaml")
+    }
+    assert ids == {
+        "clips": "",
+        "coding": "claude_code",
+        "creative": "",
+        "echo": "",
+        "home": "home_assistant",
+        "obs": "obs",
+        "rl": "",  # it has to run everywhere: it detects the game that switches the profile
+        "telegram": "telegram",
+        "twitch": "twitch",
+    }
+
+
 def test_tool_outside_namespace_is_rejected() -> None:
     with pytest.raises(ManifestError, match=r"outside the plugin's 'demo\.' namespace"):
         parse_manifest({**VALID_MANIFEST, "permissions": [{"tool": "obs.scene.switch"}]})

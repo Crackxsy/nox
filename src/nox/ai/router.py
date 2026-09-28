@@ -13,6 +13,12 @@ it is exceeded, cloud providers are skipped for background requests (local ones 
 degraded) and the request is refused only if no local provider remains. Below
 ``budget_warmup_tokens`` cloud tokens the share is not enforced, so the first requests of the day
 are never blocked.
+
+Which providers may answer at all is not the router's decision: ``provider_gate`` is asked for
+each one and returns the reason it is blocked (the active profile's ``integrations_allowed`` and
+``cloud_allowed`` together with the privacy state, see ``nox.security.policy``), and a blocked
+provider is skipped with that reason in ``explain``. The request's own privacy mode still keeps
+cloud providers out in private and offline, as a second, independent check.
 """
 
 from __future__ import annotations
@@ -96,6 +102,7 @@ class DefaultRouter:
         config: RouterConfig | None = None,
         *,
         cloud_allowed: Callable[[], bool] | None = None,
+        provider_gate: Callable[[ProviderInfo], str] | None = None,
         clock: Callable[[], float] = time.monotonic,
         today: Callable[[], date] = date.today,
         max_decisions: int = 100,
@@ -104,6 +111,7 @@ class DefaultRouter:
         self._bus = bus
         self._cfg = config or RouterConfig()
         self._cloud_allowed = cloud_allowed or (lambda: True)
+        self._provider_gate: Callable[[ProviderInfo], str] = provider_gate or (lambda _info: "")
         self._clock = clock
         self._today = today
         self._health: dict[str, tuple[float, ProviderInfo]] = {}
@@ -140,14 +148,27 @@ class DefaultRouter:
         models are not allowed, because even a local CLI probe is a step toward the cloud the user
         switched off.
         """
-        if not provider.info.local and not self._cloud_allowed():
+        blocked = self._health_block_reason(provider.info)
+        if blocked:
             return provider.info.model_copy(
-                update={
-                    "status": HealthStatus.UNAVAILABLE,
-                    "reason": "not probed: cloud models are blocked by the privacy mode or profile",
-                }
+                update={"status": HealthStatus.UNAVAILABLE, "reason": f"not probed: {blocked}"}
             )
         return await self._probe(provider)
+
+    def _health_block_reason(self, info: ProviderInfo) -> str:
+        """Why a cloud provider must not even be probed now; "" for local ones and when allowed.
+
+        Asks the same gate routing asks, so health and routing cannot disagree about what is
+        blocked.
+        """
+        if info.local:
+            return ""
+        gate_reason = self._provider_gate(info)
+        if gate_reason:
+            return gate_reason
+        if not self._cloud_allowed():
+            return "cloud models are blocked by the privacy mode or profile"
+        return ""
 
     async def stop(self) -> None:
         """Cancel background health refreshes (core shutdown)."""
@@ -255,6 +276,7 @@ class DefaultRouter:
         )
         cloud_blocked_reason = self._cloud_block_reason(request)
         budget_blocked = self._budget_block_reason(request)
+        gate_reasons: list[str] = []
         candidates: list[AiProvider] = []
         for pid in chain:
             provider = self._providers.get(pid)
@@ -268,6 +290,11 @@ class DefaultRouter:
             if not info.local and cloud_blocked_reason:
                 decision.notes.append(f"{pid}: skipped ({cloud_blocked_reason})")
                 continue
+            gate_reason = self._provider_gate(info)
+            if gate_reason:
+                decision.notes.append(f"{pid}: skipped ({gate_reason})")
+                gate_reasons.append(gate_reason)
+                continue
             if not info.local and budget_blocked:
                 decision.notes.append(f"{pid}: skipped ({budget_blocked})")
                 continue
@@ -278,7 +305,12 @@ class DefaultRouter:
             candidates.append(provider)
         if not candidates:
             self._decisions.append(decision)
-            error = budget_blocked or cloud_blocked_reason or "no provider available"
+            error = (
+                budget_blocked
+                or cloud_blocked_reason
+                or (gate_reasons[0] if gate_reasons else "")
+                or "no provider available"
+            )
             await self._bus.publish(
                 Event(
                     name=E.AI_REQUEST_FAILED,

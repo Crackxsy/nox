@@ -71,6 +71,7 @@ from nox.data.stream_repos import (
 from nox.ipc.dispatch import RequestRegistry
 from nox.ipc.handlers.core import register_core_handlers
 from nox.ipc.http import HttpServer, HttpSettings, create_app
+from nox.ipc.origin import ui_origins
 from nox.ipc.server import HubSettings, IpcHub
 from nox.ipc.tokens import TokenStore
 from nox.paths import DASHBOARD_DIST, DEFAULTS_PATH, PET_DIST, PLUGINS_DIR, PROFILES_DIR, REPO_ROOT
@@ -347,6 +348,7 @@ class NoxCore:
                 session_token=lambda: self.tokens.session_token if self.tokens else "",
                 pet_dist=self.pet_dist if self.pet_dist.exists() else None,
                 dashboard_dist=self.dashboard_dist if self.dashboard_dist.exists() else None,
+                origin_hosts=(self.config.ipc.host,),
             ),
             HttpSettings.from_config(
                 self.config.ipc, pet_dist=self.pet_dist, dashboard_dist=self.dashboard_dist
@@ -354,6 +356,9 @@ class NoxCore:
             runtime_dir=Path(paths.runtime_dir),
         )
         await self.http.start()
+        # The pet and the dashboard are pages of this HTTP server; they are the only browser
+        # origins the hub lets in (the Qt shell and the workers send no Origin at all).
+        self.hub.allow_browser_origins(ui_origins(self.http.port, (self.config.ipc.host,)))
         log.info("ipc.ready", ws=self.hub.url, http=self.http.url)
 
     def _build_tools_and_plugins(self) -> None:
@@ -391,6 +396,7 @@ class NoxCore:
             safe_mode=self.security.killswitch.is_engaged,
             global_egress_allowlist=tuple(self.config.security.egress_allowlist),
             loopback_allowlist=tuple(self.config.security.loopback_allowlist),
+            start_policy=self.security.policy,
         )
         self.plugins.register_handlers()
 
@@ -398,14 +404,16 @@ class NoxCore:
         """Every language-model client goes through the egress guard; see `nox.core.boot.ai`."""
         assert self.security is not None and self.bus is not None
         ai_config = AiConfig.from_mapping(self.config.ai.model_dump())
+        # The effective policy - profile and privacy together - decides which providers may
+        # answer; passing only the privacy half once sent `work` conversations to the cloud.
         self.ai_providers = build_providers(
-            ai_config, egress=self.security.egress, status_source=self._health_state
+            ai_config,
+            egress=self.security.egress,
+            status_source=self._health_state,
+            policy=self.security.policy,
         )
         self.router = build_router(
-            self.ai_providers,
-            ai_config,
-            bus=self.bus,
-            cloud_allowed=self.security.privacy.allows_cloud,
+            self.ai_providers, ai_config, bus=self.bus, policy=self.security.policy
         )
         self.provider_card = ProviderCard(
             self.ai_providers, probe=self._probe_providers, health_entry=self._health_entry
@@ -464,7 +472,7 @@ class NoxCore:
             turns=DbTurnStore(
                 TurnRepository(self.db), config.privacy.retention.raw_transcripts_days or None
             ),
-            memory_policy=self.security.privacy,
+            memory_policy=self.security.policy,
             system_prompt=self._system_prompt,
             config=OrchestratorConfig(
                 default_language=config.identity.ui_language,

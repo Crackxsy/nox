@@ -301,6 +301,10 @@ const OPTION_KEYS: Record<string, Record<string, Key>> = {
     auto: 'option_lang_auto',
   },
   'security.profile': PROFILE_KEYS,
+  'privacy.unobservable_policy': {
+    screen_only: 'option_unobservable_screen_only',
+    strict: 'option_unobservable_strict',
+  },
 };
 
 export function optionLabel(t: T, path: string, value: string): string {

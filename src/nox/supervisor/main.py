@@ -813,9 +813,11 @@ class Supervisor:
             self._hotkey = None
 
 
+#: Push-to-talk is a global hotkey too, so on Wayland the spoken kill phrase is only heard with
+#: continuous listening on (and `privacy.unobservable_policy: screen_only`, the default).
 WAYLAND_HOTKEY_REASON = (
     "Wayland does not let applications register global hotkeys; use the tray or the dashboard "
-    "instead"
+    "instead, or say the kill phrase with continuous listening switched on"
 )
 MAC_HOTKEY_PERMISSION = (
     "grant Nox (or the Python it runs on) Input Monitoring in System Settings > Privacy & Security"

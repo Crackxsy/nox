@@ -34,6 +34,8 @@ export const de = {
   setting_privacy_capture_microphone: 'Mikrofon erlaubt',
   setting_privacy_capture_camera: 'Kamera erlaubt',
   setting_privacy_capture_screen: 'Bildschirm erlaubt',
+  setting_privacy_zones_enabled: 'Privatsphäre-Zonen (Fenster im Vordergrund)',
+  setting_privacy_unobservable_policy: 'Wenn Nox das Fenster im Vordergrund nicht sehen kann',
   setting_security_profile: 'Aktives Profil',
   setting_ai_router_default_reasoner: 'Bevorzugtes KI-Backend',
   setting_ai_router_fallback_chain: 'Reihenfolge der KI-Backends',
@@ -65,6 +67,8 @@ export const de = {
   option_lang_de: 'Deutsch',
   option_lang_en: 'Englisch',
   option_lang_auto: 'Automatisch',
+  option_unobservable_screen_only: 'Nur Bildschirm, Kamera und Zwischenablage sperren',
+  option_unobservable_strict: 'Alles sperren, auch Mikrofon und Gedächtnis',
 
   // -- shell --------------------------------------------------------------------------------------
   app_title: 'Nox Dashboard',

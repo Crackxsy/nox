@@ -49,6 +49,22 @@ def test_restart_required_mirrors_the_live_apply_list() -> None:
     assert describe("security.profile").restart_required is True
 
 
+def test_the_zone_switches_are_privacy_settings_behind_the_pin_gate() -> None:
+    """Switching window zones off, or opening the microphone in the unobservable zone, relaxes
+    privacy: both must be `privacy.*` paths so the settings editor asks for the PIN."""
+    from nox.settings.editor import security_paths
+
+    zones = describe("privacy.zones_enabled")
+    assert zones.type == "bool" and zones.group == "privacy" and zones.restart_required
+    policy = describe("privacy.unobservable_policy")
+    assert policy.type == "enum" and policy.options == ["screen_only", "strict"]
+    assert policy.restart_required
+    assert security_paths(["privacy.zones_enabled", "privacy.unobservable_policy"]) == [
+        "privacy.zones_enabled",
+        "privacy.unobservable_policy",
+    ]
+
+
 def test_unknown_or_non_editable_paths_are_refused() -> None:
     with pytest.raises(UnknownSettingError):
         describe("security.hard_prohibitions")  # exists, but is deliberately not editable

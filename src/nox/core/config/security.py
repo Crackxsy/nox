@@ -104,4 +104,13 @@ class PrivacyConfig(StrictSection):
     mode: Literal["full", "balanced", "private", "offline"] = "balanced"
     capture: CaptureConfig = Field(default_factory=CaptureConfig)
     zones: list[str] = Field(default_factory=list)
+    #: Window privacy zones (the foreground-window check). They run even with
+    #: `sensors.enabled: false`; this is the only switch that turns them off, and as a `privacy.*`
+    #: setting it needs the PIN when one is set. Path zones for vault notes are not affected.
+    zones_enabled: bool = True
+    #: What the fail-closed `unobservable` zone closes while the foreground window cannot be read
+    #: (Wayland, a missing permission): `screen_only` closes the screen, the camera, screenshots
+    #: to the cloud and clipboard reads, and leaves the microphone and memory writes open;
+    #: `strict` closes everything a real zone closes. A real zone always closes everything.
+    unobservable_policy: Literal["screen_only", "strict"] = "screen_only"
     retention: RetentionConfig = Field(default_factory=RetentionConfig)

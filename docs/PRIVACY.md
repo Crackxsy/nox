@@ -37,7 +37,8 @@ cannot be hidden or disabled by configuration.
 - **Logs** — local, JSON-structured, filtered for personally-identifying content and secrets
   before being written, rotated (14 days by default).
 - **Memory / vault notes** — local files in your chosen vault folder, meant to be yours: readable,
-  portable, and never written to while a privacy zone is active for the thing being discussed.
+  portable, and never written to while a privacy zone is active for the thing being discussed, in
+  PRIVATE mode, or in a profile that remembers nothing (`work`) — see "Profiles" below.
 - **Raw audio is never persisted**, in any mode, at any privacy level. Only the transcript (if
   transcription is enabled) is kept, under the retention window above.
 - **Secrets** (API keys, OAuth tokens, passwords for Twitch/OBS/Telegram) — the Windows Credential
@@ -132,6 +133,32 @@ Switching to a *more* private mode (e.g. FULL → PRIVATE) is always immediate, 
 Switching back toward FULL always asks you to confirm first — Nox never silently becomes less
 private.
 
+In PRIVATE and OFFLINE, integrations that talk to anything beyond this machine (Telegram, Twitch,
+Home Assistant) and the coding assistant (which drives the Claude Code CLI)
+are not running at all: the plugin manager stops them when you switch and starts them again when
+you switch back. An integration that only talks to this machine (the OBS websocket) keeps running.
+
+## Profiles
+
+A profile (`companion`, `work`, `stream`, …) says what a kind of work may do at all; the privacy
+mode says what the moment allows. Nox applies **both**, and the stricter one wins:
+
+- **Cloud AI** is used only when the profile has `cloud_allowed: true` *and* the privacy mode is
+  FULL or BALANCED. The `work`, `offline` and `rocket_league` profiles never send a conversation to
+  a cloud provider, whatever the privacy mode — not for a plain question, not for a "denk mal
+  gründlich nach" that would otherwise go to the reasoning model, and not when the local model is
+  down. The Claude Code CLI itself refuses to start (it also skips its login check) while the
+  cloud is blocked.
+- **Memory** — conversation history, memory items and vault notes — is written only when the
+  profile has `memory_writes_allowed: true` *and* the privacy state allows it (not PRIVATE, no
+  privacy zone that closes memory, no kill switch). In the `work` profile nothing is remembered.
+- **Integrations** (Ollama, Claude Code, Telegram, Home Assistant, Twitch, OBS) run only when the
+  profile lists them in `integrations_allowed`. The deterministic rules fallback is part of Nox
+  and always available.
+
+A profile switch — from the dashboard, or automatically when Rocket League starts — takes effect
+with the next request; no restart is needed.
+
 ## Privacy zones
 
 You can mark apps/windows (by process name or title pattern) as zones Nox should never look at —
@@ -143,11 +170,32 @@ no memory write referencing it. Zone detection happens locally (it only looks at
 window's title/process name) and that detection itself never leaves the machine.
 
 When Nox **cannot see** the foreground window, it assumes the worst rather than the best: it
-enters the reserved `unobservable` zone, which closes exactly the gates a real zone closes. That
-is permanent under a Linux Wayland session (Wayland lets no application read the active window),
-lasts on macOS until you grant the Accessibility permission, and applies on any machine without a
-graphical session. The dashboard's health page names the reason. Details per platform:
-[`PLATFORMS.md`](PLATFORMS.md).
+enters the reserved `unobservable` zone. That is permanent under a Linux Wayland session (Wayland
+lets no application read the active window), lasts on macOS until you grant the Accessibility
+permission, and applies on any machine without a graphical session. The dashboard's health page
+names the reason. Details per platform: [`PLATFORMS.md`](PLATFORMS.md).
+
+What the `unobservable` zone closes is your choice, `privacy.unobservable_policy`:
+
+| Setting | Screen, camera, screenshots to the cloud, clipboard | Microphone, memory writes |
+|---|---|---|
+| `screen_only` (default) | closed | open |
+| `strict` | closed | closed |
+
+The reasoning behind the default: what an unseen window can leak is what is on the screen, not
+what you say to Nox — so voice keeps working, and what you tell Nox can be remembered, while
+everything that looks at the screen stays shut. A **real** zone (a banking page or a password
+manager Nox *can* see, or one recognised by its process name) always closes everything, including
+the microphone, whichever setting you choose. Unprompted speech (the greeting, hints) and phone
+notifications stay quiet while any zone is in force, the `unobservable` one included.
+
+**Zones do not depend on the other sensors.** Switching the awareness sensors off
+(`sensors.enabled: false` — idle time, system load, game detection, window history) leaves the
+foreground check for zones running; it then records nothing and only feeds the zones. The one
+switch that turns window zones off is `privacy.zones_enabled: false`, a `privacy.*` setting, so
+changing it in the dashboard needs your PIN when one is set, and the `sensors` health check says
+"privacy zones switched off" for as long as it is off. Path zones for vault notes (personal
+documents and the like) are not affected by it.
 
 ## How to inspect or delete your data
 

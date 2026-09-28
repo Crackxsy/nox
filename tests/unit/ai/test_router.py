@@ -375,3 +375,20 @@ async def test_health_uses_the_routing_cache(bus: FakeBus) -> None:
     await router.health(local)
     await router.complete(make_request())
     assert local.health_calls == 1
+
+
+async def test_health_never_probes_a_cloud_provider_the_policy_gate_blocks(bus: FakeBus) -> None:
+    """The core builds its router with the policy gate only; health must ask that gate too."""
+    cloud = FakeProvider("claude_code", local=False, text="hi")
+    router = DefaultRouter(
+        [cloud],
+        bus,
+        RouterConfig(fallback_chain=["claude_code"]),
+        provider_gate=lambda info: "cloud blocked by profile work" if not info.local else "",
+        clock=Clock(),
+        today=lambda: date(2026, 9, 9),
+    )
+    info = await router.health(cloud)
+    assert info.status is HealthStatus.UNAVAILABLE
+    assert info.reason == "not probed: cloud blocked by profile work"
+    assert cloud.health_calls == 0

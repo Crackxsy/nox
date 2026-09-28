@@ -68,6 +68,18 @@ async def test_muted_and_privacy_zone_precedence(pet):
     assert svc.functional is PetFunctional.IDLE
 
 
+async def test_a_screen_only_zone_leaves_the_pet_able_to_listen_and_speak(pet):
+    """The unobservable zone under `screen_only` keeps the microphone open, so the pet must not
+    sit in its "privacy" pose while Nox listens and answers; a real zone still puts it there."""
+    svc, bus, _ = pet
+    await _pub(bus, "privacy.zone_changed", active=True, zone="unobservable", screen_only=True)
+    assert svc.functional is PetFunctional.IDLE
+    await _pub(bus, E.VOICE_INPUT_STARTED)
+    assert svc.functional is PetFunctional.LISTENING
+    await _pub(bus, "privacy.zone_changed", active=True, zone="banking", screen_only=False)
+    assert svc.functional is PetFunctional.PRIVACY
+
+
 async def test_ai_failure_without_fallback_shows_error(pet):
     svc, bus, _ = pet
     await _pub(

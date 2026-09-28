@@ -251,6 +251,53 @@ async def test_crash_restarts_with_backoff_then_fails(plugins_dir: Path) -> None
         await manager.stop("test")
 
 
+class _SwitchablePolicy:
+    def __init__(self) -> None:
+        self.reason = ""
+        self.asked: list[tuple[str, bool, bool]] = []
+
+    def plugin_start_block_reason(self, integration: str, *, network: bool, cloud: bool) -> str:
+        self.asked.append((integration, network, cloud))
+        return self.reason
+
+
+async def test_a_plugin_the_policy_blocks_is_not_spawned_and_says_why(plugins_dir: Path) -> None:
+    write_manifest(plugins_dir, "demo", network={"egress": ["api.example.com:443"]})
+    policy = _SwitchablePolicy()
+    policy.reason = "privacy mode offline keeps integrations off the network"
+    built = build(plugins_dir, engine=FakeEngine(make_profile(egress_allowlist=["*"])))
+    built.manager._start_policy = policy  # type: ignore[assignment]
+    try:
+        await built.manager.start()
+        record = built.manager.records()["demo"]
+        assert built.processes == [] and record.state is PluginState.VALIDATED
+        assert record.reason == policy.reason
+        assert policy.asked == [("demo", True, False)]
+    finally:
+        await built.manager.stop("test")
+
+
+async def test_a_crashed_plugin_is_not_restarted_once_the_policy_blocks_it(
+    plugins_dir: Path,
+) -> None:
+    write_manifest(plugins_dir, "demo")
+    policy = _SwitchablePolicy()
+    built = build(plugins_dir)
+    built.manager._start_policy = policy  # type: ignore[assignment]
+    manager = built.manager
+    try:
+        await manager.start()
+        record = manager.records()["demo"]
+        assert len(built.processes) == 1
+        policy.reason = "profile work does not allow the demo integration"
+        built.processes[-1].exit(1)
+        await wait_until(lambda: record.state is PluginState.STOPPED)
+        assert record.reason == policy.reason
+        assert len(built.processes) == 1  # no respawn
+    finally:
+        await manager.stop("test")
+
+
 async def test_restarts_outside_the_window_do_not_count(plugins_dir: Path) -> None:
     write_manifest(plugins_dir, "demo")
     now = [1000.0]  # injected clock: no real sleeps, so a slow CI runner cannot skew the window

@@ -97,6 +97,14 @@ class PluginManifest(BaseModel):
     api_version: int = API_VERSION
     entry: str  # `package.module:callable`, called as `create(plugin_api)`
     profiles: list[str] = Field(default_factory=list)  # empty = every profile
+    #: The integration this plugin is, as a profile's `integrations_allowed` names it
+    #: (`home_assistant`, `twitch`, ...). Empty: the plugin id when it declares any network
+    #: egress, and no integration at all for a local-only plugin (see `integration_id`).
+    integration: str = ""
+    #: True when the plugin hands data to a cloud service through a process of its own that the
+    #: egress guard cannot see (the Claude Code CLI): the profile's `cloud_allowed` and the
+    #: privacy mode's cloud rule then decide whether it may run at all.
+    cloud: bool = False
     permissions: list[PluginPermission] = Field(default_factory=list)
     events: PluginEvents = Field(default_factory=PluginEvents)
     secrets: list[str] = Field(default_factory=list)
@@ -133,6 +141,21 @@ class PluginManifest(BaseModel):
     def matches_profile(self, profile_id: str) -> bool:
         return not self.profiles or profile_id in self.profiles
 
+    @property
+    def integration_id(self) -> str:
+        """What `integrations_allowed` must list for this plugin to start; empty = not gated.
+
+        A plugin that talks to anything over the network is an integration even when its manifest
+        does not say so (it is then named by its id); a local-only one is not, unless it declares
+        the integration it drives - the coding plugin drives `claude_code`.
+        """
+        return self.integration or (self.id if self.network.egress else "")
+
+    @property
+    def reaches_network(self) -> bool:
+        """At least one `network.egress` entry is a host other than this machine."""
+        return any(not is_loopback(split_endpoint(entry)[0]) for entry in self.network.egress)
+
     # -- validation ------------------------------------------------------------------------------
 
     @model_validator(mode="after")
@@ -146,6 +169,8 @@ class PluginManifest(BaseModel):
             )
         if not _ENTRY_RE.match(self.entry):
             raise ValueError(f"entry must be 'package.module:callable', got {self.entry!r}")
+        if self.integration and not _ID_RE.match(self.integration):
+            raise ValueError(f"integration {self.integration!r} must be lowercase [a-z][a-z0-9_]*")
         for permission in self.permissions:
             tool = permission.tool
             if is_hard_prohibited(tool):

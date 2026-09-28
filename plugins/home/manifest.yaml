@@ -16,6 +16,7 @@ version: 0.1.0
 api_version: 1
 entry: nox_plugin_home:create
 profiles: [companion]              # add another profile's allow-list entries before widening this
+integration: home_assistant        # the name a profile's `integrations_allowed` lists
 permissions:
   - tool: home.status.read          # risk: read - connection state and the reason when there is
     risk: read                      # none; never fakes "connected"

@@ -22,6 +22,7 @@ requests.
 | LLM proposes a harmful/unwanted action (hallucination, prompt injection via chat/files/web) | Tool pipeline with permission checks; untrusted input is data, never free-form execution; medium+ risk actions require confirmation. |
 | Cloud leakage of private content | Privacy modes/zones enforced at the transport level; egress allow-list per profile; screenshots to cloud only in FULL and outside zones. |
 | A local process talks to the Nox hub | Loopback-only IPC, per-client tokens, roles, rate limits, a request allow-list per role. |
+| A web page talks to the Nox hub or HTTP server (DNS rebinding, cross-site WebSocket) | Both servers accept only a `Host` naming this machine on their own port, and a browser `Origin` only from the core's own pages; everything else gets 403 before a handler or the token check runs. |
 | Secrets in code/config/logs/prompts | Keyring-only storage; secrets are never serialized; a log/PII filter; the prompt builder excludes the secret store entirely. |
 | Stream accidents (wrong scene, leaking screen, stream stopped by mistake) | Hard prohibitions (`stream.stop`, `stream.key.read`); scene switches require confirmation in the stream profile; privacy zones hide windows from capture. |
 | Anti-cheat / game integrity | No input-synthesis, no process injection, no memory reads exist anywhere in the codebase; hard prohibitions; sensors are observation-only. |
@@ -53,6 +54,21 @@ Every decision — allowed or denied — is audited with the request fields (red
 class where appropriate). The engine is pure and deterministic given (request, profile, privacy
 state, grants, time), which makes it fully unit-testable, including every negative path.
 
+### Decisions that are not tool calls
+
+Which language model answers, whether a turn or a memory item is stored, and whether a plugin may
+start are not tool calls, so the engine never sees them. They are decided in one place,
+`nox.security.policy.EffectivePolicy`, which combines the *active* profile's `cloud_allowed`,
+`memory_writes_allowed` and `integrations_allowed` with the live privacy state (mode, zones, panic,
+kill switch). The router, the Claude Code provider (which connects to the cloud outside the egress
+guard and therefore refuses to start at all while the cloud is blocked), the orchestrator's turn
+history, the memory service, the vault writer and the plugin manager all ask it and nothing else.
+It reads both inputs on every question, so a profile switch or a privacy change applies without a
+restart; the plugin manager re-evaluates on both events and stops or starts plugins accordingly.
+A plugin that reaches a host beyond this machine does not run in PRIVATE or OFFLINE. A test
+matrix (every shipped profile × every privacy mode × chat, escalation, memory write, plugin start)
+pins the outcomes down.
+
 ## Hard prohibitions
 
 Never overridable by any profile, plugin, runtime override, or the AI/LLM layer — a config
@@ -76,10 +92,10 @@ permission.self_elevate
   this path does not depend on the core process; not available under a Linux Wayland session,
   which forbids global hotkeys, and on macOS only with the Input Monitoring permission - the
   supervisor reports `hotkey: unavailable: <reason>` instead of claiming it is armed; under Wayland
-  the fail-closed privacy zone also keeps the microphone closed, so the spoken phrase is
-  unavailable there too and the tray and the dashboard remain), the tray, the dashboard, the pet's own menu, and
-  the spoken phrase "Nox, Notaus" (matched locally by the STT worker and forwarded as a
-  `security.kill` request — it never goes through the LLM).
+  the spoken phrase works only with continuous listening, because push-to-talk is a hotkey too,
+  and not at all under `privacy.unobservable_policy: strict`), the tray, the dashboard, the pet's
+  own menu, and the spoken phrase "Nox, Notaus" (matched locally by the STT worker and forwarded as
+  a `security.kill` request — it never goes through the LLM).
 - **Effect**: SAFE_MODE. Every in-flight AI request is cancelled, TTS stops in under 200 ms,
   workers/plugins stop, capture turns off, memory writes stop, the event is audited, and the pet
   shows `unavailable`.
@@ -157,6 +173,19 @@ job object with kill-on-close. On macOS and Linux each child watches the exact p
 crashed supervisor or core cannot leave a plugin or the voice worker running unsupervised.
 
 ## IPC authentication
+
+"Loopback" is decided exactly (`nox.core.netloc.is_loopback`): an IP literal counts when
+`ipaddress` says it is a loopback address (127.0.0.0/8, `::1`, their IPv4-mapped forms), a name
+only when it is `localhost`. A name that merely looks local - `127.evil.example`,
+`127.0.0.1.nip.io`, `localhost.evil` - is an ordinary remote host for the egress guard and the
+plugin manifest check.
+
+Both local servers refuse a request whose `Host` header does not name this machine on the port
+they listen on (a DNS-rebinding page always sends its own name), and a browser `Origin` other than
+the core's own pages (`http://127.0.0.1:<http port>`, `http://localhost:<http port>`, or the
+configured `ipc.host`). A client that sends no `Origin` - the shell, workers, plugins - is not a
+browser and passes on to the token check; `Origin: null` is a browser's opaque origin and is
+refused.
 
 The local WebSocket hub is loopback-only, versioned, and requires a per-client session token
 (issued by the core at startup, stored under `%APPDATA%\Nox\runtime`) — every connecting client is

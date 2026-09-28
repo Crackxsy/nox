@@ -101,7 +101,7 @@ async def test_zoned_foreground_window_reaches_privacy_and_pet(core: NoxCore) ->
         unsub()
 
     assert zone_event is not None
-    assert zone_event.payload == {"active": True, "zone": "password_manager"}
+    assert zone_event.payload == {"active": True, "zone": "password_manager", "screen_only": False}
     assert core.security.privacy.active_zone == "password_manager"
     assert core.pet.functional is PetFunctional.PRIVACY
 
@@ -112,7 +112,11 @@ async def test_zoned_foreground_window_reaches_privacy_and_pet(core: NoxCore) ->
 
 
 async def test_unobservable_foreground_fails_closed_end_to_end(core: NoxCore) -> None:
-    """A host that cannot read the active window must not look like one with nothing open."""
+    """A host that cannot read the active window must not look like one with nothing open.
+
+    With the shipped `privacy.unobservable_policy: screen_only` everything that looks at the screen
+    stays closed, while the microphone and memory keep working - and the pet does not claim a
+    privacy pose it is not in."""
     runtime = core.extensions["sensors"]
     sensor = runtime.foreground
     assert sensor is not None
@@ -123,8 +127,11 @@ async def test_unobservable_foreground_fails_closed_end_to_end(core: NoxCore) ->
     privacy = core.security.privacy
     assert privacy.active_zone == "unobservable"
     assert privacy.allows_capture("screen") is False
-    assert privacy.allows_memory_write() is False
-    assert core.pet.functional is PetFunctional.PRIVACY
+    assert privacy.allows_screenshot_to_cloud() is False
+    assert privacy.allows_capture("microphone") is True
+    assert privacy.allows_memory_write() is True
+    assert core.security.policy.allows_memory_write() is True
+    assert core.pet.functional is not PetFunctional.PRIVACY
     status, reason = await runtime.health()
     assert status.value == "limited"
     assert "cannot read the active window" in reason
