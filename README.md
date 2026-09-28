@@ -45,7 +45,7 @@ Nox is **pre-1.0**. Honest state as of the latest release:
 | --- | --- |
 | Core, supervisor, kill switch, privacy modes/zones, permission engine, audit chain | Works |
 | Local IPC hub, desktop shell (pet window, tray, hotkeys), dashboard | Works |
-| Voice: push-to-talk, wake word, local STT (faster-whisper) + TTS (Piper or Kokoro) | Works, needs the `voice` extra and a model download; see [Voice](#voice-microphone-and-speech) |
+| Voice: push-to-talk, wake word, local STT (faster-whisper) + TTS (Piper or Kokoro) | Works, needs the `voice` extra and a one-time, user-started model download (`--download-whisper`); see [Voice](#voice-microphone-and-speech) |
 | AI routing: Claude Code CLI → Ollama → deterministic rules fallback | Works; each provider reports its real health |
 | Memory: SQLite + `sqlite-vec`, vault indexing | Works; first start indexes the whole vault once |
 | Twitch chat bot, OBS scene control, Funken ledger, dashboard Stream page | Works (stream profile only) |
@@ -63,9 +63,11 @@ See [`CHANGELOG.md`](CHANGELOG.md) for what shipped when.
 
 - **Windows 11** (primary platform), **macOS** or **Linux**. On macOS and Linux Nox runs from
   source, and what the desktop will not reveal is handled on the safe side: under Wayland, or on
-  macOS without the Accessibility permission, privacy zones cannot see the active window and stay
-  *closed* (no screen capture, no memory writes). The full per-platform picture, including what is
-  not yet verified on real hardware, is in [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
+  macOS without the Accessibility permission, Nox cannot see the active window, so screen capture,
+  screenshots and clipboard reads stay *closed*; voice and memory keep working
+  (`privacy.unobservable_policy: screen_only`, the default; `strict` closes those too). The full
+  per-platform picture, including what is not yet verified on real hardware, is in
+  [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
 - **Python 3.13.** On Windows use the [python.org](https://www.python.org/downloads/) build, *not*
   the Microsoft Store one: Store Python virtualises `%APPDATA%`, so Nox's runtime token files end
   up somewhere other tools cannot read and startup fails with `token_acl_failed`.
@@ -97,7 +99,9 @@ cd ui\dashboard ; npm ci ; npm run build ; cd ..\..
 Other entry points: `nox dev` (core + shell in one console, no supervisor), `nox core --no-voice`,
 `nox shell`, `nox rl calibrate`, `python -m nox.worker --service voice --selftest` (devices,
 models, TTS, wake-word gate, a 3-second microphone check) and
-`python -m nox.worker --download-kokoro` (Kokoro TTS model files).
+`python -m nox.worker --download-whisper [model]` (the Whisper speech-recognition model) and
+`python -m nox.worker --download-kokoro` (Kokoro TTS model files). `nox pin set` sets the security
+PIN (also in `nox onboard` and the dashboard).
 
 Runtime files live in `<app dir>/runtime/{session.token,ipc.json,supervisor.token}`, logs in
 `<app dir>/logs`, where the app dir is `%APPDATA%\Nox` on Windows,
@@ -216,9 +220,11 @@ cloud provider is unavailable, and the only allowed provider in the `offline` an
 
 ### Voice (microphone and speech)
 
-Voice needs the `voice` extra and model files. Nothing is ever downloaded on its own: a missing
-model is an `unavailable` health reason that names the path and the command that fetches it. All
-voice models live under `<data_dir>/models/` (`piper/`, `kokoro/`, `openwakeword/`); if your
+Voice needs the `voice` extra and model files. Nothing is ever downloaded on its own - Whisper
+included, which is loaded from the local folder only: a missing model is an `unavailable` health
+reason that names the path and the command that fetches it (`python -m nox.worker
+--download-whisper`). All voice models live under `<data_dir>/models/` (`faster-whisper/`, `piper/`,
+`kokoro/`, `openwakeword/`); if your
 `paths.data_dir` is not the default, set `voice.models_dir` in your user layer as well — the voice
 worker only ever receives the `voice` section of the configuration.
 

@@ -9,6 +9,30 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **v3.5 "Truth": what Nox promises now holds** (docs/SPEC_V3.5_V4.5.md §4):
+  - **Security PIN** can be set, changed and removed in `nox onboard`, with `nox pin set|clear|status`
+    and in the dashboard (Settings → "Sicherheits-PIN"); stored as Argon2id (`argon2-cffi` is now a
+    dependency), older PBKDF2 hashes are upgraded on the next successful check, a raw value under
+    `nox/security/pin` is reported instead of locking every gate.
+  - **Profiles are enforced** for chat, escalation, memory and plugins, decided in one place
+    (`nox.security.policy`): `work`, `offline` and `rocket_league` never send a conversation to the
+    cloud, `work` remembers nothing; integrations that reach beyond this machine stop in
+    PRIVATE/OFFLINE. Profile and privacy switches take effect immediately.
+  - **"Fortsetzen"** in the dashboard and the tray also takes the supervisor out of safe mode, so a
+    crash after a hotkey kill is restarted again; the kill button works again after resuming.
+  - **Chat history** across restarts on the dashboard's Chat page (nothing recorded in private
+    mode, a privacy zone or safe mode).
+  - **Retention runs**: expired transcripts, chat, viewer data, health history and notifications are
+    deleted a minute after start and every six hours; `retention` health shows the last run;
+    PRIVACY.md lists every table and its setting.
+  - `privacy.unobservable_policy` (default `screen_only`, the owner's decision for Wayland): when
+    the window in front cannot be seen, screen, camera, screenshots and clipboard stay closed while
+    voice and memory keep working; `strict` closes those too. `privacy.zones_enabled` (PIN-gated) is
+    the only switch that turns zones off - `sensors.enabled: false` no longer does.
+  - `python -m nox.worker --download-whisper` / `nox voice download-whisper`: Whisper is never
+    fetched automatically any more.
+  - Supervisor and core refuse to start twice ("Nox is already running") instead of breaking the
+    running instance's tray kill switch.
 - `docs/CAPABILITY_ANALYSIS.md`: what Nox can really do today, per area and with evidence, and a
   register of the guarantees, recovery paths and documentation claims that do not hold yet (six
   subsystem audits in `docs/analysis/`). `docs/SPEC_V3.5_V4.5.md`: the proposed next three waves -
@@ -237,6 +261,45 @@ release (`docs/PUBLISHING.md`) - until then the compare links below point at tag
 yet either._
 
 ### Fixed
+- **Guarantees and recovery (v3.5):**
+  - Loopback is decided exactly: `127.evil.example`, `localhost.evil` or `127.0.0.1.nip.io` no
+    longer pass the egress allow-list; the local HTTP server and WebSocket hub reject DNS-rebinding
+    Host headers and foreign browser Origins.
+  - Every consumer starts from the current state: plugins, the Rocket League capture gate, the
+    pet, the tray and the voice worker learn privacy mode, capture and kill state when they
+    connect; `system.started` no longer lifts a safe mode engaged at boot.
+  - Privacy mode, panic and the kill switch survive a restart; unreadable saved state starts in the
+    strictest mode, in safe mode.
+  - The audit log detects deleted rows, a replaced database and a rolled-back checkpoint (head
+    anchored outside the database); a side-effecting tool call or outbound request that cannot be
+    audited is refused (`audit.unavailable`).
+  - Plugins are held to their manifest by the core: narrowed subscriptions, exact emitted names
+    outside core namespaces, `plugin.tool.call` only for declared tools through the permission
+    engine, audited egress. The supervisor accepts the core only with a per-spawn secret; pet and
+    dashboard get their own role tokens and cannot act as the shell; the dashboard opens through a
+    one-time 30-second ticket, so no token lands on a browser command line.
+  - Home Assistant scenes, scripts and automations are judged by what they change (a lock, alarm,
+    valve or garage door is refused); the token is not sent over plain `ws://` to another machine;
+    large installs no longer drop the connection (16 MiB frames).
+  - Workers come back: a reconnect credential after the single-use spawn token, the voice worker
+    is respawned with backoff and health names the reason; a plugin that cannot reconnect exits.
+  - A damaged database is set aside and Nox starts with an empty one, loudly; every migration is
+    preceded by a backup; `user.yaml` is written atomically, and one invalid key costs only that
+    key - privacy and security keys fall back to their strictest value.
+  - Health is cheap and honest: no paid Claude request every 30 s, no cloud probe while privacy or
+    the profile blocks the cloud, incremental audit verification off the event loop.
+  - Voice: barge-in stops the whole answer; follow-ups in the conversation window reach Nox; "Nox
+    Notaus" tolerates filler words and Whisper spellings but never fires when quoted or on Nox's
+    own speech; a dead microphone, a missing model and the half-duplex echo guard show in health;
+    mute survives worker restarts; built-in zones no longer match "Datenbank" or
+    "signal_handler.py"; Windows idle detection works after 24.9 days of uptime.
+  - Twitch lines cannot inject IRC commands and `!commands` get no extra AI reply; Telegram
+    notifications go only to paired phones; `!clip` is rate-limited; OBS picks up a stream already
+    live at start; creative file inspection is confined to configured folders.
+  - Found while merging: the router's provider health asked a `cloud_allowed` check that the
+    policy gate had replaced, so it probed blocked cloud providers again - health now asks the same
+    gate as routing; a shell status reply without `safe_mode` lifted a safe mode another snapshot
+    had just reported.
 - **The audit writer no longer commits into another thread's transaction.** It shared the core's
   one SQLite connection but guarded it with a lock of its own, so its `COMMIT` could land inside a
   transaction another thread had open - making half of that transaction permanent, or failing with
