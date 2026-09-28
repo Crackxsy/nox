@@ -47,6 +47,7 @@ from nox.plugins.manifest import (
     load_manifest,
     validate_tool_name,
 )
+from nox.security.constants import fail_closed_connect_state
 from nox.security.model import Decision, PermissionRequest, Profile, Risk
 
 log = get_logger(__name__)
@@ -426,6 +427,7 @@ class PluginManager:
         cwd: Path | None = None,
         mode: Callable[[], str] = lambda: "companion",
         safe_mode: Callable[[], bool] = lambda: False,
+        connect_state: Callable[[], Mapping[str, Any]] | None = None,
         global_egress_allowlist: Sequence[str] = (),
         loopback_allowlist: Sequence[str] = (),
         process_factory: ProcessFactory | None = None,
@@ -457,6 +459,11 @@ class PluginManager:
         self._cwd = cwd
         self._mode = mode
         self._safe_mode = safe_mode
+        #: Privacy mode, capture flags and kill state sent with `plugin.register`. Without a
+        #: source the answer is the fail-closed one: nothing allowed, safe mode.
+        self._connect_state: Callable[[], Mapping[str, Any]] = connect_state or (
+            fail_closed_connect_state
+        )
         self._global_egress = tuple(global_egress_allowlist)
         self._loopback = tuple(loopback_allowlist)
         self._process_factory = process_factory or self._default_process_factory
@@ -508,8 +515,15 @@ class PluginManager:
             ]
         await self.discover()
         for rec in list(self._records.values()):
-            if rec.enabled:
-                await self._spawn(rec)
+            if not rec.enabled:
+                continue
+            if self._safe_mode():
+                # A kill engaged at boot (a broken audit chain, a kill restored after a restart):
+                # nothing is spawned. STOPPED, not FAILED, so the next profile switch after a
+                # resume starts it the normal way.
+                self._transition(rec, PluginState.STOPPED, "not started: safe mode is engaged")
+                continue
+            await self._spawn(rec)
 
     async def discover(self) -> None:
         """`discovered -> validated -> enabled`; a bad manifest lands in `failed` and is skipped."""
@@ -889,11 +903,15 @@ class PluginManager:
         rec.registered.set()
         await self._publish(E.PLUGIN_STARTED, rec, f"{len(rec.tools)} tools")
         log.info("plugin.running", plugin=rec.plugin_id, tools=rec.tools, pid=p.pid)
+        # The worker's starting point: events only carry changes, so a privacy mode, a closed
+        # capture flag or a kill engaged before this plugin connected would otherwise never reach
+        # it, and its own egress guard and capture gates would believe the permissive defaults.
         return {
             "ok": True,
             "config": dict(manifest.config),
             "profile": self._engine.active_profile().id,
             "tools": list(rec.tools),
+            **self._connect_state(),
         }
 
     def _register_tools(

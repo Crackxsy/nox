@@ -6,11 +6,16 @@ Loads `plugins/<id>/manifest.yaml`, imports the manifest's `entry` (`package:cal
 other worker, answers `tool.call` from the core and stops within the kill switch's two-second ack
 window on `plugin.stop`. This module owns one plugin process; it owns none of the voice path.
 
+The plugin starts from the core's *current* privacy mode, capture flags and kill state, which
+`plugin.register` returns; events only carry changes after that. Until the answer arrives the
+view is closed (OFFLINE, no capture), and a core that reports the kill switch engaged gets a
+worker that never calls the plugin's `start()` and exits.
+
 A lost hub connection is not the end: the client reconnects with the worker's reconnect credential
-and the worker registers again, because the new connection knows nothing about it. A worker that
-cannot get back within `HUB_LOSS_DEADLINE_S`, or that the core refuses, shuts its plugin down and
-exits with `EXIT_HUB_LOST` - never a zombie holding its chat or smart-home connection - and the
-plugin manager's restart policy takes over.
+and the worker registers again - taking the core's state again - because the new connection knows
+nothing about it. A worker that cannot get back within `HUB_LOSS_DEADLINE_S`, or that the core
+refuses, shuts its plugin down and exits with `EXIT_HUB_LOST` - never a zombie holding its chat or
+smart-home connection - and the plugin manager's restart policy takes over.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ import asyncio
 import importlib
 import os
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +110,7 @@ class PluginWorker:
         self.client.handle("tool.call", self._on_tool_call)
         self.client.handle("plugin.stop", self._on_plugin_stop)
         self.client.on(E.PRIVACY_MODE_CHANGED, self._on_privacy_mode)
+        self.client.on(E.PRIVACY_CAPTURE_CHANGED, self._on_capture_changed)
         self.client.on(E.SECURITY_KILL_SWITCH, self._on_kill_switch)
         self.client.on(E.SYSTEM_STOPPING, self._on_system_stopping)
 
@@ -130,7 +136,11 @@ class PluginWorker:
             except ValueError:
                 log.warning("plugin.privacy_mode_unknown", plugin=self.manifest.id)
 
+    async def _on_capture_changed(self, env: Envelope) -> None:
+        self.privacy.set_capture(env.payload)
+
     async def _on_kill_switch(self, _env: Envelope) -> None:
+        self.privacy.set_safe_mode(True)
         self.status = "safe_mode"
         self._stop.set()
 
@@ -161,26 +171,11 @@ class PluginWorker:
 
     async def _reregister(self) -> None:
         try:
-            await self._register()
+            await self.register()
         except Exception as exc:  # noqa: BLE001 - the next reconnect tries again
             log.warning("plugin.reregister_failed", plugin=self.manifest.id, error=str(exc))
             return
         log.info("plugin.reregistered", plugin=self.manifest.id)
-
-    async def _register(self) -> dict[str, Any]:
-        response = await self.client.request(
-            "plugin.register",
-            {
-                "plugin_id": self.manifest.id,
-                "version": self.manifest.version,
-                "pid": os.getpid(),
-                "tools": self.api.tools.declarations(),
-            },
-        )
-        config = response.get("config")
-        if isinstance(config, dict):
-            self.api.config.update(config)
-        return dict(response)
 
     # -- lifecycle ---------------------------------------------------------------------------
 
@@ -204,8 +199,15 @@ class PluginWorker:
         # `create(api)` registers tools/handlers; events may only be emitted after `plugin.register`
         # has declared the plugin's namespaces to the hub, i.e. from `start()` onwards.
         self.plugin = plugin = await maybe_await(self.factory(self.api))
-        await self._register()
+        await self.register()
         self._registered_once = True
+        if self.privacy.safe_mode:
+            # The kill switch was engaged before this worker connected: the plugin never starts.
+            log.warning("plugin.not_started_safe_mode", plugin=self.manifest.id)
+            self.status = "safe_mode"
+            self.plugin = None  # never started, so there is nothing for `stop()` to undo
+            await self.shutdown()
+            return
         self._heartbeat_task = asyncio.create_task(
             self._heartbeat_loop(), name=f"plugin-heartbeat-{self.manifest.id}"
         )
@@ -216,6 +218,37 @@ class PluginWorker:
             await self._stop.wait()
         finally:
             await self.shutdown()
+
+    async def register(self) -> dict[str, Any]:
+        """`plugin.register`, then start from the core's current state; on every (re)register."""
+        response: dict[str, Any] = await self.client.request(
+            "plugin.register",
+            {
+                "plugin_id": self.manifest.id,
+                "version": self.manifest.version,
+                "pid": os.getpid(),
+                "tools": self.api.tools.declarations(),
+            },
+        )
+        config = response.get("config")
+        if isinstance(config, dict):
+            self.api.config.update(config)
+        self._apply_core_state(response)
+        return response
+
+    def _apply_core_state(self, response: Mapping[str, Any]) -> None:
+        """Take the privacy mode, capture flags and kill state the core sent with its answer.
+
+        Subscriptions deliver changes only, so a mode set or a kill engaged before this worker
+        connected would never arrive. Whatever the answer leaves out is read as closed.
+        """
+        self.privacy.apply(response)
+        log.info(
+            "plugin.core_state",
+            plugin=self.manifest.id,
+            privacy=self.privacy.mode.value,
+            safe_mode=self.privacy.safe_mode,
+        )
 
     @staticmethod
     async def _call_plugin(plugin: Any, hook: str) -> None:

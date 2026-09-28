@@ -31,6 +31,7 @@ class AllowPolicy:
 
 
 def make(**kw):
+    killed = kw.pop("killed", {"engaged": False})
     bus = FakeBus()
     state = FakeState()
     router = FakeRouter(bus)
@@ -44,6 +45,7 @@ def make(**kw):
         turns=turns,
         memory_policy=kw.pop("policy", AllowPolicy()),
         system_prompt=lambda: "You are Nox.",
+        safe_mode=lambda: killed["engaged"],
         config=OrchestratorConfig(**kw),
     )
     return orch, bus, router, speaker, turns
@@ -101,20 +103,34 @@ async def test_transcript_event_triggers_turn_only_when_addressed():
 
 
 async def test_kill_switch_cancels_and_blocks():
-    orch, bus, router, speaker, _ = make()
+    killed = {"engaged": False}
+    orch, bus, router, speaker, _ = make(killed=killed)
     router.delay = 0.05
     await orch.start()
     task = asyncio.create_task(orch.handle_text("lange Antwort bitte"))
     await asyncio.sleep(0.08)
+    killed["engaged"] = True
     await bus.publish(Event(name=E.SECURITY_KILL_SWITCH, payload={"by": "hotkey"}))
     with pytest.raises((asyncio.CancelledError, RuntimeError)):
         await task
     assert "kill_switch" in speaker.interrupts
     with pytest.raises(RuntimeError):
         await orch.handle_text("noch was")
-    await bus.publish(Event(name=E.SYSTEM_STARTED))
+    killed["engaged"] = False  # resumed
     turn = await orch.handle_text("wieder da")
     assert turn.response
+    await orch.stop()
+
+
+async def test_kill_engaged_before_start_keeps_chat_off_after_system_started():
+    """A kill engaged before the orchestrator existed (a broken audit chain at boot, a kill
+    restored after a restart) is honoured, and the boot's own `system.started` does not lift it."""
+    orch, bus, router, _, _ = make(killed={"engaged": True})
+    await orch.start()
+    await bus.publish(Event(name=E.SYSTEM_STARTED, payload={"session_id": "boot"}))
+    with pytest.raises(RuntimeError, match="safe mode"):
+        await orch.handle_text("hallo")
+    assert router.requests == []
     await orch.stop()
 
 

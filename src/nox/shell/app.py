@@ -70,6 +70,8 @@ SUBSCRIPTIONS = [
     # variant so the setting takes effect without restarting Nox.
     "settings.changed",
 ]
+#: State paths the shell reads when it connects, as (root, key) of the `state.get` snapshot.
+STATE_ON_CONNECT: tuple[tuple[str, str], ...] = (("system", "level"), ("privacy", "mode"))
 PING_INTERVAL_MS = 5000
 RECONNECT_INTERVAL_MS = 3000
 PING_FAILURES_BEFORE_RECONNECT = 2
@@ -257,6 +259,33 @@ class ShellApp:
 
     def _subscribe(self) -> None:
         self._request("ipc.subscribe", {"patterns": SUBSCRIPTIONS})
+        self._fetch_state()
+
+    def _fetch_state(self) -> None:
+        """Start from the core's current safe-mode level and privacy mode, on every (re)connect.
+
+        Subscriptions deliver changes only: a kill switch engaged or a mode set before the shell
+        connected - at boot, or restored after a core restart - would otherwise leave the tray
+        showing a running, balanced Nox.
+        """
+        fut = self._request("state.get", {})
+        if fut is not None:
+            fut.add_done_callback(self._on_state_snapshot)
+
+    def _on_state_snapshot(self, fut: Future[Any]) -> None:
+        """Bridge thread: turn the snapshot into `state.changed` events for the main thread."""
+        if fut.cancelled() or fut.exception() is not None:
+            return  # `_on_result` already logged it; the next (re)connect asks again
+        snapshot = fut.result()
+        if not isinstance(snapshot, dict):
+            return
+        for root, key in STATE_ON_CONNECT:
+            section = snapshot.get(root)
+            value = section.get(key) if isinstance(section, dict) else None
+            if isinstance(value, str):
+                self._signals.event_received.emit(
+                    {"name": "state.changed", "payload": {"path": f"{root}.{key}", "new": value}}
+                )
 
     def _load_pet_page(self) -> None:
         assert self.pet is not None

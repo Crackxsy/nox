@@ -19,12 +19,16 @@ disagree about what the unobservable zone allows.
 
 Tightening privacy is always allowed. Relaxing it is not: switching to FULL needs an explicit
 confirmation, and when a PIN is configured the IPC layer asks for it first.
+
+The mode and the panic flag survive a restart: `restore()` applies what was stored before anything
+can act, and every change is handed to the listener set with `set_change_listener`, which writes
+it before the change is announced on the bus.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -51,6 +55,8 @@ if TYPE_CHECKING:  # avoids a runtime cycle: the config package reads the securi
 log = get_logger(__name__)
 
 CaptureKind = Literal["microphone", "camera", "screen"]
+#: Called after the mode or the panic flag changed, with a short reason; persists the new state.
+ChangeListener = Callable[[str], Awaitable[object]]
 CAPTURE_KINDS: tuple[CaptureKind, ...] = ("microphone", "camera", "screen")
 #: `privacy.unobservable_policy`: what the fail-closed zone closes (module docstring).
 UnobservablePolicy = Literal["screen_only", "strict"]
@@ -256,6 +262,7 @@ class PrivacyService:
         self._panic = False
         self._zones_enabled = zones_enabled
         self._unobservable_policy: UnobservablePolicy = unobservable_policy
+        self._on_change: ChangeListener | None = None
 
     @classmethod
     def from_config(cls, privacy_config: PrivacyConfig, **kwargs: Any) -> PrivacyService:
@@ -279,6 +286,30 @@ class PrivacyService:
         mutable cell that is filled in later.
         """
         self._safe_mode = is_engaged
+
+    def set_change_listener(self, listener: ChangeListener) -> None:
+        """Who persists a mode or panic change. Called once, when the security core is wired."""
+        self._on_change = listener
+
+    def restore(self, mode: PrivacyMode, *, panic: bool) -> None:
+        """Boot only: apply the state stored before the restart, without announcing it.
+
+        Nothing is subscribed yet when this runs; every consumer reads the current state when it
+        connects. The restore itself is audited, because it can differ from the configuration.
+        """
+        previous = self._mode
+        self._mode = PrivacyMode(mode)
+        self._panic = panic
+        self._audit.append(
+            actor="system",
+            action="mode.restore",
+            target=self._mode.value,
+            details={"configured": previous.value, "panic": str(panic).lower()},
+        )
+
+    async def _changed(self, reason: str) -> None:
+        if self._on_change is not None:
+            await self._on_change(reason)
 
     @property
     def mode(self) -> PrivacyMode:
@@ -484,6 +515,8 @@ class PrivacyService:
             result="ok",
             details={"previous": previous.value},
         )
+        # Written before anyone is told: a crash between the two must come back in this mode.
+        await self._changed("mode.set")
         await publish(
             self._bus,
             E.PRIVACY_MODE_CHANGED,
@@ -528,4 +561,5 @@ class PrivacyService:
             decision="allow",
             result="ok",
         )
+        await self._changed("panic.set")
         await publish(self._bus, E.PRIVACY_CAPTURE_CHANGED, self.effective_capture())

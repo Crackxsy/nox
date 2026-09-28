@@ -80,7 +80,15 @@ def make_core(tmp_path: Any, clock: Clock | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         workers=workers,
         voice_report=VoiceHealthReport(clock=clock or Clock()),
-        security=SimpleNamespace(privacy=privacy, killswitch=killswitch),
+        security=SimpleNamespace(
+            privacy=privacy,
+            killswitch=killswitch,
+            connect_state=lambda: {
+                "privacy_mode": privacy.mode.value,
+                "capture": privacy.effective_capture().model_dump(mode="json"),
+                "safe_mode": killswitch.is_engaged(),
+            },
+        ),
         state=FakeState(),
         bus=FakeBus(),
         hub=Hub(),

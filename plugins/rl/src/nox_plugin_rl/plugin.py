@@ -84,14 +84,19 @@ class RlPlugin:
         if not bool(vision_cfg.get("enabled", False)):
             self._vision_sampler.disable_manually()  # opt-in-by-default (Spec open point)
         self._vision_task: asyncio.Task[None] | None = None
-        # /: both stages stop together when a privacy zone (or a privacy
-        # mode, or `privacy.capture.screen: false`) blocks screen capture. One gate for both loops:
-        # while it is closed no frame is grabbed at all, and the transition is logged once.
-        self._gate = CaptureGate(initially_allowed=True, log=self.api.log)
+        # Both stages stop together when a privacy zone (or a privacy mode, or
+        # `privacy.capture.screen: false`) blocks screen capture. One gate for both loops: while
+        # it is closed no frame is grabbed at all, and the transition is logged once. It starts
+        # closed; `start()` opens it from the state the core sent at registration.
+        self._gate = CaptureGate(initially_allowed=False, log=self.api.log)
 
     # -- lifecycle ---------------------------------------------------------------------------
 
     async def start(self) -> None:
+        # Level-triggered: start from the core's current capture state, sent with
+        # `plugin.register` (closed while the kill switch is engaged); the events subscribed
+        # below only carry changes from here on.
+        self._gate.on_capture_changed({"screen": self.api.privacy.allows_capture("screen")})
         self.api.events.on("system.mode_changed", self._on_mode_changed)
         self.api.events.on("security.kill_switch", self._on_stop_signal)
         self.api.events.on("security.panic", self._on_stop_signal)

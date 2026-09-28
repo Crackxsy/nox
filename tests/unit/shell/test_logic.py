@@ -174,3 +174,17 @@ def test_urls_keep_token_out_of_query() -> None:
     ):
         query = url.split("?", 1)[1].split("#", 1)[0] if "?" in url else ""
         assert "tok" not in query
+
+
+def test_a_status_reply_without_safe_mode_does_not_lift_safe_mode() -> None:
+    """Two snapshots arrive after a reconnect; the one that says nothing about safe mode must not
+    undo the one that reported it."""
+    from nox.core.state import SystemLevel
+    from nox.shell.logic import ShellModel
+
+    model = ShellModel()
+    model.system_level = SystemLevel.SAFE_MODE
+    model.apply_status({"mode": "offline"})
+    assert model.system_level is SystemLevel.SAFE_MODE
+    model.apply_status({"safe_mode": False})
+    assert model.system_level is SystemLevel.RUNNING

@@ -55,7 +55,14 @@ def _registry(registrations: list[str]) -> RequestRegistry:
 
     async def register(ctx: RequestContext, p: PluginRegister) -> dict[str, Any]:
         registrations.append(ctx.client_id)
-        return {"ok": True, "config": {}}
+        # A core that allows everything this plugin needs; the plugin starts from this state.
+        return {
+            "ok": True,
+            "config": {},
+            "privacy_mode": "balanced",
+            "capture": {"microphone": True, "camera": False, "screen": True, "cloud": True},
+            "safe_mode": False,
+        }
 
     async def heartbeat(_ctx: RequestContext, _p: Heartbeat) -> dict[str, Any]:
         return {"ok": True}

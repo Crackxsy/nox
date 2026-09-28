@@ -10,7 +10,7 @@ This module imports nothing from Nox, so anything may import it.
 
 from __future__ import annotations
 
-from typing import Literal, get_args
+from typing import Any, Literal, get_args
 
 __all__ = [
     "DEFAULT_LOOPBACK_ALLOWLIST",
@@ -19,6 +19,7 @@ __all__ = [
     "SECURITY_PROFILE_IDS",
     "USER_KILL_ORIGINS",
     "SecurityProfileId",
+    "fail_closed_connect_state",
 ]
 
 #: The permission profiles shipped in `config/profiles/`. `SECURITY_PROFILE_IDS` is derived from
@@ -34,7 +35,10 @@ DEFAULT_LOOPBACK_ALLOWLIST: tuple[str, ...] = ("127.0.0.1:11434",)
 #: Kill-switch origins that mean "something may be wrong with Nox itself" rather than "the user
 #: pressed the button". Resuming from one of these requires the PIN; everything else resumes on an
 #: explicit, audited user action.
-SECURITY_PATH_ORIGINS: frozenset[str] = frozenset({"tamper", "audit", "panic", "supervisor-tamper"})
+#: `state` is the kill engaged at boot when the stored security state could not be read.
+SECURITY_PATH_ORIGINS: frozenset[str] = frozenset(
+    {"tamper", "audit", "panic", "supervisor-tamper", "state"}
+)
 
 #: Origins a UI client may legitimately claim for a kill it triggers itself. Anything else in a
 #: `security.kill` payload is replaced by the caller's role, so a client cannot dress its own kill
@@ -47,3 +51,16 @@ USER_KILL_ORIGINS: frozenset[str] = frozenset(
 #: dashboard, and the tray or hotkey path that reaches the core through the supervisor. Never the
 #: pet renderer, a worker, a plugin or a paired phone.
 RESUME_ROLES: frozenset[str] = frozenset({"shell", "dashboard", "supervisor"})
+
+
+def fail_closed_connect_state() -> dict[str, Any]:
+    """What a worker or plugin is told at registration when there is no security core to ask.
+
+    The same keys as `SecurityContext.connect_state()`: strictest privacy mode, every capture
+    flag closed, and safe mode - "cannot tell" is never "allowed".
+    """
+    return {
+        "privacy_mode": "offline",
+        "capture": {"microphone": False, "camera": False, "screen": False, "cloud": False},
+        "safe_mode": True,
+    }

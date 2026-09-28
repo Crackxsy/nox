@@ -117,6 +117,11 @@ class Orchestrator:
     turns: TurnStore | None
     memory_policy: MemoryPolicy | None
     system_prompt: Callable[[], str]
+    #: Whether the kill switch is engaged, read on every turn. It used to be a flag mirrored from
+    #: `security.kill_switch` events and cleared by any `system.started`, so a kill engaged
+    #: before the orchestrator subscribed - a broken audit chain at boot, a kill restored after a
+    #: restart - was never seen, and the boot's own `system.started` switched chat back on.
+    safe_mode: Callable[[], bool]
     config: OrchestratorConfig = field(default_factory=OrchestratorConfig)
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     #: Set by `nox.memory.install` to make the prompt retrieval-augmented. `None` = no memory.
@@ -127,13 +132,11 @@ class Orchestrator:
     _active: asyncio.Task[Turn] | None = None
     voice_turn: asyncio.Task[None] | None = None
     _unsubs: list[Callable[[], None]] = field(default_factory=list)
-    _safe_mode: bool = False
 
     async def start(self) -> None:
         self._unsubs = [
             self.bus.subscribe(E.VOICE_TRANSCRIPT_READY, self._on_transcript),
             self.bus.subscribe(E.SECURITY_KILL_SWITCH, self._on_kill),
-            self.bus.subscribe(E.SYSTEM_STARTED, self._on_started),
             self.bus.subscribe(E.SYSTEM_STOPPING, self._on_stopping),
         ]
         await self.bus.publish(
@@ -161,7 +164,7 @@ class Orchestrator:
         on_chunk: Callable[[str], Awaitable[None] | None] | None = None,
     ) -> Turn:
         """Process a user utterance. Cancels an in-flight turn (barge-in semantics)."""
-        if self._safe_mode:
+        if self.safe_mode():
             raise RuntimeError("safe mode: AI requests are disabled until resume")
         await self.cancel(reason="new_input")
         self._active = asyncio.create_task(
@@ -211,11 +214,8 @@ class Orchestrator:
             log.warning("orchestrator.turn_failed", error=str(exc))
 
     async def _on_kill(self, _: Event) -> None:
-        self._safe_mode = True
+        """Stop the turn in flight; new turns are refused by `safe_mode` for as long as it lasts."""
         await self.cancel(reason="kill_switch")
-
-    async def _on_started(self, _: Event) -> None:
-        self._safe_mode = False
 
     async def _on_stopping(self, _: Event) -> None:
         await self.cancel(reason="stopping")

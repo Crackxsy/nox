@@ -64,7 +64,10 @@ class PetService:
         baseline: Mood | None = None,
         tick_seconds: float = 30.0,
         clock: Callable[[], datetime] | None = None,
+        safe_mode: Callable[[], bool] | None = None,
     ) -> None:
+        """`safe_mode` reads the kill switch. Without it the pet only learns of a kill from the
+        `security.kill_switch` event - which a kill engaged before the pet started never sends."""
         self._bus = bus
         self._state = state
         self._baseline = baseline or DEFAULT_BASELINE
@@ -77,7 +80,8 @@ class PetService:
         self._thinking = False
         self._speaking = False
         self._muted = False
-        self._safe_mode = False
+        self._killed = False
+        self._safe_mode_source = safe_mode
         self._privacy_zone = False
 
     # -- lifecycle ---------------------------------------------------------------------------------
@@ -100,6 +104,8 @@ class PetService:
             sub("privacy.zone_changed", self._on_zone),
         ]
         self._task = asyncio.create_task(self._mood_loop(), name="pet-mood")
+        if self._safe_mode:
+            self._functional = PetFunctional.UNAVAILABLE
         await self._emit(reason="start")
 
     async def stop(self) -> None:
@@ -181,13 +187,19 @@ class PetService:
         self._speaking = False
         await self._recompute("tts.done")
 
+    @property
+    def _safe_mode(self) -> bool:
+        if self._safe_mode_source is not None:
+            return self._safe_mode_source()
+        return self._killed
+
     async def _on_kill(self, _: Event) -> None:
-        self._safe_mode = True
+        self._killed = True
         self._thinking = self._speaking = False
         await self.set_functional(PetFunctional.UNAVAILABLE, reason="security.kill_switch")
 
     async def _on_system_started(self, _: Event) -> None:
-        self._safe_mode = False
+        self._killed = False
         await self._recompute("system.started")
 
     async def _on_health(self, ev: Event) -> None:

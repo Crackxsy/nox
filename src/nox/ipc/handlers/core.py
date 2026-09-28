@@ -17,6 +17,7 @@ Two boundaries are enforced in this module rather than left to the caller:
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +31,7 @@ from nox.ipc.errors import ERR_PERMISSION, ERR_UNAVAILABLE, IpcError
 from nox.security.constants import RESUME_ROLES, USER_KILL_ORIGINS
 from nox.security.gate import PinRequiredError, relaxes_privacy
 from nox.security.model import Decision
+from nox.security.service import connect_state_of
 
 if TYPE_CHECKING:
     from nox.app import NoxCore
@@ -362,6 +364,9 @@ class CoreHandlers:
             pin_ok = True
         ok = await killswitch.resume(pin_ok=pin_ok, by=ctx.role)
         if ok:
+            # Resuming from a broken audit chain is the acknowledgement that it was seen; without
+            # it every later boot would find the same break and stop again.
+            await asyncio.to_thread(core.security.acknowledge_audit_break, by=ctx.role)
             await core.state.update("system.level", SystemLevel.RUNNING.value, reason="resume")
             await core.bus.publish(Event(name=E.SYSTEM_STARTED, payload={"resumed": True}))
             core.ensure_voice_worker()
@@ -496,16 +501,10 @@ class CoreHandlers:
         # The worker's starting point for its capture gate. Events only carry changes: a privacy
         # zone entered, a microphone switched off or a kill engaged before this worker connected
         # would otherwise never reach it, and it would open the microphone anyway.
-        security = core.security
         return {
             "ok": True,
             "config": core.config.voice.model_dump(mode="json"),
-            "capture": (
-                security.privacy.effective_capture().model_dump(mode="json")
-                if security is not None
-                else {"microphone": False, "camera": False, "screen": False, "cloud": False}
-            ),
-            "safe_mode": security.killswitch.is_engaged() if security is not None else True,
+            **connect_state_of(core.security),
             # The core owns the mute flag; a restarted worker must not come back unmuted.
             "muted": bool(core.state.get("assistant.muted")) if core.state is not None else False,
         }

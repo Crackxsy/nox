@@ -159,6 +159,7 @@ async def test_late_sentences_of_a_cancelled_turn_are_dropped_but_a_new_turn_pla
 async def test_orchestrator_sentences_share_the_turn_of_their_reply() -> None:
     bus, speaker = FakeBus(), FakeSpeaker()
     orch = Orchestrator(
+        safe_mode=lambda: False,
         bus=bus,
         state=FakeState(),
         router=FakeRouter(bus),
@@ -208,6 +209,7 @@ async def test_text_fallback_follow_up_reaches_the_orchestrator_as_a_turn(
     bus = FakeBus()
     router = FakeRouter(bus)
     orch = Orchestrator(
+        safe_mode=lambda: False,
         bus=bus,
         state=FakeState(),
         router=router,

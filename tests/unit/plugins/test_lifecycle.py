@@ -536,6 +536,51 @@ async def test_nothing_is_spawned_while_the_kill_switch_is_engaged(plugins_dir: 
         await built.manager.stop("test")
 
 
+async def test_a_kill_engaged_at_boot_spawns_no_plugin_and_leaves_it_restartable(
+    plugins_dir: Path,
+) -> None:
+    """`start()` used to spawn every enabled plugin even with the kill switch engaged."""
+    write_manifest(plugins_dir, "demo")
+    built = build(plugins_dir)
+    built.manager._safe_mode = lambda: True  # type: ignore[assignment]
+    try:
+        await built.manager.start()
+        assert built.processes == []
+        record = built.manager.records()["demo"]
+        assert record.state is PluginState.STOPPED
+        assert "safe mode" in record.reason
+    finally:
+        await built.manager.stop("test")
+
+
+async def test_register_answers_with_the_cores_current_privacy_capture_and_kill_state(
+    harness: Harness,
+) -> None:
+    state = {
+        "privacy_mode": "offline",
+        "capture": {"microphone": False, "camera": False, "screen": False, "cloud": False},
+        "safe_mode": False,
+    }
+    harness.manager._connect_state = lambda: state  # type: ignore[assignment]
+    await harness.manager.start()
+
+    response = await harness.register()
+
+    assert response["privacy_mode"] == "offline"
+    assert response["capture"]["screen"] is False
+    assert response["safe_mode"] is False
+
+
+async def test_register_without_a_state_source_answers_fail_closed(harness: Harness) -> None:
+    await harness.manager.start()
+
+    response = await harness.register()
+
+    assert response["privacy_mode"] == "offline"
+    assert response["safe_mode"] is True
+    assert not any(response["capture"].values())
+
+
 class BrokenAudit:
     """An audit chain that cannot record - a full disk, a corrupt chain, a closed database."""
 

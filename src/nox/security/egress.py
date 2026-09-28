@@ -12,8 +12,16 @@ attempt is audited with host and port only - never a path, never a query string.
   `security.egress_allowlist`; with `cloud_allowed: false` only its own list counts, and the
   single entry `none` blocks everything.
 
+- **safe mode** (the kill switch is engaged): the OFFLINE rules, whatever the privacy mode says.
+
 Allow-list entries are parsed by `nox.core.netloc`, the same parser that validates them when the
 configuration is read, so an entry that loads is an entry that can match.
+
+A request is a side effect, so the entry that allows it has to be on disk before the connection
+opens: `GuardedTransport` waits for that commit (`authorize_durably`) and refuses the request when
+the audit log cannot take it (`audit.unavailable`). A denied request is still recorded best effort.
+The synchronous `authorize` stays for callers that open raw sockets; it cannot wait for the commit
+and records best effort.
 """
 
 from __future__ import annotations
@@ -30,12 +38,13 @@ from nox.core.netloc import LOOPBACK_HOSTS, NetlocError, is_loopback, normalize_
 from nox.core.netloc import split_netloc as _split_netloc
 from nox.core.state import PrivacyMode
 from nox.security._logging import get_logger
-from nox.security.audit_sink import SafeAuditLog
+from nox.security.audit_sink import AuditUnavailableError, SafeAuditLog, append_durably
 from nox.security.model import AuditLog, Profile
 
 log = get_logger(__name__)
 
 __all__ = [
+    "AUDIT_UNAVAILABLE_RULE",
     "LOOPBACK_HOSTS",
     "NO_EGRESS",
     "EgressDecision",
@@ -51,6 +60,8 @@ __all__ = [
 ]
 
 NO_EGRESS = "none"
+#: Rule id of a request refused because the entry allowing it could not be audited.
+AUDIT_UNAVAILABLE_RULE = "audit.unavailable"
 _FORBIDDEN_CLIENT_KWARGS = ("transport", "mounts", "proxy", "proxies")
 
 _SSL_CONTEXT: ssl.SSLContext | None = None
@@ -143,10 +154,13 @@ class EgressGuard:
         global_allowlist: Sequence[str] = (),
         loopback_allowlist: Sequence[str] = (),
         transport_factory: Callable[[], httpx.AsyncBaseTransport] | None = None,
+        safe_mode: Callable[[], bool] | None = None,
     ) -> None:
         self._profile = profile
         self._privacy = privacy
+        self._audit_log = audit
         self._audit = SafeAuditLog(audit, tool="network")
+        self._safe_mode: Callable[[], bool] = safe_mode or (lambda: False)
         self._global_allowlist = tuple(global_allowlist)
         self._loopback_allowlist = tuple(loopback_allowlist)
         self._transport_factory = transport_factory or default_transport
@@ -172,6 +186,14 @@ class EgressGuard:
         host_l = host.strip().lower().rstrip(".")
         mode = self._privacy.mode
         loopback = is_loopback(host_l)
+        if self._safe_mode():
+            if loopback:
+                return self._check_loopback_allowlist(host_l, port, "safe_mode")
+            return EgressDecision(
+                allowed=False,
+                rule_id="safe_mode",
+                reason="safe mode: only allow-listed loopback services",
+            )
         if mode is PrivacyMode.OFFLINE:
             if loopback:
                 return self._check_loopback_allowlist(host_l, port, "privacy.offline")
@@ -219,23 +241,61 @@ class EgressGuard:
     def authorize(self, host: str, port: int, *, scheme: str = "https", method: str = "") -> None:
         """Check and audit one request; raises `EgressDenied` when it is not allowed.
 
-        This runs inside the transport, that is on the event loop, so the audit write must not
-        touch the disk here. The guard is built with a queued audit log whose `append` hands the
-        entry to a writer thread and returns: nothing is dropped, and the loop never waits on a
-        commit.
+        For callers that open a raw socket and cannot await. The guard is built with a queued
+        audit log whose `append` hands the entry to a writer thread and returns, so the loop never
+        waits on a commit - and therefore cannot learn that one failed. HTTP requests go through
+        `authorize_durably` instead.
         """
         decision = self.check(host, port)
+        self._record(decision, f"{scheme}://{host}:{port}", method)
+        if not decision.allowed:
+            log.warning("egress.denied", host=host, port=port, rule_id=decision.rule_id)
+            raise EgressDenied(host, port, decision.rule_id, decision.reason)
+
+    async def authorize_durably(
+        self, host: str, port: int, *, scheme: str = "https", method: str = ""
+    ) -> None:
+        """`authorize`, but an allowed request waits until its audit entry is committed.
+
+        Raises `EgressDenied` for a denied request, and for an allowed one whose entry could not
+        be written (`audit.unavailable`): an outbound request nobody can account for does not go.
+        A guard built without an audit log (a plugin worker's, whose requests the core cannot
+        see) has nothing to wait for.
+        """
+        decision = self.check(host, port)
+        target = f"{scheme}://{host}:{port}"
+        if not decision.allowed or self._audit_log is None:
+            self._record(decision, target, method)
+            if not decision.allowed:
+                log.warning("egress.denied", host=host, port=port, rule_id=decision.rule_id)
+                raise EgressDenied(host, port, decision.rule_id, decision.reason)
+            return
+        try:
+            await append_durably(
+                self._audit_log,
+                actor="egress",
+                tool="network",
+                action="request",
+                target=target,
+                decision="allow",
+                result="ok",
+                details={"rule_id": decision.rule_id, "method": method},
+            )
+        except AuditUnavailableError as exc:
+            log.error("egress.denied_unaudited", host=host, port=port, error=str(exc))
+            raise EgressDenied(
+                host, port, AUDIT_UNAVAILABLE_RULE, "the audit log cannot record this request"
+            ) from exc
+
+    def _record(self, decision: EgressDecision, target: str, method: str) -> None:
         self._audit.append(
             actor="egress",
             action="request",
-            target=f"{scheme}://{host}:{port}",
+            target=target,
             decision="allow" if decision.allowed else "deny",
             result="ok" if decision.allowed else "denied",
             details={"rule_id": decision.rule_id, "method": method},
         )
-        if not decision.allowed:
-            log.warning("egress.denied", host=host, port=port, rule_id=decision.rule_id)
-            raise EgressDenied(host, port, decision.rule_id, decision.reason)
 
     def transport(self, inner: httpx.AsyncBaseTransport | None = None) -> GuardedTransport:
         return GuardedTransport(self, inner or self._transport_factory())
@@ -258,7 +318,9 @@ class GuardedTransport(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         url = request.url
         port = url.port or (443 if url.scheme == "https" else 80)
-        self._guard.authorize(url.host, port, scheme=url.scheme, method=request.method)
+        await self._guard.authorize_durably(
+            url.host, port, scheme=url.scheme, method=request.method
+        )
         return await self._inner.handle_async_request(request)
 
     async def aclose(self) -> None:

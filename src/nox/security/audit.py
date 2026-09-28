@@ -15,6 +15,18 @@ every later boot verifies only what was written since, so a log with two years o
 not turn startup into a full-table scan. The periodic health probe uses `verify_incremental()`,
 which remembers in memory how far it got and only hashes the rows appended since - after first
 re-checking that the last row it verified is still there, unchanged.
+
+A valid chain can still be a *shorter* chain, so the boot check also looks backwards:
+
+- the checkpoint only ever moves forward, and a head behind it, or a checkpoint row whose hash
+  changed, is a rollback;
+- the head is anchored outside the database (`nox.security.audit_anchor`); a head behind an
+  anchor - rows deleted from the end, or a whole new database - or an anchored row with another
+  hash is a truncation or a rewrite.
+
+Any of these is a broken chain, reported with a reason, and nothing is moved: neither the
+checkpoint nor an anchor is updated past a break, so the evidence stays until a person
+acknowledges it (`acknowledge_break`, which the core calls on a successful resume).
 """
 
 from __future__ import annotations
@@ -23,15 +35,21 @@ import hashlib
 import json
 import sqlite3
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from nox.core.events import AuditEntry, E, EventBus
 from nox.security._events import publish_nowait
 from nox.security._logging import get_logger
+from nox.security.audit_anchor import (
+    AnchorUnavailableError,
+    AnchorUnreadableError,
+    AuditAnchor,
+    AuditHead,
+)
 
 log = get_logger(__name__)
 
@@ -70,6 +88,16 @@ CREATE TABLE IF NOT EXISTS audit_verify_checkpoint (
 );
 """
 
+_CHECKPOINT_FORCE_SQL = (
+    "INSERT INTO audit_verify_checkpoint (id, seq, hash, verified_at) VALUES (1, ?, ?, ?)"
+    " ON CONFLICT(id) DO UPDATE SET seq = excluded.seq, hash = excluded.hash,"
+    " verified_at = excluded.verified_at"
+)
+#: The checkpoint only ever moves forward: an older head never overwrites a newer checkpoint.
+_CHECKPOINT_FORWARD_SQL = (
+    _CHECKPOINT_FORCE_SQL + " WHERE excluded.seq >= audit_verify_checkpoint.seq"
+)
+
 _COLUMNS = (
     "seq",
     "ts",
@@ -91,6 +119,22 @@ class ChainVerification(BaseModel):
     ok: bool
     first_bad_seq: int | None = None
     checked: int = 0
+    #: Why the chain is broken: `chain` (a row does not link), `rollback` (the head or the
+    #: checkpoint row went backwards), `truncated` / `deleted` (the head is behind an anchor),
+    #: `rewritten` (an anchored row has another hash), `anchor_unreadable`. Empty when ok.
+    reason: str = ""
+    #: Per anchor: `ok`, `absent` (never anchored: a fresh install), `unavailable` (its storage
+    #: cannot be reached), or the break it found.
+    anchors: dict[str, str] = Field(default_factory=dict)
+
+
+#: Break reasons, as reported in `ChainVerification.reason` and the boot's audit entry.
+BREAK_CHAIN = "chain"
+BREAK_ROLLBACK = "rollback"
+BREAK_TRUNCATED = "truncated"
+BREAK_DELETED = "deleted"
+BREAK_REWRITTEN = "rewritten"
+BREAK_ANCHOR_UNREADABLE = "anchor_unreadable"
 
 
 class SqliteAuditLog:
@@ -142,6 +186,10 @@ class SqliteAuditLog:
         self._lock = lock if lock is not None else threading.RLock()
         #: `(seq, hash)` of the last row `verify_incremental` found intact; None until it ran.
         self._verified_head: tuple[int, str] | None = None
+        #: Updated after every append once `arm_anchor` was called (after a clean boot check).
+        self._head_anchor: AuditAnchor | None = None
+        #: Consecutive anchor writes that failed; the row itself was committed each time.
+        self.anchor_failures = 0
         with self._lock:
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
@@ -260,6 +308,8 @@ class SqliteAuditLog:
                 ),
             )
             self._conn.commit()
+            # Inside the lock, so anchor writes happen in sequence order.
+            self._anchor_head(AuditHead(seq=seq, hash=digest))
         payload = AuditEntry(
             seq=seq,
             actor=actor,
@@ -283,21 +333,154 @@ class SqliteAuditLog:
         """Walk every row in seq order; report the first row whose hash or prev_hash is wrong."""
         return self._verify_from(GENESIS_HASH, 1)
 
-    def verify_since_checkpoint(self) -> ChainVerification:
+    def verify_since_checkpoint(self, anchors: Sequence[AuditAnchor] = ()) -> ChainVerification:
         """Verify everything written since the last successful check, then record a checkpoint.
 
         The first call on a database has no checkpoint and therefore verifies the whole chain.
         Later calls start from the recorded `(seq, hash)` pair, so a two-year retention window
-        does not make every start scan the entire table. Rewriting history undetected would mean
-        rewriting every later row *and* the checkpoint - the same deliberate, schema-level act the
-        append-only triggers already force.
+        does not make every start scan the entire table. Before walking forward it looks back:
+        the head must not be behind the checkpoint or any anchor, and the rows they name must
+        still carry the hashes they recorded (see the module docstring). Only a clean result
+        moves the checkpoint and the anchors forward.
         """
-        checkpoint = self._checkpoint()
+        with self._lock:
+            head_seq = self._last()[0]
+            checkpoint = self._checkpoint()
+            broken = self._check_checkpoint(checkpoint, head_seq)
+        statuses: dict[str, str] = {}
+        for anchor in anchors:
+            status, anchor_break = self._check_anchor(anchor, head_seq)
+            statuses[anchor.name] = status
+            broken = broken or anchor_break
+        if broken is not None:
+            return broken.model_copy(update={"anchors": statuses})
         start_hash, start_seq = checkpoint if checkpoint is not None else (GENESIS_HASH, 1)
         verification = self._verify_from(start_hash, start_seq)
-        if verification.ok:
-            self._write_checkpoint()
-        return verification
+        if not verification.ok:
+            return verification.model_copy(update={"reason": BREAK_CHAIN, "anchors": statuses})
+        self._write_checkpoint()
+        self.anchor_now([a for a in anchors if statuses.get(a.name) != "unavailable"])
+        return verification.model_copy(update={"anchors": statuses})
+
+    def _check_checkpoint(
+        self, checkpoint: tuple[str, int] | None, head_seq: int
+    ) -> ChainVerification | None:
+        """A head behind the checkpoint, or a checkpoint row with another hash, is a rollback."""
+        if checkpoint is None:
+            return None
+        cp_hash, next_seq = checkpoint
+        cp_seq = next_seq - 1
+        if head_seq < cp_seq:
+            return ChainVerification(ok=False, first_bad_seq=head_seq + 1, reason=BREAK_ROLLBACK)
+        if self._hash_at(cp_seq) != cp_hash:
+            return ChainVerification(ok=False, first_bad_seq=cp_seq, reason=BREAK_ROLLBACK)
+        return None
+
+    def _check_anchor(
+        self, anchor: AuditAnchor, head_seq: int
+    ) -> tuple[str, ChainVerification | None]:
+        """`(status, break)` for one anchor; the break is None when the anchor agrees."""
+        try:
+            anchored = anchor.read()
+        except AnchorUnavailableError as exc:
+            log.warning("security.audit_anchor_unavailable", anchor=anchor.name, reason=str(exc))
+            return "unavailable", None
+        except AnchorUnreadableError as exc:
+            log.critical("security.audit_anchor_unreadable", anchor=anchor.name, reason=str(exc))
+            broken = ChainVerification(ok=False, reason=BREAK_ANCHOR_UNREADABLE)
+            return BREAK_ANCHOR_UNREADABLE, broken
+        if anchored is None:
+            return "absent", None
+        if head_seq < anchored.seq:
+            reason = BREAK_DELETED if head_seq == 0 else BREAK_TRUNCATED
+            return reason, ChainVerification(ok=False, first_bad_seq=head_seq + 1, reason=reason)
+        if anchored.seq > 0:
+            with self._lock:
+                stored = self._hash_at(anchored.seq)
+            if stored != anchored.hash:
+                broken = ChainVerification(
+                    ok=False, first_bad_seq=anchored.seq, reason=BREAK_REWRITTEN
+                )
+                return BREAK_REWRITTEN, broken
+        return "ok", None
+
+    def head(self) -> AuditHead:
+        """The newest row's sequence number and hash (`0` and the genesis hash when empty)."""
+        with self._lock:
+            seq, digest = self._last()
+        return AuditHead(seq=seq, hash=digest)
+
+    def arm_anchor(self, anchor: AuditAnchor) -> None:
+        """Keep `anchor` at the head after every append from now on.
+
+        Armed only after a clean boot check: an anchor that followed the database before it was
+        compared with it would simply agree with whatever the database says.
+        """
+        with self._lock:
+            self._head_anchor = anchor
+            self._anchor_head(self.head())
+
+    def anchor_now(self, anchors: Sequence[AuditAnchor]) -> None:
+        """Write the current head to `anchors` now (boot, acknowledgement and shutdown)."""
+        head = self.head()
+        for anchor in anchors:
+            try:
+                anchor.write(head)
+            except AnchorUnavailableError as exc:
+                log.warning(
+                    "security.audit_anchor_unavailable", anchor=anchor.name, reason=str(exc)
+                )
+            except Exception as exc:  # noqa: BLE001 - a lagging anchor is logged, never fatal
+                log.error(
+                    "security.audit_anchor_write_failed",
+                    anchor=anchor.name,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+
+    def acknowledge_break(
+        self, *, by: str, verification: ChainVerification, anchors: Sequence[AuditAnchor]
+    ) -> int:
+        """A person has seen the break and resumed: record that, and start from the head again.
+
+        The acknowledgement is itself an audit entry naming the break, so what was detected stays
+        in the log. Then the checkpoint is set to the new head - the one place it may move
+        backwards, because the rows it described are gone - and every anchor follows. Returns the
+        acknowledgement's sequence number.
+        """
+        seq = self.append(
+            actor=by,
+            tool="security",
+            action="audit.break_acknowledged",
+            target="",
+            decision="allow",
+            result="ok",
+            details={
+                "reason": verification.reason,
+                "first_bad_seq": str(verification.first_bad_seq),
+            },
+        )
+        self._write_checkpoint(force=True)
+        self.anchor_now(anchors)
+        log.warning("security.audit_break_acknowledged", by=by, reason=verification.reason)
+        return seq
+
+    def _anchor_head(self, head: AuditHead) -> None:
+        """Move the armed anchor to `head`. A failure is logged: the row itself is committed."""
+        anchor = self._head_anchor
+        if anchor is None:
+            return
+        try:
+            anchor.write(head)
+        except Exception as exc:  # noqa: BLE001 - the anchor merely lags; never fail the append
+            self.anchor_failures += 1
+            log.error(
+                "security.audit_anchor_write_failed",
+                anchor=anchor.name,
+                error=f"{type(exc).__name__}: {exc}",
+                failures=self.anchor_failures,
+            )
+            return
+        self.anchor_failures = 0
 
     def verify_incremental(self) -> ChainVerification:
         """Verify only the rows appended since the last call, cheap enough for a periodic probe.
@@ -364,16 +547,14 @@ class SqliteAuditLog:
             return None
         return str(row[1]), int(row[0]) + 1
 
-    def _write_checkpoint(self) -> None:
+    def _write_checkpoint(self, *, force: bool = False) -> None:
+        """Record the head as verified. Only ever forward, unless a break was acknowledged."""
         with self._lock:
             last_seq, last_hash = self._last()
             if last_seq == 0:
                 return
             self._conn.execute(
-                "INSERT INTO audit_verify_checkpoint (id, seq, hash, verified_at)"
-                " VALUES (1, ?, ?, ?)"
-                " ON CONFLICT(id) DO UPDATE SET seq = excluded.seq, hash = excluded.hash,"
-                " verified_at = excluded.verified_at",
+                _CHECKPOINT_FORCE_SQL if force else _CHECKPOINT_FORWARD_SQL,
                 (last_seq, last_hash, self._clock().isoformat()),
             )
             self._conn.commit()

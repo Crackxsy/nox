@@ -37,6 +37,9 @@ from nox.security.egress import (
 )
 from nox.security.model import Profile, Risk
 
+#: Capture kinds the core reports in `privacy.capture_changed` and the connect state.
+CAPTURE_KINDS: tuple[str, ...] = ("microphone", "camera", "screen", "cloud")
+
 SECRET_GET = "plugin.secret.get"  # noqa: S105 - an IPC request name, not a secret
 STATE_GET = "state.get"
 
@@ -66,17 +69,67 @@ ToolHandler = Callable[[Any], Awaitable[Mapping[str, Any]]]
 
 
 class PrivacyView:
-    """The worker's copy of the core's privacy mode; the scoped egress guard reads it."""
+    """The worker's copy of the core's privacy mode, capture flags and kill state.
 
-    def __init__(self, mode: PrivacyMode | str = PrivacyMode.BALANCED) -> None:
+    The scoped egress guard and the plugin's own gates read it. It starts closed - OFFLINE, no
+    capture - because until `plugin.register` has answered, nobody in this process knows the real
+    state, and "cannot tell" is never "allowed". The worker applies the core's answer with
+    `apply()` on every (re)registration and keeps it current from `privacy.*` and
+    `security.kill_switch` events.
+    """
+
+    def __init__(
+        self,
+        mode: PrivacyMode | str = PrivacyMode.OFFLINE,
+        *,
+        capture: Mapping[str, bool] | None = None,
+        safe_mode: bool = False,
+    ) -> None:
         self._mode = PrivacyMode(mode)
+        self._capture: dict[str, bool] = {kind: False for kind in CAPTURE_KINDS}
+        self.set_capture(capture or {})
+        self._safe_mode = safe_mode
 
     @property
     def mode(self) -> PrivacyMode:
         return self._mode
 
+    @property
+    def safe_mode(self) -> bool:
+        return self._safe_mode
+
     def set(self, mode: PrivacyMode | str) -> None:
         self._mode = PrivacyMode(mode)
+
+    def set_capture(self, capture: Mapping[str, Any]) -> None:
+        """`privacy.capture_changed`: a kind the payload does not name is closed, not kept."""
+        self._capture = {kind: bool(capture.get(kind, False)) for kind in CAPTURE_KINDS}
+
+    def set_safe_mode(self, engaged: bool) -> None:
+        self._safe_mode = engaged
+
+    def allows_capture(self, kind: str) -> bool:
+        """Whether the core's effective capture allows `kind` (`screen`, `microphone`, ...)."""
+        return self._capture.get(kind, False) and not self._safe_mode
+
+    @property
+    def capture(self) -> dict[str, bool]:
+        return dict(self._capture)
+
+    def apply(self, state: Mapping[str, Any]) -> None:
+        """Take the core's connect state (`plugin.register`'s answer). Missing parts close.
+
+        An unknown or missing privacy mode becomes OFFLINE, missing capture flags are closed, and
+        a missing `safe_mode` counts as engaged: a core too old to send the state gets the
+        strictest reading of it.
+        """
+        try:
+            self._mode = PrivacyMode(str(state.get("privacy_mode", PrivacyMode.OFFLINE.value)))
+        except ValueError:
+            self._mode = PrivacyMode.OFFLINE
+        capture = state.get("capture")
+        self.set_capture(capture if isinstance(capture, Mapping) else {})
+        self._safe_mode = bool(state.get("safe_mode", True))
 
 
 # ---- scoped egress guard ---------------------------------------------------------------
@@ -87,7 +140,8 @@ class PluginEgressGuard(EgressGuard):
 
     The core authorized the list against the active profile before the worker was spawned; here it
     is the *upper* bound: an endpoint that is not declared is denied before the inherited
-    privacy-mode rules (OFFLINE/PRIVATE -> allow-listed loopback only) even run.
+    privacy-mode rules (OFFLINE/PRIVATE -> allow-listed loopback only) even run. While the view
+    says the kill switch is engaged, the safe-mode rules apply (allow-listed loopback only).
     """
 
     def __init__(
@@ -114,6 +168,7 @@ class PluginEgressGuard(EgressGuard):
             global_allowlist=(),
             loopback_allowlist=(),
             transport_factory=transport_factory,
+            safe_mode=lambda: privacy.safe_mode,
         )
         self.plugin_id = plugin_id
         self.declared = tuple(declared)

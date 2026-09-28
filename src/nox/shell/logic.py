@@ -137,10 +137,13 @@ class ShellModel(BaseModel):
             self.capture = CaptureFlags.model_validate(dict(capture))
         if "muted" in status:
             self.muted = bool(status["muted"])
-        if status.get("safe_mode"):
-            self.system_level = SystemLevel.SAFE_MODE
-        elif self.system_level is SystemLevel.SAFE_MODE:
-            self.system_level = SystemLevel.RUNNING
+        # Only an answer that says so changes the level: a reply without `safe_mode` must not
+        # lift a safe mode another snapshot (`state.get`) has just reported.
+        if "safe_mode" in status:
+            if status["safe_mode"]:
+                self.system_level = SystemLevel.SAFE_MODE
+            elif self.system_level is SystemLevel.SAFE_MODE:
+                self.system_level = SystemLevel.RUNNING
         after = self.model_dump()
         return {k for k in after if after[k] != before[k]}
 

@@ -111,3 +111,22 @@ def test_expression_always_in_catalog(functional):
     expr, intensity = expression_for(functional, Mood(), "companion")
     assert expr in EXPRESSIONS
     assert 0.0 <= intensity <= 1.0
+
+
+async def test_kill_engaged_before_start_shows_unavailable_and_survives_system_started():
+    """Level-triggered: a kill engaged before the pet existed is shown, and `system.started`
+    (which the boot publishes after a broken audit chain too) does not clear it."""
+    bus, state = FakeBus(), FakeState()
+    engaged = {"on": True}
+    svc = PetService(bus, state, tick_seconds=1000, safe_mode=lambda: engaged["on"])
+    await svc.start()
+    try:
+        assert svc.functional is PetFunctional.UNAVAILABLE
+        await _pub(bus, E.SYSTEM_STARTED, session_id="boot")
+        await _pub(bus, E.VOICE_INPUT_STARTED)
+        assert svc.functional is PetFunctional.UNAVAILABLE
+        engaged["on"] = False  # resumed
+        await _pub(bus, E.SYSTEM_STARTED, resumed=True)
+        assert svc.functional is PetFunctional.IDLE
+    finally:
+        await svc.stop()

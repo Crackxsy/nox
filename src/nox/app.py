@@ -62,6 +62,7 @@ from nox.data.repos import (
     StateCheckpointRepository,
     TurnRepository,
 )
+from nox.data.security_repos import SecurityStateRepository
 from nox.data.stream_repos import (
     ChatEventRepository,
     FunkenLedgerRepository,
@@ -274,9 +275,15 @@ class NoxCore:
     async def _build_security(self) -> None:
         """Build the security core, and verify the audit chain before anything can act.
 
-        A broken chain puts Nox into safe mode rather than stopping the boot. Refusing to start
-        would leave the user with no UI at all: no way to read the reason and no way to resume.
-        Safe mode denies every action with a side effect, keeps the audit entry, needs the PIN to
+        The privacy mode, panic and the kill switch come back as they were when the core went
+        down (`SecurityContext.build` restores them from the database), so a crash or a watchdog
+        restart never makes Nox less private, and a kill switch that was engaged stays engaged
+        until someone resumes it the normal way.
+
+        A broken chain - a row that does not link, rows missing from the end, a database that was
+        replaced - puts Nox into safe mode rather than stopping the boot. Refusing to start would
+        leave the user with no UI at all: no way to read the reason and no way to resume. Safe
+        mode denies every action with a side effect, keeps the audit entry, needs the PIN to
         leave, and says on screen what happened. Carrying on as normal is the one option that is
         not available.
         """
@@ -289,25 +296,34 @@ class NoxCore:
             profiles_dir=self.profiles_dir,
             bus=self.bus,
             session_id=self.session_id,
+            state_store=SecurityStateRepository(self.db),
+            audit_anchor_dir=Path(self.config.paths.runtime_dir),
+            database_path=self.db.path,
         )
         verification = await asyncio.to_thread(self.security.verify_boot)
         self._audit_database_recovery()
         await self.state.update("privacy.mode", self.security.privacy.mode.value, reason="boot")
-        if verification.ok:
-            await self.state.update("system.level", SystemLevel.RUNNING.value, reason="boot")
+        await self.state.update("privacy.panic", self.security.privacy.panic, reason="boot")
+        if not verification.ok:
+            log.critical(
+                "audit.chain_broken",
+                first_bad_seq=verification.first_bad_seq,
+                checked=verification.checked,
+                reason=verification.reason,
+                note="entering safe mode; leaving it needs the PIN",
+            )
+            await self.security.killswitch.engage(
+                "audit",
+                f"audit chain broken ({verification.reason}) at entry {verification.first_bad_seq}",
+            )
+        if self.security.killswitch.is_engaged():
+            await self.state.update(
+                "system.level",
+                SystemLevel.SAFE_MODE.value,
+                reason=f"safe_mode.{self.security.killswitch.origin}",
+            )
             return
-        log.critical(
-            "audit.chain_broken",
-            first_bad_seq=verification.first_bad_seq,
-            checked=verification.checked,
-            note="entering safe mode; leaving it needs the PIN",
-        )
-        await self.security.killswitch.engage(
-            "audit", f"audit chain broken at entry {verification.first_bad_seq}"
-        )
-        await self.state.update(
-            "system.level", SystemLevel.SAFE_MODE.value, reason="audit.chain_broken"
-        )
+        await self.state.update("system.level", SystemLevel.RUNNING.value, reason="boot")
 
     def _audit_database_recovery(self) -> None:
         """A damaged database set aside at boot is the first entry of the new audit chain."""
@@ -394,6 +410,7 @@ class NoxCore:
             cwd=REPO_ROOT,
             mode=self._current_mode,
             safe_mode=self.security.killswitch.is_engaged,
+            connect_state=self.security.connect_state,
             global_egress_allowlist=tuple(self.config.security.egress_allowlist),
             loopback_allowlist=tuple(self.config.security.loopback_allowlist),
             start_policy=self.security.policy,
@@ -448,7 +465,7 @@ class NoxCore:
         assert self.bus is not None and self.state is not None and self.security is not None
         assert self.db is not None and self.hub is not None and self.router is not None
         config = self.config
-        self.pet = PetService(self.bus, self.state)
+        self.pet = PetService(self.bus, self.state, safe_mode=self.security.killswitch.is_engaged)
         await self.pet.start()
         self.speech_policy = SpeechPolicy(
             state=self.state,
@@ -474,6 +491,7 @@ class NoxCore:
             ),
             memory_policy=self.security.policy,
             system_prompt=self._system_prompt,
+            safe_mode=self.security.killswitch.is_engaged,
             config=OrchestratorConfig(
                 default_language=config.identity.ui_language,
                 channel=Channel(config.voice.channels.routing),

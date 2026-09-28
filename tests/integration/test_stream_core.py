@@ -115,8 +115,10 @@ async def test_addressed_chat_message_reaches_twitch_chat_send_through_the_execu
         for e in core.security.audit_store.entries(limit=200)
         if e.tool == "twitch" and e.action == "chat.send"
     ]
+    # A side effect is on record before it runs (`started`) and again with its outcome.
     assert audited
-    assert all(e.decision == "allow" and e.result == "ok" for e in audited)
+    assert all(e.decision == "allow" for e in audited)
+    assert [e.result for e in audited][-2:] == ["started", "ok"]
 
 
 async def test_non_addressed_low_relevance_message_does_not_call_the_tool(core: NoxCore) -> None:

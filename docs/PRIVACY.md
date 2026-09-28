@@ -159,6 +159,13 @@ mode says what the moment allows. Nox applies **both**, and the stricter one win
 A profile switch — from the dashboard, or automatically when Rocket League starts — takes effect
 with the next request; no restart is needed.
 
+The mode you choose (and panic, which forces OFFLINE) is saved in Nox's database the moment it
+changes and restored when Nox starts again - after a crash or a restart by the watchdog Nox comes
+back in the mode it was in, not in the one from your configuration. If that saved state cannot
+be read, Nox uses the stricter of the saved and the configured mode and starts in safe mode. Every
+background part of Nox (the voice worker, each plugin) is told the current mode and capture
+settings when it connects, so none of them starts out assuming more than you allowed.
+
 ## Privacy zones
 
 You can mark apps/windows (by process name or title pattern) as zones Nox should never look at —

@@ -24,6 +24,10 @@ state itself, only react to it. `on_zone_changed` is optional and only sharpens 
 A plugin worker has no core-side `PrivacyService` access (`nox.plugins.api.PluginApi` exposes only
 events/tools/state/secrets/egress - see `nox.rl.services`'s module docstring for the identical
 constraint), which is exactly why this stays event-driven rather than querying a service directly.
+Events only carry *changes*, though, so the gate starts **closed** and is opened by the state the
+core sent when the plugin registered (`PluginApi.privacy`, applied in the plugin's `start()`):
+a zone entered or `privacy.capture.screen: false` set before the plugin connected is honoured
+from the first frame, not from the first event.
 
 NOTE (open point, out of this module's scope): wiring `_recognize_loop` to actually call through
 `CaptureGate.maybe_capture` - and refactoring `_vision_loop` to use it instead of its inline
@@ -53,13 +57,12 @@ class LoggerLike(Protocol):
 class CaptureGate:
     """Tracks whether screen capture is currently allowed and gates a capture call on it.
 
-    `initially_allowed` defaults to `True` to match Stage 2's existing `_capture_allowed = True`
-    starting value (`RlPlugin.__init__`) - a loop built on this gate behaves like Stage 2 already
-    does until the first `privacy.capture_changed` event narrows it down, rather than changing
-    Stage 2's startup behaviour as a side effect of reuse.
+    `initially_allowed` defaults to `False`: until someone has said what the core's effective
+    capture state is, no frame is grabbed. The owner opens it from the registration state, then
+    events keep it current.
     """
 
-    def __init__(self, *, initially_allowed: bool = True, log: LoggerLike | None = None) -> None:
+    def __init__(self, *, initially_allowed: bool = False, log: LoggerLike | None = None) -> None:
         self._log: LoggerLike = log if log is not None else globals()["log"]
         self._allowed = initially_allowed
         self._reason = "" if initially_allowed else _GENERIC_PAUSE_REASON
@@ -112,8 +115,10 @@ class CaptureGate:
 
     def on_capture_changed(self, payload: dict[str, Any]) -> None:
         """`privacy.capture_changed` handler (`CaptureChanged`). `screen` is the only field this
-        gate looks at - microphone/camera/cloud are other capture kinds this loop never touches."""
-        self._set(bool(payload.get("screen", True)))
+        gate looks at - microphone/camera/cloud are other capture kinds this loop never touches.
+        A payload without `screen` closes the gate: it says nothing about the screen being
+        allowed."""
+        self._set(bool(payload.get("screen", False)))
 
     def _set(self, allowed: bool) -> None:
         if allowed == self._allowed:

@@ -118,6 +118,7 @@ async def test_the_orchestrator_records_no_turn_in_a_profile_that_remembers_noth
     bus = FakeBus()
     turns = FakeTurns()
     orchestrator = Orchestrator(
+        safe_mode=lambda: False,
         bus=bus,
         state=FakeState(),
         router=FakeRouter(bus),

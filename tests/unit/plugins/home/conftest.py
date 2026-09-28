@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 import yaml
 
+from nox.core.state import PrivacyMode
 from nox.ipc.protocol import Envelope, Kind, Source
 from nox.plugins.api import PluginApi, PrivacyView
 from nox.plugins.manifest import parse_manifest
@@ -119,7 +120,10 @@ def make_api(
 ) -> PluginApi:
     manifest = make_manifest(port=port)
     config = {**manifest.config, **config_overrides}
-    return PluginApi(manifest=manifest, client=client, config=config, privacy=privacy)
+    # What the core reports at registration in the default configuration. A bare `PrivacyView()`
+    # is closed (OFFLINE) until a core has said otherwise.
+    view = privacy if privacy is not None else PrivacyView(PrivacyMode.BALANCED)
+    return PluginApi(manifest=manifest, client=client, config=config, privacy=view)
 
 
 @pytest.fixture

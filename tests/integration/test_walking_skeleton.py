@@ -138,6 +138,7 @@ async def test_kill_switch_enters_safe_mode_and_resume(core: NoxCore):
         assert state["assistant"]["pet_functional"] == "unavailable"
         with pytest.raises(IpcError):
             await client.request("chat.send", {"text": "noch da?", "speak": False}, timeout=10)
+        core.security.audit.flush(timeout_s=5.0)  # the writer thread, before reading the rows
         audit = core.db.fetch_all("SELECT action FROM audit_log")
         assert any("kill" in str(r["action"]) for r in audit)
         res = await client.request("security.resume", {})
