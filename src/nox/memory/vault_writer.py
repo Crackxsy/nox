@@ -26,6 +26,12 @@ class ZoneMatcher(Protocol):
     def path_zone(self, path: str) -> str | None: ...
 
 
+class MemoryWriteGate(Protocol):
+    """The effective policy's memory answer (profile and privacy together)."""
+
+    def allows_memory_write(self) -> bool: ...
+
+
 NOX_SECTION_HEADING = "## Nox"
 
 
@@ -49,13 +55,21 @@ class VaultWriter:
         *,
         inbox_dir: str = "00 - Inbox",
         zones: ZoneMatcher | None = None,
+        gate: MemoryWriteGate | None = None,
     ) -> None:
         self._db = db
         self._vault_dir = Path(vault_dir)
         self._inbox_dir = self._vault_dir / inbox_dir
         self._zones = zones
+        self._gate = gate
 
     def _refuse_if_zoned(self, path: Path) -> None:
+        # The policy first: a profile that remembers nothing (`work`) or PRIVATE mode refuses
+        # every vault write, whoever calls this - not only the tool the permission engine checks.
+        if self._gate is not None and not self._gate.allows_memory_write():
+            raise VaultWriteRefusedError(
+                "vault write refused: the profile or the privacy state forbids memory writes"
+            )
         if self._zones is not None and self._zones.path_zone(str(path)) is not None:
             raise VaultWriteRefusedError(f"write into a privacy-zoned path refused: {path}")
 

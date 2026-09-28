@@ -68,7 +68,8 @@ def test_rocket_league_profile_matches_spec_6_5() -> None:
     assert profile.cloud_allowed is False
     assert profile.egress_allowlist == []
     assert profile.loopback_allowlist == []
-    assert profile.integrations_allowed == ["rl"]
+    # The local model answers chat during a match (CPU only); no cloud, no other integration.
+    assert profile.integrations_allowed == ["rl", "ollama"]
     rule_ids = {r.id for r in profile.rules}
     assert "rocket_league.rl.read" in rule_ids
     assert "rocket_league.rl.calibrate" in rule_ids

@@ -197,8 +197,12 @@ def install(core: _Core) -> MemoryRuntime:
         embeddings=embeddings,
         indexer=indexer,
         watcher=VaultWatcher(indexer, vault_dir, debounce_s=cfg.vault_watch_debounce_s),
-        writer=VaultWriter(core.db, vault_dir, zones=privacy),
-        memory=MemoryService(memory_repo, privacy, embeddings=embeddings, bus=core.bus),
+        # Writes ask the effective policy (profile and privacy together), never privacy alone:
+        # the `work` profile remembers nothing even in BALANCED.
+        writer=VaultWriter(core.db, vault_dir, zones=privacy, gate=core.security.policy),
+        memory=MemoryService(
+            memory_repo, core.security.policy, embeddings=embeddings, bus=core.bus
+        ),
         retrieval=retrieval,
         retention=RetentionJob(
             memory_repo,

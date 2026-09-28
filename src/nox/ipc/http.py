@@ -9,7 +9,10 @@ bundle is served as an explicit "UI not built" page with status 503, never as a 
 
 Hardening: `/pet`, `/dashboard` and `/api/*` responses carry `Cache-Control: no-store`,
 `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`, and uvicorn's access log is
-off, so request URLs never reach a log file.
+off, so request URLs never reach a log file. Every request, `/health` included, must name this
+machine in its `Host` header and, when a browser sends an `Origin`, come from the core's own pages
+(`nox.ipc.origin`); anything else is answered 403 before a handler runs - the DNS-rebinding
+defence.
 """
 
 from __future__ import annotations
@@ -20,14 +23,14 @@ import html
 import inspect
 import ipaddress
 import socket
-from collections.abc import Awaitable, Callable, Generator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 import uvicorn
 from pydantic import BaseModel, Field, field_validator
 from starlette.applications import Starlette
-from starlette.datastructures import MutableHeaders
+from starlette.datastructures import Headers, MutableHeaders
 from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
@@ -37,6 +40,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from nox.core.config import IpcConfig
 from nox.ipc._log import get_logger
+from nox.ipc.origin import host_header_allowed, origin_allowed, ui_origins
 from nox.ipc.server import write_runtime_info
 from nox.ipc.tokens import constant_time_equals
 
@@ -76,6 +80,49 @@ class _SecurityHeaders:
             await send(message)
 
         await self._app(scope, receive, send_with_headers)
+
+
+class _LoopbackOnly:
+    """Pure-ASGI middleware: refuse a request whose Host or Origin is not this machine's own.
+
+    The listening port comes from the ASGI scope (`server`), so the check follows whichever port
+    the server actually bound, not the configured first choice.
+    """
+
+    def __init__(self, app: ASGIApp, *, origin_hosts: Iterable[str] = ()) -> None:
+        self._app = app
+        self._origin_hosts = tuple(origin_hosts)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+        refusal = self._refusal(scope)
+        if not refusal:
+            await self._app(scope, receive, send)
+            return
+        log.warning("http_request_refused", check=refusal)
+        response = JSONResponse(
+            {"error": f"{refusal}.denied", "message": "requests must come from this machine"},
+            status_code=403,
+            headers=_NO_STORE,
+        )
+        await response(scope, receive, send)
+
+    def _refusal(self, scope: Scope) -> str:
+        """`"host"` or `"origin"` for the check that failed; empty when the request may pass."""
+        server = scope.get("server")
+        port = server[1] if server else None
+        headers = Headers(scope=scope)
+        hosts = headers.getlist("host")
+        if not isinstance(port, int) or len(hosts) != 1 or not host_header_allowed(hosts[0], port):
+            return "host"
+        origins = headers.getlist("origin")
+        if len(origins) > 1 or not origin_allowed(
+            origins[0] if origins else None, ui_origins(port, self._origin_hosts)
+        ):
+            return "origin"
+        return ""
 
 
 class HttpSettings(BaseModel):
@@ -144,8 +191,13 @@ def create_app(
     session_token: TokenGetter,
     pet_dist: Path | None = None,
     dashboard_dist: Path | None = None,
+    origin_hosts: Iterable[str] = (),
 ) -> Starlette:
-    """Build the Starlette app. Callables are injected by the core; they must not return secrets."""
+    """Build the Starlette app. Callables are injected by the core; they must not return secrets.
+
+    `origin_hosts` names a configured loopback host (`ipc.host`) whose pages count as the core's
+    own in the Origin check, in addition to `127.0.0.1` and `localhost`.
+    """
 
     def authorized(request: Request) -> bool:
         header = request.headers.get("authorization", "")
@@ -190,7 +242,13 @@ def create_app(
         _ui_route("/pet", "pet", pet_dist),
         _ui_route("/dashboard", "dashboard", dashboard_dist),
     ]
-    return Starlette(routes=routes, middleware=[Middleware(_SecurityHeaders)])
+    return Starlette(
+        routes=routes,
+        middleware=[
+            Middleware(_LoopbackOnly, origin_hosts=tuple(origin_hosts)),
+            Middleware(_SecurityHeaders),
+        ],
+    )
 
 
 class _EmbeddedServer(uvicorn.Server):

@@ -21,31 +21,40 @@ real desktop of that kind · ❌ not possible on that platform · – not applic
 | Click-through pet | ✅ | ◐ | ◐ | ◐ |
 | **Privacy zones** (banking, password manager, …) | ✅ | ◐ with the Accessibility permission, otherwise **fail closed** | ◐ needs `xprop` | ❌ **always fail closed** |
 | Idle / away detection | ✅ | ◐ (`ioreg`) | ◐ needs `xprintidle` | ❌ not available |
-| Kill-switch **hotkey** | ✅ | ◐ with the Input Monitoring permission | ◐ | ❌ tray or dashboard only |
+| Kill-switch **hotkey** | ✅ | ◐ with the Input Monitoring permission | ◐ | ❌ tray, dashboard, or the spoken kill phrase with continuous listening |
 | Credential store | Credential Manager | Keychain | Secret Service (GNOME Keyring, KWallet) | Secret Service |
 | Orphan protection (child processes end with their parent) | job object (kernel) | parent watch | parent watch | parent watch |
-| Voice (Whisper, Piper/Kokoro) | ✅ | ◐ untested on real hardware | ◐ untested on real hardware | ❌ microphone closed by the fail-closed zone (see below) |
+| Voice (Whisper, Piper/Kokoro) | ✅ | ◐ untested on real hardware | ◐ untested on real hardware | ◐ continuous listening only - push-to-talk is a global hotkey, which Wayland forbids (see below) |
 | Rocket League coach | ✅ | – (no native game build) | – | – |
 | Installer, update, rollback | not proven yet | none - run from source | none - run from source | none - run from source |
 | CI | every job, blocking | unit + integration, **not yet blocking** | unit + integration, blocking | (same as X11 in CI) |
 
 ## What "fail closed" means for privacy zones
 
-A privacy zone switches screen capture, screenshots, clipboard reads and memory writes off while a
-sensitive window - online banking, a password manager, a private chat - is in front. To know that,
-Nox has to read the title of the active window.
+A privacy zone switches the microphone, screen capture, the camera, screenshots, clipboard reads
+and memory writes off while a sensitive window - online banking, a password manager, a private
+chat - is in front. To know that, Nox has to read the title of the active window.
 
 When it cannot, it does **not** assume that nothing sensitive is open. It enters the reserved
-`unobservable` zone, which closes every gate a real zone closes, and the `sensors` health check
-reports `limited` with the reason. Concretely:
+`unobservable` zone, and the `sensors` health check reports `limited` with the reason. What that
+zone closes is `privacy.unobservable_policy`:
+
+* `screen_only` (the default): everything that looks at the screen stays closed - screen capture,
+  the camera, screenshots to the cloud, clipboard reads - while the microphone and memory writes
+  keep working. An unseen window can only leak through what is on the screen, not through what
+  you say.
+* `strict`: every gate a real zone closes, the microphone and memory writes included.
+
+A real zone - one Nox *can* see, or a password manager recognised by its process name - always
+closes everything, under either setting. Concretely:
 
 * **Wayland** does not let any application read the active window. Under a Wayland session the
-  zone is permanently active: Nox works as a typed companion and assistant in the dashboard, but
-  it does not listen, does not capture the screen and does not write memories - a zone closes the
-  microphone too, so there is no voice and no spoken kill phrase; the kill switch is the tray and
-  the dashboard. Log in to an X11 session ("GNOME on Xorg", "Plasma (X11)") if you want those.
-  Whether a user may knowingly exempt the microphone from this is an open design question
-  (tracked in the v3.5 specification), not something Nox decides on its own.
+  `unobservable` zone is permanently active: Nox never captures the screen there. With the default
+  `screen_only` it listens and remembers - but only with `voice.stt.listening_mode: continuous`,
+  because push-to-talk is a global hotkey and Wayland lets no application register one. In that
+  mode the spoken kill phrase ("Nox, Notaus") works; otherwise the kill switch is the tray and the
+  dashboard. With `strict` there is no voice at all. Log in to an X11 session ("GNOME on Xorg",
+  "Plasma (X11)") for push-to-talk, the kill hotkey and window-aware zones.
 * **macOS** only reveals another app's window title to a process with the **Accessibility**
   permission (System Settings → Privacy & Security → Accessibility → add the terminal or Python
   that runs Nox). Until it is granted, the zone stays active and health names the missing
@@ -56,6 +65,10 @@ reports `limited` with the reason. Concretely:
 
 The voice worker takes the current state from the core every time it connects, not only from
 later changes, so a zone that was already in force when it started keeps the microphone closed.
+
+Zones do not depend on the other desktop sensors: with `sensors.enabled: false` Nox still checks
+the window in front for zones (and records nothing else). Only `privacy.zones_enabled: false`, a
+PIN-gated setting, switches window zones off, and the `sensors` health check then says so.
 
 A process pattern still wins where it matches - a password manager identified by its process name
 is reported as the `password_manager` zone even when its window title cannot be read.

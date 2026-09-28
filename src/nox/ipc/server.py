@@ -8,6 +8,11 @@ outbound requests to connected workers.
 
 The hub never forwards a raw frame from one client to another: everything a client sees is either
 its own answer or an event the core published.
+
+Before the handshake the opening HTTP request is checked like every request to the HTTP server
+(`nox.ipc.origin`): the Host header must name this machine on the hub's port, and a browser must
+come from one of the core's own pages (`allow_browser_origins`). A web page elsewhere - DNS
+rebinding, or plain cross-site WebSocket hijacking - is refused before it can even try a token.
 """
 
 from __future__ import annotations
@@ -48,6 +53,7 @@ from nox.ipc.errors import (
     ERR_VALIDATION,
     IpcError,
 )
+from nox.ipc.origin import host_header_allowed, origin_allowed
 from nox.ipc.protocol import (
     NAME_AUTH,
     NAME_ERROR,
@@ -349,6 +355,9 @@ class IpcHub:
         #: Hub-owned background tasks. A task nobody holds a reference to can be garbage-collected
         #: mid-flight, and its exception is then never retrieved.
         self._tasks: set[asyncio.Task[None]] = set()
+        #: Browser origins allowed to open a socket: the core's own pages, once the HTTP server
+        #: that serves them knows its port. Empty until then, so no browser page gets in early.
+        self._browser_origins: frozenset[str] = frozenset()
 
     # -- lifecycle ------------------------------------------------------------------------------
 
@@ -516,11 +525,40 @@ class IpcHub:
             return None
         return max(found, key=lambda c: c.connected_at)
 
+    def allow_browser_origins(self, origins: Iterable[str]) -> None:
+        """Let pages from these origins (the core's own UI, `nox.ipc.origin.ui_origins`) connect.
+
+        A client that sends no Origin header - the shell, a worker, a plugin - is not affected.
+        """
+        self._browser_origins = frozenset(o.strip().lower().rstrip("/") for o in origins)
+
     def _process_request(self, conn: ServerConnection, request: Request) -> Response | None:
         path = request.path.split("?", 1)[0]
         if path != WS_PATH:
             return conn.respond(HTTPStatus.NOT_FOUND, "not found\n")
+        # The DNS-rebinding defence, before the handshake and before any token is looked at: the
+        # Host must name this machine on this port, and a browser must be on one of our pages.
+        refusal = self._origin_refusal(request)
+        if refusal:
+            log.warning("ipc_connection_refused", check=refusal)
+            return conn.respond(HTTPStatus.FORBIDDEN, "forbidden\n")
         return None
+
+    def _origin_refusal(self, request: Request) -> str:
+        """`"host"` or `"origin"` for the check the opening request fails; empty when it passes.
+
+        A header sent twice is refused outright: which of two Host values "counts" is exactly the
+        ambiguity a smuggling attempt relies on.
+        """
+        hosts = request.headers.get_all("Host")
+        if self._port is None or len(hosts) != 1 or not host_header_allowed(hosts[0], self._port):
+            return "host"
+        origins = request.headers.get_all("Origin")
+        if len(origins) > 1 or not origin_allowed(
+            origins[0] if origins else None, self._browser_origins
+        ):
+            return "origin"
+        return ""
 
     async def _serve_connection(self, conn: ServerConnection) -> None:
         client = await self._handshake(conn)

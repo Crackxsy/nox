@@ -181,3 +181,22 @@ def test_client_refuses_transport_bypass(guard: EgressGuard) -> None:
     for key in ("transport", "mounts", "proxy"):
         with pytest.raises(ValueError, match=key):
             guard.client(**{key: object()})
+
+
+@pytest.mark.parametrize("host", ["127.evil.example", "127.0.0.1.nip.io", "localhost.evil"])
+def test_a_name_that_only_looks_like_loopback_needs_an_allowlist_entry(
+    guard: EgressGuard, host: str
+) -> None:
+    decision = guard.check(host, 443)
+    assert not decision.allowed
+    assert decision.rule_id == "global.default_deny"
+
+
+@pytest.mark.parametrize("mode", [PrivacyMode.PRIVATE, PrivacyMode.OFFLINE])
+async def test_a_look_alike_loopback_name_is_not_a_loopback_service_in_private_modes(
+    guard: EgressGuard, privacy: PrivacyService, mode: PrivacyMode
+) -> None:
+    await privacy.set_mode(mode, by="test")
+    decision = guard.check("127.0.0.1.nip.io", 11434)
+    assert not decision.allowed
+    assert decision.rule_id == f"privacy.{mode.value}"

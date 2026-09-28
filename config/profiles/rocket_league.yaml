@@ -22,7 +22,10 @@ permissions:
     # letter; the user layer overrides this entry if the install machine differs (Spec §6.5/§15).
     - "%USERPROFILE%/Documents/My Games/Rocket League/TAGame/DemosEpic"
   tools_allowed: []
-  integrations_allowed: [rl]
+  # ollama: the local model keeps answering chat during a match (on the CPU model, see
+  # `ai.providers.ollama.gpu_allowed_modes`); `integrations_allowed` is enforced for the router,
+  # so leaving it out would reduce Nox to the rules fallback while the game runs.
+  integrations_allowed: [rl, ollama]
   rules:
     - id: rocket_league.rl.read
       tool: "rl*"

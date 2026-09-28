@@ -20,7 +20,7 @@ import os
 import shutil
 import sys
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -201,7 +201,14 @@ class ClaudeCodeProvider:
         env: Mapping[str, str] | None = None,
         command_override: Sequence[str] | None = None,
         roles: list[AiRole] | None = None,
+        block_reason: Callable[[], str] | None = None,
     ) -> None:
+        """`block_reason` is consulted before every request and every login round-trip.
+
+        The CLI connects to the cloud by itself, outside the egress guard, so this is the only
+        place the profile and the privacy mode can stop it. A non-empty answer refuses the
+        request and marks the provider unavailable with that reason; the CLI is never started.
+        """
         self._cfg = config
         self._env = dict(env) if env is not None else None
         self._command_override = list(command_override) if command_override else None
@@ -218,6 +225,7 @@ class ClaudeCodeProvider:
         self._last: dict[str, AiResponse] = {}
         self.last_cost_usd: dict[str, float] = {}
         self.version: str = ""
+        self._block_reason: Callable[[], str] = block_reason or (lambda: "")
 
     @property
     def info(self) -> ProviderInfo:
@@ -301,6 +309,13 @@ class ClaudeCodeProvider:
             )
             return self._info
         self.version = version.strip()
+        blocked = self._block_reason()
+        if blocked:
+            # The login round-trip is a real request to the cloud: never while it is blocked.
+            self._info = self._info.model_copy(
+                update={"status": HealthStatus.UNAVAILABLE, "reason": f"{self.version}; {blocked}"}
+            )
+            return self._info
         if not self._cfg.health_roundtrip:
             self._info = self._info.model_copy(
                 update={
@@ -357,6 +372,9 @@ class ClaudeCodeProvider:
     ) -> AsyncIterator[AiChunk]:
         if not self._cfg.enabled:
             raise ProviderUnavailableError(PROVIDER_ID, "disabled in config")
+        blocked = self._block_reason()
+        if blocked:
+            raise ProviderUnavailableError(PROVIDER_ID, blocked)
         system_prompt, prompt = render_prompt(request)
         if not prompt.strip():
             raise ProviderError(PROVIDER_ID, "empty prompt", retryable=False)

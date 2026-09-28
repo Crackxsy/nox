@@ -1,10 +1,12 @@
 """`SecurityContext`: the security core, assembled once, handed to the composition root.
 
 `SecurityContext.build(config, conn=..., bus=...)` wires audit -> privacy -> kill switch ->
-profiles -> permission engine -> egress guard -> secrets, PIN and the PIN gate, all sharing one
-clock. It takes the typed `NoxConfig`, not a mapping: this is the most security-sensitive
-construction in the process, and reading it through `.get("profile")` threw away exactly the type
-checking that would catch a renamed key.
+profiles -> permission engine -> effective policy -> egress guard -> secrets, PIN and the PIN gate,
+all sharing one clock. The effective policy (`nox.security.policy`) is the single place that
+combines the active profile with the privacy state for everything that is not a tool call. It
+takes the typed `NoxConfig`, not a mapping: this is the most security-sensitive construction in
+the process, and reading it through `.get("profile")` threw away exactly the type checking that
+would catch a renamed key.
 
 The audit log the request paths see is a `QueuedAuditLog`. A permission check and every outbound
 request audit their decision, and both happen on the event loop; entries are written in order by
@@ -34,6 +36,7 @@ from nox.security.killswitch import KillSwitchService, PanicModeService
 from nox.security.model import SecretStore
 from nox.security.permissions import DefaultPermissionEngine, GrantStore, InMemoryGrantStore
 from nox.security.pin_attempts import SqlitePinAttemptStore
+from nox.security.policy import EffectivePolicy
 from nox.security.privacy import PrivacyService
 from nox.security.profiles import ProfileProvider, YamlProfileProvider
 from nox.security.prohibitions import effective_hard_prohibitions
@@ -61,6 +64,7 @@ class SecurityContext:
         profiles: ProfileProvider,
         grants: GrantStore,
         hard_prohibitions: frozenset[str],
+        policy: EffectivePolicy | None = None,
     ) -> None:
         self.audit = audit
         self.audit_store = audit_store
@@ -75,6 +79,8 @@ class SecurityContext:
         self.profiles = profiles
         self.grants = grants
         self.hard_prohibitions = hard_prohibitions
+        #: Profile x privacy for routing, memory writes and plugin starts (module docstring).
+        self.policy = policy or EffectivePolicy(privacy=privacy, profile=engine.active_profile)
 
     @classmethod
     def build(

@@ -1,12 +1,15 @@
 """Wires the PC-awareness sensors (foreground/zone, idle, resources, game process) onto a started
-core
-and returns a `SensorsRuntime` the caller stops on shutdown.
+core and returns a `SensorsRuntime` the caller stops on shutdown.
 
-`sensors.status.read` is registered regardless of `sensors.enabled`; the sensors themselves only
-start when the config enables them. Every sensor's poll checks the kill switch each cycle and no-
-ops while it is engaged, so safe mode really does stop the observation, not just the reporting. A
-sensor whose poll keeps failing is reported by the `sensors` health check as `limited` with the
-error - a frozen history is never served as if it were live.
+`sensors.status.read` is registered regardless of `sensors.enabled`; the awareness sensors only
+start when the config enables them. Privacy zones do not depend on that switch: with
+`sensors.enabled: false` a zones-only foreground sensor still runs (no state, no events, no
+history), and only `privacy.zones_enabled: false` - a PIN-gated `privacy.*` setting - leaves the
+foreground window unwatched. The `sensors` health check says which of these is in force, so zones
+are never off without a visible reason. Every sensor's poll checks the kill switch each cycle
+and no-ops while it is engaged, so safe mode really does stop the observation, not just the
+reporting. A sensor whose poll keeps failing is reported by the `sensors` health check as
+`limited` with the error - a frozen history is never served as if it were live.
 
 The foreground and idle signals come from the probe `nox.sensors.probe.select_probe` picks for the
 platform. Where the foreground window cannot be read (Wayland, no display, a missing macOS
@@ -72,6 +75,10 @@ class SensorsRuntime:
     resources: ResourceSensor | None = None
     game: GameProcessSensor | None = None
     start_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    #: `sensors.enabled`: False runs the zones-only foreground sensor and nothing else.
+    awareness_enabled: bool = True
+    #: `privacy.zones_enabled`: False is reported by the health check, never silent.
+    zones_enabled: bool = True
 
     def sensors(self) -> list[tuple[str, _Sensor]]:
         named = (
@@ -93,17 +100,27 @@ class SensorsRuntime:
             await sensor.stop()
 
     async def health(self) -> tuple[HealthStatus, str]:
+        switched_off = [] if self.zones_enabled else [ZONES_OFF_REASON]
         running = self.sensors()
         if not running:
+            if switched_off:
+                return HealthStatus.LIMITED, "; ".join([SENSORS_OFF_REASON, *switched_off])
             return HealthStatus.UNAVAILABLE, "no sensor runs on this host"
         failing = [f"{name}: {sensor.last_error}" for name, sensor in running if sensor.last_error]
         if self.foreground is not None and self.foreground.limitation:
             failing.append(f"foreground: {self.foreground.limitation} (privacy zones fail closed)")
         failing.extend(self.unsupported)
+        failing.extend(switched_off)
         if failing:
             return HealthStatus.LIMITED, "; ".join(failing)
+        if not self.awareness_enabled:
+            return HealthStatus.AVAILABLE, f"{SENSORS_OFF_REASON}; privacy-zone sensing only"
         return HealthStatus.AVAILABLE, f"{len(running)} sensors polling"
 
+
+#: Health reasons for the two switches, worded as what the user turned off and where.
+SENSORS_OFF_REASON = "awareness sensors switched off (sensors.enabled: false)"
+ZONES_OFF_REASON = "privacy zones switched off (privacy.zones_enabled: false)"
 
 #: Former name of `SensorsRuntime`, kept so existing callers keep working.
 SensorsBundle = SensorsRuntime
@@ -116,17 +133,36 @@ def install(core: _Core) -> SensorsRuntime:
     history = SensorHistoryStore(maxlen=cfg.history_len)
     core.tool_registry.register(make_sensors_status_read_tool(history))
 
-    runtime = SensorsRuntime(history=history)
-    if not cfg.enabled:
-        return runtime
-
-    _build_sensors(core, runtime)
+    zones_enabled = bool(core.security.privacy.zones_enabled)
+    runtime = SensorsRuntime(
+        history=history, awareness_enabled=bool(cfg.enabled), zones_enabled=zones_enabled
+    )
+    if cfg.enabled:
+        _build_sensors(core, runtime)
+    elif zones_enabled:
+        _build_zone_sensor(core, runtime)
     _register_health_check(core, runtime)
+    if not runtime.sensors():
+        return runtime
     runtime.start_task = asyncio.get_running_loop().create_task(
         runtime.start(), name="sensors-start"
     )
     runtime.start_task.add_done_callback(_log_start_failure)
     return runtime
+
+
+def _build_zone_sensor(core: _Core, runtime: SensorsRuntime) -> None:
+    """`sensors.enabled: false`: the foreground sensor for privacy zones and nothing else."""
+    runtime.foreground = ForegroundSensor(
+        select_probe().probe,
+        core.bus,
+        core.state,
+        core.security.privacy,
+        history=None,
+        poll_interval_s=core.config.sensors.foreground.poll_interval_s,
+        safe_mode=core.security.killswitch.is_engaged,
+        zones_only=True,
+    )
 
 
 def _build_sensors(core: _Core, runtime: SensorsRuntime) -> None:

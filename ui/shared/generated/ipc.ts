@@ -702,6 +702,7 @@ export interface PmFocusChanged {
 export interface PrivacyZoneChanged {
   active: boolean;
   zone?: string | null;
+  screen_only?: boolean;
 }
 
 export interface SensorProcessStarted {

@@ -2,7 +2,9 @@
 
 Every provider that speaks HTTP is constructed with a client factory from the egress guard, so
 there is exactly one way out of this process and the privacy mode decides whether even the local
-model server is reachable.
+model server is reachable. The Claude Code CLI makes its own connections, outside that guard, so it
+is handed the effective policy's verdict instead and refuses to start while the cloud or its
+integration is blocked. The router asks the same policy which providers may answer at all.
 
 `ProviderCard` answers the dashboard's provider card. The live probe gets a short budget, and
 whatever it does not deliver in time is answered from the health service's last observation of the
@@ -20,17 +22,26 @@ import httpx
 
 from nox.ai.base import AiProvider, ProviderInfo
 from nox.ai.config import AiConfig
+from nox.ai.providers.claude_code import PROVIDER_ID as CLAUDE_CODE_PROVIDER_ID
 from nox.ai.providers.claude_code import ClaudeCodeProvider
 from nox.ai.providers.ollama import OllamaProvider
+from nox.ai.providers.rules import PROVIDER_ID as RULES_PROVIDER_ID
 from nox.ai.providers.rules import RulesProvider
 from nox.ai.router import DefaultRouter
 from nox.core.events import EventBus
 from nox.core.logging import get_logger
 from nox.security.egress import EgressGuard
+from nox.security.policy import EffectivePolicy
 
 log = get_logger(__name__)
 
-__all__ = ["PROVIDERS_PROBE_BUDGET_S", "ProviderCard", "build_providers", "build_router"]
+__all__ = [
+    "PROVIDERS_PROBE_BUDGET_S",
+    "ProviderCard",
+    "build_providers",
+    "build_router",
+    "provider_gate",
+]
 
 #: Budget for the live provider probe behind `ai.providers`, chosen well below the UI clients'
 #: 10 s request timeout. A slower probe is answered from health instead.
@@ -46,6 +57,7 @@ def build_providers(
     *,
     egress: EgressGuard,
     status_source: Callable[[], Mapping[str, Any]],
+    policy: EffectivePolicy,
 ) -> list[AiProvider]:
     """The provider chain, in fallback order, each with its network access already guarded."""
     return [
@@ -54,8 +66,26 @@ def build_providers(
             ai_config.providers.ollama,
             client_factory=lambda: egress.client(timeout=_HTTP_TIMEOUT),
         ),
-        ClaudeCodeProvider(ai_config.providers.claude_code),
+        ClaudeCodeProvider(
+            ai_config.providers.claude_code,
+            block_reason=lambda: policy.provider_block_reason(CLAUDE_CODE_PROVIDER_ID, cloud=True),
+        ),
     ]
+
+
+def provider_gate(policy: EffectivePolicy) -> Callable[[ProviderInfo], str]:
+    """The router's per-provider question, answered by the effective policy.
+
+    The deterministic rules provider is part of Nox, not an integration: no profile lists it and
+    none can switch it off, so it is always the last answer left.
+    """
+
+    def gate(info: ProviderInfo) -> str:
+        if info.id == RULES_PROVIDER_ID:
+            return ""
+        return policy.provider_block_reason(info.id, cloud=not info.local)
+
+    return gate
 
 
 def build_router(
@@ -63,9 +93,9 @@ def build_router(
     ai_config: AiConfig,
     *,
     bus: EventBus,
-    cloud_allowed: Callable[[], bool],
+    policy: EffectivePolicy,
 ) -> DefaultRouter:
-    return DefaultRouter(providers, bus, ai_config.router, cloud_allowed=cloud_allowed)
+    return DefaultRouter(providers, bus, ai_config.router, provider_gate=provider_gate(policy))
 
 
 class ProviderCard:

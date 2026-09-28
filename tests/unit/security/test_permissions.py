@@ -140,6 +140,35 @@ async def test_zone_active_denies_capture_and_memory_write(
     assert engine.check(req("capture.screen", "grab", Risk.READ)).decision is Decision.ALLOW
 
 
+SCREEN_SIDE_TOOLS = ("capture.screen", "screenshot", "clipboard", "camera", "vision")
+
+
+def test_screen_only_unobservable_zone_opens_the_microphone_and_memory_writes_only(
+    engine: DefaultPermissionEngine,
+) -> None:
+    snapshot = PrivacySnapshot(zone_active=True, zone_screen_only=True)
+    profile = engine.active_profile()
+    now = engine._clock()  # noqa: SLF001 - the pure evaluation takes the time as an argument
+    for tool in SCREEN_SIDE_TOOLS:
+        r = engine.evaluate(req(tool, "grab", Risk.READ), profile, snapshot, [], now)
+        assert r.decision is Decision.DENY and r.rule_id == "privacy.zone_active", tool
+    mic = engine.evaluate(req("microphone", "listen", Risk.READ), profile, snapshot, [], now)
+    assert mic.decision is Decision.ALLOW
+    write = engine.evaluate(req("memory", "write", Risk.LOW), profile, snapshot, [], now)
+    assert write.rule_id != "privacy.zone_active"
+
+
+def test_a_strict_or_real_zone_still_closes_the_microphone_and_memory(
+    engine: DefaultPermissionEngine,
+) -> None:
+    snapshot = PrivacySnapshot(zone_active=True, zone_screen_only=False)
+    profile = engine.active_profile()
+    now = engine._clock()  # noqa: SLF001
+    for tool, action, risk in (("microphone", "listen", Risk.READ), ("memory", "write", Risk.LOW)):
+        r = engine.evaluate(req(tool, action, risk), profile, snapshot, [], now)
+        assert r.decision is Decision.DENY and r.rule_id == "privacy.zone_active", tool
+
+
 def test_critical_risk_is_denied_with_pin_flag(engine: DefaultPermissionEngine) -> None:
     r = engine.check(req("security", "config.write", Risk.CRITICAL))
     assert r.decision is Decision.DENY and r.requires_pin is True

@@ -71,6 +71,15 @@ privacy:
     - private_chats
     - personal_documents
     - discord
+  zones_enabled: true            # watch the window in front for the zones above. Runs even with
+                                 # sensors.enabled: false; only this switch turns window zones off
+                                 # (path zones for vault notes stay). A privacy.* setting: changing
+                                 # it needs the PIN when one is set.
+  unobservable_policy: screen_only  # when the window in front cannot be read (a Wayland session,
+                                 # a missing macOS permission): screen_only keeps screen, camera,
+                                 # screenshots and clipboard closed but lets the microphone and
+                                 # memory work; strict closes everything a real zone closes. A real
+                                 # zone (banking, ...) always closes everything.
   retention:
     raw_transcripts_days: 7
     logs_days: 14
@@ -337,7 +346,9 @@ creative:                        # detecting creative applications. The patterns
 
 sensors:                         # local awareness: foreground window, idle, resource load and
                                  # the generic game-process hook
-  enabled: true
+  enabled: true                  # false stops idle, resource, game and window-history sensing;
+                                 # privacy zones keep watching the window in front regardless
+                                 # (switch those off with privacy.zones_enabled)
   foreground:
     poll_interval_s: 1.0
   idle:

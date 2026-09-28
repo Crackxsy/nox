@@ -25,6 +25,8 @@ export const en: Record<Key, string> = {
   setting_privacy_capture_microphone: 'Microphone allowed',
   setting_privacy_capture_camera: 'Camera allowed',
   setting_privacy_capture_screen: 'Screen allowed',
+  setting_privacy_zones_enabled: 'Privacy zones (window in front)',
+  setting_privacy_unobservable_policy: 'When Nox cannot see the window in front',
   setting_security_profile: 'Active profile',
   setting_ai_router_default_reasoner: 'Preferred AI backend',
   setting_ai_router_fallback_chain: 'AI backend order',
@@ -55,6 +57,8 @@ export const en: Record<Key, string> = {
   option_lang_de: 'German',
   option_lang_en: 'English',
   option_lang_auto: 'Automatic',
+  option_unobservable_screen_only: 'Block screen, camera and clipboard only',
+  option_unobservable_strict: 'Block everything, microphone and memory too',
 
   app_title: 'Nox dashboard',
   skip_to_main: 'Skip to content',

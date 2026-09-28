@@ -3,10 +3,19 @@
 A zone is a local sensor result, not a policy: `observe_foreground(window_title, process_name)`
 matches the foreground window against title and process patterns, and `path_zone()` matches paths.
 When the foreground window cannot be observed at all (a Wayland session, a missing permission),
-`observe_foreground_unobservable()` enters the reserved `unobservable` zone: every gate that a
-real zone closes stays closed, because "cannot see a banking window" is not "no banking window".
-The window title that caused a match is never logged and never audited - only the zone id, and
-only as a boolean on the bus.
+`observe_foreground_unobservable()` enters the reserved `unobservable` zone, because "cannot see a
+banking window" is not "no banking window". What that zone closes is `privacy.unobservable_policy`:
+`strict` closes every gate a real zone closes; `screen_only` (the shipped default) keeps the screen,
+the camera, screenshots to the cloud and clipboard reads closed but leaves the microphone and memory
+writes open - the risk of an unseen window is what the screen shows, not what the user says. A real
+zone (banking, a password manager, ...) always closes everything. `privacy.zones_enabled: false`
+switches window zones off altogether; path zones for vault notes stay in force either way. The
+window title that caused a match is never logged and never audited - only the zone id, and only as
+a boolean on the bus.
+
+Every gate question goes through `_zone_closes(gate)`, so the capture flags on the bus, the
+permission engine's snapshot (`zone_active` plus `zone_screen_only`) and the memory gate can never
+disagree about what the unobservable zone allows.
 
 Tightening privacy is always allowed. Relaxing it is not: switching to FULL needs an explicit
 confirmation, and when a PIN is configured the IPC layer asks for it first.
@@ -20,14 +29,20 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from nox.core.events import CaptureChanged, E, EventBus, PrivacyModeChanged
+from nox.core.events import (
+    CaptureChanged,
+    E,
+    EventBus,
+    PrivacyModeChanged,
+    PrivacyZoneChanged,
+)
 from nox.core.globbing import value_matches
 from nox.core.state import PrivacyMode, PrivacyState
 from nox.security._events import publish
 from nox.security._logging import get_logger
 from nox.security.audit_sink import SafeAuditLog
 from nox.security.model import AuditLog
-from nox.security.permissions import PrivacySnapshot
+from nox.security.permissions import SCREEN_ONLY_OPEN_GATES, PrivacySnapshot, ZoneGate
 
 if TYPE_CHECKING:  # avoids a runtime cycle: the config package reads the security hard list
     from nox.core.config import PrivacyConfig
@@ -36,6 +51,8 @@ log = get_logger(__name__)
 
 CaptureKind = Literal["microphone", "camera", "screen"]
 CAPTURE_KINDS: tuple[CaptureKind, ...] = ("microphone", "camera", "screen")
+#: `privacy.unobservable_policy`: what the fail-closed zone closes (module docstring).
+UnobservablePolicy = Literal["screen_only", "strict"]
 Clock = Callable[[], datetime]
 
 #: The zone in force while the foreground window cannot be read. Reserved: a configured zone with
@@ -179,6 +196,8 @@ class PrivacyService:
         audit: AuditLog | None = None,
         safe_mode: Callable[[], bool] | None = None,
         clock: Clock | None = None,
+        zones_enabled: bool = True,
+        unobservable_policy: UnobservablePolicy = "strict",
     ) -> None:
         self._bus = bus
         self._audit = SafeAuditLog(audit, tool="privacy")
@@ -191,6 +210,8 @@ class PrivacyService:
         self._zones: tuple[ZoneSpec, ...] = tuple(_build_zone(z) for z in zones)
         self._active_zone: str | None = None
         self._panic = False
+        self._zones_enabled = zones_enabled
+        self._unobservable_policy: UnobservablePolicy = unobservable_policy
 
     @classmethod
     def from_config(cls, privacy_config: PrivacyConfig, **kwargs: Any) -> PrivacyService:
@@ -199,6 +220,8 @@ class PrivacyService:
             mode=PrivacyMode(privacy_config.mode),
             capture=privacy_config.capture.model_dump(),
             zones=list(privacy_config.zones),
+            zones_enabled=privacy_config.zones_enabled,
+            unobservable_policy=privacy_config.unobservable_policy,
             **kwargs,
         )
 
@@ -226,6 +249,20 @@ class PrivacyService:
         return self._active_zone
 
     @property
+    def zones_enabled(self) -> bool:
+        """False only when `privacy.zones_enabled: false` switched window zones off."""
+        return self._zones_enabled
+
+    @property
+    def unobservable_policy(self) -> UnobservablePolicy:
+        return self._unobservable_policy
+
+    @property
+    def zone_screen_only(self) -> bool:
+        """The zone in force is the unobservable one, and it closes only screen-side gates."""
+        return self._active_zone == UNOBSERVABLE_ZONE and self._unobservable_policy == "screen_only"
+
+    @property
     def panic(self) -> bool:
         return self._panic
 
@@ -247,6 +284,7 @@ class PrivacyService:
         return PrivacySnapshot(
             mode=self._mode,
             zone_active=self._active_zone is not None,
+            zone_screen_only=self.zone_screen_only,
             safe_mode=self._safe_mode(),
             panic=self._panic,
         )
@@ -263,18 +301,30 @@ class PrivacyService:
             self._capture.get(kind, False)
             and not self._panic
             and not self._safe_mode()
-            and self._active_zone is None
+            and not self._zone_closes(kind)
         )
 
     def allows_memory_write(self) -> bool:
         return (
             self._mode is not PrivacyMode.PRIVATE
-            and self._active_zone is None
+            and not self._zone_closes("memory")
             and not self._safe_mode()
         )
 
     def allows_screenshot_to_cloud(self) -> bool:
-        return self._mode is PrivacyMode.FULL and self.allows_cloud() and self._active_zone is None
+        return (
+            self._mode is PrivacyMode.FULL
+            and self.allows_cloud()
+            and not self._zone_closes("screen")
+        )
+
+    def _zone_closes(self, gate: ZoneGate) -> bool:
+        """Whether the zone in force closes `gate`. The one place that answers it."""
+        if self._active_zone is None:
+            return False
+        if self.zone_screen_only:
+            return gate not in SCREEN_ONLY_OPEN_GATES
+        return True
 
     def effective_capture(self) -> CaptureChanged:
         return CaptureChanged(
@@ -309,15 +359,23 @@ class PrivacyService:
         return self.match_zone(window_title, process_name) is not None
 
     async def observe_foreground(self, window_title: str, process_name: str = "") -> str | None:
-        """Update the active zone from the foreground window; emits capture_changed on change."""
+        """Update the active zone from the foreground window; emits capture_changed on change.
+
+        With window zones switched off (`privacy.zones_enabled: false`) nothing is entered.
+        """
+        if not self._zones_enabled:
+            return None
         return await self._enter_zone(self.match_zone(window_title, process_name))
 
-    async def observe_foreground_unobservable(self, process_name: str = "") -> str:
+    async def observe_foreground_unobservable(self, process_name: str = "") -> str | None:
         """The foreground window's title could not be read: fail closed.
 
         A process pattern that matches still names its own zone (it is the more specific answer);
-        otherwise the reserved `UNOBSERVABLE_ZONE` applies. Either way a zone is active.
+        otherwise the reserved `UNOBSERVABLE_ZONE` applies. Either way a zone is active - unless
+        window zones are switched off, when this returns None and nothing changes.
         """
+        if not self._zones_enabled:
+            return None
         zone = self.match_zone("", process_name) or UNOBSERVABLE_ZONE
         await self._enter_zone(zone)
         return zone
@@ -338,7 +396,13 @@ class PrivacyService:
         # Only the boolean and the zone id ever go on the bus, never the
         # window title/process that triggered the match. Published before CAPTURE_CHANGED so
         # existing callers that assert "the last published event is capture_changed" still hold.
-        await publish(self._bus, E.PRIVACY_ZONE_CHANGED, {"active": zone is not None, "zone": zone})
+        await publish(
+            self._bus,
+            E.PRIVACY_ZONE_CHANGED,
+            PrivacyZoneChanged(
+                active=zone is not None, zone=zone, screen_only=self.zone_screen_only
+            ),
+        )
         await publish(self._bus, E.PRIVACY_CAPTURE_CHANGED, self.effective_capture())
         log.info("privacy.zone_changed", zone=zone)
         return zone

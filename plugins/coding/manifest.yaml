@@ -10,6 +10,9 @@ version: 0.1.0
 api_version: 1
 entry: nox_plugin_coding:create
 profiles: [coding]
+integration: claude_code                # it drives the Claude Code CLI, so the profile must list it
+cloud: true                             # the CLI talks to Anthropic itself, outside the egress
+                                         # guard: no start while the profile or privacy forbids cloud
 permissions:
   - tool: coding.session.start          # risk: medium - spawns a Claude Code CLI session scoped
     risk: medium                        # to a workspace under filesystem_roots (target = workspace)

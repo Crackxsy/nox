@@ -175,7 +175,7 @@ async def test_unobservable_foreground_closes_every_gate_a_zone_closes(
     assert not privacy.allows_screenshot_to_cloud()
     assert privacy.snapshot().zone_active
     zone_events = [e.payload for e in bus.published if e.name == E.PRIVACY_ZONE_CHANGED]
-    assert zone_events[-1] == {"active": True, "zone": UNOBSERVABLE_ZONE}
+    assert zone_events[-1] == {"active": True, "zone": UNOBSERVABLE_ZONE, "screen_only": False}
 
     # The first real observation that shows nothing sensitive opens the gates again.
     assert await privacy.observe_foreground("Notepad", "notepad.exe") is None
@@ -186,6 +186,81 @@ async def test_unobservable_title_still_names_a_zone_its_process_matches(
     privacy: PrivacyService,
 ) -> None:
     assert await privacy.observe_foreground_unobservable("KeePassXC") == "password_manager"
+
+
+def _screen_only(bus: FakeBus, **kwargs: object) -> PrivacyService:
+    return PrivacyService(
+        zones=["banking", "password_manager"],
+        capture={"microphone": True, "camera": True, "screen": True},
+        bus=bus,
+        unobservable_policy="screen_only",
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+async def test_screen_only_unobservable_zone_keeps_screen_side_gates_closed(bus: FakeBus) -> None:
+    privacy = _screen_only(bus, mode=PrivacyMode.FULL)
+    assert await privacy.observe_foreground_unobservable() == UNOBSERVABLE_ZONE
+    assert not privacy.allows_capture("screen")
+    assert not privacy.allows_capture("camera")
+    assert not privacy.allows_screenshot_to_cloud()
+    # The owner's decision: what the user says and what Nox remembers are not what the screen shows.
+    assert privacy.allows_capture("microphone")
+    assert privacy.allows_memory_write()
+    assert privacy.effective_capture().microphone
+    snapshot = privacy.snapshot()
+    assert snapshot.zone_active and snapshot.zone_screen_only
+    zone_events = [e.payload for e in bus.published if e.name == E.PRIVACY_ZONE_CHANGED]
+    assert zone_events[-1] == {"active": True, "zone": UNOBSERVABLE_ZONE, "screen_only": True}
+
+
+async def test_a_real_zone_closes_everything_even_under_screen_only(bus: FakeBus) -> None:
+    privacy = _screen_only(bus)
+    await privacy.observe_foreground("Sparkasse Online-Banking", "browser.exe")
+    assert privacy.active_zone == "banking"
+    assert not privacy.allows_capture("microphone")
+    assert not privacy.allows_memory_write()
+    assert not privacy.snapshot().zone_screen_only
+    # A process pattern names a real zone even when the title is unreadable.
+    assert await privacy.observe_foreground_unobservable("KeePassXC") == "password_manager"
+    assert not privacy.allows_capture("microphone") and not privacy.allows_memory_write()
+
+
+async def test_strict_policy_closes_the_microphone_in_the_unobservable_zone(bus: FakeBus) -> None:
+    privacy = PrivacyService(bus=bus, unobservable_policy="strict")
+    await privacy.observe_foreground_unobservable()
+    assert not privacy.allows_capture("microphone")
+    assert not privacy.allows_memory_write()
+    assert not privacy.snapshot().zone_screen_only
+
+
+async def test_screen_only_does_not_override_panic_or_private_mode(bus: FakeBus) -> None:
+    privacy = _screen_only(bus, mode=PrivacyMode.PRIVATE)
+    await privacy.observe_foreground_unobservable()
+    assert not privacy.allows_memory_write()  # PRIVATE keeps everything session-only
+    await privacy.set_panic(True)
+    assert not privacy.allows_capture("microphone")
+
+
+def test_screen_only_is_the_shipped_default_and_zones_are_on() -> None:
+    import yaml
+
+    from nox.core.config import NoxConfig
+
+    from .conftest import DEFAULTS_YAML
+
+    cfg = NoxConfig.model_validate(yaml.safe_load(DEFAULTS_YAML.read_text(encoding="utf-8")))
+    svc = PrivacyService.from_config(cfg.privacy)
+    assert svc.unobservable_policy == "screen_only"
+    assert svc.zones_enabled
+
+
+async def test_zones_switched_off_enter_no_window_zone_but_keep_path_zones(bus: FakeBus) -> None:
+    privacy = PrivacyService(zones=["banking", "personal_documents"], bus=bus, zones_enabled=False)
+    assert await privacy.observe_foreground("Sparkasse Online-Banking", "browser.exe") is None
+    assert await privacy.observe_foreground_unobservable() is None
+    assert privacy.active_zone is None
+    assert privacy.path_zone("C:/Users/x/Documents/Private/steuer.pdf") == "personal_documents"
 
 
 def test_the_unobservable_zone_id_cannot_be_configured() -> None:

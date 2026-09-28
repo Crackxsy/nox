@@ -14,6 +14,8 @@ from nox.ipc.http import SECURITY_HEADERS, HttpServer, HttpSettings, create_app
 from nox.ipc.server import read_runtime_info
 
 TOKEN = "session-token-for-tests-0123456789"
+#: The address a real client uses: the Host check refuses anything that is not this machine.
+BASE_URL = "http://127.0.0.1:47801"
 
 
 def _app(pet: Path | None = None, dashboard: Path | None = None) -> Any:
@@ -38,9 +40,7 @@ def _app(pet: Path | None = None, dashboard: Path | None = None) -> Any:
 
 @pytest.fixture
 async def client() -> Any:
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_app()), base_url="http://test"
-    ) as c:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app()), base_url=BASE_URL) as c:
         yield c
 
 
@@ -108,7 +108,7 @@ async def test_static_ui_served_when_built(tmp_path: Path) -> None:
     (pet / "index.html").write_text("<!doctype html><title>pet</title><div id=app></div>")
     (pet / "app.js").write_text("console.log('pet')")
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_app(pet=pet)), base_url="http://test"
+        transport=httpx.ASGITransport(app=_app(pet=pet)), base_url=BASE_URL
     ) as c:
         r = await c.get("/pet/")
         assert r.status_code == 200 and "<title>pet</title>" in r.text
@@ -148,3 +148,91 @@ async def test_uvicorn_server_start_stop(tmp_path: Path) -> None:
         async with httpx.AsyncClient() as c:
             await c.get(f"http://127.0.0.1:{port}/health", timeout=2)
     await server.stop()  # idempotent
+
+
+# ---- DNS rebinding: Host and Origin ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "evil.example:47801",  # the rebinding page's own name
+        "127.evil.example:47801",
+        "localhost.evil:47801",
+        "127.0.0.1.nip.io:47801",
+        "127.0.0.1:9999",  # right machine, wrong port
+        "localhost",  # no port means 80
+        "",
+    ],
+)
+async def test_a_foreign_host_header_is_refused_before_any_handler(
+    client: httpx.AsyncClient, host: str
+) -> None:
+    for path in ("/health", "/api/state", "/pet"):
+        r = await client.get(path, headers={"Host": host, "Authorization": f"Bearer {TOKEN}"})
+        assert r.status_code == 403, (path, host)
+        assert r.json()["error"] == "host.denied"
+        assert "running" not in r.text and "version" not in r.text
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:47801", "localhost:47801", "[::1]:47801"])
+async def test_every_spelling_of_this_machine_passes_the_host_check(
+    client: httpx.AsyncClient, host: str
+) -> None:
+    r = await client.get("/health", headers={"Host": host})
+    assert r.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://evil.example",
+        "http://127.0.0.1:5173",  # another local page, not the core's own
+        "http://127.evil.example:47801",
+        "null",  # a sandboxed frame or a file: page
+        "",
+    ],
+)
+async def test_a_foreign_browser_origin_is_refused(client: httpx.AsyncClient, origin: str) -> None:
+    r = await client.get("/health", headers={"Origin": origin})
+    assert r.status_code == 403
+    assert r.json()["error"] == "origin.denied"
+
+
+@pytest.mark.parametrize("origin", [None, "http://127.0.0.1:47801", "http://localhost:47801"])
+async def test_the_cores_own_pages_and_non_browser_clients_pass(
+    client: httpx.AsyncClient, origin: str | None
+) -> None:
+    headers = {} if origin is None else {"Origin": origin}
+    r = await client.get("/health", headers=headers)
+    assert r.status_code == 200
+
+
+async def test_a_configured_loopback_host_counts_as_the_cores_own_origin() -> None:
+    app = create_app(
+        health=lambda: {"ok": True},
+        state=lambda _p: {},
+        providers=lambda: [],
+        session_token=lambda: TOKEN,
+        origin_hosts=("127.0.0.2",),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.2:47801") as c:
+        assert (await c.get("/health", headers={"Origin": "http://127.0.0.2:47801"})).is_success
+        refused = await c.get("/health", headers={"Origin": "http://127.0.0.3:47801"})
+        assert refused.status_code == 403
+
+
+async def test_the_real_server_checks_the_port_it_actually_bound(tmp_path: Path) -> None:
+    server = HttpServer(_app(), HttpSettings(port=0), runtime_dir=tmp_path / "runtime")
+    await server.start()
+    try:
+        async with httpx.AsyncClient() as c:
+            ok = await c.get(f"{server.url}/health")
+            assert ok.status_code == 200
+            rebound = await c.get(
+                f"{server.url}/health", headers={"Host": f"attacker.example:{server.port}"}
+            )
+            assert rebound.status_code == 403
+    finally:
+        await server.stop()

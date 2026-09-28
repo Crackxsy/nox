@@ -38,13 +38,13 @@ async def test_zone_entry_and_exit_publish_privacy_zone_changed(
     probe.set_foreground("KeePass - vault.kdbx", "keepass.exe")
     await sensor.poll()
     zone_events = [e.payload for e in bus.published if e.name == E.PRIVACY_ZONE_CHANGED]
-    assert zone_events[-1] == {"active": True, "zone": "password_manager"}
+    assert zone_events[-1] == {"active": True, "zone": "password_manager", "screen_only": False}
     assert privacy.active_zone == "password_manager"
 
     probe.set_foreground("Notepad", "notepad.exe")
     await sensor.poll()
     zone_events = [e.payload for e in bus.published if e.name == E.PRIVACY_ZONE_CHANGED]
-    assert zone_events[-1] == {"active": False, "zone": None}
+    assert zone_events[-1] == {"active": False, "zone": None, "screen_only": False}
     assert privacy.active_zone is None
 
 
@@ -76,7 +76,7 @@ async def test_zone_event_never_carries_the_window_title(
     assert privacy.active_zone == "personal_documents"
     for event in bus.published:
         if event.name == E.PRIVACY_ZONE_CHANGED:
-            assert set(event.payload) == {"active", "zone"}
+            assert set(event.payload) == {"active", "zone", "screen_only"}
             assert "Steuer" not in str(event.payload)
 
 

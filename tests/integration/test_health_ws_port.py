@@ -12,6 +12,9 @@ from pathlib import Path
 
 import httpx
 import pytest
+from websockets.asyncio.client import connect
+from websockets.exceptions import InvalidStatus
+from websockets.typing import Origin
 
 from nox.app import DEFAULTS_PATH, PROFILES_DIR, NoxCore
 from nox.core.config import load_config
@@ -54,3 +57,21 @@ async def test_health_publishes_the_hub_port(core: NoxCore) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["ws_port"] == core.hub.port
+
+
+async def test_the_cores_own_pages_reach_the_hub_and_a_foreign_page_does_not(
+    core: NoxCore,
+) -> None:
+    """The browser origins the hub admits are wired from the HTTP server's real port at boot."""
+    assert core.hub is not None and core.http is not None
+    async with connect(core.hub.url, origin=Origin(core.http.url), open_timeout=10):
+        pass  # the handshake completed: the pet and the dashboard can connect
+    with pytest.raises(InvalidStatus) as refused:
+        await connect(core.hub.url, origin=Origin("https://evil.example"), open_timeout=10)
+    assert refused.value.response.status_code == 403
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        rebound = await client.get(
+            f"{core.http.url}/health", headers={"Host": f"evil.example:{core.http.port}"}
+        )
+    assert rebound.status_code == 403

@@ -2,7 +2,9 @@
 
 Wraps `MemoryItemRepository` with importance scoring, embedding writes, and `memory.created`/
 `memory.deleted` events. A write is refused - not silently downgraded - whenever
-`PrivacyGate.allows_memory_write` is False (PRIVATE mode, an active privacy zone, or safe mode).
+`PrivacyGate.allows_memory_write` is False. In the core that gate is the effective policy
+(`nox.security.policy`): a profile without memory writes, PRIVATE mode, a privacy zone that
+closes memory, or safe mode.
 """
 
 from __future__ import annotations
@@ -46,7 +48,7 @@ class MemoryService:
     ) -> MemoryItemRow:
         if not self.privacy.allows_memory_write():
             raise MemoryWriteRefusedError(
-                "memory write refused: privacy mode/zone/safe-mode forbids it"
+                "memory write refused: the profile, privacy mode, a zone or safe mode forbids it"
             )
         type_value = type.value if isinstance(type, MemoryType) else str(type)
         importance = score_importance(text, explicit=explicit)

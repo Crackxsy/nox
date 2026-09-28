@@ -2,7 +2,10 @@
 
 Implements the plugin lifecycle - `discovered -> validated -> enabled -> spawned -> registered ->
 running -> stopping -> stopped | failed`. A plugin is only spawned when its manifest validates
-against the active security profile (namespace, secrets, hard prohibitions, egress); it runs in its
+against the active security profile (namespace, secrets, hard prohibitions, egress) and the
+effective policy lets it start (the profile's `integrations_allowed` and `cloud_allowed`, and the
+privacy mode: a plugin that reaches beyond this machine does not run in private or offline); a
+profile or privacy change stops and starts plugins accordingly, without a restart. It runs in its
 own `python -m nox.worker --plugin <id>` process with a one-time token inside the core's job
 object; crashes are restarted with backoff (three tries in five minutes, then `failed`); and the
 kill switch stops every plugin (`plugin.stop`, two seconds, then terminate). One misconfigured
@@ -73,6 +76,12 @@ class HubLike(Protocol):
 
 class TokenIssuer(Protocol):
     def worker_env(self, worker_id: str, *, ttl_s: float | None = None) -> Mapping[str, str]: ...
+
+
+class PluginStartPolicy(Protocol):
+    """`nox.security.policy.EffectivePolicy`, as far as starting a plugin goes."""
+
+    def plugin_start_block_reason(self, integration: str, *, network: bool, cloud: bool) -> str: ...
 
 
 class PermissionEngineLike(Protocol):
@@ -416,6 +425,7 @@ class PluginManager:
         loopback_allowlist: Sequence[str] = (),
         process_factory: ProcessFactory | None = None,
         clock: Callable[[], float] = time.monotonic,
+        start_policy: PluginStartPolicy | None = None,
     ) -> None:
         self.plugins_dir = plugins_dir
         self.settings = settings or PluginManagerSettings()
@@ -446,10 +456,11 @@ class PluginManager:
         self._loopback = tuple(loopback_allowlist)
         self._process_factory = process_factory or self._default_process_factory
         self._clock = clock
+        self._start_policy = start_policy
         self._records: dict[str, PluginRecord] = {}
         self._closing = False
         self._handlers_registered = False
-        self._unsubscribe: Callable[[], None] | None = None
+        self._unsubscribes: list[Callable[[], None]] = []
 
     # -- public API --------------------------------------------------------------------------
 
@@ -482,9 +493,13 @@ class PluginManager:
         """Discover + validate every plugin, then spawn the enabled ones. Failures are isolated."""
         self._closing = False
         self.register_handlers()
-        if self._unsubscribe is None:
-            # AC 3: a profile switch must start/stop profile-gated plugins without a core restart.
-            self._unsubscribe = self._bus.subscribe(E.SYSTEM_MODE_CHANGED, self._on_mode_changed)
+        if not self._unsubscribes:
+            # A profile switch or a privacy change starts and stops gated plugins without a core
+            # restart.
+            self._unsubscribes = [
+                self._bus.subscribe(E.SYSTEM_MODE_CHANGED, self._on_mode_changed),
+                self._bus.subscribe(E.PRIVACY_MODE_CHANGED, self._on_mode_changed),
+            ]
         await self.discover()
         for rec in list(self._records.values()):
             if rec.enabled:
@@ -517,9 +532,9 @@ class PluginManager:
     async def stop(self, reason: str = "shutdown") -> None:
         """Graceful shutdown of every plugin; also stops the crash monitors."""
         self._closing = True
-        if self._unsubscribe is not None:
-            self._unsubscribe()
-            self._unsubscribe = None
+        for unsubscribe in self._unsubscribes:
+            unsubscribe()
+        self._unsubscribes = []
         await self.stop_all(reason)
         for rec in self._records.values():
             if rec.monitor is not None:
@@ -554,8 +569,11 @@ class PluginManager:
             manifest = rec.manifest
             if manifest is None or rec.state is PluginState.FAILED:
                 continue
-            wanted = manifest.matches_profile(profile.id) and (
-                rec.plugin_id in self.settings.enabled
+            blocked = self._start_block_reason(manifest)
+            wanted = (
+                manifest.matches_profile(profile.id)
+                and rec.plugin_id in self.settings.enabled
+                and not blocked
             )
             if wanted and rec.state in (PluginState.VALIDATED, PluginState.STOPPED):
                 if self._safe_mode():
@@ -575,8 +593,12 @@ class PluginManager:
                 await self._spawn(rec)
             elif not wanted and rec.state in _LIVE_STATES:
                 rec.enabled = False
-                await self._stop_plugin(rec, f"profile {profile.id!r} does not match", None)
-                rec.reason = f"profile {profile.id!r} not in {manifest.profiles}"
+                await self._stop_plugin(
+                    rec, blocked or f"profile {profile.id!r} does not match", None
+                )
+                rec.reason = blocked or f"profile {profile.id!r} not in {manifest.profiles}"
+            elif not wanted and blocked:
+                rec.reason = blocked
 
     # -- health ------------------------------------------------------------------------------
 
@@ -641,8 +663,21 @@ class PluginManager:
             rec.enabled = False
             rec.reason = f"profile {profile_id!r} not in {manifest.profiles}"
             return
+        blocked = self._start_block_reason(manifest)
+        if blocked:
+            rec.enabled = False
+            rec.reason = blocked
+            return
         rec.enabled = True
         self._transition(rec, PluginState.ENABLED)
+
+    def _start_block_reason(self, manifest: PluginManifest) -> str:
+        """The effective policy's verdict on starting this plugin now; empty = it may start."""
+        if self._start_policy is None:
+            return ""
+        return self._start_policy.plugin_start_block_reason(
+            manifest.integration_id, network=manifest.reaches_network, cloud=manifest.cloud
+        )
 
     def _default_process_factory(
         self, command: Sequence[str], env: Mapping[str, str]
@@ -721,6 +756,11 @@ class PluginManager:
         except asyncio.CancelledError:
             raise
         if self._closing or rec.stopping or self._safe_mode():
+            return
+        blocked = self._start_block_reason(_manifest_of(rec))
+        if blocked:  # the profile or privacy changed while it was down: it stays down
+            rec.enabled = False
+            self._transition(rec, PluginState.STOPPED, blocked)
             return
         await self._spawn(rec)
 

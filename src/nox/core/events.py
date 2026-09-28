@@ -813,10 +813,15 @@ class PmFocusEntry(BaseModel):
 class PrivacyZoneChanged(BaseModel):
     """Payload for `E.PRIVACY_ZONE_CHANGED` (`"privacy.zone_changed"`), published by
     `PrivacyService.observe_foreground()`. `zone` is only ever a zone id (`"banking"`,
-    `"discord"`, ...), never the window title or content that triggered the match."""
+    `"discord"`, ...), never the window title or content that triggered the match.
+
+    `screen_only` is True while the zone in force is the fail-closed `unobservable` one under
+    `privacy.unobservable_policy: screen_only`: screen, camera and clipboard stay closed, the
+    microphone and memory writes do not. A real zone always reports False."""
 
     active: bool
     zone: str | None = None
+    screen_only: bool = False
 
 
 class SensorProcessStarted(BaseModel):
