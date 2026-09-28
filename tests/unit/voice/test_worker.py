@@ -327,3 +327,64 @@ def test_main_refuses_without_token(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NOX_WORKER_TOKEN", raising=False)
     monkeypatch.setattr("nox.worker.main.raise_priority", lambda: None)
     assert main(["--service", "voice"]) == 2
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        # A privacy zone (or a disabled microphone) that was in force before this worker connected.
+        {"ok": True, "config": {}, "capture": {"microphone": False}, "safe_mode": False},
+        # A core that says nothing about capture: the microphone stays closed.
+        {"ok": True, "config": {}},
+    ],
+)
+async def test_the_microphone_starts_closed_unless_the_core_allows_it(
+    client: FakeIpcClient, response: dict[str, Any]
+) -> None:
+    """Events only carry changes; the state at connect time comes with `worker.register`."""
+    client.register_response = response
+    worker = VoiceWorker(
+        client=client, service="voice", pipeline_factory=spy_factory, heartbeat_s=10
+    )
+    task = await run_worker(worker)
+    assert not worker.capture_allowed()
+    worker.request_stop()
+    await task
+
+
+async def test_a_kill_switch_engaged_before_connect_latches_the_worker(
+    client: FakeIpcClient,
+) -> None:
+    client.register_response = {
+        "ok": True,
+        "config": {},
+        "capture": {"microphone": True},
+        "safe_mode": True,
+    }
+    worker = VoiceWorker(
+        client=client, service="voice", pipeline_factory=spy_factory, heartbeat_s=10
+    )
+    task = await run_worker(worker)
+    assert not worker.capture_allowed()
+    worker.request_stop()
+    await task
+
+
+async def test_reregistering_takes_the_cores_current_state(client: FakeIpcClient) -> None:
+    """After a core restart the new core's state wins, including a zone entered meanwhile."""
+    worker = VoiceWorker(
+        client=client, service="voice", pipeline_factory=spy_factory, heartbeat_s=10
+    )
+    task = await run_worker(worker)
+    pipeline: Any = worker.pipeline
+    assert worker.capture_allowed()
+    client.register_response = {
+        "ok": True,
+        "config": {},
+        "capture": {"microphone": False},
+        "safe_mode": False,
+    }
+    await worker.register()
+    assert not worker.capture_allowed() and pipeline.refreshes >= 1
+    worker.request_stop()
+    await task

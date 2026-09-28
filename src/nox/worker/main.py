@@ -281,7 +281,24 @@ class VoiceWorker:
             "pid": os.getpid(),
         }
         self.register_response = await self.client.request("worker.register", payload)
+        await self._apply_core_state(self.register_response)
         return self.register_response
+
+    async def _apply_core_state(self, response: Mapping[str, Any]) -> None:
+        """Start from the core's current capture and kill-switch state, on every (re)register.
+
+        Subscriptions deliver changes only, so a zone entered or a microphone switched off before
+        this connection existed would never arrive. A core that sends no capture state leaves the
+        microphone closed.
+        """
+        capture = response.get("capture")
+        self.status.microphone_allowed = isinstance(capture, Mapping) and bool(
+            capture.get("microphone", False)
+        )
+        if response.get("safe_mode"):
+            self.status.killed = True
+        if self.pipeline is not None:
+            await self.pipeline.refresh_gate()
 
     def _resolve_config(self, raw: Any) -> VoiceConfig:
         """Validate the `config` the core returned from `worker.register` into a `VoiceConfig`.

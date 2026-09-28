@@ -75,7 +75,9 @@ permission.self_elevate
 - **Trigger points**: the supervisor hotkey `ctrl+alt+shift+k` (works even if the core has hung —
   this path does not depend on the core process; not available under a Linux Wayland session,
   which forbids global hotkeys, and on macOS only with the Input Monitoring permission - the
-  supervisor reports `hotkey: unavailable: <reason>` instead of claiming it is armed), the tray, the dashboard, the pet's own menu, and
+  supervisor reports `hotkey: unavailable: <reason>` instead of claiming it is armed; under Wayland
+  the fail-closed privacy zone also keeps the microphone closed, so the spoken phrase is
+  unavailable there too and the tray and the dashboard remain), the tray, the dashboard, the pet's own menu, and
   the spoken phrase "Nox, Notaus" (matched locally by the STT worker and forwarded as a
   `security.kill` request — it never goes through the LLM).
 - **Effect**: SAFE_MODE. Every in-flight AI request is cancelled, TTS stops in under 200 ms,

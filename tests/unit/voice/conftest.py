@@ -199,7 +199,14 @@ class FakeIpcClient:
         self.subscriptions: list[str] = []
         self.inbound: dict[str, Any] = {}
         self.event_handlers: list[tuple[str, Callable[[Envelope], Awaitable[None] | None]]] = []
-        self.register_response = register_response or {"ok": True, "config": {}}
+        # A core that currently allows the microphone; tests about other starting states pass
+        # their own response.
+        self.register_response = register_response or {
+            "ok": True,
+            "config": {},
+            "capture": {"microphone": True, "camera": False, "screen": True, "cloud": True},
+            "safe_mode": False,
+        }
         self.fail_requests = False
 
     async def connect(self) -> Any:

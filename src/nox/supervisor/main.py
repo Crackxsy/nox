@@ -792,8 +792,8 @@ class Supervisor:
 
 
 WAYLAND_HOTKEY_REASON = (
-    "Wayland does not let applications register global hotkeys; use the tray, the dashboard or "
-    "the spoken phrase instead"
+    "Wayland does not let applications register global hotkeys; use the tray or the dashboard "
+    "instead"
 )
 MAC_HOTKEY_PERMISSION = (
     "grant Nox (or the Python it runs on) Input Monitoring in System Settings > Privacy & Security"

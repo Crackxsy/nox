@@ -400,7 +400,20 @@ class CoreHandlers:
         # register and ready the worker is still loading its engines, and health says `limited`.
         log.info("worker.registered", service=p.service, client=ctx.client_id, pid=p.pid)
         core.spawn_task(core.health.run_once())
-        return {"ok": True, "config": core.config.voice.model_dump(mode="json")}
+        # The worker's starting point for its capture gate. Events only carry changes: a privacy
+        # zone entered, a microphone switched off or a kill engaged before this worker connected
+        # would otherwise never reach it, and it would open the microphone anyway.
+        security = core.security
+        return {
+            "ok": True,
+            "config": core.config.voice.model_dump(mode="json"),
+            "capture": (
+                security.privacy.effective_capture().model_dump(mode="json")
+                if security is not None
+                else {"microphone": False, "camera": False, "screen": False, "cloud": False}
+            ),
+            "safe_mode": security.killswitch.is_engaged() if security is not None else True,
+        }
 
     async def worker_ready(self, ctx: RequestContext, p: WorkerReady) -> dict[str, Any]:
         core = self._core

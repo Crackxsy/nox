@@ -243,6 +243,11 @@ yet either._
 - Quitting from the shell no longer starts a new core. After `sup.stop` the watchdog saw "core
   gone, still running" and spawned a fresh one, which the supervisor's own shutdown then killed
   in the middle of its boot. A requested stop now ends all restarts.
+- **The voice worker no longer opens the microphone against the core's current state.** It only
+  heard about *changes*: a privacy zone entered, a microphone switched off in `user.yaml` or a kill
+  switch engaged before it connected never reached it, and in continuous mode it listened anyway.
+  `worker.register` now returns the effective capture and kill-switch state, the worker applies it
+  on every (re)register, and a core that sends none leaves the microphone closed.
 - The supervisor collects the exit status of a core it stopped in safe mode, so the process no
   longer lingers as a zombie on Linux and macOS.
 - Test isolation: every test gets an in-memory keyring and a temporary application folder, and

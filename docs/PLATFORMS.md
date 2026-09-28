@@ -21,10 +21,10 @@ real desktop of that kind · ❌ not possible on that platform · – not applic
 | Click-through pet | ✅ | ◐ | ◐ | ◐ |
 | **Privacy zones** (banking, password manager, …) | ✅ | ◐ with the Accessibility permission, otherwise **fail closed** | ◐ needs `xprop` | ❌ **always fail closed** |
 | Idle / away detection | ✅ | ◐ (`ioreg`) | ◐ needs `xprintidle` | ❌ not available |
-| Kill-switch **hotkey** | ✅ | ◐ with the Input Monitoring permission | ◐ | ❌ tray, dashboard or "Nox, Notaus" only |
+| Kill-switch **hotkey** | ✅ | ◐ with the Input Monitoring permission | ◐ | ❌ tray or dashboard only |
 | Credential store | Credential Manager | Keychain | Secret Service (GNOME Keyring, KWallet) | Secret Service |
 | Orphan protection (child processes end with their parent) | job object (kernel) | parent watch | parent watch | parent watch |
-| Voice (Whisper, Piper/Kokoro) | ✅ | ◐ untested on real hardware | ◐ untested on real hardware | ◐ untested on real hardware |
+| Voice (Whisper, Piper/Kokoro) | ✅ | ◐ untested on real hardware | ◐ untested on real hardware | ❌ microphone closed by the fail-closed zone (see below) |
 | Rocket League coach | ✅ | – (no native game build) | – | – |
 | Installer, update, rollback | not proven yet | none - run from source | none - run from source | none - run from source |
 | CI | every job, blocking | unit + integration, **not yet blocking** | unit + integration, blocking | (same as X11 in CI) |
@@ -40,9 +40,12 @@ When it cannot, it does **not** assume that nothing sensitive is open. It enters
 reports `limited` with the reason. Concretely:
 
 * **Wayland** does not let any application read the active window. Under a Wayland session the
-  zone is permanently active: Nox works as a companion and assistant, but it does not capture the
-  screen and does not write memories. Log in to an X11 session ("GNOME on Xorg", "Plasma (X11)")
-  if you want those.
+  zone is permanently active: Nox works as a typed companion and assistant in the dashboard, but
+  it does not listen, does not capture the screen and does not write memories - a zone closes the
+  microphone too, so there is no voice and no spoken kill phrase; the kill switch is the tray and
+  the dashboard. Log in to an X11 session ("GNOME on Xorg", "Plasma (X11)") if you want those.
+  Whether a user may knowingly exempt the microphone from this is an open design question
+  (tracked in the v3.5 specification), not something Nox decides on its own.
 * **macOS** only reveals another app's window title to a process with the **Accessibility**
   permission (System Settings → Privacy & Security → Accessibility → add the terminal or Python
   that runs Nox). Until it is granted, the zone stays active and health names the missing
@@ -50,6 +53,9 @@ reports `limited` with the reason. Concretely:
 * **Linux X11** needs `xprop` (package `x11-utils` on Debian/Ubuntu, `xorg-xprop` on Arch). Idle
   detection additionally needs `xprintidle`.
 * A machine without any graphical session (a server, a container) is unobservable too.
+
+The voice worker takes the current state from the core every time it connects, not only from
+later changes, so a zone that was already in force when it started keeps the microphone closed.
 
 A process pattern still wins where it matches - a password manager identified by its process name
 is reported as the `password_manager` zone even when its window title cannot be read.
