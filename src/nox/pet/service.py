@@ -200,6 +200,10 @@ class PetService:
             self._nudge(affection=+0.05, attention=+0.1, mood=+0.02)
         elif kind == "drag":
             self._nudge(stress=+0.03, attention=+0.1)
+        elif kind == "feed":
+            # A treat is worth more than a pat and it lifts the thing a pat cannot: energy. The pet
+            # window turns the same event into a few seconds of the eating pose.
+            self._nudge(affection=+0.12, mood=+0.08, energy=+0.10, stress=-0.04)
         await self._emit(reason=f"pet.interaction:{kind}")
 
     async def _on_zone(self, ev: Event) -> None:

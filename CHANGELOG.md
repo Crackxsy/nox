@@ -9,6 +9,22 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **The creature curls up, lies down and eats.** The key-pose path shipped working and the art for
+  it did not exist, so `poses` in the Meereswolf rig was an empty object and every pose request
+  quietly did nothing. Three cut-outs now fill it: it curls up when it sleeps, lies down when it is
+  bored, and eats when you give it a treat - shift-click it, or Shift+Enter while it has focus, so
+  the second interaction is keyboard-reachable for the same reason the first one was made to be. A
+  treat lifts affection and mood more than a pat does and lifts the one thing a pat cannot, energy.
+  Making the art usable took two fixes that were only visible by watching the pet: a key pose is a
+  *different picture*, not a deformation of the base one, so it is no longer skinned - the mesh's
+  bone weights describe the base photograph, and turning the head bone loose on a curled-up body
+  smears the drawing instead of animating it. And the eyes, which are separate layers placed by the
+  skeleton, now fade exactly as the base drawing does; at full alpha over a curled body they were
+  two eyes hanging in the air above it. `make_pose_frames.py` prepares a cut-out for the rig: it
+  downscales in premultiplied alpha, because averaging raw colour across a transparent edge drags
+  the colour of nothing into the silhouette and leaves a pale halo, and it shifts each pose down
+  until its lowest pixel meets the base drawing's - which is what makes the dissolve read as the
+  creature lying down *where it was standing* rather than sinking through the floor.
 - **Nox can type into a window, and the boundary around that is narrower than the request.** The
   input-synthesis prohibition was "no file anywhere may import one of these APIs". It is now
   window-scoped, as asked: `desktop.type_text` brings one window to the front, checks it really got

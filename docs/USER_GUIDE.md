@@ -85,6 +85,9 @@ cannot be turned off or hidden by configuration — if something is being captur
 
 - **Desktop pet**: a small always-on-top window with a stable personality, mood, and voice
   (local TTS/STT by default; barge-in supported).
+- **Giving the pet a treat**: shift-click the creature, or press Shift+Enter while it has focus. It
+  eats, and it cheers up a little more than it does from an ordinary click. It curls up when it
+  sleeps and lies down when it is bored, on its own.
 - **Voice**: push-to-talk (`ctrl+alt+space` by default) or the wake word "Nox"; local
   speech-to-text (faster-whisper) and text-to-speech (Piper).
 - **Stream companion** (Twitch/OBS, opt-in at onboarding): chat responses, a "Funken" viewer

@@ -33,7 +33,7 @@ export interface SpritePetProps {
   /** Only `label` is used — the status word the procedural renderer draws under the creature. */
   params: AnimParams;
   interactive: boolean;
-  onInteract: (type: 'click', x: number, y: number) => void;
+  onInteract: (type: 'click' | 'feed', x: number, y: number) => void;
   size?: number;
   /** Freeze on the first frame of the current expression (`?still=1` screenshots). */
   still?: boolean;

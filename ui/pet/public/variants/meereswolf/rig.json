@@ -215,7 +215,17 @@
       }
     }
   ],
-  "poses": {},
+  "poses": {
+    "curl": {
+      "file": "pose_curl.png"
+    },
+    "lie": {
+      "file": "pose_lie.png"
+    },
+    "eat": {
+      "file": "pose_eat.png"
+    }
+  },
   "clips": {
     "breathe": {
       "durationMs": 5000,
