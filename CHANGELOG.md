@@ -9,6 +9,24 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Nox can see what is running and tidy up after you.** `desktop.windows`,
+  `desktop.processes`, `desktop.window_focus/minimize/restore/close` and `desktop.process_stop`
+  (`src/nox/desktop/`). A model does not know window handles, so the window tools take a title
+  fragment - and the case that matters is several matches: "close Chrome" with four Chrome windows
+  open reports the candidates and changes nothing, because a guess closes the wrong window and the
+  user cannot tell a guess was made. `window_close` posts `WM_CLOSE`, which is what the X button
+  does: the program is *asked* and may still offer to save, and a true answer means asked, not gone.
+  `process_stop` is the other half of that pair and says so in its own description, because a model
+  picking the wrong one of the two costs the user work; it never escalates to a kill when a
+  terminate is ignored, since a program that will not go is either busy saving or stuck and guessing
+  which is not the code's job. `window_focus` reports whether the window actually ended up in front
+  rather than whether the call returned - Windows refuses `SetForegroundWindow` in cases this
+  process cannot influence, and saying it worked would be a lie. Three things are out of bounds
+  entirely, in code rather than as a risk level: Windows' own session processes, Nox itself
+  (including its workers - a tool that can kill the process holding the audit log is a kill switch
+  with no record), and the game, because observation-only is not only about input. The gap rows for
+  process and window control came out of the capability table, and the remaining desktop gaps were
+  renamed to the names their tools will have, so the staleness check can catch the next one.
 - **Nox can work with your files, in the folders you name and nowhere else.** `file.list`,
   `file.read`, `file.write`, `file.move` and `file.delete` (`src/nox/files/`), bounded by a
   `files.roots` list that ships empty: a fresh installation reaches nothing outside its own vault,

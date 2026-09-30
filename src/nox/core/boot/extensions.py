@@ -38,6 +38,7 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "creative",
     "home",
     "files",
+    "desktop",
     "presets",
     "plans",
     "settings",

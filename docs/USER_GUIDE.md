@@ -99,6 +99,10 @@ cannot be turned off or hidden by configuration — if something is being captur
   also start at a time of day or when a game launches. Nothing is configured by default and
   the language model can only name a preset, never assemble one: see
   [`docs/PRESETS.md`](PRESETS.md).
+- **Windows and programs**: Nox can tell you what is running and what is open, bring a window to
+  the front, minimise it, or ask a program to close the way its X button does. Closing and ending a
+  program ask you first. Windows' own session processes, Nox itself and a running game are out of
+  bounds entirely - not "ask first", but refused.
 - **Files**: Nox can look at and change files in the folders you name, and nowhere else. The list
   ships empty, so a fresh installation reaches nothing outside its own vault. Writing asks first,
   and deleting only ever moves a file to the Recycle Bin - there is no delete you cannot undo. See

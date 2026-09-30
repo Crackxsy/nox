@@ -26,29 +26,21 @@ __all__ = ["CURATED_GAPS", "derived_gaps"]
 #: What a user may reasonably ask for and not get. Ordered roughly by how often it comes up.
 CURATED_GAPS: tuple[Gap, ...] = (
     # ---- the desktop, absent until the PC tools ship ------------------------------------------
+    # Gap names carry the name the tool would have, so `stale_gaps()` notices when one ships.
     # Files are no longer here: `file.list/read/write/move/delete` exist, bounded by
     # `files.roots`. A row left behind after a capability ships is worse than no row, which is
     # what `stale_gaps()` is for.
     Gap(
-        name="process.start",
+        name="desktop.process_start",
         what="start any program",
         reason=GapReason.MISSING,
-        detail="only programs the user registered as preset actions can be started, by id",
+        detail=(
+            "only programs the user registered as preset actions can be started, by id. "
+            "Processes can be listed and ended - `desktop.processes`, `desktop.process_stop`"
+        ),
     ),
     Gap(
-        name="process.stop",
-        what="end a running program",
-        reason=GapReason.MISSING,
-        detail="processes are observed by the sensors and never touched",
-    ),
-    Gap(
-        name="window.manage",
-        what="move, resize or focus a window",
-        reason=GapReason.MISSING,
-        detail="only the foreground window is observed, and only its title and zone",
-    ),
-    Gap(
-        name="input.send",
+        name="desktop.input_send",
         what="type or click for you inside another program",
         reason=GapReason.MISSING,
         detail="no input synthesis exists; a CI guard forbids the APIs across the source tree",
@@ -60,31 +52,31 @@ CURATED_GAPS: tuple[Gap, ...] = (
         detail="no browser automation of any kind",
     ),
     Gap(
-        name="screen.capture",
+        name="desktop.screen_capture",
         what="show what is on the screen right now",
         reason=GapReason.MISSING,
         detail="screenshots exist only for a creative application's own window, consent-gated",
     ),
     Gap(
-        name="audio.control",
+        name="desktop.audio",
         what="change the volume or switch the output device",
         reason=GapReason.MISSING,
         detail="audio is output only, through the voice worker",
     ),
     Gap(
-        name="device.list",
+        name="desktop.devices",
         what="see which devices are attached",
         reason=GapReason.MISSING,
         detail="no device enumeration; a new microphone cannot be noticed, let alone set up",
     ),
     Gap(
-        name="system.settings",
+        name="desktop.settings",
         what="change a Windows setting, service or driver",
         reason=GapReason.MISSING,
         detail="`config.set` changes Nox's own settings and nothing else on the machine",
     ),
     Gap(
-        name="software.install",
+        name="desktop.software_install",
         what="install or remove a program",
         reason=GapReason.MISSING,
         detail="nothing downloads or installs software",

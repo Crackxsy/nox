@@ -181,7 +181,7 @@ async def test_what_nox_cannot_do_reaches_the_model(core: NoxCore) -> None:
     result = await _as_model(core, "capabilities.list")
     missing = {gap["name"]: gap["why"] for gap in result.data["missing"]}
 
-    assert missing["window.manage"] == "missing"
+    assert missing["desktop.software_install"] == "missing"
     # The two boundaries, and they must not read like backlog items.
     assert missing["game.input"] == "forbidden"
     assert missing["home.lock"] == "forbidden"
@@ -251,7 +251,10 @@ async def test_the_offer_stays_within_its_budget(core: NoxCore) -> None:
     is about 1500 tokens, affordable for a cloud model and already noticeable for the small
     local one Nox falls back to. The average per tool is the more useful canary - it fails when
     a single tool arrives with a paragraph of description, which the total would hide for a
-    while. Measured at the time of writing: 30 tools, 4110 characters, 137 per tool.
+    while. Measured as the file tools and desktop tools landed: 26 tools / 3668 characters,
+    then 30 / 4110, now 43 / 5591 - about 1400 tokens a turn. The next feature will trip this
+    test, and the answer then is a relevance filter rather than a bigger number here: the
+    offer is already most of what a small local model has room to read.
     """
     section = core.orchestrator.tool_gate.prompt()
     offered = len(core.orchestrator.tool_gate.offer())
