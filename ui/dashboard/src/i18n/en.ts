@@ -293,6 +293,7 @@ export const en: Record<Key, string> = {
   chat_hint: 'Ctrl+Enter sends.',
   chat_provider: 'Provider',
   chat_degraded: 'degraded',
+  chat_tools_used: 'Used for this',
   chat_failed: 'Response failed',
   chat_answered: 'Answer complete.',
 

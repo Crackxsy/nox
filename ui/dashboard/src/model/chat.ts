@@ -14,6 +14,8 @@ export interface ChatMessage {
   provider: string | null;
   degraded: boolean;
   error: string | null;
+  /** Tools this answer used, in order. Usually empty. */
+  tools: string[];
 }
 
 /**
@@ -34,12 +36,17 @@ export function finalAnswer(payload: Record<string, unknown>): {
   text: string | null;
   provider: string | null;
   degraded: boolean;
+  tools: string[];
 } {
   const result = payload as Partial<ChatSendResult>;
+  const tools = Array.isArray(result.tools_used) ? result.tools_used : [];
   return {
     text: typeof result.text === 'string' ? result.text : null,
     provider: typeof result.provider === 'string' ? result.provider : null,
     degraded: result.degraded === true,
+    // Only strings: the field crosses a process boundary, and a number rendered into the byline
+    // would be a small lie about what Nox did.
+    tools: tools.filter((name): name is string => typeof name === 'string'),
   };
 }
 

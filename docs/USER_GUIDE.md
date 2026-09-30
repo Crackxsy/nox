@@ -99,6 +99,17 @@ cannot be turned off or hidden by configuration — if something is being captur
   also start at a time of day or when a game launches. Nothing is configured by default and
   the language model can only name a preset, never assemble one: see
   [`docs/PRESETS.md`](PRESETS.md).
+- **Tools in a conversation**: anything you can do with a button on the dashboard, you can ask
+  for in the chat or say out loud - the same tool, the same permission check, the same audit
+  entry. Nox is only offered the tools your active profile actually allows, so it cannot promise
+  something the profile forbids. Which tools an answer used is shown under that answer.
+- **Asking what Nox can do**: "was kannst du gerade?" is answered from a catalogue rather than
+  guessed. It distinguishes what is not built, what this profile forbids, what is missing a token,
+  and what Nox will never do - and it says "I have no entry for that" instead of a false no.
+- **Plans**: for work with several steps, Nox writes down what it intends to do and waits for you
+  to approve it. Approved plans run in the background, survive a restart and pause while a game is
+  running. A plan that was interrupted mid-step says so rather than repeating that step - see
+  [`docs/PLANS.md`](PLANS.md).
 - **Project manager / coding assistant**, **research/creative assistant**: planned, not part of
   this release.
 

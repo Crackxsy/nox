@@ -85,6 +85,7 @@ export interface ChatSendResult {
   text: string;
   provider: string;
   degraded: boolean;
+  tools_used?: string[];
 }
 
 export interface PluginStatusEntry {

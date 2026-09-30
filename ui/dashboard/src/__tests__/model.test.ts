@@ -190,11 +190,24 @@ describe('chat helpers', () => {
   });
   it('reads the final ChatSendResult and reports a missing answer as missing', () => {
     expect(finalAnswer({ request_id: 'r1', text: 'hi', provider: 'ollama', degraded: true })).toEqual({
-      text: 'hi', provider: 'ollama', degraded: true,
+      text: 'hi', provider: 'ollama', degraded: true, tools: [],
     });
     expect(finalAnswer({ done: true })).toEqual({
-      text: null, provider: null, degraded: false,
+      text: null, provider: null, degraded: false, tools: [],
     });
+  });
+  it('carries the tools an answer used', () => {
+    expect(finalAnswer({ text: 'ok', tools_used: ['home.light', 'presets.activate'] }).tools).toEqual([
+      'home.light', 'presets.activate',
+    ]);
+  });
+  it('drops anything in tools_used that is not a name', () => {
+    // The field crosses a process boundary; a number rendered into the byline would be a small
+    // lie about what Nox did.
+    expect(finalAnswer({ text: 'ok', tools_used: ['home.light', 42, null] }).tools).toEqual([
+      'home.light',
+    ]);
+    expect(finalAnswer({ text: 'ok', tools_used: 'home.light' }).tools).toEqual([]);
   });
 });
 

@@ -312,6 +312,7 @@ export const de = {
   chat_hint: 'Strg+Enter sendet.',
   chat_provider: 'Antwort von',
   chat_degraded: 'eingeschränkt',
+  chat_tools_used: 'Dafür benutzt',
   chat_failed: 'Antwort fehlgeschlagen',
   chat_answered: 'Antwort vollständig.',
 

@@ -78,6 +78,7 @@ export function ChatPage({
         provider: null,
         degraded: false,
         error: null,
+        tools: [],
       },
       {
         id: answerId,
@@ -87,6 +88,7 @@ export function ChatPage({
         provider: null,
         degraded: false,
         error: null,
+        tools: [],
       },
     ]);
     onDraft('');
@@ -105,6 +107,7 @@ export function ChatPage({
         streaming: false,
         provider: final.provider,
         degraded: final.degraded,
+        tools: final.tools,
         error: final.text === null && streamed === '' ? t('chat_failed') : null,
       });
       setAnnouncement(t('chat_answered'));
@@ -179,6 +182,11 @@ export function ChatPage({
                 )}
               </h3>
               <p className="msg-text">{m.text}</p>
+              {m.tools.length > 0 && (
+                <p className="msg-tools">
+                  {t('chat_tools_used')}: {m.tools.join(', ')}
+                </p>
+              )}
               {m.error && (
                 <p role="alert" className="msg-error">
                   {m.error}

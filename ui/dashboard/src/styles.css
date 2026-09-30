@@ -1153,6 +1153,15 @@ a:hover {
   border-bottom-left-radius: var(--s-2);
 }
 
+/* What Nox actually did, under the answer that describes it. Quiet by design: it is a receipt,
+   not a headline, and it appears on the few turns that changed something. */
+.msg-tools {
+  padding-inline: var(--s-5);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
 .msg-error {
   font-size: var(--text-sm);
   color: var(--danger);

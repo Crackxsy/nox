@@ -115,6 +115,9 @@ class ChatSendResult(BaseModel):
     text: str
     provider: str
     degraded: bool
+    #: Tools this answer used, in order. Almost always empty; when it is not, the page says so,
+    #: because "Nox changed something on your machine" is not a detail to leave in a log file.
+    tools_used: list[str] = Field(default_factory=list)
 
 
 # ---- stream bot response contracts ---------------------------------------------------------------

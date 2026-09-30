@@ -9,6 +9,41 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Nox can say what it cannot do.** A capability catalogue (`src/nox/capabilities/`) joins three
+  things that were never asked together: which tools exist, what the active profile would decide
+  about each of them, and what is missing entirely. Four answers come out of that and stay apart,
+  because collapsing
+  them is how an assistant ends up claiming things that are not true: a tool can exist and be
+  forbidden here, be allowed and unreachable for want of a token, or simply not be built. Asking
+  the permission engine for all of that leaves no audit entry, via a new `preview()`; recording
+  dozens of decisions for an action nobody took would bury the log it exists to explain. Boundaries
+  are marked `forbidden` rather than `missing`, so a door lock does not read like a backlog item,
+  and the build fails if a row outlives the capability it describes. `capabilities.check` has a
+  fourth answer most assistants leave out: "I have no entry for that", which is not a no.
+- **Saying it now does what clicking it does.** The orchestrator had no idea tools existed: it
+  streamed text, and the tools Nox owns were reachable only from the dashboard or a preset, so
+  "mach das Licht an" produced a sentence about lights and nothing else. Neither provider can be
+  given tools natively - the Claude Code CLI runs with `--tools ""` on purpose, because its own
+  file and shell tools would sit outside Nox's permission engine entirely - so the request travels
+  as one line of text, with the guards where the risk is. A directive counts only as the whole
+  answer, and prose followed by one runs nothing and is logged rather than swallowed. The stream is
+  held back at the head of every tool-enabled turn so the protocol is never read aloud, including
+  when the model keeps asking after the offer was withdrawn. What is offered comes from the
+  capability report under the same agent the call will use, and an integration test walks every
+  offered tool through the real permission engine to prove none would be refused. The dashboard's
+  chat shows which tools an answer used, because "Nox changed something on your machine" does not
+  belong only in a log file. Three rounds, then the offer is taken away and the model has to answer.
+- **Work that outlives the conversation it started in.** A plan (`src/nox/plans/`) is a few tool
+  steps with a title, written down so a person can read them before they run - no command lines, no
+  conditions, no loops, no nesting. `plans.propose` writes nothing and is low risk; `plans.start`
+  is high risk, so every profile falls through to a confirmation, and that confirmation shows the
+  plan's *title* rather than its identifier, because "Start: Downloads sortieren" is a question a
+  person can answer. Approving in the dashboard needs no dialog - the click is the dialog - and
+  either way every step still meets the permission engine. Plans run on the existing task queue, so
+  they survive a restart and pause while a game is running. The step being attempted is written to
+  the checkpoint *before* the call: a step is a tool call with side effects, so a plan that comes
+  back from a crash records that step as interrupted and stops rather than repeating it. A visible
+  gap beats an invisible repeat.
 - **The desktop pet is a creature, not a photograph.** A 2D deformation rig (`ui/pet/src/rig/`)
   runs a triangulated mesh over the pet's artwork, driven by a small bone hierarchy (root, body,
   chest, neck, head, muzzle, ears, gill fins, tail), so it breathes, tilts its head, flicks one ear
