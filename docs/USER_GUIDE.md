@@ -129,6 +129,10 @@ cannot be turned off or hidden by configuration — if something is being captur
   to approve it. Approved plans run in the background, survive a restart and pause while a game is
   running. A plan that was interrupted mid-step says so rather than repeating that step - see
   [`docs/PLANS.md`](PLANS.md).
+- **Asking Nox to change itself**: Nox can write a proposed change to its own source on a branch in
+  a checkout you name (`extend.workspace`, empty by default), run your tests, and show you the diff.
+  It never merges, never pushes and never restarts itself - reading the diff and deciding is yours.
+  It needs the coding profile, because the plugin that writes the change only runs there.
 - **Project manager / coding assistant**, **research/creative assistant**: planned, not part of
   this release.
 

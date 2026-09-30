@@ -26,6 +26,7 @@ from nox.core.config.core import (
     PluginsConfig,
     SupervisorConfig,
 )
+from nox.core.config.extend import ExtendConfig
 from nox.core.config.features import (
     CLIP_ROOTS,
     ClipsConfig,
@@ -71,6 +72,7 @@ class NoxConfig(StrictSection):
     home: HomeConfig = Field(default_factory=HomeConfig)
     presets: PresetsConfig = Field(default_factory=PresetsConfig)
     files: FilesConfig = Field(default_factory=FilesConfig)
+    extend: ExtendConfig = Field(default_factory=ExtendConfig)
     creative: CreativeConfig = Field(default_factory=CreativeConfig)
     sensors: SensorsConfig = Field(default_factory=SensorsConfig)
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)

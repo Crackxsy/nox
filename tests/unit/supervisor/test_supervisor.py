@@ -343,4 +343,7 @@ async def test_shell_quit_sends_sup_stop(sup_factory: Callable[..., Supervisor])
     )
     assert reply["name"] == m.NAME_ACK and reply["payload"]["ok"] is True
     await wait_until(lambda: not psutil.pid_exists(pid), 5.0)
-    assert sup.status().core_pid is None
+    # The process being gone and the supervisor having noticed are two different moments, and the
+    # second one is what this asserts. Reading the record the instant the pid disappears failed in
+    # CI while passing locally - the same shape as the restart test above.
+    await wait_until(lambda: sup.status().core_pid is None, 5.0)

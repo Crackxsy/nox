@@ -44,6 +44,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 
 [Tasks]
+; Ticked by default: the first thing somebody does after installing is look for it, and a
+; start menu entry alone means knowing it is called Nox before you can find out that it is.
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "autostart"; Description: "Nox beim Anmelden automatisch starten / Start Nox automatically at logon"; GroupDescription: "Autostart:"; Flags: unchecked
 
 [Files]
@@ -55,6 +58,7 @@ Source: "{#BuildAppDir}\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesu
 [Icons]
 Name: "{group}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: "-m nox.supervisor"; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"
 Name: "{group}\{cm:UninstallProgram,Nox}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: "-m nox.supervisor"; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"; Tasks: desktopicon
 Name: "{userstartup}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: "-m nox.supervisor"; WorkingDir: "{app}\app"; Tasks: autostart
 
 [Run]

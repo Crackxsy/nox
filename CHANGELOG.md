@@ -9,6 +9,33 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Nox can propose a change to itself, and cannot apply one.** `extend.propose` starts a branch in
+  a checkout you named, asks the `coding` plugin to write the change there, runs your test command,
+  and hands back the diff and what the tests said (`src/nox/extend/`). There is deliberately no
+  `extend.apply`: merging a branch and restarting Nox on the result are things a person does with
+  their own git, which is what keeps "Nox can extend itself" from meaning "Nox can change what it is
+  while you are not looking". `extend.workspace` ships empty, so out of the box there is no
+  repository it may touch and the tool says which setting to fill in. High risk, so every profile
+  asks first - and the confirmation shows the *intent*, because "add a tool for reading my calendar"
+  is a question a person can answer and an identifier is not. The git surface is four verbs with the
+  absences as the point: no merge, no push, no reset, no branch deletion, and the user's checkout is
+  put back on *every* path out, including the ones that raised - which is tested against a real
+  temporary repository rather than a mock, because a mock would have granted that for free.
+- **The installer offers a desktop shortcut**, ticked by default. It made a start menu entry and an
+  optional autostart, which means the first thing somebody does after installing - look for it - only
+  worked if they already knew it was called Nox.
+
+### Fixed
+- **CI has been failing since 2026-09-28, and not for any of the reasons the open dependency PRs
+  were blamed for.** Every one of #45-#62 died the same way: `Windows fatal exception: access
+  violation` in `security/audit.py`, from the queued audit writer's thread. The writer shares the
+  core's SQLite connection under its own lock, and both `NoxCore.stop()` and a unit fixture closed
+  that connection while the thread was inside a statement - which `sqlite3` does not raise on, it
+  faults. Both are fixed; the suite now runs to completion in CI (1982 passed) instead of dying at
+  78%.
+- **A supervisor test asserted on a process record the instant the process disappeared**, which are
+  two different moments. It passed locally and failed in CI - the same shape as the restart test
+  beside it, and fixed the same way.
 - **The creature curls up, lies down and eats.** The key-pose path shipped working and the art for
   it did not exist, so `poses` in the Meereswolf rig was an empty object and every pose request
   quietly did nothing. Three cut-outs now fill it: it curls up when it sleeps, lies down when it is
