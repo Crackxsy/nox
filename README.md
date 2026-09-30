@@ -29,6 +29,11 @@ personality, not a chat window with a mascot on top.
   code-level boundary enforced by a CI job, not a setting you could flip.
 - **Coding agent** — orchestrates the Claude Code CLI inside workspaces you configured, under the
   permission engine.
+- **A personal computer agent** — it can look at and change files in folders you name, see what is
+  running, close a window, draw you a chart, type into a window, and write a proposed change to its
+  own source on a branch for you to read. Every one of those goes through the same permission check
+  and audit entry as a click in the dashboard, and the things it must never do are refused in code
+  rather than by a risk level.
 - **Project/research/creative assistant** — partly built, see the honest status list below.
 
 Design principles: one coherent entity rather than a chatbot with a pet skin; local first with no
@@ -51,6 +56,15 @@ Nox is **pre-1.0**. Honest state as of the latest release:
 | Telegram bridge | Works once a bot token is set |
 | Smart home via Home Assistant: lights, sockets, scenes, media, thermostats, blinds, dashboard Zuhause page | Works against the documented API; never tested against a real instance yet — see [Home Assistant](#home-assistant-smart-home) |
 | Rocket League coach | Stage 1: observation and replay pipeline; coaching quality is early |
+| Tools in a conversation: anything on the dashboard is reachable by typing or saying it | Works; the model is offered only what the active profile allows |
+| Capability catalogue: what Nox can do, may do, and cannot do, as data | Works; "I have no entry for that" is a real answer |
+| Presets: one phrase, several systems | Works; ships empty, so a fresh install can run nothing |
+| Plans: several steps, approved once, surviving a restart | Works; an interrupted step is reported, never repeated |
+| Files in the folders you name | Works; `files.roots` ships empty, and deleting only ever means the Recycle Bin |
+| Windows and processes: see them, focus, close, end | Works; Windows' own processes, Nox and a running game are refused in code |
+| Board: Nox draws tables, charts and facts in the dashboard | Works; it sends values, never markup |
+| Typing into a window | Works; refuses entirely while a watched game runs anywhere |
+| Self-extension: Nox proposes a change to its own source on a branch | Mechanism works and is tested; **not proven end to end** - needs the coding profile and a configured workspace |
 | Coding agent (Claude Code orchestration) | Works inside configured workspaces; still rough |
 | Clips, creative-app detection, mobile companion | Early, partly scaffolding |
 | Signed installer, auto-update, rollback | Not proven yet — run from source for now |
