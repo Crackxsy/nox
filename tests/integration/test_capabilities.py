@@ -251,14 +251,22 @@ async def test_the_offer_stays_within_its_budget(core: NoxCore) -> None:
     is about 1500 tokens, affordable for a cloud model and already noticeable for the small
     local one Nox falls back to. The average per tool is the more useful canary - it fails when
     a single tool arrives with a paragraph of description, which the total would hide for a
-    while. Measured as the file tools and desktop tools landed: 26 tools / 3668 characters,
-    then 30 / 4110, now 43 / 5591 - about 1400 tokens a turn. The next feature will trip this
-    test, and the answer then is a relevance filter rather than a bigger number here: the
-    offer is already most of what a small local model has room to read.
+    while.
+
+    Measured as features landed: 26 tools / 3668 characters, then 30 / 4110, 43 / 5591, now 44 /
+    5888 - roughly 1400 tokens a turn. An earlier version of this docstring said the answer at
+    this point was a relevance filter. Designing one changed that: the tool names and descriptions
+    are English and the user writes German, so lexical relevance misses `home.light` for "mach das
+    Licht an" and a filter that misses *hides a capability*, which is a worse failure than a long
+    prompt. Doing it properly means German and English trigger words supplied per tool at
+    registration - a deliberate design step, not something to squeeze in behind a number.
+
+    So the budget is 8000 and the reason is written down. The per-tool average below is what still
+    catches the mistake this test is really for: one tool arriving with a paragraph about itself.
     """
     section = core.orchestrator.tool_gate.prompt()
     offered = len(core.orchestrator.tool_gate.offer())
     print(f"\ntool offer: {offered} tools, {len(section)} characters")
 
-    assert len(section) < 6000, f"{len(section)} characters is over the per-turn budget"
+    assert len(section) < 8000, f"{len(section)} characters is over the per-turn budget"
     assert len(section) / offered < 160, "some tool is describing itself at length"

@@ -84,8 +84,13 @@ def _properties(tool: OfferedTool) -> str:
 
 
 #: Descriptions are written for the dashboard, where there is room. Here every character rides
-#: along on every tool-enabled turn, so the offer carries the first sentence and no more. Measured:
-#: the full text of 26 tools costs about 1100 tokens a turn, the first sentences about half that.
+#: along on every tool-enabled turn, so the offer carries the first sentence and no more. Measured
+#: at 44 tools: about 1400 tokens a turn, and roughly a fifth more without this cut.
+#:
+#: Offering *fewer* tools would save more and is not done, deliberately: the names are English and
+#: the user writes German, so matching a request to a tool lexically misses, and a filter that
+#: misses hides a capability. The way to do it is German and English trigger words per tool,
+#: supplied where the tool is registered - see the budget test in tests/integration/.
 SUMMARY_LIMIT = 110
 
 
