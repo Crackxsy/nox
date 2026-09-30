@@ -27,6 +27,7 @@ const base: PetInput = {
   mood: DEFAULT_MOOD,
   sleep: 'none',
   speakingLevel: 0,
+  feeds: 0,
 };
 
 const FUNCTIONALS: Functional[] = [
@@ -160,5 +161,28 @@ describe('reduceEvent', () => {
     expect(s.functional).toBe('unavailable');
     expect(reduceEvent(s, 'weird.event', { a: 1 })).toBe(s);
     expect(toInput(s).functional).toBe('unavailable');
+  });
+});
+
+describe('treats', () => {
+  it('counts a feed, so the view can decide for how long it shows', () => {
+    // A counter and not a timestamp: a reducer that reads the clock cannot be tested for what it
+    // does, only for what time it was when it did it.
+    const fed = reduceEvent(INITIAL_STATE, 'pet.interaction', { type: 'feed' });
+
+    expect(fed.feeds).toBe(INITIAL_STATE.feeds + 1);
+    expect(reduceEvent(fed, 'pet.interaction', { type: 'feed' }).feeds).toBe(2);
+  });
+
+  it('ignores the interactions that are not treats', () => {
+    for (const type of ['click', 'drag', undefined]) {
+      expect(reduceEvent(INITIAL_STATE, 'pet.interaction', { type }).feeds).toBe(0);
+    }
+  });
+
+  it('carries the count into the animation input', () => {
+    const fed = reduceEvent(INITIAL_STATE, 'pet.interaction', { type: 'feed' });
+
+    expect(toInput(fed).feeds).toBe(1);
   });
 });

@@ -30,7 +30,7 @@ export interface PetProps {
   speakingLevel: number;
   onSpeakingDecay: (level: number) => void;
   interactive: boolean;
-  onInteract: (type: 'click', x: number, y: number) => void;
+  onInteract: (type: 'click' | 'feed', x: number, y: number) => void;
   size?: number;
   /** Silhouette/palette/motion parameters (OP-1); defaults to the `neutral` placeholder. */
   variant?: PetVariant;
@@ -166,7 +166,9 @@ export function Pet({
         // A keyboard activation reports (0, 0); answer with the centre instead of a corner.
         const x = e.clientX === 0 && e.clientY === 0 ? rect.width / 2 : e.clientX - rect.left;
         const y = e.clientX === 0 && e.clientY === 0 ? rect.height / 2 : e.clientY - rect.top;
-        onInteract('click', Math.round(x), Math.round(y));
+        // Shift is the treat. It works on a click and on Enter while the creature has focus, so
+        // the second interaction is keyboard-reachable for the same reason the first one is.
+        onInteract(e.shiftKey ? 'feed' : 'click', Math.round(x), Math.round(y));
       }}
     >
       <canvas

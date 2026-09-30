@@ -104,6 +104,8 @@ export const api = {
 
   // -- presets ---------------------------------------------------------------------------------
   presetsList: (c: IpcClient) => c.request('presets.list', {}),
+  viewsList: (c: IpcClient) => c.request('views.list', {}),
+  viewsClear: (c: IpcClient) => c.request('views.clear', {}),
   /** Runs every step of one preset; the result says which step failed, if any. */
   presetsActivate: (c: IpcClient, preset: string) => c.request('presets.activate', { preset }),
   /** Starts one registered program on its own, through the same starter a step uses. */

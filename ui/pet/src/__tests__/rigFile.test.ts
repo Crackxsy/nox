@@ -66,6 +66,7 @@ function input(overrides: Partial<PetInput> = {}): PetInput {
     mood: DEFAULT_MOOD,
     sleep: 'none',
     speakingLevel: 0,
+    feeds: 0,
     ...overrides,
   };
 }

@@ -360,6 +360,7 @@ class CoreHandlers:
             "text": turn.response,
             "provider": turn.provider,
             "degraded": turn.degraded,
+            "tools_used": list(turn.tools_used),
         }
 
     async def pet_interact(self, ctx: RequestContext, p: PetInteract) -> dict[str, Any]:

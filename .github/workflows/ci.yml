@@ -100,16 +100,42 @@ jobs:
       # contain unrelated substring matches, e.g. Telegram/Twitch chat-send input *models* named
       # `SendInput`/`ChatSendInput`, not a Win32 API call; scanning all of plugins/ would
       # false-positive on those).
+      # Process memory and the third-party automation libraries are forbidden outright, everywhere.
       - name: Forbidden API scan
         shell: bash
         run: |
           set -e
-          pattern='SendInput|pydirectinput|pyautogui|ReadProcessMemory|WriteProcessMemory'
+          pattern='pydirectinput|pyautogui|ReadProcessMemory|WriteProcessMemory'
           if grep -RInE "$pattern" src/ plugins/rl/; then
-            echo "::error::Forbidden input-synthesis/process-memory API found under src/ or plugins/rl/ (Security Model §10 - Rocket League is observation only)"
+            echo "::error::Forbidden process-memory or automation API found under src/ or plugins/rl/ (Security Model §10 - Rocket League is observation only)"
             exit 1
           fi
-          echo "clean: no forbidden APIs under src/ or plugins/rl/"
+          echo "clean: no process-memory or automation APIs under src/ or plugins/rl/"
+
+      # `SendInput` is allowed in exactly one file, and only because that file refuses to send
+      # anything while a watched game is running. Two checks, because either one alone is a hole:
+      # the first keeps input synthesis from spreading, the second keeps the exemption honest.
+      - name: Input synthesis stays in one guarded file
+        shell: bash
+        run: |
+          set -e
+          allowed='src/nox/desktop/keyboard.py'
+          found=$(grep -RIlE 'SendInput' src/ plugins/rl/ || true)
+          for file in $found; do
+            if [ "$file" != "$allowed" ]; then
+              echo "::error file=$file::SendInput may only appear in $allowed (Security Model §10)"
+              exit 1
+            fi
+          done
+          if ! grep -q 'GameRunningError' "$allowed"; then
+            echo "::error file=$allowed::the game guard is gone from the only file allowed to synthesise input"
+            exit 1
+          fi
+          if ! grep -q 'if game_running:' "$allowed"; then
+            echo "::error file=$allowed::the game check is gone from the only file allowed to synthesise input"
+            exit 1
+          fi
+          echo "clean: SendInput only in $allowed, and its game guard is present"
 
   release-hygiene:
     name: Release hygiene (third-party license audit, secrets scan)

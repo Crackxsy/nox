@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from nox.core.config import NoxConfig
 from nox.core.state import PrivacyMode
 from nox.security.audit import SqliteAuditLog
 from nox.security.model import PermissionRequest, Risk
 from nox.security.permissions import DefaultPermissionEngine, InMemoryGrantStore
 from nox.security.privacy import PrivacyService
 from nox.security.profiles import YamlProfileProvider
+from nox.security.service import SecurityContext
 from tests.unit.fakes import FakeBus, MutableClock
 
 REPO = Path(__file__).resolve().parents[3]
@@ -57,6 +60,32 @@ def conn() -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(":memory:", check_same_thread=False)
     yield connection
     connection.close()
+
+
+@pytest.fixture
+def build_security(conn: sqlite3.Connection) -> Iterator[Callable[..., SecurityContext]]:
+    """Build a `SecurityContext` on the shared connection, and stop it before that connection goes.
+
+    A context owns a `QueuedAuditLog`, whose writer runs on its own thread and shares this
+    connection - guarded by the audit log's lock, not the database's. Closing the connection while
+    that thread is inside a statement is an access violation rather than an exception: `sqlite3`
+    does not raise there, the process faults. The suite died exactly that way once, in
+    `audit.py:_last`, from the writer thread.
+
+    Depending on `conn` is what fixes the order: pytest tears this down first, so every writer is
+    stopped before the connection is closed. Building a context without this fixture puts the
+    hazard back.
+    """
+    made: list[SecurityContext] = []
+
+    def build(config: NoxConfig, **kwargs: Any) -> SecurityContext:
+        context = SecurityContext.build(config, conn=conn, **kwargs)
+        made.append(context)
+        return context
+
+    yield build
+    for context in made:
+        context.close()
 
 
 @pytest.fixture

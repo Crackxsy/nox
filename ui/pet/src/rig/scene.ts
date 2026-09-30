@@ -111,6 +111,33 @@ export class RigScene {
   }
 
   /**
+   * Queue one whole drawing - the base one, or a key pose - at `alpha`.
+   *
+   * The base drawing is skinned: that is the whole point of the rig. A key pose is *not*, and this
+   * is the difference that makes the poses usable at all. The mesh's bone weights are painted for a
+   * standing creature, so a given patch of texture is "the head" or "the tail" only in the base
+   * picture. Skinning a curled-up body with them turns the head bone loose on whatever happens to
+   * sit at those coordinates, which smears the drawing instead of animating it.
+   */
+  private drawing(pose: string | null, alpha: number): void {
+    if (alpha <= 0) return;
+    this.calls.push({
+      image: this.textureFor(pose),
+      positions: pose === null ? this.basePositions : this.baseMesh.rest,
+      uv: this.baseMesh.uv,
+      indices: this.baseMesh.indices,
+      alpha,
+    });
+  }
+
+  /** How visible the base drawing is right now, which is also how visible its layers are. */
+  private baseVisibility(dissolve: number): number {
+    if (this.currentPose === null) return dissolve;
+    if (this.previousPose === null) return 1 - dissolve;
+    return 0;
+  }
+
+  /**
    * Advance to `nowMs` and draw one frame.
    *
    * `lidClosure` is the floor under whatever the blink clip is doing, so a sleeping pet keeps its
@@ -127,36 +154,31 @@ export class RigScene {
         ? 1
         : Math.min(1, (nowMs - this.dissolveStartMs) / POSE_CROSSFADE_MS);
     if (dissolve < 1) {
-      this.calls.push({
-        image: this.textureFor(this.previousPose),
-        positions: this.basePositions,
-        uv: this.baseMesh.uv,
-        indices: this.baseMesh.indices,
-        alpha: 1 - dissolve,
-      });
+      this.drawing(this.previousPose, 1 - dissolve);
     } else {
       this.previousPose = this.currentPose;
     }
-    this.calls.push({
-      image: this.textureFor(this.currentPose),
-      positions: this.basePositions,
-      uv: this.baseMesh.uv,
-      indices: this.baseMesh.indices,
-      alpha: dissolve,
-    });
+    this.drawing(this.currentPose, dissolve);
 
-    for (const entry of this.layers) {
-      skin(entry.mesh, matrices, entry.positions);
-      if (entry.lidBoneIndex >= 0) {
-        this.applyLid(entry, matrices, pose, lidClosure);
+    // The eyes are layers of the *base* drawing, placed by the skeleton. A key pose is its own
+    // picture and carries its own face - a curled-up sleeping creature shows none at all - so the
+    // layers fade exactly as the base drawing does. At full alpha over a curled body they were two
+    // eyes hanging in the air above it.
+    const baseAlpha = this.baseVisibility(dissolve);
+    if (baseAlpha > 0) {
+      for (const entry of this.layers) {
+        skin(entry.mesh, matrices, entry.positions);
+        if (entry.lidBoneIndex >= 0) {
+          this.applyLid(entry, matrices, pose, lidClosure);
+        }
+        this.calls.push({
+          image: entry.image,
+          positions: entry.positions,
+          uv: entry.mesh.uv,
+          indices: entry.mesh.indices,
+          alpha: baseAlpha,
+        });
       }
-      this.calls.push({
-        image: entry.image,
-        positions: entry.positions,
-        uv: entry.mesh.uv,
-        indices: entry.mesh.indices,
-        alpha: 1,
-      });
     }
     this.renderer.draw(this.calls);
   }

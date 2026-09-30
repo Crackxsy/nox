@@ -133,6 +133,10 @@ class NoxCore:
         self.auto_extensions = extensions
         self.session_id = uuid.uuid4().hex
         self.stopped = asyncio.Event()
+        #: False when the queued audit writer was still working when shutdown gave up on it. The
+        #: writer shares the core's SQLite connection, so closing that connection while it is in
+        #: there is an access violation, not an exception - see `stop()`.
+        self._audit_drained = True
         #: Set by the supervisor's stop request. The entry point waits on it as well as on an OS
         #: signal, and calls `stop()` for whichever arrives first.
         self.shutdown_requested = asyncio.Event()
@@ -555,7 +559,17 @@ class NoxCore:
         if self.tokens is not None:
             self.tokens.remove_session_token()
         if self.db is not None:
-            self.db.close()
+            if self._audit_drained:
+                self.db.close()
+            else:
+                # The audit writer runs on its own thread and shares this connection, guarded by
+                # its own lock rather than the database's. Closing it now while that thread is
+                # inside a statement crashes the process - `sqlite3` does not raise there, it
+                # faults. Leaving one connection open as the process exits costs nothing.
+                log.error(
+                    "core.database_left_open",
+                    reason="the audit writer did not finish; closing its connection would crash",
+                )
         self.job.close()
         shutdown_logging()
         self.stopped.set()
@@ -595,7 +609,8 @@ class NoxCore:
                 result="ok",
                 details={"reason": reason},
             )
-            if not self.security.close():
+            self._audit_drained = self.security.close()
+            if not self._audit_drained:
                 log.error("audit.pending_entries_on_shutdown")
         if self.sessions is not None:
             try:

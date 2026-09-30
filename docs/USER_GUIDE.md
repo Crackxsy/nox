@@ -85,6 +85,9 @@ cannot be turned off or hidden by configuration — if something is being captur
 
 - **Desktop pet**: a small always-on-top window with a stable personality, mood, and voice
   (local TTS/STT by default; barge-in supported).
+- **Giving the pet a treat**: shift-click the creature, or press Shift+Enter while it has focus. It
+  eats, and it cheers up a little more than it does from an ordinary click. It curls up when it
+  sleeps and lies down when it is bored, on its own.
 - **Voice**: push-to-talk (`ctrl+alt+space` by default) or the wake word "Nox"; local
   speech-to-text (faster-whisper) and text-to-speech (Piper).
 - **Stream companion** (Twitch/OBS, opt-in at onboarding): chat responses, a "Funken" viewer
@@ -99,6 +102,37 @@ cannot be turned off or hidden by configuration — if something is being captur
   also start at a time of day or when a game launches. Nothing is configured by default and
   the language model can only name a preset, never assemble one: see
   [`docs/PRESETS.md`](PRESETS.md).
+- **Typing for you**: Nox can type text into one window - it brings the window to the front first,
+  checks it is really there, and asks you before it does any of it. Letters only: no key
+  combinations, no mouse. And nothing at all while a game is running, anywhere on the machine, not
+  just when the game is the window in question.
+- **Windows and programs**: Nox can tell you what is running and what is open, bring a window to
+  the front, minimise it, or ask a program to close the way its X button does. Closing and ending a
+  program ask you first. Windows' own session processes, Nox itself and a running game are out of
+  bounds entirely - not "ask first", but refused.
+- **Files**: Nox can look at and change files in the folders you name, and nowhere else. The list
+  ships empty, so a fresh installation reaches nothing outside its own vault. Writing asks first,
+  and deleting only ever moves a file to the Recycle Bin - there is no delete you cannot undo. See
+  [`docs/FILES.md`](FILES.md).
+- **Tools in a conversation**: anything you can do with a button on the dashboard, you can ask
+  for in the chat or say out loud - the same tool, the same permission check, the same audit
+  entry. Nox is only offered the tools your active profile actually allows, so it cannot promise
+  something the profile forbids. Which tools an answer used is shown under that answer.
+- **Asking what Nox can do**: "was kannst du gerade?" is answered from a catalogue rather than
+  guessed. It distinguishes what is not built, what this profile forbids, what is missing a token,
+  and what Nox will never do - and it says "I have no entry for that" instead of a false no.
+- **Board**: when numbers are clearer looked at than read out, Nox draws them - a table, a bar or
+  line chart, a list of facts, or a note - and they appear on the Board page. Nox can only choose
+  between those five shapes and fill in the values; it cannot send the dashboard anything to
+  execute.
+- **Plans**: for work with several steps, Nox writes down what it intends to do and waits for you
+  to approve it. Approved plans run in the background, survive a restart and pause while a game is
+  running. A plan that was interrupted mid-step says so rather than repeating that step - see
+  [`docs/PLANS.md`](PLANS.md).
+- **Asking Nox to change itself**: Nox can write a proposed change to its own source on a branch in
+  a checkout you name (`extend.workspace`, empty by default), run your tests, and show you the diff.
+  It never merges, never pushes and never restarts itself - reading the diff and deciding is yours.
+  It needs the coding profile, because the plugin that writes the change only runs there.
 - **Project manager / coding assistant**, **research/creative assistant**: planned, not part of
   this release.
 

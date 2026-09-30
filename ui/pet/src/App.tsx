@@ -191,7 +191,7 @@ export function App({ token, lang, overlay, variantId, still, animate, stillExpr
     setState((s) => (s.speakingLevel === level ? s : { ...s, speakingLevel: level }));
   }, []);
 
-  const onInteract = useCallback((type: 'click', x: number, y: number) => {
+  const onInteract = useCallback((type: 'click' | 'feed', x: number, y: number) => {
     const c = clientRef.current;
     if (!c || c.status !== 'online') return;
     c.request('pet.interact', { type, x, y }).catch(() => {

@@ -7,6 +7,9 @@
  * perfectly and simply does not move. Both are caught here rather than by looking at a screenshot.
  */
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 // The very file the browser fetches, not a copy of it: a hand edit that breaks the shipped rig has
@@ -132,3 +135,21 @@ describe('the Meereswolf rig file', () => {
     }
   });
 });
+
+describe('the key poses the variant ships', () => {
+  it('names art for the poses the creature actually reaches', () => {
+    // `curl` is what sleeping asks for and `lie` is what boredom asks for (RiggedPet.tsx). A rig
+    // that stopped naming them would leave the creature standing in both, silently.
+    expect(Object.keys(rig.poses).sort()).toEqual(['curl', 'eat', 'lie']);
+  });
+
+  it('points every pose at a file that is really there', () => {
+    // The loader treats a missing pose frame as "no art yet" rather than an error, which is right
+    // for a variant that has not drawn one - and would hide a typo in a variant that has.
+    // Vitest runs with the package root as its working directory, which is where `public/` is.
+    for (const [name, pose] of Object.entries(rig.poses)) {
+      const file = join(process.cwd(), 'public', 'variants', 'meereswolf', rig.assetDir, pose.file);
+      expect(existsSync(file), `${name} -> ${pose.file}`).toBe(true);
+    }
+  });
+})

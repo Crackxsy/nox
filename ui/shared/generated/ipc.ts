@@ -85,6 +85,7 @@ export interface ChatSendResult {
   text: string;
   provider: string;
   degraded: boolean;
+  tools_used?: string[];
 }
 
 export interface PluginStatusEntry {
@@ -784,6 +785,12 @@ export interface SettingsChanged {
 export interface TwitchAuthChanged {
   state: string;
   login?: string;
+}
+
+export interface ViewShown {
+  id: string;
+  kind: string;
+  title: string;
 }
 
 export interface RlVisionDetections {

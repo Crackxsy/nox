@@ -86,6 +86,29 @@ async def test_interaction_nudges_mood(pet):
     assert svc.mood.affection > before
 
 
+async def test_a_treat_is_worth_more_than_a_pat(pet):
+    """And it lifts the one thing a pat cannot: energy."""
+    svc, bus, _ = pet
+    patted = PetService(FakeBus(), FakeState(), baseline=Mood())
+    patted._nudge(affection=+0.05, attention=+0.1, mood=+0.02)
+    energy_before = svc.mood.energy
+
+    await _pub(bus, E.PET_INTERACTION, type="feed")
+
+    assert svc.mood.affection > patted.mood.affection
+    assert svc.mood.energy > energy_before
+
+
+async def test_an_interaction_nobody_defined_changes_nothing(pet):
+    """A client is free to send anything; the mood is not a place to guess at what it meant."""
+    svc, bus, _ = pet
+    before = svc.mood.model_dump()
+
+    await _pub(bus, E.PET_INTERACTION, type="headbutt")
+
+    assert svc.mood.model_dump() == before
+
+
 def test_decay_moves_toward_baseline():
     svc = PetService(FakeBus(), FakeState(), baseline=Mood())
     svc._nudge(stress=+0.5)

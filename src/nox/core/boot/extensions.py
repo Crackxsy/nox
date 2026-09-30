@@ -37,9 +37,16 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "clips",
     "creative",
     "home",
+    "files",
+    "desktop",
+    "views",
+    "extend",
     "presets",
+    "plans",
     "settings",
     "remote",
+    # Last on purpose: it describes the others, and reads the registry they filled.
+    "capabilities",
 )
 
 

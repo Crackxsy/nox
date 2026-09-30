@@ -9,6 +9,155 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Nox can propose a change to itself, and cannot apply one.** `extend.propose` starts a branch in
+  a checkout you named, asks the `coding` plugin to write the change there, runs your test command,
+  and hands back the diff and what the tests said (`src/nox/extend/`). There is deliberately no
+  `extend.apply`: merging a branch and restarting Nox on the result are things a person does with
+  their own git, which is what keeps "Nox can extend itself" from meaning "Nox can change what it is
+  while you are not looking". `extend.workspace` ships empty, so out of the box there is no
+  repository it may touch and the tool says which setting to fill in. High risk, so every profile
+  asks first - and the confirmation shows the *intent*, because "add a tool for reading my calendar"
+  is a question a person can answer and an identifier is not. The git surface is four verbs with the
+  absences as the point: no merge, no push, no reset, no branch deletion, and the user's checkout is
+  put back on *every* path out, including the ones that raised - which is tested against a real
+  temporary repository rather than a mock, because a mock would have granted that for free.
+- **The installer offers a desktop shortcut**, ticked by default. It made a start menu entry and an
+  optional autostart, which means the first thing somebody does after installing - look for it - only
+  worked if they already knew it was called Nox.
+
+### Fixed
+- **CI has been failing since 2026-09-28, and not for any of the reasons the open dependency PRs
+  were blamed for.** Every one of #45-#62 died the same way: `Windows fatal exception: access
+  violation` in `security/audit.py`, from the queued audit writer's thread. The writer shares the
+  core's SQLite connection under its own lock, and both `NoxCore.stop()` and a unit fixture closed
+  that connection while the thread was inside a statement - which `sqlite3` does not raise on, it
+  faults. Both are fixed; the suite now runs to completion in CI (1982 passed) instead of dying at
+  78%.
+- **A supervisor test asserted on a process record the instant the process disappeared**, which are
+  two different moments. It passed locally and failed in CI - the same shape as the restart test
+  beside it, and fixed the same way.
+- **The creature curls up, lies down and eats.** The key-pose path shipped working and the art for
+  it did not exist, so `poses` in the Meereswolf rig was an empty object and every pose request
+  quietly did nothing. Three cut-outs now fill it: it curls up when it sleeps, lies down when it is
+  bored, and eats when you give it a treat - shift-click it, or Shift+Enter while it has focus, so
+  the second interaction is keyboard-reachable for the same reason the first one was made to be. A
+  treat lifts affection and mood more than a pat does and lifts the one thing a pat cannot, energy.
+  Making the art usable took two fixes that were only visible by watching the pet: a key pose is a
+  *different picture*, not a deformation of the base one, so it is no longer skinned - the mesh's
+  bone weights describe the base photograph, and turning the head bone loose on a curled-up body
+  smears the drawing instead of animating it. And the eyes, which are separate layers placed by the
+  skeleton, now fade exactly as the base drawing does; at full alpha over a curled body they were
+  two eyes hanging in the air above it. `make_pose_frames.py` prepares a cut-out for the rig: it
+  downscales in premultiplied alpha, because averaging raw colour across a transparent edge drags
+  the colour of nothing into the silhouette and leaves a pale halo, and it shifts each pose down
+  until its lowest pixel meets the base drawing's - which is what makes the dissolve read as the
+  creature lying down *where it was standing* rather than sinking through the floor.
+- **Nox can type into a window, and the boundary around that is narrower than the request.** The
+  input-synthesis prohibition was "no file anywhere may import one of these APIs". It is now
+  window-scoped, as asked: `desktop.type_text` brings one window to the front, checks it really got
+  there, and types - high risk, so every profile asks first. `SendInput` lives in exactly one file
+  (`src/nox/desktop/keyboard.py`) and that file refuses to send anything at all while a watched game
+  process is running *anywhere on the machine*, which is stricter than refusing the game's window:
+  Rocket League's boundary is not only about where input lands, and a process that observes a game
+  and synthesises input is the shape an anti-cheat is right to distrust. The cost of being wrong
+  there is an account, not a failed request. It types characters (`KEYEVENTF_UNICODE`), which cannot
+  express Alt+F4 or Ctrl+A - the damage in synthetic input is almost never in the letters. There is
+  no mouse input, and `game.input.send` stays in the immutable hard-prohibition list. The CI guard
+  was narrowed rather than relaxed: process-memory calls and the automation libraries are still
+  forbidden everywhere, `SendInput` must appear in that one file and nowhere else, *and* that file
+  must still contain its game guard - an exemption nobody re-checks is a hole. The guard caught its
+  first thing immediately: this module's own docstring, which had named the forbidden APIs in prose.
+  A grep cannot tell a mention from a call, so the prose gave way. Not one test sends a keystroke;
+  every one of them asserts something that did not happen.
+- **Nox can draw, and it draws data rather than code.** `view.show` puts a table, a bar chart, a
+  line chart, a list of facts or a plain note on a new Board page in the dashboard
+  (`src/nox/views/`, `ui/dashboard/src/pages/Board.tsx`). The tempting design is to let the model
+  write HTML or SVG and put that on the page, which is an injection hole with extra steps: the
+  dashboard would be rendering whatever a language model was talked into producing. So the model
+  never sends markup. It picks one of five shapes, fills in values, and the page owns the rendering -
+  a bar is a div with a width, a table is a table, text is text, and React escapes all of it. The
+  shapes are a discriminated union with `extra="forbid"`, so a table sent with a `bars` list is
+  refused rather than silently stripped, a row that does not fit its columns is named, and a line
+  chart with more values than labels is named too. Every list is bounded, because a view is
+  something a person looks at and four hundred rows is not that. The wire input is deliberately
+  flat: the tool offer in the prompt lists argument names, not nested schemas, so a single `view`
+  object would have shown up as `view: object` and the five shapes would have been invisible to the
+  model. The strictness lives one layer in, which is also what lets the tool say *which* field was
+  wrong - the executor answers a failed input validation with a generic "invalid input" on purpose,
+  since it must not put user content in a log. The `view.shown` event carries the title and the kind
+  and not the view, and the page re-reads the board, the same way the Settings page re-reads its
+  snapshot after `settings.changed`. The charts are plain CSS and one inline SVG: a charting library
+  would be a dependency, a bundle and a theme to argue with, for five shapes that are a div and a
+  polyline.
+- **Nox can see what is running and tidy up after you.** `desktop.windows`,
+  `desktop.processes`, `desktop.window_focus/minimize/restore/close` and `desktop.process_stop`
+  (`src/nox/desktop/`). A model does not know window handles, so the window tools take a title
+  fragment - and the case that matters is several matches: "close Chrome" with four Chrome windows
+  open reports the candidates and changes nothing, because a guess closes the wrong window and the
+  user cannot tell a guess was made. `window_close` posts `WM_CLOSE`, which is what the X button
+  does: the program is *asked* and may still offer to save, and a true answer means asked, not gone.
+  `process_stop` is the other half of that pair and says so in its own description, because a model
+  picking the wrong one of the two costs the user work; it never escalates to a kill when a
+  terminate is ignored, since a program that will not go is either busy saving or stuck and guessing
+  which is not the code's job. `window_focus` reports whether the window actually ended up in front
+  rather than whether the call returned - Windows refuses `SetForegroundWindow` in cases this
+  process cannot influence, and saying it worked would be a lie. Three things are out of bounds
+  entirely, in code rather than as a risk level: Windows' own session processes, Nox itself
+  (including its workers - a tool that can kill the process holding the audit log is a kill switch
+  with no record), and the game, because observation-only is not only about input. The gap rows for
+  process and window control came out of the capability table, and the remaining desktop gaps were
+  renamed to the names their tools will have, so the staleness check can catch the next one.
+- **Nox can work with your files, in the folders you name and nowhere else.** `file.list`,
+  `file.read`, `file.write`, `file.move` and `file.delete` (`src/nox/files/`), bounded by a
+  `files.roots` list that ships empty: a fresh installation reaches nothing outside its own vault,
+  and the tools name the setting to add a folder to instead of failing oddly. An empty list means
+  nowhere, never everywhere - the other reading is how a guard meant to restrict ends up permitting.
+  Paths are resolved *before* they are checked, so `..`, symlinks and Windows junctions are all
+  checked against where they really lead; the junction test creates a real junction rather than a
+  mock. Writing asks first in every profile that has not said otherwise, never replaces a file
+  unless told to and never invents a missing folder, because a typo would otherwise build a tree
+  nobody looks in. Reading refuses anything that is not text and caps the size, since a file read
+  becomes part of a prompt. Deleting goes through the Windows shell with `FOF_ALLOWUNDO` - the
+  Recycle Bin, where it can be got back - and there is no fallback to `os.unlink`: if the shell
+  refuses, the file stays. Turning the setting off removes the delete tool rather than making it
+  permanent. Each tool reports its path as the permission target, so *writing is fine under
+  Downloads, ask me anywhere else* is a profile rule and not a code change. See
+  [`docs/FILES.md`](docs/FILES.md).
+- **Nox can say what it cannot do.** A capability catalogue (`src/nox/capabilities/`) joins three
+  things that were never asked together: which tools exist, what the active profile would decide
+  about each of them, and what is missing entirely. Four answers come out of that and stay apart,
+  because collapsing
+  them is how an assistant ends up claiming things that are not true: a tool can exist and be
+  forbidden here, be allowed and unreachable for want of a token, or simply not be built. Asking
+  the permission engine for all of that leaves no audit entry, via a new `preview()`; recording
+  dozens of decisions for an action nobody took would bury the log it exists to explain. Boundaries
+  are marked `forbidden` rather than `missing`, so a door lock does not read like a backlog item,
+  and the build fails if a row outlives the capability it describes. `capabilities.check` has a
+  fourth answer most assistants leave out: "I have no entry for that", which is not a no.
+- **Saying it now does what clicking it does.** The orchestrator had no idea tools existed: it
+  streamed text, and the tools Nox owns were reachable only from the dashboard or a preset, so
+  "mach das Licht an" produced a sentence about lights and nothing else. Neither provider can be
+  given tools natively - the Claude Code CLI runs with `--tools ""` on purpose, because its own
+  file and shell tools would sit outside Nox's permission engine entirely - so the request travels
+  as one line of text, with the guards where the risk is. A directive counts only as the whole
+  answer, and prose followed by one runs nothing and is logged rather than swallowed. The stream is
+  held back at the head of every tool-enabled turn so the protocol is never read aloud, including
+  when the model keeps asking after the offer was withdrawn. What is offered comes from the
+  capability report under the same agent the call will use, and an integration test walks every
+  offered tool through the real permission engine to prove none would be refused. The dashboard's
+  chat shows which tools an answer used, because "Nox changed something on your machine" does not
+  belong only in a log file. Three rounds, then the offer is taken away and the model has to answer.
+- **Work that outlives the conversation it started in.** A plan (`src/nox/plans/`) is a few tool
+  steps with a title, written down so a person can read them before they run - no command lines, no
+  conditions, no loops, no nesting. `plans.propose` writes nothing and is low risk; `plans.start`
+  is high risk, so every profile falls through to a confirmation, and that confirmation shows the
+  plan's *title* rather than its identifier, because "Start: Downloads sortieren" is a question a
+  person can answer. Approving in the dashboard needs no dialog - the click is the dialog - and
+  either way every step still meets the permission engine. Plans run on the existing task queue, so
+  they survive a restart and pause while a game is running. The step being attempted is written to
+  the checkpoint *before* the call: a step is a tool call with side effects, so a plan that comes
+  back from a crash records that step as interrupted and stops rather than repeating it. A visible
+  gap beats an invisible repeat.
 - **The desktop pet is a creature, not a photograph.** A 2D deformation rig (`ui/pet/src/rig/`)
   runs a triangulated mesh over the pet's artwork, driven by a small bone hierarchy (root, body,
   chest, neck, head, muzzle, ears, gill fins, tail), so it breathes, tilts its head, flicks one ear

@@ -47,6 +47,7 @@ from nox.core.events.desktop import (
     SensorProcessStarted,
     SettingsChanged,
     TwitchAuthChanged,
+    ViewShown,
 )
 from nox.core.events.mobile import (
     RemoteCommand,
@@ -209,6 +210,7 @@ __all__ = [
     "TranscriptReady",
     "TtsStarted",
     "TwitchAuthChanged",
+    "ViewShown",
     "TwitchChatMessage",
     "TwitchChatMoodChanged",
     "TwitchCommandInvoked",

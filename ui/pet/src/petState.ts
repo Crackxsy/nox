@@ -49,6 +49,8 @@ export interface PetInput {
   sleep: SleepTier;
   /** 0..1, bumped by tts.chunk and decayed per frame. */
   speakingLevel: number;
+  /** Monotonic count of treats. The view turns a change into a few seconds of the eating pose. */
+  feeds: number;
 }
 
 export type Ring = 'none' | 'pulse' | 'orbit' | 'segments' | 'shield' | 'cross' | 'alert' | 'bar';
@@ -304,6 +306,8 @@ export interface PetState {
   capture: CaptureFlags;
   privacyMode: string;
   muted: boolean;
+  /** Counter, not a timestamp: a reducer that reads the clock cannot be tested for what it does. */
+  feeds: number;
 }
 
 export const INITIAL_STATE: PetState = {
@@ -317,6 +321,7 @@ export const INITIAL_STATE: PetState = {
   capture: { microphone: false, camera: false, screen: false, cloud: false },
   privacyMode: 'balanced',
   muted: false,
+  feeds: 0,
 };
 
 const FUNCTIONALS: ReadonlySet<string> = new Set([
@@ -351,6 +356,10 @@ export function reduceEvent(state: PetState, name: string, payload: Record<strin
         speakingLevel: f === 'speaking' ? state.speakingLevel : 0,
       };
     }
+    case 'pet.interaction':
+      // Every client hears this, so a treat given from anywhere shows on the creature. Counting
+      // rather than timestamping keeps this function pure - the view owns "for how long".
+      return payload.type === 'feed' ? { ...state, feeds: state.feeds + 1 } : state;
     case 'tts.started':
       return { ...state, speakingLevel: Math.max(state.speakingLevel, 0.4) };
     case 'tts.chunk': {
@@ -434,5 +443,6 @@ export function toInput(state: PetState): PetInput {
     mood: state.mood,
     sleep: state.sleep,
     speakingLevel: state.speakingLevel,
+    feeds: state.feeds,
   };
 }

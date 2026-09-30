@@ -35,6 +35,7 @@ const baseInput: PetInput = {
   mood: DEFAULT_MOOD,
   sleep: 'none',
   speakingLevel: 0,
+  feeds: 0,
 };
 
 describe('Pet renderer', () => {

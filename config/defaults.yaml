@@ -310,6 +310,31 @@ home:                            # smart home through your own Home Assistant in
   request_timeout_s: 10.0
   max_state_events_per_s: 10.0   # ceiling on live state updates forwarded to the dashboard
 
+extend:                          # whether Nox may propose changes to its own source. Ships with
+                                 # no workspace, so it may not. Naming one is the only thing that
+                                 # turns this on - and even then Nox never merges, pushes or
+                                 # restarts itself: it writes a branch and you read the diff.
+  enabled: true
+  workspace: ""                  # a git checkout, e.g. "E:/Nox/repo". Empty = no self-extension
+  branch_prefix: "nox/proposal/"
+  test_command: []               # absolute path first, e.g. ["C:/.../python.exe", "-m", "pytest"]
+                                 # empty = a proposal ships untested and says so
+  test_timeout_s: 900.0
+  keep: 20
+
+files:                           # the folders Nox may look at and change. Ships empty, so a fresh
+                                 # installation can read, write and move nothing outside the vault -
+                                 # and says which setting to add a folder to. Paths are resolved
+                                 # before the check, so a junction or ".." cannot lead out of a root.
+  enabled: true
+  roots: []                      # e.g. "%USERPROFILE%/Downloads", "%USERPROFILE%/Documents"
+  max_read_bytes: 262144         # a file read becomes part of a prompt; without a cap one wrong
+                                 # path makes one very expensive turn
+  max_list_entries: 200          # a folder with 40000 files must not become one answer
+  max_write_bytes: 262144
+  delete_to_recycle_bin: true    # with this off there is no delete tool at all: an unlink nobody
+                                 # can undo is not something to hand a language model
+
 presets:                         # one phrase, several systems at once: lights, Nox's own mode,
                                  # and programs you registered here. Both lists ship empty, so a
                                  # fresh installation can run nothing at all until you add an entry.

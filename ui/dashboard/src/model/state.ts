@@ -62,6 +62,8 @@ export interface DashboardState {
   home: HomeState;
   /** Bumped by every `settings.changed` event; the Settings page reloads when it moves. */
   settingsRevision: number;
+  /** Bumped by `view.shown`; the Board page reloads when it changes. */
+  viewsRevision: number;
   /** Last `twitch.auth.changed` state, or null while none was received on this connection. */
   twitchAuth: string | null;
   /**
@@ -88,6 +90,7 @@ export const INITIAL_STATE: DashboardState = {
   clips: INITIAL_CLIPS_STATE,
   home: INITIAL_HOME_STATE,
   settingsRevision: 0,
+  viewsRevision: 0,
   twitchAuth: null,
   seq: 0,
 };

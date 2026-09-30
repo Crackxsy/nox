@@ -33,7 +33,7 @@ export interface RiggedPetProps {
   /** Same projection the sprite path uses, purely for the accessible label. */
   expression: SpriteState;
   interactive: boolean;
-  onInteract: (type: 'click', x: number, y: number) => void;
+  onInteract: (type: 'click' | 'feed', x: number, y: number) => void;
   size?: number;
   still?: boolean;
   /** Dev preview (`?still=1` / `?animate=1`): fix the ambient schedule so two review renders of
@@ -47,9 +47,13 @@ export interface RiggedPetProps {
 /** Key pose to cross-dissolve to per state, once the art for it exists (`rig.json: poses`). */
 const POSE_FOR_STATE: Readonly<Record<string, string>> = {
   sleeping: 'curl',
+  bored: 'lie',
   listening: 'sit',
   speaking: 'sit',
 };
+
+/** How long the creature stays on the eating pose after a treat. Long enough to be a moment. */
+const EATING_MS = 2600;
 
 /** Fixed seed for the preview modes. Any value; what matters is that it never changes. */
 const PREVIEW_SEED = 0x4e6f78;
@@ -114,6 +118,8 @@ export function RiggedPet({
 
     let active: readonly string[] = [];
     let lastFunctional = inputRef.current.functional;
+    let lastFeeds = inputRef.current.feeds;
+    let eatingUntilMs = 0;
     const applyPlan = (nowMs: number): number => {
       const current = inputRef.current;
       const plan = planFor(current, reduced);
@@ -138,7 +144,15 @@ export function RiggedPet({
       active = [...names];
       scene.player.setPosture(plan.posture);
       ambient.update(nowMs, plan.ambient, scene.player);
-      scene.setPose(POSE_FOR_STATE[expressionOf(current)] ?? null, nowMs);
+      if (current.feeds !== lastFeeds) {
+        lastFeeds = current.feeds;
+        eatingUntilMs = nowMs + EATING_MS;
+      }
+      const wantedPose =
+        nowMs < eatingUntilMs ? 'eat' : (POSE_FOR_STATE[expressionOf(current)] ?? null);
+      // A pose whose art the variant does not ship returns false. Falling back to the base drawing
+      // rather than leaving the creature in whatever it was in is the honest read of "no art".
+      if (!scene.setPose(wantedPose, nowMs)) scene.setPose(null, nowMs);
       return plan.lidClosure;
     };
 
