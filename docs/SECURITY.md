@@ -94,12 +94,23 @@ permission.self_elevate
 
 Immutable, code-level, not a setting: screen/HUD capture, game audio, replay files, and
 non-invasive input *observation* (hotkey-listener statistics, never sending input) are the only
-things Nox's Rocket League feature does. No file anywhere in the repository may import an
-input-synthesis API (`SendInput`, `pydirectinput`, `pyautogui`) or a process-memory API
-(`ReadProcessMemory`, `WriteProcessMemory`) for a game window. This is enforced by CI, not just by
-convention: the `guard-security-model` job in `.github/workflows/ci.yml` greps all of `src/` for
-these patterns on every push and pull request and fails the build the moment one appears, no
-matter which module introduced it.
+things Nox's Rocket League feature does.
+
+No file anywhere in the repository may import a process-memory API (`ReadProcessMemory`,
+`WriteProcessMemory`) or a third-party input-automation library (`pydirectinput`, `pyautogui`).
+`SendInput` is permitted in exactly one file, `src/nox/desktop/keyboard.py`, which exists so Nox can
+type into an ordinary window - and which refuses to send anything at all while a watched game
+process is running anywhere on the machine, not merely when the game window is the target. It types
+characters (`KEYEVENTF_UNICODE`), which cannot express a key combination. There is no mouse input.
+
+`game.input.send` remains in the immutable hard-prohibition list, which no profile, configuration,
+plugin or model can lift.
+
+All of this is enforced by CI rather than by convention. The `guard-security-model` job in
+`.github/workflows/ci.yml` runs two checks on every push and pull request: the process-memory and
+automation patterns must appear nowhere under `src/` or `plugins/rl/`, and `SendInput` must appear in
+that one file and nowhere else - *and* that file must still contain its game guard. The second half
+matters as much as the first: an exemption nobody re-checks is not an exemption, it is a hole.
 
 ## Secrets handling
 

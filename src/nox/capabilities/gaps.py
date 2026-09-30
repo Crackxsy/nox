@@ -41,9 +41,12 @@ CURATED_GAPS: tuple[Gap, ...] = (
     ),
     Gap(
         name="desktop.input_send",
-        what="type or click for you inside another program",
+        what="press a key combination, or click and move the mouse",
         reason=GapReason.MISSING,
-        detail="no input synthesis exists; a CI guard forbids the APIs across the source tree",
+        detail=(
+            "typing text into an ordinary window exists - `desktop.type_text` - and it types "
+            "characters only. Shortcuts like Ctrl+S and every kind of mouse input do not exist"
+        ),
     ),
     Gap(
         name="browser.control",
@@ -105,8 +108,9 @@ CURATED_GAPS: tuple[Gap, ...] = (
         what="play or assist inside a running game",
         reason=GapReason.FORBIDDEN,
         detail=(
-            "Rocket League is observation only - no input, no process memory, no injection. "
-            "Enforced by a CI guard over the whole source tree"
+            "Rocket League is observation only - no input, no process memory, no injection. The "
+            "one file that can type refuses while any watched game runs, and CI checks both that "
+            "exemption and its guard"
         ),
     ),
     # ---- on the roadmap, and honest about it --------------------------------------------------

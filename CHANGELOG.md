@@ -9,6 +9,23 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Nox can type into a window, and the boundary around that is narrower than the request.** The
+  input-synthesis prohibition was "no file anywhere may import one of these APIs". It is now
+  window-scoped, as asked: `desktop.type_text` brings one window to the front, checks it really got
+  there, and types - high risk, so every profile asks first. `SendInput` lives in exactly one file
+  (`src/nox/desktop/keyboard.py`) and that file refuses to send anything at all while a watched game
+  process is running *anywhere on the machine*, which is stricter than refusing the game's window:
+  Rocket League's boundary is not only about where input lands, and a process that observes a game
+  and synthesises input is the shape an anti-cheat is right to distrust. The cost of being wrong
+  there is an account, not a failed request. It types characters (`KEYEVENTF_UNICODE`), which cannot
+  express Alt+F4 or Ctrl+A - the damage in synthetic input is almost never in the letters. There is
+  no mouse input, and `game.input.send` stays in the immutable hard-prohibition list. The CI guard
+  was narrowed rather than relaxed: process-memory calls and the automation libraries are still
+  forbidden everywhere, `SendInput` must appear in that one file and nowhere else, *and* that file
+  must still contain its game guard - an exemption nobody re-checks is a hole. The guard caught its
+  first thing immediately: this module's own docstring, which had named the forbidden APIs in prose.
+  A grep cannot tell a mention from a call, so the prose gave way. Not one test sends a keystroke;
+  every one of them asserts something that did not happen.
 - **Nox can draw, and it draws data rather than code.** `view.show` puts a table, a bar chart, a
   line chart, a list of facts or a plain note on a new Board page in the dashboard
   (`src/nox/views/`, `ui/dashboard/src/pages/Board.tsx`). The tempting design is to let the model

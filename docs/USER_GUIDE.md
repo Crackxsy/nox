@@ -99,6 +99,10 @@ cannot be turned off or hidden by configuration — if something is being captur
   also start at a time of day or when a game launches. Nothing is configured by default and
   the language model can only name a preset, never assemble one: see
   [`docs/PRESETS.md`](PRESETS.md).
+- **Typing for you**: Nox can type text into one window - it brings the window to the front first,
+  checks it is really there, and asks you before it does any of it. Letters only: no key
+  combinations, no mouse. And nothing at all while a game is running, anywhere on the machine, not
+  just when the game is the window in question.
 - **Windows and programs**: Nox can tell you what is running and what is open, bring a window to
   the front, minimise it, or ask a program to close the way its X button does. Closing and ending a
   program ask you first. Windows' own session processes, Nox itself and a running game are out of

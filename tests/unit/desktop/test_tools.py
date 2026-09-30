@@ -167,3 +167,105 @@ def test_the_risk_levels_say_what_each_tool_costs() -> None:
     assert registry.get("desktop.window_focus").risk is Risk.LOW
     assert registry.get("desktop.window_close").risk is Risk.MEDIUM
     assert registry.get("desktop.process_stop").risk is Risk.HIGH
+
+
+# ---- typing ------------------------------------------------------------------------------------
+
+
+def typing(
+    windows: list[WindowInfo] | None = None,
+    *,
+    games: set[int] | None = None,
+    focus_works: bool = True,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[dict[str, Any], FakeProbe, list[dict[str, Any]]]:
+    """A registry plus a recording stand-in for `type_text`.
+
+    Patched without exception: a test that let the real call through would type into whatever window
+    had focus on the machine running the suite. What is asserted is that the tool reaches it
+    with the right window, or does not reach it at all.
+    """
+    sent: list[dict[str, Any]] = []
+
+    def fake_type(text: str, *, press_enter: bool, game_running: bool, expected_window: int) -> int:
+        sent.append(
+            {
+                "text": text,
+                "press_enter": press_enter,
+                "game_running": game_running,
+                "expected_window": expected_window,
+            }
+        )
+        return len(text)
+
+    monkeypatch.setattr("nox.desktop.tools.type_text", fake_type)
+    handlers, probe = build(windows, games=games, works=focus_works)
+    return handlers, probe, sent
+
+
+async def test_typing_brings_the_window_forward_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    handlers, probe, sent = typing(monkeypatch=monkeypatch)
+
+    answer = await handlers["desktop.type_text"]({"title": "notizen", "text": "hallo"})
+
+    assert answer["ok"] and answer["characters"] == 5
+    assert probe.focused == [EDITOR.handle], (
+        "the text must go to a window that is actually in front"
+    )
+    assert sent == [
+        {
+            "text": "hallo",
+            "press_enter": False,
+            "game_running": False,
+            "expected_window": EDITOR.handle,
+        }
+    ]
+
+
+async def test_a_running_game_stops_it_before_the_window_is_even_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """First check of all: the answer "no" must not depend on getting anything else right."""
+    handlers, probe, sent = typing(games={GAME.pid}, monkeypatch=monkeypatch)
+
+    answer = await handlers["desktop.type_text"]({"title": "notizen", "text": "hallo"})
+
+    assert answer["ok"] is False and "a game is running" in answer["error"]
+    assert sent == [] and probe.focused == []
+
+
+async def test_typing_into_the_game_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    handlers, probe, sent = typing([GAME], games={GAME.pid}, monkeypatch=monkeypatch)
+
+    answer = await handlers["desktop.type_text"]({"title": "rocket", "text": "hallo"})
+
+    assert answer["ok"] is False
+    assert sent == [] and probe.focused == []
+
+
+async def test_a_window_that_will_not_come_forward_gets_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handlers, _, sent = typing(focus_works=False, monkeypatch=monkeypatch)
+
+    answer = await handlers["desktop.type_text"]({"title": "notizen", "text": "hallo"})
+
+    assert answer["ok"] is False and "would not come to the front" in answer["error"]
+    assert sent == []
+
+
+async def test_an_ambiguous_window_gets_nothing_typed(monkeypatch: pytest.MonkeyPatch) -> None:
+    handlers, probe, sent = typing([CHROME_A, CHROME_B, EDITOR], monkeypatch=monkeypatch)
+
+    answer = await handlers["desktop.type_text"]({"title": "chrome", "text": "hallo"})
+
+    assert answer["ok"] is False and "2 windows match" in answer["error"]
+    assert sent == [] and probe.focused == []
+
+
+async def test_typing_asks_the_user_first() -> None:
+    """High risk: every profile that has not said otherwise opens a confirmation."""
+    registry = ToolRegistry()
+    register_desktop_tools(registry, FakeProbe([]), set)
+
+    assert registry.get("desktop.type_text").risk is Risk.HIGH

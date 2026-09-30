@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, model_validator
 from nox.core.logging import get_logger
 from nox.desktop import processes
 from nox.desktop.boundary import BoundaryError, check_process
+from nox.desktop.keyboard import TypingError, type_text
 from nox.desktop.win32 import WindowInfo, WindowProbe
 from nox.security.model import Risk
 from nox.tools.registry import ToolRegistry, ToolSpec
@@ -55,6 +56,13 @@ class WindowRef(BaseModel):
 
 class ProcessRef(BaseModel):
     pid: int = Field(gt=0)
+
+
+class TypeInput(WindowRef):
+    """`desktop.type_text` - which window, what to type, and whether to press Enter after."""
+
+    text: str = Field(min_length=1, max_length=2000)
+    press_enter: bool = False
 
 
 def _matches(windows: list[WindowInfo], ref: WindowRef) -> list[WindowInfo]:
@@ -193,8 +201,67 @@ def _build_stop(game_pids: GamePids) -> ToolSpec:
     )
 
 
+def _build_type(probe: WindowProbe, game_pids: GamePids) -> ToolSpec:
+    """The only tool that synthesises input, and the order of its checks is the safety.
+
+    Refuse while a game runs, then find the window, then the boundary, then take focus and *verify*
+    it, and only then type - with `nox.desktop.keyboard` re-reading the foreground one last time
+    before the keystrokes go out. Any of those failing means nothing was typed anywhere.
+    """
+
+    async def handler(payload: dict[str, Any]) -> dict[str, Any]:
+        ref = TypeInput.model_validate(payload)
+        games = game_pids()
+        if games:
+            # First, and before the window is even looked up: the answer "no" must not depend on
+            # getting anything else right.
+            return {
+                "ok": False,
+                "error": "a game is running; Nox does not send input anywhere while that is true",
+            }
+        window = _one(probe.windows(), WindowRef(title=ref.title, handle=ref.handle))
+        if isinstance(window, dict):
+            return window
+        try:
+            check_process(window.pid, window.process_name, game_pids=games)
+        except BoundaryError as exc:
+            log.info("desktop.type_refused", pid=window.pid, reason=str(exc))
+            return {"ok": False, "error": str(exc)}
+        if not probe.focus(window.handle):
+            return {
+                "ok": False,
+                "error": "that window would not come to the front, so nothing was typed",
+            }
+        try:
+            typed = type_text(
+                ref.text,
+                press_enter=ref.press_enter,
+                game_running=bool(games),
+                expected_window=window.handle,
+            )
+        except TypingError as exc:
+            log.info("desktop.type_failed", pid=window.pid, reason=str(exc))
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "window": _as_dict(window), "characters": typed}
+
+    return ToolSpec(
+        name="desktop.type_text",
+        description=(
+            "Type text into one window, as if the user typed it. It is brought to the front first "
+            "and the text goes nowhere else. Letters only - no key combinations - and never while "
+            "a game is running."
+        ),
+        input_model=TypeInput,
+        risk=Risk.HIGH,
+        side_effects=True,
+        local=True,
+        handler=handler,
+        targets=lambda payload: str(payload.get("title") or payload.get("handle") or ""),
+    )
+
+
 def register_desktop_tools(registry: ToolRegistry, probe: WindowProbe, game_pids: GamePids) -> None:
-    """Register the six `desktop.*` tools."""
+    """Register the `desktop.*` tools."""
     actions = (
         (
             "desktop.window_focus",
@@ -228,6 +295,7 @@ def register_desktop_tools(registry: ToolRegistry, probe: WindowProbe, game_pids
         for name, description, risk, act, verb in actions
     ]
     specs.append(_build_stop(game_pids))
+    specs.append(_build_type(probe, game_pids))
     for spec in specs:
         registry.register(spec)
     log.info("desktop.tools_registered", count=len(specs))
