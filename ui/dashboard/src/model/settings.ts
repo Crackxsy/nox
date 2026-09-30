@@ -16,7 +16,16 @@ import type {
 import { bool, isRecord, numOrNull, str, stringList } from '../../../shared/guards';
 import type { FieldMap } from './wire';
 
-export type SettingType = 'string' | 'int' | 'float' | 'bool' | 'enum' | 'list[str]';
+/** `structured` is a list of models (presets, their programs): edited on its own page,
+ *  never by the generic settings form, which only knows how to render scalars. */
+export type SettingType =
+  | 'string'
+  | 'int'
+  | 'float'
+  | 'bool'
+  | 'enum'
+  | 'list[str]'
+  | 'structured';
 
 const SETTING_TYPES: readonly string[] = ['string', 'int', 'float', 'bool', 'enum', 'list[str]'];
 

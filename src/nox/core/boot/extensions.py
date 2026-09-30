@@ -37,6 +37,7 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "clips",
     "creative",
     "home",
+    "presets",
     "settings",
     "remote",
 )

@@ -36,6 +36,7 @@ from nox.core.config.features import (
     RlConfig,
     StreamConfig,
 )
+from nox.core.config.presets import PresetsConfig
 from nox.core.config.security import PrivacyConfig, SecurityConfig
 from nox.core.config.types import ConfigWarning, StrictSection, expand_path
 
@@ -67,6 +68,7 @@ class NoxConfig(StrictSection):
     clips: ClipsConfig = Field(default_factory=ClipsConfig)
     pm: PmConfig = Field(default_factory=PmConfig)
     home: HomeConfig = Field(default_factory=HomeConfig)
+    presets: PresetsConfig = Field(default_factory=PresetsConfig)
     creative: CreativeConfig = Field(default_factory=CreativeConfig)
     sensors: SensorsConfig = Field(default_factory=SensorsConfig)
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)

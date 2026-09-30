@@ -1,8 +1,13 @@
 """Runtime files the shell reads/writes: session.token, ipc.json, supervisor.token, shell.json.
 
 Location (IPC Model handshake step 2 / D223): `%APPDATA%\\Nox\\runtime` by default, overridable
-with `NOX_RUNTIME_DIR`; `E:\\Nox\\runtime` is accepted as a second candidate (the project standards
-data dirs). Tokens are read from files only and never logged.
+with `NOX_RUNTIME_DIR` or with `paths.runtime_dir` in the user configuration. Tokens are
+read from files only and never logged.
+
+The shell is a separate process from the core, so it has to find the directory the core
+actually wrote to. It reads `paths.runtime_dir` rather than guessing: a moved runtime
+directory used to leave the shell waiting in the default location for a token that was
+never going to appear there.
 """
 
 from __future__ import annotations
@@ -14,6 +19,9 @@ from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError
+
+from nox.core.config.types import ConfigError, expand_path
+from nox.paths import user_config_path
 
 SESSION_TOKEN_FILE = "session.token"  # noqa: S105 - file name, not a secret
 SUPERVISOR_TOKEN_FILE = "supervisor.token"  # noqa: S105
@@ -40,16 +48,42 @@ class ShellState(BaseModel):
     click_through: bool = False
 
 
+def _configured_runtime_dir() -> Path | None:
+    """`paths.runtime_dir` from the user configuration, or `None` when it sets none.
+
+    Only the user layer is read, and as plain YAML rather than validated: the default location is
+    already the last candidate below, and the shell has no business refusing to start because some
+    unrelated section of the configuration is malformed.
+    """
+    try:
+        raw = yaml.safe_load(user_config_path().read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    paths = raw.get("paths") if isinstance(raw, dict) else None
+    configured = paths.get("runtime_dir") if isinstance(paths, dict) else None
+    if not isinstance(configured, str) or not configured.strip():
+        return None
+    try:
+        return expand_path(configured)
+    except ConfigError:
+        return None
+
+
 def candidate_runtime_dirs() -> list[Path]:
+    """Where the runtime files may be, most specific first."""
     dirs: list[Path] = []
     env = os.environ.get("NOX_RUNTIME_DIR")
     if env:
         dirs.append(Path(env))
+    configured = _configured_runtime_dir()
+    if configured is not None:
+        dirs.append(configured)
     appdata = os.environ.get("APPDATA")
     if appdata:
         dirs.append(Path(appdata) / "Nox" / "runtime")
-    dirs.append(Path(r"E:\Nox\runtime"))
-    return dirs
+    # A machine without APPDATA is not Windows and not a supported install, but the shell still
+    # has to return somewhere rather than an empty list its caller would index into.
+    return dirs or [Path.cwd() / "runtime"]
 
 
 def resolve_runtime_dir(candidates: list[Path] | None = None) -> Path:

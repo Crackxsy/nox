@@ -40,6 +40,15 @@ class Speaker(Protocol):
     async def interrupt(self, *, reason: str) -> None: ...
 
 
+class PresetGate(Protocol):
+    """Resolves a sentence to a preset, runs it, and returns what to answer.
+
+    `None` means no preset matched and the sentence continues on its ordinary path.
+    """
+
+    async def handle(self, text: str, language: str) -> str | None: ...
+
+
 class TurnStore(Protocol):
     async def record(
         self, session_id: str, role: str, text: str, *, provider: str = "", latency_ms: int = 0
@@ -121,6 +130,9 @@ class Orchestrator:
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     #: Set by `nox.memory.install` to make the prompt retrieval-augmented. `None` = no memory.
     context_provider: ContextProvider | None = None
+    #: Set by `nox.presets.install` so a registered phrase reaches its preset before any
+    #: model is asked. `None` = no presets.
+    preset_gate: PresetGate | None = None
     fast_path: FastPath = field(default_factory=FastPath)
     escalation: EscalationPolicy = field(default_factory=EscalationPolicy)
 
@@ -232,6 +244,19 @@ class Orchestrator:
         request_id = uuid.uuid4().hex
         turn = Turn(request_id=request_id, text=text)
         speak_enabled = self.config.speak if speak is None else speak
+
+        if self.preset_gate is not None:
+            spoken = await self.preset_gate.handle(text, language)
+            if spoken is not None:
+                turn.fast_path = "preset"
+                return await self._deliver_fast_path(
+                    turn,
+                    spoken,
+                    language,
+                    speak=speak_enabled,
+                    on_chunk=on_chunk,
+                    started=started,
+                )
 
         answer = self.fast_path.match(text, language)
         if answer is not None:

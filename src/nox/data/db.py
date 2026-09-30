@@ -110,6 +110,21 @@ class Database:
             row = self._conn.execute(sql, params).fetchone()
             return row if row is not None else None
 
+    def insert_returning(self, sql: str, params: Params = ()) -> sqlite3.Row:
+        """Run an `INSERT ... RETURNING *` and hand back the row it inserted.
+
+        Preferred over "insert, then read back what `lastrowid` says": one statement instead of
+        two, and `RETURNING` reports the row the statement itself wrote, never one a trigger
+        touched. `memory_items` has an `AFTER INSERT` trigger feeding its full-text index, and
+        `last_insert_rowid()` has not always been restored after a trigger in every SQLite
+        version - a difference that cost a failing test which could not be reproduced locally.
+        """
+        with self._lock:
+            row: sqlite3.Row | None = self._conn.execute(sql, params).fetchone()
+        if row is None:  # pragma: no cover - an INSERT that returns nothing inserted nothing
+            raise LookupError(f"insert returned no row: {sql.split('(', 1)[0].strip()}")
+        return row
+
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
         """BEGIN IMMEDIATE at depth 0, SAVEPOINT when nested. Rolls back on any exception."""

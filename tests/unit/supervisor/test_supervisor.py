@@ -134,7 +134,12 @@ async def test_hung_core_is_restarted_then_safe_mode(
     await sup.start()
     first_pid = sup.status().core_pid
     await wait_until(lambda: sup.status().restarts_in_window >= 1, 10.0)
-    assert first_pid is not None and not psutil.pid_exists(first_pid)
+    assert first_pid is not None
+    # The restart counter moves when the supervisor decides to restart; the old process is torn
+    # down around that moment, not inside it. On a slow runner it is still there for a beat, which
+    # made this line fail in CI while passing locally - so wait for it, the way the other three
+    # process-death checks in this file already do.
+    await wait_until(lambda: not psutil.pid_exists(first_pid), 5.0)
     await wait_until(lambda: sup.status().state is SupervisorState.SAFE_MODE, 15.0)
     st = sup.status()
     assert st.core_pid is None and "restart limit" in st.safe_mode_reason

@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from nox.data.db import Database
-from nox.data.repos import Row
+from nox.data.repos import Row, written_row
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -59,9 +59,10 @@ class StreamSessionRepository:
             "INSERT INTO stream_sessions (started_at, mode, preflight_json) VALUES (?, ?, ?)",
             (_iso(started_at or _now()), mode, json.dumps(preflight or {})),
         )
-        row = self.get(int(cur.lastrowid or 0))
-        assert row is not None
-        return row
+        row_id = cur.lastrowid
+        if row_id is None:  # pragma: no cover - SQLite reports an id for every INSERT
+            raise LookupError("stream_sessions: the insert reported no row id")
+        return written_row(self.get(row_id), "stream_sessions", row_id)
 
     def get(self, session_id: int) -> StreamSessionRow | None:
         row = self._db.fetch_one("SELECT * FROM stream_sessions WHERE id = ?", (session_id,))
@@ -166,9 +167,7 @@ class ViewerRepository:
                     twitch_user_id,
                 ),
             )
-        row = self.get(twitch_user_id)
-        assert row is not None
-        return row
+        return written_row(self.get(twitch_user_id), "viewers", twitch_user_id)
 
     def get(self, twitch_user_id: str) -> ViewerRow | None:
         row = self._db.fetch_one(

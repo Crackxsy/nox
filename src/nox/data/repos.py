@@ -41,6 +41,19 @@ class Row(BaseModel):
 # ---- state checkpoints ---------------------------------------------------------------------------
 
 
+def written_row[RowT: Row](row: RowT | None, table: str, key: object) -> RowT:
+    """Return the row that was just written, or say which one went missing.
+
+    Every `add`/`create` here writes a row and reads it back to return it. That read cannot fail
+    in practice, but it used to be guarded by a bare `assert`, which reported nothing when it did
+    fail - `AssertionError:` with no message - and which `python -O` removes entirely, letting a
+    `None` flow on as though it were a record.
+    """
+    if row is None:
+        raise LookupError(f"{table}: row {key!r} was written but could not be read back")
+    return row
+
+
 class StateCheckpointRow(Row):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
@@ -178,9 +191,7 @@ class SessionRepository:
             "INSERT INTO sessions (id, started_at, mode, privacy_mode) VALUES (?, ?, ?, ?)",
             (sid, _iso(started), mode, privacy_mode),
         )
-        row = self.get(sid)
-        assert row is not None
-        return row
+        return written_row(self.get(sid), "sessions", sid)
 
     def get(self, session_id: str) -> SessionRow | None:
         row = self._db.fetch_one("SELECT * FROM sessions WHERE id = ?", (session_id,))
@@ -303,9 +314,7 @@ class TaskRepository:
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (tid, kind, priority, TaskStatus.PENDING, json.dumps(payload or {}), now, now),
         )
-        row = self.get(tid)
-        assert row is not None
-        return row
+        return written_row(self.get(tid), "tasks", tid)
 
     def get(self, task_id: str) -> TaskRow | None:
         row = self._db.fetch_one("SELECT * FROM tasks WHERE id = ?", (task_id,))
@@ -405,9 +414,7 @@ class TemporaryGrantRepository:
                 _iso(_now()),
             ),
         )
-        row = self.get(gid)
-        assert row is not None
-        return row
+        return written_row(self.get(gid), "temporary_grants", gid)
 
     def get(self, grant_id: str) -> TemporaryGrantRow | None:
         row = self._db.fetch_one("SELECT * FROM temporary_grants WHERE grant_id = ?", (grant_id,))
@@ -473,10 +480,10 @@ class MemoryItemRepository:
         retain_until: datetime | None = None,
         created_at: datetime | None = None,
     ) -> MemoryItemRow:
-        cur = self._db.execute(
+        row = self._db.insert_returning(
             "INSERT INTO memory_items "
             "(type, text, importance, source, vault_path, created_at, retain_until, privacy_class) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
             (
                 type,
                 text,
@@ -488,9 +495,7 @@ class MemoryItemRepository:
                 privacy_class,
             ),
         )
-        row = self.get(int(cur.lastrowid or 0))
-        assert row is not None
-        return row
+        return MemoryItemRow(**dict(row))
 
     def get(self, item_id: int) -> MemoryItemRow | None:
         row = self._db.fetch_one("SELECT * FROM memory_items WHERE id = ?", (item_id,))
@@ -612,9 +617,7 @@ class NotificationRepository:
                 _iso(expires_at),
             ),
         )
-        row = self.get(id)
-        assert row is not None
-        return row
+        return written_row(self.get(id), "proactive_notifications", id)
 
     def get(self, notification_id: str) -> NotificationRow | None:
         row = self._db.fetch_one(

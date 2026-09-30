@@ -362,7 +362,7 @@ scripts/            type generation, license audit, secrets scan, link check, re
 installer/          Inno Setup packaging
 spikes/             measurement and feasibility scripts (not part of the product)
 tests/              unit, integration and end-to-end tests
-docs/               user guide, privacy, security, plugin authoring, release process
+docs/               user guide, presets, privacy, security, plugin authoring, release process
 ```
 
 ## Development

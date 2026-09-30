@@ -94,6 +94,11 @@ cannot be turned off or hidden by configuration — if something is being captur
 - **Rocket League coach**: observation-only — screen/HUD capture, game audio, replay files. Nox
   never sends input to the game and never reads or injects into its process memory; this is a
   hard, code-level boundary (see `SECURITY.md` §Rocket League boundary), not a setting.
+- **Presets**: one phrase that reaches several systems at once - lights and scenes through
+  your own Home Assistant, Nox's mode, and programs you registered yourself. A preset can
+  also start at a time of day or when a game launches. Nothing is configured by default and
+  the language model can only name a preset, never assemble one: see
+  [`docs/PRESETS.md`](PRESETS.md).
 - **Project manager / coding assistant**, **research/creative assistant**: planned, not part of
   this release.
 

@@ -310,6 +310,32 @@ home:                            # smart home through your own Home Assistant in
   request_timeout_s: 10.0
   max_state_events_per_s: 10.0   # ceiling on live state updates forwarded to the dashboard
 
+presets:                         # one phrase, several systems at once: lights, Nox's own mode,
+                                 # and programs you registered here. Both lists ship empty, so a
+                                 # fresh installation can run nothing at all until you add an entry.
+  enabled: true
+  actions: []                    # programs Nox may start, each under a name. The language model
+                                 # can never pass a command line - it can only ask for a preset by
+                                 # id, and only these entries decide what that actually runs.
+                                 # The program needs an absolute path. Example:
+                                 #   - id: dpi_low
+                                 #     name: "Mouse to 800 dpi"
+                                 #     command: ["C:/Program Files/AutoHotkey/AutoHotkey.exe",
+                                 #               "C:/Users/you/nox/dpi-800.ahk"]
+                                 #     timeout_s: 20.0
+  items: []                      # the presets themselves. Steps run in order; a step that fails
+                                 # is reported and the rest still run. Example:
+                                 #   - id: gaming
+                                 #     name: "Gaming"
+                                 #     triggers:
+                                 #       phrases: ["gaming mode", "zocken"]
+                                 #       on_process_start: "RocketLeague.exe"
+                                 #     steps:
+                                 #       - {kind: light, entity_ids: [light.desk], brightness_pct: 25}
+                                 #       - {kind: mode, mode: companion}
+                                 #       - {kind: run, action: dpi_low}
+                                 #       - {kind: say, text: "Viel Erfolg."}
+
 creative:                        # detecting creative applications. The patterns below are
                                  # deliberately narrow: not detecting an app is cheaper than
                                  # announcing a session that is not happening.
