@@ -19,11 +19,12 @@ from typing import Any
 import pytest
 import yaml
 
+from nox.ai.tooluse import SENTINEL
 from nox.app import DEFAULTS_PATH, NoxCore
 from nox.core.config import load_config
 from nox.ipc.dispatch import RequestContext
 from nox.ipc.protocol import Envelope, Kind, Source
-from nox.security.model import Decision
+from nox.security.model import Decision, PermissionRequest
 from tests._ports import free_port_base
 
 
@@ -191,3 +192,62 @@ async def test_checking_one_thing_names_the_rule_that_decided(core: NoxCore) -> 
 
     assert result.data["known"] and result.data["possible"]
     assert result.data["rule"], "an answer nobody can trace to a rule cannot be argued with"
+
+
+# ---- tools in a conversation -------------------------------------------------------------------
+
+
+async def test_the_orchestrator_got_a_tool_gate(core: NoxCore) -> None:
+    """Everything reachable from the dashboard has to be reachable by saying it."""
+    assert core.orchestrator is not None
+    assert core.orchestrator.tool_gate is not None
+
+
+async def test_the_offer_is_what_the_model_may_actually_call(core: NoxCore) -> None:
+    """The presets bug in one sentence: offered under one agent, carried out as another.
+
+    So this walks the whole offer and asks the real permission engine about each entry under the
+    agent the gate will use. Anything the model is told about must survive that check.
+    """
+    gate = core.orchestrator.tool_gate
+    offered = gate.offer()
+    assert offered, "a companion profile with nothing usable would be a broken installation"
+
+    refused = []
+    for tool in offered:
+        name, _, action = tool.name.partition(".")
+        spec = core.tool_registry.get(tool.name)
+        assert spec is not None, f"{tool.name} is offered but not registered"
+        decided = core.security.engine.preview(
+            PermissionRequest(
+                agent="companion", tool=name, action=action, mode="companion", risk=spec.risk
+            )
+        )
+        if decided.decision is Decision.DENY:
+            refused.append(f"{tool.name} ({decided.rule_id})")
+
+    assert refused == []
+
+
+async def test_a_tool_that_asks_first_is_offered_and_marked(core: NoxCore) -> None:
+    """Hiding it would take the decision away from the person the dialog is for."""
+    gate = core.orchestrator.tool_gate
+    marked = [tool.name for tool in gate.offer() if tool.asks_first]
+
+    assert marked, "some tool in the companion profile must need a confirmation"
+
+
+async def test_the_prompt_section_names_the_protocol_once(core: NoxCore) -> None:
+    section = core.orchestrator.tool_gate.prompt()
+
+    assert section.count(SENTINEL) == 1
+    assert "capabilities.check" in section
+
+
+async def test_the_offer_stays_small_enough_to_send_every_turn(core: NoxCore) -> None:
+    """The section rides along on every tool-enabled turn, so its size is a latency decision."""
+    section = core.orchestrator.tool_gate.prompt()
+    offered = len(core.orchestrator.tool_gate.offer())
+    print(f"\ntool offer: {offered} tools, {len(section)} characters")
+
+    assert len(section) < 4000, f"{len(section)} characters is too much to send every turn"

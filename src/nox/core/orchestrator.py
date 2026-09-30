@@ -18,17 +18,23 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from nox.ai.base import AiRequest, Message, Router
+from nox.ai.base import AiRequest, AiRole, Message, Router
 from nox.ai.escalation import EscalationPolicy
 from nox.ai.fastpath import FastPath
+from nox.ai.tooluse import decided_prose
 from nox.core.events import E, Event, EventBus
 from nox.core.logging import get_logger
 from nox.core.state import StateManager
+from nox.core.toolloop import ToolGate
 from nox.voice.base import Channel, TtsRequest
 
 log = get_logger(__name__)
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+|(?<=[.!?…])$")
+
+#: Said when the model kept asking for tools until the turn ran out of rounds. Deliberately
+#: short: the user only needs to know that nothing happened, and the detail belongs in the log.
+GAVE_UP_ON_TOOLS = {"de": "Das hat nicht funktioniert.", "en": "That did not work."}
 
 #: Provider id reported for a turn the deterministic fast path answered. It is a real provider name
 #: in the dashboard badge on purpose: the user must be able to see that no language model was asked.
@@ -106,6 +112,9 @@ class Turn:
     fast_path: str = ""
     #: Why this turn was routed to the reasoning chain instead of the chat chain; empty when not.
     escalated: str = ""
+    #: Tools this turn used, in order. Empty for the great majority of turns, and that is the
+    #: point: it is data, so "did it actually do something" is answerable without the transcript.
+    tools_used: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -133,6 +142,10 @@ class Orchestrator:
     #: Set by `nox.presets.install` so a registered phrase reaches its preset before any
     #: model is asked. `None` = no presets.
     preset_gate: PresetGate | None = None
+    #: Set by `nox.capabilities.install` so that everything reachable from the dashboard is
+    #: also reachable by saying it. `None` = the model can only talk, which was the state
+    #: until now.
+    tool_gate: ToolGate | None = None
     fast_path: FastPath = field(default_factory=FastPath)
     escalation: EscalationPolicy = field(default_factory=EscalationPolicy)
 
@@ -267,7 +280,8 @@ class Orchestrator:
 
         context = await self._retrieve_context(text, turn.timings)
         build_started = time.perf_counter()
-        messages = [Message(role="system", content=self._prompt_with(context))]
+        tools = self.tool_gate.prompt() if self.tool_gate is not None else ""
+        messages = [Message(role="system", content=self._prompt_with(context, tools))]
         if self.turns is not None:
             for role, content in await self.turns.recent(
                 self.session_id, self.config.history_turns
@@ -276,20 +290,10 @@ class Orchestrator:
         messages.append(Message(role="user", content=text))
         decision = self.escalation.decide(text, relevance=context.relevance)
         turn.escalated = decision.reason
-        request = AiRequest(
-            request_id=request_id,
-            role=decision.role,
-            messages=messages,
-            mode=str(self.state.get("assistant.mode")),
-            privacy_mode=str(self.state.get("privacy.mode")),
-            max_tokens=self.config.max_tokens,
-            metadata={"language": language, "session_id": self.session_id},
-        )
         turn.timings.prompt_build_ms = (time.perf_counter() - build_started) * 1000
         if decision.reason:
             log.info("orchestrator.escalated", request_id=request_id, reason=decision.reason)
         await self._record("user", text)
-        buffer = ""
         ready: dict[str, object] = {}
 
         def _capture_ready(ev: Event) -> None:
@@ -297,28 +301,45 @@ class Orchestrator:
                 ready.update(ev.payload)
 
         unsub = self.bus.subscribe(E.AI_RESPONSE_READY, _capture_ready)
+        rounds = self.tool_gate.max_rounds if self.tool_gate is not None and tools else 0
         try:
-            async for chunk in self.router.stream(request):
-                turn.chunks += 1
-                buffer += chunk.delta
-                turn.response += chunk.delta
-                if chunk.delta and turn.timings.first_token_ms == 0.0:
-                    turn.timings.first_token_ms = (time.perf_counter() - started) * 1000
-                if on_chunk is not None and chunk.delta:
-                    result = on_chunk(chunk.delta)
-                    if result is not None:
-                        await result
-                if speak_enabled and self.speaker is not None:
-                    sentences, buffer = self._split(buffer, final=chunk.done)
-                    for sentence in sentences:
-                        self._note_first_sentence(turn, started)
-                        await self._speak(sentence, language, request_id)
-                elif turn.timings.first_sentence_ms == 0.0 and _SENTENCE_END.search(buffer):
-                    # Not speaking, but the number still matters: it is when speech *could* start.
-                    self._note_first_sentence(turn, started)
-            if speak_enabled and self.speaker is not None and buffer.strip():
-                self._note_first_sentence(turn, started)
-                await self._speak(buffer.strip(), language, request_id)
+            for attempt in range(rounds + 1):
+                final_attempt = attempt == rounds
+                if final_attempt and rounds:
+                    # Out of tool rounds. Take the offer away so the model has to answer with what
+                    # it has; the alternative is a user left with silence or with a protocol line.
+                    messages[0] = Message(role="system", content=self._prompt_with(context))
+                    log.info("orchestrator.tool_rounds_spent", request_id=request_id)
+                produced, directive = await self._stream(
+                    self._request(request_id, decision.role, messages, language),
+                    turn,
+                    language,
+                    speak=speak_enabled,
+                    on_chunk=on_chunk,
+                    started=started,
+                    # Held on every attempt, the last one included: a model that asks for a tool
+                    # after the offer was withdrawn must still never be read aloud.
+                    hold=rounds > 0,
+                )
+                if not directive or self.tool_gate is None:
+                    break
+                if final_attempt:
+                    log.warning("orchestrator.directive_without_an_offer", request_id=request_id)
+                    await self._deliver_plain(
+                        turn,
+                        GAVE_UP_ON_TOOLS.get(language[:2], GAVE_UP_ON_TOOLS["en"]),
+                        language,
+                        speak=speak_enabled,
+                        on_chunk=on_chunk,
+                    )
+                    break
+                used = await self.tool_gate.advance(produced)
+                if used is None:  # the sniffer was wrong about the head; nothing to hand back
+                    break
+                if used.tool:
+                    turn.tools_used.append(used.tool)
+                messages.append(Message(role="assistant", content=produced))
+                messages.append(Message(role="user", content=used.feedback))
             if not ready:  # router emitted ready after the generator finished: ask it
                 explain = self.router.explain(request_id)
                 ready = {
@@ -333,6 +354,102 @@ class Orchestrator:
             return turn
         finally:
             unsub()
+
+    def _request(
+        self, request_id: str, role: AiRole, messages: list[Message], language: str
+    ) -> AiRequest:
+        """One model request. Built per round, because the messages grow with every tool result."""
+        return AiRequest(
+            request_id=request_id,
+            role=role,
+            messages=list(messages),
+            mode=str(self.state.get("assistant.mode")),
+            privacy_mode=str(self.state.get("privacy.mode")),
+            max_tokens=self.config.max_tokens,
+            metadata={"language": language, "session_id": self.session_id},
+        )
+
+    async def _deliver_plain(
+        self,
+        turn: Turn,
+        text: str,
+        language: str,
+        *,
+        speak: bool,
+        on_chunk: Callable[[str], Awaitable[None] | None] | None,
+    ) -> None:
+        """Put one sentence of Nox's own on the same path a streamed answer takes.
+
+        Used only when the model produced nothing usable. Kept separate from `_deliver_fast_path`
+        because that one owns a whole turn, including recording the user message.
+        """
+        turn.response = text
+        if on_chunk is not None:
+            result = on_chunk(text)
+            if result is not None:
+                await result
+        if speak and self.speaker is not None:
+            await self._speak(text, language, turn.request_id)
+
+    async def _stream(
+        self,
+        request: AiRequest,
+        turn: Turn,
+        language: str,
+        *,
+        speak: bool,
+        on_chunk: Callable[[str], Awaitable[None] | None] | None,
+        started: float,
+        hold: bool,
+    ) -> tuple[str, bool]:
+        """Stream one model answer; returns the whole text and whether it was a tool directive.
+
+        `hold` is what keeps the user from hearing `NOX_TOOL_CALL` read aloud. While the first
+        characters could still turn into the sentinel, nothing is emitted, spoken or added to the
+        turn; once it is clear this is prose, the held text is released in one piece and the rest
+        streams as before. The cost is the latency of about a dozen characters, paid only in turns
+        where tools are on offer at all.
+        """
+        produced = ""
+        pending = ""
+        buffer = ""
+        directive = False
+        decided = not hold
+
+        async for chunk in self.router.stream(request):
+            turn.chunks += 1
+            produced += chunk.delta
+            if chunk.delta and turn.timings.first_token_ms == 0.0:
+                turn.timings.first_token_ms = (time.perf_counter() - started) * 1000
+            release = chunk.delta
+            if not decided:
+                pending += chunk.delta
+                verdict = decided_prose(pending)
+                if verdict is None and not chunk.done:
+                    continue
+                decided = True
+                directive = verdict is False
+                release, pending = ("" if directive else pending), ""
+            if directive:
+                continue
+            turn.response += release
+            buffer += release
+            if on_chunk is not None and release:
+                result = on_chunk(release)
+                if result is not None:
+                    await result
+            if speak and self.speaker is not None:
+                sentences, buffer = self._split(buffer, final=chunk.done)
+                for sentence in sentences:
+                    self._note_first_sentence(turn, started)
+                    await self._speak(sentence, language, turn.request_id)
+            elif turn.timings.first_sentence_ms == 0.0 and _SENTENCE_END.search(buffer):
+                # Not speaking, but the number still matters: it is when speech *could* start.
+                self._note_first_sentence(turn, started)
+        if not directive and speak and self.speaker is not None and buffer.strip():
+            self._note_first_sentence(turn, started)
+            await self._speak(buffer.strip(), language, turn.request_id)
+        return produced, directive
 
     async def _retrieve_context(self, text: str, timings: TurnTimings) -> TurnContext:
         """Memory context for this turn. A failing provider degrades to no context, not a
@@ -350,9 +467,15 @@ class Orchestrator:
         finally:
             timings.context_ms = (time.perf_counter() - started) * 1000
 
-    def _prompt_with(self, context: TurnContext) -> str:
-        base = self.system_prompt()
-        return f"{base}\n\n{context.block}" if context.block else base
+    def _prompt_with(self, context: TurnContext, tools: str = "") -> str:
+        """System message for one turn: personality, then memory, then the tools on offer.
+
+        The tool section goes last so that the names the model may use are the freshest thing
+        in the prompt, and it is left out entirely when nothing is on offer - a model told
+        about a protocol it cannot use will eventually try to use it anyway.
+        """
+        parts = [self.system_prompt(), context.block, tools]
+        return "\n\n".join(part for part in parts if part)
 
     @staticmethod
     def _note_first_sentence(turn: Turn, started: float) -> None:

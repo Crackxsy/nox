@@ -18,16 +18,20 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any, Protocol
 
-from nox.capabilities.catalog import build_report
+from nox.ai.tooluse import OfferedTool
+from nox.capabilities.catalog import DEFAULT_AGENT, build_report
 from nox.capabilities.ipc import register_capability_ipc
 from nox.capabilities.model import CapabilityReport, CapabilityState
 from nox.capabilities.tools import register_capability_tools
 from nox.core.config import NoxConfig
 from nox.core.extension import ExtensionRuntime
 from nox.core.logging import get_logger
+from nox.core.toolloop import ToolGate
 from nox.home.install import ACCESS_TOKEN_SECRET as HOME_TOKEN_SECRET
 from nox.ipc.dispatch import RequestRegistry
 from nox.plugins.manager import PluginState
+from nox.security.model import Decision
+from nox.tools.executor import ToolExecutor
 from nox.tools.registry import ToolRegistry
 
 log = get_logger(__name__)
@@ -56,6 +60,8 @@ class CoreLike(Protocol):
     security: Any
     registry: RequestRegistry
     tool_registry: ToolRegistry
+    tool_executor: ToolExecutor
+    orchestrator: Any
     plugins: Any
 
 
@@ -121,7 +127,46 @@ def install(core: CoreLike) -> ExtensionRuntime:
             missing_prerequisites=stalled,
         )
 
+    def offer() -> list[OfferedTool]:
+        """The tools the model is told about: what the catalogue says is usable right now.
+
+        Built from the report rather than from the registry, so a tool the active profile denies is
+        never mentioned - cheaper than offering it and refusing the call, and more honest. One that
+        would ask the user first *is* offered and marked, because hiding it would take the decision
+        away from the person the dialog is for.
+        """
+        described = core.tool_registry.describe()
+        schemas = {tool.name: tool.input_schema for tool in described}
+        return [
+            OfferedTool(
+                name=capability.name,
+                description=capability.description,
+                schema=schemas.get(capability.name, {}),
+                asks_first=capability.decision is Decision.CONFIRM,
+            )
+            for capability in report().capabilities
+            if capability.state is CapabilityState.AVAILABLE
+            and capability.decision is not Decision.DENY
+        ]
+
+    async def call(name: str, arguments: dict[str, Any]) -> Any:
+        """Every tool a conversation reaches goes through the same executor as a dashboard click.
+
+        The agent name matches the one the report was built with on purpose: if the offer were made
+        for one agent and the call carried out as another, the model would be told it may do things
+        that are then refused - which is exactly how the preset runner broke.
+        """
+        return await core.tool_executor.call(
+            agent=DEFAULT_AGENT, name=name, arguments=arguments, mode=_mode(core)
+        )
+
     register_capability_tools(core.tool_registry, report)
     register_capability_ipc(core.registry, report)
+
+    orchestrator = getattr(core, "orchestrator", None)
+    if orchestrator is not None:
+        orchestrator.tool_gate = ToolGate(offer=offer, call=call)
+    else:
+        log.warning("capabilities.no_orchestrator", detail="conversations will have no tools")
     log.info("capabilities.installed")
     return None
