@@ -40,6 +40,8 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "presets",
     "settings",
     "remote",
+    # Last on purpose: it describes the others, and reads the registry they filled.
+    "capabilities",
 )
 
 

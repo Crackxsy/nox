@@ -552,6 +552,18 @@ class DefaultPermissionEngine:
         self._record(request, result, request_id=uuid.uuid4().hex, by="policy", snapshot=snapshot)
         return result
 
+    def preview(self, request: PermissionRequest) -> PermissionResult:
+        """The decision this request would get, without recording it.
+
+        `check` is the real thing and leaves an audit entry, which is right for a decision that
+        precedes an action. The capability catalogue asks about every tool at once and takes no
+        action at all; auditing that would bury the log it exists to explain.
+        """
+        now = self._clock()
+        return self.evaluate(
+            request, self._profile, self._privacy.snapshot(), self._grants.active(now), now
+        )
+
     def active_profile(self) -> Profile:
         return self._profile
 
