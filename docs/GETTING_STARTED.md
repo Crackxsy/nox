@@ -19,16 +19,24 @@ You need:
 ```powershell
 git clone https://github.com/Crackxsy/nox.git
 cd nox
-python -m pip install uv
-uv sync --extra dev --extra shell
+powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
 ```
 
-Build the two UIs once (the core serves the built files, not a dev server):
+That installs the dependencies, builds both web UIs and runs the machine check. It stops at the
+first failure and says which step failed. It deliberately does not start Nox or run the wizard -
+both ask questions.
+
+By hand, if you would rather see each step:
 
 ```powershell
+python -m pip install uv
+uv sync --extra dev --extra shell
 cd ui\pet ; npm ci ; npm run build ; cd ..\..
 cd ui\dashboard ; npm ci ; npm run build ; cd ..\..
 ```
+
+The UIs have to be built: the core serves the built files, not a dev server. Forgetting this is the
+usual reason for a pet window that renders nothing.
 
 ## 2. Check the machine
 
