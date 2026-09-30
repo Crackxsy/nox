@@ -41,6 +41,9 @@ hard cloud dependency; security before autonomy; no fake capabilities (every sub
 `available` / `limited` / `unavailable` with a real reason); recoverable by design (supervisor,
 degraded modes, rollback).
 
+**New here? [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)** is the four-step version:
+install, `nox doctor`, `nox onboard`, `nox supervisor`.
+
 ## What works today (60-second version)
 
 Nox is **pre-1.0**. Honest state as of the latest release:
