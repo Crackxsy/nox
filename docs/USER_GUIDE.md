@@ -132,7 +132,8 @@ cannot be turned off or hidden by configuration — if something is being captur
 - **Asking Nox to change itself**: Nox can write a proposed change to its own source on a branch in
   a checkout you name (`extend.workspace`, empty by default), run your tests, and show you the diff.
   It never merges, never pushes and never restarts itself - reading the diff and deciding is yours.
-  It needs the coding profile, because the plugin that writes the change only runs there.
+  It needs the coding profile, because the plugin that writes the change only runs there - see
+  [`docs/EXTEND.md`](EXTEND.md).
 - **Project manager / coding assistant**, **research/creative assistant**: planned, not part of
   this release.
 

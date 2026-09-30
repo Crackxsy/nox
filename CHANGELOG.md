@@ -8,6 +8,8 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-01
+
 ### Added
 - **Nox can propose a change to itself, and cannot apply one.** `extend.propose` starts a branch in
   a checkout you named, asks the `coding` plugin to write the change there, runs your test command,
