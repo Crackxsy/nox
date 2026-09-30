@@ -9,6 +9,22 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Nox can work with your files, in the folders you name and nowhere else.** `file.list`,
+  `file.read`, `file.write`, `file.move` and `file.delete` (`src/nox/files/`), bounded by a
+  `files.roots` list that ships empty: a fresh installation reaches nothing outside its own vault,
+  and the tools name the setting to add a folder to instead of failing oddly. An empty list means
+  nowhere, never everywhere - the other reading is how a guard meant to restrict ends up permitting.
+  Paths are resolved *before* they are checked, so `..`, symlinks and Windows junctions are all
+  checked against where they really lead; the junction test creates a real junction rather than a
+  mock. Writing asks first in every profile that has not said otherwise, never replaces a file
+  unless told to and never invents a missing folder, because a typo would otherwise build a tree
+  nobody looks in. Reading refuses anything that is not text and caps the size, since a file read
+  becomes part of a prompt. Deleting goes through the Windows shell with `FOF_ALLOWUNDO` - the
+  Recycle Bin, where it can be got back - and there is no fallback to `os.unlink`: if the shell
+  refuses, the file stays. Turning the setting off removes the delete tool rather than making it
+  permanent. Each tool reports its path as the permission target, so *writing is fine under
+  Downloads, ask me anywhere else* is a profile rule and not a code change. See
+  [`docs/FILES.md`](docs/FILES.md).
 - **Nox can say what it cannot do.** A capability catalogue (`src/nox/capabilities/`) joins three
   things that were never asked together: which tools exist, what the active profile would decide
   about each of them, and what is missing entirely. Four answers come out of that and stay apart,

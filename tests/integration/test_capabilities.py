@@ -181,7 +181,7 @@ async def test_what_nox_cannot_do_reaches_the_model(core: NoxCore) -> None:
     result = await _as_model(core, "capabilities.list")
     missing = {gap["name"]: gap["why"] for gap in result.data["missing"]}
 
-    assert missing["file.delete"] == "missing"
+    assert missing["window.manage"] == "missing"
     # The two boundaries, and they must not read like backlog items.
     assert missing["game.input"] == "forbidden"
     assert missing["home.lock"] == "forbidden"

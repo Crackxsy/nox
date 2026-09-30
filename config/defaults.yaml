@@ -310,6 +310,19 @@ home:                            # smart home through your own Home Assistant in
   request_timeout_s: 10.0
   max_state_events_per_s: 10.0   # ceiling on live state updates forwarded to the dashboard
 
+files:                           # the folders Nox may look at and change. Ships empty, so a fresh
+                                 # installation can read, write and move nothing outside the vault -
+                                 # and says which setting to add a folder to. Paths are resolved
+                                 # before the check, so a junction or ".." cannot lead out of a root.
+  enabled: true
+  roots: []                      # e.g. "%USERPROFILE%/Downloads", "%USERPROFILE%/Documents"
+  max_read_bytes: 262144         # a file read becomes part of a prompt; without a cap one wrong
+                                 # path makes one very expensive turn
+  max_list_entries: 200          # a folder with 40000 files must not become one answer
+  max_write_bytes: 262144
+  delete_to_recycle_bin: true    # with this off there is no delete tool at all: an unlink nobody
+                                 # can undo is not something to hand a language model
+
 presets:                         # one phrase, several systems at once: lights, Nox's own mode,
                                  # and programs you registered here. Both lists ship empty, so a
                                  # fresh installation can run nothing at all until you add an entry.

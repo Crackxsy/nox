@@ -99,6 +99,10 @@ cannot be turned off or hidden by configuration — if something is being captur
   also start at a time of day or when a game launches. Nothing is configured by default and
   the language model can only name a preset, never assemble one: see
   [`docs/PRESETS.md`](PRESETS.md).
+- **Files**: Nox can look at and change files in the folders you name, and nowhere else. The list
+  ships empty, so a fresh installation reaches nothing outside its own vault. Writing asks first,
+  and deleting only ever moves a file to the Recycle Bin - there is no delete you cannot undo. See
+  [`docs/FILES.md`](FILES.md).
 - **Tools in a conversation**: anything you can do with a button on the dashboard, you can ask
   for in the chat or say out loud - the same tool, the same permission check, the same audit
   entry. Nox is only offered the tools your active profile actually allows, so it cannot promise

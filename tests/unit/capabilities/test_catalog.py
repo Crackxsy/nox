@@ -148,13 +148,17 @@ def test_a_target_dependent_rule_is_marked(registry: ToolRegistry) -> None:
 
 
 def test_a_gap_whose_tool_now_exists_is_dropped(registry: ToolRegistry) -> None:
-    """The maintenance failure this catches: a capability ships and the "I cannot" stays behind."""
-    registry.register(spec("file.delete", Risk.HIGH))
+    """The maintenance failure this catches: a capability ships and the "I cannot" stays behind.
+
+    It has already caught one. `file.delete` was the example here until the file tools shipped, and
+    this test failed until the row was taken out of the table - which is the whole point of it.
+    """
+    registry.register(spec("window.manage", Risk.MEDIUM))
 
     report = report_for(registry, FakeEngine(profile()))
 
-    assert stale_gaps(registry) == ["file.delete"]
-    assert "file.delete" not in {gap.name for gap in report.gaps}
+    assert stale_gaps(registry) == ["window.manage"]
+    assert "window.manage" not in {gap.name for gap in report.gaps}
 
 
 def test_the_curated_gaps_do_not_name_registered_tools(registry: ToolRegistry) -> None:
@@ -187,7 +191,7 @@ async def test_check_answers_for_something_it_cannot_do(registry: ToolRegistry) 
     report = report_for(registry, FakeEngine(profile()))
     register_capability_tools(registry, lambda: report)
 
-    answer = await handlers(registry)["capabilities.check"]({"name": "file.delete"})
+    answer = await handlers(registry)["capabilities.check"]({"name": "window.manage"})
 
     assert answer["known"] and answer["possible"] is False
     assert answer["why"] == GapReason.MISSING.value

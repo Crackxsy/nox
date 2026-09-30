@@ -26,24 +26,9 @@ __all__ = ["CURATED_GAPS", "derived_gaps"]
 #: What a user may reasonably ask for and not get. Ordered roughly by how often it comes up.
 CURATED_GAPS: tuple[Gap, ...] = (
     # ---- the desktop, absent until the PC tools ship ------------------------------------------
-    Gap(
-        name="file.read",
-        what="read a file anywhere on the machine",
-        reason=GapReason.MISSING,
-        detail="only the vault is readable today, through `vault.read`",
-    ),
-    Gap(
-        name="file.write",
-        what="create or change a file outside the vault",
-        reason=GapReason.MISSING,
-        detail="only `vault.append_inbox` writes, and only into the vault inbox",
-    ),
-    Gap(
-        name="file.delete",
-        what="delete a file or folder",
-        reason=GapReason.MISSING,
-        detail="nothing deletes files; deletion is not a side effect to add casually",
-    ),
+    # Files are no longer here: `file.list/read/write/move/delete` exist, bounded by
+    # `files.roots`. A row left behind after a capability ships is worse than no row, which is
+    # what `stale_gaps()` is for.
     Gap(
         name="process.start",
         what="start any program",
