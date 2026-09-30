@@ -1167,6 +1167,216 @@ a:hover {
   color: var(--danger);
 }
 
+/* ---- the board: the five shapes Nox may draw -------------------------------------------------
+   Plain CSS and one inline SVG. A charting library would be a dependency, a bundle and a theme to
+   argue with, for five shapes that are a div with a width and a polyline. */
+
+.board {
+  display: grid;
+  gap: var(--s-4);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.board-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--s-3);
+}
+
+.view-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.view-head h3 {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.view-when {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.view-note {
+  margin-top: var(--s-1);
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.view-table {
+  width: 100%;
+  margin-top: var(--s-3);
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.view-table th,
+.view-table td {
+  padding: var(--s-2) var(--s-2);
+  text-align: left;
+  border-bottom: 1px solid var(--hairline);
+  overflow-wrap: anywhere;
+}
+
+.view-table th {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.view-table tr:last-child td {
+  border-bottom: none;
+}
+
+.view-bars {
+  margin-top: var(--s-3);
+  display: grid;
+  gap: var(--s-2);
+}
+
+.view-bars li {
+  display: grid;
+  grid-template-columns: minmax(64px, 30%) 1fr auto;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: var(--text-sm);
+}
+
+.view-bars__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-bars__track {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--page-soft);
+  overflow: hidden;
+}
+
+.view-bars__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--blue);
+}
+
+.view-bars__value {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+
+.view-lines {
+  margin-top: var(--s-3);
+}
+
+.view-lines svg {
+  width: 100%;
+  height: 120px;
+  overflow: visible;
+}
+
+.view-lines__line {
+  fill: none;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.view-lines__line--0,
+.view-lines__swatch--0 {
+  stroke: var(--blue);
+  background: var(--blue);
+}
+
+.view-lines__line--1,
+.view-lines__swatch--1 {
+  stroke: var(--ok, #2e9e5b);
+  background: var(--ok, #2e9e5b);
+}
+
+.view-lines__line--2,
+.view-lines__swatch--2 {
+  stroke: var(--warn, #c98a12);
+  background: var(--warn, #c98a12);
+}
+
+.view-lines__line--3,
+.view-lines__swatch--3 {
+  stroke: var(--ink-2);
+  background: var(--ink-2);
+}
+
+.view-lines__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  margin-top: var(--s-2);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.view-lines__legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+.view-lines__swatch {
+  width: 10px;
+  height: 2px;
+  border-radius: 999px;
+}
+
+.view-lines__axis {
+  margin-top: var(--s-1);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.view-facts {
+  margin-top: var(--s-3);
+  display: grid;
+  gap: var(--s-2);
+}
+
+.view-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+  font-size: var(--text-sm);
+}
+
+.view-facts dt {
+  color: var(--ink-2);
+}
+
+.view-facts dd {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.view-text {
+  margin-top: var(--s-3);
+  display: grid;
+  gap: var(--s-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.view-text p {
+  overflow-wrap: anywhere;
+}
+
 .composer {
   margin-top: 28px;
   padding: var(--s-4) var(--s-4) var(--s-3) var(--s-5);

@@ -37,6 +37,7 @@ from nox.core.events.desktop import (
     SensorProcessStarted,
     SettingsChanged,
     TwitchAuthChanged,
+    ViewShown,
 )
 from nox.core.events.mobile import (
     RemoteCommand,
@@ -188,6 +189,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     E.MEMORY_INDEX_UPDATED: MemoryIndexUpdated,
     E.SETTINGS_CHANGED: SettingsChanged,
     E.TWITCH_AUTH_CHANGED: TwitchAuthChanged,
+    E.VIEW_SHOWN: ViewShown,
     E.RL_VISION_DETECTIONS: RlVisionDetections,
     E.RL_VISION_DISABLED: RlVisionDisabled,
     E.RL_VISION_ANALYSIS: RlVisionAnalysis,

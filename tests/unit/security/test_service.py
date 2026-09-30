@@ -4,6 +4,7 @@ engine."""
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 
 import pytest
 import yaml
@@ -27,13 +28,12 @@ def config() -> NoxConfig:
 
 async def test_build_and_boot(
     config: NoxConfig,
-    conn: sqlite3.Connection,
+    build_security: Callable[..., SecurityContext],
     bus: FakeBus,
     clock: MutableClock,
 ) -> None:
-    ctx = SecurityContext.build(
+    ctx = build_security(
         config,
-        conn=conn,
         profiles_dir=PROFILES_DIR,
         bus=bus,
         secret_store=InMemorySecretStore(),
@@ -56,16 +56,14 @@ async def test_build_and_boot(
 
 async def test_build_wires_both_egress_allowlists_from_the_config(
     config: NoxConfig,
-    conn: sqlite3.Connection,
+    build_security: Callable[..., SecurityContext],
 ) -> None:
     """Both `security.egress_allowlist` and `security.loopback_allowlist` reach the guard."""
     config.security.egress_allowlist = ["api.example.com:443"]
     # The global list only applies to a profile that inherits it. `companion` has an entry of its
     # own for the mobile companion, so this test uses `coding`, which still inherits.
     config.security.profile = "coding"
-    ctx = SecurityContext.build(
-        config, conn=conn, profiles_dir=PROFILES_DIR, secret_store=InMemorySecretStore()
-    )
+    ctx = build_security(config, profiles_dir=PROFILES_DIR, secret_store=InMemorySecretStore())
     assert config.security.loopback_allowlist == ["127.0.0.1:11434"]  # from defaults.yaml
     assert ctx.egress.check("api.example.com", 443).allowed  # BALANCED: the global list applies
     assert not ctx.egress.check("api.anthropic.com", 443).allowed
@@ -87,10 +85,12 @@ def test_build_rejects_config_that_drops_a_hard_prohibition(
         )
 
 
-def test_verify_boot_reports_broken_chain(config: NoxConfig, conn: sqlite3.Connection) -> None:
-    ctx = SecurityContext.build(
-        config, conn=conn, profiles_dir=PROFILES_DIR, secret_store=InMemorySecretStore()
-    )
+def test_verify_boot_reports_broken_chain(
+    config: NoxConfig,
+    conn: sqlite3.Connection,
+    build_security: Callable[..., SecurityContext],
+) -> None:
+    ctx = build_security(config, profiles_dir=PROFILES_DIR, secret_store=InMemorySecretStore())
     # Written through the store, not the queue: this row has to be on disk before it is tampered
     # with, and `audit_store` is the synchronous path boot and shutdown already use.
     ctx.audit_store.append(

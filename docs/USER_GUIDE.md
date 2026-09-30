@@ -114,6 +114,10 @@ cannot be turned off or hidden by configuration — if something is being captur
 - **Asking what Nox can do**: "was kannst du gerade?" is answered from a catalogue rather than
   guessed. It distinguishes what is not built, what this profile forbids, what is missing a token,
   and what Nox will never do - and it says "I have no entry for that" instead of a false no.
+- **Board**: when numbers are clearer looked at than read out, Nox draws them - a table, a bar or
+  line chart, a list of facts, or a note - and they appear on the Board page. Nox can only choose
+  between those five shapes and fill in the values; it cannot send the dashboard anything to
+  execute.
 - **Plans**: for work with several steps, Nox writes down what it intends to do and waits for you
   to approve it. Approved plans run in the background, survive a restart and pause while a game is
   running. A plan that was interrupted mid-step says so rather than repeating that step - see

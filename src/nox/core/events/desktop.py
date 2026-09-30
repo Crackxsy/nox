@@ -232,3 +232,11 @@ class TwitchAuthChanged(BaseModel):
 
     state: str
     login: str = ""
+
+
+class ViewShown(BaseModel):
+    """Nox drew something. What it is, not what is in it - the page fetches the view itself."""
+
+    id: str
+    kind: str
+    title: str

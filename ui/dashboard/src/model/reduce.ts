@@ -181,6 +181,10 @@ export function reduceEvent(
       // Which paths changed is the core's business; the Settings page reloads the whole snapshot
       // rather than patching a value it did not read back.
       return { ...state, settingsRevision: state.settingsRevision + 1 };
+    case 'view.shown':
+      // What was drawn is in the event; what is *in* it is not. The Board page re-reads the
+      // board, the same way Settings re-reads its snapshot instead of patching a value.
+      return { ...state, viewsRevision: state.viewsRevision + 1 };
     case 'twitch.auth.changed': {
       const twitchAuth = str(payload.state);
       return twitchAuth ? { ...state, twitchAuth } : state;

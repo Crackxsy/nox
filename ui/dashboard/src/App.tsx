@@ -34,6 +34,7 @@ import {
 } from './model';
 import { NotificationToasts } from './NotificationToasts';
 import { AuditPage } from './pages/Audit';
+import { BoardPage } from './pages/Board';
 import { ChatPage } from './pages/Chat';
 import { ClipsPage } from './pages/Clips';
 import { HomePage } from './pages/Home';
@@ -47,6 +48,7 @@ import { type ThemePref, applyTheme, storeTheme } from './theme';
 export type TabId =
   | 'status'
   | 'chat'
+  | 'board'
   | 'home'
   | 'presets'
   | 'stream'
@@ -58,6 +60,7 @@ const TABS: { id: TabId; label: Key }[] = [
   { id: 'status', label: 'tab_status' },
   { id: 'chat', label: 'tab_chat' },
   { id: 'home', label: 'tab_home' },
+  { id: 'board', label: 'tab_board' },
   { id: 'presets', label: 'tab_presets' },
   { id: 'stream', label: 'tab_stream' },
   { id: 'clips', label: 'tab_clips' },
@@ -382,6 +385,9 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
                 onState={setState}
                 onOpenSettings={() => setTab('settings')}
               />
+            )}
+            {item.id === 'board' && (
+              <BoardPage t={t} lang={lang} client={liveClient} revision={state.viewsRevision} />
             )}
             {item.id === 'presets' && <PresetsPage t={t} client={liveClient} />}
             {item.id === 'stream' && (

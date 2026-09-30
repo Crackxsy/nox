@@ -192,3 +192,7 @@ class E:
     # Twitch OAuth device-code login (`nox.settings.twitch_auth`) moved on: the dashboard's login
     # panel follows this instead of polling `twitch.auth.status`. Carries no token, ever.
     TWITCH_AUTH_CHANGED = "twitch.auth.changed"
+
+    # A view Nox drew (`nox.views`). Carries what it is, never what is in it: the dashboard reads
+    # the view itself with `views.list`, the same way it re-reads a setting after settings.changed.
+    VIEW_SHOWN = "view.shown"

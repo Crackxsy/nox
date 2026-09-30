@@ -787,6 +787,12 @@ export interface TwitchAuthChanged {
   login?: string;
 }
 
+export interface ViewShown {
+  id: string;
+  kind: string;
+  title: string;
+}
+
 export interface RlVisionDetections {
   match_id?: number | null;
   backend?: string;

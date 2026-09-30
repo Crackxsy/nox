@@ -9,6 +9,26 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Nox can draw, and it draws data rather than code.** `view.show` puts a table, a bar chart, a
+  line chart, a list of facts or a plain note on a new Board page in the dashboard
+  (`src/nox/views/`, `ui/dashboard/src/pages/Board.tsx`). The tempting design is to let the model
+  write HTML or SVG and put that on the page, which is an injection hole with extra steps: the
+  dashboard would be rendering whatever a language model was talked into producing. So the model
+  never sends markup. It picks one of five shapes, fills in values, and the page owns the rendering -
+  a bar is a div with a width, a table is a table, text is text, and React escapes all of it. The
+  shapes are a discriminated union with `extra="forbid"`, so a table sent with a `bars` list is
+  refused rather than silently stripped, a row that does not fit its columns is named, and a line
+  chart with more values than labels is named too. Every list is bounded, because a view is
+  something a person looks at and four hundred rows is not that. The wire input is deliberately
+  flat: the tool offer in the prompt lists argument names, not nested schemas, so a single `view`
+  object would have shown up as `view: object` and the five shapes would have been invisible to the
+  model. The strictness lives one layer in, which is also what lets the tool say *which* field was
+  wrong - the executor answers a failed input validation with a generic "invalid input" on purpose,
+  since it must not put user content in a log. The `view.shown` event carries the title and the kind
+  and not the view, and the page re-reads the board, the same way the Settings page re-reads its
+  snapshot after `settings.changed`. The charts are plain CSS and one inline SVG: a charting library
+  would be a dependency, a bundle and a theme to argue with, for five shapes that are a div and a
+  polyline.
 - **Nox can see what is running and tidy up after you.** `desktop.windows`,
   `desktop.processes`, `desktop.window_focus/minimize/restore/close` and `desktop.process_stop`
   (`src/nox/desktop/`). A model does not know window handles, so the window tools take a title
