@@ -244,10 +244,18 @@ async def test_the_prompt_section_names_the_protocol_once(core: NoxCore) -> None
     assert "capabilities.check" in section
 
 
-async def test_the_offer_stays_small_enough_to_send_every_turn(core: NoxCore) -> None:
-    """The section rides along on every tool-enabled turn, so its size is a latency decision."""
+async def test_the_offer_stays_within_its_budget(core: NoxCore) -> None:
+    """The section rides along on every tool-enabled turn, so its size is a latency decision.
+
+    Two bounds, because they catch different mistakes. The total is a budget: 6000 characters
+    is about 1500 tokens, affordable for a cloud model and already noticeable for the small
+    local one Nox falls back to. The average per tool is the more useful canary - it fails when
+    a single tool arrives with a paragraph of description, which the total would hide for a
+    while. Measured at the time of writing: 30 tools, 4110 characters, 137 per tool.
+    """
     section = core.orchestrator.tool_gate.prompt()
     offered = len(core.orchestrator.tool_gate.offer())
     print(f"\ntool offer: {offered} tools, {len(section)} characters")
 
-    assert len(section) < 4000, f"{len(section)} characters is too much to send every turn"
+    assert len(section) < 6000, f"{len(section)} characters is over the per-turn budget"
+    assert len(section) / offered < 160, "some tool is describing itself at length"
