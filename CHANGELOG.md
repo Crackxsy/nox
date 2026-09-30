@@ -27,17 +27,6 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   optional autostart, which means the first thing somebody does after installing - look for it - only
   worked if they already knew it was called Nox.
 
-### Fixed
-- **CI has been failing since 2026-09-28, and not for any of the reasons the open dependency PRs
-  were blamed for.** Every one of #45-#62 died the same way: `Windows fatal exception: access
-  violation` in `security/audit.py`, from the queued audit writer's thread. The writer shares the
-  core's SQLite connection under its own lock, and both `NoxCore.stop()` and a unit fixture closed
-  that connection while the thread was inside a statement - which `sqlite3` does not raise on, it
-  faults. Both are fixed; the suite now runs to completion in CI (1982 passed) instead of dying at
-  78%.
-- **A supervisor test asserted on a process record the instant the process disappeared**, which are
-  two different moments. It passed locally and failed in CI - the same shape as the restart test
-  beside it, and fixed the same way.
 - **The creature curls up, lies down and eats.** The key-pose path shipped working and the art for
   it did not exist, so `poses` in the Meereswolf rig was an empty object and every pose request
   quietly did nothing. Three cut-outs now fill it: it curls up when it sleeps, lies down when it is
@@ -362,6 +351,16 @@ release (`docs/PUBLISHING.md`) - until then the compare links below point at tag
 yet either._
 
 ### Fixed
+- **CI has been failing since 2026-09-28, and not for any of the reasons the open dependency PRs
+  were blamed for.** Every one of #45-#62 died the same way: `Windows fatal exception: access
+  violation` in `security/audit.py`, from the queued audit writer's thread. The writer shares the
+  core's SQLite connection under its own lock, and both `NoxCore.stop()` and a unit fixture closed
+  that connection while the thread was inside a statement - which `sqlite3` does not raise on, it
+  faults. Both are fixed; the suite now runs to completion in CI (1982 passed) instead of dying at
+  78%.
+- **A supervisor test asserted on a process record the instant the process disappeared**, which are
+  two different moments. It passed locally and failed in CI - the same shape as the restart test
+  beside it, and fixed the same way.
 - **The Meereswolf no longer has a black outline on a light desktop.** Its cut-out had been stored
   with premultiplied colour under a straight-alpha flag, which left every soft fur edge too dark by
   its own alpha - mean border luminance 0.102 against fur at 0.352. The matte is now repaired
