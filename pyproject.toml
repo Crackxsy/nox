@@ -71,7 +71,7 @@ Issues = "https://github.com/Crackxsy/nox/issues"
 Changelog = "https://github.com/Crackxsy/nox/blob/main/CHANGELOG.md"
 
 [build-system]
-requires = ["hatchling>=1.27"]  # >=1.27: PEP 639 `license = "Apache-2.0"` string support
+requires = ["hatchling>=1.32.4"]  # >=1.27: PEP 639 `license = "Apache-2.0"` string support
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
