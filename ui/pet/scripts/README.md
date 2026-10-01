@@ -4,11 +4,38 @@ Everything here is run by hand, from the project venv, and everything it produce
 None of it runs at build time.
 
 ```
-.venv/Scripts/python.exe ui/pet/scripts/make_pet_layers.py     # textures + matte repair
-.venv/Scripts/python.exe ui/pet/scripts/render_rig.py          # review renders + cost
-node ui/pet/scripts/weights_probe.mjs                          # bone weights at landmarks
-.venv/Scripts/python.exe ui/pet/scripts/render_variants.py     # the older OP-1 concept gallery
+.venv/Scripts/python.exe ui/pet/scripts/cut_out.py  SRC OUT     # background off a generated picture
+.venv/Scripts/python.exe ui/pet/scripts/make_variant.py ID ...  # cut-out -> a whole rigged variant
+.venv/Scripts/python.exe ui/pet/scripts/make_pose_frames.py ... # cut-out -> one key pose frame
+.venv/Scripts/python.exe ui/pet/scripts/make_pet_layers.py      # the Meereswolf's own matte repair
+.venv/Scripts/python.exe ui/pet/scripts/render_rig.py --variant ID   # review renders + cost
+node ui/pet/scripts/weights_probe.mjs                           # bone weights at landmarks
+.venv/Scripts/python.exe ui/pet/scripts/render_variants.py      # the older OP-1 concept gallery
 ```
+
+## Adding a creature
+
+Seven ship. A new one is the same four steps, and `src/__tests__/rigVariants.test.ts` reads the
+variants off the directory, so it is tested the moment the folder exists.
+
+1. **Cut it out.** `cut_out.py picture.png cut.png`. It works out for itself whether the backdrop
+   is a transparency checkerboard, one flat colour, or a lit studio wall, and says which it chose.
+   Two cases need a hand: a creature the colour of its backdrop (a grey cat on a grey wall, a white
+   wolf on white) wants `--tolerance` well below the default - measure the border against the
+   lightest fur rather than guessing - and a stubborn one can be told `--background` outright.
+2. **Frame it.** `make_variant.py <id> --source cut.png` writes a grid preview and stops.
+3. **Measure it.** Read the landmarks off that grid into `<id>.json`: the two eye centres, and a
+   pivot for each bone. `inheritsFrom` lets a bone take another's clip tracks, which is how a
+   dragon's wings move on the motion written for the Meereswolf's fins without being called fins.
+4. **Build it.** `make_variant.py <id> --source cut.png --landmarks <id>.json`, then
+   `render_rig.py --overlay-only --variant <id>` and look: every joint has to sit on the part it
+   is named after. That picture is the check, not the test suite - a skeleton can be perfectly
+   valid data and still be pinned to the wrong shoulder.
+
+Key poses are separate art and arrive the same way: cut the picture out, then
+`make_pose_frames.py cut.png <pose> <id>`, which scales it to the base drawing and drops it onto
+the same ground line. That alignment is what makes a cross-dissolve read as the creature lying
+down rather than as a cut to a different picture.
 
 | Script | What it owns |
 | --- | --- |
@@ -16,6 +43,9 @@ node ui/pet/scripts/weights_probe.mjs                          # bone weights at
 | `make_pet_layers.py` | Cuts the eye layers out of the source photo, fills the sockets behind them with fur, repairs the matte, and prints the measurements. Writes `public/variants/meereswolf/rig/`. |
 | `render_rig.py` | Renders the rigged pet in headless Chromium: a still of every state on three desktops, three-second frame sequences of the motion, the bone overlay, and the measured frame cost. |
 | `weights_probe.mjs` | Prints which bone owns which landmark. The influence radii in `rig.json` are the one thing that cannot be judged by looking at the picture. |
+| `cut_out.py` | Separates a creature from its backdrop: checkerboard, flat colour, or a lit wall fitted as a surface. Keys on colour, texture and connectivity, because colour alone cannot tell grey fur from a grey wall. |
+| `make_variant.py` | One cut-out plus a landmark file becomes a whole variant: base drawing, eye layers, filled sockets, `rig.json`, `sprites.json`. |
+| `make_pose_frames.py` | Scales a cut-out pose to the base drawing and stands it on the same ground line. |
 | `make_placeholder_sprites.py` | The generated placeholder sprite set, unrelated to the rig. |
 
 ## The matte, and what is wrong with the current source

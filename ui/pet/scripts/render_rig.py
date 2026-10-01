@@ -43,9 +43,22 @@ LOG = logging.getLogger("nox.pet." + Path(__file__).stem)
 
 PET_DIR = Path(__file__).resolve().parents[1]
 DIST_DIR = PET_DIR / "dist"
-VARIANT = "sprite:meereswolf"
-RIG_JSON = PET_DIR / "public" / "variants" / "meereswolf" / "rig.json"
-BASE_TEXTURE = PET_DIR / "public" / "variants" / "meereswolf" / "rig" / "base.png"
+#: Which rigged creature to render. Two ship with a rig - the Meereswolf and the Chamster - and
+#: they are different skeletons over different photographs, so "does the rig still look right"
+#: is a question that has to be asked of each one separately. `--variant` picks it.
+VARIANT_ID = "meereswolf"
+
+
+def variant_dir(variant_id: str) -> Path:
+    return PET_DIR / "public" / "variants" / variant_id
+
+
+def rig_json(variant_id: str) -> Path:
+    return variant_dir(variant_id) / "rig.json"
+
+
+def base_texture(variant_id: str) -> Path:
+    return variant_dir(variant_id) / "rig" / "base.png"
 
 SIZE = 260
 WINDOW = (260, 300)
@@ -120,7 +133,7 @@ def start_server(root: Path, port: int) -> subprocess.Popen[bytes]:
 def page_url(port: int, expression: str, *, animate: bool) -> str:
     mode = "animate=1" if animate else "still=1"
     return (
-        f"http://127.0.0.1:{port}/pet/?variant={VARIANT}&{mode}"
+        f"http://127.0.0.1:{port}/pet/?variant=sprite:{VARIANT_ID}&{mode}"
         f"&expression={expression}&size={SIZE}&lang=de"
     )
 
@@ -400,8 +413,8 @@ def measure_cost(page: Page, port: int) -> dict[str, float]:
 
 def draw_overlay(out: Path) -> None:
     """Skeleton and mesh over the base texture: the picture the pivots were placed against."""
-    rig = json.loads(RIG_JSON.read_text(encoding="utf-8"))
-    image = read_rgba(BASE_TEXTURE).astype(np.float32) / 255.0
+    rig = json.loads(rig_json(VARIANT_ID).read_text(encoding="utf-8"))
+    image = read_rgba(base_texture(VARIANT_ID)).astype(np.float32) / 255.0
     size = image.shape[0]
     backdrop = np.full_like(image[:, :, :3], 0.14)
     alpha = image[:, :, 3:4]
@@ -465,11 +478,18 @@ def _draw_disc(
 
 
 def main() -> int:
+    global VARIANT_ID  # noqa: PLW0603 - one setting, read by everything below
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--out", default=str(PET_DIR / "dist" / "rig-review"))
     parser.add_argument("--overlay-only", action="store_true")
+    parser.add_argument("--variant", default=VARIANT_ID, help="which rigged variant to render")
     args = parser.parse_args()
+
+    VARIANT_ID = args.variant
+    if not rig_json(VARIANT_ID).exists():
+        print(f"no rig.json for variant {VARIANT_ID!r}", file=sys.stderr)
+        return 1
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

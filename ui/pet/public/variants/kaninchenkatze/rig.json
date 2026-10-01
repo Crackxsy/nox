@@ -1,5 +1,5 @@
 {
-  "id": "meereswolf",
+  "id": "kaninchenkatze",
   "base": "base.png",
   "assetDir": "rig",
   "mesh": {
@@ -11,10 +11,10 @@
       "name": "root",
       "parent": null,
       "pivot": [
-        0.57,
-        0.96
+        0.4825,
+        0.965
       ],
-      "restAngle": 0,
+      "restAngle": -90,
       "influence": {
         "radius": 0.3,
         "falloff": 1.0
@@ -24,12 +24,12 @@
       "name": "body",
       "parent": "root",
       "pivot": [
-        0.575,
-        0.78
+        0.4825,
+        0.8
       ],
       "restAngle": -90,
       "influence": {
-        "radius": 0.34,
+        "radius": 0.32,
         "falloff": 1.0
       }
     },
@@ -37,12 +37,12 @@
       "name": "chest",
       "parent": "body",
       "pivot": [
-        0.585,
-        0.6
+        0.4825,
+        0.7
       ],
       "restAngle": -90,
       "influence": {
-        "radius": 0.27,
+        "radius": 0.26,
         "falloff": 1.0
       }
     },
@@ -50,12 +50,12 @@
       "name": "neck",
       "parent": "chest",
       "pivot": [
-        0.6,
-        0.475
+        0.4825,
+        0.615
       ],
       "restAngle": -90,
       "influence": {
-        "radius": 0.17,
+        "radius": 0.16,
         "falloff": 1.1
       }
     },
@@ -63,12 +63,12 @@
       "name": "head",
       "parent": "neck",
       "pivot": [
-        0.6,
-        0.385
+        0.4825,
+        0.515
       ],
       "restAngle": -90,
       "influence": {
-        "radius": 0.26,
+        "radius": 0.24,
         "falloff": 0.9
       }
     },
@@ -76,8 +76,8 @@
       "name": "muzzle",
       "parent": "head",
       "pivot": [
-        0.602,
-        0.325
+        0.4825,
+        0.575
       ],
       "restAngle": -90,
       "influence": {
@@ -89,10 +89,10 @@
       "name": "ear.l",
       "parent": "head",
       "pivot": [
-        0.455,
-        0.145
+        0.38,
+        0.33
       ],
-      "restAngle": -104,
+      "restAngle": -108,
       "influence": {
         "radius": 0.15,
         "falloff": 0.9
@@ -102,51 +102,25 @@
       "name": "ear.r",
       "parent": "head",
       "pivot": [
-        0.727,
-        0.152
+        0.59,
+        0.33
       ],
-      "restAngle": -76,
+      "restAngle": -72,
       "influence": {
         "radius": 0.15,
         "falloff": 0.9
       }
     },
     {
-      "name": "fin.l",
-      "parent": "head",
-      "pivot": [
-        0.44,
-        0.29
-      ],
-      "restAngle": 160,
-      "influence": {
-        "radius": 0.11,
-        "falloff": 1.6
-      }
-    },
-    {
-      "name": "fin.r",
-      "parent": "head",
-      "pivot": [
-        0.755,
-        0.285
-      ],
-      "restAngle": 20,
-      "influence": {
-        "radius": 0.11,
-        "falloff": 1.6
-      }
-    },
-    {
       "name": "tail",
       "parent": "body",
       "pivot": [
-        0.37,
-        0.85
+        0.69,
+        0.87
       ],
-      "restAngle": 178,
+      "restAngle": 15,
       "influence": {
-        "radius": 0.24,
+        "radius": 0.18,
         "falloff": 0.9
       }
     },
@@ -154,28 +128,28 @@
       "name": "lid.l",
       "parent": "head",
       "pivot": [
-        0.532,
-        0.2705
+        0.422,
+        0.5527
       ],
       "restAngle": 0,
       "channelOnly": true,
       "influence": {
         "radius": 0.002,
-        "falloff": 1
+        "falloff": 1.0
       }
     },
     {
       "name": "lid.r",
       "parent": "head",
       "pivot": [
-        0.669,
-        0.2666
+        0.543,
+        0.5527
       ],
       "restAngle": 0,
       "channelOnly": true,
       "influence": {
         "radius": 0.002,
-        "falloff": 1
+        "falloff": 1.0
       }
     }
   ],
@@ -184,10 +158,10 @@
       "name": "eye.l",
       "file": "eye_l.png",
       "rect": [
-        0.49414,
-        0.2168,
-        0.56836,
-        0.28223
+        0.35938,
+        0.45508,
+        0.48438,
+        0.58008
       ],
       "grid": {
         "columns": 3,
@@ -201,10 +175,10 @@
       "name": "eye.r",
       "file": "eye_r.png",
       "rect": [
-        0.63477,
-        0.21484,
-        0.70313,
-        0.27832
+        0.48047,
+        0.45508,
+        0.60547,
+        0.58008
       ],
       "grid": {
         "columns": 3,
@@ -215,11 +189,7 @@
       }
     }
   ],
-  "poses": {
-    "eat": {
-      "file": "pose_eat.png"
-    }
-  },
+  "poses": {},
   "clips": {
     "breathe": {
       "durationMs": 5000,
@@ -733,42 +703,6 @@
             {
               "t": 1,
               "value": 5
-            }
-          ]
-        },
-        {
-          "bone": "fin.l",
-          "channel": "rotate",
-          "keys": [
-            {
-              "t": 0,
-              "value": 2
-            },
-            {
-              "t": 0.5,
-              "value": 4
-            },
-            {
-              "t": 1,
-              "value": 2
-            }
-          ]
-        },
-        {
-          "bone": "fin.r",
-          "channel": "rotate",
-          "keys": [
-            {
-              "t": 0,
-              "value": -2
-            },
-            {
-              "t": 0.5,
-              "value": -4
-            },
-            {
-              "t": 1,
-              "value": -2
             }
           ]
         }

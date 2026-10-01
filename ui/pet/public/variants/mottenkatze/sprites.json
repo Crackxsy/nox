@@ -1,0 +1,15 @@
+{
+  "id": "mottenkatze",
+  "name": "Mottenkatze (Katze x Luna-Motte)",
+  "frames": {
+    "idle": [
+      "idle.png"
+    ]
+  },
+  "fps": 6,
+  "anchor": [
+    0.5,
+    0.5
+  ],
+  "scale": 1.0
+}
