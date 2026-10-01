@@ -10,16 +10,20 @@ assistant. This guide covers install, first start, day-to-day use, and troublesh
 
 ## 1. Install
 
-Nox ships as a signed Windows installer (Inno Setup) with an embedded Python runtime —
-you do not need Python installed separately. The installer:
+**Today the route is from source**, and it is four steps:
+[`docs/GETTING_STARTED.md`](GETTING_STARTED.md).
 
-- installs the program under `%ProgramFiles%\Nox` (or a folder you choose),
-- never installs to, or deletes, your data or vault folders,
-- lets you choose stable/beta/dev update channels,
-- shows the project license before you continue (see `LICENSE`),
-- does not enable telemetry — there is none to enable.
+An Inno Setup script that builds a Windows installer with an embedded Python runtime is in the
+repository (`installer/`), but it has not been signed, and it has not been proven on a machine
+that is not the one it was written on. So there is nothing to download yet. What it will do
+when there is:
 
-For a development checkout instead of the installer, see `README.md`'s "Development" section.
+- install the program under `%ProgramFiles%\Nox` (or a folder you choose),
+- never install to, or delete, your data or vault folders,
+- let you choose stable/beta/dev update channels,
+- show the project license before you continue (see `LICENSE`),
+- offer a desktop shortcut and an optional autostart entry,
+- not enable telemetry - there is none to enable.
 
 ## 2. First start: the onboarding wizard
 
@@ -132,7 +136,8 @@ cannot be turned off or hidden by configuration — if something is being captur
 - **Asking Nox to change itself**: Nox can write a proposed change to its own source on a branch in
   a checkout you name (`extend.workspace`, empty by default), run your tests, and show you the diff.
   It never merges, never pushes and never restarts itself - reading the diff and deciding is yours.
-  It needs the coding profile, because the plugin that writes the change only runs there.
+  It needs the coding profile, because the plugin that writes the change only runs there - see
+  [`docs/EXTEND.md`](EXTEND.md).
 - **Project manager / coding assistant**, **research/creative assistant**: planned, not part of
   this release.
 

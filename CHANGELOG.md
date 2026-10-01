@@ -8,7 +8,20 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-01
+
 ### Added
+- **The default local model could not drive Nox's own tools, and now one that can is the default.**
+  `scripts/probe_models.py` asks every model Ollama has the real question - the real offer text, the
+  real parser from `nox.ai.tooluse`, four cases including one where the right answer is *not* to
+  reach for a tool. `llama3.2:3b`, which was the shipped default, hit 1 of 4 at 14.6 seconds an
+  answer: it writes a friendly paragraph where a tool directive belongs, so the local fallback could
+  talk and do nothing. `qwen3:4b-instruct` hits 3 of 4 at 2.9. Measured on the development machine
+  (GTX 1060 6 GB, Ryzen 7 7800X3D), and the probe ships so anyone can measure their own.
+  [`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) has the table and two findings behind it: a bigger
+  model is not the win, because the larger open models reason before answering and an 8B that fits
+  this card takes 32.7 seconds; and "does not fit the VRAM" is survivable while "does not fit the
+  RAM" is not - a model streamed from an SSD needs every layer for every token.
 - **Nox can propose a change to itself, and cannot apply one.** `extend.propose` starts a branch in
   a checkout you named, asks the `coding` plugin to write the change there, runs your test command,
   and hands back the diff and what the tests said (`src/nox/extend/`). There is deliberately no
@@ -25,17 +38,6 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   optional autostart, which means the first thing somebody does after installing - look for it - only
   worked if they already knew it was called Nox.
 
-### Fixed
-- **CI has been failing since 2026-09-28, and not for any of the reasons the open dependency PRs
-  were blamed for.** Every one of #45-#62 died the same way: `Windows fatal exception: access
-  violation` in `security/audit.py`, from the queued audit writer's thread. The writer shares the
-  core's SQLite connection under its own lock, and both `NoxCore.stop()` and a unit fixture closed
-  that connection while the thread was inside a statement - which `sqlite3` does not raise on, it
-  faults. Both are fixed; the suite now runs to completion in CI (1982 passed) instead of dying at
-  78%.
-- **A supervisor test asserted on a process record the instant the process disappeared**, which are
-  two different moments. It passed locally and failed in CI - the same shape as the restart test
-  beside it, and fixed the same way.
 - **The creature curls up, lies down and eats.** The key-pose path shipped working and the art for
   it did not exist, so `poses` in the Meereswolf rig was an empty object and every pose request
   quietly did nothing. Three cut-outs now fill it: it curls up when it sleeps, lies down when it is
@@ -360,6 +362,16 @@ release (`docs/PUBLISHING.md`) - until then the compare links below point at tag
 yet either._
 
 ### Fixed
+- **CI has been failing since 2026-09-28, and not for any of the reasons the open dependency PRs
+  were blamed for.** Every one of #45-#62 died the same way: `Windows fatal exception: access
+  violation` in `security/audit.py`, from the queued audit writer's thread. The writer shares the
+  core's SQLite connection under its own lock, and both `NoxCore.stop()` and a unit fixture closed
+  that connection while the thread was inside a statement - which `sqlite3` does not raise on, it
+  faults. Both are fixed; the suite now runs to completion in CI (1982 passed) instead of dying at
+  78%.
+- **A supervisor test asserted on a process record the instant the process disappeared**, which are
+  two different moments. It passed locally and failed in CI - the same shape as the restart test
+  beside it, and fixed the same way.
 - **The Meereswolf no longer has a black outline on a light desktop.** Its cut-out had been stored
   with premultiplied colour under a straight-alpha flag, which left every soft fur edge too dark by
   its own alpha - mean border luminance 0.102 against fur at 0.352. The matte is now repaired

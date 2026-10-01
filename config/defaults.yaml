@@ -143,7 +143,11 @@ ai:
     ollama:
       enabled: true
       base_url: "http://127.0.0.1:11434"
-      model: "llama3.2:3b"
+      # Measured, not guessed: `scripts/probe_models.py` asks every local model to drive Nox's
+      # own tool protocol. llama3.2:3b, which used to be here, hit 1 of 4 and took 14.6s an
+      # answer - it writes prose where a tool directive belongs, so the local fallback could
+      # talk and do nothing. This one hits 3 of 4 at 2.9s. See docs/LOCAL_MODELS.md.
+      model: "qwen3:4b-instruct"
       gpu_allowed_modes: [companion, coding, research, idle]   # never during rocket_league
       timeout_s: 60
 

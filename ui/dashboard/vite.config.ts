@@ -19,6 +19,12 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // 5s is vitest's default and it is tight here: `../shared/__tests__/envelope.test.ts` starts
+    // a real WebSocket server, and on a loaded CI runner a worker doing that can starve a plain
+    // synchronous test in the same pool past the deadline. That is what happened - a test that
+    // only formats a date was reported as timing out. Raising the deadline treats the symptom,
+    // and the symptom is the only thing wrong: the tests themselves take milliseconds.
+    testTimeout: 20000,
     globals: false,
     setupFiles: ['src/__tests__/setup.ts'],
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx', '../shared/**/*.test.ts'],
