@@ -11,7 +11,7 @@
  * itself. A broken-image icon next to a setting reads as the setting being broken.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 const SPRITE_PREFIX = 'sprite:';
 
@@ -31,10 +31,10 @@ export interface PetPreviewProps {
 
 export function PetPreview({ variant, alt }: PetPreviewProps) {
   const url = previewUrl(variant);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [url]);
+  // The URL that failed, not a flag: picking another creature is then a fresh attempt by itself.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
 
-  if (url === null || failed) return null;
+  if (url === null || url === failedUrl) return null;
   return (
     <img
       className="pet-preview"
@@ -43,7 +43,7 @@ export function PetPreview({ variant, alt }: PetPreviewProps) {
       width={96}
       height={96}
       loading="lazy"
-      onError={() => setFailed(true)}
+      onError={() => setFailedUrl(url)}
     />
   );
 }

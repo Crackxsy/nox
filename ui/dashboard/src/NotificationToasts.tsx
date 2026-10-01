@@ -35,8 +35,12 @@ const LEAVE_MS = 180;
 export function NotificationToasts({ t, notifications, onDismiss }: NotificationToastsProps) {
   const shown = notifications.slice(0, 5);
   const shownIds = shown.map((n) => n.id).join(',');
+  // The latest `onDismiss` for the timers below, updated after each commit rather than during
+  // render, where a render React throws away would still have changed it.
   const dismissRef = useRef(onDismiss);
-  dismissRef.current = onDismiss;
+  useEffect(() => {
+    dismissRef.current = onDismiss;
+  });
   /** Toasts that are playing their exit animation and will be gone a moment later. */
   const [leaving, setLeaving] = useState<readonly string[]>([]);
 

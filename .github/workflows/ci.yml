@@ -78,6 +78,10 @@ jobs:
         working-directory: ui/${{ matrix.app }}
         run: npm ci
 
+      - name: npm run lint
+        working-directory: ui/${{ matrix.app }}
+        run: npm run lint
+
       - name: npm test
         working-directory: ui/${{ matrix.app }}
         run: npm test

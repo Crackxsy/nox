@@ -11,7 +11,7 @@
  * number on every incoming event turned a screen reader into a ticker.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { formatTimestamp } from '../../../shared/format';
 import {
@@ -75,13 +75,15 @@ export function AuditPage({ t, lang, rows }: AuditPageProps) {
   const count = shown.length;
   const filtered = filter !== '' || decisionFilter !== '' || resultFilter !== '';
 
-  // Announce the count when the *filter* changes, not when a new event arrives. `countRef` keeps
-  // the number out of the dependency list, so an incoming audit event does not re-announce.
-  const countRef = useRef(count);
-  countRef.current = count;
-  useEffect(() => {
-    setAnnouncement(fill(t('audit_count'), countRef.current));
-  }, [filter, decisionFilter, resultFilter, t]);
+  // Announce the count when the *filter* (or the language) changes, not when a new event arrives:
+  // the announcement remembers what it was made for and is redone, while rendering, only when
+  // that changes.
+  const announceFor = JSON.stringify([filter, decisionFilter, resultFilter]);
+  const [announced, setAnnounced] = useState<{ key: string; t: typeof t } | null>(null);
+  if (announced === null || announced.key !== announceFor || announced.t !== t) {
+    setAnnounced({ key: announceFor, t });
+    setAnnouncement(fill(t('audit_count'), count));
+  }
 
   const reset = () => {
     setFilter('');
