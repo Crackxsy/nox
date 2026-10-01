@@ -161,8 +161,18 @@ pet:
   greeting_enabled: true          # speak the startup greeting (the speech policy still decides)
   quiet_in_private_modes: true    # no unsolicited speech (greeting, hints) while privacy mode is
                                    # private or offline; replies to you are never blocked
-  variant: neutral                # creature shape rendered by the pet window
-                                   # (ui/pet/src/variants), or sprite:<id> for a sprite set
+  variant: neutral                # which creature the pet window draws. `neutral`, `imp`, `fox`,
+                                   # `owl` and `cat` are drawn in code (ui/pet/src/variants) and
+                                   # need no art. The seven photographed creatures are picked as
+                                   # `sprite:<id>`, and each one breathes, blinks, flicks an ear
+                                   # and has art for sleeping, lying down and eating:
+                                   #   sprite:meereswolf      arctic wolf x gill-fish
+                                   #   sprite:eulenfuchs      red fox x barn owl
+                                   #   sprite:katzendrache    house cat x small dragon
+                                   #   sprite:mottenkatze     cat x luna moth
+                                   #   sprite:kaninchenkatze  Maine Coon x giant rabbit
+                                   #   sprite:koalaflughund   koala x flying fox
+                                   #   sprite:chamster        hamster x chameleon
 
 plugins:                         # plugin workers (plugins/<id>/manifest.yaml)
   enabled: []                    # plugin ids started at boot; empty = no plugin runs

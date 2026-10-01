@@ -37,6 +37,29 @@ Key poses are separate art and arrive the same way: cut the picture out, then
 the same ground line. That alignment is what makes a cross-dissolve read as the creature lying
 down rather than as a cut to a different picture.
 
+## Asking a generator for pose art
+
+Two things decide whether the result is usable, and neither is the wording of the pose.
+
+**Attach the creature.** Describing it gets a new animal that merely matches the description - the
+first attempt at a sitting Chamster came back a different colour with a different face. Attaching
+its base picture and asking for the same animal in a new pose keeps it the same animal.
+
+**Ask for a green screen, not transparency.** Asked for transparency the generator bakes a
+checkerboard into the pixels, and its light square is pure white, which is also what a white wolf
+is made of. No threshold separates those. A flat chroma green keys cleanly off any creature that
+is not itself green:
+
+```
+.venv/Scripts/python.exe ui/pet/scripts/cut_out.py raw.png cut.png     --background flat --tolerance 60 --max-size 512 --chroma
+```
+
+`--chroma` is what makes the fur edge right rather than merely present: it measures coverage from
+the key colour left in each pixel, then takes that colour back out, so half a tuft of fur is
+stored as half covered instead of as a green rim. The creatures with green of their own - the
+Chamster's scales, the Mottenkatze's wings - survive it, a little desaturated at the edges, because
+the flood still decides what is background and they are not connected to the screen.
+
 | Script | What it owns |
 | --- | --- |
 | `pngio.py` | RGBA PNG read/write on `zlib` + `numpy`, so no script here needs Pillow. |

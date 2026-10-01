@@ -14,6 +14,12 @@ Two ideas carry the result:
 * **Except when it is enclosed.** The field inside the curl of the tail is background too, and the
   border cannot reach it, so a closed region larger than a fur marking counts as well.
 
+**The thresholds are tuned for a picture about 512 across**, because that is the size the art is
+drawn at, and two of them - the texture window and the opening radius - are measured in pixels. A
+1024 source keyed at full size reads as finer-grained than the same picture halved and lets more
+through; a checkerboard halved reads as nothing but edges and lets nothing through. Hence
+`--max-size 512` for a flat or lit backdrop, and full size for a checkerboard.
+
 numpy only. `pngio` exists because Pillow is not a dependency of this project, and scipy arrives
 only indirectly through another package - `labels_of` below is what `scipy.ndimage.label` does.
 
@@ -156,11 +162,13 @@ def candidate_mask(rgb: np.ndarray, *, kind: str) -> np.ndarray:
     if kind == "checker":
         grey = rgb.mean(axis=2)
         near = np.minimum.reduce([np.abs(grey - tone) for tone in CHECKER_TONES])
-        # The light square of a checkerboard is white, and so is a white wolf. Colour decides
-        # nothing between them; a painted square is perfectly flat and fur never is.
-        return (near < TONE_TOLERANCE) & (chroma < CHROMA_LIMIT) & (
-            local_detail(rgb) < FLOOD_MAX_DETAIL
-        )
+        # No texture test here, unlike the lit backdrop below. It was tried, to separate a white
+        # creature from the white square of a checkerboard, and it cannot work on a pattern: the
+        # squares are only tens of pixels across, so most of the board lies within a texture
+        # window of an edge and reads as textured. On a picture with fine squares it removed
+        # nothing at all. A white creature needs a green screen, not a cleverer threshold - see
+        # the chroma key below.
+        return (near < TONE_TOLERANCE) & (chroma < CHROMA_LIMIT)
     if kind == "gradient":
         difference = rgb - backdrop_surface(rgb)
         close = np.abs(difference).max(axis=2) < GRADIENT_TOLERANCE
@@ -226,7 +234,7 @@ def background_of(rgb: np.ndarray, *, kind: str) -> np.ndarray:
     if not keep:
         return np.zeros_like(candidate)
     found = np.isin(labels, list(keep))
-    if kind in ("gradient", "checker"):
+    if kind == "gradient":
         found = opened(found, OPENING_RADIUS)
         found = regrow_halo(rgb, found, kind=kind)
     return found
@@ -424,7 +432,9 @@ def main() -> int:
         help=(
             "key at this resolution instead of the source's. The flood fill costs more than "
             "linearly in pixels, and a pose frame ends up at 512 anyway, so halving first is "
-            "most of the time back for an edge nobody will see at the size it is drawn"
+            "most of the time back for an edge nobody will see at the size it is drawn. "
+            "Not for a checkerboard: its squares halve with the picture until every pixel is "
+            "near an edge, every pixel therefore counts as textured, and nothing is removed"
         ),
     )
     parser.add_argument(
