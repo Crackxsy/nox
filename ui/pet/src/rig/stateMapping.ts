@@ -30,6 +30,31 @@ export const RIG_CLIPS = [
 ] as const;
 export type RigClipName = (typeof RIG_CLIPS)[number];
 
+/** The pose a treat shows for a moment, whatever the mood. */
+export const EATING_POSE = 'eat';
+
+/**
+ * The key pose the creature should be in, or null for its base drawing.
+ *
+ * This used to be a table keyed by one string that was either `sleeping` or the *functional*
+ * state - `idle`, `listening` and so on. Its `bored: 'lie'` entry was keyed by an *expression*,
+ * which that string never was, so no creature ever lay down: the art for it existed and nothing
+ * could reach it. Reading the two layers separately is the fix. Boredom only shows while Nox is
+ * idle; a creature that is listening or speaking sits up, whatever its mood.
+ *
+ * Sitting needs no pose of its own - every creature's base picture already is it, sitting up and
+ * attentive. The table used to ask for a `sit` no variant had ever drawn and fell back to the base
+ * drawing each time.
+ */
+export function poseFor(input: PetInput): string | null {
+  if (isRestingState(input)) return 'curl';
+  if (input.functional === 'idle' && input.expression === 'bored') return 'lie';
+  return null;
+}
+
+/** Every key pose the pet can ever ask a variant for; art for anything else would never show. */
+export const REACHABLE_POSES: ReadonlySet<string> = new Set(['curl', 'lie', EATING_POSE]);
+
 export interface SustainedClip {
   name: RigClipName;
   weight: number;

@@ -20,7 +20,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSkeleton } from '../rig/bones';
 import { computeWeights } from '../rig/mesh';
 import { parseRigDefinition } from '../rig/rigFile';
-import { RIG_CLIPS } from '../rig/stateMapping';
+import { REACHABLE_POSES, RIG_CLIPS } from '../rig/stateMapping';
 
 const VARIANTS_DIR = join(process.cwd(), 'public', 'variants');
 
@@ -108,10 +108,9 @@ describe.each(RIGGED)('%s', (variant) => {
   it('points every key pose at art that exists, and at a pose the pet can reach', () => {
     // A pose nothing asks for is art that never shows; a misspelt one - `curled` for `curl` - is
     // worse, because the loader accepts it and the creature simply never lies down.
-    const reachable = new Set(['curl', 'lie', 'sit', 'eat']); // RiggedPet.tsx: POSE_FOR_STATE
     for (const [pose, { file }] of Object.entries(rig.poses)) {
       expect(existsSync(join(assets, file)), `${pose} -> ${file}`).toBe(true);
-      expect(reachable, `${pose} is art nothing ever shows`).toContain(pose);
+      expect(REACHABLE_POSES, `${pose} is art nothing ever shows`).toContain(pose);
     }
   });
 

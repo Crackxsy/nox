@@ -4,11 +4,14 @@ the proactive layer and the local sensors.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import Field, field_validator, model_validator
 
 from nox.core.config.types import StrictSection, require_ordered
+from nox.core.logging import get_logger
+
+log = get_logger(__name__)
 
 __all__ = [
     "AiConfig",
@@ -145,6 +148,27 @@ class AiConfig(StrictSection):
 # ---- pet and attention --------------------------------------------------------------------------
 
 
+#: Every creature the pet window can draw. The first five are drawn in code
+#: (`ui/pet/src/variants`) and need no art; the `sprite:` ones are photographed creatures with a
+#: deformation rig and key-pose art under `ui/pet/public/variants/<id>/`. A test holds this list
+#: and those folders to each other, so neither can gain an entry the other does not know about.
+PetVariant = Literal[
+    "neutral",
+    "imp",
+    "fox",
+    "owl",
+    "cat",
+    "sprite:meereswolf",
+    "sprite:eulenfuchs",
+    "sprite:katzendrache",
+    "sprite:mottenkatze",
+    "sprite:kaninchenkatze",
+    "sprite:koalaflughund",
+    "sprite:chamster",
+]
+PET_VARIANTS: tuple[str, ...] = get_args(PetVariant)
+
+
 class PetConfig(StrictSection):
     renderer: Literal["web"] = "web"
     default_monitor: str = "left"
@@ -156,10 +180,21 @@ class PetConfig(StrictSection):
     #: Block unsolicited speech - the greeting and proactive hints, never a reply to the user -
     #: while privacy mode is private or offline: the pet stays silent and just shows it is ready.
     quiet_in_private_modes: bool = True
-    #: Creature shape rendered by the pet window (`ui/pet/src/variants`), or `sprite:<id>` for a
-    #: sprite set. "neutral" is the abstract shape that ships with Nox. The shell passes it
-    #: through to the pet page as `?variant=`; it is never a secret.
-    variant: str = "neutral"
+    #: Which creature the pet window draws. The shell passes it through to the pet page as
+    #: `?variant=`; it is never a secret. See `PetVariant` for the choices.
+    variant: PetVariant = "neutral"
+
+    @field_validator("variant", mode="before")
+    @classmethod
+    def _known_variant(cls, value: object) -> object:
+        # A configuration written before this list was closed - or edited by hand with a typo -
+        # must not stop Nox from starting over how the pet looks. The pet page already draws the
+        # neutral shape for an id it does not know; this makes the configuration say so too,
+        # and says it in the log rather than nowhere.
+        if isinstance(value, str) and value not in PET_VARIANTS:
+            log.warning("config.pet.unknown_variant", value=value, using="neutral")
+            return "neutral"
+        return value
 
 
 class QuietHoursConfig(StrictSection):

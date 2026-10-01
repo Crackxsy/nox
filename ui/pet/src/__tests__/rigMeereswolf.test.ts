@@ -18,7 +18,7 @@ import rigJson from '../../public/variants/meereswolf/rig.json';
 import { buildSkeleton } from '../rig/bones';
 import { computeWeights } from '../rig/mesh';
 import { parseRigDefinition } from '../rig/rigFile';
-import { RIG_CLIPS } from '../rig/stateMapping';
+import { REACHABLE_POSES, RIG_CLIPS } from '../rig/stateMapping';
 
 const rig = parseRigDefinition(rigJson, 'meereswolf');
 const skeleton = buildSkeleton(rig.bones);
@@ -145,9 +145,8 @@ describe('the key poses the variant ships', () => {
     // Which is why this does not pin the list. A pose the state mapping never asks for is dead
     // art, and a misspelt one - `curled` for `curl` - is worse: the file is there, the loader is
     // happy, and the creature simply never lies down. Both show up here; a growing list does not.
-    const reachable = new Set(['curl', 'lie', 'sit', 'eat']); // RiggedPet.tsx: POSE_FOR_STATE
     for (const pose of Object.keys(rig.poses)) {
-      expect(reachable, `${pose} is art nothing ever shows`).toContain(pose);
+      expect(REACHABLE_POSES, `${pose} is art nothing ever shows`).toContain(pose);
     }
   });
 
