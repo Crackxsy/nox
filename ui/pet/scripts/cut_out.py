@@ -156,7 +156,11 @@ def candidate_mask(rgb: np.ndarray, *, kind: str) -> np.ndarray:
     if kind == "checker":
         grey = rgb.mean(axis=2)
         near = np.minimum.reduce([np.abs(grey - tone) for tone in CHECKER_TONES])
-        return (near < TONE_TOLERANCE) & (chroma < CHROMA_LIMIT)
+        # The light square of a checkerboard is white, and so is a white wolf. Colour decides
+        # nothing between them; a painted square is perfectly flat and fur never is.
+        return (near < TONE_TOLERANCE) & (chroma < CHROMA_LIMIT) & (
+            local_detail(rgb) < FLOOD_MAX_DETAIL
+        )
     if kind == "gradient":
         difference = rgb - backdrop_surface(rgb)
         close = np.abs(difference).max(axis=2) < GRADIENT_TOLERANCE
@@ -222,9 +226,9 @@ def background_of(rgb: np.ndarray, *, kind: str) -> np.ndarray:
     if not keep:
         return np.zeros_like(candidate)
     found = np.isin(labels, list(keep))
-    if kind == "gradient":
+    if kind in ("gradient", "checker"):
         found = opened(found, OPENING_RADIUS)
-        found = regrow_halo(rgb, found)
+        found = regrow_halo(rgb, found, kind=kind)
     return found
 
 
@@ -247,15 +251,20 @@ def opened(mask: np.ndarray, radius: int) -> np.ndarray:
     return shrunk & mask
 
 
-def regrow_halo(rgb: np.ndarray, found: np.ndarray) -> np.ndarray:
+def regrow_halo(rgb: np.ndarray, found: np.ndarray, *, kind: str = "gradient") -> np.ndarray:
     """Grow the background into neighbouring pixels that still match the fitted backdrop.
 
     Only the halo the texture window left behind can satisfy both conditions - touching known
     background and sitting on the backdrop's own colour - so this recovers the outline without
     reaching the fur the texture test was there to protect.
     """
-    difference = rgb - backdrop_surface(rgb)
-    matches = np.abs(difference).max(axis=2) < GRADIENT_TOLERANCE
+    if kind == "checker":
+        grey = rgb.mean(axis=2)
+        near = np.minimum.reduce([np.abs(grey - tone) for tone in CHECKER_TONES])
+        matches = (near < TONE_TOLERANCE) & (rgb.max(axis=2) - rgb.min(axis=2) < CHROMA_LIMIT)
+    else:
+        difference = rgb - backdrop_surface(rgb)
+        matches = np.abs(difference).max(axis=2) < GRADIENT_TOLERANCE
     grown = found.copy()
     for _ in range(HALO_PASSES):
         neighbours = np.zeros_like(grown)
@@ -327,11 +336,97 @@ def drop_fragments(alpha: np.ndarray) -> np.ndarray:
     return np.where(np.isin(labels, keep), alpha, 0.0)
 
 
+def halve(image: np.ndarray) -> np.ndarray:
+    """Average 2x2 blocks. The source has no alpha yet, so no premultiplication is needed."""
+    height, width = (side - side % 2 for side in image.shape[:2])
+    block = image[:height, :width].astype(np.float64).reshape(height // 2, 2, width // 2, 2, -1)
+    return block.mean(axis=(1, 3))
+
+
+def backdrop_colour(rgb: np.ndarray, kind: str) -> np.ndarray:
+    """What was behind the creature, per pixel, as far as it can be known."""
+    if kind == "gradient":
+        return backdrop_surface(rgb)
+    if kind == "checker":
+        grey = rgb.mean(axis=2)
+        nearest = min(CHECKER_TONES, key=lambda tone: abs(float(np.median(grey)) - tone))
+        pick = np.where(
+            np.abs(grey - CHECKER_TONES[0]) < np.abs(grey - CHECKER_TONES[1]),
+            CHECKER_TONES[0],
+            CHECKER_TONES[1],
+        )
+        return np.repeat(np.where(np.isfinite(pick), pick, nearest)[..., None], 3, axis=2)
+    corners = np.stack([rgb[0, 0], rgb[0, -1], rgb[-1, 0], rgb[-1, -1]])
+    return np.broadcast_to(np.median(corners, axis=0), rgb.shape).copy()
+
+
+def decontaminate(rgb: np.ndarray, alpha: np.ndarray, backdrop: np.ndarray) -> np.ndarray:
+    """Take the backdrop back out of the half-transparent edge.
+
+    A pixel on the silhouette is a mixture: `C = a*F + (1-a)*B`, the fur F showing through over
+    whatever was behind it. Storing C and calling it the fur leaves the backdrop smeared round the
+    outline - a green rim off a chroma key, grey stubble off a studio wall - which the compositor
+    then draws over the desktop. B is known and a has just been measured, so F can simply be
+    solved for. Below a sliver of coverage the division is noise, so those pixels are left alone;
+    they are almost invisible anyway.
+    """
+    coverage = np.maximum(alpha, 1e-3)[..., None]
+    recovered = (rgb - (1.0 - coverage) * backdrop) / coverage
+    usable = (alpha > 0.04)[..., None]
+    return np.clip(np.where(usable, recovered, rgb), 0.0, 255.0)
+
+
+def chroma_matte(rgb: np.ndarray, key: np.ndarray, outside: np.ndarray) -> np.ndarray:
+    """Coverage from how much of the key colour is left in a pixel, not from how dark it is.
+
+    The obvious measure - distance from the key colour - fails on exactly the creatures a chroma
+    key is for. Shadowed white fur is numerically closer to green than lit fur is, so a distance
+    ramp reads the wolf's own shaded flank as half transparent and then unmixes green out of it,
+    which turns it magenta. Measured on the attempt that did: fur in shadow came out at a
+    coverage of 0.5 and the whole animal went purple.
+
+    What separates a green screen from anything else is not its brightness but that its green runs
+    far ahead of its red and blue. Fur does not, at any brightness. So the excess carries the
+    answer: full excess means the pixel is all screen, none means it is all creature, and half of
+    it means half covered - which is what the edge of a tuft of fur actually is.
+    """
+    dominant = int(np.argmax(key.reshape(-1, 3).mean(axis=0)))
+    others = [channel for channel in range(3) if channel != dominant]
+    excess = rgb[..., dominant] - np.maximum(rgb[..., others[0]], rgb[..., others[1]])
+    reference = float(
+        np.median(key[..., dominant] - np.maximum(key[..., others[0]], key[..., others[1]]))
+    )
+    if reference <= 1.0:  # not a chroma screen at all; fall back to a hard matte
+        return np.where(outside, 0.0, 1.0)
+    covered = np.clip(excess / reference, 0.0, 1.0)
+    # The flood still has the last word: fur that happens to be greenish but is not connected to
+    # the screen stays opaque.
+    return np.where(outside, 0.0, 1.0 - covered)
+
+
 def main() -> int:
     global FLAT_TOLERANCE, GRADIENT_TOLERANCE  # noqa: PLW0603
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("destination", type=Path)
+    parser.add_argument(
+        "--chroma",
+        action="store_true",
+        help=(
+            "the backdrop is a chroma key. Builds a soft matte from the colour distance instead "
+            "of a hard one, so a half-covered pixel is stored as half covered and the key colour "
+            "can be taken back out of it - without this a green rim survives along the fur"
+        ),
+    )
+    parser.add_argument(
+        "--max-size",
+        type=int,
+        help=(
+            "key at this resolution instead of the source's. The flood fill costs more than "
+            "linearly in pixels, and a pose frame ends up at 512 anyway, so halving first is "
+            "most of the time back for an edge nobody will see at the size it is drawn"
+        ),
+    )
     parser.add_argument(
         "--tolerance",
         type=float,
@@ -354,6 +449,10 @@ def main() -> int:
         FLAT_TOLERANCE = GRADIENT_TOLERANCE = args.tolerance
 
     image = read_rgba(args.source)
+    if args.max_size and max(image.shape[:2]) > args.max_size:
+        while max(image.shape[:2]) > args.max_size * 2:
+            image = halve(image)
+        image = halve(image)
     rgb = image[..., :3].astype(np.float64)
     if args.background == "auto":
         if looks_like_checker(rgb):
@@ -364,10 +463,14 @@ def main() -> int:
         kind = args.background
 
     outside = background_of(rgb, kind=kind)
-    alpha = feather(~outside, FEATHER)
-    write_rgba(args.destination, np.dstack([rgb, alpha * 255.0]).astype(np.uint8))
-
+    if args.chroma:
+        alpha = chroma_matte(rgb, backdrop_colour(rgb, kind), outside)
+    else:
+        alpha = feather(~outside, FEATHER)
     alpha = fill_holes(drop_fragments(alpha))
+    clean = decontaminate(rgb, alpha, backdrop_colour(rgb, kind))
+    write_rgba(args.destination, np.dstack([clean, alpha * 255.0]).astype(np.uint8))
+
     solid = alpha > 0.5
     rows, columns = np.nonzero(solid)
     described = {"checker": "checkerboard", "flat": "flat colour", "gradient": "lit backdrop"}[kind]
