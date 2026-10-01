@@ -161,3 +161,22 @@ def test_pin_hash_format_and_argon2_fallback_report() -> None:
     assert not PinManager(store, prefer_argon2=False).verify_pin("4711").ok
     pin.clear_pin()
     assert not pin.is_set()
+
+
+def test_a_weaker_pin_hash_is_upgraded_when_the_pin_is_entered_correctly(
+    audit: SqliteAuditLog,
+) -> None:
+    """A PIN set on a start without Argon2id keeps working, and is moved to Argon2id the next
+    time it is entered correctly - the only moment the PIN itself is at hand."""
+    store = InMemorySecretStore()
+    PinManager(store, prefer_argon2=False).set_pin("4711")
+    pin = PinManager(store, audit=audit)
+    assert pin.algorithm == "argon2id"
+
+    assert not pin.verify_pin("0000").ok
+    assert (store.get(PIN_SECRET_NAME) or "").startswith("pbkdf2_sha256$")  # wrong PIN: untouched
+
+    assert pin.verify_pin("4711").ok
+    assert (store.get(PIN_SECRET_NAME) or "").startswith("argon2id$")
+    assert pin.verify_pin("4711").ok and not pin.verify_pin("4712").ok
+    assert any(entry.action == "pin.rehash" for entry in audit.entries())
