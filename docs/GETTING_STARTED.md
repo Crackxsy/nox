@@ -15,6 +15,8 @@ You need:
 - **Python 3.13 from python.org** - *not* the Microsoft Store build, which sandboxes paths.
 - **Node.js 20+**, to build the two web UIs the core serves.
 - Optional: **Ollama** for local models, **Claude Code CLI** for cloud-grade reasoning.
+  With Ollama, pull the model Nox expects: `ollama pull qwen3:4b-instruct`. Which model you
+  use decides whether Nox can *act* or only talk - see [`docs/LOCAL_MODELS.md`](LOCAL_MODELS.md).
 
 ```powershell
 git clone https://github.com/Crackxsy/nox.git
