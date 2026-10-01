@@ -179,6 +179,7 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
     let cancelled = false;
     let timer = 0;
     let attempt = 0;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- refresh() sets state only after awaiting the core; the rule does not see past the await
     void refresh(client);
     const tryProviders = () => {
       void loadProviders(client).then((ok) => {

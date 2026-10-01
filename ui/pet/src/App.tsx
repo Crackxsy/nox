@@ -52,10 +52,22 @@ export function App({ token, lang, overlay, variantId, still, animate, stillExpr
   // The variant is state, not just a prop: `config.set pet.variant` swaps it live, without a page
   // reload (#24). `variantId` is only the value the shell put in the URL at load time.
   const [activeVariant, setActiveVariant] = useState<string | null>(variantId);
-  useEffect(() => setActiveVariant(variantId), [variantId]);
+  // A new URL value wins over a live swap. Adjusted while rendering, not in an effect, so the
+  // stale variant is never painted for a frame (react.dev: "adjusting state when a prop changes").
+  const [urlVariant, setUrlVariant] = useState<string | null>(variantId);
+  if (urlVariant !== variantId) {
+    setUrlVariant(variantId);
+    setActiveVariant(variantId);
+  }
 
-  const [sprite, setSprite] = useState<LoadedSprite | null>(null);
-  const [rig, setRig] = useState<LoadedRig | null>(null);
+  // What the loaders below last delivered. A procedural variant uses neither, so for it they are
+  // ignored here rather than cleared from an effect; switching between two sprite variants keeps
+  // the previous creature on screen until the next one has loaded.
+  const [loadedSprite, setSprite] = useState<LoadedSprite | null>(null);
+  const [loadedRig, setRig] = useState<LoadedRig | null>(null);
+  const spriteId = spriteVariantId(activeVariant);
+  const sprite = spriteId === null ? null : loadedSprite;
+  const rig = spriteId === null ? null : loadedRig;
   const variant = useMemo(() => getVariant(activeVariant), [activeVariant]);
   const theme = useThemeMode();
   const [state, setState] = useState<PetState>(() =>
@@ -107,13 +119,9 @@ export function App({ token, lang, overlay, variantId, still, animate, stillExpr
   // Sprite variants (#19): fetch + validate + preload the whole set before showing anything. Any
   // failure logs a reason and leaves `sprite` null, which renders the procedural variant instead.
   useEffect(() => {
-    const id = spriteVariantId(activeVariant);
-    if (id === null) {
-      setSprite(null);
-      return;
-    }
+    if (spriteId === null) return;
     let cancelled = false;
-    loadSprite(id, {
+    loadSprite(spriteId, {
       base: import.meta.env.BASE_URL,
       fetchJson: async (url) => {
         const res = await fetch(url, { cache: 'no-store' });
@@ -133,20 +141,16 @@ export function App({ token, lang, overlay, variantId, still, animate, stillExpr
     return () => {
       cancelled = true;
     };
-  }, [activeVariant]);
+  }, [spriteId, activeVariant]);
 
   // Deformation rig (`rig.json`). Strictly an upgrade on top of the sprite set: a variant without
   // one, or with one that will not load, keeps the sprite renderer and its static frames, and the
   // reason is logged rather than swallowed.
   useEffect(() => {
-    const id = spriteVariantId(activeVariant);
-    if (id === null) {
-      setRig(null);
-      return;
-    }
+    if (spriteId === null) return;
     let cancelled = false;
-    loadRig(id, {
-      variantBase: spriteBaseUrl(import.meta.env.BASE_URL, id),
+    loadRig(spriteId, {
+      variantBase: spriteBaseUrl(import.meta.env.BASE_URL, spriteId),
       fetchJson: async (url) => {
         const res = await fetch(url, { cache: 'no-store' });
         if (res.status === 404) return null;
@@ -166,7 +170,7 @@ export function App({ token, lang, overlay, variantId, still, animate, stillExpr
     return () => {
       cancelled = true;
     };
-  }, [activeVariant]);
+  }, [spriteId, activeVariant]);
 
   // A rig running on Canvas 2D is a working pet with a coarser mesh, not a failure — but it is a
   // downgrade, and the reason for it belongs in the log rather than nowhere.

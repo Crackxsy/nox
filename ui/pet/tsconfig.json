@@ -14,8 +14,7 @@
     "resolveJsonModule": true,
     "noEmit": true,
     "types": ["vite/client", "node"],
-    "baseUrl": ".",
-    "paths": { "vitest": ["node_modules/vitest"] }
+    "paths": { "vitest": ["./node_modules/vitest"] }
   },
   "include": ["src", "../shared"]
 }

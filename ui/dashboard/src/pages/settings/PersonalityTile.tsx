@@ -9,7 +9,7 @@
  * where the text is kept in a sentence instead.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 
 import { errorText } from '../../../../shared/errors';
 import type { T } from '../../i18n';
@@ -31,13 +31,13 @@ export function PersonalityTile({ t, client, personality, failed, onSaved }: Per
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
-  const dirtyRef = useRef(dirty);
-  dirtyRef.current = dirty;
-
-  // Adopt what the core reports, unless the user has unsaved edits in the box.
-  useEffect(() => {
-    if (personality && !dirtyRef.current) setDraft(personality.text);
-  }, [personality]);
+  // Adopt what the core reports, unless the user has unsaved edits in the box. Done while
+  // rendering, when the reported personality changes, rather than one render late from an effect.
+  const [adopted, setAdopted] = useState<Personality | null>(null);
+  if (personality !== adopted) {
+    setAdopted(personality);
+    if (personality && !dirty) setDraft(personality.text);
+  }
 
   const disabled = client === null;
 

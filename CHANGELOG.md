@@ -8,6 +8,17 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+### Changed
+- **UI build tooling**: Vite 8, `@vitejs/plugin-react` 6, TypeScript 6.0 and vitest 5.0.2 for both the
+  pet window and the dashboard. TypeScript 7 and ESLint 10 are held back on purpose -
+  `typescript-eslint` supports TypeScript only below 6.1, and `eslint-plugin-jsx-a11y` does not
+  support ESLint 10 yet - and Dependabot is told so, with the reasons, instead of opening pull
+  requests that cannot pass.
+- **CI lints both UIs.** It ran their tests and builds but never `npm run lint`, so findings of the
+  React hooks rules went unnoticed; a stale local install had hidden them too. All of them are
+  fixed: state that follows a prop is adjusted while rendering instead of one render late from an
+  effect, and no component writes a ref during render any more.
+
 ### Added
 - **A stalled event loop is reported with the code that stalls it.** When the core's loop does not
   answer for 3 s, `core.loop_stalled` names the module, function and line it is stuck in, and

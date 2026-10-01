@@ -57,11 +57,14 @@ export function useTwitchDeviceFlow(
     }
   }, []);
 
+  // readStatus() sets state only after awaiting the core; the rule does not see past the await.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
     if (client) void readStatus(client);
   }, [client, readStatus]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
     if (client && authEvent) void readStatus(client);
   }, [client, authEvent, readStatus]);
 

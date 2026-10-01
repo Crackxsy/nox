@@ -289,7 +289,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
- | allow | OR expression, using the 'Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/\n\n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION\n\n   1. Definitions.\n\n      "License" shall mean the terms and conditions for use, reproduction,\n      and distribution as defined by Sections 1 through 9 of this document.\n\n      "Licensor" shall mean the copyright owner or entity authorized by\n      the copyright owner that is granting the License.\n\n      "Legal Entity" shall mean the union of the acting entity and all\n      other entities that control, are controlled by, or are under common\n      control with that entity. For the purposes of this definition,\n      "control" means (i) the power, direct or indirect, to cause the\n      direction or management of such entity, whether by contract or\n      otherwise, or (ii) ownership of fifty percent (50%) or more of the\n      outstanding shares, or (iii) beneficial ownership of such entity.\n\n      "You" (or "Your") shall mean an individual or Legal Entity\n      exercising permissions granted by this License.\n\n      "Source" form shall mean the preferred form for making modifications,\n      including but not limited to software source code, documentation\n      source, and configuration files.\n\n      "Object" form shall mean any form resulting from mechanical\n      transformation or translation of a Source form, including but\n      not limited to compiled object code, generated documentation,\n      and conversions to other media types.\n\n      "Work" shall mean the work of authorship, whether in Source or\n      Object form, made available under the License, as indicated by a\n      copyright notice that is included in or attached to the work\n      (an example is provided in the Appendix below).\n\n      "Derivative Works" shall mean any work, whether in Source or Object\n      form, that is based on (or derived from) the Work and for which the\n      editorial revisions, annotations, elaborations, or other modifications\n      represent, as a whole, an original work of authorship. For the purposes\n      of this License, Derivative Works shall not include works that remain\n      separable from, or merely link (or bind by name) to the interfaces of,\n      the Work and Derivative Works thereof.\n\n      "Contribution" shall mean any work of authorship, including\n      the original version of the Work and any modifications or additions\n      to that Work or Derivative Works thereof, that is intentionally\n      submitted to Licensor for inclusion in the Work by the copyright owner\n      or by an individual or Legal Entity authorized to submit on behalf of\n      the copyright owner. For the purposes of this definition, "submitted"\n      means any form of electronic, verbal, or written communication sent\n      to the Licensor or its representatives, including but not limited to\n      communication on electronic mailing lists, source code control systems,\n      and issue tracking systems that are managed by, or on behalf of, the\n      Licensor for the purpose of discussing and improving the Work, but\n      excluding communication that is conspicuously marked or otherwise\n      designated in writing by the copyright owner as "Not a Contribution."\n\n      "Contributor" shall mean Licensor and any individual or Legal Entity\n      on behalf of whom a Contribution has been received by Licensor and\n      subsequently incorporated within the Work.\n\n   2. Grant of Copyright License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      copyright license to reproduce, prepare Derivative Works of,\n      publicly display, publicly perform, sublicense, and distribute the\n      Work and such Derivative Works in Source or Object form.\n\n   3. Grant of Patent License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      (except as stated in this section) patent license to make, have made,\n      use, offer to sell, sell, import, and otherwise transfer the Work,\n      where such license applies only to those patent claims licensable\n      by such Contributor that are necessarily infringed by their\n      Contribution(s) alone or by combination of their Contribution(s)\n      with the Work to which such Contribution(s) was submitted. If You\n      institute patent litigation against any entity (including a\n      cross-claim or counterclaim in a lawsuit) alleging that the Work\n      or a Contribution incorporated within the Work constitutes direct\n      or contributory patent infringement, then any patent licenses\n      granted to You under this License for that Work shall terminate\n      as of the date such litigation is filed.\n\n   4. Redistribution. You may reproduce and distribute copies of the\n      Work or Derivative Works thereof in any medium, with or without\n      modifications, and in Source or Object form, provided that You\n      meet the following conditions:\n\n      (a) You must give any other recipients of the Work or\n          Derivative Works a copy of this License; and\n\n      (b) You must cause any modified files to carry prominent notices\n          stating that You changed the files; and\n\n      (c) You must retain, in the Source form of any Derivative Works\n          that You distribute, all copyright, patent, trademark, and\n          attribution notices from the Source form of the Work,\n          excluding those notices that do not pertain to any part of\n          the Derivative Works; and\n\n      (d) If the Work includes a "NOTICE" text file as part of its\n          distribution, then any Derivative Works that You distribute must\n          include a readable copy of the attribution notices contained\n          within such NOTICE file, excluding those notices that do not\n          pertain to any part of the Derivative Works, in at least one\n          of the following places: within a NOTICE text file distributed\n          as part of the Derivative Works; within the Source form or\n          documentation, if provided along with the Derivative Works; or,\n          within a display generated by the Derivative Works, if and\n          wherever such third-party notices normally appear. The contents\n          of the NOTICE file are for informational purposes only and\n          do not modify the License. You may add Your own attribution\n          notices within Derivative Works that You distribute, alongside\n          or as an addendum to the NOTICE text from the Work, provided\n          that such additional attribution notices cannot be construed\n          as modifying the License.\n\n      You may add Your own copyright statement to Your modifications and\n      may provide additional or different license terms and conditions\n      for use, reproduction, or distribution of Your modifications, or\n      for any such Derivative Works as a whole, provided Your use,\n      reproduction, and distribution of the Work otherwise complies with\n      the conditions stated in this License.\n\n   5. Submission of Contributions. Unless You explicitly state otherwise,\n      any Contribution intentionally submitted for inclusion in the Work\n      by You to the Licensor shall be under the terms and conditions of\n      this License, without any additional terms or conditions.\n      Notwithstanding the above, nothing herein shall supersede or modify\n      the terms of any separate license agreement you may have executed\n      with Licensor regarding such Contributions.\n\n   6. Trademarks. This License does not grant permission to use the trade\n      names, trademarks, service marks, or product names of the Licensor,\n      except as required for reasonable and customary use in describing the\n      origin of the Work and reproducing the content of the NOTICE file.\n\n   7. Disclaimer of Warranty. Unless required by applicable law or\n      agreed to in writing, Licensor provides the Work (and each\n      Contributor provides its Contributions) on an "AS IS" BASIS,\n      WITHOUT WARRANTIES' alternative (Apache License
+ | allow_with_note | OR expression, using the 'Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/\n\n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION\n\n   1. Definitions.\n\n      "License" shall mean the terms and conditions for use, reproduction,\n      and distribution as defined by Sections 1 through 9 of this document.\n\n      "Licensor" shall mean the copyright owner or entity authorized by\n      the copyright owner that is granting the License.\n\n      "Legal Entity" shall mean the union of the acting entity and all\n      other entities that control, are controlled by, or are under common\n      control with that entity. For the purposes of this definition,\n      "control" means (i) the power, direct or indirect, to cause the\n      direction or management of such entity, whether by contract or\n      otherwise, or (ii) ownership of fifty percent (50%) or more of the\n      outstanding shares, or (iii) beneficial ownership of such entity.\n\n      "You" (or "Your") shall mean an individual or Legal Entity\n      exercising permissions granted by this License.\n\n      "Source" form shall mean the preferred form for making modifications,\n      including but not limited to software source code, documentation\n      source, and configuration files.\n\n      "Object" form shall mean any form resulting from mechanical\n      transformation or translation of a Source form, including but\n      not limited to compiled object code, generated documentation,\n      and conversions to other media types.\n\n      "Work" shall mean the work of authorship, whether in Source or\n      Object form, made available under the License, as indicated by a\n      copyright notice that is included in or attached to the work\n      (an example is provided in the Appendix below).\n\n      "Derivative Works" shall mean any work, whether in Source or Object\n      form, that is based on (or derived from) the Work and for which the\n      editorial revisions, annotations, elaborations, or other modifications\n      represent, as a whole, an original work of authorship. For the purposes\n      of this License, Derivative Works shall not include works that remain\n      separable from, or merely link (or bind by name) to the interfaces of,\n      the Work and Derivative Works thereof.\n\n      "Contribution" shall mean any work of authorship, including\n      the original version of the Work and any modifications or additions\n      to that Work or Derivative Works thereof, that is intentionally\n      submitted to Licensor for inclusion in the Work by the copyright owner\n      or by an individual or Legal Entity authorized to submit on behalf of\n      the copyright owner. For the purposes of this definition, "submitted"\n      means any form of electronic, verbal, or written communication sent\n      to the Licensor or its representatives, including but not limited to\n      communication on electronic mailing lists, source code control systems,\n      and issue tracking systems that are managed by, or on behalf of, the\n      Licensor for the purpose of discussing and improving the Work, but\n      excluding communication that is conspicuously marked or otherwise\n      designated in writing by the copyright owner as "Not a Contribution."\n\n      "Contributor" shall mean Licensor and any individual or Legal Entity\n      on behalf of whom a Contribution has been received by Licensor and\n      subsequently incorporated within the Work.\n\n   2. Grant of Copyright License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      copyright license to reproduce, prepare Derivative Works of,\n      publicly display, publicly perform, sublicense, and distribute the\n      Work and such Derivative Works in Source or Object form.\n\n   3. Grant of Patent License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      (except as stated in this section) patent license to make, have made,\n      use, offer to sell, sell, import, and otherwise transfer the Work,\n      where such license applies only to those patent claims licensable\n      by such Contributor that are necessarily infringed by their\n      Contribution(s) alone or by combination of their Contribution(s)\n      with the Work to which such Contribution(s) was submitted. If You\n      institute patent litigation against any entity (including a\n      cross-claim or counterclaim in a lawsuit) alleging that the Work\n      or a Contribution incorporated within the Work constitutes direct\n      or contributory patent infringement, then any patent licenses\n      granted to You under this License for that Work shall terminate\n      as of the date such litigation is filed.\n\n   4. Redistribution. You may reproduce and distribute copies of the\n      Work or Derivative Works thereof in any medium, with or without\n      modifications, and in Source or Object form, provided that You\n      meet the following conditions:\n\n      (a) You must give any other recipients of the Work or\n          Derivative Works a copy of this License; and\n\n      (b) You must cause any modified files to carry prominent notices\n          stating that You changed the files; and\n\n      (c) You must retain, in the Source form of any Derivative Works\n          that You distribute, all copyright, patent, trademark, and\n          attribution notices from the Source form of the Work,\n          excluding those notices that do not pertain to any part of\n          the Derivative Works; and\n\n      (d) If the Work includes a "NOTICE" text file as part of its\n          distribution, then any Derivative Works that You distribute must\n          include a readable copy of the attribution notices contained\n          within such NOTICE file, excluding those notices that do not\n          pertain to any part of the Derivative Works, in at least one\n          of the following places: within a NOTICE text file distributed\n          as part of the Derivative Works; within the Source form or\n          documentation, if provided along with the Derivative Works; or,\n          within a display generated by the Derivative Works, if and\n          wherever such third-party notices normally appear. The contents\n          of the NOTICE file are for informational purposes only and\n          do not modify the License. You may add Your own attribution\n          notices within Derivative Works that You distribute, alongside\n          or as an addendum to the NOTICE text from the Work, provided\n          that such additional attribution notices cannot be construed\n          as modifying the License.\n\n      You may add Your own copyright statement to Your modifications and\n      may provide additional or different license terms and conditions\n      for use, reproduction, or distribution of Your modifications, or\n      for any such Derivative Works as a whole, provided Your use,\n      reproduction, and distribution of the Work otherwise complies with\n      the conditions stated in this License.\n\n   5. Submission of Contributions. Unless You explicitly state otherwise,\n      any Contribution intentionally submitted for inclusion in the Work\n      by You to the Licensor shall be under the terms and conditions of\n      this License, without any additional terms or conditions.\n      Notwithstanding the above, nothing herein shall supersede or modify\n      the terms of any separate license agreement you may have executed\n      with Licensor regarding such Contributions.\n\n   6. Trademarks. This License does not grant permission to use the trade\n      names, trademarks, service marks, or product names of the Licensor,\n      except as required for reasonable and customary use in describing the\n      origin of the Work and reproducing the content of the NOTICE file.\n\n   7. Disclaimer of Warranty. Unless required by applicable law or\n      agreed to in writing, Licensor provides the Work (and each\n      Contributor provides its Contributions) on an "AS IS" BASIS,\n      WITHOUT WARRANTIES' alternative (Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
 
@@ -2357,8 +2357,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 | Package | Version | Declared license | Category | Note |
 |---|---|---|---|---|
-| @asamuzakjp/css-color | 6.0.7 | MIT | allow | MIT |
-| @asamuzakjp/dom-selector | 8.3.2 | MIT | allow | MIT |
+| @asamuzakjp/css-color | 7.1.2 | MIT | allow | MIT |
+| @asamuzakjp/dom-selector | 9.2.2 | MIT | allow | MIT |
 | @babel/code-frame | 7.29.7 | MIT | allow | MIT |
 | @babel/compat-data | 7.29.7 | MIT | allow | MIT |
 | @babel/core | 7.29.7 | MIT | allow | MIT |
@@ -2367,51 +2367,22 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | @babel/helper-globals | 7.29.7 | MIT | allow | MIT |
 | @babel/helper-module-imports | 7.29.7 | MIT | allow | MIT |
 | @babel/helper-module-transforms | 7.29.7 | MIT | allow | MIT |
-| @babel/helper-plugin-utils | 7.29.7 | MIT | allow | MIT |
 | @babel/helper-string-parser | 7.29.7 | MIT | allow | MIT |
 | @babel/helper-validator-identifier | 7.29.7 | MIT | allow | MIT |
 | @babel/helper-validator-option | 7.29.7 | MIT | allow | MIT |
 | @babel/helpers | 7.29.7 | MIT | allow | MIT |
 | @babel/parser | 7.29.8 | MIT | allow | MIT |
-| @babel/plugin-transform-react-jsx-self | 7.29.7 | MIT | allow | MIT |
-| @babel/plugin-transform-react-jsx-source | 7.29.7 | MIT | allow | MIT |
 | @babel/runtime | 7.29.7 | MIT | allow | MIT |
 | @babel/template | 7.29.7 | MIT | allow | MIT |
 | @babel/traverse | 7.29.8 | MIT | allow | MIT |
 | @babel/types | 7.29.8 | MIT | allow | MIT |
 | @bramus/specificity | 2.4.2 | MIT | allow | MIT |
-| @csstools/color-helpers | 6.1.1 | MIT-0 | allow | MIT-0 |
-| @csstools/css-calc | 3.4.0 | MIT | allow | MIT |
-| @csstools/css-color-parser | 4.2.3 | MIT | allow | MIT |
-| @csstools/css-parser-algorithms | 4.0.0 | MIT | allow | MIT |
+| @csstools/color-helpers | 6.1.2 | MIT-0 | allow | MIT-0 |
+| @csstools/css-calc | 3.4.1 | MIT | allow | MIT |
+| @csstools/css-color-parser | 4.2.4 | MIT | allow | MIT |
+| @csstools/css-parser-algorithms | 4.0.1 | MIT | allow | MIT |
 | @csstools/css-syntax-patches-for-csstree | 1.1.14 | MIT-0 | allow | MIT-0 |
-| @csstools/css-tokenizer | 4.0.0 | MIT | allow | MIT |
-| @esbuild/aix-ppc64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/android-arm | 0.28.2 | MIT | allow | MIT |
-| @esbuild/android-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/android-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/darwin-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/darwin-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/freebsd-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/freebsd-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-arm | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-ia32 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-loong64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-mips64el | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-ppc64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-riscv64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-s390x | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/netbsd-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/netbsd-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/openbsd-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/openbsd-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/openharmony-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/sunos-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/win32-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/win32-ia32 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/win32-x64 | 0.28.2 | MIT | allow | MIT |
+| @csstools/css-tokenizer | 4.0.2 | MIT | allow | MIT |
 | @eslint-community/eslint-utils | 4.10.1 | MIT | allow | MIT |
 | @eslint-community/regexpp | 4.12.2 | MIT | allow | MIT |
 | @eslint/config-array | 0.21.2 | Apache-2.0 | allow | Apache-2.0 |
@@ -2432,40 +2403,26 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | @jridgewell/resolve-uri | 3.1.2 | MIT | allow | MIT |
 | @jridgewell/sourcemap-codec | 1.6.0 | MIT | allow | MIT |
 | @jridgewell/trace-mapping | 0.3.31 | MIT | allow | MIT |
-| @napi-rs/lzma-linux-x64-gnu | 1.5.1 | MIT | allow | MIT |
-| @rolldown/pluginutils | 1.0.0-rc.3 | MIT | allow | MIT |
-| @rollup/rollup-android-arm-eabi | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-android-arm64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-darwin-arm64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-darwin-x64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-freebsd-arm64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-freebsd-x64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-arm-gnueabihf | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-arm-musleabihf | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-arm64-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-arm64-musl | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-loong64-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-loong64-musl | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-ppc64-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-ppc64-musl | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-riscv64-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-riscv64-musl | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-s390x-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-x64-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-x64-musl | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-openbsd-x64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-openharmony-arm64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-win32-arm64-msvc | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-win32-ia32-msvc | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-win32-x64-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-win32-x64-msvc | 4.63.1 | MIT | allow | MIT |
+| @oxc-project/types | 0.152.0 | MIT | allow | MIT |
+| @rolldown/binding-android-arm-eabi | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-android-arm64 | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-darwin-arm64 | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-darwin-x64 | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-freebsd-x64 | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-arm-gnueabihf | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-arm64-gnu | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-arm64-musl | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-ppc64-gnu | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-s390x-gnu | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-x64-gnu | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-x64-musl | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-openharmony-arm64 | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-win32-arm64-msvc | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-win32-x64-msvc | 1.2.12 | MIT | allow | MIT |
+| @rolldown/pluginutils | 1.0.1 | MIT | allow | MIT |
 | @testing-library/dom | 10.4.2 | MIT | allow | MIT |
 | @testing-library/react | 16.3.3 | MIT | allow | MIT |
 | @types/aria-query | 5.0.4 | MIT | allow | MIT |
-| @types/babel__core | 7.20.5 | MIT | allow | MIT |
-| @types/babel__generator | 7.27.0 | MIT | allow | MIT |
-| @types/babel__template | 7.4.4 | MIT | allow | MIT |
-| @types/babel__traverse | 7.28.0 | MIT | allow | MIT |
 | @types/chai | 5.2.3 | MIT | allow | MIT |
 | @types/deep-eql | 4.0.2 | MIT | allow | MIT |
 | @types/estree | 1.0.9 | MIT | allow | MIT |
@@ -2483,9 +2440,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | @typescript-eslint/typescript-estree | 8.70.0 | MIT | allow | MIT |
 | @typescript-eslint/utils | 8.70.0 | MIT | allow | MIT |
 | @typescript-eslint/visitor-keys | 8.70.0 | MIT | allow | MIT |
-| @vitejs/plugin-react | 5.2.0 | MIT | allow | MIT |
-| @vitest/mocker | 5.0.1 | MIT | allow | MIT |
-| @vitest/spy | 5.0.1 | MIT | allow | MIT |
+| @vitejs/plugin-react | 6.1.1 | MIT | allow | MIT |
+| @vitest/mocker | 5.0.3 | MIT | allow | MIT |
+| @vitest/spy | 5.0.3 | MIT | allow | MIT |
 | acorn | 8.18.0 | MIT | allow | MIT |
 | acorn-jsx | 5.3.2 | MIT | allow | MIT |
 | ajv | 6.15.0 | MIT | allow | MIT |
@@ -2538,6 +2495,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | define-data-property | 1.1.4 | MIT | allow | MIT |
 | define-properties | 1.2.1 | MIT | allow | MIT |
 | dequal | 2.0.3 | MIT | allow | MIT |
+| detect-libc | 2.1.2 | Apache-2.0 | allow | Apache-2.0 |
 | dom-accessibility-api | 0.5.16 | MIT | allow | MIT |
 | dunder-proto | 1.0.1 | MIT | allow | MIT |
 | electron-to-chromium | 1.5.427 | ISC | allow | ISC |
@@ -2552,12 +2510,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | es-set-tostringtag | 2.1.0 | MIT | allow | MIT |
 | es-shim-unscopables | 1.1.0 | MIT | allow | MIT |
 | es-to-primitive | 1.3.4 | MIT | allow | MIT |
-| esbuild | 0.28.2 | MIT | allow | MIT |
 | escalade | 3.2.0 | MIT | allow | MIT |
 | escape-string-regexp | 4.0.0 | MIT | allow | MIT |
 | eslint | 9.39.5 | MIT | allow | MIT |
 | eslint-plugin-jsx-a11y | 6.10.2 | MIT | allow | MIT |
-| eslint-plugin-react-hooks | 6.1.1 | MIT | allow | MIT |
+| eslint-plugin-react-hooks | 7.1.1 | MIT | allow | MIT |
 | eslint-plugin-react-refresh | 0.5.7 | MIT | allow | MIT |
 | eslint-scope | 8.4.0 | BSD-2-Clause | allow | BSD-2-Clause |
 | eslint-visitor-keys | 3.4.3 | Apache-2.0 | allow | Apache-2.0 |
@@ -2600,7 +2557,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | has-symbols | 1.1.0 | MIT | allow | MIT |
 | has-tostringtag | 1.0.2 | MIT | allow | MIT |
 | hasown | 2.0.4 | MIT | allow | MIT |
-| html-encoding-sniffer | 6.0.0 | MIT | allow | MIT |
+| hermes-estree | 0.25.1 | MIT | allow | MIT |
+| hermes-parser | 0.25.1 | MIT | allow | MIT |
+| html-encoding-sniffer | 7.0.0 | MIT | allow | MIT |
 | ignore | 7.0.9 | MIT | allow | MIT |
 | ignore | 5.3.2 | MIT | allow | MIT |
 | import-fresh | 3.3.1 | MIT | allow | MIT |
@@ -2635,7 +2594,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | isexe | 2.0.0 | ISC | allow | ISC |
 | js-tokens | 4.0.0 | MIT | allow | MIT |
 | js-yaml | 4.3.2 | MIT | allow | MIT |
-| jsdom | 30.0.1 | MIT | allow | MIT |
+| jsdom | 30.1.1 | MIT | allow | MIT |
 | jsesc | 3.1.0 | MIT | allow | MIT |
 | json-buffer | 3.0.1 | MIT | allow | MIT |
 | json-schema-traverse | 0.4.1 | MIT | allow | MIT |
@@ -2646,14 +2605,26 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | language-subtag-registry | 0.3.23 | CC0-1.0 | allow | CC0-1.0 |
 | language-tags | 1.0.9 | MIT | allow | MIT |
 | levn | 0.4.1 | MIT | allow | MIT |
+| lightningcss | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-android-arm64 | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-darwin-arm64 | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-darwin-x64 | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-freebsd-x64 | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-linux-arm-gnueabihf | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-linux-arm64-gnu | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-linux-arm64-musl | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-linux-x64-gnu | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-linux-x64-musl | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-win32-arm64-msvc | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-win32-x64-msvc | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
 | locate-path | 6.0.0 | MIT | allow | MIT |
 | lodash.merge | 4.6.2 | MIT | allow | MIT |
-| lru-cache | 11.5.2 | BlueOak-1.0.0 | allow | BlueOak-1.0.0 |
-| lru-cache | 11.5.2 | BlueOak-1.0.0 | allow | BlueOak-1.0.0 |
+| lru-cache | 11.5.3 | BlueOak-1.0.0 | allow | BlueOak-1.0.0 |
+| lru-cache | 11.5.3 | BlueOak-1.0.0 | allow | BlueOak-1.0.0 |
 | lru-cache | 11.5.2 | BlueOak-1.0.0 | allow | BlueOak-1.0.0 |
 | lru-cache | 5.1.1 | ISC | allow | ISC |
 | lz-string | 1.5.0 | MIT | allow | MIT |
-| magic-string | 1.4.1 | MIT | allow | MIT |
+| magic-string | 1.4.2 | MIT | allow | MIT |
 | math-intrinsics | 1.1.0 | MIT | allow | MIT |
 | mdn-data | 2.27.1 | CC0-1.0 | allow | CC0-1.0 |
 | minimatch | 10.2.6 | BlueOak-1.0.0 | allow | BlueOak-1.0.0 |
@@ -2686,12 +2657,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | react | 19.3.0 | MIT | allow | MIT |
 | react-dom | 19.3.0 | MIT | allow | MIT |
 | react-is | 17.0.2 | MIT | allow | MIT |
-| react-refresh | 0.18.0 | MIT | allow | MIT |
 | reflect.getprototypeof | 1.0.10 | MIT | allow | MIT |
 | regexp.prototype.flags | 1.5.4 | MIT | allow | MIT |
 | require-from-string | 2.0.2 | MIT | allow | MIT |
 | resolve-from | 4.0.0 | MIT | allow | MIT |
-| rollup | 4.63.1 | MIT | allow | MIT |
+| rolldown | 1.2.12 | MIT | allow | MIT |
 | safe-array-concat | 1.1.4 | MIT | allow | MIT |
 | safe-push-apply | 1.0.0 | MIT | allow | MIT |
 | safe-regex-test | 1.1.0 | MIT | allow | MIT |
@@ -2708,9 +2678,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | side-channel-list | 1.0.1 | MIT | allow | MIT |
 | side-channel-map | 1.0.1 | MIT | allow | MIT |
 | side-channel-weakmap | 1.0.2 | MIT | allow | MIT |
-| siginfo | 2.0.0 | ISC | allow | ISC |
 | source-map-js | 1.2.1 | BSD-3-Clause | allow | BSD-3-Clause |
-| stackback | 0.0.2 | MIT | allow | MIT |
 | std-env | 4.2.0 | MIT | allow | MIT |
 | stop-iteration-iterator | 1.1.0 | MIT | allow | MIT |
 | string.prototype.includes | 2.0.1 | MIT | allow | MIT |
@@ -2719,7 +2687,6 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | string.prototype.trimstart | 1.0.8 | MIT | allow | MIT |
 | strip-json-comments | 3.1.1 | MIT | allow | MIT |
 | supports-color | 7.2.0 | MIT | allow | MIT |
-| symbol-tree | 3.2.4 | MIT | allow | MIT |
 | tinybench | 6.1.4 | MIT | allow | MIT |
 | tinyexec | 1.3.0 | MIT | allow | MIT |
 | tinyglobby | 0.2.17 | MIT | allow | MIT |
@@ -2733,16 +2700,16 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | typed-array-byte-length | 1.0.3 | MIT | allow | MIT |
 | typed-array-byte-offset | 1.0.4 | MIT | allow | MIT |
 | typed-array-length | 1.0.8 | MIT | allow | MIT |
-| typescript | 5.6.3 | Apache-2.0 | allow | Apache-2.0 |
+| typescript | 6.0.3 | Apache-2.0 | allow | Apache-2.0 |
 | typescript-eslint | 8.70.0 | MIT | allow | MIT |
 | unbox-primitive | 1.1.0 | MIT | allow | MIT |
 | undici | 8.10.2 | MIT | allow | MIT |
 | undici-types | 6.21.0 | MIT | allow | MIT |
 | update-browserslist-db | 1.3.3 | MIT | allow | MIT |
 | uri-js | 4.4.1 | BSD-2-Clause | allow | BSD-2-Clause |
-| vite | 7.3.6 | MIT | allow | MIT |
-| vitest | 5.0.1 | MIT | allow | MIT |
-| w3c-xmlserializer | 5.0.0 | MIT | allow | MIT |
+| vite | 8.3.2 | MIT | allow | MIT |
+| vitest | 5.0.3 | MIT | allow | MIT |
+| w3c-xmlserializer | 6.0.0 | MIT | allow | MIT |
 | webidl-conversions | 8.0.1 | BSD-2-Clause | allow | BSD-2-Clause |
 | whatwg-mimetype | 5.0.0 | MIT | allow | MIT |
 | whatwg-url | 16.0.1 | MIT | allow | MIT |
@@ -2752,7 +2719,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | which-builtin-type | 1.2.1 | MIT | allow | MIT |
 | which-collection | 1.0.2 | MIT | allow | MIT |
 | which-typed-array | 1.1.22 | MIT | allow | MIT |
-| why-is-node-running | 2.3.0 | MIT | allow | MIT |
+| why-is-node-running | 3.2.1 | MIT | allow | MIT |
 | word-wrap | 1.2.5 | MIT | allow | MIT |
 | xml-name-validator | 5.0.0 | Apache-2.0 | allow | Apache-2.0 |
 | xmlchars | 2.2.0 | MIT | allow | MIT |
@@ -2765,8 +2732,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 | Package | Version | Declared license | Category | Note |
 |---|---|---|---|---|
-| @asamuzakjp/css-color | 6.0.7 | MIT | allow | MIT |
-| @asamuzakjp/dom-selector | 8.3.2 | MIT | allow | MIT |
+| @asamuzakjp/css-color | 7.1.2 | MIT | allow | MIT |
+| @asamuzakjp/dom-selector | 9.2.2 | MIT | allow | MIT |
 | @babel/code-frame | 7.29.7 | MIT | allow | MIT |
 | @babel/compat-data | 7.29.7 | MIT | allow | MIT |
 | @babel/core | 7.29.7 | MIT | allow | MIT |
@@ -2775,51 +2742,22 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | @babel/helper-globals | 7.29.7 | MIT | allow | MIT |
 | @babel/helper-module-imports | 7.29.7 | MIT | allow | MIT |
 | @babel/helper-module-transforms | 7.29.7 | MIT | allow | MIT |
-| @babel/helper-plugin-utils | 7.29.7 | MIT | allow | MIT |
 | @babel/helper-string-parser | 7.29.7 | MIT | allow | MIT |
 | @babel/helper-validator-identifier | 7.29.7 | MIT | allow | MIT |
 | @babel/helper-validator-option | 7.29.7 | MIT | allow | MIT |
 | @babel/helpers | 7.29.7 | MIT | allow | MIT |
 | @babel/parser | 7.29.8 | MIT | allow | MIT |
-| @babel/plugin-transform-react-jsx-self | 7.29.7 | MIT | allow | MIT |
-| @babel/plugin-transform-react-jsx-source | 7.29.7 | MIT | allow | MIT |
 | @babel/runtime | 7.29.7 | MIT | allow | MIT |
 | @babel/template | 7.29.7 | MIT | allow | MIT |
 | @babel/traverse | 7.29.8 | MIT | allow | MIT |
 | @babel/types | 7.29.8 | MIT | allow | MIT |
 | @bramus/specificity | 2.4.2 | MIT | allow | MIT |
-| @csstools/color-helpers | 6.1.1 | MIT-0 | allow | MIT-0 |
-| @csstools/css-calc | 3.4.0 | MIT | allow | MIT |
-| @csstools/css-color-parser | 4.2.3 | MIT | allow | MIT |
-| @csstools/css-parser-algorithms | 4.0.0 | MIT | allow | MIT |
+| @csstools/color-helpers | 6.1.2 | MIT-0 | allow | MIT-0 |
+| @csstools/css-calc | 3.4.1 | MIT | allow | MIT |
+| @csstools/css-color-parser | 4.2.4 | MIT | allow | MIT |
+| @csstools/css-parser-algorithms | 4.0.1 | MIT | allow | MIT |
 | @csstools/css-syntax-patches-for-csstree | 1.1.14 | MIT-0 | allow | MIT-0 |
-| @csstools/css-tokenizer | 4.0.0 | MIT | allow | MIT |
-| @esbuild/aix-ppc64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/android-arm | 0.28.2 | MIT | allow | MIT |
-| @esbuild/android-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/android-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/darwin-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/darwin-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/freebsd-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/freebsd-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-arm | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-ia32 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-loong64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-mips64el | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-ppc64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-riscv64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-s390x | 0.28.2 | MIT | allow | MIT |
-| @esbuild/linux-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/netbsd-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/netbsd-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/openbsd-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/openbsd-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/openharmony-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/sunos-x64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/win32-arm64 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/win32-ia32 | 0.28.2 | MIT | allow | MIT |
-| @esbuild/win32-x64 | 0.28.2 | MIT | allow | MIT |
+| @csstools/css-tokenizer | 4.0.2 | MIT | allow | MIT |
 | @eslint-community/eslint-utils | 4.10.1 | MIT | allow | MIT |
 | @eslint-community/regexpp | 4.12.2 | MIT | allow | MIT |
 | @eslint/config-array | 0.21.2 | Apache-2.0 | allow | Apache-2.0 |
@@ -2840,41 +2778,27 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | @jridgewell/resolve-uri | 3.1.2 | MIT | allow | MIT |
 | @jridgewell/sourcemap-codec | 1.6.0 | MIT | allow | MIT |
 | @jridgewell/trace-mapping | 0.3.31 | MIT | allow | MIT |
-| @napi-rs/lzma-linux-x64-gnu | 1.5.1 | MIT | allow | MIT |
-| @rolldown/pluginutils | 1.0.0-rc.3 | MIT | allow | MIT |
-| @rollup/rollup-android-arm-eabi | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-android-arm64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-darwin-arm64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-darwin-x64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-freebsd-arm64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-freebsd-x64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-arm-gnueabihf | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-arm-musleabihf | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-arm64-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-arm64-musl | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-loong64-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-loong64-musl | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-ppc64-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-ppc64-musl | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-riscv64-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-riscv64-musl | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-s390x-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-x64-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-linux-x64-musl | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-openbsd-x64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-openharmony-arm64 | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-win32-arm64-msvc | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-win32-ia32-msvc | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-win32-x64-gnu | 4.63.1 | MIT | allow | MIT |
-| @rollup/rollup-win32-x64-msvc | 4.63.1 | MIT | allow | MIT |
+| @oxc-project/types | 0.152.0 | MIT | allow | MIT |
+| @rolldown/binding-android-arm-eabi | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-android-arm64 | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-darwin-arm64 | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-darwin-x64 | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-freebsd-x64 | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-arm-gnueabihf | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-arm64-gnu | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-arm64-musl | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-ppc64-gnu | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-s390x-gnu | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-x64-gnu | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-linux-x64-musl | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-openharmony-arm64 | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-win32-arm64-msvc | 1.2.12 | MIT | allow | MIT |
+| @rolldown/binding-win32-x64-msvc | 1.2.12 | MIT | allow | MIT |
+| @rolldown/pluginutils | 1.0.1 | MIT | allow | MIT |
 | @testing-library/dom | 10.4.2 | MIT | allow | MIT |
 | @testing-library/react | 16.3.3 | MIT | allow | MIT |
 | @testing-library/user-event | 14.6.7 | MIT | allow | MIT |
 | @types/aria-query | 5.0.4 | MIT | allow | MIT |
-| @types/babel__core | 7.20.5 | MIT | allow | MIT |
-| @types/babel__generator | 7.27.0 | MIT | allow | MIT |
-| @types/babel__template | 7.4.4 | MIT | allow | MIT |
-| @types/babel__traverse | 7.28.0 | MIT | allow | MIT |
 | @types/chai | 5.2.3 | MIT | allow | MIT |
 | @types/deep-eql | 4.0.2 | MIT | allow | MIT |
 | @types/estree | 1.0.9 | MIT | allow | MIT |
@@ -2882,19 +2806,19 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | @types/node | 22.20.3 | MIT | allow | MIT |
 | @types/react | 19.3.0 | MIT | allow | MIT |
 | @types/react-dom | 19.3.0 | MIT | allow | MIT |
-| @typescript-eslint/eslint-plugin | 8.70.0 | MIT | allow | MIT |
-| @typescript-eslint/parser | 8.70.0 | MIT | allow | MIT |
-| @typescript-eslint/project-service | 8.70.0 | MIT | allow | MIT |
-| @typescript-eslint/scope-manager | 8.70.0 | MIT | allow | MIT |
-| @typescript-eslint/tsconfig-utils | 8.70.0 | MIT | allow | MIT |
-| @typescript-eslint/type-utils | 8.70.0 | MIT | allow | MIT |
-| @typescript-eslint/types | 8.70.0 | MIT | allow | MIT |
-| @typescript-eslint/typescript-estree | 8.70.0 | MIT | allow | MIT |
-| @typescript-eslint/utils | 8.70.0 | MIT | allow | MIT |
-| @typescript-eslint/visitor-keys | 8.70.0 | MIT | allow | MIT |
-| @vitejs/plugin-react | 5.2.0 | MIT | allow | MIT |
-| @vitest/mocker | 5.0.1 | MIT | allow | MIT |
-| @vitest/spy | 5.0.1 | MIT | allow | MIT |
+| @typescript-eslint/eslint-plugin | 8.70.1 | MIT | allow | MIT |
+| @typescript-eslint/parser | 8.70.1 | MIT | allow | MIT |
+| @typescript-eslint/project-service | 8.70.1 | MIT | allow | MIT |
+| @typescript-eslint/scope-manager | 8.70.1 | MIT | allow | MIT |
+| @typescript-eslint/tsconfig-utils | 8.70.1 | MIT | allow | MIT |
+| @typescript-eslint/type-utils | 8.70.1 | MIT | allow | MIT |
+| @typescript-eslint/types | 8.70.1 | MIT | allow | MIT |
+| @typescript-eslint/typescript-estree | 8.70.1 | MIT | allow | MIT |
+| @typescript-eslint/utils | 8.70.1 | MIT | allow | MIT |
+| @typescript-eslint/visitor-keys | 8.70.1 | MIT | allow | MIT |
+| @vitejs/plugin-react | 6.1.1 | MIT | allow | MIT |
+| @vitest/mocker | 5.0.3 | MIT | allow | MIT |
+| @vitest/spy | 5.0.3 | MIT | allow | MIT |
 | acorn | 8.18.0 | MIT | allow | MIT |
 | acorn-jsx | 5.3.2 | MIT | allow | MIT |
 | ajv | 6.15.0 | MIT | allow | MIT |
@@ -2947,6 +2871,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | define-data-property | 1.1.4 | MIT | allow | MIT |
 | define-properties | 1.2.1 | MIT | allow | MIT |
 | dequal | 2.0.3 | MIT | allow | MIT |
+| detect-libc | 2.1.2 | Apache-2.0 | allow | Apache-2.0 |
 | dom-accessibility-api | 0.5.16 | MIT | allow | MIT |
 | dunder-proto | 1.0.1 | MIT | allow | MIT |
 | electron-to-chromium | 1.5.427 | ISC | allow | ISC |
@@ -2961,12 +2886,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | es-set-tostringtag | 2.1.0 | MIT | allow | MIT |
 | es-shim-unscopables | 1.1.0 | MIT | allow | MIT |
 | es-to-primitive | 1.3.4 | MIT | allow | MIT |
-| esbuild | 0.28.2 | MIT | allow | MIT |
 | escalade | 3.2.0 | MIT | allow | MIT |
 | escape-string-regexp | 4.0.0 | MIT | allow | MIT |
 | eslint | 9.39.5 | MIT | allow | MIT |
 | eslint-plugin-jsx-a11y | 6.10.2 | MIT | allow | MIT |
-| eslint-plugin-react-hooks | 6.1.1 | MIT | allow | MIT |
+| eslint-plugin-react-hooks | 7.1.1 | MIT | allow | MIT |
 | eslint-plugin-react-refresh | 0.5.7 | MIT | allow | MIT |
 | eslint-scope | 8.4.0 | BSD-2-Clause | allow | BSD-2-Clause |
 | eslint-visitor-keys | 3.4.3 | Apache-2.0 | allow | Apache-2.0 |
@@ -3009,8 +2933,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | has-symbols | 1.1.0 | MIT | allow | MIT |
 | has-tostringtag | 1.0.2 | MIT | allow | MIT |
 | hasown | 2.0.4 | MIT | allow | MIT |
-| html-encoding-sniffer | 6.0.0 | MIT | allow | MIT |
-| ignore | 7.0.9 | MIT | allow | MIT |
+| hermes-estree | 0.25.1 | MIT | allow | MIT |
+| hermes-parser | 0.25.1 | MIT | allow | MIT |
+| html-encoding-sniffer | 7.0.0 | MIT | allow | MIT |
+| ignore | 7.0.10 | MIT | allow | MIT |
 | ignore | 5.3.2 | MIT | allow | MIT |
 | import-fresh | 3.3.1 | MIT | allow | MIT |
 | imurmurhash | 0.1.4 | MIT | allow | MIT |
@@ -3044,7 +2970,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | isexe | 2.0.0 | ISC | allow | ISC |
 | js-tokens | 4.0.0 | MIT | allow | MIT |
 | js-yaml | 4.3.2 | MIT | allow | MIT |
-| jsdom | 30.0.1 | MIT | allow | MIT |
+| jsdom | 30.1.1 | MIT | allow | MIT |
 | jsesc | 3.1.0 | MIT | allow | MIT |
 | json-buffer | 3.0.1 | MIT | allow | MIT |
 | json-schema-traverse | 0.4.1 | MIT | allow | MIT |
@@ -3055,14 +2981,26 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | language-subtag-registry | 0.3.23 | CC0-1.0 | allow | CC0-1.0 |
 | language-tags | 1.0.9 | MIT | allow | MIT |
 | levn | 0.4.1 | MIT | allow | MIT |
+| lightningcss | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-android-arm64 | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-darwin-arm64 | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-darwin-x64 | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-freebsd-x64 | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-linux-arm-gnueabihf | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-linux-arm64-gnu | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-linux-arm64-musl | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-linux-x64-gnu | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-linux-x64-musl | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-win32-arm64-msvc | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
+| lightningcss-win32-x64-msvc | 1.33.0 | MPL-2.0 | allow_with_note | MPL-2.0 |
 | locate-path | 6.0.0 | MIT | allow | MIT |
 | lodash.merge | 4.6.2 | MIT | allow | MIT |
-| lru-cache | 11.5.2 | BlueOak-1.0.0 | allow | BlueOak-1.0.0 |
-| lru-cache | 11.5.2 | BlueOak-1.0.0 | allow | BlueOak-1.0.0 |
+| lru-cache | 11.5.3 | BlueOak-1.0.0 | allow | BlueOak-1.0.0 |
+| lru-cache | 11.5.3 | BlueOak-1.0.0 | allow | BlueOak-1.0.0 |
 | lru-cache | 11.5.2 | BlueOak-1.0.0 | allow | BlueOak-1.0.0 |
 | lru-cache | 5.1.1 | ISC | allow | ISC |
 | lz-string | 1.5.0 | MIT | allow | MIT |
-| magic-string | 1.4.1 | MIT | allow | MIT |
+| magic-string | 1.4.2 | MIT | allow | MIT |
 | math-intrinsics | 1.1.0 | MIT | allow | MIT |
 | mdn-data | 2.27.1 | CC0-1.0 | allow | CC0-1.0 |
 | minimatch | 10.2.6 | BlueOak-1.0.0 | allow | BlueOak-1.0.0 |
@@ -3095,12 +3033,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | react | 19.3.0 | MIT | allow | MIT |
 | react-dom | 19.3.0 | MIT | allow | MIT |
 | react-is | 17.0.2 | MIT | allow | MIT |
-| react-refresh | 0.18.0 | MIT | allow | MIT |
 | reflect.getprototypeof | 1.0.10 | MIT | allow | MIT |
 | regexp.prototype.flags | 1.5.4 | MIT | allow | MIT |
 | require-from-string | 2.0.2 | MIT | allow | MIT |
 | resolve-from | 4.0.0 | MIT | allow | MIT |
-| rollup | 4.63.1 | MIT | allow | MIT |
+| rolldown | 1.2.12 | MIT | allow | MIT |
 | safe-array-concat | 1.1.4 | MIT | allow | MIT |
 | safe-push-apply | 1.0.0 | MIT | allow | MIT |
 | safe-regex-test | 1.1.0 | MIT | allow | MIT |
@@ -3117,9 +3054,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | side-channel-list | 1.0.1 | MIT | allow | MIT |
 | side-channel-map | 1.0.1 | MIT | allow | MIT |
 | side-channel-weakmap | 1.0.2 | MIT | allow | MIT |
-| siginfo | 2.0.0 | ISC | allow | ISC |
 | source-map-js | 1.2.1 | BSD-3-Clause | allow | BSD-3-Clause |
-| stackback | 0.0.2 | MIT | allow | MIT |
 | std-env | 4.2.0 | MIT | allow | MIT |
 | stop-iteration-iterator | 1.1.0 | MIT | allow | MIT |
 | string.prototype.includes | 2.0.1 | MIT | allow | MIT |
@@ -3128,7 +3063,6 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | string.prototype.trimstart | 1.0.8 | MIT | allow | MIT |
 | strip-json-comments | 3.1.1 | MIT | allow | MIT |
 | supports-color | 7.2.0 | MIT | allow | MIT |
-| symbol-tree | 3.2.4 | MIT | allow | MIT |
 | tinybench | 6.1.4 | MIT | allow | MIT |
 | tinyexec | 1.3.0 | MIT | allow | MIT |
 | tinyglobby | 0.2.17 | MIT | allow | MIT |
@@ -3142,16 +3076,16 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | typed-array-byte-length | 1.0.3 | MIT | allow | MIT |
 | typed-array-byte-offset | 1.0.4 | MIT | allow | MIT |
 | typed-array-length | 1.0.8 | MIT | allow | MIT |
-| typescript | 5.6.3 | Apache-2.0 | allow | Apache-2.0 |
-| typescript-eslint | 8.70.0 | MIT | allow | MIT |
+| typescript | 6.0.3 | Apache-2.0 | allow | Apache-2.0 |
+| typescript-eslint | 8.70.1 | MIT | allow | MIT |
 | unbox-primitive | 1.1.0 | MIT | allow | MIT |
 | undici | 8.10.2 | MIT | allow | MIT |
 | undici-types | 6.21.0 | MIT | allow | MIT |
 | update-browserslist-db | 1.3.3 | MIT | allow | MIT |
 | uri-js | 4.4.1 | BSD-2-Clause | allow | BSD-2-Clause |
-| vite | 7.3.6 | MIT | allow | MIT |
-| vitest | 5.0.1 | MIT | allow | MIT |
-| w3c-xmlserializer | 5.0.0 | MIT | allow | MIT |
+| vite | 8.3.2 | MIT | allow | MIT |
+| vitest | 5.0.3 | MIT | allow | MIT |
+| w3c-xmlserializer | 6.0.0 | MIT | allow | MIT |
 | webidl-conversions | 8.0.1 | BSD-2-Clause | allow | BSD-2-Clause |
 | whatwg-mimetype | 5.0.0 | MIT | allow | MIT |
 | whatwg-url | 16.0.1 | MIT | allow | MIT |
@@ -3161,7 +3095,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | which-builtin-type | 1.2.1 | MIT | allow | MIT |
 | which-collection | 1.0.2 | MIT | allow | MIT |
 | which-typed-array | 1.1.22 | MIT | allow | MIT |
-| why-is-node-running | 2.3.0 | MIT | allow | MIT |
+| why-is-node-running | 3.2.1 | MIT | allow | MIT |
 | word-wrap | 1.2.5 | MIT | allow | MIT |
 | xml-name-validator | 5.0.0 | Apache-2.0 | allow | Apache-2.0 |
 | xmlchars | 2.2.0 | MIT | allow | MIT |
@@ -3172,9 +3106,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ## Summary
 
-- Total packages scanned: 905
-- `allow`: 899
-- `allow_with_note`: 6
+- Total packages scanned: 839
+- `allow`: 808
+- `allow_with_note`: 31
 - `deny`: 0
 - `unknown`: 0
 
@@ -3185,5 +3119,231 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 - **python/PySide6** 6.11.2: [package exception] SPDX expression "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only" (Qt for open source). Nox uses the LGPL-3.0 alternative and installs PySide6 as an unmodified PyPI wheel dependency (dynamic linking, no static link, no PySide6 source modification) - the common LGPL-compatible path (see `NOTICE`). OPEN POINT: a named person must sign off that Nox's actual packaging (embedded-Python installer) preserves the user's LGPL right to replace the PySide6/Qt libraries; this is flagged, not resolved, by this audit.
 - **python/PySide6_Addons** 6.11.2: OR expression, using the 'LGPL-3.0-only' alternative (LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only)
 - **python/PySide6_Essentials** 6.11.2: OR expression, using the 'LGPL-3.0-only' alternative (LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only)
+- **python/pytest-playwright** 0.9.0: OR expression, using the 'Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/\n\n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION\n\n   1. Definitions.\n\n      "License" shall mean the terms and conditions for use, reproduction,\n      and distribution as defined by Sections 1 through 9 of this document.\n\n      "Licensor" shall mean the copyright owner or entity authorized by\n      the copyright owner that is granting the License.\n\n      "Legal Entity" shall mean the union of the acting entity and all\n      other entities that control, are controlled by, or are under common\n      control with that entity. For the purposes of this definition,\n      "control" means (i) the power, direct or indirect, to cause the\n      direction or management of such entity, whether by contract or\n      otherwise, or (ii) ownership of fifty percent (50%) or more of the\n      outstanding shares, or (iii) beneficial ownership of such entity.\n\n      "You" (or "Your") shall mean an individual or Legal Entity\n      exercising permissions granted by this License.\n\n      "Source" form shall mean the preferred form for making modifications,\n      including but not limited to software source code, documentation\n      source, and configuration files.\n\n      "Object" form shall mean any form resulting from mechanical\n      transformation or translation of a Source form, including but\n      not limited to compiled object code, generated documentation,\n      and conversions to other media types.\n\n      "Work" shall mean the work of authorship, whether in Source or\n      Object form, made available under the License, as indicated by a\n      copyright notice that is included in or attached to the work\n      (an example is provided in the Appendix below).\n\n      "Derivative Works" shall mean any work, whether in Source or Object\n      form, that is based on (or derived from) the Work and for which the\n      editorial revisions, annotations, elaborations, or other modifications\n      represent, as a whole, an original work of authorship. For the purposes\n      of this License, Derivative Works shall not include works that remain\n      separable from, or merely link (or bind by name) to the interfaces of,\n      the Work and Derivative Works thereof.\n\n      "Contribution" shall mean any work of authorship, including\n      the original version of the Work and any modifications or additions\n      to that Work or Derivative Works thereof, that is intentionally\n      submitted to Licensor for inclusion in the Work by the copyright owner\n      or by an individual or Legal Entity authorized to submit on behalf of\n      the copyright owner. For the purposes of this definition, "submitted"\n      means any form of electronic, verbal, or written communication sent\n      to the Licensor or its representatives, including but not limited to\n      communication on electronic mailing lists, source code control systems,\n      and issue tracking systems that are managed by, or on behalf of, the\n      Licensor for the purpose of discussing and improving the Work, but\n      excluding communication that is conspicuously marked or otherwise\n      designated in writing by the copyright owner as "Not a Contribution."\n\n      "Contributor" shall mean Licensor and any individual or Legal Entity\n      on behalf of whom a Contribution has been received by Licensor and\n      subsequently incorporated within the Work.\n\n   2. Grant of Copyright License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      copyright license to reproduce, prepare Derivative Works of,\n      publicly display, publicly perform, sublicense, and distribute the\n      Work and such Derivative Works in Source or Object form.\n\n   3. Grant of Patent License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      (except as stated in this section) patent license to make, have made,\n      use, offer to sell, sell, import, and otherwise transfer the Work,\n      where such license applies only to those patent claims licensable\n      by such Contributor that are necessarily infringed by their\n      Contribution(s) alone or by combination of their Contribution(s)\n      with the Work to which such Contribution(s) was submitted. If You\n      institute patent litigation against any entity (including a\n      cross-claim or counterclaim in a lawsuit) alleging that the Work\n      or a Contribution incorporated within the Work constitutes direct\n      or contributory patent infringement, then any patent licenses\n      granted to You under this License for that Work shall terminate\n      as of the date such litigation is filed.\n\n   4. Redistribution. You may reproduce and distribute copies of the\n      Work or Derivative Works thereof in any medium, with or without\n      modifications, and in Source or Object form, provided that You\n      meet the following conditions:\n\n      (a) You must give any other recipients of the Work or\n          Derivative Works a copy of this License; and\n\n      (b) You must cause any modified files to carry prominent notices\n          stating that You changed the files; and\n\n      (c) You must retain, in the Source form of any Derivative Works\n          that You distribute, all copyright, patent, trademark, and\n          attribution notices from the Source form of the Work,\n          excluding those notices that do not pertain to any part of\n          the Derivative Works; and\n\n      (d) If the Work includes a "NOTICE" text file as part of its\n          distribution, then any Derivative Works that You distribute must\n          include a readable copy of the attribution notices contained\n          within such NOTICE file, excluding those notices that do not\n          pertain to any part of the Derivative Works, in at least one\n          of the following places: within a NOTICE text file distributed\n          as part of the Derivative Works; within the Source form or\n          documentation, if provided along with the Derivative Works; or,\n          within a display generated by the Derivative Works, if and\n          wherever such third-party notices normally appear. The contents\n          of the NOTICE file are for informational purposes only and\n          do not modify the License. You may add Your own attribution\n          notices within Derivative Works that You distribute, alongside\n          or as an addendum to the NOTICE text from the Work, provided\n          that such additional attribution notices cannot be construed\n          as modifying the License.\n\n      You may add Your own copyright statement to Your modifications and\n      may provide additional or different license terms and conditions\n      for use, reproduction, or distribution of Your modifications, or\n      for any such Derivative Works as a whole, provided Your use,\n      reproduction, and distribution of the Work otherwise complies with\n      the conditions stated in this License.\n\n   5. Submission of Contributions. Unless You explicitly state otherwise,\n      any Contribution intentionally submitted for inclusion in the Work\n      by You to the Licensor shall be under the terms and conditions of\n      this License, without any additional terms or conditions.\n      Notwithstanding the above, nothing herein shall supersede or modify\n      the terms of any separate license agreement you may have executed\n      with Licensor regarding such Contributions.\n\n   6. Trademarks. This License does not grant permission to use the trade\n      names, trademarks, service marks, or product names of the Licensor,\n      except as required for reasonable and customary use in describing the\n      origin of the Work and reproducing the content of the NOTICE file.\n\n   7. Disclaimer of Warranty. Unless required by applicable law or\n      agreed to in writing, Licensor provides the Work (and each\n      Contributor provides its Contributions) on an "AS IS" BASIS,\n      WITHOUT WARRANTIES' alternative (Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "[]"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Portions Copyright (c) Microsoft Corporation.
+   Portions Copyright 2017 Google Inc.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.)
 - **python/shiboken6** 6.11.2: OR expression, using the 'LGPL-3.0-only' alternative (LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only)
+- **ui/dashboard/lightningcss** 1.33.0: MPL-2.0
+- **ui/dashboard/lightningcss-android-arm64** 1.33.0: MPL-2.0
+- **ui/dashboard/lightningcss-darwin-arm64** 1.33.0: MPL-2.0
+- **ui/dashboard/lightningcss-darwin-x64** 1.33.0: MPL-2.0
+- **ui/dashboard/lightningcss-freebsd-x64** 1.33.0: MPL-2.0
+- **ui/dashboard/lightningcss-linux-arm-gnueabihf** 1.33.0: MPL-2.0
+- **ui/dashboard/lightningcss-linux-arm64-gnu** 1.33.0: MPL-2.0
+- **ui/dashboard/lightningcss-linux-arm64-musl** 1.33.0: MPL-2.0
+- **ui/dashboard/lightningcss-linux-x64-gnu** 1.33.0: MPL-2.0
+- **ui/dashboard/lightningcss-linux-x64-musl** 1.33.0: MPL-2.0
+- **ui/dashboard/lightningcss-win32-arm64-msvc** 1.33.0: MPL-2.0
+- **ui/dashboard/lightningcss-win32-x64-msvc** 1.33.0: MPL-2.0
+- **ui/pet/lightningcss** 1.33.0: MPL-2.0
+- **ui/pet/lightningcss-android-arm64** 1.33.0: MPL-2.0
+- **ui/pet/lightningcss-darwin-arm64** 1.33.0: MPL-2.0
+- **ui/pet/lightningcss-darwin-x64** 1.33.0: MPL-2.0
+- **ui/pet/lightningcss-freebsd-x64** 1.33.0: MPL-2.0
+- **ui/pet/lightningcss-linux-arm-gnueabihf** 1.33.0: MPL-2.0
+- **ui/pet/lightningcss-linux-arm64-gnu** 1.33.0: MPL-2.0
+- **ui/pet/lightningcss-linux-arm64-musl** 1.33.0: MPL-2.0
+- **ui/pet/lightningcss-linux-x64-gnu** 1.33.0: MPL-2.0
+- **ui/pet/lightningcss-linux-x64-musl** 1.33.0: MPL-2.0
+- **ui/pet/lightningcss-win32-arm64-msvc** 1.33.0: MPL-2.0
+- **ui/pet/lightningcss-win32-x64-msvc** 1.33.0: MPL-2.0
 

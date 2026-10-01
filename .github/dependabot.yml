@@ -34,6 +34,19 @@ updates:
     groups:
       pet-dev-tooling:
         patterns: ["@types/*", "vite*", "vitest*", "typescript", "@vitejs/*"]
+    # Held back on purpose; lift each line when its reason is gone.
+    ignore:
+      # typescript-eslint supports TypeScript only below 6.1.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # eslint-plugin-jsx-a11y does not support ESLint 10 yet, and the accessibility rules stay.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@eslint/js"
+        update-types: ["version-update:semver-major"]
+      # Node's types follow the Node the UIs are built with (22, see ci.yml), not the newest one.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: "/ui/dashboard"
@@ -50,6 +63,19 @@ updates:
     groups:
       dashboard-dev-tooling:
         patterns: ["@types/*", "vite*", "vitest*", "typescript", "@vitejs/*"]
+    # Held back on purpose; lift each line when its reason is gone.
+    ignore:
+      # typescript-eslint supports TypeScript only below 6.1.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # eslint-plugin-jsx-a11y does not support ESLint 10 yet, and the accessibility rules stay.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@eslint/js"
+        update-types: ["version-update:semver-major"]
+      # Node's types follow the Node the UIs are built with (22, see ci.yml), not the newest one.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
