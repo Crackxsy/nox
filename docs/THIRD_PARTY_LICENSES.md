@@ -11,6 +11,8 @@ Scope: every installed Python package (`importlib.metadata` against the project 
 | annotated-doc | 0.0.5 | MIT | allow | MIT |
 | annotated-types | 0.8.0 | MIT | allow | MIT |
 | anyio | 4.15.1 | MIT | allow | MIT |
+| argon2-cffi | 25.1.0 | MIT | allow | MIT |
+| argon2-cffi-bindings | 26.1.0 | MIT | allow | MIT |
 | ast_serialize | 0.11.1 | MIT | allow | MIT |
 | av | 18.1.0 | BSD-3-Clause | allow | BSD-3-Clause |
 | certifi | 2026.7.22 | MPL-2.0 | allow | [package exception] MPL-2.0 (Mozilla Public License, file-level copyleft). Used unmodified as an httpx/requests CA-bundle dependency; MPL-2.0 imposes no obligation on code that merely depends on an unmodified MPL file, only on modifications to MPL-licensed files themselves. |
@@ -61,7 +63,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | mypy | 2.3.1 | MIT | allow | MIT |
 | mypy_extensions | 1.1.0 | MIT | allow | MIT |
 | narwhals | 2.26.0 | MIT | allow | MIT |
-| nox | 0.1.0.dev0 | Apache-2.0 | allow | Apache-2.0 |
+| nox | 0.4.0 | Apache-2.0 | allow | Apache-2.0 |
 | numpy | 2.5.3 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | allow | [package exception] Declared license expression is an SPDX AND of BSD-3-Clause, 0BSD, MIT, Zlib and CC0-1.0 for numpy's own code plus small vendored components; every component is permissive. Verified against numpy's LICENSE.txt (2026-09-14). |
 | onnxruntime | 1.29.0 | MIT License | allow | [package exception] MIT (Microsoft). Inference runtime for the Kokoro TTS model (`voice-kokoro` extra) and for openWakeWord (`voice` extra); used unmodified as a PyPI wheel. |
 | opencv-python-headless | 5.0.0.93 | Apache 2.0 | allow | Apache 2.0 |
@@ -499,7 +501,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | requests | 2.34.2 | Apache-2.0 | allow | Apache-2.0 |
 | rich | 15.0.0 | MIT | allow | MIT |
 | ruamel.yaml | 0.19.1 | MIT | allow | MIT |
-| ruff | 0.16.6 | MIT | allow | MIT |
+| ruff | 0.16.10 | MIT | allow | MIT |
 | scikit-learn | 1.9.1 | BSD-3-Clause | allow | BSD-3-Clause |
 | scipy | 1.18.1 | Copyright (c) 2001-2002 Enthought, Inc. 2003, SciPy Developers.
  All rights reserved.
@@ -2336,7 +2338,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | six | 1.17.0 | MIT | allow | MIT |
 | sounddevice | 0.5.6 | MIT | allow | MIT |
 | sqlite-vec | 0.1.9 | MIT License, Apache License, Version 2.0 | allow | [package exception] Dual-licensed "MIT License, Apache License, Version 2.0" (project's own PyPI classifier text) - Nox uses it under the MIT alternative. |
-| starlette | 1.6.0 | BSD-3-Clause | allow | BSD-3-Clause |
+| starlette | 1.7.0 | BSD-3-Clause | allow | BSD-3-Clause |
 | structlog | 26.1.0 | MIT OR Apache-2.0 | allow | [package exception] Dual-licensed MIT OR Apache-2.0 (SPDX expression); Nox uses it under the MIT alternative. |
 | text-unidecode | 1.3 | Artistic License | allow | [package exception] Perl Artistic License 2.0 - OSI-approved permissive license, unmodified dependency. |
 | threadpoolctl | 3.7.0 | BSD-3-Clause | allow | BSD-3-Clause |
@@ -2347,7 +2349,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | types-PyYAML | 6.0.12.20260906 | Apache-2.0 | allow | Apache-2.0 |
 | typing-inspection | 0.4.4 | MIT | allow | MIT |
 | typing_extensions | 4.16.0 | PSF-2.0 | allow | PSF-2.0 |
-| urllib3 | 2.7.0 | MIT | allow | MIT |
+| urllib3 | 2.8.0 | MIT | allow | MIT |
 | uvicorn | 0.52.4 | BSD-3-Clause | allow | BSD-3-Clause |
 | watchdog | 6.0.0 | Apache-2.0 | allow | Apache-2.0 |
 | watchfiles | 1.2.0 | MIT | allow | MIT |
@@ -3106,8 +3108,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ## Summary
 
-- Total packages scanned: 839
-- `allow`: 808
+- Total packages scanned: 841
+- `allow`: 810
 - `allow_with_note`: 31
 - `deny`: 0
 - `unknown`: 0

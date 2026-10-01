@@ -229,6 +229,7 @@ class PinManager:
         if self._verify(stored, pin):
             self._attempts.clear()
             self._audit.append(actor=by, action="pin.verify", target="pin")
+            self._upgrade_hash(stored, pin)
             return PinStatus(ok=True, remaining_attempts=self._max_attempts)
         failed = state.failed + 1
         details = {"failed_attempts": str(failed)}
@@ -277,6 +278,28 @@ class PinManager:
         salt = _secrets.token_bytes(16)
         digest = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt, PBKDF2_ITERATIONS)
         return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt.hex()}${digest.hex()}"
+
+    def _upgrade_hash(self, stored: str, pin: str) -> None:
+        """Re-hash a correctly entered PIN whose stored hash is weaker than what is available now:
+        PBKDF2 from a start without Argon2id, or Argon2id with older parameters. The moment the
+        PIN is entered is the only one at which that is possible."""
+        if self._argon2 is None:
+            return
+        scheme, _, rest = stored.partition("$")
+        if scheme == "argon2id":
+            try:
+                if not self._argon2.check_needs_rehash(rest):
+                    return
+            except Exception:  # noqa: BLE001 - an unreadable hash just verified; keep it
+                return
+        self._store.set(PIN_SECRET_NAME, self._hash(pin))
+        self._audit.append(
+            actor="core",
+            action="pin.rehash",
+            target="pin",
+            details={"from": scheme, "to": "argon2id"},
+        )
+        log.info("security.pin_rehashed", previous=scheme)
 
     def _verify(self, stored: str, pin: str) -> bool:
         scheme, _, rest = stored.partition("$")
