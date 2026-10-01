@@ -9,7 +9,7 @@
 ; Output: installer\out\Nox-Setup-{#MyAppVersion}.exe (installer\out\ is git-ignored).
 
 #define MyAppName "Nox"
-#define MyAppVersion "0.3.0"
+#define MyAppVersion "0.4.0"
 #define MyAppPublisher "Nox Project"
 #define MyAppExeName "pythonw.exe"
 #define BuildAppDir "..\build\app"

@@ -8,6 +8,8 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-01
+
 ### Added
 - **Seven creatures to choose from, each one complete.** Meereswolf, Eulenfuchs, Katzendrache,
   Mottenkatze, Kaninchenkatze, Koala-Flughund and Chamster, each with a deformation rig - it
@@ -629,7 +631,9 @@ history, which 404 on the public repository (#29) - they now use the tag-based f
 foundation") predates the tagging process and never gets one, hence the single-tag link shape
 below instead of a compare for it and for `v0.1.0` (nothing tagged to compare either against).
 
-[Unreleased]: https://github.com/Crackxsy/nox/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Crackxsy/nox/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Crackxsy/nox/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/Crackxsy/nox/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Crackxsy/nox/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Crackxsy/nox/releases/tag/v0.1.0
 [0.0.0]: https://github.com/Crackxsy/nox/releases/tag/v0.0.0

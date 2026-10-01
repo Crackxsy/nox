@@ -193,7 +193,11 @@ def test_dashboard_auth_status_and_chat(core: NoxCore, page: Page) -> None:
     )
 
     # Status page: ai.rules is always available offline (RulesProvider needs no network).
-    rules_row = page.locator("tbody tr", has_text="ai.rules")
+    # Scoped to the health table by its caption. Searching every `tbody tr` on the page also
+    # matched the audit log and the health history once either recorded something about
+    # ai.rules, which depends on timing - the same commit passed on one run and failed the next.
+    health = page.get_by_role("table", name="System health")
+    rules_row = health.locator("tbody tr", has_text="ai.rules")
     expect(rules_row).to_be_visible(timeout=10000)
     expect(rules_row.locator("td").first).to_have_text("available", timeout=10000)
 
