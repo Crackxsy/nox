@@ -47,6 +47,7 @@ export class RigScene {
   private currentPose: string | null = null;
   private previousPose: string | null = null;
   private dissolveStartMs = 0;
+  private hasDrawn = false;
 
   constructor(
     private readonly loaded: LoadedRig,
@@ -94,7 +95,12 @@ export class RigScene {
   setPose(name: string | null, nowMs: number): boolean {
     if (name !== null && !this.availablePoses.includes(name)) return false;
     if (name === this.currentPose) return true;
-    this.previousPose = this.currentPose;
+    // A dissolve needs a "before". Until a frame has been drawn there is none on screen, so the
+    // first pose is simply where the creature is: a pet that starts asleep appears curled up,
+    // instead of sitting for a quarter of a second and then curling. The single still frame the
+    // review renders take depends on this - it is drawn at the instant the pose is set, which is
+    // dissolve zero, and used to show every state in the base drawing.
+    this.previousPose = this.hasDrawn ? this.currentPose : name;
     this.currentPose = name;
     this.dissolveStartMs = nowMs;
     return true;
@@ -144,6 +150,7 @@ export class RigScene {
    * eyes shut while still breathing.
    */
   frame(nowMs: number, lidClosure: number): void {
+    this.hasDrawn = true;
     const pose: Pose = this.player.update(nowMs);
     const matrices = poseMatrices(this.skeleton, pose);
     skin(this.baseMesh, matrices, this.basePositions);

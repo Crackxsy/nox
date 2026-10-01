@@ -51,7 +51,7 @@
       "parent": "chest",
       "pivot": [
         0.4825,
-        0.615
+        0.65
       ],
       "restAngle": -90,
       "influence": {
@@ -77,7 +77,7 @@
       "parent": "head",
       "pivot": [
         0.4825,
-        0.575
+        0.59
       ],
       "restAngle": -90,
       "influence": {
@@ -128,8 +128,8 @@
       "name": "lid.l",
       "parent": "head",
       "pivot": [
-        0.422,
-        0.5527
+        0.4361,
+        0.5597
       ],
       "restAngle": 0,
       "channelOnly": true,
@@ -142,8 +142,8 @@
       "name": "lid.r",
       "parent": "head",
       "pivot": [
-        0.543,
-        0.5527
+        0.5299,
+        0.5571
       ],
       "restAngle": 0,
       "channelOnly": true,
@@ -158,10 +158,10 @@
       "name": "eye.l",
       "file": "eye_l.png",
       "rect": [
-        0.35938,
-        0.45508,
-        0.48438,
-        0.58008
+        0.375,
+        0.46289,
+        0.49805,
+        0.58789
       ],
       "grid": {
         "columns": 3,
@@ -175,10 +175,10 @@
       "name": "eye.r",
       "file": "eye_r.png",
       "rect": [
-        0.48047,
-        0.45508,
-        0.60547,
-        0.58008
+        0.46875,
+        0.46094,
+        0.5918,
+        0.58398
       ],
       "grid": {
         "columns": 3,

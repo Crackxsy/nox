@@ -477,7 +477,13 @@ def main() -> int:
         alpha = chroma_matte(rgb, backdrop_colour(rgb, kind), outside)
     else:
         alpha = feather(~outside, FEATHER)
-    alpha = fill_holes(drop_fragments(alpha))
+    alpha = drop_fragments(alpha)
+    if not args.chroma:
+        # Filling enclosed pockets is right where colour is ambiguous - a patch of grey flank that
+        # matched a grey wall. On a chroma screen nothing is ambiguous: a pocket of key colour
+        # between two legs is a real gap the screen shows through, and filling it put a green
+        # dot under the wolf and the koala.
+        alpha = fill_holes(alpha)
     clean = decontaminate(rgb, alpha, backdrop_colour(rgb, kind))
     write_rgba(args.destination, np.dstack([clean, alpha * 255.0]).astype(np.uint8))
 

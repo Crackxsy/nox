@@ -81,6 +81,7 @@ describe('key poses', () => {
 
   it('draws a pose from its own geometry, not through the skin buffer', () => {
     const { scene, recorder } = sceneWith();
+    scene.frame(0, 0); // the creature is on screen in its base drawing
     scene.setPose('curl', 0);
 
     scene.frame(100, 0); // mid-dissolve: the base picture and the pose are both on screen
@@ -103,6 +104,7 @@ describe('key poses', () => {
 
   it('fades the eyes out over the dissolve rather than cutting them', () => {
     const { scene, recorder } = sceneWith();
+    scene.frame(0, 0);
     scene.setPose('curl', 0);
 
     scene.frame(100, 0); // mid-dissolve
@@ -124,6 +126,20 @@ describe('key poses', () => {
     scene.frame(20_000, 0);
 
     expect(last(recorder)).toHaveLength(2);
+  });
+
+  it('starts in its first pose instead of dissolving into it from nothing', () => {
+    // A pet that opens asleep is curled up from its first frame. Dissolving needs something on
+    // screen to dissolve *from*; before the first frame there is nothing, and the old behaviour
+    // drew the sitting creature and then curled it up - and drew every review still sitting.
+    const { scene, recorder } = sceneWith();
+    scene.setPose('curl', 0);
+
+    scene.frame(0, 0);
+
+    const calls = last(recorder);
+    expect(calls).toHaveLength(1); // the pose alone: no base drawing, no eyes hanging over it
+    expect(calls[0].alpha).toBe(1);
   });
 
   it('refuses a pose it has no art for, so the caller can fall back', () => {

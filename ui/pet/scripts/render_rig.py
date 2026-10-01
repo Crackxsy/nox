@@ -162,12 +162,23 @@ def render_states(page: Page, port: int, out: Path) -> None:
             page.screenshot(path=str(out / f"state-{state}-{name}.png"))
 
 
-#: Regions of interest for the unprompted clips, as `[top, bottom, left, right]` in window pixels
-#: at `SIZE` = 260. The eye boxes are tight on the two eyeballs; the ear box is the left ear tip.
-EVENT_REGIONS = {
-    "blink": [(58, 72, 131, 146), (57, 71, 167, 182)],
-    "ear_flick": [(2, 30, 100, 132)],
-}
+def event_regions(variant_id: str) -> dict[str, list[tuple[int, int, int, int]]]:
+    """Where to look for the unprompted clips, as `(top, bottom, left, right)` window pixels.
+
+    These used to be constants measured on the Meereswolf, which made every other creature fail
+    review: its eyes are somewhere else, so no blink was ever "seen". They come from the variant's
+    own rig now - the eye layers for a blink, the left ear's pivot for a flick - and for the wolf
+    they work out to the numbers that were hand-measured before, within a pixel.
+    """
+    rig = json.loads(rig_json(variant_id).read_text(encoding="utf-8"))
+    eyes = []
+    for layer in rig["layers"]:
+        x0, y0, x1, y1 = (value * SIZE for value in layer["rect"])
+        eyes.append((round(y0) + 2, round(y1) - 1, round(x0) + 3, round(x1) - 2))
+    ear = next(bone for bone in rig["bones"] if bone["name"] == "ear.l")
+    ear_x, ear_y = (value * SIZE for value in ear["pivot"])
+    ears = [(max(0, round(ear_y) - 36), round(ear_y) - 8, round(ear_x) - 18, round(ear_x) + 14)]
+    return {"blink": eyes, "ear_flick": ears}
 #: How many clock steps are searched for an unprompted event before giving up.
 EVENT_SEARCH_STEPS = 600
 #: Luminance below which a pixel counts as eyeball rather than fur, out of 255.
@@ -198,7 +209,7 @@ def _event_signal(png_bytes: bytes, clip: str) -> float:
     For a blink that is how much eyeball is visible, which the breathing cannot fake. For an ear
     flick it is the brightness of the ear tip's box, which only the ear swinging changes.
     """
-    patches = _regions(png_bytes, EVENT_REGIONS[clip])
+    patches = _regions(png_bytes, event_regions(VARIANT_ID)[clip])
     if clip == "blink":
         return _eyeball_pixels(patches)
     return statistics.fmean(float(patch.mean()) for patch in patches)
