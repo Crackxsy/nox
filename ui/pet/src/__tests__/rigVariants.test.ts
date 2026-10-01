@@ -17,8 +17,8 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { buildSkeleton } from '../rig/bones';
-import { computeWeights } from '../rig/mesh';
+import { buildSkeleton, poseMatrices } from '../rig/bones';
+import { buildGrid, computeWeights, skin } from '../rig/mesh';
 import { parseRigDefinition } from '../rig/rigFile';
 import { REACHABLE_POSES, RIG_CLIPS } from '../rig/stateMapping';
 
@@ -134,6 +134,35 @@ describe.each(RIGGED)('%s', (variant) => {
       expect(bone.pivot[0], `${bone.name} x`).toBeLessThanOrEqual(1);
       expect(bone.pivot[1], `${bone.name} y`).toBeGreaterThanOrEqual(0);
       expect(bone.pivot[1], `${bone.name} y`).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('flicks each ear far enough to be seen at the size the pet is drawn', () => {
+    // The flick is a random, unprompted event, and filming one out of a breathing creature proved
+    // unreliable: on a small ear the swing and the breath move the pixels by similar amounts. So
+    // the motion is measured where it is decided - in the mesh - at the clip's peak. A flick that
+    // moves the ear by less than a few pixels in a 260-pixel window is a flick nobody sees.
+    const WINDOW_PX = 260;
+    const MIN_VISIBLE_PX = 3;
+    const skeleton = buildSkeleton(rig.bones);
+    const mesh = buildGrid([0, 0, 1, 1], 22, 22, skeleton);
+    const rest = new Float32Array(mesh.rest);
+    for (const [clipName, boneName] of [
+      ['ear_flick', 'ear.l'],
+      ['ear_flick_r', 'ear.r'],
+    ] as const) {
+      const clip = rig.clips[clipName];
+      if (!clip) continue; // ear_flick_r is optional; the scheduler falls back to ear_flick
+      const track = clip.tracks.find((t) => t.bone === boneName && t.channel === 'rotate');
+      expect(track, `${clipName} rotates ${boneName}`).toBeDefined();
+      const peak = Math.max(...track!.keys.map((key) => Math.abs(key.value)));
+      const pose = { [boneName]: { rotate: peak, x: 0, y: 0, scaleX: 1, scaleY: 1 } };
+      const moved = skin(mesh, poseMatrices(skeleton, pose), new Float32Array(rest.length));
+      let furthest = 0;
+      for (let v = 0; v < rest.length; v += 2) {
+        furthest = Math.max(furthest, Math.hypot(moved[v] - rest[v], moved[v + 1] - rest[v + 1]));
+      }
+      expect(furthest * WINDOW_PX, `${clipName} moves ${boneName}`).toBeGreaterThan(MIN_VISIBLE_PX);
     }
   });
 
