@@ -13,6 +13,8 @@ profiles: [coding]
 permissions:
   - tool: coding.session.start          # risk: medium - spawns a Claude Code CLI session scoped
     risk: medium                        # to a workspace under filesystem_roots (target = workspace)
+    timeout_s: 1860                     # config.session_timeout_s (1800), which the plugin
+                                         # enforces, plus a minute for the CLI to stop
   - tool: coding.session.status.read    # risk: read - snapshot of a tracked session
     risk: read
   - tool: coding.session.stop           # risk: low - graceful cancel, no new side effects

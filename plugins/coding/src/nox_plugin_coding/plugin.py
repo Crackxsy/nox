@@ -28,6 +28,7 @@ from .session import (
     DEFAULT_MAX_TURNS,
     DEFAULT_PERMISSION_MODE,
     MAX_REPAIR_ATTEMPTS,
+    SESSION_TIMEOUT_S,
     SessionOutcome,
     SessionRecord,
     SessionRunner,
@@ -99,6 +100,7 @@ class CodingPlugin:
             allowed_tools=tuple(api.config.get("allowed_tools", DEFAULT_ALLOWED_TOOLS)),
             max_repair_attempts=int(api.config.get("max_repair_attempts", MAX_REPAIR_ATTEMPTS)),
             default_max_turns=int(api.config.get("max_turns", DEFAULT_MAX_TURNS)),
+            session_timeout_s=float(api.config.get("session_timeout_s", SESSION_TIMEOUT_S)),
         )
         self._unsub_kill_switch: Any = None
 
@@ -243,6 +245,8 @@ def _snapshot(record: SessionRecord) -> dict[str, Any]:
         "repair_attempts": record.repair_attempts,
         "files_touched": list(record.files_touched),
         "last_error": record.last_error,
+        #: The session's own last words - why it did or did not change anything.
+        "summary": record.last_result_text[:500],
     }
 
 

@@ -255,9 +255,10 @@ class ToolExecutor:
         waitables: list[asyncio.Task[Any]] = [handler_task]
         if kill_task is not None:
             waitables.append(kill_task)
+        timeout_s = spec.timeout_s or self._timeout_s
         try:
             done, _pending = await asyncio.wait(
-                waitables, timeout=self._timeout_s, return_when=asyncio.FIRST_COMPLETED
+                waitables, timeout=timeout_s, return_when=asyncio.FIRST_COMPLETED
             )
         except asyncio.CancelledError:
             handler_task.cancel()
@@ -277,7 +278,7 @@ class ToolExecutor:
             raise ToolCancelledError("kill switch engaged")
         if kill_task is not None:
             kill_task.cancel()
-        raise ToolTimeoutError(f"tool timed out after {self._timeout_s:g}s")
+        raise ToolTimeoutError(f"tool timed out after {timeout_s:g}s")
 
     # ---- audit -------------------------------------------------------------------------------
 

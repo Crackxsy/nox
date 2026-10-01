@@ -123,6 +123,45 @@ async def test_a_session_that_did_not_end_is_a_failure_not_an_empty_proposal(
     assert "failed" in proposal.note
 
 
+async def test_an_empty_proposal_passes_on_what_the_session_said(workspace: Path) -> None:
+    """ "Changed nothing" alone leaves the user guessing; the session usually says why."""
+
+    async def call(name: str, arguments: dict[str, Any]) -> Outcome:
+        answer = Outcome()
+        answer.data = {"outcome": "ended", "summary": "That function already exists."}
+        return answer
+
+    engine = ProposalRunner(lambda: config(workspace), call, lambda _n: True)
+
+    proposal = await engine.propose("write something into the readme")
+
+    assert proposal.state is ProposalState.EMPTY
+    assert proposal.note.endswith("it said: That function already exists.")
+
+
+async def test_what_the_test_run_leaves_behind_is_named_for_what_it_is(workspace: Path) -> None:
+    """Caches and reports from the suite are kept off the user's checkout, but they are not the
+    session's "unfinished" work - the proposal finished - and the result reads without escapes."""
+    import sys
+
+    from nox.extend.runner import LEFT_BY_TESTS
+
+    suite = (
+        "import sys; open('left.txt', 'w').write('x'); "
+        "sys.stdout.write(chr(27) + '[32m1 passed' + chr(27) + '[0m')"
+    )
+    engine, _ = runner(config(workspace, test_command=[sys.executable, "-c", suite]))
+
+    proposal = await engine.propose("write something into the readme")
+
+    assert proposal.state is ProposalState.READY
+    assert proposal.tests == "1 passed"
+    assert not (workspace / "left.txt").exists()
+    messages = git(workspace, "log", "--format=%s", f"develop..{proposal.branch}").splitlines()
+    assert messages[0] == LEFT_BY_TESTS
+    assert not any("unfinished" in m for m in messages)
+
+
 async def test_the_work_is_on_a_branch_and_not_on_the_users_own(workspace: Path) -> None:
     engine, _ = runner(config(workspace))
 

@@ -15,6 +15,7 @@ Nothing here merges, pushes or restarts anything.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Protocol
@@ -47,6 +48,13 @@ Known = Callable[[str], bool]
 def _commit_message(intent: str, *, unfinished: bool = False) -> str:
     first = intent.strip().splitlines()[0][:72]
     return f"proposal (unfinished): {first}" if unfinished else f"proposal: {first}"
+
+
+#: For what the test suite leaves in the checkout after a finished proposal: caches, reports.
+LEFT_BY_TESTS = "proposal: files the test run left behind"
+
+#: Colour and cursor sequences a test runner writes; the result is read in a dashboard, not a TTY.
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 def _session_failure(outcome: Outcome) -> str:
@@ -131,11 +139,12 @@ class ProposalRunner:
         workspace = Path(config.workspace)
         base = await repo.current_branch(workspace)
         branch = ""
+        finished = False
         try:
             branch = await repo.start_branch(workspace, config.branch_prefix, proposal_id)
-            return self._record(
-                await self._work(proposal_id, intent, config, workspace, base, branch)
-            )
+            proposal = await self._work(proposal_id, intent, config, workspace, base, branch)
+            finished = proposal.state is not ProposalState.FAILED
+            return self._record(proposal)
         except repo.GitError as exc:
             return self._record(
                 Proposal(
@@ -151,17 +160,19 @@ class ProposalRunner:
             # Every path out, including the ones that raised. A checkout left on a machine's
             # half-finished branch is the surprise this whole design exists to avoid - and so is
             # its half-finished work: git carries uncommitted changes across a checkout, so
-            # whatever a session left behind is committed on the proposal's branch first.
+            # whatever is left is committed on the proposal's branch first: a session's unfinished
+            # work, or what the test run of a finished one wrote, each under its own name.
             if branch:
-                await self._keep_on_branch(workspace, intent)
+                message = LEFT_BY_TESTS if finished else _commit_message(intent, unfinished=True)
+                await self._keep_on_branch(workspace, message)
             await repo.back_to(workspace, base)
 
-    async def _keep_on_branch(self, workspace: Path, intent: str) -> None:
+    async def _keep_on_branch(self, workspace: Path, message: str) -> None:
         try:
-            if await repo.commit_all(workspace, _commit_message(intent, unfinished=True)):
-                log.warning("extend.unfinished_work_kept_on_branch")
+            if await repo.commit_all(workspace, message):
+                log.warning("extend.leftovers_kept_on_branch", commit=message)
         except repo.GitError as exc:
-            log.error("extend.unfinished_work_not_kept", error=str(exc))
+            log.error("extend.leftovers_not_kept", error=str(exc))
 
     async def _work(
         self,
@@ -185,13 +196,16 @@ class ProposalRunner:
             )
 
         if not await repo.commit_all(workspace, _commit_message(intent)):
+            said = str((outcome.data or {}).get("summary") or "").strip()
             return Proposal(
                 id=proposal_id,
                 intent=intent,
                 state=ProposalState.EMPTY,
                 base=base,
                 branch=branch,
-                note="the session ran and changed nothing",
+                note=f"the session ran and changed nothing; it said: {said}"
+                if said
+                else "the session ran and changed nothing",
             )
 
         diff = await repo.diff_stat(workspace, base)
@@ -223,7 +237,7 @@ class ProposalRunner:
         except TimeoutError:
             process.kill()
             return (f"the tests took longer than {config.test_timeout_s:.0f}s", False)
-        text = out.decode("utf-8", errors="replace")
+        text = _ANSI.sub("", out.decode("utf-8", errors="replace"))
         # The tail is where a test runner says what failed; the head is machine configuration.
         tail = "\n".join(text.strip().splitlines()[-20:])
         return (tail, process.returncode == 0)

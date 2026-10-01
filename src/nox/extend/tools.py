@@ -27,6 +27,12 @@ __all__ = ["register_extend_tools"]
 #: Enough for a real description, short enough that the confirmation dialog stays readable.
 MAX_INTENT = 2000
 
+#: A proposal is a coding session (the plugin stops it after 30 minutes) followed by the test
+#: suite (`extend.test_timeout_s`, at most an hour). Both bound themselves; this only has to be
+#: longer than the two together, so the executor never gives up on a proposal that is still
+#: inside its own limits.
+PROPOSE_TIMEOUT_S = 2 * 3600.0
+
 
 class ProposeInput(BaseModel):
     """`extend.propose {intent}` - what the change should do, in words."""
@@ -69,6 +75,7 @@ def register_extend_tools(registry: ToolRegistry, runner: ProposalRunner) -> Non
             side_effects=True,
             local=True,
             handler=propose,
+            timeout_s=PROPOSE_TIMEOUT_S,
             # The dialog shows the target, so the target is what the user needs to read.
             targets=lambda payload: str(payload.get("intent") or "")[:120],
         )

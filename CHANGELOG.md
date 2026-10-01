@@ -37,6 +37,19 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `git checkout` back onto your branch. A session that did not end is now a failed proposal with
   the reason, and anything it wrote is committed on the proposal's branch, marked unfinished,
   before the checkout is restored.
+- **Self-extension never worked against the real Claude Code.** Found by a live run, not by the
+  tests, whose fake session answers instantly: every tool call had 30 s, a real session takes
+  minutes, so each proposal timed out. Tools now carry their own time budget (`timeout_s` on a
+  tool, and per tool in a plugin manifest); the coding session has its 30 minutes and
+  `extend.propose` room for the session plus the test suite.
+- **The coding plugin's `session_timeout_s` was never enforced.** It stood in the manifest and
+  nothing read it, so a session could run without end. It now bounds the whole session, repair
+  attempts included; past it the CLI is stopped and the session fails with the reason.
+- **A coding session depended on the person's own Claude Code setup.** It loaded their personal
+  hooks and permissions, which in the live run refused every edit with a question nobody was
+  there to answer. Sessions now read only the workspace's own settings (`--setting-sources
+  project`). An empty proposal also passes on what the session said, instead of only "changed
+  nothing", and the test result is plain text without terminal colour codes.
 - **Self-extension asked twice for one change.** After you confirmed `extend.propose`, the coding
   session it starts asked again. The `coding` profile now lets the core's own `extend` agent start
   that session; a model starting one directly is still asked.

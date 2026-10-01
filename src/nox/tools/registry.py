@@ -38,6 +38,9 @@ class ToolSpec:
     side_effects: bool = True
     local: bool = True
     targets: Targets | None = None
+    #: How long one call may take, when the executor's default is too short by design - a coding
+    #: session takes minutes. None means the executor's default.
+    timeout_s: float | None = None
 
 
 class ToolDescription(BaseModel):
