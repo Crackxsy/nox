@@ -34,6 +34,11 @@ allow_with_note:
   - LGPL
   - LGPLv2
   - LGPLv3
+  # MPL-2.0 is file-level copyleft: only changes to the MPL-covered files themselves would have to
+  # be published, and Nox changes none. It is also compatible with Apache-2.0 for distribution.
+  # As of 2026-10-01 its only users are lightningcss and its platform binaries, a CSS transformer
+  # Vite runs at build time - nothing of it ends up in the pet window or the dashboard.
+  - MPL
 
 deny:
   - AGPL
