@@ -31,6 +31,15 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   parameters - is re-hashed the next time it is entered correctly; the audit log records it.
 - **`uv.lock` was behind `pyproject.toml`** (starlette, ruff and Nox's own version), and the
   third-party license list had been generated from a stale local install. Both are current again.
+- **A self-extension proposal could leave a crashed session's edits in your own checkout.** The
+  runner only checked that the coding tool answered, not how the session ended: a session that
+  failed was reported as "changed nothing", and its half-written files were carried by
+  `git checkout` back onto your branch. A session that did not end is now a failed proposal with
+  the reason, and anything it wrote is committed on the proposal's branch, marked unfinished,
+  before the checkout is restored.
+- **Self-extension asked twice for one change.** After you confirmed `extend.propose`, the coding
+  session it starts asked again. The `coding` profile now lets the core's own `extend` agent start
+  that session; a model starting one directly is still asked.
 - **The core restarted itself over and over on a cold start.** With the data on a spinning drive,
   single install steps of the boot stalled the core's event loop for 13-16 s while the voice worker
   and the language model were loading from the same drive. The supervisor counted that as ten missed

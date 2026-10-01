@@ -3,6 +3,8 @@
 data, no real session content). Selected by the `FAKE_CLI_MODE` env var:
 
 - "ok"          - init, one Edit tool_use touching notes.txt, a result (success).
+- "writes"      - "ok", and the edit really happens: a line is appended to notes.txt in the working
+                   directory, for tests that need the change on disk (self-extension end to end).
 - "always_fail" - init, one Edit tool_use, a result with `is_error=True` and a generic (repairable)
                    reason - used to drive the repair loop to its cap.
 - "max_turns"   - init, a result shaped like a real `--max-turns` exhaustion
@@ -147,7 +149,11 @@ if mode == "always_fail":
     )
     sys.exit(0)
 
-# "ok"
+if mode == "writes":
+    with open("notes.txt", "a", encoding="utf-8") as notes:
+        notes.write("line two\n")
+
+# "ok" (and "writes")
 emit(
     {
         "type": "result",

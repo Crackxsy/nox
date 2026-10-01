@@ -44,9 +44,27 @@ CallTool = Callable[[str, dict[str, Any]], Awaitable[Outcome]]
 Known = Callable[[str], bool]
 
 
-def _commit_message(intent: str) -> str:
+def _commit_message(intent: str, *, unfinished: bool = False) -> str:
     first = intent.strip().splitlines()[0][:72]
-    return f"proposal: {first}"
+    return f"proposal (unfinished): {first}" if unfinished else f"proposal: {first}"
+
+
+def _session_failure(outcome: Outcome) -> str:
+    """Why the coding session did not finish, or an empty string when it did.
+
+    The call succeeding is not the session succeeding: `coding.session.start` answers with the
+    session's own outcome, and a session that crashed or was cancelled is not one that "changed
+    nothing".
+    """
+    if not outcome.ok:
+        return str(outcome.error or "the coding session did not run")
+    data = outcome.data or {}
+    result = str(data.get("outcome", ""))
+    if result == "ended":
+        return ""
+    detail = str(data.get("last_error") or "").strip()
+    reason = f"the coding session ended as {result or 'unknown'}"
+    return f"{reason}: {detail}" if detail else reason
 
 
 class ProposalRunner:
@@ -131,8 +149,19 @@ class ProposalRunner:
             )
         finally:
             # Every path out, including the ones that raised. A checkout left on a machine's
-            # half-finished branch is the surprise this whole design exists to avoid.
+            # half-finished branch is the surprise this whole design exists to avoid - and so is
+            # its half-finished work: git carries uncommitted changes across a checkout, so
+            # whatever a session left behind is committed on the proposal's branch first.
+            if branch:
+                await self._keep_on_branch(workspace, intent)
             await repo.back_to(workspace, base)
+
+    async def _keep_on_branch(self, workspace: Path, intent: str) -> None:
+        try:
+            if await repo.commit_all(workspace, _commit_message(intent, unfinished=True)):
+                log.warning("extend.unfinished_work_kept_on_branch")
+        except repo.GitError as exc:
+            log.error("extend.unfinished_work_not_kept", error=str(exc))
 
     async def _work(
         self,
@@ -144,14 +173,15 @@ class ProposalRunner:
         branch: str,
     ) -> Proposal:
         outcome = await self._call(CODING_TOOL, {"target": str(workspace), "prompt": intent})
-        if not outcome.ok:
+        failure = _session_failure(outcome)
+        if failure:
             return Proposal(
                 id=proposal_id,
                 intent=intent,
                 state=ProposalState.FAILED,
                 base=base,
                 branch=branch,
-                note=str(outcome.error or "the coding session did not run"),
+                note=f"{failure}; anything it wrote is kept on {branch}, unfinished",
             )
 
         if not await repo.commit_all(workspace, _commit_message(intent)):

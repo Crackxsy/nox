@@ -23,9 +23,9 @@ from nox.extend.runner import CODING_TOOL, ProposalRunner
 
 
 class Outcome:
-    def __init__(self, ok: bool = True, error: str | None = None) -> None:
+    def __init__(self, ok: bool = True, error: str | None = None, session: str = "ended") -> None:
         self.ok = ok
-        self.data: dict[str, Any] | None = {}
+        self.data: dict[str, Any] | None = {"outcome": session}
         self.error = error
 
 
@@ -59,6 +59,7 @@ def runner(
     *,
     writes: str | None = "changed\n",
     ok: bool = True,
+    session: str = "ended",
     known: bool = True,
 ) -> tuple[ProposalRunner, list[str]]:
     """A runner whose "coding session" writes a file, or does not, or fails."""
@@ -69,7 +70,7 @@ def runner(
         called.append(name)
         if writes is not None and place is not None:
             (place / "README.md").write_text(writes, encoding="utf-8")
-        return Outcome(ok=ok, error=None if ok else "the session fell over")
+        return Outcome(ok=ok, error=None if ok else "the session fell over", session=session)
 
     return ProposalRunner(lambda: settings, call, lambda _n: known), called
 
@@ -93,6 +94,33 @@ async def test_the_checkout_comes_back_even_when_the_session_fails(workspace: Pa
 
     assert proposal.state is ProposalState.FAILED
     assert git(workspace, "rev-parse", "--abbrev-ref", "HEAD").strip() == "develop"
+
+
+async def test_a_failed_sessions_half_finished_work_never_reaches_the_users_checkout(
+    workspace: Path,
+) -> None:
+    """git carries uncommitted changes across a checkout: without parking them on the proposal's
+    branch first, a crashed session's edits would land in the user's own working tree."""
+    engine, _ = runner(config(workspace), ok=False)
+
+    proposal = await engine.propose("write something into the readme")
+
+    assert (workspace / "README.md").read_text(encoding="utf-8") == "start\n"
+    assert git(workspace, "status", "--porcelain") == ""
+    kept = git(workspace, "show", f"{proposal.branch}:README.md")
+    assert kept == "changed\n", "the unfinished work is kept, on the proposal's branch"
+
+
+async def test_a_session_that_did_not_end_is_a_failure_not_an_empty_proposal(
+    workspace: Path,
+) -> None:
+    """The call returning is not the session succeeding: "failed" is not "changed nothing"."""
+    engine, _ = runner(config(workspace), writes=None, session="failed")
+
+    proposal = await engine.propose("write something into the readme")
+
+    assert proposal.state is ProposalState.FAILED
+    assert "failed" in proposal.note
 
 
 async def test_the_work_is_on_a_branch_and_not_on_the_users_own(workspace: Path) -> None:
