@@ -22,7 +22,7 @@ import { AmbientScheduler, seededRandom } from './rig/ambient';
 import { createRigRenderer } from './rig/renderer';
 import type { LoadedRig } from './rig/rigFile';
 import { RigScene } from './rig/scene';
-import { isRestingState, planFor } from './rig/stateMapping';
+import { EATING_POSE, planFor, poseFor } from './rig/stateMapping';
 import type { SpriteState } from './variants/sprite';
 
 export interface RiggedPetProps {
@@ -43,14 +43,6 @@ export interface RiggedPetProps {
   /** Called once with the chosen backend, so a WebGL downgrade is reported rather than hidden. */
   onBackend?: (backend: 'webgl' | 'canvas2d', downgradeReason: string | null) => void;
 }
-
-/** Key pose to cross-dissolve to per state, once the art for it exists (`rig.json: poses`). */
-const POSE_FOR_STATE: Readonly<Record<string, string>> = {
-  sleeping: 'curl',
-  bored: 'lie',
-  listening: 'sit',
-  speaking: 'sit',
-};
 
 /** How long the creature stays on the eating pose after a treat. Long enough to be a moment. */
 const EATING_MS = 2600;
@@ -148,8 +140,7 @@ export function RiggedPet({
         lastFeeds = current.feeds;
         eatingUntilMs = nowMs + EATING_MS;
       }
-      const wantedPose =
-        nowMs < eatingUntilMs ? 'eat' : (POSE_FOR_STATE[expressionOf(current)] ?? null);
+      const wantedPose = nowMs < eatingUntilMs ? EATING_POSE : poseFor(current);
       // A pose whose art the variant does not ship returns false. Falling back to the base drawing
       // rather than leaving the creature in whatever it was in is the honest read of "no art".
       if (!scene.setPose(wantedPose, nowMs)) scene.setPose(null, nowMs);
@@ -231,10 +222,4 @@ export function RiggedPet({
       <span className="pet-rig">{creature}</span>
     </button>
   );
-}
-
-/** The one word that decides which key pose a state wants. Deliberately coarse. */
-function expressionOf(input: PetInput): string {
-  if (isRestingState(input)) return 'sleeping';
-  return input.functional;
 }

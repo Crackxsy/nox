@@ -8,6 +8,32 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+### Added
+- **Seven creatures to choose from, each one complete.** Meereswolf, Eulenfuchs, Katzendrache,
+  Mottenkatze, Kaninchenkatze, Koala-Flughund and Chamster, each with a deformation rig - it
+  breathes, blinks, flicks an ear, turns its head, and moves its tail or wings - and its own art for
+  sleeping, lying down and eating. They come from the original creature concepts; the key poses were
+  generated against each creature's own picture on a green screen and keyed out.
+- **The creature is picked from a list in the dashboard**, with a picture of the one you chose under
+  it, instead of a text box that expected you to know to type `sprite:koalaflughund`. It applies
+  without a restart. A configuration written before the list existed still loads; an unknown value
+  falls back to the plain shape and says so in the log.
+- **Tools to add a creature**: `ui/pet/scripts/cut_out.py` keys a generated picture off a
+  checkerboard, a flat colour, a lit studio wall or a chroma screen; `make_variant.py` turns the
+  cut-out and a landmark file into a whole rigged variant; `ui/pet/scripts/README.md` walks through
+  it, including how to ask an image generator for pose art it can actually use.
+
+### Fixed
+- **The pet turned into another animal when it fell asleep.** The Meereswolf's base picture was a
+  wolf and its three pose pictures were a hamster, so sleeping cross-dissolved one creature into the
+  other on screen. Nothing objected: every file was valid. The hamster is now its own creature, the
+  Chamster, and a test reads the variants off disk and checks each one is internally consistent.
+- **No creature ever lay down when bored.** The pose table looked the mood up under a key that only
+  ever held the activity, so the lying-down art was unreachable. The user guide had been promising
+  it all along.
+- **A pet that started asleep sat up first**, for a quarter of a second, before curling up: the first
+  pose was dissolved into from a frame that was never drawn.
+
 ## [0.3.0] - 2026-10-01
 
 ### Added

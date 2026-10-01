@@ -219,11 +219,11 @@
     "curl": {
       "file": "pose_curl.png"
     },
-    "lie": {
-      "file": "pose_lie.png"
-    },
     "eat": {
       "file": "pose_eat.png"
+    },
+    "lie": {
+      "file": "pose_lie.png"
     }
   },
   "clips": {

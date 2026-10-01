@@ -18,7 +18,7 @@ import rigJson from '../../public/variants/meereswolf/rig.json';
 import { buildSkeleton } from '../rig/bones';
 import { computeWeights } from '../rig/mesh';
 import { parseRigDefinition } from '../rig/rigFile';
-import { RIG_CLIPS } from '../rig/stateMapping';
+import { REACHABLE_POSES, RIG_CLIPS } from '../rig/stateMapping';
 
 const rig = parseRigDefinition(rigJson, 'meereswolf');
 const skeleton = buildSkeleton(rig.bones);
@@ -137,10 +137,17 @@ describe('the Meereswolf rig file', () => {
 });
 
 describe('the key poses the variant ships', () => {
-  it('names art for the poses the creature actually reaches', () => {
-    // `curl` is what sleeping asks for and `lie` is what boredom asks for (RiggedPet.tsx). A rig
-    // that stopped naming them would leave the creature standing in both, silently.
-    expect(Object.keys(rig.poses).sort()).toEqual(['curl', 'eat', 'lie']);
+  it('names only poses the creature can actually reach', () => {
+    // There used to be three poses here and they were a hamster: the base drawing is a wolf, so
+    // falling asleep cross-dissolved one animal into another on screen. They were drawn for the
+    // Chamster and now live in that variant, and the wolf's own art is being drawn pose by pose.
+    //
+    // Which is why this does not pin the list. A pose the state mapping never asks for is dead
+    // art, and a misspelt one - `curled` for `curl` - is worse: the file is there, the loader is
+    // happy, and the creature simply never lies down. Both show up here; a growing list does not.
+    for (const pose of Object.keys(rig.poses)) {
+      expect(REACHABLE_POSES, `${pose} is art nothing ever shows`).toContain(pose);
+    }
   });
 
   it('points every pose at a file that is really there', () => {

@@ -14,9 +14,11 @@ move:
 
 Run it from this directory:
 
-    python make_pose_frames.py <cut-out.png> <name>
+    python make_pose_frames.py <cut-out.png> <name> [variant]
 
-and it writes `../public/variants/meereswolf/rig/pose_<name>.png`.
+and it writes `../public/variants/<variant>/rig/pose_<name>.png`, defaulting to the Meereswolf.
+The variant matters: the ground line is read off *that* creature's base drawing, so a pose can
+only be aligned against the animal it belongs to.
 """
 
 from __future__ import annotations
@@ -25,10 +27,9 @@ import sys
 from pathlib import Path
 
 import numpy as np
-
 from pngio import read_rgba, write_rgba
 
-VARIANT = Path(__file__).resolve().parent.parent / "public" / "variants" / "meereswolf" / "rig"
+VARIANTS = Path(__file__).resolve().parent.parent / "public" / "variants"
 #: Anything below this is edge feathering, not silhouette. Used only to find the ground line.
 OPAQUE = 8
 
@@ -71,8 +72,11 @@ def align_to(image: np.ndarray, target_row: int) -> np.ndarray:
     return out
 
 
-def main(source: Path, name: str) -> None:
-    base = read_rgba(VARIANT / "base.png")
+def main(source: Path, name: str, variant: str = "meereswolf") -> None:
+    rig = VARIANTS / variant / "rig"
+    if not (rig / "base.png").exists():
+        raise SystemExit(f"no base drawing for variant {variant!r}")
+    base = read_rgba(rig / "base.png")
     picture = read_rgba(source)
     while picture.shape[0] > base.shape[0]:
         picture = halve(picture)
@@ -81,12 +85,12 @@ def main(source: Path, name: str) -> None:
 
     target = ground_line(base)
     aligned = align_to(picture, target)
-    destination = VARIANT / f"pose_{name}.png"
+    destination = rig / f"pose_{name}.png"
     write_rgba(destination, aligned)
     print(f"{source.name} -> {destination.name}: ground line {ground_line(picture)} -> {target}")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: make_pose_frames.py <cut-out.png> <name>")
-    main(Path(sys.argv[1]), sys.argv[2])
+    if len(sys.argv) not in (3, 4):
+        raise SystemExit("usage: make_pose_frames.py <cut-out.png> <name> [variant]")
+    main(Path(sys.argv[1]), sys.argv[2], *sys.argv[3:4])

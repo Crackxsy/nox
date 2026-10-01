@@ -1451,6 +1451,19 @@ a:hover {
   justify-self: stretch;
 }
 
+/* The creature `pet.variant` names, under its select. The pictures are cut-outs with real
+   transparency, so they sit on the field colour rather than a white box of their own. */
+.pet-preview {
+  display: block;
+  width: 96px;
+  height: 96px;
+  margin-top: 8px;
+  object-fit: contain;
+  background: var(--field);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-field);
+}
+
 .setting-error {
   grid-column: 1 / -1;
   color: var(--danger);

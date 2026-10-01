@@ -92,6 +92,12 @@ cannot be turned off or hidden by configuration — if something is being captur
 - **Giving the pet a treat**: shift-click the creature, or press Shift+Enter while it has focus. It
   eats, and it cheers up a little more than it does from an ordinary click. It curls up when it
   sleeps and lies down when it is bored, on its own.
+- **Choosing the creature**: Dashboard → Settings → *Nox window* → *How Nox looks* (in German:
+  *Nox-Fenster* → *Aussehen von Nox*). Seven photographed creatures - Meereswolf, Eulenfuchs,
+  Katzendrache, Mottenkatze, Kaninchenkatze, Koala-Flughund and Chamster - each breathe, blink,
+  flick an ear, and have their own pictures for sleeping, lying down and eating; a preview shows the
+  one you picked. The five drawn shapes need no pictures at all. The change applies at once,
+  without a restart.
 - **Voice**: push-to-talk (`ctrl+alt+space` by default) or the wake word "Nox"; local
   speech-to-text (faster-whisper) and text-to-speech (Piper).
 - **Stream companion** (Twitch/OBS, opt-in at onboarding): chat responses, a "Funken" viewer

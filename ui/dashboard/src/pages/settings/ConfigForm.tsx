@@ -20,6 +20,7 @@ import {
   type SettingSpec,
   parseConfigSetResult,
 } from '../../model';
+import { PetPreview } from './PetPreview';
 
 export interface ConfigFormProps {
   t: T;
@@ -246,6 +247,21 @@ export function ConfigForm({ t, client, config, onApplied }: ConfigFormProps) {
                       <span id={`${id}-hint`} className="hint">
                         {t('settings_list_hint')}
                       </span>
+                    )}
+                    {spec.path === 'pet.variant' && (
+                      <>
+                        <PetPreview
+                          variant={String(valueOf(config, draft, spec.path) ?? '')}
+                          alt={optionLabel(
+                            t,
+                            spec.path,
+                            String(valueOf(config, draft, spec.path) ?? ''),
+                          )}
+                        />
+                        <span id={`${id}-hint`} className="hint">
+                          {t('setting_pet_variant_hint')}
+                        </span>
+                      </>
                     )}
                   </span>
                   {message && (

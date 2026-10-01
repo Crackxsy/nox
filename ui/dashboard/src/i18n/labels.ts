@@ -301,6 +301,20 @@ const OPTION_KEYS: Record<string, Record<string, Key>> = {
     auto: 'option_lang_auto',
   },
   'security.profile': PROFILE_KEYS,
+  'pet.variant': {
+    neutral: 'option_pet_neutral',
+    imp: 'option_pet_imp',
+    fox: 'option_pet_fox',
+    owl: 'option_pet_owl',
+    cat: 'option_pet_cat',
+    'sprite:meereswolf': 'option_pet_meereswolf',
+    'sprite:eulenfuchs': 'option_pet_eulenfuchs',
+    'sprite:katzendrache': 'option_pet_katzendrache',
+    'sprite:mottenkatze': 'option_pet_mottenkatze',
+    'sprite:kaninchenkatze': 'option_pet_kaninchenkatze',
+    'sprite:koalaflughund': 'option_pet_koalaflughund',
+    'sprite:chamster': 'option_pet_chamster',
+  },
 };
 
 export function optionLabel(t: T, path: string, value: string): string {

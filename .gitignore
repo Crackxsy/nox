@@ -61,3 +61,6 @@ installer/out/
 installer/build/
 installer/.cache/
 installer/_requirements.filtered.txt
+
+# Claude Code working state: per-task git worktrees live here and must never be committed.
+.claude/
