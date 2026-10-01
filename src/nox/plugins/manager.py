@@ -827,13 +827,16 @@ class PluginManager:
                 side_effects=declaration.side_effects,
                 local=declaration.local,
                 targets=None,
-                handler=self._forwarding_handler(rec.plugin_id, declaration.name),
+                handler=self._forwarding_handler(
+                    rec.plugin_id, declaration.name, permission.timeout_s
+                ),
+                timeout_s=permission.timeout_s,
             )
             self.tools.register(spec)
             rec.tools.append(declaration.name)
 
     def _forwarding_handler(
-        self, plugin_id: str, tool_name: str
+        self, plugin_id: str, tool_name: str, timeout_s: float | None = None
     ) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
         async def handler(payload: dict[str, Any]) -> dict[str, Any]:
             rec = self._records.get(plugin_id)
@@ -845,7 +848,7 @@ class PluginManager:
                 rec.client_id,
                 WORKER_TOOL_CALL,
                 {"name": tool_name, "input": payload},
-                timeout=self.settings.tool_timeout_s,
+                timeout=timeout_s or self.settings.tool_timeout_s,
             )
 
         return handler

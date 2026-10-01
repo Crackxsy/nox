@@ -46,6 +46,8 @@ DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = ("Read", "Edit", "Write", "Glob", "Grep
 DEFAULT_PERMISSION_MODE = "acceptEdits"
 DEFAULT_MAX_TURNS = 30
 MAX_REPAIR_ATTEMPTS = 3
+#: The manifest's `session_timeout_s` when a configuration leaves it out.
+SESSION_TIMEOUT_S = 1800.0
 STDOUT_LINE_LIMIT = 4 * 1024 * 1024
 STDERR_CAPTURE_BYTES = 16 * 1024
 
@@ -158,6 +160,11 @@ def build_session_args(
         "--max-turns",
         str(max_turns),
         "--strict-mcp-config",
+        # The workspace's own settings and nothing else. A session runs unattended, so it must not
+        # depend on how the person's own Claude Code is set up: their personal hooks and
+        # permissions answered questions nobody was there to see, and the edits never happened.
+        "--setting-sources",
+        "project",
     ]
     if model:
         args += ["--model", model]
@@ -222,6 +229,7 @@ class SessionRunner:
         allowed_tools: Sequence[str] = DEFAULT_ALLOWED_TOOLS,
         max_repair_attempts: int = MAX_REPAIR_ATTEMPTS,
         default_max_turns: int = DEFAULT_MAX_TURNS,
+        session_timeout_s: float | None = None,
     ) -> None:
         self._command = command
         self._command_override = list(command_override) if command_override else None
@@ -231,6 +239,8 @@ class SessionRunner:
         self.allowed_tools = tuple(allowed_tools)
         self.max_repair_attempts = max_repair_attempts
         self.default_max_turns = default_max_turns
+        #: The whole session, repair attempts included. None means no limit (tests only).
+        self.session_timeout_s = session_timeout_s
         self.sessions: dict[str, SessionRecord] = {}
 
     def executable(self) -> list[str]:
@@ -283,7 +293,45 @@ class SessionRunner:
     ) -> SessionRecord:
         """Start a session; on a fixable-looking CLI failure, resume with a repair prompt up to
         `max_repair_attempts` times, then stop and report (no infinite retry,
-        no silent stall)."""
+        no silent stall). The whole of it runs against `session_timeout_s`: past it the CLI is
+        stopped and the session is a failure that says so, never one left running unattended."""
+        started: list[SessionRecord] = []
+
+        async def remember(record: SessionRecord) -> None:
+            started.append(record)
+            if on_started is not None:
+                await maybe_await(on_started(record))
+
+        try:
+            async with asyncio.timeout(self.session_timeout_s):
+                return await self._run_with_repair(
+                    workspace=workspace,
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    max_turns=max_turns,
+                    on_started=remember,
+                    on_progress=on_progress,
+                )
+        except TimeoutError:
+            if not started:
+                raise
+            record = started[0]
+            reason = f"the session took longer than {self.session_timeout_s:g} s and was stopped"
+            await self.cancel(record.session_id, reason=reason)
+            record.outcome = SessionOutcome.FAILED
+            log.warning("session.timeout", session=record.session_id)
+            return record
+
+    async def _run_with_repair(
+        self,
+        *,
+        workspace: str,
+        prompt: str,
+        system_prompt: str,
+        max_turns: int | None,
+        on_started: Callable[[SessionRecord], Awaitable[None] | None],
+        on_progress: ProgressHandler | None,
+    ) -> SessionRecord:
         record = await self.start(
             workspace=workspace,
             prompt=prompt,

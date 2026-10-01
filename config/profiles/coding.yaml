@@ -29,6 +29,17 @@ permissions:
       action: "run_action"
       decision: allow
       reason: "the program, the preset and the trigger were all configured by the user"
+    # The coding session a self-extension proposal starts. `agent: extend` is the core carrying out
+    # an `extend.propose` the user has just confirmed - high risk, so always a dialog - on a branch
+    # of the one checkout named in `extend.workspace`. Asking again for the session that writes it
+    # is the same question twice. A model calling `coding.session.start` itself does not match
+    # this rule and is still asked.
+    - id: coding.extend.session_for_confirmed_proposal
+      agent: extend
+      tool: "coding"
+      action: "session.start"
+      decision: allow
+      reason: "started by an extend.propose the user confirmed"
     - id: coding.filesystem.write_in_workspace
       agent: "*coding*"
       tool: "filesystem*"

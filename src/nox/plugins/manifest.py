@@ -69,6 +69,9 @@ class PluginPermission(_Section):
     tool: str
     #: Conservative default: an undeclared risk is never treated as `read`.
     risk: Risk = Risk.MEDIUM
+    #: How long one call may take; empty means `plugins.tool_timeout_s`. For a tool whose work
+    #: takes minutes by design, and which bounds that work itself.
+    timeout_s: float | None = Field(default=None, gt=0.0, le=7200.0)
 
 
 class PluginEvents(_Section):

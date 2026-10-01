@@ -23,9 +23,9 @@ from nox.extend.runner import CODING_TOOL, ProposalRunner
 
 
 class Outcome:
-    def __init__(self, ok: bool = True, error: str | None = None) -> None:
+    def __init__(self, ok: bool = True, error: str | None = None, session: str = "ended") -> None:
         self.ok = ok
-        self.data: dict[str, Any] | None = {}
+        self.data: dict[str, Any] | None = {"outcome": session}
         self.error = error
 
 
@@ -59,6 +59,7 @@ def runner(
     *,
     writes: str | None = "changed\n",
     ok: bool = True,
+    session: str = "ended",
     known: bool = True,
 ) -> tuple[ProposalRunner, list[str]]:
     """A runner whose "coding session" writes a file, or does not, or fails."""
@@ -69,7 +70,7 @@ def runner(
         called.append(name)
         if writes is not None and place is not None:
             (place / "README.md").write_text(writes, encoding="utf-8")
-        return Outcome(ok=ok, error=None if ok else "the session fell over")
+        return Outcome(ok=ok, error=None if ok else "the session fell over", session=session)
 
     return ProposalRunner(lambda: settings, call, lambda _n: known), called
 
@@ -93,6 +94,72 @@ async def test_the_checkout_comes_back_even_when_the_session_fails(workspace: Pa
 
     assert proposal.state is ProposalState.FAILED
     assert git(workspace, "rev-parse", "--abbrev-ref", "HEAD").strip() == "develop"
+
+
+async def test_a_failed_sessions_half_finished_work_never_reaches_the_users_checkout(
+    workspace: Path,
+) -> None:
+    """git carries uncommitted changes across a checkout: without parking them on the proposal's
+    branch first, a crashed session's edits would land in the user's own working tree."""
+    engine, _ = runner(config(workspace), ok=False)
+
+    proposal = await engine.propose("write something into the readme")
+
+    assert (workspace / "README.md").read_text(encoding="utf-8") == "start\n"
+    assert git(workspace, "status", "--porcelain") == ""
+    kept = git(workspace, "show", f"{proposal.branch}:README.md")
+    assert kept == "changed\n", "the unfinished work is kept, on the proposal's branch"
+
+
+async def test_a_session_that_did_not_end_is_a_failure_not_an_empty_proposal(
+    workspace: Path,
+) -> None:
+    """The call returning is not the session succeeding: "failed" is not "changed nothing"."""
+    engine, _ = runner(config(workspace), writes=None, session="failed")
+
+    proposal = await engine.propose("write something into the readme")
+
+    assert proposal.state is ProposalState.FAILED
+    assert "failed" in proposal.note
+
+
+async def test_an_empty_proposal_passes_on_what_the_session_said(workspace: Path) -> None:
+    """ "Changed nothing" alone leaves the user guessing; the session usually says why."""
+
+    async def call(name: str, arguments: dict[str, Any]) -> Outcome:
+        answer = Outcome()
+        answer.data = {"outcome": "ended", "summary": "That function already exists."}
+        return answer
+
+    engine = ProposalRunner(lambda: config(workspace), call, lambda _n: True)
+
+    proposal = await engine.propose("write something into the readme")
+
+    assert proposal.state is ProposalState.EMPTY
+    assert proposal.note.endswith("it said: That function already exists.")
+
+
+async def test_what_the_test_run_leaves_behind_is_named_for_what_it_is(workspace: Path) -> None:
+    """Caches and reports from the suite are kept off the user's checkout, but they are not the
+    session's "unfinished" work - the proposal finished - and the result reads without escapes."""
+    import sys
+
+    from nox.extend.runner import LEFT_BY_TESTS
+
+    suite = (
+        "import sys; open('left.txt', 'w').write('x'); "
+        "sys.stdout.write(chr(27) + '[32m1 passed' + chr(27) + '[0m')"
+    )
+    engine, _ = runner(config(workspace, test_command=[sys.executable, "-c", suite]))
+
+    proposal = await engine.propose("write something into the readme")
+
+    assert proposal.state is ProposalState.READY
+    assert proposal.tests == "1 passed"
+    assert not (workspace / "left.txt").exists()
+    messages = git(workspace, "log", "--format=%s", f"develop..{proposal.branch}").splitlines()
+    assert messages[0] == LEFT_BY_TESTS
+    assert not any("unfinished" in m for m in messages)
 
 
 async def test_the_work_is_on_a_branch_and_not_on_the_users_own(workspace: Path) -> None:
