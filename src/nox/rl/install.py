@@ -41,6 +41,35 @@ _BACKFILL_KIND = "rl_replay_backfill"
 _BACKFILL_TASK_ID = "rl-replay-backfill"
 
 
+def _import_callout_engine() -> Any:
+    """The rule engine's class, or None. It lives in the plugin package, which the core does not
+    depend on; without it callouts are honestly absent rather than silently wrong."""
+    try:
+        plugin_src = Path(__file__).resolve().parents[3] / "plugins" / "rl" / "src"
+        if str(plugin_src) not in sys.path and plugin_src.is_dir():
+            sys.path.append(str(plugin_src))
+        from nox_plugin_rl.callouts import CalloutEngine
+    except ImportError:
+        return None
+    return CalloutEngine
+
+
+def _import_vision() -> tuple[Any, str]:
+    """`install_vision`, or None and the reason it cannot be imported."""
+    try:
+        from nox.rl.vision import install_vision
+    except Exception as exc:  # noqa: BLE001 - reported through the rl.vision health check
+        return None, f"{type(exc).__name__}: {exc}"
+    return install_vision, ""
+
+
+# Both run once, here, rather than inside `install()`: the core imports this module on a worker
+# thread and then calls `install()` on its event loop, and on a cold machine a first import reads
+# its files from disk - seconds the loop, and with it the supervisor heartbeat, would stand still.
+_CALLOUT_ENGINE = _import_callout_engine()
+_INSTALL_VISION, _VISION_IMPORT_ERROR = _import_vision()
+
+
 @dataclass
 class RlRuntime:
     """Handles for the caller. `stop` shuts the backfill queue down before the database closes -
@@ -113,17 +142,10 @@ def install(core: Any) -> RlRuntime:
 
 
 def _build_callout_engine(cfg: Any) -> CalloutEngineProtocol:
-    """The rule engine lives in the plugin package, which the core does not depend on; without it
-    callouts are honestly absent rather than silently wrong."""
-    try:
-        plugin_src = Path(__file__).resolve().parents[3] / "plugins" / "rl" / "src"
-        if str(plugin_src) not in sys.path and plugin_src.is_dir():
-            sys.path.append(str(plugin_src))
-        from nox_plugin_rl.callouts import CalloutEngine
-    except ImportError:
+    if _CALLOUT_ENGINE is None:
         log.warning("rl.callout_engine_unavailable")
         return _NullCalloutEngine()
-    engine: CalloutEngineProtocol = CalloutEngine(
+    engine: CalloutEngineProtocol = _CALLOUT_ENGINE(
         min_confidence=cfg.callouts.min_confidence,
         cooldown_s=cfg.callouts.cooldown_s,
         min_per_minute=cfg.callouts.min_per_minute,
@@ -138,13 +160,15 @@ def _install_vision(core: Any, runtime: RlRuntime) -> None:
     The failure is recorded and reported by a health check instead of leaving the feature quietly
     missing with nothing but a log line behind it.
     """
-    try:
-        from nox.rl.vision import install_vision
-
-        runtime.vision = install_vision(core)
-    except Exception as exc:  # noqa: BLE001 - reported through the health check below
-        runtime.vision_unavailable = f"{type(exc).__name__}: {exc}"
-        log.warning("rl.vision_install_failed", error=runtime.vision_unavailable, exc_info=True)
+    if _INSTALL_VISION is None:
+        runtime.vision_unavailable = _VISION_IMPORT_ERROR
+        log.warning("rl.vision_install_failed", error=runtime.vision_unavailable)
+    else:
+        try:
+            runtime.vision = _INSTALL_VISION(core)
+        except Exception as exc:  # noqa: BLE001 - reported through the health check below
+            runtime.vision_unavailable = f"{type(exc).__name__}: {exc}"
+            log.warning("rl.vision_install_failed", error=runtime.vision_unavailable, exc_info=True)
     try:
         core.health.add_check(Check("rl.vision", runtime.vision_health))
     except ValueError:  # installed twice on the same core (tests)

@@ -195,3 +195,27 @@ def test_standalone_creates_table_and_survives_reopen(tmp_path) -> None:  # type
     with pytest.raises(KeyError):
         a2.details(99)
     c2.close()
+
+
+def test_quiesced_waits_for_a_chain_walk_in_another_thread() -> None:
+    """Shutdown closes the shared connection inside `quiesced()`; a walk still running on a thread
+    must make it wait, or give up, rather than let the connection close underneath it."""
+    import threading
+
+    audit = SqliteAuditLog(sqlite3.connect(":memory:", check_same_thread=False))
+    holding, release = threading.Event(), threading.Event()
+
+    def walk_that_takes_a_while() -> None:
+        with audit._lock:  # noqa: SLF001 - stands in for verify_chain() mid-walk
+            holding.set()
+            release.wait(5)
+
+    walker = threading.Thread(target=walk_that_takes_a_while)
+    walker.start()
+    holding.wait(5)
+    with audit.quiesced(0.1) as idle:
+        assert idle is False
+    release.set()
+    walker.join(5)
+    with audit.quiesced(0.1) as idle:
+        assert idle is True

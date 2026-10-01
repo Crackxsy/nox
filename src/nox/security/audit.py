@@ -21,7 +21,8 @@ import hashlib
 import json
 import sqlite3
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
@@ -130,6 +131,18 @@ class SqliteAuditLog:
         with self._lock:
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
+
+    @contextmanager
+    def quiesced(self, timeout_s: float) -> Iterator[bool]:
+        """Hold the store's lock for the block, so no write and no chain walk is inside the shared
+        connection meanwhile - closing it under one of them faults the process. Yields False,
+        without the lock, when the one in progress did not finish within `timeout_s`."""
+        acquired = self._lock.acquire(timeout=timeout_s)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                self._lock.release()
 
     # ---- helpers ---------------------------------------------------------------------------------
 

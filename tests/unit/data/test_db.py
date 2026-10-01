@@ -215,3 +215,11 @@ def test_integrity_check_detects_corruption(tmp_path: Path) -> None:
     broken = Database(path)
     assert broken.integrity_check() is False
     broken.close()
+
+
+def test_ping_answers_cheaply_and_names_the_error_when_it_cannot(tmp_path: Path) -> None:
+    db = Database(tmp_path / "ping.db")
+    db.migrate()
+    assert db.ping() == ""
+    db.close()
+    assert db.ping() == "ProgrammingError"  # a closed connection: a reason, not an exception

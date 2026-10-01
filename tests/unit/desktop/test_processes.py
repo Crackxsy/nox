@@ -127,3 +127,21 @@ async def test_the_listing_is_capped_and_says_the_real_total() -> None:
 
 def test_nox_knows_which_processes_are_its_own() -> None:
     assert os.getpid() in processes.own_pids()
+
+
+def test_a_process_windows_will_not_name_is_labelled_not_left_blank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Protected system processes ("Registry", "Secure System") come back from psutil with an
+    empty name and enough memory to make the top of the list (seen on the product owner's PC)."""
+
+    class _Entry:
+        info = {"pid": 236, "name": "", "memory_info": None}
+
+    monkeypatch.setattr(processes.psutil, "process_iter", lambda _attrs: [_Entry()])
+
+    answer = processes._snapshot(5)  # noqa: SLF001 - the blocking half, without a thread
+
+    assert answer["processes"] == [
+        {"pid": 236, "name": processes.UNNAMED_PROCESS, "memory_mb": 0.0}
+    ]

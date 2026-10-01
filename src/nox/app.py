@@ -49,6 +49,7 @@ from nox.core.extension import ExtensionRuntime
 from nox.core.health import Check, HealthService
 from nox.core.jobobject import JobObject
 from nox.core.logging import configure_logging, get_logger, shutdown_logging
+from nox.core.loopwatch import LoopWatch
 from nox.core.orchestrator import Orchestrator, OrchestratorConfig
 from nox.core.speech_policy import SpeechPolicy
 from nox.core.state import PetFunctional, SystemLevel
@@ -87,6 +88,10 @@ from nox.tools.registry import ToolRegistry
 from nox.voice.base import Channel, TtsRequest
 
 log = get_logger(__name__)
+
+#: How long shutdown waits for an audit write or chain walk in progress before it leaves the
+#: database connection open rather than closing it underneath one.
+AUDIT_QUIESCE_TIMEOUT_S = 2.0
 
 #: Re-exported: these are the defaults `NoxCore` is constructed with, and a caller that builds a
 #: core - the entry points, the tests - takes them from here rather than recomputing the layout.
@@ -179,6 +184,10 @@ class NoxCore:
             data_dir=Path(config.paths.data_dir),
         )
         self._started = False
+        # True until `start()` has run to its end; the heartbeat carries it so the supervisor can
+        # tell a core that is still installing from one that hangs.
+        self._booting = True
+        self._loop_watch: LoopWatch | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
 
     # ---- boot ------------------------------------------------------------------------------------
@@ -186,6 +195,9 @@ class NoxCore:
     async def start(self) -> None:
         """Build every component, in order. See the module docstring for why this order."""
         self._prepare_filesystem_and_logging()
+        # First, so a stall anywhere in the boot below is reported with the code that caused it.
+        self._loop_watch = LoopWatch(asyncio.get_running_loop())
+        self._loop_watch.start()
         self._build_supervisor_client()
         await asyncio.sleep(0)  # let the first heartbeat go out before the heavy steps
         await self._open_database()
@@ -203,6 +215,7 @@ class NoxCore:
         await self._install_extensions()
         await self._announce_started()
         await self._start_plugins()
+        self._booting = False
 
     def _prepare_filesystem_and_logging(self) -> None:
         paths = self.config.paths
@@ -559,20 +572,32 @@ class NoxCore:
         if self.tokens is not None:
             self.tokens.remove_session_token()
         if self.db is not None:
-            if self._audit_drained:
-                self.db.close()
-            else:
-                # The audit writer runs on its own thread and shares this connection, guarded by
-                # its own lock rather than the database's. Closing it now while that thread is
-                # inside a statement crashes the process - `sqlite3` does not raise there, it
-                # faults. Leaving one connection open as the process exits costs nothing.
-                log.error(
-                    "core.database_left_open",
-                    reason="the audit writer did not finish; closing its connection would crash",
-                )
+            self._close_database()
         self.job.close()
+        if self._loop_watch is not None:
+            self._loop_watch.stop()
         shutdown_logging()
         self.stopped.set()
+
+    def _close_database(self) -> None:
+        """Close the connection - unless the audit store, which shares it under its own lock, is
+        still inside it. The queued writer and the health check's chain walk both run on threads;
+        closing the connection while one of them is inside a statement crashes the process -
+        `sqlite3` does not raise there, it faults. Leaving one connection open as the process
+        exits costs nothing."""
+        assert self.db is not None
+        audit = self.security.audit_store if self.security is not None else None
+        if audit is None:
+            self.db.close()
+            return
+        with audit.quiesced(AUDIT_QUIESCE_TIMEOUT_S) as idle:
+            if self._audit_drained and idle:
+                self.db.close()
+                return
+        log.error(
+            "core.database_left_open",
+            reason="the audit store was still working; closing its connection would crash",
+        )
 
     def _stoppable(self) -> tuple[tuple[str, Any], ...]:
         """The components with a `stop()`, in shutdown order: the reverse of how they are built."""
@@ -802,8 +827,12 @@ class NoxCore:
         self.shutdown_requested.set()
 
     def _supervisor_status(self) -> dict[str, Any]:
-        """Heartbeat decoration. The first heartbeat goes out before the state manager exists."""
-        return {"level": str(self.state.get("system.level")) if self.state else "starting"}
+        """Heartbeat decoration, plus `booting`, which the supervisor's watchdog reads. The first
+        heartbeat goes out before the state manager exists."""
+        return {
+            "level": str(self.state.get("system.level")) if self.state else "starting",
+            "booting": self._booting,
+        }
 
 
 if __name__ == "__main__":  # `python -m nox.app`
