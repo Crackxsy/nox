@@ -34,7 +34,7 @@ dependencies = [
     "sqlite-vec>=0.1.9",
     "keyring>=25.7.0",
     "watchdog>=6.0.0",
-    "numpy>=2.0",
+    "numpy>=2.5.3",
     "typer>=0.12",
     # Argon2id for the PIN hash (`nox.security.secrets`). Without it the PIN falls back to
     # PBKDF2-SHA256 and the log says so on every start. MIT.
@@ -59,7 +59,7 @@ dev = [
     "types-psutil",
 ]
 e2e = ["playwright>=1.62.0", "pytest-playwright>=0.9.0"]
-rl = ["mss>=9.0", "opencv-python-headless>=5.0.0.93", "numpy>=2.0"]
+rl = ["mss>=9.0", "opencv-python-headless>=5.0.0.93", "numpy>=2.5.3"]
 
 [project.scripts]
 nox = "nox.cli:main"
