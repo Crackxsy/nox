@@ -6,7 +6,8 @@ with sup.ack and exit), --restart-ack (ack every sup.kill but exit 0 only for `m
 simulating the core's clean shutdown so the supervisor respawns it), --stop-ack (exit 0 on
 sup.stop, simulating a graceful NoxCore.stop(); when absent, sup.stop is received and ignored -
 simulating a hung core), --boot-delay S (sleep before connecting at all, simulating a slow cold
-boot), --exit-after S (exit with code 3 without connecting).
+boot), --booting (every heartbeat says `booting: true`, as the real core's do until it has
+installed its extensions), --exit-after S (exit with code 3 without connecting).
 
 B-1: authenticates once per connection (`sup.auth` -> `sup.auth_ok`) before doing anything else;
 every frame after that carries no token.
@@ -59,6 +60,7 @@ async def main() -> int:
     parser.add_argument("--restart-ack", action="store_true")
     parser.add_argument("--stop-ack", action="store_true")
     parser.add_argument("--boot-delay", type=float, default=0.0)
+    parser.add_argument("--booting", action="store_true")
     parser.add_argument("--exit-after", type=float, default=None)
     args = parser.parse_args()
 
@@ -101,7 +103,10 @@ async def main() -> int:
 
     reader_task = asyncio.create_task(read_loop())
     for _ in range(args.beats):
-        writer.write(envelope("sup.heartbeat", "event", {"pid": os.getpid()}))
+        beat: dict[str, object] = {"pid": os.getpid()}
+        if args.booting:
+            beat["booting"] = True
+        writer.write(envelope("sup.heartbeat", "event", beat))
         await writer.drain()
         await asyncio.sleep(args.interval)
     await asyncio.sleep(3600)  # hang: alive and connected, but silent

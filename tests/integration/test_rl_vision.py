@@ -163,12 +163,14 @@ async def test_vision_install_failure_never_breaks_stage1_install(
     `app.py`'s outer per-extension try/except (Spec/ENGINEERING.md hard rule: additive code must
     never break an existing feature) - a simulated Vision Stage 2 wiring failure still leaves
     Stage 1 fully wired. Patched before `core.start()`, since step 11b runs inside it."""
-    import nox.rl.vision as vision_module
+    import nox.rl.install as rl_install
 
     def _boom(_core: Any) -> None:
         raise RuntimeError("simulated vision wiring failure")
 
-    monkeypatch.setattr(vision_module, "install_vision", _boom)
+    # `install_vision` is bound when `nox.rl.install` is imported (off the loop), so that binding
+    # is the one to replace.
+    monkeypatch.setattr(rl_install, "_INSTALL_VISION", _boom)
 
     cfg = _config(tmp_path)
     core = NoxCore(cfg, voice=False, profiles_dir=PROFILES_DIR)

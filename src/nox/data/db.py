@@ -212,6 +212,20 @@ class Database:
 
     # ---- health ------------------------------------------------------------------------------
 
+    def ping(self) -> str:
+        """Whether the database answers a query: an empty string, or the error it raised.
+
+        This is the periodic health probe, and deliberately cheap: it reads the schema page and
+        nothing else. `integrity_check` reads every page under the lock that the event loop needs
+        for its own queries - on a cold spinning drive that took longer than the supervisor
+        tolerates a silent core, so it runs once, when the database is opened.
+        """
+        try:
+            self.fetch_one("SELECT count(*) FROM sqlite_master")
+        except sqlite3.Error as exc:
+            return type(exc).__name__
+        return ""
+
     def integrity_check(self) -> bool:
         """`PRAGMA integrity_check` == ok.
 

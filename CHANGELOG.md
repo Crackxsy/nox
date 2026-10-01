@@ -8,6 +8,31 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+### Added
+- **A stalled event loop is reported with the code that stalls it.** When the core's loop does not
+  answer for 3 s, `core.loop_stalled` names the module, function and line it is stuck in, and
+  `core.loop_resumed` says how long it lasted - instead of a silent gap in the log.
+
+### Fixed
+- **The core restarted itself over and over on a cold start.** With the data on a spinning drive,
+  single install steps of the boot stalled the core's event loop for 13-16 s while the voice worker
+  and the language model were loading from the same drive. The supervisor counted that as ten missed
+  heartbeats and killed the core - which started the same disk-bound boot again, so the next one
+  stalled too. The heartbeat now says whether the core is still booting, and while it is, a silence
+  only counts as a hang once it outlasts `supervisor.boot_grace_s`; a core that has started is
+  watched as strictly as before. The Rocket League extension also no longer imports its vision and
+  callout modules on the event loop.
+- **The database health check stalled the core every 30 s on a busy drive.** It ran a full
+  `PRAGMA integrity_check` - every page of the database - under the lock the event loop needs for
+  its own queries. Warm that costs 40-150 ms; on a cold spinning drive it held the lock long enough
+  for the supervisor to kill the core. The periodic check now only asks whether the database
+  answers; the full integrity check still runs once, when the database is opened.
+- **The audit-chain health check re-hashed the whole audit log on the event loop** every 30 s. It
+  still verifies the whole chain - it is how tampering is noticed - but now in a worker thread, with
+  30 s instead of 5 s before a slow drive is mistaken for a broken chain.
+- **The process list showed a blank name** for protected system processes such as "Registry",
+  whose name Windows does not hand out. They are now listed as "(protected system process)".
+
 ## [0.4.0] - 2026-10-01
 
 ### Added

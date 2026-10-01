@@ -174,6 +174,38 @@ async def test_core_that_never_heartbeats_is_restarted_after_the_grace(
     await wait_until(lambda: sup.status().restarts_in_window >= 1, 10.0)
 
 
+async def test_booting_core_is_not_restarted_for_a_silence_inside_the_grace(
+    sup_factory: Callable[..., Supervisor],
+) -> None:
+    """A core that says it is still booting may go quiet for up to `boot_grace_s`: on a cold
+    machine with a spinning data drive, single install steps stalled its loop for 15 s, and the
+    restarts that followed repeated the same disk-bound work (product owner's log, 2026-10-01)."""
+    # Beats for 3 s - past the grace counted from the spawn - then falls silent mid-boot.
+    sup = sup_factory("--booting", "--beats", "60", "--interval", "0.05", boot_grace_s=2.0)
+    await sup.start()
+    await wait_until(lambda: sup.status().core_connected, 5.0)
+
+    def silent_for(seconds: float) -> bool:
+        return (sup.status().heartbeat_age_s or 0.0) >= seconds
+
+    await wait_until(lambda: silent_for(1.2), 10.0)  # 24 intervals: past both thresholds
+    st = sup.status()
+    assert st.missed_heartbeats == 0 and st.restarts_in_window == 0
+    assert st.state is SupervisorState.RUNNING
+
+
+async def test_booting_core_silent_past_the_grace_is_still_restarted(
+    sup_factory: Callable[..., Supervisor],
+) -> None:
+    """The grace delays the verdict on a booting core; it does not exempt it."""
+    sup = sup_factory(
+        "--booting", "--beats", "3", "--interval", "0.05", boot_grace_s=0.5, restart_limit=5
+    )
+    await sup.start()
+    await wait_until(lambda: sup.status().core_connected, 5.0)
+    await wait_until(lambda: sup.status().restarts_in_window >= 1, 10.0)
+
+
 async def test_graceful_restart_request_respawns_the_core(
     sup_factory: Callable[..., Supervisor],
 ) -> None:

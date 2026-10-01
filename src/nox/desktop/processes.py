@@ -25,6 +25,10 @@ log = get_logger(__name__)
 
 __all__ = ["list_processes", "own_pids", "stop_process"]
 
+#: Shown for a process whose name Windows will not tell us - a protected system process such as
+#: "Registry" or "Secure System". It is listed rather than dropped, so `total` stays true.
+UNNAMED_PROCESS = "(protected system process)"
+
 #: How long a terminated process is given to disappear before the answer says it is still there.
 TERMINATE_TIMEOUT_S = 5.0
 
@@ -57,7 +61,7 @@ def _snapshot(limit: int) -> dict[str, Any]:
             rows.append(
                 {
                     "pid": int(info["pid"]),
-                    "name": str(info.get("name") or ""),
+                    "name": str(info.get("name") or UNNAMED_PROCESS),
                     "memory_mb": round((memory.rss if memory else 0) / (1024 * 1024), 1),
                 }
             )

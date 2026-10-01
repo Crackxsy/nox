@@ -226,7 +226,7 @@ supervisor:
   control_host: 127.0.0.1
   control_port: 47799            # localhost control channel (heartbeats, kill); token in paths.runtime_dir
   heartbeat_interval_s: 2.0
-  boot_grace_s: 90               # no missed-heartbeat accounting during a cold boot
+  boot_grace_s: 90               # silence tolerated after a spawn and while the core reports booting
   missed_for_graceful: 5
   missed_for_hard: 10
   kill_ack_timeout_s: 2.0

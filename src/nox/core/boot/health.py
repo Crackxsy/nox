@@ -42,8 +42,10 @@ def core_health_checks(
         db = database()
         if db is None:
             return HealthStatus.UNAVAILABLE, "not opened"
-        ok = await asyncio.to_thread(db.integrity_check)
-        return (HealthStatus.AVAILABLE, "ok") if ok else (HealthStatus.UNAVAILABLE, "corrupt")
+        # Integrity is checked once, when the database is opened (`nox.core.boot.persistence`);
+        # this asks only whether it answers, which is cheap enough to ask every interval.
+        error = await asyncio.to_thread(db.ping)
+        return (HealthStatus.AVAILABLE, "ok") if not error else (HealthStatus.UNAVAILABLE, error)
 
     async def vault_check() -> tuple[HealthStatus, str]:
         # The reason is a word, not the path: `/health` needs no authentication, and where the

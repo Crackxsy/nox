@@ -77,3 +77,22 @@ async def test_config_check_with_warnings() -> None:
     status, reason = await check.probe()
     assert status is HealthStatus.LIMITED
     assert "1 config layer" in reason
+
+
+async def test_audit_chain_walk_runs_off_the_event_loop_with_room_for_a_cold_drive() -> None:
+    """The walk re-hashes every audit row; on the loop it stalled the core on a cold disk."""
+    import threading
+
+    from nox.health.checks import AUDIT_CHAIN_TIMEOUT_S
+
+    walked_on: list[threading.Thread] = []
+
+    class _Verifier:
+        def verify_chain(self) -> bool:
+            walked_on.append(threading.current_thread())
+            return True
+
+    check = make_audit_chain_check(_Verifier())
+    assert await check.probe() == (HealthStatus.AVAILABLE, "")
+    assert walked_on and walked_on[0] is not threading.main_thread()
+    assert check.timeout_s == AUDIT_CHAIN_TIMEOUT_S > 5.0

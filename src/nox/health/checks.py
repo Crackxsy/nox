@@ -8,6 +8,7 @@ the existing `HealthService.add_check` without changing that module.
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -22,6 +23,7 @@ log = get_logger(__name__)
 DISK_COMPONENT = "system.disk"
 VAULT_COMPONENT = "memory.vault"
 AUDIT_CHAIN_COMPONENT = "security.audit_chain"
+AUDIT_CHAIN_TIMEOUT_S = 30.0
 CONFIG_COMPONENT = "system.config"
 
 DEFAULT_DISK_WARN_MB = 1024.0
@@ -92,7 +94,9 @@ def make_audit_chain_check(audit: AuditVerifier, *, name: str = AUDIT_CHAIN_COMP
 
     async def probe() -> tuple[HealthStatus, str]:
         try:
-            ok = audit.verify_chain()
+            # Walks and re-hashes every row, so it runs off the loop; the audit store has its own
+            # lock, so nothing on the loop waits for it.
+            ok = await asyncio.to_thread(audit.verify_chain)
         except Exception as exc:  # noqa: BLE001 - a broken verifier is itself UNAVAILABLE, not a crash
             return HealthStatus.UNAVAILABLE, f"audit chain verify error: {exc}"
         return (
@@ -101,7 +105,9 @@ def make_audit_chain_check(audit: AuditVerifier, *, name: str = AUDIT_CHAIN_COMP
             else (HealthStatus.UNAVAILABLE, "audit hash chain broken")
         )
 
-    return Check(name=name, probe=probe)
+    # A whole-chain walk reads every audit row; on a cold spinning drive that takes longer than the
+    # default five seconds, and a timeout here would put Nox into degraded mode for nothing.
+    return Check(name=name, probe=probe, timeout_s=AUDIT_CHAIN_TIMEOUT_S)
 
 
 def make_config_check(

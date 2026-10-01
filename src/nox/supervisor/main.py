@@ -14,6 +14,12 @@ Missed-heartbeat accounting only starts `boot_grace_s` after a spawn. A cold boo
 takes tens of seconds, and counting from spawn time restarted cores that were still importing.
 Inside the grace only the hard liveness check applies: a process that exited is restarted.
 
+The same grace covers each silence while the core reports `booting` in its heartbeat. Installing
+the extensions does disk-bound work, and on a cold machine with a spinning data drive single steps
+of it stalled the core's loop for 15 s - long enough for ten missed beats. Restarting a booting
+core makes it start that disk-bound work again from the beginning, so the restart never helped;
+it only repeated itself. Once the core reports itself started, the normal thresholds apply.
+
 The kill switch - the global hotkey, or the tray over the control channel - sends `sup.kill` to
 the core, waits for the acknowledgement, and otherwise terminates the tree and relaunches the
 shell in safe mode. A graceful shutdown (`sup.stop`) asks the core to run its own shutdown and
@@ -197,6 +203,7 @@ class Supervisor:
         self._last_heartbeat: float | None = None
         self._core_spawned_at: float = clock()
         self._core_ready = False  # authenticated *and* first heartbeat seen
+        self._core_booting = False  # the last heartbeat said the core is still installing
         self._graceful_requested = False
         self._restarts: deque[float] = deque()
         self._shell_restarts: deque[float] = deque()
@@ -393,6 +400,7 @@ class Supervisor:
         self._core_spawned_at = self._clock()
         self._last_heartbeat = None  # nothing is counted before the first real heartbeat
         self._core_ready = False
+        self._core_booting = False
         self._graceful_requested = False
 
     def _spawn_shell(self, *, safe_mode: bool) -> None:
@@ -412,12 +420,18 @@ class Supervisor:
         `boot_grace_s` has passed since it was spawned. A cold boot takes tens of seconds (imports,
         vault index), so counting from spawn time restarted a core that was merely still booting.
         The grace only delays accounting: a core that never reports is counted from the grace's end
-        and is restarted like any other silent core."""
-        accounting_from = self._core_spawned_at + self._s.boot_grace_s
-        if now < accounting_from:
+        and is restarted like any other silent core. While the core's last heartbeat said it is
+        still booting, a silence is counted only once it has outlasted the grace as well."""
+        grace = self._s.boot_grace_s
+        if self._last_heartbeat is None:
+            silent_since = self._core_spawned_at + grace
+        elif self._core_booting:
+            silent_since = self._last_heartbeat + grace
+        else:
+            silent_since = max(self._last_heartbeat, self._core_spawned_at + grace)
+        if now < silent_since:
             return 0
-        reference = self._last_heartbeat if self._last_heartbeat is not None else accounting_from
-        return int((now - reference) // self._s.heartbeat_interval_s)
+        return int((now - silent_since) // self._s.heartbeat_interval_s)
 
     def _prune_restarts(self, now: float) -> None:
         for window in (self._restarts, self._shell_restarts):
@@ -611,6 +625,7 @@ class Supervisor:
                     "supervisor.core_ready", boot_s=round(now - self._core_spawned_at, 1)
                 )
             self._last_heartbeat = now
+            self._core_booting = envelope.payload.get("booting") is True
             self._graceful_requested = False
         elif name == m.NAME_ACK:
             fut = self._pending_acks.pop(envelope.corr or "", None)
