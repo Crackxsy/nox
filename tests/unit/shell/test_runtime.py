@@ -127,3 +127,28 @@ def test_no_candidate_list_is_ever_empty(tmp_path: Path, monkeypatch: MonkeyPatc
     monkeypatch.setenv("NOX_USER_CONFIG", str(tmp_path / "missing.yaml"))
 
     assert candidate_runtime_dirs() != []
+
+
+def test_load_config_lays_the_users_settings_over_the_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shell read the defaults alone, so the pet window opened as the plain shape whatever
+    creature the dashboard had chosen."""
+    user = tmp_path / "user.yaml"
+    user.write_text("pet:\n  variant: sprite:eulenfuchs\n", encoding="utf-8")
+    monkeypatch.setenv("NOX_USER_CONFIG", str(user))
+
+    config = load_config()
+
+    assert config["pet"]["variant"] == "sprite:eulenfuchs"
+    assert config["pet"]["fps_target"] == 60, "the rest of the section still comes from defaults"
+    assert "ipc" in config
+
+
+def test_load_config_without_a_user_layer_is_the_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NOX_USER_CONFIG", str(tmp_path / "missing.yaml"))
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+
+    assert load_config()["pet"]["variant"] == "neutral"

@@ -21,7 +21,7 @@ import yaml
 from pydantic import BaseModel, Field, ValidationError
 
 from nox.core.config.types import ConfigError, expand_path
-from nox.paths import user_config_path
+from nox.paths import resolve_config_paths, user_config_path
 
 SESSION_TOKEN_FILE = "session.token"  # noqa: S105 - file name, not a secret
 SUPERVISOR_TOKEN_FILE = "supervisor.token"  # noqa: S105
@@ -135,24 +135,47 @@ def save_shell_state(runtime_dir: Path, state: ShellState) -> None:
     os.replace(tmp, runtime_dir / SHELL_STATE_FILE)
 
 
-def load_config(path: Path | None = None) -> dict[str, Any]:
-    """Read the YAML config tree (defaults only; the core owns the full 4-layer merge).
+def _read_yaml(path: Path) -> dict[str, Any] | None:
+    """A file's YAML mapping; None when it cannot be read, {} when it is not a mapping."""
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    except yaml.YAMLError:
+        return {}
+    return data if isinstance(data, dict) else {}
 
-    Order: explicit path, `NOX_CONFIG`, `<repo>/config/defaults.yaml`. Missing file -> {}.
+
+def _merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Nested mappings merged recursively, everything else replaced (the core's rule)."""
+    merged = dict(base)
+    for key, value in overlay.items():
+        current = merged.get(key)
+        merged[key] = (
+            _merge(current, value)
+            if isinstance(value, dict) and isinstance(current, dict)
+            else value
+        )
+    return merged
+
+
+def load_config(path: Path | None = None) -> dict[str, Any]:
+    """The configuration the shell acts on: the defaults with the user's own layer on top.
+
+    An explicit `path` is read on its own (tests). Otherwise the defaults come from `NOX_CONFIG`
+    or the shipped `config/defaults.yaml`, and the user layer from the same resolver the core and
+    the supervisor use (`nox.paths.resolve_config_paths`). Reading the defaults alone left the
+    shell blind to every setting the user changed - the pet window always opened as the plain
+    shape, whatever creature was chosen in the dashboard.
     """
-    candidates: list[Path] = []
-    if path:
-        candidates.append(path)
+    if path is not None:
+        return _read_yaml(path) or {}
     env = os.environ.get("NOX_CONFIG")
-    if env:
-        candidates.append(Path(env))
-    candidates.append(Path(__file__).resolve().parents[3] / "config" / "defaults.yaml")
-    for c in candidates:
-        try:
-            data = yaml.safe_load(c.read_text(encoding="utf-8"))
-        except OSError:
-            continue
-        except yaml.YAMLError:
-            return {}
-        return data if isinstance(data, dict) else {}
-    return {}
+    defaults_file = (
+        Path(env) if env else Path(__file__).resolve().parents[3] / "config" / "defaults.yaml"
+    )
+    config = _read_yaml(defaults_file) or {}
+    _defaults, user_file = resolve_config_paths()
+    if user_file is not None:
+        config = _merge(config, _read_yaml(user_file) or {})
+    return config
