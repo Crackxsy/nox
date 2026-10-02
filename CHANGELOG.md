@@ -25,6 +25,10 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `core.loop_resumed` says how long it lasted - instead of a silent gap in the log.
 
 ### Fixed
+- **The pet window ignored the creature chosen in the dashboard.** The shell read only the shipped
+  defaults and never the user's own `user.yaml`, so it always opened the pet as the plain shape -
+  and every other setting it reads, such as the push-to-talk key, was the default too. It now lays
+  the user layer over the defaults with the same resolver the core and the supervisor use.
 - **The PIN was hashed with PBKDF2 instead of Argon2id on every installation.** The code prefers
   Argon2id, but `argon2-cffi` was in no dependency list, so the log reported the downgrade on every
   start. It is a dependency now, and a PIN stored with the weaker scheme - or with older Argon2
