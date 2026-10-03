@@ -78,6 +78,15 @@ export const de = {
     'Die gezeichneten Formen kommen ohne Bilder aus. Die übrigen sind fotografierte Tiere, die atmen, blinzeln und eigene Bilder fürs Schlafen, Liegen und Fressen haben.',
   option_lang_de: 'Deutsch',
   option_lang_en: 'Englisch',
+  option_stt_auto: 'Automatisch (bleibt bei Deutsch, außer es ist klar Englisch)',
+  option_whisper_tiny: 'Winzig – am schnellsten, versteht am wenigsten',
+  option_whisper_base: 'Klein – schnell, ungenau',
+  option_whisper_small: 'Mittel – ca. 1 s, empfohlen',
+  option_whisper_medium: 'Groß – genauer, deutlich langsamer',
+  option_whisper_large_v3_turbo: 'Sehr groß – am genauesten, braucht eine schnelle CPU oder Grafikkarte',
+  setting_voice_stt_vocabulary: 'Wörter, die Nox kennen soll',
+  setting_voice_stt_vocabulary_hint:
+    'Namen und Fachwörter, die die Spracherkennung sonst verhört – z. B. Spiele, Szenen, Freunde.',
   option_lang_auto: 'Automatisch',
 
   // -- shell --------------------------------------------------------------------------------------

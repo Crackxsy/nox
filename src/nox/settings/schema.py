@@ -37,6 +37,7 @@ EDITABLE_PATHS: dict[str, str] = {
     "voice.tts.engine": "voice",
     "voice.stt.language": "voice",
     "voice.stt.wake_word": "voice",
+    "voice.stt.vocabulary": "voice",
     "voice.stt.push_to_talk_hotkey": "voice",
     "voice.tts.voice": "voice",
     "voice.tts.rate": "voice",

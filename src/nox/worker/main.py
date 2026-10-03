@@ -477,6 +477,7 @@ def build_components(voice: VoiceConfig, *, service: str) -> dict[str, Any]:
             model_size=voice.stt.model,
             device=voice.stt.device,
             models_dir=str(engine_models_dir("faster-whisper", voice.models_dir)),
+            vocabulary=(voice.stt.wake_word, *voice.stt.vocabulary),
         )
     if "tts" in caps:
         if voice.tts.engine == "kokoro":

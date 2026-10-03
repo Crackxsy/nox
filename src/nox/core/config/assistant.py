@@ -39,11 +39,33 @@ __all__ = [
 # ---- voice --------------------------------------------------------------------------------------
 
 
+#: Whisper sizes faster-whisper downloads by name. Bigger is more accurate and slower; `small` on
+#: the CPU answers in about a second for a short sentence.
+WhisperModel = Literal["tiny", "base", "small", "medium", "large-v3-turbo"]
+#: `de` and `en` fix the language; `auto` detects it but stays with German unless the audio is
+#: clearly English. Plain detection turned "Hallo Nox" into "Hello Nox" and answered in English.
+SttLanguage = Literal["de", "en", "auto"]
+#: Words Whisper is told to expect. Without them "Lass uns streamen" came back as "striam".
+DEFAULT_STT_VOCABULARY = [
+    "Nox",
+    "Stream",
+    "streamen",
+    "Twitch",
+    "OBS",
+    "Szene",
+    "Clip",
+    "Chat",
+    "Minecraft",
+    "Rocket League",
+]
+
+
 class SttConfig(StrictSection):
     engine: str = "faster-whisper"
-    model: str = "small"
+    model: WhisperModel = "small"
     device: str = "cpu"
-    language: str = "auto"
+    language: SttLanguage = "de"
+    vocabulary: list[str] = Field(default_factory=lambda: list(DEFAULT_STT_VOCABULARY))
     vad: bool = True
     wake_word: str = "Nox"
     push_to_talk_hotkey: str = "ctrl+alt+space"
@@ -67,6 +89,22 @@ class SttConfig(StrictSection):
     #: still transcribed, checked for the kill phrase and then discarded, never reported.
     kill_phrase_watchdog: bool = True
     kill_watchdog_max_ms: int = Field(default=2500, ge=0)
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def _known_model(cls, value: object) -> object:
+        if isinstance(value, str) and value not in get_args(WhisperModel):
+            log.warning("config.stt.unknown_model", value=value, using="small")
+            return "small"
+        return value
+
+    @field_validator("language", mode="before")
+    @classmethod
+    def _known_language(cls, value: object) -> object:
+        if isinstance(value, str) and value not in get_args(SttLanguage):
+            log.warning("config.stt.unknown_language", value=value, using="de")
+            return "de"
+        return value
 
 
 class TtsConfig(StrictSection):
