@@ -300,6 +300,18 @@ const OPTION_KEYS: Record<string, Record<string, Key>> = {
     en: 'option_lang_en',
     auto: 'option_lang_auto',
   },
+  'voice.stt.language': {
+    de: 'option_lang_de',
+    en: 'option_lang_en',
+    auto: 'option_stt_auto',
+  },
+  'voice.stt.model': {
+    tiny: 'option_whisper_tiny',
+    base: 'option_whisper_base',
+    small: 'option_whisper_small',
+    medium: 'option_whisper_medium',
+    'large-v3-turbo': 'option_whisper_large_v3_turbo',
+  },
   'security.profile': PROFILE_KEYS,
   'pet.variant': {
     neutral: 'option_pet_neutral',

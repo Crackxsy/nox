@@ -248,6 +248,9 @@ export function ConfigForm({ t, client, config, onApplied }: ConfigFormProps) {
                         {t('settings_list_hint')}
                       </span>
                     )}
+                    {spec.path === 'voice.stt.vocabulary' && (
+                      <span className="hint">{t('setting_voice_stt_vocabulary_hint')}</span>
+                    )}
                     {spec.path === 'pet.variant' && (
                       <>
                         <PetPreview
