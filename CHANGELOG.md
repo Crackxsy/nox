@@ -25,6 +25,11 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `core.loop_resumed` says how long it lasted - instead of a silent gap in the log.
 
 ### Fixed
+- **Nox said "Ich bin bereit" while answering with its weakest brain.** With Claude Code's login
+  expired, every answer came from the small local model and nothing said so. When the preferred AI
+  backend is not available at start, the greeting now says which one answers instead, and how to
+  fix it where the reason is known ("Die Anmeldung ist abgelaufen. Starte einmal claude in einer
+  Konsole und gib slash login ein.").
 - **Nox misheard German and answered in English.** Speech recognition guessed the language for every
   sentence and flipped short German ones to English ("Hallo Nox" -> "Hello Nox"), and the answer
   followed in English; stream words came out as "Lass uns striam". It now listens for German by
