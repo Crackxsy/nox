@@ -20,11 +20,23 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   effect, and no component writes a ref during render any more.
 
 ### Added
+- **"Lass uns streamen" starts the stream.** A spoken mode switch is recognised before the model
+  is asked: "lass uns streamen", "wir gehen live", "starte den Stream" switch to stream mode,
+  "Stream beenden" switches back. Nox then says what actually runs - "Stream-Modus ist an. Twitch
+  und OBS laufen." - or which plugin did not start and why. Questions and statements about
+  streaming ("Wann wollen wir streamen?", "Ich will heute nicht streamen") still go to the model.
 - **A stalled event loop is reported with the code that stalls it.** When the core's loop does not
   answer for 3 s, `core.loop_stalled` names the module, function and line it is stuck in, and
   `core.loop_resumed` says how long it lasted - instead of a silent gap in the log.
 
 ### Fixed
+- **Switching to stream could never start Twitch or OBS.** Three faults stacked up: the plugins'
+  network access was checked against the profile Nox started in, which failed them for good under
+  `companion`; a preset's mode switch changed the mode but not the security profile; and
+  `plugins.enabled` was empty, so neither plugin was allowed to run in any mode. A plugin is now
+  checked against the profile it would run under, every mode switch goes through one function that
+  sets mode and profile together, and Twitch and OBS are enabled by default - they still run only
+  in stream mode.
 - **The pet window ignored the creature chosen in the dashboard.** The shell read only the shipped
   defaults and never the user's own `user.yaml`, so it always opened the pet as the plain shape -
   and every other setting it reads, such as the push-to-talk key, was the default too. It now lays

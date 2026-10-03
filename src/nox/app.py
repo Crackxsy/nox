@@ -50,9 +50,11 @@ from nox.core.health import Check, HealthService
 from nox.core.jobobject import JobObject
 from nox.core.logging import configure_logging, get_logger, shutdown_logging
 from nox.core.loopwatch import LoopWatch
+from nox.core.mode_intents import ModeGate, PluginStatus
+from nox.core.modes import switch_mode
 from nox.core.orchestrator import Orchestrator, OrchestratorConfig
 from nox.core.speech_policy import SpeechPolicy
-from nox.core.state import PetFunctional, SystemLevel
+from nox.core.state import Mode, PetFunctional, SystemLevel
 from nox.core.statemgr import NoxStateManager
 from nox.data.db import Database
 from nox.data.repos import (
@@ -74,7 +76,7 @@ from nox.ipc.server import HubSettings, IpcHub
 from nox.ipc.tokens import TokenStore
 from nox.paths import DASHBOARD_DIST, DEFAULTS_PATH, PET_DIST, PLUGINS_DIR, PROFILES_DIR, REPO_ROOT
 from nox.pet.service import PetService
-from nox.plugins.manager import PluginManager, PluginManagerSettings
+from nox.plugins.manager import PluginManager, PluginManagerSettings, PluginState
 from nox.security.killswitch import KillReport
 from nox.security.service import SecurityContext
 from nox.stream.booking import FunkenBooking
@@ -447,7 +449,33 @@ class NoxCore:
             ),
             session_id=self.session_id,
         )
+        self.orchestrator.mode_gate = ModeGate(
+            switch=self._switch_mode,
+            current_mode=self._current_mode,
+            stream_plugins=self._stream_plugin_statuses,
+        )
         await self.orchestrator.start()
+
+    async def _switch_mode(self, mode: Mode) -> str:
+        assert self.state is not None and self.security is not None and self.bus is not None
+        return await switch_mode(self.state, self.security.engine, self.bus, mode, by="voice")
+
+    def _stream_plugin_statuses(self) -> list[PluginStatus]:
+        """The enabled plugins the stream profile runs, each running or with its reason."""
+        if self.plugins is None:
+            return []
+        statuses: list[PluginStatus] = []
+        enabled = set(self.config.plugins.enabled)
+        for plugin_id, record in self.plugins.records().items():
+            manifest = record.manifest
+            if plugin_id not in enabled or manifest is None:
+                continue
+            if not manifest.matches_profile("stream"):
+                continue
+            running = record.state is PluginState.RUNNING
+            failed = record.state is PluginState.FAILED
+            statuses.append(PluginStatus(plugin_id, running, record.reason if failed else ""))
+        return statuses
 
     def _register_kill_switch_hooks(self) -> None:
         """What has to stop when the kill switch fires, below the model layer."""
