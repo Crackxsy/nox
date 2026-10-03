@@ -90,7 +90,8 @@ voice:
     engine: faster-whisper
     model: small
     device: cpu
-    language: auto
+    language: de                 # de | en | auto (auto stays German unless clearly English)
+    vocabulary: [Nox, Stream, streamen, Twitch, OBS, Szene, Clip, Chat, Minecraft, Rocket League]
     vad: true
     wake_word: "Nox"
     push_to_talk_hotkey: "ctrl+alt+space"

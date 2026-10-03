@@ -25,6 +25,14 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `core.loop_resumed` says how long it lasted - instead of a silent gap in the log.
 
 ### Fixed
+- **Nox misheard German and answered in English.** Speech recognition guessed the language for every
+  sentence and flipped short German ones to English ("Hallo Nox" -> "Hello Nox"), and the answer
+  followed in English; stream words came out as "Lass uns striam". It now listens for German by
+  default (`voice.stt.language: de`), `auto` stays German unless the audio is clearly English, and
+  a vocabulary list (`voice.stt.vocabulary`: Nox, Stream, Twitch, OBS, Szene, Minecraft, ...) tells
+  Whisper which words to expect. Measured on eight German commands with the shipped `small`
+  model: 4/8 correct in 1.9 s before, 8/8 in 0.86 s after. The Whisper model and the recognition
+  language are now picked from a list in the dashboard instead of typed in.
 - **The pet window ignored the creature chosen in the dashboard.** The shell read only the shipped
   defaults and never the user's own `user.yaml`, so it always opened the pet as the plain shape -
   and every other setting it reads, such as the push-to-talk key, was the default too. It now lays

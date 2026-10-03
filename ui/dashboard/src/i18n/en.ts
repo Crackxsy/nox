@@ -68,6 +68,15 @@ export const en: Record<Key, string> = {
     'The drawn shapes need no pictures. The others are photographed creatures that breathe, blink and have their own pictures for sleeping, lying down and eating.',
   option_lang_de: 'German',
   option_lang_en: 'English',
+  option_stt_auto: 'Automatic (stays German unless clearly English)',
+  option_whisper_tiny: 'Tiny – fastest, understands the least',
+  option_whisper_base: 'Small – fast, imprecise',
+  option_whisper_small: 'Medium – about 1 s, recommended',
+  option_whisper_medium: 'Large – more accurate, much slower',
+  option_whisper_large_v3_turbo: 'Very large – most accurate, needs a fast CPU or a GPU',
+  setting_voice_stt_vocabulary: 'Words Nox should know',
+  setting_voice_stt_vocabulary_hint:
+    'Names and terms the speech recognition would otherwise mishear – games, scenes, friends.',
   option_lang_auto: 'Automatic',
 
   app_title: 'Nox dashboard',
