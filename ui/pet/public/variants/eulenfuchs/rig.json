@@ -3,8 +3,8 @@
   "base": "base.png",
   "assetDir": "rig",
   "mesh": {
-    "columns": 22,
-    "rows": 22
+    "columns": 30,
+    "rows": 30
   },
   "bones": [
     {
@@ -83,6 +83,19 @@
       "influence": {
         "radius": 0.1,
         "falloff": 0.75
+      }
+    },
+    {
+      "name": "jaw",
+      "parent": "muzzle",
+      "pivot": [
+        0.51,
+        0.61
+      ],
+      "restAngle": -90,
+      "influence": {
+        "radius": 0.07,
+        "falloff": 0.6
       }
     },
     {
@@ -781,10 +794,118 @@
       ]
     },
     "speak_idle": {
-      "durationMs": 620,
+      "durationMs": 1300,
       "loop": true,
       "easing": "sine",
       "tracks": [
+        {
+          "bone": "jaw",
+          "channel": "x",
+          "keys": [
+            {
+              "t": 0.0,
+              "value": -0.0
+            },
+            {
+              "t": 0.07,
+              "value": -0.0765
+            },
+            {
+              "t": 0.15,
+              "value": -0.009
+            },
+            {
+              "t": 0.24,
+              "value": -0.054
+            },
+            {
+              "t": 0.31,
+              "value": -0.0045
+            },
+            {
+              "t": 0.4,
+              "value": -0.09
+            },
+            {
+              "t": 0.5,
+              "value": -0.0135
+            },
+            {
+              "t": 0.57,
+              "value": -0.063
+            },
+            {
+              "t": 0.64,
+              "value": -0.0
+            },
+            {
+              "t": 0.74,
+              "value": -0.045
+            },
+            {
+              "t": 0.82,
+              "value": -0.0045
+            },
+            {
+              "t": 1.0,
+              "value": -0.0
+            }
+          ]
+        },
+        {
+          "bone": "jaw",
+          "channel": "scaleX",
+          "keys": [
+            {
+              "t": 0.0,
+              "value": 1.0
+            },
+            {
+              "t": 0.07,
+              "value": 1.102
+            },
+            {
+              "t": 0.15,
+              "value": 1.012
+            },
+            {
+              "t": 0.24,
+              "value": 1.072
+            },
+            {
+              "t": 0.31,
+              "value": 1.006
+            },
+            {
+              "t": 0.4,
+              "value": 1.12
+            },
+            {
+              "t": 0.5,
+              "value": 1.018
+            },
+            {
+              "t": 0.57,
+              "value": 1.084
+            },
+            {
+              "t": 0.64,
+              "value": 1.0
+            },
+            {
+              "t": 0.74,
+              "value": 1.06
+            },
+            {
+              "t": 0.82,
+              "value": 1.006
+            },
+            {
+              "t": 1.0,
+              "value": 1.0
+            }
+          ]
+        },
         {
           "bone": "head",
           "channel": "y",
@@ -794,30 +915,12 @@
               "value": 0
             },
             {
-              "t": 0.45,
-              "value": 0.0035
+              "t": 0.4,
+              "value": 0.003
             },
             {
               "t": 1,
               "value": 0
-            }
-          ]
-        },
-        {
-          "bone": "muzzle",
-          "channel": "scaleY",
-          "keys": [
-            {
-              "t": 0,
-              "value": 1
-            },
-            {
-              "t": 0.45,
-              "value": 1.03
-            },
-            {
-              "t": 1,
-              "value": 1
             }
           ]
         },

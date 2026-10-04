@@ -201,6 +201,34 @@ def drop_unknown_tracks(clips: OrderedDict, bone_names: set[str]) -> None:
             del clips[name]
 
 
+#: Grid cells per side. 30 rather than 22 so the jaw's small reach moves the chin, not the cheeks.
+MESH_CELLS = 30
+
+#: Where the jaw sits relative to the muzzle, and how far it reaches. The photographs have closed
+#: mouths and no lip line to cut along, so speech is a chin that drops - a hand puppet's jaw - and
+#: the speaking clip (`speak_idle`) drives it in an uneven syllable rhythm. Measured on three
+#: creatures at the 260 px window: 5-10 px at the strongest syllable; below that it did not read
+#: as speech at all.
+JAW_BELOW_MUZZLE = 0.065
+JAW_RADIUS = 0.07
+
+
+def add_jaw(bones: list) -> None:
+    """A `jaw` under the muzzle, unless the landmarks already name one."""
+    names = [bone["name"] for bone in bones]
+    if "jaw" in names or "muzzle" not in names:
+        return
+    muzzle = bones[names.index("muzzle")]
+    jaw = OrderedDict(
+        name="jaw",
+        parent="muzzle",
+        pivot=[muzzle["pivot"][0], round(muzzle["pivot"][1] + JAW_BELOW_MUZZLE, 5)],
+        restAngle=muzzle["restAngle"],
+    )
+    jaw["influence"] = OrderedDict(radius=JAW_RADIUS, falloff=0.6)
+    bones.insert(names.index("muzzle") + 1, jaw)
+
+
 def build_rig(variant: str, landmarks: dict, eye_rects: dict, poses: list[str]) -> OrderedDict:
     bones = []
     for name, spec in landmarks["bones"].items():
@@ -216,6 +244,7 @@ def build_rig(variant: str, landmarks: dict, eye_rects: dict, poses: list[str]) 
             radius=spec.get("radius", 0.2), falloff=spec.get("falloff", 1.0)
         )
         bones.append(bone)
+    add_jaw(bones)
 
     layers = [
         OrderedDict(
@@ -242,7 +271,7 @@ def build_rig(variant: str, landmarks: dict, eye_rects: dict, poses: list[str]) 
         id=variant,
         base="base.png",
         assetDir="rig",
-        mesh=OrderedDict(columns=22, rows=22),
+        mesh=OrderedDict(columns=MESH_CELLS, rows=MESH_CELLS),
         bones=bones,
         layers=layers,
         poses=OrderedDict((pose, OrderedDict(file=f"pose_{pose}.png")) for pose in sorted(poses)),

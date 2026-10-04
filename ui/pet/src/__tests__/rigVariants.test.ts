@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { buildSkeleton, poseMatrices } from '../rig/bones';
+import { sampleClip } from '../rig/clips';
 import { buildGrid, computeWeights, skin } from '../rig/mesh';
 import { parseRigDefinition } from '../rig/rigFile';
 import { REACHABLE_POSES, RIG_CLIPS } from '../rig/stateMapping';
@@ -164,6 +165,29 @@ describe.each(RIGGED)('%s', (variant) => {
       }
       expect(furthest * WINDOW_PX, `${clipName} moves ${boneName}`).toBeGreaterThan(MIN_VISIBLE_PX);
     }
+  });
+
+  it('drops its jaw far enough to be seen while it speaks', () => {
+    // The photographs have closed mouths, so speech is a chin that drops in a syllable rhythm. The
+    // old clip stretched the whole muzzle by 3 % and nobody could see the mouth move at all.
+    const WINDOW_PX = 260;
+    const MIN_VISIBLE_PX = 4;
+    const clip = rig.clips.speak_idle;
+    expect(clip, 'speak_idle').toBeDefined();
+    expect(clip!.tracks.some((t) => t.bone === 'jaw')).toBe(true);
+    const skeleton = buildSkeleton(rig.bones);
+    const mesh = buildGrid([0, 0, 1, 1], rig.mesh.columns, rig.mesh.rows, skeleton);
+    const rest = new Float32Array(mesh.rest);
+    let furthest = 0;
+    for (let ms = 0; ms < clip!.durationMs; ms += 20) {
+      // The head's nod is not the mouth: only the jaw's own motion counts.
+      const { head: _nod, ...pose } = sampleClip(clip!, ms);
+      const moved = skin(mesh, poseMatrices(skeleton, pose), new Float32Array(rest.length));
+      for (let v = 0; v < rest.length; v += 2) {
+        furthest = Math.max(furthest, Math.hypot(moved[v] - rest[v], moved[v + 1] - rest[v + 1]));
+      }
+    }
+    expect(furthest * WINDOW_PX).toBeGreaterThan(MIN_VISIBLE_PX);
   });
 
   it('stands on its feet: the root is at the bottom and the head above it', () => {
