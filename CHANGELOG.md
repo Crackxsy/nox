@@ -36,6 +36,11 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `core.loop_resumed` says how long it lasted - instead of a silent gap in the log.
 
 ### Fixed
+- **Nox said "Ich bin bereit" while answering with its weakest brain.** With Claude Code's login
+  expired, every answer came from the small local model and nothing said so. When the preferred AI
+  backend is not available at start, the greeting now says which one answers instead, and how to
+  fix it where the reason is known ("Die Anmeldung ist abgelaufen. Starte einmal claude in einer
+  Konsole und gib slash login ein.").
 - **Switching to stream could never start Twitch or OBS.** Three faults stacked up: the plugins'
   network access was checked against the profile Nox started in, which failed them for good under
   `companion`; a preset's mode switch changed the mode but not the security profile; and
