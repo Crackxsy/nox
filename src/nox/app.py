@@ -39,6 +39,7 @@ from nox.ai.prompting import DECIDED_PERSONALITY_BLOCK, build_system_prompt
 from nox.ai.router import DefaultRouter
 from nox.core.boot.ai import ProviderCard, build_providers, build_router
 from nox.core.boot.extensions import DEFAULT_EXTENSIONS, install_extensions, stop_extensions
+from nox.core.boot.greeting import GREETING, greeting_text
 from nox.core.boot.health import core_health_checks
 from nox.core.boot.persistence import DbTurnStore, open_database
 from nox.core.boot.workers import WorkerProcess, WorkerSpeaker, WorkerSupervisor
@@ -109,7 +110,6 @@ __all__ = [
     "WorkerProcess",
 ]
 
-GREETING = {"de": "Hallo, ich bin Nox. Ich bin bereit.", "en": "Hi, I am Nox. I am ready."}
 
 #: How long the greeting waits for the voice worker to finish loading its engines before it gives
 #: up and settles into a silent idle expression instead.
@@ -807,7 +807,11 @@ class NoxCore:
         await self.speaker.say(
             TtsRequest(
                 utterance_id=f"greeting:{uuid.uuid4().hex[:8]}",
-                text=GREETING.get(language, GREETING["en"]),
+                text=greeting_text(
+                    language,
+                    self.health.current() if self.health is not None else {},
+                    self.config.ai.router.fallback_chain,
+                ),
                 language=language,
                 channel=self.orchestrator.config.channel,
             )
