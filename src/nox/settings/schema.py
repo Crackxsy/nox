@@ -16,6 +16,8 @@ needs a second edit here.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
 from types import UnionType
 from typing import Any, Literal, Union, get_args, get_origin
 
@@ -24,6 +26,9 @@ from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
 from nox.core.config import NoxConfig
+from nox.paths import PLUGINS_DIR
+from nox.plugins.manifest import discover_manifest_paths
+from nox.voice.models import engine_models_dir
 
 #: Dotted path -> UI group. The order is the order the dashboard renders.
 EDITABLE_PATHS: dict[str, str] = {
@@ -101,7 +106,9 @@ LIVE_APPLY_PATHS: frozenset[str] = frozenset(
 
 #: The value kinds the dashboard knows how to render. Anything a model expresses that does not map
 #: onto one of these is simply not offered for editing (it never reaches `EDITABLE_PATHS`).
-ValueKind = Literal["string", "int", "float", "bool", "enum", "list[str]", "structured"]
+ValueKind = Literal[
+    "string", "int", "float", "bool", "enum", "list[str]", "multi", "hotkey", "structured"
+]
 
 
 class UnknownSettingError(KeyError):
@@ -114,6 +121,9 @@ class ConfigFieldSpec(BaseModel):
     path: str
     type: ValueKind
     options: list[str] | None = None
+    #: For `multi`: the order of the chosen values matters (a fallback chain), so the dashboard
+    #: lets the user move them up and down rather than only tick them.
+    ordered: bool = False
     min: float | None = None
     max: float | None = None
     restart_required: bool
@@ -152,6 +162,8 @@ def _kind_and_options(annotation: Any) -> tuple[ValueKind, list[str] | None]:
         return "enum", [str(a) for a in get_args(annotation)]
     if get_origin(annotation) is list:
         args = get_args(annotation)
+        if args and get_origin(args[0]) is Literal:
+            return "multi", [str(a) for a in get_args(args[0])]
         if args and args[0] is str:
             return "list[str]", None
         if args:
@@ -187,18 +199,71 @@ def _as_float(bound: Any) -> float | None:
     return float(bound) if isinstance(bound, int | float) else None
 
 
-def describe(path: str) -> ConfigFieldSpec:
-    """The schema entry for one editable path. Raises `UnknownSettingError` for anything else."""
+def _installed_plugins(config: NoxConfig | None) -> list[str]:
+    """The plugin ids in the plugins folder, which is everything `plugins.enabled` can name."""
+    directory = (
+        Path(str(config.plugins.dir)) if config is not None and config.plugins.dir else PLUGINS_DIR
+    )
+    return sorted(path.parent.name for path in discover_manifest_paths(directory))
+
+
+def _installed_voices(config: NoxConfig | None) -> list[str] | None:
+    """The Piper voices in the models folder, after "" (the default voice for each language).
+
+    None for any other engine: Kokoro keeps all its voices in one data file, so there is nothing
+    to list, and its voice stays a free-text name.
+    """
+    engine = config.voice.tts.engine if config is not None else "piper"
+    if engine != "piper":
+        return None
+    configured = config.voice.models_dir if config is not None else None
+    directory = engine_models_dir("piper", configured or None)
+    names = sorted(path.stem for path in directory.glob("*.onnx")) if directory.is_dir() else []
+    return ["", *names]
+
+
+#: Settings whose valid values are not a fixed `Literal` but what is installed. They are offered as
+#: choices like any other, and a value outside them is refused when it is set. A source that
+#: returns None has nothing to list, and the setting stays as it is typed.
+COMPUTED_CHOICES: dict[str, Callable[[NoxConfig | None], list[str] | None]] = {
+    "plugins.enabled": _installed_plugins,
+    "voice.tts.voice": _installed_voices,
+}
+
+#: Lists whose order means something: the first backend is asked first.
+ORDERED_PATHS: frozenset[str] = frozenset({"ai.router.fallback_chain"})
+
+#: Key combinations. The dashboard records the keys pressed instead of asking for a spelling.
+HOTKEY_PATHS: frozenset[str] = frozenset({"voice.stt.push_to_talk_hotkey"})
+
+
+class InvalidChoiceError(ValueError):
+    """A value outside the choices a setting offers."""
+
+
+def describe(path: str, config: NoxConfig | None = None) -> ConfigFieldSpec:
+    """The schema entry for one editable path. Raises `UnknownSettingError` for anything else.
+
+    `config` is only needed for choices computed from it (`COMPUTED_CHOICES`); without it they
+    come from the shipped defaults.
+    """
     group = EDITABLE_PATHS.get(path)
     if group is None:
         raise UnknownSettingError(path)
     field = _resolve_field(path)
     kind, options = _kind_and_options(field.annotation)
+    computed = COMPUTED_CHOICES[path](config) if path in COMPUTED_CHOICES else None
+    if computed is not None:
+        options = computed
+        kind = "multi" if kind == "list[str]" else "enum"
+    if path in HOTKEY_PATHS:
+        kind = "hotkey"
     low, high = _bounds(field)
     return ConfigFieldSpec(
         path=path,
         type=kind,
         options=options,
+        ordered=path in ORDERED_PATHS,
         min=low,
         max=high,
         restart_required=path not in LIVE_APPLY_PATHS,
@@ -206,9 +271,22 @@ def describe(path: str) -> ConfigFieldSpec:
     )
 
 
-def describe_all() -> list[ConfigFieldSpec]:
+def describe_all(config: NoxConfig | None = None) -> list[ConfigFieldSpec]:
     """Every editable setting, in `EDITABLE_PATHS` order."""
-    return [describe(path) for path in EDITABLE_PATHS]
+    return [describe(path, config) for path in EDITABLE_PATHS]
+
+
+def check_choice(spec: ConfigFieldSpec, value: Any) -> None:
+    """Refuse a value a computed-choice setting does not offer. Fixed choices are `Literal`s and
+    `NoxConfig` refuses those itself."""
+    if spec.path not in COMPUTED_CHOICES or spec.options is None:
+        return
+    values = value if isinstance(value, list) else [value]
+    unknown = [str(v) for v in values if str(v) not in spec.options]
+    if unknown:
+        raise InvalidChoiceError(
+            f"not available: {', '.join(unknown)} (choose from {', '.join(spec.options)})"
+        )
 
 
 def read_value(config: NoxConfig, path: str) -> Any:

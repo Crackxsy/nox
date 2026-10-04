@@ -32,7 +32,9 @@ from nox.security.model import AuditLog
 from nox.settings.layers import deep_merge, load_existing_user_layer, write_user_config
 from nox.settings.schema import (
     ConfigFieldSpec,
+    InvalidChoiceError,
     UnknownSettingError,
+    check_choice,
     describe,
     describe_all,
     nest,
@@ -86,7 +88,7 @@ class ConfigEditor:
     # -- read ------------------------------------------------------------------------------------
 
     def schema(self) -> list[ConfigFieldSpec]:
-        return describe_all()
+        return describe_all(self._config)
 
     def values(self) -> dict[str, Any]:
         """Current effective value per editable path, read off the live `NoxConfig`."""
@@ -122,6 +124,9 @@ class ConfigEditor:
                 candidate = deep_merge(patch, nest(path, self._coerce(path, value)))
             except UnknownSettingError:
                 errors[path] = "not an editable setting"
+                continue
+            except InvalidChoiceError as exc:
+                errors[path] = str(exc)
                 continue
             try:
                 NoxConfig.model_validate(deep_merge(defaults, deep_merge(existing, candidate)))
@@ -189,7 +194,8 @@ class ConfigEditor:
 
     def _coerce(self, path: str, value: Any) -> Any:
         """Reject a non-editable path early; the value itself is validated by `NoxConfig`."""
-        describe(path)  # raises UnknownSettingError for anything not on the allow-list
+        spec = describe(path, self._config)  # raises UnknownSettingError if not on the allow-list
+        check_choice(spec, value)
         return value
 
     def _audit_change(self, paths: list[str], *, by: str) -> None:

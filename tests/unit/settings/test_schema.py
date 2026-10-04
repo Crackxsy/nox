@@ -29,7 +29,8 @@ def test_types_and_options_come_from_the_pydantic_models() -> None:
     assert describe("identity.ui_language").options == ["de", "en"]
     assert describe("identity.name").type == "string"
     assert describe("pet.greeting_enabled").type == "bool"
-    assert describe("ai.router.fallback_chain").type == "list[str]"
+    assert describe("ai.router.fallback_chain").type == "multi"
+    assert describe("stream.twitch.bot_names").type == "list[str]"
     assert describe("voice.channels.routing").options == ["private", "stream", "both", "mute"]
     assert "companion" in (describe("security.profile").options or [])
 

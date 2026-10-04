@@ -9,6 +9,12 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Changed
+- **Settings with fixed values are picked, not typed.** Active plugins are checkboxes with a line
+  on what each one does, the AI backends a dropdown and an ordered list you move up and down, the
+  voice a list of the Piper voices actually installed, and the push-to-talk key is recorded by
+  pressing it - shown as "Strg + Alt + Leertaste" rather than spelled. Before, each of these was a
+  text box that expected exact ids, one per line. A plugin that is not installed is refused when
+  saved, and the AI backends only accept the three Nox has. The presets group has its German name.
 - **UI build tooling**: Vite 8, `@vitejs/plugin-react` 6, TypeScript 6.0 and vitest 5.0.2 for both the
   pet window and the dashboard. TypeScript 7 and ESLint 10 are held back on purpose -
   `typescript-eslint` supports TypeScript only below 6.1, and `eslint-plugin-jsx-a11y` does not
