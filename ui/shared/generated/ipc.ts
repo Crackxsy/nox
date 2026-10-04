@@ -207,6 +207,7 @@ export interface ConfigFieldSchema {
   path: string;
   type: string;
   options?: string[] | null;
+  ordered?: boolean;
   min?: number | null;
   max?: number | null;
   restart_required: boolean;

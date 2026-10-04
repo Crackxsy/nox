@@ -25,14 +25,27 @@ export type SettingType =
   | 'bool'
   | 'enum'
   | 'list[str]'
+  | 'multi'
+  | 'hotkey'
   | 'structured';
 
-const SETTING_TYPES: readonly string[] = ['string', 'int', 'float', 'bool', 'enum', 'list[str]'];
+const SETTING_TYPES: readonly string[] = [
+  'string',
+  'int',
+  'float',
+  'bool',
+  'enum',
+  'list[str]',
+  'multi',
+  'hotkey',
+];
 
 export interface SettingSpec {
   path: string;
   type: SettingType;
   options: string[];
+  /** `multi`: the order of the chosen values matters, so they can be moved up and down. */
+  ordered: boolean;
   min: number | null;
   max: number | null;
   restartRequired: boolean;
@@ -44,6 +57,7 @@ export const SETTING_FIELDS: FieldMap<WireConfigFieldSchema, SettingSpec> = {
   path: 'path',
   type: 'type',
   options: 'options',
+  ordered: 'ordered',
   min: 'min',
   max: 'max',
   restart_required: 'restartRequired',
@@ -76,6 +90,7 @@ export function parseEditableConfig(payload: unknown): EditableConfig | null {
       options: Array.isArray(entry.options)
         ? entry.options.map((o) => String(o)).filter((o) => o.length > 0)
         : [],
+      ordered: bool(entry.ordered),
       min: numOrNull(entry.min),
       max: numOrNull(entry.max),
       restartRequired: bool(entry.restart_required),

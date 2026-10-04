@@ -135,9 +135,18 @@ class VoiceConfig(StrictSection):
 # ---- language models ----------------------------------------------------------------------------
 
 
+#: The AI backends Nox ships. A chain naming anything else could never be served, so it is not a
+#: value the configuration accepts - and the dashboard offers exactly these.
+ProviderId = Literal["claude_code", "ollama", "rules"]
+
+
+#: Ask the strongest backend first, then the local model, then the rules that always answer.
+DEFAULT_FALLBACK_CHAIN: list[ProviderId] = ["claude_code", "ollama", "rules"]
+
+
 class AiRouterConfig(StrictSection):
-    default_reasoner: str = "claude_code"
-    fallback_chain: list[str] = Field(default_factory=lambda: ["claude_code", "ollama", "rules"])
+    default_reasoner: ProviderId = "claude_code"
+    fallback_chain: list[ProviderId] = Field(default_factory=lambda: list(DEFAULT_FALLBACK_CHAIN))
     background_budget_share: float = Field(default=0.30, ge=0.0, le=1.0)
     reserve_for_stream: bool = True
     #: Per-role provider chains, e.g. `chat: [ollama, claude_code, rules]` to answer chat from the

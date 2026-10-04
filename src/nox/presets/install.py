@@ -16,8 +16,8 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from nox.core.config import NoxConfig
-from nox.core.events import E, Event
 from nox.core.logging import get_logger
+from nox.core.modes import switch_mode
 from nox.core.state import Mode
 from nox.presets.engine import PresetRunner
 from nox.presets.gate import VoicePresetGate
@@ -47,6 +47,7 @@ class CoreLike(Protocol):
     config: NoxConfig
     bus: Any
     state: Any
+    security: Any
     speaker: Any
     orchestrator: Any
     tool_registry: ToolRegistry
@@ -89,16 +90,11 @@ def install(core: CoreLike) -> PresetsRuntime:
         if mode not in {member.value for member in Mode}:
             known = ", ".join(sorted(member.value for member in Mode))
             raise ValueError(f"unknown mode {mode!r}; known modes: {known}")
-        previous = _mode(core)
-        if previous == mode:
+        if _mode(core) == mode:
             return
-        await core.state.update("assistant.mode", mode, reason="preset")
-        await core.bus.publish(
-            Event(
-                name=E.SYSTEM_MODE_CHANGED,
-                payload={"previous": previous, "current": mode, "reason": "preset"},
-            )
-        )
+        # The mode and its profile together: changing the mode alone left the profile in force,
+        # so a preset's "stream" could never start Twitch or OBS.
+        await switch_mode(core.state, core.security.engine, core.bus, Mode(mode), by="preset")
 
     async def say(text: str) -> None:
         if core.speaker is None:

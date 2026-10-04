@@ -487,12 +487,19 @@ class PluginManager:
             try:
                 rec.manifest = load_manifest(path, expected_id=plugin_id)
                 self._transition(rec, PluginState.VALIDATED)
-                check_egress(
-                    rec.manifest,
-                    self._engine.active_profile(),
-                    global_allowlist=self._global_egress,
-                    loopback_allowlist=self._loopback,
-                )
+                # Egress is judged against the profile the plugin would run under, and only once it
+                # can run at all: Twitch's chat host is checked when the stream profile is active,
+                # not against the companion profile Nox happened to start in. Checking it at boot
+                # marked Twitch and OBS `failed`, and a failed plugin is never started again - so
+                # switching to stream later could not bring them up.
+                active = self._engine.active_profile()
+                if rec.manifest.matches_profile(active.id):
+                    check_egress(
+                        rec.manifest,
+                        active,
+                        global_allowlist=self._global_egress,
+                        loopback_allowlist=self._loopback,
+                    )
             except ManifestError as exc:
                 await self._fail(rec, str(exc))
                 continue
