@@ -142,6 +142,10 @@ class Orchestrator:
     #: Set by `nox.presets.install` so a registered phrase reaches its preset before any
     #: model is asked. `None` = no presets.
     preset_gate: PresetGate | None = None
+    #: Set by `NoxCore` so "lass uns streamen" switches to stream mode instead of being talked
+    #: about (`nox.core.mode_intents`). Asked after the presets: a phrase the user registered
+    #: themselves wins over the built-in one. Same contract as `PresetGate`.
+    mode_gate: PresetGate | None = None
     #: Set by `nox.capabilities.install` so that everything reachable from the dashboard is
     #: also reachable by saying it. `None` = the model can only talk, which was the state
     #: until now.
@@ -262,6 +266,19 @@ class Orchestrator:
             spoken = await self.preset_gate.handle(text, language)
             if spoken is not None:
                 turn.fast_path = "preset"
+                return await self._deliver_fast_path(
+                    turn,
+                    spoken,
+                    language,
+                    speak=speak_enabled,
+                    on_chunk=on_chunk,
+                    started=started,
+                )
+
+        if self.mode_gate is not None:
+            spoken = await self.mode_gate.handle(text, language)
+            if spoken is not None:
+                turn.fast_path = "mode"
                 return await self._deliver_fast_path(
                     turn,
                     spoken,

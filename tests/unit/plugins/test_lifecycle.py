@@ -509,3 +509,27 @@ async def test_a_secret_is_refused_when_the_access_cannot_be_audited(plugins_dir
             await manager._h_secret_get(built.context(), PluginSecretGet(name="nox/demo/token"))
     finally:
         await manager.stop("test")
+
+
+async def test_a_stream_plugin_started_outside_the_stream_profile_can_start_later(
+    plugins_dir: Path,
+) -> None:
+    """Twitch's egress used to be checked against the profile Nox booted in. Under `companion`
+    that failed it for good, and a failed plugin is never started again - so switching to stream
+    later could not bring Twitch up (product owner's first stream attempt)."""
+    write_manifest(
+        plugins_dir, "demo", profiles=["stream"], network={"egress": ["api.twitch.tv:443"]}
+    )
+    engine = FakeEngine()
+    built = build(plugins_dir, engine=engine)
+    manager = built.manager
+    try:
+        await manager.start()
+        record = manager.records()["demo"]
+        assert record.state is PluginState.VALIDATED, record.reason
+
+        engine.profile = make_profile("stream", egress_allowlist=["api.twitch.tv:443"])
+        await manager.apply_profile()
+        assert record.state is PluginState.SPAWNED and len(built.processes) == 1
+    finally:
+        await manager.stop("test")
