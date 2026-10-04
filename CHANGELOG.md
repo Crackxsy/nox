@@ -36,6 +36,11 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `core.loop_resumed` says how long it lasted - instead of a silent gap in the log.
 
 ### Fixed
+- **The pet's mouth did not move when it spoke.** Speaking stretched the whole muzzle by 3 % on a
+  fixed beat, which nobody could see. Every creature now has a jaw below the muzzle that drops in
+  an uneven syllable rhythm, scaled by how loud Nox speaks: 5-10 px at the strongest syllable in
+  the 260 px window, with the nose left where it is. The photographs have closed mouths, so it is
+  a chin that moves rather than lips; real lips would need open-mouth art for each creature.
 - **Nox said "Ich bin bereit" while answering with its weakest brain.** With Claude Code's login
   expired, every answer came from the small local model and nothing said so. When the preferred AI
   backend is not available at start, the greeting now says which one answers instead, and how to
