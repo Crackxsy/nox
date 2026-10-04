@@ -9,6 +9,12 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Changed
+- **Settings with fixed values are picked, not typed.** Active plugins are checkboxes with a line
+  on what each one does, the AI backends a dropdown and an ordered list you move up and down, the
+  voice a list of the Piper voices actually installed, and the push-to-talk key is recorded by
+  pressing it - shown as "Strg + Alt + Leertaste" rather than spelled. Before, each of these was a
+  text box that expected exact ids, one per line. A plugin that is not installed is refused when
+  saved, and the AI backends only accept the three Nox has. The presets group has its German name.
 - **UI build tooling**: Vite 8, `@vitejs/plugin-react` 6, TypeScript 6.0 and vitest 5.0.2 for both the
   pet window and the dashboard. TypeScript 7 and ESLint 10 are held back on purpose -
   `typescript-eslint` supports TypeScript only below 6.1, and `eslint-plugin-jsx-a11y` does not
@@ -20,6 +26,11 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   effect, and no component writes a ref during render any more.
 
 ### Added
+- **"Lass uns streamen" starts the stream.** A spoken mode switch is recognised before the model
+  is asked: "lass uns streamen", "wir gehen live", "starte den Stream" switch to stream mode,
+  "Stream beenden" switches back. Nox then says what actually runs - "Stream-Modus ist an. Twitch
+  und OBS laufen." - or which plugin did not start and why. Questions and statements about
+  streaming ("Wann wollen wir streamen?", "Ich will heute nicht streamen") still go to the model.
 - **A stalled event loop is reported with the code that stalls it.** When the core's loop does not
   answer for 3 s, `core.loop_stalled` names the module, function and line it is stuck in, and
   `core.loop_resumed` says how long it lasted - instead of a silent gap in the log.
@@ -30,6 +41,13 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   an uneven syllable rhythm, scaled by how loud Nox speaks: 5-10 px at the strongest syllable in
   the 260 px window, with the nose left where it is. The photographs have closed mouths, so it is
   a chin that moves rather than lips; real lips would need open-mouth art for each creature.
+- **Switching to stream could never start Twitch or OBS.** Three faults stacked up: the plugins'
+  network access was checked against the profile Nox started in, which failed them for good under
+  `companion`; a preset's mode switch changed the mode but not the security profile; and
+  `plugins.enabled` was empty, so neither plugin was allowed to run in any mode. A plugin is now
+  checked against the profile it would run under, every mode switch goes through one function that
+  sets mode and profile together, and Twitch and OBS are enabled by default - they still run only
+  in stream mode.
 - **Nox misheard German and answered in English.** Speech recognition guessed the language for every
   sentence and flipped short German ones to English ("Hallo Nox" -> "Hello Nox"), and the answer
   followed in English; stream words came out as "Lass uns striam". It now listens for German by

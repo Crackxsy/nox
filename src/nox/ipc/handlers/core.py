@@ -23,6 +23,9 @@ from pydantic import BaseModel
 
 from nox.core.events import E, Event
 from nox.core.logging import get_logger
+from nox.core.modes import DEFAULT_PROFILE as MODE_DEFAULT_PROFILE
+from nox.core.modes import PROFILE_FOR_MODE as MODE_PROFILES
+from nox.core.modes import switch_mode
 from nox.core.state import Mode, PrivacyMode, SystemLevel
 from nox.ipc.dispatch import EmptyPayload, RequestContext
 from nox.ipc.errors import ERR_PERMISSION, ERR_UNAVAILABLE, IpcError
@@ -62,12 +65,10 @@ __all__ = [
 PUBLIC_STATE_ROOTS: tuple[str, ...] = ("assistant", "privacy", "system")
 
 #: Assistant mode -> the permission profile it selects.
-PROFILE_FOR_MODE: dict[Mode, str] = {
-    Mode.CODING: "coding",
-    Mode.STREAM: "stream",
-    Mode.RESEARCH: "research",
-}
-DEFAULT_PROFILE = "companion"
+# The mode -> profile table lives with the switch itself (`nox.core.modes`); re-exported here for
+# the callers that read it from the handlers.
+PROFILE_FOR_MODE = MODE_PROFILES
+DEFAULT_PROFILE = MODE_DEFAULT_PROFILE
 
 UI_ROLES: tuple[str, ...] = ("shell", "dashboard")
 
@@ -225,20 +226,7 @@ class CoreHandlers:
         """
         core = self._core
         assert core.state is not None and core.security is not None and core.bus is not None
-        previous = str(core.state.get("assistant.mode"))
-        await core.state.update("assistant.mode", p.mode.value, reason=f"mode.set by {ctx.role}")
-        profile = PROFILE_FOR_MODE.get(p.mode, DEFAULT_PROFILE)
-        try:
-            core.security.engine.set_profile(profile, by=ctx.role)
-        except (KeyError, ValueError) as exc:
-            log.error("security.profile_switch_failed", profile=profile, error=str(exc))
-        active = core.security.engine.active_profile().id
-        await core.bus.publish(
-            Event(
-                name=E.SYSTEM_MODE_CHANGED,
-                payload={"previous": previous, "current": p.mode.value, "reason": ctx.role},
-            )
-        )
+        active = await switch_mode(core.state, core.security.engine, core.bus, p.mode, by=ctx.role)
         return {"ok": True, "mode": p.mode.value, "profile": active}
 
     async def privacy_set(self, ctx: RequestContext, p: PrivacySet) -> dict[str, Any]:

@@ -311,8 +311,10 @@ class ConfigFieldSchema(BaseModel):
     renders a control from this instead of hard-coding a field list that drifts."""
 
     path: str
-    type: str  # string | int | float | bool | enum | list[str]
+    type: str  # string | int | float | bool | enum | list[str] | multi | hotkey
     options: list[str] | None = None
+    #: `multi` only: the order of the chosen values matters (a fallback chain).
+    ordered: bool = False
     min: float | None = None
     max: float | None = None
     restart_required: bool

@@ -256,6 +256,7 @@ const GROUP_KEYS: Record<string, Key> = {
   plugins: 'settings_group_plugins',
   remote: 'settings_group_remote',
   home: 'settings_group_home',
+  presets: 'settings_group_presets',
 };
 
 /** Settings group heading; an unknown group name is shown verbatim. */
@@ -278,6 +279,12 @@ export function settingLabel(t: T, path: string): string {
  * Option text for one `enum` setting. Scoped by path first, because the same value means different
  * things in different places (`de` is a language here and could be something else elsewhere).
  */
+const PROVIDER_KEYS: Record<string, Key> = {
+  claude_code: 'option_provider_claude_code',
+  ollama: 'option_provider_ollama',
+  rules: 'option_provider_rules',
+};
+
 const OPTION_KEYS: Record<string, Record<string, Key>> = {
   'voice.stt.listening_mode': {
     continuous: 'option_listening_continuous',
@@ -311,6 +318,24 @@ const OPTION_KEYS: Record<string, Record<string, Key>> = {
     small: 'option_whisper_small',
     medium: 'option_whisper_medium',
     'large-v3-turbo': 'option_whisper_large_v3_turbo',
+  },
+  'ai.router.default_reasoner': PROVIDER_KEYS,
+  'ai.router.fallback_chain': PROVIDER_KEYS,
+  'voice.tts.voice': {
+    '': 'option_voice_default',
+    'de_DE-thorsten-medium': 'option_voice_thorsten',
+    'en_US-lessac-medium': 'option_voice_lessac',
+  },
+  'plugins.enabled': {
+    twitch: 'option_plugin_twitch',
+    obs: 'option_plugin_obs',
+    clips: 'option_plugin_clips',
+    home: 'option_plugin_home',
+    telegram: 'option_plugin_telegram',
+    rl: 'option_plugin_rl',
+    coding: 'option_plugin_coding',
+    creative: 'option_plugin_creative',
+    echo: 'option_plugin_echo',
   },
   'security.profile': PROFILE_KEYS,
   'pet.variant': {
