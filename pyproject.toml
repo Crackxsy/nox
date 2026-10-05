@@ -58,7 +58,7 @@ dev = [
     "types-PyYAML",
     "types-psutil",
 ]
-e2e = ["playwright>=1.62.0", "pytest-playwright>=0.9.0"]
+e2e = ["playwright>=1.63.0", "pytest-playwright>=0.9.0"]
 rl = ["mss>=9.0", "opencv-python-headless>=5.0.0.93", "numpy>=2.5.3"]
 
 [project.scripts]
