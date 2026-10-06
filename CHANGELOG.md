@@ -36,6 +36,16 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `core.loop_resumed` says how long it lasted - instead of a silent gap in the log.
 
 ### Fixed
+- **Every conversation was answered by the weakest model.** The default chat chain started with the
+  local 4B model "because it answers fastest": in a real test it took 4-19 s per answer, claimed it
+  could not control devices it has tools for, and invented memories. Claude, set as the preferred
+  backend, was never asked. Chat now uses the fallback chain like every other role - Claude first,
+  the local model only when Claude is not reachable; Claude answered the same twelve questions in
+  4-12 s.
+- **The memory index was left half written at every start.** The audit log shares the core's
+  database connection but kept a lock of its own, so it committed in the middle of the vault
+  index's transaction, whose own COMMIT then failed ("cannot commit - no transaction is active").
+  It now takes the database's lock; the same start indexes the vault without an error.
 - **The pet's mouth did not move when it spoke.** Speaking stretched the whole muzzle by 3 % on a
   fixed beat, which nobody could see. Every creature now has a jaw below the muzzle that drops in
   an uneven syllable rhythm, scaled by how loud Nox speaks: 5-10 px at the strongest syllable in

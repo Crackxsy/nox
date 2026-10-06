@@ -122,12 +122,21 @@ class SqliteAuditLog:
     _REDACT_SUFFIXES: ClassVar[tuple[str, ...]] = ("_token", "_secret", "_key", "_password", "_pin")
 
     def __init__(
-        self, conn: sqlite3.Connection, *, bus: EventBus | None = None, clock: Clock | None = None
+        self,
+        conn: sqlite3.Connection,
+        *,
+        bus: EventBus | None = None,
+        clock: Clock | None = None,
+        lock: threading.RLock | None = None,
     ) -> None:
         self._conn = conn
         self._bus = bus
         self._clock = clock or (lambda: datetime.now(UTC))
-        self._lock = threading.RLock()
+        # The connection is shared with `nox.data.db.Database`, so its lock must be too. With a lock
+        # of its own the audit writer committed in the middle of another thread's transaction - the
+        # vault index's - and that transaction's own COMMIT then failed ("cannot commit - no
+        # transaction is active"), leaving the memory index half written.
+        self._lock = lock or threading.RLock()
         with self._lock:
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
