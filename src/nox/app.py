@@ -289,6 +289,7 @@ class NoxCore:
         self.security = SecurityContext.build(
             self.config,
             conn=self.db.connection,
+            connection_lock=self.db.lock,
             profiles_dir=self.profiles_dir,
             bus=self.bus,
             session_id=self.session_id,

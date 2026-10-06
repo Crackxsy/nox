@@ -219,3 +219,40 @@ def test_quiesced_waits_for_a_chain_walk_in_another_thread() -> None:
     walker.join(5)
     with audit.quiesced(0.1) as idle:
         assert idle is True
+
+
+def test_an_audit_write_waits_for_a_transaction_on_the_shared_connection(tmp_path) -> None:
+    """The audit writer shares the core's connection. With a lock of its own it committed in the
+    middle of the vault index's transaction, whose COMMIT then failed - "cannot commit - no
+    transaction is active" - and the memory index was left half written."""
+    import threading
+
+    from nox.data.db import Database
+
+    db = Database(tmp_path / "shared.db")
+    db.execute("CREATE TABLE notes (x INTEGER)")
+    audit = SqliteAuditLog(db.connection, lock=db.lock)
+    inside, failures = threading.Event(), []
+
+    def index_notes() -> None:
+        try:
+            with db.transaction():
+                db.execute("INSERT INTO notes VALUES (1)")
+                inside.set()
+                threading.Event().wait(0.3)  # a slow bulk write, as the vault index's is
+                db.execute("INSERT INTO notes VALUES (2)")
+        except Exception as exc:  # noqa: BLE001 - recorded and asserted below
+            failures.append(exc)
+
+    worker = threading.Thread(target=index_notes)
+    worker.start()
+    inside.wait(5)
+    audit.append(
+        actor="core", tool="test", action="test", target="t", decision="allow", result="ok"
+    )
+    worker.join(5)
+
+    assert failures == []
+    assert db.fetch_one("SELECT count(*) FROM notes")[0] == 2  # type: ignore[index]
+    assert audit.verify_chain()
+    db.close()

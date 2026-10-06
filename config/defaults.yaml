@@ -130,8 +130,10 @@ ai:
   router:
     default_reasoner: claude_code   # the degradation chain below applies when it is unavailable
     fallback_chain: [claude_code, ollama, rules]
-    roles:                          # per-role chains; the local model answers chat fastest
-      chat: [ollama, claude_code, rules]
+    roles: {}                       # per-role chains, e.g. chat: [ollama, claude_code, rules];
+                                    # a role without one uses fallback_chain. Chat used to start with
+                                    # the local 4B model "for speed": it answered every conversation,
+                                    # took 4-19 s and invented memories, while Claude took 4-9 s.
     background_budget_share: 0.30
     reserve_for_stream: true
   providers:

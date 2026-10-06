@@ -18,6 +18,7 @@ repairs anything; the composition root turns a failure into safe mode.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -81,6 +82,7 @@ class SecurityContext:
         config: NoxConfig,
         *,
         conn: sqlite3.Connection,
+        connection_lock: threading.RLock | None = None,
         profiles_dir: Path,
         bus: EventBus | None = None,
         secret_store: SecretStore | None = None,
@@ -92,7 +94,7 @@ class SecurityContext:
         security = config.security
         hard = effective_hard_prohibitions(security.hard_prohibitions)
 
-        audit_store = SqliteAuditLog(conn, bus=bus, clock=clock)
+        audit_store = SqliteAuditLog(conn, bus=bus, clock=clock, lock=connection_lock)
         audit = QueuedAuditLog(audit_store)
 
         # The privacy service needs to know whether the kill switch is engaged, and the kill
