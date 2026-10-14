@@ -22,7 +22,7 @@ UID:dentist
 DTSTART:20261015T090000Z
 DTEND:20261015T093000Z
 SUMMARY:Zahnarzt
-LOCATION:Witten
+LOCATION:Musterstadt
 END:VEVENT
 BEGIN:VEVENT
 UID:holiday
@@ -73,7 +73,7 @@ def test_all_day_events_span_a_day_and_cancelled_ones_vanish() -> None:
     holiday = next(e for e in events if e.title == "Brueckentag")
     assert holiday.all_day and holiday.end - holiday.start == timedelta(days=1)
     assert all(e.title != "Abgesagt" for e in events)
-    assert next(e for e in events if e.title == "Zahnarzt").location == "Witten"
+    assert next(e for e in events if e.title == "Zahnarzt").location == "Musterstadt"
 
 
 def test_recurrence_honours_exdate_and_the_override_replaces_its_instance() -> None:
@@ -93,10 +93,22 @@ class _FakeClient:
     async def __aexit__(self, *_exc: object) -> None:
         return None
 
-    async def get(self, url: str, **_kwargs: Any) -> Any:
+    def stream(self, method: str, url: str, **_kwargs: Any) -> Any:
+        return _FakeStream(self._outcome, httpx.Request(method, url))
+
+
+class _FakeStream:
+    def __init__(self, outcome: Any, request: httpx.Request) -> None:
+        self._outcome = outcome
+        self._request = request
+
+    async def __aenter__(self) -> Any:
         if isinstance(self._outcome, Exception):
             raise self._outcome
-        return httpx.Response(200, text=self._outcome, request=httpx.Request("GET", url))
+        return httpx.Response(200, text=self._outcome, request=self._request)
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
 
 
 def _service(outcome: Any, *, configured: bool = True) -> CalendarService:
@@ -137,3 +149,50 @@ async def test_a_failed_fetch_never_reveals_the_url() -> None:
     denied = _service(PermissionError("egress denied https://calendar.example/private/SECRET"))
     await denied.refresh()
     assert "SECRET" not in denied.status()[0].error and "allow-list" in denied.status()[0].error
+
+
+DST_FEED = """BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//EN
+BEGIN:VEVENT
+UID:standup
+DTSTART;TZID=Europe/Berlin:20261001T090000
+DTEND;TZID=Europe/Berlin:20261001T091500
+RRULE:FREQ=WEEKLY;BYDAY=TH;UNTIL=20261105T080000Z
+SUMMARY:Standup
+END:VEVENT
+END:VCALENDAR
+"""
+
+
+def test_a_weekly_series_keeps_its_wall_clock_time_across_the_dst_change() -> None:
+    # 25 Oct 2026 is the switch from CEST to CET; 09:00 must stay 09:00 on both sides, and the
+    # UTC UNTIL ("08:00Z" = 09:00 CET) must keep the last occurrence on 5 Nov.
+    start = datetime(2026, 10, 19, tzinfo=TZ)
+    events = parse_ics(
+        DST_FEED, source="t", window_start=start, window_end=start + timedelta(days=21), tz=TZ
+    )
+    assert [(e.start.strftime("%d.%m %H:%M"), e.start.utcoffset()) for e in events] == [
+        ("22.10 09:00", timedelta(hours=2)),
+        ("29.10 09:00", timedelta(hours=1)),
+        ("05.11 09:00", timedelta(hours=1)),
+    ]
+
+
+def test_a_fixed_offset_clock_is_read_as_the_machine_zone() -> None:
+    from datetime import timezone
+
+    from dateutil import tz as dateutil_tz
+
+    from nox.day.calendar import _zone_of
+
+    assert isinstance(
+        _zone_of(datetime(2026, 10, 15, tzinfo=timezone(timedelta(hours=2)))), dateutil_tz.tzlocal
+    )
+    assert _zone_of(datetime(2026, 10, 15, tzinfo=TZ)) is TZ
+
+
+async def test_a_failing_feed_is_retried_on_the_interval_not_on_every_question() -> None:
+    service = _service(PermissionError("denied"))
+    await service.refresh()
+    assert service.status()[0].error and not service.is_stale()

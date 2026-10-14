@@ -126,6 +126,37 @@ def render_offer(tools: Sequence[OfferedTool]) -> str:
     return "\n".join(lines)
 
 
+class Unavailable(BaseModel):
+    """Something the user may ask for that cannot be done right now, and the reason in words
+    the user can act on - a missing credential, a profile that forbids it, a part not built."""
+
+    model_config = ConfigDict(frozen=True)
+
+    #: A tool family (`calendar.*`) or the handle a missing capability would have (`file.delete`).
+    name: str
+    detail: str
+
+
+def render_unavailable(items: Sequence[Unavailable]) -> str:
+    """The prompt section that names what Nox cannot do at the moment.
+
+    Asked for something on this list, a model with only the tool offer in front of it tends to
+    improvise - a confident sentence about a light it never switched. Told the reason, it can say
+    the one useful thing instead: what would make it work. Empty when nothing is missing.
+    """
+    if not items:
+        return ""
+    lines = [
+        "NOT AVAILABLE RIGHT NOW",
+        "If the user asks for one of these, say so plainly and name what would make it work. "
+        "Do not pretend it happened and do not improvise around it.",
+        "",
+    ]
+    for item in items:
+        lines.append(f"- {item.name}: {summarise(item.detail)}")
+    return "\n".join(lines)
+
+
 def decided_prose(head: str) -> bool | None:
     """Is this the start of ordinary prose, a directive, or too early to tell?
 

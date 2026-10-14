@@ -15,11 +15,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta, tzinfo
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Any
 
 import httpx
 import icalendar
+from dateutil import tz as dateutil_tz
 from dateutil.rrule import rruleset, rrulestr
 from pydantic import BaseModel, ConfigDict
 
@@ -75,9 +76,25 @@ class FeedStatus(BaseModel):
 # ---- parsing -------------------------------------------------------------------------------------
 
 
+#: Longest title or location kept. A feed is untrusted input that ends up in a tool result the
+#: model reads, so it is cut to one plain line of bounded length before it goes anywhere.
+MAX_TEXT_CHARS = 200
+
+#: A feed larger than this is not a calendar. Google exports of busy calendars are a few hundred
+#: kilobytes; the cap keeps a hostile or broken URL from filling memory.
+MAX_FEED_BYTES = 5 * 1024 * 1024
+
+
+class FeedTooLargeError(ValueError):
+    pass
+
+
 def _text(component: icalendar.cal.Component, key: str) -> str:
     value = component.get(key)
-    return "" if value is None else " ".join(str(value).split())
+    if value is None:
+        return ""
+    plain = "".join(ch for ch in str(value) if ch.isprintable() or ch.isspace())
+    return " ".join(plain.split())[:MAX_TEXT_CHARS]
 
 
 def _as_local(value: date | datetime, tz: tzinfo) -> datetime:
@@ -131,6 +148,12 @@ def _occurrences(
         return [local_start]
     series = rruleset()
     if rule is not None:
+        # UNTIL is usually UTC ("...T080000Z"). Expanded in wall time, it has to be wall time too,
+        # or the last occurrence of a 09:00 CET series ending "08:00Z" is dropped.
+        until = rule.get("UNTIL")
+        if until:
+            rule = icalendar.vRecur(rule)
+            rule["UNTIL"] = [_as_local(until[0], tz).replace(tzinfo=None)]
         text = rule.to_ical().decode()
         series.rrule(rrulestr(text, dtstart=naive_start, ignoretz=True))
     else:
@@ -202,7 +225,7 @@ def _expand(
     starts = (
         [_as_local(start_value, tz)]
         if is_override
-        else _occurrences(component, start_value, lo, hi, tz)
+        else _occurrences(component, start_value, lo - duration, hi, tz)
     )
     return [
         CalendarEvent(
@@ -226,6 +249,9 @@ class _Feed:
     source: CalendarSource
     events: list[CalendarEvent] = field(default_factory=list)
     fetched_at: datetime | None = None
+    #: Last fetch, successful or not; what `is_stale` looks at, so a feed that keeps failing is
+    #: retried on the interval and not on every question.
+    attempted_at: datetime | None = None
     error: str = ""
     configured: bool = False
 
@@ -236,11 +262,26 @@ def _safe_error(exc: BaseException) -> str:
         return f"HTTP {exc.response.status_code}"
     if isinstance(exc, PermissionError):
         return "host not in the active profile's egress allow-list"
+    if isinstance(exc, FeedTooLargeError):
+        return f"feed larger than {MAX_FEED_BYTES // (1024 * 1024)} MB"
+    if isinstance(exc, ValueError):
+        return "unreadable feed"  # the parser's message can quote feed content; it stays out
     return type(exc).__name__
 
 
 def _local_midnight(now: datetime) -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _zone_of(now: datetime) -> tzinfo:
+    """The zone to expand a feed in. A fixed offset (what `datetime.now().astimezone()` carries)
+    is today's offset, not a zone: it would put every occurrence after the next DST change an hour
+    off. Such a clock is read as "the machine's local zone", which `dateutil` resolves per date."""
+    zone = now.tzinfo
+    if zone is None or isinstance(zone, timezone):
+        local: tzinfo = dateutil_tz.tzlocal()
+        return local
+    return zone
 
 
 class CalendarService:
@@ -302,7 +343,7 @@ class CalendarService:
     def is_stale(self) -> bool:
         now = self._clock()
         return any(
-            f.fetched_at is None or (now - f.fetched_at).total_seconds() > self._refresh_s
+            f.attempted_at is None or (now - f.attempted_at).total_seconds() > self._refresh_s
             for f in self._feeds.values()
             if self._secret(f.source.secret)
         )
@@ -337,7 +378,8 @@ class CalendarService:
             feed.events, feed.error = [], ""
             return
         now = self._clock()
-        tz = now.tzinfo or datetime.now().astimezone().tzinfo
+        feed.attempted_at = now
+        tz = _zone_of(now)
         window_start = _local_midnight(now)
         window_end = window_start + timedelta(days=self._lookahead_days + 1)
         try:
@@ -348,7 +390,7 @@ class CalendarService:
                 source=feed.source.id,
                 window_start=window_start,
                 window_end=window_end,
-                tz=tz,  # type: ignore[arg-type]
+                tz=tz,
             )
         except Exception as exc:  # noqa: BLE001 - recorded per feed; the loop and the tools go on
             feed.error = _safe_error(exc)
@@ -359,7 +401,17 @@ class CalendarService:
 
     async def _fetch(self, url: str) -> str:
         kwargs: dict[str, Any] = {"timeout": httpx.Timeout(20.0, connect=5.0)}
-        async with self._client_factory(**kwargs) as client:
-            response = await client.get(url, follow_redirects=True)
+        chunks: list[bytes] = []
+        size = 0
+        async with (
+            self._client_factory(**kwargs) as client,
+            client.stream("GET", url, follow_redirects=True) as response,
+        ):
             response.raise_for_status()
-            return response.text
+            async for chunk in response.aiter_bytes():
+                size += len(chunk)
+                if size > MAX_FEED_BYTES:
+                    raise FeedTooLargeError(size)
+                chunks.append(chunk)
+            encoding = response.encoding or "utf-8"
+        return b"".join(chunks).decode(encoding, errors="replace")

@@ -121,6 +121,11 @@ def configure_logging(
 
     root = logging.getLogger()
     root.setLevel(numeric_level)
+    # httpx and httpcore log every request URL at INFO/DEBUG. Some of Nox's URLs are credentials
+    # (a private calendar feed), so those loggers stay at WARNING whatever the level above; the
+    # egress guard logs the host of every outbound request, which is all a log needs.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     handlers: list[logging.Handler] = []
 
     if logs_dir is not None:

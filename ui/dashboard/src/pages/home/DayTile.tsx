@@ -114,8 +114,8 @@ export function DayTile({ t, lang, client, onOpenSettings }: DayTileProps) {
             <p className="muted">{t('day_empty')}</p>
           ) : (
             <ul className="list day-list">
-              {day.events.map((event) => (
-                <li key={`${event.source}-${event.start}-${event.title}`}>
+              {day.events.map((event, index) => (
+                <li key={`${index}-${event.source}-${event.start}`}>
                   <span className="day-time">
                     {event.allDay ? t('day_all_day') : clockTime(event.start, lang)}
                   </span>

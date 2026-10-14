@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any, Protocol, cast
 
 import httpx
+from dateutil import tz
 
 from nox.core.events import HealthStatus
 from nox.core.health import Check
@@ -71,7 +72,9 @@ class DayRuntime:
 
 
 def _local_now() -> datetime:
-    return datetime.now().astimezone()
+    """Now, in the machine's zone - `tzlocal()`, not today's fixed offset, so a reminder set in
+    October for a date after the DST change lands on the hour the user said."""
+    return datetime.now(tz.tzlocal())
 
 
 def install(core: _Core) -> DayRuntime | None:
@@ -112,7 +115,14 @@ def install(core: _Core) -> DayRuntime | None:
             "urgent", "reminder", text, context_key=f"reminder:{reminder.id}"
         )
 
-    scheduler = ReminderScheduler(repo, fire=fire, poll_s=cfg.reminder_poll_s)
+    def deliverable() -> bool:
+        """Whether a reminder fired now would be heard or seen at all."""
+        proactive = core.extensions.get("proactive") if core.extensions else None
+        return proactive is not None and bool(core.config.proactive.enabled)
+
+    scheduler = ReminderScheduler(
+        repo, fire=fire, poll_s=cfg.reminder_poll_s, deliverable=deliverable
+    )
     register_day_tools(core.tool_registry, calendar=calendar, reminders=repo, clock=_local_now)
     register_day_ipc(core.registry, calendar=calendar, reminders=repo, clock=_local_now)
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any, Protocol
 
-from nox.ai.tooluse import OfferedTool
+from nox.ai.tooluse import OfferedTool, Unavailable
 from nox.capabilities.catalog import DEFAULT_AGENT, build_report
 from nox.capabilities.ipc import register_capability_ipc
 from nox.capabilities.model import CapabilityReport, CapabilityState
@@ -133,6 +133,10 @@ def install(core: CoreLike) -> ExtensionRuntime:
             missing_prerequisites=stalled,
         )
 
+    #: The report the current offer was built from, so the caveats below come from the same
+    #: snapshot and the permission preview runs once per turn, not twice.
+    latest: list[CapabilityReport] = []
+
     def offer() -> list[OfferedTool]:
         """The tools the model is told about: what the catalogue says is usable right now.
 
@@ -143,6 +147,8 @@ def install(core: CoreLike) -> ExtensionRuntime:
         """
         described = core.tool_registry.describe()
         schemas = {tool.name: tool.input_schema for tool in described}
+        snapshot = report()
+        latest[:] = [snapshot]
         return [
             OfferedTool(
                 name=capability.name,
@@ -150,10 +156,34 @@ def install(core: CoreLike) -> ExtensionRuntime:
                 schema=schemas.get(capability.name, {}),
                 asks_first=capability.decision is Decision.CONFIRM,
             )
-            for capability in report().capabilities
+            for capability in snapshot.capabilities
             if capability.state is CapabilityState.AVAILABLE
             and capability.decision is not Decision.DENY
         ]
+
+    def unavailable() -> list[Unavailable]:
+        """What the model must not pretend to do: tool families that are present but unreachable
+        or forbidden right now, each with its reason, and the known gaps. Grouped by family so a
+        home with forty entities costs one line, not forty."""
+        snapshot = latest[0] if latest else report()
+        families: dict[str, str] = {}
+        for capability in snapshot.capabilities:
+            if (
+                capability.state is CapabilityState.AVAILABLE
+                and capability.decision is not Decision.DENY
+            ):
+                continue
+            family = capability.name.split(".", 1)[0] + ".*"
+            reason = capability.reason or f"not allowed in the {snapshot.profile!r} profile"
+            families.setdefault(family, reason)
+        items = [Unavailable(name=name, detail=reason) for name, reason in families.items()]
+        items += [
+            Unavailable(
+                name=gap.name, detail=f"{gap.what} - {gap.detail}" if gap.detail else gap.what
+            )
+            for gap in snapshot.gaps
+        ]
+        return items
 
     async def call(name: str, arguments: dict[str, Any]) -> Any:
         """Every tool a conversation reaches goes through the same executor as a dashboard click.
@@ -171,7 +201,7 @@ def install(core: CoreLike) -> ExtensionRuntime:
 
     orchestrator = getattr(core, "orchestrator", None)
     if orchestrator is not None:
-        orchestrator.tool_gate = ToolGate(offer=offer, call=call)
+        orchestrator.tool_gate = ToolGate(offer=offer, call=call, unavailable=unavailable)
     else:
         log.warning("capabilities.no_orchestrator", detail="conversations will have no tools")
     log.info("capabilities.installed")

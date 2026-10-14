@@ -86,3 +86,22 @@ async def test_start_and_stop_leave_no_task_behind(repo: ReminderRepository) -> 
     scheduler.start()
     await scheduler.stop()
     await scheduler.stop()  # idempotent
+
+
+async def test_nothing_is_marked_fired_while_nothing_could_deliver_it(
+    repo: ReminderRepository,
+) -> None:
+    spoken: list[str] = []
+
+    async def fire(reminder: ReminderRow) -> None:
+        spoken.append(reminder.text)
+
+    repo.add(text="Jetzt", due_at=NOW - timedelta(seconds=30))
+    deliverable = {"ok": False}
+    scheduler = ReminderScheduler(
+        repo, fire=fire, clock=lambda: NOW, deliverable=lambda: deliverable["ok"]
+    )
+    assert await scheduler.tick() == [] and spoken == []
+    assert [r.text for r in repo.list_open()] == ["Jetzt"]  # still open, not lost
+    deliverable["ok"] = True
+    assert len(await scheduler.tick()) == 1 and spoken == ["Jetzt"]

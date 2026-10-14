@@ -23,10 +23,13 @@ from nox.data.repos import Row, written_row
 
 log = get_logger(__name__)
 
-__all__ = ["MAX_TEXT_CHARS", "ReminderRepository", "ReminderRow", "ReminderScheduler"]
+__all__ = ["MAX_AHEAD", "MAX_TEXT_CHARS", "ReminderRepository", "ReminderRow", "ReminderScheduler"]
 
 #: Longest reminder text; anything longer is a note, and the vault is the place for notes.
 MAX_TEXT_CHARS = 300
+
+#: Furthest ahead a reminder may be set; a year is plenty and catches "2062" typos.
+MAX_AHEAD = timedelta(days=366)
 
 
 class ReminderRow(Row):
@@ -144,10 +147,12 @@ class ReminderScheduler:
         fire: Fire,
         clock: Callable[[], datetime] = _now,
         poll_s: float = 20.0,
+        deliverable: Callable[[], bool] = lambda: True,
     ) -> None:
         self._repo = repo
         self._fire = fire
         self._clock = clock
+        self._deliverable = deliverable
         self._poll_s = poll_s
         self._task: asyncio.Task[None] | None = None
 
@@ -164,6 +169,10 @@ class ReminderScheduler:
     async def tick(self) -> list[str]:
         """Fire what is due now. Returns the ids fired, for tests and logs."""
         fired: list[str] = []
+        if not self._deliverable():
+            # Nothing would be heard or seen: leave the reminders open rather than mark them
+            # fired and lose them. They go out as soon as a way to deliver them is back.
+            return fired
         for reminder in self._repo.list_due(self._clock()):
             # Marked before speaking: a reminder repeated after a crash mid-sentence would be
             # worse than one that was cut off, and the record says it was attempted.

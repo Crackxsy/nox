@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from nox.core.logging import get_logger
 from nox.day.calendar import CalendarService
-from nox.day.reminders import MAX_TEXT_CHARS, ReminderRepository, ReminderRow
+from nox.day.reminders import MAX_AHEAD, MAX_TEXT_CHARS, ReminderRepository, ReminderRow
 from nox.ipc.dispatch import EmptyPayload, RequestContext, RequestRegistry
 
 log = get_logger(__name__)
@@ -95,12 +95,17 @@ def register_day_ipc(
         }
 
     async def add(ctx: RequestContext, payload: ReminderAdd) -> dict[str, Any]:
-        due = datetime.fromisoformat(payload.due_at)
+        try:
+            due = datetime.fromisoformat(payload.due_at)
+        except ValueError:
+            return {"ok": False, "reason": "not a date-time"}
         now = clock()
         if due.tzinfo is None:
             due = due.replace(tzinfo=now.tzinfo)
         if due < now - timedelta(minutes=1):
             return {"ok": False, "reason": "in the past"}
+        if due > now + MAX_AHEAD:
+            return {"ok": False, "reason": "more than a year ahead"}
         row = reminders.add(text=payload.text, due_at=due, source=ctx.role)
         log.info("day.reminder_added", id=row.id, by=ctx.role)
         return {"ok": True, **_reminder(row)}

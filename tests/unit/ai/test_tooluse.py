@@ -13,10 +13,12 @@ from nox.ai.tooluse import (
     SENTINEL,
     OfferedTool,
     ToolCall,
+    Unavailable,
     decided_prose,
     parse_directive,
     render_offer,
     render_result,
+    render_unavailable,
 )
 
 ALLOWED = ("home.light", "time.now")
@@ -146,3 +148,26 @@ def test_the_offer_names_the_arguments_and_the_confirmation() -> None:
 def test_a_result_reads_as_a_sentence() -> None:
     assert "done" in render_result("time.now", ok=True)
     assert "no token" in render_result("home.light", ok=False, error="no token stored")
+
+
+def test_nothing_missing_means_no_caveat_section() -> None:
+    assert render_unavailable([]) == ""
+
+
+def test_the_caveats_name_the_family_and_the_reason() -> None:
+    text = render_unavailable(
+        [
+            Unavailable(
+                name="home.*",
+                detail="no Home Assistant token is stored - add it on the Settings page",
+            ),
+            Unavailable(
+                name="desktop.software_install",
+                detail="install or remove a program - nothing downloads or installs software",
+            ),
+        ]
+    )
+    assert text.startswith("NOT AVAILABLE RIGHT NOW")
+    assert "say so plainly" in text and "Do not pretend" in text
+    assert "- home.*: no Home Assistant token is stored - add it on the Settings page" in text
+    assert "- desktop.software_install: install or remove a program" in text

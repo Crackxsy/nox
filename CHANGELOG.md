@@ -26,6 +26,13 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   effect, and no component writes a ref during render any more.
 
 ### Added
+- **Nox says what it cannot do, and why.** Asked to switch off a light with no Home Assistant
+  connected, Nox used to improvise a confident sentence. The tool offer in its prompt now ends with
+  a "not available right now" list: every tool family that is present but unreachable or forbidden
+  in the current profile, with the reason in words the user can act on ("no calendar is connected -
+  paste a private iCal URL on the Settings page"), plus the known gaps (nothing installs software,
+  no lock or alarm has a tool). The model is told to say so plainly and name what would make it
+  work, instead of pretending or working around it.
 - **Nox knows your day.** "Was steht heute an?" used to be answered from Nox's own development
   backlog, the only list it had. Now it reads your calendars - a Google Calendar and a school
   timetable, each as a private iCal address stored in the Credential Manager, never in a file -
