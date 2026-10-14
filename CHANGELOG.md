@@ -8,6 +8,8 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-14
+
 ### Changed
 - **Settings with fixed values are picked, not typed.** Active plugins are checkboxes with a line
   on what each one does, the AI backends a dropdown and an ordered list you move up and down, the
@@ -771,7 +773,8 @@ history, which 404 on the public repository (#29) - they now use the tag-based f
 foundation") predates the tagging process and never gets one, hence the single-tag link shape
 below instead of a compare for it and for `v0.1.0` (nothing tagged to compare either against).
 
-[Unreleased]: https://github.com/Crackxsy/nox/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Crackxsy/nox/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Crackxsy/nox/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Crackxsy/nox/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Crackxsy/nox/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Crackxsy/nox/compare/v0.1.0...v0.2.0
