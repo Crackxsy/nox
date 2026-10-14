@@ -10,7 +10,7 @@ arithmetic, not ours.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
@@ -75,11 +75,13 @@ def _event(event: CalendarEvent) -> dict[str, Any]:
     }
 
 
-def _reminder(row: ReminderRow) -> dict[str, Any]:
+def _reminder(row: ReminderRow, tz: tzinfo | None) -> dict[str, Any]:
+    """`tz` is the clock's zone, not the process's: the answer must read right for the user even
+    when the process runs somewhere else (a CI runner in UTC, say)."""
     return {
         "id": row.id,
         "text": row.text,
-        "due_at": row.due_at.astimezone().isoformat(timespec="minutes"),
+        "due_at": row.due_at.astimezone(tz).isoformat(timespec="minutes"),
         "source": row.source,
     }
 
@@ -181,7 +183,7 @@ def make_reminder_set_tool(repo: ReminderRepository, clock: Clock) -> ToolSpec:
         if due > now + MAX_AHEAD:
             raise ValueError("a reminder can be at most a year ahead")
         row = repo.add(text=payload.text, due_at=due, source="tool")
-        return {**_reminder(row), "in_minutes": int((due - now).total_seconds() // 60)}
+        return {**_reminder(row, now.tzinfo), "in_minutes": int((due - now).total_seconds() // 60)}
 
     return ToolSpec(
         name="reminder.set",
@@ -198,9 +200,10 @@ def make_reminder_set_tool(repo: ReminderRepository, clock: Clock) -> ToolSpec:
     )
 
 
-def make_reminder_list_tool(repo: ReminderRepository) -> ToolSpec:
+def make_reminder_list_tool(repo: ReminderRepository, clock: Clock) -> ToolSpec:
     async def handler(_arguments: dict[str, Any]) -> dict[str, Any]:
-        return {"items": [_reminder(r) for r in repo.list_open()]}
+        tz = clock().tzinfo
+        return {"items": [_reminder(r, tz) for r in repo.list_open()]}
 
     return ToolSpec(
         name="reminder.list",
@@ -242,5 +245,5 @@ def register_day_tools(
     registry.register(make_calendar_today_tool(calendar))
     registry.register(make_calendar_upcoming_tool(calendar))
     registry.register(make_reminder_set_tool(reminders, clock))
-    registry.register(make_reminder_list_tool(reminders))
+    registry.register(make_reminder_list_tool(reminders, clock))
     registry.register(make_reminder_cancel_tool(reminders))

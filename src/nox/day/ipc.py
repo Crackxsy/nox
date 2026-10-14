@@ -8,7 +8,7 @@ so a reminder added here is spoken exactly like one the model set.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -39,11 +39,11 @@ class ReminderCancel(BaseModel):
     id: str = Field(min_length=1)
 
 
-def _reminder(row: ReminderRow) -> dict[str, Any]:
+def _reminder(row: ReminderRow, tz: tzinfo | None) -> dict[str, Any]:
     return {
         "id": row.id,
         "text": row.text,
-        "due_at": row.due_at.astimezone().isoformat(timespec="minutes"),
+        "due_at": row.due_at.astimezone(tz).isoformat(timespec="minutes"),
         "fired": row.fired_at is not None,
         "source": row.source,
     }
@@ -77,8 +77,8 @@ def register_day_ipc(
                 }
                 for e in calendar.today()
             ],
-            "reminders": [_reminder(r) for r in todays],
-            "later": [_reminder(r) for r in later],
+            "reminders": [_reminder(r, now.tzinfo) for r in todays],
+            "later": [_reminder(r, now.tzinfo) for r in later],
             "calendars": [
                 {
                     "id": f.id,
@@ -108,7 +108,7 @@ def register_day_ipc(
             return {"ok": False, "reason": "more than a year ahead"}
         row = reminders.add(text=payload.text, due_at=due, source=ctx.role)
         log.info("day.reminder_added", id=row.id, by=ctx.role)
-        return {"ok": True, **_reminder(row)}
+        return {"ok": True, **_reminder(row, now.tzinfo)}
 
     async def cancel(ctx: RequestContext, payload: ReminderCancel) -> dict[str, Any]:
         ok = reminders.cancel(payload.id)
