@@ -31,6 +31,7 @@ from nox.core.config.features import (
     CLIP_ROOTS,
     ClipsConfig,
     CreativeConfig,
+    DayConfig,
     HomeConfig,
     PmConfig,
     RemoteConfig,
@@ -70,6 +71,7 @@ class NoxConfig(StrictSection):
     clips: ClipsConfig = Field(default_factory=ClipsConfig)
     pm: PmConfig = Field(default_factory=PmConfig)
     home: HomeConfig = Field(default_factory=HomeConfig)
+    day: DayConfig = Field(default_factory=DayConfig)
     presets: PresetsConfig = Field(default_factory=PresetsConfig)
     files: FilesConfig = Field(default_factory=FilesConfig)
     extend: ExtendConfig = Field(default_factory=ExtendConfig)

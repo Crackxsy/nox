@@ -315,6 +315,17 @@ pm:                              # project management, reading and writing notes
   watch_debounce_s: 1.5
   focus_max_items: 5
 
+day:                             # your day: calendar feeds and reminders. The feed URLs are
+                                 # credentials and live in the Credential Manager
+                                 # (nox/calendar/google_ics_url, nox/calendar/school_ics_url),
+                                 # entered on the Settings page - never here.
+  enabled: true
+  refresh_minutes: 15            # how often connected calendars are fetched again
+  lookahead_days: 14             # how many days of appointments are kept, today included
+  reminders_enabled: true        # "erinner mich um 9 an ..." - spoken when due
+  reminder_poll_s: 20.0          # how often due reminders are looked for
+  reminder_prefix: "Erinnerung:" # spoken before the reminder's own words; empty = just the words
+
 home:                            # smart home through your own Home Assistant instance. Nothing
                                  # here reaches a manufacturer cloud: every request goes to the
                                  # address below and nowhere else. Inactive until you add "home"

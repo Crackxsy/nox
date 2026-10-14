@@ -9,6 +9,7 @@
  *   providers.ts      the AI provider list and its display names
  *   stream.ts         stream session, live chat feed, Funken leaderboard
  *   clips.ts          clip records, the pending rows events announce, export results
+ *   day.ts            the user's day: appointments, reminders, calendar feeds
  *   home.ts           Home Assistant areas, entities and their live state
  *   remote.ts         paired devices and the one-time pairing code
  *   settings.ts       config, secrets, PIN, Twitch device flow, personality
@@ -20,6 +21,7 @@
 
 export * from './chat';
 export * from './clips';
+export * from './day';
 export * from './health';
 export * from './home';
 export * from './presets';

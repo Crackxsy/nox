@@ -53,6 +53,13 @@ deny:
 # and is copied into THIRD_PARTY_LICENSES.md. Use this only for a specific, vetted package, never
 # to blanket-allow a whole license family — that belongs in the lists above instead.
 package_exceptions:
+  - name: python-dateutil
+    ecosystem: python
+    category: allow
+    reason: >
+      Declares "Dual License" in its metadata; the LICENSE file is Apache-2.0 OR BSD-3-Clause
+      (dual, at the user's choice). Nox uses it under the BSD-3-Clause alternative. Pulled in by
+      icalendar (BSD-2-Clause) and used directly for RRULE expansion in nox.day.calendar.
   - name: numpy
     ecosystem: python
     category: allow

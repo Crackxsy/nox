@@ -15,7 +15,10 @@ permissions:
   # network, for the `home` plugin. It is not loopback, so privacy mode private/offline blocks it
   # like any other host. A Home Assistant at a fixed IP goes here instead, next to the matching
   # entry in plugins/home/manifest.yaml.
-  egress_allowlist: ["api.telegram.org:443", "id.twitch.tv:443", "homeassistant.local:8123"]
+  # calendar.google.com / *.webuntis.com: the user's own calendar feeds (private iCal URLs,
+  # stored as secrets) for the `day` extension - read-only GETs, nothing is sent.
+  egress_allowlist: ["api.telegram.org:443", "id.twitch.tv:443", "homeassistant.local:8123",
+                     "calendar.google.com:443", "*.webuntis.com:443"]
   # 127.0.0.1:8123: a Home Assistant running on this machine (a container, usually). The entry is
   # what authorizes the `home` plugin's declared loopback egress at spawn time; it does NOT make
   # smart-home control survive privacy mode private/offline. The plugin refuses to connect in

@@ -12,6 +12,7 @@ def test_urgent_order_matches_b13() -> None:
     assert URGENT_ORDER == (
         UrgentCategory.SECURITY,
         UrgentCategory.DATA_LOSS,
+        UrgentCategory.REMINDER,
         UrgentCategory.RESOURCES,
         UrgentCategory.TASK_RESULT,
     )

@@ -38,6 +38,8 @@ KNOWN_SECRETS: dict[str, str] = {
     "nox/obs/websocket_password": "obs",
     "nox/telegram/bot_token": "telegram",
     "nox/home/access_token": "home",
+    "nox/calendar/google_ics_url": "calendar",
+    "nox/calendar/school_ics_url": "calendar",
 }
 
 DEFAULT_RATE_LIMIT = 10

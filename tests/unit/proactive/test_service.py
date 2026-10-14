@@ -239,3 +239,26 @@ async def test_recent_notifications_are_stored() -> None:
     assert len(status.recent) == 1
     assert status.recent[0].text == "warning"
     assert status.recent[0].kind == "urgent"
+
+
+# ---- URGENT: reminder - the user's own callout -------------------------------------------------
+
+
+async def test_a_reminder_is_spoken_without_touching_the_proactive_budget() -> None:
+    speaker = FakeSpeaker()
+    service, events, _state = make_service(speaker=speaker)
+    decision = await service.notify("urgent", "reminder", "Erinnerung: Zahnarzt")
+    assert decision.allowed and decision.channel == "speech+toast"
+    assert speaker.calls[-1] == "Erinnerung: Zahnarzt"
+    assert service.status().interruptions_used_this_hour == 0
+    assert events[-1][0] == "proactive.notification"
+    assert events[-1][1]["priority"] == "reminder" and events[-1][1]["spoken"] is True
+
+
+async def test_a_reminder_while_muted_is_a_toast_not_a_voice() -> None:
+    speaker = FakeSpeaker()
+    service, events, _state = make_service(muted=True, speaker=speaker)
+    decision = await service.notify("urgent", "reminder", "Erinnerung: Zahnarzt")
+    assert decision.allowed and decision.channel == "toast"
+    assert speaker.calls == []
+    assert events[-1][1]["spoken"] is False

@@ -201,6 +201,35 @@ Spoken and typed commands are matched **locally** first: "mach das Licht im Wohn
 resolved against your own Home Assistant names in well under a millisecond, with no language model
 involved. Only a sentence that does not match is handed to the model.
 
+### Calendar and reminders (your day)
+
+Asked "was steht heute an?", Nox answers from **your** calendars and reminders - not from its own
+project backlog, which is a separate list it also keeps. Calendars are read as private iCal feeds;
+nothing is written back, and no Google or school account is ever handed to Nox.
+
+1. **Google Calendar**: open it in the browser → **Settings** → pick the calendar on the left →
+   **Integrate calendar** → copy the **Secret address in iCal format**.
+2. **School timetable**: in WebUntis, **Profile → Sharing** → copy the ICS link (other timetable
+   systems that export an `.ics` URL work the same way).
+3. Paste each address in the dashboard under **Einstellungen → Integrationen → Kalender**, or
+   store it with `.venv\Scripts\python.exe -m nox.cli secrets set nox/calendar/google_ics_url`
+   (and `nox/calendar/school_ics_url`). The address *is* the credential - anyone who has it can
+   read the whole calendar - so it lives in the Windows Credential Manager like a token and is
+   never written to a file, a log or a prompt. A failed fetch is reported as its HTTP status, not
+   its URL.
+
+Feeds are fetched every 15 minutes (`day.refresh_minutes`) for the next two weeks
+(`day.lookahead_days`); a question refreshes early when the cache is stale, but never waits more
+than a few seconds for the network. The hosts `calendar.google.com` and `*.webuntis.com` are on
+the `companion` and `stream` profiles' egress allow-lists; another provider's host goes into
+`config/profiles/companion.yaml` → `egress_allowlist` like any other.
+
+**Reminders** need no setup. "Erinner mich morgen um 9 an den Zahnarzt" is stored in the database
+(`reminder.set`), survives a restart and is spoken when due - once, as a toast too, respecting
+mute and quiet zones but not the proactive budget, because you asked for exactly this at exactly
+this time. The **Zuhause** page opens with **Dein Tag**: today's appointments, the reminders
+(spoken ones greyed out), the next few after today, and a field to add one by hand.
+
 ### Telegram (mobile bridge)
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.

@@ -1980,3 +1980,34 @@ a:hover {
   font-size: var(--text-sm, 0.875rem);
   white-space: nowrap;
 }
+
+/* ---- Dein Tag (Home) ----------------------------------------------------------------------- */
+
+.day-list > li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.day-time {
+  flex: 0 0 5.5rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+
+.day-list .detail {
+  flex: 1 1 auto;
+}
+
+.day-subtitle {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.day-fired {
+  opacity: 0.6;
+}

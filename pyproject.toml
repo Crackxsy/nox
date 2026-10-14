@@ -39,6 +39,10 @@ dependencies = [
     # Argon2id for the PIN hash (`nox.security.secrets`). Without it the PIN falls back to
     # PBKDF2-SHA256 and the log says so on every start. MIT.
     "argon2-cffi>=23.1",
+    # Calendar feeds (`nox.day`): iCalendar parsing and RRULE expansion. BSD-2-Clause and
+    # BSD-3-Clause/Apache-2.0 - chosen over recurring-ical-events, which is LGPL.
+    "icalendar>=6.0",
+    "python-dateutil>=2.9",
 ]
 
 [project.optional-dependencies]

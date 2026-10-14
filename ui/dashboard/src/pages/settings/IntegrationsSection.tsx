@@ -21,6 +21,8 @@ export const TWITCH_CLIENT_ID = 'nox/twitch/client_id';
 export const OBS_PASSWORD = 'nox/obs/websocket_password';
 export const TELEGRAM_TOKEN = 'nox/telegram/bot_token';
 export const HOME_ACCESS_TOKEN = 'nox/home/access_token';
+export const CALENDAR_GOOGLE_URL = 'nox/calendar/google_ics_url';
+export const CALENDAR_SCHOOL_URL = 'nox/calendar/school_ics_url';
 
 export interface IntegrationsSectionProps {
   t: T;
@@ -215,6 +217,25 @@ export function IntegrationsSection({
               <p role="status" aria-live="polite" className="hint break">
                 {homeTest.message && <Detail label={homeTest.message} detail={homeTest.detail} />}
               </p>
+            </Tile>
+
+            <Tile level={4} id="calendar" title={t('settings_group_calendar')}>
+              <p className="hint">{t('calendar_intro')}</p>
+              <ol className="steps">
+                <li>{t('calendar_step_1')}</li>
+                <li>{t('calendar_step_2')}</li>
+                <li>{t('calendar_step_3')}</li>
+              </ol>
+              <SecretField
+                {...secretProps(CALENDAR_GOOGLE_URL)}
+                labelKey="calendar_google_label"
+                hintKey="calendar_google_hint"
+              />
+              <SecretField
+                {...secretProps(CALENDAR_SCHOOL_URL)}
+                labelKey="calendar_school_label"
+                hintKey="calendar_school_hint"
+              />
             </Tile>
 
             <Tile level={4} id="telegram" title="Telegram">

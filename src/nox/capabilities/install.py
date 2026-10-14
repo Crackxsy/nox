@@ -27,6 +27,7 @@ from nox.core.config import NoxConfig
 from nox.core.extension import ExtensionRuntime
 from nox.core.logging import get_logger
 from nox.core.toolloop import ToolGate
+from nox.day.install import CALENDAR_SECRETS
 from nox.home.install import ACCESS_TOKEN_SECRET as HOME_TOKEN_SECRET
 from nox.ipc.dispatch import RequestRegistry
 from nox.plugins.manager import PluginState
@@ -43,11 +44,16 @@ DEFAULT_MODE = "companion"
 #: Tool prefix -> (secret name, what to tell the user). The one place where "the tool is there and
 #: has no credential" is written down; the secret *name* is imported from the module that owns it,
 #: so renaming it there cannot leave a stale copy here.
-_SECRET_PREREQUISITES: tuple[tuple[str, str, str], ...] = (
+_SECRET_PREREQUISITES: tuple[tuple[str, tuple[str, ...], str], ...] = (
     (
         "home.",
-        HOME_TOKEN_SECRET,
+        (HOME_TOKEN_SECRET,),
         "no Home Assistant token is stored - add it on the Settings page",
+    ),
+    (
+        "calendar.",
+        CALENDAR_SECRETS,
+        "no calendar is connected - paste a private iCal URL on the Settings page",
     ),
 )
 
@@ -96,8 +102,8 @@ def _plugin_status(core: CoreLike) -> list[Any]:
 
 def install(core: CoreLike) -> ExtensionRuntime:
     def probe(tool_name: str) -> tuple[CapabilityState, str] | None:
-        for prefix, secret, detail in _SECRET_PREREQUISITES:
-            if tool_name.startswith(prefix) and not _has_secret(core, secret):
+        for prefix, secrets, detail in _SECRET_PREREQUISITES:
+            if tool_name.startswith(prefix) and not any(_has_secret(core, s) for s in secrets):
                 return CapabilityState.UNAVAILABLE, detail
         return None
 

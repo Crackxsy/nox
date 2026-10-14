@@ -136,6 +136,8 @@ class ProactiveService:
             category = UrgentCategory(priority)
             if category in INTERRUPT_ELIGIBLE:
                 return await self._notify_interrupt_eligible(category, text)
+            if category is UrgentCategory.REMINDER:
+                return await self._notify_reminder(text)
             return await self._notify_lesser_urgent(category, text, context_key)
         return await self._notify_hint(priority, text, context_key)
 
@@ -164,6 +166,33 @@ class ProactiveService:
         await self._publish_notification(record)
         # Never suppressed: the toast/expression/event above always fire regardless of mute.
         return AttentionDecision(allowed=True, reason="ok", channel=channel, announced=False)
+
+    # ---- URGENT: a reminder the user set (spoken when speaking is allowed, toast always) -----
+
+    async def _notify_reminder(self, text: str) -> AttentionDecision:
+        """The user asked for this callout at this time, so the hint gate (density, budget,
+        timing learner) does not apply; mute and quiet zones still do, because they are about
+        where the voice may be heard, not about how often Nox volunteers something."""
+        speak_allowed, reason = self._speech_policy.may_speak("proactive")
+        spoken = False
+        announced = False
+        if speak_allowed and self._speaker is not None:
+            announced = await self._announce()
+            await self._speaker.say(text)
+            spoken = True
+        channel: Channel = "speech+toast" if spoken else "toast"
+        record = self._record(
+            kind="urgent",
+            priority=UrgentCategory.REMINDER.value,
+            text=text,
+            channel=channel,
+            spoken=spoken,
+            announced=announced,
+            suppressed_reason="" if speak_allowed else reason,
+        )
+        await self._touch_pet_expression(urgent=False)
+        await self._publish_notification(record)
+        return AttentionDecision(allowed=True, reason="ok", channel=channel, announced=announced)
 
     # ---- URGENT: resources / task_result (visible warning, not an interruption) -----------
 
