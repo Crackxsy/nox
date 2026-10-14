@@ -444,4 +444,8 @@ memory:                          # the vault watcher, indexer and retrieval. The
                                  # topic; a chunk that answers the question scores 0.79-0.82
   retrieval_k: 8
   full_scan_on_boot: true
+  capture_enabled: true          # learn durable facts about the user from conversations
+  capture_settle_s: 45           # ... once the conversation has been quiet this long
+  capture_batch_turns: 4         # ... or sooner, after this many turns
+  profile_max_chars: 1500        # longest "what you know about the user" block in the prompt
   retention_note_version_days: 30 # how long rollback copies of a note are kept

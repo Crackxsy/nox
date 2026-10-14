@@ -284,6 +284,14 @@ class MemoryConfig(StrictSection):
     retrieval_min_score: float = Field(default=0.75, ge=0.0, le=1.0)
     retrieval_k: int = Field(default=8, ge=1, le=50)
     full_scan_on_boot: bool = True
+    #: Facts about the user are captured from finished conversation turns (`nox.memory.capture`).
+    capture_enabled: bool = True
+    #: Quiet time after the last turn before the captured exchanges are examined.
+    capture_settle_s: float = Field(default=45.0, ge=5.0, le=600.0)
+    #: Examine sooner once this many turns are pending, so a long conversation is not held back.
+    capture_batch_turns: int = Field(default=4, ge=1, le=20)
+    #: Longest "what you know about the user" block in the system prompt.
+    profile_max_chars: int = Field(default=1500, ge=200, le=8000)
     retention_note_version_days: int = Field(default=30, ge=1)
 
 

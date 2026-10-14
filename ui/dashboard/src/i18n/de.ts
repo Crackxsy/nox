@@ -109,6 +109,15 @@ export const de = {
   option_plugin_creative: 'Kreativ – Texte und Ideen',
   option_plugin_echo: 'Echo – Testplugin für Entwickler',
   settings_group_presets: 'Presets',
+  profile_title: 'Was Nox über dich weiß',
+  profile_hint:
+    'Das merkt sich Nox aus euren Gesprächen – Leute, Spiele, Vorlieben, Pläne. Jeder Eintrag lässt sich löschen; was du hier selbst einträgst, zählt mehr als das, was Nox nur vermutet.',
+  profile_loading: 'Lade …',
+  profile_empty: 'Noch nichts. Erzähl Nox etwas von dir – oder trag es hier ein.',
+  profile_forget: 'Vergessen',
+  profile_add_label: 'Nox soll sich merken',
+  profile_add_placeholder: 'z. B. Mein bester Freund heißt Tim.',
+  profile_add: 'Merken',
   option_lang_auto: 'Automatisch',
 
   // -- shell --------------------------------------------------------------------------------------

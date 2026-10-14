@@ -26,6 +26,14 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   effect, and no component writes a ref during render any more.
 
 ### Added
+- **Nox remembers you.** Asked "was weißt du über mich?" after weeks of use, Nox answered "kaum
+  etwas": nothing ever wrote to its memory unless you said "merk dir". It now learns durable facts
+  from conversations on its own - people, games, likes, projects, dated plans - a little after the
+  conversation goes quiet, and keeps them in every prompt rather than hoping a search finds them.
+  Nothing is learned while the privacy mode forbids memory writes. The dashboard shows the list
+  under Einstellungen as "Was Nox über dich weiß", where any fact can be forgotten and one can be
+  typed in. Retrieved vault notes are now labelled as documents - Nox's own project documentation
+  was being paraphrased back to you as "what you told me".
 - **"Lass uns streamen" starts the stream.** A spoken mode switch is recognised before the model
   is asked: "lass uns streamen", "wir gehen live", "starte den Stream" switch to stream mode,
   "Stream beenden" switches back. Nox then says what actually runs - "Stream-Modus ist an. Twitch

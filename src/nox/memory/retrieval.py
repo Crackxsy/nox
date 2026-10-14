@@ -179,7 +179,9 @@ def format_context(result: RetrievalResult) -> str:
         return ""
     lines = []
     for item in result.items:
-        tag = "vault" if item.kind == "vault_chunk" else "memory"
+        # "note" rather than "vault": the model reads this, and a note is a document the user
+        # keeps - it was presenting Nox's own project documentation as things the user had said.
+        tag = "note" if item.kind == "vault_chunk" else "remembered"
         lines.append(f"[{tag}:{item.source}#{item.ref_id} score={item.score:.2f}] {item.text}")
     prefix = "(degraded: keyword search only)\n" if result.limited else ""
     return prefix + "\n\n".join(lines)
