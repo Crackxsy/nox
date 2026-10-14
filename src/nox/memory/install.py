@@ -26,7 +26,9 @@ from nox.core.health import Check
 from nox.core.logging import get_logger
 from nox.core.orchestrator import TurnContext
 from nox.data.repos import MemoryItemRepository
+from nox.memory.capture import FactCapture, UserProfile
 from nox.memory.embeddings import EmbeddingService
+from nox.memory.ipc import register_memory_ipc
 from nox.memory.items import MemoryService
 from nox.memory.retention import RetentionJob
 from nox.memory.retrieval import RetrievalResult, RetrievalService, format_context
@@ -52,6 +54,8 @@ class _Core(Protocol):
     security: Any
     tool_registry: Any
     orchestrator: Any
+    router: Any
+    registry: Any
     health: Any
 
 
@@ -98,10 +102,20 @@ class _PromptAdapter:
         self.last_result = result
         block = format_context(result)
         return TurnContext(
-            block=f"## Memory context (retrieved)\n{block}" if block else "",
+            block=f"## Memory context (retrieved)\n{_CONTEXT_NOTE}\n{block}" if block else "",
             relevance=result.relevance,
             items=len(result.items),
         )
+
+
+#: Read by the model above every retrieved block. The vault holds Nox's own project documentation
+#: next to the user's notes, and without this line a chunk of the PRD was being paraphrased back
+#: to the user as "what you told me".
+_CONTEXT_NOTE = (
+    "(lines tagged `note` are documents from the user's vault, which includes Nox's own project "
+    "documentation - they are not things the user said to you; `remembered` lines were learned "
+    "in conversation)"
+)
 
 
 @dataclass
@@ -115,6 +129,10 @@ class MemoryRuntime:
     memory: MemoryService
     retrieval: RetrievalService
     retention: RetentionJob
+    #: What Nox knows about the user, for the prompt and the dashboard.
+    profile: UserProfile | None = None
+    #: Learns facts about the user from finished turns; None when capture is switched off.
+    capture: FactCapture | None = None
     #: Empty while embeddings work; otherwise why they do not, for the health check and the user.
     embeddings_unavailable: str = ""
     scan_task: asyncio.Task[Any] | None = field(default=None, repr=False)
@@ -122,6 +140,8 @@ class MemoryRuntime:
     prompt_adapter: _PromptAdapter | None = field(default=None, repr=False)
 
     async def stop(self) -> None:
+        if self.capture is not None:
+            await self.capture.stop()
         self.watcher.stop()
         if self.scan_task is not None and not self.scan_task.done():
             self.scan_task.cancel()
@@ -224,6 +244,22 @@ def install(core: _Core) -> MemoryRuntime:
     adapter = _PromptAdapter(core.orchestrator, retrieval, k=cfg.retrieval_k)
     adapter.install()
     runtime.prompt_adapter = adapter
+
+    user_name = core.config.identity.user_display_name or "the user"
+    runtime.profile = UserProfile(memory_repo, user_name=user_name, max_chars=cfg.profile_max_chars)
+    core.orchestrator.profile_block = runtime.profile.block
+    if cfg.capture_enabled:
+        runtime.capture = FactCapture(
+            memory=runtime.memory,
+            profile=runtime.profile,
+            complete=core.router.complete,
+            user_name=user_name,
+            embeddings=embeddings if not embeddings_unavailable else None,
+            settle_s=cfg.capture_settle_s,
+            batch_turns=cfg.capture_batch_turns,
+        )
+        core.orchestrator.on_turn_complete = runtime.capture.observe
+    register_memory_ipc(core.registry, runtime.profile, runtime.memory)
 
     if cfg.full_scan_on_boot:
         runtime.scan_task = asyncio.get_running_loop().create_task(

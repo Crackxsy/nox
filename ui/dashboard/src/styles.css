@@ -1952,3 +1952,31 @@ a:hover {
   font-family: inherit;
   font-size: var(--text-base);
 }
+
+/* ---- what Nox knows about you (settings) ---------------------------------------------------- */
+
+.fact-list {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.fact-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--hit);
+  padding: 6px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-field);
+  background: var(--field);
+}
+
+.fact-meta {
+  color: var(--ink-2);
+  font-size: var(--text-sm, 0.875rem);
+  white-space: nowrap;
+}

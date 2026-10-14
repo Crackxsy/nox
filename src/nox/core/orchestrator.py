@@ -139,6 +139,13 @@ class Orchestrator:
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     #: Set by `nox.memory.install` to make the prompt retrieval-augmented. `None` = no memory.
     context_provider: ContextProvider | None = None
+    #: Set by `nox.memory.install`: what Nox knows about the user, rendered for the prompt. It sits
+    #: between the stable personality and the per-turn memory context, so it is cached as part of
+    #: the prefix until a fact changes. `None` = nothing known, or no memory.
+    profile_block: Callable[[], str] | None = None
+    #: Set by `nox.memory.install`: told about every finished model turn, so facts about the user
+    #: can be captured from it in the background. Never awaited inside the turn.
+    on_turn_complete: Callable[[str, str], None] | None = None
     #: Set by `nox.presets.install` so a registered phrase reaches its preset before any
     #: model is asked. `None` = no presets.
     preset_gate: PresetGate | None = None
@@ -368,9 +375,20 @@ class Orchestrator:
             self._note_first_sentence(turn, started)
             turn.timings.total_ms = (time.perf_counter() - started) * 1000
             await self._record("assistant", turn.response, provider=turn.provider)
+            self._notify_turn_complete(text, turn.response)
             return turn
         finally:
             unsub()
+
+    def _notify_turn_complete(self, user_text: str, response: str) -> None:
+        if self.on_turn_complete is None or not response.strip():
+            return
+        if self.memory_policy is not None and not self.memory_policy.allows_memory_write():
+            return
+        try:
+            self.on_turn_complete(user_text, response)
+        except Exception as exc:  # noqa: BLE001 - a listener must never break the turn it heard
+            log.warning("orchestrator.turn_listener_failed", error=f"{type(exc).__name__}: {exc}")
 
     def _request(
         self, request_id: str, role: AiRole, messages: list[Message], language: str
@@ -491,7 +509,8 @@ class Orchestrator:
         in the prompt, and it is left out entirely when nothing is on offer - a model told
         about a protocol it cannot use will eventually try to use it anyway.
         """
-        parts = [self.system_prompt(), context.block, tools]
+        profile = self.profile_block() if self.profile_block is not None else ""
+        parts = [self.system_prompt(), profile, context.block, tools]
         return "\n\n".join(part for part in parts if part)
 
     @staticmethod

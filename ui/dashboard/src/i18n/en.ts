@@ -99,6 +99,15 @@ export const en: Record<Key, string> = {
   option_plugin_creative: 'Creative – texts and ideas',
   option_plugin_echo: 'Echo – test plugin for developers',
   settings_group_presets: 'Presets',
+  profile_title: 'What Nox knows about you',
+  profile_hint:
+    'What Nox picked up from your conversations – people, games, likes, plans. Any entry can be deleted; what you type here outranks what Nox merely inferred.',
+  profile_loading: 'Loading …',
+  profile_empty: 'Nothing yet. Tell Nox something about yourself – or add it here.',
+  profile_forget: 'Forget',
+  profile_add_label: 'Nox should remember',
+  profile_add_placeholder: 'e.g. My best friend is Tim.',
+  profile_add: 'Remember',
   option_lang_auto: 'Automatic',
 
   app_title: 'Nox dashboard',

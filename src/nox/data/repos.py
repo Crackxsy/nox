@@ -522,6 +522,18 @@ class MemoryItemRepository:
         )
         return [MemoryItemRow(**dict(r)) for r in rows]
 
+    def list_by_types(self, types: list[str], *, limit: int = 200) -> list[MemoryItemRow]:
+        """Items of the given types, most important first and newest first within a tie."""
+        if not types:
+            return []
+        marks = ",".join("?" for _ in types)
+        rows = self._db.fetch_all(
+            f"SELECT * FROM memory_items WHERE type IN ({marks}) "  # noqa: S608 - placeholders only
+            "ORDER BY importance DESC, created_at DESC, id DESC LIMIT ?",
+            (*types, limit),
+        )
+        return [MemoryItemRow(**dict(r)) for r in rows]
+
     def list_by_ids(self, ids: list[int]) -> list[MemoryItemRow]:
         if not ids:
             return []
