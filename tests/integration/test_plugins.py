@@ -112,7 +112,9 @@ async def test_tool_is_registered_and_forwarded_to_the_worker(core: NoxCore):
     pong: asyncio.Future[Event] = asyncio.get_running_loop().create_future()
 
     def collect(event: Event) -> None:
-        if not pong.done():
+        # The worker announces itself with a pong of its own on start; on a slow machine it can
+        # arrive after this subscription. Only the answer to *this* ping is the one under test.
+        if not pong.done() and event.payload.get("text") == "hallo":
             pong.set_result(event)
 
     unsubscribe = core.bus.subscribe("echo.pong", collect)
