@@ -509,9 +509,18 @@ class Orchestrator:
         in the prompt, and it is left out entirely when nothing is on offer - a model told
         about a protocol it cannot use will eventually try to use it anyway.
         """
-        profile = self.profile_block() if self.profile_block is not None else ""
-        parts = [self.system_prompt(), profile, context.block, tools]
+        parts = [self.system_prompt(), self._profile(), context.block, tools]
         return "\n\n".join(part for part in parts if part)
+
+    def _profile(self) -> str:
+        """What Nox knows about the user, or nothing: a broken profile must not fail the turn."""
+        if self.profile_block is None:
+            return ""
+        try:
+            return self.profile_block()
+        except Exception as exc:  # noqa: BLE001 - the answer matters more than the profile
+            log.warning("orchestrator.profile_block_failed", error=str(exc))
+            return ""
 
     @staticmethod
     def _note_first_sentence(turn: Turn, started: float) -> None:

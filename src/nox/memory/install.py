@@ -254,6 +254,7 @@ def install(core: _Core) -> MemoryRuntime:
             profile=runtime.profile,
             complete=core.router.complete,
             user_name=user_name,
+            allowed=privacy.allows_memory_write,
             embeddings=embeddings if not embeddings_unavailable else None,
             settle_s=cfg.capture_settle_s,
             batch_turns=cfg.capture_batch_turns,

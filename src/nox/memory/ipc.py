@@ -7,9 +7,9 @@ go through `MemoryService`, so the privacy mode decides here exactly as it does 
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, StringConstraints
 
 from nox.core.logging import get_logger
 from nox.ipc.dispatch import EmptyPayload, RequestContext, RequestRegistry
@@ -29,7 +29,7 @@ _PROFILE_TYPE_NAMES = frozenset(t.value for t in PROFILE_TYPES)
 
 
 class ProfileAdd(BaseModel):
-    text: str = Field(min_length=3, max_length=300)
+    text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=300)]
     type: str = MemoryType.USER.value
 
 

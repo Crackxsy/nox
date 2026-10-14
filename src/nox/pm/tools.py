@@ -88,7 +88,10 @@ def make_project_list_tool(repo: PmVaultRepo) -> ToolSpec:
 
     return ToolSpec(
         name="pm.project.list",
-        description="List projects from the PM vault's projects list note.",
+        description=(
+            "List the projects in Nox's own development vault (the work on Nox itself, "
+            "not the user's plans)."
+        ),
         input_model=_EmptyInput,
         risk=Risk.READ,
         side_effects=False,
@@ -105,7 +108,7 @@ def make_epic_list_tool(index: PmIndex) -> ToolSpec:
 
     return ToolSpec(
         name="pm.epic.list",
-        description="List epics from the PM index, optionally filtered by status.",
+        description=("List epics of Nox's own development backlog, optionally filtered by status."),
         input_model=_EpicListInput,
         risk=Risk.READ,
         side_effects=False,
@@ -126,7 +129,10 @@ def make_story_list_tool(index: PmIndex) -> ToolSpec:
 
     return ToolSpec(
         name="pm.story.list",
-        description="List stories from the PM index, optionally filtered by epic and/or status.",
+        description=(
+            "List stories of Nox's own development backlog, optionally filtered by epic "
+            "and/or status."
+        ),
         input_model=_StoryListInput,
         risk=Risk.READ,
         side_effects=False,
@@ -147,7 +153,7 @@ def make_story_get_tool(index: PmIndex, state: StateManager | None) -> ToolSpec:
 
     return ToolSpec(
         name="pm.story.get",
-        description="Get one story by id from the PM index.",
+        description="Get one story of Nox's own development backlog by id.",
         input_model=_StoryGetInput,
         risk=Risk.READ,
         side_effects=False,
@@ -218,7 +224,11 @@ def make_focus_today_tool(focus: FocusService) -> ToolSpec:
 
     return ToolSpec(
         name="pm.focus.today",
-        description="Today's focus: open stories ranked by status/priority, with reasons.",
+        description=(
+            "Nox's own development backlog for today: open stories about building Nox, ranked "
+            "by status/priority, with reasons. This is NOT the user's day - for their "
+            "appointments and reminders use the calendar and reminder tools."
+        ),
         input_model=_EmptyInput,
         risk=Risk.READ,
         side_effects=False,
