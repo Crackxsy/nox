@@ -6,13 +6,13 @@
  * A fact typed in here counts like "merk dir": it outranks anything Nox inferred on its own.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from 'react';
 
-import { errorText } from "../../../../shared/errors";
-import { isRecord, str } from "../../../../shared/guards";
-import type { T } from "../../i18n";
-import { type IpcClient, api } from "../../ipc";
-import { Tile } from "../../ui";
+import { errorText } from '../../../../shared/errors';
+import { isRecord, str } from '../../../../shared/guards';
+import type { T } from '../../i18n';
+import { type IpcClient, api } from '../../ipc';
+import { Tile } from '../../ui';
 
 export interface ProfileFact {
   id: number;
@@ -26,12 +26,12 @@ export function parseProfileFacts(payload: unknown): ProfileFact[] {
   if (!isRecord(payload) || !Array.isArray(payload.items)) return [];
   const facts: ProfileFact[] = [];
   for (const entry of payload.items) {
-    if (!isRecord(entry) || typeof entry.id !== "number") continue;
+    if (!isRecord(entry) || typeof entry.id !== 'number') continue;
     const text = str(entry.text);
     if (!text) continue;
     facts.push({
       id: entry.id,
-      type: str(entry.type, "user"),
+      type: str(entry.type, 'user'),
       text,
       createdAt: str(entry.created_at),
     });
@@ -47,18 +47,18 @@ export interface ProfileTileProps {
 
 export function ProfileTile({ t, lang, client }: ProfileTileProps) {
   const [facts, setFacts] = useState<ProfileFact[] | null>(null);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     if (!client) return;
     try {
       const parsed = parseProfileFacts(await api.profileList(client));
       setFacts(parsed);
-      setError("");
+      setError('');
     } catch (e) {
-      setError(errorText(t("error_prefix"), e));
+      setError(errorText(t('error_prefix'), e));
     }
   }, [client, t]);
 
@@ -74,7 +74,7 @@ export function ProfileTile({ t, lang, client }: ProfileTileProps) {
       await api.profileForget(client, id);
       setFacts((list) => (list ? list.filter((f) => f.id !== id) : list));
     } catch (e) {
-      setError(errorText(t("error_prefix"), e));
+      setError(errorText(t('error_prefix'), e));
     } finally {
       setBusy(false);
     }
@@ -86,10 +86,10 @@ export function ProfileTile({ t, lang, client }: ProfileTileProps) {
     setBusy(true);
     try {
       await api.profileAdd(client, text);
-      setDraft("");
+      setDraft('');
       await load();
     } catch (e) {
-      setError(errorText(t("error_prefix"), e));
+      setError(errorText(t('error_prefix'), e));
     } finally {
       setBusy(false);
     }
@@ -97,20 +97,20 @@ export function ProfileTile({ t, lang, client }: ProfileTileProps) {
 
   const when = (iso: string) => {
     const date = new Date(iso);
-    return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString(lang);
+    return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString(lang);
   };
 
   return (
-    <Tile id="profile" title={t("profile_title")} lede={t("profile_hint")}>
+    <Tile id="profile" title={t('profile_title')} lede={t('profile_hint')}>
       {error && (
         <p role="alert" className="alert">
           {error}
         </p>
       )}
       {facts === null ? (
-        <p className="muted">{t("profile_loading")}</p>
+        <p className="muted">{t('profile_loading')}</p>
       ) : facts.length === 0 ? (
-        <p className="muted">{t("profile_empty")}</p>
+        <p className="muted">{t('profile_empty')}</p>
       ) : (
         <ul className="fact-list">
           {facts.map((fact) => (
@@ -122,9 +122,9 @@ export function ProfileTile({ t, lang, client }: ProfileTileProps) {
                 className="btn btn--quiet"
                 disabled={busy || !client}
                 onClick={() => void forget(fact.id)}
-                aria-label={`${t("profile_forget")}: ${fact.text}`}
+                aria-label={`${t('profile_forget')}: ${fact.text}`}
               >
-                {t("profile_forget")}
+                {t('profile_forget')}
               </button>
             </li>
           ))}
@@ -132,17 +132,17 @@ export function ProfileTile({ t, lang, client }: ProfileTileProps) {
       )}
       <div className="field">
         <label htmlFor="profile-add" className="label">
-          {t("profile_add_label")}
+          {t('profile_add_label')}
         </label>
         <input
           id="profile-add"
           className="input"
           value={draft}
           disabled={!client || busy}
-          placeholder={t("profile_add_placeholder")}
+          placeholder={t('profile_add_placeholder')}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void add();
+            if (e.key === 'Enter') void add();
           }}
         />
       </div>
@@ -153,7 +153,7 @@ export function ProfileTile({ t, lang, client }: ProfileTileProps) {
           disabled={!client || busy || draft.trim().length < 3}
           onClick={() => void add()}
         >
-          {t("profile_add")}
+          {t('profile_add')}
         </button>
       </div>
     </Tile>

@@ -29,6 +29,10 @@ class UrgentCategory(StrEnum):
 
     SECURITY = "security"
     DATA_LOSS = "data_loss"
+    #: A reminder the user set themselves. Spoken when speaking is allowed at all (not muted, no
+    #: quiet zone), shown as a toast always; it never forces an interruption and never counts
+    #: against the proactive budget - the user asked for exactly this, at exactly this time.
+    REMINDER = "reminder"
     RESOURCES = "resources"
     TASK_RESULT = "task_result"
 
@@ -37,6 +41,7 @@ class UrgentCategory(StrEnum):
 URGENT_ORDER: tuple[UrgentCategory, ...] = (
     UrgentCategory.SECURITY,
     UrgentCategory.DATA_LOSS,
+    UrgentCategory.REMINDER,
     UrgentCategory.RESOURCES,
     UrgentCategory.TASK_RESULT,
 )

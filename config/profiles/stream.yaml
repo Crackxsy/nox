@@ -8,7 +8,10 @@ permissions:
   cloud_allowed: true
   # Twitch chat and the Twitch API, for the twitch plugin.
   # Not loopback, so this only applies in FULL/BALANCED privacy mode - PRIVATE/OFFLINE still block it.
-  egress_allowlist: ["irc.chat.twitch.tv:6697", "api.twitch.tv:443", "id.twitch.tv:443"]
+  # calendar.google.com / *.webuntis.com: the user's own calendar feeds (private iCal URLs,
+  # stored as secrets) for the `day` extension - read-only GETs, nothing is sent.
+  egress_allowlist: ["irc.chat.twitch.tv:6697", "api.twitch.tv:443", "id.twitch.tv:443",
+                     "calendar.google.com:443", "*.webuntis.com:443"]
   loopback_allowlist: ["127.0.0.1:11434", "127.0.0.1:4455"]   # Ollama and the OBS websocket
   memory_writes_allowed: true
   screenshots_to_cloud: false

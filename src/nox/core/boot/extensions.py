@@ -32,6 +32,7 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "memory",
     "health",
     "proactive",
+    "day",
     "pm",
     "rl",
     "clips",

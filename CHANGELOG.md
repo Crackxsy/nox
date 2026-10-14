@@ -26,6 +26,24 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   effect, and no component writes a ref during render any more.
 
 ### Added
+- **Nox says what it cannot do, and why.** Asked to switch off a light with no Home Assistant
+  connected, Nox used to improvise a confident sentence. The tool offer in its prompt now ends with
+  a "not available right now" list: every tool family that is present but unreachable or forbidden
+  in the current profile, with the reason in words the user can act on ("no calendar is connected -
+  paste a private iCal URL on the Settings page"), plus the known gaps (nothing installs software,
+  no lock or alarm has a tool). The model is told to say so plainly and name what would make it
+  work, instead of pretending or working around it.
+- **Nox knows your day.** "Was steht heute an?" used to be answered from Nox's own development
+  backlog, the only list it had. Now it reads your calendars - a Google Calendar and a school
+  timetable, each as a private iCal address stored in the Credential Manager, never in a file -
+  and answers with your appointments (`calendar.today`, `calendar.upcoming`). It also keeps
+  reminders: "erinner mich morgen um 9 an den Zahnarzt" is stored in the database, survives a
+  restart and is spoken when due, once. The Zuhause page opens with "Dein Tag": today's
+  appointments, the reminders (spoken ones greyed), the next few after today, and a field to add
+  one by hand. A calendar that cannot be fetched is named in the core's words; no calendar at all
+  points to the Settings page instead of showing an empty box. The prompt now carries the weekday
+  with the time, so "am Freitag" is arithmetic the model can do. New dependencies: `icalendar`
+  (BSD-2) and `python-dateutil` (BSD-3/Apache-2.0) for parsing and recurrence.
 - **Nox remembers you.** Asked "was weißt du über mich?" after weeks of use, Nox answered "kaum
   etwas": nothing ever wrote to its memory unless you said "merk dir". It now learns durable facts
   from conversations on its own - people, games, likes, projects, dated plans - a little after the

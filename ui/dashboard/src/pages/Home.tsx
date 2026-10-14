@@ -34,6 +34,7 @@ import {
   parseHomeStatus,
 } from '../model';
 import { Detail, Hero, StateWord, Tile, type Tone } from '../ui';
+import { DayTile } from './home/DayTile';
 
 export interface HomePageProps {
   t: T;
@@ -194,6 +195,10 @@ export function HomePage({ t, lang, state, client, onState, onOpenSettings }: Ho
           {error}
         </p>
       )}
+
+      <div className="tiles tiles--single">
+        <DayTile t={t} lang={lang} client={client} onOpenSettings={onOpenSettings} />
+      </div>
 
       {blocked ? (
         <div className="tiles tiles--single">

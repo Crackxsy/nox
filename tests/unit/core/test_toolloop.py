@@ -12,7 +12,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from nox.ai.base import AiRequest
-from nox.ai.tooluse import SENTINEL, OfferedTool
+from nox.ai.tooluse import SENTINEL, OfferedTool, Unavailable
 from nox.core.orchestrator import GAVE_UP_ON_TOOLS, Orchestrator, OrchestratorConfig
 from nox.core.toolloop import ToolGate
 from tests.unit.fakes import FakeBus, FakeRouter, FakeSpeaker, FakeState, FakeTurns
@@ -211,3 +211,25 @@ async def test_without_an_offer_the_protocol_is_never_mentioned() -> None:
     assert SENTINEL not in router.requests[0].messages[0].content
     assert len(router.requests) == 1
     assert turn.response == "Alles klar."
+
+
+def test_the_prompt_lists_what_cannot_be_done_under_the_offer() -> None:
+    gate = ToolGate(
+        offer=lambda: [LIGHT],
+        call=Recorder(),
+        unavailable=lambda: [
+            Unavailable(name="home.*", detail="no Home Assistant token is stored")
+        ],
+    )
+    prompt = gate.prompt()
+    assert prompt.index("TOOLS") < prompt.index("NOT AVAILABLE RIGHT NOW")
+    assert "- home.*: no Home Assistant token is stored" in prompt
+
+
+def test_a_broken_caveat_provider_still_leaves_the_offer_standing() -> None:
+    def broken() -> list[Unavailable]:
+        raise RuntimeError("report failed")
+
+    gate = ToolGate(offer=lambda: [LIGHT], call=Recorder(), unavailable=broken)
+    prompt = gate.prompt()
+    assert "TOOLS" in prompt and "NOT AVAILABLE" not in prompt

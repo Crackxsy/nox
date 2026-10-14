@@ -325,6 +325,31 @@ class HomeConfig(StrictSection):
         return require_ordered(self, "min_backoff_s", "max_backoff_s")
 
 
+# ---- the user's day: calendar feeds and reminders -----------------------------------------------
+
+
+class DayConfig(StrictSection):
+    """Calendar feeds and reminders (`nox.day`).
+
+    The feed URLs are not here: a private iCal address is a credential and lives in the Windows
+    Credential Manager under `nox/calendar/google_ics_url` and `nox/calendar/school_ics_url`,
+    entered on the Settings page. This section only says how often to look and how far ahead.
+    """
+
+    enabled: bool = True
+    #: How often every connected feed is fetched again. A tool call refreshes early when the
+    #: cache is older than this, but never waits more than a few seconds for it.
+    refresh_minutes: int = Field(default=15, ge=1, le=24 * 60)
+    #: How many days of appointments are kept in memory, today included.
+    lookahead_days: int = Field(default=14, ge=1, le=60)
+    reminders_enabled: bool = True
+    #: How often due reminders are looked for. Twenty seconds is late enough to be cheap and
+    #: early enough that nobody notices.
+    reminder_poll_s: float = Field(default=20.0, ge=5.0, le=300.0)
+    #: Spoken before the reminder's own text. Empty = just the text.
+    reminder_prefix: str = "Erinnerung:"
+
+
 # ---- project management, creative apps, mobile companion ----------------------------------------
 
 

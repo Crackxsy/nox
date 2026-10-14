@@ -18,15 +18,16 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any, Protocol
 
-from nox.ai.tooluse import OfferedTool
+from nox.ai.tooluse import OfferedTool, Unavailable
 from nox.capabilities.catalog import DEFAULT_AGENT, build_report
 from nox.capabilities.ipc import register_capability_ipc
-from nox.capabilities.model import CapabilityReport, CapabilityState
+from nox.capabilities.model import CapabilityReport, CapabilityState, GapReason
 from nox.capabilities.tools import register_capability_tools
 from nox.core.config import NoxConfig
 from nox.core.extension import ExtensionRuntime
 from nox.core.logging import get_logger
 from nox.core.toolloop import ToolGate
+from nox.day.install import CALENDAR_SECRETS
 from nox.home.install import ACCESS_TOKEN_SECRET as HOME_TOKEN_SECRET
 from nox.ipc.dispatch import RequestRegistry
 from nox.plugins.manager import PluginState
@@ -43,11 +44,16 @@ DEFAULT_MODE = "companion"
 #: Tool prefix -> (secret name, what to tell the user). The one place where "the tool is there and
 #: has no credential" is written down; the secret *name* is imported from the module that owns it,
 #: so renaming it there cannot leave a stale copy here.
-_SECRET_PREREQUISITES: tuple[tuple[str, str, str], ...] = (
+_SECRET_PREREQUISITES: tuple[tuple[str, tuple[str, ...], str], ...] = (
     (
         "home.",
-        HOME_TOKEN_SECRET,
+        (HOME_TOKEN_SECRET,),
         "no Home Assistant token is stored - add it on the Settings page",
+    ),
+    (
+        "calendar.",
+        CALENDAR_SECRETS,
+        "no calendar is connected - paste a private iCal URL on the Settings page",
     ),
 )
 
@@ -96,8 +102,8 @@ def _plugin_status(core: CoreLike) -> list[Any]:
 
 def install(core: CoreLike) -> ExtensionRuntime:
     def probe(tool_name: str) -> tuple[CapabilityState, str] | None:
-        for prefix, secret, detail in _SECRET_PREREQUISITES:
-            if tool_name.startswith(prefix) and not _has_secret(core, secret):
+        for prefix, secrets, detail in _SECRET_PREREQUISITES:
+            if tool_name.startswith(prefix) and not any(_has_secret(core, s) for s in secrets):
                 return CapabilityState.UNAVAILABLE, detail
         return None
 
@@ -127,6 +133,10 @@ def install(core: CoreLike) -> ExtensionRuntime:
             missing_prerequisites=stalled,
         )
 
+    #: The report the current offer was built from, so the caveats below come from the same
+    #: snapshot and the permission preview runs once per turn, not twice.
+    latest: list[CapabilityReport] = []
+
     def offer() -> list[OfferedTool]:
         """The tools the model is told about: what the catalogue says is usable right now.
 
@@ -137,6 +147,8 @@ def install(core: CoreLike) -> ExtensionRuntime:
         """
         described = core.tool_registry.describe()
         schemas = {tool.name: tool.input_schema for tool in described}
+        snapshot = report()
+        latest[:] = [snapshot]
         return [
             OfferedTool(
                 name=capability.name,
@@ -144,10 +156,48 @@ def install(core: CoreLike) -> ExtensionRuntime:
                 schema=schemas.get(capability.name, {}),
                 asks_first=capability.decision is Decision.CONFIRM,
             )
-            for capability in report().capabilities
+            for capability in snapshot.capabilities
             if capability.state is CapabilityState.AVAILABLE
             and capability.decision is not Decision.DENY
         ]
+
+    def unavailable() -> list[Unavailable]:
+        """What the model must not pretend to do, in as few lines as honesty allows.
+
+        Every line rides along on every tool-enabled turn, so the shape is chosen by what the user
+        can do about it: a family that is present but unreachable or forbidden gets its reason;
+        a missing credential gets its own line; plugins that are merely switched off share one
+        line, and what is not built or never will be is a list of names - the name says enough,
+        and the catalogue tool has the details when asked.
+        """
+        snapshot = latest[0] if latest else report()
+        items: list[Unavailable] = []
+        families: dict[str, str] = {}
+        for capability in snapshot.capabilities:
+            if (
+                capability.state is CapabilityState.AVAILABLE
+                and capability.decision is not Decision.DENY
+            ):
+                continue
+            family = capability.name.split(".", 1)[0] + ".*"
+            reason = capability.reason or f"not allowed in the {snapshot.profile!r} profile"
+            families.setdefault(family, reason)
+        items += [Unavailable(name=name, detail=reason) for name, reason in families.items()]
+        items += [
+            Unavailable(name=gap.name, detail=gap.detail or gap.what)
+            for gap in snapshot.gaps
+            if gap.reason is GapReason.PREREQUISITE
+        ]
+        grouped = (
+            (GapReason.DISABLED, "plugins switched off (add to plugins.enabled to use)"),
+            (GapReason.MISSING, "not built"),
+            (GapReason.FORBIDDEN, "never, by design"),
+        )
+        for reason, label in grouped:
+            names = sorted({gap.name for gap in snapshot.gaps if gap.reason is reason})
+            if names:
+                items.append(Unavailable(name=label, detail=", ".join(names)))
+        return items
 
     async def call(name: str, arguments: dict[str, Any]) -> Any:
         """Every tool a conversation reaches goes through the same executor as a dashboard click.
@@ -165,7 +215,7 @@ def install(core: CoreLike) -> ExtensionRuntime:
 
     orchestrator = getattr(core, "orchestrator", None)
     if orchestrator is not None:
-        orchestrator.tool_gate = ToolGate(offer=offer, call=call)
+        orchestrator.tool_gate = ToolGate(offer=offer, call=call, unavailable=unavailable)
     else:
         log.warning("capabilities.no_orchestrator", detail="conversations will have no tools")
     log.info("capabilities.installed")

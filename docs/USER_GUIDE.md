@@ -100,6 +100,17 @@ cannot be turned off or hidden by configuration — if something is being captur
   without a restart.
 - **Voice**: push-to-talk (`ctrl+alt+space` by default) or the wake word "Nox"; local
   speech-to-text (faster-whisper) and text-to-speech (Piper).
+- **What Nox knows about you**: durable facts from your conversations - people, games, projects,
+  dated plans - are learned on their own a little after the conversation goes quiet, kept in every
+  prompt, and listed under *Einstellungen → Was Nox über dich weiß*, where each one can be
+  forgotten and one can be typed in. Nothing is learned while the privacy mode forbids memory
+  writes, and what the model writes down is checked before it enters a prompt: one plain line,
+  never an instruction. "Merk dir ..." still works and outranks what Nox inferred.
+- **Your day**: *Dein Tag* on the Zuhause page shows today's appointments from your calendars
+  (Google Calendar and a school timetable as private iCal addresses, stored as secrets - see the
+  README's calendar section) and your reminders. "Erinner mich morgen um 9 an den Zahnarzt" is
+  stored, survives a restart and is spoken when due, once; it respects mute and quiet zones. "Was
+  steht heute an?" answers from this, not from Nox's own project backlog.
 - **Stream companion** (Twitch/OBS, opt-in at onboarding): chat responses, a "Funken" viewer
   currency/loyalty system, scene-aware behavior via a narrow, read-mostly OBS tool surface (scene
   switching is a confirmed action; there is no scene/source-delete or stream-stop tool — see

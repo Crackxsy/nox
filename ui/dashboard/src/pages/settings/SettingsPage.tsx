@@ -9,22 +9,22 @@
  * control that failed instead of two screens above it.
  */
 
-import { useMemo } from "react";
+import { useMemo } from 'react';
 
-import type { Lang, T } from "../../i18n";
-import { groupLabel } from "../../i18n";
-import type { IpcClient } from "../../ipc";
-import type { StreamPluginStatus } from "../../model";
-import { Hero } from "../../ui";
-import { ConfigForm, groupId, groupsOf } from "./ConfigForm";
-import { HealthHistoryTable } from "./HealthHistoryTable";
-import { IntegrationsSection } from "./IntegrationsSection";
-import { PersonalityTile } from "./PersonalityTile";
-import { ProfileTile } from "./ProfileTile";
-import { useHomeTest } from "./useHomeTest";
-import { useSecrets } from "./useSecrets";
-import { useSettingsData } from "./useSettingsData";
-import { useTwitchDeviceFlow } from "./useTwitchDeviceFlow";
+import type { Lang, T } from '../../i18n';
+import { groupLabel } from '../../i18n';
+import type { IpcClient } from '../../ipc';
+import type { StreamPluginStatus } from '../../model';
+import { Hero } from '../../ui';
+import { ConfigForm, groupId, groupsOf } from './ConfigForm';
+import { HealthHistoryTable } from './HealthHistoryTable';
+import { IntegrationsSection } from './IntegrationsSection';
+import { PersonalityTile } from './PersonalityTile';
+import { ProfileTile } from './ProfileTile';
+import { useHomeTest } from './useHomeTest';
+import { useSecrets } from './useSecrets';
+import { useSettingsData } from './useSettingsData';
+import { useTwitchDeviceFlow } from './useTwitchDeviceFlow';
 
 export interface SettingsPageProps {
   t: T;
@@ -49,39 +49,25 @@ export function SettingsPage({
   onOpenRemote,
 }: SettingsPageProps) {
   const data = useSettingsData(client, revision);
-  const secrets = useSecrets(
-    client,
-    t,
-    data.secrets,
-    data.pinConfigured,
-    data.reloadSecrets,
-  );
+  const secrets = useSecrets(client, t, data.secrets, data.pinConfigured, data.reloadSecrets);
   const twitch = useTwitchDeviceFlow(client, t, twitchAuthEvent);
   const homeTest = useHomeTest(client, t);
 
-  const groups = useMemo(
-    () => (data.config ? groupsOf(data.config) : []),
-    [data.config],
-  );
+  const groups = useMemo(() => (data.config ? groupsOf(data.config) : []), [data.config]);
   const disabled = client === null;
 
   return (
     <div className="page wrap">
       <Hero
-        title={t("hero_settings")}
-        sub={t("hero_settings_sub")}
+        title={t('hero_settings')}
+        sub={t('hero_settings_sub')}
         links={
-          <button
-            type="button"
-            className="link"
-            disabled={disabled}
-            onClick={data.reload}
-          >
-            {t("settings_refresh")}
+          <button type="button" className="link" disabled={disabled} onClick={data.reload}>
+            {t('settings_refresh')}
           </button>
         }
       >
-        <p className="hero-note">{t("settings_file")}</p>
+        <p className="hero-note">{t('settings_file')}</p>
       </Hero>
 
       <IntegrationsSection
@@ -101,10 +87,10 @@ export function SettingsPage({
         <div className="rail-head">
           <div>
             <h3 id="h-config" className="rail-title">
-              {t("settings_title")}
+              {t('settings_title')}
             </h3>
             {groups.length > 1 && (
-              <nav className="jump" aria-label={t("settings_jump")}>
+              <nav className="jump" aria-label={t('settings_jump')}>
                 {groups.map(({ group }) => (
                   <a key={group} className="chip" href={`#${groupId(group)}`}>
                     {groupLabel(t, group)}
@@ -115,9 +101,7 @@ export function SettingsPage({
           </div>
         </div>
 
-        {data.configFailed && (
-          <p className="muted">{t("settings_unavailable")}</p>
-        )}
+        {data.configFailed && <p className="muted">{t('settings_unavailable')}</p>}
         {/*
           A skeleton rather than a spinner: the shape of a settings form is known before its
           contents are, so showing the shape says more than showing that something is happening.
@@ -130,12 +114,7 @@ export function SettingsPage({
           </div>
         )}
         {data.config && (
-          <ConfigForm
-            t={t}
-            client={client}
-            config={data.config}
-            onApplied={data.applyValues}
-          />
+          <ConfigForm t={t} client={client} config={data.config} onApplied={data.applyValues} />
         )}
       </section>
 

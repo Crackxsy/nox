@@ -21,7 +21,17 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from nox.ai.tooluse import OfferedTool, ToolCall, parse_directive, render_offer, render_result
+from nox.ai.tooluse import (
+    OfferedTool,
+    ToolCall,
+    parse_directive,
+    render_offer,
+    render_result,
+    render_unavailable,
+)
+from nox.ai.tooluse import (
+    Unavailable as UnavailableItem,
+)
 from nox.core.logging import get_logger
 
 log = get_logger(__name__)
@@ -43,6 +53,7 @@ class ToolOutcome(Protocol):
 
 Offer = Callable[[], Sequence[OfferedTool]]
 Call = Callable[[str, dict[str, Any]], Awaitable[ToolOutcome]]
+Unavailable = Callable[[], Sequence[UnavailableItem]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +76,8 @@ class ToolGate:
 
     offer: Offer
     call: Call
+    #: What cannot be done right now, and why; rendered under the offer so the model can say so.
+    unavailable: Unavailable | None = None
     max_rounds: int = DEFAULT_MAX_ROUNDS
     #: Names offered in the current turn, so a directive can be checked against them.
     _allowed: list[str] = field(default_factory=list)
@@ -81,7 +94,14 @@ class ToolGate:
             log.warning("toolloop.offer_failed", error=f"{type(exc).__name__}: {exc}")
             tools = []
         self._allowed = [tool.name for tool in tools]
-        return render_offer(tools)
+        missing: list[UnavailableItem] = []
+        if self.unavailable is not None:
+            try:
+                missing = list(self.unavailable())
+            except Exception as exc:  # noqa: BLE001 - the offer still stands without the caveats
+                log.warning("toolloop.unavailable_failed", error=f"{type(exc).__name__}: {exc}")
+        sections = [render_offer(tools), render_unavailable(missing)]
+        return "\n\n".join(section for section in sections if section)
 
     async def advance(self, text: str) -> ToolRound | None:
         """`None` when `text` is an ordinary answer; otherwise the round to hand back.

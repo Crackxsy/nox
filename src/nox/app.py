@@ -719,11 +719,14 @@ class NoxCore:
         return self._facts(mode="stream")
 
     def _facts(self, *, mode: str | None) -> dict[str, object]:
+        now = datetime.now().astimezone()
         return {
             "mode": mode if mode is not None else self._current_mode(),
             "privacy_mode": self._privacy_mode(),
             "user": self.config.identity.user_display_name or "the user",
-            "time": datetime.now().astimezone().isoformat(timespec="minutes"),
+            # The weekday is spelled out: "morgen um 9" and "am Freitag" are only arithmetic for
+            # the model when it knows which day today is, and ISO dates do not say.
+            "time": f"{now.isoformat(timespec='minutes')} ({now:%A})",
         }
 
     # ---- health and HTTP payloads ----------------------------------------------------------------

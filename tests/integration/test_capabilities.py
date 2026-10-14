@@ -254,7 +254,8 @@ async def test_the_offer_stays_within_its_budget(core: NoxCore) -> None:
     while.
 
     Measured as features landed: 26 tools / 3668 characters, then 30 / 4110, 43 / 5591, now 44 /
-    5888 - roughly 1400 tokens a turn. An earlier version of this docstring said the answer at
+    5888, then 50 / 7447 with the "not available right now" list under the offer - roughly
+    1800 tokens a turn. An earlier version of this docstring said the answer at
     this point was a relevance filter. Designing one changed that: the tool names and descriptions
     are English and the user writes German, so lexical relevance misses `home.light` for "mach das
     Licht an" and a filter that misses *hides a capability*, which is a worse failure than a long
