@@ -137,6 +137,15 @@ class Unavailable(BaseModel):
     detail: str
 
 
+def _bounded(detail: str, limit: int = 220) -> str:
+    """One line, cut on a word; a name list is kept whole up to the limit rather than at its
+    first full stop like a description."""
+    flat = " ".join(detail.split())
+    if len(flat) <= limit:
+        return flat
+    return flat[:limit].rsplit(" ", 1)[0] + "..."
+
+
 def render_unavailable(items: Sequence[Unavailable]) -> str:
     """The prompt section that names what Nox cannot do at the moment.
 
@@ -153,7 +162,7 @@ def render_unavailable(items: Sequence[Unavailable]) -> str:
         "",
     ]
     for item in items:
-        lines.append(f"- {item.name}: {summarise(item.detail)}")
+        lines.append(f"- {item.name}: {_bounded(item.detail)}")
     return "\n".join(lines)
 
 

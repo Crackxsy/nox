@@ -21,7 +21,7 @@ from typing import Any, Protocol
 from nox.ai.tooluse import OfferedTool, Unavailable
 from nox.capabilities.catalog import DEFAULT_AGENT, build_report
 from nox.capabilities.ipc import register_capability_ipc
-from nox.capabilities.model import CapabilityReport, CapabilityState
+from nox.capabilities.model import CapabilityReport, CapabilityState, GapReason
 from nox.capabilities.tools import register_capability_tools
 from nox.core.config import NoxConfig
 from nox.core.extension import ExtensionRuntime
@@ -162,10 +162,16 @@ def install(core: CoreLike) -> ExtensionRuntime:
         ]
 
     def unavailable() -> list[Unavailable]:
-        """What the model must not pretend to do: tool families that are present but unreachable
-        or forbidden right now, each with its reason, and the known gaps. Grouped by family so a
-        home with forty entities costs one line, not forty."""
+        """What the model must not pretend to do, in as few lines as honesty allows.
+
+        Every line rides along on every tool-enabled turn, so the shape is chosen by what the user
+        can do about it: a family that is present but unreachable or forbidden gets its reason;
+        a missing credential gets its own line; plugins that are merely switched off share one
+        line, and what is not built or never will be is a list of names - the name says enough,
+        and the catalogue tool has the details when asked.
+        """
         snapshot = latest[0] if latest else report()
+        items: list[Unavailable] = []
         families: dict[str, str] = {}
         for capability in snapshot.capabilities:
             if (
@@ -176,13 +182,21 @@ def install(core: CoreLike) -> ExtensionRuntime:
             family = capability.name.split(".", 1)[0] + ".*"
             reason = capability.reason or f"not allowed in the {snapshot.profile!r} profile"
             families.setdefault(family, reason)
-        items = [Unavailable(name=name, detail=reason) for name, reason in families.items()]
+        items += [Unavailable(name=name, detail=reason) for name, reason in families.items()]
         items += [
-            Unavailable(
-                name=gap.name, detail=f"{gap.what} - {gap.detail}" if gap.detail else gap.what
-            )
+            Unavailable(name=gap.name, detail=gap.detail or gap.what)
             for gap in snapshot.gaps
+            if gap.reason is GapReason.PREREQUISITE
         ]
+        grouped = (
+            (GapReason.DISABLED, "plugins switched off (add to plugins.enabled to use)"),
+            (GapReason.MISSING, "not built"),
+            (GapReason.FORBIDDEN, "never, by design"),
+        )
+        for reason, label in grouped:
+            names = sorted({gap.name for gap in snapshot.gaps if gap.reason is reason})
+            if names:
+                items.append(Unavailable(name=label, detail=", ".join(names)))
         return items
 
     async def call(name: str, arguments: dict[str, Any]) -> Any:
