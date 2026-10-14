@@ -97,6 +97,14 @@ To start it with Windows, put that same shortcut in
 - Say or type **"was kannst du gerade?"** - Nox answers from a catalogue, not from a guess, and it
   will tell you what it *cannot* do.
 - Ask it for something it can see: **"welche fenster sind offen?"**
+- Tell it something about yourself in passing - who your best friend is, what you are building -
+  and ask a few minutes later: **"was weißt du über mich?"** Nox learns durable facts from
+  conversation on its own; the list is under *Einstellungen → Was Nox über dich weiß*, where any
+  fact can be forgotten.
+- **"Erinner mich in zehn Minuten an den Tee."** It will say so when the time comes, and the
+  reminder is on the Zuhause page under *Dein Tag* until then. Connect a calendar there
+  (*Einstellungen → Integrationen → Kalender*) and **"was steht heute an?"** answers with your
+  appointments.
 - Give it a folder (`files.roots` in the settings) and ask **"was liegt in meinen Downloads?"**
 - Ask for a picture of something: **"zeig mir den Speicherverbrauch als Balkendiagramm"** - it
   appears on the Board page.
