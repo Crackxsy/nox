@@ -84,8 +84,9 @@ jobs:
         run: python -m uv sync --frozen --no-build --dry-run
 
       # No `shell` extra: the server has no desktop, and PySide6 has no wheel for the Pi's glibc.
+      # `rl` for the Rocket League plugin's tests (OpenCV headless has ARM64 wheels).
       - name: Sync dependencies
-        run: python -m uv sync --extra dev
+        run: python -m uv sync --extra dev --extra rl
 
       - name: shellcheck the installer
         run: shellcheck --severity=warning scripts/install-linux.sh installer/linux/nox-command.sh
