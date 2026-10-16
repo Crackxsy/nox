@@ -70,12 +70,27 @@ jobs:
 
       - name: Installer and its checksum
         run: |
-          cp source/scripts/install-linux.sh install-linux.sh
-          sha256sum install-linux.sh > install-linux.sh.sha256
+          mkdir installer
+          cp source/scripts/install-linux.sh installer/install-linux.sh
+          (cd installer && sha256sum install-linux.sh > install-linux.sh.sha256)
 
+      # Into its own folder, so nothing in the artifact can overwrite the installer above.
       - uses: actions/download-artifact@v7
         with:
           name: ui-bundle
+          path: bundle
+
+      - name: The artifact is exactly the bundle and its checksum
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          expected="$(printf '%s\n' "nox-ui-$TAG.tar.gz" "nox-ui-$TAG.tar.gz.sha256")"
+          actual="$(find bundle -mindepth 1 -printf '%P\n' | sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "unexpected artifact contents:"; echo "$actual"; exit 1
+          fi
+          find bundle -mindepth 1 ! -type f -print -quit | grep -q . && { echo "non-regular file in artifact"; exit 1; }
+          (cd bundle && sha256sum --quiet -c "nox-ui-$TAG.tar.gz.sha256")
 
       - name: Upload
         env:
@@ -84,4 +99,5 @@ jobs:
           REPO: ${{ github.repository }}
         run: >-
           gh release upload "$TAG" --repo "$REPO"
-          "nox-ui-$TAG.tar.gz" "nox-ui-$TAG.tar.gz.sha256" install-linux.sh install-linux.sh.sha256
+          "bundle/nox-ui-$TAG.tar.gz" "bundle/nox-ui-$TAG.tar.gz.sha256"
+          installer/install-linux.sh installer/install-linux.sh.sha256
