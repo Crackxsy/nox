@@ -31,7 +31,7 @@ def core(
     profile: str | None = typer.Option(None, help="Security profile id (companion, coding, ...)."),
     no_voice: bool = typer.Option(False, "--no-voice", help="Do not spawn the voice worker."),
     user_config: Path | None = typer.Option(
-        None, help="Path to your user.yaml. Defaults to %APPDATA%\\Nox\\user.yaml."
+        None, help="Path to your user.yaml. Defaults to the one `nox where` shows."
     ),
 ) -> None:
     """Run the core process in the foreground (normally the supervisor spawns it)."""
@@ -42,6 +42,32 @@ def core(
     raise SystemExit(
         asyncio.run(run_core(profile=profile, voice=not no_voice, user_config=user_config))
     )
+
+
+@app.command()
+def where() -> None:
+    """Show where Nox keeps its files on this machine and how it stores secrets."""
+    from nox.core.config import load_config  # noqa: PLC0415
+    from nox.paths import defaults_path, nox_home, resolve_config_paths  # noqa: PLC0415
+    from nox.security.secrets import resolve_secret_backend  # noqa: PLC0415
+
+    defaults, user = resolve_config_paths()
+    configured = load_config(defaults, user).security.secret_store
+    backend = resolve_secret_backend(configured)
+    secrets = {
+        "keyring": "OS keyring",
+        "file": f"owner-only file {nox_home() / 'secrets.json'}",
+        "unavailable": "OS keyring - NOT reachable right now; the PIN cannot be checked",
+    }[backend]
+    rows = [
+        ("Nox folder", str(nox_home())),
+        ("Settings", str(user) if user else f"{nox_home() / 'user.yaml'} (not created yet)"),
+        ("Defaults", str(defaults_path())),
+        ("Secrets", secrets if configured == "auto" else f"{secrets} (set in user.yaml)"),
+    ]
+    width = max(len(label) for label, _ in rows)
+    for label, value in rows:
+        typer.echo(f"{label.ljust(width)}  {value}")
 
 
 @app.command()
@@ -141,28 +167,28 @@ def secrets_set(
     name: str = typer.Argument(..., help="Secret name, e.g. nox/obs/websocket_password"),
 ) -> None:
     """Store a secret. The value is read from a hidden prompt, never from the command line."""
-    from nox.security.secrets import KeyringSecretStore  # noqa: PLC0415
+    from nox.security.secrets import open_configured_secret_store  # noqa: PLC0415
 
     value = typer.prompt("Value", hide_input=True)
-    KeyringSecretStore().set(name, value)
+    open_configured_secret_store().set(name, value)
     typer.echo(f"stored {name}")
 
 
 @secrets_app.command("delete")
 def secrets_delete(name: str = typer.Argument(..., help="Secret name to remove.")) -> None:
     """Remove a stored secret."""
-    from nox.security.secrets import KeyringSecretStore  # noqa: PLC0415
+    from nox.security.secrets import open_configured_secret_store  # noqa: PLC0415
 
-    KeyringSecretStore().delete(name)
+    open_configured_secret_store().delete(name)
     typer.echo(f"deleted {name}")
 
 
 @secrets_app.command("check")
 def secrets_check(name: str = typer.Argument(..., help="Secret name to look for.")) -> None:
     """Report whether a secret exists. The value is never printed."""
-    from nox.security.secrets import KeyringSecretStore  # noqa: PLC0415
+    from nox.security.secrets import open_configured_secret_store  # noqa: PLC0415
 
-    typer.echo("present" if KeyringSecretStore().get(name) is not None else "missing")
+    typer.echo("present" if open_configured_secret_store().get(name) is not None else "missing")
 
 
 def _register_voice_commands() -> None:

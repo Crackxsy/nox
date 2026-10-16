@@ -1,7 +1,7 @@
 """Runtime files the shell reads/writes: session.token, ipc.json, supervisor.token, shell.json.
 
-Location (IPC Model handshake step 2 / D223): `%APPDATA%\\Nox\\runtime` by default, overridable
-with `NOX_RUNTIME_DIR` or with `paths.runtime_dir` in the user configuration. Tokens are
+Location (IPC Model handshake step 2 / D223): `runtime` in Nox's folder (`nox_home()`) by default,
+overridable with `NOX_RUNTIME_DIR` or with `paths.runtime_dir` in the user configuration. Tokens are
 read from files only and never logged.
 
 The shell is a separate process from the core, so it has to find the directory the core
@@ -21,7 +21,7 @@ import yaml
 from pydantic import BaseModel, Field, ValidationError
 
 from nox.core.config.types import ConfigError, expand_path
-from nox.paths import resolve_config_paths, user_config_path
+from nox.paths import nox_home, resolve_config_paths, user_config_path
 
 SESSION_TOKEN_FILE = "session.token"  # noqa: S105 - file name, not a secret
 SUPERVISOR_TOKEN_FILE = "supervisor.token"  # noqa: S105
@@ -78,12 +78,8 @@ def candidate_runtime_dirs() -> list[Path]:
     configured = _configured_runtime_dir()
     if configured is not None:
         dirs.append(configured)
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        dirs.append(Path(appdata) / "Nox" / "runtime")
-    # A machine without APPDATA is not Windows and not a supported install, but the shell still
-    # has to return somewhere rather than an empty list its caller would index into.
-    return dirs or [Path.cwd() / "runtime"]
+    dirs.append(nox_home() / "runtime")
+    return dirs
 
 
 def resolve_runtime_dir(candidates: list[Path] | None = None) -> Path:

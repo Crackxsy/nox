@@ -37,7 +37,7 @@ from nox.security.pin_attempts import SqlitePinAttemptStore
 from nox.security.privacy import PrivacyService
 from nox.security.profiles import ProfileProvider, YamlProfileProvider
 from nox.security.prohibitions import effective_hard_prohibitions
-from nox.security.secrets import KeyringSecretStore, PinManager
+from nox.security.secrets import PinManager, open_secret_store
 
 log = get_logger(__name__)
 
@@ -128,7 +128,9 @@ class SecurityContext:
             global_allowlist=allowlist,
             loopback_allowlist=tuple(security.loopback_allowlist),
         )
-        secrets = secret_store if secret_store is not None else KeyringSecretStore()
+        secrets = (
+            secret_store if secret_store is not None else open_secret_store(security.secret_store)
+        )
         pin = PinManager(secrets, audit=audit, clock=clock, attempts=SqlitePinAttemptStore(conn))
         gate = SecurityChangeGate(
             pin, required=security.pin_required_for_security_changes, audit=audit

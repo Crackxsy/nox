@@ -69,6 +69,10 @@ class SecurityConfig(StrictSection):
     #: entries to this list rather than replacing it.
     loopback_allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_LOOPBACK_ALLOWLIST))
     audit: AuditConfig = Field(default_factory=AuditConfig)
+    #: Where stored credentials live. `auto`: the OS keyring (Windows Credential Manager, macOS
+    #: Keychain, Secret Service), or - where none works, as on a headless Raspberry Pi - an
+    #: owner-only file in Nox's home folder. `keyring` and `file` force one of the two.
+    secret_store: Literal["auto", "keyring", "file"] = "auto"  # noqa: S105 - a backend name
 
     @field_validator("hard_prohibitions")
     @classmethod

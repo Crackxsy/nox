@@ -9,6 +9,9 @@ from typing import Any
 
 import pytest
 
+# The shell is the Windows/macOS desktop window; a server install (a Raspberry Pi) has no PySide6.
+pytest.importorskip("PySide6")
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 

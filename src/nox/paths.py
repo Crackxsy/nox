@@ -12,6 +12,7 @@ Nothing here reads or validates a file; `nox.core.config` does that.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 #: `<...>/src/nox`
@@ -52,24 +53,47 @@ def defaults_path() -> Path:
     return Path(env) if env else DEFAULTS_PATH
 
 
+def nox_home() -> Path:
+    """The one folder Nox owns on this machine: user config, database, runtime files, models.
+
+    `NOX_HOME` wins (the Raspberry Pi service sets it to `/var/lib/nox`). Otherwise the platform's
+    place for per-user application data: `%APPDATA%/Nox` on Windows, `~/Library/Application
+    Support/Nox` on macOS, `$XDG_DATA_HOME/Nox` (default `~/.local/share/Nox`) elsewhere. An
+    `APPDATA` variable is honoured on every system, so a test that sets it gets the Windows layout
+    it asked for.
+
+    Always absolute: the core, the CLI and every worker start in different directories, and a
+    relative `NOX_HOME` would give each of them a different folder.
+    """
+    env = os.environ.get("NOX_HOME", "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    appdata = os.environ.get("APPDATA", "").strip()
+    if appdata:
+        return Path(appdata) / "Nox"
+    if sys.platform == "win32":
+        return Path.home() / "AppData" / "Roaming" / "Nox"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Nox"
+    xdg = os.environ.get("XDG_DATA_HOME", "").strip()
+    return (Path(xdg) if xdg else Path.home() / ".local" / "share") / "Nox"
+
+
 def user_config_path() -> Path:
     """Where the user layer is *written*; it need not exist yet.
 
-    `NOX_USER_CONFIG` wins, otherwise `%APPDATA%\\Nox\\user.yaml`, falling back to the equivalent
-    under the home directory when `APPDATA` is not set.
+    `NOX_USER_CONFIG` wins, otherwise `user.yaml` in `nox_home()`.
     """
     env = os.environ.get("NOX_USER_CONFIG")
     if env:
         return Path(env)
-    appdata = os.environ.get("APPDATA")
-    base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
-    return base / "Nox" / USER_CONFIG_FILENAME
+    return nox_home() / USER_CONFIG_FILENAME
 
 
 def resolve_config_paths(user_config: Path | None = None) -> tuple[Path, Path | None]:
     """`(defaults, user or None)` for `nox.core.config.load_config`.
 
-    An explicit `user_config` wins, then `NOX_USER_CONFIG`, then `%APPDATA%\\Nox\\user.yaml`, then
+    An explicit `user_config` wins, then `NOX_USER_CONFIG`, then `user.yaml` in `nox_home()`, then
     a `user.yaml` next to the defaults file, which is the layout a checkout uses. The second
     element is None when no user layer exists, which the loader reads as "defaults only".
 
@@ -82,11 +106,7 @@ def resolve_config_paths(user_config: Path | None = None) -> tuple[Path, Path | 
     env_user = os.environ.get("NOX_USER_CONFIG")
     if env_user:
         return defaults, Path(env_user)
-    candidates: list[Path] = []
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        candidates.append(Path(appdata) / "Nox" / USER_CONFIG_FILENAME)
-    candidates.append(defaults.parent / USER_CONFIG_FILENAME)
+    candidates = [nox_home() / USER_CONFIG_FILENAME, defaults.parent / USER_CONFIG_FILENAME]
     for candidate in candidates:
         if candidate.is_file():
             return defaults, candidate

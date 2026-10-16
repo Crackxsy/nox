@@ -4,12 +4,20 @@
 (and its descendants) is terminated when the job handle is closed - including when the owning
 process dies. Off Windows (or when the Win32 call fails) every method is a logged no-op returning
 False, so callers degrade to psutil tree kills.
+
+The other half of the guarantee lives in the child: `die_with_parent` is what a worker calls on
+Linux and macOS, where no job object exists, so a worker or plugin never outlives a core that
+crashed or was killed - on a headless Raspberry Pi nobody would notice the orphans otherwise.
 """
 
 from __future__ import annotations
 
 import ctypes
+import os
+import signal
 import sys
+import threading
+import time
 from ctypes import wintypes
 
 from nox.core.logging import get_logger
@@ -138,3 +146,53 @@ class JobObject:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+
+#: `prctl` option number from <linux/prctl.h>.
+_PR_SET_PDEATHSIG = 1
+
+
+def die_with_parent(poll_s: float = 2.0) -> bool:
+    """End this process when the process that spawned it ends (POSIX; a no-op on Windows).
+
+    Two mechanisms, because each covers a gap of the other:
+
+    * Linux `PR_SET_PDEATHSIG` delivers SIGTERM the moment the parent dies. The kernel ties it to
+      the parent *thread* that forked us; the core spawns workers from its event-loop thread,
+      which lives as long as the core. A spawn moved to a short-lived executor thread would
+      trigger it early - keep spawning on the loop thread.
+    * Everywhere (and the only mechanism on macOS), a daemon thread notices re-parenting, the
+      portable sign that the parent is gone.
+
+    Both end the process with SIGTERM, so its own shutdown handling still runs - the voice worker
+    releases the audio device instead of being cut off. Returns True when protection is on.
+    """
+    if sys.platform == "win32":
+        return False
+    parent = os.getppid()
+    if sys.platform.startswith("linux"):
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+            if libc.prctl(_PR_SET_PDEATHSIG, int(signal.SIGTERM), 0, 0, 0) != 0:
+                get_logger(__name__).warning("jobobject.pdeathsig_failed", errno=ctypes.get_errno())
+        except (OSError, AttributeError) as exc:
+            get_logger(__name__).warning("jobobject.pdeathsig_failed", error=str(exc))
+    if os.getppid() != parent:
+        _terminate_self()  # the parent died before protection was in place
+
+    def watch() -> None:
+        while True:
+            time.sleep(poll_s)
+            if os.getppid() != parent:
+                _terminate_self()
+                return
+
+    threading.Thread(target=watch, name="nox-parent-watch", daemon=True).start()
+    return True
+
+
+def _terminate_self(grace_s: float = 5.0) -> None:
+    """SIGTERM to ourselves; if the process is still there after `grace_s`, exit hard."""
+    os.kill(os.getpid(), signal.SIGTERM)
+    time.sleep(grace_s)
+    os._exit(0)

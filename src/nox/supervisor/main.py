@@ -77,6 +77,17 @@ class SupervisorState(StrEnum):
     STOPPED = "stopped"
 
 
+def has_display() -> bool:
+    """Whether this machine has a screen session a window and global hotkeys could use.
+
+    Windows and macOS always do for an interactive user. On Linux it is the X11 or Wayland
+    session variables; a systemd service on a headless Raspberry Pi has neither.
+    """
+    if sys.platform in ("win32", "darwin"):
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
 class SupervisorSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -102,12 +113,21 @@ class SupervisorSettings(BaseModel):
     @classmethod
     def from_config(cls, cfg: NoxConfig, *, hotkey_enabled: bool = True) -> SupervisorSettings:
         sup = cfg.supervisor
+        display = has_display()
+        if not display:
+            # A headless server (a Raspberry Pi with no screen): the pet window and the global
+            # hotkeys have nowhere to go. Starting the shell anyway would only feed the restart
+            # loop; every device in the network reaches Nox through the dashboard instead.
+            get_logger(__name__).info("supervisor.headless", shell=False, hotkeys=False)
+        hotkey_enabled = hotkey_enabled and display
         return cls(
             control_host=sup.control_host,
             control_port=sup.control_port,
             runtime_dir=cfg.paths.runtime_dir,
             core_command=resolve_command(sup.core_command),
-            shell_command=resolve_command(sup.shell_command) if sup.shell_enabled else None,
+            shell_command=(
+                resolve_command(sup.shell_command) if sup.shell_enabled and display else None
+            ),
             heartbeat_interval_s=sup.heartbeat_interval_s,
             missed_for_graceful=sup.missed_for_graceful,
             missed_for_hard=sup.missed_for_hard,

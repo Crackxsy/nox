@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from nox.ai.base import AiProvider
 from nox.core.boot.workers import WorkerSupervisor
@@ -34,6 +35,7 @@ def core_health_checks(
     voice_enabled: bool,
     tokens: Callable[[], TokenStore | None],
     providers: Callable[[], list[AiProvider]],
+    secrets: Callable[[], Any] = lambda: None,
 ) -> list[Check]:
     """Build the core's checks. Everything is read through a callable, because the components are
     built in order and a check may be created before the thing it asks about exists."""
@@ -81,11 +83,26 @@ def core_health_checks(
             return HealthStatus.AVAILABLE, "owner-only"
         return HealthStatus.LIMITED, "could not restrict the token file to this account"
 
+    async def secrets_check() -> tuple[HealthStatus, str]:
+        # Which store holds the PIN and the tokens. The owner-only file is a deliberate trade-off
+        # on a machine without a keyring, so it is `limited` rather than hidden; a keyring this
+        # installation used and can no longer reach means the PIN cannot be checked at all.
+        store = secrets()
+        backend = getattr(store, "backend", None)
+        if backend == "keyring":
+            return HealthStatus.AVAILABLE, "OS keyring"
+        if backend == "file":
+            return HealthStatus.LIMITED, "owner-only file (no OS keyring on this machine)"
+        if backend == "unavailable":
+            return HealthStatus.UNAVAILABLE, "OS keyring unreachable; PIN-gated changes refused"
+        return HealthStatus.AVAILABLE, str(backend or "not opened")
+
     checks = [
         Check("db", db_check),
         Check("vault", vault_check),
         Check("voice", voice_check),
         Check("tokens", tokens_check),
+        Check("secrets", secrets_check),
     ]
     for provider in providers():
 

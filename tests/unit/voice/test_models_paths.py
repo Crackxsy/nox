@@ -33,6 +33,7 @@ def test_models_root_follows_the_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_p
 def test_models_root_falls_back_to_appdata(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("NOX_DATA_DIR", raising=False)
     monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.delenv("NOX_HOME", raising=False)  # this test is about the APPDATA layout
     assert default_models_root() == tmp_path / "Nox" / "models"
 
 
@@ -40,6 +41,7 @@ def test_no_absolute_machine_path_is_baked_in(monkeypatch: pytest.MonkeyPatch) -
     """Regression guard for the public repository: no developer path in the defaults."""
     monkeypatch.delenv("NOX_DATA_DIR", raising=False)
     monkeypatch.setenv("APPDATA", r"C:\Users\someone\AppData\Roaming")
+    monkeypatch.delenv("NOX_HOME", raising=False)  # this test is about the APPDATA layout
     assert "Nox" in str(default_models_root())
     assert str(default_models_root()).startswith(r"C:\Users\someone")
 

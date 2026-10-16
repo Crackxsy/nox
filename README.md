@@ -77,12 +77,16 @@ See [`CHANGELOG.md`](CHANGELOG.md) for what shipped when.
 
 ## Requirements
 
-- **Windows 11.** Nox is Windows-only by design (Qt shell, Windows Credential Manager, per-window
-  privacy zones). There is no Linux or macOS build and none is planned.
-- **Python 3.13 from [python.org](https://www.python.org/downloads/)** — *not* the Microsoft Store
-  build: Store Python virtualises `%APPDATA%`, so Nox's runtime token files end up somewhere other
-  tools cannot read and startup fails with `token_acl_failed`.
-- **Node.js 20 or newer** to build the two UIs (the core serves the built bundles).
+- **Windows 11** for the desktop companion: the pet window, hotkeys, window and program control,
+  per-window privacy zones. On Windows you also need:
+  - **Python 3.13 from [python.org](https://www.python.org/downloads/)** — *not* the Microsoft
+    Store build: Store Python virtualises `%APPDATA%`, so Nox's runtime token files end up
+    somewhere other tools cannot read and startup fails with `token_acl_failed`.
+  - **Node.js 20 or newer** to build the two UIs (the core serves the built bundles).
+- **Or Linux as a server** - a Raspberry Pi 4/5 with 64-bit Raspberry Pi OS, Debian or Ubuntu,
+  ARM64 or x86-64. One command installs the core as a service and brings its own Python and the
+  built dashboard: [`docs/RASPBERRY_PI.md`](docs/RASPBERRY_PI.md) (deutsch:
+  [`docs/RASPBERRY_PI.de.md`](docs/RASPBERRY_PI.de.md)). macOS is not a supported target yet.
 - **[Ollama](https://ollama.com) (optional)** for fully local language models and embeddings.
 - **[Claude Code CLI](https://claude.com/claude-code) (optional)** for cloud-grade reasoning and
   the coding agent.

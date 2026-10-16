@@ -8,6 +8,38 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+### Added
+- **Nox runs as a server on a Raspberry Pi or any Linux machine.** One command installs it as a
+  hardened systemd service (`scripts/install-linux.sh`, `docs/RASPBERRY_PI.md`): its own system
+  user, the program read-only in `/opt/nox`, everything it keeps in `/var/lib/nox`, Python 3.13
+  through uv from prebuilt packages only, and the prebuilt dashboard from the release, checked
+  against its SHA-256, so the Pi needs no Node.js and compiles nothing. From this release on every
+  release carries that bundle (`nox-ui-<tag>.tar.gz`). Before an update it snapshots
+  `/var/lib/nox` and prints the command back to the previous version. A short `nox` command acts on
+  the service's data (`nox doctor`, `nox onboard`, `nox claude-login`). Guide in English and German
+  (`docs/RASPBERRY_PI.md`, `docs/RASPBERRY_PI.de.md`).
+- **One folder per machine.** `nox_home()` is `%APPDATA%/Nox` on Windows and
+  `~/.local/share/Nox` on Linux (`~/Library/Application Support/Nox` on macOS, path logic only -
+  macOS is not supported yet), and `NOX_HOME` moves it (the Pi service uses `/var/lib/nox`). The
+  shipped defaults follow it, and a Windows `user.yaml` with `${APPDATA}` lands in the same folder
+  on Linux. `nox where` prints where the settings, data and secrets are.
+- **Secrets without a desktop.** Where no OS keyring works - a Pi without a desktop session - Nox
+  keeps credentials in an owner-only `secrets.json` instead of failing every save, locked across
+  processes and refused when it is a link, foreign or readable by others. The choice is remembered:
+  a keyring that disappears later is reported (health check `secrets`, `nox where`) and PIN-gated
+  changes are refused, instead of starting over with an empty file. `security.secret_store` forces
+  either.
+- **CI on Linux, x86-64 and ARM64**, next to Windows: the core's unit and integration tests run on
+  the Pi's architecture on every pull request.
+
+### Fixed
+- **Workers and plugins outlived a crashed core on Linux and macOS**, where no job object exists.
+  They now end with the process that spawned them.
+- **A server without a screen kept restarting the pet window.** The supervisor no longer starts the
+  desktop shell or global hotkeys where there is no display.
+- Plugin workers on Linux started without `HOME`, a locale or `XDG_*`; they now inherit those.
+
+
 ## [0.5.0] - 2026-10-14
 
 ### Changed

@@ -18,10 +18,10 @@ identity:
 paths:
   # Everything Nox stores lives below data_dir: vault, index, database, cache, backups, runtime
   # tokens and logs. Moving this one key moves all of them.
-  data_dir: "${APPDATA}/Nox"
+  data_dir: "${NOX_HOME}"
   # vault_dir / index_dir / database_dir / cache_dir / backups_dir / logs_dir each default to
   # <data_dir>/<name>. Set one here only to move that one somewhere else.
-  runtime_dir: "${APPDATA}/Nox/runtime"
+  runtime_dir: "${NOX_HOME}/runtime"
   # runtime_dir stays here on purpose: the desktop shell and the pet window look for the session
   # token and the port file before they have read any configuration. It holds no data of yours -
   # both files are recreated on every start.
@@ -34,6 +34,10 @@ security:
   # privacy mode, switching a capture device back on, editing a security or privacy setting, or
   # changing a stored credential. Making Nox stricter never asks.
   pin_required_for_security_changes: true
+  # Where tokens and passwords are kept. auto: the OS keyring (Windows Credential Manager, macOS
+  # Keychain, Secret Service), or an owner-only file in Nox's folder where there is none - a
+  # Raspberry Pi without a desktop. keyring | file force one of the two.
+  secret_store: auto
   hard_prohibitions:             # never overridable by any profile, plugin, runtime override or LLM
     - game.input.send
     - game.memory.read
@@ -80,7 +84,7 @@ ipc:
   port: 47800                    # WebSocket hub
   http_port: 47801               # static UI (pet renderer, dashboard) and health endpoint
   schema_version: 1
-  auth: token                    # per-start session tokens issued by core, stored under %APPDATA%/Nox/runtime
+  auth: token                    # per-start session tokens issued by core, stored under <data_dir>/runtime
 
 voice:
   models_dir: ""                 # root for piper/kokoro/openwakeword model files;

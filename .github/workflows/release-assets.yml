@@ -1,0 +1,69 @@
+# Attaches the built dashboard and pet window to every GitHub release, as nox-ui-<tag>.tar.gz plus
+# its SHA-256. scripts/install-linux.sh downloads both and refuses an archive that does not match,
+# so a Raspberry Pi needs no Node.js toolchain to serve the dashboard. The archive holds
+# ui/dashboard/dist and ui/pet/dist and nothing else.
+#
+# Two jobs on purpose: the build runs third-party npm code and therefore has a read-only token and
+# no stored git credentials; only the upload job, which runs no repository code, may write.
+name: Release assets
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build UI bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Build dashboard and pet
+        run: |
+          for app in dashboard pet; do
+            (cd "ui/$app" && npm ci --ignore-scripts && npm run build)
+          done
+
+      - name: Pack
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          tar --owner=0 --group=0 --numeric-owner -czf "nox-ui-$TAG.tar.gz" ui/dashboard/dist ui/pet/dist
+          sha256sum "nox-ui-$TAG.tar.gz" > "nox-ui-$TAG.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ui-bundle
+          path: nox-ui-*.tar.gz*
+          if-no-files-found: error
+
+  upload:
+    name: Attach to the release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: ui-bundle
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" "nox-ui-$TAG.tar.gz" "nox-ui-$TAG.tar.gz.sha256" --repo "$REPO"

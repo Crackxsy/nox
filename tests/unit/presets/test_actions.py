@@ -101,4 +101,5 @@ def test_nox_own_variables_are_not_passed_to_the_program(monkeypatch: pytest.Mon
     assert "NOX_INTERNAL_PROBE" not in environment
     assert environment["PATH_PROBE"] == "ordinary"
     # The rest of the environment still reaches the program: a tool that needs PATH keeps working.
-    assert len(environment) >= len(os.environ) - 1
+    ordinary = {name for name in os.environ if not name.upper().startswith("NOX_")}
+    assert set(environment) >= ordinary
