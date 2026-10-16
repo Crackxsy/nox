@@ -95,7 +95,9 @@ def core_health_checks(
             return HealthStatus.LIMITED, "owner-only file (no OS keyring on this machine)"
         if backend == "unavailable":
             return HealthStatus.UNAVAILABLE, "OS keyring unreachable; PIN-gated changes refused"
-        return HealthStatus.AVAILABLE, str(backend or "not opened")
+        if backend is None:
+            return HealthStatus.LIMITED, "secret store not opened yet"
+        return HealthStatus.AVAILABLE, str(backend)
 
     checks = [
         Check("db", db_check),

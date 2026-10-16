@@ -21,7 +21,9 @@ import asyncio
 import hashlib
 import hmac
 import importlib
+import os
 import secrets as _secrets
+import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -82,12 +84,24 @@ class KeyringSecretStore:
         self._service = service
         self._keyring = backend if backend is not None else importlib.import_module("keyring")
 
+    # Backend errors (a locked collection, a lost D-Bus session, an init failure) become
+    # `SecretStoreUnavailableError`, so callers handle one exception type - and `PinManager` treats
+    # it as "set and unverifiable" rather than letting it escape as a crash.
+
     def get(self, name: str) -> str | None:
-        value = self._keyring.get_password(self._service, validate_name(name))
+        validate_name(name)
+        try:
+            value = self._keyring.get_password(self._service, name)
+        except Exception as exc:  # noqa: BLE001 - every backend raises its own types
+            raise SecretStoreUnavailableError(f"OS keyring: {type(exc).__name__}") from exc
         return None if value is None else str(value)
 
     def set(self, name: str, value: str) -> None:
-        self._keyring.set_password(self._service, validate_name(name), value)
+        validate_name(name)
+        try:
+            self._keyring.set_password(self._service, name, value)
+        except Exception as exc:  # noqa: BLE001
+            raise SecretStoreUnavailableError(f"OS keyring: {type(exc).__name__}") from exc
         log.debug("secrets.set", name=name)
 
     def delete(self, name: str) -> None:
@@ -96,7 +110,7 @@ class KeyringSecretStore:
             self._keyring.delete_password(self._service, name)
         except Exception as exc:  # noqa: BLE001 - keyring raises backend-specific errors for "not found"
             if type(exc).__name__ != "PasswordDeleteError":
-                raise
+                raise SecretStoreUnavailableError(f"OS keyring: {type(exc).__name__}") from exc
         log.debug("secrets.deleted", name=name)
 
     def __repr__(self) -> str:
@@ -164,19 +178,41 @@ def _read_marker(home: Path) -> str | None:
 
 
 def _write_marker(home: Path, backend: str) -> None:
+    """Atomically, so a crash can never leave a half-written choice behind."""
     try:
         home.mkdir(parents=True, exist_ok=True)
-        (home / BACKEND_MARKER).write_text(backend + "\n", encoding="utf-8")
+        tmp = home / f".{BACKEND_MARKER}.{os.getpid()}.tmp"
+        tmp.write_text(backend + "\n", encoding="utf-8")
+        os.replace(tmp, home / BACKEND_MARKER)
     except OSError as exc:  # a read-only home is reported by the store itself on first use
         log.warning("secrets.marker_write_failed", error=type(exc).__name__)
 
 
-def resolve_secret_backend(backend: SecretBackend = "auto", *, home: Path | None = None) -> str:
+def _first_choice(base: Path) -> str:
+    """The store a fresh installation starts with.
+
+    Windows and macOS always have a keyring for an interactive user, so they never choose the
+    file on their own: a keyring that is unreachable at that one moment must surface as
+    "unavailable", not become a permanent downgrade. Elsewhere the file is chosen only where no
+    keyring works (a headless Raspberry Pi) or where a secrets file is already in place.
+    """
+    if sys.platform in ("win32", "darwin"):
+        return "keyring"
+    from nox.security.file_secrets import SECRETS_FILENAME  # noqa: PLC0415
+
+    if (base / SECRETS_FILENAME).exists():
+        return "file"
+    return "keyring" if keyring_usable() else "file"
+
+
+def resolve_secret_backend(
+    backend: SecretBackend = "auto", *, home: Path | None = None, record: bool = True
+) -> str:
     """`keyring`, `file` or `unavailable` - the store this process must use, without opening it.
 
     `keyring`/`file` in the configuration force one. `auto` keeps whatever this installation
-    chose before; only on first use does it pick the keyring where one works and the file where
-    none does (a headless Raspberry Pi).
+    chose before; on first use it applies `_first_choice`. `record=False` is for commands that
+    only look (`nox where`): they report the choice but never make it.
     """
     from nox.paths import nox_home  # noqa: PLC0415 - nox.paths is import-light, this module is not
 
@@ -184,16 +220,26 @@ def resolve_secret_backend(backend: SecretBackend = "auto", *, home: Path | None
     marker = _read_marker(base)
     if backend != "auto":
         chosen: str = backend
-        if marker != chosen:
-            _write_marker(base, chosen)
+        if marker is not None and marker != chosen:
+            # A forced switch does not move anything: the other store keeps its secrets and the
+            # PIN, which will look unset here. Say so where it is noticed - in the log and `where`.
+            log.warning("secrets.backend_switched", recorded=marker, configured=chosen)
     elif marker is not None:
         chosen = marker
     else:
-        chosen = "keyring" if keyring_usable() else "file"
+        chosen = _first_choice(base)
+    if record and marker != chosen and (chosen == "file" or keyring_usable()):
         _write_marker(base, chosen)
     if chosen == "keyring" and not keyring_usable():
         return "unavailable"
     return chosen
+
+
+def recorded_secret_backend(home: Path | None = None) -> str | None:
+    """The store this installation recorded, or None before its first use."""
+    from nox.paths import nox_home  # noqa: PLC0415
+
+    return _read_marker(home if home is not None else nox_home())
 
 
 def open_secret_store(backend: SecretBackend = "auto", *, home: Path | None = None) -> SecretStore:

@@ -1,7 +1,7 @@
-# Attaches the built dashboard and pet window to every GitHub release, as nox-ui-<tag>.tar.gz plus
-# its SHA-256. scripts/install-linux.sh downloads both and refuses an archive that does not match,
-# so a Raspberry Pi needs no Node.js toolchain to serve the dashboard. The archive holds
-# ui/dashboard/dist and ui/pet/dist and nothing else.
+# Attaches to every GitHub release: the built dashboard and pet window as nox-ui-<tag>.tar.gz, and
+# the installer itself as install-linux.sh, each with its SHA-256. scripts/install-linux.sh
+# downloads the bundle and refuses one that does not match, so a Raspberry Pi needs no Node.js
+# toolchain; the documented `releases/latest/download/install-linux.sh` is always a tagged version.
 #
 # Two jobs on purpose: the build runs third-party npm code and therefore has a read-only token and
 # no stored git credentials; only the upload job, which runs no repository code, may write.
@@ -42,11 +42,15 @@ jobs:
         run: |
           tar --owner=0 --group=0 --numeric-owner -czf "nox-ui-$TAG.tar.gz" ui/dashboard/dist ui/pet/dist
           sha256sum "nox-ui-$TAG.tar.gz" > "nox-ui-$TAG.tar.gz.sha256"
+          cp scripts/install-linux.sh install-linux.sh
+          sha256sum install-linux.sh > install-linux.sh.sha256
 
       - uses: actions/upload-artifact@v7
         with:
           name: ui-bundle
-          path: nox-ui-*.tar.gz*
+          path: |
+            nox-ui-*.tar.gz*
+            install-linux.sh*
           if-no-files-found: error
 
   upload:
@@ -66,4 +70,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
           REPO: ${{ github.repository }}
-        run: gh release upload "$TAG" "nox-ui-$TAG.tar.gz" "nox-ui-$TAG.tar.gz.sha256" --repo "$REPO"
+        run: >-
+          gh release upload "$TAG" --repo "$REPO"
+          "nox-ui-$TAG.tar.gz" "nox-ui-$TAG.tar.gz.sha256" install-linux.sh install-linux.sh.sha256

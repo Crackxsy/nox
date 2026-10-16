@@ -22,15 +22,15 @@ Python, die Abhängigkeiten und das Dashboard bringt der Installer mit. Kein Nod
 Auf dem Pi in einem Terminal (oder per SSH):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Crackxsy/nox/develop/scripts/install-linux.sh | sudo bash
+curl -fsSL https://github.com/Crackxsy/nox/releases/latest/download/install-linux.sh | sudo bash
 ```
 
 Lieber erst lesen? `curl -fsSLO <dieselbe Adresse>`, dann `less install-linux.sh` und
-`sudo bash install-linux.sh`.
+`sudo bash install-linux.sh`. Jedes Release enthält dazu `install-linux.sh.sha256`.
 
-Das Skript zeigt jeden Schritt an und endet mit **„Nox läuft"**, sobald der Dienst antwortet. Ab
+Das Skript zeigt jeden Schritt an und endet mit **„Nox läuft“**, sobald der Dienst antwortet. Ab
 dann startet Nox nach jedem Neustart von selbst. Installiert wird die neueste Version, die unter
-Linux läuft (ab v0.6.0); `sudo env NOX_REF=<version> bash install-linux.sh` wählt eine andere.
+Linux läuft (ab v0.6.0); später wählt `nox update <version>` eine andere.
 
 Was es tut, und sonst nichts:
 
@@ -54,6 +54,7 @@ nox doctor         # ein ehrlicher Bericht, was geht und was nicht
 ```
 
 `nox` arbeitet auf dem Pi immer mit den Daten des Dienstes, von jedem Konto aus, das `sudo` darf.
+`nox onboard` startet den Dienst am Ende neu, damit deine Antworten sofort gelten.
 
 ### Die KI dahinter
 
@@ -63,8 +64,21 @@ leitet nur weiter, gedacht wird bei Anthropic. `nox claude-login` installiert es
 startet die Anmeldung: `/login` eintippen, den angezeigten Link auf dem Handy oder PC öffnen, den
 Code zurück ins Terminal kopieren, dann `/exit` und `sudo systemctl restart nox`.
 
+`nox claude-login` führt den offiziellen Installer von Anthropic aus (`claude.ai/install.sh`, über
+HTTPS), und zwar als Benutzer `nox` – Claude Code liegt dann neben den Daten von Nox und nirgends
+sonst.
+
 Ein lokales Modell über Ollama läuft auf einem Pi 5 mit 8 GB, braucht für eine Antwort aber viele
-Sekunden. Es ist optional, der Installer richtet es nicht ein.
+Sekunden. Es ist optional, der Installer richtet es nicht ein. Wenn du es willst:
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen3:1.7b        # klein genug für 8 GB; antwortet auf Deutsch
+```
+
+Nox findet ein lokales Ollama von selbst (`127.0.0.1:11434`) und nutzt es, wenn Claude Code nicht
+erreichbar ist. Ein größeres Modell antwortet besser und langsamer; `nox doctor` zeigt, welche KI
+erreichbar ist.
 
 ## Im Alltag
 
@@ -75,12 +89,22 @@ Sekunden. Es ist optional, der Installer richtet es nicht ein.
 | Gesundheitsbericht | `nox doctor` |
 | Wo liegen seine Dateien? | `nox where` |
 | Einstellungen | `sudo nano /var/lib/nox/user.yaml`, danach `sudo systemctl restart nox` |
-| Update | den Installationsbefehl noch einmal ausführen |
+| Update | `nox update` |
 
-**Updates sind gefahrlos.** Vor einem Update hält der Installer Nox an, sichert `/var/lib/nox` als
-Schnappschuss nach `/var/backups/nox` (die letzten fünf bleiben) und zeigt den Befehl, mit dem du
-zur vorherigen Version zurückkehrst. Einstellungen, Gedächtnis und Zugangsdaten rührt das Update
-selbst nie an.
+**Updates lassen sich zurücknehmen.** `nox update` holt und bereitet die neue Version vor, während
+die alte weiterläuft. Dann hält es Nox kurz an, sichert `/var/lib/nox` als Schnappschuss nach
+`/var/backups/nox` (die letzten fünf bleiben, Programm-Zwischenspeicher bleiben draußen) und startet
+die neue Version. Geht unterwegs etwas schief, startet wieder die bisherige. Der Schnappschuss
+enthält auch deine Zugangsdaten und ist nur für root lesbar.
+
+### Ein Update zurücknehmen
+
+```bash
+nox update v0.6.0                          # das Programm: deine vorherige Version (der Installer nennt sie)
+sudo systemctl stop nox                    # die Daten, falls die neue Version sie verändert hat:
+sudo tar -xzf /var/backups/nox/<schnappschuss>.tar.gz -C /var/lib
+sudo systemctl start nox
+```
 
 **Zeitzone.** Erinnerungen und Kalender richten sich nach der Uhr des Pi. Raspberry Pi OS Lite
 startet oft in UTC; der Installer weist darauf hin. In Deutschland:
@@ -102,7 +126,12 @@ lesbar nur für den Benutzer `nox` – derselbe Schutz, den ein SSH-Schlüssel a
 `nox where` und `nox doctor` sagen, was in Gebrauch ist. Hat eine Installation einmal gewählt,
 bleibt sie dabei: Fehlt ein Schlüsselbund, den sie benutzt hat, eines Tages, meldet Nox das und
 lehnt PIN-geschützte Änderungen ab, statt still mit einer leeren Datei neu anzufangen.
-`security.secret_store: keyring | file` in `user.yaml` erzwingt eines von beiden.
+`security.secret_store: keyring | file` in `user.yaml` erzwingt eines von beiden; ein Wechsel
+verschiebt bereits gespeicherte Zugangsdaten nicht, und `nox where` warnt davor.
+
+Plugins laufen als derselbe Benutzer `nox` und können deshalb dieselben Dateien lesen – die
+Plugin-Grenze von Nox ist eine Rechteprüfung bei jedem Aufruf, keine Sandbox des Betriebssystems.
+Installiere nur Plugins, denen du vertraust.
 
 ## Was läuft wo
 
@@ -111,7 +140,7 @@ Der Pi ist das gemeinsame Gehirn; Gerätespezifisches bleibt auf dem Gerät, zu 
 | | Auf dem Pi | Auf deinem Windows-PC |
 | --- | --- | --- |
 | Gespräch, Gedächtnis, Erinnerungen, Kalender, Smart Home, Pläne | ✓ | ✓ |
-| Dashboard von jedem Gerät im Netzwerk | mit dem Netzwerkzugriff (oben) | ✓ (auf diesem PC) |
+| Dashboard von jedem Gerät im Netzwerk | geplant – mit dem Netzwerkzugriff (oben) | ✓ (auf diesem PC) |
 | Das Pet-Fenster und globale Tastenkürzel | – (kein Bildschirm) | ✓ |
 | Fenster, Programme, Tippen in ein Fenster | – | ✓ |
 | Sprechen und Zuhören | geplant (USB-Mikrofon und -Lautsprecher) | ✓ |

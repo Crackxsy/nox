@@ -66,6 +66,13 @@ class StrictSection(BaseModel):
 
 _VAR = re.compile(r"\$\{(\w+)\}|\$(\w+)|%(\w+)%")
 
+#: `${APPDATA}/Nox`, `$LOCALAPPDATA\Nox`, `%APPDATA%/Nox` ... at the start of a path.
+_WINDOWS_NOX_HOME = re.compile(
+    r"^(?:\$\{(?P<braced>APPDATA|LOCALAPPDATA)\}|\$(?P<bare>APPDATA|LOCALAPPDATA)"
+    r"|%(?P<percent>APPDATA|LOCALAPPDATA)%)[/\\]Nox(?=$|[/\\])",
+    re.IGNORECASE,
+)
+
 #: Locations a configuration may name that the environment does not always define. Any other
 #: unresolved variable is an error, because guessing would put user data somewhere nobody asked
 #: for.
@@ -99,6 +106,16 @@ def expand_path(value: str) -> Path:
     known Windows locations above.
     """
     unresolved: list[str] = []
+    if sys.platform != "win32":
+        # `${APPDATA}/Nox` in a Windows user.yaml means "Nox's folder". Elsewhere that folder is
+        # `nox_home()` - which may be called anything (`/var/lib/nox` on the Pi service).
+        windows_home = _WINDOWS_NOX_HOME.match(value)
+        if windows_home is not None:
+            var = windows_home["braced"] or windows_home["bare"] or windows_home["percent"]
+            if not os.environ.get(var.upper()):
+                from nox.paths import nox_home  # noqa: PLC0415
+
+                value = str(nox_home()) + value[windows_home.end() :]
 
     def replace(match: re.Match[str]) -> str:
         name = match.group(1) or match.group(2) or match.group(3)

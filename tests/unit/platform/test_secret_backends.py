@@ -31,6 +31,7 @@ def _keyring(monkeypatch: pytest.MonkeyPatch, usable: bool) -> None:
 
 def test_the_first_choice_is_remembered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _keyring(monkeypatch, usable=False)
+    monkeypatch.setattr(sys, "platform", "linux")
     assert resolve_secret_backend("auto", home=tmp_path) == "file"
     assert (tmp_path / BACKEND_MARKER).read_text(encoding="utf-8").strip() == "file"
     # A keyring appearing later (a desktop installed on the Pi) does not move the secrets.
@@ -154,9 +155,14 @@ def test_a_windows_style_path_lands_in_the_nox_folder_elsewhere(
 
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.delenv("APPDATA", raising=False)
-    monkeypatch.setenv("NOX_HOME", str(tmp_path / "srv" / "Nox"))
-    assert expand_path("${APPDATA}/Nox") == tmp_path / "srv" / "Nox"
-    assert expand_path("${NOX_HOME}/runtime") == tmp_path / "srv" / "Nox" / "runtime"
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    # The Pi service's folder is lowercase `/var/lib/nox`: `${APPDATA}/Nox` must still land there.
+    monkeypatch.setenv("NOX_HOME", str(tmp_path / "var" / "lib" / "nox"))
+    home = tmp_path / "var" / "lib" / "nox"
+    assert expand_path("${APPDATA}/Nox") == home
+    assert expand_path("%APPDATA%/Nox/data/clips") == home / "data" / "clips"
+    assert expand_path("$LOCALAPPDATA/Nox/runtime") == home / "runtime"
+    assert expand_path("${NOX_HOME}/runtime") == home / "runtime"
 
 
 def test_a_relative_nox_home_is_made_absolute(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,3 +170,110 @@ def test_a_relative_nox_home_is_made_absolute(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setenv("NOX_HOME", "relative-folder")
     assert nox_home().is_absolute()
+
+
+def test_looking_never_decides(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _keyring(monkeypatch, usable=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert resolve_secret_backend("auto", home=tmp_path, record=False) == "file"
+    assert not (tmp_path / BACKEND_MARKER).exists()
+
+
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
+def test_a_desktop_os_never_chooses_the_file_by_itself(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform: str
+) -> None:
+    # An upgrade whose first start meets a keyring that hiccups must not be pinned to an empty file.
+    _keyring(monkeypatch, usable=False)
+    monkeypatch.setattr(sys, "platform", platform)
+    assert resolve_secret_backend("auto", home=tmp_path) == "unavailable"
+    assert not (tmp_path / BACKEND_MARKER).exists()
+    _keyring(monkeypatch, usable=True)
+    assert resolve_secret_backend("auto", home=tmp_path) == "keyring"
+
+
+def test_an_existing_secrets_file_is_kept_on_linux(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _keyring(monkeypatch, usable=True)
+    FileSecretStore(tmp_path).set("nox/home/access_token", "t0k3n")
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert resolve_secret_backend("auto", home=tmp_path) == "file"
+
+
+def test_keyring_backend_errors_keep_the_gate_closed() -> None:
+    class Broken:
+        def get_password(self, *_a: object) -> str:
+            raise RuntimeError("dbus went away")
+
+        def set_password(self, *_a: object) -> None:
+            raise RuntimeError("locked")
+
+        def delete_password(self, *_a: object) -> None:
+            raise RuntimeError("locked")
+
+    store = KeyringSecretStore(backend=Broken())
+    with pytest.raises(SecretStoreUnavailableError, match="RuntimeError"):
+        store.get("nox/security/pin")
+    with pytest.raises(SecretStoreUnavailableError):
+        store.set("nox/security/pin", "x")
+    with pytest.raises(SecretStoreUnavailableError):
+        store.delete("nox/security/pin")
+    assert PinManager(store).is_set() is True
+
+
+def test_reading_an_empty_store_creates_nothing(tmp_path: Path) -> None:
+    home = tmp_path / "not-yet"
+    store = FileSecretStore(home)
+    assert store.get("nox/home/access_token") is None and store.names() == []
+    assert not home.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes")
+def test_a_fresh_folder_is_usable_and_private(tmp_path: Path) -> None:
+    home = tmp_path / "fresh" / "Nox"
+    store = FileSecretStore(home)
+    store.set("nox/home/access_token", "t0k3n")
+    assert store.get("nox/home/access_token") == "t0k3n"
+    assert home.stat().st_mode & 0o777 == 0o700
+    os.chmod(home, 0o755)
+    store.set("nox/home/access_token", "again")
+    assert home.stat().st_mode & 0o777 == 0o700
+
+
+def test_nox_secrets_reports_a_broken_store_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typer.testing import CliRunner
+
+    from nox.cli import app
+
+    monkeypatch.setattr(
+        secrets_module, "open_configured_secret_store", lambda: UnavailableSecretStore("gone")
+    )
+    result = CliRunner().invoke(app, ["secrets", "check", "nox/home/access_token"])
+    assert result.exit_code == 1 and "gone" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_nox_where_names_the_store_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, _isolated_nox_home: Path
+) -> None:
+    from typer.testing import CliRunner
+
+    from nox.cli import app
+
+    _keyring(monkeypatch, usable=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.delenv("APPDATA", raising=False)
+    result = CliRunner().invoke(app, ["where"])
+    assert result.exit_code == 0, result.output
+    assert "owner-only file" in result.output and str(_isolated_nox_home) in result.output
+    assert not (_isolated_nox_home / BACKEND_MARKER).exists()
+
+
+def test_the_user_layer_is_found_in_the_nox_folder(_isolated_nox_home: Path) -> None:
+    from nox.paths import resolve_config_paths
+
+    (_isolated_nox_home / "user.yaml").write_text("identity: {}\n", encoding="utf-8")
+    assert resolve_config_paths()[1] == _isolated_nox_home / "user.yaml"

@@ -116,6 +116,7 @@ def test_auto_falls_back_to_the_file_where_no_keyring_works(
     import nox.security.secrets as secrets_module
 
     monkeypatch.setattr(secrets_module, "keyring_usable", lambda module=None: False)
+    monkeypatch.setattr(sys, "platform", "linux")  # a desktop OS never picks the file itself
     store = open_secret_store("auto", home=tmp_path)
     assert isinstance(store, FileSecretStore) and store.path == tmp_path / "secrets.json"
     assert isinstance(open_secret_store("file", home=tmp_path), FileSecretStore)

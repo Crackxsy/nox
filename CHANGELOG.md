@@ -15,9 +15,11 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   through uv from prebuilt packages only, and the prebuilt dashboard from the release, checked
   against its SHA-256, so the Pi needs no Node.js and compiles nothing. From this release on every
   release carries that bundle (`nox-ui-<tag>.tar.gz`). Before an update it snapshots
-  `/var/lib/nox` and prints the command back to the previous version. A short `nox` command acts on
-  the service's data (`nox doctor`, `nox onboard`, `nox claude-login`). Guide in English and German
-  (`docs/RASPBERRY_PI.md`, `docs/RASPBERRY_PI.de.md`).
+  `/var/lib/nox` - the old version keeps running until then, and comes back if the update fails -
+  and says how to go back. A short `nox` command acts on the service's data (`nox doctor`,
+  `nox onboard`, `nox update`, `nox claude-login`). The installer itself is attached to every
+  release with its SHA-256, and CI runs it for real - install, update, service up - on x86-64 and
+  ARM64. Guide in English and German (`docs/RASPBERRY_PI.md`, `docs/RASPBERRY_PI.de.md`).
 - **One folder per machine.** `nox_home()` is `%APPDATA%/Nox` on Windows and
   `~/.local/share/Nox` on Linux (`~/Library/Application Support/Nox` on macOS, path logic only -
   macOS is not supported yet), and `NOX_HOME` moves it (the Pi service uses `/var/lib/nox`). The
@@ -26,9 +28,9 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 - **Secrets without a desktop.** Where no OS keyring works - a Pi without a desktop session - Nox
   keeps credentials in an owner-only `secrets.json` instead of failing every save, locked across
   processes and refused when it is a link, foreign or readable by others. The choice is remembered:
-  a keyring that disappears later is reported (health check `secrets`, `nox where`) and PIN-gated
-  changes are refused, instead of starting over with an empty file. `security.secret_store` forces
-  either.
+  a keyring that disappears later is reported (health check `secrets`, `nox where`, `nox doctor`)
+  and PIN-gated changes are refused, instead of starting over with an empty file; Windows and macOS
+  never fall back to the file on their own. `security.secret_store` forces either.
 - **CI on Linux, x86-64 and ARM64**, next to Windows: the core's unit and integration tests run on
   the Pi's architecture on every pull request.
 

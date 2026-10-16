@@ -48,6 +48,9 @@ _FORMAT_VERSION = 1
 #: open the store more than once, and the file lock below does not exclude threads of one process
 #: on every platform.
 _THREAD_LOCKS: dict[Path, threading.Lock] = {}
+
+#: Never open the lock file through a planted link (0 where the flag does not exist).
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _THREAD_LOCKS_GUARD = threading.Lock()
 
 
@@ -72,6 +75,8 @@ class FileSecretStore:
 
     def get(self, name: str) -> str | None:
         validate_name(name)
+        if not self._path.exists():
+            return None  # nothing stored yet: answer without creating the folder or a lock file
         with self._locked():
             return self._read().get(name)
 
@@ -93,6 +98,8 @@ class FileSecretStore:
         log.debug("secrets.deleted", name=name, backend="file")
 
     def names(self) -> list[str]:
+        if not self._path.exists():
+            return []
         with self._locked():
             return sorted(self._read())
 
@@ -102,9 +109,12 @@ class FileSecretStore:
     def _locked(self) -> Iterator[None]:
         with _thread_lock(self._path):
             self._ensure_home()
-            fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+            fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT | _O_NOFOLLOW, 0o600)
             try:
-                _lock_fd(fd)
+                try:
+                    _lock_fd(fd)
+                except OSError as exc:  # Windows gives up after ~10 s of contention
+                    raise SecretStoreError(f"{self._path} is locked by another process") from exc
                 try:
                     yield
                 finally:
@@ -113,9 +123,16 @@ class FileSecretStore:
                 os.close(fd)
 
     def _ensure_home(self) -> None:
+        """The folder exists and is the owner's alone (0700 on POSIX; the ACL is per file there)."""
         if not self._home.exists():
             self._home.mkdir(parents=True, mode=0o700)
-            restrict_to_owner(self._home)
+        if sys.platform == "win32":
+            return
+        info = os.stat(self._home)
+        if info.st_uid != os.getuid():
+            raise SecretStoreError(f"{self._home} belongs to another user; refusing to use it")
+        if info.st_mode & 0o077:
+            os.chmod(self._home, 0o700)
 
     # ---- file handling ---------------------------------------------------------------------------
 

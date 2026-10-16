@@ -7,7 +7,9 @@ this module, so `nox core` and `python -m nox.app` cannot drift apart.
 
 from __future__ import annotations
 
+import contextlib
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import typer
@@ -49,11 +51,16 @@ def where() -> None:
     """Show where Nox keeps its files on this machine and how it stores secrets."""
     from nox.core.config import load_config  # noqa: PLC0415
     from nox.paths import defaults_path, nox_home, resolve_config_paths  # noqa: PLC0415
-    from nox.security.secrets import resolve_secret_backend  # noqa: PLC0415
+    from nox.security.secrets import (  # noqa: PLC0415
+        recorded_secret_backend,
+        resolve_secret_backend,
+    )
 
     defaults, user = resolve_config_paths()
     configured = load_config(defaults, user).security.secret_store
-    backend = resolve_secret_backend(configured)
+    # Looking never decides: the choice is made by the core or the first stored secret.
+    backend = resolve_secret_backend(configured, record=False)
+    recorded = recorded_secret_backend()
     secrets = {
         "keyring": "OS keyring",
         "file": f"owner-only file {nox_home() / 'secrets.json'}",
@@ -65,6 +72,14 @@ def where() -> None:
         ("Defaults", str(defaults_path())),
         ("Secrets", secrets if configured == "auto" else f"{secrets} (set in user.yaml)"),
     ]
+    if configured != "auto" and recorded is not None and recorded != configured:
+        rows.append(
+            (
+                "Warning",
+                f"user.yaml says {configured!r}, but the secrets were kept in {recorded!r} so far; "
+                "they were not moved",
+            )
+        )
     width = max(len(label) for label, _ in rows)
     for label, value in rows:
         typer.echo(f"{label.ljust(width)}  {value}")
@@ -162,6 +177,18 @@ secrets_app = typer.Typer(help="Manage secrets in the Windows Credential Manager
 app.add_typer(secrets_app, name="secrets")
 
 
+@contextlib.contextmanager
+def _secret_store_errors() -> Iterator[None]:
+    """A store that cannot be used is a sentence and exit code 1, not a traceback."""
+    from nox.security.secret_names import SecretNameError, SecretStoreError  # noqa: PLC0415
+
+    try:
+        yield
+    except (SecretStoreError, SecretNameError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
 @secrets_app.command("set")
 def secrets_set(
     name: str = typer.Argument(..., help="Secret name, e.g. nox/obs/websocket_password"),
@@ -170,7 +197,8 @@ def secrets_set(
     from nox.security.secrets import open_configured_secret_store  # noqa: PLC0415
 
     value = typer.prompt("Value", hide_input=True)
-    open_configured_secret_store().set(name, value)
+    with _secret_store_errors():
+        open_configured_secret_store().set(name, value)
     typer.echo(f"stored {name}")
 
 
@@ -179,7 +207,8 @@ def secrets_delete(name: str = typer.Argument(..., help="Secret name to remove."
     """Remove a stored secret."""
     from nox.security.secrets import open_configured_secret_store  # noqa: PLC0415
 
-    open_configured_secret_store().delete(name)
+    with _secret_store_errors():
+        open_configured_secret_store().delete(name)
     typer.echo(f"deleted {name}")
 
 
@@ -188,7 +217,9 @@ def secrets_check(name: str = typer.Argument(..., help="Secret name to look for.
     """Report whether a secret exists. The value is never printed."""
     from nox.security.secrets import open_configured_secret_store  # noqa: PLC0415
 
-    typer.echo("present" if open_configured_secret_store().get(name) is not None else "missing")
+    with _secret_store_errors():
+        present = open_configured_secret_store().get(name) is not None
+    typer.echo("present" if present else "missing")
 
 
 def _register_voice_commands() -> None:
