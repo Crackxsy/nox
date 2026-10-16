@@ -4,7 +4,8 @@
 # toolchain; the documented `releases/latest/download/install-linux.sh` is always a tagged version.
 #
 # Two jobs on purpose: the build runs third-party npm code and therefore has a read-only token and
-# no stored git credentials; only the upload job, which runs no repository code, may write.
+# no stored git credentials; only the upload job, which runs no repository or third-party code, may
+# write - and it takes the installer from its own clean checkout of the tag.
 name: Release assets
 
 on:
@@ -42,15 +43,11 @@ jobs:
         run: |
           tar --owner=0 --group=0 --numeric-owner -czf "nox-ui-$TAG.tar.gz" ui/dashboard/dist ui/pet/dist
           sha256sum "nox-ui-$TAG.tar.gz" > "nox-ui-$TAG.tar.gz.sha256"
-          cp scripts/install-linux.sh install-linux.sh
-          sha256sum install-linux.sh > install-linux.sh.sha256
 
       - uses: actions/upload-artifact@v7
         with:
           name: ui-bundle
-          path: |
-            nox-ui-*.tar.gz*
-            install-linux.sh*
+          path: nox-ui-*.tar.gz*
           if-no-files-found: error
 
   upload:
@@ -61,6 +58,21 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The installer runs as root on every Pi, so it is taken from a clean checkout of the tag
+      # here - never from the build job, where third-party npm code could have changed it.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+          sparse-checkout: scripts/install-linux.sh
+          sparse-checkout-cone-mode: false
+          path: source
+
+      - name: Installer and its checksum
+        run: |
+          cp source/scripts/install-linux.sh install-linux.sh
+          sha256sum install-linux.sh > install-linux.sh.sha256
+
       - uses: actions/download-artifact@v7
         with:
           name: ui-bundle
