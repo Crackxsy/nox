@@ -24,6 +24,7 @@ import importlib
 import os
 import secrets as _secrets
 import sys
+import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -180,9 +181,10 @@ def _read_marker(home: Path) -> str | None:
 def _write_marker(home: Path, backend: str) -> None:
     """Atomically, so a crash can never leave a half-written choice behind."""
     try:
-        home.mkdir(parents=True, exist_ok=True)
-        tmp = home / f".{BACKEND_MARKER}.{os.getpid()}.tmp"
-        tmp.write_text(backend + "\n", encoding="utf-8")
+        home.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd, tmp = tempfile.mkstemp(dir=home, prefix=f".{BACKEND_MARKER}-", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(backend + "\n")
         os.replace(tmp, home / BACKEND_MARKER)
     except OSError as exc:  # a read-only home is reported by the store itself on first use
         log.warning("secrets.marker_write_failed", error=type(exc).__name__)

@@ -13,13 +13,17 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   hardened systemd service (`scripts/install-linux.sh`, `docs/RASPBERRY_PI.md`): its own system
   user, the program read-only in `/opt/nox`, everything it keeps in `/var/lib/nox`, Python 3.13
   through uv from prebuilt packages only, and the prebuilt dashboard from the release, checked
-  against its SHA-256, so the Pi needs no Node.js and compiles nothing. From this release on every
-  release carries that bundle (`nox-ui-<tag>.tar.gz`). Before an update it snapshots
-  `/var/lib/nox` - the old version keeps running until then, and comes back if the update fails -
-  and says how to go back. A short `nox` command acts on the service's data (`nox doctor`,
-  `nox onboard`, `nox update`, `nox claude-login`). The installer itself is attached to every
-  release with its SHA-256, and CI runs it for real - install, update, service up - on x86-64 and
-  ARM64. Guide in English and German (`docs/RASPBERRY_PI.md`, `docs/RASPBERRY_PI.de.md`).
+  against its SHA-256, so the Pi needs no Node.js and compiles nothing. Every version is a
+  complete folder of its own (`/opt/nox/releases/<commit>`, `/opt/nox/current` the running one):
+  an update builds the new one while the old keeps running, snapshots `/var/lib/nox`, switches and
+  starts - and if the new version does not answer, it switches back and restores the data by
+  itself. `nox rollback` does the same on request, `nox snapshots` and `nox restore` put data back
+  without ever writing over the current folder. A short `nox` command acts on the service's data
+  (`nox doctor`, `nox onboard`, `nox update`, `nox claude-login`). The installer is attached to
+  every release with its SHA-256, and CI runs it for real on x86-64 and ARM64: install, update,
+  rollback, a deliberately broken version that must roll itself back, and UI bundles with a
+  symlink, a `..` path or an extra file that must be refused. Guide in English and German
+  (`docs/RASPBERRY_PI.md`, `docs/RASPBERRY_PI.de.md`).
 - **One folder per machine.** `nox_home()` is `%APPDATA%/Nox` on Windows and
   `~/.local/share/Nox` on Linux (`~/Library/Application Support/Nox` on macOS, path logic only -
   macOS is not supported yet), and `NOX_HOME` moves it (the Pi service uses `/var/lib/nox`). The

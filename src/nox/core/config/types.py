@@ -115,7 +115,8 @@ def expand_path(value: str) -> Path:
             if not os.environ.get(var.upper()):
                 from nox.paths import nox_home  # noqa: PLC0415
 
-                value = str(nox_home()) + value[windows_home.end() :]
+                tail = value[windows_home.end() :].replace(chr(92), "/")  # a Windows tail
+                value = str(nox_home()) + tail
 
     def replace(match: re.Match[str]) -> str:
         name = match.group(1) or match.group(2) or match.group(3)

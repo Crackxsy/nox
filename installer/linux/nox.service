@@ -2,7 +2,8 @@
 # Installed by scripts/install-linux.sh; see docs/RASPBERRY_PI.md.
 #
 # The core runs headless as its own system user. Everything it owns is in /var/lib/nox (NOX_HOME),
-# the program in /opt/nox is read-only to it, and the rest of the system is out of reach.
+# the program in /opt/nox (a folder per version, /opt/nox/current the running one) is read-only to
+# it, and the rest of the system is out of reach.
 
 [Unit]
 Description=Nox - local-first AI companion (server)
@@ -19,8 +20,8 @@ Environment=HOME=/var/lib/nox
 Environment=PYTHONUNBUFFERED=1
 # Claude Code installs itself into the service user's ~/.local/bin (`nox claude-login`).
 Environment=PATH=/var/lib/nox/.local/bin:/usr/local/bin:/usr/bin:/bin
-WorkingDirectory=/opt/nox
-ExecStart=/opt/nox/.venv/bin/nox core --no-voice
+WorkingDirectory=/opt/nox/current
+ExecStart=/opt/nox/current/.venv/bin/nox core --no-voice
 # A server comes back whatever stopped it, a crash or a clean exit from the dashboard.
 Restart=always
 RestartSec=5

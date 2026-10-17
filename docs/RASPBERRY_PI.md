@@ -70,11 +70,15 @@ optional and not set up by the installer. If you want it:
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3:1.7b        # small enough for 8 GB; answers in German
+ollama pull qwen3:4b-instruct   # the model Nox asks for by default (about 2.5 GB)
 ```
 
 Nox finds a local Ollama by itself (`127.0.0.1:11434`) and uses it when Claude Code is not
-available. A bigger model answers better and slower; `nox doctor` shows which AI is reachable.
+available - no setting needed. That model was chosen by measurement: it drives Nox's tools in 3 of
+4 tries, where smaller ones tend to answer in prose instead of acting
+([`LOCAL_MODELS.md`](LOCAL_MODELS.md)). A smaller model such as `qwen3:1.7b` is faster on a Pi but
+acts less reliably; to use it anyway, set `ai.providers.ollama.model: "qwen3:1.7b"` in `user.yaml`.
+`nox doctor` says whether the model Nox wants is there.
 
 ## Day to day
 
@@ -87,20 +91,25 @@ available. A bigger model answers better and slower; `nox doctor` shows which AI
 | Settings | `sudo nano /var/lib/nox/user.yaml`, then `sudo systemctl restart nox` |
 | Update | `nox update` |
 
-**Updates can be undone.** `nox update` fetches and prepares the new version while the old one
-keeps running, then stops Nox briefly, saves `/var/lib/nox` as a snapshot in `/var/backups/nox`
-(the last five are kept; program caches are left out) and starts the new version. If anything fails
-on the way, the previous version is started again. The snapshot holds your secrets too and is
-readable by root only.
+**Updates can be undone.** Every version is a complete folder of its own under
+`/opt/nox/releases`, and `/opt/nox/current` points at the one that runs. `nox update` builds the new
+version there while the old one keeps running; only then does it stop Nox briefly, save
+`/var/lib/nox` as a snapshot in `/var/backups/nox` (the last five are kept; program caches are left
+out), switch to the new version and start it. If the new version does not answer, the installer
+switches back and restores the data from that snapshot by itself. The snapshot holds your secrets
+too and is readable by root only.
 
 ### Undoing an update
 
-```bash
-nox update v0.6.0                          # the program: the version you had (the installer names it)
-sudo systemctl stop nox                    # the data, if the new version changed it:
-sudo tar -xzf /var/backups/nox/<snapshot>.tar.gz -C /var/lib
-sudo systemctl start nox
-```
+| | |
+| --- | --- |
+| Version **and** data back to before the last update | `nox rollback` |
+| Which snapshots exist | `nox snapshots` |
+| Only the data of one snapshot back | `nox restore <file name>` |
+
+Restoring never writes over the current data: they are moved aside to
+`/var/lib/nox.vor-wiederherstellung-<time>` first, and the command tells you so - delete that
+folder once everything works.
 
 **Time zone.** Reminders and the calendar follow the Pi's clock. Raspberry Pi OS Lite often starts
 in UTC; the installer warns about it. In Germany: `sudo timedatectl set-timezone Europe/Berlin`.
@@ -120,8 +129,9 @@ no such keyring, so Nox keeps them in `/var/lib/nox/secrets.json`, readable by t
 the same protection an SSH key has on that machine. `nox where` and `nox doctor` say which one is
 in use. Once an installation has chosen, it stays with that choice: if a keyring it used is missing
 one day, Nox reports it and refuses PIN-protected changes instead of quietly starting over with an
-empty file. `security.secret_store: keyring | file` in `user.yaml` forces either; switching does not
-move secrets that are already stored, and `nox where` warns about that.
+empty file. `security.secret_store: keyring | file` in `user.yaml` forces either. Switching moves nothing:
+secrets already stored stay where they are, a PIN set before looks unset afterwards, and
+`nox where` warns about exactly that.
 
 Plugins run as the same `nox` user and can therefore read the same files - Nox's plugin boundary is
 a permission check on every call, not an operating-system sandbox. Install plugins you trust.

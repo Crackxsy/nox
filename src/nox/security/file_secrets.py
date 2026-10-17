@@ -132,6 +132,12 @@ class FileSecretStore:
         if info.st_uid != os.getuid():
             raise SecretStoreError(f"{self._home} belongs to another user; refusing to use it")
         if info.st_mode & 0o077:
+            log.warning(
+                "secrets.home_tightened",
+                path=str(self._home),
+                mode=f"{stat.S_IMODE(info.st_mode):o}",
+                now="700",
+            )
             os.chmod(self._home, 0o700)
 
     # ---- file handling ---------------------------------------------------------------------------

@@ -277,3 +277,42 @@ def test_the_user_layer_is_found_in_the_nox_folder(_isolated_nox_home: Path) -> 
 
     (_isolated_nox_home / "user.yaml").write_text("identity: {}\n", encoding="utf-8")
     assert resolve_config_paths()[1] == _isolated_nox_home / "user.yaml"
+
+
+def test_a_windows_tail_gets_forward_slashes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from nox.core.config.types import expand_path
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setenv("NOX_HOME", str(tmp_path / "nox"))
+    windows_style = "%APPDATA%" + chr(92) + "Nox" + chr(92) + "data" + chr(92) + "clips"
+    assert expand_path(windows_style) == tmp_path / "nox" / "data" / "clips"
+
+
+def test_the_secret_store_cannot_be_switched_from_the_dashboard() -> None:
+    # Switching stores makes the PIN look unset; it must take a file edit on the machine itself.
+    from nox.settings.schema import EDITABLE_PATHS
+
+    assert "security.secret_store" not in EDITABLE_PATHS
+
+
+def test_the_cli_and_wizard_use_the_configured_store(
+    monkeypatch: pytest.MonkeyPatch, _isolated_nox_home: Path
+) -> None:
+    (_isolated_nox_home / "user.yaml").write_text(
+        "security:\n  secret_store: file\n", encoding="utf-8"
+    )
+    store = secrets_module.open_configured_secret_store()
+    assert isinstance(store, FileSecretStore) and store.path.parent == _isolated_nox_home
+
+
+async def test_nox_doctor_names_the_secret_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    from nox.core.config import NoxConfig
+    from nox.entrypoints import _secrets_line
+
+    monkeypatch.setattr(secrets_module, "resolve_secret_backend", lambda *a, **kw: "unavailable")
+    assert _secrets_line(NoxConfig()).startswith("[FAIL] secrets:")
+    monkeypatch.setattr(secrets_module, "resolve_secret_backend", lambda *a, **kw: "file")
+    assert "owner-only file" in _secrets_line(NoxConfig())

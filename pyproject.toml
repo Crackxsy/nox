@@ -116,6 +116,30 @@ plugins = ["pydantic.mypy"]
 mypy_path = "src"
 ignore_missing_imports = true
 
+# Type-checked on Windows and on Linux (`mypy --platform linux` in the Linux job). These modules
+# call the Win32 API through ctypes behind runtime platform checks; on Linux, `ctypes.windll` and
+# the Win32 structures do not exist for mypy, so only those error kinds are silenced - and only
+# here. Everything else in them, and every other module, is checked on both platforms.
+[[tool.mypy.overrides]]
+module = [
+    "nox.desktop.win32",
+    "nox.desktop.keyboard",
+    "nox.sensors.win32",
+    "nox.files.recycle",
+    "nox.rl.paths",
+]
+disable_error_code = ["attr-defined", "has-type", "name-defined"]
+
+[[tool.mypy.overrides]]
+module = ["nox.core.jobobject"]
+disable_error_code = ["attr-defined", "has-type"]
+
+# The desktop shell needs PySide6, which a server install does not have.
+[[tool.mypy.overrides]]
+module = ["nox.shell.*"]
+disallow_subclassing_any = false
+warn_unused_ignores = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

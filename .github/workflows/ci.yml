@@ -94,8 +94,10 @@ jobs:
       - name: Put the project venv on PATH
         run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
-      # No mypy here: the Windows job type-checks the code, and on Linux mypy reports the
-      # Windows-only branches (ctypes.windll, the Qt shell without PySide6) instead of anything new.
+      # The POSIX-only branches (the file secret store, die_with_parent) are reachable only here;
+      # the Win32-only modules have narrow overrides in pyproject.toml.
+      - name: mypy
+        run: mypy src/nox
 
       - name: pytest unit
         run: pytest tests/unit -m "not hardware and not network and not spike" -p no:cacheprovider
@@ -126,12 +128,66 @@ jobs:
           nox where
           nox doctor || true
 
-      - name: Update over the existing install (snapshot, restart)
+      - name: Same version again changes nothing
         run: |
           sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh
-          sudo ls -l /var/backups/nox
-          test "$(sudo find /var/backups/nox -name 'nox-*.tar.gz' | wc -l)" -ge 1
+          test "$(sudo find /var/backups/nox -name 'nox-*.tar.gz' 2>/dev/null | wc -l)" = 0
           curl -fsS http://127.0.0.1:47801/health
+
+      - name: Update to a new version (built aside, snapshot, switch)
+        run: |
+          first="$(basename "$(readlink /opt/nox/current)")"
+          echo "FIRST=$first" >> "$GITHUB_ENV"
+          sudo -u nox touch /var/lib/nox/written-by-first
+          git -c user.name=ci -c user.email=ci@example.invalid commit --allow-empty -q -m "second"
+          sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh
+          second="$(basename "$(readlink /opt/nox/current)")"
+          test "$second" != "$first"
+          test -d "/opt/nox/releases/$first"
+          test "$(sudo find /var/backups/nox -name 'nox-*.tar.gz' | wc -l)" = 1
+          curl -fsS http://127.0.0.1:47801/health
+
+      - name: nox rollback brings back version and data
+        run: |
+          sudo -u nox touch /var/lib/nox/written-by-second
+          nox rollback
+          test "$(basename "$(readlink /opt/nox/current)")" = "$FIRST"
+          sudo test -e /var/lib/nox/written-by-first
+          ! sudo test -e /var/lib/nox/written-by-second
+          # The data that were replaced are kept aside, not deleted.
+          sudo sh -c 'ls -d /var/lib/nox.vor-wiederherstellung-*'
+          curl -fsS http://127.0.0.1:47801/health
+          nox snapshots
+
+      - name: A broken version rolls itself back
+        run: |
+          before="$(basename "$(readlink /opt/nox/current)")"
+          echo 'raise SystemExit("broken on purpose by CI")' >> src/nox/__init__.py
+          git -c user.name=ci -c user.email=ci@example.invalid commit -q -am "broken"
+          if sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh; then
+            echo "the installer accepted a version that does not start"; exit 1
+          fi
+          test "$(basename "$(readlink /opt/nox/current)")" = "$before"
+          curl -fsS http://127.0.0.1:47801/health
+          git reset -q --hard HEAD~1
+
+      - name: The UI bundle check refuses what a release never contains
+        run: |
+          mk() { rm -rf b && mkdir -p b/ui/dashboard/dist b/ui/pet/dist && echo ok > b/ui/dashboard/dist/index.html && echo ok > b/ui/pet/dist/index.html; }
+          check() { sudo env NOX_ACTION=verify-bundle NOX_BUNDLE="$PWD/$1" bash scripts/install-linux.sh; }
+          mk; tar -czf good.tar.gz -C b ui; check good.tar.gz
+          mk; ln -s /etc/shadow b/ui/pet/dist/link; tar -czf link.tar.gz -C b ui; ! check link.tar.gz
+          mk; echo x > b/evil.sh; tar -czf extra.tar.gz -C b ui evil.sh; ! check extra.tar.gz
+          mk; rm -rf b/ui/pet; tar -czf half.tar.gz -C b ui; ! check half.tar.gz
+          python3 - <<'PY'
+          import io, tarfile
+          with tarfile.open("dotdot.tar.gz", "w:gz") as archive:
+              for name in ("ui/dashboard/dist/index.html", "ui/pet/dist/index.html", "ui/pet/dist/../../../evil"):
+                  data = b"x"
+                  info = tarfile.TarInfo(name); info.size = len(data)
+                  archive.addfile(info, io.BytesIO(data))
+          PY
+          ! check dotdot.tar.gz
 
       - name: Files and permissions are what the docs promise
         run: |

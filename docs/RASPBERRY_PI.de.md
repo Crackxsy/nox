@@ -73,12 +73,15 @@ Sekunden. Es ist optional, der Installer richtet es nicht ein. Wenn du es willst
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3:1.7b        # klein genug für 8 GB; antwortet auf Deutsch
+ollama pull qwen3:4b-instruct   # das Modell, das Nox von sich aus anfragt (etwa 2,5 GB)
 ```
 
 Nox findet ein lokales Ollama von selbst (`127.0.0.1:11434`) und nutzt es, wenn Claude Code nicht
-erreichbar ist. Ein größeres Modell antwortet besser und langsamer; `nox doctor` zeigt, welche KI
-erreichbar ist.
+erreichbar ist – ohne weitere Einstellung. Das Modell wurde durch Messung ausgewählt: Es bedient die
+Werkzeuge von Nox in 3 von 4 Versuchen, kleinere antworten eher mit Text, statt zu handeln
+([`LOCAL_MODELS.md`](LOCAL_MODELS.md)). Ein kleineres wie `qwen3:1.7b` ist auf dem Pi schneller,
+handelt aber unzuverlässiger; wer es trotzdem will, setzt `ai.providers.ollama.model: "qwen3:1.7b"`
+in `user.yaml`. `nox doctor` sagt, ob das gewünschte Modell da ist.
 
 ## Im Alltag
 
@@ -91,20 +94,25 @@ erreichbar ist.
 | Einstellungen | `sudo nano /var/lib/nox/user.yaml`, danach `sudo systemctl restart nox` |
 | Update | `nox update` |
 
-**Updates lassen sich zurücknehmen.** `nox update` holt und bereitet die neue Version vor, während
-die alte weiterläuft. Dann hält es Nox kurz an, sichert `/var/lib/nox` als Schnappschuss nach
-`/var/backups/nox` (die letzten fünf bleiben, Programm-Zwischenspeicher bleiben draußen) und startet
-die neue Version. Geht unterwegs etwas schief, startet wieder die bisherige. Der Schnappschuss
-enthält auch deine Zugangsdaten und ist nur für root lesbar.
+**Updates lassen sich zurücknehmen.** Jede Version ist ein vollständiger eigener Ordner unter
+`/opt/nox/releases`, und `/opt/nox/current` zeigt auf die, die läuft. `nox update` baut die neue
+Version dort, während die alte weiterläuft; erst dann hält es Nox kurz an, sichert `/var/lib/nox`
+als Schnappschuss nach `/var/backups/nox` (die letzten fünf bleiben, Programm-Zwischenspeicher
+bleiben draußen), schaltet auf die neue Version um und startet sie. Antwortet die neue Version
+nicht, schaltet der Installer von selbst zurück und holt die Daten aus diesem Schnappschuss. Der
+Schnappschuss enthält auch deine Zugangsdaten und ist nur für root lesbar.
 
 ### Ein Update zurücknehmen
 
-```bash
-nox update v0.6.0                          # das Programm: deine vorherige Version (der Installer nennt sie)
-sudo systemctl stop nox                    # die Daten, falls die neue Version sie verändert hat:
-sudo tar -xzf /var/backups/nox/<schnappschuss>.tar.gz -C /var/lib
-sudo systemctl start nox
-```
+| | |
+| --- | --- |
+| Version **und** Daten zurück auf den Stand vor dem letzten Update | `nox rollback` |
+| Welche Schnappschüsse es gibt | `nox snapshots` |
+| Nur die Daten eines Schnappschusses zurück | `nox restore <dateiname>` |
+
+Beim Wiederherstellen wird nie über die aktuellen Daten geschrieben: Sie werden vorher nach
+`/var/lib/nox.vor-wiederherstellung-<zeit>` verschoben, und der Befehl sagt dir das – lösche den
+Ordner, sobald alles läuft.
 
 **Zeitzone.** Erinnerungen und Kalender richten sich nach der Uhr des Pi. Raspberry Pi OS Lite
 startet oft in UTC; der Installer weist darauf hin. In Deutschland:
@@ -126,8 +134,9 @@ lesbar nur für den Benutzer `nox` – derselbe Schutz, den ein SSH-Schlüssel a
 `nox where` und `nox doctor` sagen, was in Gebrauch ist. Hat eine Installation einmal gewählt,
 bleibt sie dabei: Fehlt ein Schlüsselbund, den sie benutzt hat, eines Tages, meldet Nox das und
 lehnt PIN-geschützte Änderungen ab, statt still mit einer leeren Datei neu anzufangen.
-`security.secret_store: keyring | file` in `user.yaml` erzwingt eines von beiden; ein Wechsel
-verschiebt bereits gespeicherte Zugangsdaten nicht, und `nox where` warnt davor.
+`security.secret_store: keyring | file` in `user.yaml` erzwingt eines von beiden. Ein Wechsel
+verschiebt nichts: Bereits gespeicherte Zugangsdaten bleiben, wo sie sind, eine vorher gesetzte PIN
+wirkt danach ungesetzt, und `nox where` warnt genau davor.
 
 Plugins laufen als derselbe Benutzer `nox` und können deshalb dieselben Dateien lesen – die
 Plugin-Grenze von Nox ist eine Rechteprüfung bei jedem Aufruf, keine Sandbox des Betriebssystems.
