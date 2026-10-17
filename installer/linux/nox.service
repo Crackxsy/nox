@@ -1,0 +1,60 @@
+# Nox as a server: a systemd service for Linux (Raspberry Pi OS 64-bit, Debian, Ubuntu).
+# Installed by scripts/install-linux.sh; see docs/RASPBERRY_PI.md.
+#
+# The core runs headless as its own system user. Everything it owns is in /var/lib/nox (NOX_HOME),
+# the program in /opt/nox (a folder per version, /opt/nox/current the running one) is read-only to
+# it, and the rest of the system is out of reach.
+
+[Unit]
+Description=Nox - local-first AI companion (server)
+Documentation=https://github.com/Crackxsy/nox/blob/develop/docs/RASPBERRY_PI.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nox
+Group=nox
+Environment=NOX_HOME=/var/lib/nox
+Environment=HOME=/var/lib/nox
+Environment=PYTHONUNBUFFERED=1
+# Claude Code installs itself into the service user's ~/.local/bin (`nox claude-login`).
+Environment=PATH=/var/lib/nox/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/opt/nox/current
+ExecStart=/opt/nox/current/.venv/bin/nox core --no-voice
+# A server comes back whatever stopped it, a crash or a clean exit from the dashboard.
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+# Hardening: the core needs its own folder and the network, nothing else.
+StateDirectory=nox
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/nox
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+# AF_NETLINK: listing network interfaces (psutil, the network health check).
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

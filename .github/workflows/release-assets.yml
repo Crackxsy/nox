@@ -1,0 +1,103 @@
+# Attaches to every GitHub release: the built dashboard and pet window as nox-ui-<tag>.tar.gz, and
+# the installer itself as install-linux.sh, each with its SHA-256. scripts/install-linux.sh
+# downloads the bundle and refuses one that does not match, so a Raspberry Pi needs no Node.js
+# toolchain; the documented `releases/latest/download/install-linux.sh` is always a tagged version.
+#
+# Two jobs on purpose: the build runs third-party npm code and therefore has a read-only token and
+# no stored git credentials; only the upload job, which runs no repository or third-party code, may
+# write - and it takes the installer from its own clean checkout of the tag.
+name: Release assets
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build UI bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Build dashboard and pet
+        run: |
+          for app in dashboard pet; do
+            (cd "ui/$app" && npm ci --ignore-scripts && npm run build)
+          done
+
+      - name: Pack
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          tar --owner=0 --group=0 --numeric-owner -czf "nox-ui-$TAG.tar.gz" ui/dashboard/dist ui/pet/dist
+          sha256sum "nox-ui-$TAG.tar.gz" > "nox-ui-$TAG.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ui-bundle
+          path: nox-ui-*.tar.gz*
+          if-no-files-found: error
+
+  upload:
+    name: Attach to the release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      # The installer runs as root on every Pi, so it is taken from a clean checkout of the tag
+      # here - never from the build job, where third-party npm code could have changed it.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+          sparse-checkout: scripts/install-linux.sh
+          sparse-checkout-cone-mode: false
+          path: source
+
+      - name: Installer and its checksum
+        run: |
+          mkdir installer
+          cp source/scripts/install-linux.sh installer/install-linux.sh
+          (cd installer && sha256sum install-linux.sh > install-linux.sh.sha256)
+
+      # Into its own folder, so nothing in the artifact can overwrite the installer above.
+      - uses: actions/download-artifact@v7
+        with:
+          name: ui-bundle
+          path: bundle
+
+      - name: The artifact is exactly the bundle and its checksum
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          expected="$(printf '%s\n' "nox-ui-$TAG.tar.gz" "nox-ui-$TAG.tar.gz.sha256")"
+          actual="$(find bundle -mindepth 1 -printf '%P\n' | sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "unexpected artifact contents:"; echo "$actual"; exit 1
+          fi
+          find bundle -mindepth 1 ! -type f -print -quit | grep -q . && { echo "non-regular file in artifact"; exit 1; }
+          (cd bundle && sha256sum --quiet -c "nox-ui-$TAG.tar.gz.sha256")
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: >-
+          gh release upload "$TAG" --repo "$REPO"
+          "bundle/nox-ui-$TAG.tar.gz" "bundle/nox-ui-$TAG.tar.gz.sha256"
+          installer/install-linux.sh installer/install-linux.sh.sha256

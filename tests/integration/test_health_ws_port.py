@@ -43,12 +43,14 @@ async def core(tmp_path: Path) -> AsyncIterator[NoxCore]:
 
 async def test_health_publishes_the_hub_port(core: NoxCore) -> None:
     # Arrange: the core listens on ports no client could guess.
-    assert core.hub is not None
-    http_port = core.config.ipc.http_port
+    assert core.hub is not None and core.http is not None
+    # The port the server actually bound: if the configured one was taken in the moment between
+    # picking it and starting, the server moves to the next free one (`port_attempts`).
+    url = core.http.url
 
     # Act
     async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.get(f"http://127.0.0.1:{http_port}/health")
+        response = await client.get(f"{url.rstrip('/')}/health")
 
     # Assert: a page served here finds the hub instead of falling back to the default port.
     assert response.status_code == 200

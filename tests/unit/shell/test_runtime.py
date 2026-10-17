@@ -116,6 +116,7 @@ def test_an_unusable_configuration_leaves_the_default_in_place(
     monkeypatch.setenv("NOX_USER_CONFIG", str(config))
     monkeypatch.delenv("NOX_RUNTIME_DIR", raising=False)
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.delenv("NOX_HOME", raising=False)  # this test is about the APPDATA layout
 
     assert candidate_runtime_dirs() == [tmp_path / "appdata" / "Nox" / "runtime"]
 
@@ -150,5 +151,6 @@ def test_load_config_without_a_user_layer_is_the_defaults(
 ) -> None:
     monkeypatch.setenv("NOX_USER_CONFIG", str(tmp_path / "missing.yaml"))
     monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.delenv("NOX_HOME", raising=False)  # this test is about the APPDATA layout
 
     assert load_config()["pet"]["variant"] == "neutral"

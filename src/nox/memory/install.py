@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
@@ -190,6 +191,7 @@ def install(core: _Core) -> MemoryRuntime:
     cfg = core.config.memory
     vault_dir = core.config.paths.vault_dir
     privacy = core.security.privacy
+    vault_present = _ensure_vault(vault_dir, core.config.paths.data_dir)
 
     provider, embeddings_unavailable = _build_embed_provider(core, cfg.embed_model)
     embeddings = EmbeddingService(core.db, provider, model=cfg.embed_model)
@@ -262,12 +264,13 @@ def install(core: _Core) -> MemoryRuntime:
         core.orchestrator.on_turn_complete = runtime.capture.observe
     register_memory_ipc(core.registry, runtime.profile, runtime.memory)
 
-    if cfg.full_scan_on_boot:
-        runtime.scan_task = asyncio.get_running_loop().create_task(
-            indexer.full_scan(), name="nox-memory-full-scan"
-        )
-        runtime.scan_task.add_done_callback(lambda task: _note_scan_result(runtime, task))
-    runtime.watcher.start()
+    if vault_present:
+        if cfg.full_scan_on_boot:
+            runtime.scan_task = asyncio.get_running_loop().create_task(
+                indexer.full_scan(), name="nox-memory-full-scan"
+            )
+            runtime.scan_task.add_done_callback(lambda task: _note_scan_result(runtime, task))
+        runtime.watcher.start()
 
     async def _on_stopping(_event: Event) -> None:
         runtime.watcher.stop()
@@ -275,6 +278,28 @@ def install(core: _Core) -> MemoryRuntime:
     core.bus.subscribe(E.SYSTEM_STOPPING, _on_stopping)
     _register_health_check(core, runtime)
     return runtime
+
+
+def _ensure_vault(vault_dir: Path, data_dir: Path) -> bool:
+    """Whether the vault folder is there to index and watch.
+
+    Inside Nox's own data folder - the default, and what a fresh server install has - a missing
+    vault is simply created: that is where it is meant to be. Anywhere else a missing folder is
+    more likely a drive that is not plugged in, and inventing an empty one there would hide that;
+    it is reported instead. Memory about the user works either way: it lives in the database.
+    """
+    if vault_dir.is_dir():
+        return True
+    try:
+        inside = vault_dir.resolve().is_relative_to(data_dir.resolve())
+    except OSError:
+        inside = False
+    if inside:
+        vault_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        log.info("memory.vault_created", path=str(vault_dir))
+        return True
+    log.warning("memory.vault_missing", path=str(vault_dir), effect="notes are not indexed")
+    return False
 
 
 def _note_scan_result(runtime: MemoryRuntime, task: asyncio.Task[Any]) -> None:

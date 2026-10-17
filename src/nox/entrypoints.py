@@ -173,6 +173,7 @@ async def run_doctor(report: Reporter = _stdout) -> int:
         report(f"[warn] {warning}")
     for line in await asyncio.to_thread(_folder_lines, config):
         report(line)
+    report(await asyncio.to_thread(_secrets_line, config))
     await _report_providers(config, report)
     for module in VOICE_MODULES:
         report(_import_line(module))
@@ -189,6 +190,18 @@ def _folder_lines(config: NoxConfig) -> list[str]:
             ("database_dir", config.paths.database_dir),
         )
     ]
+
+
+def _secrets_line(config: NoxConfig) -> str:
+    """Which store holds the PIN and the tokens - looked up, never chosen (`record=False`)."""
+    from nox.security.secrets import resolve_secret_backend  # noqa: PLC0415 - keyring is slow
+
+    backend = resolve_secret_backend(config.security.secret_store, record=False)
+    if backend == "keyring":
+        return "[ ok ] secrets: OS keyring"
+    if backend == "file":
+        return "[ ok ] secrets: owner-only file in Nox's folder (no OS keyring on this machine)"
+    return "[FAIL] secrets: the OS keyring this installation uses is not reachable"
 
 
 async def _report_providers(config: NoxConfig, report: Reporter) -> None:

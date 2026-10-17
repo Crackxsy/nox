@@ -173,9 +173,22 @@ class LocalToolRegistry:
 #: Environment variables a plugin worker process inherits from the core. Everything else stays in
 #: the core: third-party plugin code has no business reading the whole environment of the process
 #: that supervises it - the API keys of unrelated tools included. What remains is what CPython
-#: itself needs in order to start on Windows: an interpreter path, a home directory and a
-#: temporary directory.
+#: itself needs in order to start - an interpreter path, a home directory, a temporary directory
+#: and a locale - on Windows and on POSIX systems, plus `NOX_HOME` so a worker resolves the same
+#: data folder as the core that spawned it.
 _INHERITED_ENV = (
+    "NOX_HOME",
+    "NOX_DATA_DIR",
+    "NOX_USER_CONFIG",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+    "XDG_RUNTIME_DIR",
+    "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
     "PATH",
     "PATHEXT",
     "SYSTEMROOT",

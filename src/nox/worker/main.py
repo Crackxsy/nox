@@ -726,6 +726,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if os.environ.get("NOX_WORKER_TOKEN"):
+        # Spawned by a core: never outlive it (the job object does this on Windows).
+        from nox.core.jobobject import die_with_parent
+
+        die_with_parent()
     if args.plugin:
         # Plugin mode: no audio devices, no priority change, nothing of the voice path is touched.
         from nox.worker.plugin import run_plugin_worker

@@ -1,5 +1,7 @@
-# Nox CI. Windows-only: the product only ships on Windows 11 and several checks (shell tests, the
-# e2e smoke) need a real Windows Qt/Chromium runtime.
+# Nox CI. The desktop app ships on Windows 11, and several checks (shell tests, the e2e smoke)
+# need a real Windows Qt/Chromium runtime, so those run on Windows. The core also runs as a server
+# on Linux - a Raspberry Pi in the living room - so its unit and integration tests run on Linux too,
+# on x86-64 and on ARM64 like the Pi itself.
 #
 # No secrets are used or required, and nothing here talks to a network service beyond the package
 # registries (npm/PyPI) and the loopback `ai.rules` provider inside the walking-skeleton integration
@@ -56,6 +58,174 @@ jobs:
       # valid provider when Ollama is absent).
       - name: pytest integration
         run: pytest tests/integration -p no:cacheprovider
+
+  python-linux:
+    name: Python on Linux (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-24.04-arm is the Raspberry Pi's architecture (aarch64).
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      # The uv version scripts/install-linux.sh pins, so this checks what a Pi actually runs.
+      - name: Install uv
+        run: python -m pip install "uv==0.12.18"
+
+      # What scripts/install-linux.sh does on a Pi: prebuilt wheels only, nothing compiled as root.
+      - name: Server install needs no compiler
+        run: python -m uv sync --frozen --no-build --dry-run
+
+      # No `shell` extra: the server has no desktop, and PySide6 has no wheel for the Pi's glibc.
+      # `rl` for the Rocket League plugin's tests (OpenCV headless has ARM64 wheels).
+      - name: Sync dependencies
+        run: python -m uv sync --extra dev --extra rl
+
+      - name: shellcheck the installer
+        run: shellcheck --severity=warning scripts/install-linux.sh installer/linux/nox-command.sh
+
+      - name: Put the project venv on PATH
+        run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      # The POSIX-only branches (the file secret store, die_with_parent) are reachable only here;
+      # the Win32-only modules have narrow overrides in pyproject.toml.
+      - name: mypy
+        run: mypy src/nox
+
+      - name: pytest unit
+        run: pytest tests/unit -m "not hardware and not network and not spike" -p no:cacheprovider
+
+      - name: pytest integration
+        run: pytest tests/integration -p no:cacheprovider
+
+  installer-linux:
+    name: Installer on Linux (${{ matrix.runner }})
+    # The hosted Ubuntu runners boot with systemd, so the real service - hardening included - is
+    # installed, started, updated and checked, exactly as on a Raspberry Pi.
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: First install
+        run: sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh
+
+      - name: The service is up and answers
+        run: |
+          systemctl is-active nox
+          curl -fsS http://127.0.0.1:47801/health
+          nox where
+          nox doctor || true
+          # Answering is not enough: every extension (memory above all) must have started.
+          if sudo journalctl -u nox --no-pager | grep -q "extension.failed"; then
+            sudo journalctl -u nox --no-pager | grep "extension.failed"; exit 1
+          fi
+
+      - name: Same version again changes nothing
+        run: |
+          sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh
+          test "$(sudo find /var/backups/nox -name 'nox-*.tar.gz' 2>/dev/null | wc -l)" = 0
+          curl -fsS http://127.0.0.1:47801/health
+
+      - name: Update to a new version (built aside, snapshot, switch)
+        run: |
+          first="$(basename "$(readlink /opt/nox/current)")"
+          echo "FIRST=$first" >> "$GITHUB_ENV"
+          sudo -u nox touch /var/lib/nox/written-by-first
+          git -c user.name=ci -c user.email=ci@example.invalid commit --allow-empty -q -m "second"
+          sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh
+          second="$(basename "$(readlink /opt/nox/current)")"
+          test "$second" != "$first"
+          test -d "/opt/nox/releases/$first"
+          test "$(sudo find /var/backups/nox -name 'nox-*.tar.gz' | wc -l)" = 1
+          curl -fsS http://127.0.0.1:47801/health
+
+      - name: nox rollback brings back version and data
+        run: |
+          sudo -u nox touch /var/lib/nox/written-by-second
+          nox rollback
+          test "$(basename "$(readlink /opt/nox/current)")" = "$FIRST"
+          sudo test -e /var/lib/nox/written-by-first
+          ! sudo test -e /var/lib/nox/written-by-second
+          # The data that were replaced are kept aside, not deleted.
+          sudo sh -c 'ls -d /var/lib/nox.vor-wiederherstellung-*'
+          curl -fsS http://127.0.0.1:47801/health
+          nox snapshots
+          # Once: a second rollback must not put the same old data back over what came since.
+          sudo -u nox touch /var/lib/nox/written-after-rollback
+          if nox rollback; then echo "a second rollback was accepted"; exit 1; fi
+          test "$(basename "$(readlink /opt/nox/current)")" = "$FIRST"
+          sudo test -e /var/lib/nox/written-after-rollback
+
+      - name: nox restore takes only snapshots Nox made
+        run: |
+          snap="$(sudo find /var/backups/nox -name 'nox-*.tar.gz' -printf '%f\n' | head -n1)"
+          sudo cp "/var/backups/nox/$snap" /tmp/copy.tar.gz
+          if nox restore /tmp/copy.tar.gz; then echo "restored from outside the backup folder"; exit 1; fi
+          if nox restore ../../../tmp/copy.tar.gz; then echo "followed .. out of the backup folder"; exit 1; fi
+          sudo -u nox touch /var/lib/nox/written-before-restore
+          nox restore "$snap"
+          ! sudo test -e /var/lib/nox/written-before-restore
+          curl -fsS http://127.0.0.1:47801/health
+          nox doctor || true
+
+      - name: A broken version rolls itself back
+        run: |
+          before="$(basename "$(readlink /opt/nox/current)")"
+          echo 'raise SystemExit("broken on purpose by CI")' >> src/nox/__init__.py
+          git -c user.name=ci -c user.email=ci@example.invalid commit -q -am "broken"
+          if sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh; then
+            echo "the installer accepted a version that does not start"; exit 1
+          fi
+          test "$(basename "$(readlink /opt/nox/current)")" = "$before"
+          curl -fsS http://127.0.0.1:47801/health
+          git reset -q --hard HEAD~1
+
+      - name: The UI bundle check refuses what a release never contains
+        run: |
+          mk() { rm -rf b && mkdir -p b/ui/dashboard/dist b/ui/pet/dist && echo ok > b/ui/dashboard/dist/index.html && echo ok > b/ui/pet/dist/index.html; }
+          check() { sudo env NOX_ACTION=verify-bundle NOX_BUNDLE="$PWD/$1" bash scripts/install-linux.sh; }
+          mk; tar -czf good.tar.gz -C b ui; check good.tar.gz
+          mk; ln -s /etc/shadow b/ui/pet/dist/link; tar -czf link.tar.gz -C b ui; ! check link.tar.gz
+          mk; echo x > b/evil.sh; tar -czf extra.tar.gz -C b ui evil.sh; ! check extra.tar.gz
+          mk; rm -rf b/ui/pet; tar -czf half.tar.gz -C b ui; ! check half.tar.gz
+          python3 - <<'PY'
+          import io, tarfile
+          with tarfile.open("dotdot.tar.gz", "w:gz") as archive:
+              for name in ("ui/dashboard/dist/index.html", "ui/pet/dist/index.html", "ui/pet/dist/../../../evil"):
+                  data = b"x"
+                  info = tarfile.TarInfo(name); info.size = len(data)
+                  archive.addfile(info, io.BytesIO(data))
+          PY
+          ! check dotdot.tar.gz
+
+      - name: Files and permissions are what the docs promise
+        run: |
+          test "$(sudo stat -c '%U %a' /var/lib/nox)" = "nox 700"
+          test "$(sudo stat -c '%U %a' /var/lib/nox/user.yaml)" = "nox 600"
+          test "$(stat -c '%U' /opt/nox)" = "root"
+          # The folder is private: an ordinary account must not even list it.
+          ! ls /var/lib/nox >/dev/null 2>&1
+          if sudo test -e /var/lib/nox/secrets.json; then test "$(sudo stat -c '%a' /var/lib/nox/secrets.json)" = "600"; fi
+
+      - name: Sandbox report (informational)
+        if: always()
+        run: systemd-analyze security nox --no-pager || true
+
+      - name: Service log
+        if: always()
+        run: sudo journalctl -u nox -n 200 --no-pager || true
 
   ui:
     name: UI (${{ matrix.app }})

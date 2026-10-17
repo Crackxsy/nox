@@ -10,6 +10,7 @@ because a mock would pass whatever the implementation happened to do.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -55,6 +56,9 @@ def test_dot_dot_cannot_climb_out(root: Path) -> None:
         resolve_inside(escape, [str(root)])
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="junctions are a Windows feature (cmd /c mklink /J)"
+)
 def test_a_junction_out_of_a_root_is_refused(root: Path) -> None:
     """A folder inside the root that is really somewhere else. `..` with no dots to notice."""
     link = root / "shortcut"

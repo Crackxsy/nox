@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -65,16 +66,37 @@ class StrictSection(BaseModel):
 
 _VAR = re.compile(r"\$\{(\w+)\}|\$(\w+)|%(\w+)%")
 
-#: Windows locations that a non-Windows run - a test box, a contributor's machine - has no
-#: environment variable for. Substituting them keeps the shipped defaults loadable everywhere. Any
-#: other unresolved variable is an error, because guessing would put user data somewhere nobody
-#: asked for.
+#: `${APPDATA}/Nox`, `$LOCALAPPDATA\Nox`, `%APPDATA%/Nox` ... at the start of a path.
+_WINDOWS_NOX_HOME = re.compile(
+    r"^(?:\$\{(?P<braced>APPDATA|LOCALAPPDATA)\}|\$(?P<bare>APPDATA|LOCALAPPDATA)"
+    r"|%(?P<percent>APPDATA|LOCALAPPDATA)%)[/\\]Nox(?=$|[/\\])",
+    re.IGNORECASE,
+)
+
+#: Locations a configuration may name that the environment does not always define. Any other
+#: unresolved variable is an error, because guessing would put user data somewhere nobody asked
+#: for.
 _FALLBACKS: dict[str, Path] = {
-    "APPDATA": Path.home() / "AppData" / "Roaming",
-    "LOCALAPPDATA": Path.home() / "AppData" / "Local",
     "USERPROFILE": Path.home(),
     "HOME": Path.home(),
 }
+
+
+def _fallback(name: str) -> Path | None:
+    """The value for a variable the environment does not set.
+
+    `APPDATA`/`LOCALAPPDATA` stand for "where Nox lives" in a Windows `user.yaml`. Copied to a
+    Raspberry Pi, `${APPDATA}/Nox` must land in the same folder `nox_home()` uses there, not in an
+    invented `~/AppData/Roaming` nobody would look in.
+    """
+    from nox.paths import nox_home  # noqa: PLC0415 - keeps the config package import-light
+
+    if name in ("APPDATA", "LOCALAPPDATA"):
+        if sys.platform == "win32":
+            sub = "Roaming" if name == "APPDATA" else "Local"
+            return Path.home() / "AppData" / sub
+        return nox_home().parent
+    return _FALLBACKS.get(name)
 
 
 def expand_path(value: str) -> Path:
@@ -84,13 +106,29 @@ def expand_path(value: str) -> Path:
     known Windows locations above.
     """
     unresolved: list[str] = []
+    if sys.platform != "win32":
+        # `${APPDATA}/Nox` in a Windows user.yaml means "Nox's folder". Elsewhere that folder is
+        # `nox_home()` - which may be called anything (`/var/lib/nox` on the Pi service).
+        windows_home = _WINDOWS_NOX_HOME.match(value)
+        if windows_home is not None:
+            var = windows_home["braced"] or windows_home["bare"] or windows_home["percent"]
+            if not os.environ.get(var.upper()):
+                from nox.paths import nox_home  # noqa: PLC0415
+
+                tail = value[windows_home.end() :].replace(chr(92), "/")  # a Windows tail
+                value = str(nox_home()) + tail
 
     def replace(match: re.Match[str]) -> str:
         name = match.group(1) or match.group(2) or match.group(3)
+        if name.upper() == "NOX_HOME":
+            # One resolver for the core, the CLI and the workers (absolute, per platform).
+            from nox.paths import nox_home  # noqa: PLC0415
+
+            return str(nox_home())
         from_environment = os.environ.get(name)
         if from_environment:
             return from_environment
-        fallback = _FALLBACKS.get(name.upper())
+        fallback = _fallback(name.upper())
         if fallback is not None:
             return str(fallback)
         unresolved.append(name)

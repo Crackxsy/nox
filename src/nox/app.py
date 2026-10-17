@@ -740,6 +740,7 @@ class NoxCore:
             voice_enabled=self.voice_enabled,
             tokens=lambda: self.tokens,
             providers=lambda: self.ai_providers,
+            secrets=lambda: self.security.secrets if self.security is not None else None,
         )
 
     def health_json(self) -> dict[str, Any]:

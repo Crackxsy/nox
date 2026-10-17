@@ -29,9 +29,11 @@ pytestmark = pytest.mark.timeout(180)
 
 # No Twitch bot account exists yet (ES-01): `nox/twitch/oauth_token`/`bot_username` are never set
 # in the real Windows Credential Manager this machine uses. `SecurityContext.build` falls back to a
-# real `KeyringSecretStore()` when `NoxCore` does not hand it one (and `NoxCore.__init__` takes no
-# such override - out of this plugin's scope to add), so this fake, in-process-only keyring backend
-# is swapped in for the credential lookup only (ENGINEERING.md: "tests use an in-memory backend").
+# store from `open_secret_store` when `NoxCore` does not hand it one (and `NoxCore.__init__` takes
+# no such override - out of this plugin's scope to add), so a keyring store over this fake,
+# in-process-only backend is swapped in for the credential lookup only (ENGINEERING.md: "tests use
+# an in-memory backend"). Patching the factory rather than the keyring class keeps it working on a
+# Linux runner, where `auto` would otherwise choose the file store.
 # It never touches the real Credential Manager and reverts automatically via `monkeypatch`.
 _FAKE_KEYRING_VALUES = {
     "nox/twitch/oauth_token": "s3cret",
@@ -159,7 +161,7 @@ def _profiles_dir_with_test_port(tmp_path: Path, *, port: int) -> Path:
 async def core(tmp_path: Path, irc_server: FakeIrcServer, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         security_service,
-        "KeyringSecretStore",
+        "open_secret_store",
         lambda *a, **kw: KeyringSecretStore(backend=_FakeKeyringBackend()),
     )
     plugins_dir = _twitch_plugin_dir(tmp_path, port=irc_server.port)

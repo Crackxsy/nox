@@ -8,6 +8,7 @@ reaches the real `PrivacyService` and, end to end through the real bus, the real
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -78,6 +79,7 @@ async def test_install_registers_sensors_status_read_tool(core: NoxCore) -> None
     assert core.tool_registry.get("sensors.status.read") is not None
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="the foreground-window sensor reads Win32")
 async def test_zoned_foreground_window_reaches_privacy_and_pet(core: NoxCore) -> None:
     sensor = core.extensions["sensors"].foreground
     # This test host is Windows (ENGINEERING.md), so install() built a RealWin32Probe.

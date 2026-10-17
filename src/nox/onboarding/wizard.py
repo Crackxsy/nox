@@ -7,8 +7,8 @@ one behind a live probe of the real providers, never an assumption.
 
 Every step has a safe default and can be skipped. A skipped step writes nothing, so the value from
 `config/defaults.yaml` keeps applying. The wizard only ever writes the user layer
-(`%APPDATA%\\Nox\\user.yaml`) and the OS keyring; it never touches `config/defaults.yaml`, and a
-credential never reaches a file.
+(`user.yaml` in Nox's folder, see `nox where`) and the secret store; it never touches
+`config/defaults.yaml`, and a credential never reaches the configuration.
 
 The interactive driver is a thin shell around the pure functions below it. Everything it depends
 on - the secret store, the AI probe, the paths - is injected, so a test never touches a real
@@ -17,7 +17,6 @@ keyring and never makes a network or subprocess call.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,7 +26,7 @@ import typer
 
 from nox.ai.config import AiConfig, load_ai_config
 from nox.core.events import HealthStatus
-from nox.paths import DEFAULTS_PATH
+from nox.paths import DEFAULTS_PATH, nox_home
 
 # The user-layer reader and writer live in `nox.settings.layers`, so this wizard and the
 # dashboard's `config.set` write the very same file the very same way. Re-exported below, because
@@ -200,9 +199,9 @@ class SecretStore(Protocol):
 
 
 def default_secret_store() -> SecretStore:
-    from nox.security.secrets import KeyringSecretStore  # noqa: PLC0415 - keyring imports slowly
+    from nox.security.secrets import open_configured_secret_store  # noqa: PLC0415 - imports slowly
 
-    return KeyringSecretStore()
+    return open_configured_secret_store()
 
 
 # ---- AI backend probe ---------------------------------------------------------------------------
@@ -471,14 +470,13 @@ def _prompt_answers() -> OnboardingAnswers:
     answers.user_display_name = display_name or None
 
     typer.echo(t["folders_intro"])
-    appdata = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
     answers.data_dir = Path(
-        typer.prompt(t["data_dir"], default=existing_paths.get("data_dir", str(appdata / "Nox")))
+        typer.prompt(t["data_dir"], default=existing_paths.get("data_dir", str(nox_home())))
     )
     answers.vault_dir = Path(
         typer.prompt(
             t["vault_dir"],
-            default=existing_paths.get("vault_dir", str(appdata / "Nox" / "vault")),
+            default=existing_paths.get("vault_dir", str(nox_home() / "vault")),
         )
     )
 

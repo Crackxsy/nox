@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +15,7 @@ import yaml
 from nox.app import DEFAULTS_PATH, PROFILES_DIR, REPO_ROOT, NoxCore
 from nox.core.config import load_config
 from nox.plugins.manager import PluginState
+from tests._fake_cli import write_fake_cli
 from tests._ports import free_port_base
 
 pytestmark = pytest.mark.timeout(180)
@@ -24,13 +24,9 @@ FAKE_CLAUDE_SCRIPT = REPO_ROOT / "tests" / "unit" / "plugins" / "coding" / "fake
 
 
 def _fake_claude_wrapper(tmp_path: Path) -> Path:
-    """A `.cmd` wrapper so `shutil.which` resolution (an absolute path ending in a `PATHEXT`
-    extension) finds a real, spawnable executable on Windows without touching PATH."""
-    wrapper = tmp_path / "fake_claude.cmd"
-    wrapper.write_text(
-        f'@echo off\r\n"{sys.executable}" "{FAKE_CLAUDE_SCRIPT}" %*\r\n', encoding="utf-8"
-    )
-    return wrapper
+    """A spawnable wrapper (`.cmd` on Windows, a shell script elsewhere) that `shutil.which`
+    resolves like the real executable, without touching PATH."""
+    return write_fake_cli(tmp_path, "fake_claude", FAKE_CLAUDE_SCRIPT)
 
 
 def _coding_plugin_dir(tmp_path: Path, *, command: Path, workspace: Path) -> Path:

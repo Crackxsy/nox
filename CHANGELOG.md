@@ -8,6 +8,57 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+### Added
+- **Nox runs as a server on a Raspberry Pi or any Linux machine.** One command installs it as a
+  hardened systemd service (`scripts/install-linux.sh`, `docs/RASPBERRY_PI.md`): its own system
+  user, the program read-only in `/opt/nox`, everything it keeps in `/var/lib/nox`, Python 3.13
+  through uv from prebuilt packages only, and the prebuilt dashboard from the release, checked
+  against its SHA-256, so the Pi needs no Node.js and compiles nothing. Every version is a
+  complete folder of its own (`/opt/nox/releases/<commit>`, `/opt/nox/current` the running one):
+  an update builds the new one while the old keeps running, snapshots `/var/lib/nox`, switches and
+  starts - and if the new version does not answer, it switches back and restores the data by
+  itself. `nox rollback` does the same on request - exactly one step, so the same old data can
+  never be put back twice - and `nox snapshots` / `nox restore` put data back without ever writing
+  over the current folder (a corrupt snapshot is refused before anything moves; only snapshots Nox
+  made itself are accepted). `nox update` runs the installer of the version it installs, taken from
+  that version's git tree; an installation from a branch stays on it; only real releases count as
+  "newest", one installer runs at a time, and bytecode is compiled at install time so a Pi does
+  not recompile on every start. `nox doctor` ends with one line on whether a newer release exists.
+  A short `nox` command acts on the service's data (`nox doctor`, `nox onboard`, `nox update`,
+  `nox claude-login`). The installer is attached to
+  every release with its SHA-256, and CI runs it for real on x86-64 and ARM64: install, update,
+  rollback, a deliberately broken version that must roll itself back, and UI bundles with a
+  symlink, a `..` path or an extra file that must be refused. Guide in English and German
+  (`docs/RASPBERRY_PI.md`, `docs/RASPBERRY_PI.de.md`).
+- **One folder per machine.** `nox_home()` is `%APPDATA%/Nox` on Windows and
+  `~/.local/share/Nox` on Linux (`~/Library/Application Support/Nox` on macOS, path logic only -
+  macOS is not supported yet), and `NOX_HOME` moves it (the Pi service uses `/var/lib/nox`). The
+  shipped defaults follow it, and a Windows `user.yaml` with `${APPDATA}` lands in the same folder
+  on Linux. `nox where` prints where the settings, data and secrets are.
+- **Secrets without a desktop.** Where no OS keyring works - a Pi without a desktop session - Nox
+  keeps credentials in an owner-only `secrets.json` instead of failing every save, locked across
+  processes and refused when it is a link, foreign or readable by others. The choice is remembered:
+  a keyring that disappears later is reported (health check `secrets`, `nox where`, `nox doctor`)
+  and PIN-gated changes are refused, instead of starting over with an empty file; Windows and macOS
+  never fall back to the file on their own. `security.secret_store` forces either.
+- **CI on Linux, x86-64 and ARM64**, next to Windows: the core's unit and integration tests run on
+  the Pi's architecture on every pull request.
+
+### Fixed
+- **Memory did not start on a fresh server.** The vault folder did not exist yet, the vault watcher
+  failed on it, and with it the whole memory extension - Nox would have remembered nothing on a new
+  Pi. A missing vault inside Nox's own folder is now created; one elsewhere (a drive that is not
+  plugged in) is reported instead of invented, and memory about you works either way.
+- **Preset actions and self-extension refused every Linux program path** (`/usr/bin/...`): the
+  "absolute path" check only knew Windows paths.
+- **The supervisor left a zombie process on Linux** when the core exited after the kill switch.
+- **Workers and plugins outlived a crashed core on Linux and macOS**, where no job object exists.
+  They now end with the process that spawned them.
+- **A server without a screen kept restarting the pet window.** The supervisor no longer starts the
+  desktop shell or global hotkeys where there is no display.
+- Plugin workers on Linux started without `HOME`, a locale or `XDG_*`; they now inherit those.
+
+
 ## [0.5.0] - 2026-10-14
 
 ### Changed

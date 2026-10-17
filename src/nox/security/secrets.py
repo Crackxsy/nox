@@ -21,11 +21,14 @@ import asyncio
 import hashlib
 import hmac
 import importlib
-import re
+import os
 import secrets as _secrets
+import sys
+import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -33,28 +36,26 @@ from nox.security._logging import get_logger
 from nox.security.audit_sink import SafeAuditLog
 from nox.security.model import AuditLog, SecretStore
 from nox.security.pin_attempts import InMemoryPinAttemptStore, PinAttemptState, PinAttemptStore
+from nox.security.secret_names import SECRET_NAME_RE as SECRET_NAME_RE  # re-exported
+from nox.security.secret_names import SecretNameError as SecretNameError  # re-exported
+from nox.security.secret_names import (
+    SecretStoreError,
+    SecretStoreUnavailableError,
+    validate_name,
+)
 
 log = get_logger(__name__)
 
-SECRET_NAME_RE = re.compile(r"^nox/[a-z0-9_\-]+/[a-z0-9_\-.]+$")
 KEYRING_SERVICE = "nox"
 PIN_SECRET_NAME = "nox/security/pin"  # noqa: S105 - keyring entry name, not a value
 PBKDF2_ITERATIONS = 600_000
 Clock = Callable[[], datetime]
 
 
-class SecretNameError(ValueError):
-    """Secret names must look like nox/<component>/<key> (lowercase)."""
-
-
-def validate_name(name: str) -> str:
-    if not SECRET_NAME_RE.match(name):
-        raise SecretNameError(f"invalid secret name {name!r}; expected nox/<component>/<key>")
-    return name
-
-
 class InMemorySecretStore:
     """Test/dev backend. Holds values only in process memory."""
+
+    backend = "memory"
 
     def __init__(self) -> None:
         self._values: dict[str, str] = {}
@@ -78,16 +79,30 @@ class InMemorySecretStore:
 class KeyringSecretStore:
     """Windows Credential Manager (or the platform keyring) via `keyring`."""
 
+    backend = "keyring"
+
     def __init__(self, service: str = KEYRING_SERVICE, backend: Any | None = None) -> None:
         self._service = service
         self._keyring = backend if backend is not None else importlib.import_module("keyring")
 
+    # Backend errors (a locked collection, a lost D-Bus session, an init failure) become
+    # `SecretStoreUnavailableError`, so callers handle one exception type - and `PinManager` treats
+    # it as "set and unverifiable" rather than letting it escape as a crash.
+
     def get(self, name: str) -> str | None:
-        value = self._keyring.get_password(self._service, validate_name(name))
+        validate_name(name)
+        try:
+            value = self._keyring.get_password(self._service, name)
+        except Exception as exc:  # noqa: BLE001 - every backend raises its own types
+            raise SecretStoreUnavailableError(f"OS keyring: {type(exc).__name__}") from exc
         return None if value is None else str(value)
 
     def set(self, name: str, value: str) -> None:
-        self._keyring.set_password(self._service, validate_name(name), value)
+        validate_name(name)
+        try:
+            self._keyring.set_password(self._service, name, value)
+        except Exception as exc:  # noqa: BLE001
+            raise SecretStoreUnavailableError(f"OS keyring: {type(exc).__name__}") from exc
         log.debug("secrets.set", name=name)
 
     def delete(self, name: str) -> None:
@@ -96,11 +111,171 @@ class KeyringSecretStore:
             self._keyring.delete_password(self._service, name)
         except Exception as exc:  # noqa: BLE001 - keyring raises backend-specific errors for "not found"
             if type(exc).__name__ != "PasswordDeleteError":
-                raise
+                raise SecretStoreUnavailableError(f"OS keyring: {type(exc).__name__}") from exc
         log.debug("secrets.deleted", name=name)
 
     def __repr__(self) -> str:
         return f"KeyringSecretStore(service={self._service!r})"
+
+
+# ---- choosing a store ----------------------------------------------------------------------------
+
+SecretBackend = Literal["auto", "keyring", "file"]
+
+#: Which store this installation chose the first time. Read on every later start, so a keyring
+#: that is missing one day (a service started before login, a broken D-Bus) is reported instead of
+#: being silently replaced by an empty file - which would make the PIN look unset.
+BACKEND_MARKER = "secret_backend"
+
+
+class UnavailableSecretStore:
+    """Stands in for a store that this installation uses but cannot reach right now.
+
+    Every call raises `SecretStoreUnavailableError`. `PinManager` treats that as "a PIN is set
+    and cannot be verified", so nothing that needs the PIN goes through.
+    """
+
+    backend = "unavailable"
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    def get(self, name: str) -> str | None:
+        raise SecretStoreUnavailableError(self.reason)
+
+    def set(self, name: str, value: str) -> None:
+        raise SecretStoreUnavailableError(self.reason)
+
+    def delete(self, name: str) -> None:
+        raise SecretStoreUnavailableError(self.reason)
+
+    def __repr__(self) -> str:
+        return f"UnavailableSecretStore(reason={self.reason!r})"
+
+
+def keyring_usable(module: Any | None = None) -> bool:
+    """Whether the platform keyring can actually hold a secret.
+
+    `keyring` always returns *a* backend. Without a desktop session on Linux it is the `fail`
+    backend (priority 0), or a chainer with nothing in it; both refuse every call.
+    """
+    try:
+        kr = module if module is not None else importlib.import_module("keyring")
+        backend = kr.get_keyring()
+    except Exception:  # noqa: BLE001 - an unimportable or broken keyring is simply not usable
+        return False
+    if getattr(backend, "priority", 1) <= 0:
+        return False
+    chained = getattr(backend, "backends", None)
+    return not (chained is not None and len(chained) == 0)
+
+
+def _read_marker(home: Path) -> str | None:
+    try:
+        value = (home / BACKEND_MARKER).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value if value in ("keyring", "file") else None
+
+
+def _write_marker(home: Path, backend: str) -> None:
+    """Atomically, so a crash can never leave a half-written choice behind."""
+    try:
+        home.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd, tmp = tempfile.mkstemp(dir=home, prefix=f".{BACKEND_MARKER}-", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(backend + "\n")
+        os.replace(tmp, home / BACKEND_MARKER)
+    except OSError as exc:  # a read-only home is reported by the store itself on first use
+        log.warning("secrets.marker_write_failed", error=type(exc).__name__)
+
+
+def _first_choice(base: Path) -> str:
+    """The store a fresh installation starts with.
+
+    Windows and macOS always have a keyring for an interactive user, so they never choose the
+    file on their own: a keyring that is unreachable at that one moment must surface as
+    "unavailable", not become a permanent downgrade. Elsewhere the file is chosen only where no
+    keyring works (a headless Raspberry Pi) or where a secrets file is already in place.
+    """
+    if sys.platform in ("win32", "darwin"):
+        return "keyring"
+    from nox.security.file_secrets import SECRETS_FILENAME  # noqa: PLC0415
+
+    if (base / SECRETS_FILENAME).exists():
+        return "file"
+    return "keyring" if keyring_usable() else "file"
+
+
+def resolve_secret_backend(
+    backend: SecretBackend = "auto", *, home: Path | None = None, record: bool = True
+) -> str:
+    """`keyring`, `file` or `unavailable` - the store this process must use, without opening it.
+
+    `keyring`/`file` in the configuration force one. `auto` keeps whatever this installation
+    chose before; on first use it applies `_first_choice`. `record=False` is for commands that
+    only look (`nox where`): they report the choice but never make it.
+    """
+    from nox.paths import nox_home  # noqa: PLC0415 - nox.paths is import-light, this module is not
+
+    base = home if home is not None else nox_home()
+    marker = _read_marker(base)
+    if backend != "auto":
+        chosen: str = backend
+        if marker is not None and marker != chosen:
+            # A forced switch does not move anything: the other store keeps its secrets and the
+            # PIN, which will look unset here. Say so where it is noticed - in the log and `where`.
+            log.warning("secrets.backend_switched", recorded=marker, configured=chosen)
+    elif marker is not None:
+        chosen = marker
+    else:
+        chosen = _first_choice(base)
+    if record and marker != chosen and (chosen == "file" or keyring_usable()):
+        _write_marker(base, chosen)
+    if chosen == "keyring" and not keyring_usable():
+        return "unavailable"
+    return chosen
+
+
+def recorded_secret_backend(home: Path | None = None) -> str | None:
+    """The store this installation recorded, or None before its first use."""
+    from nox.paths import nox_home  # noqa: PLC0415
+
+    return _read_marker(home if home is not None else nox_home())
+
+
+def open_secret_store(backend: SecretBackend = "auto", *, home: Path | None = None) -> SecretStore:
+    """The store every process uses, so the core, the CLI and the wizard agree on one place.
+
+    Callers pass the configured `security.secret_store`; `open_configured_secret_store` does
+    that for a process that has not loaded the configuration itself.
+    """
+    from nox.paths import nox_home  # noqa: PLC0415
+
+    base = home if home is not None else nox_home()
+    chosen = resolve_secret_backend(backend, home=base)
+    if chosen == "unavailable":
+        log.error("secrets.backend_unavailable", backend="keyring")
+        return UnavailableSecretStore(
+            "this installation keeps its secrets in the OS keyring, which is not available "
+            "right now (no desktop session, or D-Bus/Secret Service missing)"
+        )
+    if chosen == "keyring":
+        log.info("secrets.backend", backend="keyring")
+        return KeyringSecretStore()
+    from nox.security.file_secrets import FileSecretStore  # noqa: PLC0415
+
+    log.info("secrets.backend", backend="file")
+    return FileSecretStore(base)
+
+
+def open_configured_secret_store() -> SecretStore:
+    """`open_secret_store` with the backend from the user's configuration (CLI, wizard)."""
+    from nox.core.config import load_config  # noqa: PLC0415 - heavy, and only this path needs it
+    from nox.paths import resolve_config_paths  # noqa: PLC0415
+
+    defaults, user = resolve_config_paths()
+    return open_secret_store(load_config(defaults, user).security.secret_store)
 
 
 # ---- PIN -----------------------------------------------------------------------------------------
@@ -169,7 +344,13 @@ class PinManager:
         return self._argon2_reason
 
     def is_set(self) -> bool:
-        return self._store.get(PIN_SECRET_NAME) is not None
+        """Whether a PIN exists. Fail-closed: a store that cannot be read counts as "set", so a
+        gate that asks for the PIN keeps asking - and `verify_pin` then says why it cannot."""
+        try:
+            return self._store.get(PIN_SECRET_NAME) is not None
+        except SecretStoreError as exc:
+            log.error("security.pin_store_unreadable", error=str(exc))
+            return True
 
     def is_locked(self) -> bool:
         state = self._attempts.load()
@@ -212,7 +393,14 @@ class PinManager:
                 remaining_attempts=0,
                 reason="locked out",
             )
-        stored = self._store.get(PIN_SECRET_NAME)
+        try:
+            stored = self._store.get(PIN_SECRET_NAME)
+        except SecretStoreError as exc:
+            return PinStatus(
+                ok=False,
+                remaining_attempts=self._remaining(state),
+                reason=f"secret store unavailable: {exc}",
+            )
         if stored is None:
             return PinStatus(
                 ok=False, remaining_attempts=self._remaining(state), reason="no PIN set"
