@@ -27,7 +27,7 @@ def _clear(monkeypatch: pytest.MonkeyPatch) -> None:
     [
         ("win32", ("AppData", "Roaming", "Nox")),
         ("darwin", ("Library", "Application Support", "Nox")),
-        ("linux", (".local", "share", "nox")),
+        ("linux", (".local", "share", "Nox")),
     ],
 )
 def test_each_os_gets_its_own_place(
@@ -46,7 +46,7 @@ def test_nox_home_wins_then_xdg_then_appdata(
     _clear(monkeypatch)
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
-    assert nox_home() == tmp_path / "xdg" / "nox"
+    assert nox_home() == tmp_path / "xdg" / "Nox"
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
     assert nox_home() == tmp_path / "appdata" / "Nox"
     monkeypatch.setenv("NOX_HOME", str(tmp_path / "srv"))
@@ -88,6 +88,10 @@ def test_the_file_store_keeps_secrets_owner_only_and_atomic(tmp_path: Path) -> N
 
 def test_a_foreign_file_is_refused_not_overwritten(tmp_path: Path) -> None:
     (tmp_path / "secrets.json").write_text('{"something": "else"}', encoding="utf-8")
+    if sys.platform != "win32":
+        os.chmod(
+            tmp_path / "secrets.json", 0o600
+        )  # owner-only, so it is the format that is refused
     store = FileSecretStore(tmp_path)
     with pytest.raises(SecretStoreError, match="not a Nox secrets file"):
         store.set("nox/home/access_token", "x")

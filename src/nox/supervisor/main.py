@@ -480,6 +480,11 @@ class Supervisor:
                 self._log.warning("supervisor.shell_exited", code=self._shell.proc.returncode)
                 self._spawn_shell(safe_mode=self._state == SupervisorState.SAFE_MODE)
         if self._state == SupervisorState.SAFE_MODE:
+            # Nothing restarts the core in safe mode, but an exited one still has to be collected:
+            # `alive()` polls, which reaps it - on Linux it would otherwise stay as a zombie.
+            if self._core is not None and not self._core.alive():
+                self._log.info("supervisor.core_exited_in_safe_mode", code=self._core.proc.returncode)
+                self._core = None
             return
         async with self._lock:
             if self._state != SupervisorState.RUNNING:

@@ -32,11 +32,13 @@ def test_a_running_game_stops_a_request_over_the_limit() -> None:
         type_text("x" * (MAX_CHARS + 1), game_running=True, expected_window=0)
 
 
+@pytest.mark.skipif(not available(), reason="typing is a Windows-only tool")
 def test_nothing_to_type_is_refused() -> None:
     with pytest.raises(TypingError, match="nothing to type"):
         type_text("", game_running=False, expected_window=0)
 
 
+@pytest.mark.skipif(not available(), reason="typing is a Windows-only tool")
 def test_too_much_to_type_is_refused() -> None:
     """An unbounded loop of synthetic keystrokes is not something to leave to a language model."""
     with pytest.raises(TypingError, match=f"the limit is {MAX_CHARS}"):

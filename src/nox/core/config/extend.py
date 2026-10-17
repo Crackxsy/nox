@@ -12,7 +12,7 @@ chose would be arbitrary code execution wearing a lab coat.
 
 from __future__ import annotations
 
-from pathlib import PureWindowsPath
+from pathlib import PurePath
 
 from pydantic import Field, field_validator
 
@@ -46,7 +46,8 @@ class ExtendConfig(StrictSection):
         if not value:
             return value
         program = value[0].strip()
-        if not PureWindowsPath(program).is_absolute():
+        # The rules of the system Nox runs on: `C:\...` on Windows, `/...` on Linux.
+        if not PurePath(program).is_absolute():
             raise ValueError(
                 f"extend.test_command must start with an absolute path, got {program!r}"
             )

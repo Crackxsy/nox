@@ -14,7 +14,7 @@ purpose. The boundary sits under the model rather than in its instructions - the
 
 from __future__ import annotations
 
-from pathlib import PureWindowsPath
+from pathlib import PurePath
 from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -152,7 +152,8 @@ class PresetActionConfig(StrictSection):
         program = value[0].strip()
         if not program:
             raise ValueError("the first entry of command must be the program to run")
-        if not PureWindowsPath(program).is_absolute():
+        # The rules of the system Nox runs on: `C:\...` on Windows, `/...` on Linux.
+        if not PurePath(program).is_absolute():
             raise ValueError(
                 f"command must start with an absolute path to the program, got {program!r} - "
                 "a bare name would be resolved through PATH and could mean different programs "
