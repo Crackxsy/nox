@@ -127,6 +127,10 @@ jobs:
           curl -fsS http://127.0.0.1:47801/health
           nox where
           nox doctor || true
+          # Answering is not enough: every extension (memory above all) must have started.
+          if sudo journalctl -u nox --no-pager | grep -q "extension.failed"; then
+            sudo journalctl -u nox --no-pager | grep "extension.failed"; exit 1
+          fi
 
       - name: Same version again changes nothing
         run: |
