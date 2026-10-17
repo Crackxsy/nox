@@ -162,6 +162,11 @@ jobs:
           sudo sh -c 'ls -d /var/lib/nox.vor-wiederherstellung-*'
           curl -fsS http://127.0.0.1:47801/health
           nox snapshots
+          # Once: a second rollback must not put the same old data back over what came since.
+          sudo -u nox touch /var/lib/nox/written-after-rollback
+          if nox rollback; then echo "a second rollback was accepted"; exit 1; fi
+          test "$(basename "$(readlink /opt/nox/current)")" = "$FIRST"
+          sudo test -e /var/lib/nox/written-after-rollback
 
       - name: A broken version rolls itself back
         run: |

@@ -20,7 +20,8 @@
 #
 # Actions (normally through the `nox` command): NOX_ACTION=install (default) | rollback | restore
 # (NOX_SNAPSHOT=<file>) | verify-bundle (NOX_BUNDLE=<file>, for tests). NOX_REF picks a version;
-# NOX_SOURCE=<checkout> installs from a local checkout (CI uses it).
+# NOX_SOURCE=<checkout> installs from a local checkout (CI uses it); root runs git in it, so it
+# must be a checkout you trust.
 set -euo pipefail
 umask 022
 
@@ -39,7 +40,11 @@ MIN_VERSION="0.6.0"
 UV_VERSION="0.12.18"
 CURL=(curl --proto '=https' --tlsv1.2 -fsSL)
 SOURCE="${NOX_SOURCE:-$REPO_URL}"
-GIT=(git -c safe.directory='*')
+# Ownership checks stay on, except for the one checkout NOX_SOURCE names (CI's is not root's).
+GIT=(git)
+if [ -n "${NOX_SOURCE:-}" ]; then
+  GIT+=(-c "safe.directory=$NOX_SOURCE" -c "safe.directory=$NOX_SOURCE/.git")
+fi
 ACTION="${NOX_ACTION:-install}"
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
@@ -93,35 +98,54 @@ install_service_files() {
 
 #: Data back from a snapshot - into a fresh folder, never over the current one: files a newer
 #: version wrote (a SQLite write-ahead log, say) must not survive next to restored ones.
+#: Returns non-zero - with the current folder back in place - when anything goes wrong, because it
+#: is also called from inside `|| true` (the automatic rollback), where `set -e` does not apply.
 restore_data() {
-  local file="$1" stamp aside
-  [ -f "$file" ] || fail "Schnappschuss $file gibt es nicht."
+  local file="$1" stamp aside kept
+  [ -f "$file" ] || { printf 'Schnappschuss %s gibt es nicht.\n' "$file" >&2; return 1; }
+  # A truncated or corrupt archive is found before anything is moved.
+  tar -tzf "$file" >/dev/null 2>&1 || { printf 'Schnappschuss %s ist beschädigt; nichts wurde geändert.\n' "$file" >&2; return 1; }
   stamp="$(date +%Y%m%d-%H%M%S)"
   aside="$NOX_HOME_DIR.vor-wiederherstellung-$stamp"
-  mv -T "$NOX_HOME_DIR" "$aside"
-  tar -xzf "$file" -C "$(dirname "$NOX_HOME_DIR")"
-  # What snapshots leave out (the AI's own install, caches, models) comes back from the old folder.
-  local kept
+  mv -T "$NOX_HOME_DIR" "$aside" || return 1
+  if ! tar -xzf "$file" -C "$(dirname "$NOX_HOME_DIR")"; then
+    rm -rf -- "$NOX_HOME_DIR"
+    mv -T "$aside" "$NOX_HOME_DIR"
+    printf 'Entpacken fehlgeschlagen (Speicher voll?); die bisherigen Daten sind unverändert zurück.\n' >&2
+    return 1
+  fi
+  # What snapshots leave out (the AI's own install, caches, models) moves back from the old folder.
   for kept in .local .cache models; do
-    if [ -e "$aside/$kept" ] && [ ! -e "$NOX_HOME_DIR/$kept" ]; then cp -a "$aside/$kept" "$NOX_HOME_DIR/"; fi
+    if [ -e "$aside/$kept" ] && [ ! -e "$NOX_HOME_DIR/$kept" ]; then mv "$aside/$kept" "$NOX_HOME_DIR/"; fi
   done
   chmod 0700 "$NOX_HOME_DIR"
   note "Daten aus $file wiederhergestellt. Der Stand davor liegt in $aside - löschen, sobald alles läuft."
 }
 
-#: Back to an earlier release, with the data as they were before the update that left it.
+#: Back to an earlier release, with the data as they were before the update that left it. Once:
+#: afterwards there is no step further back, so a second rollback cannot put the same old data
+#: back over everything written since.
 rollback_to() {
   local release="$1" file="$2"
-  [ -n "$release" ] && [ -d "$RELEASES/$release" ] || { printf 'Keine vorherige Version zum Zurückgehen.\n' >&2; return 1; }
+  # Cleared first: a failure from here on must not make `fail` start another rollback.
+  phase=""
+  [ -n "$release" ] && [ -d "$RELEASES/$release" ] || {
+    printf 'Es gibt keinen weiteren Schritt zurück. Zu einer neueren Version: nox update\n' >&2
+    return 1
+  }
   say "Zurück zur vorherigen Version ($release)"
   systemctl stop nox 2>/dev/null || true
-  if [ -n "$file" ]; then restore_data "$file"; fi
+  if [ -n "$file" ]; then
+    restore_data "$file" || { systemctl start nox 2>/dev/null || true; return 1; }
+  fi
   switch_to "$release"
   install_service_files
   systemctl start nox
   phase=""
+  rm -f -- "$STATE/previous-release" "$STATE/previous-snapshot"
   if wait_healthy 90; then
     note "Die vorherige Version läuft wieder, mit den Daten von vor dem Update."
+    note "Was seit dem Update dazukam, liegt im beiseitegelegten Ordner (siehe oben)."
   else
     note "Auch die vorherige Version antwortet nicht. Protokoll: journalctl -u nox -n 50"
     return 1
@@ -154,6 +178,11 @@ verify_bundle() {
 
 [ "$(id -u)" -eq 0 ] || fail "bitte mit sudo starten: curl -fsSL <Adresse> | sudo bash  (oder: sudo bash install-linux.sh)"
 [ "$(uname -s)" = "Linux" ] || fail "dieses Skript ist für Linux. Unter Windows: scripts/setup.ps1."
+
+# One installer at a time: two runs (a timer and a manual `nox update`) would race on the release
+# folders, the snapshot and the link.
+exec 9>/run/nox-install.lock
+flock -n 9 || fail "ein anderer Installations- oder Update-Lauf ist gerade aktiv. Bitte warten und erneut versuchen."
 
 if [ "$ACTION" = "verify-bundle" ]; then
   trap - ERR
@@ -220,7 +249,8 @@ if [ -z "${NOX_REF:-}" ]; then
   if [ -n "${NOX_SOURCE:-}" ]; then
     NOX_REF="$("${GIT[@]}" -C "$NOX_SOURCE" rev-parse HEAD)"
   else
-    NOX_REF="$("${GIT[@]}" -C "$SRC" tag --list 'v*' --sort=-v:refname | head -n1)"
+    # Releases only: a tag like v0.7.0-rc1 sorts above v0.7.0 but is not "the newest version".
+    NOX_REF="$("${GIT[@]}" -C "$SRC" tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+[.][0-9]+[.][0-9]+$' | head -n1 || true)"
   fi
   [ -n "$NOX_REF" ] || fail "keine Nox-Version gefunden. Internetverbindung prüfen."
 fi
@@ -272,7 +302,10 @@ else
   if [ ! -x "$UV_INSTALL_DIR/uv" ] || [ "$("$UV_INSTALL_DIR/uv" --version | awk '{print $2}')" != "$UV_VERSION" ]; then
     "${CURL[@]}" "https://astral.sh/uv/$UV_VERSION/install.sh" | sh >/dev/null
   fi
-  (cd "$staging" && "$UV_INSTALL_DIR/uv" sync --quiet --frozen --no-build --python 3.13)
+  # Bytecode is compiled now: the service may not write into its own release folder, and without
+  # .pyc files a Pi would recompile every module on every start.
+  (cd "$staging" && UV_COMPILE_BYTECODE=1 "$UV_INSTALL_DIR/uv" sync --quiet --frozen --no-build --python 3.13)
+  "$UV_INSTALL_DIR/uv" cache prune --ci --quiet || true  # an SD card is small
 
   say "Oberflächen (Dashboard und Pet) installieren"
   asset="nox-ui-${NOX_REF//\//-}.tar.gz"
@@ -364,6 +397,12 @@ say "Nox läuft ($label)."
 if [ -n "$snapshot" ]; then
   note "Zurück zur vorherigen Version samt Daten: nox rollback"
 fi
+# Folders kept aside by an earlier restore hold a full copy of the data (secrets included) and stay
+# until the user removes them; an SD card fills up otherwise.
+for kept_aside in "$NOX_HOME_DIR".vor-wiederherstellung-*; do
+  [ -d "$kept_aside" ] || continue
+  note "Beiseitegelegt: $kept_aside ($(du -sh "$kept_aside" | cut -f1)) - wenn alles läuft: sudo rm -r $kept_aside"
+done
 if ! sudo -u "$SERVICE_USER" test -s "$NOX_HOME_DIR/.claude/.credentials.json"; then
   note "Noch keine KI angemeldet: Nox antwortet mit einfachen eingebauten Regeln, bis du \"nox claude-login\" ausführst."
 fi

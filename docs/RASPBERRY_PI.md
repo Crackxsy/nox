@@ -108,8 +108,14 @@ too and is readable by root only.
 | Only the data of one snapshot back | `nox restore <file name>` |
 
 Restoring never writes over the current data: they are moved aside to
-`/var/lib/nox.vor-wiederherstellung-<time>` first, and the command tells you so - delete that
-folder once everything works.
+`/var/lib/nox.vor-wiederherstellung-<time>` first - so whatever came after the update is still
+there - and the command tells you so. Delete that folder once everything works; `nox update` lists
+any that are left. `nox rollback` goes back exactly one step; after that there is no further step
+back, so it can never put the same old data back twice. Restore only snapshots from
+`/var/backups/nox` - they are the ones Nox made.
+
+`nox update` runs the installer of the version it installs (taken from that release, checked
+against its SHA-256), so a fix to the installer itself applies to the very update that brings it.
 
 **Time zone.** Reminders and the calendar follow the Pi's clock. Raspberry Pi OS Lite often starts
 in UTC; the installer warns about it. In Germany: `sudo timedatectl set-timezone Europe/Berlin`.

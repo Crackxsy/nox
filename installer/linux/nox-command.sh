@@ -21,6 +21,7 @@ NOX_HOME_DIR="/var/lib/nox"
 CURRENT="/opt/nox/current"
 PROGRAM="$CURRENT/.venv/bin/nox"
 BACKUP_DIR="/var/backups/nox"
+REPO_URL="https://github.com/Crackxsy/nox"
 
 as_service() {
   if [ "$(id -un)" = "$SERVICE_USER" ]; then
@@ -42,9 +43,37 @@ run_installer() {
   sudo env "$@" bash "$installer_copy"
 }
 
+#: For an update: the installer of the version being installed, so a fix in it applies to this
+#: update and not only to the next one. Taken from the release with its SHA-256; without network
+#: or for a version that is not a release, the running version's installer does the job.
+fetch_target_installer() {
+  local ref="$1" base dir
+  if [ -z "$ref" ]; then
+    base="$REPO_URL/releases/latest/download"
+  elif [[ "$ref" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
+    base="$REPO_URL/releases/download/$ref"
+  else
+    return 1
+  fi
+  dir="$(mktemp -d)"
+  if curl --proto '=https' --tlsv1.2 -fsSL -o "$dir/install-linux.sh" "$base/install-linux.sh" 2>/dev/null \
+    && curl --proto '=https' --tlsv1.2 -fsSL -o "$dir/install-linux.sh.sha256" "$base/install-linux.sh.sha256" 2>/dev/null \
+    && (cd "$dir" && sha256sum --quiet -c install-linux.sh.sha256); then
+    installer_copy="$dir/install-linux.sh"
+    return 0
+  fi
+  return 1
+}
+
 case "${1:-}" in
   update)
-    if [ -n "${2:-}" ]; then run_installer NOX_ACTION=install "NOX_REF=$2"; else run_installer NOX_ACTION=install; fi
+    version=(NOX_ACTION=install)
+    if [ -n "${2:-}" ]; then version+=("NOX_REF=$2"); fi
+    if fetch_target_installer "${2:-}"; then
+      sudo env "${version[@]}" bash "$installer_copy"
+    else
+      run_installer "${version[@]}"
+    fi
     exit $?
     ;;
   rollback)
@@ -53,8 +82,11 @@ case "${1:-}" in
     ;;
   restore)
     [ -n "${2:-}" ] || { echo "Welcher Schnappschuss? Liste: nox snapshots" >&2; exit 2; }
-    file="$2"
-    [ -f "$file" ] || file="$BACKUP_DIR/$2"
+    # A name is looked up among the snapshots; the folder is root-only, so no `test -f` from here.
+    case "$2" in
+      /*) file="$2" ;;
+      *) file="$BACKUP_DIR/$2" ;;
+    esac
     run_installer NOX_ACTION=restore "NOX_SNAPSHOT=$file"
     exit $?
     ;;

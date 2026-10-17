@@ -111,8 +111,15 @@ Schnappschuss enthält auch deine Zugangsdaten und ist nur für root lesbar.
 | Nur die Daten eines Schnappschusses zurück | `nox restore <dateiname>` |
 
 Beim Wiederherstellen wird nie über die aktuellen Daten geschrieben: Sie werden vorher nach
-`/var/lib/nox.vor-wiederherstellung-<zeit>` verschoben, und der Befehl sagt dir das – lösche den
-Ordner, sobald alles läuft.
+`/var/lib/nox.vor-wiederherstellung-<zeit>` verschoben – was nach dem Update dazukam, ist also noch
+da –, und der Befehl sagt dir das. Lösche den Ordner, sobald alles läuft; `nox update` zeigt an,
+welche noch liegen. `nox rollback` geht genau einen Schritt zurück; danach gibt es keinen weiteren,
+damit nie zweimal dieselben alten Daten zurückgespielt werden. Stelle nur Schnappschüsse aus
+`/var/backups/nox` wieder her – das sind die, die Nox angelegt hat.
+
+`nox update` benutzt den Installer der Version, die es installiert (aus genau diesem Release,
+gegen seine SHA-256-Prüfsumme geprüft), damit eine Korrektur am Installer schon bei dem Update
+greift, das sie mitbringt.
 
 **Zeitzone.** Erinnerungen und Kalender richten sich nach der Uhr des Pi. Raspberry Pi OS Lite
 startet oft in UTC; der Installer weist darauf hin. In Deutschland:
