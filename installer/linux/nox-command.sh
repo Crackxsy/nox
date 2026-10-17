@@ -71,7 +71,8 @@ fetch_target_installer() {
   fi
   [ -n "$commit" ] || return 1
   installer_copy="$(mktemp)"
-  sudo git -C "$SRC" show "$commit:scripts/install-linux.sh" > "$installer_copy" 2>/dev/null
+  # Root reads the checkout; the copy belongs to the caller (pipefail keeps git's exit status).
+  sudo git -C "$SRC" show "$commit:scripts/install-linux.sh" 2>/dev/null | tee "$installer_copy" >/dev/null
 }
 
 #: One line in `nox doctor` when a newer release exists. Asked only when the owner runs it; GitHub
