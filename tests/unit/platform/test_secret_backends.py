@@ -316,3 +316,23 @@ async def test_nox_doctor_names_the_secret_store(monkeypatch: pytest.MonkeyPatch
     assert _secrets_line(NoxConfig()).startswith("[FAIL] secrets:")
     monkeypatch.setattr(secrets_module, "resolve_secret_backend", lambda *a, **kw: "file")
     assert "owner-only file" in _secrets_line(NoxConfig())
+
+
+def test_a_missing_vault_in_the_nox_folder_is_created(tmp_path: Path) -> None:
+    from nox.memory.install import _ensure_vault
+
+    data = tmp_path / "Nox"
+    data.mkdir()
+    assert _ensure_vault(data / "vault", data) is True
+    assert (data / "vault").is_dir()
+
+
+def test_a_missing_vault_elsewhere_is_reported_not_invented(tmp_path: Path) -> None:
+    # A vault on a drive that is not plugged in must not be replaced by an empty folder.
+    from nox.memory.install import _ensure_vault
+
+    data = tmp_path / "Nox"
+    data.mkdir()
+    elsewhere = tmp_path / "unplugged-drive" / "vault"
+    assert _ensure_vault(elsewhere, data) is False
+    assert not elsewhere.exists()

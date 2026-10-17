@@ -39,6 +39,13 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   the Pi's architecture on every pull request.
 
 ### Fixed
+- **Memory did not start on a fresh server.** The vault folder did not exist yet, the vault watcher
+  failed on it, and with it the whole memory extension - Nox would have remembered nothing on a new
+  Pi. A missing vault inside Nox's own folder is now created; one elsewhere (a drive that is not
+  plugged in) is reported instead of invented, and memory about you works either way.
+- **Preset actions and self-extension refused every Linux program path** (`/usr/bin/...`): the
+  "absolute path" check only knew Windows paths.
+- **The supervisor left a zombie process on Linux** when the core exited after the kill switch.
 - **Workers and plugins outlived a crashed core on Linux and macOS**, where no job object exists.
   They now end with the process that spawned them.
 - **A server without a screen kept restarting the pet window.** The supervisor no longer starts the

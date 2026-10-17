@@ -12,6 +12,7 @@ failed instead of reporting the whole preset as broken.
 from __future__ import annotations
 
 import asyncio
+import sys
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,11 +21,11 @@ import pytest
 from nox.core.config.presets import PresetsConfig
 from nox.presets.engine import PresetRunner, match_phrase, normalise
 
+_AHK = "C:/Tools/ahk.exe" if sys.platform == "win32" else "/opt/tools/ahk"
+
 CONFIG = PresetsConfig.model_validate(
     {
-        "actions": [
-            {"id": "dpi_low", "name": "DPI 800", "command": ["C:/Tools/ahk.exe", "dpi.ahk"]}
-        ],
+        "actions": [{"id": "dpi_low", "name": "DPI 800", "command": [_AHK, "dpi.ahk"]}],
         "items": [
             {
                 "id": "gaming",

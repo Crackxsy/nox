@@ -71,10 +71,14 @@ async def test_a_hanging_program_is_stopped_at_its_deadline() -> None:
     assert result.duration_ms < 5_000
 
 
+#: An absolute path that exists nowhere, in the form of the system the tests run on.
+_NOWHERE = "C:/nowhere/at/all.exe" if sys.platform == "win32" else "/nowhere/at/all"
+
+
 @pytest.mark.asyncio
 async def test_a_missing_program_is_named_rather_than_crashing() -> None:
     missing = PresetActionConfig.model_validate(
-        {"id": "ghost", "name": "Ghost", "command": ["C:/nowhere/at/all.exe"]}
+        {"id": "ghost", "name": "Ghost", "command": [_NOWHERE]}
     )
 
     result = await run_action(missing)

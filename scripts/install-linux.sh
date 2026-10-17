@@ -208,6 +208,10 @@ if [ -d "$SRC/.git" ]; then
 else
   "${GIT[@]}" clone --quiet "$SOURCE" "$SRC"
 fi
+if [ -n "${NOX_SOURCE:-}" ]; then
+  # A local checkout may sit on a commit no branch points to (CI checks out a detached HEAD).
+  "${GIT[@]}" -C "$SRC" fetch --quiet origin HEAD
+fi
 
 if [ -z "${NOX_REF:-}" ]; then
   if [ -n "${NOX_SOURCE:-}" ]; then

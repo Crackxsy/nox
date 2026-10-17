@@ -8,6 +8,7 @@ short that ordinary speech would trip it.
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 import pytest
@@ -15,7 +16,8 @@ from pydantic import ValidationError
 
 from nox.core.config.presets import PresetActionConfig, PresetsConfig
 
-AHK = "C:/Tools/AutoHotkey.exe"
+#: An absolute program path on the system the tests run on.
+AHK = "C:/Tools/AutoHotkey.exe" if sys.platform == "win32" else "/opt/tools/autohotkey"
 
 
 def section(**overrides: Any) -> dict[str, Any]:
