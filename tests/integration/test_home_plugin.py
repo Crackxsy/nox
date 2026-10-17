@@ -291,9 +291,13 @@ async def test_real_home_assistant_connection() -> None:
     """
     from nox.home.probe import probe_home_assistant
     from nox.security.egress import EgressGuard
+    from nox.security.secret_names import SecretStoreError
     from nox.security.secrets import KeyringSecretStore
 
-    token = KeyringSecretStore().get("nox/home/access_token")
+    try:
+        token = KeyringSecretStore().get("nox/home/access_token")
+    except SecretStoreError:  # no keyring on this machine (a headless runner): no token either
+        token = None
     if not token:
         pytest.skip("nox/home/access_token is not set; run `nox secrets set nox/home/access_token`")
 

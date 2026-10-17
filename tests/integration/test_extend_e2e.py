@@ -24,6 +24,7 @@ from nox.app import PROFILES_DIR, NoxCore
 from nox.core.events import E, Event
 from nox.plugins.manager import PluginState
 from nox.security.model import Decision
+from tests._fake_cli import write_fake_cli
 from tests.integration.test_coding_plugin import (
     FAKE_CLAUDE_SCRIPT,
     _coding_plugin_dir,
@@ -63,13 +64,9 @@ def _writing_fake_claude(tmp_path: Path) -> Path:
     """The fake `claude` in its "writes" mode. The mode is set inside the wrapper: the plugin
     manager hands a plugin only an allow-list of environment variables, so one set on this test
     process never reaches the session."""
-    wrapper = tmp_path / "fake_claude_writes.cmd"
-    wrapper.write_text(
-        f"@echo off\r\nset FAKE_CLI_MODE=writes\r\n"
-        f'"{sys.executable}" "{FAKE_CLAUDE_SCRIPT}" %*\r\n',
-        encoding="utf-8",
+    return write_fake_cli(
+        tmp_path, "fake_claude_writes", FAKE_CLAUDE_SCRIPT, env={"FAKE_CLI_MODE": "writes"}
     )
-    return wrapper
 
 
 @pytest.fixture

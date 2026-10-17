@@ -179,9 +179,13 @@ async def test_real_obs_connection_and_scene_list() -> None:
     """Facts: OBS 32.2.1 with obs-websocket v5 on 127.0.0.1:4455, auth on. Skipped until the
     maintainer runs `nox secrets set nox/obs/websocket_password` - no fake data, no fabricated
     pass."""
+    from nox.security.secret_names import SecretStoreError
     from nox.security.secrets import KeyringSecretStore
 
-    password = KeyringSecretStore().get("nox/obs/websocket_password")
+    try:
+        password = KeyringSecretStore().get("nox/obs/websocket_password")
+    except SecretStoreError:  # no keyring on this machine (a headless runner): no password either
+        password = None
     if not password:
         pytest.skip("nox/obs/websocket_password is not set; run `nox secrets set ...` first")
 

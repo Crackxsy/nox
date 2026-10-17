@@ -129,16 +129,19 @@ rollback_to() {
 }
 
 #: Exit status 0 when the UI archive is exactly what a release builds: plain files and folders,
-#: only below ui/dashboard/dist and ui/pet/dist, no `..`, both folders present.
+#: only below ui/dashboard/dist and ui/pet/dist (plus their bare parent folders), no `..`, both
+#: folders present.
 verify_bundle() {
   local archive="$1" listing
   listing="$(mktemp -d)"
   tar -tvzf "$archive" > "$listing/long" || { rm -rf -- "$listing"; return 1; }
   tar -tzf "$archive" > "$listing/names" || { rm -rf -- "$listing"; return 1; }
-  # Lists go to files first: `tar | grep -q` under pipefail turns grep's early exit into a pass.
+  # Every list goes to a file before grep reads it: in `producer | grep -q` under pipefail, grep's
+  # early exit gives the producer SIGPIPE and turns a hit into a pass.
+  awk '{print substr($1,1,1)}' "$listing/long" > "$listing/types"
   local status=0
-  if awk '{print substr($1,1,1)}' "$listing/long" | grep -qv '^[-d]$'; then status=1; fi
-  if grep -qvE '^ui/(dashboard|pet)/dist(/|$)' "$listing/names"; then status=1; fi
+  if grep -qv '^[-d]$' "$listing/types"; then status=1; fi
+  if grep -qvE '^ui/$|^ui/(dashboard|pet)/$|^ui/(dashboard|pet)/dist(/|$)' "$listing/names"; then status=1; fi
   if grep -q '\.\.' "$listing/names"; then status=1; fi
   for app in dashboard pet; do
     grep -qE "^ui/$app/dist/" "$listing/names" || status=1

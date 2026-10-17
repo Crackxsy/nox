@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,9 @@ from nox.app import DEFAULTS_PATH, NoxCore
 from nox.core.config import load_config
 from nox.security.model import Decision, PermissionRequest
 from tests._ports import free_port_base
+
+#: Windows, programs and typing are Windows tools; the module registers nothing elsewhere.
+pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="desktop tools are Windows-only")
 
 
 def _config(tmp_path: Path) -> Any:
