@@ -26,7 +26,9 @@ curl -fsSL https://github.com/Crackxsy/nox/releases/latest/download/install-linu
 ```
 
 Prefer to read it first? `curl -fsSLO <same address>`, `less install-linux.sh`, then
-`sudo bash install-linux.sh`. Each release also carries `install-linux.sh.sha256`.
+`sudo bash install-linux.sh`. Each release also carries `install-linux.sh.sha256`. The checksum
+catches a damaged download; it sits next to the script, so it does not protect against a release
+that someone with write access to the project had altered.
 
 The script prints each step in German and ends with **"Nox läuft"** once the service answers. From
 then on it starts by itself after every reboot. It installs the newest release that runs on Linux
@@ -89,6 +91,7 @@ acts less reliably; to use it anyway, set `ai.providers.ollama.model: "qwen3:1.7
 | Health check | `nox doctor` |
 | Where are its files? | `nox where` |
 | Settings | `sudo nano /var/lib/nox/user.yaml`, then `sudo systemctl restart nox` |
+| Is there a new version? | `nox doctor` (last line) |
 | Update | `nox update` |
 
 **Updates can be undone.** Every version is a complete folder of its own under
@@ -111,11 +114,14 @@ Restoring never writes over the current data: they are moved aside to
 `/var/lib/nox.vor-wiederherstellung-<time>` first - so whatever came after the update is still
 there - and the command tells you so. Delete that folder once everything works; `nox update` lists
 any that are left. `nox rollback` goes back exactly one step; after that there is no further step
-back, so it can never put the same old data back twice. Restore only snapshots from
-`/var/backups/nox` - they are the ones Nox made.
+back, so it can never put the same old data back twice. For the same reason there is no
+`nox rollback` after a `nox restore`. `nox restore` accepts only snapshots Nox itself made in
+`/var/backups/nox` and refuses any other file.
 
-`nox update` runs the installer of the version it installs (taken from that release, checked
-against its SHA-256), so a fix to the installer itself applies to the very update that brings it.
+`nox update` runs the installer of the version it installs - taken from that version's git tree,
+the very code about to be installed - so a fix to the installer itself applies to the very update
+that brings it. An installation from a branch (`nox update develop`) stays on that branch with a
+plain `nox update` instead of falling back to the older last release.
 
 **Time zone.** Reminders and the calendar follow the Pi's clock. Raspberry Pi OS Lite often starts
 in UTC; the installer warns about it. In Germany: `sudo timedatectl set-timezone Europe/Berlin`.

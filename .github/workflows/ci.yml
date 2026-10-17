@@ -168,6 +168,18 @@ jobs:
           test "$(basename "$(readlink /opt/nox/current)")" = "$FIRST"
           sudo test -e /var/lib/nox/written-after-rollback
 
+      - name: nox restore takes only snapshots Nox made
+        run: |
+          snap="$(sudo find /var/backups/nox -name 'nox-*.tar.gz' -printf '%f\n' | head -n1)"
+          sudo cp "/var/backups/nox/$snap" /tmp/copy.tar.gz
+          if nox restore /tmp/copy.tar.gz; then echo "restored from outside the backup folder"; exit 1; fi
+          if nox restore ../../../tmp/copy.tar.gz; then echo "followed .. out of the backup folder"; exit 1; fi
+          sudo -u nox touch /var/lib/nox/written-before-restore
+          nox restore "$snap"
+          ! sudo test -e /var/lib/nox/written-before-restore
+          curl -fsS http://127.0.0.1:47801/health
+          nox doctor || true
+
       - name: A broken version rolls itself back
         run: |
           before="$(basename "$(readlink /opt/nox/current)")"

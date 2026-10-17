@@ -136,7 +136,12 @@ rollback_to() {
   say "Zurück zur vorherigen Version ($release)"
   systemctl stop nox 2>/dev/null || true
   if [ -n "$file" ]; then
-    restore_data "$file" || { systemctl start nox 2>/dev/null || true; return 1; }
+    if ! restore_data "$file"; then
+      systemctl start nox 2>/dev/null || true
+      printf 'Zurückschalten abgebrochen: Daten unverändert, es läuft weiter Version %s. Protokoll: journalctl -u nox -n 50\n' \
+        "$(basename "$(readlink "$CURRENT")")" >&2
+      return 1
+    fi
   fi
   switch_to "$release"
   install_service_files
@@ -179,8 +184,8 @@ verify_bundle() {
 [ "$(id -u)" -eq 0 ] || fail "bitte mit sudo starten: curl -fsSL <Adresse> | sudo bash  (oder: sudo bash install-linux.sh)"
 [ "$(uname -s)" = "Linux" ] || fail "dieses Skript ist für Linux. Unter Windows: scripts/setup.ps1."
 
-# One installer at a time: two runs (a timer and a manual `nox update`) would race on the release
-# folders, the snapshot and the link.
+# One installer at a time: two runs (two `nox update`s from two terminals, say) would race on the
+# release folders, the snapshot and the link.
 exec 9>/run/nox-install.lock
 flock -n 9 || fail "ein anderer Installations- oder Update-Lauf ist gerade aktiv. Bitte warten und erneut versuchen."
 
@@ -194,17 +199,28 @@ if [ "$ACTION" = "rollback" ]; then
   previous_release="$(cat "$STATE/previous-release" 2>/dev/null || true)"
   snapshot="$(cat "$STATE/previous-snapshot" 2>/dev/null || true)"
   rollback_to "$previous_release" "$snapshot" || exit 1
-  # The release that was left becomes the one to return to.
   exit 0
 fi
 
 if [ "$ACTION" = "restore" ]; then
-  file="${NOX_SNAPSHOT:?welcher Schnappschuss? nox restore <datei>  (Liste: sudo ls /var/backups/nox)}"
+  requested="${NOX_SNAPSHOT:?welcher Schnappschuss? nox restore <datei>  (Liste: nox snapshots)}"
+  # Root unpacks it into the service's home, so only what Nox itself made counts: a root-owned
+  # snapshot directly in the backup folder. `realpath` resolves `..` and links before the check.
+  file="$(realpath -e -- "$requested" 2>/dev/null || true)"
+  [ -n "$file" ] && [ -f "$file" ] || fail "Schnappschuss $requested gibt es nicht. Liste: nox snapshots"
+  [[ "$file" == "$BACKUP_DIR"/nox-*.tar.gz && "$(dirname "$file")" == "$BACKUP_DIR" ]] \
+    || fail "nur Schnappschüsse aus $BACKUP_DIR lassen sich wiederherstellen (Liste: nox snapshots)."
+  [ "$(stat -c %u "$file")" = 0 ] || fail "$file gehört nicht root - so legt Nox keine Schnappschüsse an."
   systemctl stop nox 2>/dev/null || true
   phase="stopped"
   restore_data "$file"
   systemctl start nox
   phase=""
+  # A later `nox rollback` would put the pre-update snapshot over the data just restored.
+  if [ -e "$STATE/previous-release" ]; then
+    rm -f -- "$STATE/previous-release" "$STATE/previous-snapshot"
+    note "Ein \`nox rollback\` gibt es danach nicht mehr: es würde diese Daten wieder überschreiben."
+  fi
   wait_healthy 90 && say "Nox läuft wieder, mit den Daten aus $file." || fail "Nox antwortet nach dem Wiederherstellen nicht. Protokoll: journalctl -u nox -n 50"
   exit 0
 fi

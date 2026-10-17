@@ -26,7 +26,9 @@ curl -fsSL https://github.com/Crackxsy/nox/releases/latest/download/install-linu
 ```
 
 Lieber erst lesen? `curl -fsSLO <dieselbe Adresse>`, dann `less install-linux.sh` und
-`sudo bash install-linux.sh`. Jedes Release enthält dazu `install-linux.sh.sha256`.
+`sudo bash install-linux.sh`. Jedes Release enthält dazu `install-linux.sh.sha256`. Die Prüfsumme
+erkennt einen beschädigten Download; sie liegt aber neben dem Skript und schützt deshalb nicht vor
+einem Release, das jemand mit Schreibrechten am Projekt verändert hätte.
 
 Das Skript zeigt jeden Schritt an und endet mit **„Nox läuft“**, sobald der Dienst antwortet. Ab
 dann startet Nox nach jedem Neustart von selbst. Installiert wird die neueste Version, die unter
@@ -92,6 +94,7 @@ in `user.yaml`. `nox doctor` sagt, ob das gewünschte Modell da ist.
 | Gesundheitsbericht | `nox doctor` |
 | Wo liegen seine Dateien? | `nox where` |
 | Einstellungen | `sudo nano /var/lib/nox/user.yaml`, danach `sudo systemctl restart nox` |
+| Gibt es eine neue Version? | `nox doctor` (letzte Zeile) |
 | Update | `nox update` |
 
 **Updates lassen sich zurücknehmen.** Jede Version ist ein vollständiger eigener Ordner unter
@@ -114,12 +117,14 @@ Beim Wiederherstellen wird nie über die aktuellen Daten geschrieben: Sie werden
 `/var/lib/nox.vor-wiederherstellung-<zeit>` verschoben – was nach dem Update dazukam, ist also noch
 da –, und der Befehl sagt dir das. Lösche den Ordner, sobald alles läuft; `nox update` zeigt an,
 welche noch liegen. `nox rollback` geht genau einen Schritt zurück; danach gibt es keinen weiteren,
-damit nie zweimal dieselben alten Daten zurückgespielt werden. Stelle nur Schnappschüsse aus
-`/var/backups/nox` wieder her – das sind die, die Nox angelegt hat.
+damit nie zweimal dieselben alten Daten zurückgespielt werden. Aus demselben Grund gibt es nach
+einem `nox restore` kein `nox rollback` mehr. `nox restore` nimmt nur Schnappschüsse an, die Nox
+selbst in `/var/backups/nox` angelegt hat, und lehnt jede andere Datei ab.
 
-`nox update` benutzt den Installer der Version, die es installiert (aus genau diesem Release,
-gegen seine SHA-256-Prüfsumme geprüft), damit eine Korrektur am Installer schon bei dem Update
-greift, das sie mitbringt.
+`nox update` benutzt den Installer der Version, die es installiert – aus deren Git-Stand, also aus
+genau dem Code, der gleich installiert wird –, damit eine Korrektur am Installer schon bei dem
+Update greift, das sie mitbringt. Wer von einem Branch installiert hat (`nox update develop`),
+bleibt mit `nox update` auf diesem Branch, statt auf das ältere letzte Release zurückzufallen.
 
 **Zeitzone.** Erinnerungen und Kalender richten sich nach der Uhr des Pi. Raspberry Pi OS Lite
 startet oft in UTC; der Installer weist darauf hin. In Deutschland:

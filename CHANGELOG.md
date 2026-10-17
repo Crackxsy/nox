@@ -19,11 +19,13 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   starts - and if the new version does not answer, it switches back and restores the data by
   itself. `nox rollback` does the same on request - exactly one step, so the same old data can
   never be put back twice - and `nox snapshots` / `nox restore` put data back without ever writing
-  over the current folder (a corrupt snapshot is refused before anything moves). `nox update` runs
-  the installer of the version it installs, checked against its SHA-256; only real releases count
-  as "newest", one installer runs at a time, and bytecode is compiled at install time so a Pi does
-  not recompile on every start. A short `nox` command acts on the service's data
-  (`nox doctor`, `nox onboard`, `nox update`, `nox claude-login`). The installer is attached to
+  over the current folder (a corrupt snapshot is refused before anything moves; only snapshots Nox
+  made itself are accepted). `nox update` runs the installer of the version it installs, taken from
+  that version's git tree; an installation from a branch stays on it; only real releases count as
+  "newest", one installer runs at a time, and bytecode is compiled at install time so a Pi does
+  not recompile on every start. `nox doctor` ends with one line on whether a newer release exists.
+  A short `nox` command acts on the service's data (`nox doctor`, `nox onboard`, `nox update`,
+  `nox claude-login`). The installer is attached to
   every release with its SHA-256, and CI runs it for real on x86-64 and ARM64: install, update,
   rollback, a deliberately broken version that must roll itself back, and UI bundles with a
   symlink, a `..` path or an extra file that must be refused. Guide in English and German
