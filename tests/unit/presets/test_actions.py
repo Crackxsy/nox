@@ -85,7 +85,7 @@ async def test_a_missing_program_is_named_rather_than_crashing() -> None:
 
     assert not result.ok
     assert result.exit_code is None
-    assert "C:/nowhere/at/all.exe" in result.error
+    assert _NOWHERE in result.error
 
 
 @pytest.mark.asyncio

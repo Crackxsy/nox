@@ -30,13 +30,16 @@ as_service() {
     bash -c 'cd "$HOME" && exec "$@"' nox "$@"
 }
 
+#: The copy of the installer, removed on exit. Global on purpose: the EXIT trap runs after
+#: `run_installer` has returned, when a local variable would no longer exist (and `set -u` fails).
+installer_copy=""
+trap 'if [ -n "$installer_copy" ]; then rm -f -- "$installer_copy"; fi' EXIT
+
 #: The installer of the running version, run from a copy: an update replaces what it reads from.
 run_installer() {
-  local installer
-  installer="$(mktemp)"
-  trap 'rm -f -- "$installer"' EXIT
-  cp "$CURRENT/scripts/install-linux.sh" "$installer"
-  sudo env "$@" bash "$installer"
+  installer_copy="$(mktemp)"
+  cp "$CURRENT/scripts/install-linux.sh" "$installer_copy"
+  sudo env "$@" bash "$installer_copy"
 }
 
 case "${1:-}" in
