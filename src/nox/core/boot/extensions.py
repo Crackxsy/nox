@@ -46,6 +46,8 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "plans",
     "settings",
     "remote",
+    # Network access for paired devices; inert unless `ipc.lan.enabled`.
+    "lan",
     # Last on purpose: it describes the others, and reads the registry they filled.
     "capabilities",
 )

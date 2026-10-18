@@ -43,6 +43,12 @@ dependencies = [
     # BSD-3-Clause/Apache-2.0 - chosen over recurring-ical-events, which is LGPL.
     "icalendar>=6.0",
     "python-dateutil>=2.9",
+    # Network access (`nox.lan`): the per-install certificate authority and the server
+    # certificate the home network sees. Apache-2.0 OR BSD-3-Clause.
+    "cryptography>=44.0",
+    # The pairing QR code, as SVG for the dashboard and as text for `nox pair`. Pure Python,
+    # BSD-3-Clause.
+    "segno>=1.6",
 ]
 
 [project.optional-dependencies]

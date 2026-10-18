@@ -12,6 +12,7 @@ from typing import Any
 from nox.clips.tools import ClipExportInput, ClipListInput, ClipTagInput, ClipTrimInput
 from nox.ipc.dispatch import RequestContext, RequestRegistry
 from nox.ipc.errors import ERR_INTERNAL, ERR_PERMISSION, IpcError
+from nox.ipc.roles import LOCAL_UI_ROLES, UI_ROLES
 from nox.tools.executor import ERR_PERMISSION_DENIED, ToolExecutor
 
 ModeProvider = Callable[[], str]
@@ -57,8 +58,10 @@ def register_clip_ipc(
             _raise_for(result)
         return result.data or {}
 
-    ui = ("shell", "dashboard")
+    ui = UI_ROLES
     registry.register("clip.list", ClipListInput, h_list, roles=ui)
-    registry.register("clip.tag", ClipTagInput, h_tag, roles=ui)
-    registry.register("clip.export", ClipExportInput, h_export, roles=ui)
-    registry.register("clip.trim", ClipTrimInput, h_trim, roles=ui)
+    # Editing and exporting write files on this machine: administration (`nox.ipc.roles`).
+    local = LOCAL_UI_ROLES
+    registry.register("clip.tag", ClipTagInput, h_tag, roles=local)
+    registry.register("clip.export", ClipExportInput, h_export, roles=local)
+    registry.register("clip.trim", ClipTrimInput, h_trim, roles=local)

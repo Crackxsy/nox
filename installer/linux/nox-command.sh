@@ -15,6 +15,7 @@
 #   nox snapshots          list the snapshots taken before updates
 #   nox restore <file>     put the data of one snapshot back (the program stays as it is)
 #   nox claude-login       install Claude Code for the service user and start its login
+#   nox pair               pair a phone, tablet or PC (as everywhere; QR code and link)
 #   nox onboard            as everywhere, then restart the service so the answers take effect
 set -euo pipefail
 

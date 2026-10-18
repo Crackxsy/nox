@@ -388,6 +388,11 @@ if [ ! -e "$NOX_HOME_DIR/user.yaml" ]; then
 # Desktop plugins (Twitch, OBS) belong on the PC you stream from.
 plugins:
   enabled: []
+# Paired phones, tablets and PCs in the home network open the dashboard here (pair one with
+# `nox pair`). A server nobody can reach is of no use, so this is on.
+ipc:
+  lan:
+    enabled: true
 YAML
   # Written into a root-owned temp folder and installed with its final owner and mode, so root
   # never writes through a path inside the service user's folder.
@@ -456,6 +461,12 @@ for kept_aside in "$NOX_HOME_DIR".vor-wiederherstellung-*; do
   [ -d "$kept_aside" ] || continue
   note "Beiseitegelegt: $kept_aside ($(du -sh "$kept_aside" | cut -f1)) - wenn alles läuft: sudo rm -r $kept_aside"
 done
+if ! grep -qE '^[[:space:]]+enabled:[[:space:]]+true' <(sed -n '/^ipc:/,/^[^[:space:]#]/p' "$NOX_HOME_DIR/user.yaml" 2>/dev/null); then
+  note "Andere Geräte im Heimnetz erreichen Nox noch nicht. Einschalten: in $NOX_HOME_DIR/user.yaml"
+  note "  ipc: / lan: / enabled: true eintragen, dann sudo systemctl restart nox"
+elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+  note "Die Firewall (ufw) ist aktiv. Damit Handy und Tablet Nox erreichen: sudo ufw allow 47843/tcp"
+fi
 if ! sudo -u "$SERVICE_USER" test -s "$NOX_HOME_DIR/.claude/.credentials.json"; then
   note "Noch keine KI angemeldet: Nox antwortet mit einfachen eingebauten Regeln, bis du \"nox claude-login\" ausführst."
 fi
@@ -470,7 +481,8 @@ cat <<INFO
   Nächste Schritte:
     1. KI anmelden (empfohlen):   nox claude-login
     2. Name, PIN, Zugänge:        nox onboard
-    3. Prüfen:                    nox doctor
+    3. Handy oder Tablet koppeln: nox pair
+    4. Prüfen:                    nox doctor
   Anleitung: $guide
 
   Im Alltag:

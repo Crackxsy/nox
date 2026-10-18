@@ -17,13 +17,13 @@ from nox.core.logging import get_logger
 from nox.day.calendar import CalendarService
 from nox.day.reminders import MAX_AHEAD, MAX_TEXT_CHARS, ReminderRepository, ReminderRow
 from nox.ipc.dispatch import EmptyPayload, RequestContext, RequestRegistry
+from nox.ipc.roles import UI_ROLES
 
 log = get_logger(__name__)
 
 __all__ = ["register_day_ipc"]
 
 #: The two user-facing clients, never a plugin, a worker or a phone.
-UI_ROLES = ("shell", "dashboard")
 
 #: Open reminders after today that the page lists under "später".
 _LATER_LIMIT = 5

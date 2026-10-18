@@ -24,6 +24,7 @@ __all__ = [
     "HealthConfig",
     "IdentityConfig",
     "IpcConfig",
+    "LanConfig",
     "LocaleConfig",
     "LoggingConfig",
     "PathsConfig",
@@ -110,12 +111,32 @@ class PathsConfig(StrictSection):
 # ---- ipc ----------------------------------------------------------------------------------------
 
 
+class LanConfig(StrictSection):
+    """Network access (`nox.lan`): the dashboard for paired devices in the home network.
+
+    Off unless asked for. When on, a second listener serves the dashboard over HTTPS (a
+    per-install certificate authority, see `nox.lan.tls`) to devices paired with a one-time code;
+    the loopback listeners above stay exactly as they are.
+    """
+
+    enabled: bool = False
+    #: All local addresses by default, so phones and laptops in the home network reach it.
+    host: str = "0.0.0.0"  # noqa: S104 - binding the home network is this listener's purpose
+    #: 0 lets the operating system pick a free port (tests); the one in use is in `lan.status`.
+    port: int = Field(default=47843, ge=0, le=65535)
+    max_devices: int = Field(default=20, ge=1, le=100)
+    pair_code_ttl_s: float = Field(default=300.0, ge=60.0, le=3600.0)
+    #: Pairing attempts per source address and minute; a wrong code costs one.
+    pair_attempts_per_minute: int = Field(default=5, ge=1, le=60)
+
+
 class IpcConfig(StrictSection):
     host: str = "127.0.0.1"
     port: int = Field(default=47800, ge=1024, le=65535)
     http_port: int = Field(default=47801, ge=1024, le=65535)
     schema_version: int = Field(default=1, ge=1)
     auth: Literal["token"] = "token"
+    lan: LanConfig = Field(default_factory=LanConfig)
 
 
 # ---- health, logging, supervisor, plugins -------------------------------------------------------

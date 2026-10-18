@@ -149,6 +149,27 @@ jobs:
             sudo journalctl -u nox --no-pager | grep "extension.failed"; exit 1
           fi
 
+      - name: Paired devices reach it over HTTPS, nothing else does
+        run: |
+          # The installer turns network access on for a server; the listener is up within seconds.
+          for _ in $(seq 1 30); do
+            sudo curl -fsS --cacert /var/lib/nox/data/tls/ca.crt -o /dev/null \
+              https://127.0.0.1:47843/nox-ca.crt && break
+            sleep 1
+          done
+          sudo curl -fsS --cacert /var/lib/nox/data/tls/ca.crt -o /dev/null https://127.0.0.1:47843/nox-ca.crt
+          # A foreign Host header (DNS rebinding) is turned away before any route runs.
+          code="$(sudo curl -s -o /dev/null -w '%{http_code}' --cacert /var/lib/nox/data/tls/ca.crt \
+            -H 'Host: evil.example' https://127.0.0.1:47843/dashboard/)"
+          test "$code" = 421
+          # The session-token surface does not exist on the network listener.
+          code="$(sudo curl -s -o /dev/null -w '%{http_code}' --cacert /var/lib/nox/data/tls/ca.crt \
+            https://127.0.0.1:47843/api/state)"
+          test "$code" = 404
+          # Pairing from the terminal, the way a server without a screen pairs its first device.
+          nox pair --name ci | tee pair.txt
+          grep -q '#pair=' pair.txt
+
       - name: Same version again changes nothing
         run: |
           sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh

@@ -32,7 +32,9 @@ class Kind(StrEnum):
     STREAM = "stream"  # partial results for a request (TTS chunks, AI tokens); corr = request
 
 
-Role = Literal["core", "shell", "worker", "plugin", "pet", "dashboard", "supervisor", "remote"]
+Role = Literal[
+    "core", "shell", "worker", "plugin", "pet", "dashboard", "supervisor", "remote", "device"
+]
 
 
 class Source(BaseModel):

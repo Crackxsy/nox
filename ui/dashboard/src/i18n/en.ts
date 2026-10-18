@@ -33,6 +33,7 @@ export const en: Record<Key, string> = {
   setting_memory_full_scan_on_boot: 'Index all notes on start',
   setting_plugins_enabled: 'Enabled plugins',
   setting_remote_enabled: 'Remote access (Telegram) enabled',
+  setting_ipc_lan_enabled: 'Other devices in the home network may open Nox',
   setting_stream_twitch_channel: 'Twitch channel',
   setting_stream_twitch_bot_names: 'Names the bot answers to',
   setting_stream_twitch_relevance_cooldown_s: 'Cooldown per viewer (seconds)',

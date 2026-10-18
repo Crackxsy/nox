@@ -42,6 +42,7 @@ class PairingService:
         ttl_s: float = 300.0,
         max_devices: int = 3,
         channel: str = "telegram",
+        role: str = "remote",
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._repo = repo
@@ -50,6 +51,7 @@ class PairingService:
         self._ttl_s = ttl_s
         self._max_devices = max_devices
         self._channel = channel
+        self._role = role
         self._clock = clock or (lambda: datetime.now(UTC))
 
     # -- local side (dashboard/shell over IPC) -------------------------------------------------
@@ -79,7 +81,8 @@ class PairingService:
 
     async def revoke(self, device_id: str, *, reason: str = "dashboard") -> bool:
         device = self._repo.get_device(device_id)
-        if device is None or device.revoked:
+        # One service per channel shares the table: it never revokes another channel's device.
+        if device is None or device.revoked or device.channel != self._channel:
             return False
         ok = self._repo.revoke_device(device_id, reason=reason, when=self._clock())
         if ok:
@@ -89,13 +92,15 @@ class PairingService:
         return ok
 
     def devices(self) -> list[DeviceRow]:
-        return self._repo.list_devices()
+        """This channel's devices, revoked ones included (the dashboard shows the history)."""
+        return [d for d in self._repo.list_devices() if d.channel == self._channel]
 
     # -- phone side ----------------------------------------------------------------------------
 
-    async def redeem(self, code: str, *, sender_id: str) -> PairingResult:
+    async def redeem(self, code: str, *, sender_id: str, name: str = "") -> PairingResult:
         """Redeem a one-time code for `sender_id`. Every rejection path is audited and creates no
-        device row."""
+        device row. `name`, when given, is what the new device calls itself; otherwise the name
+        chosen when the code was made is used."""
         now = self._clock()
         existing = self._repo.find_device_for_sender(self._channel, sender_id)
         if existing is not None:
@@ -108,13 +113,16 @@ class PairingService:
             return self._reject("used")
         if datetime.fromisoformat(str(row["expires_at"])) <= now:
             return self._reject("expired")
-        active = [d for d in self._repo.list_devices(include_revoked=False)]
+        active = [
+            d for d in self._repo.list_devices(include_revoked=False) if d.channel == self._channel
+        ]
         if len(active) >= self._max_devices:
             return self._reject("max_devices")
 
         device = self._repo.create_device(
-            name=str(row["device_name"]) or "phone",
+            name=name.strip()[:64] or str(row["device_name"]) or "phone",
             channel=self._channel,
+            role=self._role,
             sender_id=sender_id,
             pairing_code_hash=str(row["code_hash"]),
             paired_at=now,

@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from nox.core.events import Event
 from nox.ipc.dispatch import EmptyPayload
+from nox.ipc.roles import UI_ROLES
 from nox.proactive.dashboard import (
     HealthHistoryRequest,
     make_config_effective_handler,
@@ -113,13 +114,13 @@ def _register_requests(core: _Core) -> None:
         "health.history",
         HealthHistoryRequest,
         make_health_history_handler(core.db),
-        roles=("shell", "dashboard"),
+        roles=UI_ROLES,
     )
     reg(
         "config.effective",
         EmptyPayload,
         make_config_effective_handler(core.config),
-        roles=("shell", "dashboard"),
+        roles=UI_ROLES,
     )
 
 

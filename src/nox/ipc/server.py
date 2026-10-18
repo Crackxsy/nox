@@ -63,13 +63,21 @@ from nox.ipc.protocol import (
     Kind,
     Source,
 )
-from nox.ipc.tokens import TokenStore
+from nox.ipc.tokens import TokenStore, constant_time_equals, generate_token
 
 log = get_logger(__name__)
 
 RUNTIME_INFO_FILE = "ipc.json"
 WS_PATH = "/ws"
 DEFAULT_SUBSCRIPTIONS: tuple[str, ...] = ("system.*",)
+
+#: The network listener (`nox.lan.app`) bridges a paired device's WebSocket in to this loopback hub
+#: and marks the connection with this header, carrying a secret that exists only inside this
+#: process for this start. A marked connection may only authenticate as a paired device, and a
+#: paired device may only come in marked (`TokenStore.authenticate`). The peer header carries the
+#: device's own address for the logs; it is believed only next to a valid secret.
+LAN_BRIDGE_HEADER = "X-Nox-Lan-Bridge"
+LAN_PEER_HEADER = "X-Nox-Lan-Peer"
 
 CLOSE_POLICY_VIOLATION = 1008
 CLOSE_GOING_AWAY = 1001
@@ -90,7 +98,7 @@ REDACTED_FROM: tuple[tuple[str, frozenset[str]], ...] = (
 )
 # (pattern, the only roles that may receive it)
 RESTRICTED_TO: tuple[tuple[str, frozenset[str]], ...] = (
-    ("security.audit", frozenset({"dashboard", "shell"})),
+    ("security.audit", frozenset({"dashboard", "shell", "device"})),
 )
 
 
@@ -299,6 +307,11 @@ class ClientSession:
     events: asyncio.Queue[Envelope] = field(default_factory=asyncio.Queue)
     event_pump: asyncio.Task[None] | None = None
     closing: bool = False
+    #: Bridged in by the network listener; then `peer` is the device's own address.
+    via_lan: bool = False
+    peer: str = ""
+    #: The paired device behind a `device` session.
+    device_id: str = ""
 
     @property
     def client_id(self) -> str:
@@ -349,6 +362,9 @@ class IpcHub:
         #: Hub-owned background tasks. A task nobody holds a reference to can be garbage-collected
         #: mid-flight, and its exception is then never retrieved.
         self._tasks: set[asyncio.Task[None]] = set()
+        self._lan_secret = generate_token()
+        #: Connections the network listener bridged in, by `id(conn)` -> the device's address.
+        self._lan_peers: dict[int, str] = {}
 
     # -- lifecycle ------------------------------------------------------------------------------
 
@@ -365,6 +381,11 @@ class IpcHub:
     @property
     def url(self) -> str:
         return f"ws://{self._settings.host}:{self.port}{WS_PATH}"
+
+    @property
+    def lan_bridge_secret(self) -> str:
+        """For the in-process network listener only; never written anywhere."""
+        return self._lan_secret
 
     @property
     def runtime_dir(self) -> Path:
@@ -508,6 +529,13 @@ class IpcHub:
         if c is not None:
             await self._close_client(c, CLOSE_POLICY_VIOLATION, reason)
 
+    async def disconnect_device(self, device_id: str, reason: str = "device removed") -> int:
+        """Close every session of a paired device (all its tabs) at once; returns how many."""
+        sessions = [c for c in self._clients.values() if c.device_id == device_id and not c.closing]
+        for c in sessions:
+            await self._close_client(c, CLOSE_POLICY_VIOLATION, reason)
+        return len(sessions)
+
     # -- connection handling ---------------------------------------------------------------------
 
     def _find(self, client_id: str) -> ClientSession | None:
@@ -520,16 +548,32 @@ class IpcHub:
         path = request.path.split("?", 1)[0]
         if path != WS_PATH:
             return conn.respond(HTTPStatus.NOT_FOUND, "not found\n")
+        marker = request.headers.get(LAN_BRIDGE_HEADER)
+        if marker is not None:
+            if not constant_time_equals(marker, self._lan_secret):
+                log.warning("ipc_lan_marker_invalid", peer=_peer(conn))
+                return conn.respond(HTTPStatus.FORBIDDEN, "forbidden\n")
+            self._lan_peers[id(conn)] = request.headers.get(LAN_PEER_HEADER, "")[:64]
         return None
 
     async def _serve_connection(self, conn: ServerConnection) -> None:
-        client = await self._handshake(conn)
+        try:
+            client = await self._handshake(conn)
+        finally:
+            lan_peer = self._lan_peers.pop(id(conn), None)
         if client is None:
             return
+        if lan_peer is not None:
+            client.peer = lan_peer
         self._clients[client.session_id] = client
         writer = asyncio.create_task(self._writer(client))
         client.event_pump = asyncio.create_task(self._event_pump(client))
-        log.info("ipc_client_connected", client=client.client_id, role=client.role)
+        log.info(
+            "ipc_client_connected",
+            client=client.client_id,
+            role=client.role,
+            **({"via_lan": True, "peer": client.peer} if client.via_lan else {}),
+        )
         await self._publish(
             E.IPC_CLIENT_CONNECTED, {"client_id": client.client_id, "role": client.role}
         )
@@ -603,9 +647,17 @@ class IpcHub:
                     conn, env.id, f"client version {auth.client_version} not compatible"
                 )
                 return None
-        decision = self._tokens.authenticate(auth.token, auth.role, auth.id)
+        via_lan = id(conn) in self._lan_peers
+        decision = self._tokens.authenticate(auth.token, auth.role, auth.id, via_lan=via_lan)
         if not decision.ok:
-            log.warning("ipc_auth_denied", role=auth.role, client=auth.id, reason=decision.reason)
+            log.warning(
+                "ipc_auth_denied",
+                role=auth.role,
+                client=auth.id,
+                reason=decision.reason,
+                via_lan=via_lan,
+                peer=self._lan_peers.get(id(conn)) or _peer(conn),
+            )
             await self._deny(conn, env.id, decision.reason)
             return None
         session_id = str(uuid.uuid4())
@@ -616,6 +668,8 @@ class IpcHub:
             bucket=TokenBucket(s.rate_per_s, s.rate_burst, self._clock),
             queue=asyncio.Queue(maxsize=s.send_queue_size),
             events=asyncio.Queue(maxsize=s.event_queue_size),
+            via_lan=via_lan,
+            device_id=decision.device_id,
         )
         response = AuthResponse(ok=True, session_id=session_id, core_version=s.core_version)
         await conn.send(

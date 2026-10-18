@@ -12,7 +12,7 @@ What this wires:
   * chat through the existing orchestrator with `speak=False`: same router, same prompt builder,
     same personality as the desktop, only without a voice,
   * `RemoteNotifier` on the configured event allow-list,
-  * three requests for the dashboard's "Remote" page, for the `shell` and `dashboard` roles only:
+  * three requests for the dashboard's "Remote" page, for the local UI roles only (`nox.ipc.roles`):
     `remote.pair.start`, `remote.devices.list`, `remote.unpair`. The `remote` role is never
     granted any of them - a phone cannot pair a second phone or revoke another device.
 """
@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from nox.core.logging import get_logger
 from nox.ipc.dispatch import RequestContext
 from nox.ipc.errors import ERR_NOT_FOUND, ERR_UNAVAILABLE, IpcError
+from nox.ipc.roles import LOCAL_UI_ROLES
 from nox.memory.capture import turn_origin
 from nox.remote.models import DeviceRow
 from nox.remote.notify import RemoteNotifier
@@ -41,8 +42,9 @@ log = get_logger(__name__)
 #: `plugins/telegram/manifest.yaml`, registered in the shared `ToolRegistry` when the plugin starts.
 SEND_TOOL = "telegram.send"
 
-#: UI roles allowed to pair and revoke. `remote` is absent on purpose (see the module docstring).
-LOCAL_ROLES = ("shell", "dashboard")
+#: UI roles allowed to pair and revoke: the shell and the dashboard on this machine. `remote` and a
+#: paired network device are absent on purpose (see the module docstring and `nox.ipc.roles`).
+LOCAL_ROLES = LOCAL_UI_ROLES
 
 
 class PairStart(BaseModel):
@@ -154,7 +156,7 @@ def install(core: Any) -> RemoteRuntime:
         events=cfg.notifications.events,
         quiet_hours=core.config.attention.quiet_hours,
         active_zone=lambda: core.security.privacy.active_zone,
-        has_device=lambda: any(not d.revoked for d in repo.list_devices()),
+        has_device=lambda: any(not d.revoked for d in pairing.devices()),
         enabled=cfg.notifications.enabled,
     )
 

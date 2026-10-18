@@ -8,6 +8,10 @@
 - Worker and plugin tokens are issued per spawn, delivered through the environment
   (`NOX_WORKER_TOKEN`, never on a command line), expire after a short lifetime and are consumed by
   the first authentication attempt, successful or not.
+- Paired devices (`device`, see `nox.lan`) authenticate with their own long-lived token, checked
+  by the device registry the network extension plugs in (`use_device_verifier`). They are only
+  accepted on connections the network listener bridged in, and nothing else is accepted on those:
+  a device in the home network can never pose as the shell, the pet or a worker.
 - Every comparison is constant-time.
 """
 
@@ -32,9 +36,13 @@ SESSION_TOKEN_FILE = "session.token"  # noqa: S105 - a file name, not a secret
 WORKER_TOKEN_ENV = "NOX_WORKER_TOKEN"  # noqa: S105 - an env var name, not a secret
 DEFAULT_WORKER_TOKEN_TTL_S = 60.0
 
-TokenKind = Literal["session", "worker"]
+TokenKind = Literal["session", "worker", "device"]
 SESSION_ROLES: frozenset[str] = frozenset({"shell", "pet", "dashboard"})
 WORKER_ROLES: frozenset[str] = frozenset({"worker", "plugin"})
+DEVICE_ROLE = "device"
+DEVICE_CLIENT_PREFIX = "device:"
+#: token -> the paired device's id, or None for an unknown or revoked token.
+DeviceVerifier = Callable[[str], "str | None"]
 
 _CREATE_NO_WINDOW = 0x08000000
 
@@ -108,6 +116,8 @@ class AuthDecision:
     ok: bool
     kind: TokenKind | None = None
     reason: str = ""
+    #: The paired device behind a `device` token.
+    device_id: str = ""
 
 
 class TokenStore:
@@ -126,6 +136,7 @@ class TokenStore:
         self._worker: dict[str, WorkerToken] = {}
         self._session_file: Path | None = None
         self._session_file_restricted: bool | None = None
+        self._device_verifier: DeviceVerifier | None = None
 
     @property
     def session_token(self) -> str:
@@ -178,10 +189,28 @@ class TokenStore:
             del self._worker[t]
         return len(expired)
 
+    # -- devices --------------------------------------------------------------------------------
+
+    def use_device_verifier(self, verifier: DeviceVerifier | None) -> None:
+        """Plug in (or, with None, remove) the registry that recognises paired devices."""
+        self._device_verifier = verifier
+
     # -- authentication -------------------------------------------------------------------------
 
-    def authenticate(self, token: str, role: str, client_id: str) -> AuthDecision:
-        """Check `token` for a connection claiming `role`/`client_id`; worker tokens are used up."""
+    def authenticate(
+        self, token: str, role: str, client_id: str, *, via_lan: bool = False
+    ) -> AuthDecision:
+        """Check `token` for a connection claiming `role`/`client_id`; worker tokens are used up.
+
+        `via_lan` says the connection came through the network listener. Such a connection may
+        only be a paired device, and a paired device may only come that way.
+        """
+        if via_lan:
+            if role != DEVICE_ROLE:
+                return AuthDecision(ok=False, reason="only paired devices connect over the network")
+            return self._authenticate_device(token, client_id)
+        if role == DEVICE_ROLE:
+            return AuthDecision(ok=False, reason="a device connects over the network listener only")
         if role in SESSION_ROLES:
             if constant_time_equals(token, self._session):
                 return AuthDecision(ok=True, kind="session")
@@ -205,3 +234,14 @@ class TokenStore:
         if meta.worker_id != client_id:
             return AuthDecision(ok=False, reason="token was issued for a different worker id")
         return AuthDecision(ok=True, kind="worker")
+
+    def _authenticate_device(self, token: str, client_id: str) -> AuthDecision:
+        verifier = self._device_verifier
+        if verifier is None:
+            return AuthDecision(ok=False, reason="network access is off")
+        device_id = verifier(token)
+        if device_id is None:
+            return AuthDecision(ok=False, reason="unknown or revoked device")
+        if client_id != f"{DEVICE_CLIENT_PREFIX}{device_id}":
+            return AuthDecision(ok=False, reason="the token belongs to a different device")
+        return AuthDecision(ok=True, kind="device", device_id=device_id)

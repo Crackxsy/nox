@@ -42,6 +42,7 @@ export const de = {
   setting_memory_full_scan_on_boot: 'Notizen beim Start komplett indexieren',
   setting_plugins_enabled: 'Aktive Plugins',
   setting_remote_enabled: 'Fernzugriff (Telegram) aktiv',
+  setting_ipc_lan_enabled: 'Andere Geräte im Heimnetz dürfen Nox öffnen',
   setting_stream_twitch_channel: 'Twitch-Kanal',
   setting_stream_twitch_bot_names: 'Namen, auf die der Bot hört',
   setting_stream_twitch_relevance_cooldown_s: 'Pause pro Zuschauer (Sekunden)',

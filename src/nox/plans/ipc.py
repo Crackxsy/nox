@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from nox.core.logging import get_logger
 from nox.ipc.dispatch import EmptyPayload, RequestContext, RequestRegistry
 from nox.ipc.errors import ERR_NOT_FOUND, IpcError
+from nox.ipc.roles import UI_ROLES
 from nox.plans.book import PlanBook
 
 log = get_logger(__name__)
@@ -24,7 +25,6 @@ log = get_logger(__name__)
 __all__ = ["register_plan_ipc"]
 
 #: The two user-facing clients, never a plugin or a worker.
-UI_ROLES = ("shell", "dashboard")
 
 
 class PlanRef(BaseModel):
