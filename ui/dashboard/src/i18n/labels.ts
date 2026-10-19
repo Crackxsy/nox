@@ -337,7 +337,11 @@ const OPTION_KEYS: Record<string, Record<string, Key>> = {
     openwakeword: 'option_wake_openwakeword',
     text: 'option_wake_text',
   },
-  'voice.tts.engine': { piper: 'option_tts_piper', kokoro: 'option_tts_kokoro' },
+  'voice.tts.engine': {
+    piper: 'option_tts_piper',
+    kokoro: 'option_tts_kokoro',
+    supertonic: 'option_tts_supertonic',
+  },
   'voice.channels.routing': {
     private: 'option_routing_private',
     stream: 'option_routing_stream',

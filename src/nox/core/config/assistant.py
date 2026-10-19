@@ -108,7 +108,7 @@ class SttConfig(StrictSection):
 
 
 class TtsConfig(StrictSection):
-    engine: Literal["piper", "kokoro"] = "piper"
+    engine: Literal["piper", "kokoro", "supertonic"] = "piper"
     voice: str = ""
     rate: float = Field(default=1.0, gt=0.0, le=4.0)
     volume: float = Field(default=0.8, ge=0.0, le=1.0)

@@ -52,3 +52,23 @@ def test_kokoro_voices_stay_typed_because_there_is_nothing_to_list(tmp_path: Pat
         {"voice": {"models_dir": str(tmp_path), "tts": {"engine": "kokoro"}}}
     )
     assert describe("voice.tts.voice", config).type == "string"
+
+
+def test_supertonic_voices_are_picked_from_the_installed_style_files(tmp_path: Path) -> None:
+    styles = tmp_path / "supertonic" / "voice_styles"
+    styles.mkdir(parents=True)
+    for name in ("M1", "F3"):
+        (styles / f"{name}.json").write_text("{}", encoding="utf-8")
+    config = NoxConfig.model_validate(
+        {"voice": {"models_dir": str(tmp_path), "tts": {"engine": "supertonic"}}}
+    )
+    spec = describe("voice.tts.voice", config)
+    assert spec.type == "enum"
+    assert spec.options == ["", "F3", "M1"]
+    with pytest.raises(InvalidChoiceError):
+        check_choice(spec, "de_DE-thorsten-medium")
+
+
+def test_supertonic_is_an_engine_choice() -> None:
+    spec = describe("voice.tts.engine")
+    assert spec.options is not None and "supertonic" in spec.options

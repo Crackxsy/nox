@@ -51,6 +51,7 @@ export const en: Record<Key, string> = {
   option_wake_text: 'From the transcript',
   option_tts_piper: 'Piper (German)',
   option_tts_kokoro: 'Kokoro (English)',
+  option_tts_supertonic: 'Supertonic (natural, German)',
   option_routing_private: 'Only me',
   option_routing_stream: 'Only the stream',
   option_routing_both: 'Both',
