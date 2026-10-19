@@ -223,3 +223,22 @@ def test_ping_answers_cheaply_and_names_the_error_when_it_cannot(tmp_path: Path)
     assert db.ping() == ""
     db.close()
     assert db.ping() == "ProgrammingError"  # a closed connection: a reason, not an exception
+
+
+def test_a_lower_id_merged_later_is_still_applied(tmp_path: Path, db: Database) -> None:
+    # The hands wave lands 0014/0015 (consents) before 0013 (watchers): a database migrated with
+    # the earlier pull request must still get 0013 when the later one arrives.
+    mig = tmp_path / "migs"
+    mig.mkdir()
+    (mig / "0012_a.sql").write_text("CREATE TABLE a (x INTEGER);", encoding="utf-8")
+    (mig / "0014_c.sql").write_text("CREATE TABLE c (x INTEGER);", encoding="utf-8")
+    assert db.migrate(mig) == ["0012_a", "0014_c"]
+    (mig / "0013_b.sql").write_text("CREATE TABLE b (x INTEGER);", encoding="utf-8")
+    assert db.migrate(mig) == ["0013_b"]
+    assert db.applied_migrations() == [12, 13, 14]
+
+
+def test_shipped_migration_ids_are_unique() -> None:
+    ids = [mig_id for mig_id, _name, _file in Database.list_migrations(MIGRATIONS_DIR)]
+    assert len(ids) == len(set(ids))
+    assert {12, 13, 14, 15} <= set(ids)

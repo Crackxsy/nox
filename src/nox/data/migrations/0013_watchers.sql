@@ -1,5 +1,7 @@
 -- 0013_watchers: "sag mir, wenn ..." - things Nox checks on a schedule and reports on.
--- (0012 is left to the consents table of the sandbox wave; migration ids need not be contiguous.)
+-- Ids follow the stack of the hands wave: 0012 turn_privacy, 0013 watchers (this), 0014 consents,
+-- 0015 consents.recorded_by. A database that already has 0014/0015 still gets 0013: the runner
+-- applies every id it has not recorded, in id order, not only ids above the highest one.
 -- A watcher is one read-only tool call (`tool` + JSON `args`), a structured condition on one value
 -- of its answer (`path`, `op`, JSON `value`, optional text anchor `near`), an interval and a
 -- cooldown. Created through the `watch.create` tool (asks first) and listed/deleted from the
