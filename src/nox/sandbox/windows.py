@@ -52,7 +52,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -267,13 +267,56 @@ def _contains(outer: Path, inner: Path) -> bool:
 
 
 Runner = Callable[[list[str]], int]
+#: One explicit (not inherited) allow ACE of a folder: SID, access mask, inheritance flags.
+Ace = tuple[str, int, int]
+AclReader = Callable[[Path], list[Ace]]
 #: ALL APPLICATION PACKAGES: never granted any more; only removed where an old build put it.
 _LEGACY_BROAD_SID = "S-1-15-2-1"
+#: The exact ACE the old build set: ReadAndExecute + Synchronize, container and object inherit.
+_LEGACY_ACE = (_LEGACY_BROAD_SID, 0x1200A9, 0x3)
+#: Lists a folder's explicit allow ACEs with SIDs (never localized account names); the path comes
+#: through the environment, so no quoting of a user path can break the command. Plain .NET, not
+#: `Get-Acl`: a module autoload can fail under an inherited PowerShell 7 `PSModulePath`.
+_ACL_PS = (
+    "$r = ([System.IO.DirectoryInfo]::new($env:NOX_ACL_PATH)).GetAccessControl().GetAccessRules("
+    "$true, $false, "
+    "[System.Security.Principal.SecurityIdentifier]); foreach ($a in $r) { if ("
+    "[int]$a.AccessControlType -eq 0) { '{0}|{1}|{2}' -f $a.IdentityReference.Value, "
+    "[int]$a.FileSystemRights, [int]$a.InheritanceFlags } }"
+)
 
 
 def _icacls(argv: list[str]) -> int:
-    done = subprocess.run(argv, capture_output=True, check=False)  # noqa: S603 - fixed argv
+    done = subprocess.run(  # noqa: S603 - fixed argv
+        argv,
+        capture_output=True,
+        check=False,
+        creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined,unused-ignore]
+    )
     return done.returncode
+
+
+def _explicit_aces(folder: Path) -> list[Ace]:
+    """The explicit allow ACEs on `folder` (inherited ones are not the folder's own)."""
+    done = subprocess.run(  # noqa: S603 - fixed argv; the path travels in the environment
+        [_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", _ACL_PS],
+        capture_output=True,
+        text=True,
+        encoding="ascii",
+        errors="replace",
+        check=False,
+        env={**os.environ, "NOX_ACL_PATH": str(folder)},
+        creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined,unused-ignore]
+    )
+    if done.returncode != 0:
+        raise OSError(f"could not read the ACL of {folder}")
+    aces: list[Ace] = []
+    for line in done.stdout.splitlines():
+        sid, _, rest = line.strip().partition("|")
+        mask, _, flags = rest.partition("|")
+        if sid and mask.isdigit() and flags.isdigit():
+            aces.append((sid, int(mask), int(flags)))
+    return aces
 
 
 def default_grants_manifest() -> Path:
@@ -285,63 +328,110 @@ def default_grants_manifest() -> Path:
 class RuntimeGrants:
     """The read ACEs Nox puts on runtime folders for its AppContainer - recorded, reversible.
 
-    `grant(folder, sid)` adds `*SID:(OI)(CI)(RX)` once and records it; a recorded pair is never
-    granted again. `reset()` removes exactly the recorded ACEs (`icacls /remove:g`) and empties
-    the manifest. The runner is injectable so tests can assert the exact commands.
+    `grant(folder, sid)` adds `*SID:(OI)(CI)(RX)` once and records it, together with the folder's
+    state *before* Nox's first grant (`broad_before`: whether it already carried an explicit
+    `ALL APPLICATION PACKAGES` ACE); a recorded pair is never granted again. `reset()` removes
+    exactly the recorded ACEs (`icacls /remove:g`) and empties the manifest. `migrate_legacy()`
+    cleans what one earlier build left behind, and touches nothing Nox cannot prove it put there.
+    The runner and the ACL reader are injectable so tests can assert the exact commands.
     """
 
-    def __init__(self, manifest: Path | None = None, *, runner: Runner = _icacls) -> None:
+    def __init__(
+        self,
+        manifest: Path | None = None,
+        *,
+        runner: Runner = _icacls,
+        acl_reader: AclReader = _explicit_aces,
+    ) -> None:
         self.manifest = manifest or default_grants_manifest()
         self._run = runner
+        self._read_acl = acl_reader
 
-    def recorded(self) -> list[tuple[str, str]]:
+    def _entries(self) -> list[dict[str, Any]]:
         import json
 
         try:
             data = json.loads(self.manifest.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return []
+        entries = data.get("grants", []) if isinstance(data, dict) else []
         return [
-            (str(item["path"]), str(item["sid"]))
-            for item in data.get("grants", [])
+            {"path": str(item["path"]), "sid": str(item["sid"]), **_pre_state(item)}
+            for item in entries
             if isinstance(item, dict) and "path" in item and "sid" in item
         ]
 
-    def _write(self, grants: list[tuple[str, str]]) -> None:
+    def recorded(self) -> list[tuple[str, str]]:
+        return [(entry["path"], entry["sid"]) for entry in self._entries()]
+
+    def _write(self, entries: list[dict[str, Any]]) -> None:
         import json
 
         self.manifest.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"grants": [{"path": path, "sid": sid} for path, sid in grants]}
-        self.manifest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        self.manifest.write_text(json.dumps({"grants": entries}, indent=2), encoding="utf-8")
 
     def grant(self, folder: Path, sid: str) -> bool:
-        if not sid.startswith("S-1-15-2-") or sid == "S-1-15-2-1":
+        if not sid.startswith("S-1-15-2-") or sid == _LEGACY_BROAD_SID:
             raise ValueError("only Nox's own container SID is ever granted")
-        entry = (str(folder), sid)
-        recorded = self.recorded()
-        if entry in recorded:
+        entries = self._entries()
+        if any(e["path"] == str(folder) and e["sid"] == sid for e in entries):
             return True
+        try:
+            broad_before: bool | None = any(
+                ace[0] == _LEGACY_BROAD_SID for ace in self._read_acl(folder)
+            )
+        except OSError:
+            broad_before = None
         ok = self._run(["icacls", str(folder), "/grant", f"*{sid}:(OI)(CI)(RX)", "/Q"]) == 0
         if ok:
-            self._write([*recorded, entry])
+            # `None` would read as "pre-state unknown" (a manifest of the build right after the
+            # legacy one); a grant Nox makes now always knows it, so an unreadable ACL counts as
+            # "was already there" - the stricter reading: the migration never touches it.
+            pre = True if broad_before is None else broad_before
+            self._write([*entries, {"path": str(folder), "sid": sid, "broad_before": pre}])
         return ok
 
-    def migrate_legacy(self, folders: Iterable[Path], *, force: bool = False) -> int:
-        """Remove the broad `ALL APPLICATION PACKAGES` read ACE an earlier build of this branch put
-        on the runtime folders. Once per installation (a marker next to the manifest) unless
-        `force`; returns how many folders were cleaned. `/remove:g` drops only explicit grants on
-        the folder itself, never inherited ones."""
+    def migrate_legacy(self, *, force: bool = False) -> int:
+        """Remove the broad `ALL APPLICATION PACKAGES` read ACE one earlier build put on the
+        runtime folders - and only where Nox can tell it did (review finding #18).
+
+        That build granted `*S-1-15-2-1:(OI)(CI)(RX)` and recorded nothing; the build right after
+        it recorded its own grants without the folder's prior state. So a folder is cleaned only
+        when (a) Nox recorded a grant on it, (b) that record predates pre-state recording
+        (`broad_before` unknown), and (c) the folder carries exactly the legacy ACE, explicitly.
+        A folder whose recorded pre-state says the ACE was already there, a folder Nox never
+        granted, an inherited ACE and an ACE of any other shape are never touched. Once per
+        installation (a marker next to the manifest) unless `force`; returns how many folders
+        were cleaned.
+        """
         marker = self.manifest.with_name("legacy-acl-migrated")
         if marker.exists() and not force:
             return 0
+        entries = self._entries()
         cleaned = 0
-        for folder in folders:
-            if (
-                folder.exists()
-                and self._run(["icacls", str(folder), "/remove:g", f"*{_LEGACY_BROAD_SID}", "/Q"])
+        changed = False
+        for entry in entries:
+            if entry["broad_before"] is not None or not Path(entry["path"]).exists():
+                continue
+            try:
+                aces = self._read_acl(Path(entry["path"]))
+            except OSError:
+                continue  # unknown stays unknown: try again next time
+            broad = [ace for ace in aces if ace[0] == _LEGACY_BROAD_SID]
+            if broad != [_LEGACY_ACE]:
+                # None, or some other shape: not provably Nox's - leave it, and know it from now on.
+                entry["broad_before"] = bool(broad)
+                changed = True
+            elif (
+                self._run(["icacls", entry["path"], "/remove:g", f"*{_LEGACY_BROAD_SID}", "/Q"])
                 == 0
             ):
                 cleaned += 1
+                entry["broad_before"] = False
+                changed = True
+            # A failed removal stays unknown, so `nox sandbox reset` (force) tries it again.
+        if changed:
+            self._write(entries)
         log.info("sandbox.legacy_acl_migrated", folders=cleaned)
         with contextlib.suppress(OSError):
             marker.parent.mkdir(parents=True, exist_ok=True)
@@ -350,21 +440,26 @@ class RuntimeGrants:
 
     def reset(self) -> int:
         """Remove every recorded ACE; returns how many were removed. Failures stay recorded."""
-        left: list[tuple[str, str]] = []
+        left: list[dict[str, Any]] = []
         removed = 0
-        for path, sid in self.recorded():
-            if not Path(path).exists():
+        for entry in self._entries():
+            if not Path(entry["path"]).exists():
                 continue  # the folder is gone, and its ACE with it
-            if self._run(["icacls", path, "/remove:g", f"*{sid}", "/Q"]) == 0:
+            if self._run(["icacls", entry["path"], "/remove:g", f"*{entry['sid']}", "/Q"]) == 0:
                 removed += 1
             else:
-                left.append((path, sid))
+                left.append(entry)
         if left:
             self._write(left)
         else:
             with contextlib.suppress(OSError):
                 self.manifest.unlink()
         return removed
+
+
+def _pre_state(item: dict[str, Any]) -> dict[str, bool | None]:
+    value = item.get("broad_before")
+    return {"broad_before": value if isinstance(value, bool) else None}
 
 
 def python_runtime_dirs(
@@ -397,6 +492,17 @@ def python_runtime_dirs(
     return tuple(out)
 
 
+def _runs_python(argv: list[str]) -> bool:
+    """Whether `argv` starts an executable from Nox's own Python runtime (`python_runtime_dirs`)."""
+    if not argv:
+        return False
+    try:
+        exe = Path(argv[0]).resolve()
+    except (OSError, ValueError):
+        return False
+    return any(_contains(folder, exe) for folder in python_runtime_dirs())
+
+
 class WindowsSandbox:
     """Backend for `nox.sandbox.Sandbox` on Windows. One instance per core."""
 
@@ -414,7 +520,7 @@ class WindowsSandbox:
         self.proxy_transport = "pipe" if self._sid else "none"
         self._runtime_ready = False
         self._grants = grants or RuntimeGrants()
-        self._grants.migrate_legacy(python_runtime_dirs())
+        self._grants.migrate_legacy()
         if self._sid is None and self._grants.recorded():
             # Container-SID ACEs on the interpreter break low-IL Python (module docstring).
             removed = self._grants.reset()
@@ -430,9 +536,11 @@ class WindowsSandbox:
             return False
         return self._grants.grant(folder, self._sid)
 
-    async def _ensure_runtime(self) -> None:
-        """Once per backend: make the Python runtime readable for the container (see above)."""
-        if self._sid is None or self._runtime_ready:
+    async def _ensure_runtime(self, argv: list[str]) -> None:
+        """Make the Python runtime readable for the container (see above) - once per backend, and
+        only when a run actually starts that Python: `cmd`, PowerShell or curl need no access to
+        it, so their runs leave the runtime's ACL alone."""
+        if self._sid is None or self._runtime_ready or not _runs_python(argv):
             return
         self._runtime_ready = True
         for folder in python_runtime_dirs():
@@ -513,7 +621,7 @@ class WindowsSandbox:
         """Run `argv` confined. With egress, `proxy_socket` is the proxy's named pipe;
         a low-integrity run with egress is refused - nothing could hold it to the proxy."""
         self._check_egress(egress, proxy_socket)
-        await self._ensure_runtime()
+        await self._ensure_runtime(argv)
         work, created = self._prepare_workdir(cwd)
         forwarder: Spawned | None = None
         try:
@@ -577,7 +685,7 @@ class WindowsSandbox:
         and doing that in `asyncio.to_thread` would starve every other user of the pool.
         """
         self._check_egress(egress, proxy_socket)
-        await self._ensure_runtime()
+        await self._ensure_runtime(argv)
         work, created = self._prepare_workdir(cwd)
         forwarder: Spawned | None = None
 

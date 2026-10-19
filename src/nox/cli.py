@@ -325,12 +325,13 @@ app.add_typer(sandbox_app, name="sandbox")
 def sandbox_reset() -> None:
     """Remove every access right Nox granted its sandbox on runtime folders (also run on
     uninstall). Harmless to run twice; Nox grants them again when it next needs them."""
-    from nox.sandbox.windows import RuntimeGrants, python_runtime_dirs  # noqa: PLC0415
+    from nox.sandbox.windows import RuntimeGrants  # noqa: PLC0415
 
     grants = RuntimeGrants()
+    # The legacy check reads the manifest, so it runs before `reset` empties it.
+    legacy = grants.migrate_legacy(force=True)
     removed = grants.reset()
-    legacy = grants.migrate_legacy(python_runtime_dirs(), force=True)
-    typer.echo(f"removed {removed} sandbox access right(s); checked {legacy} runtime folder(s)")
+    typer.echo(f"removed {removed} sandbox access right(s) and {legacy} legacy one(s)")
 
 
 eval_app = typer.Typer(help="Benchmarks that measure what Nox can do (source checkout only).")
