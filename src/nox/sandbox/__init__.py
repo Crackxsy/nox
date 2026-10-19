@@ -30,17 +30,30 @@ and cloud-metadata addresses and the Home Assistant host - so `*` can never reac
 the home. Whether a server may have `*` at all is decided before `start` by the caller's
 permission check (installing a network-enabled server is confirmed), not by the sandbox.
 
-Declared egress goes through a loopback proxy that exists for that one run or process and
-demands its own random credentials, which only the child receives (in its proxy URL): another
-local program - another run's child included - cannot use it.
+**One egress design on every OS.** Declared egress goes through a proxy that exists for that one
+run or process and demands its own random credentials (`Proxy-Authorization`, `407` otherwise).
+The child receives them only in its environment (`HTTPS_PROXY=http://nox:<secret>@127.0.0.1:<port>`),
+never on a command line, so another local program - another run's child included - cannot use the
+proxy. How the child reaches it is the backend's `proxy_transport`:
+
+* `"pipe"` (Windows AppContainer): the proxy listens on a fresh named pipe whose DACL admits only
+  the container SID; a forwarder inside the same container offers the child the loopback port.
+* `"tcp"`: loopback TCP (the Linux bwrap backend, which shares the host's loopback for a run
+  that declared egress; test backends).
+* anything else (`"none"`: the Windows low-integrity fallback, whose sockets nothing restricts):
+  a run that declares egress is refused.
+
+The backend gets `proxy_port`, `proxy_socket` and `proxy_auth` and needs nothing else.
 
 `env` adds variables to the child's minimal environment (an MCP server's settings); the keys that
 carry the confinement (`PATH`, `HOME`/`USERPROFILE`/`TEMP`, the proxy variables, `LD_PRELOAD`,
 ...) are refused with `ValueError` (`model.RESERVED_ENV_KEYS`). Nothing from the core's own
 environment is inherited beyond the backend's fixed safe list.
 
-`guarantees()` reports what this machine's backend really enforces (weaker on the Windows
-low-integrity fallback), for `run` and `start` alike.
+`guarantees()` reports what this machine's backend really enforces - measured where it depends on
+the machine (Windows loopback isolation) - and `run` and `start` alike refuse a backend whose
+guarantees are not all strong unless the user accepted the weaker mode (`accept_weak`, from
+`hands.accept_weak_sandbox`).
 """
 
 from __future__ import annotations
@@ -82,7 +95,12 @@ __all__ = [
 
 
 class Backend(Protocol):
-    """What a per-OS backend offers the `Sandbox` wrapper (Windows / Linux implementations)."""
+    """What a per-OS backend offers the `Sandbox` wrapper (Windows / Linux implementations).
+
+    A backend may also set `proxy_transport` (see the module docstring); the default is `"tcp"`.
+    `run` and `start` take the same proxy arguments: `proxy_port` (loopback TCP or the forwarder's
+    target), `proxy_socket` (named pipe or Unix socket path) and `proxy_auth` (`user:secret`).
+    """
 
     mode: SandboxMode
 
