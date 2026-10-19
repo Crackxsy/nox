@@ -4,8 +4,7 @@ Nox's core can run as a server: always on, quiet, in a corner of the flat, on a 
 64-bit Linux machine. Your PC, laptop, phone and tablet then share one Nox - the same memory,
 reminders and calendar - instead of each having its own.
 
-> **Deutsch:** [`RASPBERRY_PI.de.md`](RASPBERRY_PI.de.md) ist dieselbe Anleitung auf Deutsch. The
-> installer itself talks German.
+> **Deutsch:** [`RASPBERRY_PI.de.md`](RASPBERRY_PI.de.md) ist dieselbe Anleitung auf Deutsch.
 
 ## What you need
 
@@ -30,9 +29,12 @@ Prefer to read it first? `curl -fsSLO <same address>`, `less install-linux.sh`, 
 catches a damaged download; it sits next to the script, so it does not protect against a release
 that someone with write access to the project had altered.
 
-The script prints each step in German and ends with **"Nox läuft"** once the service answers. From
+The script prints each step and ends with **"Nox is running"** once the service answers. From
 then on it starts by itself after every reboot. It installs the newest release that runs on Linux
-(v0.6.0 or later); once installed, `nox update <version>` picks another one.
+(v0.6.0 or later); once installed, `nox update <version>` picks another one. The installer and the
+`nox` command speak German when the system language is German (`LANG`, `LC_ALL` or `LC_MESSAGES`
+starting with `de`) and English otherwise; `NOX_LANG=de|en` overrides that, given after `sudo`,
+which passes on `LANG` and `LC_*` but not `NOX_LANG`: `curl ... | sudo NOX_LANG=en bash`.
 
 What it does, and nothing else:
 

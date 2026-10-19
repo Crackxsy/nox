@@ -33,7 +33,11 @@ einem Release, das jemand mit Schreibrechten am Projekt verändert hätte.
 
 Das Skript zeigt jeden Schritt an und endet mit **„Nox läuft“**, sobald der Dienst antwortet. Ab
 dann startet Nox nach jedem Neustart von selbst. Installiert wird die neueste Version, die unter
-Linux läuft (ab v0.6.0); später wählt `nox update <version>` eine andere.
+Linux läuft (ab v0.6.0); später wählt `nox update <version>` eine andere. Installer und
+`nox`-Befehl sprechen Deutsch, wenn die Systemsprache Deutsch ist (`LANG`, `LC_ALL` oder
+`LC_MESSAGES` beginnt mit `de`), sonst Englisch; `NOX_LANG=de|en` legt die Sprache fest – hinter
+`sudo` angegeben, weil sudo `LANG` und `LC_*` weitergibt, `NOX_LANG` aber nicht:
+`curl ... | sudo NOX_LANG=de bash`.
 
 Was es tut, und sonst nichts:
 
