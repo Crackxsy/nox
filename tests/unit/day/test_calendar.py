@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
+import pytest
 
 from nox.day.calendar import CalendarService, CalendarSource, parse_ics
 
@@ -196,3 +197,72 @@ async def test_a_failing_feed_is_retried_on_the_interval_not_on_every_question()
     service = _service(PermissionError("denied"))
     await service.refresh()
     assert service.status()[0].error and not service.is_stale()
+
+
+def _series(rule: str, *, dtstart: str = "20261015T080000") -> str:
+    return (
+        "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//test//EN\nBEGIN:VEVENT\nUID:flood\n"
+        f"DTSTART;TZID=Europe/Berlin:{dtstart}\nDURATION:PT1S\nRRULE:{rule}\nSUMMARY:Flood\n"
+        "END:VEVENT\nEND:VCALENDAR\n"
+    )
+
+
+@pytest.mark.parametrize("freq", ["SECONDLY", "MINUTELY"])
+def test_a_sub_hourly_series_is_read_as_its_first_occurrence_only(freq: str) -> None:
+    # A stranger's invite lands in a Google feed unasked; FREQ=SECONDLY expanded over the lookahead
+    # window would be hundreds of thousands of events in one tool result.
+    start = datetime(2026, 10, 15, tzinfo=TZ)
+    events = parse_ics(
+        _series(f"FREQ={freq}"),
+        source="t",
+        window_start=start,
+        window_end=start + timedelta(days=8),
+        tz=TZ,
+    )
+    assert [e.start.strftime("%d.%m %H:%M:%S") for e in events] == ["15.10 08:00:00"]
+
+
+def test_an_hourly_series_that_expands_to_every_second_is_capped_per_series() -> None:
+    from nox.day.calendar import MAX_OCCURRENCES_PER_SERIES
+
+    every_second = ",".join(str(n) for n in range(60))
+    start = datetime(2026, 10, 15, tzinfo=TZ)
+    events = parse_ics(
+        _series(f"FREQ=HOURLY;BYMINUTE={every_second};BYSECOND={every_second}"),
+        source="t",
+        window_start=start,
+        window_end=start + timedelta(days=8),
+        tz=TZ,
+    )
+    assert len(events) == MAX_OCCURRENCES_PER_SERIES
+    assert events[0].start == datetime(2026, 10, 15, 8, 0, tzinfo=TZ)
+
+
+def test_an_old_daily_series_without_until_still_reaches_the_window() -> None:
+    # The iteration bound must not cut off an ordinary long-running series before today.
+    start = datetime(2026, 10, 15, tzinfo=TZ)
+    events = parse_ics(
+        _series("FREQ=DAILY", dtstart="19900101T070000"),
+        source="t",
+        window_start=start,
+        window_end=start + timedelta(days=1),
+        tz=TZ,
+    )
+    assert [e.start for e in events] == [datetime(2026, 10, 15, 7, 0, tzinfo=TZ)]
+
+
+def test_a_feed_with_too_many_events_keeps_only_the_earliest() -> None:
+    from nox.day.calendar import MAX_EVENTS_PER_FEED
+
+    body = "".join(
+        f"BEGIN:VEVENT\nUID:e{n}\nDTSTART;TZID=Europe/Berlin:20261015T{8 + n // 3600:02d}"
+        f"{n // 60 % 60:02d}{n % 60:02d}\nDURATION:PT1M\nSUMMARY:E{n}\nEND:VEVENT\n"
+        for n in range(MAX_EVENTS_PER_FEED + 50)
+    )
+    text = f"BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//test//EN\n{body}END:VCALENDAR\n"
+    start = datetime(2026, 10, 15, tzinfo=TZ)
+    events = parse_ics(
+        text, source="t", window_start=start, window_end=start + timedelta(days=1), tz=TZ
+    )
+    assert len(events) == MAX_EVENTS_PER_FEED
+    assert events[0].title == "E0" and events[-1].title == f"E{MAX_EVENTS_PER_FEED - 1}"

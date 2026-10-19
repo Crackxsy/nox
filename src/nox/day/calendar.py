@@ -8,11 +8,17 @@ only the exception type and the HTTP status are kept.
 Parsing is `icalendar` for the format and `dateutil.rrule` for recurrence (both permissively
 licensed; the usual `recurring-ical-events` is LGPL). Occurrences are expanded into a bounded
 window around today, which is all a companion needs and keeps a ten-year weekly series cheap.
+
+A feed is untrusted: anyone can drop an invite into a Google calendar, and it then shows up in the
+feed unasked. So the expansion is bounded on every axis - recurrences finer than hourly are read
+as their first occurrence only, every series stops after a fixed number of steps and occurrences,
+the whole feed has a step budget, and at most `MAX_EVENTS_PER_FEED` occurrences are kept.
 """
 
 from __future__ import annotations
 
 import asyncio
+import itertools
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
@@ -85,8 +91,35 @@ MAX_TEXT_CHARS = 200
 MAX_FEED_BYTES = 5 * 1024 * 1024
 
 
+#: Recurrence frequencies that are not appointments. A series finer than hourly is read as its
+#: first occurrence only: FREQ=SECONDLY over the lookahead window is ~700,000 events.
+IGNORED_FREQUENCIES = frozenset({"MINUTELY", "SECONDLY"})
+
+#: Most occurrences one series contributes to the window. An hourly series is 24 a day; anything
+#: denser (BYMINUTE/BYSECOND lists on an hourly rule) is noise, not a schedule.
+MAX_OCCURRENCES_PER_SERIES = 200
+
+#: Most steps one series is iterated from its DTSTART. A daily series started in 1990 needs about
+#: 13,000 steps to reach today; the bound only bites on series no human calendar contains.
+MAX_SERIES_STEPS = 50_000
+
+#: Most steps all series of one feed are iterated together, so a feed of many dense series cannot
+#: keep the parser thread busy for minutes.
+MAX_FEED_STEPS = 250_000
+
+#: Most occurrences kept from one feed (the earliest win). A busy week is a few dozen.
+MAX_EVENTS_PER_FEED = 500
+
+
 class FeedTooLargeError(ValueError):
     pass
+
+
+class _StepBudget:
+    """The steps a feed may still spend expanding recurrences (shared by all of its series)."""
+
+    def __init__(self, steps: int = MAX_FEED_STEPS) -> None:
+        self.left = steps
 
 
 def _text(component: icalendar.cal.Component, key: str) -> str:
@@ -134,8 +167,12 @@ def _occurrences(
     window_start: datetime,
     window_end: datetime,
     tz: tzinfo,
+    budget: _StepBudget | None = None,
 ) -> list[datetime]:
     """Every start of this event inside the window, expanded from RRULE/RDATE minus EXDATE.
+
+    Bounded by `IGNORED_FREQUENCIES`, `MAX_SERIES_STEPS`, `MAX_OCCURRENCES_PER_SERIES` and the
+    feed's shared step `budget`.
 
     `dateutil` insists that DTSTART and UNTIL agree on being timezone-aware. Feeds do not always
     oblige (an all-day series with a UTC UNTIL is common), so the series is expanded in naive
@@ -146,14 +183,24 @@ def _occurrences(
     rule = component.get("RRULE")
     if rule is None and not component.get("RDATE"):
         return [local_start]
+    lo = window_start.astimezone(tz).replace(tzinfo=None)
+    hi = window_end.astimezone(tz).replace(tzinfo=None)
     series = rruleset()
+    freq = str((rule.get("FREQ") or [""])[0]).upper() if rule is not None else ""
+    if freq in IGNORED_FREQUENCIES:
+        log.info("calendar.series_ignored", freq=freq)
+        rule = None
     if rule is not None:
+        rule = icalendar.vRecur(rule)
         # UNTIL is usually UTC ("...T080000Z"). Expanded in wall time, it has to be wall time too,
-        # or the last occurrence of a 09:00 CET series ending "08:00Z" is dropped.
+        # or the last occurrence of a 09:00 CET series ending "08:00Z" is dropped. Nothing after
+        # the window is needed, so an open-ended series stops there too (COUNT and UNTIL must not
+        # be combined, so a counted series relies on the step bound below).
         until = rule.get("UNTIL")
         if until:
-            rule = icalendar.vRecur(rule)
-            rule["UNTIL"] = [_as_local(until[0], tz).replace(tzinfo=None)]
+            rule["UNTIL"] = [min(_as_local(until[0], tz).replace(tzinfo=None), hi)]
+        elif not rule.get("COUNT"):
+            rule["UNTIL"] = [hi]
         text = rule.to_ical().decode()
         series.rrule(rrulestr(text, dtstart=naive_start, ignoretz=True))
     else:
@@ -162,9 +209,20 @@ def _occurrences(
         series.rdate(_as_local(extra, tz).replace(tzinfo=None))
     for excluded in _listed(component, "EXDATE"):
         series.exdate(_as_local(excluded, tz).replace(tzinfo=None))
-    lo = window_start.astimezone(tz).replace(tzinfo=None)
-    hi = window_end.astimezone(tz).replace(tzinfo=None)
-    return [occurrence.replace(tzinfo=tz) for occurrence in series.between(lo, hi, inc=True)]
+    budget = budget or _StepBudget()
+    found: list[datetime] = []
+    steps = 0
+    for occurrence in itertools.islice(series, max(0, min(MAX_SERIES_STEPS, budget.left))):
+        steps += 1
+        if occurrence > hi:
+            break
+        if occurrence >= lo:
+            found.append(occurrence.replace(tzinfo=tz))
+            if len(found) >= MAX_OCCURRENCES_PER_SERIES:
+                log.warning("calendar.series_capped", occurrences=len(found))
+                break
+    budget.left -= steps
+    return found
 
 
 def parse_ics(
@@ -191,14 +249,21 @@ def parse_ics(
     # The window is widened by a day so an occurrence that started yesterday and runs into
     # today is still found; the overlap test below does the exact cut.
     lo, hi = window_start - timedelta(days=1), window_end + timedelta(days=1)
+    budget = _StepBudget()
     events: list[CalendarEvent] = []
     for component in components:
+        if budget.left <= 0:
+            log.warning("calendar.feed_budget_spent", source=source)
+            break
         try:
-            events.extend(_expand(component, source, lo, hi, tz, overrides))
+            events.extend(_expand(component, source, lo, hi, tz, overrides, budget))
         except Exception as exc:  # noqa: BLE001 - one unreadable entry never hides the rest
             log.warning("calendar.event_skipped", source=source, error=type(exc).__name__)
     kept = [e for e in events if e.start < window_end and e.end > window_start]
     kept.sort(key=lambda e: (e.start, e.title))
+    if len(kept) > MAX_EVENTS_PER_FEED:
+        log.warning("calendar.feed_capped", source=source, events=len(kept))
+        del kept[MAX_EVENTS_PER_FEED:]
     return kept
 
 
@@ -209,6 +274,7 @@ def _expand(
     hi: datetime,
     tz: tzinfo,
     overrides: set[tuple[str, datetime]],
+    budget: _StepBudget,
 ) -> list[CalendarEvent]:
     if _text(component, "STATUS").upper() == "CANCELLED":
         return []
@@ -225,7 +291,7 @@ def _expand(
     starts = (
         [_as_local(start_value, tz)]
         if is_override
-        else _occurrences(component, start_value, lo - duration, hi, tz)
+        else _occurrences(component, start_value, lo - duration, hi, tz, budget)
     )
     return [
         CalendarEvent(
