@@ -52,6 +52,8 @@ class MoveInput(BaseModel):
     path: str = PATH_FIELD
     to: str = PATH_FIELD
     overwrite: bool = False
+    #: Create a missing destination folder (inside the same root). Off unless asked for.
+    create_folders: bool = False
 
 
 class RootsInput(BaseModel):
@@ -177,11 +179,15 @@ def _build_move(settings: Settings) -> ToolSpec:
             str(payload["to"]),
             config.roots,
             overwrite=bool(payload.get("overwrite", False)),
+            create_folders=bool(payload.get("create_folders", False)),
         )
 
     return ToolSpec(
         name="file.move",
-        description="Move or rename a file. Both ends have to be in a folder you configured.",
+        description=(
+            "Move or rename a file. Both ends have to be in a folder you configured; pass "
+            "create_folders to create a missing destination folder, e.g. when sorting files."
+        ),
         input_model=MoveInput,
         risk=Risk.MEDIUM,
         side_effects=True,

@@ -220,3 +220,37 @@ async def test_deleting_outside_the_roots_never_reaches_the_shell(
         await ops.delete(str(root.parent), roots(root))
 
     assert called == []
+
+
+async def test_move_creates_a_missing_folder_only_when_asked(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    (root / "Downloads").mkdir(parents=True)
+    source = root / "Downloads" / "a-2023.pdf"
+    source.write_text("x", encoding="utf-8")
+
+    refused = await ops.move(
+        str(source), str(root / "Downloads" / "2023" / "a-2023.pdf"), [str(root)]
+    )
+    moved = await ops.move(
+        str(source),
+        str(root / "Downloads" / "2023" / "a-2023.pdf"),
+        [str(root)],
+        create_folders=True,
+    )
+
+    assert refused["ok"] is False and "create_folders" in refused["error"]
+    assert moved["ok"] is True
+    assert (root / "Downloads" / "2023" / "a-2023.pdf").is_file()
+
+
+async def test_move_never_creates_a_folder_outside_the_roots(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    source = root / "a.txt"
+    source.write_text("x", encoding="utf-8")
+
+    with pytest.raises(OutsideRootsError):
+        await ops.move(
+            str(source), str(tmp_path / "elsewhere" / "a.txt"), [str(root)], create_folders=True
+        )
+    assert not (tmp_path / "elsewhere").exists()

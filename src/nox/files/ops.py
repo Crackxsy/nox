@@ -156,16 +156,34 @@ async def write_text(
 
 
 async def move(
-    source: str, destination: str, roots: list[str], *, overwrite: bool = False
+    source: str,
+    destination: str,
+    roots: list[str],
+    *,
+    overwrite: bool = False,
+    create_folders: bool = False,
 ) -> dict[str, Any]:
-    """Move or rename, with both ends inside a configured root."""
+    """Move or rename, with both ends inside a configured root.
+
+    A missing destination folder is created only on request (`create_folders`): sorting files
+    into new folders is a common ask, but a folder tree grown from a typo is not.
+    """
     from_path = resolve_inside(source, roots, must_exist=True)
     to_path = resolve_inside(destination, roots)
 
     def work() -> dict[str, Any]:
         target = to_path / from_path.name if to_path.is_dir() else to_path
         if not target.parent.is_dir():
-            return {"ok": False, "error": f"the folder {target.parent} does not exist"}
+            if not create_folders:
+                return {
+                    "ok": False,
+                    "error": f"the folder {target.parent} does not exist "
+                    "(pass create_folders to create it)",
+                }
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                return {"ok": False, "error": f"cannot create {target.parent}: {exc}"}
         if target.exists() and not overwrite:
             return {"ok": False, "error": f"{target} already exists"}
         try:
