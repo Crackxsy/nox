@@ -63,7 +63,7 @@ class FasterWhisperStt:
         self.compute_type = compute_type
         self.models_dir = models_dir or str(engine_models_dir("faster-whisper"))
         self.languages = languages
-        #: ctranslate2's default under-uses the 7800X3D; physical cores (capped at 8) were
+        #: ctranslate2's default under-uses a modern 8-core CPU; physical cores (capped at 8) were
         # 35 % faster than the default and SMT threads (16) brought nothing.
         self.cpu_threads = cpu_threads or max(1, min(8, (os.cpu_count() or 2) // 2))
         self.beam_size = beam_size

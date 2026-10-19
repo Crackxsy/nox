@@ -65,7 +65,7 @@ config:
     demo_confidence_threshold: 0.75
     min_confidence: 0.6
   vision:                          # Vision Stage 2; opt-in-by-
-                                    # default (see `enabled`) - the GTX 1060 budget risk (OP-E) is
+                                    # default (see `enabled`) - the GPU budget on a 6 GB card is
                                     # unresolved, so this never starts just because `rl` is enabled.
     enabled: false
     backend: none                  # none | opencv | onnx (onnx: documented stub, always reports

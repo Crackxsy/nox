@@ -13,9 +13,9 @@ Nothing happens until you name a checkout:
 
 ```yaml
 extend:
-  workspace: "E:/Nox/repo"          # a git repository. Empty = Nox may not touch anything
+  workspace: "D:/src/nox"           # a git repository. Empty = Nox may not touch anything
   test_command:                     # absolute path first, the way preset actions work
-    - "E:/Nox/repo/.venv/Scripts/python.exe"
+    - "D:/src/nox/.venv/Scripts/python.exe"
     - "-m"
     - "pytest"
     - "tests/unit"

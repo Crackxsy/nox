@@ -19,7 +19,7 @@ and the real parser, and reports both:
 Four cases: three that need a specific tool, and one that needs the model *not* to reach for one -
 which is the half most small models fail.
 
-## Measured, on a GTX 1060 6 GB / Ryzen 7 7800X3D / 32 GB
+## Measured, on the reference machine (6 GB GPU)
 
 | Model | Protocol | Seconds per answer | Notes |
 | --- | --- | --- | --- |
@@ -58,8 +58,8 @@ Rules of thumb for a Q4 quantisation, which is what Ollama pulls by default:
 | 27-32B | 16-20 GB | no | no | needs 24 GB |
 
 "Does not fit" is not a failure. Ollama puts as many layers on the GPU as it can and runs the rest
-on the CPU, which is why `gemma4:e2b` above answers in 8.7 s rather than not at all. On a 7800X3D
-that is survivable. It is still three times slower than a model that fits.
+on the CPU, which is why `gemma4:e2b` above answers in 8.7 s rather than not at all. On a fast
+desktop CPU that is survivable. It is still three times slower than a model that fits.
 
 ## About running a model bigger than your memory
 

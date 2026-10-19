@@ -348,7 +348,7 @@ extend:                          # whether Nox may propose changes to its own so
                                  # turns this on - and even then Nox never merges, pushes or
                                  # restarts itself: it writes a branch and you read the diff.
   enabled: true
-  workspace: ""                  # a git checkout, e.g. "E:/Nox/repo". Empty = no self-extension
+  workspace: ""                  # a git checkout, e.g. "D:/src/nox". Empty = no self-extension
   branch_prefix: "nox/proposal/"
   test_command: []               # absolute path first, e.g. ["C:/.../python.exe", "-m", "pytest"]
                                  # empty = a proposal ships untested and says so
