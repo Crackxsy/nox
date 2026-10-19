@@ -212,3 +212,32 @@ def test_default_resolver_finds_only_system_programs() -> None:
     name = "whoami" if sys.platform == "win32" else "uname"
     assert resolver.resolve(name) is not None
     assert resolver.resolve("definitely-not-a-program-xyz") is None
+
+
+def test_resolver_never_resolves_a_path_even_if_the_file_exists(tmp_path: Path) -> None:
+    # Defence in depth, layer 1: the resolver itself only takes bare names.
+    planted = tmp_path / f"whoami{EXE}"
+    planted.write_bytes(b"planted")
+    resolver = ProgramResolver(dirs=(str(tmp_path),))
+    assert resolver.resolve(str(planted)) is None
+    assert resolver.resolve(f"./whoami{EXE}") is None
+    assert resolver.resolve(f"whoami{EXE}") is not None
+
+
+class _AnythingResolver(ProgramResolver):
+    """A resolver that would resolve any token - so only classify's own check can refuse a path."""
+
+    def resolve(self, name: str):  # type: ignore[no-untyped-def]  # noqa: ANN201
+        from nox.hands.shell import ResolvedProgram
+
+        return ResolvedProgram(name, "0" * 16)
+
+
+def test_classify_refuses_a_path_whatever_the_resolver_says() -> None:
+    # Defence in depth, layer 2: argv0 with a path is complex before any lookup happens.
+    info = classify(
+        argv=[r"C:\Downloads\whoami.exe"],
+        resolver=_AnythingResolver(dirs=()),
+        readonly_allowed=True,
+    )
+    assert info.kind is ShellClass.COMPLEX

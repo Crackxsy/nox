@@ -191,3 +191,18 @@ def test_outside_a_conversation_nothing_is_tainted(engine: DefaultPermissionEngi
     assert not engine.is_tainted("")
     fetch = _req("web.fetch", risk=Risk.LOW, conversation="")
     assert engine.check(fetch).decision is Decision.ALLOW
+
+
+async def test_a_call_that_raised_still_taints() -> None:
+    marked: list[str] = []
+
+    async def call(name: str, arguments: dict[str, Any]) -> _Outcome:
+        raise RuntimeError("upstream said something")
+
+    loop = ToolLoop(
+        offer=lambda: [OfferedTool(name="mcp.thing", description="", schema={})],
+        call=call,
+        taint=marked.append,
+    )
+    await loop.execute(loop.begin("t", conversation="s"), "mcp.thing", {})
+    assert marked == ["s"]
