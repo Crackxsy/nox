@@ -257,11 +257,7 @@ jobs:
             esac
             pflags="$parent"
             [ $v = e ] && pflags="$(echo "$parent" | sed 's/flags=(attach_disconnected,mediate_deleted)/flags=(attach_disconnected,mediate_deleted,complain)/')"
-            printf 'abi <abi/4.0>,
-include <tunables/global>
-profile nexp-%s /usr/lib/nox-exp/bw%s %s %s }
-profile nexp-child-%s %s
-'               "$v" "$v" "$pflags" "$rule" "$v" "$child" | sudo tee /etc/apparmor.d/nexp-$v >/dev/null
+            printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile nexp-%s /usr/lib/nox-exp/bw%s %s %s }\nprofile nexp-child-%s %s\n' "$v" "$v" "$pflags" "$rule" "$v" "$child" | sudo tee /etc/apparmor.d/nexp-$v >/dev/null
             sudo apparmor_parser -r /etc/apparmor.d/nexp-$v || { echo "variant $v: parse failed"; continue; }
             b=/usr/lib/nox-exp/bw$v
             sudo -u nox $b --unshare-user --ro-bind / / --proc /proc --dev /dev /usr/bin/true; echo "variant $v true rc=$?"
