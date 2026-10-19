@@ -229,8 +229,9 @@ class ClaudeCodeProvider:
     async def _stream_conversation(self, request: AiRequest) -> AsyncIterator[AiChunk]:
         if not self._cfg.enabled:
             raise ProviderUnavailableError(PROVIDER_ID, "disabled in config")
-        async for chunk in self.conversation.stream(request):
-            yield chunk
+        async with contextlib.aclosing(self.conversation.stream(request)) as chunks:
+            async for chunk in chunks:
+                yield chunk
         response = self.conversation.last.pop(request.request_id, None)
         if response is not None:
             self._last[request.request_id] = response

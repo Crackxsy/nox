@@ -20,6 +20,7 @@ Arguments, and why (verified in `spikes/sp13_native_tools.py` against Claude Cod
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import os
@@ -118,6 +119,10 @@ class PersistentClaude:
         self._conversation: str | None = None
         self._dirty = False
         self._killed = False
+        #: Bumped by every kill; a start that began in an older epoch is discarded.
+        self._epoch = 0
+        self._lifecycle = asyncio.Lock()
+        self._starting: tuple[ClaudeSession, Launch | None] | None = None
         self.last: dict[str, AiResponse] = {}
 
     def attach_tools(self, bridge: ToolBridge) -> None:
@@ -179,7 +184,21 @@ class PersistentClaude:
     async def _ensure(
         self, system_prompt: str, privacy_mode: str, *, conversation: str | None
     ) -> ClaudeSession:
-        wanted = self.spec(system_prompt, privacy_mode, None).fingerprint
+        # One start at a time. The kill switch does not take this lock - it must never wait for a
+        # slow start - it kills a starting session directly (`_starting`) and bumps the epoch, so
+        # a start that was overtaken by a kill can never store its session.
+        async with self._lifecycle:
+            return await self._ensure_locked(system_prompt, privacy_mode, conversation)
+
+    async def _ensure_locked(
+        self, system_prompt: str, privacy_mode: str, conversation: str | None
+    ) -> ClaudeSession:
+        if self._killed:
+            raise ProviderUnavailableError(PROVIDER_ID, "stopped by the kill switch")
+        # The config path differs per spawn and is not part of the fingerprint, but whether there
+        # is one at all is: compare like with like.
+        placeholder = Path("mcp.json") if self._bridge is not None else None
+        wanted = self.spec(system_prompt, privacy_mode, placeholder).fingerprint
         session = self._session
         reusable = (
             session is not None
@@ -194,22 +213,37 @@ class PersistentClaude:
                 self._conversation = conversation
             return session
         await self.close()
+        epoch = self._epoch
         launch = self._bridge.prepare() if self._bridge is not None else None
         spec = self.spec(system_prompt, privacy_mode, launch.config_path if launch else None)
         if self._workdir is not None:
             self._workdir.mkdir(parents=True, exist_ok=True)
         session = ClaudeSession(spec, creationflags=self._creationflags)
-        await session.start(self._executable())
+        self._starting = (session, launch)
         try:
+            await session.start(self._executable())
             await session.initialize()
         except ProviderError:
-            session.kill()
-            if launch is not None and self._bridge is not None:
-                await self._bridge.retire(launch)
+            await self._discard(session, launch)
+            if self._killed or epoch != self._epoch:
+                raise ProviderUnavailableError(PROVIDER_ID, "stopped by the kill switch") from None
             raise
+        except BaseException:
+            await self._discard(session, launch)
+            raise
+        finally:
+            self._starting = None
+        if self._killed or epoch != self._epoch:
+            await self._discard(session, launch)
+            raise ProviderUnavailableError(PROVIDER_ID, "stopped by the kill switch")
         self._session, self._launch, self._conversation = session, launch, conversation
         self._dirty = False
         return session
+
+    async def _discard(self, session: ClaudeSession, launch: Launch | None) -> None:
+        session.kill()
+        if launch is not None and self._bridge is not None:
+            await self._bridge.retire(launch)
 
     async def close(self) -> None:
         session, launch = self._session, self._launch
@@ -220,15 +254,20 @@ class PersistentClaude:
             await self._bridge.retire(launch)
 
     async def kill(self) -> None:
-        """Kill switch: the process tree dies now, the bridge is cut off, nothing restarts until
-        `resume`."""
+        """Kill switch: every process tree dies now - the running session and one still
+        starting - the bridges are cut off, and nothing starts again until `resume`."""
         self._killed = True
-        session, launch = self._session, self._launch
+        self._epoch += 1
+        doomed = [(self._session, self._launch)]
+        if self._starting is not None:
+            doomed.append(self._starting)
         self._session, self._launch = None, None
-        if session is not None:
-            session.kill()
-        if launch is not None and self._bridge is not None:
-            await self._bridge.retire(launch)
+        for session, _launch in doomed:
+            if session is not None:
+                session.kill()
+        for _session, launch in doomed:
+            if launch is not None and self._bridge is not None:
+                await self._bridge.retire(launch)
 
     def resume(self) -> None:
         self._killed = False
@@ -278,8 +317,11 @@ class PersistentClaude:
                 session.kill()
                 session = await self._ensure(system, request.privacy_mode, conversation=None)
             self._dirty = False
-            async for chunk in self._turn(session, request, turns):
-                yield chunk
+            # `aclosing`: when the consumer stops early (barge-in), the inner generator must be
+            # closed now - its `finally` sends the interrupt - not whenever it is collected.
+            async with contextlib.aclosing(self._turn(session, request, turns)) as chunks:
+                async for chunk in chunks:
+                    yield chunk
 
     async def _turn(
         self, session: ClaudeSession, request: AiRequest, turns: list[Message]

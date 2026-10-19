@@ -105,8 +105,32 @@ RESTRICTED_TO: tuple[tuple[str, frozenset[str]], ...] = (
 )
 
 
+#: Every role, and whether it may receive events at all. "filtered": yes, subject to the tables
+#: above; "none": nothing, not even `system.*`, and `ipc.subscribe` is refused. A role missing here
+#: receives nothing (fail closed); `tests/unit/ipc/test_role_tables.py` makes every role explicit.
+EVENT_POLICY: Mapping[str, str] = {
+    "core": "filtered",
+    "shell": "filtered",
+    "worker": "filtered",
+    "plugin": "filtered",
+    "pet": "filtered",
+    "dashboard": "filtered",
+    "supervisor": "filtered",
+    "remote": "filtered",
+    # The MCP bridge forwards tool calls and needs no event at all; chat, transcripts and memory
+    # must never reach a process a language model drives.
+    "mcp": "none",
+}
+
+
+def role_receives_events(role: str) -> bool:
+    return EVENT_POLICY.get(role) == "filtered"
+
+
 def role_may_see(role: str, name: str) -> bool:
     """Whether an event named `name` may be delivered to a client in `role`."""
+    if not role_receives_events(role):
+        return False
     for pattern, blocked in REDACTED_FROM:
         if role in blocked and name_matches(name, pattern):
             return False
@@ -806,6 +830,10 @@ class IpcHub:
         return _stream
 
     def _subscribe(self, client: ClientSession, env: Envelope) -> Envelope:
+        if not role_receives_events(client.role):
+            return error_envelope(
+                ERR_PERMISSION, f"role {client.role!r} may not subscribe to events", corr=env.id
+            )
         try:
             req = SubscribeRequest.model_validate(env.payload)
         except ValidationError as exc:

@@ -47,6 +47,8 @@ DeviceVerifier = Callable[[str], "str | None"]
 #: only for that role, and the role works only with such a token. `mcp` is Nox's MCP bridge
 #: (`nox.mcp.bridge`), which may call `mcp.tools.list` and `mcp.tools.call` and nothing else.
 BOUND_ROLES: frozenset[str] = frozenset({"mcp"})
+#: Roles that never authenticate over the hub (the core itself, the supervisor, the LAN gateway).
+HUBLESS_ROLES: frozenset[str] = frozenset({"core", "supervisor", "remote"})
 
 _CREATE_NO_WINDOW = 0x08000000
 

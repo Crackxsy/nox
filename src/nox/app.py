@@ -715,7 +715,7 @@ class NoxCore:
     def _system_prompt(self) -> str:
         """The stable part of the assistant's prompt: personality, rules, answer shape, tools.
         The facts that change per turn travel separately (`_turn_facts`)."""
-        return build_system_prompt(DECIDED_PERSONALITY_BLOCK, {})
+        return build_system_prompt(DECIDED_PERSONALITY_BLOCK, {}, acting=True)
 
     def _turn_facts(self) -> str:
         return "Current facts:\n" + format_facts(self._facts(mode=None))

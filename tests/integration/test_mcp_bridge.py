@@ -308,3 +308,16 @@ async def test_a_call_without_a_token_fails_validation(world: World) -> None:
         assert world.recorder.calls == []
     finally:
         await client.close()
+
+
+async def test_the_mcp_role_cannot_subscribe_to_events(world: World) -> None:
+    """Chat, transcripts and memory must never reach a process a language model drives."""
+    launch = world.gate.prepare()
+    env = json.loads(launch.config_path.read_text(encoding="utf-8"))["mcpServers"]["nox"]["env"]
+    client = await _client(world, env["NOX_WORKER_TOKEN"], "mcp", launch.client_id)
+    try:
+        with pytest.raises(IpcError) as caught:
+            await client.subscribe(["chat.*", "voice.*", "memory.*"])
+        assert caught.value.code == ERR_PERMISSION
+    finally:
+        await client.close()
