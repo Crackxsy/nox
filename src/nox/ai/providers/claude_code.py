@@ -40,13 +40,17 @@ log = get_logger(__name__)
 
 def render_prompt(request: AiRequest) -> tuple[str, str]:
     """Split messages into (system_prompt, user_prompt). Multi-turn history is rendered as a
-    transcript because ``claude -p`` takes exactly one prompt."""
-    system_parts = [m.content for m in request.messages if m.role == "system"]
-    turns = [m for m in request.messages if m.role != "system"]
+    transcript because ``claude -p`` takes exactly one prompt.
+
+    The per-turn context joins the system prompt. History marked `private` (said while cloud models
+    were not allowed) is left out: this is a cloud provider.
+    """
+    system = request.system_text()
+    turns = [m for m in request.messages if m.role in ("user", "assistant") and not m.private]
     if not turns:
-        return "\n\n".join(system_parts), ""
+        return system, ""
     if len(turns) == 1:
-        return "\n\n".join(system_parts), turns[0].content
+        return system, turns[0].content
     history = turns[:-1]
     lines = ["Previous conversation:"]
     for m in history:
@@ -54,7 +58,7 @@ def render_prompt(request: AiRequest) -> tuple[str, str]:
         lines.append(f"{speaker}: {m.content}")
     lines.append("")
     lines.append(f"Current message from the user:\n{turns[-1].content}")
-    return "\n\n".join(system_parts), "\n".join(lines)
+    return system, "\n".join(lines)
 
 
 class ClaudeCodeProvider:
@@ -150,6 +154,21 @@ class ClaudeCodeProvider:
     # -- health -------------------------------------------------------------------------------
 
     async def health(self) -> ProviderInfo:
+        """`_probe`, plus the state of the conversation session: when it was given up, Claude
+        still answers - one process per turn, without Nox's tools - and the card says so."""
+        info = await self._probe()
+        if info.status is not HealthStatus.UNAVAILABLE and self.conversation.disabled:
+            info = info.model_copy(
+                update={
+                    "status": HealthStatus.LIMITED,
+                    "reason": f"{info.reason}; conversation session off "
+                    f"({self.conversation.disabled_reason}) - one process per turn, no tools",
+                }
+            )
+            self._info = info
+        return info
+
+    async def _probe(self) -> ProviderInfo:
         """``claude --version`` plus (if configured) a 1-token round-trip that verifies the login.
         The round-trip costs quota (about 0.005 USD equivalent on sonnet); the router caches it."""
         if not self._cfg.enabled:
@@ -228,16 +247,36 @@ class ClaudeCodeProvider:
         return self._stream(request)
 
     async def _stream_conversation(self, request: AiRequest) -> AsyncIterator[AiChunk]:
+        """The warm session; if it cannot answer, the same model one-shot - never silently a
+        different provider. After repeated failures the session is off for this run (health
+        says so) and every conversation turn goes one-shot, without Nox's tools."""
         if not self._cfg.enabled:
             raise ProviderUnavailableError(PROVIDER_ID, "disabled in config")
-        async with contextlib.aclosing(self.conversation.stream(request)) as chunks:
-            async for chunk in chunks:
-                yield chunk
-        response = self.conversation.last.pop(request.request_id, None)
+        if not self.conversation.disabled:
+            yielded = False
+            try:
+                async with contextlib.aclosing(self.conversation.stream(request)) as chunks:
+                    async for chunk in chunks:
+                        yielded = True
+                        yield chunk
+            except (ProviderUnavailableError, ProviderTimeoutError):
+                raise  # the kill switch, a missing login, or a turn that already took its time
+            except ProviderError as exc:
+                if yielded:
+                    raise
+                log.warning("claude_code.conversation_fallback", error=str(exc)[:300])
+            else:
+                self._record_conversation(request.request_id)
+                return
+        async for chunk in self._stream(request):
+            yield chunk
+
+    def _record_conversation(self, request_id: str) -> None:
+        response = self.conversation.last.pop(request_id, None)
         if response is not None:
-            self._last[request.request_id] = response
+            self._last[request_id] = response
             if response.cost_usd is not None:
-                self.last_cost_usd[request.request_id] = response.cost_usd
+                self.last_cost_usd[request_id] = response.cost_usd
 
     def last_response(self, request_id: str) -> AiResponse | None:
         return self._last.pop(request_id, None)

@@ -25,6 +25,7 @@ import contextlib
 import hashlib
 import json
 import time
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,11 +34,13 @@ import psutil
 
 from nox.ai._log import get_logger
 from nox.ai.errors import ProviderError, ProviderTimeoutError, ProviderUnavailableError
+from nox.core.jobobject import JobObject
 
 log = get_logger(__name__)
 
 PROVIDER_ID = "claude_code"
 STDOUT_LINE_LIMIT = 4 * 1024 * 1024
+STDERR_TAIL_LINES = 40
 #: How long an interrupted turn may take to wind down before the process is killed instead.
 INTERRUPT_GRACE_S = 2.0
 CONTROL_TIMEOUT_S = 5.0
@@ -53,11 +56,13 @@ class SessionSpec:
     env: Mapping[str, str] | None
     cwd: Path | None
     model: str
+    #: The tool names on offer when it started: Claude Code lists the tools once, at start.
+    offer: tuple[str, ...] = ()
 
     @property
     def fingerprint(self) -> str:
         # The MCP config path changes with every spawn and is not part of the identity.
-        stable = [a for a in self.args if not a.endswith(".json")]
+        stable = [a for a in self.args if not a.endswith(".json")] + list(self.offer)
         return hashlib.sha256("\0".join(stable).encode("utf-8")).hexdigest()[:16]
 
 
@@ -72,7 +77,12 @@ def control_line(request_id: str, request: Mapping[str, object]) -> bytes:
 
 
 def kill_tree(pid: int) -> None:
-    """Kill `pid` and every descendant now (Windows does not do this for a killed parent)."""
+    """Kill `pid` and every descendant now, without waiting for them to be reaped.
+
+    The fallback where no job object exists (Linux, or a failed Win32 call): Windows does not end
+    the children of a killed parent, and a process whose parent already exited is not found this
+    way - the job object is what catches those.
+    """
     try:
         parent = psutil.Process(pid)
         processes = [*parent.children(recursive=True), parent]
@@ -81,7 +91,6 @@ def kill_tree(pid: int) -> None:
     for process in processes:
         with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
             process.kill()
-    psutil.wait_procs(processes, timeout=1.0)
 
 
 class ClaudeSession:
@@ -95,7 +104,12 @@ class ClaudeSession:
         self._proc: asyncio.subprocess.Process | None = None
         self._lines: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._reader: asyncio.Task[None] | None = None
-        self._stderr: asyncio.Task[bytes] | None = None
+        self._stderr: asyncio.Task[None] | None = None
+        #: The last lines the CLI wrote to stderr, for the log when a start or a turn fails.
+        self._stderr_tail: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
+        #: Every process of this session - the CLI, the MCP bridge it starts, anything those
+        #: start - is in this job; closing it ends all of them at once (Windows).
+        self._job: JobObject | None = None
         self._cost_total = 0.0
         self._control = 0
 
@@ -127,9 +141,23 @@ class ClaudeSession:
         except OSError as exc:
             raise ProviderError(PROVIDER_ID, f"cannot start the CLI: {exc}") from exc
         assert self._proc.stdout is not None and self._proc.stderr is not None
+        job = JobObject()
+        if job.available and job.assign(self._proc.pid):
+            self._job = job
         self._reader = asyncio.create_task(self._read(self._proc.stdout), name="nox-claude-out")
-        self._stderr = asyncio.create_task(self._proc.stderr.read(16 * 1024))
+        self._stderr = asyncio.create_task(self._read_stderr(self._proc.stderr))
         log.info("claude_session.started", pid=self._proc.pid, model=self.model)
+
+    async def _read_stderr(self, stderr: asyncio.StreamReader) -> None:
+        """Keep reading, so a chatty CLI never blocks on a full pipe; keep only the tail."""
+        while True:
+            line = await stderr.readline()
+            if not line:
+                return
+            self._stderr_tail.append(line.decode("utf-8", errors="replace").rstrip()[:500])
+
+    def stderr_tail(self) -> str:
+        return " | ".join(self._stderr_tail)
 
     async def _read(self, stdout: asyncio.StreamReader) -> None:
         try:
@@ -142,8 +170,15 @@ class ClaudeSession:
             await self._lines.put(None)
 
     def kill(self) -> None:
-        """Kill the process tree immediately. Safe to call twice and from any state."""
+        """Kill the process tree immediately. Safe to call twice and from any state; never waits.
+
+        The job object goes first: it also ends the MCP bridge when the CLI itself has already
+        exited and the bridge is nobody's child any more.
+        """
         proc, self._proc = self._proc, None
+        job, self._job = self._job, None
+        if job is not None:
+            job.close()
         if proc is not None and proc.returncode is None:
             kill_tree(proc.pid)
         for task in (self._reader, self._stderr):

@@ -74,6 +74,7 @@ def _provider(
         creationflags=0x08000000 if sys.platform == "win32" else 0,
         workdir=tmp_path / "claude",
         env=dict(os.environ),
+        also_inherit=frozenset({"FAKE_LOG", "FAKE_CHILD", "FAKE_INIT_DELAY", "FAKE_DELTA_DELAY"}),
     )
     bridge = FakeBridge(tmp_path)
     provider.attach_tools(bridge)

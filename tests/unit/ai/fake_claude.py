@@ -5,7 +5,11 @@ FAKE_LOG          JSONL file every received message is appended to (plus `pid`/`
 FAKE_INIT_DELAY   seconds the `initialize` control request takes
 FAKE_CHILD        "1": start a long-lived child process at `initialize`, like the MCP bridge
 FAKE_DELTA_DELAY  seconds between text deltas (a slow answer, for barge-in and kill tests)
-A user message containing "TOOL" is answered with text, a tool_use block, then more text.
+FAKE_FAIL_INIT    "1": the `initialize` control request ends the process (a changed protocol)
+FAKE_SLOW_EXIT    seconds to wait after stdin closes before exiting
+A user message containing "TOOL" is answered with text, a tool_use block, then more text;
+"SEARCH" makes seven WebSearch calls; "SLOW" keeps writing until interrupted.
+Without `--input-format` it behaves like a one-shot `claude -p` and answers "Einmal."
 """
 
 from __future__ import annotations
@@ -66,10 +70,20 @@ def delta(text: str) -> None:
     )
 
 
+def one_shot() -> None:
+    log({"pid": os.getpid(), "one_shot": sys.stdin.read()[-200:]})
+    out({"type": "system", "subtype": "init", "model": "default", "session_id": "o"})
+    delta("Einmal.")
+    out({"type": "result", "subtype": "success", "is_error": False, "result": "", "usage": {}})
+
+
 def main() -> None:
     # The real CLI speaks UTF-8 on its pipes whatever the console code page is.
     sys.stdin.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+    if "--input-format" not in sys.argv:
+        one_shot()
+        return
     model = next((a for i, a in enumerate(sys.argv) if sys.argv[i - 1] == "--model"), "default")
     log({"pid": os.getpid(), "model": model})
     turns = 0
@@ -78,12 +92,15 @@ def main() -> None:
     while True:
         message = inbox.get()
         if message is None:
+            time.sleep(float(os.environ.get("FAKE_SLOW_EXIT", "0")))
             return
         log({"in": message})
         if message.get("type") == "control_request":
             request = message["request"]
             assert isinstance(request, dict)
             if request.get("subtype") == "initialize":
+                if os.environ.get("FAKE_FAIL_INIT") == "1":
+                    return
                 if os.environ.get("FAKE_CHILD") == "1":
                     child = subprocess.Popen(  # noqa: S603 - fixed argv
                         [sys.executable, "-c", "import time; time.sleep(600)"]
@@ -121,6 +138,20 @@ def main() -> None:
                 }
             )
             delta("Erledigt.")
+        if "SEARCH" in content:
+            for _ in range(7):
+                if _INTERRUPTED.is_set():
+                    break
+                out(
+                    {
+                        "type": "stream_event",
+                        "event": {
+                            "type": "content_block_start",
+                            "content_block": {"type": "tool_use", "name": "WebSearch"},
+                        },
+                    }
+                )
+                time.sleep(0.05)
         if "SLOW" in content:
             for _ in range(200):
                 if _INTERRUPTED.is_set():

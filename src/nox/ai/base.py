@@ -51,6 +51,9 @@ class Message(BaseModel):
     #: Set on a `tool` message: which call this is the result of.
     tool_name: str = ""
     tool_call_id: str = ""
+    #: Said while cloud models were not allowed (privacy mode private/offline): a cloud provider
+    #: never sends it, not even later as history.
+    private: bool = False
 
 
 class AiRequest(BaseModel):
