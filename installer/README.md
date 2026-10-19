@@ -49,7 +49,9 @@ Output: `installer/out/Nox-Setup-<version>.exe` (git-ignored, like `installer/bu
 
 - Installs to `%LOCALAPPDATA%\Programs\Nox` (per-user, `PrivilegesRequired=lowest` - no UAC
   prompt, no admin rights needed).
-- Start-menu shortcut running `runtime\pythonw.exe -m nox.supervisor`.
+- Start-menu shortcut running `runtime\pythonw.exe "{app}\app\start_nox.pyw"` - the launcher
+  puts `{app}\app` on `sys.path` itself and, if Nox cannot start, writes the reason to
+  `%LOCALAPPDATA%\Nox\startup-error.log` and shows it in a message box.
 - Optional (unchecked by default) autostart shortcut in the user's Startup folder - never turned
   on without the user explicitly checking the box during setup.
 - **Never touches the user's vault, database or data folders, or any other data path.**
@@ -60,6 +62,36 @@ Output: `installer/out/Nox-Setup-<version>.exe` (git-ignored, like `installer/bu
   user data are left exactly as they were.
 - No telemetry, no network access by the installer itself (everything it packages was already
   fetched by `build.py` beforehand).
+
+## Repairing an installation that does not start
+
+Installers built before this fix (0.2.0 - 0.5.0) produce a copy that never starts: no window, no
+tray icon, no log. Two mistakes in the build caused it:
+
+- The embedded Python's `runtime\python313._pth` is its whole `sys.path` - not even the working
+  directory is added - and it did not name `app\`, where the `nox` package lives. The shortcuts
+  ran `pythonw.exe -m nox.supervisor`, which failed on `import nox`; `pythonw` has no console to
+  print that to.
+- `nox.paths` looked for `config\defaults.yaml` one folder above `app\`, so even an importable
+  copy would not have found its configuration.
+
+To repair:
+
+1. Quit any Nox that is running from a source checkout, if you use one.
+2. Uninstall the old copy: **Settings → Apps → Installed apps → Nox → Uninstall**. This removes
+   only the program files (`runtime\` and `app\` in the install folder). Your vault, database,
+   user configuration (`%APPDATA%\Nox\user.yaml`) and data folder are not touched.
+3. Build and run a new installer (sections 1 and 2 above) and install. It recreates the
+   Start-menu and desktop shortcuts and - if you tick it - the autostart entry, all pointing at
+   `start_nox.pyw`.
+4. Start Nox from the Start menu. If it still does not come up, the reason is in
+   `%LOCALAPPDATA%\Nox\startup-error.log`.
+
+Editing the old copy's `._pth` by hand is not enough: its code has the second mistake too.
+Until a new installer is built, run Nox from a source checkout instead
+(`docs/GETTING_STARTED.md`) and point the autostart shortcut at that checkout's
+`.venv\Scripts\pythonw.exe -m nox.supervisor`; remove the old autostart entry first
+(Win+R, `shell:startup`, delete the old "Nox" shortcut), or Windows keeps trying the dead copy.
 
 ## Known sizes and limitations
 

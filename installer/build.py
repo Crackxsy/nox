@@ -6,13 +6,15 @@ Steps (in order, each idempotent - re-running `build.py` from a clean `build/` i
    unpack it into `build/runtime/`.
 2. Fix `build/runtime/python31X._pth`: the embeddable distribution ships with `import site`
    commented out and no `Lib\\site-packages` on `sys.path`, so a plain `pip install` target would
-   never be importable - uncomment `import site` and add the site-packages path explicitly.
+   never be importable - uncomment `import site`, add the site-packages path explicitly, and add
+   `..\\app`, the folder the `nox` package is copied to (step 5).
 3. Bootstrap pip into that runtime via `get-pip.py` (the embeddable zip has no pip of its own).
 4. Regenerate `installer/requirements.lock` via `uv export --extra shell --extra voice` (the
    locked, reproducible dependency set - NOT `pyproject.toml`, which this script never touches)
    and `pip install` everything in it except the `-e .` self-reference (nox's own source is copied
    in step 5, not pip-installed, so the payload has no build backend / editable-install machinery).
-5. Copy `src/nox`, `config/`, `plugins/`, `ui/pet/dist`, `ui/dashboard/dist` into `build/app/`.
+5. Copy `src/nox`, `config/`, `plugins/`, `ui/pet/dist`, `ui/dashboard/dist` and the launcher
+   `installer/start_nox.pyw` into `build/app/`.
 6. Record sizes into `build/app/BUILD_INFO.txt` (installer size target: "< 400 MB without
    models").
 
@@ -47,6 +49,10 @@ EMBED_URL_TMPL = "https://www.python.org/ftp/python/{v}/python-{v}-embed-amd64.z
 GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
 
 REQUIREMENTS_LOCK = INSTALLER_DIR / "requirements.lock"
+#: `{app}\runtime\python313._pth` -> `{app}\app`, where the `nox` package is copied to.
+APP_PTH_ENTRY = "..\\app"
+#: The launcher the shortcuts start (puts `app/` on `sys.path` itself and reports a failed start).
+LAUNCHER = INSTALLER_DIR / "start_nox.pyw"
 
 
 def log(msg: str) -> None:
@@ -61,6 +67,18 @@ def download(url: str, dest: Path) -> Path:
     log(f"downloading {url}")
     urllib.request.urlretrieve(url, dest)  # noqa: S310 - fixed https URLs, not user input
     return dest
+
+
+def fixed_pth_lines(lines: list[str]) -> list[str]:
+    """The embeddable Python's `python3*._pth`, made usable: `import site` on, the site-packages
+    folder, and the folder holding the `nox` package. A `._pth` file is the whole `sys.path` of an
+    embedded Python - not even the working directory is added - so without the last line
+    `import nox` failed in every installed copy, silently, because `pythonw` has no console."""
+    fixed = ["import site" if line.strip() == "#import site" else line for line in lines]
+    for entry in ("Lib\\site-packages", APP_PTH_ENTRY):
+        if entry not in fixed:
+            fixed.append(entry)
+    return fixed
 
 
 def step_download_runtime(python_version: str, *, skip_download: bool) -> Path:
@@ -83,13 +101,8 @@ def step_download_runtime(python_version: str, *, skip_download: bool) -> Path:
         raise RuntimeError(f"no python3*._pth found in {RUNTIME_DIR} - unexpected zip layout")
     pth_path = pth_candidates[0]
     lines = pth_path.read_text(encoding="utf-8").splitlines()
-    fixed = []
-    for line in lines:
-        fixed.append("import site" if line.strip() == "#import site" else line)
-    if "Lib\\site-packages" not in fixed:
-        fixed.append("Lib\\site-packages")
-    pth_path.write_text("\n".join(fixed) + "\n", encoding="utf-8")
-    log(f"fixed {pth_path.name}: site-packages importable")
+    pth_path.write_text("\n".join(fixed_pth_lines(lines)) + "\n", encoding="utf-8")
+    log(f"fixed {pth_path.name}: site-packages and the app folder importable")
     return RUNTIME_DIR
 
 
@@ -179,6 +192,7 @@ def step_assemble_app() -> None:
     copy_tree(REPO_ROOT / "plugins", APP_DIR / "plugins")
     copy_tree(REPO_ROOT / "ui" / "pet" / "dist", APP_DIR / "ui" / "pet")
     copy_tree(REPO_ROOT / "ui" / "dashboard" / "dist", APP_DIR / "ui" / "dashboard")
+    shutil.copy2(LAUNCHER, APP_DIR / LAUNCHER.name)
     log(f"assembled app payload -> {APP_DIR}")
 
 

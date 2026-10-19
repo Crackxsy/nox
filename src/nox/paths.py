@@ -22,7 +22,8 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 def repo_root() -> Path:
     """The directory that holds `config/`, `plugins/` and `ui/`.
 
-    Running from a checkout, that is the repository root. `NOX_REPO_ROOT` overrides it, which is
+    Running from a checkout, that is the repository root; in an installed copy, the `app` folder
+    next to the embedded Python. `NOX_REPO_ROOT` overrides it, which is
     how an installed copy points at the data directory it was deployed with. If neither has a
     `config/defaults.yaml`, the package directory is returned, so the caller fails on a path it
     can print rather than on a silently wrong one two layers down.
@@ -30,9 +31,11 @@ def repo_root() -> Path:
     override = os.environ.get("NOX_REPO_ROOT")
     if override:
         return Path(override)
-    checkout = PACKAGE_DIR.parents[1]
-    if (checkout / "config" / "defaults.yaml").is_file():
-        return checkout
+    # A checkout keeps the package at `src/nox`; an installed copy (installer/build.py) at
+    # `app/nox`, right next to `app/config`.
+    for candidate in (PACKAGE_DIR.parents[1], PACKAGE_DIR.parent):
+        if (candidate / "config" / "defaults.yaml").is_file():
+            return candidate
     return PACKAGE_DIR
 
 

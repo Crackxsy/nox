@@ -23,13 +23,14 @@ import yaml
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
+from nox import paths
 from nox.core.config import NoxConfig, load_config
 from nox.paths import user_config_path
 
-#: `<repo>/config/defaults.yaml` - resolved from this module, not from the working directory, so
-#: a plugin worker or a test with a different cwd finds the same file the core uses.
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULTS_PATH = REPO_ROOT / "config" / "defaults.yaml"
+#: `<repo>/config/defaults.yaml` - from `nox.paths`, not from the working directory or this file's
+#: depth, so a plugin worker, a test and an installed copy all find the file the core uses.
+REPO_ROOT = paths.REPO_ROOT
+DEFAULTS_PATH = paths.DEFAULTS_PATH
 
 USER_CONFIG_HEADER = (
     "# Nox user configuration - layer 2 of 4 (Defaults -> User -> Profile -> Runtime).\n"

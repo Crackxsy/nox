@@ -92,6 +92,9 @@ The installer offers one (ticked by default). From a source checkout, make one b
 To start it with Windows, put that same shortcut in
 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` (press Win+R and type `shell:startup`).
 
+An installed copy from an installer built before 0.5.0's start fix does not start at all - see
+"Repairing an installation that does not start" in `installer/README.md`.
+
 ## What to try first
 
 - Say or type **"was kannst du gerade?"** - Nox answers from a catalogue, not from a guess, and it

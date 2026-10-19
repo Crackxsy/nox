@@ -56,14 +56,18 @@ Source: "{#BuildRuntimeDir}\*"; DestDir: "{app}\runtime"; Flags: ignoreversion r
 Source: "{#BuildAppDir}\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: "-m nox.supervisor"; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"
+; Every shortcut starts the launcher, not `-m nox.supervisor`: the launcher puts `{app}\app` on
+; `sys.path` itself and reports a failed start (%LOCALAPPDATA%\Nox\startup-error.log and a
+; message box) instead of `pythonw` failing silently. Installing over an older version replaces
+; these shortcuts, the autostart entry included.
+Name: "{group}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"
 Name: "{group}\{cm:UninstallProgram,Nox}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: "-m nox.supervisor"; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"; Tasks: desktopicon
-Name: "{userstartup}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: "-m nox.supervisor"; WorkingDir: "{app}\app"; Tasks: autostart
+Name: "{autodesktop}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"; Tasks: desktopicon
+Name: "{userstartup}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; Tasks: autostart
 
 [Run]
 ; Optional immediate first start after install finishes (unchecked by default - never surprise-run).
-Filename: "{app}\runtime\pythonw.exe"; Parameters: "-m nox.supervisor"; WorkingDir: "{app}\app"; Description: "{cm:LaunchProgram,Nox}"; Flags: nowait postinstall skipifsilent unchecked
+Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; Description: "{cm:LaunchProgram,Nox}"; Flags: nowait postinstall skipifsilent unchecked
 
 [UninstallDelete]
 ; Belt-and-braces: only ever delete inside {app} (program files). The user's vault, database,

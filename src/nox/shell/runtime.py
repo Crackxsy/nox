@@ -21,7 +21,7 @@ import yaml
 from pydantic import BaseModel, Field, ValidationError
 
 from nox.core.config.types import ConfigError, expand_path
-from nox.paths import nox_home, resolve_config_paths, user_config_path
+from nox.paths import DEFAULTS_PATH, nox_home, resolve_config_paths, user_config_path
 
 SESSION_TOKEN_FILE = "session.token"  # noqa: S105 - file name, not a secret
 SUPERVISOR_TOKEN_FILE = "supervisor.token"  # noqa: S105
@@ -167,9 +167,7 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     if path is not None:
         return _read_yaml(path) or {}
     env = os.environ.get("NOX_CONFIG")
-    defaults_file = (
-        Path(env) if env else Path(__file__).resolve().parents[3] / "config" / "defaults.yaml"
-    )
+    defaults_file = Path(env) if env else DEFAULTS_PATH
     config = _read_yaml(defaults_file) or {}
     _defaults, user_file = resolve_config_paths()
     if user_file is not None:
