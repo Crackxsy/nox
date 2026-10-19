@@ -47,6 +47,10 @@ async def test_tools_are_registered_with_the_manifest_risk(
                 "obs.preflight.check",
                 "obs.replay_buffer.save",
                 "obs.replay_buffer.status.read",
+                "obs.request",
+                "obs.screenshot",
+                "obs.overlay.setup",
+                "obs.audio_track.setup",
             ]
         )
         assert api.tools.get("obs.scene.switch").risk.value == "medium"

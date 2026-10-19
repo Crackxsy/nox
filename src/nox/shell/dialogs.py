@@ -9,7 +9,7 @@ from typing import Any
 
 from PySide6.QtWidgets import QCheckBox, QMessageBox, QWidget
 
-from nox.shell.logic import permission_reply
+from nox.shell.logic import permission_reply, rememberable
 
 _TEXT = {
     "de": {
@@ -59,7 +59,12 @@ class PermissionDialog:
         )
         self.box.setInformativeText("\n".join(details))
         self.remember = QCheckBox(t["remember"])
-        self.box.setCheckBox(self.remember)
+        if rememberable(request):
+            self.box.setCheckBox(self.remember)
+        else:
+            # High risk is confirmed every time; offering the box would promise what the core
+            # refuses to do.
+            self.remember.setVisible(False)
         self.allow_button = self.box.addButton(t["allow"], QMessageBox.ButtonRole.AcceptRole)
         self.deny_button = self.box.addButton(t["deny"], QMessageBox.ButtonRole.RejectRole)
         self.box.setDefaultButton(self.deny_button)

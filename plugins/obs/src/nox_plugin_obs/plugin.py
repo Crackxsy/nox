@@ -24,16 +24,23 @@ stop the recording, or touch the recording file - those verbs do not exist in th
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import ipaddress
+import json
+import tempfile
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from nox.core.events import HealthStatus
 from nox.plugins.api import PluginApi
 from nox.security.model import Risk
+from nox.stream.obs_requests import TOOL_GUIDE, refusal
 
 from .ws_client import (
     DEFAULT_EVENT_SUBSCRIPTIONS,
@@ -76,6 +83,80 @@ class ReplayBufferSaveInput(BaseModel):
     reason: str = ""
 
 
+#: An `obs.request` answer larger than this is cut: the model gets a preview, not megabytes.
+MAX_RESPONSE_CHARS = 24_000
+#: How many `obs.screenshot` files are kept; older ones are deleted.
+SCREENSHOTS_KEPT = 5
+#: Names Nox gives the sources it sets up (the user may rename them; the input is then created
+#: again under this name on the next setup).
+OVERLAY_INPUT = "Nox Overlay"
+VOICE_INPUT = "Nox Voice"
+
+
+class ObsRequestInput(BaseModel):
+    """Input of `obs.request`: one obs-websocket v5 request. Batches are not offered - every
+    request is classified and confirmed on its own."""
+
+    request_type: str = Field(..., min_length=3, max_length=64, pattern=r"^[A-Z][A-Za-z0-9]+$")
+    request_data: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("request_data")
+    @classmethod
+    def _bounded(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(value, default=str)) > 64_000:
+            raise ValueError("request_data is larger than 64 kB")
+        return value
+
+
+class ScreenshotInput(BaseModel):
+    """`obs.screenshot`: a small local image of a source or scene (default: the program scene)."""
+
+    source_name: str = Field(default="", max_length=200)
+    width: int = Field(default=640, ge=64, le=1280)
+
+
+class OverlaySetupInput(BaseModel):
+    """`obs.overlay.setup`: create or update the browser source that shows Nox on stream. The URL
+    must point at Nox's own loopback web server; it carries the overlay credential, so it is never
+    logged."""
+
+    url: str = Field(..., min_length=10, max_length=600)
+    input_name: str = Field(default=OVERLAY_INPUT, min_length=1, max_length=100)
+    scene_name: str = Field(default="", max_length=200)
+    width: int = Field(default=400, ge=64, le=3840)
+    height: int = Field(default=400, ge=64, le=2160)
+
+    @field_validator("url")
+    @classmethod
+    def _loopback_pet_page(cls, value: str) -> str:
+        parts = urlsplit(value)
+        try:
+            loopback = ipaddress.ip_address(parts.hostname or "").is_loopback
+        except ValueError:
+            loopback = parts.hostname == "localhost"
+        if parts.scheme != "http" or not loopback or not parts.path.startswith("/pet/"):
+            raise ValueError("the overlay URL must be Nox's own http://127.0.0.1:<port>/pet/ page")
+        return value
+
+
+class AudioTrackSetupInput(BaseModel):
+    """`obs.audio_track.setup`: an audio input capturing the device Nox speaks into (the output
+    side of a virtual cable), so Nox's voice is its own source - and track - in OBS."""
+
+    device_hint: str = Field(default="CABLE Output", min_length=1, max_length=200)
+    input_name: str = Field(default=VOICE_INPUT, min_length=1, max_length=100)
+    scene_name: str = Field(default="", max_length=200)
+    #: OBS audio tracks (1-6) the source is routed to; empty keeps OBS's default (all tracks).
+    tracks: list[int] = Field(default_factory=list, max_length=6)
+
+    @field_validator("tracks")
+    @classmethod
+    def _track_numbers(cls, value: list[int]) -> list[int]:
+        if any(t < 1 or t > 6 for t in value):
+            raise ValueError("OBS audio tracks are numbered 1 to 6")
+        return sorted(set(value))
+
+
 class ObsPlugin:
     def __init__(self, api: PluginApi) -> None:
         self.api = api
@@ -86,6 +167,7 @@ class ObsPlugin:
         #: Futures waiting on the next `ReplayBufferSaved` event ( step 4-5): OBS's
         #: `SaveReplayBuffer` response carries no path, only the later event does.
         self._replay_waiters: list[asyncio.Future[str]] = []
+        self._background: set[asyncio.Task[None]] = set()
         self._replay_save_timeout_s = float(api.config.get("replay_save_timeout_s", 10.0))
         subscribe = bool(api.config.get("subscribe_events", True))
         url = self._url()
@@ -99,6 +181,11 @@ class ObsPlugin:
             min_backoff_s=float(api.config.get("min_backoff_s", 1.0)),
             max_backoff_s=float(api.config.get("max_backoff_s", 30.0)),
             authorize=lambda: self._authorize_egress(url),
+            on_auth_failed=self._on_obs_auth_failed,
+        )
+        configured_dir = str(api.config.get("screenshot_dir", "") or "")
+        self._screenshot_dir = (
+            Path(configured_dir) if configured_dir else Path(tempfile.gettempdir()) / "nox-obs"
         )
 
     def _url(self) -> str:
@@ -123,6 +210,9 @@ class ObsPlugin:
         self.client.start()
 
     async def stop(self) -> None:
+        for task in list(self._background):
+            task.cancel()
+        await asyncio.gather(*self._background, return_exceptions=True)
         await self.client.stop()
 
     # -- health --------------------------------------------------------------------------------
@@ -131,6 +221,10 @@ class ObsPlugin:
         if not (self.client.connected and self.client.identified):
             if await self._get_password() is None:
                 return HealthStatus.UNAVAILABLE, "no secret configured: " + OBS_PASSWORD_SECRET
+            if self.client.auth_failed:
+                return HealthStatus.UNAVAILABLE, "OBS rejected the login: " + (
+                    self.client.last_error or "authentication failed"
+                )
             return HealthStatus.UNAVAILABLE, self.client.last_error or "not connected to OBS"
         if self.client.event_subscriptions == 0:
             return HealthStatus.LIMITED, "connected but not subscribed to OBS events"
@@ -140,6 +234,25 @@ class ObsPlugin:
 
     async def _on_obs_connected(self) -> None:
         await self.api.events.emit("obs.connected", {"reason": ""})
+        # OBS may already be live when Nox (re)connects - after a Nox restart in the middle of a
+        # broadcast, say. `StreamStateChanged` only reports changes, so ask once. As a task: this
+        # hook runs before the client reads responses, so awaiting a request here would wait for
+        # an answer nobody is reading yet.
+        task = asyncio.create_task(self._sync_stream_state(), name="obs-stream-state")
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    async def _sync_stream_state(self) -> None:
+        try:
+            status = await self.client.request("GetStreamStatus")
+        except (ConnectionError, ObsRequestError, TimeoutError) as exc:
+            self.api.log.warning("obs.stream_status_unavailable", error=str(exc))
+            return
+        await self._on_stream_state(bool(status.get("outputActive", False)))
+
+    async def _on_obs_auth_failed(self, reason: str) -> None:
+        """Tell the core once per run of failures; it reports it to the user (health, notice)."""
+        await self.api.events.emit("obs.auth_failed", {"reason": reason})
 
     async def _on_obs_disconnected(self, reason: str) -> None:
         await self.api.events.emit(
@@ -357,6 +470,213 @@ class ObsPlugin:
             }
         return {"ok": True, "file_path": path, "reason": ""}
 
+    # -- generic request, screenshot, one-click setups -------------------------------------------
+
+    def _require_connection(self) -> None:
+        if not (self.client.connected and self.client.identified):
+            raise ConnectionError(
+                f"not connected to OBS ({self.client.last_error or 'unavailable'})"
+            )
+
+    def _privacy_scene(self) -> str:
+        return str(self.api.config.get("privacy_scene", "") or "")
+
+    async def request(self, data: ObsRequestInput) -> dict[str, Any]:
+        """`obs.request`: any obs-websocket v5 request. The core has already classified and
+        confirmed this call (`nox.stream.obs_requests`); the refusal check here is a second lock
+        on the same door, in case this handler is ever reached another way."""
+        refused = refusal(data.request_type)
+        if refused is not None:
+            raise PermissionError(refused)
+        self._require_connection()
+        try:
+            response = await self.client.request(data.request_type, data.request_data)
+        except ObsRequestError as exc:
+            # OBS's own explanation ("No source was found by the name of ...") is what lets the
+            # model correct its next request, so it is a result, not a crash.
+            return {
+                "ok": False,
+                "request_type": data.request_type,
+                "code": exc.code,
+                "comment": exc.comment,
+            }
+        text = json.dumps(response, default=str)
+        if len(text) > MAX_RESPONSE_CHARS:
+            return {
+                "ok": True,
+                "request_type": data.request_type,
+                "truncated": True,
+                "response_preview": text[:MAX_RESPONSE_CHARS],
+            }
+        return {"ok": True, "request_type": data.request_type, "response": response}
+
+    async def screenshot(self, data: ScreenshotInput) -> dict[str, Any]:
+        """`obs.screenshot`: a small JPEG of a source or scene, written to a local folder. Only
+        the path and size are returned - the image never travels with the tool result, so it
+        never reaches a cloud model by accident."""
+        self._require_connection()
+        source = data.source_name or await self._current_scene_name()
+        response = await self.client.request(
+            "GetSourceScreenshot",
+            {
+                "sourceName": source,
+                "imageFormat": "jpg",
+                "imageWidth": data.width,
+                "imageCompressionQuality": 70,
+            },
+        )
+        image = _decode_image(str(response.get("imageData", "")))
+        path = await asyncio.to_thread(self._store_screenshot, image)
+        return {"source": source, "path": str(path), "bytes": len(image), "width": data.width}
+
+    def _store_screenshot(self, image: bytes) -> Path:
+        directory = self._screenshot_dir
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"obs-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}.jpg"
+        path.write_bytes(image)
+        older = sorted(directory.glob("obs-*.jpg"), key=lambda p: p.stat().st_mtime)
+        for stale in older[:-SCREENSHOTS_KEPT]:
+            stale.unlink(missing_ok=True)
+        return path
+
+    async def _current_scene_name(self) -> str:
+        current = await self.client.request("GetCurrentProgramScene")
+        scene = str(current.get("currentProgramSceneName", "") or current.get("sceneName", ""))
+        if not scene:
+            raise ValueError("OBS reported no current program scene")
+        return scene
+
+    async def _target_scene(self, requested: str) -> str:
+        scene = requested or await self._current_scene_name()
+        if scene == self._privacy_scene():
+            raise PermissionError(
+                f"{scene!r} is the privacy scene; switch to the scene you stream from first"
+            )
+        return scene
+
+    async def _input_names(self, kind: str) -> set[str]:
+        listed = await self.client.request("GetInputList", {"inputKind": kind})
+        return {str(i.get("inputName", "")) for i in listed.get("inputs", [])}
+
+    async def _ensure_in_scene(self, scene: str, input_name: str) -> bool:
+        """Add an existing input to `scene` unless it is already there. True when added."""
+        try:
+            await self.client.request(
+                "GetSceneItemId", {"sceneName": scene, "sourceName": input_name}
+            )
+        except ObsRequestError:
+            await self.client.request(
+                "CreateSceneItem",
+                {"sceneName": scene, "sourceName": input_name, "sceneItemEnabled": True},
+            )
+            return True
+        return False
+
+    async def overlay_setup(self, data: OverlaySetupInput) -> dict[str, Any]:
+        """`obs.overlay.setup`: the browser source that shows Nox on stream, created in the
+        current scene or updated in place (same name), always with a transparent background."""
+        self._require_connection()
+        scene = await self._target_scene(data.scene_name)
+        settings = {
+            "url": data.url,
+            "width": data.width,
+            "height": data.height,
+            "css": "body { background-color: rgba(0, 0, 0, 0); margin: 0; overflow: hidden; }",
+            "reroute_audio": False,
+            "shutdown": False,
+        }
+        if data.input_name in await self._input_names("browser_source"):
+            await self.client.request(
+                "SetInputSettings",
+                {"inputName": data.input_name, "inputSettings": settings, "overlay": True},
+            )
+            added = await self._ensure_in_scene(scene, data.input_name)
+            return {"input_name": data.input_name, "scene": scene, "created": False, "added": added}
+        await self.client.request(
+            "CreateInput",
+            {
+                "sceneName": scene,
+                "inputName": data.input_name,
+                "inputKind": "browser_source",
+                "inputSettings": settings,
+                "sceneItemEnabled": True,
+            },
+        )
+        return {"input_name": data.input_name, "scene": scene, "created": True, "added": True}
+
+    async def audio_track_setup(self, data: AudioTrackSetupInput) -> dict[str, Any]:
+        """`obs.audio_track.setup`: an audio input on the device Nox speaks into. OBS lists the
+        devices an input can capture only through an existing input, so a new one is created
+        first and then pointed at the device; if no device matches, that new input is removed
+        again rather than left behind half set up."""
+        self._require_connection()
+        scene = await self._target_scene(data.scene_name)
+        created = data.input_name not in await self._input_names("wasapi_input_capture")
+        if created:
+            await self.client.request(
+                "CreateInput",
+                {
+                    "sceneName": scene,
+                    "inputName": data.input_name,
+                    "inputKind": "wasapi_input_capture",
+                    "inputSettings": {},
+                    "sceneItemEnabled": True,
+                },
+            )
+        items = await self.client.request(
+            "GetInputPropertiesListPropertyItems",
+            {"inputName": data.input_name, "propertyName": "device_id"},
+        )
+        devices = [
+            (str(i.get("itemName", "")), str(i.get("itemValue", "")))
+            for i in items.get("propertyItems", [])
+            if i.get("itemEnabled", True)
+        ]
+        hint = data.device_hint.casefold()
+        match = next(((n, v) for n, v in devices if hint in n.casefold() and v), None)
+        if match is None:
+            if created:
+                await self.client.request("RemoveInput", {"inputName": data.input_name})
+            return {
+                "ok": False,
+                "reason": f"no OBS audio input device matches {data.device_hint!r}",
+                "devices": [n for n, _ in devices],
+            }
+        await self.client.request(
+            "SetInputSettings",
+            {"inputName": data.input_name, "inputSettings": {"device_id": match[1]}},
+        )
+        if data.tracks:
+            await self.client.request(
+                "SetInputAudioTracks",
+                {
+                    "inputName": data.input_name,
+                    "inputAudioTracks": {str(t): t in data.tracks for t in range(1, 7)},
+                },
+            )
+        added = created or await self._ensure_in_scene(scene, data.input_name)
+        return {
+            "ok": True,
+            "input_name": data.input_name,
+            "device": match[0],
+            "scene": scene,
+            "created": created,
+            "added": added,
+            "tracks": data.tracks,
+        }
+
+
+def _decode_image(data_url: str) -> bytes:
+    """The bytes of OBS's `imageData` (a `data:image/jpg;base64,...` URL)."""
+    _, _, encoded = data_url.partition("base64,")
+    try:
+        image = base64.b64decode(encoded or data_url, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("OBS returned no readable image") from exc
+    if not image:
+        raise ValueError("OBS returned an empty image")
+    return image
+
 
 def create(api: PluginApi) -> ObsPlugin:
     plugin = ObsPlugin(api)
@@ -421,6 +741,54 @@ def create(api: PluginApi) -> ObsPlugin:
         Risk.READ,
         description="Read whether OBS's replay buffer is currently active.",
         side_effects=False,
+        local=True,
+    )
+    api.tools.register(
+        "obs.request",
+        ObsRequestInput,
+        plugin.request,
+        Risk.HIGH,
+        description=TOOL_GUIDE,
+        side_effects=True,
+        local=True,
+    )
+    api.tools.register(
+        "obs.screenshot",
+        ScreenshotInput,
+        plugin.screenshot,
+        Risk.READ,
+        description=(
+            "Small JPEG of an OBS source or scene (default: the program scene), saved to a local "
+            "folder; returns its path and size, never the image itself. To check a layout "
+            "numerically, use obs.request GetSceneItemTransform."
+        ),
+        side_effects=False,
+        local=True,
+    )
+    api.tools.register(
+        "obs.overlay.setup",
+        OverlaySetupInput,
+        plugin.overlay_setup,
+        Risk.MEDIUM,
+        description=(
+            "Create or update the 'Nox Overlay' browser source in the current scene. Needs the "
+            "overlay URL with its credential, which only Nox's own setup has - call "
+            "stream.overlay.setup instead."
+        ),
+        side_effects=True,
+        local=True,
+    )
+    api.tools.register(
+        "obs.audio_track.setup",
+        AudioTrackSetupInput,
+        plugin.audio_track_setup,
+        Risk.MEDIUM,
+        description=(
+            "Create the 'Nox Voice' audio input in OBS on the device Nox speaks into (default: "
+            "the output side of VB-Audio Virtual Cable, 'CABLE Output'), optionally routed to "
+            "OBS audio tracks 1-6 only."
+        ),
+        side_effects=True,
         local=True,
     )
     return plugin

@@ -147,6 +147,34 @@ def test_permission_dialog_reply_and_session_memory(
     app.quit()
 
 
+def test_high_risk_is_asked_every_time_even_if_remembered(
+    qapp: Any, tmp_path: Path, fake_bridge_factory: Any
+) -> None:
+    factory, created = fake_bridge_factory
+    asked: list[dict[str, Any]] = []
+
+    def handler(payload: dict[str, Any]) -> dict[str, Any]:
+        asked.append(payload)
+        return {"grant_id": payload["request_id"], "decision": "allow", "remember": True}
+
+    app = make_app(make_runtime(tmp_path), factory, permission_handler=handler)
+    app.start()
+    qapp.processEvents()
+    req = {
+        "request_id": "r1",
+        "agent": "nox.chat",
+        "tool": "obs",
+        "action": "scene.delete",
+        "mode": "stream",
+        "risk": "high",
+    }
+    created[0].emit("security.permission_requested", req)
+    created[0].emit("security.permission_requested", {**req, "request_id": "r2"})
+    qapp.processEvents()
+    assert [p["request_id"] for p in asked] == ["r1", "r2"]
+    app.quit()
+
+
 def test_kill_switch_goes_to_core_when_connected(
     qapp: Any, tmp_path: Path, fake_bridge_factory: Any
 ) -> None:

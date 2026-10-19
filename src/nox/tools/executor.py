@@ -2,10 +2,11 @@
 
 Steps, in order: registry lookup (unknown -> refused) -> input validation against the tool's
 `input_model` (invalid -> tool error, never executed) -> `PermissionRequest` built from the tool
-name/target -> `PermissionEngine.check()` (deny -> tool error; confirm -> `request_confirmation()`
-and wait, 60 s timeout = deny; allow -> run) -> execution with a timeout and cancellation on
-`security.kill_switch` -> every outcome is audited (actor/tool/action/target/decision/duration,
-never the tool's input or output - those may carry private content).
+name/target, or from the per-call `CallScope` of a tool that has one -> `PermissionEngine.check()`
+(deny -> tool error; confirm -> `request_confirmation()` and wait, 60 s timeout = deny; allow ->
+run) -> execution with a timeout and cancellation on `security.kill_switch` -> every outcome is
+audited (actor/tool/action/target/decision/duration, never the tool's input or output - those may
+carry private content).
 """
 
 from __future__ import annotations
@@ -141,13 +142,32 @@ class ToolExecutor:
             )
 
         payload = validated.model_dump(mode="json")
+        risk = spec.risk
+        if spec.scope is not None:
+            try:
+                scope = spec.scope(payload)
+            except ValueError as exc:
+                log.info("tools.call_unscoped", tool=name, reason=str(exc))
+                return self._finish(
+                    agent=agent,
+                    tool=tool,
+                    action=action,
+                    target="",
+                    task_id=task_id,
+                    decision=Decision.DENY,
+                    started=started,
+                    result="validation_failed",
+                    ok=False,
+                    error=ERR_INVALID_INPUT,
+                )
+            action, risk = scope.action, scope.risk
         target = spec.targets(payload) if spec.targets is not None else ""
         request = PermissionRequest(
             agent=agent,
             tool=tool,
             action=action,
             mode=mode,
-            risk=spec.risk,
+            risk=risk,
             target=target,
             task_id=task_id,
             origin=origin,

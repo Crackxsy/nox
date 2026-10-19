@@ -246,9 +246,9 @@ def test_stream_profile_confirms_scene_switch(engine: DefaultPermissionEngine) -
         engine.check(req("obs", "scene.switch", Risk.MEDIUM, mode="stream")).decision
         is Decision.CONFIRM
     )
-    assert (
-        engine.check(req("obs", "scene.delete", Risk.HIGH, mode="stream")).decision is Decision.DENY
-    )
+    # Deleting a scene is asked every time (high risk is never remembered), not refused outright.
+    deleting = engine.check(req("obs", "scene.delete", Risk.HIGH, mode="stream"))
+    assert deleting.decision is Decision.CONFIRM and deleting.rule_id == "stream.obs.scene_delete"
     assert (
         engine.check(req("screenshot", "upload", Risk.MEDIUM, target="https://x")).rule_id
         == "stream.screenshots_to_cloud"

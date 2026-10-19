@@ -29,6 +29,7 @@ from nox.shell.logic import (
     hotkey_map,
     kill_path,
     pet_url,
+    rememberable,
     toggle_privacy,
     ws_url,
 )
@@ -344,7 +345,7 @@ class ShellApp:
 
     def _handle_permission(self, payload: dict[str, Any]) -> None:
         key = (str(payload.get("agent")), str(payload.get("tool")), str(payload.get("action")))
-        remembered = self._session_permissions.get(key)
+        remembered = self._session_permissions.get(key) if rememberable(payload) else None
         if remembered is not None:
             reply = {
                 "grant_id": payload.get("request_id"),
@@ -356,7 +357,7 @@ class ShellApp:
             if answer is None:
                 return
             reply = answer
-            if reply.get("remember"):
+            if reply.get("remember") and rememberable(payload):
                 self._session_permissions[key] = reply["decision"] == "allow"
         self._request("security.permission.reply", reply)
 

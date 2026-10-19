@@ -39,6 +39,10 @@ OBS_MANIFEST: dict[str, Any] = {
         {"tool": "obs.preflight.check", "risk": "read"},
         {"tool": "obs.replay_buffer.save", "risk": "medium"},
         {"tool": "obs.replay_buffer.status.read", "risk": "read"},
+        {"tool": "obs.request", "risk": "high"},
+        {"tool": "obs.screenshot", "risk": "read"},
+        {"tool": "obs.overlay.setup", "risk": "medium"},
+        {"tool": "obs.audio_track.setup", "risk": "medium"},
     ],
     "events": {
         "emits": [
@@ -48,6 +52,7 @@ OBS_MANIFEST: dict[str, Any] = {
             "stream.started",
             "stream.ended",
             "obs.recording_changed",
+            "obs.auth_failed",
         ],
         "listens": ["security.panic"],
     },
