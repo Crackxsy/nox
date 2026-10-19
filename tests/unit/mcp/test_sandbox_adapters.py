@@ -22,6 +22,7 @@ class EgressDecl:
 @dataclass(frozen=True)
 class Limits:
     timeout_s: float = 60.0
+    max_message_bytes: int = 1024
 
 
 @dataclass
@@ -95,3 +96,4 @@ async def test_a_local_server_without_network_gets_no_egress(tmp_path: Path) -> 
     )
     assert launched.pid == 7 and sandbox.runs[0]["egress"] == EgressDecl()
     assert sandbox.runs[0]["env"] == {"A": "1"}
+    assert "cwd" not in sandbox.runs[0]  # the sandbox's own folder, never one under <nox home>

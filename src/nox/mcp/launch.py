@@ -17,15 +17,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import importlib
+import json
 import subprocess
 import sys
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
 from nox.core.logging import get_logger
-from nox.mcp.client import MAX_MESSAGE_BYTES
+from nox.mcp.client import MAX_MESSAGE_BYTES, McpClientError, StdioTransport, Transport
 
 log = get_logger(__name__)
 
@@ -51,11 +52,10 @@ class LaunchedServer(Protocol):
     @property
     def pid(self) -> int: ...
     @property
-    def reader(self) -> asyncio.StreamReader: ...
-    @property
-    def writer(self) -> asyncio.StreamWriter: ...
-    @property
     def returncode(self) -> int | None: ...
+    def transport(self) -> Transport:
+        """The JSON-RPC line transport over the process's stdin/stdout."""
+
     def stderr_tail(self) -> str: ...
     async def wait(self) -> int: ...
     async def terminate(self, timeout_s: float = 2.0) -> None: ...
@@ -110,6 +110,9 @@ class _Process:
     @property
     def returncode(self) -> int | None:
         return self._process.returncode
+
+    def transport(self) -> Transport:
+        return StdioTransport(self.reader, self.writer)
 
     def stderr_tail(self) -> str:
         return " | ".join(self._tail)[-STDERR_TAIL_CHARS:]
@@ -171,48 +174,79 @@ class ProcessLauncher:
         return _Process(process)
 
 
+class SandboxLineTransport:
+    """Newline-delimited JSON-RPC over a `SandboxProcess` (`send(bytes)` / `readline()`)."""
+
+    def __init__(self, process: Any) -> None:
+        self._process = process
+
+    async def send(self, message: dict[str, Any]) -> None:
+        data = json.dumps(message, ensure_ascii=False, separators=(",", ":")) + chr(10)
+        try:
+            await self._process.send(data.encode("utf-8"))
+        except (BrokenPipeError, OSError) as exc:
+            raise McpClientError("the server has exited") from exc
+
+    async def messages(self) -> AsyncIterator[dict[str, Any]]:
+        while True:
+            try:
+                line = await self._process.readline()
+            except ValueError as exc:  # MessageTooLarge
+                raise McpClientError("the server sent a message larger than allowed") from exc
+            if not line:
+                return
+            text = line.decode("utf-8", errors="replace").strip()
+            if not text:
+                continue
+            try:
+                message = json.loads(text)
+            except json.JSONDecodeError:
+                log.info("mcp.client.non_json_line", size=len(text))
+                continue
+            if isinstance(message, dict):
+                yield message
+
+    async def close(self) -> None:
+        return None
+
+
 class _SandboxedServer:
-    """A `SandboxProcess` (the sandbox's long-running variant) seen as a `LaunchedServer`."""
+    """A `SandboxProcess` (`Sandbox.start`) seen as a `LaunchedServer`: its pipes are `send` /
+    `readline`, it ends with `stop(grace_s)`, and its stderr is the sandbox's ring buffer."""
 
     def __init__(self, process: Any) -> None:
         self._process = process
 
     @property
     def pid(self) -> int:
-        return int(getattr(self._process, "pid", 0) or 0)
-
-    @property
-    def reader(self) -> asyncio.StreamReader:
-        reader: asyncio.StreamReader = self._process.stdout
-        return reader
-
-    @property
-    def writer(self) -> asyncio.StreamWriter:
-        writer: asyncio.StreamWriter = self._process.stdin
-        return writer
+        return int(self._process.pid)
 
     @property
     def returncode(self) -> int | None:
-        code = getattr(self._process, "returncode", None)
+        code = self._process.returncode
         return None if code is None else int(code)
 
+    def transport(self) -> Transport:
+        return SandboxLineTransport(self._process)
+
     def stderr_tail(self) -> str:
-        tail = getattr(self._process, "stderr_tail", None)
-        return str(tail() if callable(tail) else "")[-STDERR_TAIL_CHARS:]
+        tail = str(self._process.stderr_tail()).strip().splitlines()[-40:]
+        return " | ".join(tail)[-STDERR_TAIL_CHARS:]
 
     async def wait(self) -> int:
-        return int(await self._process.wait())
+        code = await self._process.wait()
+        return -9 if code is None else int(code)
 
     async def terminate(self, timeout_s: float = 2.0) -> None:
         with contextlib.suppress(Exception):
-            await asyncio.wait_for(self._process.terminate(), timeout_s)
+            await self._process.stop(grace_s=timeout_s)
 
 
 class SandboxLauncher:
-    """Local MCP servers inside `nox.sandbox`, through its long-running variant
-    `Sandbox.start(argv, *, cwd, env, egress, limits)`, which returns a process with asyncio
-    `stdin`/`stdout`, `pid`, `returncode`, `wait()` and `terminate()`. A server that declares no
-    network gets no egress at all; one that does goes through the sandbox's egress proxy."""
+    """Local MCP servers inside `nox.sandbox`, through `Sandbox.start(argv, *, env, egress,
+    limits)` -> `SandboxProcess`. The sandbox owns the server's work folder (a private one per
+    start; nothing under `<nox home>` is shared with it). A server that declares no network gets
+    no egress at all; one that does goes through its own egress proxy (`*`: public hosts only)."""
 
     sandboxed = True
 
@@ -228,12 +262,15 @@ class SandboxLauncher:
         env: Mapping[str, str],
         network: bool,
     ) -> LaunchedServer:
-        await asyncio.to_thread(cwd.mkdir, parents=True, exist_ok=True)
+        del cwd  # the sandbox's private work folder, not a folder under <nox home>
         egress = self._module.EgressDecl(hosts=("*",)) if network else self._module.EgressDecl()
         process = await self._sandbox.start(
-            list(argv), cwd=str(cwd), env=dict(env), egress=egress, limits=self._module.Limits()
+            list(argv),
+            env=dict(env),
+            egress=egress,
+            limits=self._module.Limits(max_message_bytes=MAX_MESSAGE_BYTES),
         )
-        log.info("mcp.server_process_started", sandboxed=True)
+        log.info("mcp.server_process_started", pid=process.pid, sandboxed=True)
         return _SandboxedServer(process)
 
 
