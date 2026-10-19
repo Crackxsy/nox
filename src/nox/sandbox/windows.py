@@ -8,9 +8,10 @@ Two variants, strongest first:
   container SID so that is the one place it can read and write. Whether it can reach a *loopback*
   port of the host depends on Windows network isolation, which is not enforced on every machine
   (measured: on some Windows 11 builds a desktop AppContainer reaches any host loopback listener).
-  So the backend measures it once (`host_loopback_reachable`) and reports `confines_network`
-  honestly: where loopback leaks, local services (a model server, a browser's debug port) would
-  be reachable from inside, and the sandbox is not "strong".
+  So the backend measures it (`host_loopback_reachable`, fail closed: anything but an explicit
+  "blocked" report counts as reachable) and reports `confines_network` honestly: where loopback
+  leaks, local services (a model server, a browser's debug port) would be reachable from inside,
+  and the sandbox is not "strong".
 * **Low-integrity token** (fallback): the child runs with a low-integrity copy of the core's token.
   Mandatory integrity control stops it *writing* anything labelled medium (every user file). It
   does **not** stop it reading the user's files or the credential store, and integrity level does
@@ -53,12 +54,17 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-__all__ = ["FORWARDER_PS", "WindowsSandbox", "appcontainer_available", "host_loopback_reachable"]
+__all__ = [
+    "FORWARDER_PS",
+    "WindowsSandbox",
+    "appcontainer_available",
+    "host_loopback_reachable",
+    "probe_verdict",
+]
 
 _APP_CONTAINER_NAME = "Nox.Sandbox"
 _SYSTEM32 = r"C:\Windows\System32"
 _POWERSHELL = _SYSTEM32 + r"\WindowsPowerShell\v1.0\powershell.exe"
-_CURL = _SYSTEM32 + r"\curl.exe"
 #: Environment the child inherits. Nothing that points at the user's profile or secrets.
 _SAFE_ENV_KEYS = (
     "SystemRoot",
@@ -119,24 +125,52 @@ def appcontainer_available() -> bool:
 
 _loopback_probe: dict[str, bool] = {}
 _probe_lock = threading.Lock()
+#: What the probe child prints after its connection attempt failed. Only this, with exit code 0
+#: and no connection seen by the core, counts as "isolated".
+_PROBE_BLOCKED = "NOXPROBE BLOCKED"
+_PROBE_PS = (
+    "try {{ (New-Object Net.Sockets.TcpClient).Connect('127.0.0.1', {port}); "
+    "[Console]::Out.WriteLine('NOXPROBE OPEN') }} "
+    "catch {{ [Console]::Out.WriteLine('" + _PROBE_BLOCKED + "') }}; exit 0"
+)
 
 
 def host_loopback_reachable(sid: str) -> bool:
     """Whether a child in AppContainer `sid` can connect to a loopback port of the host.
 
-    Measured once per process and container: the core listens on `127.0.0.1:0`, a contained
-    `curl.exe` (PowerShell where curl is absent) tries to connect, and the core watches for the
-    connection. Any doubt - the probe could not even start - counts as "reachable", so the
-    guarantee is never overstated.
+    The core listens on `127.0.0.1:0`, a contained PowerShell tries to connect and reports what
+    happened, and the core watches for the connection. Fail closed: only an explicit "blocked"
+    report from a probe that ran to its end (exit code 0) and no connection seen counts as
+    isolated. A timeout, a crash, a missing report or a probe that could not start counts as
+    reachable - and such an inconclusive result is not cached, so a later call measures again
+    instead of keeping a guess. A conclusive result is measured once per process and container.
     """
     with _probe_lock:
-        if sid not in _loopback_probe:
-            _loopback_probe[sid] = _probe_loopback(sid)
-            log.info("sandbox.loopback_probe", reachable=_loopback_probe[sid])
-        return _loopback_probe[sid]
+        if sid in _loopback_probe:
+            return _loopback_probe[sid]
+        measured = _probe_loopback(sid)
+        log.info("sandbox.loopback_probe", reachable=measured, conclusive=measured is not None)
+        if measured is None:
+            return True
+        _loopback_probe[sid] = measured
+        return measured
 
 
-def _probe_loopback(sid: str) -> bool:
+def probe_verdict(*, connected: bool, result: Result | None) -> bool | None:
+    """Reachable (True), isolated (False) or inconclusive (None) from one probe run."""
+    if connected:
+        return True
+    if result is None or result.timed_out or result.exit_code != 0:
+        return None
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if lines == [_PROBE_BLOCKED]:
+        return False
+    if lines == ["NOXPROBE OPEN"]:
+        return True  # it connected somewhere, even if the core's listener did not see it
+    return None
+
+
+def _probe_loopback(sid: str) -> bool | None:
     from nox.sandbox import _win32
 
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -156,17 +190,7 @@ def _probe_loopback(sid: str) -> bool:
 
     watcher = threading.Thread(target=accept, daemon=True)
     watcher.start()
-    url = f"http://127.0.0.1:{port}/"
-    if Path(_CURL).exists():
-        argv = [_CURL, "-s", "-m", "4", "-o", "NUL", url]
-    else:
-        argv = [
-            _POWERSHELL,
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            f"try{{(New-Object Net.Sockets.TcpClient).Connect('127.0.0.1',{port})}}catch{{}}",
-        ]
+    argv = [_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", _PROBE_PS.format(port=port)]
     work = Path(tempfile.mkdtemp(prefix="nox-sbx-probe-"))
     try:
         _grant_container(work, sid)
@@ -182,16 +206,19 @@ def _probe_loopback(sid: str) -> bool:
         log.warning("sandbox.loopback_probe_failed", error=str(exc))
         listener.close()
         _best_effort_rmtree(work)
-        return True
+        return None
+    result: Result | None = None
     try:
-        spawned.wait(10_000)
-        watcher.join(timeout=9.0)
+        result = _collect(spawned, Limits(timeout_s=30.0, max_output_bytes=4096))
+        watcher.join(timeout=2.0)
+    except OSError as exc:
+        log.warning("sandbox.loopback_probe_failed", error=str(exc))
     finally:
         spawned.close()
         _close_fds(spawned)
         listener.close()
         _best_effort_rmtree(work)
-    return connected.is_set()
+    return probe_verdict(connected=connected.is_set(), result=result)
 
 
 def _grant_container(work: Path, sid: str) -> None:

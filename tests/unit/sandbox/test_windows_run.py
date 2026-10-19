@@ -227,3 +227,74 @@ async def test_appcontainer_without_declaration_cannot_reach_the_internet() -> N
         limits=Limits(timeout_s=40),
     )
     assert result.stdout.strip() in ("000", ""), result.stdout
+
+
+# ---- the loopback probe fails closed (push review) ---
+
+
+def _probe_result(stdout: str = "", exit_code: int | None = 0, *, timed_out: bool = False):  # noqa: ANN202
+    from nox.sandbox.model import Result
+
+    return Result(exit_code=exit_code, stdout=stdout, stderr="", timed_out=timed_out)
+
+
+@pytest.mark.parametrize(
+    "connected,result,expected",
+    [
+        (False, "blocked", False),  # the one way to "isolated": explicit report, exit 0
+        (True, "blocked", True),  # the core saw the connection: whatever the child says
+        (False, "timeout", None),
+        (False, "crash", None),
+        (False, "silent", None),
+        (False, "garbage", None),
+        (False, "none", None),  # the probe never produced a result
+        (False, "open", True),
+    ],
+)
+def test_probe_verdict_is_isolated_only_on_an_explicit_blocked_report(
+    connected: bool, result: str, expected: bool | None
+) -> None:
+    from nox.sandbox.windows import probe_verdict
+
+    results = {
+        "blocked": _probe_result("NOXPROBE BLOCKED\r\n"),
+        "timeout": _probe_result("NOXPROBE BLOCKED\r\n", None, timed_out=True),
+        "crash": _probe_result("NOXPROBE BLOCKED\r\n", 3221225477),
+        "silent": _probe_result(""),
+        "garbage": _probe_result("BLOCKED but also something else\r\n"),
+        "none": None,
+        "open": _probe_result("NOXPROBE OPEN\r\n"),
+    }
+    assert probe_verdict(connected=connected, result=results[result]) is expected
+
+
+def test_an_inconclusive_probe_counts_as_reachable_and_is_not_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nox.sandbox import windows
+
+    answers = iter([None, False])
+    monkeypatch.setattr(windows, "_probe_loopback", lambda sid: next(answers))
+    monkeypatch.setattr(windows, "_loopback_probe", {})
+    sid = "S-1-15-2-99-98-97"
+    assert windows.host_loopback_reachable(sid) is True  # inconclusive: fail closed
+    assert sid not in windows._loopback_probe  # noqa: SLF001 - never cached as a guess
+    assert windows.host_loopback_reachable(sid) is False  # measured again, now conclusive
+    assert windows._loopback_probe[sid] is False  # noqa: SLF001
+
+
+async def test_an_inconclusive_probe_means_the_appcontainer_is_not_strong(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nox.sandbox import windows
+
+    if not windows.appcontainer_available():
+        pytest.skip("AppContainer profile cannot be created here")
+    monkeypatch.setattr(windows, "_probe_loopback", lambda sid: None)
+    monkeypatch.setattr(windows, "_loopback_probe", {})
+    g = windows.WindowsSandbox(prefer_appcontainer=True).guarantees()
+    assert g.confines_network is False and not g.strong
+    with pytest.raises(SandboxUnavailable, match="accept_weak_sandbox"):
+        await Sandbox(windows.WindowsSandbox(), guard=NetGuard()).run(
+            [CMD, "/c", "echo", "x"], limits=Limits(timeout_s=20)
+        )
