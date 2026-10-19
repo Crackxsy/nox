@@ -391,6 +391,7 @@ def _scope_prefix(limits: Limits, *, user: bool) -> list[str]:
         "--collect",
         "--no-ask-password",
         f"-pMemoryMax={limits.memory_bytes}",
+        "-pMemorySwapMax=0",  # a machine with swap would page instead of hitting the ceiling
         f"-pTasksMax={limits.max_processes}",
     ]
 

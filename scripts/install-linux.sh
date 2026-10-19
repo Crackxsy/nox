@@ -577,8 +577,9 @@ install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$NOX_HOME_DIR"
 # There AppArmor lets a program create user namespaces only with a profile that allows it, and
 # bwrap needs one. Nothing is changed for /usr/bin/bwrap or any other user: Nox gets its own copy,
 # executable only by the service user, and a profile attached to that path alone. What bwrap
-# starts inside its sandbox runs under a second profile that denies every capability and new user
-# namespaces (modelled on Ubuntu's own bwrap-userns-restrict). Raspberry Pi OS and Debian have no
+# starts inside its sandbox runs stacked under a second profile that denies every capability and
+# new user namespaces (modelled on Ubuntu's own bwrap-userns-restrict; stacking is what AppArmor
+# permits under no_new_privs, which both the service and bwrap set). Raspberry Pi OS and Debian have no
 # such restriction: nothing is installed there, and leftovers of an earlier install are removed.
 nox_bwrap=/usr/lib/nox/bwrap
 nox_profile=/etc/apparmor.d/nox-bwrap
@@ -622,7 +623,7 @@ profile nox-bwrap /usr/lib/nox/bwrap flags=(attach_disconnected,mediate_deleted)
   allow umount,
   allow pivot_root,
   allow dbus,
-  allow px /** -> nox-bwrap-sandboxed,
+  allow px /** -> &nox-bwrap//&nox-bwrap-sandboxed,
   include if exists <local/nox-bwrap>
 }
 
