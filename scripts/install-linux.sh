@@ -38,6 +38,10 @@ HTTP_PORT="47801"
 #: The first release that runs on Linux. Older tags would install a Windows-only Nox.
 MIN_VERSION="0.6.0"
 UV_VERSION="0.12.18"
+#: SHA-256 of uv's release archives for UV_VERSION (github.com/astral-sh/uv/releases). Pinned here,
+#: not fetched next to the archive, so a compromised download cannot hand root another program.
+UV_SHA256_AARCH64="afb6291f3f0a6b4521fc67b947822506c41dde5b60d2189dd8f3695b2ac8c9e7"
+UV_SHA256_X86_64="89eadd7c76fc063887959510d5ba0ab1264dfd5f1143b925ddb73021a40acf16"
 CURL=(curl --proto '=https' --tlsv1.2 -fsSL)
 SOURCE="${NOX_SOURCE:-$REPO_URL}"
 # Ownership checks stay on, except for the one checkout NOX_SOURCE names (CI's is not root's).
@@ -75,13 +79,43 @@ version_at_least() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "
 
 docs_url() { printf '%s/blob/%s/docs/RASPBERRY_PI.de.md' "$REPO_URL" "${1:-develop}"; }
 
+#: The HTTP port the core actually took. It moves to the next free port when 47801 is busy and
+#: writes the one it got to runtime/ipc.json at every start - stale until then, so it is re-read
+#: on every try. Without the file (first start), the default.
+http_port() {
+  local port=""
+  if [ -r "$NOX_HOME_DIR/runtime/ipc.json" ]; then
+    port="$(sed -n 's/^[[:space:]]*"http_port":[[:space:]]*\([0-9]\{1,5\}\),\{0,1\}[[:space:]]*$/\1/p' \
+      "$NOX_HOME_DIR/runtime/ipc.json" 2>/dev/null | head -n1 || true)"
+  fi
+  printf '%s' "${port:-$HTTP_PORT}"
+}
+
 wait_healthy() {
   local _
   for _ in $(seq 1 "${1:-90}"); do
-    if curl -fsS -o /dev/null "http://127.0.0.1:$HTTP_PORT/health" 2>/dev/null; then return 0; fi
+    if curl -fsS -o /dev/null "http://127.0.0.1:$(http_port)/health" 2>/dev/null; then return 0; fi
     sleep 1
   done
   return 1
+}
+
+#: uv from its release archive, checked against the pinned SHA-256 before anything runs it.
+install_uv() {
+  local arch sum archive="$work/uv.tar.gz"
+  case "$(uname -m)" in
+    aarch64|arm64) arch="aarch64"; sum="$UV_SHA256_AARCH64" ;;
+    x86_64) arch="x86_64"; sum="$UV_SHA256_X86_64" ;;
+    *) fail "keine uv-Version für $(uname -m)." ;;
+  esac
+  "${CURL[@]}" -o "$archive" \
+    "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$arch-unknown-linux-gnu.tar.gz"
+  printf '%s  %s\n' "$sum" "$archive" | sha256sum --quiet -c - \
+    || fail "uv $UV_VERSION stimmt nicht mit der hinterlegten Prüfsumme überein. Nichts wurde geändert."
+  mkdir -p "$work/uv"
+  tar -xzf "$archive" -C "$work/uv" --no-same-owner --no-same-permissions
+  install -d -m 0755 "$UV_INSTALL_DIR"
+  install -m 0755 "$work/uv/uv-$arch-unknown-linux-gnu/uv" "$UV_INSTALL_DIR/uv"
 }
 
 switch_to() {
@@ -316,7 +350,7 @@ else
   export UV_INSTALL_DIR="$PREFIX/.tools" UV_PYTHON_INSTALL_DIR="$PREFIX/.python" UV_NO_MODIFY_PATH=1
   export UV_CACHE_DIR="$PREFIX/.cache/uv"
   if [ ! -x "$UV_INSTALL_DIR/uv" ] || [ "$("$UV_INSTALL_DIR/uv" --version | awk '{print $2}')" != "$UV_VERSION" ]; then
-    "${CURL[@]}" "https://astral.sh/uv/$UV_VERSION/install.sh" | sh >/dev/null
+    install_uv
   fi
   # Bytecode is compiled now: the service may not write into its own release folder, and without
   # .pyc files a Pi would recompile every module on every start.
@@ -403,10 +437,13 @@ fi
 phase=""
 trap - ERR
 
-# Keep the running and the previous version; older ones go.
+# Keep the running version, the one it replaced and the one `nox rollback` points to - after
+# running the same version again that is still the one from the last real update. Older ones go.
+rollback_target="$(cat "$STATE/previous-release" 2>/dev/null || true)"
 for old in "$RELEASES"/*/; do
   name="$(basename "$old")"
-  [ "$name" = "$release" ] || [ "$name" = "$previous_release" ] || rm -rf -- "$old"
+  [ "$name" = "$release" ] || [ "$name" = "$previous_release" ] || [ "$name" = "$rollback_target" ] \
+    || rm -rf -- "$old"
 done
 
 say "Nox läuft ($label)."
