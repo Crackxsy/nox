@@ -355,3 +355,62 @@ def test_env_args_refuses_what_bwrap_could_misread() -> None:
     for bad in ({"A\0B": "1"}, {"A": "x\0y"}, {"A=B": "1"}, {"": "1"}):
         with pytest.raises(SandboxUnavailable):
             env_args(bad)
+
+
+# ---- Nox's own Python inside bwrap (self-built skill workers on the Pi) ---
+
+VENV = "/opt/nox/app/.venv"
+SITE = f"{VENV}/lib/python3.13/site-packages"
+
+
+def _runtime(argv0: str, **kw: object) -> list[str]:
+    from nox.sandbox.linux import runtime_bind_paths
+
+    args: dict[str, object] = {
+        "executable": f"{VENV}/bin/python",
+        "real": "/usr/bin/python3.13",
+        "venv_cfg": f"{VENV}/pyvenv.cfg",
+        "site_dirs": [SITE],
+        "package_root": SITE,
+        "interpreter": (),
+    }
+    args.update(kw)
+    return runtime_bind_paths(argv0, **args)  # type: ignore[arg-type]
+
+
+def test_noxs_python_gets_its_venv_and_package_and_nothing_else() -> None:
+    paths = _runtime(f"{VENV}/bin/python")
+    assert paths == [f"{VENV}/bin/python", f"{VENV}/pyvenv.cfg", SITE]
+    # An editable install: the checkout's src is added, not the checkout.
+    editable = _runtime(f"{VENV}/bin/python", package_root="/srv/nox/src")
+    assert editable[-1] == "/srv/nox/src" and "/srv/nox" not in editable
+    # The real interpreter path counts as Nox's Python too.
+    assert _runtime("/usr/bin/python3.13")[0] == "/usr/bin/python3.13"
+
+
+def test_any_other_program_gets_no_runtime_binds() -> None:
+    assert _runtime("/usr/bin/python3") == []
+    assert _runtime("/bin/sh") == []
+
+
+@pytest.mark.parametrize(
+    "package_root",
+    ["/home/nox", "/var/lib/nox", "/var/lib", "/", "/home"],
+)
+def test_runtime_binds_that_would_expose_a_home_or_noxs_folder_are_refused(
+    package_root: str,
+) -> None:
+    paths = _runtime(f"{VENV}/bin/python", package_root=package_root)
+    private = ["/home/nox", "/var/lib/nox"]
+    assert safe_python_binds(paths, private=private) is None
+
+
+def test_runtime_binds_are_read_only_and_present_without_egress() -> None:
+    argv = build_bwrap_argv(
+        ["/opt/py/bin/python", "-I", "-c", "pass"],
+        work="/tmp/w",  # noqa: S108
+        runtime_binds=("/opt/py/bin/python", SITE),
+    )
+    i = argv.index(SITE)
+    assert argv[i - 1] == "--ro-bind" and argv[i + 1] == SITE
+    assert "--bind" not in [argv[j - 1] for j, a in enumerate(argv) if a == SITE]
