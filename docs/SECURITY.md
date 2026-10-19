@@ -170,22 +170,43 @@ model is allowed to reach is decided in code, below it:
 - **Per-turn offer, token and budget.** Each chat turn opens a turn with the tools usable right
   now (profile, mode, privacy), a random token, and a `TurnBudget` (20 calls, 180 s, no fourth try
   of an identical failing call). A call outside the offer, after the turn ended, or past the
-  budget is refused before the executor sees it.
+  budget is refused before the executor sees it, and the current offer is checked again on every
+  call: a tool the profile, mode or privacy took away during the turn is refused.
+- **Privacy mid-turn.** The gate asks before every call whether cloud models are still allowed;
+  a switch to private or offline ends all open turns and interrupts Claude Code's answer. Turns
+  said while cloud models were not allowed are stored marked private (sticky for the whole turn,
+  question and answer alike) and never sent to a cloud provider later, not even as history;
+  turns in privacy mode private are not stored at all.
 - **Claude Code** runs as one long-lived process per core with its own tools switched off
   (`--tools ""`) and Nox's tools served over MCP by `python -m nox.mcp.bridge`
   (`--mcp-config <file> --strict-mcp-config --allowedTools mcp__nox__*`; the pre-approval only
   stops the CLI from asking itself - Nox decides). It ignores user and project settings, hooks,
-  plugins and skills (`--setting-sources ""`, `--disable-slash-commands`) and runs in an empty
-  folder of its own. Anthropic's web search is allowed only in privacy mode full/balanced.
+  plugins, skills and auto-memory (`--setting-sources ""`, `--disable-slash-commands`,
+  `autoMemoryEnabled: false` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY`), runs in a working folder of
+  its own under the system temp folder with a home folder of its own, and gets an allow-listed
+  environment: no Nox token or secret and nothing of an outer Claude Code session; only
+  `CLAUDE_CONFIG_DIR` points at the user's Claude Code configuration, for the login.
+  `tests/integration/test_claude_isolation.py` proves it with canaries (CLAUDE.md files around the
+  working folder, hooks, the home folder, auto-memory). Anthropic's web search is allowed only in
+  privacy mode full/balanced and at most five times per turn. Tool results reach the model as
+  marked untrusted data.
+- **Cost.** `ai.providers.claude_code.max_budget_usd` is enforced per answer while it runs, from
+  the usage Claude Code streams (a conservative estimate at list prices); the answer is stopped
+  with a sentence saying so. The CLI's own `--max-budget-usd` counts a whole session and is only
+  the outer cap.
 - **IPC role `mcp`.** The bridge authenticates once with a one-time token bound to the role and to
   its client id (a worker token cannot open the role, nor its token a worker role); the MCP config
   file that carries it is owner-only and deleted as soon as the bridge is connected. The role can
   call exactly `mcp.tools.list` and `mcp.tools.call`, receives no events and may not subscribe.
   Every call must carry the token of the open turn, which the core hands the bridge right before
-  the turn and which dies with it.
+  the turn, which works only for that bridge, and which dies with the turn. A bridge that drops
+  out unexpectedly gets the session replaced before the next turn.
 - **Kill switch.** It kills the Claude Code process tree - including the bridge, which Windows
-  would otherwise leave running - within a second, also while a session is still starting, ends
-  every open turn (running handlers are cancelled), and nothing restarts until resume.
+  would otherwise leave running (a job object per session, psutil as fallback, never waiting on
+  the event loop) - within a second, also while a session is still starting or the previous one
+  is closing, ends every open turn (running handlers are cancelled), and nothing restarts until
+  resume. After three failed starts or control requests the warm session is given up for the run:
+  turns go to one-shot Claude without tools, and the provider card says so.
 - **Local models.** Ollama gets the offer in its native `tools` field when the model declares
   support, otherwise as the text protocol (`NOX_TOOL_CALL`), parsed inside the provider so the
   line is never shown or spoken. Both end in the same tool loop.
