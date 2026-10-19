@@ -97,6 +97,7 @@ def _feed(status: FeedStatus) -> dict[str, Any]:
         "configured": status.configured,
         "error": status.error,
         "count": status.count,
+        "incomplete": status.truncated,
     }
 
 
@@ -112,13 +113,18 @@ def _calendar_answer(calendar: CalendarService, events: list[CalendarEvent]) -> 
     }
     if len(events) > MAX_EVENTS_PER_ANSWER:
         answer["omitted"] = len(events) - MAX_EVENTS_PER_ANSWER
-    if not calendar.configured:
+    if any(f.error for f in feeds):
+        answer["hint"] = "At least one calendar could not be read; the list may be incomplete."
+    elif any(f.truncated for f in feeds):
+        answer["hint"] = (
+            "At least one calendar was too large or too complex to read completely (possibly a "
+            "flood of invitations); the list may be incomplete."
+        )
+    elif not calendar.configured:
         answer["hint"] = (
             "No calendar is connected. The user can paste a private iCal URL (Google Calendar, "
             "school timetable) under Settings > Integrations > Calendar."
         )
-    elif any(f.error for f in feeds if f.configured):
-        answer["hint"] = "At least one calendar could not be fetched; the list may be incomplete."
     return answer
 
 

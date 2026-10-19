@@ -11,8 +11,11 @@ window around today, which is all a companion needs and keeps a ten-year weekly 
 
 A feed is untrusted: anyone can drop an invite into a Google calendar, and it then shows up in the
 feed unasked. So the expansion is bounded on every axis - recurrences finer than hourly are read
-as their first occurrence only, every series stops after a fixed number of steps and occurrences,
-the whole feed has a step budget, and at most `MAX_EVENTS_PER_FEED` occurrences are kept.
+as their first occurrence only, impossible rules are dropped, every series is walked from close to
+the window and capped in steps and occurrences, the feed's series share a wall-clock budget, and
+at most `MAX_EVENTS_PER_FEED` occurrences are kept. Single appointments are always read, before
+any series: a hostile invite can make a feed incomplete, but never hide the user's own day. A
+feed that was cut says so (`FeedStatus.truncated`).
 """
 
 from __future__ import annotations
@@ -22,12 +25,13 @@ import itertools
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from time import monotonic
 from typing import Any
 
 import httpx
 import icalendar
 from dateutil import tz as dateutil_tz
-from dateutil.rrule import rruleset, rrulestr
+from dateutil.rrule import rrule, rrulestr
 from pydantic import BaseModel, ConfigDict
 
 from nox.core.logging import get_logger
@@ -39,6 +43,8 @@ __all__ = [
     "CalendarService",
     "CalendarSource",
     "FeedStatus",
+    "ParsedFeed",
+    "parse_feed",
     "parse_ics",
 ]
 
@@ -77,6 +83,8 @@ class FeedStatus(BaseModel):
     #: Empty when the last fetch worked. Never contains the URL.
     error: str = ""
     count: int = 0
+    #: The last fetch had to cut the feed (too many or too complex entries): events may be missing.
+    truncated: bool = False
 
 
 # ---- parsing -------------------------------------------------------------------------------------
@@ -95,17 +103,38 @@ MAX_FEED_BYTES = 5 * 1024 * 1024
 #: first occurrence only: FREQ=SECONDLY over the lookahead window is ~700,000 events.
 IGNORED_FREQUENCIES = frozenset({"MINUTELY", "SECONDLY"})
 
+#: Frequencies with a fixed period. Without COUNT, such a series can start its walk at the last
+#: period boundary before the window instead of at a DTSTART from decades ago - same occurrences.
+#: (A month or a year varies in length; those series are cheap to walk from the start anyway.)
+_FIXED_PERIODS: dict[str, timedelta] = {
+    "HOURLY": timedelta(hours=1),
+    "DAILY": timedelta(days=1),
+    "WEEKLY": timedelta(weeks=1),
+}
+
+#: `dateutil` stops a rule whose BY* parts never match again only at year 9999 (UNTIL is checked
+#: against matches, not against empty periods): thousands of years of empty iterations, seconds
+#: per series. The Gregorian calendar repeats exactly every 400 years, weekdays and leap days
+#: included, so a series is expanded moved forward by whole cycles to just below 9999, where at
+#: most one cycle is left to scan, and moved back afterwards.
+_CYCLE_YEARS = 400
+_LAST_YEAR = 9998
+
+#: Longest a month can be, per month (leap February), to drop BYMONTH/BYMONTHDAY combinations that
+#: can never match (BYMONTH=2;BYMONTHDAY=31) before `dateutil` searches for them.
+_MONTH_DAYS = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
 #: Most occurrences one series contributes to the window. An hourly series is 24 a day; anything
 #: denser (BYMINUTE/BYSECOND lists on an hourly rule) is noise, not a schedule.
 MAX_OCCURRENCES_PER_SERIES = 200
 
-#: Most steps one series is iterated from its DTSTART. A daily series started in 1990 needs about
-#: 13,000 steps to reach today; the bound only bites on series no human calendar contains.
-MAX_SERIES_STEPS = 50_000
+#: Most steps one series is walked. With the walk starting near the window, an ordinary series
+#: needs a few dozen; a monthly one from 1990 a few hundred.
+MAX_SERIES_STEPS = 20_000
 
-#: Most steps all series of one feed are iterated together, so a feed of many dense series cannot
-#: keep the parser thread busy for minutes.
-MAX_FEED_STEPS = 250_000
+#: Wall-clock budget for expanding the series of one feed. Spent, the remaining series are skipped
+#: (and the feed is marked truncated); single appointments are read regardless.
+MAX_FEED_SECONDS = 3.0
 
 #: Most occurrences kept from one feed (the earliest win). A busy week is a few dozen.
 MAX_EVENTS_PER_FEED = 500
@@ -115,11 +144,22 @@ class FeedTooLargeError(ValueError):
     pass
 
 
-class _StepBudget:
-    """The steps a feed may still spend expanding recurrences (shared by all of its series)."""
+@dataclass
+class _Budget:
+    """What expanding one feed may still spend, and whether anything had to be cut."""
 
-    def __init__(self, steps: int = MAX_FEED_STEPS) -> None:
-        self.left = steps
+    deadline: float
+    truncated: bool = False
+
+    def spent(self) -> bool:
+        return monotonic() >= self.deadline
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedFeed:
+    events: list[CalendarEvent]
+    #: Something was cut: a series capped or skipped, or the feed over `MAX_EVENTS_PER_FEED`.
+    truncated: bool = False
 
 
 def _text(component: icalendar.cal.Component, key: str) -> str:
@@ -161,18 +201,85 @@ def _listed(component: icalendar.cal.Component, key: str) -> list[date | datetim
     return [entry.dt for chunk in chunks for entry in chunk.dts]
 
 
+def _ints(rule: Any, key: str) -> list[int]:
+    return [int(value) for value in rule.get(key) or []]
+
+
+def _impossible(rule: Any) -> bool:
+    """A BYMONTH/BYMONTHDAY combination no month can satisfy, e.g. BYMONTH=2;BYMONTHDAY=31."""
+    days = _ints(rule, "BYMONTHDAY")
+    if not days:
+        return False
+    months = _ints(rule, "BYMONTH") or list(range(1, 13))
+    return not any(
+        0 < abs(day) <= _MONTH_DAYS[month - 1]
+        for month in months
+        if 1 <= month <= 12
+        for day in days
+    )
+
+
+def _shifted(value: datetime, years: int) -> datetime:
+    """`value` moved by whole 400-year cycles (a 29 February stays valid)."""
+    return value.replace(year=value.year + years)
+
+
+def _expand_rule(
+    raw_rule: Any, naive_start: datetime, lo: datetime, hi: datetime, tz: tzinfo, budget: _Budget
+) -> list[datetime]:
+    """The starts of one RRULE inside `[lo, hi]` (naive wall time), bounded in every direction."""
+    rule: Any = icalendar.vRecur(raw_rule)
+    if _impossible(rule):
+        log.info("calendar.series_impossible")
+        return []
+    raw_count = rule.pop("COUNT", None)
+    count = int(raw_count[0]) if raw_count else None
+    raw_until = rule.pop("UNTIL", None)
+    # UNTIL is usually UTC ("...T080000Z"). Expanded in wall time, it has to be wall time too, or
+    # the last occurrence of a 09:00 CET series ending "08:00Z" is dropped. Nothing after the
+    # window is needed, so every series - counted ones too, see below - stops there.
+    until = hi if not raw_until else min(_as_local(raw_until[0], tz).replace(tzinfo=None), hi)
+    first = naive_start
+    freq = str((rule.get("FREQ") or [""])[0]).upper()
+    period = _FIXED_PERIODS.get(freq)
+    if count is None and period is not None and first < lo:
+        step = period * max(1, int((rule.get("INTERVAL") or [1])[0]))
+        first += step * ((lo - first) // step)
+    shift = _CYCLE_YEARS * ((_LAST_YEAR - hi.year) // _CYCLE_YEARS)
+    parsed = rrulestr(rule.to_ical().decode(), dtstart=_shifted(first, shift), ignoretz=True)
+    if not isinstance(parsed, rrule):  # pragma: no cover - one RRULE line is one rule
+        return []
+    # COUNT and UNTIL must not be combined, so COUNT becomes the step limit of the walk: the rule
+    # alone is walked (RDATE/EXDATE are applied by the caller), exactly as COUNT counts.
+    series = parsed.replace(until=_shifted(until, shift), count=None)
+    limit = MAX_SERIES_STEPS if count is None else min(count, MAX_SERIES_STEPS)
+    lo_s = _shifted(lo, shift)
+    found: list[datetime] = []
+    steps = 0
+    for occurrence in itertools.islice(series, limit):
+        steps += 1
+        if occurrence >= lo_s:
+            found.append(_shifted(occurrence, -shift))
+        if len(found) > MAX_OCCURRENCES_PER_SERIES or (steps % 256 == 0 and budget.spent()):
+            budget.truncated = True
+            log.warning("calendar.series_capped", occurrences=len(found), steps=steps)
+            break
+    else:
+        if steps == MAX_SERIES_STEPS and limit == MAX_SERIES_STEPS:
+            budget.truncated = True
+            log.warning("calendar.series_capped", occurrences=len(found), steps=steps)
+    return found
+
+
 def _occurrences(
     component: icalendar.cal.Component,
     start: date | datetime,
     window_start: datetime,
     window_end: datetime,
     tz: tzinfo,
-    budget: _StepBudget | None = None,
+    budget: _Budget | None = None,
 ) -> list[datetime]:
     """Every start of this event inside the window, expanded from RRULE/RDATE minus EXDATE.
-
-    Bounded by `IGNORED_FREQUENCIES`, `MAX_SERIES_STEPS`, `MAX_OCCURRENCES_PER_SERIES` and the
-    feed's shared step `budget`.
 
     `dateutil` insists that DTSTART and UNTIL agree on being timezone-aware. Feeds do not always
     oblige (an all-day series with a UTC UNTIL is common), so the series is expanded in naive
@@ -185,44 +292,37 @@ def _occurrences(
         return [local_start]
     lo = window_start.astimezone(tz).replace(tzinfo=None)
     hi = window_end.astimezone(tz).replace(tzinfo=None)
-    series = rruleset()
+    budget = budget or _Budget(monotonic() + MAX_FEED_SECONDS)
     freq = str((rule.get("FREQ") or [""])[0]).upper() if rule is not None else ""
     if freq in IGNORED_FREQUENCIES:
         log.info("calendar.series_ignored", freq=freq)
         rule = None
+    found: set[datetime] = set()
     if rule is not None:
-        rule = icalendar.vRecur(rule)
-        # UNTIL is usually UTC ("...T080000Z"). Expanded in wall time, it has to be wall time too,
-        # or the last occurrence of a 09:00 CET series ending "08:00Z" is dropped. Nothing after
-        # the window is needed, so an open-ended series stops there too (COUNT and UNTIL must not
-        # be combined, so a counted series relies on the step bound below).
-        until = rule.get("UNTIL")
-        if until:
-            rule["UNTIL"] = [min(_as_local(until[0], tz).replace(tzinfo=None), hi)]
-        elif not rule.get("COUNT"):
-            rule["UNTIL"] = [hi]
-        text = rule.to_ical().decode()
-        series.rrule(rrulestr(text, dtstart=naive_start, ignoretz=True))
-    else:
-        series.rdate(naive_start)
+        found.update(_expand_rule(rule, naive_start, lo, hi, tz, budget))
+    elif lo <= naive_start <= hi:
+        found.add(naive_start)
     for extra in _listed(component, "RDATE"):
-        series.rdate(_as_local(extra, tz).replace(tzinfo=None))
+        moment = _as_local(extra, tz).replace(tzinfo=None)
+        if lo <= moment <= hi:
+            found.add(moment)
     for excluded in _listed(component, "EXDATE"):
-        series.exdate(_as_local(excluded, tz).replace(tzinfo=None))
-    budget = budget or _StepBudget()
-    found: list[datetime] = []
-    steps = 0
-    for occurrence in itertools.islice(series, max(0, min(MAX_SERIES_STEPS, budget.left))):
-        steps += 1
-        if occurrence > hi:
-            break
-        if occurrence >= lo:
-            found.append(occurrence.replace(tzinfo=tz))
-            if len(found) >= MAX_OCCURRENCES_PER_SERIES:
-                log.warning("calendar.series_capped", occurrences=len(found))
-                break
-    budget.left -= steps
-    return found
+        found.discard(_as_local(excluded, tz).replace(tzinfo=None))
+    ordered = sorted(found)
+    if len(ordered) > MAX_OCCURRENCES_PER_SERIES:
+        budget.truncated = True
+        del ordered[MAX_OCCURRENCES_PER_SERIES:]
+    return [occurrence.replace(tzinfo=tz) for occurrence in ordered]
+
+
+def _cost_rank(component: icalendar.cal.Component) -> int:
+    """0: a single occurrence (read first, always); 1: an ordinary series; 2: a sub-daily one."""
+    rule = component.get("RRULE")
+    if rule is None or component.get("RECURRENCE-ID") is not None:
+        return 0
+    freq = str((rule.get("FREQ") or [""])[0]).upper()
+    dense = freq == "HOURLY" or any(rule.get(key) for key in ("BYHOUR", "BYMINUTE", "BYSECOND"))
+    return 2 if dense else 1
 
 
 def parse_ics(
@@ -239,6 +339,21 @@ def parse_ics(
     series would have produced. A component the library cannot read is skipped, not fatal: one
     odd entry in a school timetable must not hide the rest of the week.
     """
+    return parse_feed(
+        text, source=source, window_start=window_start, window_end=window_end, tz=tz
+    ).events
+
+
+def parse_feed(
+    text: str,
+    *,
+    source: str,
+    window_start: datetime,
+    window_end: datetime,
+    tz: tzinfo,
+    max_seconds: float = MAX_FEED_SECONDS,
+) -> ParsedFeed:
+    """`parse_ics`, and whether the feed had to be cut to stay within its bounds."""
     calendar = icalendar.Calendar.from_ical(text)
     components = list(calendar.walk("VEVENT"))
     overrides: set[tuple[str, datetime]] = set()
@@ -249,22 +364,29 @@ def parse_ics(
     # The window is widened by a day so an occurrence that started yesterday and runs into
     # today is still found; the overlap test below does the exact cut.
     lo, hi = window_start - timedelta(days=1), window_end + timedelta(days=1)
-    budget = _StepBudget()
+    budget = _Budget(monotonic() + max_seconds)
     events: list[CalendarEvent] = []
-    for component in components:
-        if budget.left <= 0:
-            log.warning("calendar.feed_budget_spent", source=source)
-            break
+    skipped = 0
+    # Single appointments first and always; then ordinary series; dense ones last. A hostile series
+    # can only use up what is left after the user's own appointments were read.
+    for component in sorted(components, key=_cost_rank):
+        if _cost_rank(component) > 0 and budget.spent():
+            skipped += 1
+            continue
         try:
             events.extend(_expand(component, source, lo, hi, tz, overrides, budget))
         except Exception as exc:  # noqa: BLE001 - one unreadable entry never hides the rest
             log.warning("calendar.event_skipped", source=source, error=type(exc).__name__)
+    if skipped:
+        budget.truncated = True
+        log.warning("calendar.series_skipped", source=source, skipped=skipped)
     kept = [e for e in events if e.start < window_end and e.end > window_start]
     kept.sort(key=lambda e: (e.start, e.title))
     if len(kept) > MAX_EVENTS_PER_FEED:
+        budget.truncated = True
         log.warning("calendar.feed_capped", source=source, events=len(kept))
         del kept[MAX_EVENTS_PER_FEED:]
-    return kept
+    return ParsedFeed(events=kept, truncated=budget.truncated)
 
 
 def _expand(
@@ -274,7 +396,7 @@ def _expand(
     hi: datetime,
     tz: tzinfo,
     overrides: set[tuple[str, datetime]],
-    budget: _StepBudget,
+    budget: _Budget,
 ) -> list[CalendarEvent]:
     if _text(component, "STATUS").upper() == "CANCELLED":
         return []
@@ -320,6 +442,7 @@ class _Feed:
     attempted_at: datetime | None = None
     error: str = ""
     configured: bool = False
+    truncated: bool = False
 
 
 def _safe_error(exc: BaseException) -> str:
@@ -351,7 +474,16 @@ def _zone_of(now: datetime) -> tzinfo:
 
 
 class CalendarService:
-    """Fetches the configured feeds, caches their occurrences, answers "what is on today"."""
+    """Fetches the configured feeds, caches their occurrences, answers "what is on today".
+
+    The credential store is only read by `refresh` (in a worker thread): whether a feed is
+    configured is cached with its events, so answering a question never blocks the event loop on
+    the keyring. A feed without a URL is re-checked every `UNCONFIGURED_RECHECK_S`, so a URL the
+    user just pasted shows up within a minute.
+    """
+
+    #: How soon a feed without a stored URL is looked at again.
+    UNCONFIGURED_RECHECK_S = 60.0
 
     def __init__(
         self,
@@ -375,18 +507,19 @@ class CalendarService:
 
     @property
     def configured(self) -> bool:
-        """Whether at least one feed has a URL stored."""
-        return any(self._secret(f.source.secret) for f in self._feeds.values())
+        """Whether at least one feed had a URL stored at the last refresh."""
+        return any(f.configured for f in self._feeds.values())
 
     def status(self) -> list[FeedStatus]:
         return [
             FeedStatus(
                 id=f.source.id,
                 label=f.source.label,
-                configured=f.configured or bool(self._secret(f.source.secret)),
+                configured=f.configured,
                 fetched_at=f.fetched_at,
                 error=f.error,
                 count=len(f.events),
+                truncated=f.truncated,
             )
             for f in self._feeds.values()
         ]
@@ -408,18 +541,23 @@ class CalendarService:
 
     def is_stale(self) -> bool:
         now = self._clock()
-        return any(
-            f.attempted_at is None or (now - f.attempted_at).total_seconds() > self._refresh_s
-            for f in self._feeds.values()
-            if self._secret(f.source.secret)
-        )
+        return any(self._feed_stale(f, now) for f in self._feeds.values())
+
+    def _feed_stale(self, feed: _Feed, now: datetime) -> bool:
+        if feed.attempted_at is None:
+            return True
+        interval = self._refresh_s if feed.configured else self.UNCONFIGURED_RECHECK_S
+        return (now - feed.attempted_at).total_seconds() > interval
 
     # ---- fetching --------------------------------------------------------------------------------
 
-    async def refresh(self) -> None:
-        """Fetch every configured feed once; failures are recorded per feed, never raised."""
+    async def refresh(self, *, only_stale: bool = False) -> None:
+        """Fetch every configured feed once (or only the stale ones); failures are recorded per
+        feed, never raised."""
         async with self._refreshing:
-            await asyncio.gather(*(self._refresh_one(f) for f in self._feeds.values()))
+            now = self._clock()
+            feeds = [f for f in self._feeds.values() if not only_stale or self._feed_stale(f, now)]
+            await asyncio.gather(*(self._refresh_one(f) for f in feeds))
 
     async def ensure_fresh(self, timeout_s: float = 8.0) -> None:
         """Refresh if the cache is older than the refresh interval, but never wait longer than
@@ -427,7 +565,7 @@ class CalendarService:
         if not self.is_stale():
             return
         try:
-            await asyncio.wait_for(self.refresh(), timeout_s)
+            await asyncio.wait_for(self.refresh(only_stale=True), timeout_s)
         except TimeoutError:
             log.info("calendar.refresh_slow", timeout_s=timeout_s)
 
@@ -438,20 +576,25 @@ class CalendarService:
             await asyncio.sleep(self._refresh_s)
 
     async def _refresh_one(self, feed: _Feed) -> None:
-        url = self._secret(feed.source.secret)
+        now = self._clock()
+        feed.attempted_at = now
+        try:
+            url = await asyncio.to_thread(self._secret, feed.source.secret)
+        except Exception as exc:  # noqa: BLE001 - an unreachable keyring is reported, not "no feed"
+            feed.error = f"credential store unavailable ({type(exc).__name__})"
+            log.warning("calendar.secret_read_failed", source=feed.source.id, error=feed.error)
+            return
         feed.configured = bool(url)
         if not url:
             feed.events, feed.error = [], ""
             return
-        now = self._clock()
-        feed.attempted_at = now
         tz = _zone_of(now)
         window_start = _local_midnight(now)
         window_end = window_start + timedelta(days=self._lookahead_days + 1)
         try:
             text = await self._fetch(url)
-            feed.events = await asyncio.to_thread(
-                parse_ics,
+            parsed = await asyncio.to_thread(
+                parse_feed,
                 text,
                 source=feed.source.id,
                 window_start=window_start,
@@ -462,8 +605,14 @@ class CalendarService:
             feed.error = _safe_error(exc)
             log.warning("calendar.fetch_failed", source=feed.source.id, error=feed.error)
             return
+        feed.events, feed.truncated = parsed.events, parsed.truncated
         feed.fetched_at, feed.error = now, ""
-        log.info("calendar.fetched", source=feed.source.id, events=len(feed.events))
+        log.info(
+            "calendar.fetched",
+            source=feed.source.id,
+            events=len(feed.events),
+            truncated=feed.truncated,
+        )
 
     async def _fetch(self, url: str) -> str:
         kwargs: dict[str, Any] = {"timeout": httpx.Timeout(20.0, connect=5.0)}
