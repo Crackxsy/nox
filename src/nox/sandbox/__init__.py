@@ -188,6 +188,15 @@ class Sandbox:
         its own namespaces and work folder."""
         return {"workload": workload} if getattr(self._backend, "isolates_workloads", False) else {}
 
+    def _new_proxy(self, egress: EgressDecl) -> EgressProxy:
+        """The proxy for one run or process: its declaration, the guard, fresh credentials."""
+        return EgressProxy(
+            allow=egress.hosts,
+            guard=self._guard,
+            audit=self._audit,
+            credentials=EgressProxy.new_credentials(),
+        )
+
     async def _open_proxy(self, egress: EgressDecl, workload: str) -> EgressProxy | None:
         """Start the run's own proxy when it declared egress, on the transport its backend needs:
         loopback TCP, a named pipe only the backend's AppContainer may open, or a Unix socket for
@@ -195,12 +204,7 @@ class Sandbox:
         child is held to (`"none"`) gets no network at all."""
         if not egress.wants_network:
             return None
-        proxy = EgressProxy(
-            allow=egress.hosts,
-            guard=self._guard,
-            audit=self._audit,
-            credentials=EgressProxy.new_credentials(),
-        )
+        proxy = self._new_proxy(egress)
         transport = getattr(self._backend, "proxy_transport", "tcp")
         if transport == "pipe":
             # Only the run's own container may open the pipe.
