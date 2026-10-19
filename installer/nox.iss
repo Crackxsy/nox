@@ -69,6 +69,11 @@ Name: "{userstartup}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: ""
 ; Optional immediate first start after install finishes (unchecked by default - never surprise-run).
 Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; Description: "{cm:LaunchProgram,Nox}"; Flags: nowait postinstall skipifsilent unchecked
 
+[UninstallRun]
+; Remove the read rights Nox granted its AppContainer sandbox on the runtime folders (recorded in a
+; manifest; exactly those ACEs, nothing else). Runs before the runtime itself is deleted.
+Filename: "{app}\runtime\python.exe"; Parameters: "-m nox.cli sandbox reset"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated; RunOnceId: "NoxSandboxReset"
+
 [UninstallDelete]
 ; Belt-and-braces: only ever delete inside {app} (program files). The user's vault, database,
 ; data folder and any config outside {app} are never named here and are never touched -

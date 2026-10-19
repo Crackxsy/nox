@@ -302,7 +302,7 @@ async def test_an_inconclusive_probe_means_the_appcontainer_is_not_strong(
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows sandbox")
 async def test_appcontainer_runs_python_and_still_cannot_read_user_files(tmp_path) -> None:  # noqa: ANN001
-    from nox.sandbox.windows import WindowsSandbox, appcontainer_available
+    from nox.sandbox.windows import RuntimeGrants, WindowsSandbox, appcontainer_available
 
     if not appcontainer_available():
         pytest.skip("AppContainer profile cannot be created here")
@@ -316,18 +316,83 @@ async def test_appcontainer_runs_python_and_still_cannot_read_user_files(tmp_pat
         "except OSError:\n"
         "    print('USER-FILE-BLOCKED')\n"
     )
-    sandbox = Sandbox(WindowsSandbox(prefer_appcontainer=True), guard=NetGuard())
-    result = await sandbox.run(
-        [sys.executable, "-I", "-B", "-c", script], limits=Limits(timeout_s=60)
-    )
-    assert "IMPORT-OK" in result.stdout, result.stderr
-    assert "USER-FILE-BLOCKED" in result.stdout and "READ-USER-FILE" not in result.stdout
-    # The runtime grant must not break the low-integrity fallback (a specific-SID ACE did).
-    low = Sandbox(WindowsSandbox(prefer_appcontainer=False), guard=NetGuard())
+    grants = RuntimeGrants(tmp_path / "acl-grants.json")
+    try:
+        backend = WindowsSandbox(prefer_appcontainer=True, grants=grants)
+        result = await Sandbox(backend, guard=NetGuard()).run(
+            [sys.executable, "-I", "-B", "-c", script], limits=Limits(timeout_s=60)
+        )
+        assert "IMPORT-OK" in result.stdout, result.stderr
+        assert "USER-FILE-BLOCKED" in result.stdout and "READ-USER-FILE" not in result.stdout
+        recorded = grants.recorded()
+        assert recorded and all(sid == backend._sid for _p, sid in recorded)  # noqa: SLF001
+    finally:
+        # The low-IL backend resets the recorded grants itself - and must then run Python again.
+        low = Sandbox(WindowsSandbox(prefer_appcontainer=False, grants=grants), guard=NetGuard())
+    assert grants.recorded() == []
     again = await low.run(
         [sys.executable, "-I", "-B", "-c", "print('LOW-OK')"], limits=Limits(timeout_s=60)
     )
     assert "LOW-OK" in again.stdout, again.stderr
+
+
+class _Recorder:
+    def __init__(self, code: int = 0) -> None:
+        self.calls: list[list[str]] = []
+        self.code = code
+
+    def __call__(self, argv: list[str]) -> int:
+        self.calls.append(argv)
+        return self.code
+
+
+SID = "S-1-15-2-11-22-33-44-55-66-77"
+
+
+def test_grants_name_only_the_container_sid_and_are_recorded_once(tmp_path) -> None:  # noqa: ANN001
+    from nox.sandbox.windows import RuntimeGrants
+
+    runner = _Recorder()
+    grants = RuntimeGrants(tmp_path / "m.json", runner=runner)
+    folder = tmp_path / "py"
+    folder.mkdir()
+    assert grants.grant(folder, SID) and grants.grant(folder, SID)  # a restart: no duplicate
+    assert runner.calls == [["icacls", str(folder), "/grant", f"*{SID}:(OI)(CI)(RX)", "/Q"]]
+    assert all("S-1-15-2-1:" not in " ".join(c) for c in runner.calls)
+    assert grants.recorded() == [(str(folder), SID)]
+    for bad in ("S-1-15-2-1", "S-1-5-32-545", "S-1-1-0"):
+        with pytest.raises(ValueError):
+            grants.grant(folder, bad)
+
+
+def test_reset_removes_exactly_the_recorded_aces(tmp_path) -> None:  # noqa: ANN001
+    from nox.sandbox.windows import RuntimeGrants
+
+    runner = _Recorder()
+    grants = RuntimeGrants(tmp_path / "m.json", runner=runner)
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    grants.grant(a, SID)
+    grants.grant(b, SID)
+    runner.calls.clear()
+    assert grants.reset() == 2
+    assert runner.calls == [
+        ["icacls", str(a), "/remove:g", f"*{SID}", "/Q"],
+        ["icacls", str(b), "/remove:g", f"*{SID}", "/Q"],
+    ]
+    assert grants.recorded() == [] and not (tmp_path / "m.json").exists()
+    assert grants.reset() == 0  # twice is harmless
+
+
+def test_a_failed_removal_stays_recorded(tmp_path) -> None:  # noqa: ANN001
+    from nox.sandbox.windows import RuntimeGrants
+
+    grants = RuntimeGrants(tmp_path / "m.json", runner=_Recorder())
+    grants.grant(tmp_path, SID)
+    failing = RuntimeGrants(tmp_path / "m.json", runner=_Recorder(code=5))
+    assert failing.reset() == 0
+    assert failing.recorded() == [(str(tmp_path), SID)]
 
 
 def test_runtime_dirs_never_include_nox_home_or_the_profile(tmp_path) -> None:  # noqa: ANN001
@@ -345,5 +410,9 @@ def test_runtime_dirs_never_include_nox_home_or_the_profile(tmp_path) -> None:  
     )
     assert outer == ()  # one contains Nox's home, the other lies inside it
     assert python_runtime_dirs(home=tmp_path / "h", base=str(Path.home()), prefix=str(py)) == (
+        py.resolve(),
+    )
+    broad = Path.home() / "Documents"
+    assert python_runtime_dirs(home=tmp_path / "h", base=str(broad), prefix=str(py)) == (
         py.resolve(),
     )

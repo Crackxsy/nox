@@ -317,6 +317,20 @@ def _register_voice_commands() -> None:
 _register_voice_commands()
 
 
+sandbox_app = typer.Typer(help="The command sandbox (Windows: AppContainer access rights).")
+app.add_typer(sandbox_app, name="sandbox")
+
+
+@sandbox_app.command("reset")
+def sandbox_reset() -> None:
+    """Remove every access right Nox granted its sandbox on runtime folders (also run on
+    uninstall). Harmless to run twice; Nox grants them again when it next needs them."""
+    from nox.sandbox.windows import RuntimeGrants  # noqa: PLC0415
+
+    removed = RuntimeGrants().reset()
+    typer.echo(f"removed {removed} sandbox access right(s)")
+
+
 eval_app = typer.Typer(help="Benchmarks that measure what Nox can do (source checkout only).")
 app.add_typer(eval_app, name="eval")
 

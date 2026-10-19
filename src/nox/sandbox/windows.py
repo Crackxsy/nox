@@ -11,12 +11,19 @@ Two variants, strongest first:
   So the backend measures it (`host_loopback_reachable`, fail closed: anything but an explicit
   "blocked" report counts as reachable) and reports `confines_network` honestly: where loopback
   leaks, local services (a model server, a browser's debug port) would be reachable from inside, and
-  the sandbox is not "strong". To run Python (a skill's tests, an MCP server written in Python), the
-  container SID additionally gets *read and execute* on exactly the Python runtime Nox itself runs
-  on: the interpreter's install folder (python.exe, DLLs, standard library) and the virtual
+  the sandbox is not "strong". To run Python (a skill's tests, an MCP server written in Python),
+  Nox's container SID additionally gets *read and execute* on exactly the Python runtime Nox itself
+  runs on: the interpreter's install folder (python.exe, DLLs, standard library) and the virtual
   environment (`pyvenv.cfg`, `Scripts`, site-packages) - `python_runtime_dirs()`. Never a user
   folder as such, never a folder that contains Nox's home (secrets, database) or lies inside it;
-  such a candidate is skipped and the child simply cannot start Python.
+  such a candidate is skipped and the child simply cannot start Python. Only Nox's own container SID
+  is named (never ALL APPLICATION PACKAGES, which would open the folders to every packaged app on
+  the machine). Every ACE Nox sets is recorded in a manifest (`<nox home>/sandbox/acl-grants.json`)
+  so a restart adds no duplicate and `nox sandbox reset` - also run by the uninstaller - removes
+  exactly those ACEs again (`RuntimeGrants`). Measured on Windows 11: while such a container-SID ACE
+  sits on an interpreter folder, that interpreter fails to load its DLL under the *low-integrity*
+  token (STATUS_DLL_NOT_FOUND). So the low-integrity backend resets the recorded grants when it
+  starts; the two backends never share a machine state.
 * **Low-integrity token** (fallback): the child runs with a low-integrity copy of the core's token.
   Mandatory integrity control stops it *writing* anything labelled medium (every user file). It
   does **not** stop it reading the user's files or the credential store, and integrity level does
@@ -67,8 +74,10 @@ log = get_logger(__name__)
 
 __all__ = [
     "FORWARDER_PS",
+    "RuntimeGrants",
     "WindowsSandbox",
     "appcontainer_available",
+    "default_grants_manifest",
     "host_loopback_reachable",
     "probe_verdict",
     "python_runtime_dirs",
@@ -77,9 +86,6 @@ __all__ = [
 _APP_CONTAINER_NAME = "Nox.Sandbox"
 _SYSTEM32 = r"C:\Windows\System32"
 _POWERSHELL = _SYSTEM32 + r"\WindowsPowerShell\v1.0\powershell.exe"
-_CURL = _SYSTEM32 + r"\curl.exe"
-#: ALL APPLICATION PACKAGES - see the module docstring for why not the container's own SID.
-_ALL_APP_PACKAGES = "S-1-15-2-1"
 #: Environment the child inherits. Nothing that points at the user's profile or secrets.
 _SAFE_ENV_KEYS = (
     "SystemRoot",
@@ -260,6 +266,83 @@ def _contains(outer: Path, inner: Path) -> bool:
     return inner == outer or inner.is_relative_to(outer)
 
 
+Runner = Callable[[list[str]], int]
+
+
+def _icacls(argv: list[str]) -> int:
+    done = subprocess.run(argv, capture_output=True, check=False)  # noqa: S603 - fixed argv
+    return done.returncode
+
+
+def default_grants_manifest() -> Path:
+    from nox.paths import nox_home
+
+    return nox_home() / "sandbox" / "acl-grants.json"
+
+
+class RuntimeGrants:
+    """The read ACEs Nox puts on runtime folders for its AppContainer - recorded, reversible.
+
+    `grant(folder, sid)` adds `*SID:(OI)(CI)(RX)` once and records it; a recorded pair is never
+    granted again. `reset()` removes exactly the recorded ACEs (`icacls /remove:g`) and empties
+    the manifest. The runner is injectable so tests can assert the exact commands.
+    """
+
+    def __init__(self, manifest: Path | None = None, *, runner: Runner = _icacls) -> None:
+        self.manifest = manifest or default_grants_manifest()
+        self._run = runner
+
+    def recorded(self) -> list[tuple[str, str]]:
+        import json
+
+        try:
+            data = json.loads(self.manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return [
+            (str(item["path"]), str(item["sid"]))
+            for item in data.get("grants", [])
+            if isinstance(item, dict) and "path" in item and "sid" in item
+        ]
+
+    def _write(self, grants: list[tuple[str, str]]) -> None:
+        import json
+
+        self.manifest.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"grants": [{"path": path, "sid": sid} for path, sid in grants]}
+        self.manifest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def grant(self, folder: Path, sid: str) -> bool:
+        if not sid.startswith("S-1-15-2-") or sid == "S-1-15-2-1":
+            raise ValueError("only Nox's own container SID is ever granted")
+        entry = (str(folder), sid)
+        recorded = self.recorded()
+        if entry in recorded:
+            return True
+        ok = self._run(["icacls", str(folder), "/grant", f"*{sid}:(OI)(CI)(RX)", "/Q"]) == 0
+        if ok:
+            self._write([*recorded, entry])
+        return ok
+
+    def reset(self) -> int:
+        """Remove every recorded ACE; returns how many were removed. Failures stay recorded."""
+        left: list[tuple[str, str]] = []
+        removed = 0
+        for path, sid in self.recorded():
+            if not Path(path).exists():
+                continue  # the folder is gone, and its ACE with it
+            if self._run(["icacls", path, "/remove:g", f"*{sid}", "/Q"]) == 0:
+                removed += 1
+            else:
+                left.append((path, sid))
+        if left:
+            self._write(left)
+        else:
+            with contextlib.suppress(OSError):
+                self.manifest.unlink()
+        return removed
+
+
 def python_runtime_dirs(
     *, home: Path | None = None, base: str | None = None, prefix: str | None = None
 ) -> tuple[Path, ...]:
@@ -273,13 +356,15 @@ def python_runtime_dirs(
 
     nox = (home or nox_home()).resolve()
     profile = Path.home().resolve()
+    # Never a broad profile folder: the profile itself, anything above it, or a folder directly
+    # in it (Documents, AppData, ...). A runtime lives deeper (AppData/Roaming/uv/python/...).
     out: list[Path] = []
     for raw in (base or sys.base_prefix, prefix or sys.prefix):
         folder = Path(raw).resolve()
         if folder in out:
             continue
-        if len(folder.parts) <= 1 or folder == profile:
-            log.warning("sandbox.runtime_dir_refused", reason="root or profile folder")
+        if len(folder.parts) <= 1 or _contains(folder, profile) or folder.parent == profile:
+            log.warning("sandbox.runtime_dir_refused", reason="root or broad profile folder")
             continue
         if _contains(folder, nox) or _contains(nox, folder):
             log.warning("sandbox.runtime_dir_refused", reason="overlaps Nox's home")
@@ -291,7 +376,9 @@ def python_runtime_dirs(
 class WindowsSandbox:
     """Backend for `nox.sandbox.Sandbox` on Windows. One instance per core."""
 
-    def __init__(self, *, prefer_appcontainer: bool = True) -> None:
+    def __init__(
+        self, *, prefer_appcontainer: bool = True, grants: RuntimeGrants | None = None
+    ) -> None:
         from nox.sandbox import _win32
 
         self._w = _win32
@@ -302,25 +389,21 @@ class WindowsSandbox:
         #: The proxy reaches an AppContainer child over a named pipe (see the module docstring).
         self.proxy_transport = "pipe" if self._sid else "none"
         self._runtime_ready = False
+        self._grants = grants or RuntimeGrants()
+        if self._sid is None and self._grants.recorded():
+            # Container-SID ACEs on the interpreter break low-IL Python (module docstring).
+            removed = self._grants.reset()
+            log.info("sandbox.runtime_grants_reset", removed=removed)
 
     @property
     def container_sid(self) -> str | None:
         return self._sid
 
     def grant_read(self, folder: Path) -> bool:
-        """Give AppContainers read+execute on `folder` (inherited by everything below).
-
-        Additive and idempotent (`icacls /grant` merges an identical ACE); done once per backend,
-        off the event loop.
-        """
+        """Give Nox's container SID read+execute on `folder` - recorded, once (`RuntimeGrants`)."""
         if self._sid is None:
             return False
-        done = subprocess.run(  # noqa: S603 - fixed argv, a vetted runtime folder
-            ["icacls", str(folder), "/grant", f"*{_ALL_APP_PACKAGES}:(OI)(CI)(RX)", "/Q"],
-            capture_output=True,
-            check=False,
-        )
-        return done.returncode == 0
+        return self._grants.grant(folder, self._sid)
 
     async def _ensure_runtime(self) -> None:
         """Once per backend: make the Python runtime readable for the container (see above)."""
