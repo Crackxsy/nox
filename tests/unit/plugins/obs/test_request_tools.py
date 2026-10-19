@@ -318,6 +318,7 @@ async def test_wrong_password_is_reported_once_and_in_health() -> None:
 
 
 def _with_privacy_scene(server: FakeObsServer) -> None:
+    """The privacy scene holds an image and a group; the group holds a text source."""
     server.set_response(
         "GetSceneList",
         {
@@ -331,8 +332,21 @@ def _with_privacy_scene(server: FakeObsServer) -> None:
     server.set_response(
         "GetSceneItemList",
         lambda d: (
-            {"sceneItems": [{"sourceName": "BRB Image", "sourceUuid": "uuid-brb"}]}
+            {
+                "sceneItems": [
+                    {"sourceName": "BRB Image", "sourceUuid": "uuid-brb", "isGroup": False},
+                    {"sourceName": "Overlay Group", "sourceUuid": "uuid-group", "isGroup": True},
+                ]
+            }
             if d.get("sceneName") == "Technical Problems"
+            else {"sceneItems": []}
+        ),
+    )
+    server.set_response(
+        "GetGroupSceneItemList",
+        lambda d: (
+            {"sceneItems": [{"sourceName": "Group Text", "sourceUuid": "uuid-gt"}]}
+            if d.get("sceneName") == "Overlay Group"
             else {"sceneItems": []}
         ),
     )
@@ -345,6 +359,9 @@ def _with_privacy_scene(server: FakeObsServer) -> None:
         ("SetSceneItemEnabled", {"sceneUuid": "uuid-privacy", "sceneItemId": 1}),
         ("SetInputSettings", {"inputUuid": "uuid-brb", "inputSettings": {}}),
         ("RemoveInput", {"inputName": "BRB Image"}),
+        # Review payload: an input inside a group nested in the privacy scene.
+        ("SetInputSettings", {"inputName": "Group Text", "inputSettings": {"text": "x"}}),
+        ("RemoveInput", {"inputUuid": "uuid-gt"}),
     ],
 )
 async def test_privacy_scene_is_protected_by_uuid_and_by_its_sources(
@@ -414,6 +431,42 @@ async def test_answers_are_redacted_before_the_model_sees_them(
             {"request_type": "GetInputSettings", "request_data": {"inputName": "Nox Overlay"}},
         )
         assert "SECRET" not in str(result) and "hunter2" not in str(result)
-        assert result["response"]["inputSettings"]["url"].startswith("http://127.0.0.1:47801/pet/")
+        assert result["response"]["inputSettings"]["url"] == "http://127.0.0.1:47801"
+    finally:
+        await plugin.stop()
+
+
+async def test_privacy_check_fails_closed_when_a_nested_group_cannot_be_read(
+    obs_server: FakeObsServer, fake_client: FakeClient
+) -> None:
+    _with_privacy_scene(obs_server)
+    obs_server.set_response("GetGroupSceneItemList", RuntimeError("busy"))
+    api, plugin = await _plugin(obs_server, fake_client)
+    try:
+        with pytest.raises(PermissionError):
+            await api.tools.call(
+                "obs.request",
+                {"request_type": "SetInputMute", "request_data": {"inputName": "Mic"}},
+            )
+        assert "SetInputMute" not in _types(obs_server)
+    finally:
+        await plugin.stop()
+
+
+async def test_unrelated_change_passes_the_privacy_check(
+    obs_server: FakeObsServer, fake_client: FakeClient
+) -> None:
+    _with_privacy_scene(obs_server)
+    api, plugin = await _plugin(obs_server, fake_client)
+    try:
+        result = await api.tools.call(
+            "obs.request",
+            {
+                "request_type": "SetInputMute",
+                "request_data": {"inputName": "Mic", "inputMuted": True},
+            },
+        )
+        assert result["ok"] is True
+        assert "GetGroupSceneItemList" in _types(obs_server)  # the group was looked into
     finally:
         await plugin.stop()

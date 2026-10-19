@@ -94,6 +94,8 @@ class ReplayBufferSaveInput(BaseModel):
 MAX_RESPONSE_CHARS = 24_000
 #: How many `obs.screenshot` files are kept; older ones are deleted.
 SCREENSHOTS_KEPT = 5
+#: How deep `obs.request` follows nested scenes and groups inside the privacy scene.
+PRIVACY_SCENE_DEPTH = 8
 #: Names Nox gives the sources it sets up (the user may rename them; the input is then created
 #: again under this name on the next setup).
 OVERLAY_INPUT = "Nox Overlay"
@@ -539,27 +541,42 @@ class ObsPlugin:
             entry = next(
                 (s for s in scenes.get("scenes", []) if s.get("sceneName") == privacy), None
             )
-            names: list[str] = []
-            uuids: list[str] = []
+            own = {privacy}
+            protected: set[str] = set()
             if entry is not None:
-                items = await self.client.request("GetSceneItemList", {"sceneName": privacy})
-                for item in items.get("sceneItems", []):
-                    names.append(str(item.get("sourceName", "")))
-                    uuids.append(str(item.get("sourceUuid", "")))
-        except (ObsRequestError, ConnectionError, TimeoutError) as exc:
+                own.add(str(entry.get("sceneUuid", "")))
+                await self._collect_contents(privacy, group=False, into=protected, depth=0)
+        except (ObsRequestError, ConnectionError, TimeoutError, RecursionError) as exc:
             raise PermissionError(
                 f"could not check the privacy scene in OBS ({exc}); nothing was changed"
             ) from exc
         reason = privacy_refusal(
-            data.request_type,
-            data.request_data,
-            scene_name=privacy,
-            scene_uuid=str(entry.get("sceneUuid", "")) if entry is not None else "",
-            source_names=names,
-            source_uuids=uuids,
+            data.request_type, data.request_data, scene_names=own, protected=protected
         )
         if reason is not None:
             raise PermissionError(reason)
+
+    async def _collect_contents(
+        self, name: str, *, group: bool, into: set[str], depth: int
+    ) -> None:
+        """Every source in scene (or group) `name`, by name and UUID, descending into nested
+        scenes and groups - a source two levels down is still on screen when the panic hits."""
+        if depth > PRIVACY_SCENE_DEPTH:
+            raise RecursionError("the privacy scene is nested too deeply to check")
+        request = "GetGroupSceneItemList" if group else "GetSceneItemList"
+        items = await self.client.request(request, {"sceneName": name})
+        for item in items.get("sceneItems", []):
+            source = str(item.get("sourceName", ""))
+            if not source:
+                continue
+            already = source in into
+            into.update({source, str(item.get("sourceUuid", ""))})
+            if already:
+                continue  # a scene nested twice, or a cycle
+            if item.get("isGroup"):
+                await self._collect_contents(source, group=True, into=into, depth=depth + 1)
+            elif item.get("sourceType") == "OBS_SOURCE_TYPE_SCENE":
+                await self._collect_contents(source, group=False, into=into, depth=depth + 1)
 
     async def screenshot(self, data: ScreenshotInput) -> dict[str, Any]:
         """`obs.screenshot`: a small JPEG of a source or scene, written to a local folder. Only

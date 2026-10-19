@@ -230,23 +230,60 @@ def test_reads_that_can_return_secrets_are_confirmed() -> None:
     ("request_type", "data"),
     [
         ("CreateInput", {"inputKind": "image_source", "inputSettings": {"file": "C:/x.png"}}),
+        ("CreateInput", {"inputKind": "browser_source", "inputSettings": {}}),
+        ("CreateInput", {"inputKind": "monitor_capture", "inputSettings": {}}),
         ("SetInputSettings", {"inputName": "Web", "inputSettings": {"url": "https://x.example"}}),
         ("SetInputSettings", {"inputName": "Media", "inputSettings": {"local_file": "D:/v.mp4"}}),
         ("SetInputSettings", {"inputName": "Text", "inputSettings": {"text": "/etc/passwd"}}),
-        ("CreateSourceFilter", {"filterSettings": {"image_path": "C:/mask.png"}}),
+        # Review payload: uppercase drive letter with a backslash.
+        ("SetInputSettings", {"inputName": "Text", "inputSettings": {"text": "C:\\Users\\x"}}),
+        # Any scheme, any case.
+        ("SetInputSettings", {"inputName": "Text", "inputSettings": {"text": "SMB:share"}}),
+        # A key nobody listed is unknown, so high - whatever it is called.
+        ("SetInputSettings", {"inputName": "X", "inputSettings": {"stream_passphrase": "a"}}),
+        ("CreateSourceFilter", {"filterKind": "mask_filter_v2", "filterSettings": {}}),
+        ("CreateSourceFilter", {"filterKind": "crop_filter", "filterSettings": {"x": "C:/a"}}),
+        ("SetSourceFilterSettings", {"filterSettings": {"image_path": "mask.png"}}),
+        ("SetCurrentSceneTransitionSettings", {"transitionSettings": {"path": "stinger.webm"}}),
+        ("SetSceneItemEnabled", {"sceneName": "Live", "sceneItemId": 3, "sceneItemEnabled": True}),
     ],
 )
-def test_settings_that_point_at_content_are_high(request_type: str, data: dict) -> None:
+def test_anything_beyond_the_listed_harmless_settings_is_high(
+    request_type: str, data: dict
+) -> None:
     assert classify(request_type, data).risk is Risk.HIGH
 
 
-def test_plain_settings_stay_medium() -> None:
-    data = {"inputName": "Title", "inputSettings": {"text": "Back soon", "font": {"size": 48}}}
-    assert classify("SetInputSettings", data).risk is Risk.MEDIUM
+@pytest.mark.parametrize(
+    ("request_type", "data"),
+    [
+        (
+            "SetInputSettings",
+            {"inputName": "Title", "inputSettings": {"text": "Back soon", "font": {"size": 48}}},
+        ),
+        (
+            "CreateInput",
+            {
+                "sceneName": "Live",
+                "inputName": "Title",
+                "inputKind": "text_gdiplus_v3",
+                "inputSettings": {"text": "Hi", "color": 4294967295},
+            },
+        ),
+        ("CreateSourceFilter", {"filterKind": "crop_filter", "filterSettings": {"left": 10}}),
+        ("SetSceneItemEnabled", {"sceneName": "Live", "sceneItemId": 3, "sceneItemEnabled": False}),
+    ],
+)
+def test_listed_harmless_settings_stay_medium(request_type: str, data: dict) -> None:
+    assert classify(request_type, data).risk is Risk.MEDIUM
+
+
+def test_adding_an_existing_source_to_a_scene_is_high() -> None:
+    assert classify("CreateSceneItem", {"sceneName": "A", "sourceName": "Cam"}).risk is Risk.HIGH
 
 
 def test_uuids_make_a_change_high_until_the_plugin_resolved_them() -> None:
-    scope = classify("SetSceneItemEnabled", {"sceneUuid": "abc", "sceneItemId": 3})
+    scope = classify("SetSceneItemLocked", {"sceneUuid": "abc", "sceneItemId": 3})
     assert scope.risk is Risk.HIGH
     assert classify("SetInputMute", {"inputUuid": "def", "inputMuted": True}).risk is Risk.HIGH
 
@@ -261,48 +298,82 @@ def test_confirmation_text_names_the_target_without_secrets() -> None:
 
 
 class TestPrivacyRefusal:
-    SCENE = {"scene_name": "Technical Problems", "scene_uuid": "uuid-privacy"}
+    OWN = {"Technical Problems", "uuid-privacy"}
+    # The scene's contents as the plugin collects them: an image, a nested group and what is
+    # inside that group.
+    PROTECTED = {"BRB Image", "uuid-brb", "Overlay Group", "uuid-group", "Group Text", "uuid-gt"}
 
     def refuse(self, request_type: str, data: dict) -> str | None:
-        return privacy_refusal(
-            request_type,
-            data,
-            **self.SCENE,
-            source_names=["BRB Image"],
-            source_uuids=["uuid-brb"],
-        )
+        return privacy_refusal(request_type, data, scene_names=self.OWN, protected=self.PROTECTED)
 
-    def test_scene_by_uuid(self) -> None:
+    def test_scene_by_name_and_uuid(self) -> None:
         assert self.refuse("RemoveScene", {"sceneUuid": "uuid-privacy"})
         assert self.refuse("SetSceneItemEnabled", {"sceneUuid": "uuid-privacy", "sceneItemId": 1})
+        assert self.refuse(
+            "SetSceneName", {"sceneName": "Live", "newSceneName": "Technical Problems"}
+        )
 
     def test_sources_inside_it_by_name_and_uuid(self) -> None:
         assert self.refuse("SetInputSettings", {"inputName": "BRB Image", "inputSettings": {}})
         assert self.refuse("RemoveInput", {"inputUuid": "uuid-brb"})
         assert self.refuse("SetInputName", {"inputName": "Cam", "newInputName": "BRB Image"})
+        assert self.refuse("CreateSourceFilter", {"sourceName": "BRB Image", "filterName": "f"})
+
+    def test_an_input_inside_a_nested_group(self) -> None:
+        # Review payload: the input sits in a group inside the privacy scene.
+        assert self.refuse("SetInputSettings", {"inputName": "Group Text", "inputSettings": {}})
+        assert self.refuse("SetSceneItemEnabled", {"sceneName": "Overlay Group", "sceneItemId": 2})
+        assert self.refuse("RemoveInput", {"inputUuid": "uuid-gt"})
 
     def test_switching_to_it_and_unrelated_changes_pass(self) -> None:
         assert self.refuse("SetCurrentProgramScene", {"sceneUuid": "uuid-privacy"}) is None
+        assert self.refuse("SetCurrentProgramScene", {"sceneName": "Technical Problems"}) is None
         assert self.refuse("SetInputMute", {"inputName": "Mic", "inputMuted": True}) is None
         assert self.refuse("GetInputSettings", {"inputName": "BRB Image"}) is None
 
+    def test_switching_does_not_unlock_its_contents(self) -> None:
+        assert self.refuse("SetCurrentProgramScene", {"sceneName": "Overlay Group"})
 
-def test_redaction_of_obs_answers() -> None:
+
+def test_redaction_keeps_only_listed_settings() -> None:
     answer = {
+        "inputKind": "browser_source",
         "inputSettings": {
             "url": "http://127.0.0.1:47801/pet/?overlay=1&token=abc#overlay=SECRET",
-            "server": "rtmp://live.example.tv/app/live_123_KEY",
-            "password": "hunter2",
-            "stream_key": "live_123",
-            "text": "visit https://user:pw@example.com/x?sig=zzz&page=2",
+            "stream_passphrase": "correct horse",  # review payload: secret word inside the key
+            "css": "body { background: url(https://x.example/a.png) }",
             "width": 400,
+            "text": "hello",
         },
-        "parameterValue": "plain",
     }
     redacted = redact(answer)
-    flat = str(redacted)
-    for secret in ("SECRET", "abc", "live_123", "hunter2", "pw@", "zzz", "KEY"):
-        assert secret not in flat, secret
-    assert redacted["inputSettings"]["width"] == 400
-    assert "page=2" in redacted["inputSettings"]["text"]
-    assert redacted["parameterValue"] == "plain"
+    settings = redacted["inputSettings"]
+    assert settings["url"] == "http://127.0.0.1:47801"
+    assert settings["stream_passphrase"] == "[redacted]"
+    assert settings["css"] == "[redacted]"  # not on the list
+    assert settings["text"] == "hello" and settings["width"] == 400
+    assert "SECRET" not in str(redacted) and "abc" not in str(redacted)
+    assert "correct horse" not in str(redacted)
+
+
+def test_redaction_of_tokens_in_url_paths_and_key_like_strings() -> None:
+    answer = {
+        # Review payload: the token is in the URL path, not in a parameter.
+        "comment": "failed to open https://api.example.com/hooks/T0K3Nabcdefghijklmnop/send",
+        "savedReplayPath": "D:/Videos/Replay 2026-10-19.mkv",
+        "sceneUuid": "1b4e28ba-2fa1-11d2-883f-0016d3cca427",
+        "outputName": "live_123456789_AbCdEfGhIjKlMnOp",
+        "authToken": "x",
+        "monitorKeyFile": "y",
+    }
+    redacted = redact(answer)
+    assert redacted["comment"] == "failed to open https://api.example.com"
+    assert redacted["sceneUuid"] == answer["sceneUuid"]
+    assert "AbCdEfGhIjKlMnOp" not in redacted["outputName"]
+    assert redacted["authToken"] == "[redacted]" and redacted["monitorKeyFile"] == "[redacted]"
+    assert redacted["savedReplayPath"].startswith("D:/Videos/Replay")
+
+
+def test_file_settings_show_only_the_file_name() -> None:
+    redacted = redact({"inputSettings": {"file": "C:\\Users\\someone\\Pictures\\brb.png"}})
+    assert redacted["inputSettings"]["file"] == "brb.png"
