@@ -20,6 +20,7 @@ import { ConfigForm, groupId, groupsOf } from './ConfigForm';
 import { ConsentTile } from './ConsentTile';
 import { HealthHistoryTable } from './HealthHistoryTable';
 import { IntegrationsSection } from './IntegrationsSection';
+import { LocalAiTile } from './LocalAiTile';
 import { PersonalityTile } from './PersonalityTile';
 import { ProfileTile } from './ProfileTile';
 import { useHomeTest } from './useHomeTest';
@@ -129,6 +130,7 @@ export function SettingsPage({
         />
         <ProfileTile t={t} lang={lang} client={client} />
         <ConsentTile t={t} lang={lang} client={client} pinConfigured={data.pinConfigured} />
+        <LocalAiTile t={t} lang={lang} client={client} />
       </div>
 
       <HealthHistoryTable t={t} lang={lang} history={data.history} />

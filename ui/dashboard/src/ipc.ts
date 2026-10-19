@@ -94,6 +94,13 @@ export const api = {
   dayReminderAdd: (c: IpcClient, text: string, dueAt: string) =>
     c.request('day.reminder.add', { text, due_at: dueAt }),
   dayReminderCancel: (c: IpcClient, id: string) => c.request('day.reminder.cancel', { id }),
+  // -- local model setup (Settings -> Lokale KI) -------------------------------------------------
+  localAiStatus: (c: IpcClient) => c.request('ai.setup.status', {}),
+  /** A dry run: measure, recommend, ask Ollama. Downloads and writes nothing. */
+  localAiCheck: (c: IpcClient) => c.request('ai.setup.check', {}),
+  /** Starts a run in the core; the tile then polls `ai.setup.status`. */
+  localAiStart: (c: IpcClient, installOllama: boolean) =>
+    c.request('ai.setup.start', { install_ollama: installOllama }),
   profileList: (c: IpcClient) => c.request('memory.profile.list', {}),
   profileAdd: (c: IpcClient, text: string) => c.request('memory.profile.add', { text }),
   profileForget: (c: IpcClient, id: number) => c.request('memory.profile.forget', { id }),

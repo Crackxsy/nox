@@ -2665,3 +2665,11 @@ a:hover {
   padding: 0;
   min-width: 0;
 }
+
+/* ---------------------------------------------------------------- localai - */
+
+.localai-progress {
+  display: block;
+  width: 100%;
+  margin: var(--s-2) 0;
+}

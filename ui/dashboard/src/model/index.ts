@@ -11,6 +11,7 @@
  *   clips.ts          clip records, the pending rows events announce, export results
  *   day.ts            the user's day: appointments, reminders, calendar feeds
  *   home.ts           Home Assistant areas, entities and their live state
+ *   localai.ts        the local-model setup: hardware, recommendation, download, probe
  *   remote.ts         paired devices and the one-time pairing code
  *   lan.ts            devices in the home network, pairing links, permission prompts
  *   settings.ts       config, secrets, PIN, Twitch device flow, personality
@@ -26,6 +27,7 @@ export * from './day';
 export * from './health';
 export * from './home';
 export * from './lan';
+export * from './localai';
 export * from './presets';
 export * from './views';
 export * from './notifications';

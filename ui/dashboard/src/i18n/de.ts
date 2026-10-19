@@ -958,6 +958,65 @@ export const de = {
   perm_risk_medium: 'mittel',
   perm_risk_high: 'hoch',
   perm_risk_critical: 'kritisch',
+  // -- local model setup (Settings -> Lokale KI) ------------------------------------------------
+  localai_title: 'Lokale KI',
+  localai_hint:
+    'Ein Sprachmodell, das auf diesem Rechner läuft. Nox misst Arbeits- und Grafikspeicher, empfiehlt ein passendes Modell, lädt es über Ollama und prüft es, bevor es eingetragen wird.',
+  localai_loading: 'Prüfe diesen Rechner …',
+  localai_unavailable: 'Die Einrichtung der lokalen KI ist gerade nicht erreichbar.',
+  localai_unknown: 'unbekannt',
+  localai_ram: 'Arbeitsspeicher',
+  localai_vram: 'Grafikspeicher',
+  localai_vram_none: 'kein Messwert (nur NVIDIA-Karten)',
+  localai_gb: '{0} GB',
+  localai_device: 'Gerät',
+  localai_device_pi: 'Raspberry Pi {0}',
+  localai_model: 'Empfohlenes Modell',
+  localai_model_size: '{0} (Download etwa {1} GB)',
+  localai_ollama: 'Ollama',
+  localai_ollama_ok: 'läuft (Version {0})',
+  localai_ollama_stopped: 'installiert, antwortet aber nicht',
+  localai_ollama_missing: 'nicht gefunden',
+  localai_reason_vram: 'Gewählt nach Grafikspeicher.',
+  localai_reason_ram_no_vram_reading:
+    'Kein Grafikspeicher-Messwert (AMD, Intel, Apple oder kein nvidia-smi) – gewählt nach Arbeitsspeicher.',
+  localai_reason_ram_vram_too_small:
+    'Der Grafikspeicher reicht für kein Modell der Tabelle – gewählt nach Arbeitsspeicher; das Modell läuft auf dem Prozessor.',
+  localai_reason_no_llm_pi:
+    'Auf einem Raspberry Pi 4 oder älter ist kein lokales Modell sinnvoll: eine Antwort würde Minuten dauern. Nutze Claude Code oder Ollama auf einem stärkeren Rechner im Netz.',
+  localai_reason_no_llm_arm_low_ram:
+    'Ein ARM-Gerät mit höchstens 4 GB Arbeitsspeicher kann kein brauchbares Modell halten. Nutze Claude Code oder Ollama auf einem anderen Rechner.',
+  localai_reason_no_llm_low_ram:
+    'Unter 6 GB Arbeitsspeicher ist kein lokales Modell sinnvoll. Nutze Claude Code oder Ollama auf einem anderen Rechner.',
+  localai_unmeasured:
+    'Dieses Modell hat das Projekt noch nicht vermessen; die Prüfung nach dem Download entscheidet.',
+  localai_has_model: 'Das Modell ist schon vorhanden; es wird nichts heruntergeladen.',
+  localai_start_ollama: 'Starte die Ollama-App oder „ollama serve“ und prüfe dann erneut.',
+  localai_install_how: 'So installierst du Ollama:',
+  localai_pull_blocked: 'Im Privatsphäre-Modus „{0}“ lädt Nox nichts herunter.',
+  localai_setup: 'Einrichten',
+  localai_install_setup: 'Ollama installieren und einrichten',
+  localai_recheck: 'Erneut prüfen',
+  localai_phase_detect: 'Messe diesen Rechner …',
+  localai_phase_ollama: 'Frage Ollama …',
+  localai_phase_install: 'Installiere Ollama …',
+  localai_phase_pull: 'Lade {0} herunter …',
+  localai_phase_probe: 'Prüfe das Modell: eine Antwort und ein Werkzeugaufruf …',
+  localai_phase_write: 'Trage das Modell ein …',
+  localai_progress_label: 'Fortschritt des Downloads',
+  localai_progress: '{0} % von {1} GB',
+  localai_out_done: '{0} ist eingerichtet und eingetragen. Wirksam nach einem Neustart von Nox.',
+  localai_out_ollama_missing: 'Ollama fehlt; ohne Ollama gibt es kein lokales Modell.',
+  localai_out_ollama_not_running: 'Ollama antwortet nicht.',
+  localai_out_install_failed: 'Ollama wurde nicht installiert: {1}',
+  localai_out_privacy_blocked:
+    'Nicht heruntergeladen: Im aktuellen Privatsphäre-Modus lädt Nox nichts aus dem Netz.',
+  localai_out_declined: 'Abgebrochen; nichts wurde verändert.',
+  localai_out_pull_failed: 'Der Download ist fehlgeschlagen: {1}',
+  localai_out_probe_failed:
+    'Das Modell hat die Prüfung nicht bestanden ({1}). Die Einstellungen bleiben unverändert.',
+  localai_out_config_failed: 'Die Einstellungen konnten nicht gespeichert werden: {1}',
+  localai_out_failed: 'Unerwarteter Fehler: {1}',
 } as const;
 
 export type Key = keyof typeof de;
