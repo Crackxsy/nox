@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -45,7 +46,14 @@ token = (
     .map(lambda t: f"TOK{t}")
 )
 words = st.text(alphabet="abcdefg hijk", min_size=1, max_size=20)
-part = st.one_of(absolute_path(), url(), token, words)
+#: Whatever may stand right in front of a path or URL: letters, digits, punctuation, a colon.
+glued = st.text(alphabet="xyz019.:;!-_()=,'\"", max_size=3)
+part = st.one_of(
+    st.tuples(glued, absolute_path()).map("".join),
+    st.tuples(glued, url()).map("".join),
+    token,
+    words,
+)
 separator = st.sampled_from([" ", "  ", "\n", " (", ") ", ": ", "\t"])
 
 
@@ -81,3 +89,18 @@ def test_redacted_text_leaks_no_directory_url_detail_or_key(sample: tuple[str, l
 def test_a_path_alone_becomes_its_file_name(path: str) -> None:
     out = redact({"savedReplayPath": path})["savedReplayPath"]
     assert out.endswith(".png") and "/" not in out and "\\" not in out
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "x1https://host.example/TOKENPATH",  # a scheme character right in front
+        ".https://host.example/TOKENPATH",
+        "1://host.example/TOKENPATH",  # not a scheme at all, still a URL-like tail
+        "key:/home/DIRSEGuser/notes.txt",  # a path right after a colon
+        "x/home/DIRSEGuser/notes.txt",
+    ],
+)
+def test_review_edge_cases(value: str) -> None:
+    out = redact({"comment": value})["comment"]
+    assert "TOKENPATH" not in out and "DIRSEG" not in out, out

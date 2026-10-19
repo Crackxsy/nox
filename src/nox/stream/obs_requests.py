@@ -556,11 +556,15 @@ _SECRET_WORDS = (
     "pass", "secret", "token", "key", "auth", "credential", "cookie", "session", "signature",
     "bearer", "private", "cert",
 )  # fmt: skip
-#: A URL anywhere in a string: any scheme, up to the next space or quote.
-_URL = re.compile(r"(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*://[^\s\"'<>]*", re.IGNORECASE)
-#: Where an absolute path starts: a drive letter, a UNC share, a home-relative or root path. A
-#: slash only starts one at the beginning or after a space, quote or bracket (not in "and/or").
-_PATH_START = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]|\\\\|(?<![^\s\"'(\[<=,;])~?[\\/]")
+#: A URL anywhere in a string: any scheme - whatever stands in front of it becomes part of the
+#: scheme - up to the next space or quote.
+_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s\"'<>]*", re.IGNORECASE)
+#: Whatever still contains `://` after that (a scheme starting with a digit, say), whole.
+_URL_REST = re.compile(r"[^\s\"'<>]*://[^\s\"'<>]*")
+#: A path separator. Every one counts: a path can start anywhere (`key:/home/...`), and a slash
+#: in ordinary text costs at most the words before it.
+_SEPARATOR = re.compile(r"[\\/]")
+_SPACE_OR_HOLD = re.compile(r"[\s\x00]")
 #: Long runs of base64/hex/url-safe characters: keys, tokens, signatures - whatever their name.
 _KEYLIKE = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
@@ -604,26 +608,28 @@ def _host_only(url: str) -> str:
 
 
 def _basenames(line: str) -> str:
-    """Every absolute path in `line` replaced by its last segment. A path may contain spaces,
-    so it runs to the end of the line - or to the next URL, already reduced and held aside -
-    and whatever follows its last separator is kept."""
-    match = _PATH_START.search(line)
-    while match is not None:
-        start = match.start()
-        end = line.find(_HOLD, start)
+    """Every path in `line` replaced by its last segment. A path starts at the beginning of the
+    word that holds a separator; it may contain spaces, so it runs to the end of the line - or to
+    the next URL, already reduced and held aside - and whatever follows its last separator is
+    kept."""
+    found = _SEPARATOR.search(line)
+    while found is not None:
+        before = [m.end() for m in _SPACE_OR_HOLD.finditer(line, 0, found.start())]
+        start = before[-1] if before else 0
+        end = line.find(_HOLD, found.start())
         end = len(line) if end < 0 else end
         region = line[start:end]
         cut = max(region.rfind("/"), region.rfind("\\"))
         line = line[:start] + region[cut + 1 :] + line[end:]
-        match = _PATH_START.search(line, start)
+        found = _SEPARATOR.search(line, start)
     return line
 
 
 def _redact_string(text: str) -> str:
     """The fixed pipeline every string from OBS goes through, in this order: (1) every URL
-    becomes `scheme://host`; (2) every absolute path, anywhere in the string, becomes its file
-    name; (3) every generated-looking 20+ character run becomes `[redacted]`. Secret key names
-    are handled by the caller, on top."""
+    becomes `scheme://host`, and anything else with `://` in it is redacted whole; (2) every
+    path, anywhere in the string, becomes its file name; (3) every generated-looking 20+
+    character run becomes `[redacted]`. Secret key names are handled by the caller, on top."""
     held: list[str] = []
 
     def hold(match: re.Match[str]) -> str:
@@ -631,6 +637,12 @@ def _redact_string(text: str) -> str:
         return f"{_HOLD}{len(held) - 1}{_HOLD}"
 
     text = _URL.sub(hold, text)
+
+    def hold_redacted(_match: re.Match[str]) -> str:
+        held.append(REDACTED)
+        return f"{_HOLD}{len(held) - 1}{_HOLD}"
+
+    text = _URL_REST.sub(hold_redacted, text)
     text = "\n".join(_basenames(line) for line in text.split("\n"))
     text = _no_keys(text)
     return re.sub(f"{_HOLD}(\\d+){_HOLD}", lambda m: held[int(m.group(1))], text)
