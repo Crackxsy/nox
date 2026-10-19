@@ -145,6 +145,12 @@ class Turn:
     tools_used: list[str] = field(default_factory=list)
     #: Tools the provider ran on its own side (Claude Code's web search), outside Nox's tool loop.
     provider_tools: list[str] = field(default_factory=list)
+    #: Cloud models were not allowed at some point during this turn. Sticky, and shared by the
+    #: user's message and the answer: both are stored private, whatever the mode at the end.
+    private: bool = False
+    #: Memory writes were not allowed at some point during the turn: nothing of it is stored.
+    unrecordable: bool = False
+    recorded: bool = False
 
 
 @dataclass
@@ -373,7 +379,9 @@ class Orchestrator:
         turn.timings.prompt_build_ms = (time.perf_counter() - build_started) * 1000
         if decision.reason:
             log.info("orchestrator.escalated", request_id=request_id, reason=decision.reason)
-        await self._record("user", text)
+        # Both messages are stored when the turn ends, with the privacy the whole turn had: a
+        # switch in the middle must not leave the question public and the answer private.
+        self._note_privacy(turn)
         ready: dict[str, object] = {}
 
         def _capture_ready(ev: Event) -> None:
@@ -406,12 +414,15 @@ class Orchestrator:
             turn.degraded = bool(ready.get("degraded", False))
             self._note_first_sentence(turn, started)
             turn.timings.total_ms = (time.perf_counter() - started) * 1000
-            await self._record("assistant", turn.response, provider=turn.provider)
+            await self._record_turn(turn)
             self._notify_turn_complete(text, turn.response)
             return turn
         finally:
             unsub()
             speech.cancel_filler()
+            if not turn.recorded:
+                # The turn failed or was cancelled: the question still belongs in the history.
+                await self._record_turn(turn, answer=False)
             if tools is not None and self.tool_loop is not None:
                 turn.tools_used = list(tools.used)
                 await self.tool_loop.end(tools)
@@ -561,6 +572,7 @@ class Orchestrator:
         calls: list[ToolCallRequest] = []
         async for chunk in self.router.stream(request):
             turn.chunks += 1
+            self._note_privacy(turn)
             if chunk.tool_activity:
                 self._on_provider_tools(chunk.tool_activity, speech, language, turn)
             calls.extend(chunk.tool_calls)
@@ -700,7 +712,7 @@ class Orchestrator:
         tell the difference apart from the provider badge, which says `fastpath` so the user can
         see that no language model was involved.
         """
-        await self._record("user", turn.text)
+        self._note_privacy(turn)
         turn.response = text
         turn.chunks = 1
         turn.provider = FAST_PATH_PROVIDER
@@ -715,7 +727,7 @@ class Orchestrator:
                 await self._speak(sentence, language, turn.request_id)
         turn.timings.first_sentence_ms = (time.perf_counter() - started) * 1000
         turn.timings.total_ms = (time.perf_counter() - started) * 1000
-        await self._record("assistant", turn.response, provider=turn.provider)
+        await self._record_turn(turn)
         return turn
 
     async def _speak(self, sentence: str, language: str, request_id: str) -> None:
@@ -729,12 +741,35 @@ class Orchestrator:
             )
         )
 
-    async def _record(self, role: str, text: str, *, provider: str = "") -> None:
+    def _note_privacy(self, turn: Turn) -> None:
+        """Sticky privacy of the turn: private if cloud models were not allowed at any point, and
+        not to be stored at all if memory writes were not (privacy mode private, a zone)."""
+        if self.cloud_allowed is not None and not self.cloud_allowed():
+            turn.private = True
+        if self.memory_policy is not None and not self.memory_policy.allows_memory_write():
+            turn.unrecordable = True
+
+    async def _record_turn(self, turn: Turn, *, answer: bool = True) -> None:
+        """Store the user's message and (unless the turn failed) the answer, once, together."""
+        if turn.recorded:
+            return
+        turn.recorded = True
+        self._note_privacy(turn)
+        if turn.unrecordable:
+            return
+        await self._record("user", turn.text, private=turn.private)
+        if answer:
+            await self._record(
+                "assistant", turn.response, provider=turn.provider, private=turn.private
+            )
+
+    async def _record(
+        self, role: str, text: str, *, provider: str = "", private: bool = False
+    ) -> None:
         if self.turns is None:
             return
         if self.memory_policy is not None and not self.memory_policy.allows_memory_write():
             return
-        private = self.cloud_allowed is not None and not self.cloud_allowed()
         try:
             await self.turns.record(self.session_id, role, text, provider=provider, private=private)
         except Exception as exc:
