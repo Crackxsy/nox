@@ -187,7 +187,10 @@ def tool_installer(
 
     async def install() -> InstallResult:
         result = await executor.call(
-            _AGENT, PACKAGE_INSTALL_TOOL, {"package": OLLAMA_PACKAGE}, mode=mode()
+            agent=_AGENT,
+            name=PACKAGE_INSTALL_TOOL,
+            arguments={"package": OLLAMA_PACKAGE},
+            mode=mode(),
         )
         log.info("localai.ollama_install", ok=result.ok, error=result.error)
         return InstallResult(ok=result.ok, detail=result.error or "")
