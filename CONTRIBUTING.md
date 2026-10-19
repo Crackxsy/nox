@@ -44,6 +44,46 @@ cd ui\pet && npm test && cd ..\dashboard && npm test
 Tests are required. A behaviour change without a test will not be merged, and security-relevant
 code needs negative-path tests (the case that must be *rejected*), not only the happy path.
 
+### What a test has to prove
+
+These rules hold for every test, and they are checked most carefully on tests an AI agent wrote,
+because those tend to be numerous and shallow:
+
+- **Every policy list is tested element by element.** A deny list, an allow list or a set of
+  forbidden values gets one test case per element, written out as literals. Parametrizing over the
+  constant itself proves nothing: remove an element and its test case disappears with it.
+- **Every `except`, default and limit has a test that breaks it.** For each exception handler,
+  fallback value, cap or timeout there is a test that drives the code into it and asserts what must
+  happen there - the error is reported, the default is the documented one, the cap holds at its
+  exact value.
+- **A bug fix comes with a test that fails without the fix.** Say in the pull request that you saw
+  it fail.
+- **No sleep-then-assert.** Wait for an event, a condition with a timeout, or call the step
+  directly; a test that passes only because a `sleep` was long enough is flaky by design.
+- **At least one behavioural assertion per test.** `assert result is not None` or "it did not
+  raise" is not a test of behaviour; assert the value, the state change or the message.
+- **A new security test must demonstrably kill a mutant.** Change the guarded line (drop an element,
+  flip a comparison, change a default) and show that the test fails; mention the mutant in the pull
+  request.
+- A bare `pytest` must stay hermetic: anything that needs a real service, device, network or toolchain
+  is marked `e2e`, `network`, `hardware` or `spike`.
+
+## This is a public repository
+
+Everything committed here - code, comments, tests, fixtures, docs, commit messages and pull-request
+text - is public:
+
+- **English** for code, comments, docs, commits and pull requests (user-facing UI strings are
+  translated through the i18n files).
+- **No personal data**: no real names, places, e-mail addresses, employers, or details of anyone's
+  machine, hardware or accounts. Use neutral examples (`Alex`, `Springfield`, `example.com`).
+- **No local paths**: no drive letters or home folders from a real machine. Use `tmp_path` in tests,
+  placeholders in docs and command-line arguments in scripts.
+- **Commit with your GitHub noreply address** (`<id>+<user>@users.noreply.github.com`), never a
+  private one.
+- No internal planning IDs (story, decision or open-point numbers) in code comments: say what the
+  rule is, not where it was decided.
+
 ## Branches, commits, pull requests
 
 - Two long-lived branches: **`develop`** (default; integration, every contribution targets it) and

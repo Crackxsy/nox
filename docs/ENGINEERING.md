@@ -24,12 +24,14 @@ Binding sources for any contribution: the code contracts in this repo —
 - No fake implementations: a feature either works and is tested, or is explicitly reported as missing/degraded. No stubs that silently return success.
 - Raw audio is never persisted. Transcripts and memory respect privacy mode/zones.
 - No personal data (real names, e-mail addresses, machine paths, employer names) in code, config, tests, fixtures or docs.
+- This repository is public: code, comments, docs, commit messages and pull-request text are in English, carry no personal data and no local paths (use `tmp_path`, placeholders, CLI arguments), and every commit is authored with a GitHub noreply address. No internal planning IDs in code comments.
 
 ## Code conventions
 - Python 3.13, `from __future__ import annotations`, pydantic v2 models for all data crossing boundaries, `StrEnum` for enums, asyncio, type hints everywhere (mypy strict), ruff (line length 100).
 - Structured logging via `nox.core.logging.get_logger(__name__)` (structlog). Never log secrets, tokens, transcripts or memory content at INFO; use `log.debug` with redaction where needed.
 - Dependency injection through constructors; no module-level singletons except the hard prohibition constant.
 - Each module gets tests in `tests/unit/<area>/test_*.py` (pytest, `pytest-asyncio` in `asyncio_mode = "auto"`). Security-relevant code needs negative-path tests.
+- Test rules (binding for agent-written tests too; details in `../CONTRIBUTING.md`): every policy list is tested element by element with literal cases; every `except`, default and limit has a test that drives the code into it; a bug fix comes with a test that fails without it; no sleep-then-assert; at least one behavioural assertion per test (not only `is not None`); a new security test must demonstrably kill a mutant of the line it guards.
 - Keep changes to shared contracts (`events.py`, `state.py`, `model.py`, `protocol.py`, `base.py`) small and additive, and call them out in the pull request.
 - TypeScript types under `ui/shared/generated/` are generated from the pydantic models: run `python scripts/gen_ts_types.py` after changing a contract; CI checks they are current.
 - Docstrings: one line per module explaining its purpose and which contract/ADR it implements.
