@@ -46,6 +46,7 @@ from nox.ai._log import get_logger
 from nox.ai.base import AiChunk, AiRequest, AiResponse, AiRole, Message
 from nox.ai.config import ClaudeCodeConfig
 from nox.ai.errors import ProviderError, ProviderTimeoutError, ProviderUnavailableError
+from nox.ai.providers.claude_cost import TurnCost
 from nox.ai.providers.claude_session import ClaudeSession, SessionSpec
 from nox.ai.providers.claude_stream import ClaudeStreamParser, StreamItem
 from nox.tools.names import from_wire
@@ -68,6 +69,11 @@ TOOL_TURN_MARGIN_S = 30.0
 #: Failed starts or control requests after which the warm session is given up for this run.
 MAX_SESSION_FAILURES = 3
 DRAIN_GRACE_S = 2.0
+#: Said when a turn is stopped because its estimated cost passed `max_budget_usd`.
+COST_LIMIT_NOTICE = {
+    "de": " Ich höre hier auf: Das Kostenlimit für eine Antwort ist erreicht.",
+    "en": " I am stopping here: the cost limit for one answer is reached.",
+}
 
 #: Environment variables the CLI process may inherit. Everything else - an outer Claude Code
 #: session's variables, Nox's own tokens, any secret that happens to be set - stays behind.
@@ -493,6 +499,8 @@ class PersistentClaude:
         #: Text after a tool call is a new block; without a space it would run into the last one.
         after_tool = False
         searches = 0
+        cost = TurnCost(model=session.model)
+        over_budget = False
         try:
             await session.set_model(self._model_for(request))
             await session.send(self._compose(session, request, turns))
@@ -503,6 +511,26 @@ class PersistentClaude:
                 item = parser.feed(line)
                 if item is None:
                     continue
+                if item.kind == "status" and item.text == "message_start":
+                    cost.step_started(
+                        input_tokens=item.tokens_in or 0,
+                        cache_write_tokens=item.cache_write_tokens or 0,
+                        cache_read_tokens=item.cache_read_tokens or 0,
+                    )
+                elif item.kind == "status" and item.text == "message_delta" and item.tokens_out:
+                    cost.output_so_far(item.tokens_out)
+                if not over_budget and item.kind != "result" and self._over_budget(cost):
+                    over_budget = True
+                    log.warning("claude_persistent.turn_cost_limit", estimate_usd=cost.usd)
+                    session.request_interrupt()
+                    notice = COST_LIMIT_NOTICE.get(
+                        request.metadata.get("language", "de")[:2], COST_LIMIT_NOTICE["en"]
+                    )
+                    parts.append(notice)
+                    yield AiChunk(request_id=request.request_id, delta=notice)
+                    continue
+                if over_budget and item.kind != "result":
+                    continue  # nothing more from a turn that was stopped for its cost
                 if item.kind == "delta" and item.text:
                     if first_token_ms is None:
                         first_token_ms = int((time.perf_counter() - started) * 1000)
@@ -543,6 +571,9 @@ class PersistentClaude:
                 # left (or replaces the process if it does not wind down).
                 self._abandon(session)
         yield AiChunk(request_id=request.request_id, delta="", done=True)
+
+    def _over_budget(self, cost: TurnCost) -> bool:
+        return self._cfg.max_budget_usd > 0 and cost.usd > self._cfg.max_budget_usd
 
     def _abandon(self, session: ClaudeSession) -> None:
         self._dirty = True

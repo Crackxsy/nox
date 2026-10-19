@@ -290,3 +290,41 @@ def test_the_kill_never_waits_on_the_event_loop(monkeypatch: pytest.MonkeyPatch)
     claude_session.kill_tree(child.pid)
 
     assert child.wait(timeout=10) is not None
+
+
+async def test_a_turn_is_stopped_honestly_when_its_estimated_cost_passes_the_limit(
+    tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--max-budget-usd counts the whole session; the per-turn limit is enforced while the turn
+    runs, from the usage Claude Code streams."""
+    monkeypatch.setenv("FAKE_LOG", str(log))
+    provider = PersistentClaude(
+        ClaudeCodeConfig(model="sonnet", max_budget_usd=0.25, session_turns=40),
+        executable=lambda: [sys.executable, str(FAKE)],
+        creationflags=NO_WINDOW,
+        workdir=tmp_path / "claude",
+        env=dict(os.environ),
+        also_inherit=frozenset({"FAKE_LOG"}),
+    )
+    try:
+        chunks = await _collect(provider.stream(_request("EXPENSIVE bitte")))
+
+        text = "".join(c.delta for c in chunks)
+        assert "Kostenlimit" in text
+        assert text.count("Schritt.") <= 4, "stopped after about 0.25 USD of sonnet steps"
+        assert _interrupted(log)
+        assert chunks[-1].done
+    finally:
+        await provider.close()
+
+
+def test_the_cost_estimate_prices_unknown_models_like_the_most_expensive_family() -> None:
+    from nox.ai.providers.claude_cost import TurnCost
+
+    known, unknown = TurnCost(model="claude-sonnet-5-5"), TurnCost(model="mystery")
+    for cost in (known, unknown):
+        cost.step_started(input_tokens=1_000_000, cache_write_tokens=0, cache_read_tokens=0)
+        cost.output_so_far(100_000)
+
+    assert known.usd == pytest.approx(2.0 + 1.0)
+    assert unknown.usd == pytest.approx(4.0 + 2.0)

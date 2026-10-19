@@ -138,6 +138,31 @@ def main() -> None:
                 }
             )
             delta("Erledigt.")
+        if "EXPENSIVE" in content:
+            # Agent steps with large prompts, until interrupted (at most 20).
+            for _ in range(20):
+                if _INTERRUPTED.is_set():
+                    break
+                out(
+                    {
+                        "type": "stream_event",
+                        "event": {
+                            "type": "message_start",
+                            "message": {
+                                "model": "claude-sonnet-5-5",
+                                "usage": {"input_tokens": 40000, "output_tokens": 1},
+                            },
+                        },
+                    }
+                )
+                delta(" Schritt.")
+                out(
+                    {
+                        "type": "stream_event",
+                        "event": {"type": "message_delta", "usage": {"output_tokens": 500}},
+                    }
+                )
+                time.sleep(0.05)
         if "SEARCH" in content:
             for _ in range(7):
                 if _INTERRUPTED.is_set():

@@ -26,6 +26,9 @@ class StreamItem(BaseModel):
     duration_api_ms: int | None = None
     stop_reason: str = ""
     terminal_reason: str = ""
+    #: On `message_start`: the prompt tokens of that model step, by how they are billed.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
 
 class ClaudeStreamParser:
@@ -79,7 +82,16 @@ class ClaudeStreamParser:
         if etype == "message_start":
             message = event.get("message") or {}
             self.model = str(message.get("model", "") or self.model)
-            return StreamItem(kind="status", text="message_start", model=self.model)
+            usage = message.get("usage") or {}
+            return StreamItem(
+                kind="status",
+                text="message_start",
+                model=self.model,
+                tokens_in=_as_int(usage.get("input_tokens")),
+                cache_read_tokens=_as_int(usage.get("cache_read_input_tokens")),
+                cache_write_tokens=_as_int(usage.get("cache_creation_input_tokens")),
+                tokens_out=_as_int(usage.get("output_tokens")),
+            )
         if etype == "content_block_start":
             block = event.get("content_block") or {}
             if block.get("type") == "tool_use":
