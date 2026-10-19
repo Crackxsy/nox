@@ -5,7 +5,8 @@ Raspberry Pi oder einem anderen 64-Bit-Linux-Rechner. PC, Laptop, Handy und Tabl
 ein Nox – mit demselben Gedächtnis, denselben Erinnerungen und demselben Kalender –, statt dass jedes
 Gerät sein eigenes hat.
 
-> **English:** [`RASPBERRY_PI.md`](RASPBERRY_PI.md) is the same guide in English.
+> **Maßgeblich ist die englische Fassung:** [`RASPBERRY_PI.md`](RASPBERRY_PI.md). Diese Übersetzung wird im selben
+> Pull Request mitgepflegt; weichen beide einmal voneinander ab, gilt die englische.
 
 ## Was du brauchst
 

@@ -780,6 +780,7 @@ export const en: Record<Key, string> = {
   perm_device_note: 'From this device a permission counts for this one time only.',
   perm_more: '{0} more waiting',
   perm_decided_elsewhere: 'Decided on another device.',
+  device_local_only: 'Only on the computer Nox runs on.',
   audit_tool_file: 'Files',
   audit_tool_filesystem: 'Files',
   audit_tool_desktop: 'PC',

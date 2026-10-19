@@ -173,7 +173,8 @@ class CoreHandlers:
         ui = UI_ROLES
         reg("state.get", StateGet, self.state_get, roles=(*ui, "pet", "plugin"))
         reg("health.get", EmptyPayload, self.health_get, roles=ui)
-        reg("mode.set", ModeSet, self.mode_set, roles=ui)
+        # A mode switch changes which profile - and so which tools - Nox may use: administration.
+        reg("mode.set", ModeSet, self.mode_set, roles=LOCAL_UI_ROLES)
         # Changing privacy and resuming after the kill switch are administration; engaging the
         # kill switch or panic mode is for everyone, a paired phone included.
         reg("privacy.set", PrivacySet, self.privacy_set, roles=(*LOCAL_UI_ROLES, "supervisor"))

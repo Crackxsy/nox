@@ -92,9 +92,9 @@ def register_memory_ipc(
         return {"ok": ok}
 
     registry.register("memory.profile.list", EmptyPayload, p_list, roles=UI_ROLES)
-    # A fact added here becomes part of every prompt; adding one is administration, and so is
-    # confirming one Nox only picked up from a phone message or pasted text. Forgetting one is
-    # open to every UI - taking something out of Nox's memory never widens anything.
+    # What Nox knows about its person is changed on the machine it runs on: a fact added here is
+    # part of every prompt - and so is one Nox only picked up from a phone message or pasted text
+    # once it is confirmed - and a lost phone must not be able to erase what Nox knows either.
     registry.register("memory.profile.confirm", ProfileConfirm, p_confirm, roles=LOCAL_UI_ROLES)
     registry.register("memory.profile.add", ProfileAdd, p_add, roles=LOCAL_UI_ROLES)
-    registry.register("memory.profile.forget", ProfileForget, p_forget, roles=UI_ROLES)
+    registry.register("memory.profile.forget", ProfileForget, p_forget, roles=LOCAL_UI_ROLES)

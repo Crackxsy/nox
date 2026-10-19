@@ -56,15 +56,12 @@ DEVICE_SURFACE = frozenset(
         "lan.pair.start",
         "lan.status",
         "lan.unpair",
-        "memory.profile.forget",
         "memory.profile.list",
-        "mode.set",
         "personality.get",
         "plans.approve",
         "plans.discard",
         "plans.list",
         "plugin.status",
-        "presets.activate",
         "presets.list",
         "secrets.status",
         "security.kill",
@@ -92,6 +89,9 @@ ADMINISTRATION = (
     "twitch.auth.start",
     "twitch.auth.disconnect",
     "memory.profile.add",
+    "memory.profile.forget",
+    "mode.set",
+    "presets.activate",
     "presets.test_action",
     "clip.tag",
     "clip.export",
@@ -316,7 +316,7 @@ async def test_revoking_closes_the_open_session_at_once(core: NoxCore) -> None:
 
 async def test_a_device_cannot_pair_or_remove_others_without_a_pin(core: NoxCore) -> None:
     paired = await _pair(core)
-    other = await _pair(core, "Zweites Gerät")
+    other = await _pair(core, "Second device")
     async with await _connect(core) as ws:
         await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
         pair = await _request(ws, paired["client_id"], "lan.pair.start", {})
@@ -388,3 +388,29 @@ async def test_nox_pair_prints_a_link_a_code_and_the_fingerprint(core: NoxCore) 
     assert "#pair=" in text and "https://" in text
     assert _lan(core).tls.fingerprint[:23] in text  # type: ignore[union-attr]
     assert "Valid until" in text
+
+
+async def test_with_a_pin_a_device_pairs_only_with_the_right_one(core: NoxCore) -> None:
+    from nox.security.gate import SecurityChangeGate
+    from nox.security.secrets import InMemorySecretStore, PinManager
+
+    assert core.security is not None
+    # Never the real credential manager in a test.
+    core.security.secrets = InMemorySecretStore()
+    core.security.pin = PinManager(
+        core.security.secrets, audit=core.security.audit, prefer_argon2=False
+    )
+    core.security.gate = SecurityChangeGate(
+        core.security.pin, required=True, audit=core.security.audit
+    )
+    core.security.pin.set_pin("4711", by="test")
+
+    paired = await _pair(core)
+    async with await _connect(core) as ws:
+        await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
+        without = await _request(ws, paired["client_id"], "lan.pair.start", {})
+        assert without.kind is Kind.ERROR and without.payload["code"] == ERR_PERMISSION
+        wrong = await _request(ws, paired["client_id"], "lan.pair.start", {"pin": "0000"})
+        assert wrong.kind is Kind.ERROR and wrong.payload["code"] == ERR_PERMISSION
+        right = await _request(ws, paired["client_id"], "lan.pair.start", {"pin": "4711"})
+        assert right.kind is Kind.RESPONSE and len(right.payload["code"]) == 8

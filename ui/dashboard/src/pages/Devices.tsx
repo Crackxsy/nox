@@ -346,7 +346,7 @@ export function DevicesSection({
         <section aria-labelledby="h-lan-ca" className="tiles tiles--single">
           <Tile id="lan-ca" title={t('lan_ca_title')} lede={t('lan_ca_lede')}>
             <div className="tile-actions">
-              <a className="btn" href="/nox-ca.crt" download="nox-heimnetz.crt">
+              <a className="btn" href="/nox-ca.crt" download="nox-home-ca.crt">
                 {t('lan_ca_download')}
               </a>
               {install && (

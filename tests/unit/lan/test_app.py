@@ -163,3 +163,40 @@ def test_a_missing_dashboard_says_so(
         limiter=limiter,
     )
     assert TestClient(app, base_url=BASE).get("/dashboard/").status_code == 503
+
+
+def test_the_policy_is_built_from_the_validated_host_only(client: TestClient) -> None:
+    """The raw header never reaches the policy: an upper-case host is accepted (hosts are case
+    insensitive) but appears normalised, and a host with anything after the port is refused."""
+    response = client.get("/dashboard/", headers={"Host": "NOXPI.LOCAL:47843"})
+    assert response.status_code == 200
+    csp = response.headers["content-security-policy"]
+    assert "wss://noxpi.local:47843" in csp
+    assert "NOXPI" not in csp
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["noxpi.local:47843; script-src *", "noxpi.local:47843 x", "noxpi.local:99999", "noxpi.local:"],
+)
+def test_a_host_with_a_bad_port_is_refused(client: TestClient, host: str) -> None:
+    assert client.get("/dashboard/", headers={"Host": host}).status_code == 421
+
+
+def test_an_ipv6_loopback_host_keeps_its_brackets_in_the_policy(
+    devices: LanDevices, dist: Path, limiter: PairLimiter, tmp_path: Path
+) -> None:
+    from nox.lan.tls import ensure_tls
+
+    material = ensure_tls(tmp_path / "tls6", names=("localhost",), addresses=("127.0.0.1", "::1"))
+    app = create_lan_app(
+        devices=devices,
+        tls=lambda: material,
+        hub_url=lambda: "ws://127.0.0.1:1/ws",
+        bridge_secret=lambda: "secret",
+        dashboard_dist=dist,
+        limiter=limiter,
+    )
+    response = TestClient(app, base_url="https://[::1]:47843").get("/dashboard/")
+    assert response.status_code == 200
+    assert "wss://[::1]:47843" in response.headers["content-security-policy"]

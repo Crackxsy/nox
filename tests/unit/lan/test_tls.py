@@ -139,7 +139,9 @@ def test_the_fingerprint_is_the_sha256_of_the_authority(tls: TlsMaterial) -> Non
     assert len(tls.fingerprint.split(":")) == 32
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="POSIX permission bits; Windows: the icacls test"
+)
 def test_keys_and_their_folder_are_owner_only(tls: TlsMaterial) -> None:
     assert os.stat(tls.key_file.parent).st_mode & 0o077 == 0
     assert os.stat(tls.key_file).st_mode & 0o077 == 0
@@ -151,3 +153,52 @@ def test_local_identity_offers_loopback_and_private_addresses_only() -> None:
     assert "localhost" in names
     assert addresses[0] == "127.0.0.1"
     assert all(permitted_address(a) for a in addresses)
+
+
+def test_a_key_that_cannot_be_protected_is_not_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail closed: when the owner-only ACL cannot be applied, the key file is removed again and
+    nothing is issued - the listener then stays off (`test_listener.py`)."""
+    from nox.lan import tls as tls_module
+
+    def unprotected(path: Path, content: str) -> bool:
+        path.write_text(content, encoding="utf-8")
+        return False
+
+    monkeypatch.setattr(tls_module, "write_secret_file", unprotected)
+    with pytest.raises(tls_module.KeyNotProtectedError):
+        ensure_tls(tmp_path / "tls", names=NAMES, addresses=ADDRESSES)
+    assert not (tmp_path / "tls" / "ca.key").exists()
+    assert not (tmp_path / "tls" / "server.key").exists()
+
+
+def test_a_server_certificate_near_its_end_is_renewed_under_the_same_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import datetime as dt
+
+    from nox.lan import tls as tls_module
+
+    first = ensure_tls(tmp_path / "tls", names=NAMES, addresses=ADDRESSES)
+    real_now = tls_module._now
+    # 20 days before the server certificate ends: inside the 30-day renewal window.
+    later = real_now() + dt.timedelta(days=SERVER_VALIDITY_DAYS - 20)
+    monkeypatch.setattr(tls_module, "_now", lambda: later)
+    renewed = ensure_tls(tmp_path / "tls", names=NAMES, addresses=ADDRESSES)
+    assert renewed.server_serial != first.server_serial
+    assert renewed.fingerprint == first.fingerprint  # the same authority: no new warning
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows ACLs")
+def test_on_windows_the_key_is_readable_by_this_user_only(tls: TlsMaterial) -> None:
+    import os
+    import subprocess
+
+    out = subprocess.run(  # noqa: S603 - fixed argv
+        ["icacls", str(tls.key_file)], capture_output=True, text=True, check=True
+    ).stdout
+    # One access-control entry, for the current user; inheritance removed.
+    entries = [line for line in out.splitlines() if ":(" in line]
+    assert len(entries) == 1, out
+    assert os.environ["USERNAME"].lower() in entries[0].lower()

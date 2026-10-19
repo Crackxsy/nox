@@ -239,7 +239,7 @@ def _new_ca(
     subject = x509.Name(
         [
             x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Nox"),
-            x509.NameAttribute(NameOID.COMMON_NAME, f"Nox {label} - nur Heimnetz"),
+            x509.NameAttribute(NameOID.COMMON_NAME, f"Nox {label} home network CA"),
         ]
     )
     now = _now()

@@ -17,11 +17,18 @@
  * the DOM, so assistive technology never sees duplicates.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { Auth } from './auth';
-import { type Key, type Lang, type T, translator } from './i18n';
-import { type ConnStatus, type Envelope, type IpcClient, api, createDashboardClient } from './ipc';
+import type { Auth } from "./auth";
+import { DeviceContext } from "./device";
+import { type Key, type Lang, type T, translator } from "./i18n";
+import {
+  type ConnStatus,
+  type Envelope,
+  type IpcClient,
+  api,
+  createDashboardClient,
+} from "./ipc";
 import {
   type ChatMessage,
   type DashboardState,
@@ -36,51 +43,51 @@ import {
   reduceEvent,
   removePrompt,
   setConnected,
-} from './model';
-import { NotificationToasts } from './NotificationToasts';
-import { AuditPage } from './pages/Audit';
-import { DevicesSection } from './pages/Devices';
-import { PermissionPromptDialog } from './PermissionPrompt';
-import { BoardPage } from './pages/Board';
-import { ChatPage } from './pages/Chat';
-import { ClipsPage } from './pages/Clips';
-import { HomePage } from './pages/Home';
-import { PresetsPage } from './pages/Presets';
-import { RemotePage } from './pages/Remote';
-import { SettingsPage } from './pages/settings/SettingsPage';
-import { StatusPage } from './pages/Status';
-import { StreamPage } from './pages/Stream';
-import { type ThemePref, applyTheme, storeTheme } from './theme';
-import { Hero } from './ui';
+} from "./model";
+import { NotificationToasts } from "./NotificationToasts";
+import { AuditPage } from "./pages/Audit";
+import { DevicesSection } from "./pages/Devices";
+import { PermissionPromptDialog } from "./PermissionPrompt";
+import { BoardPage } from "./pages/Board";
+import { ChatPage } from "./pages/Chat";
+import { ClipsPage } from "./pages/Clips";
+import { HomePage } from "./pages/Home";
+import { PresetsPage } from "./pages/Presets";
+import { RemotePage } from "./pages/Remote";
+import { SettingsPage } from "./pages/settings/SettingsPage";
+import { StatusPage } from "./pages/Status";
+import { StreamPage } from "./pages/Stream";
+import { type ThemePref, applyTheme, storeTheme } from "./theme";
+import { Hero } from "./ui";
 
 export type TabId =
-  | 'status'
-  | 'chat'
-  | 'board'
-  | 'home'
-  | 'presets'
-  | 'stream'
-  | 'clips'
-  | 'remote'
-  | 'audit'
-  | 'settings';
+  | "status"
+  | "chat"
+  | "board"
+  | "home"
+  | "presets"
+  | "stream"
+  | "clips"
+  | "remote"
+  | "audit"
+  | "settings";
 const TABS: { id: TabId; label: Key }[] = [
-  { id: 'status', label: 'tab_status' },
-  { id: 'chat', label: 'tab_chat' },
-  { id: 'home', label: 'tab_home' },
-  { id: 'board', label: 'tab_board' },
-  { id: 'presets', label: 'tab_presets' },
-  { id: 'stream', label: 'tab_stream' },
-  { id: 'clips', label: 'tab_clips' },
-  { id: 'remote', label: 'tab_remote' },
-  { id: 'audit', label: 'tab_audit' },
-  { id: 'settings', label: 'tab_settings' },
+  { id: "status", label: "tab_status" },
+  { id: "chat", label: "tab_chat" },
+  { id: "home", label: "tab_home" },
+  { id: "board", label: "tab_board" },
+  { id: "presets", label: "tab_presets" },
+  { id: "stream", label: "tab_stream" },
+  { id: "clips", label: "tab_clips" },
+  { id: "remote", label: "tab_remote" },
+  { id: "audit", label: "tab_audit" },
+  { id: "settings", label: "tab_settings" },
 ];
 
 const THEME_OPTIONS: { value: ThemePref; label: Key }[] = [
-  { value: 'system', label: 'theme_system' },
-  { value: 'light', label: 'theme_light' },
-  { value: 'dark', label: 'theme_dark' },
+  { value: "system", label: "theme_system" },
+  { value: "light", label: "theme_light" },
+  { value: "dark", label: "theme_dark" },
 ];
 
 /**
@@ -102,36 +109,78 @@ export interface AppProps {
    * A paired device was removed (its token is refused) or signed itself out. The caller forgets
    * its credentials and shows the "not paired" screen.
    */
-  onDeviceGone?: (reason: 'removed' | 'signed_out') => void;
+  onDeviceGone?: (reason: "removed" | "signed_out") => void;
   /** One line shown under the bar, e.g. that this browser could not store the pairing. */
   notice?: string;
+}
+
+/**
+ * A page a paired device may look at but not operate: one line saying where it works, and every
+ * control inside disabled by the browser itself (a disabled fieldset), so nothing is offered that
+ * the core would refuse.
+ */
+function LocalOnly({
+  t,
+  device,
+  note = "device_local_only",
+  children,
+}: {
+  t: T;
+  device: boolean;
+  note?: Key;
+  children: React.ReactNode;
+}) {
+  if (!device) return <>{children}</>;
+  return (
+    <>
+      <p role="note" className="banner device-note">
+        {t(note)}
+      </p>
+      <fieldset disabled className="fieldset-plain">
+        {children}
+      </fieldset>
+    </>
+  );
 }
 
 /** Typing in a field must not be swallowed by a global accelerator. */
 function isTextEntry(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+  return (
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    target.isContentEditable
+  );
 }
 
-export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: AppProps) {
+export function App({
+  auth,
+  lang,
+  theme: initialTheme,
+  onDeviceGone,
+  notice,
+}: AppProps) {
   const t: T = useMemo(() => translator(lang), [lang]);
-  const device = auth?.kind === 'device';
-  const [tab, setTab] = useState<TabId>('status');
+  const device = auth?.kind === "device";
+  const [tab, setTab] = useState<TabId>("status");
   const [state, setState] = useState<DashboardState>(INITIAL_STATE);
-  const [status, setStatus] = useState<ConnStatus>(auth ? 'connecting' : 'offline');
+  const [status, setStatus] = useState<ConnStatus>(
+    auth ? "connecting" : "offline",
+  );
   const [prompts, setPrompts] = useState<PermissionPrompt[]>([]);
   const [decidedElsewhere, setDecidedElsewhere] = useState(false);
   const [lanRevision, setLanRevision] = useState(0);
-  const [justPaired, setJustPaired] = useState('');
+  const [justPaired, setJustPaired] = useState("");
   /** Prompts this dashboard answered itself: their "decided" event is not "elsewhere". */
   const answeredRef = useRef<Set<string>>(new Set());
-  const [statusDetail, setStatusDetail] = useState<string>('');
+  const [statusDetail, setStatusDetail] = useState<string>("");
   const [client, setClient] = useState<IpcClient | null>(null);
   const [theme, setTheme] = useState<ThemePref>(initialTheme);
   const [providersFailed, setProvidersFailed] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [chatDraft, setChatDraft] = useState('');
+  const [chatDraft, setChatDraft] = useState("");
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const pickTheme = (next: ThemePref) => {
@@ -142,23 +191,31 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
 
   /** Events the shared reducer does not own: permission prompts and device pairing. */
   const onSideEvent = useCallback((env: Envelope) => {
-    if (env.name === 'security.permission_requested') {
+    if (env.name === "security.permission_requested") {
       const prompt = parsePermissionRequested(env.payload);
       if (prompt) {
         setDecidedElsewhere(false);
         setPrompts((q) => addPrompt(q, prompt));
       }
-    } else if (env.name === 'security.permission_decided') {
+    } else if (env.name === "security.permission_decided") {
       const id = (env.payload as { request_id?: unknown }).request_id;
       setPrompts((q) => {
-        if (typeof id === 'string' && q.some((p) => p.id === id) && !answeredRef.current.has(id)) {
+        if (
+          typeof id === "string" &&
+          q.some((p) => p.id === id) &&
+          !answeredRef.current.has(id)
+        ) {
           setDecidedElsewhere(true);
         }
         return removePrompt(q, env.payload);
       });
-    } else if (env.name === 'remote.paired' || env.name === 'remote.revoked') {
+    } else if (env.name === "remote.paired" || env.name === "remote.revoked") {
       const payload = env.payload as { channel?: unknown; name?: unknown };
-      if (env.name === 'remote.paired' && payload.channel === 'lan' && typeof payload.name === 'string') {
+      if (
+        env.name === "remote.paired" &&
+        payload.channel === "lan" &&
+        typeof payload.name === "string"
+      ) {
         setJustPaired(payload.name);
       }
       setLanRevision((n) => n + 1);
@@ -176,8 +233,8 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
       },
       onStatus: (s, detail) => {
         setStatus(s);
-        setStatusDetail(detail ?? '');
-        setState((prev) => setConnected(prev, s === 'online'));
+        setStatusDetail(detail ?? "");
+        setState((prev) => setConnected(prev, s === "online"));
       },
     })
       .then((c) => {
@@ -189,7 +246,7 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
         // §3: availability is never faked. A client that could not even be built means offline,
         // and the banner says so rather than leaving the page on "verbinde …" forever.
         if (cancelled) return;
-        setStatus('offline');
+        setStatus("offline");
         setStatusDetail(e instanceof Error ? e.message : String(e));
       });
     return () => {
@@ -208,16 +265,20 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
 
   // A paired device whose token is refused has been removed: say so instead of "auth failed".
   useEffect(() => {
-    if (device && status === 'auth_failed') onDeviceGone?.('removed');
+    if (device && status === "auth_failed") onDeviceGone?.("removed");
   }, [device, status, onDeviceGone]);
 
   // Initial snapshot after every (re)connect: the core is the only source of truth.
   const refresh = useCallback(async (c: IpcClient) => {
-    const [snapshot, health] = await Promise.allSettled([api.stateGet(c), api.healthGet(c)]);
+    const [snapshot, health] = await Promise.allSettled([
+      api.stateGet(c),
+      api.healthGet(c),
+    ]);
     setState((s) => {
       let next = s;
-      if (snapshot.status === 'fulfilled') next = applyStateSnapshot(next, snapshot.value);
-      if (health.status === 'fulfilled') {
+      if (snapshot.status === "fulfilled")
+        next = applyStateSnapshot(next, snapshot.value);
+      if (health.status === "fulfilled") {
         const parsed = parseHealthReport(health.value);
         if (parsed) next = { ...next, health: parsed };
       }
@@ -238,7 +299,7 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
   }, []);
 
   useEffect(() => {
-    if (!client || status !== 'online') return;
+    if (!client || status !== "online") return;
     let cancelled = false;
     let timer = 0;
     let attempt = 0;
@@ -276,15 +337,15 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
     const onKey = (e: KeyboardEvent) => {
       if (!e.altKey || e.ctrlKey || e.metaKey) return;
       if (isTextEntry(e.target)) return;
-      const idx = ['1', '2', '3', '4', '5', '6', '7', '8', '9'].indexOf(e.key);
+      const idx = ["1", "2", "3", "4", "5", "6", "7", "8", "9"].indexOf(e.key);
       const target = TABS[idx];
       if (idx < 0 || !target) return;
       e.preventDefault();
       setTab(target.id);
       tabRefs.current[idx]?.focus();
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   const onTabKey = (e: React.KeyboardEvent, index: number) => {
@@ -309,36 +370,36 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
     tabRefs.current[next]?.focus();
   };
 
-  const online = status === 'online';
+  const online = status === "online";
   const liveClient = online ? client : null;
   const connLabel: Key =
-    status === 'online'
-      ? 'conn_online'
-      : status === 'connecting'
-        ? 'conn_connecting'
-        : status === 'auth_failed'
-          ? 'conn_auth_failed'
-          : 'conn_offline';
+    status === "online"
+      ? "conn_online"
+      : status === "connecting"
+        ? "conn_connecting"
+        : status === "auth_failed"
+          ? "conn_auth_failed"
+          : "conn_offline";
   const connClass = online
-    ? 'conn--online'
-    : status === 'auth_failed'
-      ? 'conn--error'
-      : 'conn--warn';
+    ? "conn--online"
+    : status === "auth_failed"
+      ? "conn--error"
+      : "conn--warn";
 
   return (
     <div className="app">
       <a href="#main" className="skip-link">
-        {t('skip_to_main')}
+        {t("skip_to_main")}
       </a>
 
       <header className="nav">
         <div className="wrap nav-inner">
-          <h1 className="wordmark">{t('app_title')}</h1>
+          <h1 className="wordmark">{t("app_title")}</h1>
 
-          <nav className="nav-links" aria-label={t('nav')}>
+          <nav className="nav-links" aria-label={t("nav")}>
             <div
               role="tablist"
-              aria-label={t('nav')}
+              aria-label={t("nav")}
               aria-orientation="horizontal"
               aria-describedby="nav-shortcuts"
               className="tablist"
@@ -367,7 +428,7 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
               })}
             </div>
             <p id="nav-shortcuts" className="sr-only">
-              {t('shortcuts_hint')}
+              {t("shortcuts_hint")}
             </p>
           </nav>
 
@@ -376,11 +437,13 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
               <span aria-hidden="true" className="dot" />
               <span>
                 {t(connLabel)}
-                {statusDetail && status === 'auth_failed' ? `: ${statusDetail}` : ''}
+                {statusDetail && status === "auth_failed"
+                  ? `: ${statusDetail}`
+                  : ""}
               </span>
             </p>
             <fieldset className="seg">
-              <legend className="sr-only">{t('theme_label')}</legend>
+              <legend className="sr-only">{t("theme_label")}</legend>
               {THEME_OPTIONS.map((option) => (
                 <label key={option.value} className="seg-item">
                   <input
@@ -400,7 +463,7 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
 
       {!auth && (
         <p role="alert" className="banner banner--error">
-          {t('no_token')}
+          {t("no_token")}
         </p>
       )}
       {notice && (
@@ -408,116 +471,136 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
           {notice}
         </p>
       )}
-      {auth && !online && status !== 'connecting' && (
+      {auth && !online && status !== "connecting" && (
         <p role="alert" className="banner">
-          {t('offline_hint')}
+          {t("offline_hint")}
         </p>
       )}
 
-      <main id="main" className="main" tabIndex={-1}>
-        {TABS.map((item) => (
-          <div
-            key={item.id}
-            role="tabpanel"
-            id={`panel-${item.id}`}
-            aria-labelledby={`tab-${item.id}`}
-            hidden={tab !== item.id}
-          >
-            {item.id === 'status' && (
-              <StatusPage
-                t={t}
-                lang={lang}
-                state={state}
-                client={liveClient}
-                providersFailed={providersFailed}
-                onRefresh={refreshAll}
-              />
-            )}
-            {item.id === 'chat' && (
-              <ChatPage
-                t={t}
-                lang={lang}
-                client={liveClient}
-                providers={state.providers}
-                messages={messages}
-                onMessages={(update) => setMessages((list) => update(list))}
-                draft={chatDraft}
-                onDraft={setChatDraft}
-              />
-            )}
-            {item.id === 'home' && (
-              <HomePage
-                t={t}
-                lang={lang}
-                state={state}
-                client={liveClient}
-                onState={setState}
-                onOpenSettings={() => setTab('settings')}
-              />
-            )}
-            {item.id === 'board' && (
-              <BoardPage t={t} lang={lang} client={liveClient} revision={state.viewsRevision} />
-            )}
-            {item.id === 'presets' && <PresetsPage t={t} client={liveClient} />}
-            {item.id === 'stream' && (
-              <StreamPage
-                t={t}
-                lang={lang}
-                state={state}
-                client={liveClient}
-                onState={setState}
-                onOpenSettings={() => setTab('settings')}
-              />
-            )}
-            {item.id === 'clips' && (
-              <ClipsPage t={t} lang={lang} state={state} client={liveClient} onState={setState} />
-            )}
-            {item.id === 'remote' && (
-              <div className="page wrap">
-                <Hero title={t('hero_remote')} sub={t('hero_remote_sub')} />
-                <DevicesSection
+      <DeviceContext.Provider value={device}>
+        <main id="main" className="main" tabIndex={-1}>
+          {TABS.map((item) => (
+            <div
+              key={item.id}
+              role="tabpanel"
+              id={`panel-${item.id}`}
+              aria-labelledby={`tab-${item.id}`}
+              hidden={tab !== item.id}
+            >
+              {item.id === "status" && (
+                <StatusPage
+                  t={t}
+                  lang={lang}
+                  state={state}
+                  client={liveClient}
+                  providersFailed={providersFailed}
+                  onRefresh={refreshAll}
+                />
+              )}
+              {item.id === "chat" && (
+                <ChatPage
                   t={t}
                   lang={lang}
                   client={liveClient}
-                  device={device}
-                  revision={lanRevision}
-                  justPaired={justPaired}
-                  onOpenSettings={() => setTab('settings')}
-                  onSignedOut={() => onDeviceGone?.('signed_out')}
+                  providers={state.providers}
+                  messages={messages}
+                  onMessages={(update) => setMessages((list) => update(list))}
+                  draft={chatDraft}
+                  onDraft={setChatDraft}
                 />
-                {device ? (
-                  <p className="hint section-note">{t('remote_device_note')}</p>
-                ) : (
-                  <RemotePage
+              )}
+              {item.id === "home" && (
+                <HomePage
+                  t={t}
+                  lang={lang}
+                  state={state}
+                  client={liveClient}
+                  onState={setState}
+                  onOpenSettings={() => setTab("settings")}
+                />
+              )}
+              {item.id === "board" && (
+                <BoardPage
+                  t={t}
+                  lang={lang}
+                  client={liveClient}
+                  revision={state.viewsRevision}
+                />
+              )}
+              {item.id === "presets" && (
+                <LocalOnly t={t} device={device}>
+                  <PresetsPage t={t} client={liveClient} />
+                </LocalOnly>
+              )}
+              {item.id === "stream" && (
+                <StreamPage
+                  t={t}
+                  lang={lang}
+                  state={state}
+                  client={liveClient}
+                  onState={setState}
+                  onOpenSettings={() => setTab("settings")}
+                />
+              )}
+              {item.id === "clips" && (
+                <LocalOnly t={t} device={device}>
+                  <ClipsPage
+                    t={t}
+                    lang={lang}
+                    state={state}
+                    client={liveClient}
+                    onState={setState}
+                  />
+                </LocalOnly>
+              )}
+              {item.id === "remote" && (
+                <div className="page wrap">
+                  <Hero title={t("hero_remote")} sub={t("hero_remote_sub")} />
+                  <DevicesSection
                     t={t}
                     lang={lang}
                     client={liveClient}
-                    onOpenSettings={() => setTab('settings')}
-                    embedded
+                    device={device}
+                    revision={lanRevision}
+                    justPaired={justPaired}
+                    onOpenSettings={() => setTab("settings")}
+                    onSignedOut={() => onDeviceGone?.("signed_out")}
                   />
-                )}
-              </div>
-            )}
-            {item.id === 'audit' && <AuditPage t={t} lang={lang} rows={state.audit} />}
-            {item.id === 'settings' && device && (
-              <p role="note" className="banner device-note">
-                {t('device_admin_note')}
-              </p>
-            )}
-            {item.id === 'settings' && (
-              <SettingsPage
-                t={t}
-                lang={lang}
-                client={liveClient}
-                revision={state.settingsRevision}
-                twitchAuthEvent={state.twitchAuth}
-                plugins={state.stream.session.plugins}
-                onOpenRemote={() => setTab('remote')}
-              />
-            )}
-          </div>
-        ))}
-      </main>
+                  {device ? (
+                    <p className="hint section-note">
+                      {t("remote_device_note")}
+                    </p>
+                  ) : (
+                    <RemotePage
+                      t={t}
+                      lang={lang}
+                      client={liveClient}
+                      onOpenSettings={() => setTab("settings")}
+                      embedded
+                    />
+                  )}
+                </div>
+              )}
+              {item.id === "audit" && (
+                <AuditPage t={t} lang={lang} rows={state.audit} />
+              )}
+              {item.id === "settings" && (
+                <LocalOnly t={t} device={device} note="device_admin_note">
+                  <SettingsPage
+                    t={t}
+                    lang={lang}
+                    client={liveClient}
+                    revision={state.settingsRevision}
+                    twitchAuthEvent={state.twitchAuth}
+                    plugins={state.stream.session.plugins}
+                    onOpenRemote={() => setTab("remote")}
+                  />
+                </LocalOnly>
+              )}
+            </div>
+          ))}
+        </main>
+      </DeviceContext.Provider>
 
       <NotificationToasts
         t={t}

@@ -810,6 +810,7 @@ export const de = {
   perm_device_note: 'Von diesem Gerät aus gilt eine Erlaubnis nur dieses eine Mal.',
   perm_more: '{0} weitere warten',
   perm_decided_elsewhere: 'Auf einem anderen Gerät entschieden.',
+  device_local_only: 'Geht nur am Rechner, auf dem Nox läuft.',
   audit_tool_file: 'Dateien',
   audit_tool_filesystem: 'Dateien',
   audit_tool_desktop: 'PC',

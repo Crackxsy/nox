@@ -4,12 +4,16 @@ One definition, imported by every request surface the dashboard uses, so a new U
 granted in one module and forgotten in the next.
 
 Two tiers, because a paired device is not the machine Nox runs on. A phone can be lost in the
-home network, so it gets what a person uses day to day - talking, the day, the house, plans,
-approvals, the kill switch - but nothing that changes how Nox is set up or what it may do later:
-settings, secrets, the PIN-free relaxing of privacy, resuming after the kill switch, editing
-memory, extensions, pairing. Those stay with the shell and the dashboard on this machine
-(`LOCAL_UI_ROLES`). `remote` (the Telegram companion) and `pet` are no UI roles at all; they have
-their own, much narrower surfaces.
+home network, so it gets what a person uses day to day - talking, the day and its reminders, the
+lights and scenes of the house, approving or discarding a plan, answering a permission prompt
+once, the kill switch - but nothing that changes how Nox is set up or what it may do later:
+settings, secrets, privacy, the mode (and with it the tool profile), resuming after the kill
+switch, presets that start programs, what Nox remembers about its person, clips, extensions,
+pairing without the PIN. Those stay with the shell and the dashboard on this machine
+(`LOCAL_UI_ROLES`). The exact device surface is pinned by `tests/integration/test_lan.py`.
+
+`remote` (the Telegram companion) and `pet` are no UI roles at all; they have their own, much
+narrower surfaces.
 """
 
 from __future__ import annotations

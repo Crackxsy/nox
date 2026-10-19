@@ -55,7 +55,7 @@ log = get_logger(__name__)
 
 __all__ = ["LanSettings", "PairLimiter", "create_lan_app", "host_of"]
 
-CA_FILE_NAME = "nox-heimnetz.crt"
+CA_FILE_NAME = "nox-home-ca.crt"
 CLOSE_POLICY_VIOLATION = 1008
 CLOSE_INTERNAL_ERROR = 1011
 MAX_FRAME_BYTES = 1024 * 1024

@@ -3,8 +3,10 @@
 The request surface is registered always, so the dashboard can say honestly that network access
 is off and how to turn it on. The listener itself only starts when `ipc.lan.enabled` is set:
 
-  * certificates from `nox.lan.tls` in `<data_dir>/tls`, checked every ten minutes and re-issued -
-    with a short listener restart - when this machine's addresses changed (a new DHCP lease),
+  * certificates from `nox.lan.tls` in `<data_dir>/tls`, made off the event loop with a deadline,
+    compared with this machine every ten minutes and re-issued - with a short listener restart -
+    when its addresses changed (a new DHCP lease) or the certificate nears its end
+    (`LanListener`),
   * the device registry plugged into the hub's token store, so `device` sessions authenticate,
   * the HTTPS listener (`nox.lan.app`) on `ipc.lan.host:port`.
 
@@ -12,18 +14,21 @@ Requests, for the UI roles (`nox.ipc.roles`):
   * `lan.status` - on or off, the addresses, the authority's fingerprint,
   * `lan.devices.list` - paired devices; the caller's own one is marked,
   * `lan.pair.start` - a one-time code, the pairing link and its QR code. Pairing gives a new
-    device full dashboard access, so it needs the PIN when one is set (`SecurityChangeGate`),
-  * `lan.unpair` - revoke a device and close its open sessions at once.
+    device dashboard access, so it needs the PIN when one is set (`SecurityChangeGate`) - and
+    from a paired device always,
+  * `lan.unpair` - revoke a device and close its open sessions at once; a device may always sign
+    itself out.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import segno
 from pydantic import BaseModel, Field
@@ -44,7 +49,7 @@ from nox.security.gate import PinRequiredError
 
 log = get_logger(__name__)
 
-__all__ = ["LanRuntime", "install", "lan_urls"]
+__all__ = ["LanListener", "LanRuntime", "install", "lan_urls"]
 
 #: How often the certificate is compared with this machine's current names and addresses.
 TLS_RECHECK_S = 600.0
@@ -64,6 +69,15 @@ class UnpairRequest(BaseModel):
 
 class EmptyRequest(BaseModel):
     pass
+
+
+class Server(Protocol):
+    """What the listener needs from a server: `HttpServer`, or a stand-in in tests."""
+
+    @property
+    def port(self) -> int: ...
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
 
 
 def lan_urls(material: TlsMaterial, port: int) -> list[str]:
@@ -99,14 +113,17 @@ class LanRuntime:
     enabled: bool
     port: int
     tls: TlsMaterial | None = None
-    server: HttpServer | None = None
+    server: Server | None = None
+    #: Why the listener is not serving (it never started, or a restart failed).
     error: str = ""
+    #: Why the last certificate check failed while the listener kept serving the old one.
+    warning: str = ""
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
     _core: Any = None
 
     @property
     def running(self) -> bool:
-        return self.server is not None and not self.error
+        return self.server is not None
 
     def urls(self) -> list[str]:
         return lan_urls(self.tls, self.port) if self.tls is not None else []
@@ -121,6 +138,92 @@ class LanRuntime:
         tokens = getattr(self._core, "tokens", None)
         if tokens is not None:
             tokens.use_device_verifier(None)
+
+
+class LanListener:
+    """Certificates and the HTTPS listener over time: start, re-check, reload.
+
+    `make_tls` and `build` are injected, so tests drive every path - a resolver that hangs, a key
+    that cannot be protected, a certificate re-issued under the same or a new serial - without a
+    network, a core or real time.
+    """
+
+    def __init__(
+        self,
+        runtime: LanRuntime,
+        *,
+        make_tls: Callable[[], TlsMaterial],
+        build: Callable[[TlsMaterial], Server],
+        timeout_s: float = TLS_TIMEOUT_S,
+    ) -> None:
+        self._runtime = runtime
+        self._make_tls = make_tls
+        self._build = build
+        self._timeout_s = timeout_s
+
+    async def _certificates(self) -> TlsMaterial | str:
+        """Fresh certificates, or why there are none. Off the loop, never longer than the
+        deadline: `ensure_tls` resolves this machine's own name."""
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(self._make_tls), self._timeout_s)
+        except (OSError, ValueError, TimeoutError, KeyNotProtectedError) as exc:
+            reason = f"certificates: {type(exc).__name__}: {exc}"
+            log.error("lan.tls_failed", error=reason)
+            return reason
+
+    async def _serve(self, material: TlsMaterial) -> bool:
+        runtime = self._runtime
+        server = self._build(material)
+        try:
+            await server.start()
+        except (OSError, RuntimeError, TimeoutError) as exc:
+            runtime.error = f"{type(exc).__name__}: {exc}"
+            log.error("lan.start_failed", error=runtime.error)
+            return False
+        runtime.server, runtime.error, runtime.warning = server, "", ""
+        runtime.port = server.port
+        log.info("lan.ready", urls=runtime.urls(), fingerprint=material.fingerprint)
+        return True
+
+    async def start(self) -> bool:
+        material = await self._certificates()
+        if isinstance(material, str):
+            self._runtime.error = material
+            return False
+        self._runtime.tls = material
+        return await self._serve(material)
+
+    async def recheck(self) -> None:
+        """Compare the certificate with this machine once. A failed check while serving is a
+        warning - the listener keeps the certificate it has - and is cleared by the next good one.
+        A new serial (new addresses, a renamed machine, the end of its validity near) means a
+        restart, because only a restarted listener serves the new certificate."""
+        runtime = self._runtime
+        material = await self._certificates()
+        if isinstance(material, str):
+            if runtime.server is not None:
+                runtime.warning = material
+            else:
+                runtime.error = material
+            return
+        runtime.warning = ""
+        before, runtime.tls = runtime.tls, material
+        if runtime.server is not None and before is not None:
+            if before.server_serial == material.server_serial:
+                return
+            log.info("lan.tls_reloaded", addresses=list(material.addresses))
+            await runtime.server.stop()
+            runtime.server = None
+        await self._serve(material)
+
+    async def run(self, interval_s: float = TLS_RECHECK_S) -> None:
+        await self.start()
+        while True:
+            await asyncio.sleep(interval_s)
+            try:
+                await self.recheck()
+            except Exception as exc:  # noqa: BLE001 - the watcher must outlive one bad round
+                log.error("lan.recheck_failed", error=f"{type(exc).__name__}: {exc}")
 
 
 def install(core: Any) -> LanRuntime:
@@ -140,24 +243,13 @@ def install(core: Any) -> LanRuntime:
 
     tls_dir = Path(core.config.paths.data_dir) / "tls"
     core.tokens.use_device_verifier(lambda token: getattr(devices.verify(token), "id", None))
-
-    async def make_tls() -> TlsMaterial | None:
-        """Certificates off the event loop, with a deadline; None (and a reason) on failure."""
-        try:
-            return await asyncio.wait_for(asyncio.to_thread(ensure_tls, tls_dir), TLS_TIMEOUT_S)
-        except (OSError, ValueError, TimeoutError, KeyNotProtectedError) as exc:
-            runtime.error = f"certificates: {type(exc).__name__}: {exc}"
-            log.error("lan.tls_failed", error=runtime.error)
-            return None
-
     hub_host = core.hub.settings.host
 
     def current_tls() -> TlsMaterial:
-        assert runtime.tls is not None  # set above, before the listener can run
+        assert runtime.tls is not None  # set before any server is built
         return runtime.tls
 
-    def build_server() -> HttpServer:
-        assert runtime.tls is not None
+    def build(material: TlsMaterial) -> Server:
         app = create_lan_app(
             devices=devices,
             tls=current_tls,
@@ -169,56 +261,13 @@ def install(core: Any) -> LanRuntime:
         return HttpServer(
             app,
             LanSettings(host=cfg.host, port=cfg.port),
-            ssl_certfile=runtime.tls.cert_file,
-            ssl_keyfile=runtime.tls.key_file,
+            ssl_certfile=material.cert_file,
+            ssl_keyfile=material.key_file,
             name="lan",
         )
 
-    async def start() -> None:
-        server = build_server()
-        try:
-            await server.start()
-        except (OSError, RuntimeError, TimeoutError) as exc:
-            runtime.error = f"{type(exc).__name__}: {exc}"
-            log.error("lan.start_failed", error=runtime.error, port=cfg.port)
-            return
-        runtime.server, runtime.error = server, ""
-        runtime.port = server.port
-        log.info(
-            "lan.ready",
-            urls=runtime.urls(),
-            fingerprint=runtime.tls.fingerprint if runtime.tls else "",
-        )
-
-    async def recheck() -> None:
-        """One comparison of the certificate with this machine. A new DHCP lease, a renamed
-        machine or a certificate close to expiry all end in a new server certificate - and only a
-        restarted listener serves it."""
-        fresh = await make_tls()
-        if fresh is None:
-            return
-        before = runtime.tls
-        runtime.tls = fresh
-        if before is not None and before.server_serial == fresh.server_serial and runtime.server:
-            return
-        log.info("lan.tls_reloaded", addresses=list(fresh.addresses))
-        if runtime.server is not None:
-            await runtime.server.stop()
-            runtime.server = None
-        await start()
-
-    async def run() -> None:
-        runtime.tls = await make_tls()
-        if runtime.tls is not None:
-            await start()
-        while True:
-            await asyncio.sleep(TLS_RECHECK_S)
-            try:
-                await recheck()
-            except Exception as exc:  # noqa: BLE001 - the watcher must outlive one bad round
-                log.error("lan.recheck_failed", error=f"{type(exc).__name__}: {exc}")
-
-    task = asyncio.get_running_loop().create_task(run(), name="nox-lan")
+    listener = LanListener(runtime, make_tls=lambda: ensure_tls(tls_dir), build=build)
+    task = asyncio.get_running_loop().create_task(listener.run(), name="nox-lan")
     runtime.tasks.add(task)
     task.add_done_callback(runtime.tasks.discard)
     _add_health_check(core, runtime)
@@ -236,11 +285,17 @@ def _add_health_check(core: Any, runtime: LanRuntime) -> None:
         return
 
     async def probe() -> tuple[HealthStatus, str]:
-        if runtime.error:
-            return HealthStatus.UNAVAILABLE, runtime.error
         if runtime.server is None:
+            if runtime.error:
+                return HealthStatus.UNAVAILABLE, runtime.error
             return HealthStatus.LIMITED, "starting"
-        active = sum(1 for d in runtime.devices.devices() if not d.revoked)
+        if runtime.warning:
+            return (
+                HealthStatus.LIMITED,
+                f"serving; the last certificate check failed: {runtime.warning}",
+            )
+        listed = await asyncio.to_thread(runtime.devices.devices)
+        active = sum(1 for d in listed if not d.revoked)
         return HealthStatus.AVAILABLE, f"{active} paired device(s)"
 
     with contextlib.suppress(ValueError):  # a second install in one process (tests)
@@ -264,6 +319,7 @@ def _register_requests(core: Any, runtime: LanRuntime) -> None:
             "enabled": runtime.enabled,
             "running": runtime.running,
             "error": runtime.error,
+            "warning": runtime.warning,
             "port": runtime.port,
             "urls": runtime.urls(),
             "fingerprint": runtime.tls.fingerprint if runtime.tls else "",
@@ -271,10 +327,11 @@ def _register_requests(core: Any, runtime: LanRuntime) -> None:
         }
 
     async def h_devices(ctx: RequestContext, _p: EmptyRequest) -> dict[str, Any]:
-        own = ctx.client_id.removeprefix(CLIENT_PREFIX) if ctx.role == "device" else ""
+        own = ctx.client_id.removeprefix(CLIENT_PREFIX) if ctx.role == DEVICE_ROLE else ""
+        listed = await asyncio.to_thread(devices.devices)
         return {
             "enabled": runtime.enabled,
-            "devices": [_device_json(d, current=d.id == own) for d in devices.devices()],
+            "devices": [_device_json(d, current=d.id == own) for d in listed],
         }
 
     async def authorize(ctx: RequestContext, pin: str | None, action: str) -> None:

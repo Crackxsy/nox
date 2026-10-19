@@ -80,6 +80,7 @@ def register_preset_ipc(
         return result.as_dict()
 
     registry.register("presets.list", EmptyPayload, p_list, roles=UI_ROLES)
-    registry.register("presets.activate", PresetActivateInput, p_activate, roles=UI_ROLES)
+    # A preset starts programs and switches scenes on this machine: from here, not from a phone.
+    registry.register("presets.activate", PresetActivateInput, p_activate, roles=LOCAL_UI_ROLES)
     # Trying out an arbitrary action belongs to setting presets up, on this machine.
     registry.register("presets.test_action", ActionTestInput, p_test_action, roles=LOCAL_UI_ROLES)

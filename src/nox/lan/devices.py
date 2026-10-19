@@ -62,7 +62,7 @@ class LanDevices:
         )
 
     async def start(self, *, name: str = "") -> PairingStart:
-        return await self.pairing.start(device_name=name or "Gerät")
+        return await self.pairing.start(device_name=name or "Device")
 
     async def redeem(self, code: str, *, name: str = "") -> Redeemed:
         token = generate_token()
