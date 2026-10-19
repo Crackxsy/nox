@@ -61,7 +61,7 @@ async def test_the_scheduler_fires_each_due_reminder_exactly_once(repo: Reminder
     assert [(r.text, r.fired_at is not None) for r in fired] == [("Jetzt", True), ("Später", False)]
 
 
-async def test_a_failing_callout_is_marked_fired_and_does_not_stop_the_others(
+async def test_a_failing_callout_stays_open_for_a_retry_and_does_not_stop_the_others(
     repo: ReminderRepository,
 ) -> None:
     calls: list[str] = []
@@ -74,8 +74,54 @@ async def test_a_failing_callout_is_marked_fired_and_does_not_stop_the_others(
     repo.add(text="kaputt", due_at=NOW - timedelta(minutes=2))
     repo.add(text="heil", due_at=NOW - timedelta(minutes=1))
     scheduler = ReminderScheduler(repo, fire=fire, clock=lambda: NOW)
-    assert len(await scheduler.tick()) == 2 and calls == ["kaputt", "heil"]
-    assert repo.list_open() == []
+    assert [repo.get(i).text for i in await scheduler.tick()] == ["heil"]  # type: ignore[union-attr]
+    assert calls == ["kaputt", "heil"]
+    # not delivered, so not lost: still open, and the next tick tries it again
+    assert [r.text for r in repo.list_open()] == ["kaputt"]
+    assert await scheduler.tick() == [] and calls == ["kaputt", "heil", "kaputt"]
+
+
+async def test_a_callout_that_keeps_failing_is_given_up_after_a_bounded_number_of_tries(
+    repo: ReminderRepository,
+) -> None:
+    from nox.day.reminders import MAX_FIRE_ATTEMPTS
+
+    calls: list[str] = []
+
+    async def fire(reminder: ReminderRow) -> None:
+        calls.append(reminder.text)
+        raise RuntimeError("speaker down")
+
+    repo.add(text="kaputt", due_at=NOW - timedelta(minutes=2))
+    scheduler = ReminderScheduler(repo, fire=fire, clock=lambda: NOW)
+    for _ in range(MAX_FIRE_ATTEMPTS + 2):
+        await scheduler.tick()
+    assert len(calls) == MAX_FIRE_ATTEMPTS
+    assert repo.list_open() == []  # recorded as attempted, not retried forever
+
+
+async def test_a_crashing_tick_is_counted_for_the_health_check_not_swallowed(
+    repo: ReminderRepository,
+) -> None:
+    async def fire(_reminder: ReminderRow) -> None:
+        return None
+
+    broken = {"yes": True}
+
+    def deliverable() -> bool:
+        if broken["yes"]:
+            raise RuntimeError("config gone")
+        return True
+
+    scheduler = ReminderScheduler(repo, fire=fire, deliverable=deliverable)
+    assert scheduler.tick_failures == 0 and scheduler.last_tick_error == ""
+    await scheduler.run_once()  # the loop body: must not raise
+    await scheduler.run_once()
+    assert scheduler.tick_failures == 2 and scheduler.last_tick_error == "RuntimeError"
+    assert scheduler.failing
+    broken["yes"] = False
+    await scheduler.run_once()
+    assert not scheduler.failing and scheduler.tick_failures == 2  # the total stays for the record
 
 
 async def test_start_and_stop_leave_no_task_behind(repo: ReminderRepository) -> None:

@@ -176,10 +176,17 @@ class ProactiveService:
         speak_allowed, reason = self._speech_policy.may_speak("proactive")
         spoken = False
         announced = False
+        suppressed = "" if speak_allowed else reason
         if speak_allowed and self._speaker is not None:
-            announced = await self._announce()
-            await self._speaker.say(text)
-            spoken = True
+            # The reminder is already marked fired; if the voice fails (worker timeout, device
+            # gone) the toast below is how it still reaches the user, so speech never aborts it.
+            try:
+                announced = await self._announce()
+                await self._speaker.say(text)
+                spoken = True
+            except Exception as exc:  # noqa: BLE001 - fall back to the toast, never lose it
+                log.warning("proactive.reminder_unspoken", error=type(exc).__name__)
+                suppressed = f"speech failed: {type(exc).__name__}"
         channel: Channel = "speech+toast" if spoken else "toast"
         record = self._record(
             kind="urgent",
@@ -188,7 +195,7 @@ class ProactiveService:
             channel=channel,
             spoken=spoken,
             announced=announced,
-            suppressed_reason="" if speak_allowed else reason,
+            suppressed_reason=suppressed,
         )
         await self._touch_pet_expression(urgent=False)
         await self._publish_notification(record)
