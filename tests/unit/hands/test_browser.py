@@ -243,6 +243,120 @@ async def test_the_sandbox_proxy_still_speaks_only_connect(fake_web: FakeWeb) ->
         await proxy.stop()
 
 
+def _proxy(web: FakeWeb, **kw: Any) -> EgressProxy:
+    return EgressProxy(
+        allow=("*:*",),
+        guard=NetGuard(),
+        resolver=fake_resolver,
+        open_connection=_dial(web),
+        forward_plain_http=True,
+        **kw,
+    )
+
+
+@pytest.mark.parametrize(
+    "auth",
+    [b"", b"Proxy-Authorization: Basic bm94Ondyb25n\r\n", b"Proxy-Authorization: Bearer x\r\n"],
+)
+@pytest.mark.parametrize(
+    "request_line",
+    [b"GET http://public.test/ HTTP/1.1\r\n", b"CONNECT public.test:443 HTTP/1.1\r\n"],
+)
+async def test_a_proxy_with_credentials_refuses_everyone_without_them(
+    fake_web: FakeWeb, auth: bytes, request_line: bytes
+) -> None:
+    proxy = _proxy(fake_web, credentials=("nox", "right-secret"))
+    port = await proxy.start()
+    try:
+        reply = await _raw(port, request_line + b"Host: public.test\r\n" + auth + b"\r\n")
+        assert reply.startswith(b"HTTP/1.1 407") and b"Proxy-Authenticate: Basic" in reply
+        assert fake_web.requests == []
+    finally:
+        await proxy.stop()
+
+
+async def test_a_proxy_with_credentials_serves_the_holder(fake_web: FakeWeb) -> None:
+    import base64
+
+    proxy = _proxy(fake_web, credentials=("nox", "right-secret"))
+    port = await proxy.start()
+    token = base64.b64encode(b"nox:right-secret")
+    try:
+        reply = await _raw(
+            port,
+            b"GET http://public.test/ HTTP/1.1\r\nHost: public.test\r\n"
+            b"Proxy-Authorization: Basic " + token + b"\r\n\r\n",
+        )
+        assert reply.split(b"\r\n", 1)[0].endswith(b"200 OK")
+        assert fake_web.requests[0][:2] == ("GET", "public.test")
+        assert "right-secret" in proxy.url
+    finally:
+        await proxy.stop()
+
+
+async def test_a_pipelined_second_request_to_another_host_is_never_forwarded(
+    fake_web: FakeWeb,
+) -> None:
+    proxy = _proxy(fake_web)
+    port = await proxy.start()
+    try:
+        reply = await _raw(
+            port,
+            b"GET http://public.test/ HTTP/1.1\r\nHost: public.test\r\n\r\n"
+            b"GET http://other.test/form HTTP/1.1\r\nHost: other.test\r\n\r\n"
+            b"GET /form HTTP/1.1\r\nHost: lan.test\r\n\r\n",
+        )
+        await asyncio.sleep(0.3)
+        assert [r[:3] for r in fake_web.requests] == [("GET", "public.test", "/")]
+        head = reply.split(b"\r\n\r\n", 1)[0].lower()
+        assert b"connection: close" in head and reply.count(b"HTTP/1.") == 1
+    finally:
+        await proxy.stop()
+
+
+@pytest.mark.parametrize(
+    "framing",
+    [
+        b"Content-Length: 3\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: gzip, chunked\r\n",
+        b"Content-Length: 3\r\nContent-Length: 4\r\n",
+        b"Content-Length: -1\r\n",
+    ],
+)
+async def test_ambiguous_request_framing_is_refused(fake_web: FakeWeb, framing: bytes) -> None:
+    proxy = _proxy(fake_web)
+    port = await proxy.start()
+    try:
+        reply = await _raw(
+            port,
+            b"POST http://public.test/send HTTP/1.1\r\nHost: public.test\r\n"
+            + framing
+            + b"\r\n0\r\n\r\n",
+        )
+        assert reply.startswith(b"HTTP/1.1 400")
+        assert fake_web.requests == []
+    finally:
+        await proxy.stop()
+
+
+async def test_a_chunked_body_is_forwarded_whole_and_only_once(fake_web: FakeWeb) -> None:
+    proxy = _proxy(fake_web)
+    port = await proxy.start()
+    try:
+        reply = await _raw(
+            port,
+            b"POST http://public.test/send HTTP/1.1\r\nHost: public.test\r\n"
+            b"Transfer-Encoding: chunked\r\n\r\n3\r\nq=h\r\n4\r\nallo\r\n0\r\n\r\n"
+            b"POST http://lan.test/send HTTP/1.1\r\nHost: lan.test\r\n"
+            b"Content-Length: 0\r\n\r\n",
+        )
+        assert b"gesendet" in reply
+        await asyncio.sleep(0.3)
+        assert fake_web.requests == [("POST", "public.test", "/send", "q=hallo")]
+    finally:
+        await proxy.stop()
+
+
 # ---- real headless Chromium ----------------------------------------------------------------------
 
 
@@ -360,6 +474,35 @@ async def test_type_and_submit_act_only_on_the_named_origin(
     sent = await session.act("submit", origin="http://public.test/", selector="#q")
     assert sent["ok"] is True and sent["title"] == "Danke"
     assert ("POST", "public.test", "/send", "q=hallo") in fake_web.requests
+
+
+@pytestmark_browser
+async def test_the_in_page_origin_check_is_the_authority(
+    session: BrowserSession, fake_web: FakeWeb, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page moved between Nox's check and the action (simulated by a check that passes):
+    the action is asserted inside the page, atomically, and nothing is typed or sent."""
+    assert (await session.open("http://public.test/form"))["ok"]
+    monkeypatch.setattr(browser_mod, "page_origin", lambda _url: "http://other.test")
+    for action in ("type", "submit", "click"):
+        result = await session.act(action, origin="http://other.test", selector="#q", text="x")
+        assert result["error"] == "browser.origin_mismatch", (action, result)
+        assert "moved" in result["detail"]
+    monkeypatch.undo()
+    assert await session._page.input_value("#q") == ""  # noqa: SLF001
+    assert not [r for r in fake_web.requests if r[0] == "POST"]
+
+
+@pytestmark_browser
+async def test_the_browser_proxy_serves_only_its_browser(session: BrowserSession) -> None:
+    proxy = session._proxy  # noqa: SLF001
+    assert proxy is not None and proxy.credentials is not None
+    reply = await _raw(proxy.port, b"GET http://public.test/ HTTP/1.1\r\nHost: public.test\r\n\r\n")
+    assert reply.startswith(b"HTTP/1.1 407")
+    port = proxy.port
+    await session.close()
+    with pytest.raises(OSError):  # bound to the session's lifetime
+        await asyncio.open_connection("127.0.0.1", port)
 
 
 @pytestmark_browser

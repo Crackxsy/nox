@@ -307,13 +307,18 @@ class WindowsSandbox:
         return work, True
 
     def _child_env(
-        self, work: Path, proxy_port: int | None, extra: Mapping[str, str] | None = None
+        self,
+        work: Path,
+        proxy_port: int | None,
+        extra: Mapping[str, str] | None = None,
+        proxy_auth: str = "",
     ) -> dict[str, str]:
         # The caller's extra variables first, so the sandbox's own always win (they are also
         # refused up front by `checked_env`).
         env = {**(extra or {}), **_base_env(work)}
         if proxy_port is not None:
-            url = f"http://127.0.0.1:{proxy_port}"
+            userinfo = f"{proxy_auth}@" if proxy_auth else ""
+            url = f"http://{userinfo}127.0.0.1:{proxy_port}"
             env["HTTPS_PROXY"] = env["HTTP_PROXY"] = env["ALL_PROXY"] = url
             env["https_proxy"] = env["http_proxy"] = env["all_proxy"] = url
         return env
@@ -327,6 +332,7 @@ class WindowsSandbox:
         limits: Limits,
         proxy_port: int | None,  # noqa: ARG002 - the proxy is reached over `proxy_socket` here
         extra_env: Mapping[str, str] | None = None,
+        proxy_auth: str = "",
         proxy_socket: str | None = None,
     ) -> Result:
         """Run `argv` confined. With egress, `proxy_socket` is the proxy's named pipe;
@@ -340,7 +346,7 @@ class WindowsSandbox:
                 forwarder, port = await asyncio.to_thread(
                     self._start_forwarder, work, proxy_socket, limits
                 )
-            env = self._child_env(work, port, extra_env)
+            env = self._child_env(work, port, extra_env, proxy_auth)
             try:
                 spawned = self._w.spawn(
                     argv,
@@ -384,6 +390,7 @@ class WindowsSandbox:
         limits: Limits,
         proxy_port: int | None,  # noqa: ARG002 - the proxy is reached over `proxy_socket` here
         extra_env: Mapping[str, str] | None = None,
+        proxy_auth: str = "",
         proxy_socket: str | None = None,
     ) -> ProcessIo:
         """Start `argv` confined exactly like `run`, but keep it running with stdio pipes.
@@ -408,7 +415,7 @@ class WindowsSandbox:
                 forwarder, port = await asyncio.to_thread(
                     self._start_forwarder, work, proxy_socket, limits
                 )
-            env = self._child_env(work, port, extra_env)
+            env = self._child_env(work, port, extra_env, proxy_auth)
             spawned = self._w.spawn(
                 argv,
                 cwd=str(work),

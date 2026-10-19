@@ -106,14 +106,19 @@ class LinuxSandbox:
         )
 
     def _env(
-        self, work: str, proxy_port: int | None, extra: Mapping[str, str] | None = None
+        self,
+        work: str,
+        proxy_port: int | None,
+        extra: Mapping[str, str] | None = None,
+        proxy_auth: str = "",
     ) -> dict[str, str]:
         # The caller's extra variables first, so the sandbox's own always win (reserved keys are
         # also refused up front by `checked_env`).
         env = dict(extra or {})
         env |= {"PATH": "/usr/bin:/bin", "HOME": work, "TMPDIR": work}
         if proxy_port is not None:
-            url = f"http://127.0.0.1:{proxy_port}"
+            userinfo = f"{proxy_auth}@" if proxy_auth else ""
+            url = f"http://{userinfo}127.0.0.1:{proxy_port}"
             env |= {"HTTPS_PROXY": url, "HTTP_PROXY": url, "https_proxy": url, "http_proxy": url}
         return env
 
@@ -126,12 +131,15 @@ class LinuxSandbox:
         limits: Limits,
         proxy_port: int | None,
         extra_env: Mapping[str, str] | None = None,
+        proxy_auth: str = "",
     ) -> list[str]:
         """The full command line (`systemd-run` scope around `bwrap`) for one confined process."""
         inner = build_bwrap_argv(
             argv,
             work=work,
-            env=self._env(work, proxy_port if egress.wants_network else None, extra_env),
+            env=self._env(
+                work, proxy_port if egress.wants_network else None, extra_env, proxy_auth
+            ),
             share_loopback=egress.wants_network,
         )
         if not self._has_systemd_run:
@@ -155,6 +163,7 @@ class LinuxSandbox:
         limits: Limits,
         proxy_port: int | None,
         extra_env: Mapping[str, str] | None = None,
+        proxy_auth: str = "",
         proxy_socket: str | None = None,  # noqa: ARG002 - loopback TCP here, see Backend
     ) -> ProcessIo:
         """Start `argv` confined exactly like `run`, kept running with stdio pipes.
@@ -174,6 +183,7 @@ class LinuxSandbox:
             limits=limits,
             proxy_port=proxy_port,
             extra_env=extra_env,
+            proxy_auth=proxy_auth,
         )
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -231,6 +241,7 @@ class LinuxSandbox:
         limits: Limits,
         proxy_port: int | None,
         extra_env: Mapping[str, str] | None = None,
+        proxy_auth: str = "",
         proxy_socket: str | None = None,  # noqa: ARG002 - loopback TCP here, see Backend
     ) -> Result:
         if egress.wants_network and proxy_port is None:
@@ -244,6 +255,7 @@ class LinuxSandbox:
             limits=limits,
             proxy_port=proxy_port,
             extra_env=extra_env,
+            proxy_auth=proxy_auth,
         )
         proc = await asyncio.create_subprocess_exec(
             *cmd,

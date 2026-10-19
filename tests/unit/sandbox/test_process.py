@@ -232,8 +232,9 @@ async def test_the_egress_proxy_lives_as_long_as_the_process() -> None:
     class Backend:
         mode = SandboxMode.LINUX_BWRAP
 
-        async def start(self, argv, *, cwd, egress, limits, proxy_port, extra_env):  # noqa: ANN001, ANN202
-            seen["port"] = proxy_port
+        async def start(self, argv, **kw):  # noqa: ANN001, ANN003, ANN202
+            seen["port"] = kw["proxy_port"]
+            seen["auth"] = kw["proxy_auth"]
             return fake.io()
 
     sandbox = Sandbox(Backend(), guard=NetGuard())  # type: ignore[arg-type]
@@ -241,7 +242,13 @@ async def test_the_egress_proxy_lives_as_long_as_the_process() -> None:
     port = seen["port"]
     assert isinstance(port, int) and port > 0
     reader, writer = await asyncio.open_connection("127.0.0.1", port)  # the proxy is up
+    # ...but serves only the child it was made for: no credentials, no egress.
+    writer.write(b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+    await writer.drain()
+    assert (await asyncio.wait_for(reader.read(), 10)).startswith(b"HTTP/1.1 407")
     writer.close()
+    user, _, secret = str(seen["auth"]).partition(":")
+    assert user and len(secret) >= 32, "each run's proxy carries its own random secret"
     await proc.stop(1)
     with pytest.raises(OSError):
         await asyncio.open_connection("127.0.0.1", port)  # and gone with the process
@@ -352,3 +359,15 @@ async def test_linux_echo_server_round_trip() -> None:
             pytest.skip(f"bwrap refused to start: {proc.stderr_tail()}")
         assert line == b"echo:hi\n"
     assert not proc.running
+
+
+@windows_only
+async def test_windows_child_gets_its_own_proxy_credentials() -> None:
+    sandbox = _windows_sandbox()
+    echo = [r"C:\Windows\System32\cmd.exe", "/c", "echo %HTTPS_PROXY%"]
+    egress = EgressDecl(hosts=("example.com:443",))
+    first = await sandbox.run(echo, egress=egress, limits=Limits(timeout_s=20))
+    url = first.stdout.strip()
+    assert url.startswith("http://nox:") and "@127.0.0.1:" in url
+    second = await sandbox.run(echo, egress=egress, limits=Limits(timeout_s=20))
+    assert second.stdout.strip() != url, "a fresh secret (and port) per run"

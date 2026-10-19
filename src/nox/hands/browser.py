@@ -93,11 +93,38 @@ for (const name of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChan
 }
 """
 _PASSIVE_SCHEMES = frozenset({"data", "blob", "about"})
-_SUBMIT_JS = """
-el => {
-  const form = el.tagName === 'FORM' ? el : (el.form || el.closest('form'));
-  if (!form) { throw new Error('no form for this element'); }
-  form.requestSubmit();
+#: One page action, done in a single in-page evaluation that first asserts the page's origin.
+#: JavaScript in a page runs to completion, so nothing can navigate between the check and the
+#: act: either the page is still on the confirmed origin and the action happens there, or it
+#: throws and nothing happens. (A Playwright `click()`/`fill()` after a separate origin check
+#: could land on a page a script had navigated to in between.)
+_ACT_JS = """
+(el, [action, origin, text]) => {
+  if (window.location.origin !== origin) {
+    throw new Error('nox-origin-mismatch:' + window.location.origin);
+  }
+  if (action === 'click') {
+    el.click();
+  } else if (action === 'type') {
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
+      : el instanceof HTMLInputElement ? HTMLInputElement.prototype : null;
+    el.focus();
+    if (proto) {
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, text);
+    } else if (el.isContentEditable) {
+      el.textContent = text;
+    } else {
+      throw new Error('not a text field');
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  } else if (action === 'submit') {
+    const form = el.tagName === 'FORM' ? el : (el.form || el.closest('form'));
+    if (!form) { throw new Error('no form for this element'); }
+    form.requestSubmit();
+  } else {
+    throw new Error('unknown action');
+  }
 }
 """
 
@@ -247,14 +274,23 @@ class BrowserSession:
             resolver=self._resolver,
             open_connection=self._open_connection,
             forward_plain_http=True,
+            # A loopback proxy is reachable by every local program; without its secret, which
+            # only this browser gets, it answers 407 and serves no one else.
+            credentials=EgressProxy.new_credentials(),
         )
         port = await proxy.start()
+        user, password = proxy.credentials or ("", "")
         pw = await async_playwright().start()
         try:
             context = await pw.chromium.launch_persistent_context(
                 str(profile),
                 headless=True,  # never a visible window, not even as an option
-                proxy={"server": f"http://127.0.0.1:{port}", "bypass": "<-loopback>"},
+                proxy={
+                    "server": f"http://127.0.0.1:{port}",
+                    "bypass": "<-loopback>",
+                    "username": user,
+                    "password": password,
+                },
                 accept_downloads=False,
                 service_workers="block",
                 permissions=[],
@@ -378,7 +414,8 @@ class BrowserSession:
                 }
             self.blocked.clear()
             target = page.locator(selector).first
-            # A submit navigates; a click may. Wait for that navigation, briefly for a click.
+            # The check above is for a clear message; the authority is the in-page assertion in
+            # `_ACT_JS`, atomic with the action. A submit navigates; a click may: wait for it.
             wait_ms = {"submit": 15_000, "click": 2_000}.get(action, 0)
             acted = False
             try:
@@ -387,17 +424,18 @@ class BrowserSession:
                         await stack.enter_async_context(
                             page.expect_navigation(wait_until="domcontentloaded", timeout=wait_ms)
                         )
-                    if action == "click":
-                        await target.click()
-                    elif action == "type":
-                        await target.fill(text)
-                    elif action == "submit":
-                        await target.evaluate(_SUBMIT_JS)
-                    else:  # pragma: no cover - the registry only wires the three
-                        raise ValueError(action)
+                    await target.evaluate(_ACT_JS, [action, expected, text])
                     acted = True
             except Exception as exc:  # noqa: BLE001 - Playwright raises its own Error types
                 if not acted:
+                    if "nox-origin-mismatch:" in str(exc):
+                        moved = str(exc).split("nox-origin-mismatch:", 1)[1].split()[0]
+                        return {
+                            "ok": False,
+                            "error": "browser.origin_mismatch",
+                            "detail": f"the page moved to {moved} before the action; nothing "
+                            "was done",
+                        }
                     return self._navigation_error(exc)
                 # The action ran and no navigation followed within the window: that is fine.
             landed = await self._judge_landing(page)

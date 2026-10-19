@@ -23,6 +23,10 @@ Two ways to run something, with the same confinement:
   (job object kill-on-close / `bwrap --die-with-parent`). `on_exit(code)` plus `RestartPolicy`
   are the hooks for a supervisor; the sandbox never restarts anything by itself.
 
+Declared egress goes through a loopback proxy that exists for that one run or process and
+demands its own random credentials, which only the child receives (in its proxy URL): another
+local program - another run's child included - cannot use it.
+
 `env` adds variables to the child's minimal environment (an MCP server's settings); the keys that
 carry the confinement (`PATH`, `HOME`/`USERPROFILE`/`TEMP`, the proxy variables, `LD_PRELOAD`,
 ...) are refused with `ValueError` (`model.RESERVED_ENV_KEYS`). Nothing from the core's own
@@ -86,6 +90,7 @@ class Backend(Protocol):
         limits: Limits,
         proxy_port: int | None,
         extra_env: Mapping[str, str] | None = None,
+        proxy_auth: str = "",
         proxy_socket: str | None = None,
     ) -> Result: ...
 
@@ -98,6 +103,7 @@ class Backend(Protocol):
         limits: Limits,
         proxy_port: int | None,
         extra_env: Mapping[str, str] | None = None,
+        proxy_auth: str = "",
         proxy_socket: str | None = None,
     ) -> ProcessIo: ...
 
@@ -152,7 +158,12 @@ class Sandbox:
         offers no transport its child is held to (`"none"`) gets no network at all."""
         if not egress.wants_network:
             return None
-        proxy = EgressProxy(allow=egress.hosts, guard=self._guard, audit=self._audit)
+        proxy = EgressProxy(
+            allow=egress.hosts,
+            guard=self._guard,
+            audit=self._audit,
+            credentials=EgressProxy.new_credentials(),
+        )
         transport = getattr(self._backend, "proxy_transport", "tcp")
         if transport == "pipe":
             await proxy.start_pipe(str(self._backend.container_sid))  # type: ignore[attr-defined]
@@ -249,10 +260,14 @@ class Sandbox:
 
 
 def _proxy_kwargs(proxy: EgressProxy | None) -> dict[str, Any]:
-    """Where the backend's child finds its proxy: a loopback port or a socket/pipe path."""
+    """Where the backend's child finds its proxy (a loopback port or a socket/pipe path) and the
+    per-run credentials it must present."""
     if proxy is None:
-        return {"proxy_port": None}
-    kwargs: dict[str, Any] = {"proxy_port": proxy.port or None}
+        return {"proxy_port": None, "proxy_auth": ""}
+    kwargs: dict[str, Any] = {
+        "proxy_port": proxy.port or None,
+        "proxy_auth": ":".join(proxy.credentials or ()),
+    }
     if proxy.socket_path:
         kwargs["proxy_socket"] = proxy.socket_path
     return kwargs
