@@ -52,6 +52,12 @@ function fakeClient(options: FakeOptions = {}) {
                 restart_required: true,
                 group: 'voice',
               },
+              {
+                path: 'desktop.computer_use.enabled',
+                type: 'bool',
+                restart_required: false,
+                group: 'privacy',
+              },
             ],
             user_config_path: 'C:\\Users\\x\\user.yaml',
           });
@@ -176,6 +182,15 @@ describe('the page as a whole', () => {
     await renderSettings();
     expect(screen.getByText(t('settings_file'))).toBeDefined();
     expect(screen.queryByText(/user\.yaml/)).toBeNull();
+  });
+
+  it('explains computer control next to its switch', async () => {
+    await renderSettings();
+    const box = screen.getByLabelText(t('setting_desktop_computer_use_enabled'));
+    expect(box.getAttribute('type')).toBe('checkbox');
+    expect((box as HTMLInputElement).checked).toBe(false);
+    const hint = document.getElementById(box.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toBe(t('setting_desktop_computer_use_enabled_hint'));
   });
 
   it('labels an enum option with words, not with its value', async () => {

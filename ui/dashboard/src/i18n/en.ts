@@ -27,6 +27,9 @@ export const en: Record<Key, string> = {
   setting_privacy_capture_microphone: 'Microphone allowed',
   setting_privacy_capture_camera: 'Camera allowed',
   setting_privacy_capture_screen: 'Screen allowed',
+  setting_desktop_computer_use_enabled: 'Computer control (mouse and key combinations)',
+  setting_desktop_computer_use_enabled_hint:
+    'Off until you switch it on. Needs the PIN. Never while a game is running.',
   setting_security_profile: 'Active profile',
   setting_ai_router_default_reasoner: 'Preferred AI backend',
   setting_ai_router_fallback_chain: 'AI backend order',

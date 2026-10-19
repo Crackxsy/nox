@@ -36,6 +36,9 @@ export const de = {
   setting_privacy_capture_microphone: 'Mikrofon erlaubt',
   setting_privacy_capture_camera: 'Kamera erlaubt',
   setting_privacy_capture_screen: 'Bildschirm erlaubt',
+  setting_desktop_computer_use_enabled: 'Computer-Steuerung (Maus und Tastenkombinationen)',
+  setting_desktop_computer_use_enabled_hint:
+    'Aus, bis du es einschaltest. Braucht die PIN. Nie während ein Spiel läuft.',
   setting_security_profile: 'Aktives Profil',
   setting_ai_router_default_reasoner: 'Bevorzugtes KI-Backend',
   setting_ai_router_fallback_chain: 'Reihenfolge der KI-Backends',
