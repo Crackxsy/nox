@@ -43,6 +43,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--latency-runs", type=int, default=2)
     parser.add_argument("--judge-model", default="opus")
     parser.add_argument("--privacy-mode", default="balanced")
+    parser.add_argument("--log-level", default="WARNING", help="core log level (DEBUG for traces)")
     return parser.parse_args(argv)
 
 
@@ -78,7 +79,7 @@ async def _run(ns: argparse.Namespace, nox_src: Path) -> int:
         },
     }
     with tempfile.TemporaryDirectory(prefix="nox-eval-") as tmp:
-        world = World(Path(tmp), privacy_mode=ns.privacy_mode)
+        world = World(Path(tmp), privacy_mode=ns.privacy_mode, log_level=ns.log_level)
         try:
             await world.start()
         except Exception as exc:  # noqa: BLE001 - reported with an exit code

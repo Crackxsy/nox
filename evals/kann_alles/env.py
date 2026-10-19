@@ -124,7 +124,9 @@ class RecordingSpeaker:
 class World:
     """One booted core plus its sandbox, reused across tasks and reset between them."""
 
-    def __init__(self, root: Path, *, privacy_mode: str = "balanced") -> None:
+    def __init__(
+        self, root: Path, *, privacy_mode: str = "balanced", log_level: str = "WARNING"
+    ) -> None:
         self.root = root
         self.sandbox = root / "sandbox"
         self.vault = root / "vault"
@@ -133,6 +135,7 @@ class World:
         self.confirm_tools: list[str] = []
         self.forbidden_tools: list[str] = []
         self._privacy_mode = privacy_mode
+        self._log_level = log_level
         self.core: NoxCore | None = None
         self._unsub: Callable[[], None] | None = None
 
@@ -158,7 +161,7 @@ class World:
             "ipc": {"port": base, "http_port": base + 1},
             "privacy": {"mode": self._privacy_mode},
             "health": {"check_interval_s": 3600},
-            "logging": {"level": "WARNING"},
+            "logging": {"level": self._log_level},
             # Deleting goes through the recycle bin by default; a benchmark must not fill the real
             # one, so there is no delete tool in this world (a task that needs one says so).
             "files": {"roots": [str(self.sandbox)], "delete_to_recycle_bin": False},

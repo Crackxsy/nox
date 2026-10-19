@@ -47,10 +47,11 @@ class Outcome(BaseModel):
 class Recorder:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.data: dict[str, Any] = {"state": "on"}
 
     async def __call__(self, name: str, arguments: dict[str, Any]) -> Outcome:
         self.calls.append((name, arguments))
-        return Outcome(ok=True, data={"state": "on"})
+        return Outcome(ok=True, data=self.data)
 
 
 class World:
@@ -160,6 +161,23 @@ async def test_tools_are_listed_in_wire_names_and_calls_run_through_the_loop(wor
         assert "Result of home.light" in result["content"][0]["text"]
         assert world.recorder.calls == [("home.light", {"on": True})]
         assert turn.used == ["home.light"]
+    finally:
+        await bridge.close()
+
+
+async def test_results_with_any_unicode_reach_the_caller(world: World) -> None:
+    """Window titles carry emoji and dashes; the console code page cannot encode them."""
+    world.recorder.data = {"windows": ["Grüße – Stream 🎮", "日本語"]}
+    launch = world.gate.prepare()
+    bridge = await _connected(world, launch)
+    try:
+        turn = world.loop.begin("t1")
+        await world.gate.activate(launch, turn.token)
+
+        result = await bridge.call("home-light")
+
+        assert result["isError"] is False
+        assert "Grüße – Stream 🎮" in result["content"][0]["text"]
     finally:
         await bridge.close()
 

@@ -129,7 +129,8 @@ refused, say so plainly in one sentence, with the reason and what would make it 
 unless the user asks.
 - Background in the turn context (facts, remembered notes) may be outdated or unrelated to the \
 question: use it only when it clearly fits, and never present a remembered detail as if the \
-user had just said it.
+user had just said it. Do not weave unrelated personal details (games, errands, appointments) \
+into an answer about something else.
 """
 
 #: Set once at boot by `nox.settings.install`; `None` means "no personality file configured yet",

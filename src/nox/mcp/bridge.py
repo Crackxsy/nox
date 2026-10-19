@@ -13,6 +13,7 @@ switch, the end of the Claude Code session) - whichever comes first.
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import sys
 from collections.abc import Mapping
@@ -114,7 +115,15 @@ async def serve(client: IpcClient, bridge: Bridge) -> int:
     pending: set[asyncio.Task[None]] = set()
 
     async def answer(message: dict[str, Any]) -> None:
-        reply = await bridge.handle(message)
+        # Every request gets exactly one reply: a crash here would leave Claude Code waiting for
+        # its whole MCP timeout with the user in silence.
+        try:
+            reply = await bridge.handle(message)
+        except Exception as exc:  # noqa: BLE001 - turned into a JSON-RPC error for the caller
+            sys.stderr.write(f"nox.mcp.bridge: request failed: {type(exc).__name__}\n")
+            reply = protocol.error(message.get("id"), protocol.ERR_INTERNAL, type(exc).__name__)
+            if message.get("id") is None:
+                return
         if reply is not None:
             await bridge.write(reply)
 
@@ -155,6 +164,11 @@ async def _main(env: Mapping[str, str]) -> int:
 
 
 def main() -> int:
+    # MCP is UTF-8 on the wire. A pipe on Windows defaults to the console code page, and one
+    # window title with an emoji in a tool result was enough to kill the reply.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     # The token is read once and removed, so nothing this process might start inherits it.
     env = dict(os.environ)
     os.environ.pop(WORKER_TOKEN_ENV, None)
