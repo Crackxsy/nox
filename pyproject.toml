@@ -143,7 +143,9 @@ warn_unused_ignores = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-q"
+# A bare `pytest` is hermetic: tests that reach real services, devices or toolchains run only when
+# selected with -m (a later -m on the command line replaces this one; `-m ""` selects everything).
+addopts = "-q -m 'not e2e and not network and not hardware and not spike'"
 timeout = 60
 timeout_method = "thread"
 markers = [

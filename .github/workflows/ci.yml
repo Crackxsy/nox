@@ -57,7 +57,8 @@ jobs:
       # is green with or without Ollama installed on the runner (tests already accept "rules" as a
       # valid provider when Ollama is absent).
       - name: pytest integration
-        run: pytest tests/integration -p no:cacheprovider
+        # -m "": every marker, as before the hermetic default in pyproject.toml.
+        run: pytest tests/integration -m "" -p no:cacheprovider
 
   python-linux:
     name: Python on Linux (${{ matrix.runner }})
@@ -103,7 +104,8 @@ jobs:
         run: pytest tests/unit -m "not hardware and not network and not spike" -p no:cacheprovider
 
       - name: pytest integration
-        run: pytest tests/integration -p no:cacheprovider
+        # -m "": every marker, as before the hermetic default in pyproject.toml.
+        run: pytest tests/integration -m "" -p no:cacheprovider
 
   installer-linux:
     name: Installer on Linux (${{ matrix.runner }})
