@@ -59,20 +59,47 @@ class Backend(Protocol):
         egress: EgressDecl,
         limits: Limits,
         proxy_port: int | None,
+        proxy_socket: str | None = None,
     ) -> Result: ...
 
 
 class Sandbox:
-    """Confined execution with a vetted network path. Build it with `make_sandbox`."""
+    """Confined execution with a vetted network path. Build it with `make_sandbox`.
 
-    def __init__(self, backend: Backend, *, guard: NetGuard, audit: AuditFn | None = None) -> None:
+    A backend whose `Guarantees` are not `strong` (the Windows low-integrity fallback, or an
+    AppContainer on a machine where Windows does not enforce loopback isolation) is refused for
+    every run unless `accept_weak` was set - which only the user can do, through
+    `hands.accept_weak_sandbox`. Skill tests, MCP servers and shell commands all rely on the file
+    and network confinement, so "it ran, just less confined" is never decided silently.
+    """
+
+    def __init__(
+        self,
+        backend: Backend,
+        *,
+        guard: NetGuard,
+        audit: AuditFn | None = None,
+        accept_weak: bool = False,
+    ) -> None:
         self._backend = backend
         self._guard = guard
         self._audit = audit
+        self._accept_weak = accept_weak
         self.mode: SandboxMode = backend.mode
 
     def guarantees(self) -> Guarantees:
         return self._backend.guarantees()
+
+    def check_usable(self) -> Guarantees:
+        """The guarantees, or `SandboxUnavailable` when they are weaker than accepted."""
+        guarantees = self.guarantees()
+        if not guarantees.strong and not self._accept_weak:
+            raise SandboxUnavailable(
+                f"the {guarantees.backend} sandbox is weaker than required "
+                f"({'; '.join(guarantees.notes) or 'not all guarantees hold'}); it runs only if "
+                "the user explicitly accepts the weaker mode (hands.accept_weak_sandbox)"
+            )
+        return guarantees
 
     async def run(
         self,
@@ -83,15 +110,34 @@ class Sandbox:
         limits: Limits | None = None,
     ) -> Result:
         """Run `argv` confined to a work directory, reaching only the declared network (if any)."""
+        import asyncio
+
+        # The first call may measure the backend (the Windows loopback probe): off the event loop.
+        await asyncio.to_thread(self.check_usable)
         limits = limits or Limits()
         proxy: EgressProxy | None = None
         port: int | None = None
+        socket_path: str | None = None
         if egress.wants_network:
             proxy = EgressProxy(allow=egress.hosts, guard=self._guard, audit=self._audit)
-            port = await proxy.start()
+            transport = getattr(self._backend, "proxy_transport", "tcp")
+            if transport == "pipe":
+                socket_path = await proxy.start_pipe(str(self._backend.container_sid))  # type: ignore[attr-defined]
+            elif transport == "tcp":
+                port = await proxy.start()
+            else:
+                raise SandboxUnavailable(
+                    f"the {self.mode.value} sandbox cannot confine network access; a run that "
+                    "needs the network is refused"
+                )
         try:
             return await self._backend.run(
-                argv, cwd=cwd, egress=egress, limits=limits, proxy_port=port
+                argv,
+                cwd=cwd,
+                egress=egress,
+                limits=limits,
+                proxy_port=port,
+                proxy_socket=socket_path,
             )
         finally:
             if proxy is not None:
@@ -104,6 +150,7 @@ def make_sandbox(
     blocked_hosts: Iterable[str] = (),
     audit: AuditFn | None = None,
     prefer_appcontainer: bool = True,
+    accept_weak: bool = False,
 ) -> Sandbox:
     """A `Sandbox` for this OS, or `SandboxUnavailable` when none can be built (fail closed)."""
     guard = NetGuard(
@@ -121,6 +168,6 @@ def make_sandbox(
         backend = LinuxSandbox()
     else:
         raise SandboxUnavailable(f"no sandbox backend for platform {sys.platform!r}")
-    sandbox = Sandbox(backend, guard=guard, audit=audit)
-    log.info("sandbox.ready", backend=sandbox.mode.value, strong=sandbox.guarantees().strong)
+    sandbox = Sandbox(backend, guard=guard, audit=audit, accept_weak=accept_weak)
+    log.info("sandbox.ready", backend=sandbox.mode.value, accept_weak=accept_weak)
     return sandbox

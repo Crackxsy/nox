@@ -75,6 +75,7 @@ def install(core: CoreLike) -> ExtensionRuntime:
                         home_assistant_ips=guard.home_assistant_ips,
                         blocked_hosts=guard.blocked_hosts,
                         prefer_appcontainer=config.hands.windows_appcontainer,
+                        accept_weak=config.hands.accept_weak_sandbox,
                     )
                 )
             except SandboxUnavailable as exc:
@@ -119,7 +120,6 @@ def install(core: CoreLike) -> ExtensionRuntime:
         shell=config.hands.shell_enabled,
         web=config.hands.web_enabled,
         packages=config.hands.packages_enabled,
-        sandbox=sandbox_factory() is not None,
     )
     return None
 

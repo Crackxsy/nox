@@ -13,7 +13,8 @@ What a child started by `spawn()` gets:
   and the number of processes, and blocks the clipboard, global atoms, desktop switching and
   system-parameter changes (`JOB_OBJECT_UILIMIT_*`);
 * no console window (`CREATE_NO_WINDOW`), and `SW_HIDE` for any window it would show;
-* exactly the environment block it is given, and only the three standard handles.
+* exactly the environment block it is given, and only its three standard handles - an explicit
+  `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, so no other inheritable handle of the core leaks in.
 """
 
 from __future__ import annotations
@@ -207,7 +208,7 @@ def _prototypes() -> None:
         DWORD,
         ctypes.c_void_p,
         wintypes.LPCWSTR,
-        ctypes.POINTER(_StartupInfo),
+        ctypes.c_void_p,
         ctypes.POINTER(_ProcessInformation),
     ]
     _adv.CreateProcessAsUserW.restype = BOOL
@@ -543,6 +544,49 @@ _k32.TerminateProcess.argtypes = [HANDLE, wintypes.UINT]
 _k32.TerminateProcess.restype = BOOL
 
 
+PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
+_AttrValue = ctypes.Structure | ctypes.Array[HANDLE]
+
+
+class _AttributeList:
+    """A `PROC_THREAD_ATTRIBUTE_LIST` and the buffers its entries point at (kept alive with it).
+
+    Every sandboxed child is created with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` naming exactly its own
+    three standard handles. `bInheritHandles` must be TRUE for stdio redirection, and without the
+    list *every* inheritable handle the core holds at that moment - another run's pipe, a socket,
+    a file - would leak into the child (review finding 8).
+    """
+
+    def __init__(self, count: int) -> None:
+        size = ctypes.c_size_t()
+        _k32.InitializeProcThreadAttributeList(None, count, 0, ctypes.byref(size))
+        self.buffer = ctypes.create_string_buffer(size.value)
+        if not _k32.InitializeProcThreadAttributeList(self.buffer, count, 0, ctypes.byref(size)):
+            raise _fail("InitializeProcThreadAttributeList")
+        self._keep: list[object] = []
+        self._initialised = True
+
+    def set(self, attribute: int, value: _AttrValue, size: int) -> None:
+        self._keep.append(value)
+        if not _k32.UpdateProcThreadAttribute(
+            self.buffer, 0, attribute, ctypes.byref(value), size, None, None
+        ):
+            raise _fail(f"UpdateProcThreadAttribute({attribute:#x})")
+
+    def handle_list(self, handles: list[int]) -> None:
+        array = (HANDLE * len(handles))(*handles)
+        self.set(PROC_THREAD_ATTRIBUTE_HANDLE_LIST, array, ctypes.sizeof(array))
+
+    @property
+    def pointer(self) -> int:
+        return ctypes.addressof(self.buffer)
+
+    def close(self) -> None:
+        if self._initialised:
+            _k32.DeleteProcThreadAttributeList(self.buffer)
+            self._initialised = False
+
+
 def app_container_sid(name: str) -> str:
     """The SID string of the AppContainer profile `name`, creating the profile on first use.
 
@@ -593,33 +637,26 @@ def spawn(
             with_stdin=with_stdin,
             sid_string=app_container,
         )
-    import msvcrt
-
     token = low_integrity_token()
     job = Job(memory_bytes=memory_bytes, max_processes=max_processes)
-    pipes: list[int] = []
+    to_close: list[int] = []
+    attributes: _AttributeList | None = None
     try:
-        out_parent, out_child = _pipe(child_reads=False)
-        err_parent, err_child = _pipe(child_reads=False)
-        pipes += [out_child, err_child]
-        in_parent: int | None = None
-        if with_stdin:
-            in_parent, in_child = _pipe(child_reads=True)
-        else:
-            attrs = _SecurityAttributes(ctypes.sizeof(_SecurityAttributes), None, True)
-            in_child = int(_k32.CreateFileW("NUL", 0x80000000, 3, ctypes.byref(attrs), 3, 0, None))
-        pipes.append(in_child)
-        startup = _StartupInfo()
-        startup.cb = ctypes.sizeof(_StartupInfo)
-        startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW
-        startup.wShowWindow = SW_HIDE
-        startup.hStdInput = in_child
-        startup.hStdOutput = out_child
-        startup.hStdError = err_child
+        in_parent, out_parent, err_parent, in_child, out_child, err_child, to_close = _std_handles(
+            with_stdin
+        )
+        attributes = _AttributeList(1)
+        attributes.handle_list([in_child, out_child, err_child])
+        startup = _startup_info(in_child, out_child, err_child, attributes)
         info = _ProcessInformation()
         command = ctypes.create_unicode_buffer(subprocess.list2cmdline(argv))
         block = _environment_block(env)
-        flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW
+        flags = (
+            CREATE_SUSPENDED
+            | CREATE_UNICODE_ENVIRONMENT
+            | CREATE_NO_WINDOW
+            | EXTENDED_STARTUPINFO_PRESENT
+        )
         ok = _adv.CreateProcessAsUserW(
             token,
             None,
@@ -651,31 +688,59 @@ def spawn(
             )
         if not ok:
             raise _fail("CreateProcessAsUserW")
-        try:
-            job.assign(info.hProcess)
-        except SandboxWin32Error:
-            _k32.TerminateJobObject(job.handle, 1)
-            _k32.TerminateProcess(info.hProcess, 1)
-            _k32.CloseHandle(info.hThread)
-            _k32.CloseHandle(info.hProcess)
-            raise
-        _k32.ResumeThread(info.hThread)
-        _k32.CloseHandle(info.hThread)
-        return Spawned(
-            pid=int(info.dwProcessId),
-            process=int(info.hProcess),
-            job=job,
-            stdin_fd=msvcrt.open_osfhandle(in_parent, 0) if in_parent is not None else None,  # type: ignore[attr-defined,unused-ignore]
-            stdout_fd=msvcrt.open_osfhandle(out_parent, os.O_RDONLY),  # type: ignore[attr-defined,unused-ignore]
-            stderr_fd=msvcrt.open_osfhandle(err_parent, os.O_RDONLY),  # type: ignore[attr-defined,unused-ignore]
-        )
+        return _start_in_job(info, job, in_parent, out_parent, err_parent)
     except BaseException:
         job.close()
         raise
     finally:
-        for handle in pipes:
+        if attributes is not None:
+            attributes.close()
+        for handle in to_close:
             _k32.CloseHandle(handle)
         _k32.CloseHandle(token)
+
+
+def _startup_info(
+    in_child: int, out_child: int, err_child: int, attributes: _AttributeList
+) -> _StartupInfoEx:
+    startup = _StartupInfoEx()
+    startup.StartupInfo.cb = ctypes.sizeof(_StartupInfoEx)
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW
+    startup.StartupInfo.wShowWindow = SW_HIDE
+    startup.StartupInfo.hStdInput = in_child
+    startup.StartupInfo.hStdOutput = out_child
+    startup.StartupInfo.hStdError = err_child
+    startup.lpAttributeList = attributes.pointer
+    return startup
+
+
+def _start_in_job(
+    info: _ProcessInformation,
+    job: Job,
+    in_parent: int | None,
+    out_parent: int,
+    err_parent: int,
+) -> Spawned:
+    """Put the suspended process in its job, then let it run; returns the parent's view of it."""
+    import msvcrt
+
+    try:
+        job.assign(info.hProcess)
+    except SandboxWin32Error:
+        _k32.TerminateProcess(info.hProcess, 1)
+        _k32.CloseHandle(info.hThread)
+        _k32.CloseHandle(info.hProcess)
+        raise
+    _k32.ResumeThread(info.hThread)
+    _k32.CloseHandle(info.hThread)
+    return Spawned(
+        pid=int(info.dwProcessId),
+        process=int(info.hProcess),
+        job=job,
+        stdin_fd=msvcrt.open_osfhandle(in_parent, 0) if in_parent is not None else None,  # type: ignore[attr-defined,unused-ignore]
+        stdout_fd=msvcrt.open_osfhandle(out_parent, os.O_RDONLY),  # type: ignore[attr-defined,unused-ignore]
+        stderr_fd=msvcrt.open_osfhandle(err_parent, os.O_RDONLY),  # type: ignore[attr-defined,unused-ignore]
+    )
 
 
 def _std_handles(
@@ -719,42 +784,23 @@ def _spawn_app_container(
     with_stdin: bool,
     sid_string: str,
 ) -> Spawned:
-    import msvcrt
-
     sid = ctypes.c_void_p()
     if not _adv.ConvertStringSidToSidW(sid_string, ctypes.byref(sid)):
         raise _fail("ConvertStringSidToSidW(AppContainer)")
     job = Job(memory_bytes=memory_bytes, max_processes=max_processes)
     to_close: list[int] = []
-    attribute_list: ctypes.Array[ctypes.c_char] | None = None
+    attributes: _AttributeList | None = None
     try:
         in_parent, out_parent, err_parent, in_child, out_child, err_child, to_close = _std_handles(
             with_stdin, app_container=True
         )
-        size = ctypes.c_size_t()
-        _k32.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
-        attribute_list = ctypes.create_string_buffer(size.value)
-        if not _k32.InitializeProcThreadAttributeList(attribute_list, 1, 0, ctypes.byref(size)):
-            raise _fail("InitializeProcThreadAttributeList")
+        attributes = _AttributeList(2)
         capabilities = _SecurityCapabilities(sid, None, 0, 0)
-        if not _k32.UpdateProcThreadAttribute(
-            attribute_list,
-            0,
-            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-            ctypes.byref(capabilities),
-            ctypes.sizeof(capabilities),
-            None,
-            None,
-        ):
-            raise _fail("UpdateProcThreadAttribute")
-        startup = _StartupInfoEx()
-        startup.StartupInfo.cb = ctypes.sizeof(_StartupInfoEx)
-        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW
-        startup.StartupInfo.wShowWindow = SW_HIDE
-        startup.StartupInfo.hStdInput = in_child
-        startup.StartupInfo.hStdOutput = out_child
-        startup.StartupInfo.hStdError = err_child
-        startup.lpAttributeList = ctypes.cast(attribute_list, ctypes.c_void_p)
+        attributes.set(
+            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, capabilities, ctypes.sizeof(capabilities)
+        )
+        attributes.handle_list([in_child, out_child, err_child])
+        startup = _startup_info(in_child, out_child, err_child, attributes)
         info = _ProcessInformation()
         command = ctypes.create_unicode_buffer(subprocess.list2cmdline(argv))
         block = _environment_block(env)
@@ -777,29 +823,13 @@ def _spawn_app_container(
             ctypes.byref(info),
         ):
             raise _fail("CreateProcessW(AppContainer)")
-        try:
-            job.assign(info.hProcess)
-        except SandboxWin32Error:
-            _k32.TerminateProcess(info.hProcess, 1)
-            _k32.CloseHandle(info.hThread)
-            _k32.CloseHandle(info.hProcess)
-            raise
-        _k32.ResumeThread(info.hThread)
-        _k32.CloseHandle(info.hThread)
-        return Spawned(
-            pid=int(info.dwProcessId),
-            process=int(info.hProcess),
-            job=job,
-            stdin_fd=msvcrt.open_osfhandle(in_parent, 0) if in_parent is not None else None,  # type: ignore[attr-defined,unused-ignore]
-            stdout_fd=msvcrt.open_osfhandle(out_parent, os.O_RDONLY),  # type: ignore[attr-defined,unused-ignore]
-            stderr_fd=msvcrt.open_osfhandle(err_parent, os.O_RDONLY),  # type: ignore[attr-defined,unused-ignore]
-        )
+        return _start_in_job(info, job, in_parent, out_parent, err_parent)
     except BaseException:
         job.close()
         raise
     finally:
-        if attribute_list is not None:
-            _k32.DeleteProcThreadAttributeList(attribute_list)
+        if attributes is not None:
+            attributes.close()
         for handle in to_close:
             _k32.CloseHandle(handle)
         _k32.LocalFree(sid)

@@ -33,3 +33,8 @@ class HandsConfig(StrictSection):
     #: this off forces the low-integrity fallback (weaker: it cannot hide the user's files or the
     #: credential store), which is reported honestly by the sandbox's guarantees.
     windows_appcontainer: bool = True
+    #: Run sandboxed code even when the sandbox is weaker than the Security Model asks (the Windows
+    #: low-integrity fallback reads the user's files and reaches the network; an AppContainer on a
+    #: machine without loopback isolation reaches local services). Only the user can set this; off,
+    #: every such run is refused and says why.
+    accept_weak_sandbox: bool = False

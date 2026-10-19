@@ -15,8 +15,9 @@ Three rules the contract makes explicit, because they are the point of the sandb
   read-only; the keyring and the user's files are not reachable at all on a backend that supports
   it (AppContainer, bwrap), and read-only-but-reachable on the weaker Windows fallback, which
   `Sandbox.guarantees()` reports honestly.
-* **Fail closed.** If the backend cannot be set up (no `bwrap`, no AppContainer and the firewall
-  rule missing), `run` raises `SandboxUnavailable` rather than running the code unconfined.
+* **Fail closed.** If the backend cannot be set up (no `bwrap`), or its guarantees are weaker than
+  the Security Model asks and the user has not explicitly accepted that, `run` raises
+  `SandboxUnavailable` rather than running the code less confined than promised.
 """
 
 from __future__ import annotations

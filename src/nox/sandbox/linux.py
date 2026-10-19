@@ -117,6 +117,7 @@ class LinuxSandbox:
         egress: EgressDecl,
         limits: Limits,
         proxy_port: int | None,
+        proxy_socket: str | None = None,
     ) -> Result:
         if egress.wants_network and proxy_port is None:
             raise SandboxUnavailable("egress declared but no proxy is running; failing closed")

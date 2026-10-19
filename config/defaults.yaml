@@ -407,6 +407,9 @@ hands:                           # the machine-and-world tools: shell, packages,
                                  # remembered): winget source 'winget' on Windows, apt on Linux/Pi
   windows_appcontainer: true     # prefer the stronger AppContainer sandbox; off forces the weaker
                                  # low-integrity fallback (reported honestly by the sandbox)
+  accept_weak_sandbox: false     # run commands even when the sandbox cannot give every guarantee
+                                 # (low-integrity fallback: reads your files, reaches the network;
+                                 # or loopback isolation not enforced). Off = such runs are refused
 
 presets:                         # one phrase, several systems at once: lights, Nox's own mode,
                                  # and programs you registered here. Both lists ship empty, so a

@@ -25,9 +25,13 @@ import contextlib
 import ipaddress
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from nox.core.logging import get_logger
 from nox.sandbox.netguard import BlockedAddress, NetGuard, resolve_all
+
+if TYPE_CHECKING:
+    from nox.sandbox._winpipe import PipeListener
 
 _IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 StreamPair = tuple[asyncio.StreamReader, asyncio.StreamWriter]
@@ -76,7 +80,11 @@ class EgressProxy:
         self._resolver = resolver
         self._open = open_connection or self._open_upstream
         self._server: asyncio.AbstractServer | None = None
+        self._pipe: PipeListener | None = None
         self.port = 0
+        #: Where a child reaches the proxy when it is not loopback TCP: a Windows named pipe path
+        #: (`start_pipe`). Empty while the proxy only listens on TCP.
+        self.socket_path = ""
 
     async def start(self) -> int:
         self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
@@ -84,7 +92,24 @@ class EgressProxy:
         log.info("sandbox.proxy_started", port=self.port, allow=len(self._allow))
         return self.port
 
+    async def start_pipe(self, container_sid: str) -> str:
+        """Also listen on a fresh named pipe only `container_sid` (and the core) may open.
+
+        For the Windows AppContainer backend, whose child may not be able to reach a loopback TCP
+        port of the host. Connections arriving here get exactly the same `CONNECT` handling and
+        policy as TCP ones. Returns the pipe path, also kept in `socket_path`.
+        """
+        from nox.sandbox._winpipe import PipeListener, pipe_sddl
+
+        listener = PipeListener(sddl=pipe_sddl(container_sid), handler=self._handle)
+        self.socket_path = await listener.start()
+        self._pipe = listener
+        return self.socket_path
+
     async def stop(self) -> None:
+        if self._pipe is not None:
+            await self._pipe.close()
+            self._pipe = None
         if self._server is not None:
             self._server.close()
             with contextlib.suppress(Exception):
@@ -147,7 +172,14 @@ class EgressProxy:
             log.warning("sandbox.proxy_upstream_failed", host=host, port=port, error=str(exc))
             await _respond(writer, 502, "Bad Gateway")
             return
-        await _respond(writer, 200, "Connection Established")
+        # Not `_respond`: that closes the connection, which would end the tunnel before it began.
+        try:
+            writer.write(b"HTTP/1.1 200 Connection Established" + _CRLF + _CRLF)
+            await writer.drain()
+        except (OSError, ConnectionError):
+            await _close(writer)
+            await _close(up_writer)
+            return
         await _tunnel(reader, writer, up_reader, up_writer)
 
     async def _open_upstream(self, host: str, port: int) -> StreamPair:
