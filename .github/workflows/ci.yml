@@ -238,6 +238,39 @@ jobs:
             test ! -e /usr/lib/nox/bwrap
           fi
 
+      # TEMPORARY experiment: which AppArmor child-transition form works under no_new_privs here.
+      - name: AppArmor child-profile experiment (informational)
+        continue-on-error: true
+        run: |
+          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" != "1" ]; then exit 0; fi
+          sudo install -d -m 0755 /usr/lib/nox-exp
+          child='flags=(attach_disconnected,mediate_deleted) { allow file rwlkmix /{**,}, allow network, allow unix, allow ptrace, allow signal, allow mqueue, allow io_uring, allow mount, allow umount, allow pivot_root, allow dbus, audit deny capability, audit deny userns, }'
+          parent='flags=(attach_disconnected,mediate_deleted) { allow capability, allow file rwlkm /{**,}, allow network, allow unix, allow ptrace, allow signal, allow mqueue, allow io_uring, allow userns, allow mount, allow umount, allow pivot_root, allow dbus, allow'
+          for v in a b c d e; do
+            sudo install -m 0750 -o root -g nox /usr/bin/bwrap /usr/lib/nox-exp/bw$v
+            case $v in
+              a) rule="px /** -> &nexp-child-$v," ;;
+              b) rule="px /** -> &nexp-$v//&nexp-child-$v," ;;
+              c) rule="px /** -> nexp-child-$v," ;;
+              d) rule="pix /** -> &nexp-child-$v," ;;
+              e) rule="px /** -> &nexp-child-$v," ;;
+            esac
+            pflags="$parent"
+            [ $v = e ] && pflags="$(echo "$parent" | sed 's/flags=(attach_disconnected,mediate_deleted)/flags=(attach_disconnected,mediate_deleted,complain)/')"
+            printf 'abi <abi/4.0>,
+include <tunables/global>
+profile nexp-%s /usr/lib/nox-exp/bw%s %s %s }
+profile nexp-child-%s %s
+'               "$v" "$v" "$pflags" "$rule" "$v" "$child" | sudo tee /etc/apparmor.d/nexp-$v >/dev/null
+            sudo apparmor_parser -r /etc/apparmor.d/nexp-$v || { echo "variant $v: parse failed"; continue; }
+            b=/usr/lib/nox-exp/bw$v
+            sudo -u nox $b --unshare-user --ro-bind / / --proc /proc --dev /dev /usr/bin/true; echo "variant $v true rc=$?"
+            sudo -u nox $b --unshare-user --ro-bind / / --proc /proc --dev /dev /usr/bin/unshare -U true; echo "variant $v nested-userns rc=$?"
+            sudo -u nox $b --unshare-user --cap-add CAP_NET_RAW --ro-bind / / --proc /proc --dev /dev /usr/bin/python3 -c 'import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, 1); print("RAW OK")'; echo "variant $v raw rc=$?"
+            sudo -u nox $b --unshare-user --ro-bind / / --proc /proc --dev /dev cat /proc/self/attr/current; echo
+          done
+          sudo dmesg | grep -E 'apparmor="(DENIED|AUDIT)"' | grep nexp | tail -30 || true
+
       # A bubblewrap update the copy missed must stop the sandbox (fail closed); the apt hook
       # refreshes the copy, and the sandbox works again.
       - name: An outdated bwrap copy fails closed; the apt hook refreshes it
@@ -246,15 +279,13 @@ jobs:
             sudo sh -c 'printf x >> /usr/lib/nox/bwrap'
             since="$(date '+%Y-%m-%d %H:%M:%S')"; sleep 1
             sudo systemctl restart nox
-            for _ in $(seq 60); do curl -fsS http://127.0.0.1:47801/health >/dev/null 2>&1 && break; sleep 1; done
-            sleep 3
+            for _ in $(seq 60); do sudo journalctl -u nox --no-pager --since "$since" | grep -qE "sandbox\.linux_ready|hands\.sandbox_unavailable" && break; sleep 1; done
             sudo journalctl -u nox --no-pager --since "$since" | grep -q "differs from /usr/bin/bwrap"
             sudo apt-get install --reinstall -y -qq bubblewrap >/dev/null
             sudo cmp /usr/bin/bwrap /usr/lib/nox/bwrap
             since="$(date '+%Y-%m-%d %H:%M:%S')"; sleep 1
             sudo systemctl restart nox
-            for _ in $(seq 60); do curl -fsS http://127.0.0.1:47801/health >/dev/null 2>&1 && break; sleep 1; done
-            sleep 3
+            for _ in $(seq 60); do sudo journalctl -u nox --no-pager --since "$since" | grep -qE "sandbox\.linux_ready|hands\.sandbox_unavailable" && break; sleep 1; done
             sudo journalctl -u nox --no-pager --since "$since" | grep -E "sandbox\.linux_ready" | grep -q "egress=.\?True"
           fi
 
