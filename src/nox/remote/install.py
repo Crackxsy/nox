@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from nox.core.logging import get_logger
 from nox.ipc.dispatch import RequestContext
 from nox.ipc.errors import ERR_NOT_FOUND, ERR_UNAVAILABLE, IpcError
+from nox.memory.capture import turn_origin
 from nox.remote.models import DeviceRow
 from nox.remote.notify import RemoteNotifier
 from nox.remote.pairing import PairingService
@@ -112,7 +113,10 @@ def install(core: Any) -> RemoteRuntime:
     async def chat(text: str) -> str:
         """Phone chat: the normal orchestrator, `speak=False`. No separate prompt, no relaxed
         profile, and the active privacy mode applies exactly as it does on the desktop."""
-        turn = await core.orchestrator.handle_text(text, speak=False)
+        # Marked `remote`: facts learned from a phone message wait for confirmation on the
+        # dashboard before they reach the prompt (`nox.memory.capture`).
+        with turn_origin("remote"):
+            turn = await core.orchestrator.handle_text(text, speak=False)
         return str(getattr(turn, "response", ""))
 
     def status() -> dict[str, str]:

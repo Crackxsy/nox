@@ -522,6 +522,10 @@ class MemoryItemRepository:
         )
         return [MemoryItemRow(**dict(r)) for r in rows]
 
+    def set_source(self, item_id: int, source: str) -> bool:
+        cur = self._db.execute("UPDATE memory_items SET source = ? WHERE id = ?", (source, item_id))
+        return int(cur.rowcount) == 1
+
     def list_by_types(self, types: list[str], *, limit: int = 200) -> list[MemoryItemRow]:
         """Items of the given types, most important first and newest first within a tie."""
         if not types:

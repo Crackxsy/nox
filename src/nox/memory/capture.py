@@ -16,15 +16,25 @@ Two pieces fix that:
 
 Facts are stored in the language they were said in and in the third person, so they read the
 same in a prompt and on the dashboard, where the user can delete any of them.
+
+Where a turn came from matters, because a profile line is in every future system prompt. A turn
+spoken or typed at the machine (`voice`, `chat`) is the user talking. A turn from the phone bridge
+(`remote`) or a chat message that looks pasted (`paste`) may carry someone else's words - a
+forwarded message, a web page - and one prompt injection in it must not become a permanent line in
+the prompt. Facts from those are stored as *unconfirmed*: listed on the dashboard, never in the
+profile block, until the user confirms them there. Each fact records its origin in `source`
+(`capture:<origin>`, plus `:unconfirmed` while it waits).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 from nox.ai.base import AiRequest, AiResponse, AiRole, Message
@@ -38,12 +48,16 @@ log = get_logger(__name__)
 
 __all__ = [
     "PROFILE_TYPES",
+    "TRUSTED_ORIGINS",
     "CapturedFact",
     "FactCapture",
     "UserProfile",
+    "confirmed_source",
     "extract_facts_json",
+    "is_unconfirmed",
     "normalise_fact",
     "sanitise_fact",
+    "turn_origin",
 ]
 
 #: The memory types that describe the user rather than a task, a stream or Nox itself. These are
@@ -63,6 +77,19 @@ DUPLICATE_SCORE = 0.92
 MAX_FACT_CHARS = 200
 
 _SOURCE = "capture"
+_UNCONFIRMED = ":unconfirmed"
+
+#: Where a turn came from: `voice` (the microphone - the default, since the voice path is the one
+#: that does not say), `chat` (the dashboard), `remote` (the phone bridge), `paste` (a chat message
+#: that looks pasted, see `_looks_pasted`). Set by the caller around `handle_text`.
+_TURN_ORIGIN: ContextVar[str] = ContextVar("nox_turn_origin", default="voice")
+
+#: Origins whose facts go straight into the profile block. Anything else waits for confirmation.
+TRUSTED_ORIGINS = frozenset({"voice", "chat"})
+
+#: A chat message longer than this, or with this many line breaks, reads like pasted text.
+_PASTE_CHARS = 400
+_PASTE_LINES = 3
 _WHITESPACE = re.compile(r"\s+")
 _PUNCTUATION = re.compile(r"[^\w\s]")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
@@ -71,6 +98,34 @@ _MARKUP_STARTS = ("#", "-", "*", ">", "[", "{", "<")
 
 
 Complete = Callable[[AiRequest], Awaitable[AiResponse]]
+
+
+@contextlib.contextmanager
+def turn_origin(origin: str) -> Iterator[None]:
+    """Marks the turns handled inside this block as coming from `origin` (see `_TURN_ORIGIN`).
+
+    A context variable, so it follows the turn into the task `handle_text` starts for it and into
+    the `on_turn_complete` callback, without the orchestrator having to carry it.
+    """
+    token = _TURN_ORIGIN.set(origin)
+    try:
+        yield
+    finally:
+        _TURN_ORIGIN.reset(token)
+
+
+def _looks_pasted(text: str) -> bool:
+    return len(text) > _PASTE_CHARS or text.count("\n") >= _PASTE_LINES
+
+
+def is_unconfirmed(source: str) -> bool:
+    """A captured fact that waits for the user's confirmation before it reaches the prompt."""
+    return source.startswith(f"{_SOURCE}:") and source.endswith(_UNCONFIRMED)
+
+
+def confirmed_source(source: str) -> str:
+    """`source` with the unconfirmed mark removed (unchanged when there is none)."""
+    return source.removesuffix(_UNCONFIRMED) if is_unconfirmed(source) else source
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,7 +214,9 @@ class UserProfile:
 
         Bounded by `max_chars` so a long-lived profile cannot crowd out the question.
         """
-        rows = self.items()
+        # Unconfirmed facts (learned from a phone message or pasted text) stay out of the prompt
+        # until the user confirms them on the dashboard.
+        rows = [row for row in self.items() if not is_unconfirmed(row.source)]
         if not rows:
             return ""
         head = (
@@ -205,6 +262,8 @@ class _Exchange:
     #: Only what the user wrote. Nox's replies can echo tool, web or vault content, which is
     #: untrusted, and the facts are about the user anyway.
     user: str
+    #: Where the turn came from (`_TURN_ORIGIN`).
+    origin: str = "voice"
 
 
 @dataclass
@@ -241,7 +300,10 @@ class FactCapture:
         del assistant_text  # not a source of facts, see `_Exchange`
         if not user_text.strip():
             return
-        self._pending.append(_Exchange(user_text.strip()))
+        origin = _TURN_ORIGIN.get()
+        if origin in TRUSTED_ORIGINS and _looks_pasted(user_text.strip()):
+            origin = "paste"
+        self._pending.append(_Exchange(user_text.strip(), origin))
         self._schedule(0.0 if len(self._pending) >= self.batch_turns else self.settle_s)
 
     async def stop(self) -> None:
@@ -300,7 +362,19 @@ class FactCapture:
                 log.warning("memory.capture_failed", error=self.last_error)
 
     async def _capture(self, exchanges: list[_Exchange]) -> int:
+        """Extracts per origin, so a fact is never credited to a more trusted origin than the text
+        it came from (one excerpt mixing a voice turn and a pasted page would launder the page)."""
+        stored = 0
+        for origin in dict.fromkeys(e.origin for e in exchanges):
+            group = [e for e in exchanges if e.origin == origin]
+            stored += await self._capture_group(origin, group)
+        return stored
+
+    async def _capture_group(self, origin: str, exchanges: list[_Exchange]) -> int:
         facts = await self._extract(exchanges)
+        source = f"{_SOURCE}:{origin}"
+        if origin not in TRUSTED_ORIGINS:
+            source += _UNCONFIRMED
         stored = 0
         try:
             for fact in facts:
@@ -309,7 +383,7 @@ class FactCapture:
                     continue
                 try:
                     await self.memory.create(
-                        fact.text, type=fact.type, source=_SOURCE, explicit=False
+                        fact.text, type=fact.type, source=source, explicit=False
                     )
                 except MemoryWriteRefusedError as exc:
                     log.info("memory.capture_refused", reason=str(exc))
@@ -318,7 +392,7 @@ class FactCapture:
         finally:
             self.captured += stored
             if facts:
-                log.info("memory.captured", facts=len(facts), stored=stored)
+                log.info("memory.captured", facts=len(facts), stored=stored, origin=origin)
         return stored
 
     async def _extract(self, exchanges: list[_Exchange]) -> list[CapturedFact]:

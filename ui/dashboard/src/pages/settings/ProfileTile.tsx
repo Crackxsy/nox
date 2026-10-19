@@ -4,6 +4,10 @@
  * A memory the user cannot see is one they cannot trust, and one they cannot correct. So the list
  * is plain: the fact in the words it was stored in, when it was learned, and a "Vergessen" button.
  * A fact typed in here counts like "merk dir": it outranks anything Nox inferred on its own.
+ *
+ * What Nox learned by itself in the last days is marked "neu", so a wrong inference is noticed
+ * while it is fresh. A fact learned from a phone message or pasted text is marked "nicht
+ * bestätigt": Nox keeps it out of its prompt until the user confirms it here.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -19,6 +23,19 @@ export interface ProfileFact {
   type: string;
   text: string;
   createdAt: string;
+  /** Inferred by Nox from a conversation, not typed in by the user. */
+  learned: boolean;
+  /** From a phone message or pasted text; not used until confirmed. */
+  unconfirmed: boolean;
+}
+
+/** How long a fact Nox learned by itself is marked as new. */
+export const NEW_FOR_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Learned by Nox (not typed in) within `NEW_FOR_MS` of `now`. */
+export function isNewlyLearned(fact: ProfileFact, now: number = Date.now()): boolean {
+  const created = new Date(fact.createdAt).getTime();
+  return fact.learned && !Number.isNaN(created) && now - created < NEW_FOR_MS;
 }
 
 /** `memory.profile.list` reply -> facts; anything malformed is dropped rather than guessed. */
@@ -34,6 +51,8 @@ export function parseProfileFacts(payload: unknown): ProfileFact[] {
       type: str(entry.type, 'user'),
       text,
       createdAt: str(entry.created_at),
+      learned: entry.learned === true,
+      unconfirmed: entry.unconfirmed === true,
     });
   }
   return facts;
@@ -80,6 +99,21 @@ export function ProfileTile({ t, lang, client }: ProfileTileProps) {
     }
   };
 
+  const confirm = async (id: number) => {
+    if (!client || busy) return;
+    setBusy(true);
+    try {
+      await api.profileConfirm(client, id);
+      setFacts((list) =>
+        list ? list.map((f) => (f.id === id ? { ...f, unconfirmed: false } : f)) : list,
+      );
+    } catch (e) {
+      setError(errorText(t('error_prefix'), e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const add = async () => {
     const text = draft.trim();
     if (!client || busy || text.length < 3) return;
@@ -115,17 +149,39 @@ export function ProfileTile({ t, lang, client }: ProfileTileProps) {
         <ul className="fact-list">
           {facts.map((fact) => (
             <li key={fact.id} className="fact-row">
-              <span className="fact-text">{fact.text}</span>
+              <span className="fact-text">
+                {fact.text}
+                {fact.unconfirmed ? (
+                  <span className="badge badge--warn" title={t('profile_unconfirmed_hint')}>
+                    {t('profile_unconfirmed')}
+                  </span>
+                ) : (
+                  isNewlyLearned(fact) && <span className="badge">{t('profile_new')}</span>
+                )}
+              </span>
               <span className="fact-meta">{when(fact.createdAt)}</span>
-              <button
-                type="button"
-                className="btn btn--quiet"
-                disabled={busy || !client}
-                onClick={() => void forget(fact.id)}
-                aria-label={`${t('profile_forget')}: ${fact.text}`}
-              >
-                {t('profile_forget')}
-              </button>
+              <span className="fact-actions">
+                {fact.unconfirmed && (
+                  <button
+                    type="button"
+                    className="btn btn--quiet"
+                    disabled={busy || !client}
+                    onClick={() => void confirm(fact.id)}
+                    aria-label={`${t('profile_confirm')}: ${fact.text}`}
+                  >
+                    {t('profile_confirm')}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn--quiet"
+                  disabled={busy || !client}
+                  onClick={() => void forget(fact.id)}
+                  aria-label={`${t('profile_forget')}: ${fact.text}`}
+                >
+                  {t('profile_forget')}
+                </button>
+              </span>
             </li>
           ))}
         </ul>

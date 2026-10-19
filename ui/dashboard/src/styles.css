@@ -1981,6 +1981,16 @@ a:hover {
   white-space: nowrap;
 }
 
+.fact-text .badge {
+  margin-inline-start: 8px;
+  vertical-align: baseline;
+}
+
+.fact-actions {
+  display: flex;
+  gap: 8px;
+}
+
 /* ---- Dein Tag (Home) ----------------------------------------------------------------------- */
 
 .day-list > li {

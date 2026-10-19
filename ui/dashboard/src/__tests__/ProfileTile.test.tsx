@@ -8,7 +8,12 @@ import { describe, expect, it } from 'vitest';
 
 import { translator } from '../i18n';
 import type { IpcClient } from '../ipc';
-import { ProfileTile, parseProfileFacts } from '../pages/settings/ProfileTile';
+import {
+  NEW_FOR_MS,
+  ProfileTile,
+  isNewlyLearned,
+  parseProfileFacts,
+} from '../pages/settings/ProfileTile';
 
 const t = translator('de');
 
@@ -17,6 +22,8 @@ interface Fact {
   type: string;
   text: string;
   created_at: string;
+  learned?: boolean;
+  unconfirmed?: boolean;
 }
 
 function fakeClient(items: Fact[]) {
@@ -92,5 +99,42 @@ describe('ProfileTile', () => {
     fireEvent.click(screen.getByRole('button', { name: t('profile_add') }));
     await waitFor(() => expect(screen.getByText('Mein bester Freund heißt Tim.')).toBeTruthy());
     expect(sent).toContainEqual(['memory.profile.add', { text: 'Mein bester Freund heißt Tim.' }]);
+  });
+});
+
+describe('facts Nox learned by itself', () => {
+  it('marks a recent inference as new, but not one the user typed in', () => {
+    const now = Date.parse('2026-10-19T12:00:00');
+    const [learned, typed, old] = parseProfileFacts({
+      items: [
+        { id: 1, text: 'Plays chess.', created_at: '2026-10-18T09:00:00', learned: true },
+        { id: 2, text: 'Has a dog.', created_at: '2026-10-18T09:00:00', learned: false },
+        { id: 3, text: 'Likes tea.', created_at: '2026-09-01T09:00:00', learned: true },
+      ],
+    });
+    expect(isNewlyLearned(learned, now)).toBe(true);
+    expect(isNewlyLearned(typed, now)).toBe(false);
+    expect(isNewlyLearned(old, now)).toBe(false);
+    expect(isNewlyLearned(learned, Date.parse('2026-10-18T09:00:00') + NEW_FOR_MS)).toBe(false);
+  });
+
+  it('shows an unconfirmed fact as such and confirms it on request', async () => {
+    const { client, sent } = fakeClient([
+      {
+        id: 5,
+        type: 'user',
+        text: 'Hat einen Hund.',
+        created_at: '2026-10-14T20:00:00',
+        learned: true,
+        unconfirmed: true,
+      },
+    ]);
+    render(<ProfileTile t={t} lang="de" client={client} />);
+    await waitFor(() => expect(screen.getByText(t('profile_unconfirmed'))).toBeTruthy());
+    fireEvent.click(
+      screen.getByRole('button', { name: `${t('profile_confirm')}: Hat einen Hund.` }),
+    );
+    await waitFor(() => expect(screen.queryByText(t('profile_unconfirmed'))).toBeNull());
+    expect(sent).toContainEqual(['memory.profile.confirm', { id: 5 }]);
   });
 });

@@ -83,6 +83,7 @@ export const api = {
   profileList: (c: IpcClient) => c.request('memory.profile.list', {}),
   profileAdd: (c: IpcClient, text: string) => c.request('memory.profile.add', { text }),
   profileForget: (c: IpcClient, id: number) => c.request('memory.profile.forget', { id }),
+  profileConfirm: (c: IpcClient, id: number) => c.request('memory.profile.confirm', { id }),
   funkenTop: (c: IpcClient, limit = 10) => c.request('stream.funken.top', { limit }),
   remoteDevices: (c: IpcClient) => c.request('remote.devices.list', {}),
   remotePairStart: (c: IpcClient, name: string) => c.request('remote.pair.start', { name }),
