@@ -99,6 +99,10 @@ def _log_lines(log: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
 
 
+def _log_lines_if_any(log: Path) -> list[dict[str, Any]]:
+    return _log_lines(log) if log.exists() else []
+
+
 def _user_messages(log: Path) -> list[str]:
     return [
         str(e["in"]["message"]["content"])
@@ -283,7 +287,7 @@ async def test_a_kill_during_a_slow_start_leaves_nothing_running(
     provider, bridge = _provider(tmp_path, log, monkeypatch, FAKE_INIT_DELAY="30")
     turn = asyncio.create_task(_collect(provider.stream(_request("Hallo"))))
     deadline = time.monotonic() + 20
-    while not log.exists() or not any("pid" in e for e in _log_lines(log)):
+    while not any("pid" in e for e in await asyncio.to_thread(_log_lines_if_any, log)):
         assert time.monotonic() < deadline, "the fake CLI never started"
         await asyncio.sleep(0.02)
     pid = next(e["pid"] for e in _log_lines(log) if "pid" in e)

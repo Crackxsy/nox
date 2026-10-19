@@ -25,7 +25,7 @@ import contextlib
 import hashlib
 import os
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from pathlib import Path
 from typing import Protocol
 
@@ -303,7 +303,7 @@ class PersistentClaude:
             return max(request.timeout_s, self._cfg.timeout_s)
         return min(request.timeout_s, self._cfg.timeout_s)
 
-    async def stream(self, request: AiRequest) -> AsyncIterator[AiChunk]:
+    async def stream(self, request: AiRequest) -> AsyncGenerator[AiChunk]:
         if self._killed:
             raise ProviderUnavailableError(PROVIDER_ID, "stopped by the kill switch")
         system = "\n\n".join(m.content for m in request.messages if m.role == "system")
@@ -325,7 +325,7 @@ class PersistentClaude:
 
     async def _turn(
         self, session: ClaudeSession, request: AiRequest, turns: list[Message]
-    ) -> AsyncIterator[AiChunk]:
+    ) -> AsyncGenerator[AiChunk]:
         started = time.perf_counter()
         deadline = time.monotonic() + self._timeout(request)
         if request.tools and request.tool_turn and self._bridge and self._launch:
