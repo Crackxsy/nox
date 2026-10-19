@@ -91,7 +91,8 @@ class SkillRecord(BaseModel):
 
 
 class PluginControl(Protocol):
-    def allow_egress(self, entries: Iterable[str]) -> None: ...
+    def allow_egress(self, plugin_id: str, entries: Iterable[str]) -> None: ...
+    def revoke_egress(self, plugin_id: str) -> None: ...
     async def rescan(self) -> None: ...
     async def enable(self, plugin_id: str) -> Any: ...
     async def disable(self, plugin_id: str, reason: str = "disabled") -> None: ...
@@ -160,6 +161,7 @@ class SkillService:
         home_host: Callable[[], str] = lambda: "",
         secret_present: Callable[[str], bool] = lambda _name: False,
         runtime_unavailable: Callable[[], str | None] = lambda: "no sandbox is configured",
+        revoke_grants: Callable[[str], int] = lambda _prefix: 0,
         clock: Callable[[], datetime] = _now,
     ) -> None:
         self.root = root
@@ -178,6 +180,7 @@ class SkillService:
         self._secret_present = secret_present
         #: Fail closed: a skill is only switched on where its worker can run in the sandbox.
         self._runtime_unavailable = runtime_unavailable
+        self._revoke_grants = revoke_grants
         self._clock = clock
         self._task: asyncio.Task[None] | None = None
         self._halted = False
@@ -419,8 +422,10 @@ class SkillService:
                 return {"ok": False, "needs_pin": True, "reason": str(exc)}
         target = self.plugins_root / skill_id
         await asyncio.to_thread(_replace_tree, version_dir, target)
+        # A new version never inherits what the user approved or remembered for an older one.
+        self._forget_approvals(skill_id)
         if new_hosts:
-            self._plugins.allow_egress(new_hosts)
+            self._plugins.allow_egress(skill_id, new_hosts)
         await self._persist_enabled(skill_id, True)
         status = await self._plugins.enable(skill_id)
         record.state = SkillState.ACTIVE
@@ -434,6 +439,7 @@ class SkillService:
         if record is None:
             return {"ok": False, "reason": "unknown skill"}
         await self._plugins.disable(skill_id, "deactivated")
+        self._forget_approvals(skill_id)
         await self._persist_enabled(skill_id, False)
         await asyncio.to_thread(shutil.rmtree, self.plugins_root / skill_id, True)
         if record.state is SkillState.ACTIVE:
@@ -450,11 +456,20 @@ class SkillService:
             self._task.cancel()
             await self.wait()
         await self._plugins.remove(skill_id)
+        self._forget_approvals(skill_id)
         await self._persist_enabled(skill_id, False)
         await asyncio.to_thread(shutil.rmtree, self.plugins_root / skill_id, True)
         await asyncio.to_thread(shutil.rmtree, self._dir(skill_id), True)
         self._record(by, "skill.forget", skill_id, "allow", "ok")
         return {"ok": True}
+
+    def _forget_approvals(self, skill_id: str) -> None:
+        """Drop the hosts approved for this skill and every "remember" for its tools.
+
+        Grant scopes are `session:<tool>/<action>` with the skill id as the tool, so the prefix
+        `session:<id>/` matches exactly this skill - `dice` never reaches `dice_x`."""
+        self._plugins.revoke_egress(skill_id)
+        self._revoke_grants(f"session:{skill_id}/")
 
     # -- lifecycle -------------------------------------------------------------------------------
 
@@ -462,9 +477,9 @@ class SkillService:
         """At boot, before the plugin manager starts: re-approve the hosts of active skills (the
         manager then starts them like any enabled plugin) and close builds a restart cut off."""
         records = self.records()
-        approved = [h for r in records if r.state is SkillState.ACTIVE for h in r.approved_hosts]
-        if approved:
-            self._plugins.allow_egress(approved)
+        for record in records:
+            if record.state is SkillState.ACTIVE and record.approved_hosts:
+                self._plugins.allow_egress(record.id, record.approved_hosts)
         for record in records:
             if record.state is SkillState.BUILDING:
                 record.state = SkillState.FAILED

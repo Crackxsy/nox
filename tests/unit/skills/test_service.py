@@ -20,9 +20,14 @@ class Plugins:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
         self.allowed: list[str] = []
+        self.egress: dict[str, list[str]] = {}
 
-    def allow_egress(self, entries: Iterable[str]) -> None:
+    def allow_egress(self, plugin_id: str, entries: Iterable[str]) -> None:
         self.allowed += list(entries)
+        self.egress[plugin_id] = list(entries)
+
+    def revoke_egress(self, plugin_id: str) -> None:
+        self.egress.pop(plugin_id, None)
 
     async def rescan(self) -> None:
         self.calls.append(("rescan", None))
@@ -68,6 +73,7 @@ def service(
     allowed_hosts: tuple[str, ...] = (),
     tests: Any = None,
     runtime: str | None = None,
+    revoked: list[str] | None = None,
 ) -> tuple[SkillService, Plugins, list[tuple[str, bool]], list[str], Audit]:
     plugins = Plugins()
     enabled: list[tuple[str, bool]] = []
@@ -97,6 +103,7 @@ def service(
         notify=notify,
         audit=audit,
         runtime_unavailable=lambda: runtime,
+        revoke_grants=lambda prefix: (revoked.append(prefix) if revoked is not None else None) or 0,
     )
     return svc, plugins, enabled, told, audit
 
@@ -249,7 +256,7 @@ def test_restart_closes_interrupted_builds_and_reapproves_hosts(tmp_path: Path) 
             )
         )
     svc.start()
-    assert plugins.allowed == ["x.org:443"]
+    assert plugins.allowed == ["x.org:443"] and plugins.egress == {"b": ["x.org:443"]}
     record = svc.get("a")
     assert record is not None and record.state is SkillState.FAILED
 
@@ -270,3 +277,20 @@ def test_skill_ids(text: str, expected: str) -> None:
 
 def test_skill_ids_avoid_taken_names() -> None:
     assert skill_id_for("dice", taken={"dice", "dice_2"}) == "dice_3"
+
+
+async def test_approved_hosts_and_remembered_grants_end_with_the_skill(tmp_path: Path) -> None:
+    revoked: list[str] = []
+    svc, plugins, *_ = service(
+        tmp_path, FakeSkillBuilder(rounds=["with_host"]), gate=Gate(), revoked=revoked
+    )
+    await svc.learn("Wuerfeln online", capability="dice", by="companion")
+    await svc.wait()
+    assert (await svc.activate("dice", pin="1234", by="dashboard"))["ok"]
+    assert plugins.egress == {"dice": ["api.example.org:443"]}  # for this skill only
+    assert revoked == ["session:dice/"]  # a new version starts without old "remember"s
+    assert (await svc.deactivate("dice", by="dashboard"))["ok"]
+    assert plugins.egress == {} and revoked[-1] == "session:dice/"
+    assert (await svc.activate("dice", pin="1234", by="dashboard"))["ok"]
+    assert (await svc.forget("dice", by="dashboard"))["ok"]
+    assert plugins.egress == {} and revoked == ["session:dice/"] * 4

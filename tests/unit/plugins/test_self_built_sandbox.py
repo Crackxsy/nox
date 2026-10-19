@@ -77,3 +77,32 @@ async def test_a_skill_runs_through_the_sandboxed_spawner(
     # The bundled plugin next to it still starts the ordinary way, and only it.
     assert len(harness.processes) == 1
     await harness.manager.stop("test")
+
+
+async def test_a_host_approved_for_one_skill_is_not_approved_for_another(
+    tmp_path: Path, plugins_dir: Path
+) -> None:
+    skills = tmp_path / "self_built"
+    for sid in ("alpha", "beta"):
+        write_manifest(
+            skills,
+            sid,
+            entry=f"nox_skill_{sid}:create",
+            permissions=[{"tool": f"{sid}.get", "risk": "medium"}],
+            events={"emits": [], "listens": []},
+            network={"egress": ["api.example.org:443"]},
+        )
+    harness = build(plugins_dir, enabled=("alpha", "beta"))
+    manager = harness.manager
+    manager.extra_dirs = {ORIGIN_SELF_BUILT: skills}
+    manager.sandboxed_spawner = Spawner()
+    manager.allow_egress("alpha", ["api.example.org:443"])
+    await manager.start()
+    await wait_until(lambda: manager.state_of("alpha") is PluginState.SPAWNED)
+    beta = manager.records()["beta"]
+    assert beta.state is PluginState.FAILED and "api.example.org" in beta.reason
+    assert manager.global_egress_allowlist == ()  # nothing leaked into the global list
+    await manager.stop("test")
+    manager.revoke_egress("alpha")
+    await manager.rescan()
+    assert manager.records()["alpha"].state is PluginState.FAILED

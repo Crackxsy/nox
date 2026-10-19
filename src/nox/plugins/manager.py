@@ -483,6 +483,7 @@ class PluginManager:
         self._mode = mode
         self._safe_mode = safe_mode
         self._global_egress = tuple(global_egress_allowlist)
+        self._plugin_egress: dict[str, tuple[str, ...]] = {}
         self._loopback = tuple(loopback_allowlist)
         self._process_factory = process_factory or self._default_process_factory
         self._clock = clock
@@ -568,7 +569,7 @@ class PluginManager:
                     check_egress(
                         rec.manifest,
                         active,
-                        global_allowlist=self._global_egress,
+                        global_allowlist=self._egress_for(plugin_id),
                         loopback_allowlist=self._loopback,
                     )
             except ManifestError as exc:
@@ -582,13 +583,20 @@ class PluginManager:
     def global_egress_allowlist(self) -> tuple[str, ...]:
         return self._global_egress
 
-    def allow_egress(self, entries: Iterable[str]) -> None:
-        """Add `host:port` entries the user approved for a skill to the global allow-list."""
-        merged = list(self._global_egress)
-        for entry in entries:
-            if entry not in merged:
-                merged.append(entry)
-        self._global_egress = tuple(merged)
+    def allow_egress(self, plugin_id: str, entries: Iterable[str]) -> None:
+        """The `host:port` entries the user approved for one skill - for that plugin only.
+
+        Never merged into the global allow-list: another plugin or skill declaring the same host
+        is judged against the configuration alone. Replaces what was approved before (a new
+        version brings its own approval)."""
+        self._plugin_egress[plugin_id] = tuple(dict.fromkeys(entries))
+
+    def revoke_egress(self, plugin_id: str) -> None:
+        """Forget the hosts approved for `plugin_id` (deactivated, forgotten, replaced)."""
+        self._plugin_egress.pop(plugin_id, None)
+
+    def _egress_for(self, plugin_id: str) -> tuple[str, ...]:
+        return (*self._global_egress, *self._plugin_egress.get(plugin_id, ()))
 
     async def rescan(self) -> None:
         """Pick up plugin folders that appeared or changed since the last discovery and start
@@ -684,7 +692,7 @@ class PluginManager:
                     check_egress(
                         manifest,
                         profile,
-                        global_allowlist=self._global_egress,
+                        global_allowlist=self._egress_for(rec.plugin_id),
                         loopback_allowlist=self._loopback,
                     )
                 except ManifestError as exc:

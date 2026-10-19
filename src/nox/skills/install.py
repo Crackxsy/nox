@@ -159,6 +159,7 @@ def install(core: Any) -> SkillsRuntime | None:
         ),
         secret_present=secret_present,
         runtime_unavailable=_runtime_unavailable(manager),
+        revoke_grants=lambda prefix: core.security.engine.revoke_scope(prefix, by="skills"),
     )
     service.start()
     register_skill_tools(core.tool_registry, service, _gap_source(core))
