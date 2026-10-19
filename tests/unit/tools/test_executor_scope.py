@@ -169,16 +169,37 @@ async def test_remove_is_asked_every_time_even_when_remembered(
     assert sent == ["RemoveScene"]
 
 
-async def test_start_stream_is_never_remembered(
+@pytest.mark.parametrize("request_type", ["StartStream", "StartOutput", "ToggleRecordPause"])
+async def test_going_live_is_never_remembered_by_any_route(
     executor: ToolExecutor,
     stream_engine: DefaultPermissionEngine,
     bus: FakeBus,
     sent: list[str],
+    request_type: str,
 ) -> None:
-    await call_answering(executor, stream_engine, bus, "StartStream", remember=True)
-    second = await call(executor, "StartStream")
+    _, asked = await call_answering(
+        executor, stream_engine, bus, request_type, remember=True, outputName="adv_stream"
+    )
+    assert asked["risk"] == "high"
+    second = await call(executor, request_type, outputName="adv_stream")
     assert second.ok is False
-    assert sent == ["StartStream"]
+    assert sent == [request_type]
+
+
+async def test_reads_that_may_return_secrets_are_asked(
+    executor: ToolExecutor, sent: list[str]
+) -> None:
+    result = await call(executor, "GetProfileParameter", parameterCategory="x", parameterName="y")
+    assert result.ok is False and sent == []  # asked, nobody answered
+
+
+async def test_confirmation_names_what_is_changed(
+    executor: ToolExecutor, stream_engine: DefaultPermissionEngine, bus: FakeBus
+) -> None:
+    _, asked = await call_answering(
+        executor, stream_engine, bus, "CreateScene", sceneName="Just Chatting"
+    )
+    assert asked["target"] == "CreateScene sceneName=Just Chatting"
 
 
 @pytest.mark.parametrize("request_type", ["StopStream", "ToggleStream", "StopOutput"])

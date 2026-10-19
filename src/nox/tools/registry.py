@@ -33,6 +33,9 @@ class CallScope:
 
     action: str
     risk: Risk
+    #: What the confirmation dialog and the audit entry name as the call's target; empty means
+    #: the tool's own `targets`.
+    target: str = ""
 
 
 Scope = Callable[[dict[str, Any]], CallScope]

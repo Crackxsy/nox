@@ -40,7 +40,14 @@ from pydantic import BaseModel, Field, field_validator
 from nox.core.events import HealthStatus
 from nox.plugins.api import PluginApi
 from nox.security.model import Risk
-from nox.stream.obs_requests import TOOL_GUIDE, refusal
+from nox.stream.obs_requests import (
+    TOOL_GUIDE,
+    classify,
+    privacy_refusal,
+    redact,
+    redact_text,
+    refusal,
+)
 
 from .ws_client import (
     DEFAULT_EVENT_SUBSCRIPTIONS,
@@ -168,6 +175,7 @@ class ObsPlugin:
         #: `SaveReplayBuffer` response carries no path, only the later event does.
         self._replay_waiters: list[asyncio.Future[str]] = []
         self._background: set[asyncio.Task[None]] = set()
+        self._panicked = False
         self._replay_save_timeout_s = float(api.config.get("replay_save_timeout_s", 10.0))
         subscribe = bool(api.config.get("subscribe_events", True))
         url = self._url()
@@ -314,6 +322,9 @@ class ObsPlugin:
         touches the stream output itself - if OBS is unreachable this only logs and reports on the
         private channel via the plugin log; `stream.stop`/`recording.delete` are hard prohibitions
         and are never attempted, here or anywhere else in this plugin."""
+        # From now on obs.request changes nothing, whatever the core decided: the panic scene
+        # stays on until a person moves away from it in OBS (or Nox restarts the plugin).
+        self._panicked = True
         scene = str(self.api.config.get("privacy_scene", ""))
         if not scene:
             self.api.log.warning("obs.panic_no_privacy_scene")
@@ -489,8 +500,13 @@ class ObsPlugin:
         if refused is not None:
             raise PermissionError(refused)
         self._require_connection()
+        scope = classify(data.request_type, data.request_data, privacy_scene=self._privacy_scene())
+        if scope.risk is not Risk.READ:
+            if self._panicked:
+                raise PermissionError("the panic button was pressed; OBS stays as it is")
+            await self._check_privacy_scene(data)
         try:
-            response = await self.client.request(data.request_type, data.request_data)
+            raw = await self.client.request(data.request_type, data.request_data)
         except ObsRequestError as exc:
             # OBS's own explanation ("No source was found by the name of ...") is what lets the
             # model correct its next request, so it is a result, not a crash.
@@ -498,8 +514,9 @@ class ObsPlugin:
                 "ok": False,
                 "request_type": data.request_type,
                 "code": exc.code,
-                "comment": exc.comment,
+                "comment": redact_text(exc.comment),
             }
+        response = redact(raw)
         text = json.dumps(response, default=str)
         if len(text) > MAX_RESPONSE_CHARS:
             return {
@@ -509,6 +526,40 @@ class ObsPlugin:
                 "response_preview": text[:MAX_RESPONSE_CHARS],
             }
         return {"ok": True, "request_type": data.request_type, "response": response}
+
+    async def _check_privacy_scene(self, data: ObsRequestInput) -> None:
+        """Refuse a change to the privacy scene or any source in it, by name or UUID. What the
+        privacy scene holds is asked from OBS right now; if OBS cannot say, the request is
+        refused - the panic path is worth more than one request."""
+        privacy = self._privacy_scene()
+        if not privacy:
+            return
+        try:
+            scenes = await self.client.request("GetSceneList")
+            entry = next(
+                (s for s in scenes.get("scenes", []) if s.get("sceneName") == privacy), None
+            )
+            names: list[str] = []
+            uuids: list[str] = []
+            if entry is not None:
+                items = await self.client.request("GetSceneItemList", {"sceneName": privacy})
+                for item in items.get("sceneItems", []):
+                    names.append(str(item.get("sourceName", "")))
+                    uuids.append(str(item.get("sourceUuid", "")))
+        except (ObsRequestError, ConnectionError, TimeoutError) as exc:
+            raise PermissionError(
+                f"could not check the privacy scene in OBS ({exc}); nothing was changed"
+            ) from exc
+        reason = privacy_refusal(
+            data.request_type,
+            data.request_data,
+            scene_name=privacy,
+            scene_uuid=str(entry.get("sceneUuid", "")) if entry is not None else "",
+            source_names=names,
+            source_uuids=uuids,
+        )
+        if reason is not None:
+            raise PermissionError(reason)
 
     async def screenshot(self, data: ScreenshotInput) -> dict[str, Any]:
         """`obs.screenshot`: a small JPEG of a source or scene, written to a local folder. Only

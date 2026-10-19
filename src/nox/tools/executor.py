@@ -162,6 +162,8 @@ class ToolExecutor:
                 )
             action, risk = scope.action, scope.risk
         target = spec.targets(payload) if spec.targets is not None else ""
+        if spec.scope is not None and scope.target:
+            target = scope.target
         request = PermissionRequest(
             agent=agent,
             tool=tool,

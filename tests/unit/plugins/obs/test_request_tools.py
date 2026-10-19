@@ -312,3 +312,108 @@ async def test_wrong_password_is_reported_once_and_in_health() -> None:
     finally:
         await plugin.stop()
         await server.stop()
+
+
+# ---- privacy scene, panic and redaction inside the plugin -----------------------------------
+
+
+def _with_privacy_scene(server: FakeObsServer) -> None:
+    server.set_response(
+        "GetSceneList",
+        {
+            "currentProgramSceneName": "Live",
+            "scenes": [
+                {"sceneName": "Live", "sceneUuid": "uuid-live"},
+                {"sceneName": "Technical Problems", "sceneUuid": "uuid-privacy"},
+            ],
+        },
+    )
+    server.set_response(
+        "GetSceneItemList",
+        lambda d: (
+            {"sceneItems": [{"sourceName": "BRB Image", "sourceUuid": "uuid-brb"}]}
+            if d.get("sceneName") == "Technical Problems"
+            else {"sceneItems": []}
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("request_type", "data"),
+    [
+        ("RemoveScene", {"sceneUuid": "uuid-privacy"}),
+        ("SetSceneItemEnabled", {"sceneUuid": "uuid-privacy", "sceneItemId": 1}),
+        ("SetInputSettings", {"inputUuid": "uuid-brb", "inputSettings": {}}),
+        ("RemoveInput", {"inputName": "BRB Image"}),
+    ],
+)
+async def test_privacy_scene_is_protected_by_uuid_and_by_its_sources(
+    obs_server: FakeObsServer, fake_client: FakeClient, request_type: str, data: dict
+) -> None:
+    _with_privacy_scene(obs_server)
+    api, plugin = await _plugin(obs_server, fake_client)
+    try:
+        with pytest.raises(PermissionError):
+            await api.tools.call(
+                "obs.request", {"request_type": request_type, "request_data": data}
+            )
+        assert request_type not in _types(obs_server)
+    finally:
+        await plugin.stop()
+
+
+async def test_privacy_check_fails_closed_when_obs_cannot_answer(
+    obs_server: FakeObsServer, fake_client: FakeClient
+) -> None:
+    obs_server.set_response("GetSceneList", RuntimeError("busy"))
+    api, plugin = await _plugin(obs_server, fake_client)
+    try:
+        with pytest.raises(PermissionError):
+            await api.tools.call(
+                "obs.request", {"request_type": "CreateScene", "request_data": {"sceneName": "A"}}
+            )
+        assert "CreateScene" not in _types(obs_server)
+    finally:
+        await plugin.stop()
+
+
+async def test_after_panic_nothing_changes_but_reads_still_work(
+    obs_server: FakeObsServer, fake_client: FakeClient
+) -> None:
+    api, plugin = await _plugin(obs_server, fake_client)
+    try:
+        await fake_client.fire("security.panic", {"by": "user"})
+        with pytest.raises(PermissionError):
+            await api.tools.call(
+                "obs.request",
+                {"request_type": "SetCurrentProgramScene", "request_data": {"sceneName": "Live"}},
+            )
+        assert ("SetCurrentProgramScene", {"sceneName": "Live"}) not in obs_server.requests
+        read = await api.tools.call("obs.request", {"request_type": "GetSceneList"})
+        assert read["ok"] is True
+    finally:
+        await plugin.stop()
+
+
+async def test_answers_are_redacted_before_the_model_sees_them(
+    obs_server: FakeObsServer, fake_client: FakeClient
+) -> None:
+    obs_server.set_response(
+        "GetInputSettings",
+        {
+            "inputSettings": {
+                "url": "http://127.0.0.1:47801/pet/?overlay=1#overlay=SECRET",
+                "password": "hunter2",
+            }
+        },
+    )
+    api, plugin = await _plugin(obs_server, fake_client)
+    try:
+        result = await api.tools.call(
+            "obs.request",
+            {"request_type": "GetInputSettings", "request_data": {"inputName": "Nox Overlay"}},
+        )
+        assert "SECRET" not in str(result) and "hunter2" not in str(result)
+        assert result["response"]["inputSettings"]["url"].startswith("http://127.0.0.1:47801/pet/")
+    finally:
+        await plugin.stop()

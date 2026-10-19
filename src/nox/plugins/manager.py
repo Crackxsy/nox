@@ -933,6 +933,7 @@ class PluginManager:
             raise IpcError(ERR_NOT_FOUND, f"unknown tool {p.name!r}")
         tool, _, action = p.name.partition(".")
         risk = Risk(spec.risk)
+        target = str(p.input.get("target", ""))
         scope = getattr(spec, "scope", None)
         if scope is not None:
             try:
@@ -940,6 +941,7 @@ class PluginManager:
             except ValueError as exc:
                 raise IpcError(ERR_PERMISSION, f"{p.name}: {exc}") from exc
             action, risk = call_scope.action, call_scope.risk
+            target = call_scope.target or target
         decision = self._engine.check(
             PermissionRequest(
                 agent="plugin",
@@ -947,7 +949,7 @@ class PluginManager:
                 action=action,
                 mode=self._mode(),
                 risk=risk,
-                target=str(p.input.get("target", "")),
+                target=target,
                 origin="plugin",
             )
         )
