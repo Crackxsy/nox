@@ -203,3 +203,19 @@ the read path:
 
 All ten requests are registered for the `shell` and `dashboard` roles only — never `plugin`,
 `worker`, `pet`, `supervisor` or the `remote` role a paired phone gets.
+
+## Known limits of network access
+
+Paired devices in the home network (`nox.lan`, see [`NETWORK_ACCESS.md`](NETWORK_ACCESS.md)) are
+protected as described there. Two limits are known and accepted for now:
+
+- **The global pairing rate limit can be used up.** Wrong pairing codes are limited per source
+  address and in total. Someone in the home network who floods the pairing endpoint uses up the
+  total budget, and pairing then waits about a minute for everyone - including a legitimate new
+  device. Already paired devices are not affected; nothing is unlocked by it.
+- **First contact is trusted.** A device sees Nox's certificate for the first time while pairing.
+  Someone who controls the network at that moment could put themselves in between, and the browser
+  warning looks the same either way; comparing the SHA-256 fingerprint shown next to the QR code
+  is the only check. Pair only on your own Wi-Fi, never on a network you do not control, and
+  install Nox's certificate authority (its fingerprint is shown in the Devices tab) to make later
+  connections verifiable.

@@ -141,12 +141,26 @@ Dashboard, sobald sie gekoppelt sind – und erst dann.
 nox pair            # zeigt einen QR-Code und einen Link; mit der Kamera des neuen Geräts scannen
 ```
 
-Der Browser warnt beim ersten Mal, weil Nox ein eigenes Zertifikat hat – den Fingerabdruck
-vergleichen, den `nox pair` zeigt, dann fortfahren. Wer das Zertifikat auf dem Gerät installiert,
-sieht keine Warnung mehr und kann Nox auf den Startbildschirm legen; der Reiter **Geräte** im
-Dashboard zeigt, wie, und dort koppelst du weitere Geräte oder entfernst eins. Ein gekoppeltes Gerät
-darf alles im Alltag, nur nicht ändern, wie Nox eingerichtet ist. Mehr:
-[`NETWORK_ACCESS.md`](NETWORK_ACCESS.md).
+Der Browser warnt beim ersten Mal, weil Nox ein eigenes Zertifikat hat. Das ist erwartet; wer
+sichergehen will, lässt sich im Browser das Zertifikat anzeigen und vergleicht die ersten Zeichen
+des SHA-256-Fingerabdrucks mit dem, den `nox pair` zeigt, dann fortfahren. Wer die
+Zertifizierungsstelle von Nox auf dem Gerät installiert, sieht keine Warnung mehr und kann Nox auf
+den Startbildschirm legen; der Reiter **Geräte** im Dashboard zeigt, wie. Ein gekoppeltes Gerät darf
+alles im Alltag, nur nicht ändern, wie Nox eingerichtet ist; andere Geräte koppeln oder entfernen
+und bei hohem Risiko etwas erlauben geht dort nur mit der Sicherheits-PIN – richte also eine ein
+(`nox onboard` fragt danach), wenn Geräte das können sollen.
+
+Jedes gekoppelte Gerät sieht alles, was das Dashboard zeigt – den Chat, das Protokoll, die Clips.
+In einem Haushalt mit Kindern koppelst du vorerst nur die Geräte der Erwachsenen.
+
+```bash
+nox devices                 # die gekoppelten Geräte
+nox unpair Tablet          # eins entfernen (per Name oder ID) – etwa ein verlorenes Handy
+```
+
+Gib dem Pi im Router eine feste Adresse (eine DHCP-Reservierung): Mit einer neuen Adresse finden ihn
+gekoppelte Geräte nicht mehr. Mehr, auch wenn es nicht klappt:
+[`NETWORK_ACCESS.de.md`](NETWORK_ACCESS.de.md).
 
 Firewall: Ist `ufw` aktiv, `sudo ufw allow 47843/tcp`.
 

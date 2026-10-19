@@ -136,11 +136,24 @@ dashboard once they are paired, and only then.
 nox pair            # prints a QR code and a link; scan it with the new device's camera
 ```
 
-The browser warns once, because Nox has a certificate of its own - compare the fingerprint `nox
-pair` prints, then continue. Installing that certificate on a device removes the warning for good
-and lets you add Nox to the home screen; the dashboard's **Devices** tab shows how, and is also where
-you pair further devices and remove one. A paired device may do everything day to day but change
-how Nox is set up. Details: [`NETWORK_ACCESS.md`](NETWORK_ACCESS.md).
+The browser warns once, because Nox has a certificate of its own. That is expected; to be sure,
+show the certificate in the browser and compare the first characters of its SHA-256 fingerprint
+with the one `nox pair` prints, then continue. Installing Nox's certificate authority on a device
+removes the warning for good and lets you add Nox to the home screen; the dashboard's **Devices**
+tab shows how. A paired device may do everything day to day but change how Nox is set up; pairing
+or removing other devices, and allowing anything at high risk, needs the security PIN there - so
+set one (`nox onboard` asks for it) if devices should do that.
+
+Every paired device sees everything the dashboard shows - the chat, the audit trail, clips. In a
+household with children, pair the adults' devices only for now.
+
+```bash
+nox devices                 # the paired devices
+nox unpair Tablet          # remove one (by name or id) - a lost phone, say
+```
+
+Give the Pi a fixed address in the router (a DHCP reservation): with a new address, paired devices
+no longer find it. Details and troubleshooting: [`NETWORK_ACCESS.md`](NETWORK_ACCESS.md).
 
 Firewall: with `ufw` active, `sudo ufw allow 47843/tcp`.
 
