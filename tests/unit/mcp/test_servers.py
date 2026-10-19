@@ -377,3 +377,11 @@ def test_clean_schema_keeps_only_known_keywords() -> None:
 @pytest.mark.parametrize("bad", [None, [], "x"])
 def test_clean_schema_of_garbage_is_an_empty_object(bad: Any) -> None:
     assert clean_schema(bad) == {}
+
+
+def test_clean_schema_drops_unknown_numeric_keywords() -> None:
+    assert clean_schema({"type": "object", "x-weird": 7, "minimum": 1}) == {
+        "type": "object",
+        "minimum": 1,
+        "properties": {},
+    }

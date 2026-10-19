@@ -210,3 +210,20 @@ def test_assess_offers_learning_for_what_is_missing() -> None:
 
 def test_templates_cover_every_rule() -> None:
     assert len(TEMPLATES) >= 12
+
+
+async def test_raw_sockets_are_refused_in_the_test_process(tmp_path: Path) -> None:
+    work = build(tmp_path, "good")
+    (work / "tests" / "test_raw.py").write_text(
+        "import socket\n\ndef test_raw():\n"
+        "    s = socket.socket()\n    s.settimeout(2)\n    s.connect(('127.0.0.1', 9))\n",
+        encoding="utf-8",
+    )
+    outcome = await ProcessTestRunner().run(work, timeout_s=60)
+    assert outcome.failed == 1 and "network access is not available" in outcome.output
+
+
+def test_a_forbidden_gap_is_refused_even_with_an_ordinary_name() -> None:
+    gaps = [Gap(name="drone.fly", what="fly a drone", reason=GapReason.FORBIDDEN, detail="no")]
+    verdict = assess(capability="drone.fly", intent="flieg die Drohne", gaps=gaps, usable_tools=[])
+    assert verdict.verdict is Verdict.REFUSE

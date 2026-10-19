@@ -211,3 +211,13 @@ def test_fingerprint_changes_with_everything_that_decides_what_runs() -> None:
     ]
     assert len({fingerprint(base), *(fingerprint(v) for v in variants)}) == 4
     assert fingerprint(base) == fingerprint(base.model_copy(update={"name": "renamed"}))
+
+
+def test_mutation_survivors_are_pinned_down() -> None:
+    # Key spelled with capitals still names a forbidden domain.
+    assert forbidden_home_reference({"Domain": "lock"}) == "Domain=lock"
+    # Zero-width characters vanish rather than splitting a word.
+    assert untrusted_text("ig​nore", 50) == "ignore"
+    # An npx server without a pinned version says exactly that.
+    with pytest.raises(PolicyError, match="needs its pinned version"):
+        check_command(["npx", "-y", "a@1.0.0"], "")
