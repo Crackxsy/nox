@@ -99,6 +99,8 @@ CAPTURE_TOOL_PATTERNS: tuple[str, ...] = (
     "camera.*",
     "microphone",
     "microphone.*",
+    "mic",
+    "mic.*",
     "clipboard",
     "clipboard.*",
     "vision",
@@ -140,6 +142,17 @@ class PrivacySnapshot(BaseModel):
     zone_active: bool = False
     safe_mode: bool = False
     panic: bool = False
+    #: Capture kinds ("microphone", "camera", "screen") the user switched off
+    #: (`privacy.capture.*`). A tool of that kind is refused below the model.
+    capture_disabled: frozenset[str] = frozenset()
+
+
+#: Tool-id patterns per capture kind, for the `privacy.capture.*` switches.
+CAPTURE_KIND_PATTERNS: dict[str, tuple[str, ...]] = {
+    "microphone": ("microphone", "microphone.*", "mic", "mic.*"),
+    "camera": ("camera", "camera.*"),
+    "screen": ("screen", "screen.*", "screenshot", "screenshot.*", "capture", "capture.*"),
+}
 
 
 class PrivacyStateProvider(Protocol):
@@ -355,9 +368,9 @@ class EvaluationContext:
     #: Pre-computed, because four guards ask the same two questions.
     cloud: bool
     memory_write: bool
-    #: True once untrusted content (web/browser/MCP/file content) entered this turn. While it is,
-    #: a remembered grant above LOW no longer silently allows - the request falls through to a
-    #: fresh confirmation (Security Model: "tainted turn").
+    #: True once a tool result Nox did not author entered this request's conversation
+    #: (`nox.security.taint`). While it is, a remembered grant above LOW no longer silently allows,
+    #: and an allowed call that sends data off the machine is turned into a confirmation.
     tainted: bool = False
 
 
@@ -414,6 +427,24 @@ def _privacy_zone(ctx: EvaluationContext) -> PermissionResult | None:
         decision=Decision.DENY,
         rule_id="privacy.zone_active",
         reason="a privacy zone is in the foreground",
+    )
+
+
+def capture_kind(request: PermissionRequest) -> str | None:
+    for kind, patterns in CAPTURE_KIND_PATTERNS.items():
+        if value_matches_any(request.tool, patterns):
+            return kind
+    return None
+
+
+def _privacy_capture_flag(ctx: EvaluationContext) -> PermissionResult | None:
+    kind = capture_kind(ctx.request)
+    if kind is None or kind not in ctx.snapshot.capture_disabled:
+        return None
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id=f"privacy.capture.{kind}",
+        reason=f"{kind} capture is switched off in the privacy settings",
     )
 
 
@@ -542,6 +573,7 @@ EVALUATION_GUARDS: tuple[Guard, ...] = (
     _privacy_cloud,
     _privacy_memory_write,
     _privacy_zone,
+    _privacy_capture_flag,
     _critical_risk,
     _temporary_grant,
     _profile_cloud,
@@ -554,6 +586,30 @@ EVALUATION_GUARDS: tuple[Guard, ...] = (
     # explicit profile DENY/CONFIRM (which returned above), nor privacy/safe-mode/kill-switch.
     _shell_curated_readonly,
 )
+
+
+def tainted_escalation(ctx: EvaluationContext, result: PermissionResult) -> PermissionResult:
+    """Turn an ALLOW into a CONFIRM when the conversation is tainted and the call could act on
+    injected instructions without the user seeing it.
+
+    Applied after the guards, so it can only tighten: a DENY stays a DENY, a CONFIRM stays one.
+    Two cases: a call that sends data off the machine (a cloud/network tool such as `web.fetch`,
+    or a declared egress) - injected text could have chosen the URL or query to exfiltrate what is
+    in the context - and the curated read-only shell exception, which exists to save a click, not
+    to let a web page run commands.
+    """
+    if not ctx.tainted or result.decision is not Decision.ALLOW:
+        return result
+    request = ctx.request
+    if ctx.cloud or request.network:
+        reason = "the conversation holds untrusted content and this call sends data out"
+        return PermissionResult(decision=Decision.CONFIRM, rule_id="taint.egress", reason=reason)
+    if request.tool == "shell" and request.target.startswith("readonly:"):
+        reason = "the conversation holds untrusted content; even read-only commands ask"
+        return PermissionResult(
+            decision=Decision.CONFIRM, rule_id="taint.shell_readonly", reason=reason
+        )
+    return result
 
 
 # ---- engine --------------------------------------------------------------------------------------
@@ -596,24 +652,32 @@ class DefaultPermissionEngine:
         self._session_id = session_id or uuid.uuid4().hex[:12]
         self._profile: Profile = profiles.get(initial_profile)
         self._pending: dict[str, _Pending] = {}
-        self._tainted = False
+        #: Conversations (`PermissionRequest.conversation`) that hold untrusted content.
+        self._tainted: set[str] = set()
 
     # ---- PermissionEngine protocol ---------------------------------------------------------------
 
-    def set_tainted(self, tainted: bool) -> None:
-        """Mark (or clear) the current turn as holding untrusted content.
+    def mark_tainted(self, conversation: str) -> None:
+        """Record that `conversation` now holds content Nox did not author.
 
-        The tool loop calls this the moment a tool returns content Nox did not author - a web page,
-        a browser read, an MCP result, file content - and clears it when a fresh turn begins. While
-        set, a remembered grant above LOW falls back to confirmation (see `_temporary_grant`).
+        The tool loop calls this after every tool result that is not trusted-internal
+        (`nox.security.taint`). It stays set until `clear_taint` - when that conversation's
+        context is reset - never merely because a new turn began.
         """
-        if tainted != self._tainted:
-            log.info("security.taint_changed", tainted=tainted)
-        self._tainted = tainted
+        if not conversation:
+            return
+        if conversation not in self._tainted:
+            log.info("security.taint_changed", tainted=True)
+        self._tainted.add(conversation)
 
-    @property
-    def tainted(self) -> bool:
-        return self._tainted
+    def clear_taint(self, conversation: str) -> None:
+        """The conversation's context was reset (a new session): nothing untrusted is in it."""
+        if conversation in self._tainted:
+            log.info("security.taint_changed", tainted=False)
+        self._tainted.discard(conversation)
+
+    def is_tainted(self, conversation: str) -> bool:
+        return bool(conversation) and conversation in self._tainted
 
     def check(self, request: PermissionRequest) -> PermissionResult:
         snapshot = self._privacy.snapshot()
@@ -684,8 +748,12 @@ class DefaultPermissionEngine:
     # ---- pure evaluation -------------------------------------------------------------------------
 
     def is_cloud_tool(self, request: PermissionRequest) -> bool:
-        return value_matches_any(request.tool, self._cloud_tool_patterns) or value_matches_any(
-            request.action, CLOUD_ACTION_PATTERNS
+        # A call that declares it sends data out (`ToolSpec.network`: shell egress, a package
+        # download) is a cloud call for every privacy rule, whatever its name.
+        return (
+            request.network
+            or value_matches_any(request.tool, self._cloud_tool_patterns)
+            or value_matches_any(request.action, CLOUD_ACTION_PATTERNS)
         )
 
     def evaluate(
@@ -705,16 +773,19 @@ class DefaultPermissionEngine:
             now=now,
             cloud=self.is_cloud_tool(request),
             memory_write=is_memory_write(request),
-            tainted=self._tainted,
+            tainted=self.is_tainted(request.conversation),
         )
         for guard in EVALUATION_GUARDS:
             result = guard(context)
             if result is not None:
-                return result
-        return PermissionResult(
-            decision=DEFAULT_BY_RISK[request.risk],
-            rule_id=f"default.{request.risk.value}",
-            reason="default by risk",
+                return tainted_escalation(context, result)
+        return tainted_escalation(
+            context,
+            PermissionResult(
+                decision=DEFAULT_BY_RISK[request.risk],
+                rule_id=f"default.{request.risk.value}",
+                reason="default by risk",
+            ),
         )
 
     # ---- confirmation flow -----------------------------------------------------------------------

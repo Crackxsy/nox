@@ -90,6 +90,7 @@ def install(core: CoreLike) -> ExtensionRuntime:
             enabled=config.hands.shell_enabled,
             shell_program=_shell_program(),
             timeout_s=config.hands.shell_timeout_s,
+            trusted_dirs=tuple(config.hands.trusted_program_dirs),
         ),
     )
 

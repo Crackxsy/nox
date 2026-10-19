@@ -240,6 +240,9 @@ class PrivacyService:
             zone_active=self._active_zone is not None,
             safe_mode=self._safe_mode(),
             panic=self._panic,
+            capture_disabled=frozenset(
+                kind for kind in CAPTURE_KINDS if not self._capture.get(kind, False)
+            ),
         )
 
     def allows_cloud(self) -> bool:

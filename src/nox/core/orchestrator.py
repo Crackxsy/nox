@@ -367,7 +367,11 @@ class Orchestrator:
 
         context = await self._retrieve_context(text, turn.timings)
         build_started = time.perf_counter()
-        tools = self.tool_loop.begin(request_id) if self.tool_loop is not None else None
+        tools = (
+            self.tool_loop.begin(request_id, conversation=self.session_id)
+            if self.tool_loop is not None
+            else None
+        )
         messages = [Message(role="system", content=self.system_prompt())]
         if self.turns is not None:
             for past in await self.turns.recent_turns(self.session_id, self.config.history_turns):

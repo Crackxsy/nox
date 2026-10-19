@@ -47,6 +47,12 @@ class PermissionRequest(BaseModel):
     #: False for tools whose confirmation may never become a remembered grant (package.*,
     #: mic.record_long, skill.*). The executor copies it from the tool's `ToolSpec.rememberable`.
     rememberable: bool = True
+    #: True when this call sends data off the machine (`ToolSpec.network`): privacy mode
+    #: OFFLINE/PRIVATE refuses it like a cloud tool, and a tainted conversation confirms it.
+    network: bool = False
+    #: The conversation the call belongs to (`nox.security.taint`); empty outside a conversation
+    #: (a dashboard click). Taint is tracked per conversation.
+    conversation: str = ""
 
 
 class PermissionResult(BaseModel):

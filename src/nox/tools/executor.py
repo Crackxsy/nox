@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from nox.core.events import E, EventBus
 from nox.core.logging import get_logger
 from nox.security.model import AuditLog, Decision, KillSwitch, PermissionRequest, PermissionResult
+from nox.security.taint import current_conversation
 from nox.tools.registry import ToolRegistry, ToolSpec
 
 log = get_logger(__name__)
@@ -174,6 +175,8 @@ class ToolExecutor:
             task_id=task_id,
             origin=origin,
             rememberable=spec.rememberable,
+            network=spec.network(payload) if callable(spec.network) else spec.network,
+            conversation=current_conversation(),
         )
 
         result = self._permission_engine.check(request)

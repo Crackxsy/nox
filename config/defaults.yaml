@@ -410,6 +410,8 @@ hands:                           # the machine-and-world tools: shell, packages,
   accept_weak_sandbox: false     # run commands even when the sandbox cannot give every guarantee
                                  # (low-integrity fallback: reads your files, reaches the network;
                                  # or loopback isolation not enforced). Off = such runs are refused
+  trusted_program_dirs: []       # extra folders shell.run may find a bare program name in (e.g.
+                                 # Git's cmd folder); system folders only by default
 
 presets:                         # one phrase, several systems at once: lights, Nox's own mode,
                                  # and programs you registered here. Both lists ship empty, so a

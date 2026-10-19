@@ -63,6 +63,11 @@ class ToolSpec:
     #: `shell.run` stays True but remembers per command pattern (a `cmd:` grant), not the tool.
     rememberable: bool = True
     targets: Targets | None = None
+    #: Whether a call sends data off the machine (a declared egress, a download). True, or a
+    #: function of the validated input. The permission engine treats such a call like a cloud tool:
+    #: refused in privacy mode OFFLINE/PRIVATE, and confirmed again once the conversation holds
+    #: untrusted content (exfiltration).
+    network: bool | Callable[[dict[str, Any]], bool] = False
     #: How long one call may take, when the executor's default is too short by design - a coding
     #: session takes minutes. None means the executor's default.
     timeout_s: float | None = None

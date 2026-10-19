@@ -109,8 +109,10 @@ def register_package_tools(registry: ToolRegistry, run: RunPackage) -> None:
                 risk=Risk.HIGH,
                 handler=_make(action),
                 side_effects=True,
-                local=True,
+                local=False,
                 rememberable=False,
                 targets=lambda p: str(p.get("package_id", "")),
+                # It downloads: refused in privacy mode OFFLINE/PRIVATE like any network call.
+                network=True,
             )
         )

@@ -160,12 +160,16 @@ def test_taint_drops_high_grant_to_confirmation(
             expires_at=clock.now + timedelta(hours=1),
         )
     )
-    assert engine.check(_shell_req("cmd:git push")).decision is Decision.ALLOW
-    engine.set_tainted(True)
-    # With untrusted content in the turn the HIGH grant must no longer act on its own.
-    assert engine.check(_shell_req("cmd:git push")).decision is Decision.CONFIRM
-    engine.set_tainted(False)
-    assert engine.check(_shell_req("cmd:git push")).decision is Decision.ALLOW
+    req = _shell_req("cmd:git push", conversation="c1")
+    assert engine.check(req).decision is Decision.ALLOW
+    engine.mark_tainted("c1")
+    # With untrusted content in the conversation the HIGH grant must no longer act on its own.
+    assert engine.check(req).decision is Decision.CONFIRM
+    # Another conversation is not affected ...
+    assert engine.check(_shell_req("cmd:git push", conversation="c2")).decision is Decision.ALLOW
+    # ... and only a reset of the conversation's context clears it.
+    engine.clear_taint("c1")
+    assert engine.check(req).decision is Decision.ALLOW
 
 
 def test_taint_keeps_low_grants(clock: MutableClock) -> None:
@@ -207,10 +211,11 @@ def test_taint_keeps_low_grants(clock: MutableClock) -> None:
             "action": "read",
             "mode": "companion",
             "risk": Risk.LOW,
+            "conversation": "c1",
         }
     )
     assert engine.check(low).decision is Decision.ALLOW  # grant beats the profile deny
-    engine.set_tainted(True)
+    engine.mark_tainted("c1")
     # Taint drops only grants above LOW; this LOW grant must survive, so the deny must not win.
     assert engine.check(low).decision is Decision.ALLOW
 

@@ -213,11 +213,11 @@ def install(core: CoreLike) -> ExtensionRuntime:
     register_capability_tools(core.tool_registry, report)
     register_capability_ipc(core.registry, report)
 
-    def set_tainted(tainted: bool) -> None:
+    def set_tainted(conversation: str) -> None:
         engine = getattr(core.security, "engine", None)
-        setter = getattr(engine, "set_tainted", None)
-        if setter is not None:
-            setter(tainted)
+        marker = getattr(engine, "mark_tainted", None)
+        if marker is not None:
+            marker(conversation)
 
     orchestrator = getattr(core, "orchestrator", None)
     if orchestrator is not None:

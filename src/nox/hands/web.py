@@ -235,6 +235,7 @@ def register_web_tools(
             side_effects=False,
             local=False,
             targets=lambda p: str(p.get("url", "")),
+            network=True,
         )
     )
     registry.register(
@@ -247,5 +248,6 @@ def register_web_tools(
             side_effects=False,
             local=False,
             targets=lambda p: str(p.get("query", "")),
+            network=True,
         )
     )

@@ -38,3 +38,7 @@ class HandsConfig(StrictSection):
     #: machine without loopback isolation reaches local services). Only the user can set this; off,
     #: every such run is refused and says why.
     accept_weak_sandbox: bool = False
+    #: Extra folders where `shell.run` may find a program given by bare name (for example the Git
+    #: install's `cmd` folder). Only the system folders are trusted by default; argv0 with a path
+    #: is never resolved anywhere. User-set only.
+    trusted_program_dirs: list[str] = Field(default_factory=list)
