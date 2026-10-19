@@ -257,3 +257,16 @@ def test_an_old_bwrap_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     assert any("nested user namespaces" in n for n in sandbox.guarantees().notes)
     argv = sandbox.command(["x"], work="/w", egress=EgressDecl(), limits=Limits())
     assert "--disable-userns" not in argv
+
+
+def test_nox_bwrap_copy_must_match_the_system_bwrap(tmp_path: Path) -> None:
+    system, copy = tmp_path / "bwrap", tmp_path / "nox-bwrap"
+    system.write_bytes(b"bwrap 0.9.0")
+    copy.write_bytes(b"bwrap 0.9.0")
+    copy.chmod(0o750)
+    if not os.access(copy, os.X_OK):
+        pytest.skip("no executable bit on this filesystem")
+    assert linux_mod.bwrap_path(str(copy), str(system)) == str(copy)
+    system.write_bytes(b"bwrap 0.9.1 (security update)")
+    with pytest.raises(SandboxUnavailable, match="installer again"):
+        linux_mod.bwrap_path(str(copy), str(system))

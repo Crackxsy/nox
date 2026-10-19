@@ -209,6 +209,20 @@ jobs:
           echo "$log" | grep -E "sandbox\.linux_ready" | grep -E "ceiling=.?cgroup" | grep -qE "egress=.?True"
           ! echo "$log" | grep -qE "hands\.sandbox_unavailable|sandbox\.egress_unavailable"
 
+      # An earlier installer draft attached an unconfined profile to /usr/bin/bwrap. Installing
+      # over it must unload it, so the system's bwrap is restricted again (checked next step).
+      - name: Upgrade over the old global bwrap profile
+        run: |
+          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = "1" ]; then
+            printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+              'profile nox-bwrap /usr/bin/bwrap flags=(unconfined) {' '  userns,' '}' \
+              | sudo tee /etc/apparmor.d/nox-bwrap >/dev/null
+            sudo apparmor_parser -r /etc/apparmor.d/nox-bwrap
+            /usr/bin/bwrap --unshare-user --ro-bind / / true  # the old profile really applied
+            sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh
+            sudo find /var/backups/nox -name 'nox-*.tar.gz' -delete 2>/dev/null || true
+          fi
+
       # Ubuntu restricts user namespaces through AppArmor. The installer must not lift that for
       # the system: only its own bwrap copy (executable by the nox user alone) gets a profile.
       - name: Only Nox's bwrap copy may create user namespaces
@@ -221,6 +235,26 @@ jobs:
             fi
           else
             test ! -e /usr/lib/nox/bwrap
+          fi
+
+      # A bubblewrap update the copy missed must stop the sandbox (fail closed); the apt hook
+      # refreshes the copy, and the sandbox works again.
+      - name: An outdated bwrap copy fails closed; the apt hook refreshes it
+        run: |
+          if [ -e /usr/lib/nox/bwrap ]; then
+            sudo sh -c 'printf x >> /usr/lib/nox/bwrap'
+            since="$(date '+%Y-%m-%d %H:%M:%S')"; sleep 1
+            sudo systemctl restart nox
+            for _ in $(seq 60); do curl -fsS http://127.0.0.1:47801/health >/dev/null 2>&1 && break; sleep 1; done
+            sleep 3
+            sudo journalctl -u nox --no-pager --since "$since" | grep -q "differs from /usr/bin/bwrap"
+            sudo apt-get install --reinstall -y -qq bubblewrap >/dev/null
+            cmp /usr/bin/bwrap /usr/lib/nox/bwrap
+            since="$(date '+%Y-%m-%d %H:%M:%S')"; sleep 1
+            sudo systemctl restart nox
+            for _ in $(seq 60); do curl -fsS http://127.0.0.1:47801/health >/dev/null 2>&1 && break; sleep 1; done
+            sleep 3
+            sudo journalctl -u nox --no-pager --since "$since" | grep -E "sandbox\.linux_ready" | grep -q "egress=.\?True"
           fi
 
       - name: Same version again changes nothing

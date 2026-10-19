@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import os
 import posixpath
 import shutil
@@ -103,15 +104,40 @@ _NOX_BWRAP = "/usr/lib/nox/bwrap"
 _DISABLE_USERNS_SINCE = (0, 8)
 
 
-def bwrap_path() -> str | None:
-    """The bwrap binary to use: Nox's own copy when installed, else the one on PATH."""
-    if os.access(_NOX_BWRAP, os.X_OK):
-        return _NOX_BWRAP
+_SYSTEM_BWRAP = "/usr/bin/bwrap"
+
+
+def _digest(path: str) -> str:
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+
+
+def bwrap_path(nox_copy: str = _NOX_BWRAP, system: str = _SYSTEM_BWRAP) -> str | None:
+    """The bwrap binary to use: Nox's own copy when this user may run it, else the one on PATH.
+
+    The copy must be byte-identical to the system's bwrap - otherwise it missed a security
+    update of the `bubblewrap` package (the installer's apt hook normally refreshes it), and
+    `SandboxUnavailable` says so instead of running an outdated sandbox (fail closed).
+    """
+    if os.path.exists(nox_copy) and os.access(nox_copy, os.X_OK):
+        try:
+            same = _digest(nox_copy) == _digest(system)
+        except OSError:
+            same = False
+        if not same:
+            raise SandboxUnavailable(
+                f"{nox_copy} differs from {system} (bubblewrap was updated): run the Nox "
+                "installer again to refresh it; the sandbox fails closed until then"
+            )
+        return nox_copy
     return shutil.which("bwrap")
 
 
 def bwrap_available() -> bool:
-    return bwrap_path() is not None
+    try:
+        return bwrap_path() is not None
+    except SandboxUnavailable:
+        return False
 
 
 def bwrap_version(bwrap: str) -> tuple[int, ...] | None:

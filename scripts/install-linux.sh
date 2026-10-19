@@ -179,8 +179,8 @@ define step_apparmor \
   'AppArmor: eigene bwrap-Kopie für die Sandbox (Ubuntu)' \
   'AppArmor: a separate bwrap copy for the sandbox (Ubuntu)'
 define apparmor_failed \
-  'Hinweis: AppArmor-Profil für die Sandbox ließ sich nicht laden.' \
-  'Note: the AppArmor profile for the sandbox could not be loaded.'
+  'Hinweis: AppArmor-Profil für die Sandbox ließ sich nicht laden - Nox führt keine Befehle aus, bis das geklärt ist.' \
+  'Note: the AppArmor profile for the sandbox could not be loaded - Nox runs no commands until that is sorted out.'
 define prefix_foreign \
   '%s existiert schon, ist aber keine Nox-Installation. Bitte prüfen und den Ordner entfernen oder umbenennen.' \
   '%s already exists but is not a Nox installation. Please check it, then remove or rename the folder.'
@@ -582,11 +582,26 @@ install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$NOX_HOME_DIR"
 # such restriction: nothing is installed there, and leftovers of an earlier install are removed.
 nox_bwrap=/usr/lib/nox/bwrap
 nox_profile=/etc/apparmor.d/nox-bwrap
+nox_apt_hook=/etc/apt/apt.conf.d/99nox-bwrap
 restrict=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+remove_nox_bwrap() {
+  # Unload first: a profile that stays loaded keeps applying after its file is gone.
+  if [ -e "$nox_profile" ] && command -v apparmor_parser >/dev/null 2>&1; then
+    apparmor_parser -R "$nox_profile" 2>/dev/null || true
+  fi
+  rm -f "$nox_profile" "$nox_bwrap" "$nox_apt_hook"
+}
 if [ -r "$restrict" ] && [ "$(cat "$restrict")" = "1" ] && [ -x /usr/bin/bwrap ] && command -v apparmor_parser >/dev/null 2>&1; then
   say "$(msg step_apparmor)"
+  remove_nox_bwrap  # also unloads a profile an earlier installer version attached elsewhere
   install -d -m 0755 /usr/lib/nox
   install -m 0750 -o root -g "$SERVICE_USER" /usr/bin/bwrap "$nox_bwrap"
+  # bubblewrap security updates reach the copy too: refreshed after every dpkg run. (Nox also
+  # refuses to use a copy that differs from /usr/bin/bwrap.)
+  cat > "$nox_apt_hook" <<APTHOOK
+// Installed by Nox: keep its bwrap copy identical to the bubblewrap package's.
+DPkg::Post-Invoke { "if [ -e $nox_bwrap ] && [ -x /usr/bin/bwrap ] && ! cmp -s /usr/bin/bwrap $nox_bwrap; then install -m 0750 -o root -g $SERVICE_USER /usr/bin/bwrap $nox_bwrap; fi"; };
+APTHOOK
   cat > "$nox_profile" <<'APPARMOR'
 # Installed by Nox (scripts/install-linux.sh). Only Nox's own copy of bwrap, which only the nox
 # service user can execute, may create user namespaces; what runs inside gets no capabilities.
@@ -628,12 +643,12 @@ profile nox-bwrap-sandboxed flags=(attach_disconnected,mediate_deleted) {
   include if exists <local/nox-bwrap-sandboxed>
 }
 APPARMOR
-  apparmor_parser -r "$nox_profile" || note "$(msg apparmor_failed)"
-elif [ -e "$nox_profile" ] || [ -e "$nox_bwrap" ]; then
-  if command -v apparmor_parser >/dev/null 2>&1 && [ -e "$nox_profile" ]; then
-    apparmor_parser -R "$nox_profile" 2>/dev/null || true
+  if ! apparmor_parser -r "$nox_profile"; then
+    remove_nox_bwrap
+    note "$(msg apparmor_failed)"
   fi
-  rm -f "$nox_profile" "$nox_bwrap"
+elif [ -e "$nox_profile" ] || [ -e "$nox_bwrap" ] || [ -e "$nox_apt_hook" ]; then
+  remove_nox_bwrap
 fi
 
 # ---- build the release (the running version is untouched) ----------------------------------------

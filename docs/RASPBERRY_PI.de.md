@@ -200,8 +200,9 @@ User-Namespaces (`sysctl kernel.unprivileged_userns_clone` muss, wo es existiert
 ab Ubuntu 23.10 – AppArmor schränkt sie ein. Dort lässt der Installer das `bwrap` des Systems so
 eingeschränkt, wie es ist, und legt eine Kopie `/usr/lib/nox/bwrap` an, die nur der Benutzer `nox`
 ausführen darf, mit einem AppArmor-Profil (`/etc/apparmor.d/nox-bwrap`) nur für diesen Pfad; was in
-der Sandbox läuft, bekommt keine Capabilities und keine weiteren User-Namespaces. Raspberry Pi OS
-und Debian brauchen beides nicht.
+der Sandbox läuft, bekommt keine Capabilities und keine weiteren User-Namespaces. Ein apt-Hook hält
+die Kopie gleich mit dem Paket `bubblewrap`; weicht sie je ab, führt Nox keine Befehle aus, bis der
+Installer erneut gelaufen ist. Raspberry Pi OS und Debian brauchen nichts davon.
 
 ## Was läuft wo
 
@@ -225,7 +226,8 @@ sudo rm -r /opt/nox            # das Programm
 sudo rm -r /var/lib/nox        # deine Daten: Gedächtnis, Einstellungen, Zugangsdaten – nur wenn du es wirklich willst
 sudo rm -r /var/backups/nox    # die Update-Schnappschüsse
 sudo userdel nox
-sudo rm -rf /etc/apparmor.d/nox-bwrap /usr/lib/nox   # nur unter Ubuntu, falls der Installer sie angelegt hat
+sudo apparmor_parser -R /etc/apparmor.d/nox-bwrap 2>/dev/null   # nur unter Ubuntu, falls der Installer es angelegt hat
+sudo rm -rf /etc/apparmor.d/nox-bwrap /etc/apt/apt.conf.d/99nox-bwrap /usr/lib/nox
 ```
 
 Nur die beiden als Daten markierten Zeilen löschen etwas von dir. Sie stehen absichtlich einzeln da.
