@@ -40,7 +40,7 @@ from nox.settings.layers import resolve_defaults_path, resolve_user_config_path
 from nox.settings.personality import PERSONALITY_FILENAME, PersonalityFile
 from nox.settings.schema import LIVE_APPLY_PATHS
 from nox.settings.secrets_ipc import SecretsService
-from nox.settings.twitch_auth import TwitchAuthService
+from nox.settings.twitch_auth import TwitchAuthService, TwitchAuthState
 from nox.voice.base import Channel
 
 log = get_logger(__name__)
@@ -334,8 +334,12 @@ async def _twitch_token_loop(auth: TwitchAuthService, health: TokenHealth) -> No
         log.warning("settings.twitch_state_unavailable", error=type(exc).__name__)
     while True:
         try:
-            await auth.ensure_fresh_token()
-            health.succeeded()
+            usable = await auth.ensure_fresh_token()
+            if usable or auth.state is TwitchAuthState.IDLE:
+                health.succeeded()
+            else:
+                # `ensure_fresh_token` never raises; a failure is in its state, not an exception.
+                health.failed(RuntimeError(str(auth.status().get("error") or auth.state.value)))
         except Exception as exc:  # noqa: BLE001 - the loop outlives any single failure
             health.failed(exc)
         await asyncio.sleep(TOKEN_REFRESH_INTERVAL_S)

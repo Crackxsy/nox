@@ -274,3 +274,48 @@ async def test_a_profile_without_the_host_blocks_the_flow(
     with pytest.raises(IpcError):
         await service.start()
     assert transport.calls == []
+
+
+# ---- a dead login is reported as such, a passing failure is retried --------------------------
+
+
+async def test_invalid_refresh_token_means_sign_in_again(
+    secrets: InMemorySecretStore, audit: FakeAudit, bus: FakeBus, clock: Clock
+) -> None:
+    secrets.set(SECRET_CLIENT_ID, "client-abc")
+    secrets.set(SECRET_ACCESS_TOKEN, f"oauth:{ACCESS}")
+    secrets.set(SECRET_REFRESH_TOKEN, REFRESH)
+    transport = FakeTransport(
+        {
+            "/oauth2/validate": [(401, {"message": "invalid access token"})],
+            "/oauth2/token": [(400, {"status": 400, "message": "Invalid refresh token"})],
+        }
+    )
+    service = make_service(transport, secrets, audit, bus, clock)
+    await service.refresh_state_from_secrets()
+    assert service.state is TwitchAuthState.EXPIRED and service.needs_login
+    assert "sign in again" in service.status()["error"]
+    assert bus.published[-1].payload["state"] == "expired"
+
+
+async def test_a_refresh_that_could_not_reach_twitch_is_retried(
+    secrets: InMemorySecretStore, audit: FakeAudit, bus: FakeBus, clock: Clock
+) -> None:
+    secrets.set(SECRET_CLIENT_ID, "client-abc")
+    secrets.set(SECRET_ACCESS_TOKEN, f"oauth:{ACCESS}")
+    secrets.set(SECRET_REFRESH_TOKEN, REFRESH)
+    transport = FakeTransport(
+        {
+            "/oauth2/token": [
+                (503, {"message": "unavailable"}),
+                (200, {"access_token": NEW_ACCESS, "refresh_token": REFRESH}),
+            ],
+            "/oauth2/validate": [VALIDATE_OK],
+        }
+    )
+    service = make_service(transport, secrets, audit, bus, clock)
+    assert await service.ensure_fresh_token(force=True) is False
+    assert service.state is TwitchAuthState.ERROR and not service.needs_login
+    # No expiry is known after the failure; the next round still tries again.
+    assert await service.ensure_fresh_token() is True
+    assert service.state is TwitchAuthState.AUTHORIZED
