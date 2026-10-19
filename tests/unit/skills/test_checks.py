@@ -93,6 +93,7 @@ def test_binaries_hidden_files_and_missing_tests_are_refused(tmp_path: Path) -> 
         "# SendInput",
         "import nox.core",
         "from nox.security import secrets",
+        "getattr(obj, 'value', None)",
     ],
 )
 def test_scan_code_refuses(source: str) -> None:
@@ -107,7 +108,6 @@ def test_scan_code_refuses(source: str) -> None:
         "from nox.plugins.api import PluginApi\nfrom nox.security.model import Risk",
         "from nox_skill_dice.parse import parse\nfrom . import x",
         "from urllib.parse import quote",
-        "getattr(obj, 'value', None)",
         "import asyncio\nawait asyncio.sleep(1)",
     ],
 )

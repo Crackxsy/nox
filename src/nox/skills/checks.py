@@ -10,19 +10,18 @@ on trust, and none of these checks is the model's: they run here, on the files, 
   says "remember") and never `critical`; it emits only its own events and listens to nothing but
   the mode; egress is explicit public `host:port` - never loopback, the local network or the Home
   Assistant host.
-* **Code** - an *allow-list* of imports, not a deny-list: a skill may use pure standard-library
-  modules, pydantic and the plugin API, and nothing that reaches processes, files, the network,
-  the registry, the keyring or the interpreter itself (`subprocess`, `ctypes`, `os.system`,
-  `socket`, `importlib`, `open`, `eval`, ...). The network exists only as `api.http()`, which the
-  worker scopes to the manifest's egress. Dunder attribute tricks are refused, as are the
-  input-synthesis and process-memory APIs CI forbids in Nox itself.
+* **Code** - `nox.skills.scan`: an allow-list of imports, of module attributes and of names, so
+  nothing reaches processes, files, the network, the registry, the keyring or the interpreter
+  itself - not by import, not through a module another module re-exports, not through a `_`
+  name, not by a string. The network exists only as `api.http()`, which the worker scopes to the
+  manifest's egress. The input-synthesis and process-memory APIs CI forbids in Nox are refused.
+  The scan is defence in depth: the skill's worker and its tests run only inside the sandbox.
 
 `tree_hash()` is what activation is bound to: the files the user was shown are the files that run.
 """
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import ipaddress
 import re
@@ -35,8 +34,11 @@ from nox.plugins.manifest import ManifestError, PluginManifest, load_manifest, s
 from nox.security.egress import is_loopback
 from nox.security.model import Risk
 from nox.security.reserved import name_refusal
+from nox.skills.scan import FORBIDDEN_TEXT, SRC_IMPORTS, TEST_IMPORTS, scan_code
 
 __all__ = [
+    "SRC_IMPORTS",
+    "TEST_IMPORTS",
     "CheckReport",
     "check_skill",
     "scan_code",
@@ -49,101 +51,6 @@ ALLOWED_SUFFIXES: Final[frozenset[str]] = frozenset(
     {".py", ".yaml", ".yml", ".md", ".txt", ".json", ".toml", ".cfg", ".ini"}
 )
 
-#: Modules a skill's source may import (and their submodules where listed with a dot).
-SRC_IMPORTS: Final[frozenset[str]] = frozenset(
-    {
-        "__future__",
-        "abc",
-        "asyncio",
-        "base64",
-        "bisect",
-        "calendar",
-        "collections",
-        "collections.abc",
-        "contextlib",
-        "copy",
-        "csv",
-        "dataclasses",
-        "datetime",
-        "decimal",
-        "difflib",
-        "email.utils",
-        "enum",
-        "fractions",
-        "functools",
-        "hashlib",
-        "heapq",
-        "hmac",
-        "html",
-        "html.parser",
-        "itertools",
-        "json",
-        "math",
-        "operator",
-        "random",
-        "re",
-        "statistics",
-        "string",
-        "textwrap",
-        "time",
-        "typing",
-        "unicodedata",
-        "urllib.parse",
-        "uuid",
-        "zoneinfo",
-        "pydantic",
-        "nox.plugins.api",
-        "nox.security.model",
-    }
-)
-#: Tests may additionally use mocks. They run in the same locked-down way as the source.
-TEST_IMPORTS: Final[frozenset[str]] = SRC_IMPORTS | {"unittest.mock"}
-
-#: Named explicitly so the refusal says what was found, not just "not allowed".
-_NAMED_FORBIDDEN: Final[frozenset[str]] = frozenset(
-    {"subprocess", "ctypes", "os", "sys", "socket", "importlib", "builtins", "shutil", "pathlib",
-     "pickle", "marshal", "multiprocessing", "threading", "signal", "pty", "winreg", "_winapi",
-     "msvcrt", "keyring", "requests", "httpx", "aiohttp", "urllib.request", "http.client", "ssl",
-     "ftplib", "smtplib", "code", "codeop", "inspect", "gc", "types", "io", "tempfile", "glob",
-     "sqlite3", "webbrowser", "platform", "runpy", "zipimport", "pkgutil", "site"}
-)  # fmt: skip
-_FORBIDDEN_CALLS: Final[frozenset[str]] = frozenset(
-    {"eval", "exec", "compile", "__import__", "open", "input", "breakpoint", "globals",
-     "locals", "vars", "memoryview", "help", "exit", "quit"}
-)  # fmt: skip
-_DYNAMIC_ATTR_CALLS: Final[frozenset[str]] = frozenset({"getattr", "setattr", "delattr", "hasattr"})
-#: Attributes that reach processes, sockets or files from otherwise allowed modules
-#: (`asyncio.create_subprocess_exec`, `loop.create_connection`, pydantic's `parse_file`).
-_FORBIDDEN_ATTRS: Final[frozenset[str]] = frozenset(
-    {"system", "popen", "spawnv", "spawnl", "startfile", "execv", "execl", "fork", "kill",
-     "create_subprocess_exec", "create_subprocess_shell", "subprocess_exec", "subprocess_shell",
-     "open_connection", "open_unix_connection", "start_server", "start_unix_server",
-     "create_connection", "create_datagram_endpoint", "create_server", "create_unix_connection",
-     "create_unix_server", "connect_read_pipe", "connect_write_pipe", "getaddrinfo",
-     "sock_connect", "sock_sendall", "sock_recv", "parse_file", "parse_raw", "add_signal_handler"}
-)  # fmt: skip
-_ALLOWED_DUNDERS: Final[frozenset[str]] = frozenset({"__init__", "__name__", "__doc__"})
-#: CI's list (Security Model §10) plus the other input-synthesis entry points. Spelled in pieces:
-#: the CI scan cannot tell this list from a use of what it names (see `nox.desktop.keyboard`).
-_FORBIDDEN_TEXT = re.compile(
-    "|".join(
-        a + b
-        for a, b in (
-            ("pydirect", "input"),
-            ("pyauto", "gui"),
-            ("pyn", "put"),
-            ("ReadProcess", "Memory"),
-            ("WriteProcess", "Memory"),
-            ("Send", "Input"),
-            ("keybd", "_event"),
-            ("mouse", "_event"),
-            ("SetWindows", "HookEx"),
-            ("CreateRemote", "Thread"),
-            ("Virtual", "AllocEx"),
-        )
-    ),
-    re.IGNORECASE,
-)
 _ALLOWED_LISTENS: Final[frozenset[str]] = frozenset({"system.mode_changed"})
 #: A host written into the source as a URL; it has to be one the manifest declares.
 _URL_HOST = re.compile(r"(?i)\b(?:https?|wss?)://([a-z0-9.-]+)")
@@ -209,61 +116,6 @@ def _check_files(root: Path, report: CheckReport) -> list[Path]:
 
 
 # ---- code ----------------------------------------------------------------------------------------
-
-
-def _module_allowed(module: str, allowed: frozenset[str], own: str) -> bool:
-    if module == own or module.startswith(f"{own}."):
-        return True
-    # Exactly the listed modules - a listed package does not open its submodules
-    # (`asyncio.subprocess`) - except pydantic's, which are all data validation.
-    return module in allowed or module.startswith("pydantic.")
-
-
-def scan_code(source: str, *, filename: str, own_package: str, tests: bool = False) -> list[str]:
-    """Problems in one Python file; empty when it only uses what a skill may use."""
-    problems: list[str] = []
-    if _FORBIDDEN_TEXT.search(source):
-        problems.append(f"{filename}: names an input-synthesis or process-memory API")
-    try:
-        tree = ast.parse(source, filename=filename)
-    except SyntaxError as exc:
-        return [*problems, f"{filename}: syntax error on line {exc.lineno}: {exc.msg}"]
-    allowed = TEST_IMPORTS if tests else SRC_IMPORTS
-    for node in ast.walk(tree):
-        line = getattr(node, "lineno", 0)
-        where = f"{filename}:{line}"
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if not _module_allowed(alias.name, allowed, own_package):
-                    problems.append(f"{where}: import {alias.name} is not allowed in a skill")
-        elif isinstance(node, ast.ImportFrom):
-            if node.level:
-                continue  # relative import inside the skill's own package
-            module = node.module or ""
-            if not _module_allowed(module, allowed, own_package):
-                problems.append(f"{where}: import from {module} is not allowed in a skill")
-            elif module == "os" or any(a.name == "system" for a in node.names):
-                problems.append(f"{where}: os.system is not allowed in a skill")
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id in _FORBIDDEN_CALLS:
-                problems.append(f"{where}: {node.func.id}() is not allowed in a skill")
-            elif node.func.id in _DYNAMIC_ATTR_CALLS and (
-                len(node.args) < 2
-                or not isinstance(node.args[1], ast.Constant)
-                or not isinstance(node.args[1].value, str)
-                or node.args[1].value.startswith("_")
-            ):
-                problems.append(
-                    f"{where}: {node.func.id}() needs a literal, public attribute name in a skill"
-                )
-        elif isinstance(node, ast.Attribute):
-            if node.attr.startswith("__") and node.attr not in _ALLOWED_DUNDERS:
-                problems.append(f"{where}: attribute {node.attr} is not allowed in a skill")
-            elif node.attr in _FORBIDDEN_ATTRS:
-                problems.append(f"{where}: .{node.attr} is not allowed in a skill")
-        elif isinstance(node, ast.Name) and node.id in ("__builtins__", "__loader__", "__spec__"):
-            problems.append(f"{where}: {node.id} is not allowed in a skill")
-    return problems
 
 
 # ---- manifest ------------------------------------------------------------------------------------
@@ -367,6 +219,6 @@ def check_skill(
     if not any(p.relative_to(root).as_posix().startswith("tests/test_") for p in py_files):
         report.problems.append("there are no tests (tests/test_*.py)")
     for path in root.rglob("*.yaml"):
-        if _FORBIDDEN_TEXT.search(path.read_text(encoding="utf-8", errors="replace")):
+        if FORBIDDEN_TEXT.search(path.read_text(encoding="utf-8", errors="replace")):
             report.problems.append(f"{path.name}: names an input-synthesis or process-memory API")
     return report
