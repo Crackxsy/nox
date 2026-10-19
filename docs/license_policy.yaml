@@ -107,12 +107,29 @@ package_exceptions:
       the `kokoro-v1.0` model files it loads are permissive - but see the `phonemizer` and
       `espeakng-loader` entries below: the package pulls a GPL-3.0 grapheme-to-phoneme front end,
       so selecting Kokoro does not on its own make a bundled build Apache-2.0-only (#21, NOTICE).
+  - name: supertonic
+    ecosystem: python
+    category: allow_with_note
+    reason: >
+      MIT (Supertone Inc.; declared as `License-Expression: MIT`). Optional dependency of the
+      `voice-supertonic` extra only; needs only onnxruntime, numpy, soundfile and huggingface-hub
+      and has no phonemizer, so unlike `kokoro-onnx` it pulls no GPL-3.0 code. NOTE: the
+      Supertonic 3 model WEIGHTS it loads are a separate, user-initiated download under the
+      BigScience OpenRAIL-M license (use-based restrictions, e.g. disclose machine-generated
+      audio, no impersonation, no medical advice) - not covered by this package audit; see NOTICE.
+  - name: soundfile
+    ecosystem: python
+    category: allow
+    reason: >
+      BSD-3-Clause. Audio file I/O, pulled by `supertonic` (`voice-supertonic` extra); bundles
+      libsndfile (LGPL-2.1) as a separate shared library, used unmodified via dynamic loading.
   - name: onnxruntime
     ecosystem: python
     category: allow
     reason: >
-      MIT (Microsoft). Inference runtime for the Kokoro TTS model (`voice-kokoro` extra) and for
-      openWakeWord (`voice` extra); used unmodified as a PyPI wheel.
+      MIT (Microsoft). Inference runtime for the Kokoro and Supertonic TTS models (`voice-kokoro`
+      and `voice-supertonic` extras) and for openWakeWord (`voice` extra); used unmodified as a
+      PyPI wheel.
   - name: openwakeword
     ecosystem: python
     category: allow

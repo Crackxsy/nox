@@ -219,7 +219,10 @@ def render_report(python_findings: list[Finding], npm_findings: list[Finding]) -
         "tracked in the parent spec/story, not resolved here): bundled/downloadable AI models "
         "(Ollama models, faster-whisper model weights, Piper TTS voices, any future vision model) "
         "— each has its own, separate license that this script cannot discover from package "
-        "metadata."
+        "metadata. **Flagged model license:** the optional Supertonic 3 TTS weights "
+        "(`voice-supertonic` extra, user-initiated download) are BigScience OpenRAIL-M, not an "
+        "OSI license — commercial use is allowed, but with use-based restrictions (disclose "
+        "machine-generated audio, no impersonation, no medical advice); see `NOTICE`."
     )
     lines.append("")
 
