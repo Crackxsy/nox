@@ -7,6 +7,7 @@ configuration: the configured privacy mode and allow-lists apply here too.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from nox.localai.texts import (
     render_report,
 )
 
-__all__ = ["SUCCESS_OUTCOMES", "build_cli_deps", "run_local_ai_setup"]
+__all__ = ["SUCCESS_OUTCOMES", "build_cli_deps", "run_local_ai_setup", "run_onboarding_step"]
 
 #: Outcomes that end `nox ai setup` with exit code 0: it did what was asked, or honestly declined.
 SUCCESS_OUTCOMES = frozenset({Outcome.DONE, Outcome.RECOMMENDED, Outcome.NO_LLM, Outcome.DECLINED})
@@ -109,3 +110,21 @@ async def run_local_ai_setup(
     report_once()
     echo(render_outcome(state, language, base_url=deps.ollama.base_url))
     return 0 if state.outcome in SUCCESS_OUTCOMES else 1
+
+
+def _load_config(user_config_path: Path) -> NoxConfig:
+    from nox.entrypoints import build_config  # noqa: PLC0415 - heavy import, one use
+
+    return build_config(None, user_config_path if user_config_path.is_file() else None)
+
+
+async def run_onboarding_step(language: str | None, user_config_path: Path) -> int:
+    """The optional step in `nox onboard`: the same flow, asking before every action.
+
+    Builds its dependencies from the configuration the wizard has just written, and writes to the
+    wizard's `user.yaml`, so the two never disagree about which file is meant.
+    """
+    config = await asyncio.to_thread(_load_config, user_config_path)
+    return await run_local_ai_setup(
+        deps=build_cli_deps(config, user_config_path), language=language
+    )
