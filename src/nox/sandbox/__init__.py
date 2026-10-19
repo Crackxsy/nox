@@ -23,6 +23,13 @@ Two ways to run something, with the same confinement:
   (job object kill-on-close / `bwrap --die-with-parent`). `on_exit(code)` plus `RestartPolicy`
   are the hooks for a supervisor; the sandbox never restarts anything by itself.
 
+**`EgressDecl(hosts=("*",))` means "any public host, any port, through the proxy".** It is what
+a network-enabled MCP server declares. It is not a hole: every connection still goes through the
+run's own proxy, which resolves the name and lets `NetGuard` refuse loopback, the LAN, link-local
+and cloud-metadata addresses and the Home Assistant host - so `*` can never reach anything inside
+the home. Whether a server may have `*` at all is decided before `start` by the caller's
+permission check (installing a network-enabled server is confirmed), not by the sandbox.
+
 Declared egress goes through a loopback proxy that exists for that one run or process and
 demands its own random credentials, which only the child receives (in its proxy URL): another
 local program - another run's child included - cannot use it.

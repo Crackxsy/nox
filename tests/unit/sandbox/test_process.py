@@ -113,6 +113,17 @@ async def test_an_overlong_line_raises_and_the_next_line_still_reads() -> None:
     await proc.stop(0.1)
 
 
+async def test_an_overlong_last_line_without_newline_still_raises() -> None:
+    fake = ScriptedIo()
+    proc = _process(fake, max_message_bytes=8)
+    fake.out.put_nowait(b"x" * 20)
+    await asyncio.sleep(0.01)
+    fake.end(0)
+    with pytest.raises(MessageTooLarge):
+        await proc.readline()
+    assert await proc.readline() == b""
+
+
 async def test_stderr_is_a_bounded_ring() -> None:
     fake = ScriptedIo()
     proc = _process(fake, stderr_bytes=8)

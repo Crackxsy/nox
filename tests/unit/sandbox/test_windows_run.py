@@ -298,3 +298,46 @@ async def test_an_inconclusive_probe_means_the_appcontainer_is_not_strong(
         await Sandbox(windows.WindowsSandbox(), guard=NetGuard()).run(
             [CMD, "/c", "echo", "x"], limits=Limits(timeout_s=20)
         )
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows sandbox")
+async def test_appcontainer_runs_python_and_still_cannot_read_user_files(tmp_path) -> None:  # noqa: ANN001
+    from nox.sandbox.windows import WindowsSandbox, appcontainer_available
+
+    if not appcontainer_available():
+        pytest.skip("AppContainer profile cannot be created here")
+    secret = tmp_path / "user-file.txt"  # under the user's profile (TEMP)
+    secret.write_text("private", encoding="utf-8")
+    script = (
+        "import json, email.parser, sqlite3\n"
+        "print('IMPORT-OK')\n"
+        "try:\n"
+        f"    open({str(secret)!r}).read(); print('READ-USER-FILE')\n"
+        "except OSError:\n"
+        "    print('USER-FILE-BLOCKED')\n"
+    )
+    sandbox = Sandbox(WindowsSandbox(prefer_appcontainer=True), guard=NetGuard())
+    result = await sandbox.run(
+        [sys.executable, "-I", "-B", "-c", script], limits=Limits(timeout_s=60)
+    )
+    assert "IMPORT-OK" in result.stdout, result.stderr
+    assert "USER-FILE-BLOCKED" in result.stdout and "READ-USER-FILE" not in result.stdout
+
+
+def test_runtime_dirs_never_include_nox_home_or_the_profile(tmp_path) -> None:  # noqa: ANN001
+    from pathlib import Path
+
+    from nox.sandbox.windows import python_runtime_dirs
+
+    py = tmp_path / "python"
+    venv = tmp_path / "venv"
+    home = tmp_path / "venv" / "nox-home"  # a home inside the venv: the venv is refused
+    dirs = python_runtime_dirs(home=home, base=str(py), prefix=str(venv))
+    assert dirs == (py.resolve(),)
+    outer = python_runtime_dirs(
+        home=tmp_path / "h", base=str(tmp_path), prefix=str(tmp_path / "h" / "v")
+    )
+    assert outer == ()  # one contains Nox's home, the other lies inside it
+    assert python_runtime_dirs(home=tmp_path / "h", base=str(Path.home()), prefix=str(py)) == (
+        py.resolve(),
+    )

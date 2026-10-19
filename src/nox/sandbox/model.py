@@ -85,7 +85,8 @@ class SandboxUnavailable(RuntimeError):  # noqa: N818 - a state, not an error su
 class EgressDecl:
     """What network a run is allowed to reach, as a request to the egress proxy.
 
-    `hosts` are `host` or `host:port` entries in the same grammar as `security.egress_allowlist`.
+    `hosts` are `host` or `host:port` entries in the same grammar as `security.egress_allowlist`;
+    `"*"` is any public host on any port (see `nox.sandbox`), never the LAN or loopback.
     An empty tuple (the default, `EgressDecl.NONE`) means no network at all. The proxy still vetoes
     anything its own policy forbids - the Home Assistant host and LAN ranges above all - so a
     declaration can only ever narrow what the proxy already permits, never widen it.

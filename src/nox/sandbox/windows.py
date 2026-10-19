@@ -10,8 +10,13 @@ Two variants, strongest first:
   (measured: on some Windows 11 builds a desktop AppContainer reaches any host loopback listener).
   So the backend measures it (`host_loopback_reachable`, fail closed: anything but an explicit
   "blocked" report counts as reachable) and reports `confines_network` honestly: where loopback
-  leaks, local services (a model server, a browser's debug port) would be reachable from inside,
-  and the sandbox is not "strong".
+  leaks, local services (a model server, a browser's debug port) would be reachable from inside, and
+  the sandbox is not "strong". To run Python (a skill's tests, an MCP server written in Python), the
+  container SID additionally gets *read and execute* on exactly the Python runtime Nox itself runs
+  on: the interpreter's install folder (python.exe, DLLs, standard library) and the virtual
+  environment (`pyvenv.cfg`, `Scripts`, site-packages) - `python_runtime_dirs()`. Never a user
+  folder as such, never a folder that contains Nox's home (secrets, database) or lies inside it;
+  such a candidate is skipped and the child simply cannot start Python.
 * **Low-integrity token** (fallback): the child runs with a low-integrity copy of the core's token.
   Mandatory integrity control stops it *writing* anything labelled medium (every user file). It
   does **not** stop it reading the user's files or the credential store, and integrity level does
@@ -37,6 +42,7 @@ import os
 import queue
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 from collections.abc import Callable, Mapping
@@ -65,6 +71,7 @@ __all__ = [
     "appcontainer_available",
     "host_loopback_reachable",
     "probe_verdict",
+    "python_runtime_dirs",
 ]
 
 _APP_CONTAINER_NAME = "Nox.Sandbox"
@@ -246,6 +253,38 @@ def _base_env(work: Path) -> dict[str, str]:
     return env
 
 
+def _contains(outer: Path, inner: Path) -> bool:
+    return inner == outer or inner.is_relative_to(outer)
+
+
+def python_runtime_dirs(
+    *, home: Path | None = None, base: str | None = None, prefix: str | None = None
+) -> tuple[Path, ...]:
+    """The folders an AppContainer child must read to run this Python, minus any unsafe one.
+
+    Unsafe: a drive root, the user's profile folder itself, or a folder that contains Nox's home
+    or lies inside it - granting read there would hand the container the secrets file and the
+    database.
+    """
+    from nox.paths import nox_home
+
+    nox = (home or nox_home()).resolve()
+    profile = Path.home().resolve()
+    out: list[Path] = []
+    for raw in (base or sys.base_prefix, prefix or sys.prefix):
+        folder = Path(raw).resolve()
+        if folder in out:
+            continue
+        if len(folder.parts) <= 1 or folder == profile:
+            log.warning("sandbox.runtime_dir_refused", reason="root or profile folder")
+            continue
+        if _contains(folder, nox) or _contains(nox, folder):
+            log.warning("sandbox.runtime_dir_refused", reason="overlaps Nox's home")
+            continue
+        out.append(folder)
+    return tuple(out)
+
+
 class WindowsSandbox:
     """Backend for `nox.sandbox.Sandbox` on Windows. One instance per core."""
 
@@ -259,10 +298,40 @@ class WindowsSandbox:
         self.mode = SandboxMode.WINDOWS_APPCONTAINER if self._sid else SandboxMode.WINDOWS_LOW_IL
         #: The proxy reaches an AppContainer child over a named pipe (see the module docstring).
         self.proxy_transport = "pipe" if self._sid else "none"
+        self._runtime_ready = False
 
     @property
     def container_sid(self) -> str | None:
         return self._sid
+
+    def grant_read(self, folder: Path) -> bool:
+        """Give the container SID read+execute on `folder` (inherited by everything below).
+
+        Idempotent: an ACL that already carries the grant is left alone, so this costs one
+        `icacls` query per core start, not a walk over a whole virtual environment.
+        """
+        if self._sid is None:
+            return False
+        shown = subprocess.run(  # noqa: S603 - fixed argv, a vetted runtime folder
+            ["icacls", str(folder)], capture_output=True, text=True, check=False
+        )
+        if f"{self._sid}:(OI)(CI)(RX)" in shown.stdout:
+            return True
+        done = subprocess.run(  # noqa: S603 - fixed argv, a vetted runtime folder
+            ["icacls", str(folder), "/grant", f"*{self._sid}:(OI)(CI)(RX)", "/Q"],
+            capture_output=True,
+            check=False,
+        )
+        return done.returncode == 0
+
+    async def _ensure_runtime(self) -> None:
+        """Once per backend: make the Python runtime readable for the container (see above)."""
+        if self._sid is None or self._runtime_ready:
+            return
+        self._runtime_ready = True
+        for folder in python_runtime_dirs():
+            ok = await asyncio.to_thread(self.grant_read, folder)
+            log.info("sandbox.runtime_readable", ok=ok)
 
     def guarantees(self) -> Guarantees:
         if self._sid is not None:
@@ -338,6 +407,7 @@ class WindowsSandbox:
         """Run `argv` confined. With egress, `proxy_socket` is the proxy's named pipe;
         a low-integrity run with egress is refused - nothing could hold it to the proxy."""
         self._check_egress(egress, proxy_socket)
+        await self._ensure_runtime()
         work, created = self._prepare_workdir(cwd)
         forwarder: Spawned | None = None
         try:
@@ -401,6 +471,7 @@ class WindowsSandbox:
         and doing that in `asyncio.to_thread` would starve every other user of the pool.
         """
         self._check_egress(egress, proxy_socket)
+        await self._ensure_runtime()
         work, created = self._prepare_workdir(cwd)
         forwarder: Spawned | None = None
 

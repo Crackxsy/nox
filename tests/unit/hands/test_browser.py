@@ -256,7 +256,13 @@ def _proxy(web: FakeWeb, **kw: Any) -> EgressProxy:
 
 @pytest.mark.parametrize(
     "auth",
-    [b"", b"Proxy-Authorization: Basic bm94Ondyb25n\r\n", b"Proxy-Authorization: Bearer x\r\n"],
+    [
+        b"",
+        b"Proxy-Authorization: Basic bm94Ondyb25n\r\n",
+        b"Proxy-Authorization: Bearer x\r\n",
+        # The right token under another scheme is still not Basic credentials.
+        b"Proxy-Authorization: Bearer bm94OnJpZ2h0LXNlY3JldA==\r\n",
+    ],
 )
 @pytest.mark.parametrize(
     "request_line",
@@ -321,6 +327,12 @@ async def test_a_pipelined_second_request_to_another_host_is_never_forwarded(
         b"Transfer-Encoding: gzip, chunked\r\n",
         b"Content-Length: 3\r\nContent-Length: 4\r\n",
         b"Content-Length: -1\r\n",
+        b"Content-Length: +3\r\n",
+        b"Transfer-Encoding: chunked, chunked\r\n",
+        b"Transfer-Encoding: xchunked\r\n",
+        b"Transfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: identity\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 0\r\n",
     ],
 )
 async def test_ambiguous_request_framing_is_refused(fake_web: FakeWeb, framing: bytes) -> None:
@@ -340,13 +352,15 @@ async def test_ambiguous_request_framing_is_refused(fake_web: FakeWeb, framing: 
 
 
 async def test_a_chunked_body_is_forwarded_whole_and_only_once(fake_web: FakeWeb) -> None:
+    """The client's framing never passes through: the body is re-framed with a computed
+    Content-Length (here from a ` Chunked ` coding, matched after strip/lower)."""
     proxy = _proxy(fake_web)
     port = await proxy.start()
     try:
         reply = await _raw(
             port,
             b"POST http://public.test/send HTTP/1.1\r\nHost: public.test\r\n"
-            b"Transfer-Encoding: chunked\r\n\r\n3\r\nq=h\r\n4\r\nallo\r\n0\r\n\r\n"
+            b"Transfer-Encoding:  Chunked \r\n\r\n3\r\nq=h\r\n4\r\nallo\r\n0\r\n\r\n"
             b"POST http://lan.test/send HTTP/1.1\r\nHost: lan.test\r\n"
             b"Content-Length: 0\r\n\r\n",
         )
@@ -460,6 +474,22 @@ async def test_the_proxy_alone_still_blocks_a_lan_redirect(
     await session.open("http://public.test/script-lan")
     await asyncio.sleep(0.5)
     assert fake_web.hosts() <= {"public.test"}, fake_web.requests
+
+
+@pytestmark_browser
+async def test_loopback_goes_through_the_proxy_too(
+    session: BrowserSession, fake_web: FakeWeb, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Chromium bypasses a proxy for loopback by default; `<-loopback>` removes that, so even
+    with the route check off a page cannot reach a local service directly."""
+
+    async def allow_everything(*_a: object, **_k: object) -> None:
+        return None
+
+    monkeypatch.setattr(browser_mod, "judge_request", allow_everything)
+    await session.open(f"http://127.0.0.1:{fake_web.port}/")
+    await session.open(f"http://localhost:{fake_web.port}/")
+    assert fake_web.requests == [], "a loopback request skipped the proxy"
 
 
 @pytestmark_browser
