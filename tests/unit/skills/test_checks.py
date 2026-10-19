@@ -249,6 +249,14 @@ async def test_ending_the_run_from_a_test_is_a_failure(tmp_path: Path, body: str
     )
     outcome = await LocalTestRunner().run(work, timeout_s=60)
     assert not outcome.ok and outcome.failed == 1 and outcome.passed == 2
+    assert "FAIL test_exit.py test_exit" in outcome.output  # caught per test, the run went on
+
+
+def test_two_trailers_are_a_failure_even_when_both_add_up() -> None:
+    from nox.skills.testing import parse_outcome
+
+    stdout = "RESULT passed=2 failed=0" + chr(10) + "RESULT passed=2 failed=0"
+    assert not parse_outcome(stdout, "", exit_code=0, timed_out=False, expected=2).ok
 
 
 def test_a_trailer_that_counts_other_tests_is_a_failure() -> None:
