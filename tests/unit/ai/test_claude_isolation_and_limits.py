@@ -245,19 +245,28 @@ def test_the_one_shot_prompt_leaves_private_history_out_and_carries_the_context(
 async def test_halt_stops_the_answer_in_progress(
     tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Halt alone ends the answer (the caller keeps reading to the end), and the session stays
+    ready: the next turn neither waits for a drain nor starts a new process."""
     provider, _ = _provider(tmp_path, log, monkeypatch)
     try:
-        stream = provider.stream(_request("SLOW bitte"))
-        async for chunk in stream:
-            if "weiter" in chunk.delta:
+        after_halt = 0
+        halted = False
+        async for chunk in provider.stream(_request("SLOW bitte")):
+            if halted and "weiter" in chunk.delta:
+                after_halt += 1
+            if not halted and "weiter" in chunk.delta:
                 provider.halt()
-                break
-        await stream.aclose()
+                halted = True
+        pid = provider.pid
 
+        started = asyncio.get_running_loop().time()
         chunks = await _collect(provider.stream(_request("Weiter", request_id="b")))
 
-        assert "".join(c.delta for c in chunks) == "Hallo Welt."
+        assert after_halt < 40, "the slow answer (200 parts) was cut short"
         assert _interrupted(log)
+        assert "".join(c.delta for c in chunks) == "Hallo Welt."
+        assert provider.pid == pid
+        assert asyncio.get_running_loop().time() - started < 1.5, "no drain wait after a halt"
     finally:
         await provider.close()
 

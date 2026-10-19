@@ -557,6 +557,8 @@ class PersistentClaude:
                     )
                 elif item.kind == "result":
                     finished = True
+                    # The answer reached its end here (also after a halt): nothing is left to drain.
+                    self._dirty = False
                     self._finish(session, request, item, parts, started, first_token_ms)
                     break
         except ProviderTimeoutError:

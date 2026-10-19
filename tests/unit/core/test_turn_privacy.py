@@ -108,3 +108,30 @@ async def test_an_ordinary_turn_is_stored_public() -> None:
     await orchestrator.handle_text("Eine normale Frage", speak=False)
 
     assert turns.private == [False, False]
+
+
+class TwoFlipRouter(FakeRouter):
+    """Cloud off between the first and the second chunk, back on before the last."""
+
+    def __init__(self, bus: FakeBus, switches: Switches) -> None:
+        super().__init__(bus)
+        self._switches = switches
+
+    async def stream(self, request: AiRequest) -> AsyncIterator[AiChunk]:  # type: ignore[override]
+        self.requests.append(request)
+        yield AiChunk(request_id=request.request_id, delta="Eins ")
+        self._switches.cloud = False
+        yield AiChunk(request_id=request.request_id, delta="zwei ")
+        self._switches.cloud = True
+        yield AiChunk(request_id=request.request_id, delta="drei.", done=True)
+
+
+async def test_a_brief_moment_without_the_cloud_marks_the_whole_turn() -> None:
+    switches = Switches(cloud=True)
+    orchestrator, turns = _orchestrator(switches, lambda: None)
+    orchestrator.router = TwoFlipRouter(FakeBus(), switches)
+
+    await orchestrator.handle_text("Eine Frage", speak=False)
+
+    assert switches.cloud, "back to the cloud at the end"
+    assert turns.private == [True, True]
