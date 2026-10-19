@@ -556,11 +556,17 @@ _SECRET_WORDS = (
     "pass", "secret", "token", "key", "auth", "credential", "cookie", "session", "signature",
     "bearer", "private", "cert",
 )  # fmt: skip
-_URL = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s\"'<>]+", re.IGNORECASE)
-#: Long runs of base64/hex-like characters: keys, tokens, signatures - whatever they are called.
-_HIGH_ENTROPY = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")
+#: A URL anywhere in a string: any scheme, up to the next space or quote.
+_URL = re.compile(r"(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*://[^\s\"'<>]*", re.IGNORECASE)
+#: Where an absolute path starts: a drive letter, a UNC share, a home-relative or root path. A
+#: slash only starts one at the beginning or after a space, quote or bracket (not in "and/or").
+_PATH_START = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]|\\\\|(?<![^\s\"'(\[<=,;])~?[\\/]")
+#: Long runs of base64/hex/url-safe characters: keys, tokens, signatures - whatever their name.
+_KEYLIKE = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 REDACTED = "[redacted]"
+#: Marks a reduced URL while the path pass runs, so `scheme://host` is not taken for a path.
+_HOLD = "\x00"
 
 
 def _secret_key(key: str) -> bool:
@@ -568,34 +574,66 @@ def _secret_key(key: str) -> bool:
     return any(word in folded for word in _SECRET_WORDS)
 
 
+def high_entropy(run: str) -> bool:
+    """Whether a 20+ character run of key-like characters looks generated rather than written:
+    letters mixed with digits, or several upper- and lower-case letters mixed (base64)."""
+    if len(run) < 20:
+        return False
+    if any(c.isdigit() for c in run) and any(c.isalpha() for c in run):
+        return True
+    upper = sum(c.isupper() for c in run)
+    lower = sum(c.islower() for c in run)
+    return upper >= 3 and lower >= 3
+
+
+def _no_keys(text: str) -> str:
+    return _KEYLIKE.sub(lambda m: REDACTED if high_entropy(m.group(0)) else m.group(0), text)
+
+
 def _host_only(url: str) -> str:
+    """`scheme://host[:port]` - no user info, path, query or fragment; the host checked too."""
     try:
         parts = urlsplit(url)
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port else ""
     except ValueError:
         return REDACTED
-    host = parts.hostname or ""
     if not parts.scheme or not host:
-        return REDACTED
-    port = f":{parts.port}" if parts.port else ""
-    return f"{parts.scheme}://{host}{port}"
+        return f"{parts.scheme}://" if parts.scheme else REDACTED
+    return f"{parts.scheme}://{_no_keys(host)}{port}"
 
 
-def _high_entropy(token: str) -> bool:
-    return any(c.isdigit() for c in token) and any(c.isalpha() for c in token)
-
-
-#: An absolute path on its own: a drive letter, a UNC share or a POSIX root.
-_ABSOLUTE_PATH = re.compile(r"^\s*([a-zA-Z]:[\\/]|\\\\|/)")
+def _basenames(line: str) -> str:
+    """Every absolute path in `line` replaced by its last segment. A path may contain spaces,
+    so it runs to the end of the line - or to the next URL, already reduced and held aside -
+    and whatever follows its last separator is kept."""
+    match = _PATH_START.search(line)
+    while match is not None:
+        start = match.start()
+        end = line.find(_HOLD, start)
+        end = len(line) if end < 0 else end
+        region = line[start:end]
+        cut = max(region.rfind("/"), region.rfind("\\"))
+        line = line[:start] + region[cut + 1 :] + line[end:]
+        match = _PATH_START.search(line, start)
+    return line
 
 
 def _redact_string(text: str) -> str:
-    """URLs as `scheme://host`, an absolute path as its file name (paths name the user), long
-    key-like runs replaced."""
-    if _ABSOLUTE_PATH.match(text) and "\n" not in text and "://" not in text:
-        # The file name still goes through the checks below: it may itself be a token.
-        text = PurePath(text.strip().replace("\\", "/")).name
-    text = _URL.sub(lambda m: _host_only(m.group(0)), text)
-    return _HIGH_ENTROPY.sub(lambda m: REDACTED if _high_entropy(m.group(0)) else m.group(0), text)
+    """The fixed pipeline every string from OBS goes through, in this order: (1) every URL
+    becomes `scheme://host`; (2) every absolute path, anywhere in the string, becomes its file
+    name; (3) every generated-looking 20+ character run becomes `[redacted]`. Secret key names
+    are handled by the caller, on top."""
+    held: list[str] = []
+
+    def hold(match: re.Match[str]) -> str:
+        held.append(_host_only(match.group(0)))
+        return f"{_HOLD}{len(held) - 1}{_HOLD}"
+
+    text = _URL.sub(hold, text)
+    text = "\n".join(_basenames(line) for line in text.split("\n"))
+    text = _no_keys(text)
+    return re.sub(f"{_HOLD}(\\d+){_HOLD}", lambda m: held[int(m.group(1))], text)
 
 
 def redact_text(text: str) -> str:
@@ -612,7 +650,7 @@ def _redact_settings(settings: Any) -> Any:
     for key, value in settings.items():
         name = str(key)
         if name in _FILE_KEYS and isinstance(value, str):
-            shown[name] = PurePath(value.replace("\\", "/")).name if value else ""
+            shown[name] = _redact_string(PurePath(value.replace("\\", "/")).name) if value else ""
         elif name in _URL_KEYS and isinstance(value, str):
             shown[name] = _host_only(value) if value else ""
         elif name in SAFE_SETTING_KEYS and not _secret_key(name):
