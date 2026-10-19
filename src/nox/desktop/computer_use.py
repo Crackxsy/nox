@@ -204,41 +204,47 @@ class Sender(Protocol):
     def key(self, vk: int, *, up: bool) -> None: ...
 
 
-if sys.platform == "win32":
+# ctypes structures are defined on every platform (the types exist everywhere); only the
+# sender that uses them refuses to start off Windows.
+class _MouseInput(ctypes.Structure):
+    _fields_ = (
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+    )
 
-    class _MouseInput(ctypes.Structure):
-        _fields_ = (
-            ("dx", wintypes.LONG),
-            ("dy", wintypes.LONG),
-            ("mouseData", wintypes.DWORD),
-            ("dwFlags", wintypes.DWORD),
-            ("time", wintypes.DWORD),
-            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
-        )
 
-    class _KeybdInput(ctypes.Structure):
-        _fields_ = (
-            ("wVk", wintypes.WORD),
-            ("wScan", wintypes.WORD),
-            ("dwFlags", wintypes.DWORD),
-            ("time", wintypes.DWORD),
-            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
-        )
+class _KeybdInput(ctypes.Structure):
+    _fields_ = (
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+    )
 
-    class _Union(ctypes.Union):
-        _fields_ = (("mi", _MouseInput), ("ki", _KeybdInput))
 
-    class _Input(ctypes.Structure):
-        _fields_ = (("type", wintypes.DWORD), ("union", _Union))
+class _Union(ctypes.Union):
+    _fields_ = (("mi", _MouseInput), ("ki", _KeybdInput))
+
+
+class _Input(ctypes.Structure):
+    _fields_ = (("type", wintypes.DWORD), ("union", _Union))
 
 
 class Win32Sender:
     """`SendInput` for one event at a time, plus the reads the guards need."""
 
+    _user32: Any
+    _stop_vks: tuple[int, ...]
+
     def __init__(self, stop_vks: Sequence[int]) -> None:
         if sys.platform != "win32" or not hasattr(ctypes, "windll"):
             raise ComputerUseError("computer use is only available on Windows")
-        self._user32 = ctypes.windll.user32
+        self._user32 = ctypes.windll.user32  # type: ignore[attr-defined,unused-ignore]
         self._stop_vks = tuple(stop_vks)
 
     def screen(self) -> tuple[int, int, int, int]:
