@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from nox.core.logging import get_logger
+from nox.core.orchestrator import RecordedTurn
 from nox.data.db import Database
 from nox.data.repos import TurnRepository
 
@@ -51,7 +52,14 @@ class DbTurnStore:
         self._retention_days = retention_days
 
     async def record(
-        self, session_id: str, role: str, text: str, *, provider: str = "", latency_ms: int = 0
+        self,
+        session_id: str,
+        role: str,
+        text: str,
+        *,
+        provider: str = "",
+        latency_ms: int = 0,
+        private: bool = False,
     ) -> None:
         retain_until = (
             datetime.now(UTC) + timedelta(days=self._retention_days)
@@ -66,8 +74,14 @@ class DbTurnStore:
             provider=provider,
             latency_ms=latency_ms or None,
             retain_until=retain_until,
+            private=private,
         )
 
     async def recent(self, session_id: str, limit: int) -> list[tuple[str, str]]:
         rows = await asyncio.to_thread(self._turns.list_for_session, session_id, 1000)
         return [(row.role, row.text) for row in rows[-limit:]]
+
+    async def recent_turns(self, session_id: str, limit: int) -> list[RecordedTurn]:
+        """Like `recent`, with each turn's privacy mark."""
+        rows = await asyncio.to_thread(self._turns.list_for_session, session_id, 1000)
+        return [RecordedTurn(row.role, row.text, row.private) for row in rows[-limit:]]

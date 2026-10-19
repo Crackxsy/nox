@@ -16,7 +16,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from nox.ai.base import AiRequest, AiRole, Message, Router, ToolCallRequest, ToolDefinition
 from nox.ai.escalation import EscalationPolicy
@@ -67,11 +67,27 @@ class PresetGate(Protocol):
     async def handle(self, text: str, language: str) -> str | None: ...
 
 
+class RecordedTurn(NamedTuple):
+    """One turn of the history, with whether it was said while cloud models were not allowed."""
+
+    role: str
+    text: str
+    private: bool = False
+
+
 class TurnStore(Protocol):
     async def record(
-        self, session_id: str, role: str, text: str, *, provider: str = "", latency_ms: int = 0
+        self,
+        session_id: str,
+        role: str,
+        text: str,
+        *,
+        provider: str = "",
+        latency_ms: int = 0,
+        private: bool = False,
     ) -> None: ...
     async def recent(self, session_id: str, limit: int) -> list[tuple[str, str]]: ...
+    async def recent_turns(self, session_id: str, limit: int) -> list[RecordedTurn]: ...
 
 
 class MemoryPolicy(Protocol):
@@ -193,6 +209,9 @@ class Orchestrator:
     tool_loop: ToolLoop | None = None
     #: Current facts (time, mode, privacy) for the turn context; `None` = none.
     facts: Callable[[], str] | None = None
+    #: Whether cloud models are allowed right now. Turns recorded while they are not are marked
+    #: private, and cloud providers never send them, not even later as history. `None` = always.
+    cloud_allowed: Callable[[], bool] | None = None
     fast_path: FastPath = field(default_factory=FastPath)
     escalation: EscalationPolicy = field(default_factory=EscalationPolicy)
 
@@ -345,10 +364,8 @@ class Orchestrator:
         tools = self.tool_loop.begin(request_id) if self.tool_loop is not None else None
         messages = [Message(role="system", content=self.system_prompt())]
         if self.turns is not None:
-            for role, content in await self.turns.recent(
-                self.session_id, self.config.history_turns
-            ):
-                messages.append(Message(role=role, content=content))
+            for past in await self.turns.recent_turns(self.session_id, self.config.history_turns):
+                messages.append(Message(role=past.role, content=past.text, private=past.private))
         messages.append(Message(role="user", content=text))
         turn_context = self._turn_context(context, with_caveats=tools is not None)
         decision = self.escalation.decide(text, relevance=context.relevance)
@@ -717,8 +734,9 @@ class Orchestrator:
             return
         if self.memory_policy is not None and not self.memory_policy.allows_memory_write():
             return
+        private = self.cloud_allowed is not None and not self.cloud_allowed()
         try:
-            await self.turns.record(self.session_id, role, text, provider=provider)
+            await self.turns.record(self.session_id, role, text, provider=provider, private=private)
         except Exception as exc:
             log.warning("orchestrator.record_failed", error=str(exc))
 

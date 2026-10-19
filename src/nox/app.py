@@ -454,6 +454,7 @@ class NoxCore:
             ),
             session_id=self.session_id,
             facts=self._turn_facts,
+            cloud_allowed=self.security.privacy.allows_cloud,
         )
         self.orchestrator.mode_gate = ModeGate(
             switch=self._switch_mode,
