@@ -399,3 +399,20 @@ def test_the_wall_clock_exhausts_the_budget(calls: int, expected: bool) -> None:
 
     assert (refusal is not None) is expected
     assert budget.exhausted is expected
+
+
+async def test_tools_the_provider_ran_itself_are_recorded_apart_from_nox_tools() -> None:
+    class Searches(ScriptedRouter):
+        async def stream(self, request: AiRequest) -> AsyncIterator[AiChunk]:  # type: ignore[override]
+            self.requests.append(request)
+            yield AiChunk(request_id=request.request_id, delta="", tool_activity=["WebSearch"])
+            yield AiChunk(request_id=request.request_id, delta="", tool_activity=["home.light"])
+            yield AiChunk(request_id=request.request_id, delta="Gefunden.", done=True)
+
+    orch, _, _, _ = make([])
+    orch.router = Searches(FakeBus(), [])
+
+    turn = await orch.handle_text("Such mal")
+
+    assert turn.provider_tools == ["WebSearch"]
+    assert turn.response == "Gefunden."

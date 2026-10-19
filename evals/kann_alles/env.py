@@ -94,9 +94,12 @@ class Probe:
     first_say_s: float | None = None
     said: list[str] = field(default_factory=list)
     decisions: list[ConfirmDecision] = field(default_factory=list)
+    #: Tools the model provider ran itself (e.g. web search), reported by the turn.
+    provider_tools: list[str] = field(default_factory=list)
 
     def reset(self) -> None:
         self.calls.clear()
+        self.provider_tools.clear()
         self.decisions.clear()
         self.confirmations = 0
         self.first_say_s = None

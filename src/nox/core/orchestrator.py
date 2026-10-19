@@ -127,6 +127,8 @@ class Turn:
     #: Tools this turn used, in order. Empty for the great majority of turns, and that is the
     #: point: it is data, so "did it actually do something" is answerable without the transcript.
     tools_used: list[str] = field(default_factory=list)
+    #: Tools the provider ran on its own side (Claude Code's web search), outside Nox's tool loop.
+    provider_tools: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -585,6 +587,10 @@ class Orchestrator:
         self, names: list[str], speech: _TurnSpeech, language: str, turn: Turn
     ) -> None:
         log.debug("orchestrator.provider_tools", request_id=turn.request_id, tools=names)
+        # Nox's own tools are recorded by the tool loop when they run; only the provider's own
+        # (web search) would otherwise be invisible.
+        own = set(self.tool_loop.current_offer_names()) if self.tool_loop is not None else set()
+        turn.provider_tools += [name for name in names if name not in own]
         self._arm_filler(speech, language, turn)
 
     def _arm_filler(self, speech: _TurnSpeech, language: str, turn: Turn) -> None:

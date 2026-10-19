@@ -102,7 +102,8 @@ async def _turn(world: World, text: str, *, speak: bool) -> tuple[Any, float, fl
 
 
 def _tool_log(probe: Probe) -> list[str]:
-    return [f"{c.name}: {'ok' if c.ok else 'error ' + c.error}" for c in probe.calls]
+    calls = [f"{c.name}: {'ok' if c.ok else 'error ' + c.error}" for c in probe.calls]
+    return calls + [f"{name}: ran by the model provider" for name in probe.provider_tools]
 
 
 async def run_task(world: World, task: Task, judge: Judge) -> TaskResult:
@@ -118,6 +119,7 @@ async def run_task(world: World, task: Task, judge: Judge) -> TaskResult:
         turn, seconds, _ = await _turn(world, prompt, speak=False)
         answers.append(turn.response)
         elapsed += seconds
+        world.probe.provider_tools += list(getattr(turn, "provider_tools", []))
     except Exception as exc:  # noqa: BLE001 - a crashed turn is a scored row, not a crashed run
         error = f"{type(exc).__name__}: {exc}"[:300]
     obs, checks, verdict = await _assess(world, task, prompt, answers, elapsed, False, judge)

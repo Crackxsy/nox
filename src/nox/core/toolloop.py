@@ -137,6 +137,9 @@ class ToolLoop:
             log.warning("toolloop.offer_failed", error=f"{type(exc).__name__}: {exc}")
             return []
 
+    def current_offer_names(self) -> list[str]:
+        return [tool.name for tool in self.current_offer()]
+
     def caveats(self) -> str:
         """The "not available right now" section for the turn context, or empty."""
         if self.unavailable is None:
