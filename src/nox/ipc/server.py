@@ -36,6 +36,7 @@ import nox
 from nox.core.config import IpcConfig
 from nox.core.events import E, Event, EventBus
 from nox.core.globbing import name_matches, name_matches_any
+from nox.ipc import pet_view
 from nox.ipc._log import get_logger
 from nox.ipc.dispatch import RequestContext, RequestRegistry, service_patterns
 from nox.ipc.errors import (
@@ -418,6 +419,9 @@ class IpcHub:
         self._lan_peers: weakref.WeakKeyDictionary[ServerConnection, str] = (
             weakref.WeakKeyDictionary()
         )
+        #: The current privacy mode ("private", "offline", ...); the core sets it. The stream
+        #: overlay is told nothing but the mode itself while it is private or offline.
+        self.privacy_mode: Callable[[], str] = lambda: ""
 
     # -- lifecycle ------------------------------------------------------------------------------
 
@@ -916,6 +920,23 @@ class IpcHub:
             if client.closing or not role_may_see(client.role, event.name):
                 continue
             if not name_matches_any(event.name, client.subscriptions):
+                continue
+            if client.role in pet_view.ROLES:
+                # The pet and the overlay get their own, allow-listed view of each event.
+                shown = pet_view.view(
+                    client.role, event.name, event.payload, privacy_mode=self.privacy_mode()
+                )
+                if shown is not None:
+                    self._enqueue_text(
+                        client,
+                        Envelope(
+                            kind=Kind.EVENT,
+                            name=event.name,
+                            corr=event.corr,
+                            src=CORE_SOURCE,
+                            payload=shown,
+                        ).model_dump_json(),
+                    )
                 continue
             if serialized is None:
                 serialized = Envelope(

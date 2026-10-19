@@ -332,6 +332,8 @@ class NoxCore:
             self.bus,
             Path(paths.runtime_dir),
         )
+        security = self.security
+        self.hub.privacy_mode = lambda: security.privacy.mode.value if security else ""
         await self.hub.start()
         self.http = HttpServer(
             create_app(
