@@ -335,15 +335,34 @@ def test_a_server_certificate_near_its_end_is_renewed_under_the_same_authority(
     assert renewed.fingerprint == first.fingerprint  # the same authority: no new warning
 
 
+#: Who may hold an access entry on the key besides its user: the operating system itself, the
+#: local administrators and the owner - all of whom can read any file anyway. A process running as
+#: an elevated administrator gives new files these as explicit entries (CI runners do), so they
+#: survive removing inheritance.
+_PRIVILEGED = {"SY", "BA", "OW", "S-1-5-18", "S-1-5-32-544", "S-1-3-4"}
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows ACLs")
 def test_on_windows_the_key_is_readable_by_this_user_only(tls: TlsMaterial) -> None:
-    import os
+    """Read as SDDL, so the check does not depend on the language of the account names."""
+    import re
     import subprocess
 
-    out = subprocess.run(  # noqa: S603 - fixed argv
-        ["icacls", str(tls.key_file)], capture_output=True, text=True, check=True
-    ).stdout
-    # One access-control entry, for the current user; inheritance removed.
-    entries = [line for line in out.splitlines() if ":(" in line]
-    assert len(entries) == 1, out
-    assert os.environ["USERNAME"].lower() in entries[0].lower()
+    def run(*argv: str) -> str:
+        return subprocess.run(  # noqa: S603 - fixed argv
+            list(argv), capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    me = run("whoami", "/user", "/fo", "csv", "/nh").rsplit(",", 1)[1].strip('"')
+    # `icacls /save` writes the descriptor as SDDL (UTF-16): the file name, then the SDDL.
+    saved = tls.key_file.parent.parent / "acl.txt"
+    run("icacls", str(tls.key_file), "/save", str(saved))
+    sddl = saved.read_bytes().decode("utf-16-le").splitlines()[1].strip()
+    dacl = sddl.split("D:", 1)[1]
+    # P: protected - nothing is inherited from the folder (where "Users" may read).
+    assert dacl.startswith("P"), sddl
+    aces = re.findall(r"\(([^)]*)\)", dacl)
+    trustees = {ace.split(";")[-1] for ace in aces}
+    assert me in trustees, sddl
+    assert trustees - {me} <= _PRIVILEGED, sddl
+    assert all(ace.split(";")[0] == "A" for ace in aces), sddl
