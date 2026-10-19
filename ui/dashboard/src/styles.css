@@ -2689,10 +2689,6 @@ a:hover {
 
 /* ----------------------------------------------------------- capabilities - */
 
-.caps-section {
-  margin-top: clamp(40px, 6vw, 72px);
-}
-
 .caps-section .tiles + .tile-actions {
   padding-top: var(--s-5);
 }

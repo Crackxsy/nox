@@ -42,7 +42,7 @@ export function CapabilitiesPage({ t, lang, client }: CapabilitiesPageProps) {
   useRefreshOnConnect(client, loadPin);
 
   return (
-    <>
+    <div className="page wrap">
       <Hero
         title={t('caps_title')}
         sub={t('caps_lede')}
@@ -66,6 +66,6 @@ export function CapabilitiesPage({ t, lang, client }: CapabilitiesPageProps) {
         pinConfigured={pinConfigured}
       />
       <WatchSection t={t} lang={lang} client={client} revision={revision} />
-    </>
+    </div>
   );
 }
