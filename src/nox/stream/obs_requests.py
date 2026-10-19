@@ -46,7 +46,6 @@ import re
 from collections.abc import Iterable, Mapping
 from pathlib import PurePath
 from typing import Any
-from urllib.parse import urlsplit
 
 from nox.security.model import Risk
 from nox.tools.registry import CallScope, Scope
@@ -556,21 +555,17 @@ _SECRET_WORDS = (
     "pass", "secret", "token", "key", "auth", "credential", "cookie", "session", "signature",
     "bearer", "private", "cert",
 )  # fmt: skip
-#: A URL anywhere in a string: any scheme - whatever stands in front of it becomes part of the
-#: scheme - up to the next space or quote.
-_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s\"'<>]*", re.IGNORECASE)
-#: Whatever still contains `://` after that (a scheme starting with a digit, say), whole.
-_URL_REST = re.compile(r"[^\s\"'<>]*://[^\s\"'<>]*")
-#: A path separator. Every one counts: a path can start anywhere (`key:/home/...`), and a slash
-#: in ordinary text costs at most the words before it.
-_SEPARATOR = re.compile(r"[\\/]")
-_SPACE_OR_HOLD = re.compile(r"[\s\x00]")
-#: Long runs of base64/hex/url-safe characters: keys, tokens, signatures - whatever their name.
-_KEYLIKE = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")
+#: Strings longer than this are cut before anything else looks at them.
+MAX_STRING_CHARS = 4096
+TRUNCATED = "[truncated]"
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 REDACTED = "[redacted]"
-#: Marks a reduced URL while the path pass runs, so `scheme://host` is not taken for a path.
-_HOLD = "\x00"
+#: Where tokens end: whitespace and quotes (and angle brackets, which end a URL in prose).
+_DELIMITERS = frozenset(" \t\r\n\f\v\"'<>")
+#: Characters of a key, token or signature (base64, hex, url-safe).
+_KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=_-")
+_SCHEME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-")
+_HOST_END = frozenset("/?#\\")
 
 
 def _secret_key(key: str) -> bool:
@@ -590,62 +585,130 @@ def high_entropy(run: str) -> bool:
     return upper >= 3 and lower >= 3
 
 
-def _no_keys(text: str) -> str:
-    return _KEYLIKE.sub(lambda m: REDACTED if high_entropy(m.group(0)) else m.group(0), text)
+def _no_keys(token: str) -> str:
+    """`token` with every generated-looking run of key characters replaced. One pass."""
+    out: list[str] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        text = "".join(run)
+        out.append(REDACTED if high_entropy(text) else text)
+        run.clear()
+
+    for char in token:
+        if char in _KEY_CHARS:
+            run.append(char)
+        else:
+            if run:
+                flush()
+            out.append(char)
+    if run:
+        flush()
+    return "".join(out)
 
 
-def _host_only(url: str) -> str:
-    """`scheme://host[:port]` - no user info, path, query or fragment; the host checked too."""
-    try:
-        parts = urlsplit(url)
-        host = parts.hostname or ""
-        port = f":{parts.port}" if parts.port else ""
-    except ValueError:
+def _reduce_url(token: str) -> str:
+    """A token holding `://`: whatever stood before the scheme, then `scheme://host[:port]`.
+    No user info, path, query or fragment; the host checked like any other token. Anything that
+    does not parse as that is redacted whole."""
+    mark = token.find("://")
+    start = mark
+    while start > 0 and token[start - 1] in _SCHEME_CHARS:
+        start -= 1
+    while start < mark and not token[start].isalpha():
+        start += 1  # a scheme starts with a letter; digits and dots in front are prefix
+    scheme = token[start:mark]
+    rest = token[mark + 3 :]
+    end = 0
+    while end < len(rest) and rest[end] not in _HOST_END:
+        end += 1
+    host = rest[:end].rpartition("@")[2]
+    if not scheme or not host:
         return REDACTED
-    if not parts.scheme or not host:
-        return f"{parts.scheme}://" if parts.scheme else REDACTED
-    return f"{parts.scheme}://{_no_keys(host)}{port}"
+    prefix = token[:start]
+    if "/" in prefix or "\\" in prefix:
+        prefix = ""
+    return f"{_no_keys(prefix)}{scheme}://{_no_keys(host)}"
 
 
-def _basenames(line: str) -> str:
-    """Every path in `line` replaced by its last segment. A path starts at the beginning of the
-    word that holds a separator; it may contain spaces, so it runs to the end of the line - or to
-    the next URL, already reduced and held aside - and whatever follows its last separator is
-    kept."""
-    found = _SEPARATOR.search(line)
-    while found is not None:
-        before = [m.end() for m in _SPACE_OR_HOLD.finditer(line, 0, found.start())]
-        start = before[-1] if before else 0
-        end = line.find(_HOLD, found.start())
-        end = len(line) if end < 0 else end
-        region = line[start:end]
-        cut = max(region.rfind("/"), region.rfind("\\"))
-        line = line[:start] + region[cut + 1 :] + line[end:]
-        found = _SEPARATOR.search(line, start)
-    return line
+def _is_delimiter(char: str) -> bool:
+    return char in _DELIMITERS
+
+
+def _tokens(line: str) -> list[str]:
+    """`line` split into alternating delimiter runs and tokens; joining them gives `line`."""
+    parts: list[str] = []
+    current: list[str] = []
+    in_token: bool | None = None
+    for char in line:
+        token_char = not _is_delimiter(char)
+        if in_token is None or token_char == in_token:
+            current.append(char)
+        else:
+            parts.append("".join(current))
+            current = [char]
+        in_token = token_char
+    if current:
+        parts.append("".join(current))
+    return parts
+
+
+def _has_separator(token: str) -> bool:
+    return "/" in token or "\\" in token
+
+
+def _file_name(token: str) -> str:
+    """The last segment of a path token - unless the token looks like a key with slashes in it
+    (base64): then a "file name" without an extension would be most of the secret, and the
+    whole token is redacted instead."""
+    cut = max(token.rfind("/"), token.rfind("\\"))
+    name = token[cut + 1 :]
+    keylike = _no_keys(token) != token or any(
+        high_entropy(segment) for segment in token.replace("\\", "/").split("/")
+    )
+    if keylike and ("." not in name or _no_keys(name) != name):
+        return REDACTED
+    return _no_keys(name)
+
+
+def _redact_line(line: str) -> str:
+    parts = _tokens(line)
+    is_url = [("://" in p) for p in parts]
+    is_path = [(not url and _has_separator(p)) for p, url in zip(parts, is_url, strict=True)]
+    # (1) URLs: each token holding "://" is reduced on its own and closes any path before it.
+    # (3, also first) Keys: every other token, so a base64 secret is gone before step 2.
+    out = [(_reduce_url(p) if url else _no_keys(p)) for p, url in zip(parts, is_url, strict=True)]
+    # (2) Paths: a path starts at the first token with a separator and - since folder names may
+    # hold spaces - runs to the last token with a separator before the next URL or the line's
+    # end. Everything up to that token's last separator goes; its file name stays (`_file_name`).
+    i, n = 0, len(parts)
+    while i < n:
+        if not is_path[i]:
+            i += 1
+            continue
+        last = i
+        j = i
+        while j < n and not is_url[j]:
+            if is_path[j]:
+                last = j
+            j += 1
+        for k in range(i, last):
+            out[k] = ""
+        out[last] = _file_name(parts[last])
+        i = j
+    return "".join(out)
 
 
 def _redact_string(text: str) -> str:
-    """The fixed pipeline every string from OBS goes through, in this order: (1) every URL
-    becomes `scheme://host`, and anything else with `://` in it is redacted whole; (2) every
-    path, anywhere in the string, becomes its file name; (3) every generated-looking 20+
-    character run becomes `[redacted]`. Secret key names are handled by the caller, on top."""
-    held: list[str] = []
-
-    def hold(match: re.Match[str]) -> str:
-        held.append(_host_only(match.group(0)))
-        return f"{_HOLD}{len(held) - 1}{_HOLD}"
-
-    text = _URL.sub(hold, text)
-
-    def hold_redacted(_match: re.Match[str]) -> str:
-        held.append(REDACTED)
-        return f"{_HOLD}{len(held) - 1}{_HOLD}"
-
-    text = _URL_REST.sub(hold_redacted, text)
-    text = "\n".join(_basenames(line) for line in text.split("\n"))
-    text = _no_keys(text)
-    return re.sub(f"{_HOLD}(\\d+){_HOLD}", lambda m: held[int(m.group(1))], text)
+    """The pipeline every string from OBS goes through, linear in its length: cut to
+    `MAX_STRING_CHARS`, then per line and token (split on whitespace and quotes) (1) a token with
+    `://` becomes `scheme://host`, (2) paths - also across spaces - become their file name,
+    (3) generated-looking 20+ character runs become `[redacted]` (checked before the path step
+    too, so a secret with a slash in it is not mistaken for a path). Secret key names are handled
+    by the caller, on top."""
+    if len(text) > MAX_STRING_CHARS:
+        text = text[:MAX_STRING_CHARS] + " " + TRUNCATED
+    return "\n".join(_redact_line(line) for line in text.split("\n"))
 
 
 def redact_text(text: str) -> str:
@@ -664,7 +727,7 @@ def _redact_settings(settings: Any) -> Any:
         if name in _FILE_KEYS and isinstance(value, str):
             shown[name] = _redact_string(PurePath(value.replace("\\", "/")).name) if value else ""
         elif name in _URL_KEYS and isinstance(value, str):
-            shown[name] = _host_only(value) if value else ""
+            shown[name] = _reduce_url(value) if "://" in value else _redact_string(value)
         elif name in SAFE_SETTING_KEYS and not _secret_key(name):
             shown[name] = redact(value)
         else:

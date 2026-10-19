@@ -73,14 +73,17 @@ KEYLIKE = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")
 @given(obs_text())
 def test_redacted_text_leaks_no_directory_url_detail_or_key(sample: tuple[str, list[str]]) -> None:
     text, tokens = sample
-    for key in ("comment", "inputSettings"):
-        value = {"text": text} if key == "inputSettings" else text
-        out = str(redact({key: value}))
+    for out in (
+        redact({"comment": text})["comment"],
+        redact({"inputSettings": {"text": text}})["inputSettings"]["text"],
+    ):
         assert "DIRSEG" not in out, out
         for leak in URL_LEAKS:
             assert leak not in out, out
         for tok in tokens:
-            assert tok[3:] not in out and tok[3:23] not in out, out
+            secret = tok[3:]
+            # Not the secret, and no 12-character piece of it either.
+            assert not any(secret[i : i + 12] in out for i in range(len(secret) - 11)), out
         assert not [run for run in KEYLIKE.findall(out) if high_entropy(run)], out
 
 

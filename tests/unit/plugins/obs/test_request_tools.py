@@ -110,13 +110,26 @@ async def test_request_type_must_look_like_one(
 
 
 async def test_large_responses_are_cut(obs_server: FakeObsServer, fake_client: FakeClient) -> None:
-    obs_server.set_response("GetInputSettings", lambda _d: {"blob": "x" * (MAX_RESPONSE_CHARS * 2)})
+    inputs = [{"inputName": f"Source {i}", "inputKind": "image_source"} for i in range(2000)]
+    obs_server.set_response("GetInputList", {"inputs": inputs})
     api, plugin = await _plugin(obs_server, fake_client)
     try:
-        result = await api.tools.call("obs.request", {"request_type": "GetInputSettings"})
+        result = await api.tools.call("obs.request", {"request_type": "GetInputList"})
         assert result["truncated"] is True
         assert len(result["response_preview"]) == MAX_RESPONSE_CHARS
         assert "response" not in result
+    finally:
+        await plugin.stop()
+
+
+async def test_one_huge_string_is_cut_before_redaction(
+    obs_server: FakeObsServer, fake_client: FakeClient
+) -> None:
+    obs_server.set_response("GetInputSettings", {"inputSettings": {"text": "x " * 50_000}})
+    api, plugin = await _plugin(obs_server, fake_client)
+    try:
+        result = await api.tools.call("obs.request", {"request_type": "GetInputSettings"})
+        assert result["response"]["inputSettings"]["text"].endswith("[truncated]")
     finally:
         await plugin.stop()
 
