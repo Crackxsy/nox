@@ -35,6 +35,7 @@ import contextlib
 import html
 import ipaddress
 import json
+import re
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
@@ -60,7 +61,13 @@ from nox.lan.tls import TlsMaterial, permitted_address
 
 log = get_logger(__name__)
 
-__all__ = ["LanSettings", "PairLimiter", "create_lan_app", "host_of"]
+__all__ = [
+    "LanSettings",
+    "PairLimiter",
+    "content_security_policy",
+    "create_lan_app",
+    "host_of",
+]
 
 CA_FILE_NAME = "nox-home-ca.crt"
 CLOSE_POLICY_VIOLATION = 1008
@@ -84,7 +91,38 @@ _BASE_HEADERS: dict[str, str] = {
 }
 
 
-def _csp(host: str) -> str:
+#: A DNS name as it may appear in the policy: letters, digits, dots and hyphens, nothing else.
+_DNS_NAME = re.compile(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")
+
+
+def _policy_host(host: str) -> str:
+    """`host` as it is written in an origin, or ValueError for anything that is not a plain DNS
+    name or IP address - so no value can end a directive (`;`), add a source (` `) or a scheme."""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if not _DNS_NAME.fullmatch(host):
+            raise ValueError(f"not a host name: {host[:80]!r}") from None
+        return host
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.scope_id is not None:
+            raise ValueError("an IPv6 scope is no part of an origin")
+        return f"[{address.compressed}]"
+    return str(address)
+
+
+def content_security_policy(host: str, port: int | None = None) -> str:
+    """The policy for a page served under `host[:port]`.
+
+    `host` has already been checked against this machine's certificate names (`_Guard`); this is a
+    second, independent line of defence: whatever reaches it is re-validated as a host name or an
+    IP address and the port as a number, never copied from a header.
+    """
+    origin = _policy_host(host)
+    if port is not None:
+        if not 0 < port < 65536:
+            raise ValueError(f"not a port: {port}")
+        origin = f"{origin}:{port}"
     # `connect-src 'self'` covers wss:// to the same host in current browsers; the explicit
     # wss:// origin is for the ones that still read 'self' as http(s) only.
     return "; ".join(
@@ -94,7 +132,7 @@ def _csp(host: str) -> str:
             "style-src 'self' 'unsafe-inline'",
             "img-src 'self' data:",
             "font-src 'self'",
-            f"connect-src 'self' wss://{host}",
+            f"connect-src 'self' wss://{origin}",
             "manifest-src 'self'",
             "worker-src 'self'",
             "object-src 'none'",
@@ -247,7 +285,13 @@ class _Guard:
         headers = Headers(scope=scope)
         host_header = headers.get("host", "")
         host, port = host_of(host_header), _port_of(host_header)
-        if not host or host not in set(self._allowed_hosts()) or port == -1:
+        policy = ""
+        if host and host in set(self._allowed_hosts()) and port != -1:
+            try:
+                policy = content_security_policy(host, port)
+            except ValueError:
+                policy = ""
+        if not policy:
             log.warning("lan.host_refused", host=host_header[:80])
             if scope["type"] == "websocket":
                 await send({"type": "websocket.close", "code": CLOSE_POLICY_VIOLATION})
@@ -265,9 +309,8 @@ class _Guard:
                 out = MutableHeaders(scope=message)
                 for key, value in _BASE_HEADERS.items():
                     out[key] = value
-                # Only the validated host and a numeric port reach the policy, never the raw header.
-                shown = f"[{host}]" if ":" in host else host
-                out["Content-Security-Policy"] = _csp(shown if port is None else f"{shown}:{port}")
+                # Built from the validated host and a numeric port, never from the raw header.
+                out["Content-Security-Policy"] = policy
             await send(message)
 
         await self._app(scope, receive, send_with_headers)

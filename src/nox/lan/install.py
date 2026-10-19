@@ -145,9 +145,9 @@ class LanRuntime:
 class LanListener:
     """Certificates and the HTTPS listener over time: start, re-check, reload.
 
-    `make_tls` and `build` are injected, so tests drive every path - a resolver that hangs, a key
-    that cannot be protected, a certificate re-issued under the same or a new serial - without a
-    network, a core or real time.
+    `make_tls`, `build` and `sleep` are injected, so tests drive every path - a resolver that
+    hangs, a key that cannot be protected, a certificate re-issued under the same or a new serial,
+    a round that fails unforeseen - without a network, a core or real time.
     """
 
     def __init__(
@@ -157,11 +157,13 @@ class LanListener:
         make_tls: Callable[[], TlsMaterial],
         build: Callable[[TlsMaterial], Server],
         timeout_s: float = TLS_TIMEOUT_S,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._runtime = runtime
         self._make_tls = make_tls
         self._build = build
         self._timeout_s = timeout_s
+        self._sleep = sleep
 
     async def _certificates(self) -> TlsMaterial | str:
         """Fresh certificates, or why there are none. Off the loop, never longer than the
@@ -233,7 +235,7 @@ class LanListener:
                 else:
                     self._runtime.warning = reason
             step = self.recheck
-            await asyncio.sleep(interval_s)
+            await self._sleep(interval_s)
 
 
 def install(core: Any) -> LanRuntime:

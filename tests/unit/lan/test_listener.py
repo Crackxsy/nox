@@ -3,6 +3,7 @@ health check says in each state. Certificates and servers are stand-ins; nothing
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import Any
@@ -69,14 +70,21 @@ def runtime(devices: LanDevices) -> LanRuntime:
 
 
 def listener(
-    runtime: LanRuntime, certs: Certificates, built: list[FakeServer], *, fail_on: int = -1
+    runtime: LanRuntime,
+    certs: Certificates,
+    built: list[FakeServer],
+    *,
+    fail_on: int = -1,
+    sleep: Any = None,
 ) -> LanListener:
     def build(m: TlsMaterial) -> FakeServer:
         server = FakeServer(m.server_serial, fail=m.server_serial == fail_on)
         built.append(server)
         return server
 
-    return LanListener(runtime, make_tls=certs, build=build, timeout_s=0.2)
+    if sleep is None:
+        return LanListener(runtime, make_tls=certs, build=build, timeout_s=0.2)
+    return LanListener(runtime, make_tls=certs, build=build, timeout_s=0.2, sleep=sleep)
 
 
 async def test_starts_and_reports_the_port(runtime: LanRuntime) -> None:
@@ -193,3 +201,71 @@ async def test_health_follows_the_listener(runtime: LanRuntime) -> None:
     runtime.warning = "certificates: OSError: resolver down"
     status, detail = await probe(runtime)
     assert status is HealthStatus.LIMITED and "resolver down" in detail
+
+
+# ---- review round 1: what must hold over time -------------------------------------------------
+
+
+async def test_a_hanging_resolver_during_a_recheck_keeps_the_listener(runtime: LanRuntime) -> None:
+    def slow() -> TlsMaterial:
+        time.sleep(1.0)
+        return material(1)
+
+    built: list[FakeServer] = []
+    lan = listener(runtime, Certificates(material(1), slow), built)
+    await lan.start()
+    await lan.recheck()
+    assert runtime.running and runtime.server is built[0] and not built[0].stopped
+    assert runtime.error == "" and "TimeoutError" in runtime.warning
+
+
+async def test_a_key_that_cannot_be_protected_keeps_the_listener_off(
+    runtime: LanRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail closed, end to end with the real certificate code: when the owner-only protection of
+    the key cannot be applied, nothing is built and nothing listens."""
+    from nox.ipc import tokens
+    from nox.lan.tls import ensure_tls
+
+    monkeypatch.setattr(tokens, "restrict_to_owner", lambda _path: False)
+
+    def make() -> TlsMaterial:
+        return ensure_tls(tmp_path / "tls", names=("localhost",), addresses=("127.0.0.1",))
+
+    built: list[FakeServer] = []
+    lan = listener(runtime, Certificates(make), built)
+    assert not await lan.start()
+    assert built == [] and not runtime.running
+    assert "KeyNotProtectedError" in runtime.error
+    assert not (tmp_path / "tls" / "ca.key").exists()
+    assert (await probe(runtime))[0] is HealthStatus.UNAVAILABLE
+
+
+async def test_the_watcher_never_reports_a_serving_listener_as_off(runtime: LanRuntime) -> None:
+    """The review's case: one failed re-check used to leave an error behind that a later check
+    with the same serial never cleared, so the health check said "unavailable" for good while the
+    listener served. Every round here is followed by what the health check says."""
+    answers = Certificates(
+        material(1),  # start
+        RuntimeError("unforeseen"),  # a round fails in a way nobody planned for
+        OSError("resolver down"),  # the usual failed check
+        material(1),  # the same certificate again
+    )
+    built: list[FakeServer] = []
+    seen: list[HealthStatus] = []
+
+    async def next_round(_interval: float) -> None:
+        seen.append((await probe(runtime))[0])
+        if not answers.answers:
+            raise asyncio.CancelledError
+
+    lan = listener(runtime, answers, built, sleep=next_round)
+    with pytest.raises(asyncio.CancelledError):
+        await lan.run(interval_s=600.0)
+    assert seen == [
+        HealthStatus.AVAILABLE,
+        HealthStatus.LIMITED,
+        HealthStatus.LIMITED,
+        HealthStatus.AVAILABLE,
+    ]
+    assert len(built) == 1 and runtime.server is built[0] and runtime.error == ""

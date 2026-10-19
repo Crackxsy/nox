@@ -12,6 +12,7 @@ from nox.lan.app import (
     MAX_PAIR_BODY_BYTES,
     PairLimiter,
     _close_code,
+    content_security_policy,
     create_lan_app,
     host_of,
 )
@@ -78,9 +79,7 @@ def test_a_client_outside_the_home_network_gets_nothing(
     assert outside.post("/api/pair", json={"code": "ABCDEFGH"}, headers=ORIGIN).status_code == 403
 
 
-@pytest.mark.parametrize(
-    "peer", ["127.0.0.1", "10.0.0.7", "172.16.0.1", "192.168.7.20", "fe80::1"]
-)
+@pytest.mark.parametrize("peer", ["127.0.0.1", "10.0.0.7", "172.16.0.1", "192.168.7.20", "fe80::1"])
 def test_loopback_and_private_networks_are_answered(
     devices: LanDevices, tls: TlsMaterial, dist: Path, limiter: PairLimiter, peer: str
 ) -> None:
@@ -164,6 +163,46 @@ def test_responses_carry_a_strict_policy(client: TestClient) -> None:
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["referrer-policy"] == "no-referrer"
     assert response.headers["x-content-type-options"] == "nosniff"
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "noxpi.local; script-src *",  # ends the directive and opens a new one
+        "noxpi.local *",  # adds a second source
+        "noxpi.local\r\nset-cookie: x=1",  # header splitting
+        "*.local",
+        "https://evil.example",
+        "noxpi.local'",
+        "fe80::1%eth0",  # an IPv6 scope is not part of an origin
+        "",
+    ],
+)
+def test_the_policy_builder_refuses_anything_but_a_host(hostile: str) -> None:
+    """A second line behind the Host check: even a value that got past it can never shape the
+    policy. Before, the builder interpolated whatever it was given."""
+    with pytest.raises(ValueError):
+        content_security_policy(hostile, 47843)
+
+
+@pytest.mark.parametrize("port", [0, -1, 65536])
+def test_the_policy_builder_refuses_a_port_out_of_range(port: int) -> None:
+    with pytest.raises(ValueError):
+        content_security_policy("noxpi.local", port)
+
+
+@pytest.mark.parametrize(
+    ("host", "port", "origin"),
+    [
+        ("noxpi.local", 47843, "wss://noxpi.local:47843"),
+        ("192.168.1.20", None, "wss://192.168.1.20"),
+        ("fe80::0:1", 47843, "wss://[fe80::1]:47843"),
+    ],
+)
+def test_the_policy_builder_writes_one_origin(host: str, port: int | None, origin: str) -> None:
+    csp = content_security_policy(host, port)
+    assert f"connect-src 'self' {origin};" in csp
+    assert csp.count("connect-src") == 1 and csp.count("script-src") == 1
 
 
 def test_the_policy_is_built_from_the_validated_host_only(client: TestClient) -> None:
