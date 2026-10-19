@@ -30,15 +30,9 @@ CURATED_GAPS: tuple[Gap, ...] = (
     # Files are no longer here: `file.list/read/write/move/delete` exist, bounded by
     # `files.roots`. A row left behind after a capability ships is worse than no row, which is
     # what `stale_gaps()` is for.
-    Gap(
-        name="desktop.process_start",
-        what="start any program",
-        reason=GapReason.MISSING,
-        detail=(
-            "only programs the user registered as preset actions can be started, by id. "
-            "Processes can be listed and ended - `desktop.processes`, `desktop.process_stop`"
-        ),
-    ),
+    # `desktop.process_start` was removed here: `shell.run` starts programs now (sandboxed, with a
+    # confirmation and per-command-pattern remembering). `desktop.software_install` likewise moved
+    # out when `package.install`/`package.remove` shipped.
     Gap(
         name="desktop.input_send",
         what="press a key combination, or click and move the mouse",
@@ -77,12 +71,6 @@ CURATED_GAPS: tuple[Gap, ...] = (
         what="change a Windows setting, service or driver",
         reason=GapReason.MISSING,
         detail="`config.set` changes Nox's own settings and nothing else on the machine",
-    ),
-    Gap(
-        name="desktop.software_install",
-        what="install or remove a program",
-        reason=GapReason.MISSING,
-        detail="nothing downloads or installs software",
     ),
     Gap(
         name="security.scan",

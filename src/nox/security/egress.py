@@ -142,6 +142,7 @@ class EgressGuard:
         audit: AuditLog | None = None,
         global_allowlist: Sequence[str] = (),
         loopback_allowlist: Sequence[str] = (),
+        read_only_hosts: Sequence[str] = (),
         transport_factory: Callable[[], httpx.AsyncBaseTransport] | None = None,
     ) -> None:
         self._profile = profile
@@ -149,6 +150,10 @@ class EgressGuard:
         self._audit = SafeAuditLog(audit, tool="network")
         self._global_allowlist = tuple(global_allowlist)
         self._loopback_allowlist = tuple(loopback_allowlist)
+        #: Hosts that may only be read, never written to - school platforms above all. A request
+        #: to one of these with any method other than GET or HEAD is denied before it is sent,
+        #: whatever the allow-list says. Entries use the same host grammar as the allow-list.
+        self._read_only_hosts = tuple(read_only_hosts)
         self._transport_factory = transport_factory or default_transport
 
     def loopback_allowlist(self) -> tuple[str, ...]:
@@ -168,8 +173,25 @@ class EgressGuard:
             reason="loopback service not on the loopback allow-list",
         )
 
-    def check(self, host: str, port: int) -> EgressDecision:
+    def is_read_only_host(self, host: str) -> bool:
         host_l = host.strip().lower().rstrip(".")
+        return any(
+            entry_matches(entry, host_l, 0) or entry_matches(entry, host_l, 443)
+            for entry in self._read_only_hosts
+        )
+
+    def check(self, host: str, port: int, *, method: str = "") -> EgressDecision:
+        host_l = host.strip().lower().rstrip(".")
+        if (
+            method
+            and method.upper() not in ("GET", "HEAD")
+            and any(entry_matches(entry, host_l, port) for entry in self._read_only_hosts)
+        ):
+            return EgressDecision(
+                allowed=False,
+                rule_id="read_only_host",
+                reason=f"{host_l} is read-only; {method.upper()} is not allowed",
+            )
         mode = self._privacy.mode
         loopback = is_loopback(host_l)
         if mode is PrivacyMode.OFFLINE:
@@ -224,7 +246,7 @@ class EgressGuard:
         entry to a writer thread and returns: nothing is dropped, and the loop never waits on a
         commit.
         """
-        decision = self.check(host, port)
+        decision = self.check(host, port, method=method)
         self._audit.append(
             actor="egress",
             action="request",

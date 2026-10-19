@@ -128,7 +128,12 @@ class World:
     """One booted core plus its sandbox, reused across tasks and reset between them."""
 
     def __init__(
-        self, root: Path, *, privacy_mode: str = "balanced", log_level: str = "WARNING"
+        self,
+        root: Path,
+        *,
+        privacy_mode: str = "balanced",
+        log_level: str = "WARNING",
+        isolated: bool = False,
     ) -> None:
         self.root = root
         self.sandbox = root / "sandbox"
@@ -139,6 +144,9 @@ class World:
         self.forbidden_tools: list[str] = []
         self._privacy_mode = privacy_mode
         self._log_level = log_level
+        #: Only true in a declared isolated environment (VM/container). It is the one thing that
+        #: lets the harness approve a HIGH-risk dialog (shell, package); off, those stay denied.
+        self._isolated = isolated
         self.core: NoxCore | None = None
         self._saved_env: dict[str, str | None] = {}
         self._unsub: Callable[[], None] | None = None
@@ -249,6 +257,7 @@ class World:
             forbidden_tools=self.forbidden_tools,
             sandbox=self.sandbox,
             root=self.root,
+            isolated=self._isolated,
         )
         self.probe.confirmations += 1
         self.probe.decisions.append(verdict)

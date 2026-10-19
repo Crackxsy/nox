@@ -125,14 +125,14 @@ class PluginEgressGuard(EgressGuard):
                 return True
         return False
 
-    def check(self, host: str, port: int) -> EgressDecision:
+    def check(self, host: str, port: int, *, method: str = "") -> EgressDecision:
         if not self._declared(host.strip().lower().rstrip("."), port):
             return EgressDecision(
                 allowed=False,
                 rule_id=f"plugin.{self.plugin_id}.not_declared",
                 reason="host:port is not in the plugin manifest's network.egress list",
             )
-        return super().check(host, port)
+        return super().check(host, port, method=method)
 
 
 # ---- tools ---------------------------------------------------------------------------------------

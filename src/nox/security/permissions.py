@@ -449,11 +449,17 @@ def _temporary_grant(ctx: EvaluationContext) -> PermissionResult | None:
 def _shell_curated_readonly(ctx: EvaluationContext) -> PermissionResult | None:
     """A curated, read-only shell command runs in the sandbox without a confirmation.
 
-    `shell.run` classifies the command and, when it is one of the vetted read-only commands
-    (`df`, `ls`/`dir`, `git status`, `uname`, ...), sets the target to `readonly:<pattern>`. Only
-    `shell` can produce that prefix - the target comes from the tool's own `targets()`, not the
-    model - so no other tool can borrow this allowance. Confirmation fatigue is a UX bug, and these
-    commands change nothing.
+    `shell.run` classifies the command and, when it is one of the vetted read-only commands given in
+    `argv` form (`df`, `ls`/`dir`, `git status`, `uname`, ...), sets the target to
+    `readonly:<pattern>`. Only `shell` can produce that prefix - the target comes from the tool's
+    own `targets()`, not the model - so no other tool can borrow this allowance. Confirmation
+    fatigue is a UX bug, and these commands change nothing.
+
+    This guard runs **last**, after every prohibition, privacy, safe-mode, grant and profile guard,
+    so it can only lift the HIGH *default* for `shell.run` - never an explicit profile DENY/CONFIRM
+    (those return first), and never privacy, safe mode or the kill switch. If a profile has any rule
+    that decides `shell`, that rule has already answered and this is not reached. A tainted turn
+    drops the exception too.
     """
     if ctx.request.tool != "shell" or not ctx.request.target.startswith("readonly:"):
         return None
@@ -538,13 +544,15 @@ EVALUATION_GUARDS: tuple[Guard, ...] = (
     _privacy_zone,
     _critical_risk,
     _temporary_grant,
-    _shell_curated_readonly,
     _profile_cloud,
     _profile_memory_writes,
     _profile_screenshots_to_cloud,
     _profile_tool_allowlist,
     _profile_filesystem_roots,
     _profile_rules,
+    # Last: the curated read-only exception may only lift the HIGH default for shell.run, never an
+    # explicit profile DENY/CONFIRM (which returned above), nor privacy/safe-mode/kill-switch.
+    _shell_curated_readonly,
 )
 
 

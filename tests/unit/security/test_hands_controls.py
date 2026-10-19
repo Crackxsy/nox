@@ -64,10 +64,23 @@ def test_cmd_grant_never_covers_a_complex_command(
 
 
 def test_curated_readonly_runs_without_confirmation(engine: DefaultPermissionEngine) -> None:
+    # In the companion profile a dedicated rule allows readonly:*; either that rule or the
+    # fallback guard answers ALLOW, both named for the read-only case.
     result = engine.check(_shell_req("readonly:git status"))
     assert result.decision is Decision.ALLOW
-    assert result.rule_id == "shell.curated_readonly"
+    assert "readonly" in result.rule_id
     # A non-curated simple command is HIGH -> CONFIRM, proving the allowance is not blanket.
+    assert engine.check(_shell_req("cmd:git push")).decision is Decision.CONFIRM
+
+
+def test_curated_readonly_guard_lifts_default_without_a_profile_rule(clock: MutableClock) -> None:
+    """A profile with no shell rule: the fallback guard lifts the HIGH default for readonly only."""
+    from nox.security.model import Profile
+
+    engine = _engine_with_profile(Profile(id="bare", rules=[]), clock)
+    assert engine.check(_shell_req("readonly:df")).rule_id == "shell.curated_readonly"
+    assert engine.check(_shell_req("readonly:df")).decision is Decision.ALLOW
+    # A non-readonly shell command still hits the HIGH default (confirm).
     assert engine.check(_shell_req("cmd:git push")).decision is Decision.CONFIRM
 
 
@@ -84,6 +97,53 @@ def test_curated_readonly_is_shell_only(engine: DefaultPermissionEngine) -> None
         }
     )
     assert engine.check(other).decision is not Decision.ALLOW
+
+
+def _engine_with_profile(profile, clock):  # noqa: ANN001
+    from nox.security.permissions import (
+        DefaultPermissionEngine,
+        InMemoryGrantStore,
+        PrivacySnapshot,
+    )
+
+    class _Profiles:
+        def get(self, _id: str):  # noqa: ANN202
+            return profile
+
+    class _Privacy:
+        def snapshot(self) -> PrivacySnapshot:
+            return PrivacySnapshot()
+
+    return DefaultPermissionEngine(
+        profiles=_Profiles(),  # type: ignore[arg-type]
+        privacy=_Privacy(),
+        grants=InMemoryGrantStore(),
+        clock=lambda: clock.now,
+    )
+
+
+def test_profile_deny_beats_curated_readonly(clock: MutableClock) -> None:
+    """A profile that denies shell must deny even a curated read-only command. The read-only
+    exception may lift only the HIGH default, never an explicit profile DENY (guard ordering)."""
+    from nox.security.model import Profile, ProfileRule
+
+    profile = Profile(
+        id="locked",
+        rules=[ProfileRule(id="no-shell", tool="shell", decision=Decision.DENY)],
+    )
+    engine = _engine_with_profile(profile, clock)
+    assert engine.check(_shell_req("readonly:df")).decision is Decision.DENY
+
+
+def test_profile_confirm_beats_curated_readonly(clock: MutableClock) -> None:
+    from nox.security.model import Profile, ProfileRule
+
+    profile = Profile(
+        id="ask",
+        rules=[ProfileRule(id="ask-shell", tool="shell", decision=Decision.CONFIRM)],
+    )
+    engine = _engine_with_profile(profile, clock)
+    assert engine.check(_shell_req("readonly:df")).decision is Decision.CONFIRM
 
 
 # ---- taint guard ---------------------------------------------------------------------------------
