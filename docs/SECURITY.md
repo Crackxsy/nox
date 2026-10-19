@@ -207,7 +207,7 @@ All ten requests are registered for the `shell` and `dashboard` roles only — n
 ## Known limits of network access
 
 Paired devices in the home network (`nox.lan`, see [`NETWORK_ACCESS.md`](NETWORK_ACCESS.md)) are
-protected as described there. Two limits are known and accepted for now:
+protected as described there. Three limits are known and accepted for now:
 
 - **The global pairing rate limit can be used up.** Wrong pairing codes are limited per source
   address and in total. Someone in the home network who floods the pairing endpoint uses up the
@@ -219,3 +219,9 @@ protected as described there. Two limits are known and accepted for now:
   is the only check. Pair only on your own Wi-Fi, never on a network you do not control, and
   install Nox's certificate authority (its fingerprint is shown in the Devices tab) to make later
   connections verifiable.
+- **Paired devices can use up the PIN's attempts.** A device's wrong PINs count towards the PIN's
+  own lockout (5 wrong, then 15 minutes). One device is removed after its third wrong PIN, before
+  it alone can trigger the lockout - but two or more paired devices in the wrong hands together
+  can, and the PIN is then locked for 15 minutes on the computer as well. Nothing is unlocked by
+  it; removing a device needs no PIN on the computer Nox runs on (or `nox unpair`), so the owner
+  can always cut them off.

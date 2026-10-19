@@ -74,6 +74,22 @@ key never leaves the computer Nox runs on. If that key were stolen, it could be 
 home-network names and addresses to the devices that installed the authority - not websites on the
 internet.
 
+### Why there is a warning at all, and what could replace it
+
+Browsers only trust certificates from public authorities, and a public authority only certifies
+names it can check from the internet. A computer in your home has no such name - `192.168.1.20` and
+`noxpi.local` belong to nobody - so Nox has to be its own authority, and every device either
+installs that authority once or accepts the warning. This is the price of a setup that needs no
+account, no domain and no connection to anyone.
+
+A **possible later option** (not built; planned at the earliest with remote access) is a real
+certificate: a free subdomain from a dynamic-DNS service plus a Let's Encrypt certificate obtained
+with the DNS-01 challenge, which works without opening any port. Every browser would trust it
+without a warning or an installed authority. The trade-off is privacy: the name is published in
+the public Certificate Transparency logs, the DNS provider learns it and holds an API key for it,
+and renewing every 90 days needs internet access and that third party. Nox would keep its own
+authority as the default and offer this only as an explicit choice.
+
 ## What a paired device may do
 
 | A paired device may | Only with the security PIN | It stays on the computer Nox runs on |
@@ -145,8 +161,8 @@ screen with `nox devices` (lists them) and `nox unpair <name or id>`.
 - **Only your network.** Only clients from loopback and private networks are answered
   (`ipc.lan.allow_public_clients: false`), and the certificate is only valid there. Nothing about
   this leaves your home: no account, no cloud, no telemetry.
-- **Known limits** - pairing trusts the first contact, and a flood of wrong codes can make pairing
-  wait a minute - are listed in [`SECURITY.md`](SECURITY.md#known-limits-of-network-access).
+- **Known limits** - pairing trusts the first contact, a flood of wrong codes can make pairing wait
+  a minute, and several devices in the wrong hands can lock the PIN for 15 minutes - are listed in [`SECURITY.md`](SECURITY.md#known-limits-of-network-access).
 
 ## Firewall
 

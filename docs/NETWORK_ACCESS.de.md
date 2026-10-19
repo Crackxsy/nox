@@ -79,6 +79,22 @@ verlässt den Rechner, auf dem Nox läuft, nie. Würde er gestohlen, ließen sic
 Geräten, die die Stelle installiert haben, Namen und Adressen im Heimnetz vortäuschen – keine
 Websites im Internet.
 
+### Warum es überhaupt eine Warnung gibt, und was sie ersetzen könnte
+
+Browser vertrauen nur Zertifikaten öffentlicher Stellen, und eine öffentliche Stelle bescheinigt
+nur Namen, die sie aus dem Internet prüfen kann. Ein Rechner bei dir zu Hause hat keinen solchen
+Namen – `192.168.1.20` und `noxpi.local` gehören niemandem –, also muss Nox seine eigene Stelle
+sein, und jedes Gerät installiert diese Stelle einmal oder nimmt die Warnung hin. Das ist der Preis
+dafür, dass Nox kein Konto, keine Domain und keine Verbindung zu irgendwem braucht.
+
+Eine **mögliche spätere Option** (nicht gebaut; frühestens zusammen mit dem Fernzugriff geplant) ist
+ein echtes Zertifikat: eine kostenlose Subdomain bei einem Dynamic-DNS-Dienst und dazu ein
+Let's-Encrypt-Zertifikat über die DNS-01-Prüfung, für die kein Port geöffnet werden muss. Jeder
+Browser würde ihm ohne Warnung und ohne installierte Stelle vertrauen. Der Preis ist Privatsphäre:
+Der Name steht öffentlich in den Certificate-Transparency-Logs, der DNS-Anbieter kennt ihn und hält
+einen API-Schlüssel dafür, und die Erneuerung alle 90 Tage braucht Internet und diesen Dritten. Nox
+würde die eigene Stelle als Standard behalten und das nur als bewusste Wahl anbieten.
+
 ## Was ein gekoppeltes Gerät darf
 
 | Ein gekoppeltes Gerät darf | Nur mit der Sicherheits-PIN | Bleibt beim Rechner, auf dem Nox läuft |
@@ -156,8 +172,9 @@ Server ohne Bildschirm mit `nox devices` (listet sie auf) und `nox unpair <Name 
 - **Nur dein Netzwerk.** Geantwortet wird nur Geräten aus Loopback und privaten Netzen
   (`ipc.lan.allow_public_clients: false`), und das Zertifikat gilt nur dort. Nichts davon verlässt
   dein Zuhause: kein Konto, keine Cloud, keine Telemetrie.
-- **Bekannte Grenzen** – das Koppeln vertraut dem ersten Kontakt, und eine Flut falscher Codes kann
-  das Koppeln eine Minute warten lassen – stehen in
+- **Bekannte Grenzen** – das Koppeln vertraut dem ersten Kontakt, eine Flut falscher Codes kann das
+  Koppeln eine Minute warten lassen, und mehrere Geräte in falschen Händen können die PIN 15 Minuten
+  sperren – stehen in
   [`SECURITY.md`](SECURITY.md#known-limits-of-network-access).
 
 ## Firewall
