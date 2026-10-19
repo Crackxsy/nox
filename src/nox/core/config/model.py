@@ -39,7 +39,13 @@ from nox.core.config.features import (
     StreamConfig,
 )
 from nox.core.config.files import FilesConfig
-from nox.core.config.hands import HandsConfig
+from nox.core.config.hands import (
+    DesktopConfig,
+    HandsConfig,
+    McpConfig,
+    SkillsConfig,
+    WatchConfig,
+)
 from nox.core.config.presets import PresetsConfig
 from nox.core.config.security import PrivacyConfig, SecurityConfig
 from nox.core.config.types import ConfigWarning, StrictSection, expand_path
@@ -81,6 +87,10 @@ class NoxConfig(StrictSection):
     sensors: SensorsConfig = Field(default_factory=SensorsConfig)
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    mcp: McpConfig = Field(default_factory=McpConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    watch: WatchConfig = Field(default_factory=WatchConfig)
+    desktop: DesktopConfig = Field(default_factory=DesktopConfig)
 
     _warnings: list[ConfigWarning] = PrivateAttr(default_factory=list)
     _profile_id: str | None = PrivateAttr(default=None)

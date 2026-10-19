@@ -17,6 +17,7 @@ narrow:
 
 from __future__ import annotations
 
+import re
 import time
 from collections import deque
 from collections.abc import Callable
@@ -41,6 +42,20 @@ KNOWN_SECRETS: dict[str, str] = {
     "nox/calendar/google_ics_url": "calendar",
     "nox/calendar/school_ics_url": "calendar",
 }
+
+#: Secrets that belong to something the user added at runtime rather than to a fixed integration:
+#: an external MCP server's credentials. They are settable by name pattern, and only by it.
+DYNAMIC_SECRETS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^nox/mcp/[a-z][a-z0-9_]{1,31}/[a-z0-9_\-.]{1,64}$"),
+)
+
+
+def settable(name: str, extra: Callable[[str], bool] | None = None) -> bool:
+    """Whether the Settings page may write or delete the secret `name`."""
+    if name in KNOWN_SECRETS or any(p.fullmatch(name) for p in DYNAMIC_SECRETS):
+        return True
+    return extra is not None and extra(name)
+
 
 DEFAULT_RATE_LIMIT = 10
 DEFAULT_RATE_WINDOW_S = 60.0
@@ -85,8 +100,11 @@ class SecretsService:
         max_calls: int = DEFAULT_RATE_LIMIT,
         window_s: float = DEFAULT_RATE_WINDOW_S,
         clock: Callable[[], float] | None = None,
+        extra_names: Callable[[str], bool] | None = None,
     ) -> None:
         self._store = store
+        #: Secret names something installed at runtime declared (a self-built skill's manifest).
+        self.extra_names = extra_names
         self._pin = pin
         self._audit = audit
         self._limiter = _RateLimiter(max_calls, window_s, clock)
@@ -131,7 +149,7 @@ class SecretsService:
         Verification is deliberately expensive, so it runs in a thread rather than on the event
         loop this handler was called from.
         """
-        if name not in KNOWN_SECRETS:
+        if not settable(name, self.extra_names):
             raise IpcError(ERR_VALIDATION, f"unknown secret name {name!r}")
         self._limiter.check()
         if self._pin is None or not self._pin.is_set():

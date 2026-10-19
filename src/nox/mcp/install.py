@@ -1,4 +1,10 @@
-"""`install(core)`: connects the Claude Code conversation session to Nox's tools.
+"""`install(core)`: Nox's two MCP directions.
+
+**Client** (`nox.mcp.servers`): other people's MCP servers from `mcp.servers`, as `mcp.<id>.<tool>`
+tools, with the dashboard requests that add, approve and remove them. Installed whether or not
+Claude Code is there - any model that calls tools can use them.
+
+**Bridge** - connects the Claude Code conversation session to Nox's tools.
 
 Creates the `McpGate`, registers its two IPC requests for the `mcp` role, hands it to the Claude
 Code provider's conversation session, and ties that session to the kill switch: on
@@ -18,15 +24,23 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import nox
 from nox.ai.providers.claude_code import ClaudeCodeProvider
+from nox.core.config.hands import McpConfig, McpServerConfig
 from nox.core.events import E, Event
 from nox.core.logging import get_logger
 from nox.core.toolloop import ToolLoop
+from nox.mcp.client_ipc import register_mcp_client_ipc
 from nox.mcp.gate import McpGate
+from nox.mcp.launch import default_launcher
+from nox.mcp.servers import ApprovalStore, McpServerManager, configured
+from nox.paths import nox_home
+from nox.plugins.manager import worker_environment
+from nox.settings.layers import resolve_user_config_path, write_user_config
 
 log = get_logger(__name__)
 
-__all__ = ["McpRuntime", "install", "prewarm_allowed"]
+__all__ = ["McpClientRuntime", "McpExtension", "McpRuntime", "install", "prewarm_allowed"]
 
 #: Give the core a moment to finish booting before a CLI process is started next to it.
 PREWARM_DELAY_S = 2.0
@@ -98,7 +112,99 @@ class McpRuntime:
         await self.gate.close()
 
 
-def install(core: Any) -> McpRuntime | None:
+class McpClientRuntime:
+    """The external servers, tied to the kill switch like every other process Nox starts."""
+
+    def __init__(self, manager: McpServerManager) -> None:
+        self.manager = manager
+        self.start_task: asyncio.Task[None] | None = None
+        self._unsubs: list[Callable[[], None]] = []
+
+    def watch(self, core: Any) -> None:
+        self._unsubs = [
+            core.bus.subscribe(E.SECURITY_KILL_SWITCH, self._on_kill),
+            core.bus.subscribe(E.SYSTEM_STARTED, self._on_started),
+        ]
+
+    async def _on_kill(self, _event: Event) -> None:
+        await self.manager.halt()
+        log.warning("mcp.servers_halted")
+
+    async def _on_started(self, _event: Event) -> None:
+        await self.manager.resume()
+
+    async def stop(self) -> None:
+        for unsub in self._unsubs:
+            unsub()
+        if self.start_task is not None and not self.start_task.done():
+            self.start_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self.start_task
+        await self.manager.stop()
+
+
+class McpExtension:
+    """What `install` returns: the client half always, the bridge half with Claude Code."""
+
+    def __init__(self, client: McpClientRuntime | None, bridge: McpRuntime | None) -> None:
+        self.client = client
+        self.bridge = bridge
+
+    async def stop(self) -> None:
+        if self.client is not None:
+            await self.client.stop()
+        if self.bridge is not None:
+            await self.bridge.stop()
+
+
+def install_client(core: Any) -> McpClientRuntime | None:
+    if core.tool_registry is None:
+        return None
+    user_path = resolve_user_config_path()
+
+    async def persist(servers: list[McpServerConfig]) -> None:
+        data = configured(servers)
+        await asyncio.to_thread(write_user_config, user_path, {"mcp": {"servers": data}})
+        core.config.mcp = McpConfig.model_validate(
+            {**core.config.mcp.model_dump(), "servers": data}
+        )
+
+    manager = McpServerManager(
+        config=lambda: core.config.mcp,
+        registry=core.tool_registry,
+        launcher=default_launcher(getattr(core, "job", None)),
+        http_client=core.security.egress.client,
+        secrets=core.security.secrets,
+        approvals=ApprovalStore(nox_home() / "mcp" / "approved.json"),
+        workdir=nox_home() / "mcp" / "servers",
+        allows_cloud=core.security.privacy.allows_cloud,
+        persist=persist,
+        audit=core.security.audit,
+        # Only when the home plugin is in use: its default host is loopback, which is also where
+        # a local MCP server over HTTP would live.
+        home_host=lambda: (
+            str(core.config.home.host or "") if "home" in core.config.plugins.enabled else ""
+        ),
+        env_base=worker_environment,
+        client_version=nox.__version__,
+    )
+    if core.registry is not None:
+        register_mcp_client_ipc(core.registry, manager)
+    runtime = McpClientRuntime(manager)
+    runtime.watch(core)
+    runtime.start_task = asyncio.create_task(manager.start(), name="nox-mcp-servers")
+    return runtime
+
+
+def install(core: Any) -> McpExtension | None:
+    client = install_client(core)
+    bridge = install_bridge(core)
+    if client is None and bridge is None:
+        return None
+    return McpExtension(client, bridge)
+
+
+def install_bridge(core: Any) -> McpRuntime | None:
     provider = next((p for p in core.ai_providers or [] if isinstance(p, ClaudeCodeProvider)), None)
     if provider is None or core.hub is None or core.tokens is None:
         log.warning("mcp.not_installed", reason="no Claude Code provider or no hub")

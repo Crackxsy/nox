@@ -219,6 +219,11 @@ def _worker_environment() -> dict[str, str]:
     return {name: os.environ[name] for name in _INHERITED_ENV if name in os.environ}
 
 
+#: Public name for the same allow-list, used for every other process the core starts for code it
+#: did not write (external MCP servers, a self-built skill's tests).
+worker_environment = _worker_environment
+
+
 def _manifest_of(rec: PluginRecord) -> PluginManifest:
     """The record's manifest, as a checked invariant rather than an `assert`.
 

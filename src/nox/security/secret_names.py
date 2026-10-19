@@ -16,7 +16,9 @@ __all__ = [
     "validate_name",
 ]
 
-SECRET_NAME_RE = re.compile(r"^nox/[a-z0-9_\-]+/[a-z0-9_\-.]+$")
+#: `nox/<component>/<key>`, or `nox/mcp/<server>/<key>` for an external MCP server's credentials
+#: (one folder per server, so removing a server can find exactly its secrets).
+SECRET_NAME_RE = re.compile(r"^nox/(?:mcp/[a-z0-9_]+/|[a-z0-9_\-]+/)[a-z0-9_\-.]+$")
 
 
 class SecretNameError(ValueError):
