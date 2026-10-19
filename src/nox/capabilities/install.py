@@ -112,6 +112,9 @@ class CapabilitiesRuntime:
 
 def install(core: CoreLike) -> ExtensionRuntime:
     def probe(tool_name: str) -> tuple[CapabilityState, str] | None:
+        if tool_name.startswith("computer.") and not core.config.desktop.computer_use.enabled:
+            # Not offered while off: the answer is the setting, not a dialog that cannot succeed.
+            return CapabilityState.UNAVAILABLE, "off; the user can switch it on in the settings"
         for prefix, secrets, detail in _SECRET_PREREQUISITES:
             if tool_name.startswith(prefix) and not any(_has_secret(core, s) for s in secrets):
                 return CapabilityState.UNAVAILABLE, detail

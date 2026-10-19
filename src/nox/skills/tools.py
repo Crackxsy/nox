@@ -1,4 +1,5 @@
-"""`skill.learn`, `skill.list`, `skill.remove`: what the model may do about its own skills.
+"""`skill.learn` and `skill.remove`: what the model may do about its own skills. Which skills
+exist, and their tools, is part of `capabilities.list`; the dashboard shows the rest.
 
 `skill.learn` is `high`: it starts a Claude Code session that writes code. The dialog shows the wish
 in words (the permission target), and the answer is either "I am building it", an honest reason it
@@ -39,11 +40,7 @@ class LearnInput(BaseModel):
 
 
 class RemoveInput(BaseModel):
-    id: str = Field(min_length=2, max_length=40, description="The skill id, from skill.list.")
-
-
-class _Empty(BaseModel):
-    pass
+    id: str = Field(min_length=2, max_length=40, description="The skill id.")
 
 
 def register_skill_tools(registry: ToolRegistry, service: SkillService, gaps: GapSource) -> None:
@@ -62,22 +59,6 @@ def register_skill_tools(registry: ToolRegistry, service: SkillService, gaps: Ga
             return {"ok": False, "fix": verdict.message}
         return await service.learn(payload.intent, capability=payload.capability, by="companion")
 
-    async def list_skills(_arguments: dict[str, Any]) -> dict[str, Any]:
-        status = service.status()
-        return {
-            "available": status["available"],
-            "reason": status["reason"],
-            "skills": [
-                {
-                    "id": s["id"],
-                    "intent": s["intent"],
-                    "state": s["state"],
-                    "tools": [t["name"] for t in (s.get("summary") or {}).get("tools", [])],
-                }
-                for s in status["skills"]
-            ],
-        }
-
     async def remove(arguments: dict[str, Any]) -> dict[str, Any]:
         payload = RemoveInput.model_validate(arguments)
         return await service.forget(payload.id, by="companion")
@@ -86,11 +67,9 @@ def register_skill_tools(registry: ToolRegistry, service: SkillService, gaps: Ga
         ToolSpec(
             name="skill.learn",
             description=(
-                "Teach yourself a missing capability: builds a small, checked plugin that the user "
-                "then switches on in the dashboard. Offer it first ('Kann ich noch nicht - soll "
-                "ich "
-                "es mir beibringen?') and only call it after the user said yes. Not for anything "
-                "forbidden, and not for something that exists but is switched off - say the fix."
+                "Teach yourself a missing capability (a checked plugin the user switches on). "
+                "Offer first ('Kann ich noch nicht - soll ich es mir beibringen?'), "
+                "call after a yes."
             ),
             input_model=LearnInput,
             risk=Risk.HIGH,
@@ -103,19 +82,8 @@ def register_skill_tools(registry: ToolRegistry, service: SkillService, gaps: Ga
     )
     registry.register(
         ToolSpec(
-            name="skill.list",
-            description="The skills you built for yourself and their state.",
-            input_model=_Empty,
-            risk=Risk.READ,
-            handler=list_skills,
-            side_effects=False,
-            local=True,
-        )
-    )
-    registry.register(
-        ToolSpec(
             name="skill.remove",
-            description="Forget one self-built skill (switches it off and deletes it).",
+            description="Forget a self-built skill (off and deleted).",
             input_model=RemoveInput,
             risk=Risk.LOW,
             handler=remove,

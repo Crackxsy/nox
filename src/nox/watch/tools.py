@@ -163,11 +163,9 @@ def register_watch_tools(
         ToolSpec(
             name="watch.create",
             description=(
-                "Watch something for the user and tell them when a condition holds ('sag mir, "
-                "wenn ...'): one read-only tool checked on an interval (at least every "
-                f"{config().min_interval_min} min), a value in its answer and a condition "
-                "(lt, gt, contains, changed). If anything personal is missing - which train or "
-                "station, which product, which price - ASK the user first; never guess it."
+                "Tell the user when something happens ('sag mir, wenn ...'): one read-only tool "
+                "checked every few minutes for a condition. Ask for missing details (which train, "
+                "which price) - never guess."
             ),
             input_model=WatchCreateInput,
             risk=Risk.MEDIUM,
@@ -180,7 +178,7 @@ def register_watch_tools(
     registry.register(
         ToolSpec(
             name="watch.list",
-            description="The watchers that are active, with what each last saw.",
+            description="Active watchers and what each last saw.",
             input_model=_Empty,
             risk=Risk.READ,
             handler=list_all,
@@ -191,7 +189,7 @@ def register_watch_tools(
     registry.register(
         ToolSpec(
             name="watch.delete",
-            description="Stop one watcher, by its id from watch.list.",
+            description="Stop a watcher (id from watch.list).",
             input_model=WatchDeleteInput,
             risk=Risk.LOW,
             handler=delete,

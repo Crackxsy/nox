@@ -13,6 +13,7 @@ is worse than none, because that is precisely when the user needs to hear what i
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -285,3 +286,17 @@ async def test_the_offer_stays_within_its_budget(core: NoxCore) -> None:
 
     assert len(section) < 10500, f"{len(section)} characters is over the per-turn budget"
     assert len(section) / offered < 160, "some tool is describing itself at length"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="computer use exists on Windows only")
+async def test_computer_use_is_not_offered_while_it_is_off(core: NoxCore) -> None:
+    """Off by default: the model hears the setting, not a dialog that could never succeed."""
+    assert core.config.desktop.computer_use.enabled is False
+    offered = {tool.name for tool in core.orchestrator.tool_loop.offer()}
+    assert not {n for n in offered if n.startswith("computer.")}
+    core.config.desktop.computer_use.enabled = True
+    try:
+        offered = {tool.name for tool in core.orchestrator.tool_loop.offer()}
+        assert "computer.session_start" in offered
+    finally:
+        core.config.desktop.computer_use.enabled = False

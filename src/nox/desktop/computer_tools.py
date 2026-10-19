@@ -129,9 +129,8 @@ def register_computer_tools(
         ToolSpec(
             name="computer.session_start",
             description=(
-                "Ask the user for a short session in which you may move and click the mouse and "
-                "press key combinations. Off unless the user enabled computer use; never while a "
-                "game runs. Prefer every other tool first."
+                "Ask for a short session with mouse and key combinations. Only if enabled, never "
+                "in games; prefer other tools."
             ),
             input_model=SessionStartInput,
             risk=Risk.HIGH,
