@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import posixpath
 import shutil
 import socket
 import subprocess
@@ -98,13 +99,63 @@ def _under_system_dirs(path: str) -> bool:
     return any(path == d or path.startswith(d + "/") for d in _RO_SYSTEM)
 
 
+def _is_within(path: str, folder: str) -> bool:
+    return path == folder or path.startswith(folder.rstrip("/") + "/")
+
+
+def safe_python_binds(paths: list[str], *, private: list[str]) -> tuple[str, ...] | None:
+    """The paths to bind for an interpreter outside `/usr`, or None when one is too wide.
+
+    Each path must be a file or a folder of the interpreter itself; `/`, a home directory or
+    anything that *contains* one of the `private` folders (the user's home, Nox's own folder with
+    its secrets and database) would hand the sandbox far more than an interpreter, so the egress
+    path is refused instead (fail closed).
+    """
+    out: list[str] = []
+    for raw in paths:
+        path = posixpath.normpath(raw)
+        if path in ("/", "/home", "/root", "/var", "/opt", "/srv", "/tmp"):  # noqa: S108
+            return None
+        if posixpath.dirname(path) == "/home":  # /home/<user> itself
+            return None
+        if any(_is_within(folder, path) for folder in private if folder):
+            return None
+        if not _under_system_dirs(path) and path not in out:
+            out.append(path)
+    return tuple(out)
+
+
+def _own_python_binds(real: str) -> tuple[str, ...] | None:
+    """The minimum Nox's own interpreter needs inside the sandbox with `-I -S`: the executable,
+    its standard library (with `lib-dynload`) and `libpython` when it is linked dynamically -
+    never its prefix as a whole, which may be a home directory."""
+    import sysconfig  # noqa: PLC0415 - only for this rare fallback
+
+    from nox.paths import nox_home  # noqa: PLC0415
+
+    paths = [real]
+    for key in ("stdlib", "platstdlib"):
+        folder = sysconfig.get_path(key)
+        if folder and os.path.isdir(folder):
+            paths.append(os.path.realpath(folder))
+    libdir = sysconfig.get_config_var("LIBDIR") or ""
+    if sysconfig.get_config_var("Py_ENABLE_SHARED"):
+        for name in {sysconfig.get_config_var("LDLIBRARY"), sysconfig.get_config_var("INSTSONAME")}:
+            lib = os.path.join(libdir, str(name)) if name else ""
+            if lib and os.path.isfile(lib):
+                paths.append(lib)
+                paths.append(os.path.realpath(lib))
+    private = [os.path.expanduser("~"), str(nox_home())]
+    return safe_python_binds(paths, private=private)
+
+
 def forwarder_python() -> tuple[str, tuple[str, ...]] | None:
     """The interpreter that runs the egress launcher inside the sandbox, and what to bind for it.
 
-    The system `python3` (always there on Raspberry Pi OS, Debian and Ubuntu) lives in the
-    read-only `/usr` the sandbox already sees. Without one, Nox's own interpreter is used and its
-    installation prefix - interpreter and standard library, nothing of Nox's data - is bound
-    read-only. `None` when neither exists: declared egress then fails closed.
+    The system `python3` (always there on Raspberry Pi OS, Debian and Ubuntu; the installer makes
+    sure) lives in the read-only `/usr` the sandbox already sees. Without one, Nox's own
+    interpreter is used with only its executable, standard library and `libpython` bound
+    read-only (`_own_python_binds`). `None` when neither works: declared egress then fails closed.
     """
     for candidate in ("/usr/bin/python3", "/bin/python3"):
         if os.access(candidate, os.X_OK):
@@ -114,7 +165,11 @@ def forwarder_python() -> tuple[str, tuple[str, ...]] | None:
         return None
     if _under_system_dirs(real):
         return real, ()
-    return real, (os.path.dirname(os.path.dirname(real)),)
+    binds = _own_python_binds(real)
+    if binds is None:
+        log.warning("sandbox.forwarder_python_refused", python=real)
+        return None
+    return real, binds
 
 
 def build_bwrap_argv(

@@ -164,14 +164,23 @@ define arch_unsupported \
   'nicht unterstützte Architektur: %s' \
   'unsupported architecture: %s'
 define step_packages \
-  'Pakete installieren (git, curl)' \
-  'Installing packages (git, curl)'
+  'Pakete installieren (git, curl, bubblewrap)' \
+  'Installing packages (git, curl, bubblewrap)'
 define untested_system \
   'Hinweis: getestet ist Nox auf Raspberry Pi OS, Debian und Ubuntu. Auf diesem System kann etwas fehlen.' \
   'Note: Nox is tested on Raspberry Pi OS, Debian and Ubuntu. Something may be missing on this system.'
 define tool_missing \
   '%s fehlt, bitte installieren.' \
   '%s is missing, please install it.'
+define bwrap_missing \
+  'Hinweis: bubblewrap (bwrap) fehlt - ohne es führt Nox keine Befehle aus. Bitte installieren.' \
+  'Note: bubblewrap (bwrap) is missing - without it Nox runs no commands. Please install it.'
+define step_apparmor \
+  'AppArmor: bubblewrap darf Namensräume anlegen (Ubuntu)' \
+  'AppArmor: allowing bubblewrap to create namespaces (Ubuntu)'
+define apparmor_failed \
+  'Hinweis: AppArmor-Profil für bwrap ließ sich nicht laden.' \
+  'Note: the AppArmor profile for bwrap could not be loaded.'
 define prefix_foreign \
   '%s existiert schon, ist aber keine Nox-Installation. Bitte prüfen und den Ordner entfernen oder umbenennen.' \
   '%s already exists but is not a Nox installation. Please check it, then remove or rename the folder.'
@@ -499,12 +508,34 @@ case "$(uname -m)" in
 esac
 
 if command -v apt-get >/dev/null 2>&1; then
+  # bubblewrap + python3: the command sandbox (bwrap, and the tiny relay that gives a sandboxed
+  # program its only way out - the egress proxy). Without them Nox refuses to run commands.
   say "$(msg step_packages)"
   apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates tar sudo >/dev/null
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates tar sudo bubblewrap python3 >/dev/null
 else
   note "$(msg untested_system)"
   for tool in git curl tar sha256sum sudo; do command -v "$tool" >/dev/null 2>&1 || fail "$(msg tool_missing "$tool")"; done
+  command -v bwrap >/dev/null 2>&1 || note "$(msg bwrap_missing)"
+fi
+
+# Ubuntu 23.10+ lets unprivileged programs create user namespaces only with an AppArmor profile
+# that allows it; bwrap needs one. Raspberry Pi OS and Debian have no such restriction. Only
+# added when the restriction is on and the system has no bwrap profile of its own.
+restrict=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+if [ -r "$restrict" ] && [ "$(cat "$restrict")" = "1" ] && [ -x /usr/bin/bwrap ] && [ ! -e /etc/apparmor.d/bwrap-userns-restrict ] && command -v apparmor_parser >/dev/null 2>&1; then
+  say "$(msg step_apparmor)"
+  cat > /etc/apparmor.d/nox-bwrap <<'APPARMOR'
+# Installed by Nox: lets bubblewrap create the user namespace its sandbox is built in.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile nox-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/nox-bwrap>
+}
+APPARMOR
+  apparmor_parser -r /etc/apparmor.d/nox-bwrap || note "$(msg apparmor_failed)"
 fi
 
 if [ -e "$PREFIX" ] && [ ! -d "$SRC/.git" ] && [ -n "$(ls -A "$PREFIX" 2>/dev/null)" ]; then

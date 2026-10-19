@@ -18,6 +18,9 @@ Group=nox
 Environment=NOX_HOME=/var/lib/nox
 Environment=HOME=/var/lib/nox
 Environment=PYTHONUNBUFFERED=1
+# The command sandbox's memory/process ceiling: the core may manage the cgroup subtree it is given
+# (Delegate= below) and puts each sandboxed process in a child cgroup of its own.
+Environment=NOX_CGROUP_DELEGATED=1
 # Claude Code installs itself into the service user's ~/.local/bin (`nox claude-login`).
 Environment=PATH=/var/lib/nox/.local/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=/opt/nox/current
@@ -28,6 +31,17 @@ RestartSec=5
 TimeoutStopSec=20
 
 # Hardening: the core needs its own folder and the network, nothing else.
+#
+# What the command sandbox (bubblewrap) needs on top, and why each is still narrow:
+# * RestrictNamespaces= allows exactly the namespaces bwrap creates for its children (an
+#   unprivileged user namespace holding no capability outside itself).
+# * SystemCallFilter= adds @mount: bwrap mounts its read-only view inside that namespace. Without
+#   capabilities in the host namespace, the core itself still cannot mount anything there.
+# * No ProtectKernelTunables=/ProtectKernelLogs=/ProtectControlGroups=: they over-mount parts of
+#   /proc (the kernel then refuses the sandbox its own /proc) and make the delegated cgroup
+#   read-only. Without root or capabilities, /proc/sys, /sys and foreign cgroups stay read-only to
+#   this user anyway.
+Delegate=memory pids
 StateDirectory=nox
 StateDirectoryMode=0700
 NoNewPrivileges=yes
@@ -36,21 +50,18 @@ ProtectHome=yes
 ReadWritePaths=/var/lib/nox
 PrivateTmp=yes
 PrivateDevices=yes
-ProtectKernelTunables=yes
 ProtectKernelModules=yes
-ProtectKernelLogs=yes
-ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 ProtectProc=invisible
 SystemCallArchitectures=native
-SystemCallFilter=@system-service
+SystemCallFilter=@system-service @mount
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictSUIDSGID=yes
 RestrictRealtime=yes
-RestrictNamespaces=yes
+RestrictNamespaces=user mnt pid net ipc uts
 LockPersonality=yes
 # AF_NETLINK: listing network interfaces (psutil, the network health check).
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK

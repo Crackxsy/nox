@@ -21,6 +21,7 @@ from nox.sandbox.linux import (
     LinuxSandbox,
     build_bwrap_argv,
     forwarder_python,
+    safe_python_binds,
 )
 from nox.sandbox.model import EgressDecl, Limits, SandboxUnavailable
 from nox.sandbox.netguard import NetGuard
@@ -100,11 +101,49 @@ def test_forwarder_python_prefers_the_system_interpreter(monkeypatch: pytest.Mon
     assert forwarder_python() == ("/usr/bin/python3", ())
 
 
-def test_forwarder_python_falls_back_to_our_own_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(linux_mod.os, "access", lambda path, mode: path.startswith("/opt/"))
-    monkeypatch.setattr(linux_mod.os.path, "realpath", lambda p: "/opt/py/bin/python3.13")
-    monkeypatch.setattr(linux_mod.os.path, "dirname", lambda p: p.rsplit("/", 1)[0])
-    assert forwarder_python() == ("/opt/py/bin/python3.13", ("/opt/py",))
+def test_forwarder_python_falls_back_to_minimal_binds(monkeypatch: pytest.MonkeyPatch) -> None:
+    exe = "/home/x/.local/share/uv/python/cpython-3.13/bin/python3.13"
+    monkeypatch.setattr(linux_mod.os, "access", lambda path, mode: path == exe)
+    monkeypatch.setattr(linux_mod.os.path, "realpath", lambda p: p)
+    monkeypatch.setattr(linux_mod.sys, "executable", exe)
+    monkeypatch.setattr(linux_mod, "_own_python_binds", lambda real: (real, "/lib-of-it"))
+    assert forwarder_python() == (exe, (exe, "/lib-of-it"))
+    monkeypatch.setattr(linux_mod, "_own_python_binds", lambda real: None)
+    assert forwarder_python() is None, "a too-wide bind refuses the egress path"
+
+
+UV = "/home/x/.local/share/uv/python/cpython-3.13-linux"
+
+
+def test_python_binds_are_only_the_interpreter_pieces() -> None:
+    binds = safe_python_binds(
+        [f"{UV}/bin/python3.13", f"{UV}/lib/python3.13", f"{UV}/lib/libpython3.13.so.1.0"],
+        private=["/home/x", "/home/x/.local/share/nox"],
+    )
+    assert binds == (
+        f"{UV}/bin/python3.13",
+        f"{UV}/lib/python3.13",
+        f"{UV}/lib/libpython3.13.so.1.0",
+    )
+    assert binds is not None and "/home/x" not in binds
+
+
+@pytest.mark.parametrize(
+    "wide",
+    [
+        "/",
+        "/home",
+        "/home/x",
+        "/home/x/",
+        "/root",
+        "/var",
+        "/var/lib",  # contains Nox's own folder below
+        "/home/x/.local",  # contains private data of the user's Nox
+    ],
+)
+def test_too_wide_python_binds_fail_closed(wide: str) -> None:
+    private = ["/home/x", "/var/lib/nox", "/home/x/.local/share/nox"]
+    assert safe_python_binds([f"{UV}/bin/python3.13", wide], private=private) is None
 
 
 def test_the_environment_never_reaches_the_command_line(monkeypatch: pytest.MonkeyPatch) -> None:
