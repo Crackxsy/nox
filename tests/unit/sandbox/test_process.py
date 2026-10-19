@@ -464,12 +464,15 @@ async def test_windows_child_gets_its_own_proxy_credentials() -> None:
 async def test_windows_proxy_secret_is_never_on_the_command_line() -> None:
     """CreateProcess gets the secret in the environment block only; the command line is
     readable by other processes, the environment of the child is not handed out."""
-    show = [_CMD, "/c", "echo %HTTPS_PROXY% %MCP_TOKEN%& ping -n 30 127.0.0.1 >nul"]
+    # Stays alive without touching the network (ping cannot run in an AppContainer).
+    script = "[Console]::Out.WriteLine($env:HTTPS_PROXY + ' ' + $env:MCP_TOKEN); Start-Sleep 60"
+    show = [_PS, "-NoProfile", "-NonInteractive", "-Command", script]
     proc = await _appcontainer_sandbox().start(
         show, egress=EgressDecl(hosts=("example.com:443",)), env={"MCP_TOKEN": "tok-12345"}
     )
     async with proc:
         line = (await asyncio.wait_for(proc.readline(), 60)).strip().decode()
+        assert proc.running, proc.stderr_tail()
         url, _, token = line.partition(" ")
         secret = url.split(":", 2)[2].split("@", 1)[0]
         assert url.startswith("http://nox:") and len(secret) >= 32, line
