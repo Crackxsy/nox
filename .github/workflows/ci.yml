@@ -242,6 +242,7 @@ jobs:
       - name: AppArmor child-profile experiment (informational)
         continue-on-error: true
         run: |
+          set +e
           if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" != "1" ]; then exit 0; fi
           sudo install -d -m 0755 /usr/lib/nox-exp
           child='flags=(attach_disconnected,mediate_deleted) { allow file rwlkmix /{**,}, allow network, allow unix, allow ptrace, allow signal, allow mqueue, allow io_uring, allow mount, allow umount, allow pivot_root, allow dbus, audit deny capability, audit deny userns, }'
@@ -272,17 +273,21 @@ jobs:
       - name: An outdated bwrap copy fails closed; the apt hook refreshes it
         run: |
           if [ -e /usr/lib/nox/bwrap ]; then
+            # The sandbox log lines of the service process started by this restart, once written.
+            fresh_log() {
+              sudo systemctl restart nox
+              pid="$(systemctl show -p MainPID --value nox)"
+              for _ in $(seq 90); do
+                sudo journalctl -u nox --no-pager _PID="$pid" | grep -E "sandbox\.linux_ready|hands\.sandbox_unavailable" && return 0
+                sleep 1
+              done
+              return 1
+            }
             sudo sh -c 'printf x >> /usr/lib/nox/bwrap'
-            since="$(date '+%Y-%m-%d %H:%M:%S')"; sleep 1
-            sudo systemctl restart nox
-            for _ in $(seq 60); do sudo journalctl -u nox --no-pager --since "$since" | grep -qE "sandbox\.linux_ready|hands\.sandbox_unavailable" && break; sleep 1; done
-            sudo journalctl -u nox --no-pager --since "$since" | grep -q "differs from /usr/bin/bwrap"
+            fresh_log | grep -q "differs from /usr/bin/bwrap"
             sudo apt-get install --reinstall -y -qq bubblewrap >/dev/null
             sudo cmp /usr/bin/bwrap /usr/lib/nox/bwrap
-            since="$(date '+%Y-%m-%d %H:%M:%S')"; sleep 1
-            sudo systemctl restart nox
-            for _ in $(seq 60); do sudo journalctl -u nox --no-pager --since "$since" | grep -qE "sandbox\.linux_ready|hands\.sandbox_unavailable" && break; sleep 1; done
-            sudo journalctl -u nox --no-pager --since "$since" | grep -E "sandbox\.linux_ready" | grep -q "egress=.\?True"
+            fresh_log | grep -E "sandbox\.linux_ready" | grep -q "egress=.\?True"
           fi
 
       - name: Same version again changes nothing
