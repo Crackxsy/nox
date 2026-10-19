@@ -16,10 +16,13 @@ by name - anything else is HIGH (fail closed).
 * **high** - hard to undo, visible to viewers or outside OBS, or putting content on screen:
   deleting or renaming scenes and sources, starting the broadcast, any recording, the virtual
   camera or a generic output, profiles and scene collections, captions and custom events,
-  opening windows, adding or showing a source in a scene, and creating or changing a source,
-  filter or transition with anything but the listed harmless settings (text, colours, sizes -
-  `SAFE_INPUT_SETTINGS`, `SAFE_FILTER_KINDS`). Confirmed every time, never remembered
-  (`nox.security.permissions.NEVER_REMEMBERED`).
+  opening windows, adding, showing or hiding a source in a scene, turning a filter off,
+  unmuting, levels, audio tracks and monitoring (any of which can put a private microphone on
+  air), studio-mode transitions, a scene switch outside the plugin's `scene_set`, and creating
+  or changing a source, filter or transition with anything but the listed harmless settings
+  (text, colours, sizes - `SAFE_INPUT_SETTINGS`, `SAFE_FILTER_KINDS`), replacing settings
+  (`overlay: false`) or any field the request type does not document (`MEDIUM_FIELDS`).
+  Confirmed every time, never remembered (`nox.security.permissions.NEVER_REMEMBERED`).
 * **denied** - routed to an existing hard prohibition (`stream.stop`, `stream.key.read`), so no
   profile, grant or confirmation can ever allow them; or classified critical, which no tool call
   can reach either (stream service and output settings, profile parameters, vendor requests and
@@ -139,57 +142,59 @@ READ_TYPES: frozenset[str] = frozenset(
     }
 )
 
-#: Confirmed; a "remember" covers that one request type. (Reads that may return secrets are here
-#: too: answered only after the user agreed, and redacted either way.)
-MEDIUM_TYPES: frozenset[str] = frozenset(
-    {
-        "GetProfileParameter",
-        "GetPersistentData",
-        "SetCurrentProgramScene",
-        "SetCurrentPreviewScene",
-        "TriggerStudioModeTransition",
-        "SetTBarPosition",
-        "SetStudioModeEnabled",
-        "CreateScene",
-        "SetSceneSceneTransitionOverride",
-        "CreateInput",
-        "SetInputName",
-        "SetInputSettings",
-        "SetInputMute",
-        "ToggleInputMute",
-        "SetInputVolume",
-        "SetInputAudioBalance",
-        "SetInputAudioSyncOffset",
-        "SetInputAudioMonitorType",
-        "SetInputAudioTracks",
-        "SetInputDeinterlaceMode",
-        "SetInputDeinterlaceFieldOrder",
-        "SetCurrentSceneTransition",
-        "SetCurrentSceneTransitionDuration",
-        "SetCurrentSceneTransitionSettings",
-        "CreateSourceFilter",
-        "SetSourceFilterName",
-        "SetSourceFilterIndex",
-        "SetSourceFilterSettings",
-        "SetSourceFilterEnabled",
-        "SetSceneItemTransform",
-        "SetSceneItemEnabled",
-        "SetSceneItemLocked",
-        "SetSceneItemIndex",
-        "SetSceneItemBlendMode",
-        "StopVirtualCam",
-        "StartReplayBuffer",
-        "StopReplayBuffer",
-        "ToggleReplayBuffer",
-        "SaveReplayBuffer",
-        "PauseRecord",
-        "SplitRecordFile",
-        "CreateRecordChapter",
-        "SetMediaInputCursor",
-        "OffsetMediaInputCursor",
-        "TriggerMediaInputAction",
-    }
-)
+_INPUT = ("inputName", "inputUuid")
+_SCENE = ("sceneName", "sceneUuid")
+_SOURCE = ("sourceName", "sourceUuid")
+_ITEM = (*_SCENE, "sceneItemId")
+
+#: Confirmed; a "remember" covers that one request type. Each type lists the `requestData` fields
+#: it may carry: a field obs-websocket does not document for it - or one a later version adds - is
+#: not trusted and makes the call high. (Reads that may return secrets are here too: answered only
+#: after the user agreed, and redacted either way.)
+MEDIUM_FIELDS: Mapping[str, frozenset[str]] = {
+    name: frozenset(fields)
+    for name, fields in {
+        "GetProfileParameter": ("parameterCategory", "parameterName"),
+        "GetPersistentData": ("realm", "slotName"),
+        "SetCurrentProgramScene": _SCENE,
+        "SetCurrentPreviewScene": _SCENE,
+        "SetStudioModeEnabled": ("studioModeEnabled",),
+        "CreateScene": ("sceneName",),
+        "SetSceneSceneTransitionOverride": (*_SCENE, "transitionName", "transitionDuration"),
+        "CreateInput": (*_SCENE, "inputName", "inputKind", "inputSettings", "sceneItemEnabled"),
+        "SetInputName": (*_INPUT, "newInputName"),
+        "SetInputSettings": (*_INPUT, "inputSettings", "overlay"),
+        "SetInputMute": (*_INPUT, "inputMuted"),
+        "SetInputAudioBalance": (*_INPUT, "inputAudioBalance"),
+        "SetInputAudioSyncOffset": (*_INPUT, "inputAudioSyncOffset"),
+        "SetInputDeinterlaceMode": (*_INPUT, "inputDeinterlaceMode"),
+        "SetInputDeinterlaceFieldOrder": (*_INPUT, "inputDeinterlaceFieldOrder"),
+        "SetCurrentSceneTransition": ("transitionName",),
+        "SetCurrentSceneTransitionDuration": ("transitionDuration",),
+        "SetCurrentSceneTransitionSettings": ("transitionSettings", "overlay"),
+        "CreateSourceFilter": (*_SOURCE, "filterName", "filterKind", "filterSettings"),
+        "SetSourceFilterName": (*_SOURCE, "filterName", "newFilterName"),
+        "SetSourceFilterIndex": (*_SOURCE, "filterName", "filterIndex"),
+        "SetSourceFilterSettings": (*_SOURCE, "filterName", "filterSettings", "overlay"),
+        "SetSourceFilterEnabled": (*_SOURCE, "filterName", "filterEnabled"),
+        "SetSceneItemTransform": (*_ITEM, "sceneItemTransform"),
+        "SetSceneItemLocked": (*_ITEM, "sceneItemLocked"),
+        "SetSceneItemIndex": (*_ITEM, "sceneItemIndex"),
+        "SetSceneItemBlendMode": (*_ITEM, "sceneItemBlendMode"),
+        "StopVirtualCam": (),
+        "StartReplayBuffer": (),
+        "StopReplayBuffer": (),
+        "ToggleReplayBuffer": (),
+        "SaveReplayBuffer": (),
+        "PauseRecord": (),
+        "SplitRecordFile": (),
+        "CreateRecordChapter": ("chapterName",),
+        "SetMediaInputCursor": (*_INPUT, "mediaCursor"),
+        "OffsetMediaInputCursor": (*_INPUT, "mediaCursorOffset"),
+        "TriggerMediaInputAction": (*_INPUT, "mediaAction"),
+    }.items()
+}
+MEDIUM_TYPES: frozenset[str] = frozenset(MEDIUM_FIELDS)
 
 #: Hard to undo, visible beyond OBS, or one of several ways to the same effect as another high
 #: request: confirmed every time, never remembered. A few carry the action names the shipped
@@ -204,9 +209,20 @@ HIGH_TYPES: frozenset[str] = frozenset(
         *HIGH_ACTIONS,
         "RemoveSceneItem",
         "RemoveSourceFilter",
-        # Putting an existing source - a camera, a captured screen - into another scene.
+        # Putting an existing source - a camera, a captured screen - into another scene, or
+        # showing or hiding one: either way changes what viewers see, a covered area included.
         "CreateSceneItem",
         "DuplicateSceneItem",
+        "SetSceneItemEnabled",
+        # Audio that reaches the stream: unmuting, raising a level, routing a source to a track
+        # or from "monitor only" back to the output can each make a private microphone audible.
+        "ToggleInputMute",
+        "SetInputVolume",
+        "SetInputAudioMonitorType",
+        "SetInputAudioTracks",
+        # Studio mode puts the preview on air, whatever scene the preview holds.
+        "TriggerStudioModeTransition",
+        "SetTBarPosition",
         # Going live, by any of the three routes that do it.
         "StartStream",
         "StartOutput",
@@ -360,10 +376,32 @@ def _shows_content(request_type: str, data: Mapping[str, Any]) -> bool:
         return not _numbers_only(data.get("filterSettings", {}))
     if request_type == "SetCurrentSceneTransitionSettings":
         return not _numbers_only(data.get("transitionSettings", {}))
-    if request_type == "SetSceneItemEnabled":
-        # Hiding is harmless; showing may put a camera or a captured screen on stream.
-        return data.get("sceneItemEnabled") is not False
+    if request_type == "SetInputMute":
+        return data.get("inputMuted") is not True
+    if request_type == "SetSourceFilterEnabled":
+        # Turning a filter off can uncover what it blurred or cropped away.
+        return data.get("filterEnabled") is not True
     return False
+
+
+def _unexpected_fields(request_type: str, data: Mapping[str, Any]) -> bool:
+    """A field the request type does not document, or settings replaced instead of merged
+    (`overlay: false` resets every setting not named, a privacy filter's included)."""
+    allowed = MEDIUM_FIELDS.get(request_type, frozenset())
+    if any(str(key) not in allowed for key in data):
+        return True
+    return "overlay" in data and data["overlay"] is not True
+
+
+def _outside_scene_set(
+    request_type: str, data: Mapping[str, Any], scene_set: frozenset[str]
+) -> bool:
+    """A scene switch to a scene the user did not list for Nox - the same rule `obs.scene.switch`
+    enforces, so the generic route cannot do more than the dedicated one without asking each
+    time."""
+    if request_type not in ("SetCurrentProgramScene", "SetCurrentPreviewScene") or not scene_set:
+        return False
+    return data.get("sceneName") not in scene_set
 
 
 def _names_privacy_scene(request_data: Mapping[str, Any], privacy_scene: str) -> bool:
@@ -396,8 +434,13 @@ def classify(
     request_data: Mapping[str, Any] | None = None,
     *,
     privacy_scene: str = "",
+    scene_set: Iterable[str] = (),
 ) -> CallScope:
-    """The permission action, risk and confirmation text of one `obs.request` call."""
+    """The permission action, risk and confirmation text of one `obs.request` call.
+
+    `scene_set` is the plugin's list of scenes Nox may switch to (`obs.scene.switch`); a switch
+    elsewhere is high."""
+    allowed_scenes = frozenset(scene_set)
     if not request_type.isascii() or not request_type.isalnum() or not request_type[:1].isupper():
         raise InvalidObsRequestError(f"not an obs-websocket request type: {request_type!r}")
     data = request_data or {}
@@ -418,10 +461,15 @@ def classify(
             action=HIGH_ACTIONS.get(request_type, action), risk=Risk.HIGH, target=target
         )
     if request_type in MEDIUM_TYPES:
-        if _shows_content(request_type, data) or _uses_uuids(data):
-            # Content on stream is as consequential as the high requests. A UUID only OBS can
-            # resolve; the plugin checks it against the privacy scene, and until then the call
-            # is treated as if it touched something that matters.
+        if (
+            _unexpected_fields(request_type, data)
+            or _shows_content(request_type, data)
+            or _outside_scene_set(request_type, data, allowed_scenes)
+            or _uses_uuids(data)
+        ):
+            # Unknown fields are not trusted; content on stream is as consequential as the high
+            # requests; a UUID only OBS can resolve - the plugin checks it against the privacy
+            # scene - and until then the call is treated as if it touched something that matters.
             return CallScope(action=action, risk=Risk.HIGH, target=target)
         return CallScope(action=action, risk=Risk.MEDIUM, target=target)
     # Not listed: never trusted, whatever its name suggests.
@@ -485,6 +533,8 @@ def privacy_refusal(
 def scope_for_tool(config: Mapping[str, Any]) -> Scope:
     """The `ToolSpec.scope` of `obs.request` for a plugin configured with `config`."""
     privacy_scene = str(config.get("privacy_scene", "") or "")
+    raw_set = config.get("scene_set") or []
+    scene_set = [str(name) for name in raw_set] if isinstance(raw_set, list) else []
 
     def scope(payload: dict[str, Any]) -> CallScope:
         data = payload.get("request_data")
@@ -492,6 +542,7 @@ def scope_for_tool(config: Mapping[str, Any]) -> Scope:
             str(payload.get("request_type", "")),
             data if isinstance(data, Mapping) else None,
             privacy_scene=privacy_scene,
+            scene_set=scene_set,
         )
 
     return scope
@@ -533,8 +584,15 @@ def _high_entropy(token: str) -> bool:
     return any(c.isdigit() for c in token) and any(c.isalpha() for c in token)
 
 
+#: An absolute path on its own: a drive letter, a UNC share or a POSIX root.
+_ABSOLUTE_PATH = re.compile(r"^\s*([a-zA-Z]:[\\/]|\\\\|/)")
+
+
 def _redact_string(text: str) -> str:
-    """URLs as `scheme://host`, long key-like runs replaced."""
+    """URLs as `scheme://host`, an absolute path as its file name (paths name the user), long
+    key-like runs replaced."""
+    if _ABSOLUTE_PATH.match(text) and "\n" not in text:
+        return PurePath(text.strip().replace("\\", "/")).name
     text = _URL.sub(lambda m: _host_only(m.group(0)), text)
     return _HIGH_ENTROPY.sub(lambda m: REDACTED if _high_entropy(m.group(0)) else m.group(0), text)
 

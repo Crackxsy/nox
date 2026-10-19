@@ -100,6 +100,8 @@ PRIVACY_SCENE_DEPTH = 8
 #: again under this name on the next setup).
 OVERLAY_INPUT = "Nox Overlay"
 VOICE_INPUT = "Nox Voice"
+#: What a virtual audio cable's name contains (VB-Audio Virtual Cable, VoiceMeeter, and the like).
+VIRTUAL_DEVICE_WORDS = ("cable", "voicemeeter", "virtual")
 
 
 class ObsRequestInput(BaseModel):
@@ -157,6 +159,15 @@ class AudioTrackSetupInput(BaseModel):
     scene_name: str = Field(default="", max_length=200)
     #: OBS audio tracks (1-6) the source is routed to; empty keeps OBS's default (all tracks).
     tracks: list[int] = Field(default_factory=list, max_length=6)
+
+    @field_validator("device_hint")
+    @classmethod
+    def _virtual_device(cls, value: str) -> str:
+        # Only the virtual cable Nox speaks into - never a microphone or any other real device,
+        # which would put the room on stream under Nox's name.
+        if not any(word in value.casefold() for word in VIRTUAL_DEVICE_WORDS):
+            raise ValueError("only a virtual audio cable can be Nox's track")
+        return value
 
     @field_validator("tracks")
     @classmethod
@@ -580,8 +591,8 @@ class ObsPlugin:
 
     async def screenshot(self, data: ScreenshotInput) -> dict[str, Any]:
         """`obs.screenshot`: a small JPEG of a source or scene, written to a local folder. Only
-        the path and size are returned - the image never travels with the tool result, so it
-        never reaches a cloud model by accident."""
+        the file name and size are returned - the image never travels with the tool result, so
+        it never reaches a cloud model by accident."""
         self._require_connection()
         source = data.source_name or await self._current_scene_name()
         response = await self.client.request(
@@ -595,7 +606,8 @@ class ObsPlugin:
         )
         image = _decode_image(str(response.get("imageData", "")))
         path = await asyncio.to_thread(self._store_screenshot, image)
-        return {"source": source, "path": str(path), "bytes": len(image), "width": data.width}
+        # The file name only: the folder's path names the user, and the model has no use for it.
+        return {"source": source, "file": path.name, "bytes": len(image), "width": data.width}
 
     def _store_screenshot(self, image: bytes) -> Path:
         directory = self._screenshot_dir

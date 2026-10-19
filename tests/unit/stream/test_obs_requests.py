@@ -271,7 +271,14 @@ def test_anything_beyond_the_listed_harmless_settings_is_high(
             },
         ),
         ("CreateSourceFilter", {"filterKind": "crop_filter", "filterSettings": {"left": 10}}),
-        ("SetSceneItemEnabled", {"sceneName": "Live", "sceneItemId": 3, "sceneItemEnabled": False}),
+        (
+            "SetSourceFilterEnabled",
+            {"sourceName": "Cam", "filterName": "Colour", "filterEnabled": True},
+        ),
+        (
+            "SetInputSettings",
+            {"inputName": "Title", "inputSettings": {"text": "Hi"}, "overlay": True},
+        ),
     ],
 )
 def test_listed_harmless_settings_stay_medium(request_type: str, data: dict) -> None:
@@ -371,9 +378,84 @@ def test_redaction_of_tokens_in_url_paths_and_key_like_strings() -> None:
     assert redacted["sceneUuid"] == answer["sceneUuid"]
     assert "AbCdEfGhIjKlMnOp" not in redacted["outputName"]
     assert redacted["authToken"] == "[redacted]" and redacted["monitorKeyFile"] == "[redacted]"
-    assert redacted["savedReplayPath"].startswith("D:/Videos/Replay")
+    # A path names the user; the model gets the file name.
+    assert redacted["savedReplayPath"] == "Replay 2026-10-19.mkv"
 
 
 def test_file_settings_show_only_the_file_name() -> None:
     redacted = redact({"inputSettings": {"file": "C:\\Users\\someone\\Pictures\\brb.png"}})
     assert redacted["inputSettings"]["file"] == "brb.png"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        # Review payload: `overlay: false` replaces every setting instead of merging.
+        {"inputName": "Cam", "inputSettings": {}, "overlay": False},
+        {"inputName": "Cam", "inputSettings": {"text": "x"}, "overlay": "false"},
+        # A field SetInputSettings does not document.
+        {"inputName": "Cam", "inputSettings": {}, "sceneItemEnabled": True},
+    ],
+)
+def test_replacing_settings_or_unknown_fields_are_high(data: dict) -> None:
+    assert classify("SetInputSettings", data).risk is Risk.HIGH
+
+
+def test_settings_replacement_is_high_for_filters_and_transitions_too() -> None:
+    filters = {"sourceName": "Cam", "filterName": "Blur", "filterSettings": {}, "overlay": False}
+    assert classify("SetSourceFilterSettings", filters).risk is Risk.HIGH
+    transition = {"transitionSettings": {}, "overlay": False}
+    assert classify("SetCurrentSceneTransitionSettings", transition).risk is Risk.HIGH
+
+
+def test_unknown_fields_make_any_medium_type_high() -> None:
+    for request_type in sorted(MEDIUM_TYPES):
+        assert classify(request_type, {"somethingNew": 1}).risk is Risk.HIGH, request_type
+
+
+def test_disabling_a_filter_or_hiding_a_source_is_high() -> None:
+    off = {"sourceName": "Cam", "filterName": "Blur", "filterEnabled": False}
+    assert classify("SetSourceFilterEnabled", off).risk is Risk.HIGH
+    hide = {"sceneName": "Live", "sceneItemId": 3, "sceneItemEnabled": False}
+    assert classify("SetSceneItemEnabled", hide).risk is Risk.HIGH
+
+
+@pytest.mark.parametrize(
+    ("request_type", "data"),
+    [
+        ("SetInputMute", {"inputName": "Mic", "inputMuted": False}),
+        ("ToggleInputMute", {"inputName": "Mic"}),
+        ("SetInputVolume", {"inputName": "Mic", "inputVolumeDb": 0}),
+        ("SetInputAudioTracks", {"inputName": "Mic", "inputAudioTracks": {"1": True}}),
+        (
+            "SetInputAudioMonitorType",
+            {"inputName": "Mic", "monitorType": "OBS_MONITORING_TYPE_NONE"},
+        ),
+        ("TriggerStudioModeTransition", {}),
+        ("SetTBarPosition", {"position": 1.0}),
+    ],
+)
+def test_anything_that_can_put_private_audio_or_a_scene_on_air_is_high(
+    request_type: str, data: dict
+) -> None:
+    assert classify(request_type, data).risk is Risk.HIGH
+
+
+def test_muting_stays_medium() -> None:
+    assert classify("SetInputMute", {"inputName": "Mic", "inputMuted": True}).risk is Risk.MEDIUM
+
+
+def test_scene_switches_outside_the_nox_scene_set_are_high() -> None:
+    scenes = ["Live", "Pause"]
+    inside = classify("SetCurrentProgramScene", {"sceneName": "Live"}, scene_set=scenes)
+    assert inside.risk is Risk.MEDIUM
+    outside = classify("SetCurrentProgramScene", {"sceneName": "Desktop"}, scene_set=scenes)
+    assert outside.risk is Risk.HIGH
+    preview = classify("SetCurrentPreviewScene", {"sceneName": "Desktop"}, scene_set=scenes)
+    assert preview.risk is Risk.HIGH
+
+
+def test_tool_scope_uses_the_scene_set() -> None:
+    scope = scope_for_tool({"privacy_scene": "Pause", "scene_set": ["Live"]})
+    switch = scope({"request_type": "SetCurrentProgramScene", "request_data": {"sceneName": "X"}})
+    assert switch.risk is Risk.HIGH

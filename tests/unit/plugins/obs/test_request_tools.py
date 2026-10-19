@@ -139,7 +139,8 @@ async def test_screenshot_is_stored_locally_and_never_returned(
             result = await api.tools.call("obs.screenshot", {"width": 320})
         assert result["source"] == "Live" and result["bytes"] == len(image)
         assert encoded not in str(result)
-        stored = await asyncio.to_thread(Path(result["path"]).read_bytes)
+        assert "path" not in result and str(tmp_path) not in str(result)
+        stored = await asyncio.to_thread((tmp_path / result["file"]).read_bytes)
         assert stored == image
         kept = await asyncio.to_thread(lambda: list(tmp_path.glob("obs-*.jpg")))
         assert len(kept) == SCREENSHOTS_KEPT
@@ -468,5 +469,18 @@ async def test_unrelated_change_passes_the_privacy_check(
         )
         assert result["ok"] is True
         assert "GetGroupSceneItemList" in _types(obs_server)  # the group was looked into
+    finally:
+        await plugin.stop()
+
+
+@pytest.mark.parametrize("hint", ["Microphone", "Headset", "Realtek"])
+async def test_audio_track_never_captures_a_real_device(
+    obs_server: FakeObsServer, fake_client: FakeClient, hint: str
+) -> None:
+    api, plugin = await _plugin(obs_server, fake_client)
+    try:
+        with pytest.raises(PluginApiError):
+            await api.tools.call("obs.audio_track.setup", {"device_hint": hint})
+        assert "CreateInput" not in _types(obs_server)
     finally:
         await plugin.stop()
