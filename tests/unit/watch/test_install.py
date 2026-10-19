@@ -50,7 +50,15 @@ async def test_a_finding_is_reported_through_the_proactive_service(tmp_path: Pat
         return {"ok": True, "content": "RB 40 +12 Min"}
 
     registry.register(
-        ToolSpec(name="web.fetch", description="", input_model=Empty, risk=Risk.LOW, handler=fetch)
+        ToolSpec(
+            name="web.fetch",
+            description="",
+            input_model=Empty,
+            risk=Risk.LOW,
+            handler=fetch,
+            side_effects=False,
+            local=False,
+        )
     )
     proactive = Proactive()
     config = NoxConfig()

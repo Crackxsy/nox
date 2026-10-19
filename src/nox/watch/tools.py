@@ -13,6 +13,7 @@ ask - an answer the user gives is kept by the memory's fact capture like anythin
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Literal
@@ -113,6 +114,19 @@ def watcher_dict(row: WatcherRow) -> dict[str, Any]:
     }
 
 
+def _create_target(payload: dict[str, Any]) -> str:
+    """What the confirmation shows: the tool and, for a fetcher, the address it will call."""
+    tool = str(payload.get("tool") or "")
+    args = payload.get("args")
+    if not isinstance(args, dict):
+        return tool
+    address = args.get("url") or args.get("query")
+    if address:
+        return f"{tool} {str(address)[:300]}"
+    shown = json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)
+    return f"{tool} {shown[:300]}" if args else tool
+
+
 def register_watch_tools(
     registry: ToolRegistry,
     repo: WatcherRepository,
@@ -172,7 +186,9 @@ def register_watch_tools(
             handler=create,
             side_effects=True,
             local=True,
-            targets=lambda payload: str(payload.get("tool") or ""),
+            # Each watcher is confirmed on its own: it runs unattended for days.
+            rememberable=False,
+            targets=_create_target,
         )
     )
     registry.register(

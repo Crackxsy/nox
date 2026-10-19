@@ -56,11 +56,19 @@ class Empty(BaseModel):
     pass
 
 
-def tool(name: str, risk: Risk) -> ToolSpec:
+def tool(name: str, risk: Risk, *, side_effects: bool = False, local: bool = True) -> ToolSpec:
     async def handler(_payload: dict[str, Any]) -> dict[str, Any]:
         return {}
 
-    return ToolSpec(name=name, description="", input_model=Empty, risk=risk, handler=handler)
+    return ToolSpec(
+        name=name,
+        description="",
+        input_model=Empty,
+        risk=risk,
+        handler=handler,
+        side_effects=side_effects,
+        local=local,
+    )
 
 
 @pytest.fixture
@@ -74,9 +82,16 @@ def db(tmp_path: Path) -> Iterator[Database]:
 @pytest.fixture
 def registry() -> ToolRegistry:
     reg = ToolRegistry()
-    reg.register(tool("web.fetch", Risk.LOW))
-    reg.register(tool("file.delete", Risk.HIGH))
-    reg.register(tool("mcp.shop.buy", Risk.MEDIUM))
+    reg.register(tool("web.fetch", Risk.LOW, local=False))
+    reg.register(tool("file.delete", Risk.HIGH, side_effects=True))
+    reg.register(tool("mcp.shop.buy", Risk.MEDIUM, side_effects=True))
+    # Low risk, but it changes something: the kind of tool a watcher must never run.
+    reg.register(tool("skill.remove", Risk.LOW, side_effects=True))
+    # Low risk and side-effect free, but not one of the named fetchers.
+    reg.register(tool("mcp.notes.peek", Risk.LOW))
+    # Read risk, yet it declares a side effect.
+    reg.register(tool("plug.counter.bump", Risk.READ, side_effects=True))
+    reg.register(tool("calendar.upcoming", Risk.READ))
     return reg
 
 
@@ -330,10 +345,44 @@ async def test_watch_create_refuses_a_tool_that_is_not_read_only(
     register_watch_tools(registry, repo, WatchConfig, lambda: NOW)
     create = registry.get("watch.create")
     assert create is not None and create.risk is Risk.MEDIUM
-    for name in ("file.delete", "mcp.shop.buy", "watch.list", "no.such_tool"):
+    for name in (
+        "file.delete",
+        "mcp.shop.buy",
+        "watch.list",
+        "no.such_tool",
+        "skill.remove",
+        "mcp.notes.peek",
+        "plug.counter.bump",
+    ):
         answer = await create.handler(create_payload(tool=name))
         assert answer["ok"] is False, name
     assert repo.list_active() == []
+    answer = await create.handler(create_payload(tool="calendar.upcoming", args={}))
+    assert answer["ok"] is True
+
+
+async def test_a_low_tool_with_side_effects_is_never_run_by_an_existing_watcher(
+    db: Database, registry: ToolRegistry
+) -> None:
+    repo, page, clock = WatcherRepository(db), Page(), Clock()
+    watcher = add(repo, tool="skill.remove", args={"id": "dice"})
+    sched = scheduler(repo, page, registry, clock, [])
+    assert await sched.tick() == []
+    assert page.calls == []  # never called, although its risk is only `low`
+    row = repo.get(watcher.id)
+    assert row is not None and "change something" in row.last_error
+
+
+def test_watch_create_is_never_remembered_and_shows_the_address(
+    db: Database, registry: ToolRegistry
+) -> None:
+    register_watch_tools(registry, WatcherRepository(db), WatchConfig, lambda: NOW)
+    create = registry.get("watch.create")
+    assert create is not None and create.risk is Risk.MEDIUM
+    assert create.rememberable is False
+    assert create.targets is not None
+    target = create.targets(create_payload(args={"url": "https://beacon.example/x?id=1"}))
+    assert target == "web.fetch https://beacon.example/x?id=1"
 
 
 async def test_watch_create_enforces_the_interval_floor_and_lists(

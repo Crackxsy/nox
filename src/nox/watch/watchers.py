@@ -5,11 +5,16 @@ survives a restart; a poll rather than a timer per watcher, so a laptop that sle
 and the record is written *before* Nox speaks, so a crash mid-sentence never repeats a report.
 
 What a watcher may call is the part that matters. It runs unattended, for days, so it gets exactly
-one tool, and only one that cannot change anything: risk `read` or `low`. That is checked when it
-is created *and* before every run - a tool can be re-registered with a higher risk later (a plugin
-update, an MCP server the user marked differently), and a watcher must never start acting on the
-world because something else changed. The call goes through the `ToolExecutor` like any other, so
-the permission engine, the privacy mode and the audit log apply to it as well.
+one tool, and only one that cannot change anything: an explicit allow-list, not a risk ceiling. A
+tool qualifies when it declares no side effects *and* is risk `read`, or is one of the named
+read-only fetchers in `WATCHABLE_LOW_RISK_TOOLS` (`web.fetch`, `web.search`). A `low` tool with
+side effects (`skill.remove`, `watch.delete`) never qualifies, however harmless its risk sounds.
+A fetcher reaches the network with the same arguments every few minutes, so `watch.create` - never
+rememberable - shows the user the address it will call before the watcher exists. That is checked
+when it is created *and* before every run - a tool can be re-registered with a higher risk later
+(a plugin update, an MCP server the user marked differently), and a watcher must never start
+acting on the world because something else changed. The call goes through the `ToolExecutor` like
+any other, so the permission engine, the privacy mode and the audit log apply to it as well.
 """
 
 from __future__ import annotations
@@ -32,7 +37,7 @@ from nox.watch.condition import MISSING, Op, evaluate, parse_path, preview, reso
 log = get_logger(__name__)
 
 __all__ = [
-    "WATCHABLE_RISKS",
+    "WATCHABLE_LOW_RISK_TOOLS",
     "WatchError",
     "WatcherRepository",
     "WatcherRow",
@@ -40,8 +45,9 @@ __all__ = [
     "watchable_refusal",
 ]
 
-#: The only risks a watcher's tool may have.
-WATCHABLE_RISKS: frozenset[Risk] = frozenset({Risk.READ, Risk.LOW})
+#: The only `low`-risk tools a watcher may use: read-only fetchers whose one effect - a request to
+#: the address in their arguments - the user saw and confirmed when the watcher was created.
+WATCHABLE_LOW_RISK_TOOLS: frozenset[str] = frozenset({"web.fetch", "web.search"})
 MAX_TITLE_CHARS = 200
 MAX_ARGS_BYTES = 4000
 
@@ -55,6 +61,8 @@ class ToolLike(Protocol):
     def name(self) -> str: ...
     @property
     def risk(self) -> Risk: ...
+    @property
+    def side_effects(self) -> bool: ...
 
 
 class WatcherRow(Row):
@@ -96,10 +104,15 @@ def watchable_refusal(tool: ToolLike | None, name: str) -> str | None:
         return f"there is no tool named {name!r}"
     if name.startswith("watch."):
         return "a watcher cannot watch the watchers"
-    if tool.risk not in WATCHABLE_RISKS:
+    # Unknown means "it may change something": a watcher never guesses in the tool's favour.
+    if getattr(tool, "side_effects", True):
+        return f"{name} can change something; a watcher may only use a tool that only reads"
+    if tool.risk is not Risk.READ and not (
+        tool.risk is Risk.LOW and name in WATCHABLE_LOW_RISK_TOOLS
+    ):
         return (
-            f"{name} has risk {tool.risk.value}; a watcher may only use a tool that reads "
-            "(risk read or low), because it runs unattended"
+            f"{name} has risk {tool.risk.value}; a watcher may only use a read-only tool "
+            "(risk read, or web.fetch / web.search), because it runs unattended"
         )
     return None
 
