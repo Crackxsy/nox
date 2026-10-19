@@ -150,6 +150,7 @@ async def test_repeated_start_failures_turn_the_session_off(
             await _collect(provider.stream(_request("Hallo", request_id=f"r{index}")))
 
     assert provider.disabled and "start" in provider.disabled_reason
+    assert "unknown control request" in provider.last_failure, "the CLI's stderr is kept"
     with pytest.raises(ProviderUnavailableError):
         await _collect(provider.stream(_request("Hallo", request_id="after")))
 

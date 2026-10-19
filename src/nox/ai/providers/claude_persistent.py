@@ -196,6 +196,8 @@ class PersistentClaude:
         self._lifecycle = asyncio.Lock()
         self._starting: tuple[ClaudeSession, Launch | None] | None = None
         self.failures = 0
+        #: What went wrong last, with the end of the CLI's stderr - for the log and the card.
+        self.last_failure = ""
         #: Set when the warm session was given up; the provider then answers one-shot.
         self.disabled_reason = ""
         self.last: dict[str, AiResponse] = {}
@@ -362,6 +364,7 @@ class PersistentClaude:
     def _failed(self, stage: str, exc: Exception, stderr_tail: str) -> None:
         """Count a failure of the session machinery; after a few, give the warm session up."""
         self.failures += 1
+        self.last_failure = f"{stage}: {str(exc)[:200]} | stderr: {stderr_tail[-400:]}"
         log.warning(
             "claude_persistent.failed",
             stage=stage,

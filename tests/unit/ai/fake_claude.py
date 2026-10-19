@@ -100,6 +100,8 @@ def main() -> None:
             assert isinstance(request, dict)
             if request.get("subtype") == "initialize":
                 if os.environ.get("FAKE_FAIL_INIT") == "1":
+                    sys.stderr.write("fake-cli: unknown control request subtype initialize\n")
+                    sys.stderr.flush()
                     return
                 if os.environ.get("FAKE_CHILD") == "1":
                     child = subprocess.Popen(  # noqa: S603 - fixed argv
