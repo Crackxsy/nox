@@ -45,6 +45,8 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "presets",
     "plans",
     "settings",
+    # After settings and proactive: it uses the Twitch login and the notices.
+    "stream",
     "remote",
     # Network access for paired devices; inert unless `ipc.lan.enabled`.
     "lan",

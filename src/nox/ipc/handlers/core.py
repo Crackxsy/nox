@@ -173,7 +173,7 @@ class CoreHandlers:
         assert self._core.registry is not None
         reg = self._core.registry.register
         ui = UI_ROLES
-        reg("state.get", StateGet, self.state_get, roles=(*ui, "pet", "plugin"))
+        reg("state.get", StateGet, self.state_get, roles=(*ui, "pet", "overlay", "plugin"))
         reg("health.get", EmptyPayload, self.health_get, roles=ui)
         # A mode switch changes which profile - and so which tools - Nox may use: administration.
         reg("mode.set", ModeSet, self.mode_set, roles=LOCAL_UI_ROLES)
@@ -214,7 +214,7 @@ class CoreHandlers:
         core = self._core
         assert core.state is not None
         snapshot = core.state.snapshot()
-        if ctx.role not in ("pet", "plugin"):
+        if ctx.role not in ("pet", "overlay", "plugin"):
             if p.path:
                 return {"path": p.path, "value": core.state.get(p.path)}
             return snapshot

@@ -12,6 +12,8 @@
   by the device registry the network extension plugs in (`use_device_verifier`). They are only
   accepted on connections the network listener bridged in, and nothing else is accepted on those:
   a device in the home network can never pose as the shell, the pet or a worker.
+- Overlay credentials (role `overlay`) are persistent and read-only; they live in
+  `nox.ipc.overlay_tokens` and are checked here when a store for them is attached.
 - Every comparison is constant-time.
 """
 
@@ -26,10 +28,13 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from nox.ipc._log import get_logger
 from nox.ipc.roles import DEVICE_ROLE
+
+if TYPE_CHECKING:
+    from nox.ipc.overlay_tokens import OverlayTokenStore
 
 log = get_logger(__name__)
 
@@ -37,7 +42,7 @@ SESSION_TOKEN_FILE = "session.token"  # noqa: S105 - a file name, not a secret
 WORKER_TOKEN_ENV = "NOX_WORKER_TOKEN"  # noqa: S105 - an env var name, not a secret
 DEFAULT_WORKER_TOKEN_TTL_S = 60.0
 
-TokenKind = Literal["session", "worker", "device"]
+TokenKind = Literal["session", "worker", "device", "overlay"]
 SESSION_ROLES: frozenset[str] = frozenset({"shell", "pet", "dashboard"})
 WORKER_ROLES: frozenset[str] = frozenset({"worker", "plugin"})
 DEVICE_CLIENT_PREFIX = "device:"
@@ -51,6 +56,8 @@ BOUND_ROLES: frozenset[str] = frozenset({"mcp"})
 HUBLESS_ROLES: frozenset[str] = frozenset({"core", "supervisor", "remote"})
 #: Paired devices: their own long-lived token, and only through the network listener.
 DEVICE_ROLES: frozenset[str] = frozenset({DEVICE_ROLE})
+#: Authenticated by a persistent overlay credential, never by the session token.
+OVERLAY_ROLES: frozenset[str] = frozenset({"overlay"})
 
 _CREATE_NO_WINDOW = 0x08000000
 
@@ -128,6 +135,9 @@ class AuthDecision:
     reason: str = ""
     #: The paired device behind a `device` token.
     device_id: str = ""
+    #: Which persistent credential authenticated the connection (overlay only), so revoking the
+    #: credential can close the connections that used it.
+    credential_id: str = ""
 
 
 class TokenStore:
@@ -139,8 +149,10 @@ class TokenStore:
         *,
         worker_ttl_s: float = DEFAULT_WORKER_TOKEN_TTL_S,
         clock: Callable[[], float] = time.monotonic,
+        overlay: OverlayTokenStore | None = None,
     ) -> None:
         self._session = session_token or generate_token()
+        self._overlay = overlay
         self._worker_ttl_s = worker_ttl_s
         self._clock = clock
         self._worker: dict[str, WorkerToken] = {}
@@ -151,6 +163,10 @@ class TokenStore:
     @property
     def session_token(self) -> str:
         return self._session
+
+    @property
+    def overlay(self) -> OverlayTokenStore | None:
+        return self._overlay
 
     @property
     def session_file(self) -> Path | None:
@@ -236,6 +252,12 @@ class TokenStore:
             return self._authenticate_worker(token, client_id, role="")
         if role in BOUND_ROLES:
             return self._authenticate_worker(token, client_id, role=role)
+        if role in OVERLAY_ROLES:
+            # Never the session token: an overlay connection is read-only whatever it holds.
+            credential = self._overlay.verify(token) if self._overlay is not None else None
+            if credential is None:
+                return AuthDecision(ok=False, reason="invalid or revoked overlay credential")
+            return AuthDecision(ok=True, kind="overlay", credential_id=credential.credential_id)
         return AuthDecision(ok=False, reason=f"role {role!r} cannot authenticate over the hub")
 
     def _authenticate_worker(self, token: str, client_id: str, *, role: str) -> AuthDecision:

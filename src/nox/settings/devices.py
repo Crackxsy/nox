@@ -24,6 +24,20 @@ LIST_TIMEOUT_S = 3.0
 WorkerRequest = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
+def voice_worker_request(core: Any) -> WorkerRequest | None:
+    """A way to ask the running voice worker something, or None when there is none."""
+    workers = getattr(core, "workers", None)
+    hub = getattr(core, "hub", None)
+    client_id = workers.client_id("voice") if workers is not None else None
+    if hub is None or client_id is None:
+        return None
+
+    def ask(name: str, payload: dict[str, Any]) -> Awaitable[dict[str, Any]]:
+        return hub.request(client_id, name, payload, timeout=3.0)  # type: ignore[no-any-return]
+
+    return ask
+
+
 class OutputDeviceCatalog:
     """The output device names last seen, or None when none could be listed."""
 

@@ -132,6 +132,7 @@ class ShellApp:
             on_kill=self._kill_from_tray,
             on_quit=self.quit,
             on_click_through=self.set_click_through,
+            on_obs_overlay=self.setup_obs_overlay,
             language=self.language,
         )
         self.pet: PetWindow | None = None
@@ -382,6 +383,19 @@ class ShellApp:
             "voice.mute",
             {"muted": not self.model.muted},
             failure_text="Mikrofon nicht umgeschaltet",
+        )
+
+    def setup_obs_overlay(self) -> None:
+        """Tray: create/update the OBS browser source. The core asks for confirmation through the
+        same permission dialog as any other change to OBS."""
+        self._request(
+            "stream.overlay.setup",
+            {},
+            failure_text=(
+                "OBS-Overlay nicht eingerichtet"
+                if self.language.startswith("de")
+                else "OBS overlay not set up"
+            ),
         )
 
     def ptt(self, pressed: bool) -> None:

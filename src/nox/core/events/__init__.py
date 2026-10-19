@@ -67,10 +67,10 @@ from nox.core.events.registry import (
 from nox.core.events.stream import (
     GameDetected,
     GameEnded,
+    ObsAuthFailed,
     ObsAutoRestarted,
     ObsConnectionChanged,
     ObsCrashDetected,
-    ObsAuthFailed,
     ObsDisconnected,
     ObsHealthChanged,
     ObsRecordingChanged,

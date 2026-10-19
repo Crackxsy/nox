@@ -38,7 +38,7 @@ export interface RlVisionDetection {
 }
 
 export interface Source {
-  role: "core" | "shell" | "worker" | "plugin" | "pet" | "dashboard" | "supervisor" | "remote" | "device" | "mcp";
+  role: "core" | "shell" | "worker" | "plugin" | "pet" | "overlay" | "dashboard" | "supervisor" | "remote" | "device" | "mcp";
   id: string;
 }
 
@@ -55,7 +55,7 @@ export interface Envelope {
 
 export interface AuthRequest {
   token: string;
-  role: "core" | "shell" | "worker" | "plugin" | "pet" | "dashboard" | "supervisor" | "remote" | "device" | "mcp";
+  role: "core" | "shell" | "worker" | "plugin" | "pet" | "overlay" | "dashboard" | "supervisor" | "remote" | "device" | "mcp";
   id: string;
   client_version?: string;
 }
@@ -469,6 +469,10 @@ export interface ObsConnectionChanged {
 export interface ObsDisconnected {
   reason?: string;
   backoff_s?: number;
+}
+
+export interface ObsAuthFailed {
+  reason?: string;
 }
 
 export interface ObsSceneChanged {

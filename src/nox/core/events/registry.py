@@ -51,10 +51,10 @@ from nox.core.events.names import E
 from nox.core.events.stream import (
     GameDetected,
     GameEnded,
+    ObsAuthFailed,
     ObsAutoRestarted,
     ObsConnectionChanged,
     ObsCrashDetected,
-    ObsAuthFailed,
     ObsDisconnected,
     ObsHealthChanged,
     ObsSceneChanged,

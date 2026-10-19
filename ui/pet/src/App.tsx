@@ -5,6 +5,7 @@ import {
   type ConnStatus,
   type Envelope,
   type IpcClient,
+  type PetRole,
   createPetClient,
   petVariantChanged,
   variantFromStateReply,
@@ -28,6 +29,8 @@ import {
 
 export interface AppProps {
   token: string | null;
+  /** Which IPC role the token is for: `overlay` when OBS loaded the page with `#overlay=`. */
+  ipcRole?: PetRole;
   /** One language per window; chosen once in `main.tsx` and reflected on `<html lang>`. */
   lang: Lang;
   /** OBS browser-source mode: no interaction, no capture indicator (PRD §20), transparent. */
@@ -47,7 +50,17 @@ export interface AppProps {
   size?: number;
 }
 
-export function App({ token, lang, overlay, variantId, still, animate, stillExpression, size }: AppProps) {
+export function App({
+  token,
+  ipcRole = 'pet',
+  lang,
+  overlay,
+  variantId,
+  still,
+  animate,
+  stillExpression,
+  size,
+}: AppProps) {
   const t = useMemo(() => petTranslator(lang), [lang]);
   // The variant is state, not just a prop: `config.set pet.variant` swaps it live, without a page
   // reload (#24). `variantId` is only the value the shell put in the URL at load time.
@@ -98,14 +111,18 @@ export function App({ token, lang, overlay, variantId, still, animate, stillExpr
   useEffect(() => {
     if (still || animate || !token) return;
     let cancelled = false;
-    createPetClient(token, {
-      onEvent,
-      onStatus: (s, detail) => {
-        setStatus(s);
-        setStatusDetail(detail);
-        setState((prev) => ({ ...prev, connected: s === 'online' }));
+    createPetClient(
+      token,
+      {
+        onEvent,
+        onStatus: (s, detail) => {
+          setStatus(s);
+          setStatusDetail(detail);
+          setState((prev) => ({ ...prev, connected: s === 'online' }));
+        },
       },
-    }).then((c) => {
+      ipcRole,
+    ).then((c) => {
       if (cancelled) c.close();
       else clientRef.current = c;
     });
@@ -114,7 +131,7 @@ export function App({ token, lang, overlay, variantId, still, animate, stillExpr
       clientRef.current?.close();
       clientRef.current = null;
     };
-  }, [token, still, animate, onEvent]);
+  }, [token, ipcRole, still, animate, onEvent]);
 
   // Sprite variants (#19): fetch + validate + preload the whole set before showing anything. Any
   // failure logs a reason and leaves `sprite` null, which renders the procedural variant instead.

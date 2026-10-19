@@ -11,6 +11,7 @@ export type Role =
   | 'worker'
   | 'plugin'
   | 'pet'
+  | 'overlay'
   | 'dashboard'
   | 'supervisor'
   | 'remote'

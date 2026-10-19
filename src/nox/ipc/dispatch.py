@@ -79,6 +79,8 @@ _DASHBOARD: tuple[str, ...] = (
 
 ROLE_ALLOWLIST: Mapping[str, tuple[str, ...]] = {
     "pet": ("ipc.*", "pet.interact", "state.get"),
+    # The stream overlay (a browser source in OBS): it reads, it never asks for anything.
+    "overlay": ("ipc.*", "state.get"),
     "dashboard": _DASHBOARD,
     "shell": (*_DASHBOARD, "voice.ptt", "security.permission.reply"),
     # A paired device in the home network (`nox.lan`) reaches only requests whose handler names it

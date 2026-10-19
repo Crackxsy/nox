@@ -25,6 +25,7 @@ import {
 import { type IpcClient, api } from '../ipc';
 import { type DashboardState, applyFunkenTop, applyStreamSessionStatus, viewerName } from '../model';
 import { Detail, Hero, StateWord, Tile, toneFor } from '../ui';
+import { StreamSetup } from './StreamSetup';
 
 export interface StreamPageProps {
   t: T;
@@ -166,6 +167,8 @@ export function StreamPage({ t, lang, state, client, onState, onOpenSettings }: 
           })}
         </div>
       </section>
+
+      <StreamSetup t={t} lang={lang} client={client} />
 
       <section aria-labelledby="h-stream-chat">
         <div className="rail-head">

@@ -18,6 +18,7 @@ from nox.ipc.tokens import (
     BOUND_ROLES,
     DEVICE_ROLES,
     HUBLESS_ROLES,
+    OVERLAY_ROLES,
     SESSION_ROLES,
     WORKER_ROLES,
 )
@@ -37,7 +38,7 @@ def test_every_role_has_an_event_policy(role: str) -> None:
 
 @pytest.mark.parametrize("role", ROLES)
 def test_every_role_authenticates_in_exactly_one_way(role: str) -> None:
-    classes = [SESSION_ROLES, WORKER_ROLES, BOUND_ROLES, HUBLESS_ROLES, DEVICE_ROLES]
+    classes = [SESSION_ROLES, WORKER_ROLES, BOUND_ROLES, HUBLESS_ROLES, DEVICE_ROLES, OVERLAY_ROLES]
     assert sum(role in c for c in classes) == 1
 
 

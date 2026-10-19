@@ -21,7 +21,7 @@ export interface IpcClientOptions {
   url: string;
   token: string;
   /** `device`: a paired device over the network listener (`nox.lan`), dashboard only. */
-  role: Extract<Role, 'pet' | 'dashboard' | 'device'>;
+  role: Extract<Role, 'pet' | 'overlay' | 'dashboard' | 'device'>;
   id: string;
   patterns: string[];
   clientVersion?: string;

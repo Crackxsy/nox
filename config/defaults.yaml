@@ -230,6 +230,10 @@ stream:                          # the stream bot. Every rate below is a conserv
     rate_limit_min_gap_s: 1.5    # minimum pause between two chat messages
     min_backoff_s: 1.0           # IRC reconnect backoff, doubled up to max_backoff_s
     max_backoff_s: 30.0
+  auto_session:                  # start the stream session when OBS or the channel goes live
+    enabled: true
+    from_modes: [companion, idle]   # modes Nox leaves for stream mode by itself; never a game
+    twitch_live_poll_s: 60.0     # ask Twitch while not streaming; 0 = only OBS starts it
 
 attention:
   proactivity_level: 3           # 0..5 global ceiling

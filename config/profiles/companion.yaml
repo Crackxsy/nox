@@ -17,8 +17,10 @@ permissions:
   # entry in plugins/home/manifest.yaml.
   # calendar.google.com / *.webuntis.com: the user's own calendar feeds (private iCal URLs,
   # stored as secrets) for the `day` extension - read-only GETs, nothing is sent.
-  egress_allowlist: ["api.telegram.org:443", "id.twitch.tv:443", "homeassistant.local:8123",
-                     "calendar.google.com:443", "*.webuntis.com:443"]
+  # api.twitch.tv: asking whether the user's own channel went live, so the stream session can
+  # start by itself (nox.stream.autostart; once a minute, only with a Twitch login).
+  egress_allowlist: ["api.telegram.org:443", "id.twitch.tv:443", "api.twitch.tv:443",
+                     "homeassistant.local:8123", "calendar.google.com:443", "*.webuntis.com:443"]
   # 127.0.0.1:8123: a Home Assistant running on this machine (a container, usually). The entry is
   # what authorizes the `home` plugin's declared loopback egress at spawn time; it does NOT make
   # smart-home control survive privacy mode private/offline. The plugin refuses to connect in

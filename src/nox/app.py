@@ -73,6 +73,7 @@ from nox.data.stream_repos import (
 from nox.ipc.dispatch import RequestRegistry
 from nox.ipc.handlers.core import register_core_handlers
 from nox.ipc.http import HttpServer, HttpSettings, create_app
+from nox.ipc.overlay_tokens import OVERLAY_TOKENS_FILE, OverlayTokenStore
 from nox.ipc.server import HubSettings, IpcHub
 from nox.ipc.tokens import TokenStore
 from nox.paths import DASHBOARD_DIST, DEFAULTS_PATH, PET_DIST, PLUGINS_DIR, PROFILES_DIR, REPO_ROOT
@@ -315,7 +316,11 @@ class NoxCore:
     async def _build_ipc(self) -> None:
         assert self.bus is not None
         paths = self.config.paths
-        self.tokens = TokenStore()
+        # The overlay credentials outlive this start (an OBS browser source keeps its URL), so
+        # they live in the data folder, as hashes.
+        self.tokens = TokenStore(
+            overlay=OverlayTokenStore(Path(paths.data_dir) / OVERLAY_TOKENS_FILE)
+        )
         self.tokens.write_session_token(Path(paths.runtime_dir))
         self.workers.use_tokens(self.tokens)
         self.registry = RequestRegistry()

@@ -137,11 +137,32 @@ class StreamTwitchConfig(StrictSection):
         return require_ordered(self, "min_backoff_s", "max_backoff_s")
 
 
+class StreamAutoSessionConfig(StrictSection):
+    """Starting the stream session by itself when OBS or the Twitch channel goes live
+    (`nox.stream.autostart`)."""
+
+    enabled: bool = True
+    #: The modes Nox leaves for stream mode on its own; in any other it only says the stream is
+    #: live. Everyday modes by default - never a coding session or a game in progress.
+    from_modes: list[str] = Field(default_factory=lambda: ["companion", "idle"])
+    #: How often to ask Twitch whether the channel is live while not streaming; 0 = never (OBS
+    #: going live still starts the session).
+    twitch_live_poll_s: float = Field(default=60.0, ge=0.0)
+
+    @field_validator("twitch_live_poll_s")
+    @classmethod
+    def _not_too_often(cls, value: float) -> float:
+        if 0.0 < value < 30.0:
+            raise ValueError("twitch_live_poll_s must be 0 (off) or at least 30 seconds")
+        return value
+
+
 class StreamConfig(StrictSection):
     funken: FunkenConfig = Field(default_factory=FunkenConfig)
     chat: StreamChatConfig = Field(default_factory=StreamChatConfig)
     relevance: RelevanceConfig = Field(default_factory=RelevanceConfig)
     twitch: StreamTwitchConfig = Field(default_factory=StreamTwitchConfig)
+    auto_session: StreamAutoSessionConfig = Field(default_factory=StreamAutoSessionConfig)
 
 
 # ---- Rocket League ------------------------------------------------------------------------------

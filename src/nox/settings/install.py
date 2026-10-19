@@ -34,7 +34,7 @@ from nox.core.logging import get_logger
 from nox.ipc.dispatch import EmptyPayload, RequestContext
 from nox.ipc.errors import ERR_PERMISSION, IpcError
 from nox.ipc.roles import LOCAL_UI_ROLES, UI_ROLES
-from nox.settings.devices import OUTPUT_DEVICES, WorkerRequest
+from nox.settings.devices import OUTPUT_DEVICES, voice_worker_request
 from nox.settings.editor import Applier, ConfigEditor
 from nox.settings.layers import resolve_defaults_path, resolve_user_config_path
 from nox.settings.personality import PERSONALITY_FILENAME, PersonalityFile
@@ -62,20 +62,6 @@ class _Core(Protocol):
     security: Any
     registry: Any
     orchestrator: Any
-
-
-def _voice_worker_request(core: Any) -> WorkerRequest | None:
-    """A way to ask the running voice worker something, or None when there is none."""
-    workers = getattr(core, "workers", None)
-    hub = getattr(core, "hub", None)
-    client_id = workers.client_id("voice") if workers is not None else None
-    if hub is None or client_id is None:
-        return None
-
-    def ask(name: str, payload: dict[str, Any]) -> Any:
-        return hub.request(client_id, name, payload, timeout=3.0)
-
-    return ask
 
 
 # ---- IPC payload models -------------------------------------------------------------------------
@@ -155,7 +141,7 @@ def build_appliers(core: _Core) -> dict[str, Applier]:
     async def push_voice_devices() -> None:
         """Hand the device settings to the voice worker, which switches for the next utterance.
         Without a running voice worker there is nothing to switch; it reads them when it starts."""
-        ask = _voice_worker_request(core)
+        ask = voice_worker_request(core)
         if ask is None:
             return
         channels = config.voice.channels
@@ -357,7 +343,7 @@ def _register(
 
     async def h_config_get(_ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
         # The device lists are what is plugged in now, so they are refreshed for every read.
-        await OUTPUT_DEVICES.refresh(_voice_worker_request(core))
+        await OUTPUT_DEVICES.refresh(voice_worker_request(core))
         return editor.snapshot()
 
     async def h_config_set(ctx: RequestContext, p: ConfigSetRequest) -> dict[str, Any]:

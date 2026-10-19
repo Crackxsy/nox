@@ -3,7 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { makeEnvelope, matchesPattern, parseEnvelope } from '../envelope';
 import { ipcReason } from '../errors';
 import { CLOSE_SIGNED_OUT, IpcClient, IpcError, SIGNED_OUT_DETAIL, type WebSocketLike } from '../ipc';
-import { hashWithoutToken, queryFlag, queryString, takeToken, tokenFromHash } from '../token';
+import {
+  hashWithoutToken,
+  queryFlag,
+  queryString,
+  takeCredential,
+  takeToken,
+  tokenFromHash,
+} from '../token';
 
 const good = {
   v: 1,
@@ -58,6 +65,25 @@ describe('token', () => {
     const token = takeToken({ hash: '#token=abc%2F123', search: '?overlay=1', pathname: '/pet/' }, history);
     expect(token).toBe('abc/123');
     expect(calls).toEqual(['/pet/?overlay=1']);
+  });
+  it('reads an overlay credential for the overlay role and clears it', () => {
+    const calls: string[] = [];
+    const history = { replaceState: (_d: unknown, _u: string, url?: string | null) => calls.push(String(url)) };
+    const credential = takeCredential(
+      { hash: '#overlay=persist3nt', search: '?overlay=1', pathname: '/pet/' },
+      history,
+    );
+    expect(credential).toEqual({ token: 'persist3nt', role: 'overlay' });
+    expect(calls).toEqual(['/pet/?overlay=1']);
+  });
+  it('falls back to the session token and to nothing', () => {
+    const history = { replaceState: () => undefined };
+    expect(takeCredential({ hash: '#token=s', search: '', pathname: '/pet/' }, history)).toEqual({
+      token: 's',
+      role: 'session',
+    });
+    expect(takeCredential({ hash: '', search: '?overlay=x', pathname: '/pet/' }, history)).toBeNull();
+    expect(hashWithoutToken('#overlay=o&token=t&a=1')).toBe('#a=1');
   });
   it('ignores tokens in the query string', () => {
     const history = { replaceState: () => undefined };
