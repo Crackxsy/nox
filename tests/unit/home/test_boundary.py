@@ -85,3 +85,49 @@ def test_a_malformed_entity_id_is_a_validation_error() -> None:
     assert domain_of("nonsense") == ""
     with pytest.raises(ValueError, match="entity id"):
         require_allowed("nonsense")
+
+
+# ---- every element of every list, spelled out --------------------------------------------------
+# Parametrizing over the constant itself would shrink with it: a mutant that drops "gate" from
+# FORBIDDEN_COVER_DEVICE_CLASSES would also drop the test case. So the cases are literals.
+
+
+@pytest.mark.parametrize("device_class", ["garage", "gate", "door"])
+def test_each_entrance_device_class_is_forbidden(device_class: str) -> None:
+    attributes = {"device_class": device_class}
+    assert forbidden_reason("cover.entrance", attributes) is not None
+    assert is_exposed("cover.entrance", attributes) is False
+    with pytest.raises(ForbiddenEntityError):
+        require_allowed("cover.entrance", expected_domain="cover", attributes=attributes)
+
+
+@pytest.mark.parametrize("device_class", ["Garage", "GATE", " Door "])
+def test_the_device_class_is_compared_case_and_space_insensitively(device_class: str) -> None:
+    attributes = {"device_class": device_class}
+    assert is_exposed("cover.entrance", attributes) is False
+    with pytest.raises(ForbiddenEntityError):
+        require_allowed("cover.entrance", expected_domain="cover", attributes=attributes)
+
+
+@pytest.mark.parametrize("domain", ["lock", "alarm_control_panel", "valve"])
+def test_each_building_securing_domain_is_forbidden(domain: str) -> None:
+    assert "secures the building" in (forbidden_reason(f"{domain}.x") or "")
+    with pytest.raises(ForbiddenEntityError):
+        require_allowed(f"{domain}.x")
+
+
+@pytest.mark.parametrize("domain", ["person", "device_tracker"])
+def test_each_private_domain_is_refused_as_private_not_merely_unknown(domain: str) -> None:
+    # Not being listed is not enough: neither domain has a tool, so is_exposed() would say False
+    # anyway. The boundary must name it - and refuse it with ForbiddenEntityError.
+    assert "describes people" in (forbidden_reason(f"{domain}.x") or "")
+    with pytest.raises(ForbiddenEntityError):
+        require_allowed(f"{domain}.x")
+
+
+def test_the_lists_are_exactly_what_the_privacy_document_promises() -> None:
+    from nox.home.boundary import PRIVATE_DOMAINS
+
+    assert frozenset({"lock", "alarm_control_panel", "valve"}) == FORBIDDEN_DOMAINS
+    assert frozenset({"garage", "gate", "door"}) == FORBIDDEN_COVER_DEVICE_CLASSES
+    assert frozenset({"person", "device_tracker"}) == PRIVATE_DOMAINS
