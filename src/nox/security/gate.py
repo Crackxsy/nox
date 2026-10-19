@@ -40,8 +40,14 @@ __all__ = [
 ]
 
 #: Configuration paths whose change is a security change.
-#: `ipc.lan.` opens the dashboard to the home network.
-SECURITY_SETTING_PREFIXES: tuple[str, ...] = ("security.", "privacy.", "ipc.lan.")
+#: `ipc.lan.` opens the dashboard to the home network; `desktop.computer_use.` lets Nox move the
+#: mouse and press keys.
+SECURITY_SETTING_PREFIXES: tuple[str, ...] = (
+    "security.",
+    "privacy.",
+    "ipc.lan.",
+    "desktop.computer_use.",
+)
 
 #: Privacy modes ordered from most to least protective. A move toward the end relaxes.
 _MODE_ORDER: tuple[PrivacyMode, ...] = (

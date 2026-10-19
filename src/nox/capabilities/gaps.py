@@ -36,15 +36,6 @@ CURATED_GAPS: tuple[Gap, ...] = (
     # `desktop.screen_capture` moved out with `browser.*` (Nox's own headless Chromium) and
     # `screen.capture` / `camera.snapshot` / `vision.describe`.
     Gap(
-        name="desktop.input_send",
-        what="press a key combination, or click and move the mouse",
-        reason=GapReason.MISSING,
-        detail=(
-            "typing text into an ordinary window exists - `desktop.type_text` - and it types "
-            "characters only. Shortcuts like Ctrl+S and every kind of mouse input do not exist"
-        ),
-    ),
-    Gap(
         name="desktop.audio",
         what="change the volume or switch the output device",
         reason=GapReason.MISSING,

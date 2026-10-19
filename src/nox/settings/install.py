@@ -176,7 +176,12 @@ def build_appliers(core: _Core) -> dict[str, Applier]:
 
         return apply
 
+    async def set_computer_use(value: Any) -> None:
+        # Read before every input event, so switching it off ends a running session at once.
+        config.desktop.computer_use.enabled = bool(value)
+
     return {
+        "desktop.computer_use.enabled": set_computer_use,
         "identity.name": set_identity_name,
         "identity.user_display_name": set_user_display_name,
         "identity.ui_language": set_ui_language,

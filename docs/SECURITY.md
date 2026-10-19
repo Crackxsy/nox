@@ -137,10 +137,27 @@ things Nox's Rocket League feature does.
 
 No file anywhere in the repository may import a process-memory API (`ReadProcessMemory`,
 `WriteProcessMemory`) or a third-party input-automation library (`pydirectinput`, `pyautogui`).
-`SendInput` is permitted in exactly one file, `src/nox/desktop/keyboard.py`, which exists so Nox can
-type into an ordinary window - and which refuses to send anything at all while a watched game
-process is running anywhere on the machine, not merely when the game window is the target. It types
-characters (`KEYEVENTF_UNICODE`), which cannot express a key combination. There is no mouse input.
+`SendInput` is permitted in exactly two files, and each one refuses to send anything at all while
+a watched game process is running anywhere on the machine, not merely when the game window is the
+target:
+
+- `src/nox/desktop/keyboard.py` types into an ordinary window. It types characters
+  (`KEYEVENTF_UNICODE`), which cannot express a key combination.
+- `src/nox/desktop/computer_use.py` (owner approval of this change: 2026-10-18) moves and clicks
+  the mouse and presses key combinations. It is **off by default**
+  (`desktop.computer_use.enabled: false`); turning it on is a security setting and needs the PIN
+  when one is set. Use happens in **sessions**: `computer.session_start` (risk high) asks every
+  time - a "remember" on it is revoked the moment it is used - and only a confirmed session grants
+  `computer.pointer` / `computer.keys` (risk medium), for the session's length
+  (`session_minutes`) and action budget (`max_actions_per_session`) and no longer. While it runs,
+  a `desktop.computer_use` event drives a visible notice; every action is audited. The kill switch
+  and the stop hotkey (`ctrl+alt+shift+k`, read from the key state before every single event) end
+  it at once. It refuses - in the module itself, first, and again immediately before every event -
+  while a watched game or an anti-cheat service is running and while a game is in the foreground.
+  It never clicks into or sends keys to Nox's own windows (its confirmation dialogs live there),
+  and never sends Win+R, Win+X, Ctrl+Alt+Del, Ctrl+Shift+Esc, the stop hotkey itself, or Alt+F4
+  while Nox is in front. Recognising "Nox's own window" is by process and by window title, so a
+  dashboard in a browser tab is covered by its title only; see the risks in the pull request.
 
 `game.input.send` remains in the immutable hard-prohibition list, which no profile, configuration,
 plugin or model can lift.
@@ -148,8 +165,10 @@ plugin or model can lift.
 All of this is enforced by CI rather than by convention. The `guard-security-model` job in
 `.github/workflows/ci.yml` runs two checks on every push and pull request: the process-memory and
 automation patterns must appear nowhere under `src/` or `plugins/rl/`, and `SendInput` must appear in
-that one file and nowhere else - *and* that file must still contain its game guard. The second half
-matters as much as the first: an exemption nobody re-checks is not an exemption, it is a hole.
+those two files and nowhere else - *and* each of them must still contain its game guard
+(`GameRunningError` and `if game_running:`). The second half matters as much as the first: an
+exemption nobody re-checks is not an exemption, it is a hole. `tests/unit/security/
+test_input_synthesis_guard.py` runs the same checks locally.
 
 ## Secrets handling
 
@@ -259,6 +278,53 @@ the plugin process beyond the call), and reach only the `host:port` entries in i
 the worker is ever spawned, then enforced a second time inside the worker by its own scoped
 `EgressGuard`. Nothing a plugin does can widen what the core already validated. See
 `PLUGIN_AUTHORING.md` for the manifest schema and full detail.
+
+## External MCP servers
+
+Nox can use other people's MCP servers (`mcp.servers`, or "Faehigkeit hinzufuegen" in the
+dashboard). Their tools appear as `mcp.<server>.<tool>`, always risk **medium** (the permission
+engine asks; "remember" is a grant for that one tool) unless the *user* marked a tool read-only -
+what a server claims about itself (`readOnlyHint`) is shown, never trusted. Before a server starts:
+`npx`/`uvx`/`pipx run`/`pnpm dlx` commands must name the exact version the user pinned; a shell is
+never the program; environment values and headers that look like credentials must be secret
+references `secret:nox/mcp/<id>/<name>` resolved from the secret store at start; variables that
+change what code an interpreter loads (`NODE_OPTIONS`, `PYTHONPATH`, `LD_PRELOAD`, ...) and Nox's
+own are refused; remote servers need HTTPS (plain HTTP only to loopback), go through the egress
+guard and never to the Home Assistant host. The first start, and every start after the command
+changed, waits for the user's approval of that exact command (bound to a fingerprint). Names are
+checked against the hard prohibitions in every spelling, the reserved namespaces (`security`,
+`home`, `desktop`, `game`, `permission`, `mcp`) and the home boundary; descriptions and schemas
+are cut, cleaned of control and direction-override characters and labelled as untrusted data;
+results are labelled the same way. A call whose arguments name a lock, alarm, valve or garage door
+is refused before the server sees it, and a server that uses the network is not called in the
+privacy modes private and offline. The client offers servers nothing - no sampling, no roots, no
+elicitation. Until the sandbox (`nox.sandbox`) is installed, a local server runs with the plugin
+workers' environment allow-list, in its own folder, inside the core's job object, without a
+console window - process hygiene, not isolation; the dashboard says `sandboxed: false`.
+
+## Self-built skills
+
+`skill.learn` (risk high) lets Nox build a missing capability as a plugin under `<nox home>`, never
+in its source tree. The builder is a Claude Code session with `--tools Read,Edit,Write,Glob,Grep`
+on one work folder - no shell. The core, not the model, then checks the result: manifest, id and
+tool names (reserved namespaces, hard prohibitions, home boundary, core namespaces), every tool at
+least risk medium, events only in its own namespace, egress only to declared public hosts (never
+loopback, LAN or the Home Assistant host, and every URL in the source must be declared), and an
+import allow-list that excludes processes, files, sockets, the registry, `importlib`, `eval`,
+`open` and dunder-attribute tricks. Its tests run in a separate isolated Python process whose
+sockets refuse every connection. A passing version is frozen and bound by a hash; activation is
+the user's click in the dashboard - never a tool - and needs the PIN (when one is set) only when
+the skill wants a host outside the allow-list or a secret. Learning is offered only for a missing
+capability: forbidden wishes are refused and a disabled capability gets its fix. Everything is
+audited; "Vergessen" deletes it with its versions.
+
+## Watchers
+
+A watcher (`watch.create`, risk medium, asks first) calls exactly one tool of risk read or low on
+an interval of at least five minutes and reports through the proactive service. The tool's risk is
+checked again before every run, so a tool re-registered with more power is never called. The
+condition is data (`lt`/`gt`/`contains`/`changed` on a dotted path), never code; a threshold must
+come from the user or from memory, never a guess.
 
 ## IPC authentication
 

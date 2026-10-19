@@ -456,30 +456,34 @@ jobs:
           fi
           echo "clean: no process-memory or automation APIs under src/ or plugins/rl/"
 
-      # `SendInput` is allowed in exactly one file, and only because that file refuses to send
-      # anything while a watched game is running. Two checks, because either one alone is a hole:
-      # the first keeps input synthesis from spreading, the second keeps the exemption honest.
-      - name: Input synthesis stays in one guarded file
+      # `SendInput` is allowed in exactly two files - typing (`keyboard.py`) and the approved
+      # computer-use module (`computer_use.py`, owner approval 2026-10-18) - and only because both
+      # refuse to send anything while a watched game is running. Two checks, because either one
+      # alone is a hole: the first keeps input synthesis from spreading, the second keeps each
+      # exemption honest.
+      - name: Input synthesis stays in two guarded files
         shell: bash
         run: |
           set -e
-          allowed='src/nox/desktop/keyboard.py'
+          allowed='src/nox/desktop/keyboard.py src/nox/desktop/computer_use.py'
           found=$(grep -RIlE 'SendInput' src/ plugins/rl/ || true)
           for file in $found; do
-            if [ "$file" != "$allowed" ]; then
-              echo "::error file=$file::SendInput may only appear in $allowed (Security Model §10)"
+            case " $allowed " in
+              *" $file "*) ;;
+              *) echo "::error file=$file::SendInput may only appear in $allowed (Security Model §10)"; exit 1 ;;
+            esac
+          done
+          for file in $allowed; do
+            if ! grep -q 'GameRunningError' "$file"; then
+              echo "::error file=$file::the game guard is gone from a file allowed to synthesise input"
+              exit 1
+            fi
+            if ! grep -q 'if game_running:' "$file"; then
+              echo "::error file=$file::the game check is gone from a file allowed to synthesise input"
               exit 1
             fi
           done
-          if ! grep -q 'GameRunningError' "$allowed"; then
-            echo "::error file=$allowed::the game guard is gone from the only file allowed to synthesise input"
-            exit 1
-          fi
-          if ! grep -q 'if game_running:' "$allowed"; then
-            echo "::error file=$allowed::the game check is gone from the only file allowed to synthesise input"
-            exit 1
-          fi
-          echo "clean: SendInput only in $allowed, and its game guard is present"
+          echo "clean: SendInput only in $allowed, and both game guards are present"
 
   release-hygiene:
     name: Release hygiene (third-party license audit, secrets scan)
