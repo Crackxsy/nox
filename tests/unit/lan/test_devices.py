@@ -13,13 +13,13 @@ from nox.remote.repo import RemoteRepository
 
 
 async def test_a_code_yields_a_device_and_its_token(devices: LanDevices) -> None:
-    start = await devices.start(name="Wohnzimmer")
-    redeemed = await devices.redeem(start.code, name="Handy von Sam")
+    start = await devices.start(name="Living room")
+    redeemed = await devices.redeem(start.code, name="Sam's phone")
     assert redeemed.result.ok
     assert redeemed.token is not None and len(redeemed.token) >= 40
     device = devices.verify(redeemed.token)
     assert device is not None
-    assert device.name == "Handy von Sam"
+    assert device.name == "Sam's phone"
     assert device.channel == CHANNEL and device.role == "device"
     assert device.last_seen_at is not None
 

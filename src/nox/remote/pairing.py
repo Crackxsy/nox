@@ -64,7 +64,7 @@ class PairingService:
         pairing_id = self._repo.create_pairing(
             code,
             channel=self._channel,
-            device_name=device_name or "phone",
+            device_name=device_name,
             created_at=now,
             expires_at=expires_at,
         )
@@ -97,10 +97,12 @@ class PairingService:
 
     # -- phone side ----------------------------------------------------------------------------
 
-    async def redeem(self, code: str, *, sender_id: str, name: str = "") -> PairingResult:
+    async def redeem(
+        self, code: str, *, sender_id: str, name: str = "", fallback_name: str = ""
+    ) -> PairingResult:
         """Redeem a one-time code for `sender_id`. Every rejection path is audited and creates no
-        device row. `name`, when given, is what the new device calls itself; otherwise the name
-        chosen when the code was made is used."""
+        device row. The device's name, first that applies: `name` (typed on the new device), the
+        name chosen when the code was made, `fallback_name` (what the device guesses it is)."""
         now = self._clock()
         existing = self._repo.find_device_for_sender(self._channel, sender_id)
         if existing is not None:
@@ -120,7 +122,10 @@ class PairingService:
             return self._reject("max_devices")
 
         device = self._repo.create_device(
-            name=name.strip()[:64] or str(row["device_name"]) or "phone",
+            name=name.strip()[:64]
+            or str(row["device_name"]).strip()
+            or fallback_name.strip()[:64]
+            or "phone",
             channel=self._channel,
             role=self._role,
             sender_id=sender_id,

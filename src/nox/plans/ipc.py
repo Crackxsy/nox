@@ -10,14 +10,15 @@ through the permission engine, so a step that needs confirming asks when it gets
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from nox.core.logging import get_logger
 from nox.ipc.dispatch import EmptyPayload, RequestContext, RequestRegistry
-from nox.ipc.errors import ERR_NOT_FOUND, IpcError
-from nox.ipc.roles import UI_ROLES
+from nox.ipc.errors import ERR_NOT_FOUND, ERR_PERMISSION, IpcError
+from nox.ipc.roles import DEVICE_ROLE, UI_ROLES
 from nox.plans.book import PlanBook
 
 log = get_logger(__name__)
@@ -29,10 +30,19 @@ __all__ = ["register_plan_ipc"]
 
 class PlanRef(BaseModel):
     plan: str = Field(min_length=1, max_length=40)
+    #: Needed when a paired device approves a plan (`nox.security.device_pin`).
+    pin: str | None = Field(default=None, max_length=128)
 
 
-def register_plan_ipc(registry: RequestRegistry, book: PlanBook) -> None:
-    """Register the three `plans.*` requests for the `shell` and `dashboard` roles."""
+def register_plan_ipc(
+    registry: RequestRegistry,
+    book: PlanBook,
+    *,
+    device_guard: Callable[[], Any] | None = None,
+) -> None:
+    """Register the three `plans.*` requests for the UI roles. `device_guard` returns the core's
+    `DevicePinGuard` once network access installed one: approving a plan starts work in the
+    background, so from a paired device it needs the PIN."""
 
     async def p_list(_ctx: RequestContext, _payload: EmptyPayload) -> dict[str, Any]:
         return {
@@ -40,14 +50,19 @@ def register_plan_ipc(registry: RequestRegistry, book: PlanBook) -> None:
             "started": book.history(),
         }
 
-    async def p_approve(_ctx: RequestContext, payload: PlanRef) -> dict[str, Any]:
+    async def p_approve(ctx: RequestContext, payload: PlanRef) -> dict[str, Any]:
+        if ctx.role == DEVICE_ROLE:
+            guard = device_guard() if device_guard is not None else None
+            if guard is None:
+                raise IpcError(ERR_PERMISSION, "a paired device cannot approve plans here")
+            await guard.require(ctx, payload.pin, "plans.approve")
         try:
             row = await book.start(payload.plan)
         except KeyError as exc:
             raise IpcError(
                 ERR_NOT_FOUND, f"there is no plan waiting with the id {payload.plan!r}"
             ) from exc
-        log.info("plans.approved", plan=payload.plan, task=row.id, by="dashboard")
+        log.info("plans.approved", plan=payload.plan, task=row.id, by=ctx.client_id or ctx.role)
         return {"ok": True, "plan": payload.plan, "task": row.id}
 
     async def p_discard(_ctx: RequestContext, payload: PlanRef) -> dict[str, Any]:

@@ -85,7 +85,9 @@ def install(core: CoreLike) -> PlansRuntime:
     book = PlanBook(queue=queue, tasks=tasks)
 
     register_plan_tools(core.tool_registry, book)
-    register_plan_ipc(core.registry, book)
+    register_plan_ipc(
+        core.registry, book, device_guard=lambda: getattr(core, "device_pin_guard", None)
+    )
     queue.start()
 
     log.info("plans.installed")

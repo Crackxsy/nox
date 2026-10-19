@@ -15,7 +15,7 @@ from nox.remote.repo import RemoteRepository
 from tests.unit.ipc.conftest import SimpleBus
 
 #: What the tests' certificate is issued for: loopback, so real TLS connections can be made.
-NAMES = ("localhost", "noxpi", "noxpi.local")
+NAMES = ("localhost", "noxpi.local")
 ADDRESSES = ("127.0.0.1", "192.168.1.20")
 
 

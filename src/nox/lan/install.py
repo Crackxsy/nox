@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -40,11 +40,13 @@ from nox.ipc.dispatch import RequestContext
 from nox.ipc.errors import ERR_NOT_FOUND, ERR_PERMISSION, ERR_UNAVAILABLE, IpcError
 from nox.ipc.http import HttpServer
 from nox.ipc.roles import DEVICE_ROLE, UI_ROLES
+from nox.ipc.server import CLOSE_POLICY_VIOLATION, CLOSE_SIGNED_OUT
 from nox.lan.app import LanSettings, PairLimiter, create_lan_app
 from nox.lan.devices import CLIENT_PREFIX, LanDevices
 from nox.lan.tls import KeyNotProtectedError, TlsMaterial, ensure_tls
 from nox.remote.models import DeviceRow
 from nox.remote.repo import RemoteRepository
+from nox.security.device_pin import DevicePinGuard
 from nox.security.gate import PinRequiredError
 
 log = get_logger(__name__)
@@ -217,13 +219,21 @@ class LanListener:
         await self._serve(material)
 
     async def run(self, interval_s: float = TLS_RECHECK_S) -> None:
-        await self.start()
+        """Start, then re-check forever. No round - the first included - may end the watcher: an
+        error it did not foresee is logged and reported, and the next round tries again."""
+        step: Callable[[], Awaitable[object]] = self.start
         while True:
-            await asyncio.sleep(interval_s)
             try:
-                await self.recheck()
+                await step()
             except Exception as exc:  # noqa: BLE001 - the watcher must outlive one bad round
-                log.error("lan.recheck_failed", error=f"{type(exc).__name__}: {exc}")
+                reason = f"{type(exc).__name__}: {exc}"
+                log.error("lan.watcher_round_failed", error=reason)
+                if self._runtime.server is None:
+                    self._runtime.error = reason
+                else:
+                    self._runtime.warning = reason
+            step = self.recheck
+            await asyncio.sleep(interval_s)
 
 
 def install(core: Any) -> LanRuntime:
@@ -242,7 +252,24 @@ def install(core: Any) -> LanRuntime:
         return runtime
 
     tls_dir = Path(core.config.paths.data_dir) / "tls"
-    core.tokens.use_device_verifier(lambda token: getattr(devices.verify(token), "id", None))
+
+    def device_of(token: str) -> str | None:
+        device = devices.verify(token)
+        return device.id if device is not None else None
+
+    core.tokens.use_device_verifier(device_of)
+
+    async def revoke(device_id: str, reason: str) -> None:
+        """Revoked at once - its token is dead from here on - and its sessions closed a moment
+        later, so the answer saying why still reaches it."""
+        await devices.revoke(device_id, reason=reason)
+        _keep(
+            runtime,
+            _close_later(core, device_id, reason="device removed", code=CLOSE_POLICY_VIOLATION),
+            "nox-lan-remove",
+        )
+
+    core.device_pin_guard = DevicePinGuard(lambda: core.security.gate, revoke)
     hub_host = core.hub.settings.host
 
     def current_tls() -> TlsMaterial:
@@ -257,6 +284,8 @@ def install(core: Any) -> LanRuntime:
             bridge_secret=lambda: core.hub.lan_bridge_secret,
             dashboard_dist=core.dashboard_dist if core.dashboard_dist.exists() else None,
             limiter=PairLimiter(per_address=cfg.pair_attempts_per_minute),
+            allow_public_clients=cfg.allow_public_clients,
+            max_frame_bytes=core.hub.settings.max_frame_bytes,
         )
         return HttpServer(
             app,
@@ -267,16 +296,37 @@ def install(core: Any) -> LanRuntime:
         )
 
     listener = LanListener(runtime, make_tls=lambda: ensure_tls(tls_dir), build=build)
-    task = asyncio.get_running_loop().create_task(listener.run(), name="nox-lan")
-    runtime.tasks.add(task)
-    task.add_done_callback(runtime.tasks.discard)
+    _keep(runtime, listener.run(), "nox-lan")
     _add_health_check(core, runtime)
     return runtime
 
 
-async def _close_later(core: Any, device_id: str, delay_s: float = 0.5) -> None:
+def _keep(runtime: LanRuntime, coro: Any, name: str) -> None:
+    """Run `coro` as a task the runtime holds - and whose failure is logged, never lost."""
+    task = asyncio.get_running_loop().create_task(coro, name=name)
+    runtime.tasks.add(task)
+
+    def done(finished: asyncio.Task[None]) -> None:
+        runtime.tasks.discard(finished)
+        if not finished.cancelled() and finished.exception() is not None:
+            log.error("lan.task_failed", task=name, error=repr(finished.exception()))
+
+    task.add_done_callback(done)
+
+
+async def _close_later(
+    core: Any,
+    device_id: str,
+    *,
+    reason: str = "signed out",
+    code: int = CLOSE_SIGNED_OUT,
+    delay_s: float = 0.5,
+) -> None:
+    """Close a device's sessions a moment after answering it, so the answer arrives first. A
+    sign-out closes with a code of its own (4001), so its dashboard says "signed out" even if the
+    close wins; a removal closes with 1008 like any revocation."""
     await asyncio.sleep(delay_s)
-    await core.hub.disconnect_device(device_id, reason="signed out")
+    await core.hub.disconnect_device(device_id, reason=reason, code=code)
 
 
 def _add_health_check(core: Any, runtime: LanRuntime) -> None:
@@ -307,23 +357,37 @@ def _register_requests(core: Any, runtime: LanRuntime) -> None:
 
     def require_running() -> TlsMaterial:
         if not runtime.enabled:
-            raise IpcError(ERR_UNAVAILABLE, "network access is off (ipc.lan.enabled)")
-        if runtime.tls is None or runtime.server is None:
             raise IpcError(
-                ERR_UNAVAILABLE, runtime.error or "network access is starting", retryable=True
+                ERR_UNAVAILABLE,
+                "network access is off (ipc.lan.enabled)",
+                details={"reason": "off"},
+            )
+        if runtime.tls is None or runtime.server is None:
+            failed = bool(runtime.error)
+            raise IpcError(
+                ERR_UNAVAILABLE,
+                runtime.error or "network access is starting",
+                retryable=True,
+                details={"reason": "failed" if failed else "starting"},
             )
         return runtime.tls
 
-    async def h_status(_ctx: RequestContext, _p: EmptyRequest) -> dict[str, Any]:
+    async def h_status(ctx: RequestContext, _p: EmptyRequest) -> dict[str, Any]:
+        # The raw reason can name local paths; a paired device gets the fact, not the detail.
+        local = ctx.role != DEVICE_ROLE
         return {
             "enabled": runtime.enabled,
             "running": runtime.running,
-            "error": runtime.error,
-            "warning": runtime.warning,
+            "error": runtime.error if local else ("unavailable" if runtime.error else ""),
+            "warning": runtime.warning if local else "",
             "port": runtime.port,
             "urls": runtime.urls(),
-            "fingerprint": runtime.tls.fingerprint if runtime.tls else "",
+            "fingerprint": runtime.tls.server_fingerprint if runtime.tls else "",
+            "ca_fingerprint": runtime.tls.fingerprint if runtime.tls else "",
             "ca_url": "/nox-ca.crt",
+            # A paired device can only pair or remove others with the PIN; without one set, the
+            # dashboard says where to do it instead of offering a form that cannot work.
+            "pin_set": core.security.gate.is_required(),
         }
 
     async def h_devices(ctx: RequestContext, _p: EmptyRequest) -> dict[str, Any]:
@@ -334,28 +398,37 @@ def _register_requests(core: Any, runtime: LanRuntime) -> None:
             "devices": [_device_json(d, current=d.id == own) for d in listed],
         }
 
-    async def authorize(ctx: RequestContext, pin: str | None, action: str) -> None:
-        """Pairing and removing devices from a paired device needs the PIN - always, also where
-        the local dashboard does not ask for one. Otherwise a lost phone could pair a second
-        device it keeps, or lock its owner out. Without a PIN it is refused outright."""
-        gate = core.security.gate
-        if ctx.role == DEVICE_ROLE and not gate.is_required():
-            raise IpcError(
-                ERR_PERMISSION,
-                f"{action} from a paired device needs the security PIN; set one on the server",
-            )
+    async def authorize(
+        ctx: RequestContext, pin: str | None, action: str, *, local_needs_pin: bool
+    ) -> None:
+        """From a paired device: the PIN, always (`DevicePinGuard`, which also removes a device
+        after repeated wrong PINs). Locally: the PIN gate as configured where `local_needs_pin`,
+        nothing otherwise - removing a device only ever narrows access, and a thief must not be
+        able to block it by locking the PIN."""
+        if ctx.role == DEVICE_ROLE:
+            guard = getattr(core, "device_pin_guard", None)
+            if guard is None:
+                raise IpcError(ERR_PERMISSION, f"{action} is not possible from a paired device")
+            await guard.require(ctx, pin, action)
+            return
+        if not local_needs_pin:
+            return
         try:
-            await gate.require(pin, action=action, by=ctx.client_id or ctx.role)
+            await core.security.gate.require(pin, action=action, by=ctx.client_id or ctx.role)
         except PinRequiredError as exc:
             raise IpcError(ERR_PERMISSION, exc.reason) from exc
 
     async def h_pair_start(ctx: RequestContext, p: PairStartRequest) -> dict[str, Any]:
         material = require_running()
-        await authorize(ctx, p.pin, "lan.pair")
+        await authorize(ctx, p.pin, "lan.pair", local_needs_pin=True)
         start = await devices.start(name=p.name)
         urls = [f"{u}#pair={start.code}" for u in lan_urls(material, runtime.port)]
         if not urls:
-            raise IpcError(ERR_UNAVAILABLE, "this machine has no address in the home network")
+            raise IpcError(
+                ERR_UNAVAILABLE,
+                "this machine has no address in the home network",
+                details={"reason": "no_address"},
+            )
         expires: datetime = start.expires_at
         return {
             "code": start.code,
@@ -364,7 +437,8 @@ def _register_requests(core: Any, runtime: LanRuntime) -> None:
             "url": urls[0],
             "urls": urls,
             "qr": _qr(urls[0]),
-            "fingerprint": material.fingerprint,
+            "fingerprint": material.server_fingerprint,
+            "ca_fingerprint": material.fingerprint,
         }
 
     async def h_unpair(ctx: RequestContext, p: UnpairRequest) -> dict[str, Any]:
@@ -373,14 +447,12 @@ def _register_requests(core: Any, runtime: LanRuntime) -> None:
         # Signing itself out is always allowed; removing another device is administration.
         itself = ctx.role == DEVICE_ROLE and ctx.client_id == f"{CLIENT_PREFIX}{p.device_id}"
         if not itself:
-            await authorize(ctx, p.pin, "lan.unpair")
+            await authorize(ctx, p.pin, "lan.unpair", local_needs_pin=False)
         ok = await devices.revoke(p.device_id, reason="signed_out" if itself else "dashboard")
         if ok and itself:
             # The token is already dead. Its own sessions close a moment later, so this answer
             # still reaches the device and its dashboard can say "signed out" instead of "lost".
-            task = asyncio.get_running_loop().create_task(_close_later(core, p.device_id))
-            runtime.tasks.add(task)
-            task.add_done_callback(runtime.tasks.discard)
+            _keep(runtime, _close_later(core, p.device_id), "nox-lan-sign-out")
             return {"ok": True, "device_id": p.device_id, "closed_sessions": 0}
         closed = await core.hub.disconnect_device(p.device_id) if ok else 0
         return {"ok": ok, "device_id": p.device_id, "closed_sessions": closed}

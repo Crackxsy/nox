@@ -128,6 +128,10 @@ class LanConfig(StrictSection):
     pair_code_ttl_s: float = Field(default=300.0, ge=60.0, le=3600.0)
     #: Pairing attempts per source address and minute; a wrong code costs one.
     pair_attempts_per_minute: int = Field(default=5, ge=1, le=60)
+    #: Serve clients from public addresses too. Off: only loopback and private networks are
+    #: answered, so a port forward or a public address on the machine does not expose the
+    #: pairing page to the internet. Access from outside the home is its own feature (wave F).
+    allow_public_clients: bool = False
 
 
 class IpcConfig(StrictSection):

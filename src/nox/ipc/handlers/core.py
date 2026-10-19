@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from nox.core.events import E, Event
 from nox.core.logging import get_logger
@@ -33,7 +33,7 @@ from nox.ipc.roles import CONFIRMING_ROLES, DEVICE_ROLE, LOCAL_UI_ROLES, UI_ROLE
 from nox.memory.capture import turn_origin
 from nox.security.constants import RESUME_ROLES, USER_KILL_ORIGINS
 from nox.security.gate import PinRequiredError, relaxes_privacy
-from nox.security.model import Decision
+from nox.security.model import Decision, Risk
 
 if TYPE_CHECKING:
     from nox.app import NoxCore
@@ -111,6 +111,8 @@ class PermissionReply(BaseModel):
     grant_id: str
     decision: Decision
     remember: bool = False
+    #: Needed from a paired device to allow anything at high or critical risk.
+    pin: str | None = Field(default=None, max_length=128)
 
 
 class VoicePtt(BaseModel):
@@ -185,6 +187,12 @@ class CoreHandlers:
             "security.permission.reply",
             PermissionReply,
             self.permission_reply,
+            roles=CONFIRMING_ROLES,
+        )
+        reg(
+            "security.permission.pending",
+            EmptyPayload,
+            self.permission_pending,
             roles=CONFIRMING_ROLES,
         )
         reg("voice.ptt", VoicePtt, self.voice_ptt, roles=("shell",))
@@ -311,14 +319,33 @@ class CoreHandlers:
 
     async def permission_reply(self, ctx: RequestContext, p: PermissionReply) -> dict[str, Any]:
         """The first answer wins. A paired device answers this one request only: its "always" is
-        not turned into a lasting grant, so a lost phone cannot widen what Nox may do later. The
+        not turned into a lasting grant, so a lost phone cannot widen what Nox may do later. To
+        allow anything at high or critical risk it needs the PIN - otherwise a phone could ask Nox
+        for something through the chat and then allow it itself (`nox.security.device_pin`). The
         audit trail names the client that answered."""
         assert self._core.security is not None
+        engine = self._core.security.engine
+        if ctx.role == DEVICE_ROLE and p.decision is Decision.ALLOW:
+            request = engine.pending_request(p.grant_id)
+            if request is not None and request.risk in (Risk.HIGH, Risk.CRITICAL):
+                guard = getattr(self._core, "device_pin_guard", None)
+                if guard is None:
+                    raise IpcError(ERR_PERMISSION, "a paired device cannot allow this")
+                await guard.require(ctx, p.pin, "security.permission.reply")
         remember = p.remember and ctx.role != DEVICE_ROLE
         ok = self._core.security.engine.reply(
             p.grant_id, p.decision, remember=remember, by=ctx.client_id or ctx.role
         )
         return {"ok": ok, "remembered": remember and ok}
+
+    async def permission_pending(self, _ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
+        """Questions still open, for a dashboard that (re)connects while one waits."""
+        assert self._core.security is not None
+        return {
+            "pending": [
+                r.model_dump(mode="json") for r in self._core.security.engine.pending_requests()
+            ]
+        }
 
     # ---- voice, chat, pet ------------------------------------------------------------------------
 

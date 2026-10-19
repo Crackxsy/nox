@@ -6,10 +6,12 @@ authority once trusts every server certificate Nox issues later - after the Pi g
 say - without a second warning, and only then may a phone install the dashboard as an app.
 
 What keeps that authority harmless:
-* **Name constraints.** It may only vouch for `localhost`, names ending in `.local`, this machine's
-  own host name and private or loopback addresses. A phone that trusts it does not trust it for
-  any site on the internet, even if its key were stolen; browsers and phones enforce the
-  constraint, not Nox.
+* **Name constraints.** It may only vouch for `localhost`, names ending in `.local` or
+  `.home.arpa` (the names reserved for home networks) and private or loopback addresses. A phone
+  that trusts it does not trust it for any site on the internet; browsers and phones enforce the
+  constraint, not Nox. Within the home network it is powerful, though: whoever had its key could
+  impersonate any `.local` name or private address to the devices that installed it - which is
+  why the key stays on this machine, owner-only, and the docs say so.
 * **The key never leaves this machine** and is written owner-only (`write_secret_file`).
 * EC P-256 keys, SHA-256 signatures. The authority is valid for ten years, a server certificate
   for 825 days (the longest Apple devices accept). A server certificate is re-issued 30 days
@@ -24,7 +26,8 @@ import ipaddress
 import os
 import socket
 import sys
-from collections.abc import Iterable, Sequence
+import threading
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,6 +54,10 @@ __all__ = [
     "permitted_address",
 ]
 
+#: One issuer at a time: a check that timed out may still be running in its thread when the next
+#: one starts, and both must not write the same files.
+_ISSUING = threading.Lock()
+
 CA_VALIDITY_DAYS = 3650
 SERVER_VALIDITY_DAYS = 825
 RENEW_BEFORE = dt.timedelta(days=30)
@@ -72,8 +79,10 @@ PERMITTED_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = 
     ipaddress.ip_network("fc00::/7"),
     ipaddress.ip_network("fe80::/10"),
 )
-#: DNS names it may vouch for, and every name below them (`local` covers `pi.local`).
-PERMITTED_DNS: tuple[str, ...] = ("localhost", "local")
+#: DNS names it may vouch for, and every name below them (`local` covers `pi.local`). Only names
+#: no public site can have: no bare host name (a machine called `dev` would otherwise cover a real
+#: top-level domain), no router suffix like `fritz.box` (`.box` is a public TLD).
+PERMITTED_DNS: tuple[str, ...] = ("localhost", "local", "home.arpa")
 
 
 class KeyNotProtectedError(RuntimeError):
@@ -89,12 +98,15 @@ class TlsMaterial:
     key_file: Path
     ca_file: Path
     ca_der: bytes
-    #: SHA-256 of the authority as `AB:CD:...`, what a person compares with the browser's view.
+    #: SHA-256 of the authority as `AB:CD:...` - what a person checks before installing it.
     fingerprint: str
     names: tuple[str, ...]
     addresses: tuple[str, ...]
     #: The server certificate's serial number: a new one means the listener must reload.
     server_serial: int = 0
+    #: SHA-256 of the server certificate - what a browser's certificate view shows. It changes
+    #: whenever the certificate is re-issued (a new address, near its end).
+    server_fingerprint: str = ""
 
 
 def fingerprint(der: bytes) -> str:
@@ -117,6 +129,12 @@ def _primary_ipv4() -> str | None:
         return None
 
 
+def permitted_name(name: str) -> bool:
+    """Whether the authority may vouch for this DNS name."""
+    name = name.lower().rstrip(".")
+    return any(name == d or name.endswith("." + d) for d in PERMITTED_DNS)
+
+
 def permitted_address(value: str) -> bool:
     """Whether the authority may vouch for this address (loopback or private only)."""
     try:
@@ -129,15 +147,22 @@ def permitted_address(value: str) -> bool:
 def local_identity() -> tuple[tuple[str, ...], tuple[str, ...]]:
     """(names, addresses) under which devices in the home network may reach this machine.
 
-    Names: `localhost`, the host name and `<host name>.local` (mDNS, which Raspberry Pi OS,
-    macOS, iOS, Android and Windows resolve). Addresses: loopback plus every private address of
-    this machine. Public addresses are left out on purpose: the authority may not vouch for them.
+    Names: `localhost`, `<host name>.local` (mDNS, which Raspberry Pi OS, macOS, iOS, Windows and
+    recent Android resolve) and the router's name for it when that is under `.home.arpa`.
+    Addresses: loopback plus every private address of this machine. Public addresses and names
+    outside the authority's constraints are left out on purpose.
     """
     host = socket.gethostname().strip().lower().rstrip(".")
     short = host.split(".", 1)[0]
     names = ["localhost"]
     if short and short != "localhost":
-        names += [short, f"{short}.local"]
+        names.append(f"{short}.local")
+    try:
+        fqdn = socket.getfqdn().strip().lower().rstrip(".")
+    except OSError:
+        fqdn = ""
+    if fqdn and permitted_name(fqdn) and fqdn not in names:
+        names.append(fqdn)
     candidates: list[str] = []
     primary = _primary_ipv4()
     if primary:
@@ -223,10 +248,8 @@ def _key_usage(*, sign_certificates: bool) -> x509.KeyUsage:
     )
 
 
-def _constraint_subtrees(host_names: Iterable[str]) -> list[x509.GeneralName]:
-    dns = list(PERMITTED_DNS)
-    dns += [n for n in host_names if "." not in n and n not in dns]
-    subtrees: list[x509.GeneralName] = [x509.DNSName(name) for name in dns]
+def _constraint_subtrees() -> list[x509.GeneralName]:
+    subtrees: list[x509.GeneralName] = [x509.DNSName(name) for name in PERMITTED_DNS]
     subtrees += [x509.IPAddress(network) for network in PERMITTED_NETWORKS]
     return subtrees
 
@@ -254,9 +277,7 @@ def _new_ca(
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
         .add_extension(_key_usage(sign_certificates=True), critical=True)
         .add_extension(
-            x509.NameConstraints(
-                permitted_subtrees=_constraint_subtrees(host_names), excluded_subtrees=None
-            ),
+            x509.NameConstraints(permitted_subtrees=_constraint_subtrees(), excluded_subtrees=None),
             critical=True,
         )
         .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
@@ -350,6 +371,11 @@ def ensure_tls(
         found_names, found_addresses = local_identity()
         names = found_names if names is None else names
         addresses = found_addresses if addresses is None else addresses
+    with _ISSUING:
+        return _ensure_tls(directory, names, addresses)
+
+
+def _ensure_tls(directory: Path, names: Sequence[str], addresses: Sequence[str]) -> TlsMaterial:
     wanted_names = [n.lower().rstrip(".") for n in dict.fromkeys(names) if n]
     wanted_addresses = [a for a in dict.fromkeys(addresses) if permitted_address(a)]
     directory.mkdir(parents=True, exist_ok=True)
@@ -369,6 +395,7 @@ def ensure_tls(
         _new_server(directory, ca_key, ca, issued_names, wanted_addresses)
     der = ca.public_bytes(serialization.Encoding.DER)
     served = x509.load_pem_x509_certificate((directory / SERVER_CERT).read_bytes())
+    served_der = served.public_bytes(serialization.Encoding.DER)
     return TlsMaterial(
         cert_file=directory / SERVER_CERT,
         key_file=directory / SERVER_KEY,
@@ -378,4 +405,5 @@ def ensure_tls(
         names=tuple(issued_names),
         addresses=tuple(wanted_addresses),
         server_serial=served.serial_number,
+        server_fingerprint=fingerprint(served_der),
     )

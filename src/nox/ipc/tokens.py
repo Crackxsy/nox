@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Literal
 
 from nox.ipc._log import get_logger
+from nox.ipc.roles import DEVICE_ROLE
 
 log = get_logger(__name__)
 
@@ -39,7 +40,6 @@ DEFAULT_WORKER_TOKEN_TTL_S = 60.0
 TokenKind = Literal["session", "worker", "device"]
 SESSION_ROLES: frozenset[str] = frozenset({"shell", "pet", "dashboard"})
 WORKER_ROLES: frozenset[str] = frozenset({"worker", "plugin"})
-DEVICE_ROLE = "device"
 DEVICE_CLIENT_PREFIX = "device:"
 #: token -> the paired device's id, or None for an unknown or revoked token.
 DeviceVerifier = Callable[[str], "str | None"]

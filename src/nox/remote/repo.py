@@ -188,6 +188,12 @@ class RemoteRepository:
         )
         return cursor.rowcount == 1
 
+    def mark_seen(self, device_id: str, *, when: datetime) -> None:
+        """Record that a device was just seen, nothing else."""
+        self._db.execute(
+            "UPDATE paired_devices SET last_seen_at = ? WHERE id = ?", (_iso(when), device_id)
+        )
+
     def touch_device(self, device_id: str, *, when: datetime, update_id: int) -> None:
         """Record liveness and advance the replay watermark. `max` keeps it monotonic even if two
         messages are processed out of order."""

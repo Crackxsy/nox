@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from nox.core.events import EventBus
-from nox.ipc.tokens import generate_token
+from nox.ipc.roles import DEVICE_ROLE
+from nox.ipc.tokens import DEVICE_CLIENT_PREFIX, generate_token
 from nox.remote.models import DeviceRow, PairingResult, PairingStart
 from nox.remote.pairing import PairingService
 from nox.remote.repo import RemoteRepository
@@ -24,10 +25,10 @@ from nox.security.model import AuditLog
 __all__ = ["CHANNEL", "CLIENT_PREFIX", "ROLE", "LanDevices", "Redeemed"]
 
 CHANNEL = "lan"
-ROLE = "device"
+ROLE = DEVICE_ROLE
 #: A device connects as `device:<device id>`, so the hub, the audit trail and the permission prompts
 #: name the device that acted.
-CLIENT_PREFIX = "device:"
+CLIENT_PREFIX = DEVICE_CLIENT_PREFIX
 
 
 @dataclass(frozen=True)
@@ -62,11 +63,15 @@ class LanDevices:
         )
 
     async def start(self, *, name: str = "") -> PairingStart:
-        return await self.pairing.start(device_name=name or "Device")
+        return await self.pairing.start(device_name=name.strip()[:64])
 
-    async def redeem(self, code: str, *, name: str = "") -> Redeemed:
+    async def redeem(self, code: str, *, name: str = "", fallback_name: str = "") -> Redeemed:
+        """`name` is what the person typed on the new device, `fallback_name` what the device
+        guesses it is ("iPhone"); a name chosen on the PC when the code was made sits between."""
         token = generate_token()
-        result = await self.pairing.redeem(code, sender_id=token, name=name)
+        result = await self.pairing.redeem(
+            code, sender_id=token, name=name, fallback_name=fallback_name or "Device"
+        )
         return Redeemed(result=result, token=token if result.ok else None)
 
     def verify(self, token: str) -> DeviceRow | None:
@@ -76,7 +81,7 @@ class LanDevices:
         device = self._repo.find_device_for_sender(CHANNEL, token)
         if device is None:
             return None
-        self._repo.touch_device(device.id, when=self._clock(), update_id=0)
+        self._repo.mark_seen(device.id, when=self._clock())
         return self._repo.get_device(device.id)
 
     async def revoke(self, device_id: str, *, reason: str = "dashboard") -> bool:

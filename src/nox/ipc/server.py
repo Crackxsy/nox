@@ -19,6 +19,7 @@ import os
 import re
 import time
 import uuid
+import weakref
 from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -80,6 +81,8 @@ LAN_BRIDGE_HEADER = "X-Nox-Lan-Bridge"
 LAN_PEER_HEADER = "X-Nox-Lan-Peer"
 
 CLOSE_POLICY_VIOLATION = 1008
+#: A paired device signed itself out: its dashboard says "signed out", not "removed".
+CLOSE_SIGNED_OUT = 4001
 CLOSE_GOING_AWAY = 1001
 
 #: Outbound event filtering: (pattern, the roles that must NOT receive it).
@@ -363,8 +366,12 @@ class IpcHub:
         #: mid-flight, and its exception is then never retrieved.
         self._tasks: set[asyncio.Task[None]] = set()
         self._lan_secret = generate_token()
-        #: Connections the network listener bridged in, by `id(conn)` -> the device's address.
-        self._lan_peers: dict[int, str] = {}
+        #: Connections the network listener bridged in -> the device's address. Weak references:
+        #: a connection whose handshake died never stays behind, and a recycled `id()` can never
+        #: make a later local connection look bridged.
+        self._lan_peers: weakref.WeakKeyDictionary[ServerConnection, str] = (
+            weakref.WeakKeyDictionary()
+        )
 
     # -- lifecycle ------------------------------------------------------------------------------
 
@@ -529,11 +536,13 @@ class IpcHub:
         if c is not None:
             await self._close_client(c, CLOSE_POLICY_VIOLATION, reason)
 
-    async def disconnect_device(self, device_id: str, reason: str = "device removed") -> int:
+    async def disconnect_device(
+        self, device_id: str, reason: str = "device removed", *, code: int = CLOSE_POLICY_VIOLATION
+    ) -> int:
         """Close every session of a paired device (all its tabs) at once; returns how many."""
         sessions = [c for c in self._clients.values() if c.device_id == device_id and not c.closing]
         for c in sessions:
-            await self._close_client(c, CLOSE_POLICY_VIOLATION, reason)
+            await self._close_client(c, code, reason)
         return len(sessions)
 
     # -- connection handling ---------------------------------------------------------------------
@@ -553,14 +562,14 @@ class IpcHub:
             if not constant_time_equals(marker, self._lan_secret):
                 log.warning("ipc_lan_marker_invalid", peer=_peer(conn))
                 return conn.respond(HTTPStatus.FORBIDDEN, "forbidden\n")
-            self._lan_peers[id(conn)] = request.headers.get(LAN_PEER_HEADER, "")[:64]
+            self._lan_peers[conn] = request.headers.get(LAN_PEER_HEADER, "")[:64]
         return None
 
     async def _serve_connection(self, conn: ServerConnection) -> None:
         try:
             client = await self._handshake(conn)
         finally:
-            lan_peer = self._lan_peers.pop(id(conn), None)
+            lan_peer = self._lan_peers.pop(conn, None)
         if client is None:
             return
         if lan_peer is not None:
@@ -647,7 +656,7 @@ class IpcHub:
                     conn, env.id, f"client version {auth.client_version} not compatible"
                 )
                 return None
-        via_lan = id(conn) in self._lan_peers
+        via_lan = conn in self._lan_peers
         decision = self._tokens.authenticate(auth.token, auth.role, auth.id, via_lan=via_lan)
         if not decision.ok:
             log.warning(
@@ -656,7 +665,7 @@ class IpcHub:
                 client=auth.id,
                 reason=decision.reason,
                 via_lan=via_lan,
-                peer=self._lan_peers.get(id(conn)) or _peer(conn),
+                peer=self._lan_peers.get(conn) or _peer(conn),
             )
             await self._deny(conn, env.id, decision.reason)
             return None

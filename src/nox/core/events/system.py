@@ -118,13 +118,17 @@ class PermissionRequested(BaseModel):
     mode: str
     risk: str
     target: str = ""
+    #: When an unanswered question becomes "no" (ISO 8601), so every dashboard can count down.
+    expires_at: str = ""
+    #: How long a remembered "allow" lasts, so the button can say so instead of "always".
+    remember_ttl_s: float = 0.0
 
 
 class PermissionDecided(BaseModel):
     request_id: str
     decision: str  # allow | confirm | deny
     rule_id: str
-    by: str  # policy | user | pin
+    by: str  # policy (no answer in time, or a rule) | the answering client's id | pin
     reason: str = ""
 
 

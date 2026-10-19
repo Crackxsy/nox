@@ -366,6 +366,8 @@ export interface PermissionRequested {
   mode: string;
   risk: string;
   target?: string;
+  expires_at?: string;
+  remember_ttl_s?: number;
 }
 
 export interface PermissionDecided {

@@ -43,9 +43,6 @@ from nox.settings.twitch_auth import TwitchAuthService
 
 log = get_logger(__name__)
 
-#: UI roles allowed to read or change settings. Deliberately no `plugin`, `worker`, `pet`,
-#: `remote` or `supervisor`: a phone must not be able to rewrite the configuration or the keyring.
-
 #: How often the background task checks whether the Twitch token is close to expiring.
 TOKEN_REFRESH_INTERVAL_S = 300.0
 
