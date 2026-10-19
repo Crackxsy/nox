@@ -17,6 +17,8 @@ Gerät sein eigenes hat.
 | Netzwerk | Der Pi im selben Heimnetz wie deine anderen Geräte. |
 
 Python, die Abhängigkeiten und das Dashboard bringt der Installer mit. Kein Node.js, kein Compiler.
+Dazu installiert er `bubblewrap` und `python3` aus den Systempaketen: Befehle, Skills und
+MCP-Server führt Nox nur in dieser Sandbox aus (siehe „Die Befehls-Sandbox“ unten).
 
 ## Installieren
 
@@ -184,6 +186,20 @@ Plugins laufen als derselbe Benutzer `nox` und können deshalb dieselben Dateien
 Plugin-Grenze von Nox ist eine Rechteprüfung bei jedem Aufruf, keine Sandbox des Betriebssystems.
 Installiere nur Plugins, denen du vertraust.
 
+## Die Befehls-Sandbox
+
+Befehle, die Nox für dich ausführt (und Skills, MCP-Server), laufen in bubblewrap: System nur
+lesbar, ein einziger beschreibbarer Arbeitsordner, kein Zugriff auf `/var/lib/nox`. Sie haben
+**kein Netz**, außer sie melden es an – und dann erreichen sie nur Nox' Egress-Proxy, der sie nie
+in dein Heimnetz, auf den Pi selbst oder zu Home Assistant lässt. Speicher- und Prozessgrenzen
+kommen aus der eigenen cgroup des Dienstes. `journalctl -u nox | grep sandbox.linux_ready` zeigt,
+was dieser Rechner durchsetzt (`ceiling=cgroup egress=True` ist alles).
+
+Meldet Nox die Sandbox als nicht verfügbar, erlaubt der Kernel keine unprivilegierten
+User-Namespaces (`sysctl kernel.unprivileged_userns_clone` muss, wo es existiert, 1 sein), oder –
+ab Ubuntu 23.10 – AppArmor schränkt sie ein; dann legt der Installer das Profil
+`/etc/apparmor.d/nox-bwrap` an, das `bwrap` das erlaubt.
+
 ## Was läuft wo
 
 Der Pi ist das gemeinsame Gehirn; Gerätespezifisches bleibt auf dem Gerät, zu dem es gehört.
@@ -206,6 +222,7 @@ sudo rm -r /opt/nox            # das Programm
 sudo rm -r /var/lib/nox        # deine Daten: Gedächtnis, Einstellungen, Zugangsdaten – nur wenn du es wirklich willst
 sudo rm -r /var/backups/nox    # die Update-Schnappschüsse
 sudo userdel nox
+sudo rm -f /etc/apparmor.d/nox-bwrap   # nur unter Ubuntu, falls der Installer es angelegt hat
 ```
 
 Nur die beiden als Daten markierten Zeilen löschen etwas von dir. Sie stehen absichtlich einzeln da.

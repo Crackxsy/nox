@@ -201,6 +201,34 @@ after a *security-path* kill (see "Kill switch" above — a user-initiated kill 
 Stored as an Argon2id hash in the keyring (`nox/security/pin`); 5 failed attempts trigger a 15
 minute lockout, itself audited.
 
+## Command sandbox on Linux
+
+Commands, self-built skills and foreign MCP servers run in `nox.sandbox`; on Linux and the
+Raspberry Pi that is bubblewrap (`bwrap`):
+
+- **Filesystem:** the system read-only, the work directory the only writable place, a private
+  `/tmp`, `/dev` and `/proc`, no home directory and nothing of Nox's own folder.
+- **Network:** every run gets its own network namespace with only its own loopback - no route
+  to the internet, the LAN, the Home Assistant host or services on the host's loopback (abstract
+  Unix sockets are per namespace, so the host's D-Bus/X11 are out of reach too).
+- **Declared egress** adds exactly one path, and it is not a network path: the run's egress proxy
+  listens on a Unix socket in a private `0700` directory, bwrap binds that one socket read-only
+  into the sandbox, and a stdlib-only forwarder relays the sandbox's `127.0.0.1:3128` to it. The
+  forwarder never parses or dials anything; the proxy outside checks the per-run credentials
+  (passed in the environment, never on a command line), the declaration and `NetGuard`
+  (loopback, private, link-local/metadata and the Home Assistant host are refused, even for `*`).
+  Plain-HTTP clients must tunnel (`CONNECT`); the sandbox proxy does not forward `GET http://…`.
+- **Ceilings:** memory and process limits through the service's delegated cgroup
+  (`nox.service`: `Delegate=memory pids`), a `systemd-run` scope where one is allowed, otherwise
+  none - `Sandbox.guarantees()` says which.
+- **Fail closed:** bwrap and the egress path are probed when the sandbox is built. If bwrap
+  cannot build its namespaces, nothing runs; if only the egress path fails, runs without declared
+  egress still work and declared egress is refused.
+
+For this, `nox.service` allows the namespaces bwrap creates and the `@mount` system calls inside
+them, and does not over-mount `/proc` (`ProtectKernelTunables=`/`ProtectKernelLogs=` would make
+the kernel refuse the sandbox its own `/proc`). The core itself still holds no capabilities.
+
 ## Plugin sandboxing boundary
 
 A plugin is a manifest (`plugins/<id>/manifest.yaml`) plus a worker process; nothing is spawned

@@ -23,9 +23,11 @@ So the child can reach the proxy and nothing else; the proxy, outside, checks th
 the declaration and `NetGuard` (no loopback, LAN, link-local/metadata or Home Assistant). No root,
 no firewall rule, no extra package beyond `bubblewrap` itself.
 
-`systemd-run --scope -p MemoryMax= -p TasksMax=` wraps the whole thing when it is usable here (an
-unprivileged service user usually may not create scopes): then the kernel kills the tree on the
-memory or process ceiling. `guarantees()` says when it is missing.
+**Ceilings** (memory, processes) come from the first mechanism that really works here
+(`Ceiling`): the service's delegated cgroup v2 subtree (`nox.service`, see `_cgroup`), a
+`systemd-run --user --scope` of a desktop session's user manager, a system scope when running as
+root - or none, which `guarantees()` reports. An unprivileged service user may not create
+scopes, which is why the Pi uses cgroup delegation.
 
 The backend checks at start-up that `bwrap` can really build its namespaces on this machine (a
 kernel without unprivileged user namespaces, a systemd unit with `RestrictNamespaces=`, Ubuntu's

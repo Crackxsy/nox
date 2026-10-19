@@ -15,6 +15,8 @@ reminders and calendar - instead of each having its own.
 | Network | The Pi in the same home network as your other devices. |
 
 Python, the dependencies and the dashboard come with the installer. No Node.js, no compiler.
+The installer also adds `bubblewrap` and `python3` from the system's packages: Nox runs commands,
+skills and MCP servers only inside that sandbox (see "The command sandbox" below).
 
 ## Install
 
@@ -173,6 +175,20 @@ secrets already stored stay where they are, a PIN set before looks unset afterwa
 Plugins run as the same `nox` user and can therefore read the same files - Nox's plugin boundary is
 a permission check on every call, not an operating-system sandbox. Install plugins you trust.
 
+## The command sandbox
+
+Commands Nox runs for you (and skills, MCP servers) are confined with bubblewrap: read-only
+system, one writable work folder, no access to `/var/lib/nox`. They have **no network** unless
+they declare it - and then they reach only Nox's egress proxy, which never lets them into your
+home network, to the Pi itself or to Home Assistant. Memory and process ceilings come from the
+service's own cgroup. `journalctl -u nox | grep sandbox.linux_ready` shows what this machine
+enforces (`ceiling=cgroup egress=True` is the full set).
+
+If Nox reports the sandbox as unavailable, the kernel does not allow unprivileged user
+namespaces (`sysctl kernel.unprivileged_userns_clone` must be 1 where it exists), or - on Ubuntu
+23.10 and newer - AppArmor restricts them; the installer then adds the profile
+`/etc/apparmor.d/nox-bwrap`, which lets `bwrap` create them.
+
 ## What runs where
 
 The Pi is the shared brain; device-specific things stay on the device they belong to.
@@ -195,6 +211,7 @@ sudo rm -r /opt/nox            # the program
 sudo rm -r /var/lib/nox        # your data: memory, settings, secrets - only if you mean it
 sudo rm -r /var/backups/nox    # the update snapshots
 sudo userdel nox
+sudo rm -f /etc/apparmor.d/nox-bwrap   # only on Ubuntu, if the installer added it
 ```
 
 Only the two lines marked as data delete anything of yours. They are listed separately on purpose.
