@@ -238,35 +238,20 @@ jobs:
             test ! -e /usr/lib/nox/bwrap
           fi
 
-      # TEMPORARY experiment: which AppArmor child-transition form works under no_new_privs here.
-      - name: AppArmor child-profile experiment (informational)
-        continue-on-error: true
+      # What Nox's bwrap starts is confined by AppArmor itself, not only by bwrap's arguments:
+      # even with a deliberately weakened command line (no --disable-userns, a capability added)
+      # nested user namespaces and capabilities are refused.
+      - name: The sandboxed profile holds even without bwrap's own restrictions
         run: |
-          set +e
-          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" != "1" ]; then exit 0; fi
-          sudo install -d -m 0755 /usr/lib/nox-exp
-          child='flags=(attach_disconnected,mediate_deleted) { allow file rwlkmix /{**,}, allow network, allow unix, allow ptrace, allow signal, allow mqueue, allow io_uring, allow mount, allow umount, allow pivot_root, allow dbus, audit deny capability, audit deny userns, }'
-          parent='flags=(attach_disconnected,mediate_deleted) { allow capability, allow file rwlkm /{**,}, allow network, allow unix, allow ptrace, allow signal, allow mqueue, allow io_uring, allow userns, allow mount, allow umount, allow pivot_root, allow dbus, allow'
-          for v in a b c d e; do
-            sudo install -m 0750 -o root -g nox /usr/bin/bwrap /usr/lib/nox-exp/bw$v
-            case $v in
-              a) rule="px /** -> &nexp-child-$v," ;;
-              b) rule="px /** -> &nexp-$v//&nexp-child-$v," ;;
-              c) rule="px /** -> nexp-child-$v," ;;
-              d) rule="pix /** -> &nexp-child-$v," ;;
-              e) rule="px /** -> &nexp-child-$v," ;;
-            esac
-            pflags="$parent"
-            [ $v = e ] && pflags="$(echo "$parent" | sed 's/flags=(attach_disconnected,mediate_deleted)/flags=(attach_disconnected,mediate_deleted,complain)/')"
-            printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile nexp-%s /usr/lib/nox-exp/bw%s %s %s }\nprofile nexp-child-%s %s\n' "$v" "$v" "$pflags" "$rule" "$v" "$child" | sudo tee /etc/apparmor.d/nexp-$v >/dev/null
-            sudo apparmor_parser -r /etc/apparmor.d/nexp-$v || { echo "variant $v: parse failed"; continue; }
-            b=/usr/lib/nox-exp/bw$v
-            sudo -u nox $b --unshare-user --ro-bind / / --proc /proc --dev /dev /usr/bin/true; echo "variant $v true rc=$?"
-            sudo -u nox $b --unshare-user --ro-bind / / --proc /proc --dev /dev /usr/bin/unshare -U true; echo "variant $v nested-userns rc=$?"
-            sudo -u nox $b --unshare-user --cap-add CAP_NET_RAW --ro-bind / / --proc /proc --dev /dev /usr/bin/python3 -c 'import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, 1); print("RAW OK")'; echo "variant $v raw rc=$?"
-            sudo -u nox $b --unshare-user --ro-bind / / --proc /proc --dev /dev cat /proc/self/attr/current; echo
-          done
-          sudo dmesg | grep -E 'apparmor="(DENIED|AUDIT)"' | grep nexp | tail -30 || true
+          if [ -e /usr/lib/nox/bwrap ]; then
+            bw() { sudo -u nox /usr/lib/nox/bwrap --unshare-user --ro-bind / / --proc /proc --dev /dev "$@"; }
+            bw /usr/bin/true
+            bw cat /proc/self/attr/current | grep -q "nox-bwrap-sandboxed"
+            ! bw /usr/bin/unshare -U true
+            ! sudo -u nox /usr/lib/nox/bwrap --unshare-user --cap-add CAP_NET_RAW --ro-bind / / \
+                --proc /proc --dev /dev /usr/bin/python3 -c \
+                'import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, 1)'
+          fi
 
       # A bubblewrap update the copy missed must stop the sandbox (fail closed); the apt hook
       # refreshes the copy, and the sandbox works again.

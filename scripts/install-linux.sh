@@ -577,8 +577,9 @@ install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$NOX_HOME_DIR"
 # There AppArmor lets a program create user namespaces only with a profile that allows it, and
 # bwrap needs one. Nothing is changed for /usr/bin/bwrap or any other user: Nox gets its own copy,
 # executable only by the service user (root:nox 0750), and a profile attached to that path alone.
-# Inside the sandbox bwrap drops every capability and, with --disable-userns, forbids further user
-# namespaces. Raspberry Pi OS and Debian have no such restriction: nothing is installed there, and
+# What it starts runs stacked under a second profile that denies every capability and new user
+# namespaces (like Ubuntu's bwrap-userns-restrict) - on top of bwrap's own capability drop and
+# --disable-userns. Raspberry Pi OS and Debian have no such restriction: nothing is installed there, and
 # leftovers of an earlier install are removed.
 nox_bwrap=/usr/lib/nox/bwrap
 nox_profile=/etc/apparmor.d/nox-bwrap
@@ -604,14 +605,47 @@ DPkg::Post-Invoke { "if [ -e $nox_bwrap ] && [ -x /usr/bin/bwrap ] && ! cmp -s /
 APTHOOK
   cat > "$nox_profile" <<'APPARMOR'
 # Installed by Nox (scripts/install-linux.sh). Only Nox's own copy of bwrap - executable by the
-# nox service user alone - may create user namespaces; /usr/bin/bwrap stays restricted. Inside,
-# bwrap drops every capability and forbids further user namespaces (--disable-userns).
+# nox service user alone - may create user namespaces; /usr/bin/bwrap stays restricted. What it
+# runs is stacked under nox-bwrap-sandboxed: no capabilities, no further user namespaces (in
+# addition to bwrap's own capability drop and --disable-userns).
 abi <abi/4.0>,
 include <tunables/global>
 
-profile nox-bwrap /usr/lib/nox/bwrap flags=(unconfined) {
-  userns,
+profile nox-bwrap /usr/lib/nox/bwrap flags=(attach_disconnected,mediate_deleted) {
+  allow capability,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  # Stack the restricted profile on exec. (`px` finds no stacked target under no_new_privs on
+  # AppArmor 4.0; `pix` applies the stack - CI checks the resulting label and the denials.)
+  allow pix /** -> &nox-bwrap-sandboxed,
   include if exists <local/nox-bwrap>
+}
+
+profile nox-bwrap-sandboxed flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkmix /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  audit deny capability,
+  audit deny userns,
+  include if exists <local/nox-bwrap-sandboxed>
 }
 APPARMOR
   if ! apparmor_parser -r "$nox_profile"; then
