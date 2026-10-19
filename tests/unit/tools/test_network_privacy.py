@@ -76,3 +76,28 @@ def test_executor_marks_egress_and_shows_it_in_the_target(
     assert spec.network(with_egress) is True
     assert spec.network({"command": "x", "egress": []}) is False
     assert "egress=evil.example" in spec.targets(with_egress)
+
+
+@pytest.mark.parametrize("mode", [PrivacyMode.OFFLINE, PrivacyMode.PRIVATE])
+def test_the_refusal_is_the_privacy_rule_not_a_timed_out_confirmation(
+    engine: DefaultPermissionEngine, privacy: FakePrivacy, mode: PrivacyMode
+) -> None:
+    # The executor tests above would also see DENY if the user were asked and the dialog timed
+    # out; the decision itself must come from the privacy rule, before anyone is asked.
+    from nox.security.model import PermissionRequest, Risk
+
+    privacy.mode = mode
+    request = PermissionRequest(
+        agent="companion",
+        tool="shell",
+        action="run",
+        mode="companion",
+        risk=Risk.HIGH,
+        target="complex:abc egress=example.com",
+        network=True,
+    )
+    result = engine.check(request)
+    assert result.decision is Decision.DENY
+    assert result.rule_id == f"privacy.{mode.value}.cloud"
+    package = request.model_copy(update={"tool": "package", "action": "install"})
+    assert engine.check(package).rule_id == f"privacy.{mode.value}.cloud"
