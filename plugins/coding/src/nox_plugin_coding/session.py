@@ -436,9 +436,19 @@ class SessionRunner:
                 system_prompt=system_prompt,
             ),
         ]
+        if record.outcome is SessionOutcome.CANCELLED:
+            # Cancelled (stop / kill switch) before the CLI was even started: start nothing.
+            self._finish(record, None)
+            return
         record.stage = SessionStage.IMPLEMENT
         proc = await self._spawn(args, cwd=record.workspace)
         record.process = proc
+        if record.outcome is SessionOutcome.CANCELLED:
+            # `cancel()` ran while the process was being spawned: it saw no process to kill, so
+            # the kill is ours. Without this the CLI was left running after a "cancelled" stop.
+            await _kill(proc)
+            self._finish(record, None)
+            return
         if proc.stdin is None or proc.stdout is None or proc.stderr is None:
             # `_spawn` asks for all three pipes; without them there is no session to run, and an
             # `assert` here would vanish under `python -O` and fail on the next line instead.

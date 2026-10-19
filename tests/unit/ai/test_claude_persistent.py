@@ -101,7 +101,17 @@ def _log_lines(log: Path) -> list[dict[str, Any]]:
 
 
 def _log_lines_if_any(log: Path) -> list[dict[str, Any]]:
-    return _log_lines(log) if log.exists() else []
+    """Like `_log_lines`, for polling while the fake still writes: a missing file or a line
+    caught half-written reads as "not yet" instead of failing the test."""
+    if not log.exists():
+        return []
+    entries: list[dict[str, Any]] = []
+    for line in log.read_text(encoding="utf-8").splitlines():
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            break
+    return entries
 
 
 def _user_messages(log: Path) -> list[str]:
@@ -110,6 +120,28 @@ def _user_messages(log: Path) -> list[str]:
         for e in _log_lines(log)
         if "in" in e and e["in"].get("type") == "user"
     ]
+
+
+#: How long the OS may take to reap a killed tree before the test calls it a survivor.
+REAP_BOUND_S = 15.0
+
+
+async def _logged(log: Path, key: str) -> int:
+    """The first value the fake CLI logged under `key`, polled (the log is written concurrently)."""
+    deadline = time.monotonic() + REAP_BOUND_S
+    while True:
+        for entry in await asyncio.to_thread(_log_lines_if_any, log):
+            if key in entry:
+                return int(entry[key])
+        assert time.monotonic() < deadline, f"the fake CLI never logged {key!r}"
+        await asyncio.sleep(0.02)
+
+
+async def _wait_until_gone(*pids: int) -> None:
+    deadline = time.monotonic() + REAP_BOUND_S
+    while not all(_gone(pid) for pid in pids):
+        assert time.monotonic() < deadline, "the bridge must die with the CLI"
+        await asyncio.sleep(0.02)
 
 
 def _gone(pid: int) -> bool:
@@ -267,15 +299,19 @@ async def test_the_kill_switch_ends_the_whole_process_tree_within_a_second(
         if "weiter" in chunk.delta:
             break
     pid = provider.pid
-    child = next(e["child"] for e in _log_lines(log) if "child" in e)
+    child = await _logged(log, "child")
     assert pid is not None and not _gone(child)
 
     started = time.perf_counter()
     await provider.kill()
     elapsed = time.perf_counter() - started
 
+    # `kill()` never waits for a process to exit, so returning within the budget is the claim.
     assert elapsed < KILL_BUDGET_S
-    assert _gone(pid) and _gone(child), "the bridge must die with the CLI"
+    # Reaping is the OS's business and takes a moment on a loaded machine: poll for it instead of
+    # asserting the instant `kill()` returns. The "SLOW" turn never ends on its own, so a tree that
+    # is gone at all was killed - the generous bound does not weaken that.
+    await _wait_until_gone(pid, child)
     assert ("retire", "mcp:0") in bridge.events
     with pytest.raises(ProviderUnavailableError):
         await _collect(provider.stream(_request("Hallo", request_id="b")))
@@ -296,9 +332,7 @@ async def test_a_kill_during_a_slow_start_leaves_nothing_running(
     started = time.perf_counter()
     await provider.kill()
     assert time.perf_counter() - started < KILL_BUDGET_S
-    while not _gone(pid):  # the kill is synchronous; allow only the OS a moment to reap
-        assert time.perf_counter() - started < KILL_BUDGET_S, "the starting CLI survived the kill"
-        await asyncio.sleep(0.01)
+    await _wait_until_gone(pid)  # the kill is synchronous; the OS reaps in its own time
 
     with pytest.raises(ProviderUnavailableError):
         await asyncio.wait_for(turn, timeout=KILL_BUDGET_S)

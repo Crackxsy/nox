@@ -7,12 +7,13 @@ from __future__ import annotations
 import asyncio
 import os
 
+import psutil
 import pytest
 from nox_plugin_coding import create
 
 from .conftest import FakeClient, make_api
 
-pytestmark = pytest.mark.timeout(30)
+pytestmark = pytest.mark.timeout(60)
 
 
 def _plugin(fake_client: FakeClient, fake_cli_command: list[str], workspace, **config):
@@ -86,14 +87,53 @@ async def test_session_stop_cancels_and_emits_ended(
             api.tools.call("coding.session.start", {"target": str(tmp_path), "prompt": "hang"})
         )
         session_id = await _wait_for_session_id(plugin)
+        # Stop a session whose CLI is really running (it wrote its pid), not one still being
+        # spawned - that race is its own test below. Polling with a generous bound, no sleeps.
+        pid = await _wait_for_pid(pidfile)
         stopped = await api.tools.call(
             "coding.session.stop", {"session_id": session_id, "reason": "user requested"}
         )
         assert stopped["found"] is True
         assert stopped["outcome"] == "cancelled"
-        result = await asyncio.wait_for(task, timeout=10)
+        result = await asyncio.wait_for(task, timeout=20)
         assert result["outcome"] == "cancelled"
         assert any(n == "coding.session_ended" for n, _ in fake_client.events)
+        await _wait_until_gone(pid)
+    finally:
+        await plugin.stop()
+
+
+async def test_a_stop_while_the_cli_is_still_starting_leaves_nothing_running(
+    fake_client: FakeClient, fake_cli_command: list[str], tmp_path
+) -> None:
+    """Regression: `stop` landing before the CLI was spawned found no process to kill, and the
+    spawn that followed left a hanging CLI behind a session reported as cancelled."""
+    pidfile = tmp_path / "pid"
+    api, plugin = _plugin(fake_client, fake_cli_command, tmp_path)
+    plugin.runner._env = {**os.environ, "FAKE_CLI_MODE": "hang", "FAKE_CLI_PIDFILE": str(pidfile)}
+    spawn = plugin.runner._spawn
+    cancelled_first = asyncio.Event()
+
+    async def spawn_after_the_stop(args, *, cwd):  # noqa: ANN001, ANN202
+        await cancelled_first.wait()
+        return await spawn(args, cwd=cwd)
+
+    plugin.runner._spawn = spawn_after_the_stop
+    await plugin.start()
+    try:
+        task = asyncio.create_task(
+            api.tools.call("coding.session.start", {"target": str(tmp_path), "prompt": "hang"})
+        )
+        session_id = await _wait_for_session_id(plugin)
+        stopped = await api.tools.call(
+            "coding.session.stop", {"session_id": session_id, "reason": "user requested"}
+        )
+        assert stopped["outcome"] == "cancelled"
+        cancelled_first.set()
+        result = await asyncio.wait_for(task, timeout=20)
+        assert result["outcome"] == "cancelled"
+        if pidfile.exists():  # spawned and killed at once - it must not survive
+            await _wait_until_gone(int(pidfile.read_text().strip()))
     finally:
         await plugin.stop()
 
@@ -162,7 +202,31 @@ async def test_login_failure_is_not_repaired(
         await plugin.stop()
 
 
-async def _wait_for_session_id(plugin, timeout: float = 10.0) -> str:
+async def _wait_for_pid(pidfile, timeout: float = 20.0) -> int:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        text = pidfile.read_text().strip() if pidfile.exists() else ""
+        if text:
+            return int(text)
+        await asyncio.sleep(0.02)
+    raise AssertionError("the fake CLI never wrote its pid")
+
+
+async def _wait_until_gone(pid: int, timeout: float = 20.0) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        try:
+            if psutil.Process(pid).status() == psutil.STATUS_ZOMBIE:
+                return
+        except psutil.NoSuchProcess:
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"process {pid} survived the stop")
+
+
+async def _wait_for_session_id(plugin, timeout: float = 20.0) -> str:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while loop.time() < deadline:
