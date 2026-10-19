@@ -107,12 +107,12 @@ package = true
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-src = ["src", "tests"]
+src = ["src", "tests", "evals"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "S", "ASYNC", "T20"]
 ignore = ["S101", "S603", "S607", "ASYNC109"]
-per-file-ignores = { "tests/**" = ["S", "T20"], "scripts/**" = ["T20", "S"], "ui/pet/scripts/**" = ["T20", "S"], "spikes/**" = ["T20", "S"], "src/nox/cli.py" = ["B008"], "src/nox/app.py" = ["ASYNC220", "ASYNC240", "T201"] }
+per-file-ignores = { "tests/**" = ["S", "T20"], "scripts/**" = ["T20", "S"], "evals/**" = ["T20", "S"], "ui/pet/scripts/**" = ["T20", "S"], "spikes/**" = ["T20", "S"], "src/nox/cli.py" = ["B008"], "src/nox/app.py" = ["ASYNC220", "ASYNC240", "T201"] }
 
 [tool.mypy]
 python_version = "3.13"
