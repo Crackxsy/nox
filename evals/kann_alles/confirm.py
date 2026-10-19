@@ -30,6 +30,9 @@ PATH_FAMILIES = frozenset({"file", "vault"})
 #: temporary folder: reminders, notes, memory, projects, plans, watchers.
 DATA_DIR_FAMILIES = frozenset({"vault", "memory", "reminder", "pm", "plans", "watch"})
 NEVER_AUTO_APPROVED_RISKS = frozenset({"high", "critical"})
+#: Families that only reach fakes in the benchmark world: its MCP servers are the fake ones in
+#: `envs/`, its skill builder writes a known plugin, and computer use runs dry (sends nothing).
+WORLD_FAKE_FAMILIES = frozenset({"mcp", "skill", "computer"})
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,7 @@ def decide(
     root: Path,
     isolated: bool = False,
     simulated: frozenset[str] = frozenset(),
+    approve_high: Sequence[str] = (),
 ) -> ConfirmDecision:
     """The harness's answer to one dialog. `tool`/`action` as in `PermissionRequest`."""
     name = f"{tool}.{action}" if action else tool
@@ -75,7 +79,8 @@ def decide(
 
     if any(re.fullmatch(pattern, name) for pattern in forbidden_tools):
         return result(Decision.DENY, "forbidden in this task")
-    if risk.lower() in NEVER_AUTO_APPROVED_RISKS and not isolated:
+    high_ok = risk.lower() == "high" and any(re.fullmatch(p, name) for p in approve_high)
+    if risk.lower() in NEVER_AUTO_APPROVED_RISKS and not isolated and not high_ok:
         return result(
             Decision.DENY, f"{risk} risk is never auto-approved outside an isolated world"
         )
@@ -85,6 +90,7 @@ def decide(
         return result(Decision.DENY, "target outside the benchmark's temporary folder")
     if tool == "file" and not target:
         return result(Decision.DENY, "file tool without a target path")
-    if tool not in PATH_FAMILIES | DATA_DIR_FAMILIES | simulated and not isolated:
+    in_world = PATH_FAMILIES | DATA_DIR_FAMILIES | WORLD_FAKE_FAMILIES | simulated
+    if tool not in in_world and not isolated:
         return result(Decision.DENY, f"{tool} acts outside the temporary world")
     return result(Decision.ALLOW, "listed, low enough risk, effect stays in the temporary world")

@@ -108,7 +108,10 @@ def _tool_log(probe: Probe) -> list[str]:
 
 async def run_task(world: World, task: Task, judge: Judge) -> TaskResult:
     await world.prepare(
-        task.env, confirm_tools=task.confirm_tools, forbidden_tools=task.forbidden_tools
+        task.env,
+        confirm_tools=task.confirm_tools,
+        forbidden_tools=task.forbidden_tools,
+        approve_high=task.approve_high,
     )
     prompt = world.render(task.prompt)
     answers: list[str] = []
@@ -175,6 +178,7 @@ async def _assess(
     judge: Judge,
 ) -> tuple[Observation, dict[str, bool], TaskVerdict]:
     probe = world.probe
+    await world.settle()
     sql = {
         c.sql_rows[0]: len(world.sql_rows(c.sql_rows[0]))
         for c in task.checks
@@ -188,6 +192,7 @@ async def _assess(
         elapsed_s=elapsed,
         used_followup=used_followup,
         sql=sql,
+        skills=world.skill_states(),
     )
     empty = TaskVerdict()
     deterministic = {
