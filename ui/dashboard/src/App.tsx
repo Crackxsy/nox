@@ -55,6 +55,7 @@ import {
   removePrompt,
   setConnected,
 } from "./model";
+import { ComputerUseBanner } from "./ComputerUseBanner";
 import { NotificationToasts } from "./NotificationToasts";
 import { AuditPage } from "./pages/Audit";
 import { DevicesSection, type PairedNotice } from "./pages/Devices";
@@ -595,6 +596,8 @@ export function App({
             </div>
           </div>
         </header>
+
+        <ComputerUseBanner t={t} lang={lang} notice={state.computerUse} />
 
         {!auth && (
           <p role="alert" className="banner banner--error">

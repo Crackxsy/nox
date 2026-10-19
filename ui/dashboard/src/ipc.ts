@@ -48,6 +48,9 @@ export const DASHBOARD_PATTERNS = [
   // raw Telegram traffic, which no dashboard needs and a paired device must not see.
   'remote.paired',
   'remote.revoked',
+  // `desktop.computer_use {active, reason, stop}`: the global banner while Nox steers mouse and
+  // keyboard. Only this one event, not the whole `desktop.*` namespace.
+  'desktop.computer_use',
 ];
 
 export interface DashboardIpcHandlers {

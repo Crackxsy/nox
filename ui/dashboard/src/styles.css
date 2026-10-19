@@ -398,6 +398,19 @@ a:hover {
   align-items: center;
 }
 
+/* Nox steers mouse and keyboard: loud, sticky under the top bar, never dismissable. */
+.banner--control {
+  position: sticky;
+  top: var(--nav-h);
+  z-index: 39;
+  padding: 12px var(--s-4);
+  border-bottom: 0;
+  background: var(--danger-action);
+  color: var(--danger-action-ink);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
 /* ------------------------------------------------------------------- page - */
 
 .main {

@@ -932,6 +932,8 @@ export const en: Record<Key, string> = {
   perm_risk_high: 'high',
   perm_risk_critical: 'critical',
   // -- local model setup (Settings -> Local AI) -------------------------------------------------
+  computer_use_banner: 'Nox is controlling mouse and keyboard – {0} stops it at once.',
+  computer_use_banner_no_hotkey: 'Nox is controlling mouse and keyboard – the kill switch stops it at once.',
   localai_title: 'Local AI',
   localai_hint:
     'A language model that runs on this computer. Nox measures RAM and VRAM, recommends a model that fits, downloads it through Ollama and checks it before saving it.',

@@ -962,6 +962,8 @@ export const de = {
   perm_risk_high: 'hoch',
   perm_risk_critical: 'kritisch',
   // -- local model setup (Settings -> Lokale KI) ------------------------------------------------
+  computer_use_banner: 'Nox steuert gerade Maus und Tastatur – {0} beendet sofort.',
+  computer_use_banner_no_hotkey: 'Nox steuert gerade Maus und Tastatur – der Not-Aus beendet sofort.',
   localai_title: 'Lokale KI',
   localai_hint:
     'Ein Sprachmodell, das auf diesem Rechner läuft. Nox misst Arbeits- und Grafikspeicher, empfiehlt ein passendes Modell, lädt es über Ollama und prüft es, bevor es eingetragen wird.',

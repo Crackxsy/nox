@@ -8,6 +8,7 @@
  */
 
 import type { ClipsState } from './clips';
+import type { ComputerUseNotice } from './desktop';
 import { INITIAL_CLIPS_STATE } from './clips';
 import type { HealthState } from './health';
 import type { HomeState } from './home';
@@ -66,6 +67,8 @@ export interface DashboardState {
   viewsRevision: number;
   /** Last `twitch.auth.changed` state, or null while none was received on this connection. */
   twitchAuth: string | null;
+  /** Last `desktop.computer_use` notice; `null` until one arrives and again after a disconnect. */
+  computerUse: ComputerUseNotice | null;
   /**
    * Monotonic counter for rows this app has to give a React key to (toasts, live chat messages).
    * It lives in the state rather than in a module variable so the reducer stays pure and two tests
@@ -92,6 +95,7 @@ export const INITIAL_STATE: DashboardState = {
   settingsRevision: 0,
   viewsRevision: 0,
   twitchAuth: null,
+  computerUse: null,
   seq: 0,
 };
 
@@ -120,5 +124,8 @@ export function setConnected(state: DashboardState, connected: boolean): Dashboa
     // The Home Assistant session belongs to the core, not to this page: while the core is gone we
     // do not know whether it is still connected, and the last entity states are just as stale.
     home: { ...state.home, connected: null, reason: '' },
+    // Whether Nox still steers mouse and keyboard is unknown while the core is gone; the banner
+    // only ever shows what the core said on this connection.
+    computerUse: null,
   };
 }
