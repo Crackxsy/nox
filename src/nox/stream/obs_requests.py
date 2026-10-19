@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import string
 from collections.abc import Iterable, Mapping
 from pathlib import PurePath
 from typing import Any
@@ -565,8 +566,8 @@ REDACTED = "[redacted]"
 #: Where tokens end: whitespace and quotes (and angle brackets, which end a URL in prose).
 _DELIMITERS = frozenset(" \t\r\n\f\v\"'<>")
 #: Characters of a key, token or signature (base64, hex, url-safe).
-_KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=_-")
-_SCHEME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-")
+_KEY_CHARS = frozenset(string.ascii_letters + string.digits + "+/=_-")
+_SCHEME_CHARS = frozenset(string.ascii_letters + string.digits + "+.-")
 _HOST_END = frozenset("/?#\\")
 
 
@@ -609,7 +610,7 @@ def _no_keys(token: str) -> str:
     return "".join(out)
 
 
-_HOST_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789.-")
+_HOST_CHARS = frozenset(string.ascii_lowercase + string.digits + ".-")
 
 
 def _valid_host(host: str) -> bool:

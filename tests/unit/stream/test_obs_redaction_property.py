@@ -5,6 +5,7 @@ fragment, and never a generated-looking run of 20 or more key-like characters.""
 from __future__ import annotations
 
 import re
+import string
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -12,7 +13,7 @@ from hypothesis import strategies as st
 
 from nox.stream.obs_requests import high_entropy, redact
 
-ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+ALNUM = string.ascii_letters + string.digits
 
 #: Directory and URL parts carry markers no other generated part contains, so their absence in
 #: the output can be checked by substring.

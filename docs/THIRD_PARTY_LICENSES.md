@@ -35,6 +35,7 @@ Scope: every installed Python package (`importlib.metadata` against the project 
 | httptools | 0.8.0 | MIT | allow | MIT |
 | httpx | 0.28.1 | BSD-3-Clause | allow | BSD-3-Clause |
 | huggingface_hub | 1.30.0 | Apache-2.0 | allow | Apache-2.0 |
+| hypothesis | 6.170.2 | MPL-2.0 | allow | [package exception] MPL-2.0, dev-only test dependency (property-based tests), never imported by or shipped with the product; not redistributed to end users. |
 | icalendar | 7.3.0 | BSD-2-Clause | allow | BSD-2-Clause |
 | idna | 3.19 | BSD-3-Clause | allow | BSD-3-Clause |
 | iniconfig | 2.3.0 | MIT | allow | MIT |
@@ -66,9 +67,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | mypy | 2.3.1 | MIT | allow | MIT |
 | mypy_extensions | 1.1.0 | MIT | allow | MIT |
 | narwhals | 2.26.0 | MIT | allow | MIT |
-| nox | 0.4.0 | Apache-2.0 | allow | Apache-2.0 |
+| nox | 0.5.0 | Apache-2.0 | allow | Apache-2.0 |
 | numpy | 2.5.3 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | allow | [package exception] Declared license expression is an SPDX AND of BSD-3-Clause, 0BSD, MIT, Zlib and CC0-1.0 for numpy's own code plus small vendored components; every component is permissive. Verified against numpy's LICENSE.txt (2026-09-14). |
-| onnxruntime | 1.30.0 | MIT License | allow | [package exception] MIT (Microsoft). Inference runtime for the Kokoro TTS model (`voice-kokoro` extra) and for openWakeWord (`voice` extra); used unmodified as a PyPI wheel. |
+| onnxruntime | 1.31.0 | MIT License | allow | [package exception] MIT (Microsoft). Inference runtime for the Kokoro TTS model (`voice-kokoro` extra) and for openWakeWord (`voice` extra); used unmodified as a PyPI wheel. |
 | opencv-python-headless | 5.0.0.93 | Apache 2.0 | allow | Apache 2.0 |
 | openwakeword | 0.6.0 | Apache Software License | allow | [package exception] Apache-2.0 (OSI classifier; the PyPI `license` field is empty). Tiny always-on wake-word detector in front of Whisper (#20), used unmodified with ONNX Runtime. Its pre-trained models are separate downloads and fall under the "Not covered" model section of this audit. |
 | packaging | 26.3 | Apache-2.0 OR BSD-2-Clause | allow | OR expression, using the 'Apache-2.0' alternative (Apache-2.0 OR BSD-2-Clause) |
@@ -2340,6 +2341,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | shellingham | 1.5.4 | ISC License | allow | ISC License |
 | shiboken6 | 6.11.2 | LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only | allow_with_note | OR expression, using the 'LGPL-3.0-only' alternative (LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only) |
 | six | 1.17.0 | MIT | allow | MIT |
+| sortedcontainers | 2.4.0 | Apache 2.0 | allow | Apache 2.0 |
 | sounddevice | 0.5.6 | MIT | allow | MIT |
 | sqlite-vec | 0.1.9 | MIT License, Apache License, Version 2.0 | allow | [package exception] Dual-licensed "MIT License, Apache License, Version 2.0" (project's own PyPI classifier text) - Nox uses it under the MIT alternative. |
 | starlette | 1.7.0 | BSD-3-Clause | allow | BSD-3-Clause |
@@ -3113,8 +3115,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ## Summary
 
-- Total packages scanned: 844
-- `allow`: 813
+- Total packages scanned: 846
+- `allow`: 815
 - `allow_with_note`: 31
 - `deny`: 0
 - `unknown`: 0
