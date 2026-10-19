@@ -246,10 +246,9 @@ jobs:
           port="$(sudo sed -n 's/^ *"http_port": *\([0-9]*\),* *$/\1/p' /var/lib/nox/runtime/ipc.json)"
           test -n "$port" && test "$port" != 47801
           curl -fsS "http://127.0.0.1:$port/health"
+          # The last step that talks to the service: 47801 stays in TIME_WAIT for a minute after
+          # the squatter goes, so a restart now would move again - which is the point above.
           kill "$squatter"
-          sudo systemctl restart nox
-          for _ in $(seq 1 90); do curl -fsS -o /dev/null http://127.0.0.1:47801/health && break; sleep 1; done
-          curl -fsS http://127.0.0.1:47801/health
 
       - name: Files and permissions are what the docs promise
         run: |
