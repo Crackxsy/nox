@@ -9,6 +9,17 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Nox has its own browser, and eyes.** `browser.open/read/screenshot` and, after a
+  confirmation remembered per action and site, `browser.click/type/submit` drive a headless
+  Chromium with its own profile - never your browser - that reaches public pages only: every
+  connection goes through Nox's authenticated egress proxy, which refuses loopback, the LAN, cloud
+  metadata and Home Assistant, redirects and subresources included. `screen.capture` and
+  `camera.snapshot` ask first, follow the privacy modes, zones and capture switches, and keep the
+  picture on the machine; `vision.describe` uses a local vision model when one is installed and
+  says plainly when an image went to Claude (never a camera picture, a screen capture only in
+  FULL). Optional extras `browser` and `senses`.
+- **Long-running sandboxed processes** (`Sandbox.start`) for MCP stdio servers: the same
+  confinement as a one-off run, with pipes, stop/kill, kill-on-close and restart hooks.
 - **Nox calls its tools natively and answers faster.** Claude Code runs as one warm process per
   core and reaches Nox's tools over MCP (`nox.mcp`, IPC role `mcp`); local models use Ollama's
   native `tools` field, with the old text protocol only as a fallback. The three-round limit is
