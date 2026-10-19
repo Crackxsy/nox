@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import os
 import shutil
 import socket
 import threading
@@ -29,6 +30,8 @@ from nox.core.config import load_config
 from nox.core.events import E, Event
 
 START_TIMEOUT_S = 180.0
+#: Environment the world replaces while it runs, and restores afterwards.
+ISOLATED_ENV = ("NOX_HOME", "NOX_USER_CONFIG")
 STOP_TIMEOUT_S = 30.0
 WEB_ROOT = Path(__file__).resolve().parent / "envs" / "web"
 
@@ -137,6 +140,7 @@ class World:
         self._privacy_mode = privacy_mode
         self._log_level = log_level
         self.core: NoxCore | None = None
+        self._saved_env: dict[str, str | None] = {}
         self._unsub: Callable[[], None] | None = None
 
     def _config(self) -> Any:
@@ -166,10 +170,29 @@ class World:
             # one, so there is no delete tool in this world (a task that needs one says so).
             "files": {"roots": [str(self.sandbox)], "delete_to_recycle_bin": False},
             "plugins": {"enabled": []},
+            # Never the real keyring: a file store inside this world's own NOX_HOME (`isolate`).
+            "security": {"secret_store": "file"},
         }
         return load_config(DEFAULTS_PATH, None, None, overrides)
 
+    def isolate(self) -> None:
+        """Point everything that would resolve the user's own Nox folder at this world instead:
+        `NOX_HOME` (secrets file, marker, user config) and no user config override."""
+        home = self.root / "nox-home"
+        home.mkdir(parents=True, exist_ok=True)
+        self._saved_env = {key: os.environ.get(key) for key in ISOLATED_ENV}
+        os.environ["NOX_HOME"] = str(home)
+        os.environ.pop("NOX_USER_CONFIG", None)
+
+    def _restore_env(self) -> None:
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
     async def start(self) -> NoxCore:
+        self.isolate()
         self.web.start()
         core = NoxCore(self._config(), voice=False, profiles_dir=PROFILES_DIR)
         await asyncio.wait_for(core.start(), timeout=START_TIMEOUT_S)
@@ -187,6 +210,7 @@ class World:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self.core.stop(), timeout=STOP_TIMEOUT_S)
         self.web.stop()
+        self._restore_env()
 
     def _wrap_executor(self, core: NoxCore) -> None:
         executor = core.tool_executor
