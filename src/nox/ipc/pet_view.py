@@ -46,8 +46,22 @@ def public_state_path(path: str) -> bool:
     )
 
 
-def public_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
-    """The `state.get` answer for the pet and the overlay."""
+#: What the overlay may know while privacy is PRIVATE or OFFLINE: the mode, nothing else.
+QUIET_STATE_PATHS: frozenset[str] = frozenset({"privacy.mode"})
+
+
+def _quiet(role: str, privacy_mode: str) -> bool:
+    return role == "overlay" and privacy_mode in _QUIET_MODES
+
+
+def public_snapshot(
+    snapshot: Mapping[str, Any], role: str = "pet", privacy_mode: str = ""
+) -> dict[str, Any]:
+    """The `state.get` answer for the pet and the overlay - the same rules as the event view, so
+    a page cannot learn by asking what it is not told."""
+    if _quiet(role, privacy_mode):
+        privacy = snapshot.get("privacy") or {}
+        return {"privacy": {"mode": privacy.get("mode")}}
     public = {root: dict(snapshot.get(root) or {}) for root in PUBLIC_STATE_ROOTS}
     for hidden in HIDDEN_STATE_PATHS:
         root, _, leaf = hidden.partition(".")
@@ -60,8 +74,12 @@ def view(
 ) -> dict[str, Any] | None:
     """The payload `role` may receive for event `name`, or None when it gets nothing."""
     if role == "overlay":
-        if privacy_mode in _QUIET_MODES and name != "privacy.mode_changed":
-            return None
+        if _quiet(role, privacy_mode):
+            quiet_ok = name == "privacy.mode_changed" or (
+                name == "state.changed" and payload.get("path") in QUIET_STATE_PATHS
+            )
+            if not quiet_ok:
+                return None
         if name.startswith("tts.") and payload.get("channel") == "private":
             return None
     if name.startswith("pet."):

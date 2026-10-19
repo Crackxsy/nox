@@ -221,7 +221,8 @@ class CoreHandlers:
             return snapshot
         if ctx.role in pet_view.ROLES:
             # The pet and the overlay: the public roots without the paths that carry words.
-            return pet_view.public_snapshot(snapshot)
+            mode = core.security.privacy.mode.value if core.security is not None else ""
+            return pet_view.public_snapshot(snapshot, ctx.role, mode)
         public = {root: snapshot[root] for root in PUBLIC_STATE_ROOTS}
         if ctx.role == "plugin" and p.path:
             if p.path.split(".", 1)[0] not in PUBLIC_STATE_ROOTS:

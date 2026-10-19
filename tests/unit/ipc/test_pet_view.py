@@ -133,3 +133,42 @@ async def test_hub_sends_the_overlay_the_reduced_view_and_nothing_in_private_mod
     await bus.publish(Event(name="privacy.mode_changed", payload={"current": "private"}))
     mode = await client.recv(timeout=2.0)
     assert mode.name == "privacy.mode_changed"  # the chunk before it never came
+
+
+SNAPSHOT = {
+    "assistant": {"sleep": "none", "muted": False, "current_thought": "x", "current_task": "y"},
+    "privacy": {"mode": "balanced", "microphone": True},
+    "system": {"level": "running"},
+    "voice": {"routing": "both"},
+    "memory": {"secret": True},
+}
+
+
+def _leaves(tree: dict, prefix: str = "") -> dict[str, object]:
+    out: dict[str, object] = {}
+    for key, value in tree.items():
+        path = f"{prefix}{key}"
+        if isinstance(value, dict):
+            out.update(_leaves(value, path + "."))
+        else:
+            out[path] = value
+    return out
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("mode", ["full", "balanced", "private", "offline"])
+def test_state_get_and_state_events_agree(role: str, mode: str) -> None:
+    """Parity: a path is in the `state.get` answer exactly when its change event is delivered."""
+    asked = set(_leaves(public_snapshot(SNAPSHOT, role, mode)))
+    told = {
+        path
+        for path, value in _leaves(SNAPSHOT).items()
+        if view(role, "state.changed", {"path": path, "new": value}, privacy_mode=mode) is not None
+    }
+    assert asked == told
+
+
+@pytest.mark.parametrize("mode", ["private", "offline"])
+def test_quiet_overlay_state_is_the_mode_only(mode: str) -> None:
+    assert public_snapshot(SNAPSHOT, "overlay", mode) == {"privacy": {"mode": "balanced"}}
+    assert "assistant" in public_snapshot(SNAPSHOT, "pet", mode)
