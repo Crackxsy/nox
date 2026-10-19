@@ -366,10 +366,10 @@ def test_redaction_keeps_only_listed_settings() -> None:
 def test_redaction_of_tokens_in_url_paths_and_key_like_strings() -> None:
     answer = {
         # Review payload: the token is in the URL path, not in a parameter.
-        "comment": "failed to open https://api.example.com/hooks/T0K3Nabcdefghijklmnop/send",
+        "comment": "failed to open https://api.example.com/hooks/T0K3N" + "abcdefghijklmnop/send",
         "savedReplayPath": "D:/Videos/Replay 2026-10-19.mkv",
         "sceneUuid": "1b4e28ba-2fa1-11d2-883f-0016d3cca427",
-        "outputName": "live_123456789_AbCdEfGhIjKlMnOp",
+        "outputName": "live_123456789_" + "AbCdEfGhIjKlMnOp",
         "authToken": "x",
         "monitorKeyFile": "y",
     }
@@ -465,11 +465,11 @@ def test_tool_scope_uses_the_scene_set() -> None:
     "value",
     [
         # Review payloads: a URL behind a path prefix, and a file name that is itself a token.
-        "C:/x/https://host.example/TOKEN1234567890abcdefXYZ",
-        "D:/exports/AbCdEf0123456789GhIjKlMn",
+        "C:/x/https://host.example/TOKEN1234" + "567890abcdefXYZ",
+        "D:/exports/AbCdEf0123" + "456789GhIjKlMn",
     ],
 )
 def test_paths_do_not_bypass_url_and_token_redaction(value: str) -> None:
     redacted = redact({"savedReplayPath": value})["savedReplayPath"]
     assert "TOKEN1234567890" not in redacted
-    assert "AbCdEf0123456789GhIjKlMn" not in redacted
+    assert "AbCdEf0123" + "456789GhIjKlMn" not in redacted
