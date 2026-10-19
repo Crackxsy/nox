@@ -338,7 +338,8 @@ Details: [`docs/PRIVACY.md`](docs/PRIVACY.md).
 - **Games are observation-only.** No input synthesis, no process-memory access; a CI job fails the
   build if such an API ever appears in `src/` or `plugins/rl/`.
 - **Secrets only in the Windows Credential Manager** — never in code, config, logs or prompts. CI
-  scans the working tree *and* the full git history on every run.
+  scans the working tree *and* the git history on every run - for a pull request every commit it
+  adds, for a branch its whole history.
 - **All egress goes through a guard** with a per-profile, per-plugin allowlist; plugins run as
   separate, manifest-constrained worker processes.
 - **Tamper-evident audit log** (hash-chained) for every security-relevant event; a kill triggered by

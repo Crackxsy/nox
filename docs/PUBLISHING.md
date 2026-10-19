@@ -237,7 +237,7 @@ point of keeping it out of GitHub.
 
 ## After publication
 
-- Re-run `scripts/secrets_scan.py --check` on the public clone. It scans the full history, which is
-  now a single commit; it should stay clean from here on because push protection catches the rest.
+- Re-run `scripts/secrets_scan.py --check` on the public clone. It scans the full history of the
+  checked-out branch, which is now a single commit; it should stay clean from here on because push protection catches the rest.
 - Watch the first Dependabot pull requests; they are the first real test of the protection rules.
 - `CHANGELOG.md` and `docs/RELEASE_CHECKLIST.md` drive the v1.0 release from here.
