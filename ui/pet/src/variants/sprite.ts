@@ -1,5 +1,5 @@
 /**
- * Sprite variant (#19): the renderer side of the creature the product owner will actually pick.
+ * Sprite variant (#19): the renderer side of the creature that will finally be chosen.
  *
  * The procedural variants in this folder draw the pet from parameters. A *sprite* variant instead
  * plays pre-rendered frames — one PNG-with-alpha sequence per expression — and is selected with

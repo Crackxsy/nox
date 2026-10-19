@@ -1,7 +1,7 @@
 """What Nox says when it is ready - including when it is not at its best.
 
-The greeting used to be "Hallo, ich bin Nox. Ich bin bereit." whatever the state. On the product
-owner's first real evening Claude Code's login had expired, every answer came from the small local
+The greeting used to be "Hallo, ich bin Nox. Ich bin bereit." whatever the state. In a real-world
+install, Claude Code's login had expired, every answer came from the small local
 model, and nothing said so: the answers were simply worse and Nox seemed broken. When the preferred
 AI backend is not available at start, the greeting now says which brain is answering instead, why,
 and - where there is one - what fixes it.

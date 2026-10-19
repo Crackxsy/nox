@@ -2,7 +2,7 @@
 opencv -
 no OCR/Tesseract dependency.
 
-Real HUD pixel templates need ES-04 (the PO's screenshot set, Plan v0.3 - "not provided yet" as of
+Real HUD pixel templates need ES-04 (a real screenshot set, Plan v0.3 - "not provided yet" as of
 this release); this module ships a synthetic digit-template set rendered with `cv2.putText` on a
 fixed monospace-style cell grid, so the matcher and every self-check/unit test are real and CI-safe
 today. Both the templates and `render_digits`'s fixtures use the same per-cell renderer

@@ -1,6 +1,6 @@
 """`nox.pm.install.install` must return without scanning the vault.
 
-The scan is ~4 s of synchronous file reads on the product owner's vault (184 notes); running it
+The scan is ~4 s of synchronous file reads on a real-world vault (184 notes); running it
 inline inside `NoxCore.start()` froze the event loop, the core stopped heartbeating, and the
 supervisor restarted a perfectly healthy boot (2026-09-15). It now runs in a background task and
 the `pm` health check says `limited` until it is done.

@@ -1,6 +1,6 @@
 /**
  * neutral: the existing abstract placeholder blob (D31) — no ears, no horns, no tail, round eyes,
- * a plain violet tint. Not an OP-1 concept; kept only as the safe default until the PO picks one of
+ * a plain violet tint. Not an OP-1 concept; kept only as the safe default until a final design is chosen from
  * the four variants below, per the Decision Plan 2026-09-11 OP-1 instruction "quality: default is
  * `neutral` until chosen".
  */

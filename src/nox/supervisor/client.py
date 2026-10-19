@@ -9,7 +9,7 @@ restart request) calls the synchronous `on_restart` hook, which signals a clean 
 supervisor respawns the core; every other mode (`safe_mode`, panic, the kill switch) runs the
 injected `on_kill` coroutine (entering SAFE_MODE, stopping workers) as a task. A restart request is
 not a kill - engaging the kill switch for one left Nox mute in safe mode with nothing restarted
-(the product owner's log, 2026-09-15).
+(a field log, 2026-09-15).
 `sup.stop {reason}` (B-6, supervisor -> core) calls the synchronous `on_stop`
 hook, which only needs to signal the core's own shutdown path - `NoxCore.stop()` runs from the
 process's normal run loop, not from here, so no ack is sent or expected. Reconnects with backoff;

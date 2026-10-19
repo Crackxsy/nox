@@ -1,6 +1,6 @@
 """How `FasterWhisperStt` picks the language and what it tells Whisper to expect.
 
-From the product owner's first real session: "Hallo Nox" was transcribed as "Hello Nox", the
+From a real-world session: "Hallo Nox" was transcribed as "Hello Nox", the
 answer came back in English, and "Lass uns streamen" arrived as "Lass uns striam". A fake model
 stands in for Whisper; what is pinned here is the decision logic, not Whisper's ears.
 """

@@ -1,6 +1,6 @@
 """The start greeting says when Nox is not answering with its best backend, and how to fix it.
 
-From the product owner's first real evening: Claude Code's login had expired, the small local
+From a real-world install: Claude Code's login had expired, the small local
 model answered everything, and Nox still greeted with "Ich bin bereit."
 """
 

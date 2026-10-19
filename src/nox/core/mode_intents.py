@@ -1,7 +1,7 @@
 """Spoken mode switches: "lass uns streamen" starts the stream, "Stream beenden" ends it.
 
 Saying "lass uns streamen" used to reach the language model, which talked about streaming and
-switched nothing - the product owner's first session. A mode switch is a command, not a topic, so
+switched nothing - a user report from a real install. A mode switch is a command, not a topic, so
 it is recognised here, in front of the model, the same way presets are.
 
 The rule this module must not break is the fast path's: **it may not swallow a real question or a

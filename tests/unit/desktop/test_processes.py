@@ -133,7 +133,7 @@ def test_a_process_windows_will_not_name_is_labelled_not_left_blank(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Protected system processes ("Registry", "Secure System") come back from psutil with an
-    empty name and enough memory to make the top of the list (seen on the product owner's PC)."""
+    empty name and enough memory to make the top of the list (seen on a real Windows machine)."""
 
     class _Entry:
         info = {"pid": 236, "name": "", "memory_info": None}

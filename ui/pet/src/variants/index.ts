@@ -1,6 +1,6 @@
 /**
  * Variant registry (OP-1): looked up from the `?variant=` query flag in main.tsx. Unknown or
- * missing ids fall back to `neutral` (D31 default until the PO chooses, Decision Plan 2026-09-11).
+ * missing ids fall back to `neutral` (D31 default until a final design is chosen, Decision Plan 2026-09-11).
  */
 
 import { cat } from './cat';

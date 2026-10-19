@@ -516,7 +516,7 @@ async def test_a_stream_plugin_started_outside_the_stream_profile_can_start_late
 ) -> None:
     """Twitch's egress used to be checked against the profile Nox booted in. Under `companion`
     that failed it for good, and a failed plugin is never started again - so switching to stream
-    later could not bring Twitch up (product owner's first stream attempt)."""
+    later could not bring Twitch up (a user report from a first stream)."""
     write_manifest(
         plugins_dir, "demo", profiles=["stream"], network={"egress": ["api.twitch.tv:443"]}
     )

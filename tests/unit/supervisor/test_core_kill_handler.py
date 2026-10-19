@@ -1,7 +1,7 @@
 """The core's side of `sup.kill`: `mode=restart` is a clean shutdown, every other mode is the kill
 switch.
 
-The product owner's log (2026-09-15) shows what the old handler did: the watchdog asked for a
+A field log (2026-09-15) shows what the old handler did: the watchdog asked for a
 graceful restart while the core was still booting, the core engaged the kill switch, and Nox sat in
 safe mode with the voice worker terminated - while the supervisor, waiting for a process that never
 exited, restarted nothing. Deliberately does not boot a `NoxCore` (far too heavy for two handlers);
