@@ -20,8 +20,17 @@ without parsing commands itself:
   this target as a `cmd:` grant for the session. It names the *resolved executable* and a hash of
   its contents, so a remembered `git push` never covers a different `git.exe` (a download folder,
   a planted copy) or the same path after the file changed.
-* `complex:<sha>` - a command line, an interpreter asked to run inline code, a program given with
-  a path, or a program not found in the trusted directories; HIGH, CONFIRM, never remembered.
+* `complex:<sha>` - a command line, any interpreter or launcher (below), a program given with a
+  path, or a program not found in the trusted directories; HIGH, CONFIRM, never remembered.
+
+**Interpreters and launchers are always complex.** A `cmd:` grant covers one program's subcommand
+with any further arguments - right for `git push origin` vs `git push upstream`, wrong for a
+program whose arguments *are* the program: a remembered `python a.py` would cover `python evil.py`,
+a remembered `env X=1 foo` any other program. So in argv form every interpreter (`python`, `node`,
+`pwsh`, `cmd`, `bash`, ...) and every wrapper that starts another program (`env`, `xargs`, `nice`,
+`timeout`, `sudo`, `runas`, `start`, `npx`, `uvx`, ...) is complex - confirmed each time, never
+remembered - and so are `find` with an `-exec`-like action and `git` with an option or subcommand
+that runs a configured command (`-c`, `--exec-path`, `rebase -x`, `submodule foreach`, ...).
 
 A declared network (`egress`) is part of the target (`... egress=a.example,b.example`), so the
 confirmation shows it, a grant remembered without egress never covers a run with egress, and the
@@ -69,25 +78,98 @@ __all__ = [
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 #: A bare program name: no separator, no drive, no wildcard, no quote.
 _BARE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
-#: An interpreter asked to run inline code; the subcommand token tells nothing about what it does.
+#: Interpreters: what they run is in their arguments, so no subcommand grant can describe it.
 _INTERPRETERS = frozenset(
     {
         "python",
         "python3",
+        "pythonw",
         "py",
+        "pyw",
         "node",
         "deno",
         "bun",
         "bash",
         "sh",
+        "dash",
+        "ksh",
         "zsh",
+        "fish",
+        "busybox",
         "pwsh",
         "powershell",
         "cmd",
         "perl",
         "ruby",
         "php",
+        "lua",
+        "tclsh",
+        "wish",
+        "osascript",
+        "wscript",
+        "cscript",
+        "mshta",
+        "rundll32",
+        "regsvr32",
+        "msbuild",
+        "installutil",
+        "java",
+        "dotnet",
+        "wsl",
     }
+)
+#: Wrappers that start another program named in their arguments.
+_LAUNCHERS = frozenset(
+    {
+        "env",
+        "xargs",
+        "nice",
+        "ionice",
+        "nohup",
+        "timeout",
+        "stdbuf",
+        "setsid",
+        "chroot",
+        "unshare",
+        "nsenter",
+        "flock",
+        "watch",
+        "time",
+        "exec",
+        "sudo",
+        "doas",
+        "su",
+        "pkexec",
+        "runas",
+        "start",
+        "schtasks",
+        "at",
+        "forfiles",
+        "npx",
+        "pnpx",
+        "bunx",
+        "uvx",
+        "pipx",
+        "conhost",
+        "explorer",
+    }
+)
+#: `find` actions that run (or delete) something.
+_FIND_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fls"})
+#: git options and subcommands that run a configured or given command.
+_GIT_EXEC_OPTIONS = (
+    "-c",
+    "--config-env",
+    "--exec-path",
+    "--exec",
+    "-x",
+    "--upload-pack",
+    "--receive-pack",
+    "--extcmd",
+    "--tool",
+)
+_GIT_EXEC_SUBCOMMANDS = frozenset(
+    {"submodule", "filter-branch", "filter-repo", "difftool", "mergetool", "bisect", "web--browse"}
 )
 #: Sandboxes strong enough for the no-confirm read-only exception (they cannot read user files).
 _READONLY_MODES = frozenset({SandboxMode.WINDOWS_APPCONTAINER, SandboxMode.LINUX_BWRAP})
@@ -246,10 +328,18 @@ def _is_curated(program: str, tokens: Sequence[str]) -> bool:
     return len(tokens) == 1 and allowed == ()
 
 
-def _inline_interpreter(program: str, tokens: Sequence[str]) -> bool:
-    if program not in _INTERPRETERS:
-        return False
-    return any(_is_inline_flag(token) for token in tokens[1:])
+def _starts_other_code(program: str, tokens: Sequence[str]) -> bool:
+    """Whether the argv runs code its own arguments name (see the module docstring)."""
+    if program in _INTERPRETERS or program in _LAUNCHERS:
+        return True
+    args = [token.lower() for token in tokens[1:]]
+    if program == "find":
+        return any(arg in _FIND_ACTIONS for arg in args)
+    if program == "git":
+        if any(arg.startswith(opt) for arg in args for opt in _GIT_EXEC_OPTIONS):
+            return True
+        return _subcommand(tokens) in _GIT_EXEC_SUBCOMMANDS
+    return False
 
 
 def _complex(
@@ -295,7 +385,7 @@ def classify(
         return _complex(joined, tuple(tokens), needs_shell=False, suffix=suffix)
 
     program = _program(tokens[0])
-    if _inline_interpreter(program, tokens):
+    if _starts_other_code(program, tokens):
         return _complex(joined, tuple(tokens), needs_shell=False, suffix=suffix)
     resolved = (resolver or ProgramResolver.with_extra()).resolve(tokens[0])
     if resolved is None:

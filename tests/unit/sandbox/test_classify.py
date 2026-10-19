@@ -28,7 +28,21 @@ EXE = ".exe" if sys.platform == "win32" else ""
 def trusted(tmp_path: Path) -> ProgramResolver:
     system = tmp_path / "system"
     system.mkdir()
-    for name in ("whoami", "hostname", "df", "ls", "git", "npm", "python", "cmd", "bash"):
+    for name in (
+        "whoami",
+        "hostname",
+        "df",
+        "ls",
+        "git",
+        "npm",
+        "python",
+        "cmd",
+        "bash",
+        "env",
+        "find",
+        "node",
+        "xargs",
+    ):
         (system / f"{name}{EXE}").write_bytes(f"binary of {name}".encode())
     return ProgramResolver(dirs=(str(system),))
 
@@ -241,3 +255,45 @@ def test_classify_refuses_a_path_whatever_the_resolver_says() -> None:
         readonly_allowed=True,
     )
     assert info.kind is ShellClass.COMPLEX
+
+
+def test_a_remembered_interpreter_run_never_covers_another_script(trusted: ProgramResolver) -> None:
+    # Push review: `cmd:<python> a.py` used to be a rememberable subcommand grant, which then also
+    # matched `python evil.py`. An interpreter in argv form is complex: asked every time.
+    first = classify(argv=["python", "a.py"], resolver=trusted)
+    second = classify(argv=["python", "b.py"], resolver=trusted)
+    assert first.kind is ShellClass.COMPLEX and second.kind is ShellClass.COMPLEX
+    assert first.target.startswith("complex:") and first.target != second.target
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["env", "X=1", "foo"],
+        ["env", "whoami"],
+        ["xargs", "rm"],
+        ["node", "server.js"],
+        ["bash", "script.sh"],
+        ["find", ".", "-exec", "rm", "{}", ";"],
+        ["find", ".", "-delete"],
+        ["git", "-c", "core.pager=evil", "log"],
+        ["git", "-ccore.pager=evil", "log"],
+        ["git", "--exec-path=/tmp/x", "status"],
+        ["git", "rebase", "-x", "evil", "main"],
+        ["git", "rebase", "--exec=evil", "main"],
+        ["git", "submodule", "foreach", "evil"],
+        ["git", "bisect", "run", "evil"],
+    ],
+)
+def test_launchers_and_exec_forms_are_complex(trusted: ProgramResolver, argv: list[str]) -> None:
+    info = classify(argv=argv, resolver=trusted, readonly_allowed=True)
+    assert info.kind is ShellClass.COMPLEX, argv
+    assert info.target.startswith("complex:")
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["git", "push", "origin"], ["git", "log", "--oneline"], ["find", ".", "-name", "x"]],
+)
+def test_ordinary_subcommands_stay_rememberable(trusted: ProgramResolver, argv: list[str]) -> None:
+    assert classify(argv=argv, resolver=trusted).kind is ShellClass.SIMPLE
