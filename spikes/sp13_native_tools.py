@@ -119,7 +119,10 @@ class Persistent:
                     "skills": len(data.get("skills") or []),
                     "slash_commands": len(data.get("slash_commands") or []),
                     "agents": len(data.get("agents") or []),
-                    "fast_mode_state": data.get("fast_mode_state"), "fast_mode_disabled_reason": data.get("fast_mode_disabled_reason"), "per_turn_effort_active": data.get("per_turn_effort_active"), "memory_paths": data.get("memory_paths"),
+                    "fast_mode_state": data.get("fast_mode_state"),
+                    "fast_mode_disabled_reason": data.get("fast_mode_disabled_reason"),
+                    "per_turn_effort_active": data.get("per_turn_effort_active"),
+                    "memory_paths": data.get("memory_paths"),
                 }
             if kind == "stream_event":
                 ev = data.get("event") or {}
@@ -263,7 +266,9 @@ def main() -> int:
             if ns.probe:
                 out[f"{label}.probe"] = p.turn(ns.probe)
             if not safe:
-                chats = [p.turn(f"Say a short German greeting number {i}.") for i in range(ns.turns)]
+                chats = [
+                    p.turn(f"Say a short German greeting number {i}.") for i in range(ns.turns)
+                ]
                 out["persistent.chat_thinking"] = [c.get("thinking") for c in chats]
                 tool_turns = [
                     p.turn(f"Call the echo tool with text 'x{i}' and tell me the result.")
@@ -280,10 +285,14 @@ def main() -> int:
                         f"Call the slow tool with seconds={ns.slow} and report its answer."
                     )
             p.close()
-        out["calls_log"] = log.read_text(encoding="utf-8").splitlines()[-12:] if log.exists() else []
+        out["calls_log"] = (
+            log.read_text(encoding="utf-8").splitlines()[-12:] if log.exists() else []
+        )
         if not ns.skip_oneshot:
             args = resolve(base_args(ns.model, cfg, safe=True, persistent=False))
-            shots = [one_shot(args, f"Say a short German greeting number {i}.", env) for i in range(3)]
+            shots = [
+                one_shot(args, f"Say a short German greeting number {i}.", env) for i in range(3)
+            ]
             out["oneshot.first_token_ms"] = [s["first_token_ms"] for s in shots]
     print(json.dumps(out, indent=1, default=str))
     return 0

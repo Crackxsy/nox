@@ -22,6 +22,7 @@ Run any of them with the project venv, e.g.:
 | `sp07b_shell_rss.py` | Desktop shell process-tree memory (RSS) with GPU vs software compositing. |
 | `sp09_qt_transparent.py` | Frameless transparent always-on-top `QWebEngineView` on Windows 11. |
 | `sp12_ollama.py` | Ollama local models: time-to-first-token, tokens/s, GPU vs CPU, embedding latency. |
+| `sp13_native_tools.py` | Claude Code as one persistent stream-json process with MCP tools: does `--tools ""` keep MCP, does `--safe-mode` keep `--mcp-config`, the MCP tool timeout, latency vs one process per turn. |
 | `download_models.py` | One-off helper: fetches the voice models the STT/TTS spikes need into a local, git-ignored directory (override with `NOX_SPIKE_MODELS_DIR`). |
 
 ## Output policy

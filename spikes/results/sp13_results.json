@@ -1,0 +1,51 @@
+{
+  "date": "2026-10-19",
+  "cli": "Claude Code 2.1.303",
+  "questions": {
+    "tools_empty_keeps_mcp": {
+      "answer": true,
+      "evidence": "--tools \"\" with --mcp-config: init lists mcp__nox__echo/slow, the echo tool is called"
+    },
+    "safe_mode_respects_mcp_config": {
+      "answer": false,
+      "evidence": "--safe-mode: init mcp_servers=[] and tools=[]; replaced by --setting-sources \"\" --disable-slash-commands and an empty working folder"
+    },
+    "mcp_tool_timeout_s": {
+      "answer": ">= 75",
+      "evidence": "a 75 s tool completed with and without MCP_TOOL_TIMEOUT=200000; Nox sets it explicitly to 200000 ms"
+    }
+  },
+  "control_requests": {
+    "initialize": "starts MCP servers (initialize + tools/list) without a model call, ~2.7 s",
+    "set_model": "switches sonnet -> opus inside the session",
+    "interrupt": "acknowledged; the turn ends with a result line",
+    "total_cost_usd": "cumulative per session, per-turn cost is the difference"
+  },
+  "latency_ms_p50": {
+    "oneshot_claude_p_first_token": [
+      4936,
+      4449,
+      7075
+    ],
+    "persistent_default_effort_with_user_settings": {
+      "chat_first_token": 4109,
+      "first_tool": 4743
+    },
+    "persistent_setting_sources_empty_effort_low": {
+      "chat_first_token": 1184,
+      "first_tool": 1838
+    },
+    "persistent_setting_sources_empty_effort_medium": {
+      "chat_first_token": 968,
+      "first_tool": 1115
+    },
+    "persistent_setting_sources_empty_default_effort": {
+      "chat_first_token": 1841,
+      "first_tool": 2475
+    },
+    "persistent_opus_effort_low": {
+      "chat_first_token": 2323
+    }
+  },
+  "notes": "n = 4-6 turns per variant on a busy desktop; numbers vary by run. The CLI adds the account e-mail to the first user turn as context; it goes only to the API the account belongs to."
+}
