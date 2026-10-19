@@ -187,6 +187,7 @@ def install_client(core: Any) -> McpClientRuntime | None:
         ),
         env_base=worker_environment,
         client_version=nox.__version__,
+        revoke_grants=lambda prefix: core.security.engine.revoke_scope(prefix, by="mcp"),
     )
     if core.registry is not None:
         register_mcp_client_ipc(core.registry, manager)

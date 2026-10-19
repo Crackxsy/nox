@@ -71,6 +71,7 @@ def manager(
     audit: Audit | None = None,
     cloud: bool = True,
     approve: bool = True,
+    revoked: list[str] | None = None,
 ) -> McpServerManager:
     approvals = ApprovalStore(tmp_path / "approved.json")
     if approve:
@@ -92,6 +93,7 @@ def manager(
             for k, v in __import__("os").environ.items()
             if k in ("PATH", "SYSTEMROOT", "TEMP", "TMP", "PYTHONPATH")
         },
+        revoke_grants=lambda prefix: (revoked.append(prefix) if revoked is not None else None) or 0,
     )
 
 
@@ -385,3 +387,38 @@ def test_clean_schema_drops_unknown_numeric_keywords() -> None:
         "minimum": 1,
         "properties": {},
     }
+
+
+# ---- remembered grants end with the server they were given for ------------------------------
+
+
+async def test_remove_disable_and_a_new_approval_forget_remembered_grants(
+    tmp_path: Path, registry: ToolRegistry
+) -> None:
+    holder = Holder([server(enabled=False)])
+    revoked: list[str] = []
+    mgr = manager(tmp_path, registry, holder, revoked=revoked)
+    await mgr.start()
+    assert (await mgr.set_enabled("fake", False, by="dashboard"))["ok"]
+    assert revoked == ["session:mcp/fake."]
+    await mgr.approve("fake", by="dashboard")
+    assert revoked[-1] == "session:mcp/fake."
+    assert len(revoked) == 2
+    assert (await mgr.remove("fake", by="dashboard"))["ok"]
+    assert revoked == ["session:mcp/fake."] * 3
+
+
+def test_the_prefix_reaches_one_server_only(engine: DefaultPermissionEngine) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from nox.security.model import Risk, TemporaryGrant
+
+    until = datetime.now(UTC) + timedelta(hours=1)
+    for gid, scope in (("a", "session:mcp/weather.forecast"), ("b", "session:mcp/weather_x.now")):
+        engine.grant_temporary(
+            TemporaryGrant(
+                grant_id=gid, scope=scope, max_risk=Risk.MEDIUM, expires_at=until, granted_by="user"
+            )
+        )
+    assert engine.revoke_scope("session:mcp/weather.") == 1  # weather_x keeps its grant
+    assert engine.revoke_scope("session:mcp/weather_x.") == 1

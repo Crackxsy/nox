@@ -39,7 +39,7 @@ from pydantic import BaseModel, ConfigDict, create_model
 from nox.ai.prompting import untrusted
 from nox.core.config.hands import McpConfig, McpServerConfig
 from nox.core.logging import get_logger
-from nox.mcp.client import HttpTransport, McpClient, McpClientError, RemoteTool, StdioTransport
+from nox.mcp.client import HttpTransport, McpClient, McpClientError, RemoteTool, Transport
 from nox.mcp.launch import LaunchedServer, ServerLauncher
 from nox.mcp.policy import (
     PolicyError,
@@ -328,6 +328,7 @@ class McpServerManager:
         env_base: Callable[[], dict[str, str]] = dict,
         client_version: str = "0",
         clock: Callable[[], float] = time.monotonic,
+        revoke_grants: Callable[[str], int] = lambda _prefix: 0,
     ) -> None:
         self._config = config
         self._registry = registry
@@ -343,6 +344,7 @@ class McpServerManager:
         self._env_base = env_base
         self._client_version = client_version
         self._clock = clock
+        self._revoke_grants = revoke_grants
         self._servers: dict[str, _Server] = {}
         self._halted = False
 
@@ -457,6 +459,8 @@ class McpServerManager:
             check_server(server.config, home_host=self._home_host())
         except PolicyError as exc:
             return {"ok": False, "reason": str(exc)}
+        # A newly approved command is a new program: nothing remembered for the old one applies.
+        self._forget_grants(server_id)
         self._approvals.approve(server_id, fingerprint(server.config))
         self._record(by, "server.approve", server_id, "allow", "ok")
         await self._bring_up(server)
@@ -479,8 +483,15 @@ class McpServerManager:
             await self._bring_up(server)
         else:
             await self._stop_server(server, "disabled by the user")
+            self._forget_grants(server_id)
             server.state, server.reason = ServerState.DISABLED, "switched off"
         return {"ok": True, "state": server.state.value}
+
+    def _forget_grants(self, server_id: str) -> None:
+        """Every "remember" for this server's tools. Their grant scopes are
+        `session:mcp/<server>.<tool>`, so the prefix ends with the separator: `weather` never
+        reaches `weather_x`."""
+        self._revoke_grants(f"session:mcp/{server_id}.")
 
     async def remove(self, server_id: str, *, by: str) -> dict[str, Any]:
         server = self._servers.pop(server_id, None)
@@ -488,6 +499,7 @@ class McpServerManager:
             return {"ok": False, "reason": "unknown server"}
         await self._stop_server(server, "removed")
         self._approvals.forget(server_id)
+        self._forget_grants(server_id)
         await self._persist([s for s in self._config().servers if s.id != server_id])
         self._record(by, "server.remove", server_id, "allow", "ok")
         return {"ok": True}
@@ -510,6 +522,7 @@ class McpServerManager:
                 log.warning("mcp.server_blocked", server=cfg.id, reason=str(exc))
                 return
             if not self._approvals.approved(cfg.id, fingerprint(cfg)):
+                self._forget_grants(cfg.id)
                 server.state = ServerState.NEEDS_APPROVAL
                 server.reason = "the first start (or a changed command) needs your approval"
                 return
@@ -552,9 +565,7 @@ class McpServerManager:
             server.process = await self._launcher.launch(
                 cfg.command, cwd=self._workdir / cfg.id, env=env, network=cfg.network
             )
-            transport: StdioTransport | HttpTransport = StdioTransport(
-                server.process.reader, server.process.writer
-            )
+            transport: Transport = server.process.transport()
         else:
             headers = self._secret_values(cfg, cfg.headers)
             transport = HttpTransport(
