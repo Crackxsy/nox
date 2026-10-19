@@ -23,7 +23,7 @@ requests.
 | Cloud leakage of private content | Privacy modes/zones enforced at the transport level; egress allow-list per profile; screenshots to cloud only in FULL and outside zones. |
 | A local process talks to the Nox hub | Loopback-only IPC, per-client tokens, roles, rate limits, a request allow-list per role. |
 | Secrets in code/config/logs/prompts | Keyring-only storage; secrets are never serialized; a log/PII filter; the prompt builder excludes the secret store entirely. |
-| Stream accidents (wrong scene, leaking screen, stream stopped by mistake) | Hard prohibitions (`stream.stop`, `stream.key.read`); scene switches require confirmation in the stream profile; privacy zones hide windows from capture. |
+| Stream accidents (wrong scene, leaking screen, stream stopped by mistake) | Hard prohibitions (`stream.stop`, `stream.key.read`) - also for the generic `obs.request`, whose every call the core classifies by request type (see "OBS control" below); scene switches require confirmation in the stream profile; privacy zones hide windows from capture. |
 | Anti-cheat / game integrity | No input-synthesis, no process injection, no memory reads exist anywhere in the codebase; hard prohibitions; sensors are observation-only. |
 | A runaway or hung AI | Kill switch lives below the AI layer, in the supervisor; panic mode; budget limits. |
 | Tampering with audit or security config | Hash-chain verified at boot; changes to the security core require a PIN; config changes are themselves audited. |
@@ -32,6 +32,45 @@ requests.
 **Out of scope**: an attacker with local admin on the machine, physical access, or a compromised
 OS. Nox defends against a malicious/hallucinating AI layer and a malicious remote party — not
 against someone who already owns your Windows account.
+
+
+## OBS control
+
+`obs.request` sends one obs-websocket v5 request of any type. Its risk is decided per call by the
+core, never by the plugin (`nox.stream.obs_requests`, wired through `nox.plugins.scopes`):
+
+- **Read** - listed read-only types without secrets run without asking.
+- **Medium** - listed, easily undone changes (creating scenes, moving and sizing sources, muting,
+  transitions, the local replay buffer) and reads that may return secrets (profile parameters,
+  persistent data) are confirmed; "remember for this session" covers that one request type only.
+  Each type has an allow-list of request fields; anything else in the request makes it high.
+- **High** - asked every time, never remembered (`NEVER_REMEMBERED`, enforced by the engine, the
+  shell's cache and the dialog): deleting or renaming, going live (any route), recording, the
+  virtual camera, showing/hiding sources, turning filters off, unmuting, volume, audio tracks and
+  monitoring, studio-mode transitions, switches outside the plugin's `scene_set`, sources or
+  settings beyond the harmless allow-list (text, colour, size), replaced settings
+  (`overlay: false`), UUID-addressed changes, and every request type not listed.
+- **Never** - stopping the stream and reading the stream key hit the hard prohibitions; stream and
+  output settings, profile parameters, hotkeys, vendor requests, file-writing screenshots and
+  the record directory are classified critical; the privacy scene and everything in it (nested
+  scenes and groups, resolved from OBS before each change, failing closed) cannot be changed.
+  After a panic the plugin changes nothing.
+
+Answers are redacted before the model sees them: one linear pass per string (capped at 4 KiB,
+cut at a token boundary) reduces URLs to `scheme://host` (or redacts them), paths to their file
+name and generated-looking runs to `[redacted]`; settings blocks keep only allow-listed keys.
+
+What remains possible after the user confirmed a medium request type for the session: further
+requests of that same type without asking - moving or cropping sources (which can uncover what a
+cover image hid), changing a text source's words, switching among the listed scenes.
+
+## Stream overlay credential
+
+The pet page in OBS authenticates with a persistent overlay credential (IPC role `overlay`),
+stored only as a SHA-256 in the data folder and revocable from the dashboard (revoking closes live
+connections). The role may subscribe and call `state.get`, nothing else; it receives an
+allow-listed, text-free view of the pet's events (`nox.ipc.pet_view`), nothing about
+headphone-only speech, and nothing but the privacy mode while privacy is PRIVATE or OFFLINE.
 
 ## Permission model
 

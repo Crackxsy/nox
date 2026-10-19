@@ -112,9 +112,21 @@ cannot be turned off or hidden by configuration — if something is being captur
   stored, survives a restart and is spoken when due, once; it respects mute and quiet zones. "Was
   steht heute an?" answers from this, not from Nox's own project backlog.
 - **Stream companion** (Twitch/OBS, opt-in at onboarding): chat responses, a "Funken" viewer
-  currency/loyalty system, scene-aware behavior via a narrow, read-mostly OBS tool surface (scene
-  switching is a confirmed action; there is no scene/source-delete or stream-stop tool — see
-  `SECURITY.md`).
+  currency/loyalty system, and control of OBS - Nox can build and change scenes, sources, filters,
+  audio and transitions when you ask ("make a Just Chatting scene with the camera on the left").
+  Every change asks you first; deleting, going live and anything that could put a private
+  microphone or screen on air asks every time; Nox can never stop the stream or read the stream
+  key (`docs/SECURITY.md`, "OBS control").
+  - **Stream session starts by itself** when OBS goes live (or your channel does), from the
+    everyday companion mode: Nox then answers chat, and goes back when the stream ends.
+  - **Overlay**: *Stream → Set up → Set up OBS overlay* (or the tray) puts Nox into the current
+    OBS scene as a browser source, transparent, without the capture indicator, at an address that
+    survives restarts (`http://127.0.0.1:<port>/pet/?overlay=1#overlay=<credential>`). *Revoke
+    access* turns it off. Prefer it over capturing the desktop pet.
+  - **Own audio track**: install VB-Audio Virtual Cable, then *Stream → Set up → Give Nox its own
+    audio track*: OBS gets a "Nox Voice" source on "CABLE Output" (on the tracks you tick), and Nox
+    speaks into "CABLE Input" and your headphones. The devices are also in *Settings → Voice*.
+  - When the Twitch login expires, Nox shows the code to enter at twitch.tv/activate.
 - **Rocket League coach**: observation-only — screen/HUD capture, game audio, replay files. Nox
   never sends input to the game and never reads or injects into its process memory; this is a
   hard, code-level boundary (see `SECURITY.md` §Rocket League boundary), not a setting.
