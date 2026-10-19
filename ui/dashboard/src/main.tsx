@@ -7,6 +7,7 @@ import { App } from './App';
 import { type Auth, type DeviceCredentials, forgetDevice, loadDevice, takePairCode } from './auth';
 import { PairScreen, type UnpairedReason, UnpairedScreen } from './Gate';
 import { type Lang, pickLang, translator } from './i18n';
+import { currentPlatform, isStandalone } from './platform';
 import { type ThemePref, applyTheme, readTheme } from './theme';
 
 // Token: read once from the fragment, keep in memory only, remove it from the address bar.
@@ -39,7 +40,11 @@ function initialScreen(): Screen {
   const device = loadDevice();
   if (device) return { kind: 'app', auth: { kind: 'device', ...device } };
   // On the PC without a token, the dashboard explains how to open it properly (as before).
-  return viaNetwork ? { kind: 'unpaired', reason: 'never' } : { kind: 'app', auth: null };
+  if (!viaNetwork) return { kind: 'app', auth: null };
+  // Started from the home screen for the first time: on iOS that app has storage of its own, so it
+  // is paired on its own - straight to the code entry, which is the only thing to do here.
+  if (isStandalone(currentPlatform())) return { kind: 'pair', code: null };
+  return { kind: 'unpaired', reason: 'never' };
 }
 
 function Root({ language, appearance }: { language: Lang; appearance: ThemePref }) {

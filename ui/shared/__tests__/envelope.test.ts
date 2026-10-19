@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { makeEnvelope, matchesPattern, parseEnvelope } from '../envelope';
-import { IpcClient, type WebSocketLike } from '../ipc';
+import { ipcReason } from '../errors';
+import { CLOSE_SIGNED_OUT, IpcClient, IpcError, SIGNED_OUT_DETAIL, type WebSocketLike } from '../ipc';
 import { hashWithoutToken, queryFlag, queryString, takeToken, tokenFromHash } from '../token';
 
 const good = {
@@ -178,5 +179,55 @@ describe('IpcClient handshake', () => {
     expect(client.status).toBe('auth_failed');
     await expect(client.request('ipc.ping')).rejects.toMatchObject({ code: 'unavailable' });
     expect(sockets.length).toBe(1);
+  });
+});
+
+describe('IpcClient errors and closes', () => {
+  function connected() {
+    const sockets: FakeSocket[] = [];
+    const statuses: [string, string | undefined][] = [];
+    const client = new IpcClient({
+      url: 'ws://x',
+      token: 't',
+      role: 'device',
+      id: 'device:abc',
+      patterns: [],
+      onStatus: (s, detail) => statuses.push([s, detail]),
+      createSocket: () => {
+        const s = new FakeSocket();
+        sockets.push(s);
+        return s;
+      },
+    });
+    client.connect();
+    sockets[0].open();
+    sockets[0].reply(sockets[0].sent[0], 'response', { ok: true, session_id: 's' });
+    return { client, sockets, statuses };
+  }
+
+  it('keeps the machine-readable details of an error', async () => {
+    const { client, sockets } = connected();
+    const pending = client.request('lan.pair.start', { name: '' });
+    const sent = sockets[0].sent.find((e) => e.name === 'lan.pair.start')!;
+    sockets[0].reply(sent, 'error', {
+      code: 'permission.denied',
+      message: 'lan.pair requires the security PIN',
+      details: { reason: 'pin_required' },
+    });
+    const error = await pending.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(IpcError);
+    expect((error as IpcError).details).toEqual({ reason: 'pin_required' });
+    expect(ipcReason(error)).toBe('pin_required');
+    expect(ipcReason(new Error('x'))).toBe('');
+    client.close();
+  });
+
+  it('treats the sign-out close code as final and says so', () => {
+    const { client, sockets, statuses } = connected();
+    sockets[0].readyState = 3;
+    sockets[0].onclose?.({ code: CLOSE_SIGNED_OUT });
+    expect(client.status).toBe('auth_failed');
+    expect(statuses.at(-1)).toEqual(['auth_failed', SIGNED_OUT_DETAIL]);
+    expect(sockets.length).toBe(1); // no reconnect
   });
 });

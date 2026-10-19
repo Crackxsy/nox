@@ -12,6 +12,7 @@ import {
   guessDeviceName,
   loadDevice,
   normaliseCode,
+  pairCodeFromHash,
   redeemPairCode,
   saveDevice,
   takePairCode,
@@ -54,6 +55,19 @@ describe('the pairing link', () => {
     expect(replaced).toEqual(['/dashboard/']);
   });
 
+  it('treats a link with a broken escape as no code instead of crashing the page', () => {
+    expect(() => pairCodeFromHash('#pair=%E0%A4%A')).not.toThrow();
+    expect(pairCodeFromHash('#pair=%E0%A4%A')).toBeNull();
+    const replaced: string[] = [];
+    expect(
+      takePairCode(
+        { hash: '#pair=%E0%A4%A', pathname: '/dashboard/', search: '' },
+        { replaceState: (_d, _u, url) => replaced.push(String(url)) },
+      ),
+    ).toBeNull();
+    expect(replaced).toEqual(['/dashboard/']);
+  });
+
   it('accepts only the core alphabet, in any case, with or without spaces', () => {
     expect(normaliseCode('abcd efgh')).toBe('ABCDEFGH');
     expect(normaliseCode('ABCD0FGH')).toBeNull(); // 0 is not in the alphabet
@@ -87,14 +101,21 @@ describe('redeeming a code', () => {
   const answer = (status: number, body: unknown) =>
     vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status }));
 
-  it('returns the credentials on success, and posts only code and name', async () => {
+  it('returns the credentials on success, and posts the code, the typed name and its own guess', async () => {
     const fetchImpl = answer(201, { device_id: 'abc', client_id: 'device:abc', name: 'Tablet', token: CREDS.token });
-    const outcome = await redeemPairCode('ABCDEFGH', '  Tablet ', fetchImpl);
+    const outcome = await redeemPairCode('ABCDEFGH', '  Tablet ', 'iPad', fetchImpl);
     expect(outcome).toEqual({ ok: true, creds: CREDS });
     const [url, init] = fetchImpl.mock.calls[0]!;
     expect(url).toBe('/api/pair');
-    expect(JSON.parse(String(init.body))).toEqual({ code: 'ABCDEFGH', name: 'Tablet' });
+    expect(JSON.parse(String(init.body))).toEqual({ code: 'ABCDEFGH', name: 'Tablet', default_name: 'iPad' });
     expect(init.credentials).toBe('omit');
+  });
+
+  it('sends an empty name when nothing was typed, so the name from the PC can win', async () => {
+    const fetchImpl = answer(201, { device_id: 'abc', client_id: 'device:abc', name: 'Tablet', token: CREDS.token });
+    await redeemPairCode('ABCDEFGH', '   ', 'iPhone', fetchImpl);
+    const [, init] = fetchImpl.mock.calls[0]!;
+    expect(JSON.parse(String(init.body))).toEqual({ code: 'ABCDEFGH', name: '', default_name: 'iPhone' });
   });
 
   it.each([
@@ -104,17 +125,17 @@ describe('redeeming a code', () => {
     [429, 'rate_limited'],
     [403, 'origin'],
   ])('maps %i %s to its own message', async (status, error) => {
-    expect(await redeemPairCode('ABCDEFGH', '', answer(status, { error }))).toEqual({ ok: false, error });
+    expect(await redeemPairCode('ABCDEFGH', '', '', answer(status, { error }))).toEqual({ ok: false, error });
   });
 
   it('never passes on an unknown reason or a broken success', async () => {
-    expect(await redeemPairCode('ABCDEFGH', '', answer(500, { error: 'boom' }))).toEqual({ ok: false, error: 'invalid' });
-    expect(await redeemPairCode('ABCDEFGH', '', answer(201, { token: 'short' }))).toEqual({ ok: false, error: 'invalid' });
+    expect(await redeemPairCode('ABCDEFGH', '', '', answer(500, { error: 'boom' }))).toEqual({ ok: false, error: 'invalid' });
+    expect(await redeemPairCode('ABCDEFGH', '', '', answer(201, { token: 'short' }))).toEqual({ ok: false, error: 'invalid' });
   });
 
   it('reports a network failure as such', async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
-    expect(await redeemPairCode('ABCDEFGH', '', fetchImpl)).toEqual({ ok: false, error: 'network' });
+    expect(await redeemPairCode('ABCDEFGH', '', '', fetchImpl)).toEqual({ ok: false, error: 'network' });
   });
 });
 
@@ -135,5 +156,11 @@ describe('a default device name', () => {
     expect(guessDeviceName('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)')).toBe('iPhone');
     expect(guessDeviceName('Mozilla/5.0 (Linux; Android 15; Pixel) Mobile')).toBe('Android');
     expect(guessDeviceName('curl/8')).toBe('');
+  });
+
+  it('recognises an iPad that asks for desktop pages by its touch screen', () => {
+    const desktopSafari = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15';
+    expect(guessDeviceName(desktopSafari, 5)).toBe('iPad');
+    expect(guessDeviceName(desktopSafari, 0)).toBe('Mac');
   });
 });

@@ -43,10 +43,40 @@ interface Pending {
 }
 
 export class IpcError extends Error {
-  constructor(public code: string, message: string, public retryable = false) {
+  /**
+   * `details` is the core's machine-readable side of the error (`ErrorPayload.details`), e.g.
+   * `{reason: 'pin_required'}`: the UI maps that to its own words instead of showing `message`,
+   * which is English operator text.
+   */
+  constructor(
+    public code: string,
+    message: string,
+    public retryable = false,
+    public details: Readonly<Record<string, unknown>> = {},
+  ) {
     super(message);
     this.name = 'IpcError';
   }
+}
+
+/**
+ * The close code the core uses when a paired device signed itself out (`nox.ipc.server`). The
+ * client then stops reconnecting and reports `auth_failed` with `SIGNED_OUT_DETAIL`, so the page
+ * can say "signed out" rather than "removed" - also in a second tab of the same device.
+ */
+export const CLOSE_SIGNED_OUT = 4001;
+export const SIGNED_OUT_DETAIL = 'signed out';
+
+function closeCode(ev: unknown): number | null {
+  if (typeof ev !== 'object' || ev === null) return null;
+  const code = (ev as { code?: unknown }).code;
+  return typeof code === 'number' ? code : null;
+}
+
+function detailsOf(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 export class IpcClient {
@@ -103,9 +133,15 @@ export class IpcClient {
     ws.onerror = () => {
       /* onclose follows */
     };
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (this.ws === ws) this.ws = null;
       this.failAll(new IpcError('unavailable', 'socket closed', true));
+      if (closeCode(ev) === CLOSE_SIGNED_OUT) {
+        // Signed out on purpose: reconnecting would only be refused.
+        this.closedByUser = true;
+        this.setStatus('auth_failed', SIGNED_OUT_DETAIL);
+        return;
+      }
       if (this.status !== 'auth_failed') this.setStatus('offline');
       this.scheduleReconnect();
     };
@@ -187,6 +223,7 @@ export class IpcClient {
           String(env.payload.code ?? 'internal'),
           String(env.payload.message ?? 'error'),
           env.payload.retryable === true,
+          detailsOf(env.payload.details),
         ),
       );
     } else {

@@ -85,11 +85,22 @@ export function normaliseCode(input: string): string | null {
   return CODE_RE.test(code) ? code : null;
 }
 
+/** `decodeURIComponent` throws on a malformed escape (`%E0%A4%A`); a broken link is no code. */
+function decodeOrNull(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
 export function pairCodeFromHash(hash: string): string | null {
   const h = hash.startsWith('#') ? hash.slice(1) : hash;
   for (const part of h.split('&')) {
     const [k, v] = part.split('=');
-    if (k === 'pair' && v) return normaliseCode(decodeURIComponent(v));
+    if (k !== 'pair' || !v) continue;
+    const decoded = decodeOrNull(v);
+    return decoded === null ? null : normaliseCode(decoded);
   }
   return null;
 }
@@ -132,9 +143,15 @@ const KNOWN: ReadonlySet<string> = new Set([
   'invalid',
 ]);
 
+/**
+ * `name` is what the person typed (may be empty); `defaultName` is this device's own guess
+ * ("iPhone"). The core uses the typed name, else the name chosen on the PC when the code was made,
+ * else the guess - so leaving the field empty keeps a name the PC already gave.
+ */
 export async function redeemPairCode(
   code: string,
   name: string,
+  defaultName: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<PairOutcome> {
   let res: Response;
@@ -142,7 +159,11 @@ export async function redeemPairCode(
     res = await fetchImpl('/api/pair', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, name: name.trim().slice(0, 64) }),
+      body: JSON.stringify({
+        code,
+        name: name.trim().slice(0, 64),
+        default_name: defaultName.trim().slice(0, 64),
+      }),
       cache: 'no-store',
       credentials: 'omit',
     });
@@ -168,9 +189,15 @@ export async function redeemPairCode(
   return { ok: false, error: reason };
 }
 
-/** A neutral default name for this device (a product name, no language), from its user agent. */
-export function guessDeviceName(ua: string): string {
+/**
+ * A neutral default name for this device (a product name, no language), from its user agent.
+ *
+ * iPadOS asks for desktop pages and says "Macintosh"; a Mac has no touch screen, so a "Macintosh"
+ * with more than one touch point is an iPad.
+ */
+export function guessDeviceName(ua: string, maxTouchPoints = 0): string {
   if (/iPad/.test(ua)) return 'iPad';
+  if (/Macintosh/.test(ua) && maxTouchPoints > 1) return 'iPad';
   if (/iPhone/.test(ua)) return 'iPhone';
   if (/Android/.test(ua)) return 'Android';
   if (/Macintosh/.test(ua)) return 'Mac';

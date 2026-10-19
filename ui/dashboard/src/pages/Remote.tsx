@@ -8,6 +8,10 @@
  * - when the feature is off the page says so *and disables the form*. `remote.enabled` is false by
  *   default, and the core then never installs the `remote.*` requests at all, so the honest answer
  *   is "not found", not a red error banner over a form that still looks usable.
+ *
+ * Inside the Devices tab, under the devices in the home network, an unused Telegram is one quiet
+ * line ("Phone via Telegram (off)") that opens to the same explanation - not a big disabled tile
+ * competing with the pairing that does work.
  */
 
 import { useState } from 'react';
@@ -71,6 +75,20 @@ export function RemotePage({ t, lang, client, onOpenSettings, embedded = false }
 
   const off = enabled === false;
   const disabled = client === null || off;
+
+  if (embedded && off) {
+    return (
+      <details className="remote-telegram remote-telegram--off">
+        <summary>{t('remote_telegram_off')}</summary>
+        <p className="hint">{t('remote_disabled')}</p>
+        <div className="tile-actions">
+          <button type="button" className="link" onClick={onOpenSettings}>
+            {t('remote_settings_link')}
+          </button>
+        </div>
+      </details>
+    );
+  }
 
   return (
     <div className={embedded ? 'remote-telegram' : 'page wrap'}>

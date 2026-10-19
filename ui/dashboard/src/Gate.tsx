@@ -2,6 +2,11 @@
  * What a device sees before the dashboard: pairing it, or being told it is not (or no longer)
  * paired and where a code comes from. One centred card, one decision, plain words - this is the
  * first thing a family member sees after scanning a QR code.
+ *
+ * The name field starts empty, with this device's own guess ("iPhone") as its placeholder: left
+ * empty, the core uses the name given when the code was made, else that guess. After a failed
+ * attempt the code field is always shown - also when the code came from the link - so a new code
+ * can be typed without going back to the camera.
  */
 
 import { useState } from 'react';
@@ -33,21 +38,27 @@ export interface PairScreenProps {
   code: string | null;
   onPaired: (creds: DeviceCredentials, stored: boolean) => void;
   fetchImpl?: typeof fetch;
+  /** This device's own name guess; read from the browser when not given (tests pass one). */
+  defaultName?: string;
 }
 
-export function PairScreen({ t, code: initialCode, onPaired, fetchImpl }: PairScreenProps) {
-  const [name, setName] = useState(() => guessDeviceName(navigator.userAgent));
+export function PairScreen({ t, code: initialCode, onPaired, fetchImpl, defaultName }: PairScreenProps) {
+  const [guess] = useState(
+    () => defaultName ?? guessDeviceName(navigator.userAgent, navigator.maxTouchPoints ?? 0),
+  );
+  const [name, setName] = useState('');
   const [code, setCode] = useState(initialCode ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<PairError | null>(null);
   const valid = normaliseCode(code);
+  const showCode = !initialCode || error !== null;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!valid || busy) return;
     setBusy(true);
     setError(null);
-    const outcome = await redeemPairCode(valid, name, fetchImpl);
+    const outcome = await redeemPairCode(valid, name, guess, fetchImpl);
     setBusy(false);
     if (outcome.ok) onPaired(outcome.creds, saveDevice(outcome.creds));
     else setError(outcome.error);
@@ -71,12 +82,17 @@ export function PairScreen({ t, code: initialCode, onPaired, fetchImpl }: PairSc
             id="pair-name"
             className="input"
             value={name}
+            placeholder={guess || undefined}
             onChange={(e) => setName(e.target.value)}
             maxLength={64}
             autoComplete="off"
+            aria-describedby="pair-name-hint"
           />
+          <p id="pair-name-hint" className="hint">
+            {t('pair_name_hint')}
+          </p>
         </div>
-        {!initialCode && (
+        {showCode && (
           <div className="field">
             <label htmlFor="pair-code" className="label">
               {t('pair_code')}
@@ -91,11 +107,13 @@ export function PairScreen({ t, code: initialCode, onPaired, fetchImpl }: PairSc
               spellCheck={false}
               maxLength={12}
               placeholder="ABCD EFGH"
+              aria-invalid={error === 'unknown_code' || error === 'used' || error === 'expired' || undefined}
+              aria-describedby={error ? 'pair-error' : undefined}
             />
           </div>
         )}
         {error && (
-          <p role="alert" className="alert">
+          <p id="pair-error" role="alert" className="alert">
             {t(ERROR_KEYS[error])}
           </p>
         )}

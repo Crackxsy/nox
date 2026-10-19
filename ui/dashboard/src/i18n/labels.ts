@@ -496,3 +496,39 @@ export function pluginBlockedProfile(reason: string): string | null {
   const match = PROFILE_BLOCKED.exec(reason);
   return match ? match[1] : null;
 }
+
+/**
+ * The core's machine-readable refusal reasons (`IpcError.details.reason`) for network access, the
+ * device PIN and pairing, as sentences. An unknown reason gives `null`: the caller then falls back
+ * to its general error line rather than inventing a meaning.
+ */
+const IPC_REASON_KEYS: Record<string, Key> = {
+  off: 'reason_off',
+  starting: 'reason_starting',
+  failed: 'reason_failed',
+  no_address: 'reason_no_address',
+  pin_not_set: 'reason_pin_not_set',
+  pin_required: 'reason_pin_required',
+  pin_wrong: 'reason_pin_wrong',
+  removed: 'reason_removed',
+};
+
+export function ipcReasonLabel(t: T, reason: string): string | null {
+  const key = IPC_REASON_KEYS[reason];
+  return key ? t(key) : null;
+}
+
+/**
+ * "Für 8 Stunden erlauben": how long a remembered "allow" lasts, in whole hours where it is whole
+ * hours and in minutes otherwise. Never "always" - it is not. `null` when the core did not say,
+ * and then the button is not offered at all.
+ */
+export function rememberLabel(t: T, seconds: number): string | null {
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  if (seconds >= 3600 && seconds % 3600 === 0) {
+    const hours = seconds / 3600;
+    return hours === 1 ? t('perm_remember_hour') : fill(t('perm_remember_hours'), hours);
+  }
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return minutes === 1 ? t('perm_remember_minute') : fill(t('perm_remember_minutes'), minutes);
+}

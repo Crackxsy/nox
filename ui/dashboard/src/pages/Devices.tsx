@@ -6,15 +6,21 @@
  * link to copy, the code to type if it comes to that, and until when it is valid. The code is
  * shown exactly as the core issued it and never cached; leaving the page loses it.
  *
- * Honest about the state: when network access is off the section says so and points at the one
- * setting that turns it on; while it starts, or when it failed, it says that instead of showing a
- * form that cannot work.
+ * Honest about the state, one at a time: loading; network access off (also what an older core
+ * that does not know `lan.status` at all means, and only that); an answer this page cannot read;
+ * a request that failed; starting; not running. None of them shows a form that cannot work - and
+ * a paired device, which needs the security PIN to pair or remove others, is told where to do it
+ * when no PIN is set. Refusals are the core's reasons in words, never its English text.
+ *
+ * The list stays current by itself: on `remote.paired` / `remote.revoked`, when the page becomes
+ * visible again, and every 30 seconds while it is.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { failureKind } from '../../../shared/errors';
 import { formatTimestamp } from '../../../shared/format';
-import { useIpcAction, useRefreshOnConnect } from '../hooks';
+import { refusalText, useIpcAction, useRefreshOnConnect, useWhileVisible } from '../hooks';
 import { fill, type Lang, type T } from '../i18n';
 import { type IpcClient, api } from '../ipc';
 import {
@@ -26,8 +32,16 @@ import {
   parseLanPairing,
   parseLanStatus,
   shortFingerprint,
+  spellCode,
 } from '../model';
+import { type PlatformInput, currentPlatform, isIosBrowserTab } from '../platform';
 import { StateWord, Tile } from '../ui';
+
+/** A device that paired while this dashboard was open (`remote.paired`); `seq` makes each new. */
+export interface PairedNotice {
+  name: string;
+  seq: number;
+}
 
 export interface DevicesSectionProps {
   t: T;
@@ -37,12 +51,31 @@ export interface DevicesSectionProps {
   device: boolean;
   /** Bumped by the app on `remote.paired` / `remote.revoked`; reloads the list. */
   revision: number;
-  /** The name of the device paired last while this page was open, for the success line. */
-  justPaired: string;
+  /** The device paired last while this page was open, for the success line. */
+  justPaired: PairedNotice | null;
   onOpenSettings: () => void;
   /** This device signed itself out: the app forgets its credentials. */
   onSignedOut: () => void;
+  /** Injected in tests; read from the browser otherwise. */
+  platform?: PlatformInput;
 }
+
+/** How long a "Remove" stays armed; typing the PIN restarts it. */
+export const DISARM_MS = 12000;
+/** How long "iPhone is paired." stays. */
+export const PAIRED_BANNER_MS = 8000;
+/** How often the list is refreshed while the page is visible. */
+export const REFRESH_MS = 30000;
+
+type View =
+  | { kind: 'loading' }
+  /** An older core without network access: the same thing as "off" for this page. */
+  | { kind: 'unsupported' }
+  | { kind: 'unreadable' }
+  | { kind: 'failed'; message: string }
+  | { kind: 'ready'; status: LanStatus; devices: LanDevice[] };
+
+type CopyState = 'idle' | 'copied' | 'failed';
 
 interface InstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -67,6 +100,20 @@ function useInstallPrompt(): (() => void) | null {
     : null;
 }
 
+/** Both labels in one grid cell: the button is as wide as the longer one, so arming moves nothing. */
+function SwapLabel({ shown, label, alternate }: { shown: boolean; label: string; alternate: string }) {
+  return (
+    <span className="swap">
+      <span className={shown ? 'swap-hidden' : undefined} aria-hidden={shown || undefined}>
+        {label}
+      </span>
+      <span className={shown ? undefined : 'swap-hidden'} aria-hidden={!shown || undefined}>
+        {alternate}
+      </span>
+    </span>
+  );
+}
+
 export function DevicesSection({
   t,
   lang,
@@ -76,45 +123,76 @@ export function DevicesSection({
   justPaired,
   onOpenSettings,
   onSignedOut,
+  platform,
 }: DevicesSectionProps) {
-  const [status, setStatus] = useState<LanStatus | null>(null);
-  const [devices, setDevices] = useState<LanDevice[]>([]);
+  const [view, setView] = useState<View>({ kind: 'loading' });
   const [pairing, setPairing] = useState<LanPairing | null>(null);
-  /** The pairing revision a code was made at: a device paired after it closes the panel. */
-  const [pairingRevision, setPairingRevision] = useState(0);
   const [name, setName] = useState('');
   const [pin, setPin] = useState('');
-  const [copied, setCopied] = useState(false);
+  const [copy, setCopy] = useState<CopyState>('idle');
   const [now, setNow] = useState(() => Date.now());
   /** The device whose remove button was pressed once; a second press removes it. */
   const [armed, setArmed] = useState<string | null>(null);
-  const { busy, error, setError, run } = useIpcAction(client, t);
+  const [removePin, setRemovePin] = useState('');
+  const [banner, setBanner] = useState('');
+  const [seenPaired, setSeenPaired] = useState(justPaired?.seq ?? 0);
+  const [ios] = useState(() => isIosBrowserTab(platform ?? currentPlatform()));
+  /** Whether the request in flight carried a PIN: decides "PIN required" vs "PIN wrong". */
+  const pinSentRef = useRef(false);
+  const removePinRef = useRef<HTMLInputElement | null>(null);
+  const describe = useCallback((e: unknown) => refusalText(t, e, pinSentRef.current), [t]);
+  const { busy, error, setError, run } = useIpcAction(client, t, describe);
   const install = useInstallPrompt();
 
+  /** `background`: a refresh of a page already shown keeps what it shows when the refresh fails. */
   const load = useCallback(
-    async (c: IpcClient, cancelled: () => boolean = () => false) => {
+    async (c: IpcClient, cancelled: () => boolean = () => false, background = false) => {
       try {
         const [s, d] = await Promise.all([api.lanStatus(c), api.lanDevices(c)]);
         if (cancelled()) return;
-        setStatus(parseLanStatus(s));
-        setDevices(parseLanDevices(d) ?? []);
-        setError('');
-      } catch {
-        // An older core without network access: the same thing as "off" for this page.
+        const status = parseLanStatus(s);
+        const devices = parseLanDevices(d);
+        setView(status && devices ? { kind: 'ready', status, devices } : { kind: 'unreadable' });
+      } catch (e) {
         if (cancelled()) return;
-        setStatus({ enabled: false, running: false, error: '', urls: [], fingerprint: '' });
-        setDevices([]);
+        if (failureKind(e) === 'unknown_request') {
+          setView({ kind: 'unsupported' });
+          return;
+        }
+        if (background) return;
+        setView({ kind: 'failed', message: refusalText(t, e, false, '') });
       }
     },
-    [setError],
+    [t],
   );
 
   useRefreshOnConnect(client, load);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load() sets state only after awaiting the core; the rule does not see past the await
-    if (client && revision > 0) void load(client);
+    if (client && revision > 0) void load(client, () => false, true);
   }, [client, revision, load]);
+
+  useWhileVisible(client !== null && view.kind === 'ready', REFRESH_MS, () => {
+    if (client) void load(client, () => false, true);
+  });
+
+  // A device paired since the code was made: the panel's job is done, the name was used, and a
+  // short line says who arrived.
+  if (justPaired && justPaired.seq !== seenPaired) {
+    setSeenPaired(justPaired.seq);
+    setBanner(justPaired.name);
+    if (pairing) {
+      setPairing(null);
+      setName('');
+      setCopy('idle');
+    }
+  }
+  useEffect(() => {
+    if (!banner) return;
+    const timer = window.setTimeout(() => setBanner(''), PAIRED_BANNER_MS);
+    return () => window.clearTimeout(timer);
+  }, [banner, seenPaired]);
 
   // The expiry is shown as a time; this only decides when to say "expired" instead.
   useEffect(() => {
@@ -123,50 +201,102 @@ export function DevicesSection({
     return () => window.clearInterval(timer);
   }, [pairing]);
 
-  const pair = () =>
-    run('pair', async (c) => {
-      const result = parseLanPairing(await api.lanPairStart(c, name, pin));
+  // Disarm after a while, so a stray second tap much later removes nothing.
+  useEffect(() => {
+    if (armed === null) return;
+    const timer = window.setTimeout(() => setArmed(null), DISARM_MS);
+    return () => window.clearTimeout(timer);
+  }, [armed, removePin]);
+
+  const pair = () => {
+    pinSentRef.current = pin.trim() !== '';
+    return run('pair', async (c) => {
+      let payload: Record<string, unknown>;
+      try {
+        payload = await api.lanPairStart(c, name, pin.trim());
+      } catch (e) {
+        // Refused: perhaps a PIN was set since this page last looked. Look again, so the field
+        // for it is there when the person reads why it did not work.
+        if (failureKind(e) === 'refused') void load(c, () => false, true);
+        throw e;
+      }
+      const result = parseLanPairing(payload);
+      if (!result) {
+        setError(t('lan_unreadable'));
+        return;
+      }
       setPairing(result);
-      setPairingRevision(revision);
-      setCopied(false);
+      setCopy('idle');
       setNow(Date.now());
       setPin('');
     });
-
-  // Disarm after a few seconds, so a stray second tap much later removes nothing.
-  useEffect(() => {
-    if (armed === null) return;
-    const timer = window.setTimeout(() => setArmed(null), 6000);
-    return () => window.clearTimeout(timer);
-  }, [armed]);
+  };
 
   const remove = (target: LanDevice) => {
-    const own = target.current;
     if (armed !== target.id) {
       setArmed(target.id);
+      setRemovePin('');
+      setError('');
+      return;
+    }
+    const withPin = device && !target.current;
+    if (withPin && !removePin.trim()) {
+      setError(t('reason_pin_required'));
+      removePinRef.current?.focus();
       return;
     }
     setArmed(null);
+    pinSentRef.current = withPin;
     void run(target.id, async (c) => {
-      await api.lanUnpair(c, target.id, pin);
-      setPin('');
-      if (own) onSignedOut();
+      await api.lanUnpair(c, target.id, withPin ? removePin.trim() : '');
+      setRemovePin('');
+      if (target.current) onSignedOut();
       else await load(c);
     });
   };
 
-  const copy = async (url: string) => {
+  const copyLink = async (url: string) => {
     try {
       await navigator.clipboard.writeText(url);
-      setCopied(true);
+      setCopy('copied');
     } catch {
-      setCopied(false);
+      setCopy('failed');
     }
   };
 
-  if (status === null) return null;
+  if (view.kind === 'loading') {
+    return client ? (
+      <p className="hint" role="status">
+        {t('lan_loading')}
+      </p>
+    ) : null;
+  }
 
-  if (!status.enabled) {
+  if (view.kind === 'unreadable' || view.kind === 'failed') {
+    const lede = view.kind === 'unreadable' ? t('lan_unreadable') : view.message || undefined;
+    return (
+      <div className="tiles tiles--single">
+        <Tile feature id="lan" title={t('lan_load_failed')} lede={lede}>
+          <div className="tile-actions">
+            <button
+              type="button"
+              className="link"
+              disabled={!client}
+              onClick={() => {
+                if (!client) return;
+                setView({ kind: 'loading' });
+                void load(client);
+              }}
+            >
+              {t('lan_retry')}
+            </button>
+          </div>
+        </Tile>
+      </div>
+    );
+  }
+
+  if (view.kind === 'unsupported' || !view.status.enabled) {
     return (
       <div className="tiles tiles--single">
         <Tile feature id="lan" title={t('lan_off_title')} lede={t('lan_off_body')}>
@@ -182,10 +312,24 @@ export function DevicesSection({
     );
   }
 
-  // A device paired since the code was made: the panel's job is done.
-  const shown = pairing !== null && !(justPaired && revision > pairingRevision) ? pairing : null;
-  const expired = shown !== null && Date.parse(shown.expiresAt) <= now;
+  const { status, devices } = view;
+  const expired = pairing !== null && Date.parse(pairing.expiresAt) <= now;
+  const shown = pairing !== null && !expired ? pairing : null;
   const notRunning = !status.running;
+  /** A paired device pairs only with the PIN, which needs one to be set. */
+  const canPair = !device || status.pinSet;
+  const technical = !device && (status.error || status.warning);
+  const lede = notRunning ? (status.error ? t('lan_failed') : t('lan_starting')) : t('lan_pair_lede');
+  const copyLine =
+    copy === 'copied' ? t('lan_pair_copied') : copy === 'failed' ? t('lan_pair_copy_failed') : '';
+  // One small live line for the pairing tile, always in the page so a screen reader hears it
+  // change: the code is ready, copying worked or did not, the code expired.
+  const pairingStatus = shown
+    ? copyLine || fill(t('lan_pair_ready'), formatTimestamp(shown.expiresAt, lang))
+    : expired && canPair
+      ? t('lan_pair_expired')
+      : '';
+  const statusVisible = shown ? copyLine !== '' : pairingStatus !== '';
 
   return (
     <>
@@ -194,21 +338,21 @@ export function DevicesSection({
           {error}
         </p>
       )}
-      {justPaired && (
-        <p role="status" className="banner banner--ok">
-          {fill(t('lan_pair_done'), justPaired)}
-        </p>
-      )}
+      <p role="status" className={banner ? 'banner banner--ok' : 'sr-only'}>
+        {banner ? fill(t('lan_pair_done'), banner) : ''}
+      </p>
 
       <div className="tiles tiles--single">
-        <Tile
-          feature
-          id="lan"
-          eyebrow={notRunning ? (status.error ? t('remote_unavailable') : t('lan_starting')) : undefined}
-          title={t('lan_pair_title')}
-          lede={notRunning && status.error ? fill(t('lan_failed'), status.error) : t('lan_pair_lede')}
-        >
-          {!shown || expired ? (
+        <Tile feature id="lan" title={t('lan_pair_title')} lede={lede}>
+          {technical && (
+            <details className="tile-technical">
+              <summary>{t('lan_technical')}</summary>
+              <p className="mono break">{status.error || status.warning}</p>
+            </details>
+          )}
+          {!canPair ? (
+            <p className="hint">{t('lan_pair_only_at_computer')}</p>
+          ) : !shown ? (
             <div className="row-controls">
               <div className="field field--grow">
                 <label htmlFor="lan-name" className="label">
@@ -223,7 +367,7 @@ export function DevicesSection({
                   autoComplete="off"
                 />
               </div>
-              {device && (
+              {status.pinSet && (
                 <div className="field">
                   <label htmlFor="lan-pin" className="label">
                     {t('lan_pair_pin')}
@@ -248,41 +392,67 @@ export function DevicesSection({
               >
                 {expired ? t('lan_pair_again') : t('lan_pair_button')}
               </button>
-              {device && (
+              {status.pinSet && (
                 <p id="lan-pin-hint" className="hint field--full">
                   {t('lan_pair_pin_hint')}
                 </p>
               )}
-              {expired && (
-                <p role="status" className="hint field--full">
-                  {t('lan_pair_expired')}
-                </p>
-              )}
             </div>
           ) : (
-            <div className="pairing" role="region" aria-live="polite" aria-label={t('lan_pair_title')}>
+            <div className="pairing">
               {shown.qr && <img className="pairing-qr" src={shown.qr} alt={t('lan_pair_qr_alt')} />}
               <div className="pairing-facts">
                 <p className="label">{t('lan_pair_link')}</p>
                 <p className="pairing-url">
-                  <a href={shown.url} className="link" rel="noreferrer">
+                  <a href={shown.url} className="link link--plain" rel="noreferrer">
                     {shown.url}
                   </a>
                 </p>
-                <button type="button" className="btn btn--quiet btn--sm" onClick={() => void copy(shown.url)}>
-                  {copied ? t('lan_pair_copied') : t('lan_pair_copy')}
-                </button>
+                <div className="pairing-buttons">
+                  <button type="button" className="btn btn--quiet btn--sm" onClick={() => void copyLink(shown.url)}>
+                    {t('lan_pair_copy')}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--quiet btn--sm"
+                    onClick={() => {
+                      setPairing(null);
+                      setCopy('idle');
+                    }}
+                  >
+                    {t('lan_pair_discard')}
+                  </button>
+                </div>
                 <p className="label">{t('lan_pair_code')}</p>
-                <p className="code-display">{groupCode(shown.code)}</p>
-                <p className="hint">
-                  {fill(t('lan_pair_valid_until'), formatTimestamp(shown.expiresAt, lang))}
+                <p className="code-display">
+                  <span className="code-display-value" aria-hidden="true">
+                    {groupCode(shown.code)}
+                  </span>
+                  <span className="sr-only">{fill(t('lan_pair_code_spelled'), spellCode(shown.code))}</span>
                 </p>
-                <p className="label">{t('lan_fingerprint')}</p>
-                <p className="fingerprint">{shortFingerprint(shown.fingerprint)}</p>
-                <p className="hint">{t('lan_fingerprint_hint')}</p>
+                <p className="hint">{fill(t('lan_pair_valid_until'), formatTimestamp(shown.expiresAt, lang))}</p>
+                {shown.fingerprint && (
+                  <>
+                    <p className="label">{t('lan_fingerprint')}</p>
+                    <p className="fingerprint">{shortFingerprint(shown.fingerprint)}</p>
+                    <p className="hint">{t('lan_fingerprint_hint')}</p>
+                  </>
+                )}
               </div>
             </div>
           )}
+          <p
+            role="status"
+            className={
+              statusVisible
+                ? copy === 'failed'
+                  ? 'hint pairing-status pairing-status--warn'
+                  : 'hint pairing-status'
+                : 'sr-only'
+            }
+          >
+            {pairingStatus}
+          </p>
         </Tile>
       </div>
 
@@ -298,9 +468,12 @@ export function DevicesSection({
         {devices.length > 0 && (
           <ul className="device-list" aria-labelledby="h-lan-devices">
             {devices.map((d) => {
-              const revoked = d.revokedAt !== null;
+              const removed = d.revokedAt !== null;
+              const canRemove = !removed && (d.current || !device || status.pinSet);
+              const isArmed = armed === d.id;
+              const withPin = device && !d.current;
               return (
-                <li key={d.id} className={revoked ? 'device device--revoked' : 'device'}>
+                <li key={d.id} className={removed ? 'device device--revoked' : 'device'}>
                   <div className="device-main">
                     <p className="device-name">
                       {d.name || t('unknown')}
@@ -314,24 +487,47 @@ export function DevicesSection({
                     </p>
                   </div>
                   <StateWord
-                    tone={revoked ? 'off' : 'ok'}
-                    label={revoked ? t('remote_state_revoked') : t('remote_state_active')}
+                    tone={removed ? 'off' : 'ok'}
+                    label={removed ? t('lan_state_removed') : t('lan_state_active')}
                   />
-                  {!revoked && (d.current || !device) && (
+                  {canRemove && (
                     <div className="device-action">
                       <button
                         type="button"
-                        className={armed === d.id ? 'btn btn--sm btn--armed' : 'link link--plain'}
+                        className={isArmed ? 'btn btn--sm btn--armed' : 'btn btn--sm btn--quiet'}
                         disabled={!client || busy === d.id}
                         onClick={() => remove(d)}
-                        aria-describedby={armed === d.id ? `confirm-${d.id}` : undefined}
+                        aria-describedby={isArmed ? `confirm-${d.id}` : undefined}
                       >
-                        {d.current ? t('lan_sign_out') : t('lan_remove')}
+                        <SwapLabel
+                          shown={isArmed}
+                          label={d.current ? t('lan_sign_out') : t('lan_remove')}
+                          alternate={d.current ? t('lan_sign_out_armed') : t('lan_remove_armed')}
+                        />
                       </button>
-                      {armed === d.id && (
-                        <p id={`confirm-${d.id}`} role="status" className="hint">
-                          {d.current ? t('lan_sign_out_confirm') : fill(t('lan_remove_confirm'), d.name)}
-                        </p>
+                    </div>
+                  )}
+                  {isArmed && (
+                    <div className="device-confirm">
+                      <p id={`confirm-${d.id}`} role="status" className="hint">
+                        {d.current ? t('lan_sign_out_confirm') : fill(t('lan_remove_confirm'), d.name || t('unknown'))}
+                      </p>
+                      {withPin && (
+                        <div className="field">
+                          <label htmlFor={`remove-pin-${d.id}`} className="label">
+                            {fill(t('lan_remove_pin'), d.name || t('unknown'))}
+                          </label>
+                          <input
+                            ref={removePinRef}
+                            id={`remove-pin-${d.id}`}
+                            className="input input--pin"
+                            type="password"
+                            inputMode="numeric"
+                            autoComplete="off"
+                            value={removePin}
+                            onChange={(e) => setRemovePin(e.target.value)}
+                          />
+                        </div>
                       )}
                     </div>
                   )}
@@ -345,8 +541,18 @@ export function DevicesSection({
       {device && (
         <section aria-labelledby="h-lan-ca" className="tiles tiles--single">
           <Tile id="lan-ca" title={t('lan_ca_title')} lede={t('lan_ca_lede')}>
+            {ios && (
+              <div className="ca-order">
+                <p className="label">{t('lan_ca_ios_order')}</p>
+                <ol className="steps">
+                  <li>{t('lan_ca_ios_step_cert')}</li>
+                  <li>{t('lan_ca_ios_step_home')}</li>
+                  <li>{t('lan_ca_ios_step_pair')}</li>
+                </ol>
+              </div>
+            )}
             <div className="tile-actions">
-              <a className="btn" href="/nox-ca.crt" download="nox-home-ca.crt">
+              <a className="btn" href={status.caUrl} download="nox-home-ca.crt">
                 {t('lan_ca_download')}
               </a>
               {install && (
@@ -364,10 +570,12 @@ export function DevicesSection({
                 <li>{t('lan_ca_mac')}</li>
               </ul>
             </details>
-            {status.fingerprint && (
-              <p className="hint">
-                {t('lan_fingerprint')}: <span className="fingerprint">{shortFingerprint(status.fingerprint)}</span>
-              </p>
+            {status.caFingerprint && (
+              <div className="ca-fingerprint">
+                <p className="label">{t('lan_ca_fingerprint')}</p>
+                <p className="fingerprint">{shortFingerprint(status.caFingerprint)}</p>
+                <p className="hint">{t('lan_ca_fingerprint_hint')}</p>
+              </div>
             )}
           </Tile>
         </section>

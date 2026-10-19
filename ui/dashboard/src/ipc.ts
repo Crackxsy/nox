@@ -6,11 +6,17 @@
 
 import type { Envelope } from '../../shared/envelope';
 import type { Auth } from './auth';
-import { type ConnStatus, IpcClient, IpcError, resolveWsUrl } from '../../shared/ipc';
+import {
+  type ConnStatus,
+  IpcClient,
+  IpcError,
+  SIGNED_OUT_DETAIL,
+  resolveWsUrl,
+} from '../../shared/ipc';
 import { CHAT_IDLE_TIMEOUT_MS } from './model/chat';
 
 export type { Envelope, ConnStatus };
-export { IpcClient, IpcError };
+export { IpcClient, IpcError, SIGNED_OUT_DETAIL };
 
 export const DASHBOARD_PATTERNS = [
   'system.*',
@@ -38,8 +44,10 @@ export const DASHBOARD_PATTERNS = [
   // already covered by `twitch.*`, listed here only so the pairing is obvious).
   'settings.*',
   // Devices: `remote.paired` / `remote.revoked` (channel `lan` or `telegram`), so a pairing screen
-  // on one device sees the new one arrive.
-  'remote.*',
+  // on one device sees the new one arrive. Exactly these two: `remote.*` would also deliver the
+  // raw Telegram traffic, which no dashboard needs and a paired device must not see.
+  'remote.paired',
+  'remote.revoked',
 ];
 
 export interface DashboardIpcHandlers {
@@ -152,7 +160,23 @@ export const api = {
     c.request('lan.pair.start', pin ? { name, pin } : { name }),
   lanUnpair: (c: IpcClient, deviceId: string, pin = '') =>
     c.request('lan.unpair', pin ? { device_id: deviceId, pin } : { device_id: deviceId }),
-  /** The answer to a permission prompt; `remember` is ignored by the core for a paired device. */
-  permissionReply: (c: IpcClient, grantId: string, decision: 'allow' | 'deny', remember: boolean) =>
-    c.request('security.permission.reply', { grant_id: grantId, decision, remember }),
+  /**
+   * The answer to a permission prompt; `remember` is ignored by the core for a paired device, which
+   * needs the PIN to allow anything at high or critical risk. An empty PIN is not sent.
+   */
+  permissionReply: (
+    c: IpcClient,
+    grantId: string,
+    decision: 'allow' | 'deny',
+    remember: boolean,
+    pin = '',
+  ) =>
+    c.request(
+      'security.permission.reply',
+      pin
+        ? { grant_id: grantId, decision, remember, pin }
+        : { grant_id: grantId, decision, remember },
+    ),
+  /** The questions still open, for a dashboard that (re)connects while one waits. */
+  permissionPending: (c: IpcClient) => c.request('security.permission.pending', {}),
 };

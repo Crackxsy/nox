@@ -2,10 +2,11 @@
 
     python scripts/make_dashboard_icons.py
 
-Writes ui/dashboard/public/icon-192.png, icon-512.png and apple-touch-icon.png (180 px). The
-creature is cut out by its alpha channel and centred inside the inner 70 % of a black square -
-the safe zone a maskable icon keeps on every launcher shape - matching the dashboard's feature
-tiles. Deterministic: the same artwork gives the same files.
+Writes ui/dashboard/public/icon-192.png, icon-512.png and apple-touch-icon.png (180 px), and
+icon-maskable-512.png. The creature is cut out by its alpha channel and centred on a black square:
+inside the inner 70 % for the plain icons, matching the dashboard's feature tiles, and inside the
+inner 56 % for the maskable one - the largest square that fits the circle of 80 % diameter a
+launcher may cut any shape from. Deterministic: the same artwork gives the same files.
 
 Needs OpenCV and NumPy (`uv sync --extra rl`).
 """
@@ -23,6 +24,8 @@ SOURCE = ROOT / "ui" / "pet" / "public" / "variants" / "eulenfuchs" / "idle.png"
 OUT = ROOT / "ui" / "dashboard" / "public"
 SIZES = {"icon-192.png": 192, "icon-512.png": 512, "apple-touch-icon.png": 180}
 SAFE = 0.70
+MASKABLE = {"icon-maskable-512.png": 512}
+MASKABLE_SAFE = 0.56
 BACKGROUND = (0, 0, 0)
 
 
@@ -34,9 +37,9 @@ def cut_out(image: np.ndarray) -> np.ndarray:
     return image[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
 
 
-def compose(creature: np.ndarray, size: int) -> np.ndarray:
+def compose(creature: np.ndarray, size: int, safe: float = SAFE) -> np.ndarray:
     height, width = creature.shape[:2]
-    scale = (size * SAFE) / max(height, width)
+    scale = (size * safe) / max(height, width)
     resized = cv2.resize(
         creature, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA
     )
@@ -58,8 +61,11 @@ def main() -> int:
         return 1
     creature = cut_out(image)
     OUT.mkdir(parents=True, exist_ok=True)
-    for name, size in SIZES.items():
-        cv2.imwrite(str(OUT / name), compose(creature, size), [cv2.IMWRITE_PNG_COMPRESSION, 9])
+    plain = [(name, size, SAFE) for name, size in SIZES.items()]
+    maskable = [(name, size, MASKABLE_SAFE) for name, size in MASKABLE.items()]
+    for name, size, safe in plain + maskable:
+        icon = compose(creature, size, safe)
+        cv2.imwrite(str(OUT / name), icon, [cv2.IMWRITE_PNG_COMPRESSION, 9])
         print(f"wrote {(OUT / name).relative_to(ROOT)}")
     return 0
 

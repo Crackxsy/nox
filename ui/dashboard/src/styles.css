@@ -162,14 +162,53 @@ a:hover {
   min-width: 0;
 }
 
+/*
+ * Centred while the tabs fit, scrollable when they do not. `justify-content: center` would push the
+ * first tabs out of reach on overflow; auto margins on the ends centre without that trap.
+ * `scroll-padding-inline` keeps a tab scrolled into view clear of the fade below.
+ */
 .tablist {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
-  gap: clamp(2px, 1.2vw, var(--s-5));
+  gap: var(--s-2);
   overflow-x: auto;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  scroll-padding-inline: var(--s-6);
+  --fade-start: 0px;
+  --fade-end: 0px;
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--fade-start),
+    #000 calc(100% - var(--fade-end)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--fade-start),
+    #000 calc(100% - var(--fade-end)),
+    transparent 100%
+  );
+}
+
+.tablist > .tab:first-child {
+  margin-left: auto;
+}
+
+.tablist > .tab:last-child {
+  margin-right: auto;
+}
+
+/* More tabs that way: the edge fades out (set from the scroll position in App.tsx). */
+.tablist[data-fade-start] {
+  --fade-start: var(--s-6);
+}
+
+.tablist[data-fade-end] {
+  --fade-end: var(--s-6);
 }
 
 .tablist::-webkit-scrollbar {
@@ -280,7 +319,11 @@ a:hover {
   outline-offset: 2px;
 }
 
-@media (max-width: 719px) {
+/*
+ * Ten tabs, the connection state and the appearance control do not share one row below about
+ * 1100 px: the tabs get a row of their own under the wordmark and the controls.
+ */
+@media (max-width: 1099px) {
   .nav-inner {
     grid-template-columns: auto minmax(0, 1fr);
     row-gap: 2px;
@@ -295,12 +338,34 @@ a:hover {
   }
 
   .tablist {
-    justify-content: flex-start;
     gap: var(--s-2);
   }
+}
 
+@media (max-width: 719px) {
   .nav-aside {
     gap: 10px;
+  }
+}
+
+/*
+ * A phone: the connection state may take two short lines rather than run under the wordmark, and
+ * the appearance control gets a little tighter.
+ */
+@media (max-width: 479px) {
+  .nav-aside {
+    min-width: 0;
+  }
+
+  .conn {
+    min-width: 0;
+    white-space: normal;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+
+  .seg-item span {
+    padding-inline: 7px;
   }
 }
 
@@ -317,6 +382,20 @@ a:hover {
 
 .banner--error {
   color: var(--danger);
+}
+
+.banner--action {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: var(--s-1) var(--s-4);
+  padding-inline: var(--gutter);
+}
+
+.banner--action .link {
+  min-height: var(--hit);
+  align-items: center;
 }
 
 /* ------------------------------------------------------------------- page - */
@@ -2094,13 +2173,48 @@ a:hover {
   border-top: 1px solid var(--hairline);
 }
 
+/*
+ * `align-items: start`: when a remove button is armed, the confirmation row opens *below* the
+ * device and pushes the next one down, while the button the finger is on stays where it was.
+ */
 .device {
   display: grid;
   grid-template-columns: 1fr auto auto;
-  gap: var(--s-4);
-  align-items: center;
+  gap: var(--s-3) var(--s-4);
+  align-items: start;
   padding-block: var(--s-4);
   border-bottom: 1px solid var(--hairline);
+}
+
+.device > .state {
+  align-self: center;
+}
+
+.device-confirm {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-3) var(--s-4);
+}
+
+.device-confirm .hint {
+  flex: 1 1 28ch;
+}
+
+/* Two labels in one cell: the wider decides the button's width, the other is invisible. */
+.swap {
+  display: inline-grid;
+}
+
+.swap > * {
+  grid-area: 1 / 1;
+  text-align: center;
+}
+
+.swap-hidden {
+  visibility: hidden;
 }
 
 .device--revoked {
@@ -2123,9 +2237,48 @@ a:hover {
 .device-action {
   display: grid;
   justify-items: end;
+}
+
+.pairing-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-3);
+}
+
+.pairing-status--warn {
+  color: var(--warn);
+}
+
+.code-display-value {
+  white-space: nowrap;
+}
+
+.ca-order {
+  display: grid;
+  gap: var(--s-2);
+  margin-bottom: var(--s-4);
+}
+
+.ca-fingerprint {
+  display: grid;
   gap: var(--s-1);
-  max-width: 28ch;
-  text-align: right;
+  margin-top: var(--s-4);
+}
+
+.tile-technical {
+  margin-bottom: var(--s-4);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+
+.tile-technical summary,
+.remote-telegram--off summary,
+.perm-technical summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--hit);
+  color: var(--link);
+  cursor: pointer;
 }
 
 .ca-howto {
@@ -2152,6 +2305,21 @@ a:hover {
   margin-top: var(--section);
 }
 
+/* An unused Telegram is one quiet line that opens to the explanation. */
+.remote-telegram--off {
+  margin-top: var(--s-7);
+  padding-top: var(--s-2);
+  border-top: 1px solid var(--hairline);
+}
+
+.remote-telegram--off .hint {
+  max-width: 60ch;
+}
+
+.remote-telegram--off .tile-actions {
+  padding-top: var(--s-3);
+}
+
 @media (max-width: 719px) {
   .pairing {
     grid-template-columns: 1fr;
@@ -2169,8 +2337,6 @@ a:hover {
   .device-action {
     grid-column: 1 / -1;
     justify-items: start;
-    text-align: left;
-    max-width: none;
   }
 }
 
@@ -2230,6 +2396,9 @@ a:hover {
 
 .perm-dialog {
   width: min(100%, 520px);
+  max-height: calc(100dvh - 2 * var(--gutter));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: grid;
   gap: var(--s-4);
   padding: var(--tile-pad);
@@ -2247,31 +2416,56 @@ a:hover {
   margin: 0;
 }
 
-.perm-details {
+.perm-dialog:focus {
+  outline: none;
+}
+
+.perm-dialog:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+
+/* The question itself, in one sentence, before anything else. */
+.perm-sentence {
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.perm-facts {
   display: grid;
   gap: var(--s-2);
   margin: 0;
 }
 
-.perm-details > div {
+.perm-facts > div {
   display: grid;
-  grid-template-columns: 9ch 1fr;
+  grid-template-columns: 11ch 1fr;
   gap: var(--s-3);
 }
 
-.perm-details dt {
+.perm-facts dt {
   color: var(--ink-2);
   font-size: var(--text-sm);
 }
 
-.perm-details dd {
+.perm-facts dd {
   margin: 0;
   overflow-wrap: anywhere;
 }
 
-.perm-target {
-  font-family: var(--mono);
+.perm-facts--technical {
+  padding-top: var(--s-2);
+}
+
+.perm-technical {
   font-size: var(--text-sm);
+}
+
+.perm-countdown {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .perm-risk--high,
@@ -2284,32 +2478,87 @@ a:hover {
   color: var(--warn);
 }
 
+/*
+ * Deny and Allow side by side, the same width, in reading order (the DOM order is the visual
+ * order, also on a phone where they stack). The remembered "allow" is a quiet third option on its
+ * own row, never next to the two answers.
+ */
 .perm-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--s-3);
+}
+
+.perm-actions--single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .perm-actions .btn {
   min-height: var(--hit);
+  width: 100%;
+}
+
+.perm-remember {
+  display: flex;
+  justify-content: center;
+}
+
+/*
+ * Allowing at high or critical risk: an outlined button in the danger colour, so the inviting blue
+ * fill never sits on the answer that can do the most harm.
+ */
+.btn--risky,
+.btn--risky:hover:not(:disabled) {
+  background: transparent;
+  border: 1.5px solid var(--danger);
+  color: var(--danger);
+}
+
+.btn--risky:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.btn--risky:disabled {
+  border-color: var(--hairline);
+  color: var(--ink-2);
 }
 
 .perm-more {
-  text-align: right;
+  text-align: center;
 }
 
-.perm-elsewhere {
+/*
+ * "Decided on another device" / "No answer": a toast at the bottom, on the page's own surface
+ * with a border, so it stands out on a black feature tile and on the black page alike, clear of a
+ * phone's home indicator. The element is always there (empty and invisible), so a screen reader
+ * announces the sentence when it arrives.
+ */
+.perm-note {
   position: fixed;
   left: 50%;
-  bottom: var(--s-6);
+  bottom: calc(var(--s-5) + env(safe-area-inset-bottom));
   transform: translateX(-50%);
-  z-index: 50;
+  z-index: 60;
+  width: max-content;
+  max-width: calc(100vw - 2 * var(--gutter));
   padding: var(--s-3) var(--s-5);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
-  background: var(--tile-feature);
-  color: var(--tile-feature-ink);
+  background: var(--tile);
+  color: var(--ink);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
   font-size: var(--text-sm);
+  text-align: center;
+}
+
+.perm-note--empty {
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  box-shadow: none;
 }
 
 @media (max-width: 719px) {
@@ -2324,11 +2573,15 @@ a:hover {
     padding-bottom: calc(var(--tile-pad) + env(safe-area-inset-bottom));
   }
 
-  .perm-actions {
-    flex-direction: column-reverse;
+  .perm-dialog {
+    max-height: calc(100dvh - var(--s-6));
   }
 
-  .perm-actions .btn {
+  .perm-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .perm-remember .btn {
     width: 100%;
   }
 }
