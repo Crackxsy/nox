@@ -77,6 +77,9 @@ __all__ = [
 _APP_CONTAINER_NAME = "Nox.Sandbox"
 _SYSTEM32 = r"C:\Windows\System32"
 _POWERSHELL = _SYSTEM32 + r"\WindowsPowerShell\v1.0\powershell.exe"
+_CURL = _SYSTEM32 + r"\curl.exe"
+#: ALL APPLICATION PACKAGES - see the module docstring for why not the container's own SID.
+_ALL_APP_PACKAGES = "S-1-15-2-1"
 #: Environment the child inherits. Nothing that points at the user's profile or secrets.
 _SAFE_ENV_KEYS = (
     "SystemRoot",
@@ -305,20 +308,15 @@ class WindowsSandbox:
         return self._sid
 
     def grant_read(self, folder: Path) -> bool:
-        """Give the container SID read+execute on `folder` (inherited by everything below).
+        """Give AppContainers read+execute on `folder` (inherited by everything below).
 
-        Idempotent: an ACL that already carries the grant is left alone, so this costs one
-        `icacls` query per core start, not a walk over a whole virtual environment.
+        Additive and idempotent (`icacls /grant` merges an identical ACE); done once per backend,
+        off the event loop.
         """
         if self._sid is None:
             return False
-        shown = subprocess.run(  # noqa: S603 - fixed argv, a vetted runtime folder
-            ["icacls", str(folder)], capture_output=True, text=True, check=False
-        )
-        if f"{self._sid}:(OI)(CI)(RX)" in shown.stdout:
-            return True
         done = subprocess.run(  # noqa: S603 - fixed argv, a vetted runtime folder
-            ["icacls", str(folder), "/grant", f"*{self._sid}:(OI)(CI)(RX)", "/Q"],
+            ["icacls", str(folder), "/grant", f"*{_ALL_APP_PACKAGES}:(OI)(CI)(RX)", "/Q"],
             capture_output=True,
             check=False,
         )

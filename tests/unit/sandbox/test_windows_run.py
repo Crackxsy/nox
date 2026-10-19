@@ -322,6 +322,12 @@ async def test_appcontainer_runs_python_and_still_cannot_read_user_files(tmp_pat
     )
     assert "IMPORT-OK" in result.stdout, result.stderr
     assert "USER-FILE-BLOCKED" in result.stdout and "READ-USER-FILE" not in result.stdout
+    # The runtime grant must not break the low-integrity fallback (a specific-SID ACE did).
+    low = Sandbox(WindowsSandbox(prefer_appcontainer=False), guard=NetGuard())
+    again = await low.run(
+        [sys.executable, "-I", "-B", "-c", "print('LOW-OK')"], limits=Limits(timeout_s=60)
+    )
+    assert "LOW-OK" in again.stdout, again.stderr
 
 
 def test_runtime_dirs_never_include_nox_home_or_the_profile(tmp_path) -> None:  # noqa: ANN001
