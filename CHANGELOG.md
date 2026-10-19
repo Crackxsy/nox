@@ -29,6 +29,21 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   written (a long opening sentence from its first clause), and a tool loop that keeps the user
   waiting gets one short "Moment, ich schau nach." Answers are shorter, German first, and use
   tools instead of guessing; turns routed to the reasoning chain use a stronger model.
+- **Nox uses other people's MCP servers.** Add one under Fähigkeiten or in `mcp.servers`; its
+  tools appear as `mcp.<server>.<tool>` and ask before they run. `npx`/`uvx` servers must pin an
+  exact version, the first start of each command is approved in the dashboard, secrets are only
+  references into the secret store, and descriptions and results travel as untrusted data.
+- **Nox teaches itself what it cannot do yet** (`skill.learn`): it builds a small plugin with
+  Claude Code (file tools only, no shell), the core checks and tests it offline, and one click
+  under Fähigkeiten switches it on - no restart, never in Nox's own source tree.
+- **Watchers - "sag mir, wenn ...":** one read-only tool, a condition and an interval of at least
+  five minutes; a finding is reported once, and a watcher survives restarts. Nox asks for a
+  missing train, station or price instead of guessing.
+- **Computer use** (off by default, needs the PIN to switch on): mouse and key combinations in a
+  session confirmed once, ended by the kill switch or Ctrl+Alt+Shift+K, and refused while a game
+  runs or is in front.
+- **`nox ai setup`**: picks a local model for this machine's RAM/VRAM, downloads it with progress
+  and only keeps it if it can answer and call a tool; recommends none on a small Raspberry Pi.
 - **Capability benchmark** (`evals/`, `nox eval kann-alles`): 50 everyday tasks in a simulated
   world, an answer-quality set and a latency probe, with a report per run.
 - `file.move` can create a missing destination folder when asked (`create_folders`).
