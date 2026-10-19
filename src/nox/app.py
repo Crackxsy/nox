@@ -94,6 +94,7 @@ from nox.plugins.manager import (
 )
 from nox.security.killswitch import KillReport
 from nox.security.service import SecurityContext
+from nox.skills.worker_launch import SkillWorkerLauncher, sandbox_factory_for
 from nox.stream.booking import FunkenBooking
 from nox.stream.funken import FunkenService
 from nox.stream.responder import StreamResponder
@@ -405,6 +406,8 @@ class NoxCore:
             loopback_allowlist=tuple(self.config.security.loopback_allowlist),
             # Skills Nox built for itself and the user activated (`nox.skills`).
             extra_dirs={ORIGIN_SELF_BUILT: nox_home() / "plugins"},
+            # ... which run only inside the sandbox, relayed to the hub by the core.
+            sandboxed_spawner=SkillWorkerLauncher(sandbox_factory_for(self.config)),
         )
         self.plugins.register_handlers()
 

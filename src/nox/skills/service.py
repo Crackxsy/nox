@@ -13,8 +13,9 @@ The life of a skill, all of it recorded in `<nox home>/skills/<id>/skill.json` a
 4. **activate** (the dashboard's one click, never a model's) - the frozen files are checked again,
    the PIN is asked for only when the skill wants a host outside the allow-list or a secret, then
    the version is copied to `<nox home>/plugins/<id>`, enabled in `user.yaml`, and the
-   `PluginManager` starts it in its own worker. Its tools ask before they run until the user says
-   "remember".
+   `PluginManager` starts its worker inside the sandbox (`nox.skills.worker_launch`) - never as a
+   process with the user's rights. Without a strong sandbox activation is refused (fail closed).
+   Its tools ask before they run until the user says "remember".
 5. **deactivate / forget** - stopped, disabled, and on forget deleted with its versions.
 """
 
@@ -158,6 +159,7 @@ class SkillService:
         audit: AuditLike | None = None,
         home_host: Callable[[], str] = lambda: "",
         secret_present: Callable[[str], bool] = lambda _name: False,
+        runtime_unavailable: Callable[[], str | None] = lambda: "no sandbox is configured",
         clock: Callable[[], datetime] = _now,
     ) -> None:
         self.root = root
@@ -174,6 +176,8 @@ class SkillService:
         self._audit = audit
         self._home_host = home_host
         self._secret_present = secret_present
+        #: Fail closed: a skill is only switched on where its worker can run in the sandbox.
+        self._runtime_unavailable = runtime_unavailable
         self._clock = clock
         self._task: asyncio.Task[None] | None = None
         self._halted = False
@@ -388,6 +392,10 @@ class SkillService:
             return {"ok": False, "reason": f"the skill is {record.state.value}"}
         if self._halted:
             return {"ok": False, "reason": "the kill switch is engaged"}
+        no_runtime = self._runtime_unavailable()
+        if no_runtime is not None:
+            self._record(by, "skill.activate", skill_id, "deny", "no_sandbox")
+            return {"ok": False, "reason": no_runtime}
         version_dir = self._dir(skill_id) / "versions" / str(record.version)
         if not version_dir.is_dir() or tree_hash(version_dir) != record.tree_hash:
             self._record(by, "skill.activate", skill_id, "deny", "tampered")

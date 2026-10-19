@@ -67,6 +67,7 @@ def service(
     gate: Gate | None = None,
     allowed_hosts: tuple[str, ...] = (),
     tests: Any = None,
+    runtime: str | None = None,
 ) -> tuple[SkillService, Plugins, list[tuple[str, bool]], list[str], Audit]:
     plugins = Plugins()
     enabled: list[tuple[str, bool]] = []
@@ -95,6 +96,7 @@ def service(
         persist_enabled=persist,
         notify=notify,
         audit=audit,
+        runtime_unavailable=lambda: runtime,
     )
     return svc, plugins, enabled, told, audit
 
@@ -203,6 +205,16 @@ async def test_without_a_sandbox_nothing_is_learned_or_run(tmp_path: Path) -> No
     answer = await svc.learn("Wuerfeln", capability="dice", by="companion")
     assert answer["ok"] is False and "sandbox" in answer["reason"]
     assert builder.requests == [] and svc.records() == []
+
+
+async def test_without_a_sandboxed_runtime_nothing_is_switched_on(tmp_path: Path) -> None:
+    svc, plugins, enabled, *_ = service(tmp_path, FakeSkillBuilder(), runtime="no sandbox here")
+    await svc.learn("Wuerfeln", capability="dice", by="companion")
+    await svc.wait()
+    answer = await svc.activate("dice", pin=None, by="dashboard")
+    assert answer == {"ok": False, "reason": "no sandbox here"}
+    assert plugins.calls == [] and enabled == []
+    assert not (tmp_path / "plugins" / "dice").exists()
 
 
 async def test_halt_stops_a_build_and_blocks_activation(tmp_path: Path) -> None:

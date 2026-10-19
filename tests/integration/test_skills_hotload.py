@@ -15,6 +15,7 @@ from nox.core.config import load_config
 from nox.plugins.manager import ORIGIN_SELF_BUILT, PluginState
 from nox.security.model import Decision
 from nox.skills.service import SkillState
+from nox.skills.worker_launch import SandboxedWorker
 from tests._fake_skill_builder import FakeSkillBuilder
 from tests._ports import free_port_base
 
@@ -73,6 +74,8 @@ async def test_a_skill_is_learned_activated_used_and_removed_without_a_restart(
     core: NoxCore,
 ) -> None:
     service = core.extensions["skills"].service
+    if core.plugins.sandboxed_spawner.unavailable() is not None:
+        pytest.skip("no strong sandbox on this machine: skills cannot run here (fail closed)")
     service.builder = FakeSkillBuilder()
     assert (await service.learn("Wuerfeln", capability="dice", by="companion"))["ok"]
     await service.wait()
@@ -83,6 +86,8 @@ async def test_a_skill_is_learned_activated_used_and_removed_without_a_restart(
     assert (await service.activate("dice", pin=None, by="dashboard"))["ok"]
     await _until(lambda: core.plugins.state_of("dice") is PluginState.RUNNING)
     assert core.plugins.records()["dice"].origin == ORIGIN_SELF_BUILT
+    # The worker is the sandboxed relay, never a user-rights `python -m nox.worker` process.
+    assert isinstance(core.plugins.records()["dice"].process, SandboxedWorker)
     assert "dice" in core.config.plugins.enabled
 
     engine = core.security.engine

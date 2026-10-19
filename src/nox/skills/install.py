@@ -24,8 +24,9 @@ from nox.plugins.manifest import PluginManifest, authorize_egress
 from nox.settings.layers import resolve_user_config_path, write_user_config
 from nox.skills.builder import ClaudeCodeSkillBuilder
 from nox.skills.service import SkillService
-from nox.skills.testing import default_test_runner
+from nox.skills.testing import NO_SANDBOX, default_test_runner
 from nox.skills.tools import register_skill_tools
+from nox.skills.worker_launch import sandbox_factory_for
 
 log = get_logger(__name__)
 
@@ -84,6 +85,16 @@ def _gap_source(core: Any) -> Callable[[], tuple[Iterable[Gap], Iterable[str]]]:
     return source
 
 
+def _runtime_unavailable(manager: Any) -> Callable[[], str | None]:
+    """Why an activated skill could not run here: no sandboxed spawner, or no strong sandbox."""
+
+    def reason() -> str | None:
+        spawner = getattr(manager, "sandboxed_spawner", None)
+        return NO_SANDBOX if spawner is None else spawner.unavailable()
+
+    return reason
+
+
 def install(core: Any) -> SkillsRuntime | None:
     cfg = core.config.skills
     manager = core.plugins
@@ -134,7 +145,7 @@ def install(core: Any) -> SkillsRuntime | None:
             timeout_s=cfg.build_timeout_s,
             model=cfg.model,
         ),
-        tests=default_test_runner(),
+        tests=default_test_runner(sandbox_factory_for(core.config)),
         config=lambda: core.config.skills,
         plugins=manager,
         taken_namespaces=taken,
@@ -147,6 +158,7 @@ def install(core: Any) -> SkillsRuntime | None:
             str(core.config.home.host or "") if "home" in core.config.plugins.enabled else ""
         ),
         secret_present=secret_present,
+        runtime_unavailable=_runtime_unavailable(manager),
     )
     service.start()
     register_skill_tools(core.tool_registry, service, _gap_source(core))

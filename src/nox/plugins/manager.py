@@ -47,6 +47,8 @@ from nox.plugins.manifest import (
 from nox.plugins.scopes import scope_for
 from nox.security.model import Decision, PermissionRequest, Profile, Risk
 
+WORKER_TOKEN_ENV = "NOX_WORKER_TOKEN"  # noqa: S105 - an env var name, not a secret
+
 log = get_logger(__name__)
 
 PLUGIN_CLIENT_PREFIX = "plugin:"
@@ -114,6 +116,22 @@ class ProcessLike(Protocol):
 
 
 ProcessFactory = Callable[[Sequence[str], Mapping[str, str]], ProcessLike]
+
+
+class SandboxedSpawner(Protocol):
+    """Starts a self-built skill's worker inside the sandbox (`nox.skills.worker_launch`)."""
+
+    def unavailable(self) -> str | None: ...
+
+    async def spawn(
+        self,
+        *,
+        plugin_id: str,
+        plugin_dir: Path,
+        manifest: PluginManifest,
+        hub_url: str,
+        token: str,
+    ) -> ProcessLike: ...
 
 
 class HealthRegistrar(Protocol):
@@ -432,11 +450,14 @@ class PluginManager:
         process_factory: ProcessFactory | None = None,
         clock: Callable[[], float] = time.monotonic,
         extra_dirs: Mapping[str, Path] | None = None,
+        sandboxed_spawner: SandboxedSpawner | None = None,
     ) -> None:
         self.plugins_dir = plugins_dir
         #: Further plugin folders by origin (`self_built` -> `<nox home>/plugins`). A plugin there
         #: can never shadow a bundled one: the bundled folder is discovered first and wins.
         self.extra_dirs: dict[str, Path] = dict(extra_dirs or {})
+        #: Self-built skills run only through this, inside the sandbox; None means they never run.
+        self.sandboxed_spawner = sandboxed_spawner
         self.settings = settings or PluginManagerSettings()
         self._bus = bus
         self._hub = hub
@@ -763,6 +784,30 @@ class PluginManager:
         command = [*self._worker_command, "--plugin", rec.plugin_id]
         rec.stopping = False
         rec.registered = asyncio.Event()
+        if rec.origin == ORIGIN_SELF_BUILT:
+            # Code a model wrote: only ever inside the sandbox, never as a user-rights process.
+            spawner = self.sandboxed_spawner
+            reason = spawner.unavailable() if spawner is not None else "no sandbox"
+            if spawner is None or reason is not None:
+                await self._fail(rec, f"self-built skills run only in the sandbox: {reason}")
+                return
+            try:
+                rec.process = await spawner.spawn(
+                    plugin_id=rec.plugin_id,
+                    plugin_dir=rec.path,
+                    manifest=manifest,
+                    hub_url=self._hub.url,
+                    token=self._tokens.worker_env(client_id)[WORKER_TOKEN_ENV],
+                )
+            except Exception as exc:  # noqa: BLE001 - nothing runs; the record says why
+                await self._fail(rec, f"sandboxed spawn failed: {type(exc).__name__}: {exc}")
+                return
+            self._transition(rec, PluginState.SPAWNED)
+            log.info("plugin.spawned", plugin=rec.plugin_id, pid=rec.process.pid, sandboxed=True)
+            rec.monitor = asyncio.create_task(
+                self._monitor(rec), name=f"plugin-monitor-{rec.plugin_id}"
+            )
+            return
         try:
             rec.process = self._process_factory(command, env)
         except OSError as exc:
