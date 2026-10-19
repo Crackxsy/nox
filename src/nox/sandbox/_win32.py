@@ -82,7 +82,7 @@ class SandboxWin32Error(OSError):
 
 
 def _fail(what: str) -> SandboxWin32Error:
-    code = ctypes.get_last_error()
+    code = ctypes.get_last_error()  # type: ignore[attr-defined,unused-ignore]
     return SandboxWin32Error(code, f"{what} failed: {ctypes.FormatError(code).strip()}")  # type: ignore[attr-defined,unused-ignore]
 
 
@@ -351,7 +351,7 @@ def label_low(path: str) -> None:
             sacl,
         )
         if status != 0:
-            ctypes.set_last_error(status)
+            ctypes.set_last_error(status)  # type: ignore[attr-defined,unused-ignore]
             raise _fail("SetNamedSecurityInfoW(label)")
     finally:
         _k32.LocalFree(sd)

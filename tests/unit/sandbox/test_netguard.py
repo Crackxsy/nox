@@ -75,3 +75,39 @@ def test_blocked_host_by_name() -> None:
 def test_no_resolution_is_refused() -> None:
     with pytest.raises(BlockedAddress, match="does not resolve"):
         NetGuard().check_addresses("nowhere.example", [])
+
+
+@pytest.mark.parametrize(
+    "addr,reason",
+    [
+        # Review finding 7: CGNAT / Tailscale was let through because it is neither private nor
+        # reserved. The guard now refuses everything that is not globally routable.
+        ("100.64.0.1", "CGNAT"),
+        ("100.100.100.100", "CGNAT"),
+        ("100.127.255.254", "CGNAT"),
+        ("198.18.0.1", "private"),
+        ("192.0.0.8", "private"),
+        ("224.0.0.251", "non-unicast"),
+        ("fec0::1", "site-local"),
+        # IPv6 forms that carry an IPv4 address inside: each must be judged by that address.
+        ("::ffff:100.64.0.1", "embedding"),
+        ("2002:c0a8:0101::1", "embedding"),  # 6to4 of 192.168.1.1
+        ("2002:6440:0001::1", "embedding"),  # 6to4 of 100.64.0.1
+        ("2001:0:4136:e378:8000:63bf:f5ff:fffe", "embedding"),  # Teredo, client 10.0.0.1
+        ("64:ff9b::a00:1", "embedding"),  # NAT64 of 10.0.0.1
+        ("64:ff9b::6440:1", "embedding"),  # NAT64 of 100.64.0.1
+        ("64:ff9b::7f00:1", "embedding"),  # NAT64 of 127.0.0.1
+        ("::10.0.0.1", "embedding"),  # IPv4-compatible
+        ("::a9fe:a9fe", "embedding"),  # IPv4-compatible metadata address
+    ],
+)
+def test_non_global_and_embedded_addresses_blocked(addr: str, reason: str) -> None:
+    with pytest.raises(BlockedAddress, match=reason):
+        NetGuard().check_addresses("innocent.example", _ips(addr))
+
+
+@pytest.mark.parametrize(
+    "addr", ["8.8.8.8", "2606:4700::1111", "64:ff9b::808:808", "::ffff:1.1.1.1"]
+)
+def test_public_addresses_and_their_embeddings_pass(addr: str) -> None:
+    NetGuard().check_addresses("public.example", _ips(addr))  # no raise
