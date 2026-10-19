@@ -32,12 +32,17 @@ def absolute_path(draw: st.DrawFn) -> str:
 @st.composite
 def url(draw: st.DrawFn) -> str:
     scheme = draw(st.sampled_from(["http", "https", "rtmp", "rtmps", "ftp", "obs-x", "srt"]))
-    user = draw(st.sampled_from(["", "USERINFO:PWSECRET@"]))
+    user = draw(
+        st.sampled_from(
+            ["", "USERINFO:PWSECRET@", "USERINFO@", "USERINFO:@", ":PWSECRET@", "a@USERINFO@"]
+        )
+    )
     host = draw(st.sampled_from(["127.0.0.1:47801", "live.example.tv", "localhost"]))
     path = "/".join(draw(st.lists(st.just("URLPATH"), min_size=0, max_size=3)))
     query = draw(st.sampled_from(["", "?QUERYKEY=QUERYVAL"]))
-    fragment = draw(st.sampled_from(["", "#FRAGMENT"]))
-    return f"{scheme}://{user}{host}/{path}{query}{fragment}"
+    fragment = draw(st.sampled_from(["", "#FRAGMENT", "#x@USERINFO"]))
+    after_path = draw(st.sampled_from(["", "@USERINFO", "/URLPATH@USERINFO:PWSECRET"]))
+    return f"{scheme}://{user}{host}/{path}{after_path}{query}{fragment}"
 
 
 token = (
@@ -107,3 +112,39 @@ def test_a_path_alone_becomes_its_file_name(path: str) -> None:
 def test_review_edge_cases(value: str) -> None:
     out = redact({"comment": value})["comment"]
     assert "TOKENPATH" not in out and "DIRSEG" not in out, out
+
+
+@settings(max_examples=200, deadline=None)
+@given(url(), st.sampled_from(["url", "input", "server"]))
+def test_url_settings_are_a_host_or_redacted(value: str, key: str) -> None:
+    for candidate in (value, value.split("://", 1)[1]):  # with and without a scheme
+        out = redact({"inputSettings": {key: candidate}})["inputSettings"][key]
+        for leak in URL_LEAKS:
+            assert leak not in out, out
+        assert out == "[redacted]" or "/" not in out.split("://", 1)[-1], out
+
+
+@settings(max_examples=100, deadline=None)
+@given(token, st.integers(min_value=-30, max_value=30))
+def test_truncation_never_leaves_half_a_key(tok: str, shift: int) -> None:
+    from nox.stream.obs_requests import MAX_STRING_CHARS
+
+    filler = "x " * ((MAX_STRING_CHARS + shift - 10) // 2)
+    out = redact({"comment": filler + tok + " tail"})["comment"]
+    secret = tok[3:]
+    assert not any(secret[i : i + 8] in out for i in range(len(secret) - 7)), out[-80:]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://user:pass@host.example/x",
+        "https://host.example/x@user:pass",
+        "https://host.example@evil.example/x",
+        "https://user%40x:pw@host.example",
+        "https://[::1]:8080/x",
+    ],
+)
+def test_userinfo_variants(value: str) -> None:
+    out = redact({"comment": value})["comment"]
+    assert "pass" not in out and "user" not in out and "/x" not in out, out

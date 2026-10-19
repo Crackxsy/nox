@@ -42,10 +42,12 @@ replaced, and so is any long key-like string.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from collections.abc import Iterable, Mapping
 from pathlib import PurePath
 from typing import Any
+from urllib.parse import urlsplit
 
 from nox.security.model import Risk
 from nox.tools.registry import CallScope, Scope
@@ -297,7 +299,7 @@ SAFE_FILTER_KINDS: frozenset[str] = frozenset(
 #: Settings keys whose value may be shown in reduced form: a path as its file name, a URL as
 #: `scheme://host`.
 _FILE_KEYS: frozenset[str] = frozenset({"file", "local_file"})
-_URL_KEYS: frozenset[str] = frozenset({"url", "input"})
+_URL_KEYS: frozenset[str] = frozenset({"url", "input", "server", "service_url", "endpoint"})
 #: Where OBS answers carry settings blocks; those are filtered against the allow-list above.
 _SETTINGS_BLOCKS: frozenset[str] = frozenset(
     {
@@ -607,28 +609,70 @@ def _no_keys(token: str) -> str:
     return "".join(out)
 
 
+_HOST_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789.-")
+
+
+def _valid_host(host: str) -> bool:
+    """A plain host name (letters, digits, dots, hyphens) or an IP address - nothing else."""
+    if not host or len(host) > 253:
+        return False
+    if all(c in _HOST_CHARS for c in host.lower()):
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def _host_port(url: str) -> str | None:
+    """`scheme://host[:port]` of `url`, or None unless it parses cleanly: no user info (no `@`
+    anywhere after `://`), a valid host, a numeric port."""
+    mark = url.find("://")
+    if "@" in url[mark + 3 :]:
+        return None
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        port = parts.port
+    except ValueError:
+        return None
+    if not parts.scheme or not _valid_host(host):
+        return None
+    shown = f"[{host}]" if ":" in host else host
+    return f"{parts.scheme}://{_no_keys(shown)}" + (f":{port}" if port is not None else "")
+
+
 def _reduce_url(token: str) -> str:
-    """A token holding `://`: whatever stood before the scheme, then `scheme://host[:port]`.
-    No user info, path, query or fragment; the host checked like any other token. Anything that
-    does not parse as that is redacted whole."""
+    """A token holding `://`: whatever stood before the scheme, then `scheme://host[:port]` -
+    no user info, path, query or fragment. Anything that does not parse as exactly that is
+    redacted whole."""
     mark = token.find("://")
     start = mark
     while start > 0 and token[start - 1] in _SCHEME_CHARS:
         start -= 1
     while start < mark and not token[start].isalpha():
         start += 1  # a scheme starts with a letter; digits and dots in front are prefix
-    scheme = token[start:mark]
-    rest = token[mark + 3 :]
-    end = 0
-    while end < len(rest) and rest[end] not in _HOST_END:
-        end += 1
-    host = rest[:end].rpartition("@")[2]
-    if not scheme or not host:
+    reduced = _host_port(token[start:]) if start < mark else None
+    if reduced is None:
         return REDACTED
     prefix = token[:start]
     if "/" in prefix or "\\" in prefix:
         prefix = ""
-    return f"{_no_keys(prefix)}{scheme}://{_no_keys(host)}"
+    return f"{_no_keys(prefix)}{reduced}"
+
+
+def _url_setting(value: str) -> str:
+    """A URL-typed setting: `scheme://host[:port]`, a bare valid `host[:port]`, or redacted -
+    never free text."""
+    if not value:
+        return ""
+    if "://" in value:
+        return _host_port(value) or REDACTED
+    host, _, port = value.partition(":")
+    if _valid_host(host) and (not port or port.isdigit()):
+        return value
+    return REDACTED
 
 
 def _is_delimiter(char: str) -> bool:
@@ -701,14 +745,20 @@ def _redact_line(line: str) -> str:
 
 def _redact_string(text: str) -> str:
     """The pipeline every string from OBS goes through, linear in its length: cut to
-    `MAX_STRING_CHARS`, then per line and token (split on whitespace and quotes) (1) a token with
-    `://` becomes `scheme://host`, (2) paths - also across spaces - become their file name,
-    (3) generated-looking 20+ character runs become `[redacted]` (checked before the path step
-    too, so a secret with a slash in it is not mistaken for a path). Secret key names are handled
-    by the caller, on top."""
-    if len(text) > MAX_STRING_CHARS:
-        text = text[:MAX_STRING_CHARS] + " " + TRUNCATED
-    return "\n".join(_redact_line(line) for line in text.split("\n"))
+    `MAX_STRING_CHARS` at a token boundary, then per line and token (split on whitespace and
+    quotes) (1) a token with `://` becomes `scheme://host` or `[redacted]`, (2) paths - also
+    across spaces - become their file name, (3) generated-looking 20+ character runs become
+    `[redacted]` (checked before the path step too, so a secret with a slash in it is not
+    mistaken for a path). Secret key names are handled by the caller, on top."""
+    truncated = len(text) > MAX_STRING_CHARS
+    if truncated:
+        # Cut at a token boundary, dropping the token the limit falls into: half a key would no
+        # longer look like one.
+        text = text[:MAX_STRING_CHARS]
+        cut = max(text.rfind(d) for d in _DELIMITERS)
+        text = text[:cut] if cut >= 0 else ""
+    redacted = "\n".join(_redact_line(line) for line in text.split("\n"))
+    return f"{redacted} {TRUNCATED}".lstrip() if truncated else redacted
 
 
 def redact_text(text: str) -> str:
@@ -727,7 +777,7 @@ def _redact_settings(settings: Any) -> Any:
         if name in _FILE_KEYS and isinstance(value, str):
             shown[name] = _redact_string(PurePath(value.replace("\\", "/")).name) if value else ""
         elif name in _URL_KEYS and isinstance(value, str):
-            shown[name] = _reduce_url(value) if "://" in value else _redact_string(value)
+            shown[name] = _url_setting(value)
         elif name in SAFE_SETTING_KEYS and not _secret_key(name):
             shown[name] = redact(value)
         else:
