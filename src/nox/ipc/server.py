@@ -886,7 +886,8 @@ class IpcHub:
                 details={"errors": exc.error_count()},
             )
         patterns = list(req.patterns)
-        if client.role == "plugin":
+        # Bound to the identity, not only the claimed role: every `plugin:` connection.
+        if client.role == "plugin" or client.client_id.startswith("plugin:"):
             patterns = self._plugin_patterns(client, patterns)
         client.subscriptions = list(dict.fromkeys([*DEFAULT_SUBSCRIPTIONS, *patterns]))
         return env.reply(NAME_SUBSCRIBE, {"patterns": list(client.subscriptions)}, CORE_SOURCE)

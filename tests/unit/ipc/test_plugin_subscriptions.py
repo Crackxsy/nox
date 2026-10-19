@@ -36,3 +36,13 @@ async def test_without_a_policy_a_plugin_gets_the_system_defaults_only(
     client = await plugin_client(raw, tokens, "dice")
     reply = await client.request(NAME_SUBSCRIBE, {"patterns": ["*", "voice.*"]})
     assert reply.payload["patterns"] == ["system.*"]
+
+
+def test_a_plugin_token_never_authenticates_as_a_worker() -> None:
+    store = TokenStore()
+    token = store.issue_worker_token("plugin:dice")
+    assert not store.authenticate(token, "worker", "plugin:dice").ok
+    worker = store.issue_worker_token("worker:stt")
+    assert not store.authenticate(worker, "plugin", "worker:stt").ok
+    ok = store.issue_worker_token("plugin:dice")
+    assert store.authenticate(ok, "plugin", "plugin:dice").ok
