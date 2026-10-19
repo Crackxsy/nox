@@ -623,7 +623,7 @@ profile nox-bwrap /usr/lib/nox/bwrap flags=(attach_disconnected,mediate_deleted)
   allow umount,
   allow pivot_root,
   allow dbus,
-  allow px /** -> &nox-bwrap//&nox-bwrap-sandboxed,
+  allow px /** -> &nox-bwrap-sandboxed,
   include if exists <local/nox-bwrap>
 }
 
