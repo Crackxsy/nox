@@ -314,8 +314,12 @@ class PersistentClaude:
         session = await self._ensure(system, request.privacy_mode, conversation=conversation)
         async with session.lock:
             if self._dirty and not await session.drain_until_result(2.0):
+                # The interrupted answer did not wind down: replace the process. The new one has
+                # seen nothing, so this turn carries the history it needs.
                 session.kill()
-                session = await self._ensure(system, request.privacy_mode, conversation=None)
+                session = await self._ensure(
+                    system, request.privacy_mode, conversation=conversation
+                )
             self._dirty = False
             # `aclosing`: when the consumer stops early (barge-in), the inner generator must be
             # closed now - its `finally` sends the interrupt - not whenever it is collected.
