@@ -116,3 +116,66 @@ async def test_pinned_transport_dials_the_ip_and_keeps_sni_hostname(
     assert seen["host"] == "93.184.216.34"  # dialed the vetted IP, not the name
     assert seen["sni"] == "example.com"  # SNI / cert verification keep the hostname
     assert str(seen["hdr"]).startswith("example.com")
+
+
+# ---- web.search backend exception (review finding 16) ------------------------------------------
+
+
+def _search_tool(base_url: str, captured: list[str]) -> object:
+    """`web.search` wired like the core does, with the network stubbed at the transport."""
+    from nox.tools.registry import ToolRegistry
+
+    async def fake_super(self, request):  # noqa: ANN001, ANN202 - stubs the real network call
+        captured.append(f"{request.url.host}|{request.headers.get('host')}")
+        return httpx.Response(200, json={"results": [{"title": "t", "url": "u", "content": "c"}]})
+
+    registry = ToolRegistry()
+    web.register_web_tools(
+        registry,
+        guard=NetGuard(),
+        client_factory=lambda: web.guarded_web_client(NetGuard()),
+        settings=lambda: web.WebSettings(searxng_base_url=base_url),
+        search_client_factory=lambda base: web.search_backend_client(base, NetGuard()),
+    )
+    return registry.get("web.search"), fake_super
+
+
+async def test_search_reaches_the_configured_lan_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The SearXNG instance on the Pi resolves to the LAN; NetGuard alone refused it.
+    captured: list[str] = []
+    spec, fake_super = _search_tool("http://searx.lan:8080", captured)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", fake_super)
+    result = await spec.handler({"query": "wetter"})  # type: ignore[attr-defined]
+    assert result["ok"] is True, result
+    assert captured == ["192.168.0.5|searx.lan:8080"]
+
+
+async def test_search_backend_transport_refuses_any_other_origin() -> None:
+    transport = web.SearchBackendTransport("http://searx.lan:8080", NetGuard())
+    for url in (
+        "http://other.lan:8080/search",  # another LAN host
+        "http://searx.lan:8123/api/states",  # same host, other port
+        "https://searx.lan:8080/search",  # other scheme
+        "http://example.com/x",  # the internet
+    ):
+        with pytest.raises(BlockedAddress, match="configured search backend"):
+            await transport.handle_async_request(httpx.Request("GET", url))
+    await transport.aclose()
+
+
+async def test_search_backend_never_reaches_metadata_or_home_assistant() -> None:
+    meta = web.SearchBackendTransport("http://metadata:80", NetGuard())
+    with pytest.raises(BlockedAddress, match="link-local"):
+        await meta.handle_async_request(httpx.Request("GET", "http://metadata/search"))
+    guard = NetGuard(home_assistant_ips=frozenset({"192.168.0.5"}))
+    ha = web.SearchBackendTransport("http://searx.lan:8123", guard, home_assistant_port=8123)
+    with pytest.raises(BlockedAddress, match="Home Assistant"):
+        await ha.handle_async_request(httpx.Request("GET", "http://searx.lan:8123/search"))
+    await meta.aclose()
+    await ha.aclose()
+
+
+def test_web_fetch_still_refuses_the_lan() -> None:
+    # The exception is for the configured search backend only, never for web.fetch.
+    with pytest.raises(BlockedAddress):
+        web.safe_url("http://searx.lan:8080/", NetGuard())

@@ -9,8 +9,13 @@ redirect to `http://169.254.169.254/` is caught too. A host on `read_only_hosts`
 may only be read, which GET already is; the guard refuses anything else.
 
 `web.search` queries a SearXNG instance (its base URL configured, e.g. on the Pi) and returns the
-top results. No DuckDuckGo scraping; Brave is a possible later backend behind a key in the secret
-store. Claude's own web search already serves FULL/BALANCED turns via the provider.
+top results. That instance usually lives on the LAN, which `NetGuard` refuses - so the search
+client is the one exception, and a narrow one (`SearchBackendTransport`): it reaches exactly the
+origin (scheme, host, port) the *user* configured in `hands.searxng_base_url`, nothing else, never
+a link-local/metadata address and never the Home Assistant API port. The model supplies only the
+query; it can neither name the backend nor follow a redirect away from it. No DuckDuckGo
+scraping; Brave is a possible later backend behind a key in the secret store. Claude's own web
+search already serves FULL/BALANCED turns via the provider.
 """
 
 from __future__ import annotations
@@ -35,9 +40,12 @@ __all__ = [
     "PinnedTransport",
     "WebSettings",
     "extract_text",
+    "SearchBackendTransport",
     "guarded_web_client",
+    "origin_of",
     "register_web_tools",
     "safe_url",
+    "search_backend_client",
 ]
 
 MAX_BODY_BYTES = 2 * 1024 * 1024
@@ -81,6 +89,76 @@ class PinnedTransport(httpx.AsyncHTTPTransport):
         request.headers["host"] = f"{host}:{port}" if port not in (80, 443) else host
         request.extensions = {**request.extensions, "sni_hostname": host}
         return await super().handle_async_request(request)
+
+
+Origin = tuple[str, str, int]
+
+
+def origin_of(url: str) -> Origin:
+    """(scheme, lower-case host, port) of an http(s) URL; `ValueError` for anything else."""
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("the search backend must be an http(s) URL with a host")
+    return (
+        parts.scheme,
+        parts.hostname.lower().rstrip("."),
+        parts.port or (443 if parts.scheme == "https" else 80),
+    )
+
+
+class SearchBackendTransport(httpx.AsyncHTTPTransport):
+    """Reaches exactly one origin - the user-configured search backend - even on the LAN.
+
+    Everything else about `PinnedTransport` holds: the address is resolved once, judged, and
+    dialed. What differs is the judgement: a private/CGNAT/loopback address is allowed *for this
+    origin only*, because the user put it there; link-local (cloud metadata), multicast and the
+    unspecified address never are, nor is the Home Assistant host on its API port.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        guard: NetGuard,
+        *,
+        home_assistant_port: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        from nox.security.egress import shared_ssl_context
+
+        super().__init__(verify=shared_ssl_context(), **kwargs)
+        self._origin = origin_of(base_url)
+        self._guard = guard
+        self._ha_port = home_assistant_port
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        scheme, host, port = origin_of(str(request.url))
+        if (scheme, host, port) != self._origin:
+            raise BlockedAddress(host, "not the configured search backend")
+        addresses = resolve_all(host, port)
+        if not addresses:
+            raise BlockedAddress(host, "does not resolve to any address")
+        for ip in addresses:
+            if ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved:
+                raise BlockedAddress(host, "link-local, multicast or reserved address")
+            is_ha = str(ip) in self._guard.home_assistant_ips or host in self._guard.blocked_hosts
+            if is_ha and (self._ha_port is None or port == self._ha_port):
+                raise BlockedAddress(host, "the Home Assistant host is never reachable this way")
+        request.url = request.url.copy_with(host=str(addresses[0]))
+        request.headers["host"] = f"{host}:{port}" if port not in (80, 443) else host
+        request.extensions = {**request.extensions, "sni_hostname": host}
+        return await super().handle_async_request(request)
+
+
+def search_backend_client(
+    base_url: str,
+    guard: NetGuard,
+    *,
+    home_assistant_port: int | None = None,
+    timeout: float = 20.0,
+) -> httpx.AsyncClient:
+    """A client for the configured search backend and nothing else."""
+    transport = SearchBackendTransport(base_url, guard, home_assistant_port=home_assistant_port)
+    return httpx.AsyncClient(transport=transport, timeout=timeout)
 
 
 def guarded_web_client(guard: NetGuard, *, timeout: float = 20.0) -> httpx.AsyncClient:
@@ -130,6 +208,8 @@ def _is_read_only(host: str, patterns: tuple[str, ...]) -> bool:
 
 
 ClientFactory = Callable[[], httpx.AsyncClient]
+#: Builds the client for one search backend base URL (from configuration, never from the model).
+SearchClientFactory = Callable[[str], httpx.AsyncClient]
 WebPolicy = Callable[[], WebSettings]
 
 
@@ -169,6 +249,7 @@ def register_web_tools(
     guard: NetGuard,
     client_factory: ClientFactory,
     settings: WebPolicy,
+    search_client_factory: SearchClientFactory | None = None,
 ) -> None:
     """Register `web.fetch` and `web.search`. Both run below the privacy engine's cloud gate."""
 
@@ -209,9 +290,13 @@ def register_web_tools(
         model = SearchInput.model_validate(payload)
         base = cfg.searxng_base_url.rstrip("/")
         query = urlencode({"q": model.query, "format": "json"})
-        async with client_factory() as client:
+        try:
+            origin_of(base)
+        except ValueError as exc:
+            return {"ok": False, "error": "web.search_unconfigured", "detail": str(exc)}
+        make_client = search_client_factory or (lambda url: search_backend_client(url, guard))
+        async with make_client(base) as client:
             try:
-                safe_url(base, guard)
                 response = await client.get(f"{base}/search?{query}", follow_redirects=False)
                 data = response.json()
             except BlockedAddress as blocked:

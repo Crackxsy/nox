@@ -23,7 +23,12 @@ from nox.hands.consent_tools import register_consent_ipc, register_consent_tools
 from nox.hands.consents import ConsentRepository
 from nox.hands.packages import register_package_tools
 from nox.hands.shell import ShellSettings, register_shell_tools
-from nox.hands.web import WebSettings, guarded_web_client, register_web_tools
+from nox.hands.web import (
+    WebSettings,
+    guarded_web_client,
+    register_web_tools,
+    search_backend_client,
+)
 from nox.sandbox import Sandbox, SandboxUnavailable, make_sandbox
 from nox.sandbox.netguard import NetGuard, resolve_all
 from nox.tools.registry import ToolRegistry
@@ -103,6 +108,10 @@ def install(core: CoreLike) -> ExtensionRuntime:
             registry,
             guard=guard,
             client_factory=lambda: guarded_web_client(guard, timeout=20.0),
+            # The one LAN exception: exactly the origin the user configured as search backend.
+            search_client_factory=lambda base: search_backend_client(
+                base, guard, home_assistant_port=config.home.port
+            ),
             settings=lambda: WebSettings(
                 enabled=config.hands.web_enabled,
                 searxng_base_url=config.hands.searxng_base_url,
