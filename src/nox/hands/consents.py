@@ -32,6 +32,8 @@ class ConsentRow:
     wording: str
     granted_at: str
     revoked_at: str | None = None
+    #: How it was recorded: "dashboard (shell)", "conversation, confirmed by the user" (0015).
+    recorded_by: str = ""
 
     @property
     def active(self) -> bool:
@@ -44,14 +46,15 @@ class ConsentRepository:
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    def grant(self, *, context: str, who: str, wording: str) -> ConsentRow:
+    def grant(self, *, context: str, who: str, wording: str, recorded_by: str = "") -> ConsentRow:
         context = context.strip()
         if not context or not who.strip() or not wording.strip():
             raise ValueError("a consent needs a context, who gave it, and the wording agreed")
         cid = uuid.uuid4().hex
         self._db.execute(
-            "INSERT INTO consents (id, context, who, wording, granted_at) VALUES (?, ?, ?, ?, ?)",
-            (cid, context, who.strip(), wording.strip(), _now_iso()),
+            "INSERT INTO consents (id, context, who, wording, granted_at, recorded_by) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (cid, context, who.strip(), wording.strip(), _now_iso(), recorded_by.strip()),
         )
         row = self.get(cid)
         assert row is not None

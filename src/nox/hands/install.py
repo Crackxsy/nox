@@ -19,6 +19,7 @@ from typing import Any, Protocol
 from nox.core.config import NoxConfig
 from nox.core.extension import ExtensionRuntime
 from nox.core.logging import get_logger
+from nox.hands.consent_tools import register_consent_ipc, register_consent_tools
 from nox.hands.consents import ConsentRepository
 from nox.hands.packages import register_package_tools
 from nox.hands.shell import ShellSettings, register_shell_tools
@@ -115,6 +116,10 @@ def install(core: CoreLike) -> ExtensionRuntime:
     if getattr(core, "db", None) is not None:
         consents = ConsentRepository(core.db)
         _maybe_register_mic(registry, consents)
+        register_consent_tools(registry, consents)
+        ipc = getattr(core, "registry", None)
+        if ipc is not None:
+            register_consent_ipc(ipc, consents, getattr(core.security, "gate", None))
 
     log.info(
         "hands.installed",
