@@ -87,4 +87,6 @@ def assess(
                 return Assessment(Verdict.REFUSE, f"{gap.what}: {gap.detail}")
             if gap.reason in (GapReason.DISABLED, GapReason.PREREQUISITE):
                 return Assessment(Verdict.FIX, f"{gap.what} - {gap.detail}")
-    return Assessment(Verdict.OFFER, "Kann ich noch nicht - soll ich es mir beibringen?")
+    return Assessment(
+        Verdict.OFFER, "missing - offer to learn it, in the user's language, and wait for a yes"
+    )

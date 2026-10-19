@@ -198,7 +198,7 @@ def test_assess_offers_learning_for_what_is_missing() -> None:
         gaps=CURATED_GAPS,
         usable_tools=["file.read"],
     )
-    assert verdict.verdict is Verdict.OFFER and "beibringen" in verdict.message
+    assert verdict.verdict is Verdict.OFFER and "offer to learn" in verdict.message
     assert "cheat sheet" not in ""  # a word containing "cheat" alone is not a game cheat
     assert (
         assess(

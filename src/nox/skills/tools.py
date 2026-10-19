@@ -5,7 +5,8 @@ exist, and their tools, is part of `capabilities.list`; the dashboard shows the 
 in words (the permission target), and the answer is either "I am building it", an honest reason it
 cannot be learned right now, a refusal for something forbidden, or the concrete fix for something
 that exists and is only switched off. Activation is deliberately *not* a tool: switching on code
-is the user's click in the dashboard, never a model's call.
+is the user's click in the dashboard, never a model's call. Neither tool is `rememberable`: a
+confirmation for one of them is never turned into a session grant.
 """
 
 from __future__ import annotations
@@ -68,14 +69,17 @@ def register_skill_tools(registry: ToolRegistry, service: SkillService, gaps: Ga
             name="skill.learn",
             description=(
                 "Teach yourself a missing capability (a checked plugin the user switches on). "
-                "Offer first ('Kann ich noch nicht - soll ich es mir beibringen?'), "
-                "call after a yes."
+                "Offer it first in the user's language ('I cannot do that yet - shall I teach "
+                "myself?') and call only after a yes."
             ),
             input_model=LearnInput,
             risk=Risk.HIGH,
             handler=learn,
             side_effects=True,
             local=False,
+            # Every learning session is its own decision: a remembered "yes" would let the model
+            # start coding sessions on its own for the rest of the session.
+            rememberable=False,
             targets=lambda payload: str(payload.get("intent") or "")[:200],
             timeout_s=30.0,
         )
@@ -89,6 +93,7 @@ def register_skill_tools(registry: ToolRegistry, service: SkillService, gaps: Ga
             handler=remove,
             side_effects=True,
             local=True,
+            rememberable=False,
             targets=lambda payload: str(payload.get("id") or ""),
         )
     )

@@ -33,7 +33,10 @@ ReportProvider = Callable[[], CapabilityReport]
 LearnAvailable = Callable[[], bool]
 
 #: What to say when something is missing and learning is possible.
-LEARN_OFFER = "Kann ich noch nicht - soll ich es mir beibringen? (skill.learn, after a yes)"
+LEARN_OFFER = (
+    "I cannot do that yet - offer to teach yourself, in the user's language "
+    "(skill.learn, after a yes)"
+)
 
 
 class CapabilityListInput(BaseModel):
