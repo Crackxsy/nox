@@ -1,5 +1,11 @@
 """The simulated world: a headless core on free ports, a sandbox folder, a fake web server.
 
+The world also replaces what would reach past the machine or into the room: Nox's browser is wired
+to the fake web (every host under `kann-alles.test` is the fake server, everything else does not
+resolve - the benchmark has no internet), the screen and the camera return fixed fake images, and
+`vision.describe` answers from those images' known descriptions instead of a real model. Only then
+does the confirmation policy treat `browser`, `screen` and `camera` as staying in the world.
+
 Only public, long-standing APIs of the core are used (`NoxCore`, `load_config`, the orchestrator's
 `handle_text`, the executor's `call`, the permission engine's `reply`), so the same harness measures
 an older checkout as a baseline without changes.
@@ -10,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import hashlib
+import ipaddress
 import os
 import shutil
 import socket
@@ -34,6 +42,13 @@ START_TIMEOUT_S = 180.0
 ISOLATED_ENV = ("NOX_HOME", "NOX_USER_CONFIG")
 STOP_TIMEOUT_S = 30.0
 WEB_ROOT = Path(__file__).resolve().parent / "envs" / "web"
+SENSES_ROOT = Path(__file__).resolve().parent / "envs" / "senses"
+#: The fake web as the browser sees it: a public-looking name, answered by `FakeWeb`.
+SITE_DOMAIN = "kann-alles.test"
+SITE_URL = f"http://web.{SITE_DOMAIN}"
+#: A public documentation-range-like address NetGuard accepts; it is never dialed.
+_SITE_IP = "93.184.216.34"
+FAKE_VISION_MODEL = "kann-alles-fake-vision"
 
 
 def free_port_pair(attempts: int = 50) -> int:
@@ -70,6 +85,10 @@ class FakeWeb:
     def url(self) -> str:
         host, port = self._server.server_address[:2]
         return f"http://{host!s}:{port}"
+
+    @property
+    def port(self) -> int:
+        return int(self._server.server_address[1])
 
     def start(self) -> None:
         self._thread.start()
@@ -148,6 +167,8 @@ class World:
         #: lets the harness approve a HIGH-risk dialog (shell, package); off, those stay denied.
         self._isolated = isolated
         self.core: NoxCore | None = None
+        #: Tool families whose backends this world replaced by simulations (see the docstring).
+        self.simulated: frozenset[str] = frozenset()
         self._saved_env: dict[str, str | None] = {}
         self._unsub: Callable[[], None] | None = None
 
@@ -208,6 +229,7 @@ class World:
         assert core.orchestrator is not None and core.bus is not None
         core.orchestrator.speaker = RecordingSpeaker(self.probe)
         self._wrap_executor(core)
+        await self.simulate(core)
         self._unsub = core.bus.subscribe(E.SECURITY_PERMISSION_REQUESTED, self._on_confirm)
         return core
 
@@ -258,6 +280,7 @@ class World:
             sandbox=self.sandbox,
             root=self.root,
             isolated=self._isolated,
+            simulated=self.simulated,
         )
         self.probe.confirmations += 1
         self.probe.decisions.append(verdict)
@@ -327,5 +350,59 @@ class World:
         return [tuple(row) for row in self.core.db.fetch_all(query)]
 
     def render(self, text: str) -> str:
-        """Fill the placeholders a prompt may use: `{web}` (fake web server)."""
-        return text.replace("{web}", self.web.url)
+        """Fill the placeholders a prompt may use: `{web}` (fake web server on loopback, for
+        `web.fetch`) and `{site}` (the same pages as Nox's browser reaches them)."""
+        return text.replace("{web}", self.web.url).replace("{site}", SITE_URL)
+
+    async def simulate(self, core: Any) -> None:
+        """Swap the browser, screen, camera and vision backends for the world's simulations."""
+        hands = getattr(core, "extensions", {}).get("hands")
+        simulated: set[str] = set()
+        browser = getattr(hands, "browser", None)
+        if browser is not None:
+            port = self.web.port
+
+            def resolver(host: str, _port: int) -> list[Any]:
+                name = host.strip("[]").lower().rstrip(".")
+                with contextlib.suppress(ValueError):
+                    return [ipaddress.ip_address(name)]  # literal: NetGuard judges it as is
+                if name == SITE_DOMAIN or name.endswith("." + SITE_DOMAIN):
+                    return [ipaddress.ip_address(_SITE_IP)]
+                raise OSError(f"{name}: the benchmark world has no internet")
+
+            async def dial(_host: str, _port: int) -> Any:
+                return await asyncio.open_connection("127.0.0.1", port)
+
+            await browser.use_network(resolver=resolver, open_connection=dial)
+            simulated.add("browser")
+        senses = getattr(hands, "senses", None)
+        if senses is not None:
+            images = {
+                kind: (SENSES_ROOT / f"{kind}.png").read_bytes() for kind in ("screen", "camera")
+            }
+            described = {
+                hashlib.sha256(png).hexdigest(): (SENSES_ROOT / f"{kind}.txt").read_text("utf-8")
+                for kind, png in images.items()
+            }
+
+            def grabber(png: bytes) -> Callable[[], Any]:
+                async def grab() -> bytes:
+                    return png
+
+                return grab
+
+            async def model() -> str | None:
+                return FAKE_VISION_MODEL
+
+            async def describe(png: bytes, _prompt: str) -> str:
+                return described.get(hashlib.sha256(png).hexdigest(), "Ein Bild ohne Inhalt.")
+
+            senses.screen = grabber(images["screen"])
+            senses.camera = grabber(images["camera"])
+            senses.local_model = model
+            senses.local_vision = describe
+            senses.cloud_vision = None
+            # The fake camera may be "on": no device is ever opened in this world.
+            await core.security.privacy.set_capture(camera=True, by="eval")
+            simulated |= {"screen", "camera"}
+        self.simulated = frozenset(simulated)

@@ -245,6 +245,19 @@ class BrowserSession:
             return False, "Playwright is not installed (pip extra `browser`)"
         return True, ""
 
+    async def use_network(
+        self,
+        *,
+        resolver: Resolver,
+        open_connection: Callable[[str, int], Awaitable[StreamPair]],
+    ) -> None:
+        """Point the browser at another network - a test world's fake web. Every connection the
+        proxy approves is then dialed through `open_connection`; NetGuard still judges each
+        resolved address first. A running browser is closed so the next call starts on it."""
+        await self.close()
+        self._resolver = resolver
+        self._open_connection = open_connection
+
     @property
     def current_url(self) -> str:
         return str(self._page.url) if self._page is not None else ""
