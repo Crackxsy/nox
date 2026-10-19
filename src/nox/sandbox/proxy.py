@@ -32,7 +32,9 @@ both at once, or any other transfer coding, is refused as a smuggling attempt), 
 relayed back with `Connection: close` - then both sides are closed. Nothing the client sends after
 its first request is ever read, so a pipelined second request to another host goes nowhere.
 
-Each decision is handed to an audit callback. The listener binds `127.0.0.1` on an ephemeral port.
+Each decision is handed to an audit callback. The listener binds `127.0.0.1` on an ephemeral port,
+or - for the Linux sandbox, whose child has no route to the host's loopback - a Unix domain socket
+in a private directory (`start_unix`).
 Name resolution runs in a worker thread, never on the event loop.
 """
 
@@ -43,7 +45,11 @@ import base64
 import contextlib
 import hmac
 import ipaddress
+import os
 import secrets
+import shutil
+import sys
+import tempfile
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -135,8 +141,10 @@ class EgressProxy:
         self._pipe: PipeListener | None = None
         self.port = 0
         #: Where a child reaches the proxy when it is not loopback TCP: a Windows named pipe path
-        #: (`start_pipe`). Empty while the proxy only listens on TCP.
+        #: (`start_pipe`) or a Unix socket path (`start_unix`). Empty while it only listens on TCP.
         self.socket_path = ""
+        #: The private folder holding the Unix socket; removed by `stop()`. Never the pipe path.
+        self._unix_dir = ""
 
     @staticmethod
     def new_credentials() -> tuple[str, str]:
@@ -169,6 +177,29 @@ class EgressProxy:
         self._pipe = listener
         return self.socket_path
 
+    async def start_unix(self) -> str:
+        """Listen on a Unix domain socket instead of loopback TCP; returns its path.
+
+        The Linux sandbox binds this one file into a process whose network namespace has no route
+        anywhere (see `nox.sandbox.linux`). The socket sits in a fresh `0700` directory of the
+        core's user, so nothing but that user - and the one sandbox it is bound into - can reach
+        it; the per-proxy credentials still apply on top. `stop()` removes it.
+        """
+        if sys.platform == "win32":
+            raise OSError("the Unix-socket egress proxy exists only for the Linux sandbox")
+        folder = tempfile.mkdtemp(prefix="nox-egress-")
+        path = os.path.join(folder, "egress.sock")
+        try:
+            self._server = await asyncio.start_unix_server(self._handle, path)
+            os.chmod(path, 0o600)
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
+        self.socket_path = path
+        self._unix_dir = folder
+        log.info("sandbox.proxy_started", transport="unix", allow=len(self._allow))
+        return path
+
     async def stop(self) -> None:
         if self._pipe is not None:
             await self._pipe.close()
@@ -178,6 +209,10 @@ class EgressProxy:
             with contextlib.suppress(Exception):
                 await self._server.wait_closed()
             self._server = None
+        if self._unix_dir:
+            shutil.rmtree(self._unix_dir, ignore_errors=True)
+            self._unix_dir = ""
+        self.socket_path = ""
 
     # -- policy --------------------------------------------------------------------------------
 
