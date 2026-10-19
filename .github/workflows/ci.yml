@@ -205,10 +205,9 @@ jobs:
       - name: The command sandbox works inside the service
         run: |
           log="$(sudo journalctl -u nox --no-pager)"
-          sudo dmesg | grep -i 'apparmor=' | tail -20 || true
           echo "$log" | grep -E "sandbox\.(linux_ready|egress_unavailable|cgroup_unavailable)|hands\.sandbox_unavailable" || true
           echo "$log" | grep -E "sandbox\.linux_ready" | grep -E "ceiling=.?cgroup" | grep -qE "egress=.?True"
-          ! echo "$log" | grep -qE "hands\.sandbox_unavailable|sandbox\.egress_unavailable"
+          if echo "$log" | grep -qE "hands\.sandbox_unavailable|sandbox\.egress_unavailable"; then exit 1; fi
 
       # An earlier installer draft attached an unconfined profile to /usr/bin/bwrap. Installing
       # over it must unload it, so the system's bwrap is restricted again (checked next step).
@@ -230,9 +229,9 @@ jobs:
         run: |
           if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = "1" ]; then
             test "$(stat -c '%U:%G %a' /usr/lib/nox/bwrap)" = "root:nox 750"
-            ! /usr/lib/nox/bwrap --ro-bind / / true
+            if /usr/lib/nox/bwrap --ro-bind / / true; then exit 1; fi
             if [ ! -e /etc/apparmor.d/bwrap-userns-restrict ]; then
-              ! /usr/bin/bwrap --unshare-user --ro-bind / / true
+              if /usr/bin/bwrap --unshare-user --ro-bind / / true; then exit 1; fi
             fi
           else
             test ! -e /usr/lib/nox/bwrap
@@ -247,10 +246,12 @@ jobs:
             bw() { sudo -u nox /usr/lib/nox/bwrap --unshare-user --ro-bind / / --proc /proc --dev /dev "$@"; }
             bw /usr/bin/true
             bw cat /proc/self/attr/current | grep -q "nox-bwrap-sandboxed"
-            ! bw /usr/bin/unshare -U true
-            ! sudo -u nox /usr/lib/nox/bwrap --unshare-user --cap-add CAP_NET_RAW --ro-bind / / \
+            if bw /usr/bin/unshare -U true; then exit 1; fi
+            if sudo -u nox /usr/lib/nox/bwrap --unshare-user --cap-add CAP_NET_RAW --ro-bind / / \
                 --proc /proc --dev /dev /usr/bin/python3 -c \
-                'import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, 1)'
+                'import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, 1)'; then
+              exit 1
+            fi
           fi
 
       # A bubblewrap update the copy missed must stop the sandbox (fail closed); the apt hook
