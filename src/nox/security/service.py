@@ -131,7 +131,8 @@ class SecurityContext:
         secrets = (
             secret_store if secret_store is not None else open_secret_store(security.secret_store)
         )
-        pin = PinManager(secrets, audit=audit, clock=clock, attempts=SqlitePinAttemptStore(conn))
+        attempts = SqlitePinAttemptStore(conn, lock=connection_lock)
+        pin = PinManager(secrets, audit=audit, clock=clock, attempts=attempts)
         gate = SecurityChangeGate(
             pin, required=security.pin_required_for_security_changes, audit=audit
         )
