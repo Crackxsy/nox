@@ -339,7 +339,28 @@ def test_a_server_certificate_near_its_end_is_renewed_under_the_same_authority(
 #: local administrators and the owner - all of whom can read any file anyway. A process running as
 #: an elevated administrator gives new files these as explicit entries (CI runners do), so they
 #: survive removing inheritance.
-_PRIVILEGED = {"SY", "BA", "OW", "S-1-5-18", "S-1-5-32-544", "S-1-3-4"}
+_PRIVILEGED = {"S-1-5-18", "S-1-5-32-544", "S-1-3-4"}
+
+
+def _full_sid(trustee: str) -> str:
+    """An SDDL trustee as a full SID string: SDDL abbreviates well-known accounts ("SY", "BA",
+    and "LA" for the built-in Administrator account, which CI runners run as)."""
+    import ctypes
+    from ctypes import wintypes
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)  # type: ignore[attr-defined]
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    sid = ctypes.c_void_p()
+    if not advapi32.ConvertStringSidToSidW(wintypes.LPCWSTR(trustee), ctypes.byref(sid)):
+        raise OSError(ctypes.get_last_error(), f"not a SID: {trustee}")
+    text = wintypes.LPWSTR()
+    try:
+        if not advapi32.ConvertSidToStringSidW(sid, ctypes.byref(text)):
+            raise OSError(ctypes.get_last_error(), f"not a SID: {trustee}")
+        return str(text.value)
+    finally:
+        kernel32.LocalFree(text)
+        kernel32.LocalFree(sid)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows ACLs")
@@ -362,7 +383,7 @@ def test_on_windows_the_key_is_readable_by_this_user_only(tls: TlsMaterial) -> N
     # P: protected - nothing is inherited from the folder (where "Users" may read).
     assert dacl.startswith("P"), sddl
     aces = re.findall(r"\(([^)]*)\)", dacl)
-    trustees = {ace.split(";")[-1] for ace in aces}
+    trustees = {_full_sid(ace.split(";")[-1]) for ace in aces}
     assert me in trustees, sddl
     assert trustees - {me} <= _PRIVILEGED, sddl
     assert all(ace.split(";")[0] == "A" for ace in aces), sddl
