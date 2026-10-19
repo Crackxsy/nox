@@ -1,5 +1,5 @@
 /**
- * Stream Bot view model (Spec v0.2, EPIC-11): session status, the live Twitch chat feed and the
+ * Stream Bot view model: session status, the live Twitch chat feed and the
  * Funken leaderboard.
  *
  * The chat feed is bounded and lives only for this connection — the core owns the durable

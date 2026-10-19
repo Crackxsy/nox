@@ -1,4 +1,4 @@
-"""Clip Pipeline, end to end (EPIC-15, Spec v0.6): a real `NoxCore` (headless, no plugin
+"""Clip Pipeline, end to end: a real `NoxCore` (headless, no plugin
 subprocess - the `rl.event` -> `clip.requested` translation is already covered end-to-end by
 `tests/unit/plugins/clips/test_detector.py` against a real `PluginApi`) plus `nox.clips.install.
 install(core)`. A `clip.requested` event (what the real, spawned `clips` plugin would have emitted
@@ -91,7 +91,7 @@ def _register_fake_obs_replay_buffer_save(core: NoxCore, saved_file: Path) -> li
 
 async def _publish_and_auto_confirm(core: NoxCore, event: Event, *, timeout: float = 15.0) -> None:
     """`obs.replay_buffer.save` is `medium` risk; under the `stream` profile that means CONFIRM
-    (Spec v0.6 §9 leaves the "pre-approved event kinds, confirm: no" allow-list to profile config,
+    (the design leaves the "pre-approved event kinds, confirm: no" allow-list to profile config,
     which this test does not own/edit). Publish in the background and answer the pending grant like
     a real confirm UI would, instead of either hanging on the engine's 60 s confirm timeout or
     weakening the fake tool's risk level."""
@@ -131,8 +131,8 @@ async def test_clip_requested_produces_a_saved_clip_row_end_to_end(
         saved_events: list[Event] = []
         core.bus.subscribe(E.CLIP_SAVED, lambda ev: saved_events.append(ev))
 
-        # What the real `clips` plugin's detector emits for a qualifying `rl.event` (Spec v0.6
-        # §4.1) - the translation itself is covered by `tests/unit/plugins/clips/test_detector.py`.
+        # What the real `clips` plugin's detector emits for a qualifying `rl.event`
+        # - the translation itself is covered by `tests/unit/plugins/clips/test_detector.py`.
         await _publish_and_auto_confirm(
             core,
             Event(

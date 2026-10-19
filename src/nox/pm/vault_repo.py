@@ -27,8 +27,8 @@ _FRONTMATTER_RE = re.compile(r"\A---\r?\n(?P<fm>.*?)\r?\n---\r?\n?(?P<body>.*)\Z
 _TOP_LEVEL_KEY_RE = re.compile(r"^([A-Za-z_][\w-]*):")
 _EPIC_ID_RE = re.compile(r"^(EPIC-\d+)")
 _STORY_ID_RE = re.compile(r"^(ST-\d+-\d+)")
-# PRD's conflicting `NOX-<epic>.<story>` id scheme (e.g. `NOX-13.1`), distinct from the template
-# convention (`NOX-`/`NOX-`) this repo accepts (ES-06, pending approval).
+# The alternative `NOX-<epic>.<story>` id scheme (e.g. `NOX-13.1`), distinct from the
+# filename-prefix convention this repo accepts.
 _PRD_DOC_ID_RE = re.compile(r"^NOX-\d+\.\d+$")
 
 _ID_RE_BY_KIND: dict[Kind, re.Pattern[str]] = {"epic": _EPIC_ID_RE, "story": _STORY_ID_RE}

@@ -1,6 +1,6 @@
 """Session lifecycle through the plugin's tools (`api.tools.call`, exactly as the core would
 dispatch): start -> status.read -> stop, progress events with tool name/files touched, and the
-bounded repair loop (max 3 attempts, then stop and report - Personality v1 B.8)."""
+bounded repair loop (max 3 attempts, then stop and report)."""
 
 from __future__ import annotations
 

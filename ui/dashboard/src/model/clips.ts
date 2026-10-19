@@ -1,5 +1,5 @@
 /**
- * Clip Pipeline view model (Spec v0.6, EPIC-15).
+ * Clip Pipeline view model.
  *
  * Two kinds of row live here and they are deliberately different types. A `ClipRecord` is a full
  * row the core read out of the `clips` table. A `PendingClip` is what a `clip.saved` *event*

@@ -27,7 +27,7 @@ def test_obs_manifest_loads_and_declares_the_expected_tools() -> None:
         "obs.replay_buffer.save": Risk.MEDIUM,
         "obs.replay_buffer.status.read": Risk.READ,
     }
-    # Never present, on top of being hard-prohibited/profile-denied (Spec v0.2 §5/§6.1).
+    # Never present, on top of being hard-prohibited/profile-denied.
     assert "obs.scene.delete" not in tools
     assert "obs.scene.rename" not in tools
     assert "obs.source.delete" not in tools

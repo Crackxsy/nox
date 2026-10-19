@@ -1,12 +1,11 @@
 /**
- * PetVariant: one static procedural concept for the Nox creature (OP-1, Decision Plan 2026-09-11 /
- * Decision Evaluation 2026-09-11 "missing option": static renders + one parameter file each, PO
- * picks from images, only the chosen set is implemented).
+ * PetVariant: one static procedural concept for the Nox creature (static renders + one parameter
+ * file each; a design is picked from the images and only the chosen set is implemented).
  *
  * A variant is silhouette + palette + motion tuning only. It never adds a new renderer: `Pet.tsx`
  * draws every one of the 21 `EXPRESSIONS` (src/nox/core/state.py) for every variant through the
  * same posture/mimicry pipeline (`petState.ts::deriveAnim`). Colour (the palette below) only
- * supports the expression, it never carries it alone (A57/D34) — mimicry and posture (eye
+ * supports the expression, it never carries it alone — mimicry and posture (eye
  * openness, brows, mouth curve, tilt, bob, ring shape) do that work regardless of variant.
  */
 
@@ -35,7 +34,7 @@ export interface PetVariant {
   id: string;
   /** Display name for the PRD gallery note. */
   name: string;
-  /** One-line character description (also used verbatim in the OP-1 gallery note). */
+  /** One-line character description (also used verbatim in the gallery note). */
   description: string;
   /** Ellipse half-width multiplier relative to the base radius. */
   bodyWidth: number;

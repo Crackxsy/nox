@@ -1,5 +1,5 @@
 """nox.memory.vault_writer: ownership branching, Inbox frontmatter, rollback, concurrent-edit
-conflict handling (ST-07-04 AC1-AC4)."""
+conflict handling."""
 
 from __future__ import annotations
 

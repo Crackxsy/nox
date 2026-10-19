@@ -46,8 +46,8 @@ class Clock(Protocol):
 
 @dataclass
 class SelfRepair:
-    """Rate-limited dispatch to a `RepairAction` per component (ST-09's "self-repair actions...
-    with limits"): at most `policy.max_attempts` tries within `policy.window_s`, then it gives up
+    """Rate-limited dispatch to a `RepairAction` per component (self-repair
+    with limits): at most `policy.max_attempts` tries within `policy.window_s`, then it gives up
     and lets the degraded state stand until the component recovers on its own or a human acts."""
 
     actions: dict[str, RepairAction] = field(default_factory=dict)

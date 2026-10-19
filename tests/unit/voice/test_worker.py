@@ -276,7 +276,7 @@ async def test_stt_transcribe_request(client: FakeIpcClient, tmp_path: Path) -> 
 
 
 async def test_registered_config_overrides_defaults(client: FakeIpcClient) -> None:
-    """B-8: the config the core returns from `worker.register` is applied, not the local default."""
+    """The config the core returns from `worker.register` is applied, not the local default."""
     client.register_response = {"ok": True, "config": {"stt": {"model": "base"}}}
     loaded: list[VoiceConfig] = []
 

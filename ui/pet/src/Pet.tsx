@@ -1,9 +1,9 @@
 /**
- * Procedural Canvas 2D renderer. Draws one coherent fantasy creature (OP-1, D34) from AnimParams
+ * Procedural Canvas 2D renderer. Draws one coherent fantasy creature from AnimParams
  * plus a PetVariant silhouette (body proportions, ears, tail, eye style, outline, palette, idle
  * motion amplitude). All 21 expressions are expressed through posture/mimicry parameters coming
  * from AnimParams (petState.ts::deriveAnim) — the variant only fixes *which creature* is doing the
- * expressing, never how an expression itself looks; colour (palette) only supports it (A57/D34).
+ * expressing, never how an expression itself looks; colour (palette) only supports it.
  *
  * The few *chrome* colours the canvas needs — the creature's line work and the status label plate
  * under it — come from the shared design tokens via `theme.ts::readChrome`. The body tint comes
@@ -32,7 +32,7 @@ export interface PetProps {
   interactive: boolean;
   onInteract: (type: 'click' | 'feed', x: number, y: number) => void;
   size?: number;
-  /** Silhouette/palette/motion parameters (OP-1); defaults to the `neutral` placeholder. */
+  /** Silhouette/palette/motion parameters; defaults to the `neutral` placeholder. */
   variant?: PetVariant;
   /** Active token theme; only the chrome colours depend on it (#25). */
   theme?: ThemeMode;
@@ -108,7 +108,7 @@ export function Pet({
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame);
       const p = paramsRef.current;
-      // The throttled-frame policy (FR-4.13/A390): a paused pet is not redrawn at all.
+      // The throttled-frame policy: a paused pet is not redrawn at all.
       if (p.paused) return;
       const minInterval = 1000 / p.fps;
       if (now - lastDraw < minInterval) return;
@@ -287,7 +287,7 @@ function draw(
   }
   ctx.restore(); // breath scale
 
-  // status ring (shape, not only colour — D238)
+  // status ring (shape, not only colour)
   drawRing(ctx, p, reduced ? 0 : t, r, chrome);
   ctx.restore();
 
@@ -309,7 +309,7 @@ function draw(
   }
 }
 
-/** Eye style is part of the variant's identity (D34: mimicry carries the expression regardless of
+/** Eye style is part of the variant's identity (mimicry carries the expression regardless of
  * style); `open`/`pupilSize`/`browAngle` etc. keep coming from AnimParams so every expression still
  * reads correctly no matter which of the four styles is drawn. */
 function drawEyes(

@@ -1,5 +1,5 @@
-"""`security.panic` -> the configured privacy scene, without the normal `confirm` step (Spec v0.2
-§3.6.3): the handler talks to the OBS client directly, never through `api.tools.call`/the
+"""`security.panic` -> the configured privacy scene, without the normal `confirm` step: the
+handler talks to the OBS client directly, never through `api.tools.call`/the
 permission engine."""
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ async def test_panic_without_a_configured_privacy_scene_only_logs(
 
 
 async def test_panic_survives_obs_being_unreachable(fake_client: FakeClient) -> None:
-    """§3.6.3: if OBS is unreachable, panic does not attempt to stop the stream and does not
+    """If OBS is unreachable, panic does not attempt to stop the stream and does not
     raise - it only reports the failure (here: a log call, asserted not to blow up the handler)."""
     api = make_api(fake_client, port=1)  # nothing listens on port 1
     plugin = create(api)

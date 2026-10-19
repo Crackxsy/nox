@@ -157,7 +157,7 @@ def test_urls_keep_token_out_of_query() -> None:
     assert dashboard_url(47801, "tok") == "http://127.0.0.1:47801/dashboard/#token=tok"
     assert pet_url(47801, "tok") == "http://127.0.0.1:47801/pet/#token=tok"
     assert pet_url(47801, "tok", overlay=True) == "http://127.0.0.1:47801/pet/?overlay=1#token=tok"
-    # OP-1: variant is a plain, non-secret query flag; "neutral" (the default) is omitted so
+    # Variant is a plain, non-secret query flag; "neutral" (the default) is omitted so
     # existing/unconfigured setups keep producing the same URL as before.
     assert pet_url(47801, "tok", variant="neutral") == "http://127.0.0.1:47801/pet/#token=tok"
     assert (

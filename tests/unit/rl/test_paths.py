@@ -1,4 +1,4 @@
-"""ST-12-02 AC: resolve the real path via the Windows special-folder API, not a hardcoded drive
+"""Resolve the real path via the Windows special-folder API, not a hardcoded drive
 letter."""
 
 from __future__ import annotations

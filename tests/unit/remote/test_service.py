@@ -1,4 +1,4 @@
-"""`RemoteService` end to end over the real repository (ST-17-04/07, Spec v0.8 §9).
+"""`RemoteService` end to end over the real repository.
 
 This is where the security claims of the release are asserted: an unpaired sender gets nothing and
 is still audited, a kill from the phone engages without a PIN but can never be resumed from there,
@@ -126,7 +126,7 @@ async def test_status_returns_only_allow_listed_scalars(service, pairing, channe
 
 
 async def test_status_never_contains_transcript_or_memory_fields(service, pairing, channel):
-    """Allow-list assertion (ST-17-04): the status text is exactly what the provider returned."""
+    """Allow-list assertion: the status text is exactly what the provider returned."""
     await pair(service, pairing)
 
     await service.handle(msg("/status", update_id=2))
@@ -145,7 +145,7 @@ async def test_kill_from_the_phone_engages_as_a_user_origin(service, pairing, ki
 
     assert killswitch.engaged
     assert killswitch.origins == [REMOTE_KILL_ORIGIN]
-    # Not a security-path kill: resuming locally needs no PIN (Security Model §6, OP-6 D).
+    # Not a security-path kill: resuming locally needs no PIN (Security Model §6).
     assert killswitch.security_path is False
     assert await killswitch.resume(pin_ok=False, by="dashboard") is True
 

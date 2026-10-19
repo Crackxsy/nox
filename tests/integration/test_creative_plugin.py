@@ -1,4 +1,4 @@
-"""`creative` plugin, end to end (Spec v0.7 Creative Apps, EPIC-16): a real `nox.core.bus.
+"""`creative` plugin, end to end: a real `nox.core.bus.
 AsyncEventBus` plus the core-side services from `nox.creative.install.install` react to the real
 `nox_plugin_creative.plugin.CreativePlugin` wired to a `FakeClient` bridged onto that bus.
 

@@ -1,4 +1,4 @@
-"""Highlight candidate detector (ST-15-03, Spec v0.6 Clip Pipeline §4): scores `rl.event`,
+"""Highlight candidate detector: scores `rl.event`,
 `twitch.chat_mood_changed` and `!clip` (`twitch.command_invoked`) into `clip.requested`, with a
 per-`trigger_kind` cooldown and no OBS call of any kind (the plugin declares no tools)."""
 

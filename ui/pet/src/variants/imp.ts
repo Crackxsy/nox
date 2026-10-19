@@ -1,9 +1,9 @@
 /**
  * imp: a small horned imp-like nightling — quick, mischievous, always a little too pleased with
  * itself. Curved ember-tipped horns, a thin whip tail with an arrow tip, narrow slit eyes and a
- * lean body read as "impish" at a glance without any generic "AI mascot" roundness (A73). Fantasy,
+ * lean body read as "impish" at a glance without any generic "AI mascot" roundness. Fantasy,
  * night-themed (deep magenta-violet with ember-orange accents), one coherent entity — no separate
- * parts are swappable at runtime (D34/FR-1.9).
+ * parts are swappable at runtime.
  */
 
 import type { PetVariant } from './types';

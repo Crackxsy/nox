@@ -168,7 +168,7 @@ async def test_backpressure_and_drop_oldest_for_stream_family() -> None:
     assert bus.stats().dropped == 1
     # "pet.interaction" here is an arbitrary normal-priority, non-droppable event name (like
     # "pet.blocker" above); not "memory.created", which now has a registered payload model
-    # (nox.core.events.MemoryCreated, EPIC-07) an empty payload would fail validation against.
+    # (nox.core.events.MemoryCreated) an empty payload would fail validation against.
     normal = asyncio.create_task(bus.publish(Event(name="pet.interaction")))
     await asyncio.sleep(0)
     assert bus.stats().waiting == 2  # s2 and the normal event both wait (backpressure)

@@ -1,7 +1,7 @@
 /**
- * Clips page (ST-15-05, Spec v0.6 Clip Pipeline): the review queue as a horizontal rail of tiles —
+ * Clips page: the review queue as a horizontal rail of tiles —
  * one tile per clip, with its tag field and the two actions. No upload button anywhere in this page
- * by design (spec §10): `clip.export` only ever copies into the configured `export_root` on local
+ * by design: `clip.export` only ever copies into the configured `export_root` on local
  * disk, never calls a network API.
  *
  * Refusals are a designed state, not an error banner. On a shipped install the `dashboard` role is

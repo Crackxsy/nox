@@ -1,5 +1,5 @@
 """Manifest validation: namespace, declared tool risk, and profile gating - `coding` never matches
-any profile other than `coding` (ST-14-02 acceptance: refused before any subprocess exists; here
+any profile other than `coding` (acceptance: refused before any subprocess exists; here
 verified at the manifest level, the structural guarantee the plugin manager itself enforces before
 ever spawning a worker)."""
 

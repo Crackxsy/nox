@@ -1,4 +1,4 @@
-"""Worker-side `PluginApi`: every boundary is the manifest (ST-11-01 acceptance criteria 6-8).
+"""Worker-side `PluginApi`: every boundary is the manifest.
 
 The scoped egress guard (ADR-013) is exercised through a fake transport, so no connection is ever
 opened; a denied endpoint raises before the transport is reached.

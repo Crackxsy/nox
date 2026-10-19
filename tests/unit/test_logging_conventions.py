@@ -1,4 +1,4 @@
-"""B-4: structlog calls in `src/` must never pass a reserved keyword as an event-dict key.
+"""Structlog calls in `src/` must never pass a reserved keyword as an event-dict key.
 
 structlog reserves `event` (the message), `level`, `timestamp` and `logger` for its own
 processors; a caller passing one of those as a keyword argument silently overwrites or corrupts

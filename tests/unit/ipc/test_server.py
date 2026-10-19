@@ -225,7 +225,7 @@ async def test_stream_frames_then_response(raw: RawFactory, tokens: TokenStore) 
 async def test_stream_frame_validated_against_registered_model(
     raw: RawFactory, tokens: TokenStore, registry: RequestRegistry
 ) -> None:
-    """OP-9: a stream frame for a registered name (`chat.send` -> `ChatStreamFrame`) that does not
+    """A stream frame for a registered name (`chat.send` -> `ChatStreamFrame`) that does not
     match the model becomes `validation.failed`, not a silently malformed frame on the wire.
     """
 
@@ -244,7 +244,7 @@ async def test_stream_frame_validated_against_registered_model(
 async def test_response_validated_against_registered_model(
     raw: RawFactory, tokens: TokenStore, registry: RequestRegistry
 ) -> None:
-    """OP-9: a `chat.send` response that does not match `ChatSendResult` becomes `internal`,
+    """A `chat.send` response that does not match `ChatSendResult` becomes `internal`,
     logged, and never reaches the client as a silently wrong-shaped response.
     """
 

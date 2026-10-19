@@ -5,7 +5,7 @@ SHA256 challenge/salt, Identify/Identified, Request/RequestResponse dispatch fro
 table, and Event broadcast to every identified client. Shared by unit tests and
 `tests/integration/test_obs_plugin.py`.
 
-Extended for ST-15-02 (Spec v0.6 Clip Pipeline): default `GetReplayBufferStatus`/
+Extended for the clip pipeline: default `GetReplayBufferStatus`/
 `SaveReplayBuffer` responses plus `replay_buffer_saved()`, a thin wrapper over `broadcast_event`
 that fires the `ReplayBufferSaved` event `obs.replay_buffer.save` waits on.
 """
@@ -57,7 +57,7 @@ class FakeObsServer:
             "GetStreamStatus": lambda _d: {"outputActive": False},
             "GetRecordStatus": lambda _d: {"outputActive": False},
             "SetCurrentProgramScene": lambda _d: {},
-            # ST-15-02: replay buffer defaults to "on" so a test only needs to override the one
+            # Replay buffer defaults to "on" so a test only needs to override the one
             # case it wants (disabled, or a scripted failure); SaveReplayBuffer itself never
             # returns a path (that only comes via the ReplayBufferSaved event, see below).
             "GetReplayBufferStatus": lambda _d: {"outputActive": True},
@@ -95,7 +95,7 @@ class FakeObsServer:
         self.responses[request_type] = value
 
     async def replay_buffer_saved(self, path: str) -> None:
-        """ST-15-02: fire the `ReplayBufferSaved` event `obs.replay_buffer.save` waits on."""
+        """Fire the `ReplayBufferSaved` event `obs.replay_buffer.save` waits on."""
         await self.broadcast_event("ReplayBufferSaved", {"savedReplayPath": path})
 
     async def _handle(self, ws: ServerConnection) -> None:

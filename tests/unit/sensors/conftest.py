@@ -1,5 +1,5 @@
 """Shared fixtures for nox.sensors unit tests: a fake Win32 probe (no ctypes), FakeBus/FakeState
-from tests.unit.fakes, and a real PrivacyService built with SP-15's representative zone set."""
+from tests.unit.fakes, and a real PrivacyService built with a representative zone set."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def probe() -> FakeWin32Probe:
 
 @pytest.fixture
 def privacy(bus: FakeBus) -> PrivacyService:
-    # SP-15's four representative zone patterns: password manager, Discord, banking (browser tab
+    # Four representative zone patterns: password manager, Discord, banking (browser tab
     # title), personal documents (folder/keyword pattern).
     return PrivacyService(
         mode=PrivacyMode.BALANCED,

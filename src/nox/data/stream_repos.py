@@ -1,4 +1,4 @@
-"""Typed repositories over the Stream Bot tables (Spec v0.2 §7, migration `0002_stream.sql`).
+"""Typed repositories over the Stream Bot tables (migration `0002_stream.sql`).
 
 Mirrors the conventions of `nox.data.repos`: rows are frozen pydantic models, timestamps are
 ISO-8601 UTC text, and every repository that holds retention-bound data exposes `purge_expired`
@@ -376,7 +376,7 @@ class FunkenLedgerRow(Row):
 
 
 class FunkenLedgerRepository:
-    """Append-only (Spec v0.2 §7 `funken_ledger`); there is no update/delete method on purpose."""
+    """Append-only (`funken_ledger`); there is no update/delete method on purpose."""
 
     def __init__(self, db: Database) -> None:
         self._db = db
@@ -433,7 +433,7 @@ class ModerationActionRow(Row):
 
 
 class ModerationActionRepository:
-    """Audit trail of every moderation decision, including `ignore` (Spec v0.2 §7); never purged
+    """Audit trail of every moderation decision, including `ignore`; never purged
     by the retention job - moderation history outlives the chat text it was decided on."""
 
     def __init__(self, db: Database) -> None:

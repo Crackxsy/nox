@@ -22,7 +22,7 @@ HintPriority = Literal["low", "normal", "high"]
 
 
 class UrgentCategory(StrEnum):
-    """/ F410 escalation ordering (Personality Specification v1): security/system beats
+    """Escalation ordering: security/system beats
     backup/data-loss beats resources beats expected task results. Only `SECURITY` and `DATA_LOSS`
     may ever call `SpeechPolicy.may_speak("urgent")` (the mid-match/interrupt bypass) - `RESOURCES`
     and `TASK_RESULT` are "lesser URGENT": a visible warning, never a forced interruption."""

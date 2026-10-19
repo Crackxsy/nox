@@ -1,4 +1,4 @@
-"""`plugins/clips/manifest.yaml` validates and declares no tool surface (ST-15-01 acceptance
+"""`plugins/clips/manifest.yaml` validates and declares no tool surface (acceptance
 criteria: no tool touching the source recording exists - here, no tool exists at all)."""
 
 from __future__ import annotations

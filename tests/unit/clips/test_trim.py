@@ -1,4 +1,4 @@
-"""`TrimBackend` (ST-15-06, Spec v0.6 §11): ffmpeg is not currently installed, so `available()`
+"""`TrimBackend`: ffmpeg is not currently installed, so `available()`
 must be honest, and `trim()` must fail with `TrimError` rather than fake a cut when it is
 missing."""
 

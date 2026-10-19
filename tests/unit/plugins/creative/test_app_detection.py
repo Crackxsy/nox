@@ -1,4 +1,4 @@
-"""`match_app_family` + `HysteresisDetector` (Spec v0.7 §3.1, ST-16-01): pure unit tests, no
+"""`match_app_family` + `HysteresisDetector`: pure unit tests, no
 asyncio, no plugin wiring - see `test_manifest.py`/`test_tool_registry.py` for the wired plugin."""
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ class TestMatchAppFamily:
 
     def test_conservative_false_negative_over_false_positive(self) -> None:
         # An unrelated process with a title that happens to contain "webdaw" text but is not
-        # one of the configured browser processes must not match (Spec v0.7 §11 risk note).
+        # one of the configured browser processes must not match (a known risk).
         assert match_app_family("explorer.exe", "webdaw - File Explorer", PATTERNS) is None
 
 
@@ -69,7 +69,7 @@ class TestHysteresisDetector:
         assert det.current is None
 
     def test_short_alt_tab_does_not_flap(self) -> None:
-        """Spec v0.7 acceptance criterion: alt-tabbing away for < window and back must not emit a
+        """Acceptance criterion: alt-tabbing away for < window and back must not emit a
         spurious enter/leave pair."""
         clock = FakeClock()
         det = HysteresisDetector(15.0, clock=clock)

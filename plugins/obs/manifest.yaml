@@ -43,10 +43,10 @@ resources:
 config:
   host: "127.0.0.1"
   port: 4455
-  # Designated privacy/panic scene and the allow-listed Nox scene set (names
-  # from ES-02) - both pending approval, defaults per the spec draft.
-  privacy_scene: "Technical Problems"  # pending approval ES-02
-  scene_set:                          # pending approval ES-02
+  # Designated privacy/panic scene and the allow-listed Nox scene set - both defaults,
+  # adjust them to the scene names of your OBS setup.
+  privacy_scene: "Technical Problems"  # default; rename to match your OBS
+  scene_set:                          # default set
     - "Start"
     - "Live"
     - "Pause"

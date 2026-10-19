@@ -1,5 +1,5 @@
-"""`ClipRepository`/`ClipMarkerRepository` over the real migration `0006_clips.sql` (ST-15-01
-acceptance criteria: insert/read/status-transition operations are covered by unit tests)."""
+"""`ClipRepository`/`ClipMarkerRepository` over the real migration `0006_clips.sql` (acceptance
+criteria: insert/read/status-transition operations are covered by unit tests)."""
 
 from __future__ import annotations
 

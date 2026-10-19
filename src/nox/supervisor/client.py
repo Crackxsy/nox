@@ -1,6 +1,6 @@
 """SupervisorClient: the core's side of the control channel (Runtime Lifecycle step 8).
 
-Authenticates once per connection (B-1): sends `sup.auth {token, role, pid}` as the first frame and
+Authenticates once per connection: sends `sup.auth {token, role, pid}` as the first frame and
 waits for `sup.auth_ok` before doing anything else; every frame after that (`sup.heartbeat`,
 `sup.ack`) carries no token. Sends `sup.heartbeat` every `interval_s` and answers `sup.kill` with
 `sup.ack` immediately - the ack means "received and acting", which is what the supervisor's 2 s
@@ -10,7 +10,7 @@ supervisor respawns the core; every other mode (`safe_mode`, panic, the kill swi
 injected `on_kill` coroutine (entering SAFE_MODE, stopping workers) as a task. A restart request is
 not a kill - engaging the kill switch for one left Nox mute in safe mode with nothing restarted
 (a field log, 2026-09-15).
-`sup.stop {reason}` (B-6, supervisor -> core) calls the synchronous `on_stop`
+`sup.stop {reason}` (supervisor -> core) calls the synchronous `on_stop`
 hook, which only needs to signal the core's own shutdown path - `NoxCore.stop()` runs from the
 process's normal run loop, not from here, so no ack is sent or expected. Reconnects with backoff;
 when no supervisor answers the core keeps running standalone (dev mode) and logs a warning once.
@@ -173,7 +173,7 @@ class SupervisorClient:
     async def _authenticate(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
-        """B-1: send `sup.auth` first and require `sup.auth_ok` before anything else."""
+        """Send `sup.auth` first and require `sup.auth_ok` before anything else."""
         await self._send(
             writer, m.auth_frame(self._token, role="core", pid=self._pid, src=self._src)
         )

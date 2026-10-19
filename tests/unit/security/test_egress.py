@@ -1,4 +1,4 @@
-"""Egress guard: OFFLINE/PRIVATE allow only allow-listed loopback services (OP-7 C), allow-lists,
+"""Egress guard: OFFLINE/PRIVATE allow only allow-listed loopback services, allow-lists,
 no bypass via client kwargs."""
 
 from __future__ import annotations
@@ -42,8 +42,8 @@ def guard(
     inner: RecordingTransport,
 ) -> EgressGuard:
     # `coding`, not `companion`: these tests are about the *inheritance* rule ("a profile with
-    # an empty egress_allowlist falls back to the global one"), and since EPIC-17 `companion`
-    # carries its own single entry (api.telegram.org:443) and therefore no longer inherits.
+    # an empty egress_allowlist falls back to the global one"), and since the phone bridge,
+    # `companion` carries its own single entry (api.telegram.org:443) and no longer inherits.
     # `coding` is the remaining cloud_allowed profile with an empty list.
     holder = {"profile": profiles.get("coding")}
     g = EgressGuard(
@@ -84,7 +84,7 @@ async def test_offline_mode_allows_only_allowlisted_loopback_services(
     audit: SqliteAuditLog,
     inner: RecordingTransport,
 ) -> None:
-    """OP-7 C: the decided offline baseline (local chat via Ollama) must work; nothing else does."""
+    """The decided offline baseline (local chat via Ollama) must work; nothing else does."""
     await privacy.set_mode(PrivacyMode.OFFLINE)
     async with guard.client() as client:
         r = await client.get("http://127.0.0.1:11434/api/tags")  # Ollama is allow-listed
@@ -108,7 +108,7 @@ async def test_offline_mode_allows_only_allowlisted_loopback_services(
 async def test_offline_profile_allows_ollama_and_stream_profile_adds_obs(
     guard: EgressGuard, profiles: YamlProfileProvider, privacy: PrivacyService
 ) -> None:
-    """The profile's loopback_allowlist is additive to the global one (OP-7 C)."""
+    """The profile's loopback_allowlist is additive to the global one."""
     await privacy.set_mode(PrivacyMode.OFFLINE)
     guard._holder["profile"] = profiles.get("offline")  # type: ignore[attr-defined]
     assert guard.check("127.0.0.1", 11434).allowed

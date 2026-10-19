@@ -1,4 +1,4 @@
-"""Synthetic-frame tests for the classical OpenCV backend (ST-18-01/ST-18-02 AC1): drawn ball/car
+"""Synthetic-frame tests for the classical OpenCV backend: drawn ball/car
 blobs must be detected with roughly correct positions and non-trivial confidence; a blank field or
 a degenerate arena region must never fabricate one (P10 "no fake detections ever")."""
 

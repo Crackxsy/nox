@@ -172,7 +172,7 @@ export function manifestFiles(manifest: SpriteManifest): string[] {
  * Order matters and is the honest one: an unknown connection beats everything (an offline pet must
  * not look like it is listening), then what Nox is *doing*, then how it feels. States no artist was
  * asked to draw (`error`, `muted`, `privacy`) resolve to `idle`; the capture indicator and the
- * status label — never colour-only, D238 — keep carrying those, exactly as for the procedural
+ * status label — never colour-only — keep carrying those, exactly as for the procedural
  * renderer.
  */
 export function spriteExpressionFor(input: PetInput): SpriteState {

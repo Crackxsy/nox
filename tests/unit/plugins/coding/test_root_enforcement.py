@@ -1,4 +1,4 @@
-"""Workspace root enforcement (spec §6.7): `coding.session.start`'s `target` must resolve under one
+"""Workspace root enforcement: `coding.session.start`'s `target` must resolve under one
 of the manifest's configured `filesystem_roots` or the call fails before any subprocess exists -
 the same "schema validation failure, not an ambiguous confirm" pattern as `obs.scene.switch`'s
 `scene_set` check."""

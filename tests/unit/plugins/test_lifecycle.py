@@ -1,5 +1,5 @@
 """PluginManager lifecycle, restart backoff, kill switch, health and the core-side plugin IPC
-handlers (ST-11-01 acceptance criteria 1, 3-7).
+handlers.
 
 No real process and no real socket: the process factory and the hub are fakes, so the state machine
 and the timings are deterministic.
@@ -444,7 +444,7 @@ async def test_status_report_is_serializable(harness: Harness) -> None:
     assert status["demo"].model_dump(mode="json")["enabled"] is True
 
 
-# ---- profile switching (ST-11-01 acceptance criterion 3) -----------------------------------------
+# ---- profile switching ------------------------------------------------------------------------
 
 
 async def test_profile_switch_spawns_and_stops_without_a_core_restart(plugins_dir: Path) -> None:

@@ -1,5 +1,5 @@
-"""ST-19-02/03/04: `ProactiveService.notify()` policy matrix - URGENT ordering, the B.13 mid-match
-interrupt exception (safety/data-loss only), the A.13 announce-before-speaking rule, and ordinary
+"""`ProactiveService.notify()` policy matrix - URGENT ordering, the mid-match
+interrupt exception (safety/data-loss only), the announce-before-speaking rule, and ordinary
 proactive-hint quiet-hours/budget gating."""
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def make_service(
     return service, events, state
 
 
-# ---- URGENT: security / data-loss - the B.13 mid-match exception ------------------------------
+# ---- URGENT: security / data-loss - the mid-match exception -----------------------------------
 
 
 async def test_security_urgent_bypasses_zone_privacy_mode_and_quiet_hours() -> None:
@@ -68,7 +68,7 @@ async def test_security_urgent_bypasses_zone_privacy_mode_and_quiet_hours() -> N
     decision = await service.notify("urgent", "security", "Kill switch armed")
     assert decision.allowed is True
     assert decision.channel == "speech+toast"
-    assert decision.announced is False  # A.13 exemption: URGENT itself is not announced first
+    assert decision.announced is False  # exemption: URGENT itself is not announced first
     assert speaker.calls == ["Kill switch armed"]
     assert events[0] == (
         "proactive.notification",

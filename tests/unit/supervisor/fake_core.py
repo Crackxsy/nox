@@ -9,7 +9,7 @@ simulating a hung core), --boot-delay S (sleep before connecting at all, simulat
 boot), --booting (every heartbeat says `booting: true`, as the real core's do until it has
 installed its extensions), --exit-after S (exit with code 3 without connecting).
 
-B-1: authenticates once per connection (`sup.auth` -> `sup.auth_ok`) before doing anything else;
+Authenticates once per connection (`sup.auth` -> `sup.auth_ok`) before doing anything else;
 every frame after that carries no token.
 """
 

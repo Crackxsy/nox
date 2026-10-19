@@ -1,7 +1,7 @@
 """Rocket League plugin, end to end: a real `NoxCore` (headless) spawns the real `nox_plugin_rl`
 worker, fake game detection (the plugin's own test process name, always running) drives a mode
 transition, and a synthetic replay fixture dropped into the watched folder produces a real
-`rl.replay_parsed` event via the pure-Python header parser (ST-12-01/02/03/06 wiring).
+`rl.replay_parsed` event via the pure-Python header parser.
 """
 
 from __future__ import annotations

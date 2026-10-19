@@ -192,7 +192,7 @@ class RlPlugin:
         """Captures at the configured budget rate, crops the calibrated regions only, derives
         `boost_low`/`goal` events. Overtime/demo banner classification and the live GPU/FPS budget
         guard's automatic reduction are not implemented in this pass - see the report's
-        open points (blocked on ES-04's real HUD screenshots, Plan v0.3)."""
+        open points (blocked on real HUD screenshots)."""
         assert self._calibration is not None
         capture_hz = float(self._budget.get("capture_hz", 2.0))
         interval = 1.0 / capture_hz if capture_hz > 0 else 0.5

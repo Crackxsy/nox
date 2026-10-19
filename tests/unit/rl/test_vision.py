@@ -1,7 +1,7 @@
 """Core-side Vision Stage 2 (`nox.rl.vision`): rough rotation analysis over synthetic detection
 sequences (pure function), `rl.vision.detections` persistence against the active match, and the
-post-match analysis service's skip-if-no-frames / persist-and-speak-if-frames behaviour (Spec v0.9
-§4.5/§7, ST-18-06)."""
+post-match analysis service's skip-if-no-frames / persist-and-speak-if-frames
+behaviour."""
 
 from __future__ import annotations
 

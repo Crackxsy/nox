@@ -368,7 +368,7 @@ class Supervisor:
             return True
 
     async def graceful_stop(self, *, reason: str = "", by: str = "shell") -> bool:
-        """B-6: `sup.stop` from an authenticated client. Core, shell and the supervisor all stop.
+        """`sup.stop` from an authenticated client. Core, shell and the supervisor all stop.
 
         Sends `sup.stop {reason}` to the core and gives it `stop_timeout_s` to run `NoxCore.stop()`
         and exit 0 on its own; a core that misses the budget is terminated via the job object.
@@ -691,7 +691,7 @@ class Supervisor:
 
     async def _send_stop_and_wait(self, *, reason: str) -> bool:
         """Send `sup.stop` to the connected core and wait `stop_timeout_s` for it to exit on its
-        own (B-6). True when it did; False when the caller must terminate it."""
+        own. True when it did; False when the caller must terminate it."""
         writer, core = self._core_writer, self._core
         if core is None or not core.alive():
             return True

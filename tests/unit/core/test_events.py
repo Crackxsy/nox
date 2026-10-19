@@ -1,4 +1,4 @@
-"""Event payload round-trips for the Stream Bot additions (Spec v0.2 §8): every new name in `E`
+"""Event payload round-trips for the Stream Bot additions: every new name in `E`
 has a registered model in `PAYLOAD_MODELS` and validates a representative payload."""
 
 from __future__ import annotations

@@ -156,7 +156,7 @@ async def test_preflight_check_flags_a_missing_scene(obs_server, fake_client: Fa
         await plugin.stop()
 
 
-# ---- ST-15-02: obs.replay_buffer.save / .status.read (Spec v0.6 Clip Pipeline) -----------------
+# ---- obs.replay_buffer.save / .status.read ------------------------------------------------
 
 
 async def test_replay_buffer_status_read_reports_active(

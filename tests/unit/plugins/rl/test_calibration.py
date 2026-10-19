@@ -1,5 +1,5 @@
-"""Calibration self-check (ST-12-04): fixtures engineered to pass, and ones engineered to fail
-each region individually (Spec §12.1 AC: name the specific failing region, not a generic
+"""Calibration self-check: fixtures engineered to pass, and ones engineered to fail
+each region individually (name the specific failing region, not a generic
 failure)."""
 
 from __future__ import annotations

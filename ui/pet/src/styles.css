@@ -121,7 +121,7 @@ body {
   height: 14px;
   box-sizing: border-box;
   text-align: center;
-  /* Off: a hairline ring. On: a filled square (D238 — shape carries the state, not colour alone). */
+  /* Off: a hairline ring. On: a filled square (shape carries the state, not colour alone). */
   border: 1.5px solid var(--pet-chip-line);
   border-radius: 7px;
   color: var(--pet-chip-ink-2);

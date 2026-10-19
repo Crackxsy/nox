@@ -1,5 +1,5 @@
 /**
- * Global toast panel for `proactive.notification` events (ST-19/ST-08-01). Purely presentational:
+ * Global toast panel for `proactive.notification` events. Purely presentational:
  * `App.tsx` owns the list in `DashboardState.notifications` (via `reduceEvent`); this component
  * only renders it and lets the user dismiss one.
  *

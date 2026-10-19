@@ -1,5 +1,5 @@
 """nox.supervisor.main with a real fake child: heartbeats, restart rules, safe mode, kill switch,
-handshake auth (B-1), graceful stop (B-6)."""
+handshake auth, graceful stop."""
 
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ async def sup_factory(tmp_path: Path) -> AsyncIterator[Callable[..., Supervisor]
 def _auth_and_request(
     port: int, token: str, name: str, payload: dict[str, object]
 ) -> dict[str, object]:
-    """Raw handshake + one request, for asserting the wire protocol directly (B-1)."""
+    """Raw handshake + one request, for asserting the wire protocol directly."""
     auth = m.make(
         m.NAME_AUTH, {"token": token, "role": "shell", "pid": 0}, SHELL_SRC, kind=Kind.REQUEST
     )
@@ -276,7 +276,7 @@ async def test_control_channel_from_shell(sup_factory: Callable[..., Supervisor]
     assert "tray" in sup.status().safe_mode_reason
 
 
-# ---- B-1: handshake-once auth ------------------------------------------------------------------
+# ---- handshake-once auth -----------------------------------------------------------------------
 
 
 async def test_wrong_token_is_denied_and_connection_closed(
@@ -330,7 +330,7 @@ async def test_frames_before_auth_are_ignored_not_fatal(
     assert reply["name"] == m.NAME_AUTH_OK  # the connection survived the pre-auth frames
 
 
-# ---- B-6: sup.stop graceful shutdown ------------------------------------------------------------
+# ---- sup.stop graceful shutdown -----------------------------------------------------------------
 
 
 async def test_graceful_stop_exits_within_budget(sup_factory: Callable[..., Supervisor]) -> None:

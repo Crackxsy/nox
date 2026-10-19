@@ -3,7 +3,7 @@
  * it and is always mounted on the desktop pet. The only place it is not rendered is the OBS overlay
  * (`?overlay=1`), because the PRD forbids the indicator in the public stream output.
  *
- * Each dot carries a letter *and* a shape change, so the state is never colour-only (D238). A
+ * Each dot carries a letter *and* a shape change, so the state is never colour-only. A
  * letter on its own is not an explanation, so whichever capture is running is also spelled out next
  * to the dots ("Mikrofon") instead of being hidden in a tooltip — and the tooltip is in one
  * language now, not two.

@@ -171,7 +171,7 @@ class CodingSessionEnded(BaseModel):
 
 
 class CodingSessionFailed(BaseModel):
-    """After the repair-attempt limit (Personality v1 B.8) or an unrepairable CLI failure
+    """After the repair-attempt limit or an unrepairable CLI failure
     (max-turns, not-logged-in): `detail` carries the short review-formatter triage."""
 
     session_id: str
@@ -182,7 +182,7 @@ class CodingSessionFailed(BaseModel):
 
 class ProactiveNotification(BaseModel):
     """`nox.proactive.notify()` delivered (or attempted) something. `kind` is the `SpeechKind`
-    used to gate it (`"urgent"` or `"proactive"`); `priority` is the B.13 URGENT category
+    used to gate it (`"urgent"` or `"proactive"`); `priority` is the URGENT category
     (`security` | `data_loss` | `resources` | `task_result`) for `kind="urgent"`, else a plain
     hint priority (`"low"` | `"normal"` | `"high"`). `channel` names where it actually went."""
 
@@ -191,11 +191,11 @@ class ProactiveNotification(BaseModel):
     text: str
     channel: str  # "speech" | "toast" | "speech+toast"
     spoken: bool = False
-    announced: bool = False  # A.13: a short lead-in was spoken first
+    announced: bool = False  # a short lead-in was spoken first
 
 
 class ProactiveSuppressed(BaseModel):
-    """A hint was held back entirely (never fires for URGENT security/data-loss, per B.13)."""
+    """A hint was held back entirely (never fires for URGENT security/data-loss)."""
 
     kind: str
     priority: str

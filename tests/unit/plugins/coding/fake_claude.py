@@ -1,5 +1,5 @@
 """Fake `claude` CLI executable for `coding` plugin tests: emits recorded stream-json NDJSON lines
-(shapes recorded for real in SP-18, `11 - Spikes/SP-18 Claude Code Session Wrapper.md`; no personal
+(shapes recorded from a real session wrapper spike; no personal
 data, no real session content). Selected by the `FAKE_CLI_MODE` env var:
 
 - "ok"          - init, one Edit tool_use touching notes.txt, a result (success).

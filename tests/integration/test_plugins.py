@@ -1,6 +1,6 @@
 """Plugin runtime end to end: a real `NoxCore` (headless) spawns the real `echo` plugin worker.
 
-Covers ST-11-01's integration criteria: one misconfigured plugin next to a good one, the full
+Covers the integration criteria: one misconfigured plugin next to a good one, the full
 lifecycle over the real IPC hub, a tool call forwarded core -> worker -> back, an emitted event
 reaching the bus, the hub refusing an event outside a plugin's declared namespaces, honest health
 and the kill switch stopping every plugin worker.

@@ -1,5 +1,5 @@
 """`plugins/rl/manifest.yaml` validates on its own and against the real `rocket_league` profile
-(ST-12-01 AC) - mirrors `tests/unit/plugins/obs/test_manifest.py`."""
+- mirrors `tests/unit/plugins/obs/test_manifest.py`."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def test_rl_manifest_loads_and_declares_exactly_the_expected_tools() -> None:
     assert manifest.id == "rl"
     assert manifest.entry == "nox_plugin_rl:create"
     # `profiles: []` - matches every active profile so the detector can run from boot and drive
-    # the switch *into* `rocket_league` (see manifest.yaml's comment; ST-11-01's
+    # the switch *into* `rocket_league` (see manifest.yaml's comment;
     # `PluginManager._apply_enablement` would deadlock startup otherwise).
     assert manifest.matches_profile("rocket_league") is True
     assert manifest.matches_profile("companion") is True

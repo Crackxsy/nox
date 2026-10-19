@@ -180,7 +180,7 @@ describe('setConnected', () => {
 });
 
 describe('chat helpers', () => {
-  it('reads the delta from a ChatStreamFrame and nothing else (OP-9: fixed shape)', () => {
+  it('reads the delta from a ChatStreamFrame and nothing else (fixed shape)', () => {
     expect(streamDelta({ delta: 'a' })).toBe('a');
     expect(streamDelta({ delta: '' , done: true })).toBe('');
     expect(streamDelta({ done: true })).toBe('');
@@ -335,7 +335,7 @@ describe('stream reducers', () => {
   });
 });
 
-describe('clip.list / clip.saved / clip.exported (Spec v0.6 Clip Pipeline)', () => {
+describe('clip.list / clip.saved / clip.exported', () => {
   it('parseClipList maps a clip.list response', () => {
     const clips = parseClipList({
       clips: [

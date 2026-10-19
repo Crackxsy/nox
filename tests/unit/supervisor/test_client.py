@@ -1,4 +1,4 @@
-"""nox.supervisor.client: authenticates once per connection (B-1), heartbeats/ack carry no token
+"""nox.supervisor.client: authenticates once per connection, heartbeats/ack carry no token
 afterwards, kill is acked and dispatched, sup.stop calls on_stop, standalone mode."""
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ def free_port() -> int:
 
 
 class FakeSupervisor:
-    """Requires the B-1 handshake before treating a connection as authenticated."""
+    """Requires the handshake before treating a connection as authenticated."""
 
     def __init__(self, *, accept_token: str | None = TOKEN) -> None:
         self.accept_token = accept_token
@@ -93,7 +93,7 @@ async def test_heartbeats_and_kill_ack(server: tuple[FakeSupervisor, int]) -> No
     await asyncio.sleep(0.12)
     beats = [e for e in fake.received if e.name == m.NAME_HEARTBEAT]
     assert len(beats) >= 2
-    assert "token" not in beats[0].payload  # B-1: no token outside sup.auth
+    assert "token" not in beats[0].payload  # no token outside sup.auth
     assert beats[0].payload["pid"] == 4242
     assert beats[0].payload["level"] == "running" and beats[0].src.role == "core"
 
@@ -112,7 +112,7 @@ async def test_heartbeats_and_kill_ack(server: tuple[FakeSupervisor, int]) -> No
             break
     acks = [e for e in fake.received if e.name == m.NAME_ACK]
     assert acks and acks[0].corr == kill.id and acks[0].kind is Kind.RESPONSE
-    assert "token" not in acks[0].payload  # B-1: no token outside sup.auth
+    assert "token" not in acks[0].payload  # no token outside sup.auth
     assert kills == [("test", "hotkey")]
     assert client.kills_received == 1
     await client.stop()
@@ -138,7 +138,7 @@ async def test_sup_stop_calls_on_stop_without_ack(server: tuple[FakeSupervisor, 
         if stops:
             break
     assert stops == ["user_quit"]
-    # B-6: sup.stop is not acked - NoxCore.stop() runs from the process's own run loop
+    # sup.stop is not acked - NoxCore.stop() runs from the process's own run loop
     assert not any(e.name == m.NAME_ACK for e in fake.received)
     await client.stop()
 

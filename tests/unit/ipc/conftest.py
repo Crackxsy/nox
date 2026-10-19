@@ -106,7 +106,7 @@ def build_registry(hub_ref: dict[str, IpcHub]) -> RequestRegistry:
         return {"ok": True, "mode": p.mode}
 
     async def chat_send(ctx: RequestContext, p: ChatSend) -> dict[str, Any]:
-        # OP-9: stream frames are `ChatStreamFrame {delta, done}`, the response `ChatSendResult`.
+        # Stream frames are `ChatStreamFrame {delta, done}`, the response `ChatSendResult`.
         for word in p.text.split():
             await ctx.stream({"delta": word})
         await ctx.stream({"delta": ""}, True)

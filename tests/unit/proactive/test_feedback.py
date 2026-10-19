@@ -1,4 +1,4 @@
-"""ST-19-07: the feedback loop is bounded (clamped to [min_weight, max_weight]) and traceable
+"""The feedback loop is bounded (clamped to [min_weight, max_weight]) and traceable
 (every adjustment is logged with its delta and resulting weight)."""
 
 from __future__ import annotations

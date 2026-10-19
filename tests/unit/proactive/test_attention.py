@@ -1,4 +1,4 @@
-"""ST-19-05: effective per-mode ceiling, focus-mode detection, and the hourly interruption
+"""Effective per-mode ceiling, focus-mode detection, and the hourly interruption
 budget."""
 
 from __future__ import annotations

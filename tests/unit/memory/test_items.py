@@ -1,4 +1,4 @@
-"""nox.memory.items.MemoryService: the write-refusal boundary (ST-07-01 AC4)."""
+"""nox.memory.items.MemoryService: the write-refusal boundary."""
 
 from __future__ import annotations
 

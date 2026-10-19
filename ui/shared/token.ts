@@ -52,7 +52,7 @@ export function queryFlag(search: string, key: string): boolean {
 }
 
 /** Plain query string value (not a secret): used for non-sensitive dev/display flags like
- * `?variant=` (OP-1) or `?expression=` (still-frame renders), never for tokens. */
+ * `?variant=` or `?expression=` (still-frame renders), never for tokens. */
 export function queryString(search: string, key: string): string | null {
   return new URLSearchParams(search).get(key);
 }

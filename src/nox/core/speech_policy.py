@@ -1,17 +1,16 @@
-"""OP-10: the single gate every unsolicited-speech caller (greeting now, proactive speech later,
-must go through, so the rule lives in one place instead of being re-implemented per
-caller. Implements the decided policy (Decision Plan 2026-09-11 OP-10, matching A480/A482,
-speak a greeting or a proactive utterance only when the assistant is not
-muted, no privacy zone is active, the privacy mode does not forbid it, `pet.greeting_enabled` (for
-greetings) is on, and it is outside quiet hours. A `reply` is a direct answer to something the
+"""The single gate every unsolicited-speech caller (greeting now, proactive speech later) must
+go through, so the rule lives in one place instead of being re-implemented per caller.
+
+Implements the decided policy: speak a greeting or a proactive utterance only when the assistant is
+not muted, no privacy zone is active, the privacy mode does not forbid it, `pet.greeting_enabled`
+(for greetings) is on, and it is outside quiet hours. A `reply` is a direct answer to something the
 user just said or asked for - it is blocked only by mute.
 
-A fourth kind, `"urgent"`, bypasses
-zone/privacy-mode/quiet-hours (never mute) for the genuine safety/data-loss class of interruption
-- callers in `nox.proactive` decide, per B.13's category ordering, which categories are allowed to
-call `may_speak("urgent")` at all (security/system and backup/data-loss only); lesser urgent
-categories (resources, task results) must go through `"proactive"` instead so they stay a visible
-warning rather than an interruption.
+A fourth kind, `"urgent"`, bypasses zone/privacy-mode/quiet-hours (never mute) for the genuine
+safety/data-loss class of interruption - callers in `nox.proactive` decide, by the urgent-category
+ordering, which categories are allowed to call `may_speak("urgent")` at all (security/system and
+backup/data-loss only); lesser urgent categories (resources, task results) must go through
+`"proactive"` instead so they stay a visible warning rather than an interruption.
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ from nox.core.config import NoxConfig, QuietHoursConfig
 
 SpeechKind = Literal["greeting", "proactive", "reply", "urgent"]
 
-#: Privacy modes that count as "quiet" for OP-10 when `pet.quiet_in_private_modes` is set.
+#: Privacy modes that count as "quiet" for this gate when `pet.quiet_in_private_modes` is set.
 _QUIET_PRIVACY_MODES = frozenset({"private", "offline"})
 
 

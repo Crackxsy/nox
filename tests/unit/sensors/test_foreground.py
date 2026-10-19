@@ -1,4 +1,4 @@
-"""Foreground sensor: change-only updates/events, real PrivacyService zone wiring (SP-15), never
+"""Foreground sensor: change-only updates/events, real PrivacyService zone wiring, never
 persisting window content beyond the state fields/events themselves, kill-switch pause."""
 
 from __future__ import annotations
@@ -51,14 +51,14 @@ async def test_zone_entry_and_exit_publish_privacy_zone_changed(
 async def test_browser_tab_title_switches_zone_within_same_process(
     probe: FakeWin32Probe, bus: FakeBus, state: FakeState, privacy: PrivacyService
 ) -> None:
-    """SP-15's hardest case: one process (a browser), tab title flips between zoned/non-zoned."""
+    """The hardest case: one process (a browser), tab title flips between zoned/non-zoned."""
     sensor = ForegroundSensor(probe, bus, state, privacy)
 
     probe.set_foreground("Sparkasse - Mein Konto - Chrome", "chrome.exe")
     await sensor.poll()
     assert privacy.active_zone == "banking"
 
-    probe.set_foreground("nox/repo: EPIC-20 - Chrome", "chrome.exe")
+    probe.set_foreground("nox/repo: pull request 20 - Chrome", "chrome.exe")
     await sensor.poll()
     assert privacy.active_zone is None
 
@@ -83,7 +83,7 @@ async def test_zone_event_never_carries_the_window_title(
 async def test_zoned_window_title_is_redacted_before_it_is_ever_written_anywhere(
     probe: FakeWin32Probe, bus: FakeBus, state: FakeState, privacy: PrivacyService
 ) -> None:
-    """SP-15 finding: `NoxState` is checkpointed to SQLite, so the raw title must never reach
+    """`NoxState` is checkpointed to SQLite, so the raw title must never reach
     `user.window_title` (or the `sensor.foreground_changed` payload) even for a zoned window -
     only "an app was open" (the process name) and the zone id may ever persist."""
     sensor = ForegroundSensor(probe, bus, state, privacy)

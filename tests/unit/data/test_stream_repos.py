@@ -1,4 +1,4 @@
-"""nox.data.stream_repos: typed rows, retention/purge rules (Spec v0.2 §7)."""
+"""nox.data.stream_repos: typed rows, retention/purge rules."""
 
 from __future__ import annotations
 

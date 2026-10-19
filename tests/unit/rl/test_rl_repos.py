@@ -1,4 +1,4 @@
-"""nox.data.rl_repos: typed rows over rl_matches/rl_events/rl_replays (Spec v0.3 §7, migration
+"""nox.data.rl_repos: typed rows over rl_matches/rl_events/rl_replays (migration
 0003_rl.sql)."""
 
 from __future__ import annotations

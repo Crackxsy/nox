@@ -32,7 +32,7 @@ export interface AppProps {
   lang: Lang;
   /** OBS browser-source mode: no interaction, no capture indicator (PRD §20), transparent. */
   overlay: boolean;
-  /** OP-1 creature concept, from `?variant=`; falls back to `neutral` for unknown/missing ids.
+  /** Creature concept, from `?variant=`; falls back to `neutral` for unknown/missing ids.
    * `sprite:<id>` selects a sprite set instead of a procedural variant (#19). */
   variantId: string | null;
   /** Dev-only still-frame override (`?still=1`): renders one frame with no WebSocket, used by

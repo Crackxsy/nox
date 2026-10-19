@@ -147,7 +147,7 @@ export function SpritePet({
 
     tick(performance.now());
     if (still) return;
-    // The sprite loop honours the same frame policy the procedural renderer does (`fpsFor`, A146):
+    // The sprite loop honours the same frame policy the procedural renderer does (`fpsFor`):
     // it used to tick on every animation frame regardless, so the 10/15/30/60 fps sleep tiers had
     // no effect at all on a sprite variant.
     let lastTick = 0;

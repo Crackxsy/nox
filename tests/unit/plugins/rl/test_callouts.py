@@ -1,5 +1,5 @@
-"""Callout rule engine (ST-12-06): priority order, cooldown suppression, the 2-4/minute rate cap,
-and silence-on-low-confidence (A129) - table-driven per Spec §12.1."""
+"""Callout rule engine: priority order, cooldown suppression, the 2-4/minute rate cap,
+and silence-on-low-confidence - table-driven."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def test_low_confidence_stays_silent() -> None:
 
 
 def test_save_from_hud_is_never_emitted_as_a_callout() -> None:
-    """Spec §8: `save` is replay-only in Stage 1, never real-time."""
+    """`save` is replay-only in Stage 1, never real-time."""
     now, _ = _clock()
     engine = CalloutEngine(now_fn=now)
     decision = engine.evaluate(kind="save", source="hud", confidence=0.95, payload={})

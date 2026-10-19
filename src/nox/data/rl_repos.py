@@ -1,7 +1,7 @@
-"""Typed repositories over the Rocket League Stage 1 tables (Spec v0.3 §7, migration
+"""Typed repositories over the Rocket League Stage 1 tables (migration
 `0003_rl.sql`). Mirrors `nox.data.stream_repos`'s conventions: frozen pydantic rows, ISO-8601 UTC
 timestamps, `purge_expired` for the nightly retention job. `rl_replays` rows are never purged here
-(Spec §7: never deleted by Nox except on explicit request) - no retain_until column for that table.
+(never deleted by Nox except on explicit request) - no retain_until column for that table.
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 /**
- * Proactive notifications (Spec v0.5 EPIC-19/ST-08-01): the toast panel's rows.
+ * Proactive notifications: the toast panel's rows.
  *
  * Nothing here is a durable log — `nox.proactive.store` is. Dismissing a toast is local only.
  * Toasts that report a security event or possible data loss are *not* auto-dismissed: a message

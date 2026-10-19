@@ -9,7 +9,7 @@ the `twitch.chat.send` tool (rate limiter + `ModerationGate`, never bypassed).
 
 Health is reported honestly by `TwitchPlugin.health`: AVAILABLE only once actually connected and
 joined; UNAVAILABLE when the plugin has no `nox/twitch/oauth_token`/`nox/twitch/bot_username`
-secret yet (ES-01: no bot account exists until the operator creates one) or Twitch is unreachable.
+secret yet (no bot account exists until the operator creates one) or Twitch is unreachable.
 """
 
 from __future__ import annotations

@@ -25,7 +25,7 @@ events:
   emits: [coding.session_started, coding.session_progress, coding.session_ended,
           coding.session_failed]
   listens: [security.kill_switch]       # terminate every active session (never leave one running
-                                         # unattended past a kill switch, Personality v1)
+                                         # unattended past a kill switch)
 secrets: []
 network:
   egress: []                            # no egress of its own - the Claude Code CLI authenticates

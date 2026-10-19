@@ -11,7 +11,7 @@ import './styles.css';
 // Token: read once from the fragment, keep in memory only, remove from the address bar.
 const token = takeToken(window.location, window.history);
 const overlay = queryFlag(window.location.search, 'overlay');
-// OP-1: `?variant=<id>` picks the creature concept (non-secret dev/display flag, query is fine).
+// `?variant=<id>` picks the creature concept (non-secret dev/display flag, query is fine).
 const variantId = queryString(window.location.search, 'variant');
 // Dev-only still-frame override for render_variants.py: one frame, no WebSocket.
 const still = queryFlag(window.location.search, 'still');

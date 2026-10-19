@@ -1,4 +1,4 @@
-"""Event payload round-trips for the Clip Pipeline additions (Spec v0.6 §8, EPIC-15): every new
+"""Event payload round-trips for the Clip Pipeline additions: every new
 `clip.*` name in `E` has a registered model in `PAYLOAD_MODELS` and validates a representative
 payload (Event Model testing rule, same pattern as `tests/unit/core/test_events.py`)."""
 

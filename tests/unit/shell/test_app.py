@@ -199,7 +199,7 @@ def test_kill_switch_reports_failure_honestly(qapp: Any, tmp_path: Path) -> None
 def test_quit_sends_sup_stop_to_supervisor(
     qapp: Any, tmp_path: Path, fake_bridge_factory: Any
 ) -> None:
-    """B-6: Quit always asks the supervisor to stop core, shell and itself - never a bare exit."""
+    """Quit always asks the supervisor to stop core, shell and itself - never a bare exit."""
     factory, _created = fake_bridge_factory
     sent: list[tuple[str, int, str]] = []
 
