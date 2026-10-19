@@ -591,8 +591,9 @@ _ABSOLUTE_PATH = re.compile(r"^\s*([a-zA-Z]:[\\/]|\\\\|/)")
 def _redact_string(text: str) -> str:
     """URLs as `scheme://host`, an absolute path as its file name (paths name the user), long
     key-like runs replaced."""
-    if _ABSOLUTE_PATH.match(text) and "\n" not in text:
-        return PurePath(text.strip().replace("\\", "/")).name
+    if _ABSOLUTE_PATH.match(text) and "\n" not in text and "://" not in text:
+        # The file name still goes through the checks below: it may itself be a token.
+        text = PurePath(text.strip().replace("\\", "/")).name
     text = _URL.sub(lambda m: _host_only(m.group(0)), text)
     return _HIGH_ENTROPY.sub(lambda m: REDACTED if _high_entropy(m.group(0)) else m.group(0), text)
 

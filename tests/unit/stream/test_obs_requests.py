@@ -459,3 +459,17 @@ def test_tool_scope_uses_the_scene_set() -> None:
     scope = scope_for_tool({"privacy_scene": "Pause", "scene_set": ["Live"]})
     switch = scope({"request_type": "SetCurrentProgramScene", "request_data": {"sceneName": "X"}})
     assert switch.risk is Risk.HIGH
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # Review payloads: a URL behind a path prefix, and a file name that is itself a token.
+        "C:/x/https://host.example/TOKEN1234567890abcdefXYZ",
+        "D:/exports/AbCdEf0123456789GhIjKlMn",
+    ],
+)
+def test_paths_do_not_bypass_url_and_token_redaction(value: str) -> None:
+    redacted = redact({"savedReplayPath": value})["savedReplayPath"]
+    assert "TOKEN1234567890" not in redacted
+    assert "AbCdEf0123456789GhIjKlMn" not in redacted
