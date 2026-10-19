@@ -81,6 +81,42 @@ The order of preference is therefore:
 
 A smaller model that fits beats a larger one that swaps, every time.
 
+## What `nox ai setup` picks
+
+`nox ai setup` (and the optional step in `nox onboard`, and Settings -> Lokale KI in the dashboard)
+measures the machine, checks that Ollama runs, picks a model from the table below, downloads it,
+asks it one plain question and one question that needs a tool, and only when both answers are
+right writes the model to your `user.yaml`. `nox ai setup --dry-run` stops after the
+recommendation.
+
+How it measures: RAM through `psutil`, VRAM only through `nvidia-smi`. An AMD, Intel or Apple GPU
+reports no VRAM figure that Nox could trust, so on those machines the RAM tiers decide - and the
+output says so instead of pretending. In the `offline` and `private` privacy modes nothing is
+downloaded: a model that is already present is still probed and can still be chosen.
+
+The section between the markers is machine-readable; `src/nox/ai/local_models.py` holds the same
+table and a unit test keeps them identical. Tiers are tried top to bottom within their basis.
+
+<!-- local-models:begin -->
+| Basis | At least (GB) | Model | Download (GB) | Measured |
+| --- | --- | --- | --- | --- |
+| vram | 12 | `qwen2.5:14b` | 9.0 | no |
+| vram | 4 | `qwen3:4b-instruct` | 2.5 | yes |
+| ram | 8 | `qwen3:4b-instruct` | 2.5 | yes |
+| ram | 6 | `qwen2.5:3b` | 1.9 | no |
+
+| Rule | Value |
+| --- | --- |
+| No local model below this much RAM (GB) | 6 |
+| No local model on ARM with at most this much RAM (GB) | 4 |
+| No local model on a Raspberry Pi of this generation or older | 4 |
+<!-- local-models:end -->
+
+"Measured" means the project ran the probe against that model on real hardware; an unmeasured row
+is a reasoned guess, and the probe after the download is what decides. On a Raspberry Pi 4, or any
+machine under the RAM floor, the honest answer is no local model: use Claude Code, or point
+`ai.providers.ollama.base_url` at a stronger machine on your network.
+
 ## Changing the model
 
 In your `%APPDATA%\Nox\user.yaml`:
