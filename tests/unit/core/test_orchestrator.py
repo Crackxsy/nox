@@ -189,14 +189,18 @@ async def test_a_disabled_fast_path_sends_even_a_greeting_to_the_router():
     await orch.stop()
 
 
-async def test_memory_context_is_appended_to_the_system_prompt_and_timed():
+async def test_memory_context_travels_as_turn_context_not_in_the_stable_prompt():
+    """The system message stays the same from turn to turn (cacheable, and a warm session needs no
+    restart); what changes per turn - memory included - travels as the request's context."""
     orch, _, router, _, _ = make()
     orch.context_provider = lambda _q: _context("## Memory context\n[vault:n.md#1] Notiz", 0.81)
     await orch.start()
     await orch.handle_text("Was steht in meinen Notizen?")
-    system = router.requests[0].messages[0].content
-    assert system.endswith("## Memory context\n[vault:n.md#1] Notiz")
-    assert system.startswith("You are Nox.")
+    request = router.requests[0]
+    assert request.messages[0].content == "You are Nox."
+    assert request.context.endswith("## Memory context\n[vault:n.md#1] Notiz")
+    assert request.system_text().startswith("You are Nox.")
+    assert request.system_text().endswith("[vault:n.md#1] Notiz")
     await orch.stop()
 
 

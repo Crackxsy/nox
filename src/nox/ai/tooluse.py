@@ -1,25 +1,22 @@
-"""How a model asks for a tool, and the guards around that request.
+"""The text-sentinel tool protocol, kept as the fallback for models without native tool calling.
 
-Neither provider Nox uses can be given tools natively today. The Claude Code CLI is started with
-``--tools ""`` on purpose - its own Read/Write/Bash tools would run outside Nox's permission engine
-entirely, which is the one thing that must never happen - and the local Ollama models Nox falls back
-to may or may not support tool calling depending on which model is pulled. So the request travels as
-text, in a shape narrow enough to be checked:
+Claude Code calls Nox's tools natively through the MCP bridge (`nox.mcp`), and Ollama models that
+declare the `tools` capability get Ollama's native `tools` field. A local model without that
+capability still can ask for a tool, as text, in a shape narrow enough to be checked:
 
     NOX_TOOL_CALL {"name": "home.light", "arguments": {"entity_ids": ["light.desk"], "on": true}}
 
-Three rules make that safe enough to act on:
+The Ollama provider's `SentinelSniffer` turns such a line into the same tool call the native path
+produces, so nothing downstream knows which protocol was used. Three rules make it safe enough:
 
 * **Only at the very start.** A directive is honoured only when the trimmed answer begins with the
-  sentinel. A model that writes a sentence and then a directive gets neither executed nor hidden -
-  it gets logged, because a silently swallowed tool call is the kind of bug nobody finds.
+  sentinel. A model that writes a sentence and then a directive gets neither executed nor hidden.
 * **Only offered tools.** A name that was not in this turn's offer is refused before any executor
-  sees it. The offer itself comes from the capability report, so a tool the active profile denies is
-  never even mentioned to the model.
+  sees it, by the tool loop, exactly as for native calls.
 * **The permission engine remains the backstop.** This module decides nothing about what may run.
-  Memory context is injected into the same prompt, and a vault note could contain a line that looks
-  like a directive - so the answer to "what if the model is talked into it" is not this parser, it
-  is that `presets.run_action` still needs a confirmation and a door lock still has no tool at all.
+
+This module also owns the "not available right now" section and the rendering of a tool result,
+which every protocol shares.
 """
 
 from __future__ import annotations
@@ -29,6 +26,8 @@ from collections.abc import Sequence
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from nox.ai.base import ToolDefinition
 
 __all__ = [
     "SENTINEL",
@@ -70,12 +69,12 @@ class ToolCall(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
-def _properties(tool: OfferedTool) -> str:
+def _properties(schema: dict[str, Any]) -> str:
     """The argument names and types, one line, from the JSON schema the tool already publishes."""
-    properties = tool.schema_.get("properties")
+    properties = schema.get("properties")
     if not isinstance(properties, dict) or not properties:
         return "no arguments"
-    required = set(tool.schema_.get("required") or ())
+    required = set(schema.get("required") or ())
     parts = []
     for name, spec in properties.items():
         kind = spec.get("type", "any") if isinstance(spec, dict) else "any"
@@ -102,7 +101,7 @@ def summarise(description: str) -> str:
     return first[:SUMMARY_LIMIT].rsplit(" ", 1)[0] + "..."
 
 
-def render_offer(tools: Sequence[OfferedTool]) -> str:
+def render_offer(tools: Sequence[ToolDefinition]) -> str:
     """The prompt section that describes the tools and the one shape a request may take.
 
     Empty when nothing is offered - and then the sentinel is never mentioned, so a model cannot ask
@@ -122,7 +121,9 @@ def render_offer(tools: Sequence[OfferedTool]) -> str:
     ]
     for tool in tools:
         note = " [asks the user for confirmation first]" if tool.asks_first else ""
-        lines.append(f"- {tool.name}({_properties(tool)}){note}: {summarise(tool.description)}")
+        lines.append(
+            f"- {tool.name}({_properties(tool.input_schema)}){note}: {summarise(tool.description)}"
+        )
     return "\n".join(lines)
 
 

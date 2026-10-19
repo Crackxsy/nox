@@ -197,7 +197,7 @@ async def test_checking_one_thing_names_the_rule_that_decided(core: NoxCore) -> 
 # ---- tools in a conversation -------------------------------------------------------------------
 
 
-async def test_the_orchestrator_got_a_tool_gate(core: NoxCore) -> None:
+async def test_the_orchestrator_got_a_tool_loop(core: NoxCore) -> None:
     """Everything reachable from the dashboard has to be reachable by saying it."""
     assert core.orchestrator is not None
     assert core.orchestrator.tool_gate is not None

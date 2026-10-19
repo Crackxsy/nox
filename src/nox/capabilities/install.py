@@ -26,7 +26,7 @@ from nox.capabilities.tools import register_capability_tools
 from nox.core.config import NoxConfig
 from nox.core.extension import ExtensionRuntime
 from nox.core.logging import get_logger
-from nox.core.toolloop import ToolGate
+from nox.core.toolloop import ToolLoop
 from nox.day.install import CALENDAR_SECRETS
 from nox.home.install import ACCESS_TOKEN_SECRET as HOME_TOKEN_SECRET
 from nox.ipc.dispatch import RequestRegistry
@@ -215,7 +215,7 @@ def install(core: CoreLike) -> ExtensionRuntime:
 
     orchestrator = getattr(core, "orchestrator", None)
     if orchestrator is not None:
-        orchestrator.tool_gate = ToolGate(offer=offer, call=call, unavailable=unavailable)
+        orchestrator.tool_loop = ToolLoop(offer=offer, call=call, unavailable=unavailable)
     else:
         log.warning("capabilities.no_orchestrator", detail="conversations will have no tools")
     log.info("capabilities.installed")

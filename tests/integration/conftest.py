@@ -61,3 +61,10 @@ def _no_real_ai_providers(request: pytest.FixtureRequest, monkeypatch: pytest.Mo
 
     monkeypatch.setattr(OllamaProvider, "__init__", ollama)
     monkeypatch.setattr(ClaudeCodeProvider, "__init__", claude)
+
+
+@pytest.fixture(autouse=True)
+def _no_claude_prewarm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A booted core would start a warm Claude Code process for its first turn; a test that wants
+    one starts it itself."""
+    monkeypatch.setattr("nox.mcp.install.prewarm_allowed", lambda _provider: False)

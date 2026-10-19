@@ -1,46 +1,51 @@
-"""`ToolGate`: the one place a conversation can reach a tool.
+"""`ToolLoop`: the one place a conversation can reach a tool.
 
 The orchestrator streams text and knows nothing about permissions; the executor checks permissions
-and knows nothing about conversations. This sits between them and is deliberately small - it parses
-one directive, runs one tool, and hands back one sentence for the model to read.
+and knows nothing about conversations. This sits between them. Per chat turn it opens an
+`ActiveTurn` - the offer for that turn, a `TurnBudget`, and a random token - and every tool call of
+that turn, whichever way it arrives, goes through `ToolLoop.execute`:
 
-Two decisions worth keeping:
+* native calls from a model Nox drives itself (Ollama's `tool_calls`, and the text-sentinel
+  fallback for models without tool support, which the provider turns into the same calls),
+* calls Claude Code makes through Nox's MCP bridge (`nox.mcp.gate` looks the turn up by token).
+
+Decisions worth keeping:
 
 * **The offer comes from the capability report, not from the registry.** A tool the active profile
-  denies is never mentioned to the model, which is both cheaper and more honest than offering it and
-  refusing the call. A tool that would ask the user first *is* offered, marked as such, because
-  hiding it would take the choice away from the person the dialog is for.
+  denies is never offered, which is both cheaper and more honest than offering it and refusing the
+  call. A tool that would ask the user first *is* offered, marked as such, because hiding it would
+  take the choice away from the person the dialog is for.
 * **Nothing here decides what may run.** Every call goes through the executor under the `companion`
   agent, so it meets the same permission check, audit entry and kill switch as a click in the
-  dashboard. A model that is talked into asking for something still has to get past all of that.
+  dashboard. This module only adds what a conversation needs on top: the call must be in this
+  turn's offer, the turn must still be open, and the budget must allow it.
+* **A turn's token dies with the turn.** A call that arrives after the turn ended (a model that kept
+  going after barge-in, a stale bridge) finds no turn and is refused.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
-from nox.ai.tooluse import (
-    OfferedTool,
-    ToolCall,
-    parse_directive,
-    render_offer,
-    render_result,
-    render_unavailable,
-)
-from nox.ai.tooluse import (
-    Unavailable as UnavailableItem,
-)
+from nox.ai.base import ToolDefinition
+from nox.ai.tooluse import OfferedTool, render_unavailable
+from nox.ai.tooluse import Unavailable as UnavailableItem
 from nox.core.logging import get_logger
+from nox.core.turnbudget import TurnBudget
 
 log = get_logger(__name__)
 
-__all__ = ["ToolGate", "ToolOutcome", "ToolRound"]
+__all__ = ["ActiveTurn", "ToolEvent", "ToolLoop", "ToolOutcome", "ToolRun"]
 
-#: How many tool rounds one turn may take before Nox answers with what it has. Three is enough for
-#: "look something up, act on it, report" and small enough that a confused model cannot spin.
-DEFAULT_MAX_ROUNDS = 3
+#: Error codes a refused call carries, so the model and the tests can tell the cases apart.
+REFUSED_NOT_OFFERED = "tool.not_offered"
+REFUSED_TURN_OVER = "turn.closed"
+REFUSED_BUDGET = "turn.budget"
 
 
 class ToolOutcome(Protocol):
@@ -54,86 +59,173 @@ class ToolOutcome(Protocol):
 Offer = Callable[[], Sequence[OfferedTool]]
 Call = Callable[[str, dict[str, Any]], Awaitable[ToolOutcome]]
 Unavailable = Callable[[], Sequence[UnavailableItem]]
+BudgetFactory = Callable[[], TurnBudget]
 
 
 @dataclass(frozen=True, slots=True)
-class ToolRound:
-    """One round: what to hand back to the model, and what actually happened.
+class ToolRun:
+    """The result of one call as the model will read it, plus whether it ran at all."""
 
-    The tool name is carried separately from the message because the turn record and the dashboard
-    want it as data, and digging it back out of a sentence written for a language model would be
-    exactly the kind of parsing this code exists to avoid.
-    """
+    name: str
+    ok: bool
+    data: dict[str, Any] | None = None
+    error: str = ""
+    #: True when Nox refused before the executor saw the call (not offered, turn over, budget).
+    refused: bool = False
 
-    feedback: str
-    tool: str = ""
+
+@dataclass(frozen=True, slots=True)
+class ToolEvent:
+    kind: Literal["started", "finished"]
+    name: str
     ok: bool = False
 
 
+@dataclass(eq=False)
+class ActiveTurn:
+    """One turn's tools. Created by `ToolLoop.begin`, closed by `ToolLoop.end`."""
+
+    turn_id: str
+    token: str
+    offered: dict[str, OfferedTool]
+    budget: TurnBudget
+    #: Tools that actually ran, in order (refused calls are not in here).
+    used: list[str] = field(default_factory=list)
+    listeners: list[Callable[[ToolEvent], None]] = field(default_factory=list)
+    closed: bool = False
+    tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+
+    def definitions(self) -> list[ToolDefinition]:
+        return [
+            ToolDefinition(
+                name=tool.name,
+                description=tool.description,
+                input_schema=dict(tool.schema_),
+                asks_first=tool.asks_first,
+            )
+            for tool in self.offered.values()
+        ]
+
+    def emit(self, event: ToolEvent) -> None:
+        for listener in list(self.listeners):
+            try:
+                listener(event)
+            except Exception as exc:  # noqa: BLE001 - a listener must not break the call
+                log.warning("toolloop.listener_failed", error=f"{type(exc).__name__}: {exc}")
+
+
 @dataclass(slots=True)
-class ToolGate:
+class ToolLoop:
     """Tool use for one orchestrator. `None` there means conversations get no tools at all."""
 
     offer: Offer
     call: Call
-    #: What cannot be done right now, and why; rendered under the offer so the model can say so.
+    #: What cannot be done right now, and why; rendered into the turn context.
     unavailable: Unavailable | None = None
-    max_rounds: int = DEFAULT_MAX_ROUNDS
-    #: Names offered in the current turn, so a directive can be checked against them.
-    _allowed: list[str] = field(default_factory=list)
+    budget_factory: BudgetFactory = TurnBudget
+    _turns: dict[str, ActiveTurn] = field(default_factory=dict)
 
-    def prompt(self) -> str:
-        """The tool section for this turn's system message, and the names it permits.
+    # -- offer -----------------------------------------------------------------------------------
 
-        Refreshed per turn because the profile, the mode and the privacy state can all change
+    def current_offer(self) -> list[OfferedTool]:
+        """The tools usable right now. Refreshed per call: profile, mode and privacy all change
         between two sentences, and an offer made from a stale report is a promise Nox cannot keep.
         """
         try:
-            tools = list(self.offer())
+            return list(self.offer())
         except Exception as exc:  # noqa: BLE001 - no offer is a worse turn, not a failed one
             log.warning("toolloop.offer_failed", error=f"{type(exc).__name__}: {exc}")
-            tools = []
-        self._allowed = [tool.name for tool in tools]
-        missing: list[UnavailableItem] = []
-        if self.unavailable is not None:
-            try:
-                missing = list(self.unavailable())
-            except Exception as exc:  # noqa: BLE001 - the offer still stands without the caveats
-                log.warning("toolloop.unavailable_failed", error=f"{type(exc).__name__}: {exc}")
-        sections = [render_offer(tools), render_unavailable(missing)]
-        return "\n\n".join(section for section in sections if section)
+            return []
 
-    async def advance(self, text: str) -> ToolRound | None:
-        """`None` when `text` is an ordinary answer; otherwise the round to hand back.
-
-        A refusal, a timeout and a crash all come back as a sentence rather than an exception: the
-        model is mid-conversation and the user is waiting, so "that did not work, here is why" is
-        the only useful shape.
-        """
-        parsed = parse_directive(text, self._allowed)
-        if parsed is None:
-            return None
-        if isinstance(parsed, str):
-            log.info("toolloop.directive_rejected", reason=parsed)
-            return ToolRound(feedback=parsed)
-        return await self._run(parsed)
-
-    async def _run(self, requested: ToolCall) -> ToolRound:
+    def caveats(self) -> str:
+        """The "not available right now" section for the turn context, or empty."""
+        if self.unavailable is None:
+            return ""
         try:
-            outcome = await self.call(requested.name, requested.arguments)
-        except Exception as exc:  # noqa: BLE001 - a broken tool must not end the conversation
-            log.warning(
-                "toolloop.call_raised", tool=requested.name, error=f"{type(exc).__name__}: {exc}"
-            )
-            return ToolRound(
-                feedback=render_result(requested.name, ok=False, error=type(exc).__name__),
-                tool=requested.name,
-            )
-        log.info("toolloop.called", tool=requested.name, ok=outcome.ok)
-        return ToolRound(
-            feedback=render_result(
-                requested.name, ok=outcome.ok, data=outcome.data, error=outcome.error or ""
-            ),
-            tool=requested.name,
-            ok=outcome.ok,
+            return render_unavailable(list(self.unavailable()))
+        except Exception as exc:  # noqa: BLE001 - the offer still stands without the caveats
+            log.warning("toolloop.unavailable_failed", error=f"{type(exc).__name__}: {exc}")
+            return ""
+
+    # -- turns -------------------------------------------------------------------------------------
+
+    def begin(self, turn_id: str) -> ActiveTurn:
+        turn = ActiveTurn(
+            turn_id=turn_id,
+            token=secrets.token_urlsafe(32),
+            offered={tool.name: tool for tool in self.current_offer()},
+            budget=self.budget_factory(),
         )
+        self._turns[turn.token] = turn
+        return turn
+
+    def by_token(self, token: str) -> ActiveTurn | None:
+        """The open turn this token belongs to, compared in constant time against each token."""
+        found: ActiveTurn | None = None
+        for candidate, turn in list(self._turns.items()):
+            if secrets.compare_digest(candidate.encode(), token.encode()):
+                found = turn
+        return found
+
+    def open_turns(self) -> list[ActiveTurn]:
+        return list(self._turns.values())
+
+    async def end(self, turn: ActiveTurn) -> None:
+        """Close the turn: its token stops working and calls still running are cancelled."""
+        turn.closed = True
+        self._turns.pop(turn.token, None)
+        running = [task for task in turn.tasks if not task.done()]
+        for task in running:
+            task.cancel()
+        for task in running:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+
+    async def end_all(self) -> None:
+        """Kill switch: every open turn ends now."""
+        for turn in list(self._turns.values()):
+            await self.end(turn)
+
+    # -- calls -------------------------------------------------------------------------------------
+
+    async def execute(self, turn: ActiveTurn, name: str, arguments: dict[str, Any]) -> ToolRun:
+        """Run one call of `turn`. Refusals, timeouts and crashes come back as a `ToolRun`, never
+        as an exception: the model is mid-conversation and "that did not work, here is why" is the
+        only useful shape."""
+        if turn.closed:
+            return ToolRun(name, ok=False, error=REFUSED_TURN_OVER, refused=True)
+        if name not in turn.offered:
+            log.info("toolloop.not_offered", tool=name)
+            return ToolRun(name, ok=False, error=REFUSED_NOT_OFFERED, refused=True)
+        refusal = turn.budget.admit(name, arguments)
+        if refusal is not None:
+            log.info("toolloop.budget_refused", tool=name, calls=turn.budget.calls)
+            return ToolRun(name, ok=False, error=f"{REFUSED_BUDGET}: {refusal}", refused=True)
+        turn.emit(ToolEvent("started", name))
+        task = asyncio.ensure_future(self.call(name, arguments))
+        turn.tasks.add(task)
+        try:
+            outcome = await task
+        except asyncio.CancelledError:
+            turn.emit(ToolEvent("finished", name, ok=False))
+            if turn.closed and not _current_task_cancelling():
+                return ToolRun(name, ok=False, error=REFUSED_TURN_OVER, refused=True)
+            raise
+        except Exception as exc:  # noqa: BLE001 - a broken tool must not end the conversation
+            log.warning("toolloop.call_raised", tool=name, error=f"{type(exc).__name__}: {exc}")
+            turn.budget.record(name, arguments, ok=False)
+            turn.emit(ToolEvent("finished", name, ok=False))
+            return ToolRun(name, ok=False, error=type(exc).__name__)
+        finally:
+            turn.tasks.discard(task)
+        turn.budget.record(name, arguments, ok=outcome.ok)
+        turn.used.append(name)
+        turn.emit(ToolEvent("finished", name, ok=outcome.ok))
+        log.info("toolloop.called", tool=name, ok=outcome.ok)
+        return ToolRun(name, ok=outcome.ok, data=outcome.data, error=outcome.error or "")
+
+
+def _current_task_cancelling() -> bool:
+    """Whether the caller itself is being cancelled (as opposed to only the inner call)."""
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0

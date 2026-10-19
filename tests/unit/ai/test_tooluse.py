@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pytest
 
+from nox.ai.base import ToolDefinition
 from nox.ai.tooluse import (
     SENTINEL,
-    OfferedTool,
     ToolCall,
     Unavailable,
     decided_prose,
@@ -127,10 +127,10 @@ def test_nothing_offered_means_the_protocol_is_never_mentioned() -> None:
 def test_the_offer_names_the_arguments_and_the_confirmation() -> None:
     offer = render_offer(
         [
-            OfferedTool(
+            ToolDefinition(
                 name="home.light",
                 description="Dim the lights.",
-                schema={
+                input_schema={
                     "properties": {"entity_ids": {"type": "array"}, "pct": {"type": "integer"}},
                     "required": ["entity_ids"],
                 },

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -46,6 +47,7 @@ def build_providers(
     *,
     egress: EgressGuard,
     status_source: Callable[[], Mapping[str, Any]],
+    claude_workdir: Path | None = None,
 ) -> list[AiProvider]:
     """The provider chain, in fallback order, each with its network access already guarded."""
     return [
@@ -54,7 +56,7 @@ def build_providers(
             ai_config.providers.ollama,
             client_factory=lambda: egress.client(timeout=_HTTP_TIMEOUT),
         ),
-        ClaudeCodeProvider(ai_config.providers.claude_code),
+        ClaudeCodeProvider(ai_config.providers.claude_code, workdir=claude_workdir),
     ]
 
 
