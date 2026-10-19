@@ -73,7 +73,9 @@ def initialize_result(requested_version: object, server_version: str) -> dict[st
     version = requested_version if isinstance(requested_version, str) else PROTOCOL_VERSION
     return {
         "protocolVersion": version,
-        "capabilities": {"tools": {"listChanged": True}},
+        # The tool list is fixed for the life of a bridge: a different offer gets a new Claude
+        # Code process (the offer is part of the session fingerprint), so no change is announced.
+        "capabilities": {"tools": {"listChanged": False}},
         "serverInfo": {"name": SERVER_NAME, "version": server_version},
     }
 

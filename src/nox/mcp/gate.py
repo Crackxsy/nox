@@ -103,7 +103,14 @@ class McpGate:
         tool_loop: Callable[[], ToolLoop | None],
         runtime_dir: Path,
         command: Sequence[str],
+        cloud_allowed: Callable[[], bool] | None = None,
+        on_bridge_lost: Callable[[str], None] | None = None,
     ) -> None:
+        """`cloud_allowed` is asked before every call: Claude Code is a cloud model, and a
+        switch to privacy mode private or offline must stop it mid-turn, not at the next turn.
+        `on_bridge_lost` hears when a bridge that was not retired drops out."""
+        self._cloud_allowed = cloud_allowed
+        self._on_bridge_lost = on_bridge_lost
         self._hub = hub
         self._hub_url = hub_url
         self._tokens = tokens
@@ -116,19 +123,22 @@ class McpGate:
         #: The latest turn token per bridge, kept until it is delivered or the bridge retires.
         self._pending: dict[str, str] = {}
         self._tasks: set[asyncio.Task[bool]] = set()
-        self._unsub: Callable[[], None] | None = None
+        self._unsubs: list[Callable[[], None]] = []
 
     # -- wiring ------------------------------------------------------------------------------------
 
     def register(self, registry: RequestRegistry) -> None:
         registry.register("mcp.tools.list", EmptyPayload, self._list, roles=(MCP_ROLE,))
         registry.register("mcp.tools.call", ToolsCallPayload, self._call, roles=(MCP_ROLE,))
-        self._unsub = self._bus.subscribe(E.IPC_CLIENT_CONNECTED, self._on_connected)
+        self._unsubs = [
+            self._bus.subscribe(E.IPC_CLIENT_CONNECTED, self._on_connected),
+            self._bus.subscribe(E.IPC_CLIENT_DISCONNECTED, self._on_disconnected),
+        ]
 
     async def close(self) -> None:
-        if self._unsub is not None:
-            self._unsub()
-            self._unsub = None
+        for unsub in self._unsubs:
+            unsub()
+        self._unsubs = []
         for launch in list(self._launches.values()):
             await self.retire(launch)
 
@@ -175,6 +185,13 @@ class McpGate:
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
 
+    def _on_disconnected(self, event: Event) -> None:
+        client_id = str(event.payload.get("client_id", ""))
+        # A retired bridge is no longer in `_launches`; only an unexpected loss is reported.
+        if client_id in self._launches and self._on_bridge_lost is not None:
+            log.warning("mcp.bridge_lost", client=client_id)
+            self._on_bridge_lost(client_id)
+
     async def activate(self, launch: Launch, token: str) -> bool:
         """Hand the bridge of `launch` the token of the turn that is about to start.
 
@@ -182,6 +199,11 @@ class McpGate:
         may not be connected yet: the token is then kept and pushed the moment it connects, which
         is long before the model can get to its first tool call. False = not delivered (yet).
         """
+        loop = self._tool_loop()
+        turn = loop.by_token(token) if loop is not None else None
+        if turn is not None:
+            # The token works only for the bridge it was handed to.
+            turn.client = launch.client_id
         self._pending[launch.client_id] = token
         connected = self._connected.get(launch.client_id)
         if connected is None or not connected.is_set():
@@ -241,6 +263,14 @@ class McpGate:
         if loop is None or turn is None:
             log.info("mcp.call_without_open_turn", client=ctx.client_id)
             raise IpcError(ERR_PERMISSION, "no open turn for this token")
+        if turn.client != ctx.client_id:
+            log.warning("mcp.call_from_another_bridge", client=ctx.client_id)
+            raise IpcError(ERR_PERMISSION, "this turn belongs to another bridge")
+        if self._cloud_allowed is not None and not self._cloud_allowed():
+            log.info("mcp.call_refused_privacy", client=ctx.client_id)
+            raise IpcError(
+                ERR_PERMISSION, "the privacy mode does not allow a cloud model to use tools now"
+            )
         name = from_wire(payload.name)
         run = await loop.execute(turn, name, payload.arguments)
         return {

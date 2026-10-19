@@ -58,6 +58,8 @@ class World:
     def __init__(self, hub: IpcHub, gate: McpGate, loop: ToolLoop, recorder: Recorder) -> None:
         self.hub, self.gate, self.loop, self.recorder = hub, gate, loop, recorder
         self.tokens: TokenStore = hub._tokens  # noqa: SLF001 - the test's own store
+        self.cloud_allowed = True
+        self.lost: list[str] = []
 
 
 @pytest.fixture
@@ -71,6 +73,7 @@ async def world(tmp_path: Path) -> AsyncIterator[World]:
     loop = ToolLoop(
         offer=lambda: [LIGHT], call=recorder, budget_factory=lambda: TurnBudget(max_calls=2)
     )
+    holder: list[World] = []
     gate = McpGate(
         hub=hub,
         hub_url=lambda: hub.url,
@@ -79,9 +82,13 @@ async def world(tmp_path: Path) -> AsyncIterator[World]:
         tool_loop=lambda: loop,
         runtime_dir=tmp_path,
         command=[sys.executable],
+        cloud_allowed=lambda: holder[0].cloud_allowed,
+        on_bridge_lost=lambda client_id: holder[0].lost.append(client_id),
     )
     gate.register(registry)
-    yield World(hub, gate, loop, recorder)
+    world = World(hub, gate, loop, recorder)
+    holder.append(world)
+    yield world
     await gate.close()
     await hub.stop()
 
@@ -363,3 +370,69 @@ def test_the_mcp_requests_are_registered_for_the_mcp_role_only(world: World) -> 
     for name in ("mcp.tools.list", "mcp.tools.call"):
         registration = registry.get(name)
         assert registration is not None and registration.allowed_roles == frozenset({"mcp"})
+
+
+async def test_switching_to_private_mid_turn_refuses_the_next_call(world: World) -> None:
+    """Claude Code is a cloud model: from the moment the privacy mode forbids the cloud, no tool
+    result may reach it any more, even inside a turn that started in balanced mode."""
+    launch = world.gate.prepare()
+    bridge = await _connected(world, launch)
+    try:
+        turn = world.loop.begin("t1")
+        await world.gate.activate(launch, turn.token)
+        first = await bridge.call("home-light", {"on": True})
+
+        world.cloud_allowed = False
+        second = await bridge.call("home-light", {"on": False})
+
+        assert first["isError"] is False
+        assert second["isError"] is True and "privacy" in second["content"][0]["text"]
+        assert len(world.recorder.calls) == 1
+    finally:
+        await bridge.close()
+
+
+async def test_a_turn_token_works_only_for_the_bridge_it_was_handed_to(world: World) -> None:
+    own, other = world.gate.prepare(), world.gate.prepare()
+    other_env = json.loads(other.config_path.read_text(encoding="utf-8"))["mcpServers"]["nox"][
+        "env"
+    ]
+    intruder = await _client(world, other_env["NOX_WORKER_TOKEN"], "mcp", other.client_id)
+    try:
+        turn = world.loop.begin("t1")
+        await world.gate.activate(own, turn.token)
+
+        with pytest.raises(IpcError) as caught:
+            await intruder.request(
+                "mcp.tools.call", {"token": turn.token, "name": "home-light", "arguments": {}}
+            )
+
+        assert caught.value.code == ERR_PERMISSION
+        assert world.recorder.calls == []
+    finally:
+        await intruder.close()
+
+
+async def test_an_unexpected_bridge_loss_is_reported_and_a_retired_one_is_not(
+    world: World,
+) -> None:
+    lost, retired = world.gate.prepare(), world.gate.prepare()
+    lost_bridge = await _connected(world, lost)
+    retired_bridge = await _connected(world, retired)
+
+    await lost_bridge.close()  # the process dies on its own
+    await _until(lambda: world.lost == [lost.client_id])
+    await world.gate.retire(retired)
+    await retired_bridge.close()
+
+    assert world.lost == [lost.client_id]
+
+
+async def test_the_bridge_does_not_announce_tool_list_changes(world: World) -> None:
+    launch = world.gate.prepare()
+    real = await Bridge.start(launch)
+    try:
+        init = await real.rpc("initialize", {"protocolVersion": "2025-06-18"})
+        assert init["result"]["capabilities"]["tools"] == {"listChanged": False}
+    finally:
+        await real.close()

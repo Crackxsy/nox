@@ -46,6 +46,7 @@ __all__ = ["ActiveTurn", "ToolEvent", "ToolLoop", "ToolOutcome", "ToolRun"]
 REFUSED_NOT_OFFERED = "tool.not_offered"
 REFUSED_TURN_OVER = "turn.closed"
 REFUSED_BUDGET = "turn.budget"
+REFUSED_WITHDRAWN = "tool.withdrawn"
 
 
 class ToolOutcome(Protocol):
@@ -93,6 +94,9 @@ class ActiveTurn:
     used: list[str] = field(default_factory=list)
     listeners: list[Callable[[ToolEvent], None]] = field(default_factory=list)
     closed: bool = False
+    #: The MCP bridge the turn's token was handed to (`nox.mcp.gate`); empty for a turn whose
+    #: calls come back through the orchestrator.
+    client: str = ""
     tasks: set[asyncio.Task[Any]] = field(default_factory=set)
 
     def definitions(self) -> list[ToolDefinition]:
@@ -200,6 +204,11 @@ class ToolLoop:
         if name not in turn.offered:
             log.info("toolloop.not_offered", tool=name)
             return ToolRun(name, ok=False, error=REFUSED_NOT_OFFERED, refused=True)
+        if name not in self.current_offer_names():
+            # The profile, mode or privacy changed during the turn: the offer it started with
+            # no longer holds for this tool.
+            log.info("toolloop.no_longer_offered", tool=name)
+            return ToolRun(name, ok=False, error=REFUSED_WITHDRAWN, refused=True)
         refusal = turn.budget.admit(name, arguments)
         if refusal is not None:
             log.info("toolloop.budget_refused", tool=name, calls=turn.budget.calls)

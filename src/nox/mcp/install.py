@@ -21,6 +21,7 @@ from typing import Any
 from nox.ai.providers.claude_code import ClaudeCodeProvider
 from nox.core.events import E, Event
 from nox.core.logging import get_logger
+from nox.core.toolloop import ToolLoop
 from nox.mcp.gate import McpGate
 
 log = get_logger(__name__)
@@ -45,17 +46,39 @@ def _bridge_command(worker_command: list[str]) -> list[str]:
 
 
 class McpRuntime:
-    def __init__(self, gate: McpGate, provider: ClaudeCodeProvider) -> None:
+    def __init__(
+        self,
+        gate: McpGate,
+        provider: ClaudeCodeProvider,
+        *,
+        cloud_allowed: Callable[[], bool] = lambda: True,
+        tool_loop: Callable[[], ToolLoop | None] = lambda: None,
+    ) -> None:
         self.gate = gate
         self.provider = provider
         self.prewarm_task: asyncio.Task[None] | None = None
+        self._cloud_allowed = cloud_allowed
+        self._tool_loop = tool_loop
         self._unsubs: list[Callable[[], None]] = []
 
     def watch(self, core: Any) -> None:
         self._unsubs = [
             core.bus.subscribe(E.SECURITY_KILL_SWITCH, self._on_kill),
             core.bus.subscribe(E.SYSTEM_STARTED, self._on_started),
+            core.bus.subscribe(E.PRIVACY_MODE_CHANGED, self._on_privacy),
         ]
+
+    async def _on_privacy(self, _event: Event) -> None:
+        """Private or offline from now on: a cloud model must stop mid-turn, not at the next one.
+        Open turns end (their tokens die, running calls are cancelled) and the answer in progress
+        is interrupted; the gate refuses any call that still arrives."""
+        if self._cloud_allowed():
+            return
+        loop = self._tool_loop()
+        if loop is not None:
+            await loop.end_all()
+        self.provider.conversation.halt()
+        log.info("mcp.halted_for_privacy")
 
     async def _on_kill(self, _event: Event) -> None:
         await self.provider.conversation.kill()
@@ -81,7 +104,10 @@ def install(core: Any) -> McpRuntime | None:
         log.warning("mcp.not_installed", reason="no Claude Code provider or no hub")
         return None
     orchestrator = core.orchestrator
+    privacy = core.security.privacy
     gate = McpGate(
+        cloud_allowed=privacy.allows_cloud,
+        on_bridge_lost=provider.conversation.bridge_lost,
         hub=core.hub,
         hub_url=lambda: core.hub.url,
         tokens=core.tokens,
@@ -92,7 +118,12 @@ def install(core: Any) -> McpRuntime | None:
     )
     gate.register(core.registry)
     provider.conversation.attach_tools(gate)
-    runtime = McpRuntime(gate, provider)
+    runtime = McpRuntime(
+        gate,
+        provider,
+        cloud_allowed=privacy.allows_cloud,
+        tool_loop=lambda: orchestrator.tool_loop if orchestrator is not None else None,
+    )
     runtime.watch(core)
     if prewarm_allowed(provider):
         runtime.prewarm_task = asyncio.create_task(_prewarm(core, provider), name="nox-prewarm")
@@ -105,8 +136,10 @@ async def _prewarm(core: Any, provider: ClaudeCodeProvider) -> None:
         return
     try:
         provider.executable()  # not installed: nothing to warm, the router will say why
+        loop = core.orchestrator.tool_loop
+        offer = loop.current_offer_names() if loop is not None else []
         await provider.conversation.prewarm(
-            core.orchestrator.system_prompt(), core.security.privacy.mode.value
+            core.orchestrator.system_prompt(), core.security.privacy.mode.value, offer
         )
     except Exception as exc:  # noqa: BLE001 - a failed prewarm only means a cold first turn
         log.info("mcp.prewarm_failed", error=f"{type(exc).__name__}: {exc}")

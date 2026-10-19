@@ -416,3 +416,20 @@ async def test_tools_the_provider_ran_itself_are_recorded_apart_from_nox_tools()
 
     assert turn.provider_tools == ["WebSearch"]
     assert turn.response == "Gefunden."
+
+
+async def test_a_tool_withdrawn_during_the_turn_is_refused() -> None:
+    """The offer of a turn is a ceiling, not a promise: a profile, mode or privacy change in the
+    middle of the turn takes the tool away for the rest of it."""
+    from nox.core.toolloop import REFUSED_WITHDRAWN
+
+    offer = [LIGHT]
+    recorder = Recorder()
+    loop = ToolLoop(offer=lambda: list(offer), call=recorder)
+    turn = loop.begin("t")
+
+    offer.clear()
+    run = await loop.execute(turn, "home.light", {})
+
+    assert run.refused and run.error == REFUSED_WITHDRAWN
+    assert recorder.calls == []
