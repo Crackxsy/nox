@@ -173,6 +173,7 @@ class ToolExecutor:
             target=target,
             task_id=task_id,
             origin=origin,
+            rememberable=spec.rememberable,
         )
 
         result = self._permission_engine.check(request)

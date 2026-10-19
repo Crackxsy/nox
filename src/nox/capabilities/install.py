@@ -213,9 +213,17 @@ def install(core: CoreLike) -> ExtensionRuntime:
     register_capability_tools(core.tool_registry, report)
     register_capability_ipc(core.registry, report)
 
+    def set_tainted(tainted: bool) -> None:
+        engine = getattr(core.security, "engine", None)
+        setter = getattr(engine, "set_tainted", None)
+        if setter is not None:
+            setter(tainted)
+
     orchestrator = getattr(core, "orchestrator", None)
     if orchestrator is not None:
-        orchestrator.tool_loop = ToolLoop(offer=offer, call=call, unavailable=unavailable)
+        orchestrator.tool_loop = ToolLoop(
+            offer=offer, call=call, unavailable=unavailable, taint=set_tainted
+        )
     else:
         log.warning("capabilities.no_orchestrator", detail="conversations will have no tools")
     log.info("capabilities.installed")

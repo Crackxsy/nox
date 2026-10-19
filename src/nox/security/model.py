@@ -44,6 +44,9 @@ class PermissionRequest(BaseModel):
     target: str = ""  # path, scene name, repo, url ... used for zone/root matching
     task_id: str | None = None
     origin: str = "local"  # local | voice | telegram | chat | plugin
+    #: False for tools whose confirmation may never become a remembered grant (package.*,
+    #: mic.record_long, skill.*). The executor copies it from the tool's `ToolSpec.rememberable`.
+    rememberable: bool = True
 
 
 class PermissionResult(BaseModel):
@@ -94,7 +97,7 @@ class TemporaryGrant(BaseModel):
     """
 
     grant_id: str
-    scope: str  # task:<id> | project:<id> | repo:<path>
+    scope: str  # task:<id> | project:<id> | repo:<path> | session:<tool>/<action> | cmd:<pattern>
     max_risk: Risk
     expires_at: datetime
     granted_by: str = "user"

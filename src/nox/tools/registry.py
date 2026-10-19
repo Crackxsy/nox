@@ -58,6 +58,10 @@ class ToolSpec:
     handler: Handler
     side_effects: bool = True
     local: bool = True
+    #: Whether a CONFIRM on this tool may be remembered as a session grant. False for tools where
+    #: "always allow" would be dangerous however scoped: `package.*`, `mic.record_long`, `skill.*`.
+    #: `shell.run` stays True but remembers per command pattern (a `cmd:` grant), not the tool.
+    rememberable: bool = True
     targets: Targets | None = None
     #: How long one call may take, when the executor's default is too short by design - a coding
     #: session takes minutes. None means the executor's default.

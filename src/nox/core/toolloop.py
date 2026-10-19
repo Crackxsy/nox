@@ -61,6 +61,16 @@ Offer = Callable[[], Sequence[OfferedTool]]
 Call = Callable[[str, dict[str, Any]], Awaitable[ToolOutcome]]
 Unavailable = Callable[[], Sequence[UnavailableItem]]
 BudgetFactory = Callable[[], TurnBudget]
+TaintSetter = Callable[[bool], None]
+
+#: Tool families whose result may carry content Nox did not author. After one of them runs, the
+#: turn is "tainted": a remembered grant above LOW falls back to a fresh confirmation, so a web
+#: page or an MCP result cannot silently trigger a higher-risk action it names (prompt injection).
+TAINTING_PREFIXES: tuple[str, ...] = ("web", "browser", "mcp", "file", "vision", "screen")
+
+
+def _is_tainting(name: str) -> bool:
+    return name.split(".", 1)[0] in TAINTING_PREFIXES
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +137,8 @@ class ToolLoop:
     #: What cannot be done right now, and why; rendered into the turn context.
     unavailable: Unavailable | None = None
     budget_factory: BudgetFactory = TurnBudget
+    #: Marks the turn tainted/clean in the permission engine (set when untrusted content enters).
+    taint: TaintSetter | None = None
     _turns: dict[str, ActiveTurn] = field(default_factory=dict)
 
     # -- offer -----------------------------------------------------------------------------------
@@ -164,6 +176,9 @@ class ToolLoop:
             budget=self.budget_factory(),
         )
         self._turns[turn.token] = turn
+        if self.taint is not None:
+            # A fresh turn starts clean; a grant remembered in an earlier turn is trusted again.
+            self.taint(False)
         return turn
 
     def by_token(self, token: str) -> ActiveTurn | None:
@@ -232,6 +247,9 @@ class ToolLoop:
             turn.tasks.discard(task)
         turn.budget.record(name, arguments, ok=outcome.ok)
         turn.used.append(name)
+        if outcome.ok and self.taint is not None and _is_tainting(name):
+            # Untrusted content just entered the turn; higher-risk remembered grants now re-confirm.
+            self.taint(True)
         turn.emit(ToolEvent("finished", name, ok=outcome.ok))
         log.info("toolloop.called", tool=name, ok=outcome.ok)
         return ToolRun(name, ok=outcome.ok, data=outcome.data, error=outcome.error or "")

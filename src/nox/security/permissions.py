@@ -332,6 +332,11 @@ def grant_matches(grant: TemporaryGrant, request: PermissionRequest, now: dateti
         return value_matches(request.tool, tool_glob) and value_matches(
             request.action, action_glob or "*"
         )
+    if kind == "cmd":
+        # A remembered shell command pattern (argv0 + subcommand). `shell.run` encodes a simple,
+        # non-curated command as target `cmd:<pattern>`; a command with a shell operator, an env
+        # prefix or an interpreter `-c` is encoded differently and so can never equal this scope.
+        return request.tool == "shell" and request.target == f"cmd:{value}"
     return False
 
 
@@ -350,6 +355,10 @@ class EvaluationContext:
     #: Pre-computed, because four guards ask the same two questions.
     cloud: bool
     memory_write: bool
+    #: True once untrusted content (web/browser/MCP/file content) entered this turn. While it is,
+    #: a remembered grant above LOW no longer silently allows - the request falls through to a
+    #: fresh confirmation (Security Model: "tainted turn").
+    tainted: bool = False
 
 
 #: A guard answers the request, or returns None to let the next one decide.
@@ -421,14 +430,40 @@ def _critical_risk(ctx: EvaluationContext) -> PermissionResult | None:
 
 def _temporary_grant(ctx: EvaluationContext) -> PermissionResult | None:
     for grant in ctx.grants:
-        if grant_matches(grant, ctx.request, ctx.now):
-            return PermissionResult(
-                decision=Decision.ALLOW,
-                rule_id=f"grant.{grant.scope}",
-                reason="temporary grant",
-                grant_id=grant.grant_id,
-            )
+        if not grant_matches(grant, ctx.request, ctx.now):
+            continue
+        if ctx.tainted and RISK_ORDER[ctx.request.risk] > RISK_ORDER[Risk.LOW]:
+            # Untrusted content is in the turn; a remembered grant above LOW must not act on its
+            # own. Skip it so the request falls through to a fresh confirmation.
+            log.info("security.taint_grant_fallback", tool=ctx.request.tool, scope=grant.scope)
+            return None
+        return PermissionResult(
+            decision=Decision.ALLOW,
+            rule_id=f"grant.{grant.scope}",
+            reason="temporary grant",
+            grant_id=grant.grant_id,
+        )
     return None
+
+
+def _shell_curated_readonly(ctx: EvaluationContext) -> PermissionResult | None:
+    """A curated, read-only shell command runs in the sandbox without a confirmation.
+
+    `shell.run` classifies the command and, when it is one of the vetted read-only commands
+    (`df`, `ls`/`dir`, `git status`, `uname`, ...), sets the target to `readonly:<pattern>`. Only
+    `shell` can produce that prefix - the target comes from the tool's own `targets()`, not the
+    model - so no other tool can borrow this allowance. Confirmation fatigue is a UX bug, and these
+    commands change nothing.
+    """
+    if ctx.request.tool != "shell" or not ctx.request.target.startswith("readonly:"):
+        return None
+    if ctx.tainted:
+        return None
+    return PermissionResult(
+        decision=Decision.ALLOW,
+        rule_id="shell.curated_readonly",
+        reason="curated read-only command, run in the sandbox without confirmation",
+    )
 
 
 def _profile_cloud(ctx: EvaluationContext) -> PermissionResult | None:
@@ -503,6 +538,7 @@ EVALUATION_GUARDS: tuple[Guard, ...] = (
     _privacy_zone,
     _critical_risk,
     _temporary_grant,
+    _shell_curated_readonly,
     _profile_cloud,
     _profile_memory_writes,
     _profile_screenshots_to_cloud,
@@ -552,8 +588,24 @@ class DefaultPermissionEngine:
         self._session_id = session_id or uuid.uuid4().hex[:12]
         self._profile: Profile = profiles.get(initial_profile)
         self._pending: dict[str, _Pending] = {}
+        self._tainted = False
 
     # ---- PermissionEngine protocol ---------------------------------------------------------------
+
+    def set_tainted(self, tainted: bool) -> None:
+        """Mark (or clear) the current turn as holding untrusted content.
+
+        The tool loop calls this the moment a tool returns content Nox did not author - a web page,
+        a browser read, an MCP result, file content - and clears it when a fresh turn begins. While
+        set, a remembered grant above LOW falls back to confirmation (see `_temporary_grant`).
+        """
+        if tainted != self._tainted:
+            log.info("security.taint_changed", tainted=tainted)
+        self._tainted = tainted
+
+    @property
+    def tainted(self) -> bool:
+        return self._tainted
 
     def check(self, request: PermissionRequest) -> PermissionResult:
         snapshot = self._privacy.snapshot()
@@ -645,6 +697,7 @@ class DefaultPermissionEngine:
             now=now,
             cloud=self.is_cloud_tool(request),
             memory_write=is_memory_write(request),
+            tainted=self._tainted,
         )
         for guard in EVALUATION_GUARDS:
             result = guard(context)
@@ -735,10 +788,17 @@ class DefaultPermissionEngine:
 
         final = Decision.ALLOW if decision is Decision.ALLOW else Decision.DENY
         result_grant_id: str | None = None
-        if final is Decision.ALLOW and remember and not never_remembered(request.risk):
+        scope = self._remember_scope(request)
+        # Both rules: only a rememberable scope, and never for high risk (asked every time).
+        if (
+            final is Decision.ALLOW
+            and remember
+            and scope is not None
+            and not never_remembered(request.risk)
+        ):
             grant = TemporaryGrant(
                 grant_id=grant_id,
-                scope=f"session:{request.tool}/{request.action or '*'}",
+                scope=scope,
                 max_risk=request.risk,
                 expires_at=self._clock() + self._session_grant_ttl,
                 granted_by=by,
@@ -758,6 +818,21 @@ class DefaultPermissionEngine:
             corr=grant_id,
         )
         return result
+
+    def _remember_scope(self, request: PermissionRequest) -> str | None:
+        """The grant scope a "remember" would create for this request, or None for "never".
+
+        `shell.run` remembers one command *pattern* (`cmd:git status`) and only for a simple
+        command, never the whole tool - a complex command (target `complex:...`) or a curated
+        read-only one (`readonly:...`) produces no grant. Every other rememberable tool gets the
+        session scope. A tool marked `rememberable=False` (`package.*`, `mic.record_long`,
+        `skill.*`) never produces one.
+        """
+        if not request.rememberable:
+            return None
+        if request.tool == "shell":
+            return request.target if request.target.startswith("cmd:") else None
+        return f"session:{request.tool}/{request.action or '*'}"
 
     async def authorize(self, request: PermissionRequest) -> PermissionResult:
         """check() plus the confirmation round-trip; returns only ALLOW or DENY."""
