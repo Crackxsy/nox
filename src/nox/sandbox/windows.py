@@ -30,14 +30,18 @@ enforce loopback isolation and on those that do not, and still goes only through
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextlib
 import os
+import queue
 import socket
 import subprocess
 import tempfile
 import threading
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from nox.core.logging import get_logger
 from nox.sandbox.model import (
@@ -48,6 +52,7 @@ from nox.sandbox.model import (
     SandboxMode,
     SandboxUnavailable,
 )
+from nox.sandbox.process import ProcessIo
 
 if TYPE_CHECKING:
     from nox.sandbox._win32 import Spawned
@@ -301,8 +306,12 @@ class WindowsSandbox:
             self._w.label_low(str(work))
         return work, True
 
-    def _child_env(self, work: Path, proxy_port: int | None) -> dict[str, str]:
-        env = _base_env(work)
+    def _child_env(
+        self, work: Path, proxy_port: int | None, extra: Mapping[str, str] | None = None
+    ) -> dict[str, str]:
+        # The caller's extra variables first, so the sandbox's own always win (they are also
+        # refused up front by `checked_env`).
+        env = {**(extra or {}), **_base_env(work)}
         if proxy_port is not None:
             url = f"http://127.0.0.1:{proxy_port}"
             env["HTTPS_PROXY"] = env["HTTP_PROXY"] = env["ALL_PROXY"] = url
@@ -316,23 +325,13 @@ class WindowsSandbox:
         cwd: str | None,
         egress: EgressDecl,
         limits: Limits,
-        proxy_port: int | None,
+        proxy_port: int | None,  # noqa: ARG002 - the proxy is reached over `proxy_socket` here
+        extra_env: Mapping[str, str] | None = None,
         proxy_socket: str | None = None,
     ) -> Result:
         """Run `argv` confined. With egress, `proxy_socket` is the proxy's named pipe;
         a low-integrity run with egress is refused - nothing could hold it to the proxy."""
-        import asyncio
-
-        if egress.wants_network:
-            if self._sid is None:
-                raise SandboxUnavailable(
-                    "the low-integrity Windows fallback cannot confine network access, so a run "
-                    "that needs the network is refused (AppContainer is required for egress)"
-                )
-            if not proxy_socket:
-                raise SandboxUnavailable(
-                    "egress declared but no proxy pipe is open; failing closed"
-                )
+        self._check_egress(egress, proxy_socket)
         work, created = self._prepare_workdir(cwd)
         forwarder: Spawned | None = None
         try:
@@ -341,7 +340,7 @@ class WindowsSandbox:
                 forwarder, port = await asyncio.to_thread(
                     self._start_forwarder, work, proxy_socket, limits
                 )
-            env = self._child_env(work, port)
+            env = self._child_env(work, port, extra_env)
             try:
                 spawned = self._w.spawn(
                     argv,
@@ -364,6 +363,122 @@ class WindowsSandbox:
                 _close_fds(forwarder)
             if created:
                 _best_effort_rmtree(work)
+
+    def _check_egress(self, egress: EgressDecl, proxy_socket: str | None) -> None:
+        if not egress.wants_network:
+            return
+        if self._sid is None:
+            raise SandboxUnavailable(
+                "the low-integrity Windows fallback cannot confine network access, so a run "
+                "that needs the network is refused (AppContainer is required for egress)"
+            )
+        if not proxy_socket:
+            raise SandboxUnavailable("egress declared but no proxy pipe is open; failing closed")
+
+    async def start(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None,
+        egress: EgressDecl,
+        limits: Limits,
+        proxy_port: int | None,  # noqa: ARG002 - the proxy is reached over `proxy_socket` here
+        extra_env: Mapping[str, str] | None = None,
+        proxy_socket: str | None = None,
+    ) -> ProcessIo:
+        """Start `argv` confined exactly like `run`, but keep it running with stdio pipes.
+
+        With egress, the in-container forwarder lives exactly as long as the process. The pipes
+        are blocking anonymous pipes, so each one is served by its own dedicated thread (`_Lane`)
+        instead of the shared default executor: a long-running server parks a read for hours,
+        and doing that in `asyncio.to_thread` would starve every other user of the pool.
+        """
+        self._check_egress(egress, proxy_socket)
+        work, created = self._prepare_workdir(cwd)
+        forwarder: Spawned | None = None
+
+        def drop_forwarder() -> None:
+            if forwarder is not None:
+                forwarder.close()
+                _close_fds(forwarder)
+
+        try:
+            port: int | None = None
+            if egress.wants_network and proxy_socket:
+                forwarder, port = await asyncio.to_thread(
+                    self._start_forwarder, work, proxy_socket, limits
+                )
+            env = self._child_env(work, port, extra_env)
+            spawned = self._w.spawn(
+                argv,
+                cwd=str(work),
+                env=env,
+                memory_bytes=limits.memory_bytes,
+                max_processes=limits.max_processes,
+                with_stdin=True,
+                app_container=self._sid,
+            )
+        except BaseException as exc:
+            drop_forwarder()
+            if created:
+                _best_effort_rmtree(work)
+            if isinstance(exc, OSError):
+                raise SandboxUnavailable(f"could not start the sandboxed process: {exc}") from exc
+            raise
+        if spawned.stdin_fd is None:  # requested with_stdin=True; never None in practice
+            spawned.close()
+            drop_forwarder()
+            raise SandboxUnavailable("the sandboxed process has no stdin pipe")
+        stdin_fd: list[int | None] = [spawned.stdin_fd]
+        lanes = {name: _Lane(f"nox-sbx-{spawned.pid}-{name}") for name in ("out", "err", "in")}
+        waiter = _Lane(f"nox-sbx-{spawned.pid}-wait")
+
+        async def write_in(data: bytes) -> None:
+            fd = stdin_fd[0]
+            if fd is None:
+                raise BrokenPipeError("stdin is closed")
+            await lanes["in"].call(_write_all, fd, data)
+
+        def close_in() -> None:
+            fd, stdin_fd[0] = stdin_fd[0], None
+            if fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+
+        async def read_out(n: int) -> bytes:
+            data: bytes = await lanes["out"].call(_read, spawned.stdout_fd, n)
+            return data
+
+        async def read_err(n: int) -> bytes:
+            data: bytes = await lanes["err"].call(_read, spawned.stderr_fd, n)
+            return data
+
+        async def wait() -> int | None:
+            code: int | None = await waiter.call(spawned.wait, self._w.INFINITE)
+            return code
+
+        async def cleanup() -> None:
+            close_in()
+            for fd in (spawned.stdout_fd, spawned.stderr_fd):
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+            spawned.close()
+            drop_forwarder()
+            for lane in (*lanes.values(), waiter):
+                lane.close()
+            if created:
+                await asyncio.to_thread(_best_effort_rmtree, work)
+
+        return ProcessIo(
+            pid=spawned.pid,
+            read_out=read_out,
+            read_err=read_err,
+            write_in=write_in,
+            close_in=close_in,
+            wait=wait,
+            kill=spawned.kill,
+            cleanup=cleanup,
+        )
 
     def _start_forwarder(self, work: Path, pipe_path: str, limits: Limits) -> tuple[Spawned, int]:
         """Start the in-container forwarder and return it with the loopback port it listens on."""
@@ -390,6 +505,70 @@ class WindowsSandbox:
             _close_fds(fwd)
             raise SandboxUnavailable("the egress forwarder did not start; failing closed")
         return fwd, int(line.split()[1])
+
+
+class _Lane:
+    """One dedicated daemon thread that runs blocking calls in order, for one pipe or wait.
+
+    `call()` hands a function to the thread and awaits its result. A call that is cancelled on
+    the loop side still finishes on the thread (a blocking read cannot be interrupted); its
+    result is dropped. `close()` lets the thread end after the call it is in.
+    """
+
+    def __init__(self, name: str) -> None:
+        self._jobs: queue.SimpleQueue[
+            tuple[Callable[..., Any], tuple[Any, ...], asyncio.Future[Any]] | None
+        ] = queue.SimpleQueue()
+        self._loop = asyncio.get_running_loop()
+        self._thread = threading.Thread(target=self._serve, name=name, daemon=True)
+        self._thread.start()
+
+    async def call(self, fn: Callable[..., Any], *args: Any) -> Any:
+        future: asyncio.Future[Any] = self._loop.create_future()
+        self._jobs.put((fn, args, future))
+        return await future
+
+    def close(self) -> None:
+        self._jobs.put(None)
+
+    def _serve(self) -> None:
+        while True:
+            job = self._jobs.get()
+            if job is None:
+                return
+            fn, args, future = job
+            try:
+                result = fn(*args)
+            except BaseException as exc:  # noqa: BLE001 - handed to the awaiting coroutine
+                self._settle(future, None, exc)
+            else:
+                self._settle(future, result, None)
+
+    def _settle(self, future: asyncio.Future[Any], result: Any, exc: BaseException | None) -> None:
+        def apply() -> None:
+            if future.done():
+                return
+            if exc is not None:
+                future.set_exception(exc)
+            else:
+                future.set_result(result)
+
+        with contextlib.suppress(RuntimeError):  # the loop is already closed
+            self._loop.call_soon_threadsafe(apply)
+
+
+def _read(fd: int, n: int) -> bytes:
+    try:
+        return os.read(fd, n)
+    except BrokenPipeError:  # the write end is gone: that is end of output, not an error
+        return b""
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        view = view[written:]
 
 
 def _read_line(fd: int, timeout_s: float) -> str:

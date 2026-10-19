@@ -26,12 +26,55 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 __all__ = [
+    "RESERVED_ENV_KEYS",
     "EgressDecl",
     "Guarantees",
     "Limits",
     "Result",
     "SandboxUnavailable",
+    "checked_env",
 ]
+
+
+#: Environment keys a caller may not set through `env=`: they are what point the child at its
+#: work directory and at the egress proxy, so overriding them would undo the confinement (a
+#: `HTTPS_PROXY` of the caller's choosing, a `HOME` in the user's profile).
+RESERVED_ENV_KEYS: frozenset[str] = frozenset(
+    key.upper()
+    for key in (
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "SystemRoot",
+        "windir",
+        "ComSpec",
+        "PSModuleAnalysisCachePath",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+    )
+)
+
+
+def checked_env(env: dict[str, str] | None) -> dict[str, str]:
+    """The caller's extra environment, or `ValueError` when it touches a reserved key."""
+    if not env:
+        return {}
+    clash = sorted(key for key in env if key.upper() in RESERVED_ENV_KEYS)
+    if clash:
+        raise ValueError(f"the sandbox owns these environment variables: {clash}")
+    bad = sorted(key for key in env if not key or "=" in key or chr(0) in key)
+    if bad:
+        raise ValueError(f"invalid environment variable names: {bad}")
+    return {str(k): str(v) for k, v in env.items()}
 
 
 class SandboxUnavailable(RuntimeError):  # noqa: N818 - a state, not an error suffix, by design
@@ -69,7 +112,11 @@ class Limits:
     #: Most processes the tree may hold at once (ActiveProcessLimit / TasksMax).
     max_processes: int = 32
     #: Bytes of stdout/stderr captured before the rest is dropped (the model never needs more).
+    #: For a long-running process (`Sandbox.start`) this is the size of the stderr ring buffer.
     max_output_bytes: int = 64 * 1024
+    #: Longest single stdout line a long-running process (`Sandbox.start`) may write - one
+    #: JSON-RPC message of an MCP stdio server. Longer lines raise `MessageTooLarge`.
+    max_message_bytes: int = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
