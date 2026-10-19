@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 import yaml
 
-from nox.ai.tooluse import SENTINEL
+from nox.ai.tooluse import SENTINEL, render_offer
 from nox.app import DEFAULTS_PATH, NoxCore
 from nox.core.config import load_config
 from nox.ipc.dispatch import RequestContext
@@ -200,7 +200,14 @@ async def test_checking_one_thing_names_the_rule_that_decided(core: NoxCore) -> 
 async def test_the_orchestrator_got_a_tool_loop(core: NoxCore) -> None:
     """Everything reachable from the dashboard has to be reachable by saying it."""
     assert core.orchestrator is not None
-    assert core.orchestrator.tool_gate is not None
+    assert core.orchestrator.tool_loop is not None
+
+
+def _sentinel_section(core: NoxCore) -> str:
+    """What a local model without native tool support reads: the offer as text, plus caveats."""
+    loop = core.orchestrator.tool_loop
+    turn = loop.begin("budget")
+    return "\n\n".join(p for p in (render_offer(turn.definitions()), loop.caveats()) if p)
 
 
 async def test_the_offer_is_what_the_model_may_actually_call(core: NoxCore) -> None:
@@ -209,7 +216,7 @@ async def test_the_offer_is_what_the_model_may_actually_call(core: NoxCore) -> N
     So this walks the whole offer and asks the real permission engine about each entry under the
     agent the gate will use. Anything the model is told about must survive that check.
     """
-    gate = core.orchestrator.tool_gate
+    gate = core.orchestrator.tool_loop
     offered = gate.offer()
     assert offered, "a companion profile with nothing usable would be a broken installation"
 
@@ -231,14 +238,14 @@ async def test_the_offer_is_what_the_model_may_actually_call(core: NoxCore) -> N
 
 async def test_a_tool_that_asks_first_is_offered_and_marked(core: NoxCore) -> None:
     """Hiding it would take the decision away from the person the dialog is for."""
-    gate = core.orchestrator.tool_gate
+    gate = core.orchestrator.tool_loop
     marked = [tool.name for tool in gate.offer() if tool.asks_first]
 
     assert marked, "some tool in the companion profile must need a confirmation"
 
 
 async def test_the_prompt_section_names_the_protocol_once(core: NoxCore) -> None:
-    section = core.orchestrator.tool_gate.prompt()
+    section = _sentinel_section(core)
 
     assert section.count(SENTINEL) == 1
     assert "capabilities.check" in section
@@ -265,8 +272,8 @@ async def test_the_offer_stays_within_its_budget(core: NoxCore) -> None:
     So the budget is 8000 and the reason is written down. The per-tool average below is what still
     catches the mistake this test is really for: one tool arriving with a paragraph about itself.
     """
-    section = core.orchestrator.tool_gate.prompt()
-    offered = len(core.orchestrator.tool_gate.offer())
+    section = _sentinel_section(core)
+    offered = len(core.orchestrator.tool_loop.offer())
     print(f"\ntool offer: {offered} tools, {len(section)} characters")
 
     assert len(section) < 8000, f"{len(section)} characters is over the per-turn budget"

@@ -198,8 +198,8 @@ async def test_the_three_ways_are_the_same_way(core: NoxCore) -> None:
 async def test_speaking_reaches_the_same_tools_as_typing(core: NoxCore) -> None:
     """Voice is not a second system: both ways end in `handle_text`, so both get the tool loop."""
     assert core.orchestrator is not None
-    assert core.orchestrator.tool_gate is not None
+    assert core.orchestrator.tool_loop is not None
 
-    offered = {tool.name for tool in core.orchestrator.tool_gate.offer()}
+    offered = {tool.name for tool in core.orchestrator.tool_loop.offer()}
 
     assert "presets.activate" in offered, "a spoken request can only reach what is offered"

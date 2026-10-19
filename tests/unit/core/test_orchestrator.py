@@ -249,3 +249,21 @@ async def test_every_stage_of_a_model_turn_is_timed():
     assert 0.0 < timings.first_token_ms <= timings.total_ms
     assert timings.first_token_ms <= timings.first_sentence_ms <= timings.total_ms
     await orch.stop()
+
+
+def test_a_long_opening_sentence_is_spoken_from_its_first_clause() -> None:
+    """The listener hears the first words while the model is still writing the sentence."""
+    buffer = "Also, das ist eine ziemlich lange Einleitung mit Details, und dann kommt"
+
+    early, rest = Orchestrator._split(buffer, final=False, first=True)
+    later, kept = Orchestrator._split(buffer, final=False, first=False)
+
+    assert early == ["Also, das ist eine ziemlich lange Einleitung mit Details,"]
+    assert rest == "und dann kommt"
+    assert later == [] and kept == buffer
+
+
+def test_a_short_opening_clause_waits_for_its_sentence() -> None:
+    early, rest = Orchestrator._split("Ja, gern", final=False, first=True)
+
+    assert early == [] and rest == "Ja, gern"
