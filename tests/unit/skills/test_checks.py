@@ -119,9 +119,9 @@ def test_scan_code_allows(source: str) -> None:
 
 
 def test_mocks_only_in_tests() -> None:
-    assert scan_code("from unittest.mock import Mock", filename="t.py", own_package="p")
+    assert scan_code("from unittest.mock import Mock", filename="t.py", own_package="nox_skill_p")
     assert not scan_code(
-        "from unittest.mock import Mock", filename="t.py", own_package="p", tests=True
+        "from unittest.mock import Mock", filename="t.py", own_package="nox_skill_p", tests=True
     )
 
 

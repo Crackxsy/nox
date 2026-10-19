@@ -34,12 +34,14 @@ from __future__ import annotations
 
 import ast
 import importlib
+import importlib.util
 import re
+import sys
 import types
 from dataclasses import dataclass, field
 from typing import Final
 
-__all__ = ["SRC_IMPORTS", "TEST_IMPORTS", "scan_code"]
+__all__ = ["SRC_IMPORTS", "TEST_IMPORTS", "own_package_refusal", "scan_code"]
 
 #: Modules a skill's source may import - exactly these, no submodules unless listed.
 SRC_IMPORTS: Final[frozenset[str]] = frozenset(
@@ -323,6 +325,9 @@ class _Scan:
                 self.refuse(node, "str.format is allowed only on a literal format string")
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             self._string(node, node.value)
+        elif isinstance(node, ast.Match):
+            # Class patterns read attributes by name; a skill does not need `match` at all.
+            self.refuse(node, "match statements are not allowed in a skill")
 
     def _name(self, node: ast.AST, name: str) -> None:
         if _private(name):
@@ -349,7 +354,7 @@ class _Scan:
         if _PRIVATE_FIELD.search(text):
             self.refuse(node, "a format field that reaches a private attribute")
             return
-        if len(text) > 2000 or "(" not in text:
+        if len(text) > 2000:
             return
         try:
             expression = ast.parse(text.strip(), mode="eval")
@@ -358,6 +363,39 @@ class _Scan:
         if any(isinstance(n, (ast.Call, ast.Lambda)) for n in ast.walk(expression)):
             # pydantic and typing evaluate string annotations; a call in one would run.
             self.refuse(node, "a string that would run code if it were evaluated")
+            return
+        body = expression.body
+        if isinstance(body, ast.Name) and not _private(body.id):
+            return  # a plain word ("open", "exit") is data; evaluated, it calls nothing
+        # Anything else that parses is checked like code, because it may be evaluated as code
+        # (a forward reference, a string annotation): names, attributes, module members.
+        ast.increment_lineno(expression, getattr(node, "lineno", 1) - 1)
+        for sub in ast.walk(expression):
+            if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name):
+                self.attribute_bases.add(id(sub.value))
+        for sub in ast.walk(expression):
+            if sub is not expression:
+                self._node(sub)
+
+
+OWN_PACKAGE = re.compile(r"nox_skill_[a-z0-9_]{1,40}")
+
+
+def own_package_refusal(package: str) -> str | None:
+    """Why `package` cannot be a skill's own package - which the scan treats as the skill's own
+    code - or None. It must be `nox_skill_<id>` and must not shadow anything real: a standard
+    library module, `nox`, an installed package or one of the names the scan refuses."""
+    if not OWN_PACKAGE.fullmatch(package):
+        return f"the package must be named nox_skill_<id>, not {package!r}"
+    root = package.split(".", 1)[0]
+    if (
+        root in sys.stdlib_module_names
+        or root in _MODULE_NAMES
+        or any(root == m.split(".", 1)[0] for m in SRC_IMPORTS)
+        or importlib.util.find_spec(root) is not None
+    ):
+        return f"the package name {package!r} is taken by an installed module"
+    return None
 
 
 def scan_code(source: str, *, filename: str, own_package: str, tests: bool = False) -> list[str]:
@@ -369,6 +407,9 @@ def scan_code(source: str, *, filename: str, own_package: str, tests: bool = Fal
         tree = ast.parse(source, filename=filename)
     except SyntaxError as exc:
         return [*problems, f"{filename}: syntax error on line {exc.lineno}: {exc.msg}"]
+    refusal = own_package_refusal(own_package)
+    if refusal is not None:
+        return [*problems, f"{filename}: {refusal}"]
     scan = _Scan(filename, own_package, TEST_IMPORTS if tests else SRC_IMPORTS)
     scan.collect_imports(tree)
     scan.visit(tree)

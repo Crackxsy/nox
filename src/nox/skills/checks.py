@@ -196,6 +196,9 @@ def check_skill(
     report.manifest = manifest
     _check_manifest(manifest, report, taken=taken, home_host=home_host)
     package = manifest.entry.split(":", 1)[0].split(".", 1)[0]
+    if package != f"nox_skill_{skill_id}":
+        report.problems.append(f"the entry package must be nox_skill_{skill_id}, not {package!r}")
+        return report
     if not (root / "src" / package).is_dir():
         report.problems.append(f"the entry package src/{package} does not exist")
     for path in py_files:
