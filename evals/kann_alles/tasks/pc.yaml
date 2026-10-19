@@ -36,11 +36,10 @@
     - judge: "The answer lists open programs or windows taken from a tool call in the tool log."
   max_s: 45
 - id: pc-install-vlc
-  title: Install a media player (dialog answered with deny)
+  title: Install a media player (the harness denies the dialog)
   category: pc
   kind: solve
   prompt: "Installier mir bitte den VLC Player."
-  confirm: deny
   expected_confirmations: 1
   checks:
     - tool_attempted: "(package\\.install|desktop\\.software_install|shell\\.run)"
@@ -66,11 +65,10 @@
   max_s: 45
   needs: "wave 2: shell.run"
 - id: pc-stop-memory-hog
-  title: Stop the biggest memory consumer (dialog answered with deny)
+  title: Stop the biggest memory consumer (the harness denies the dialog)
   category: pc
   kind: solve
   prompt: "Beende das Programm, das gerade am meisten Arbeitsspeicher verbraucht."
-  confirm: deny
   expected_confirmations: 1
   checks:
     - tool_attempted: "(desktop\\.process_stop|shell\\.run)"

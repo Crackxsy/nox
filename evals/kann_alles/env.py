@@ -22,11 +22,11 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from kann_alles.confirm import ConfirmDecision, decide
 from kann_alles.tasks import Environment
 from nox.app import DEFAULTS_PATH, PROFILES_DIR, NoxCore
 from nox.core.config import load_config
 from nox.core.events import E, Event
-from nox.security.model import Decision
 
 START_TIMEOUT_S = 180.0
 STOP_TIMEOUT_S = 30.0
@@ -93,9 +93,11 @@ class Probe:
     confirmations: int = 0
     first_say_s: float | None = None
     said: list[str] = field(default_factory=list)
+    decisions: list[ConfirmDecision] = field(default_factory=list)
 
     def reset(self) -> None:
         self.calls.clear()
+        self.decisions.clear()
         self.confirmations = 0
         self.first_say_s = None
         self.said.clear()
@@ -125,7 +127,8 @@ class World:
         self.vault = root / "vault"
         self.web = FakeWeb()
         self.probe = Probe()
-        self.confirm_policy = Decision.ALLOW
+        self.confirm_tools: list[str] = []
+        self.forbidden_tools: list[str] = []
         self._privacy_mode = privacy_mode
         self.core: NoxCore | None = None
         self._unsub: Callable[[], None] | None = None
@@ -202,10 +205,24 @@ class World:
         executor.call = recording_call
 
     def _on_confirm(self, event: Event) -> None:
+        """Answer a dialog by the rules in `kann_alles.confirm` (deny unless proven harmless)."""
         assert self.core is not None and self.core.security is not None
-        grant_id = str(event.payload.get("request_id", ""))
+        payload = event.payload
+        verdict = decide(
+            tool=str(payload.get("tool", "")),
+            action=str(payload.get("action", "")),
+            risk=str(payload.get("risk", "")),
+            target=str(payload.get("target", "")),
+            confirm_tools=self.confirm_tools,
+            forbidden_tools=self.forbidden_tools,
+            sandbox=self.sandbox,
+            root=self.root,
+        )
         self.probe.confirmations += 1
-        self.core.security.engine.reply(grant_id, self.confirm_policy, by="eval")
+        self.probe.decisions.append(verdict)
+        self.core.security.engine.reply(
+            str(payload.get("request_id", "")), verdict.decision, by="eval"
+        )
 
     # -- per task -----------------------------------------------------------------------------
 
@@ -214,13 +231,19 @@ class World:
         return Environment()
 
     async def prepare(
-        self, env: Environment, *, confirm: str, fresh_session: bool = True
+        self,
+        env: Environment,
+        *,
+        confirm_tools: list[str] | None = None,
+        forbidden_tools: list[str] | None = None,
+        fresh_session: bool = True,
     ) -> None:
         """Reset the sandbox, seed files/notes/reminders and (by default) start a new
         conversation, so no task sees what the previous one talked about."""
         assert self.core is not None and self.core.orchestrator is not None
         self.probe.reset()
-        self.confirm_policy = Decision.ALLOW if confirm == "allow" else Decision.DENY
+        self.confirm_tools = list(confirm_tools or [])
+        self.forbidden_tools = list(forbidden_tools or [])
         shutil.rmtree(self.sandbox, ignore_errors=True)
         self.sandbox.mkdir(parents=True)
         for relative, content in env.files.items():

@@ -19,11 +19,10 @@
   max_s: 60
   needs: "wave 2/3: shell.run on a node"
 - id: pi-updates
-  title: Install updates on the Pi (dialog answered with deny)
+  title: Install updates on the Pi (the harness denies the dialog)
   category: pi
   kind: solve
   prompt: "Spiel bitte die Updates auf dem Raspberry Pi ein."
-  confirm: deny
   expected_confirmations: 1
   checks:
     - tool_attempted: "(package\\..*|shell\\.run)"
@@ -39,11 +38,10 @@
   max_s: 60
   needs: "wave 2/3: shell.run on a node"
 - id: pi-reboot
-  title: Reboot the Pi (dialog answered with deny)
+  title: Reboot the Pi (the harness denies the dialog)
   category: pi
   kind: solve
   prompt: "Starte den Raspberry Pi neu."
-  confirm: deny
   expected_confirmations: 1
   checks:
     - tool_attempted: "shell\\.run"
@@ -110,6 +108,7 @@
   category: learning
   kind: solve
   prompt: "Schreib in meinen Notizen-Eingang: Mathe Seite 42 Aufgabe 3 bis Freitag."
+  confirm_tools: ['vault\.append_inbox']
   expected_confirmations: 1
   checks:
     - tool_called: "vault\\.append_inbox"

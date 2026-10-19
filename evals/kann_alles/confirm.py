@@ -1,0 +1,86 @@
+"""How the harness answers Nox's confirmation dialogs: deny unless a task proves it is harmless.
+
+A benchmark that clicks "allow" on every dialog lets the model under test run any confirmed tool on
+the machine the benchmark runs on. So the default is DENY, and an approval needs all of:
+
+* the task lists the tool in `confirm_tools`,
+* the tool is not in the task's `forbidden_tools`,
+* its risk is below HIGH (HIGH and CRITICAL are approved only in an isolated world, never here),
+* its effect stays inside the benchmark's temporary folder: a path target resolves inside it, and a
+  tool without a path target belongs to a family that only writes the core's own (temporary) data.
+
+Every decision is recorded with its reason and ends up in the report.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+from nox.security.model import Decision
+
+#: Families whose tools take a filesystem path as their permission target.
+PATH_FAMILIES = frozenset({"file", "vault"})
+#: Families whose writes land only in the core's data directory, which the harness creates in a
+#: temporary folder: reminders, notes, memory, projects, plans, watchers.
+DATA_DIR_FAMILIES = frozenset({"vault", "memory", "reminder", "pm", "plans", "watch"})
+NEVER_AUTO_APPROVED_RISKS = frozenset({"high", "critical"})
+
+
+@dataclass(frozen=True)
+class ConfirmDecision:
+    tool: str
+    risk: str
+    target: str
+    decision: Decision
+    reason: str
+
+
+def _inside(target: str, sandbox: Path, root: Path) -> bool:
+    if not target:
+        return False
+    candidate = Path(target)
+    if not candidate.is_absolute():
+        candidate = sandbox / candidate
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return False
+    return resolved.is_relative_to(root.resolve())
+
+
+def decide(
+    *,
+    tool: str,
+    action: str,
+    risk: str,
+    target: str,
+    confirm_tools: Sequence[str],
+    forbidden_tools: Sequence[str],
+    sandbox: Path,
+    root: Path,
+    isolated: bool = False,
+) -> ConfirmDecision:
+    """The harness's answer to one dialog. `tool`/`action` as in `PermissionRequest`."""
+    name = f"{tool}.{action}" if action else tool
+
+    def result(decision: Decision, reason: str) -> ConfirmDecision:
+        return ConfirmDecision(name, risk, target, decision, reason)
+
+    if any(re.fullmatch(pattern, name) for pattern in forbidden_tools):
+        return result(Decision.DENY, "forbidden in this task")
+    if risk.lower() in NEVER_AUTO_APPROVED_RISKS and not isolated:
+        return result(
+            Decision.DENY, f"{risk} risk is never auto-approved outside an isolated world"
+        )
+    if not any(re.fullmatch(pattern, name) for pattern in confirm_tools):
+        return result(Decision.DENY, "not listed in the task's confirm_tools")
+    if tool in PATH_FAMILIES and target and not _inside(target, sandbox, root):
+        return result(Decision.DENY, "target outside the benchmark's temporary folder")
+    if tool == "file" and not target:
+        return result(Decision.DENY, "file tool without a target path")
+    if tool not in PATH_FAMILIES | DATA_DIR_FAMILIES and not isolated:
+        return result(Decision.DENY, f"{tool} acts outside the temporary world")
+    return result(Decision.ALLOW, "listed, low enough risk, effect stays in the temporary world")

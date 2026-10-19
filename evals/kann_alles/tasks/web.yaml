@@ -77,6 +77,7 @@
   kind: solve
   prompt: "Lad die Datei {web}/handbuch.txt in meinen Arbeitsordner als handbuch.txt herunter."
   env: {web_pages: [handbuch.txt]}
+  confirm_tools: ['file\.write']
   expected_confirmations: 1
   checks:
     - file_contains: [handbuch.txt, "Kurzanleitung"]

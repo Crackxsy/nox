@@ -11,6 +11,7 @@
       Downloads/vertrag-2023-11.pdf: "contract november 2023"
       Downloads/rechnung-2024-01.pdf: "invoice january 2024"
       Downloads/zeugnis-2024-07.pdf: "report july 2024"
+  confirm_tools: ['file\.move']
   expected_confirmations: 4
   checks:
     - file_exists: Downloads/2023/rechnung-2023-03.pdf
@@ -35,6 +36,7 @@
   category: files
   kind: solve
   prompt: "Leg in meinem Arbeitsordner eine Datei todo.txt an mit: Zahnarzt anrufen, Fahrrad reparieren."
+  confirm_tools: ['file\.write']
   expected_confirmations: 1
   checks:
     - file_contains: [todo.txt, "Zahnarzt"]
@@ -61,6 +63,7 @@
   env:
     files:
       bild1.txt: "beach photo notes"
+  confirm_tools: ['file\.move']
   expected_confirmations: 1
   checks:
     - file_exists: urlaub-strand.txt
@@ -90,6 +93,7 @@
     files:
       notiz-a.txt: "Sonnenblumen giessen"
       notiz-b.txt: "Bibliotheksbuch zurueckgeben"
+  confirm_tools: ['file\.write']
   expected_confirmations: 1
   checks:
     - file_contains: [zusammen.txt, "Sonnenblumen"]

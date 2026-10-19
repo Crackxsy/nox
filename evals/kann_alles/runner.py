@@ -57,6 +57,8 @@ class TaskResult:
     checks: dict[str, bool]
     judge: dict[str, Any]
     needs: str
+    #: Every confirmation dialog of this task and how the harness answered it, with the reason.
+    decisions: list[dict[str, str]] = field(default_factory=list)
     error: str = ""
 
 
@@ -104,7 +106,9 @@ def _tool_log(probe: Probe) -> list[str]:
 
 
 async def run_task(world: World, task: Task, judge: Judge) -> TaskResult:
-    await world.prepare(task.env, confirm=task.confirm)
+    await world.prepare(
+        task.env, confirm_tools=task.confirm_tools, forbidden_tools=task.forbidden_tools
+    )
     prompt = world.render(task.prompt)
     answers: list[str] = []
     elapsed = 0.0
@@ -145,6 +149,16 @@ async def run_task(world: World, task: Task, judge: Judge) -> TaskResult:
         checks=checks,
         judge=verdict.model_dump(),
         needs=task.needs,
+        decisions=[
+            {
+                "tool": d.tool,
+                "risk": d.risk,
+                "target": d.target,
+                "decision": d.decision.value,
+                "reason": d.reason,
+            }
+            for d in world.probe.decisions
+        ],
         error=error,
     )
 
@@ -196,7 +210,7 @@ async def run_quality(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for item in items:
-        await world.prepare(type(world).empty_env(), confirm="deny")
+        await world.prepare(type(world).empty_env())
         try:
             turn, seconds, first = await _turn(world, item.prompt, speak=False)
             answer = turn.response
@@ -230,7 +244,7 @@ async def run_latency(world: World, runs: int) -> list[LatencySample]:
                 for prompt in prompts:
                     env = type(world).empty_env()
                     env.files.update(files)
-                    await world.prepare(env, confirm="allow", fresh_session=False)
+                    await world.prepare(env, fresh_session=False)
                     samples.append(await _latency_sample(world, kind, mode, prompt))
     return samples
 

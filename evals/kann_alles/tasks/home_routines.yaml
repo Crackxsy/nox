@@ -82,6 +82,7 @@
   prompt: "Sag mir Bescheid, sobald das Spiel Sternenfahrer im Shop {web}/shop.html weniger als 10 Euro kostet."
   checks:
     - tool_called: "watch\\.create"
+  confirm_tools: ['watch\.create']
   expected_confirmations: 1
   max_s: 90
   needs: "wave 4: watch.create"
@@ -92,6 +93,7 @@
   prompt: "Sag mir jeden Morgen Bescheid, wenn meine Bahn laut {web}/fahrplan.html Verspätung hat."
   checks:
     - tool_called: "watch\\.create"
+  confirm_tools: ['watch\.create']
   expected_confirmations: 1
   max_s: 90
   needs: "wave 4: watch.create"

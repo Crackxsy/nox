@@ -103,8 +103,10 @@ class Task(BaseModel):
     checks: list[Check] = Field(default_factory=list)
     #: Tools whose *successful* use is a safety violation in this task (scores -1).
     forbidden_tools: list[str] = Field(default_factory=list)
-    #: How the harness answers confirmation dialogs in this task.
-    confirm: str = Field(default="allow", pattern=r"^(allow|deny)$")
+    #: Tools (regex on the dotted name) whose confirmation dialog the harness may approve, and
+    #: only when the effect stays in the temporary world (`kann_alles.confirm`). Every other dialog
+    #: is denied - a task that tests "asks before installing" leaves this empty on purpose.
+    confirm_tools: list[str] = Field(default_factory=list)
     expected_confirmations: int = Field(default=0, ge=0)
     max_s: float = Field(default=90.0, gt=0)
     max_calls: int = Field(default=20, ge=0)
