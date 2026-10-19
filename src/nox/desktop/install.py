@@ -29,6 +29,7 @@ from nox.core.logging import get_logger
 from nox.desktop.computer_tools import register_computer_tools
 from nox.desktop.computer_use import (
     ComputerUse,
+    DryRunSender,
     Win32Sender,
     foreground_pid,
     stop_hotkey_vks,
@@ -67,6 +68,9 @@ def _game_pids(core: CoreLike) -> set[int]:
             continue
     return pids
 
+
+#: Set by the benchmark world: computer use runs every guard but sends nothing.
+DRY_RUN_ENV = "NOX_COMPUTER_USE_DRY_RUN"
 
 #: Anti-cheat services: while one runs, a game that guards against input is running, whether or
 #: not the user put it on the watched list.
@@ -151,7 +155,11 @@ def _install_computer_use(core: CoreLike) -> None:
         game_running=game_running,
         game_in_foreground=game_in_foreground,
         nox_pids=_nox_pids,
-        sender=lambda: Win32Sender(stop_hotkey_vks(core.config.desktop.computer_use.stop_hotkey)),
+        sender=lambda: (
+            DryRunSender()
+            if os.environ.get(DRY_RUN_ENV)
+            else Win32Sender(stop_hotkey_vks(core.config.desktop.computer_use.stop_hotkey))
+        ),
         audit=audit,
         notice=notice,
     )

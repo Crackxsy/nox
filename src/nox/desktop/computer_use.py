@@ -255,6 +255,32 @@ class Win32Sender:
         self._send(_Input(type=INPUT_KEYBOARD, union=_Union(ki=ki)))
 
 
+class DryRunSender:
+    """Sends nothing: for the benchmark world (`NOX_COMPUTER_USE_DRY_RUN`). It can only make this
+    module do less - every guard runs exactly as with the real sender."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, int, int, int]] = []
+
+    def screen(self) -> tuple[int, int, int, int]:
+        return (0, 0, 1920, 1080)
+
+    def window_at(self, x: int, y: int) -> tuple[int, str]:
+        return (0, "")
+
+    def foreground(self) -> tuple[int, str]:
+        return (0, "")
+
+    def stop_pressed(self) -> bool:
+        return False
+
+    def mouse(self, dx: int, dy: int, flags: int, data: int = 0) -> None:
+        self.events.append(("mouse", dx, dy, flags))
+
+    def key(self, vk: int, *, up: bool) -> None:
+        self.events.append(("key", vk, int(up), 0))
+
+
 # ---- the guarded controller ----------------------------------------------------------------------
 
 

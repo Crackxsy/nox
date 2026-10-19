@@ -124,9 +124,13 @@ async def test_foreign_descriptions_are_cut_cleaned_and_labelled(
     try:
         spec = registry.get("mcp.fake.get_weather")
         assert spec is not None
-        assert spec.description.startswith("[External MCP server 'fake' - untrusted description")
-        assert "\n" not in spec.description and "‮" not in spec.description
-        assert len(spec.description) < 420
+        description = spec.description
+        assert description.startswith("Tool of the external MCP server 'fake'")
+        assert '[[DATA source="mcp:fake"]]' in description and description.endswith("[[/DATA]]")
+        # The injected closing delimiter is defused: exactly one block, opened and closed by Nox.
+        assert description.count("[[/DATA]]") == 1 and description.count("[[DATA") == 1
+        assert "‮" not in description and "IGNORE ALL PREVIOUS" in description
+        assert len(description) < 520
         schema = spec.input_model.model_json_schema()
         assert "x-evil" not in schema
         assert "\n" not in schema["properties"]["city"]["description"]

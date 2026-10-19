@@ -30,6 +30,7 @@ from typing import Any, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
+from nox.ai.prompting import untrusted
 from nox.core.events import E, Event, EventBus, HealthStatus, PluginLifecycle
 from nox.core.health import Check
 from nox.core.logging import get_logger
@@ -939,9 +940,13 @@ class PluginManager:
                     f"tool {declaration.name!r} declares risk {declaration.risk.value!r} "
                     f"but the manifest says {permission.risk.value!r}"
                 )
+            description = declaration.description
+            if rec.origin == ORIGIN_SELF_BUILT:
+                # Written by a model, not reviewed by a person: data for the model, never orders.
+                description = untrusted(description, f"skill:{rec.plugin_id}")
             spec = self._spec_class(
                 name=declaration.name,
-                description=declaration.description,
+                description=description,
                 input_model=_input_model_for(declaration.name, declaration.input_schema),
                 risk=permission.risk,
                 side_effects=declaration.side_effects,
