@@ -1,4 +1,5 @@
-"""`nox pair`: pair a device from a terminal - the way on a server without a screen.
+"""`nox pair`, `nox devices`, `nox unpair`: devices from a terminal - the way on a server without
+a screen.
 
 It asks the running core (as the local shell, with the per-start session token only this account
 can read) for a one-time code, and prints the pairing link, a QR code to scan and the authority's
@@ -23,7 +24,14 @@ from nox.ipc.errors import ERR_PERMISSION, IpcError
 from nox.ipc.server import WS_PATH, read_runtime_info
 from nox.ipc.tokens import read_session_token
 
-__all__ = ["MESSAGES", "PairingError", "pair_in_terminal", "render"]
+__all__ = [
+    "MESSAGES",
+    "PairingError",
+    "devices_in_terminal",
+    "pair_in_terminal",
+    "render",
+    "unpair_in_terminal",
+]
 
 MESSAGES: dict[str, dict[str, str]] = {
     "de": {
@@ -43,6 +51,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "bad_pin": "Die PIN stimmt nicht.",
         "failed": "Koppeln geht gerade nicht: {error}",
         "pin_prompt": "Sicherheits-PIN",
+        "none": "Noch kein Gerät gekoppelt. Eins koppeln: nox pair",
+        "header": "Gekoppelte Geräte:",
+        "row": "  {name}  (gekoppelt {paired}, zuletzt gesehen {seen})  [{id}]",
+        "never": "nie",
+        "removed_row": "  {name}  entfernt am {when}  [{id}]",
+        "no_match": "Kein gekoppeltes Gerät heißt „{which}“. Liste: nox devices",
+        "ambiguous": "Mehrere Geräte passen zu „{which}“; bitte die ID nehmen:",
+        "unpaired": "{name} ist entfernt. Seine offenen Verbindungen sind beendet.",
     },
     "en": {
         "not_running": "Nox is not running. Start it: sudo systemctl start nox",
@@ -61,6 +77,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "bad_pin": "That PIN is not right.",
         "failed": "Pairing is not possible right now: {error}",
         "pin_prompt": "Security PIN",
+        "none": "No device paired yet. Pair one: nox pair",
+        "header": "Paired devices:",
+        "row": "  {name}  (paired {paired}, last seen {seen})  [{id}]",
+        "never": "never",
+        "removed_row": "  {name}  removed {when}  [{id}]",
+        "no_match": 'No paired device is called "{which}". List: nox devices',
+        "ambiguous": 'Several devices match "{which}"; please use the id:',
+        "unpaired": "{name} is removed. Its open connections have ended.",
     },
 }
 
@@ -73,9 +97,11 @@ def _text(language: str) -> dict[str, str]:
     return MESSAGES.get(language, MESSAGES["en"])
 
 
-async def _request(
-    runtime_dir: Path, name: str, pin: str | None, text: dict[str, str]
+async def _call(
+    runtime_dir: Path, request: str, payload: dict[str, Any], text: dict[str, str]
 ) -> dict[str, Any]:
+    """One request to the running core, as the local shell (the session token is readable by this
+    account only)."""
     info = read_runtime_info(runtime_dir)
     port = info.get("ws_port")
     host = info.get("host", "127.0.0.1")
@@ -93,12 +119,18 @@ async def _request(
     except (OSError, IpcError) as exc:
         raise PairingError(text["no_answer"].format(error=exc)) from exc
     try:
-        payload: dict[str, Any] = {"name": name}
-        if pin:
-            payload["pin"] = pin
-        return await client.request("lan.pair.start", payload)
+        return await client.request(request, payload)
     finally:
         await client.close()
+
+
+async def _request(
+    runtime_dir: Path, name: str, pin: str | None, text: dict[str, str]
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"name": name}
+    if pin:
+        payload["pin"] = pin
+    return await _call(runtime_dir, "lan.pair.start", payload, text)
 
 
 def _terminal_qr(url: str) -> str:
@@ -138,9 +170,11 @@ def render(
 
 
 def _explain(exc: IpcError, text: dict[str, str]) -> str:
-    if "network access is off" in exc.message:
+    """What went wrong, decided on the core's structured reason - never on its English wording."""
+    reason = str(exc.details.get("reason", ""))
+    if reason == "off":
         return text["off"]
-    if "starting" in exc.message:
+    if reason == "starting":
         return text["starting"]
     if exc.code == ERR_PERMISSION:
         return text["bad_pin"]
@@ -168,3 +202,69 @@ def pair_in_terminal(
         except IpcError as again:
             raise PairingError(_explain(again, text)) from again
     say(render(result, language=language))
+
+
+def _when(value: object, text: dict[str, str]) -> str:
+    if not value:
+        return text["never"]
+    return f"{datetime.fromisoformat(str(value)).astimezone():%d.%m.%Y %H:%M}"
+
+
+def devices_in_terminal(
+    runtime_dir: Path, *, language: str = "de", say: Callable[[str], None] = print
+) -> None:
+    """List the paired devices, active ones first."""
+    text = _text(language)
+    try:
+        listed = asyncio.run(_call(runtime_dir, "lan.devices.list", {}, text))["devices"]
+    except IpcError as exc:
+        raise PairingError(_explain(exc, text)) from exc
+    if not listed:
+        say(text["none"])
+        return
+    lines = [text["header"]]
+    for device in sorted(listed, key=lambda d: (d["revoked_at"] is not None, d["name"].lower())):
+        if device["revoked_at"]:
+            lines.append(
+                text["removed_row"].format(
+                    name=device["name"], when=_when(device["revoked_at"], text), id=device["id"][:8]
+                )
+            )
+        else:
+            lines.append(
+                text["row"].format(
+                    name=device["name"],
+                    paired=_when(device["paired_at"], text),
+                    seen=_when(device["last_seen_at"], text),
+                    id=device["id"][:8],
+                )
+            )
+    say("\n".join(lines))
+
+
+def unpair_in_terminal(
+    runtime_dir: Path, which: str, *, language: str = "de", say: Callable[[str], None] = print
+) -> None:
+    """Remove a paired device by its name (any case) or the start of its id. The machine Nox runs
+    on needs no PIN for this: removing a device only ever narrows access."""
+    text = _text(language)
+    try:
+        listed = asyncio.run(_call(runtime_dir, "lan.devices.list", {}, text))["devices"]
+    except IpcError as exc:
+        raise PairingError(_explain(exc, text)) from exc
+    active = [d for d in listed if not d["revoked_at"]]
+    wanted = which.strip().lower()
+    matches = [d for d in active if d["name"].lower() == wanted] or [
+        d for d in active if wanted and d["id"].startswith(wanted)
+    ]
+    if not matches:
+        raise PairingError(text["no_match"].format(which=which))
+    if len(matches) > 1:
+        rows = [f"  {d['name']}  [{d['id'][:8]}]" for d in matches]
+        raise PairingError("\n".join([text["ambiguous"].format(which=which), *rows]))
+    device = matches[0]
+    try:
+        asyncio.run(_call(runtime_dir, "lan.unpair", {"device_id": device["id"]}, text))
+    except IpcError as exc:
+        raise PairingError(_explain(exc, text)) from exc
+    say(text["unpaired"].format(name=device["name"]))

@@ -66,6 +66,7 @@ DEVICE_SURFACE = frozenset(
         "secrets.status",
         "security.kill",
         "security.panic",
+        "security.permission.pending",
         "security.permission.reply",
         "security.pin.status",
         "state.get",
@@ -128,6 +129,8 @@ def _config(tmp_path: Path) -> Any:
         },
         "health": {"check_interval_s": 3600},
         "logging": {"level": "WARNING"},
+        # On, so its requests exist and their refusal to a device is actually checked.
+        "remote": {"enabled": True},
     }
     (tmp_path / "vault").mkdir()
     return load_config(DEFAULTS_PATH, None, None, settings)
@@ -165,7 +168,7 @@ def _ssl(core: NoxCore) -> ssl.SSLContext:
     return ssl.create_default_context(cafile=str(tls.ca_file))
 
 
-async def _pair(core: NoxCore, name: str = "Testgerät") -> dict[str, str]:
+async def _pair(core: NoxCore, name: str = "Test device") -> dict[str, str]:
     start = await _lan(core).devices.start()
     tls = _lan(core).tls
     assert tls is not None
@@ -239,8 +242,8 @@ async def test_the_device_surface_is_exactly_the_list(core: NoxCore) -> None:
 @pytest.mark.parametrize("name", ADMINISTRATION)
 async def test_administration_is_refused_to_a_device(core: NoxCore, name: str) -> None:
     assert core.registry is not None
-    if core.registry.get(name) is None:
-        pytest.skip(f"{name} is not registered in this build")
+    # A renamed request must turn this red, not quietly skip its refusal.
+    assert core.registry.get(name) is not None, f"{name} is not registered"
     assert not core.registry.is_allowed(name, "device")
     assert core.registry.is_allowed(name, "dashboard") or name in {
         "voice.ptt",
@@ -293,10 +296,20 @@ async def test_a_forged_bridge_marker_is_refused(core: NoxCore) -> None:
     assert refused.value.response.status_code == 403
 
 
-async def test_another_origin_cannot_connect(core: NoxCore) -> None:
-    with pytest.raises((InvalidStatus, ConnectionClosed)):
-        async with await _connect(core, origin="https://evil.example") as ws:
-            await ws.recv()
+@pytest.mark.parametrize("origin", ["https://evil.example", None], ids=["foreign", "none"])
+async def test_another_origin_cannot_even_open_a_websocket(
+    core: NoxCore, origin: str | None
+) -> None:
+    """Refused at the upgrade with 403 - not accepted and closed later by the hub's auth timeout,
+    which a test accepting any close would not tell apart."""
+    with pytest.raises(InvalidStatus) as refused:
+        await connect(
+            f"wss://127.0.0.1:{_lan(core).port}/ws",
+            ssl=_ssl(core),
+            origin=origin,  # type: ignore[arg-type]
+            open_timeout=5,
+        )
+    assert refused.value.response.status_code == 403
 
 
 async def test_revoking_closes_the_open_session_at_once(core: NoxCore) -> None:
@@ -333,10 +346,11 @@ async def test_a_device_cannot_pair_or_remove_others_without_a_pin(core: NoxCore
 
 
 async def test_the_local_dashboard_pairs_with_a_link_and_qr(core: NoxCore) -> None:
-    result = await _local(core, "dashboard", "lan.pair.start", {"name": "Küche"})
+    result = await _local(core, "dashboard", "lan.pair.start", {"name": "Kitchen"})
     assert result["url"].startswith("https://") and f"#pair={result['code']}" in result["url"]
     assert result["qr"].startswith("data:image/svg+xml")
-    assert result["fingerprint"] == _lan(core).tls.fingerprint  # type: ignore[union-attr]
+    assert result["fingerprint"] == _lan(core).tls.server_fingerprint  # type: ignore[union-attr]
+    assert result["ca_fingerprint"] == _lan(core).tls.fingerprint  # type: ignore[union-attr]
 
 
 async def test_a_devices_always_is_not_remembered(core: NoxCore) -> None:
@@ -386,8 +400,74 @@ async def test_nox_pair_prints_a_link_a_code_and_the_fingerprint(core: NoxCore) 
     )
     (text,) = printed
     assert "#pair=" in text and "https://" in text
-    assert _lan(core).tls.fingerprint[:23] in text  # type: ignore[union-attr]
+    assert _lan(core).tls.server_fingerprint[:23] in text  # type: ignore[union-attr]
     assert "Valid until" in text
+
+
+async def test_nox_devices_lists_the_paired_devices(core: NoxCore) -> None:
+    from nox.lan.terminal import devices_in_terminal
+
+    runtime_dir = Path(core.config.paths.runtime_dir)
+    printed: list[str] = []
+    await asyncio.to_thread(devices_in_terminal, runtime_dir, language="en", say=printed.append)
+    assert printed == ["No device paired yet. Pair one: nox pair"]
+
+    kitchen = await _pair(core, "Kitchen tablet")
+    await _pair(core, "Sam's phone")
+    await _local(core, "dashboard", "lan.unpair", {"device_id": kitchen["device_id"]})
+    printed.clear()
+    await asyncio.to_thread(devices_in_terminal, runtime_dir, language="en", say=printed.append)
+    (text,) = printed
+    lines = text.splitlines()
+    assert lines[0] == "Paired devices:"
+    # Active devices first, removed ones after them.
+    assert "Sam's phone" in lines[1] and "never" in lines[1]
+    assert "Kitchen tablet" in lines[2] and "removed" in lines[2]
+    assert kitchen["device_id"][:8] in lines[2]
+
+
+async def test_nox_unpair_removes_a_lost_phone_by_name(core: NoxCore) -> None:
+    from nox.lan.terminal import unpair_in_terminal
+
+    _with_pin(core, "4711")  # the computer itself needs no PIN to narrow access
+    paired = await _pair(core, "Sam's phone")
+    ws = await _connect(core)
+    client_id = f"device:{paired['device_id']}"
+    signed_in = await _auth(ws, token=paired["token"], role="device", client_id=client_id)
+    assert signed_in.payload["ok"]
+    printed: list[str] = []
+    await asyncio.to_thread(
+        unpair_in_terminal,
+        Path(core.config.paths.runtime_dir),
+        "SAM'S PHONE",
+        language="en",
+        say=printed.append,
+    )
+    assert printed == ["Sam's phone is removed. Its open connections have ended."]
+    with pytest.raises(ConnectionClosed):
+        while True:
+            await asyncio.wait_for(ws.recv(), 5)
+    assert _lan(core).devices.verify(paired["token"]) is None
+
+
+async def test_nox_unpair_refuses_an_unknown_or_ambiguous_name(core: NoxCore) -> None:
+    from nox.lan.terminal import PairingError, unpair_in_terminal
+
+    runtime_dir = Path(core.config.paths.runtime_dir)
+    first = await _pair(core, "Tablet")
+    second = await _pair(core, "Tablet")
+    with pytest.raises(PairingError, match="No paired device"):
+        await asyncio.to_thread(unpair_in_terminal, runtime_dir, "Fridge", language="en")
+    with pytest.raises(PairingError, match="Several devices") as refused:
+        await asyncio.to_thread(unpair_in_terminal, runtime_dir, "tablet", language="en")
+    assert first["device_id"][:8] in str(refused.value)
+    # Nothing was removed on a refusal; the id then picks exactly one.
+    assert _lan(core).devices.verify(first["token"]) is not None
+    await asyncio.to_thread(
+        unpair_in_terminal, runtime_dir, second["device_id"][:8], language="en", say=print
+    )
+    assert _lan(core).devices.verify(second["token"]) is None
+    assert _lan(core).devices.verify(first["token"]) is not None
 
 
 async def test_with_a_pin_a_device_pairs_only_with_the_right_one(core: NoxCore) -> None:
@@ -414,3 +494,151 @@ async def test_with_a_pin_a_device_pairs_only_with_the_right_one(core: NoxCore) 
         assert wrong.kind is Kind.ERROR and wrong.payload["code"] == ERR_PERMISSION
         right = await _request(ws, paired["client_id"], "lan.pair.start", {"pin": "4711"})
         assert right.kind is Kind.RESPONSE and len(right.payload["code"]) == 8
+
+
+# ---- what a paired device may allow, and what removes it ----------------------------------------
+
+
+def _with_pin(core: NoxCore, pin: str | None) -> None:
+    """A PIN on an in-memory secret store - never the machine's real credential manager."""
+    from nox.security.gate import SecurityChangeGate
+    from nox.security.secrets import InMemorySecretStore, PinManager
+
+    assert core.security is not None
+    core.security.secrets = InMemorySecretStore()
+    core.security.pin = PinManager(
+        core.security.secrets, audit=core.security.audit, prefer_argon2=False
+    )
+    core.security.gate = SecurityChangeGate(
+        core.security.pin, required=True, audit=core.security.audit
+    )
+    if pin:
+        core.security.pin.set_pin(pin, by="test")
+
+
+def _ask(core: NoxCore, risk: Any) -> str:
+    from nox.security.model import PermissionRequest
+
+    assert core.security is not None
+    return core.security.engine.request_confirmation(
+        PermissionRequest(
+            agent="companion", tool="file", action="delete", mode="companion", risk=risk
+        )
+    )
+
+
+async def test_a_device_needs_the_pin_to_allow_something_risky(core: NoxCore) -> None:
+    """Otherwise a stolen phone asks Nox for something in the chat and allows it itself."""
+    from nox.security.model import Risk
+
+    _with_pin(core, None)
+    paired = await _pair(core)
+    async with await _connect(core) as ws:
+        await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
+        grant = _ask(core, Risk.HIGH)
+        allow = {"grant_id": grant, "decision": "allow", "remember": False}
+        no_pin_set = await _request(ws, paired["client_id"], "security.permission.reply", allow)
+        assert no_pin_set.kind is Kind.ERROR
+        assert no_pin_set.payload["details"]["reason"] == "pin_not_set"
+        # Saying no never needs anything.
+        deny = {"grant_id": grant, "decision": "deny", "remember": False}
+        denied = await _request(ws, paired["client_id"], "security.permission.reply", deny)
+        assert denied.kind is Kind.RESPONSE and denied.payload["ok"] is True
+
+        _with_pin(core, "4711")
+        grant = _ask(core, Risk.HIGH)
+        allow["grant_id"] = grant
+        without = await _request(ws, paired["client_id"], "security.permission.reply", allow)
+        assert without.payload["details"]["reason"] == "pin_required"
+        right = await _request(
+            ws, paired["client_id"], "security.permission.reply", {**allow, "pin": "4711"}
+        )
+        assert right.kind is Kind.RESPONSE and right.payload["ok"] is True
+
+        # Low risk: a tap is enough, as on the PC.
+        grant = _ask(core, Risk.LOW)
+        low = await _request(
+            ws,
+            paired["client_id"],
+            "security.permission.reply",
+            {"grant_id": grant, "decision": "allow", "remember": False},
+        )
+        assert low.kind is Kind.RESPONSE and low.payload["ok"] is True
+
+
+async def test_a_device_needs_the_pin_to_approve_a_plan(core: NoxCore) -> None:
+    _with_pin(core, None)
+    paired = await _pair(core)
+    async with await _connect(core) as ws:
+        await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
+        refused = await _request(ws, paired["client_id"], "plans.approve", {"plan": "p1"})
+        assert refused.kind is Kind.ERROR and refused.payload["code"] == ERR_PERMISSION
+
+
+async def test_the_pc_removes_a_lost_phone_without_the_pin(core: NoxCore) -> None:
+    """A thief must not be able to block the removal by locking the PIN."""
+    _with_pin(core, "4711")
+    paired = await _pair(core)
+    removed = await _local(core, "dashboard", "lan.unpair", {"device_id": paired["device_id"]})
+    assert removed["ok"] is True
+
+
+async def test_three_wrong_pins_remove_the_device(core: NoxCore) -> None:
+    _with_pin(core, "4711")
+    paired = await _pair(core)
+    async with await _connect(core) as ws:
+        await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
+        reasons = []
+        for _ in range(3):
+            answer = await _request(ws, paired["client_id"], "lan.pair.start", {"pin": "0000"})
+            reasons.append(answer.payload["details"]["reason"])
+        assert reasons == ["pin_wrong", "pin_wrong", "removed"]
+        with pytest.raises(ConnectionClosed) as closed:
+            while True:
+                await asyncio.wait_for(ws.recv(), 5)
+        assert closed.value.rcvd is not None and closed.value.rcvd.code == 1008
+    assert all(d.revoked for d in _lan(core).devices.devices() if d.id == paired["device_id"])
+    # The PIN itself is not locked: the owner still uses it.
+    assert core.security is not None
+    status = await core.security.pin.verify_pin_async("4711", by="test")
+    assert status.ok
+
+
+async def test_signing_out_closes_the_session_as_signed_out(core: NoxCore) -> None:
+    paired = await _pair(core)
+    async with await _connect(core) as ws:
+        await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
+        answer = await _request(
+            ws, paired["client_id"], "lan.unpair", {"device_id": paired["device_id"]}
+        )
+        assert answer.kind is Kind.RESPONSE and answer.payload["ok"] is True
+        with pytest.raises(ConnectionClosed) as closed:
+            while True:
+                await asyncio.wait_for(ws.recv(), 5)
+        assert closed.value.rcvd is not None and closed.value.rcvd.code == 4001
+
+
+async def test_open_questions_reach_a_dashboard_that_connects_later(core: NoxCore) -> None:
+    from nox.security.model import Risk
+
+    grant = _ask(core, Risk.MEDIUM)
+    paired = await _pair(core)
+    async with await _connect(core) as ws:
+        await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
+        listed = await _request(ws, paired["client_id"], "security.permission.pending", {})
+        assert listed.kind is Kind.RESPONSE
+        (pending,) = listed.payload["pending"]
+        assert pending["request_id"] == grant and pending["risk"] == "medium"
+        assert pending["expires_at"] and pending["remember_ttl_s"] == 8 * 3600
+
+
+async def test_a_device_sees_whether_a_pin_is_set_but_no_local_detail(core: NoxCore) -> None:
+    paired = await _pair(core)
+    _lan(core).error = "certificates: OSError: C:/somewhere/private"
+    async with await _connect(core) as ws:
+        await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
+        status = await _request(ws, paired["client_id"], "lan.status", {})
+        assert status.payload["pin_set"] is False
+        assert status.payload["error"] == "unavailable"
+    local = await _local(core, "dashboard", "lan.status", {})
+    assert local["error"].startswith("certificates:")

@@ -16,6 +16,7 @@
 #   nox restore <file>     put the data of one snapshot back (the program stays as it is)
 #   nox claude-login       install Claude Code for the service user and start its login
 #   nox pair               pair a phone, tablet or PC (as everywhere; QR code and link)
+#   nox devices            the paired devices;  nox unpair <name>  removes one (a lost phone)
 #   nox onboard            as everywhere, then restart the service so the answers take effect
 set -euo pipefail
 
