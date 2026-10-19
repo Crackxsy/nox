@@ -34,6 +34,24 @@ export interface LanDevice {
   current: boolean;
 }
 
+/**
+ * A device unused this long is marked in the list. The usual cause is an iPhone paired in Safari
+ * and then added to the home screen: the app has storage of its own and pairs again, so the Safari
+ * pairing is never seen again.
+ */
+export const IDLE_AFTER_DAYS = 14;
+const DAY_MS = 86_400_000;
+
+/** Whole days since an active device was last seen (or paired, if never), once that reaches
+ * `IDLE_AFTER_DAYS`; null for a recent, removed or the asking device, or an unreadable date. */
+export function idleDays(device: LanDevice, now: number): number | null {
+  if (device.revokedAt !== null || device.current) return null;
+  const last = Date.parse(device.lastSeenAt ?? device.pairedAt);
+  if (Number.isNaN(last)) return null;
+  const days = Math.floor((now - last) / DAY_MS);
+  return days >= IDLE_AFTER_DAYS ? days : null;
+}
+
 export interface LanPairing {
   code: string;
   expiresAt: string;

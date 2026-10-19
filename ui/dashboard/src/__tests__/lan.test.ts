@@ -10,7 +10,10 @@ import {
   addPrompt,
   clockSkew,
   decidedNote,
+  IDLE_AFTER_DAYS,
+  type LanDevice,
   groupCode,
+  idleDays,
   needsDevicePin,
   parseLanDevices,
   parseLanPairing,
@@ -203,5 +206,31 @@ describe('the permission prompt queue', () => {
 
   it('asks a paired device for the PIN at high and critical risk only', () => {
     expect(['read', 'low', 'medium', 'high', 'critical'].map(needsDevicePin)).toEqual([false, false, false, true, true]);
+  });
+});
+
+describe('devices nobody uses any more', () => {
+  const NOW = Date.parse('2026-11-30T12:00:00Z');
+  const base: LanDevice = {
+    id: 'a',
+    name: 'iPhone',
+    pairedAt: '2026-10-01T12:00:00Z',
+    lastSeenAt: null,
+    revokedAt: null,
+    current: false,
+  };
+  const daysAgo = (n: number) => new Date(NOW - n * 86_400_000).toISOString();
+
+  it('counts from the last time it was seen, or from pairing when it never was', () => {
+    expect(idleDays({ ...base, lastSeenAt: daysAgo(IDLE_AFTER_DAYS) }, NOW)).toBe(IDLE_AFTER_DAYS);
+    expect(idleDays({ ...base, lastSeenAt: daysAgo(IDLE_AFTER_DAYS - 1) }, NOW)).toBeNull();
+    expect(idleDays({ ...base, pairedAt: daysAgo(40) }, NOW)).toBe(40);
+  });
+
+  it('never marks a removed device, the asking one or an unreadable date', () => {
+    const old = { ...base, lastSeenAt: daysAgo(90) };
+    expect(idleDays({ ...old, revokedAt: daysAgo(1) }, NOW)).toBeNull();
+    expect(idleDays({ ...old, current: true }, NOW)).toBeNull();
+    expect(idleDays({ ...base, lastSeenAt: 'not a date' }, NOW)).toBeNull();
   });
 });

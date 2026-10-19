@@ -56,6 +56,30 @@ describe('the pairing screen', () => {
   });
 });
 
+describe('pairing on iOS in Safari', () => {
+  const safari = { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)', maxTouchPoints: 5, displayStandalone: false };
+
+  it('says to add Nox to the home screen first, because the app would not know this pairing', () => {
+    render(<PairScreen t={t} code="ABCDEFGH" onPaired={() => undefined} defaultName="iPhone" fetchImpl={vi.fn()} platform={safari} />);
+    const note = screen.getByRole('note', { name: t('pair_ios_title') });
+    expect(note.textContent).toContain(t('pair_ios_body'));
+    // Pairing in Safari stays possible: the note informs, it does not block.
+    expect(screen.getByRole('button', { name: t('pair_button') })).toBeTruthy();
+  });
+
+  it('says nothing of the kind inside the home-screen app or on other systems', () => {
+    const { unmount } = render(
+      <PairScreen t={t} code={null} onPaired={() => undefined} defaultName="iPhone" fetchImpl={vi.fn()} platform={{ ...safari, standalone: true }} />,
+    );
+    expect(screen.queryByRole('note')).toBeNull();
+    unmount();
+    render(
+      <PairScreen t={t} code={null} onPaired={() => undefined} defaultName="Android" fetchImpl={vi.fn()} platform={{ userAgent: 'Mozilla/5.0 (Linux; Android 15)', maxTouchPoints: 5, displayStandalone: false }} />,
+    );
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+});
+
 describe('where this page runs', () => {
   const ipad = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15';
 

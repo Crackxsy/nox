@@ -327,6 +327,30 @@ describe('the list', () => {
   });
 });
 
+describe('a device nobody uses any more', () => {
+  it('is marked with how long it has not been seen; a recent one is not', async () => {
+    const recent = new Date().toISOString();
+    await show({
+      answers: {
+        'lan.devices.list': {
+          enabled: true,
+          devices: [
+            { id: 'safari', name: 'iPhone', paired_at: '2026-01-02T10:00:00+00:00', last_seen_at: '2026-01-02T10:05:00+00:00', revoked_at: null, current: false },
+            { id: 'app', name: 'iPhone App', paired_at: '2026-01-02T10:10:00+00:00', last_seen_at: recent, revoked_at: null, current: false },
+          ],
+        },
+      },
+    });
+    const list = await screen.findByRole('list', { name: t('lan_devices_title') });
+    const items = within(list).getAllByRole('listitem');
+    const stale = items.find((li) => li.textContent!.startsWith('iPhoneGekoppelt'))!;
+    const fresh = items.find((li) => li.textContent!.startsWith('iPhone App'))!;
+    const idlePrefix = t('lan_device_idle').split('{0}')[0]!;
+    expect(stale.textContent).toMatch(new RegExp(`${idlePrefix}[0-9]+ Tagen`));
+    expect(fresh.textContent).not.toContain(idlePrefix);
+  });
+});
+
 describe('removing a device', () => {
   it('needs a second press on a button that stays put, then removes it', async () => {
     const { calls } = await show();

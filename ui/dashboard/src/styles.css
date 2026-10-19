@@ -2234,6 +2234,12 @@ a:hover {
   font-size: var(--text-sm);
 }
 
+.device-idle {
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  margin: 0;
+}
+
 .device-action {
   display: grid;
   justify-items: end;
@@ -2374,6 +2380,21 @@ a:hover {
 .gate-lede {
   color: var(--ink-2);
   margin: 0;
+}
+
+.gate-note {
+  border-left: 3px solid var(--hairline);
+  padding-left: 0.75rem;
+  color: var(--ink-2);
+}
+
+.gate-note p {
+  margin: 0;
+}
+
+.gate-note-title {
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .gate-button {

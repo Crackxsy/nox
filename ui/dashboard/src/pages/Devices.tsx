@@ -28,6 +28,7 @@ import {
   type LanPairing,
   type LanStatus,
   groupCode,
+  idleDays,
   parseLanDevices,
   parseLanPairing,
   parseLanStatus,
@@ -472,6 +473,7 @@ export function DevicesSection({
               const canRemove = !removed && (d.current || !device || status.pinSet);
               const isArmed = armed === d.id;
               const withPin = device && !d.current;
+              const idle = idleDays(d, now);
               return (
                 <li key={d.id} className={removed ? 'device device--revoked' : 'device'}>
                   <div className="device-main">
@@ -485,6 +487,7 @@ export function DevicesSection({
                       {t('remote_col_last_seen')}:{' '}
                       {d.lastSeenAt === null ? t('remote_never') : formatTimestamp(d.lastSeenAt, lang)}
                     </p>
+                    {idle !== null && <p className="device-idle">{fill(t('lan_device_idle'), idle)}</p>}
                   </div>
                   <StateWord
                     tone={removed ? 'off' : 'ok'}

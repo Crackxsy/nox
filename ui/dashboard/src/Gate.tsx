@@ -7,6 +7,9 @@
  * empty, the core uses the name given when the code was made, else that guess. After a failed
  * attempt the code field is always shown - also when the code came from the link - so a new code
  * can be typed without going back to the camera.
+ *
+ * On iOS in a Safari tab, a note says to add Nox to the home screen first and pair inside the app:
+ * the app keeps storage of its own, so a pairing made in Safari would not carry over.
  */
 
 import { useState } from 'react';
@@ -20,6 +23,7 @@ import {
   saveDevice,
 } from './auth';
 import type { Key, T } from './i18n';
+import { type PlatformInput, currentPlatform, isIosBrowserTab } from './platform';
 
 const ERROR_KEYS: Record<PairError, Key> = {
   unknown_code: 'pair_error_unknown_code',
@@ -40,12 +44,15 @@ export interface PairScreenProps {
   fetchImpl?: typeof fetch;
   /** This device's own name guess; read from the browser when not given (tests pass one). */
   defaultName?: string;
+  /** Read from the browser when not given (tests pass one). */
+  platform?: PlatformInput;
 }
 
-export function PairScreen({ t, code: initialCode, onPaired, fetchImpl, defaultName }: PairScreenProps) {
+export function PairScreen({ t, code: initialCode, onPaired, fetchImpl, defaultName, platform }: PairScreenProps) {
   const [guess] = useState(
     () => defaultName ?? guessDeviceName(navigator.userAgent, navigator.maxTouchPoints ?? 0),
   );
+  const [iosTab] = useState(() => isIosBrowserTab(platform ?? currentPlatform()));
   const [name, setName] = useState('');
   const [code, setCode] = useState(initialCode ?? '');
   const [busy, setBusy] = useState(false);
@@ -74,6 +81,14 @@ export function PairScreen({ t, code: initialCode, onPaired, fetchImpl, defaultN
           {t('pair_title')}
         </h1>
         <p className="gate-lede">{t('pair_lede')}</p>
+        {iosTab && (
+          <div className="gate-note" role="note" aria-labelledby="pair-ios-title">
+            <p id="pair-ios-title" className="gate-note-title">
+              {t('pair_ios_title')}
+            </p>
+            <p>{t('pair_ios_body')}</p>
+          </div>
+        )}
         <div className="field">
           <label htmlFor="pair-name" className="label">
             {t('pair_name')}
