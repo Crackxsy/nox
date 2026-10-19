@@ -95,6 +95,7 @@ in `user.yaml`. `nox doctor` sagt, ob das gewünschte Modell da ist.
 | Wo liegen seine Dateien? | `nox where` |
 | Einstellungen | `sudo nano /var/lib/nox/user.yaml`, danach `sudo systemctl restart nox` |
 | Gibt es eine neue Version? | `nox doctor` (letzte Zeile) |
+| Handy, Tablet oder PC koppeln | `nox pair` |
 | Update | `nox update` |
 
 **Updates lassen sich zurücknehmen.** Jede Version ist ein vollständiger eigener Ordner unter
@@ -132,11 +133,21 @@ startet oft in UTC; der Installer weist darauf hin. In Deutschland:
 
 ## Von deinen anderen Geräten aus
 
-Der Netzwerkzugriff ist der nächste Teil dieses Releases: Handy, Tablet oder PC werden mit einem
-Einmalcode gekoppelt, den der Server anzeigt. Danach öffnet genau dieses Gerät das Dashboard – und
-kein anderes. Bis dahin hört der Server nur auf dem Pi selbst und ist aus dem Netzwerk nicht
-erreichbar. Das ist Absicht: Ein Dashboard, das Einstellungen ändern kann, darf nicht für jedes
-Gerät offen stehen, das zufällig im selben WLAN ist.
+Der Installer schaltet den Netzwerkzugriff ein: Handy, Tablet und PC im Heimnetz öffnen das
+Dashboard, sobald sie gekoppelt sind – und erst dann.
+
+```bash
+nox pair            # zeigt einen QR-Code und einen Link; mit der Kamera des neuen Geräts scannen
+```
+
+Der Browser warnt beim ersten Mal, weil Nox ein eigenes Zertifikat hat – den Fingerabdruck
+vergleichen, den `nox pair` zeigt, dann fortfahren. Wer das Zertifikat auf dem Gerät installiert,
+sieht keine Warnung mehr und kann Nox auf den Startbildschirm legen; der Reiter **Geräte** im
+Dashboard zeigt, wie, und dort koppelst du weitere Geräte oder entfernst eins. Ein gekoppeltes Gerät
+darf alles im Alltag, nur nicht ändern, wie Nox eingerichtet ist. Mehr:
+[`NETWORK_ACCESS.md`](NETWORK_ACCESS.md).
+
+Firewall: Ist `ufw` aktiv, `sudo ufw allow 47843/tcp`.
 
 ## Zugangsdaten ohne Desktop
 
@@ -161,7 +172,7 @@ Der Pi ist das gemeinsame Gehirn; Gerätespezifisches bleibt auf dem Gerät, zu 
 | | Auf dem Pi | Auf deinem Windows-PC |
 | --- | --- | --- |
 | Gespräch, Gedächtnis, Erinnerungen, Kalender, Smart Home, Pläne | ✓ | ✓ |
-| Dashboard von jedem Gerät im Netzwerk | geplant – mit dem Netzwerkzugriff (oben) | ✓ (auf diesem PC) |
+| Dashboard von jedem Gerät im Netzwerk | ✓ (gekoppelte Geräte, oben) | ✓ (gekoppelte Geräte; anfangs aus) |
 | Das Pet-Fenster und globale Tastenkürzel | – (kein Bildschirm) | ✓ |
 | Fenster, Programme, Tippen in ein Fenster | – | ✓ |
 | Sprechen und Zuhören | geplant (USB-Mikrofon und -Lautsprecher) | ✓ |

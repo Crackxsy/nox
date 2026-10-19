@@ -12,6 +12,7 @@
  *   day.ts            the user's day: appointments, reminders, calendar feeds
  *   home.ts           Home Assistant areas, entities and their live state
  *   remote.ts         paired devices and the one-time pairing code
+ *   lan.ts            devices in the home network, pairing links, permission prompts
  *   settings.ts       config, secrets, PIN, Twitch device flow, personality
  *   notifications.ts  the toast rows
  *   chat.ts           chat turns and the kill-switch confirm machine
@@ -24,6 +25,7 @@ export * from './clips';
 export * from './day';
 export * from './health';
 export * from './home';
+export * from './lan';
 export * from './presets';
 export * from './views';
 export * from './notifications';

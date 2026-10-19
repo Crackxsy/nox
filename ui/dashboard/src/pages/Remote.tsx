@@ -26,9 +26,11 @@ export interface RemotePageProps {
   client: IpcClient | null;
   /** Takes the user to the `remote.enabled` switch on the Settings tab. */
   onOpenSettings: () => void;
+  /** Inside the "Devices" tab, under the home-network devices: no own hero and page frame. */
+  embedded?: boolean;
 }
 
-export function RemotePage({ t, lang, client, onOpenSettings }: RemotePageProps) {
+export function RemotePage({ t, lang, client, onOpenSettings, embedded = false }: RemotePageProps) {
   const [devices, setDevices] = useState<RemoteDevice[]>([]);
   /** `null` only until the first answer; a failed request means "off", never "unknown forever". */
   const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -71,16 +73,18 @@ export function RemotePage({ t, lang, client, onOpenSettings }: RemotePageProps)
   const disabled = client === null || off;
 
   return (
-    <div className="page wrap">
-      <Hero
-        title={t('hero_remote')}
-        sub={t('hero_remote_sub')}
-        links={
-          <a className="link" href="#pair">
-            {t('jump_pair')}
-          </a>
-        }
-      />
+    <div className={embedded ? 'remote-telegram' : 'page wrap'}>
+      {!embedded && (
+        <Hero
+          title={t('hero_remote')}
+          sub={t('hero_remote_sub')}
+          links={
+            <a className="link" href="#pair">
+              {t('jump_pair')}
+            </a>
+          }
+        />
+      )}
 
       {error && (
         <p role="alert" className="alert">

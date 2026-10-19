@@ -5,6 +5,7 @@
  */
 
 import type { Envelope } from '../../shared/envelope';
+import type { Auth } from './auth';
 import { type ConnStatus, IpcClient, IpcError, resolveWsUrl } from '../../shared/ipc';
 import { CHAT_IDLE_TIMEOUT_MS } from './model/chat';
 
@@ -36,6 +37,9 @@ export const DASHBOARD_PATTERNS = [
   // Settings page: `settings.changed {paths}` and `twitch.auth.changed {state}` (the latter is
   // already covered by `twitch.*`, listed here only so the pairing is obvious).
   'settings.*',
+  // Devices: `remote.paired` / `remote.revoked` (channel `lan` or `telegram`), so a pairing screen
+  // on one device sees the new one arrive.
+  'remote.*',
 ];
 
 export interface DashboardIpcHandlers {
@@ -44,15 +48,17 @@ export interface DashboardIpcHandlers {
 }
 
 export async function createDashboardClient(
-  token: string,
+  auth: Auth,
   handlers: DashboardIpcHandlers,
 ): Promise<IpcClient> {
   const url = await resolveWsUrl(window.location);
   const client = new IpcClient({
     url,
-    token,
-    role: 'dashboard',
-    id: `dashboard:${Math.random().toString(36).slice(2, 8)}`,
+    token: auth.token,
+    // A paired device authenticates as itself; the hub only accepts it through the network
+    // listener, and only for its own device id.
+    role: auth.kind === 'device' ? 'device' : 'dashboard',
+    id: auth.kind === 'device' ? auth.clientId : `dashboard:${Math.random().toString(36).slice(2, 8)}`,
     patterns: DASHBOARD_PATTERNS,
     clientVersion: '0.1.0',
     onEvent: handlers.onEvent,
@@ -138,4 +144,15 @@ export const api = {
   twitchAuthDisconnect: (c: IpcClient) => c.request('twitch.auth.disconnect', {}),
   personalityGet: (c: IpcClient) => c.request('personality.get', {}),
   personalitySet: (c: IpcClient, text: string) => c.request('personality.set', { text }),
+
+  // -- devices in the home network (`nox.lan`) ---------------------------------------------------
+  lanStatus: (c: IpcClient) => c.request('lan.status', {}),
+  lanDevices: (c: IpcClient) => c.request('lan.devices.list', {}),
+  lanPairStart: (c: IpcClient, name: string, pin = '') =>
+    c.request('lan.pair.start', pin ? { name, pin } : { name }),
+  lanUnpair: (c: IpcClient, deviceId: string, pin = '') =>
+    c.request('lan.unpair', pin ? { device_id: deviceId, pin } : { device_id: deviceId }),
+  /** The answer to a permission prompt; `remember` is ignored by the core for a paired device. */
+  permissionReply: (c: IpcClient, grantId: string, decision: 'allow' | 'deny', remember: boolean) =>
+    c.request('security.permission.reply', { grant_id: grantId, decision, remember }),
 };

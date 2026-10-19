@@ -19,21 +19,28 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import type { Auth } from './auth';
 import { type Key, type Lang, type T, translator } from './i18n';
 import { type ConnStatus, type Envelope, type IpcClient, api, createDashboardClient } from './ipc';
 import {
   type ChatMessage,
   type DashboardState,
   INITIAL_STATE,
+  type PermissionPrompt,
+  addPrompt,
   applyStateSnapshot,
   dismissNotification,
   parseHealthReport,
+  parsePermissionRequested,
   parseProviders,
   reduceEvent,
+  removePrompt,
   setConnected,
 } from './model';
 import { NotificationToasts } from './NotificationToasts';
 import { AuditPage } from './pages/Audit';
+import { DevicesSection } from './pages/Devices';
+import { PermissionPromptDialog } from './PermissionPrompt';
 import { BoardPage } from './pages/Board';
 import { ChatPage } from './pages/Chat';
 import { ClipsPage } from './pages/Clips';
@@ -44,6 +51,7 @@ import { SettingsPage } from './pages/settings/SettingsPage';
 import { StatusPage } from './pages/Status';
 import { StreamPage } from './pages/Stream';
 import { type ThemePref, applyTheme, storeTheme } from './theme';
+import { Hero } from './ui';
 
 export type TabId =
   | 'status'
@@ -85,10 +93,18 @@ const PROVIDER_RETRIES = 2;
 const PROVIDER_RETRY_MS = 4000;
 
 export interface AppProps {
-  token: string | null;
+  /** null: opened without a session token and not a paired device (the page says so). */
+  auth: Auth | null;
   lang: Lang;
   /** Appearance preference read from localStorage before the first paint (see `theme.ts`). */
   theme: ThemePref;
+  /**
+   * A paired device was removed (its token is refused) or signed itself out. The caller forgets
+   * its credentials and shows the "not paired" screen.
+   */
+  onDeviceGone?: (reason: 'removed' | 'signed_out') => void;
+  /** One line shown under the bar, e.g. that this browser could not store the pairing. */
+  notice?: string;
 }
 
 /** Typing in a field must not be swallowed by a global accelerator. */
@@ -98,11 +114,18 @@ function isTextEntry(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
 }
 
-export function App({ token, lang, theme: initialTheme }: AppProps) {
+export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: AppProps) {
   const t: T = useMemo(() => translator(lang), [lang]);
+  const device = auth?.kind === 'device';
   const [tab, setTab] = useState<TabId>('status');
   const [state, setState] = useState<DashboardState>(INITIAL_STATE);
-  const [status, setStatus] = useState<ConnStatus>(token ? 'connecting' : 'offline');
+  const [status, setStatus] = useState<ConnStatus>(auth ? 'connecting' : 'offline');
+  const [prompts, setPrompts] = useState<PermissionPrompt[]>([]);
+  const [decidedElsewhere, setDecidedElsewhere] = useState(false);
+  const [lanRevision, setLanRevision] = useState(0);
+  const [justPaired, setJustPaired] = useState('');
+  /** Prompts this dashboard answered itself: their "decided" event is not "elsewhere". */
+  const answeredRef = useRef<Set<string>>(new Set());
   const [statusDetail, setStatusDetail] = useState<string>('');
   const [client, setClient] = useState<IpcClient | null>(null);
   const [theme, setTheme] = useState<ThemePref>(initialTheme);
@@ -117,12 +140,40 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
     storeTheme(next);
   };
 
+  /** Events the shared reducer does not own: permission prompts and device pairing. */
+  const onSideEvent = useCallback((env: Envelope) => {
+    if (env.name === 'security.permission_requested') {
+      const prompt = parsePermissionRequested(env.payload);
+      if (prompt) {
+        setDecidedElsewhere(false);
+        setPrompts((q) => addPrompt(q, prompt));
+      }
+    } else if (env.name === 'security.permission_decided') {
+      const id = (env.payload as { request_id?: unknown }).request_id;
+      setPrompts((q) => {
+        if (typeof id === 'string' && q.some((p) => p.id === id) && !answeredRef.current.has(id)) {
+          setDecidedElsewhere(true);
+        }
+        return removePrompt(q, env.payload);
+      });
+    } else if (env.name === 'remote.paired' || env.name === 'remote.revoked') {
+      const payload = env.payload as { channel?: unknown; name?: unknown };
+      if (env.name === 'remote.paired' && payload.channel === 'lan' && typeof payload.name === 'string') {
+        setJustPaired(payload.name);
+      }
+      setLanRevision((n) => n + 1);
+    }
+  }, []);
+
   useEffect(() => {
-    if (!token) return;
+    if (!auth) return;
     let cancelled = false;
     let live: IpcClient | null = null;
-    createDashboardClient(token, {
-      onEvent: (env: Envelope) => setState((s) => reduceEvent(s, env.name, env.payload, env.ts)),
+    createDashboardClient(auth, {
+      onEvent: (env: Envelope) => {
+        setState((s) => reduceEvent(s, env.name, env.payload, env.ts));
+        onSideEvent(env);
+      },
       onStatus: (s, detail) => {
         setStatus(s);
         setStatusDetail(detail ?? '');
@@ -146,7 +197,19 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
       live?.close();
       setClient(null);
     };
-  }, [token]);
+  }, [auth, onSideEvent]);
+
+  // "Decided on another device" is a passing note, not a state.
+  useEffect(() => {
+    if (!decidedElsewhere) return;
+    const timer = window.setTimeout(() => setDecidedElsewhere(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [decidedElsewhere]);
+
+  // A paired device whose token is refused has been removed: say so instead of "auth failed".
+  useEffect(() => {
+    if (device && status === 'auth_failed') onDeviceGone?.('removed');
+  }, [device, status, onDeviceGone]);
 
   // Initial snapshot after every (re)connect: the core is the only source of truth.
   const refresh = useCallback(async (c: IpcClient) => {
@@ -335,12 +398,17 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
         </div>
       </header>
 
-      {!token && (
+      {!auth && (
         <p role="alert" className="banner banner--error">
           {t('no_token')}
         </p>
       )}
-      {token && !online && status !== 'connecting' && (
+      {notice && (
+        <p role="status" className="banner">
+          {notice}
+        </p>
+      )}
+      {auth && !online && status !== 'connecting' && (
         <p role="alert" className="banner">
           {t('offline_hint')}
         </p>
@@ -405,14 +473,37 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
               <ClipsPage t={t} lang={lang} state={state} client={liveClient} onState={setState} />
             )}
             {item.id === 'remote' && (
-              <RemotePage
-                t={t}
-                lang={lang}
-                client={liveClient}
-                onOpenSettings={() => setTab('settings')}
-              />
+              <div className="page wrap">
+                <Hero title={t('hero_remote')} sub={t('hero_remote_sub')} />
+                <DevicesSection
+                  t={t}
+                  lang={lang}
+                  client={liveClient}
+                  device={device}
+                  revision={lanRevision}
+                  justPaired={justPaired}
+                  onOpenSettings={() => setTab('settings')}
+                  onSignedOut={() => onDeviceGone?.('signed_out')}
+                />
+                {device ? (
+                  <p className="hint section-note">{t('remote_device_note')}</p>
+                ) : (
+                  <RemotePage
+                    t={t}
+                    lang={lang}
+                    client={liveClient}
+                    onOpenSettings={() => setTab('settings')}
+                    embedded
+                  />
+                )}
+              </div>
             )}
             {item.id === 'audit' && <AuditPage t={t} lang={lang} rows={state.audit} />}
+            {item.id === 'settings' && device && (
+              <p role="note" className="banner device-note">
+                {t('device_admin_note')}
+              </p>
+            )}
             {item.id === 'settings' && (
               <SettingsPage
                 t={t}
@@ -432,6 +523,18 @@ export function App({ token, lang, theme: initialTheme }: AppProps) {
         t={t}
         notifications={state.notifications}
         onDismiss={(id) => setState((s) => dismissNotification(s, id))}
+      />
+
+      <PermissionPromptDialog
+        t={t}
+        client={liveClient}
+        queue={prompts}
+        device={device}
+        decidedElsewhere={decidedElsewhere}
+        onAnswered={(id) => {
+          answeredRef.current.add(id);
+          setPrompts((q) => q.filter((p) => p.id !== id));
+        }}
       />
     </div>
   );

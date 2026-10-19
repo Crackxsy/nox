@@ -5,7 +5,16 @@ import { isRecord } from './guards';
 export const SCHEMA_VERSION = 1;
 
 export type Kind = 'event' | 'request' | 'response' | 'error' | 'stream';
-export type Role = 'core' | 'shell' | 'worker' | 'plugin' | 'pet' | 'dashboard' | 'supervisor' | 'remote';
+export type Role =
+  | 'core'
+  | 'shell'
+  | 'worker'
+  | 'plugin'
+  | 'pet'
+  | 'dashboard'
+  | 'supervisor'
+  | 'remote'
+  | 'device';
 
 export interface Source {
   role: Role;

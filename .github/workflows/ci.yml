@@ -476,4 +476,17 @@ jobs:
         run: playwright install chromium
 
       - name: pytest e2e
+        # The network-access click test records every window on video and shoots every step at
+        # phone, tablet and desktop size into this folder.
+        env:
+          NOX_E2E_ARTIFACTS: ${{ runner.temp }}/e2e-artifacts
         run: pytest tests/e2e -m e2e -p no:cacheprovider
+
+      - name: Upload click-test videos and screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-clicktests
+          path: ${{ runner.temp }}/e2e-artifacts
+          if-no-files-found: ignore
+          retention-days: 14

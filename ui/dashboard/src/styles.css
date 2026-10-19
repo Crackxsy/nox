@@ -2021,3 +2021,314 @@ a:hover {
 .day-fired {
   opacity: 0.6;
 }
+
+/* ------------------------------------------------- devices in the home network - */
+
+.banner--ok {
+  color: var(--ok);
+}
+
+.section-note,
+.device-note {
+  margin-block: var(--s-4);
+}
+
+.field--full {
+  flex-basis: 100%;
+}
+
+.input--pin {
+  max-width: 10ch;
+  font-family: var(--mono);
+  letter-spacing: 0.2em;
+}
+
+.input--code {
+  font-family: var(--mono);
+  font-size: var(--text-lg);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.fingerprint {
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.pairing {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) 1fr;
+  gap: var(--s-6);
+  align-items: start;
+}
+
+.pairing-qr {
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-field);
+  /* A literal on purpose: scanners need dark modules on white, in dark mode too. */
+  image-rendering: pixelated;
+  background: #fff;
+}
+
+.pairing-facts {
+  display: grid;
+  gap: var(--s-2);
+  align-content: start;
+}
+
+.pairing-facts .label {
+  margin-top: var(--s-3);
+}
+
+.pairing-url {
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+}
+
+.device-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.device {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--s-4);
+  align-items: center;
+  padding-block: var(--s-4);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.device--revoked {
+  color: var(--ink-2);
+}
+
+.device-name {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+  font-weight: 600;
+}
+
+.device-meta {
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+
+.device-action {
+  display: grid;
+  justify-items: end;
+  gap: var(--s-1);
+  max-width: 28ch;
+  text-align: right;
+}
+
+.ca-howto {
+  margin-top: var(--s-4);
+}
+
+.ca-howto summary {
+  cursor: pointer;
+  min-height: var(--hit);
+  display: flex;
+  align-items: center;
+  color: var(--link);
+}
+
+.ca-howto ul {
+  display: grid;
+  gap: var(--s-3);
+  padding-left: var(--s-5);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+
+.remote-telegram {
+  margin-top: var(--section);
+}
+
+@media (max-width: 719px) {
+  .pairing {
+    grid-template-columns: 1fr;
+  }
+
+  .pairing-qr {
+    max-width: 280px;
+    justify-self: center;
+  }
+
+  .device {
+    grid-template-columns: 1fr auto;
+  }
+
+  .device-action {
+    grid-column: 1 / -1;
+    justify-items: start;
+    text-align: left;
+    max-width: none;
+  }
+}
+
+/* ------------------------------------------------------------ the gate screens - */
+
+.gate {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: var(--s-6) var(--gutter);
+  background: var(--page-soft);
+}
+
+.gate-card {
+  width: min(100%, 440px);
+  display: grid;
+  gap: var(--s-4);
+  padding: var(--tile-pad);
+  border-radius: var(--radius-tile);
+  background: var(--tile);
+  color: var(--ink);
+}
+
+.gate-mark {
+  margin: 0;
+}
+
+.gate-title {
+  font-family: var(--font-display);
+  font-size: var(--display-4);
+  line-height: 1.1;
+  margin: 0;
+}
+
+.gate-lede {
+  color: var(--ink-2);
+  margin: 0;
+}
+
+.gate-button {
+  width: 100%;
+  min-height: calc(var(--hit) + 4px);
+}
+
+/* ----------------------------------------------------------- permission prompt - */
+
+.perm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: var(--gutter);
+  background: color-mix(in srgb, var(--page) 55%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.perm-dialog {
+  width: min(100%, 520px);
+  display: grid;
+  gap: var(--s-4);
+  padding: var(--tile-pad);
+  border-radius: var(--radius-tile);
+  border: 1px solid var(--hairline);
+  background: var(--tile);
+  color: var(--ink);
+  box-shadow: 0 24px 64px color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+.perm-title {
+  font-family: var(--font-display);
+  font-size: var(--display-4);
+  line-height: 1.15;
+  margin: 0;
+}
+
+.perm-details {
+  display: grid;
+  gap: var(--s-2);
+  margin: 0;
+}
+
+.perm-details > div {
+  display: grid;
+  grid-template-columns: 9ch 1fr;
+  gap: var(--s-3);
+}
+
+.perm-details dt {
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+
+.perm-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.perm-target {
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+}
+
+.perm-risk--high,
+.perm-risk--critical {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.perm-risk--medium {
+  color: var(--warn);
+}
+
+.perm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--s-3);
+}
+
+.perm-actions .btn {
+  min-height: var(--hit);
+}
+
+.perm-more {
+  text-align: right;
+}
+
+.perm-elsewhere {
+  position: fixed;
+  left: 50%;
+  bottom: var(--s-6);
+  transform: translateX(-50%);
+  z-index: 50;
+  padding: var(--s-3) var(--s-5);
+  border-radius: var(--radius-pill);
+  background: var(--tile-feature);
+  color: var(--tile-feature-ink);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 719px) {
+  .perm-backdrop {
+    align-items: end;
+    padding: 0;
+  }
+
+  .perm-dialog {
+    width: 100%;
+    border-radius: var(--radius-tile) var(--radius-tile) 0 0;
+    padding-bottom: calc(var(--tile-pad) + env(safe-area-inset-bottom));
+  }
+
+  .perm-actions {
+    flex-direction: column-reverse;
+  }
+
+  .perm-actions .btn {
+    width: 100%;
+  }
+}

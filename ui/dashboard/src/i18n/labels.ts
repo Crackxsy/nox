@@ -153,8 +153,51 @@ const AUDIT_ACTOR_KEYS: Record<string, Key> = {
   shell: 'audit_actor_shell',
 };
 
-const AUDIT_TOOL_KEYS: Record<string, Key> = { network: 'audit_tool_network' };
-const AUDIT_ACTION_KEYS: Record<string, Key> = { request: 'audit_action_request' };
+/** Tool namespaces (`file.delete` -> `file`) as words; the permission prompt and the audit page. */
+const AUDIT_TOOL_KEYS: Record<string, Key> = {
+  network: 'audit_tool_network',
+  file: 'audit_tool_file',
+  filesystem: 'audit_tool_filesystem',
+  desktop: 'audit_tool_desktop',
+  home: 'audit_tool_home',
+  obs: 'audit_tool_obs',
+  clip: 'audit_tool_clip',
+  memory: 'audit_tool_memory',
+  vault: 'audit_tool_vault',
+  reminder: 'audit_tool_reminder',
+  presets: 'audit_tool_presets',
+  plans: 'audit_tool_plans',
+  extend: 'audit_tool_extend',
+  self: 'audit_tool_self',
+  browser: 'audit_tool_browser',
+  pm: 'audit_tool_pm',
+};
+/** Action verbs (`file.delete` -> `delete`) as words. An unknown one is shown as it is. */
+const AUDIT_ACTION_KEYS: Record<string, Key> = {
+  request: 'audit_action_request',
+  read: 'audit_action_read',
+  write: 'audit_action_write',
+  delete: 'audit_action_delete',
+  move: 'audit_action_move',
+  list: 'audit_action_list',
+  process_start: 'audit_action_process_start',
+  process_stop: 'audit_action_process_stop',
+  type_text: 'audit_action_type_text',
+  input_send: 'audit_action_input_send',
+  screen_capture: 'audit_action_screen_capture',
+  software_install: 'audit_action_software_install',
+  settings: 'audit_action_settings',
+  lock: 'audit_action_lock',
+  export: 'audit_action_export',
+  trim: 'audit_action_trim',
+  propose: 'audit_action_propose',
+  start: 'audit_action_start',
+  set: 'audit_action_set',
+  cancel: 'audit_action_cancel',
+  run_action: 'audit_action_run_action',
+  activate: 'audit_action_activate',
+  append_inbox: 'audit_action_append_inbox',
+};
 
 export function auditDecisionLabel(t: T, value: string): string {
   return lookup(t, AUDIT_DECISION_KEYS, value);

@@ -92,6 +92,7 @@ acts less reliably; to use it anyway, set `ai.providers.ollama.model: "qwen3:1.7
 | Where are its files? | `nox where` |
 | Settings | `sudo nano /var/lib/nox/user.yaml`, then `sudo systemctl restart nox` |
 | Is there a new version? | `nox doctor` (last line) |
+| Pair a phone, tablet or PC | `nox pair` |
 | Update | `nox update` |
 
 **Updates can be undone.** Every version is a complete folder of its own under
@@ -128,11 +129,20 @@ in UTC; the installer warns about it. In Germany: `sudo timedatectl set-timezone
 
 ## Reaching it from your other devices
 
-Network access is the next part of this release: pairing a phone, tablet or PC with a one-time code
-shown on the server, after which that device - and only that device - opens the dashboard. Until it
-lands, the server listens on the Pi itself only and is not reachable from the network. That is
-deliberate: a dashboard that can change settings must not be open to anything that happens to be
-in the same Wi-Fi.
+The installer turns network access on: phones, tablets and PCs in your home network open the
+dashboard once they are paired, and only then.
+
+```bash
+nox pair            # prints a QR code and a link; scan it with the new device's camera
+```
+
+The browser warns once, because Nox has a certificate of its own - compare the fingerprint `nox
+pair` prints, then continue. Installing that certificate on a device removes the warning for good
+and lets you add Nox to the home screen; the dashboard's **Devices** tab shows how, and is also where
+you pair further devices and remove one. A paired device may do everything day to day but change
+how Nox is set up. Details: [`NETWORK_ACCESS.md`](NETWORK_ACCESS.md).
+
+Firewall: with `ufw` active, `sudo ufw allow 47843/tcp`.
 
 ## Secrets without a desktop
 
@@ -155,7 +165,7 @@ The Pi is the shared brain; device-specific things stay on the device they belon
 | | On the Pi | On your Windows PC |
 | --- | --- | --- |
 | Conversation, memory, reminders, calendar, smart home, plans | ✓ | ✓ |
-| Dashboard from every device in the network | planned - network access (above) | ✓ (on that PC) |
+| Dashboard from every device in the network | ✓ (paired devices, above) | ✓ (paired devices; off by default) |
 | The pet window and global hotkeys | – (no screen) | ✓ |
 | Windows, programs, typing into a window | – | ✓ |
 | Speaking and listening | planned (a USB microphone and speaker) | ✓ |

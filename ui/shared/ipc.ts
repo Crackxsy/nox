@@ -20,7 +20,8 @@ export interface WebSocketLike {
 export interface IpcClientOptions {
   url: string;
   token: string;
-  role: Extract<Role, 'pet' | 'dashboard'>;
+  /** `device`: a paired device over the network listener (`nox.lan`), dashboard only. */
+  role: Extract<Role, 'pet' | 'dashboard' | 'device'>;
   id: string;
   patterns: string[];
   clientVersion?: string;
@@ -255,11 +256,14 @@ export const HEALTH_PROBE_TIMEOUT_MS = 2000;
  * the default port is tried instead — a wrong port fails loudly, a hang does not fail at all.
  */
 export async function resolveWsUrl(
-  loc: { hostname: string; search: string; origin: string },
+  loc: { hostname: string; search: string; origin: string; protocol?: string; host?: string },
   fetchImpl: typeof fetch | null = typeof fetch === 'function' ? fetch : null,
   defaultPort = 47800,
   timeoutMs = HEALTH_PROBE_TIMEOUT_MS,
 ): Promise<string> {
+  // Served by the network listener (`nox.lan`): the hub is bridged on the page's own origin, so
+  // one certificate covers both and a device never needs a second port.
+  if (loc.protocol === 'https:' && loc.host) return `wss://${loc.host}/ws`;
   const host = loc.hostname || '127.0.0.1';
   const q = new URLSearchParams(loc.search).get('ws');
   const qPort = q ? Number.parseInt(q, 10) : NaN;
