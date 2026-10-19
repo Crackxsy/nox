@@ -29,7 +29,13 @@ from nox.mcp.client import MAX_MESSAGE_BYTES
 
 log = get_logger(__name__)
 
-__all__ = ["LaunchedServer", "ProcessLauncher", "ServerLauncher", "default_launcher"]
+__all__ = [
+    "LaunchedServer",
+    "ProcessLauncher",
+    "SandboxLauncher",
+    "ServerLauncher",
+    "default_launcher",
+]
 
 #: Characters of stderr kept for the status line; a server's log is not Nox's to store.
 STDERR_TAIL_CHARS = 600
@@ -165,22 +171,87 @@ class ProcessLauncher:
         return _Process(process)
 
 
-def default_launcher(job: JobLike | None = None) -> ServerLauncher:
-    """The sandbox's launcher when `nox.sandbox` provides one, else `ProcessLauncher`.
+class _SandboxedServer:
+    """A `SandboxProcess` (the sandbox's long-running variant) seen as a `LaunchedServer`."""
 
-    The sandbox module is looked up rather than imported so this file works on a checkout that does
-    not have it yet; it is expected to offer `mcp_launcher(job)` returning a `ServerLauncher`.
+    def __init__(self, process: Any) -> None:
+        self._process = process
+
+    @property
+    def pid(self) -> int:
+        return int(getattr(self._process, "pid", 0) or 0)
+
+    @property
+    def reader(self) -> asyncio.StreamReader:
+        reader: asyncio.StreamReader = self._process.stdout
+        return reader
+
+    @property
+    def writer(self) -> asyncio.StreamWriter:
+        writer: asyncio.StreamWriter = self._process.stdin
+        return writer
+
+    @property
+    def returncode(self) -> int | None:
+        code = getattr(self._process, "returncode", None)
+        return None if code is None else int(code)
+
+    def stderr_tail(self) -> str:
+        tail = getattr(self._process, "stderr_tail", None)
+        return str(tail() if callable(tail) else "")[-STDERR_TAIL_CHARS:]
+
+    async def wait(self) -> int:
+        return int(await self._process.wait())
+
+    async def terminate(self, timeout_s: float = 2.0) -> None:
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self._process.terminate(), timeout_s)
+
+
+class SandboxLauncher:
+    """Local MCP servers inside `nox.sandbox`, through its long-running variant
+    `Sandbox.start(argv, *, cwd, env, egress, limits)`, which returns a process with asyncio
+    `stdin`/`stdout`, `pid`, `returncode`, `wait()` and `terminate()`. A server that declares no
+    network gets no egress at all; one that does goes through the sandbox's egress proxy."""
+
+    sandboxed = True
+
+    def __init__(self, sandbox: Any, module: Any) -> None:
+        self._sandbox = sandbox
+        self._module = module
+
+    async def launch(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        network: bool,
+    ) -> LaunchedServer:
+        await asyncio.to_thread(cwd.mkdir, parents=True, exist_ok=True)
+        egress = self._module.EgressDecl(hosts=("*",)) if network else self._module.EgressDecl()
+        process = await self._sandbox.start(
+            list(argv), cwd=str(cwd), env=dict(env), egress=egress, limits=self._module.Limits()
+        )
+        log.info("mcp.server_process_started", sandboxed=True)
+        return _SandboxedServer(process)
+
+
+def default_launcher(job: JobLike | None = None) -> ServerLauncher:
+    """The sandbox when it can start long-running processes here, else `ProcessLauncher`.
+
+    `nox.sandbox` is looked up, not imported, so this file works on a checkout without it. Its
+    one-shot `run()` is not enough for a server that stays up: only a sandbox with `start()` is
+    used, and the dashboard says `sandboxed: false` otherwise.
     """
     try:
-        sandbox = importlib.import_module("nox.sandbox")
+        module = importlib.import_module("nox.sandbox")
+        sandbox = module.make_sandbox()
     except ImportError:
         return ProcessLauncher(job)
-    factory = getattr(sandbox, "mcp_launcher", None)
-    if callable(factory):
-        try:
-            launcher = factory(job)
-        except Exception as exc:  # noqa: BLE001 - an unusable sandbox is reported, not fatal
-            log.warning("mcp.sandbox_unavailable", error=f"{type(exc).__name__}: {exc}")
-            return ProcessLauncher(job)
-        return launcher  # type: ignore[no-any-return]
-    return ProcessLauncher(job)
+    except Exception as exc:  # noqa: BLE001 - no backend here; the process launcher remains
+        log.warning("mcp.sandbox_unavailable", error=f"{type(exc).__name__}: {exc}")
+        return ProcessLauncher(job)
+    if not callable(getattr(sandbox, "start", None)):
+        return ProcessLauncher(job)
+    return SandboxLauncher(sandbox, module)
