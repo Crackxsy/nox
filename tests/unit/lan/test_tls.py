@@ -43,6 +43,13 @@ def test_the_server_certificate_names_this_machine(tls: TlsMaterial) -> None:
     assert tls.names == NAMES and tls.addresses == ADDRESSES
 
 
+def test_the_authority_has_an_english_name(tls: TlsMaterial) -> None:
+    """What a phone shows in its trust settings - and what the guides tell people to look for."""
+    ca = _cert(tls.ca_file)
+    (name,) = ca.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
+    assert str(name.value).startswith("Nox ") and str(name.value).endswith(" home network CA")
+
+
 def test_the_authority_may_only_vouch_for_the_home_network(tls: TlsMaterial) -> None:
     """Name constraints: a phone that trusts this authority does not trust it for the internet."""
     ca = _cert(tls.ca_file)
