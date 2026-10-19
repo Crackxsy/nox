@@ -1,7 +1,10 @@
 """`Sandbox.start` / `SandboxProcess`: a long-running confined process with stdio pipes.
 
 The lifecycle logic is tested against a scripted `ProcessIo` on every OS. The real backends are
-tested where they exist: Windows here (job object + low-integrity token), Linux `bwrap` in CI.
+tested where they exist: Windows here (job object + low-integrity token or AppContainer), Linux
+`bwrap` in CI. A backend whose guarantees are not all strong (the low-integrity fallback; an
+AppContainer where Windows does not enforce loopback isolation) runs only when the weaker mode was
+accepted, so the lifecycle tests accept it explicitly and the network test checks the refusal.
 """
 
 from __future__ import annotations
@@ -20,8 +23,9 @@ from nox.sandbox import (
     RestartPolicy,
     Sandbox,
     SandboxProcess,
+    SandboxUnavailable,
 )
-from nox.sandbox.model import Limits, SandboxMode, checked_env
+from nox.sandbox.model import Guarantees, Limits, SandboxMode, checked_env
 from nox.sandbox.netguard import NetGuard
 from nox.sandbox.process import ProcessIo
 
@@ -236,12 +240,44 @@ async def test_start_refuses_a_reserved_env_key_before_starting_anything() -> No
         await sandbox.start(["x"], env={"HTTPS_PROXY": "http://evil:1"})
 
 
+STRONG = Guarantees(
+    backend="fake",
+    confines_writes=True,
+    confines_reads=True,
+    hides_secrets=True,
+    confines_network=True,
+)
+
+
+async def test_start_is_refused_when_the_sandbox_is_weaker_than_accepted() -> None:
+    class Weak:
+        mode = SandboxMode.WINDOWS_LOW_IL
+
+        def guarantees(self) -> Guarantees:
+            return Guarantees(
+                backend="weak",
+                confines_writes=True,
+                confines_reads=False,
+                hides_secrets=False,
+                confines_network=False,
+            )
+
+        async def start(self, *a, **k):  # noqa: ANN002, ANN003, ANN202
+            raise AssertionError("must not start")
+
+    with pytest.raises(SandboxUnavailable, match="accept_weak_sandbox"):
+        await Sandbox(Weak(), guard=NetGuard()).start(["srv"])  # type: ignore[arg-type]
+
+
 async def test_the_egress_proxy_lives_as_long_as_the_process() -> None:
     fake = ScriptedIo()
     seen: dict[str, object] = {}
 
     class Backend:
         mode = SandboxMode.LINUX_BWRAP
+
+        def guarantees(self) -> Guarantees:
+            return STRONG
 
         async def start(self, argv, **kw):  # noqa: ANN001, ANN003, ANN202
             seen["port"] = kw["proxy_port"]
@@ -279,9 +315,25 @@ ECHO_SERVER = (
 
 
 def _windows_sandbox() -> Sandbox:
+    """The low-integrity backend, explicitly accepted: these tests are about the process
+    lifecycle (pipes, tree kill, lifetime), not about the confinement, which is weaker here."""
     from nox.sandbox.windows import WindowsSandbox
 
-    return Sandbox(WindowsSandbox(prefer_appcontainer=False), guard=NetGuard())
+    return Sandbox(WindowsSandbox(prefer_appcontainer=False), guard=NetGuard(), accept_weak=True)
+
+
+def _appcontainer_sandbox(*, accept_weak: bool = True) -> Sandbox:
+    from nox.sandbox.windows import WindowsSandbox, appcontainer_available
+
+    if not appcontainer_available():
+        pytest.skip("AppContainer profile cannot be created here")
+    return Sandbox(
+        WindowsSandbox(prefer_appcontainer=True), guard=NetGuard(), accept_weak=accept_weak
+    )
+
+
+_PS = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+_CMD = r"C:\Windows\System32\cmd.exe"
 
 
 @windows_only
@@ -326,17 +378,41 @@ async def test_windows_stop_kills_the_whole_tree(tmp_path: Path) -> None:
         assert not psutil.pid_exists(pid), f"{pid} survived the stop"
 
 
-@windows_only
-async def test_windows_started_process_has_no_network() -> None:
+async def _probe_internet(sandbox: Sandbox) -> bytes:
     probe = (
-        "import socket\n"
-        "try:\n"
-        "    socket.create_connection(('1.1.1.1', 443), timeout=5); print('OPEN')\n"
-        "except OSError:\n"
-        "    print('BLOCKED')\n"
+        "try { (New-Object Net.Sockets.TcpClient).Connect('1.1.1.1', 443); 'OPEN' } "
+        "catch { 'BLOCKED' }"
     )
-    async with await _windows_sandbox().start([sys.executable, "-I", "-B", "-u", "-c", probe]) as p:
-        assert (await asyncio.wait_for(p.readline(), 30)).strip() == b"BLOCKED"
+    argv = [_PS, "-NoProfile", "-NonInteractive", "-Command", probe]
+    async with await sandbox.start(argv) as p:
+        return (await asyncio.wait_for(p.readline(), 60)).strip()
+
+
+@windows_only
+async def test_windows_started_process_network_matches_the_guarantees() -> None:
+    """The honest version of "a started process has no network".
+
+    The guarantee is measured, not assumed: a low-integrity child reaches the network (integrity
+    level does not restrict sockets), and an AppContainer reaches the host's loopback where Windows
+    does not enforce loopback isolation (measured on GitHub's runners and on desktop Windows 11).
+    Wherever `confines_network` is False, the sandbox must refuse the process unless the user
+    accepted the weaker mode. Where it is True, a direct connection must really fail.
+    """
+    from nox.sandbox.windows import WindowsSandbox
+
+    backend = WindowsSandbox()  # AppContainer where it can be created, as in production
+    guarantees = backend.guarantees()
+    strict = Sandbox(backend, guard=NetGuard())
+    if guarantees.confines_network:
+        assert await _probe_internet(strict) == b"BLOCKED"
+        return
+    assert not guarantees.strong
+    with pytest.raises(SandboxUnavailable, match="accept_weak_sandbox"):
+        await strict.start([_CMD, "/c", "echo", "must not start"])
+    if backend.mode is SandboxMode.WINDOWS_APPCONTAINER:
+        # Accepted, the container still has no internet capability: only loopback leaks.
+        accepted = Sandbox(backend, guard=NetGuard(), accept_weak=True)
+        assert await _probe_internet(accepted) == b"BLOCKED"
 
 
 @windows_only
@@ -374,29 +450,29 @@ async def test_linux_echo_server_round_trip() -> None:
 
 @windows_only
 async def test_windows_child_gets_its_own_proxy_credentials() -> None:
-    sandbox = _windows_sandbox()
-    echo = [r"C:\Windows\System32\cmd.exe", "/c", "echo %HTTPS_PROXY%"]
+    sandbox = _appcontainer_sandbox()
+    echo = [_CMD, "/c", "echo %HTTPS_PROXY%"]
     egress = EgressDecl(hosts=("example.com:443",))
-    first = await sandbox.run(echo, egress=egress, limits=Limits(timeout_s=20))
+    first = await sandbox.run(echo, egress=egress, limits=Limits(timeout_s=60))
     url = first.stdout.strip()
-    assert url.startswith("http://nox:") and "@127.0.0.1:" in url
-    second = await sandbox.run(echo, egress=egress, limits=Limits(timeout_s=20))
+    assert url.startswith("http://nox:") and "@127.0.0.1:" in url, (url, first.stderr)
+    second = await sandbox.run(echo, egress=egress, limits=Limits(timeout_s=60))
     assert second.stdout.strip() != url, "a fresh secret (and port) per run"
 
 
 @windows_only
 async def test_windows_proxy_secret_is_never_on_the_command_line() -> None:
     """CreateProcess gets the secret in the environment block only; the command line is
-    readable by other processes, the environment of a low-IL child is not handed out."""
-    proc = await _windows_sandbox().start(
-        [sys.executable, "-I", "-B", "-u", "-c", ECHO_SERVER],
-        egress=EgressDecl(hosts=("example.com:443",)),
-        env={"MCP_TOKEN": "tok-12345"},
+    readable by other processes, the environment of the child is not handed out."""
+    show = [_CMD, "/c", "echo %HTTPS_PROXY% %MCP_TOKEN%& ping -n 30 127.0.0.1 >nul"]
+    proc = await _appcontainer_sandbox().start(
+        show, egress=EgressDecl(hosts=("example.com:443",)), env={"MCP_TOKEN": "tok-12345"}
     )
     async with proc:
-        await proc.send(b"HTTPS_PROXY\n")
-        url = (await asyncio.wait_for(proc.readline(), 30)).strip().decode()
+        line = (await asyncio.wait_for(proc.readline(), 60)).strip().decode()
+        url, _, token = line.partition(" ")
         secret = url.split(":", 2)[2].split("@", 1)[0]
-        assert url.startswith("http://nox:") and len(secret) >= 32
+        assert url.startswith("http://nox:") and len(secret) >= 32, line
+        assert token == "tok-12345"
         cmdline = " ".join(psutil.Process(proc.pid).cmdline())
         assert secret not in cmdline and "tok-12345" not in cmdline
