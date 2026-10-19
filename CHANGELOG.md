@@ -9,6 +9,18 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Added
+- **Nox calls its tools natively and answers faster.** Claude Code runs as one warm process per
+  core and reaches Nox's tools over MCP (`nox.mcp`, IPC role `mcp`); local models use Ollama's
+  native `tools` field, with the old text protocol only as a fallback. The three-round limit is
+  gone: a turn may use up to 20 tool calls in 180 seconds, enforced in Nox, not in the prompt.
+  Every call still goes through the permission engine and the audit; the kill switch ends the
+  Claude Code process tree in under a second. The first sentence is spoken while the rest is
+  written (a long opening sentence from its first clause), and a tool loop that keeps the user
+  waiting gets one short "Moment, ich schau nach." Answers are shorter, German first, and use
+  tools instead of guessing; turns routed to the reasoning chain use a stronger model.
+- **Capability benchmark** (`evals/`, `nox eval kann-alles`): 50 everyday tasks in a simulated
+  world, an answer-quality set and a latency probe, with a report per run.
+- `file.move` can create a missing destination folder when asked (`create_folders`).
 - **Nox runs as a server on a Raspberry Pi or any Linux machine.** One command installs it as a
   hardened systemd service (`scripts/install-linux.sh`, `docs/RASPBERRY_PI.md`): its own system
   user, the program read-only in `/opt/nox`, everything it keeps in `/var/lib/nox`, Python 3.13

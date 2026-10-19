@@ -5,12 +5,14 @@ the reason people expect.
 
 ## The thing that decides it
 
-Nox reaches its tools through a text protocol: the model answers with one `NOX_TOOL_CALL {...}` line
-and nothing else, and the core parses it. A model that writes a friendly paragraph instead can talk
-and do nothing - no lights, no files, no windows. Speed is the second question.
+A model that declares native tool calling (Ollama's `/api/show` lists `tools` under
+`capabilities`) gets Nox's tools in Ollama's `tools` field and calls them as data. Every other model
+reaches them through a text protocol: it answers with one `NOX_TOOL_CALL {...}` line and nothing
+else, and the provider parses it. Either way, a model that writes a friendly paragraph instead can
+talk and do nothing - no lights, no files, no windows. Speed is the second question.
 
-`scripts/probe_models.py` asks every model Ollama has the real question, with the real offer text
-and the real parser, and reports both:
+`scripts/probe_models.py` asks every model Ollama has the real question, through the text protocol
+and - where the model supports it - natively, with the real payloads and parsers, and reports:
 
 ```powershell
 .venv\Scripts\python scripts\probe_models.py

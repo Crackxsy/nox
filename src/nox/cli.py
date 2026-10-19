@@ -317,6 +317,32 @@ def _register_voice_commands() -> None:
 _register_voice_commands()
 
 
+eval_app = typer.Typer(help="Benchmarks that measure what Nox can do (source checkout only).")
+app.add_typer(eval_app, name="eval")
+
+
+@eval_app.command(
+    "kann-alles",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def eval_kann_alles(ctx: typer.Context) -> None:
+    """Run the capability benchmark (tasks, answer quality, latency).
+
+    Options go to the runner unchanged; `python evals/run_kann_alles.py --help` lists them.
+
+    The benchmark lives next to the source (`evals/`), not in an installed package: it boots a core
+    in a temporary world and is a development tool.
+    """
+    runner = Path(__file__).resolve().parents[2] / "evals" / "run_kann_alles.py"
+    if not runner.is_file():
+        typer.echo("The benchmark ships with the source checkout (evals/), not with this install.")
+        raise typer.Exit(code=1)
+    import runpy
+
+    namespace = runpy.run_path(str(runner))
+    raise typer.Exit(code=int(namespace["main"](list(ctx.args))))
+
+
 def main() -> None:
     try:
         app()

@@ -184,6 +184,7 @@ class World:
 
     def _wrap_executor(self, core: NoxCore) -> None:
         executor = core.tool_executor
+        assert executor is not None
         original = executor.call
         probe = self.probe
 
@@ -202,7 +203,8 @@ class World:
             )
             return result
 
-        executor.call = recording_call
+        # Instance attribute over the method: every holder of this executor records through it.
+        executor.call = recording_call  # type: ignore[method-assign]
 
     def _on_confirm(self, event: Event) -> None:
         """Answer a dialog by the rules in `kann_alles.confirm` (deny unless proven harmless)."""

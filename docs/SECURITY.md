@@ -156,10 +156,39 @@ the worker is ever spawned, then enforced a second time inside the worker by its
 
 The local WebSocket hub is loopback-only, versioned, and requires a per-client session token
 (issued by the core at startup, stored under `%APPDATA%\Nox\runtime`) — every connecting client is
-assigned a role (`supervisor`, `shell`, `dashboard`, `pet`, `worker`, `plugin`, `remote`), and
+assigned a role (`supervisor`, `shell`, `dashboard`, `pet`, `worker`, `plugin`, `remote`, `mcp`), and
 requests are checked against a per-role allow-list plus rate limits, not just "authenticated =
 trusted". Security-sensitive requests (e.g. kill-switch resume) further restrict which roles may
 even attempt them, regardless of token validity — see "Kill switch" above for a concrete example.
+
+## Native tool calling and the MCP bridge
+
+Language models call Nox's tools natively, and every call still goes through the same pipeline as
+a click in the dashboard: `ToolLoop` -> `ToolExecutor` -> `PermissionEngine` -> audit. What the
+model is allowed to reach is decided in code, below it:
+
+- **Per-turn offer, token and budget.** Each chat turn opens a turn with the tools usable right
+  now (profile, mode, privacy), a random token, and a `TurnBudget` (20 calls, 180 s, no fourth try
+  of an identical failing call). A call outside the offer, after the turn ended, or past the
+  budget is refused before the executor sees it.
+- **Claude Code** runs as one long-lived process per core with its own tools switched off
+  (`--tools ""`) and Nox's tools served over MCP by `python -m nox.mcp.bridge`
+  (`--mcp-config <file> --strict-mcp-config --allowedTools mcp__nox__*`; the pre-approval only
+  stops the CLI from asking itself - Nox decides). It ignores user and project settings, hooks,
+  plugins and skills (`--setting-sources ""`, `--disable-slash-commands`) and runs in an empty
+  folder of its own. Anthropic's web search is allowed only in privacy mode full/balanced.
+- **IPC role `mcp`.** The bridge authenticates once with a one-time token bound to the role and to
+  its client id (a worker token cannot open the role, nor its token a worker role); the MCP config
+  file that carries it is owner-only and deleted as soon as the bridge is connected. The role can
+  call exactly `mcp.tools.list` and `mcp.tools.call`, receives no events and may not subscribe.
+  Every call must carry the token of the open turn, which the core hands the bridge right before
+  the turn and which dies with it.
+- **Kill switch.** It kills the Claude Code process tree - including the bridge, which Windows
+  would otherwise leave running - within a second, also while a session is still starting, ends
+  every open turn (running handlers are cancelled), and nothing restarts until resume.
+- **Local models.** Ollama gets the offer in its native `tools` field when the model declares
+  support, otherwise as the text protocol (`NOX_TOOL_CALL`), parsed inside the provider so the
+  line is never shown or spoken. Both end in the same tool loop.
 
 ## Security test obligations
 
