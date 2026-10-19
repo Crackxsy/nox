@@ -294,3 +294,16 @@ async def test_the_process_ceiling_refuses_more_processes(backend: Any) -> None:
     )
     result = await sandbox.run([PY, "-I", "-c", code], limits=Limits(max_processes=8, timeout_s=60))
     assert "refused" in result.stdout, result
+
+
+async def test_no_nested_user_namespaces_inside(backend: Any) -> None:
+    """Sandboxed code cannot create user namespaces of its own (bwrap 0.8+ `--disable-userns`)."""
+    if not backend.disables_userns:
+        if os.environ.get("NOX_REQUIRE_BWRAP") == "1":
+            pytest.fail("CI's bwrap must support --disable-userns")
+        pytest.skip("bwrap older than 0.8")
+    sandbox = Sandbox(backend, guard=NetGuard())
+    result = await sandbox.run(["/usr/bin/unshare", "-U", "true"], limits=Limits(timeout_s=30))
+    assert result.exit_code not in (0, None), result
+    control = await sandbox.run(["/usr/bin/true"], limits=Limits(timeout_s=30))
+    assert control.ok, control

@@ -197,8 +197,11 @@ was dieser Rechner durchsetzt (`ceiling=cgroup egress=True` ist alles).
 
 Meldet Nox die Sandbox als nicht verfügbar, erlaubt der Kernel keine unprivilegierten
 User-Namespaces (`sysctl kernel.unprivileged_userns_clone` muss, wo es existiert, 1 sein), oder –
-ab Ubuntu 23.10 – AppArmor schränkt sie ein; dann legt der Installer das Profil
-`/etc/apparmor.d/nox-bwrap` an, das `bwrap` das erlaubt.
+ab Ubuntu 23.10 – AppArmor schränkt sie ein. Dort lässt der Installer das `bwrap` des Systems so
+eingeschränkt, wie es ist, und legt eine Kopie `/usr/lib/nox/bwrap` an, die nur der Benutzer `nox`
+ausführen darf, mit einem AppArmor-Profil (`/etc/apparmor.d/nox-bwrap`) nur für diesen Pfad; was in
+der Sandbox läuft, bekommt keine Capabilities und keine weiteren User-Namespaces. Raspberry Pi OS
+und Debian brauchen beides nicht.
 
 ## Was läuft wo
 
@@ -222,7 +225,7 @@ sudo rm -r /opt/nox            # das Programm
 sudo rm -r /var/lib/nox        # deine Daten: Gedächtnis, Einstellungen, Zugangsdaten – nur wenn du es wirklich willst
 sudo rm -r /var/backups/nox    # die Update-Schnappschüsse
 sudo userdel nox
-sudo rm -f /etc/apparmor.d/nox-bwrap   # nur unter Ubuntu, falls der Installer es angelegt hat
+sudo rm -rf /etc/apparmor.d/nox-bwrap /usr/lib/nox   # nur unter Ubuntu, falls der Installer sie angelegt hat
 ```
 
 Nur die beiden als Daten markierten Zeilen löschen etwas von dir. Sie stehen absichtlich einzeln da.

@@ -186,8 +186,11 @@ enforces (`ceiling=cgroup egress=True` is the full set).
 
 If Nox reports the sandbox as unavailable, the kernel does not allow unprivileged user
 namespaces (`sysctl kernel.unprivileged_userns_clone` must be 1 where it exists), or - on Ubuntu
-23.10 and newer - AppArmor restricts them; the installer then adds the profile
-`/etc/apparmor.d/nox-bwrap`, which lets `bwrap` create them.
+23.10 and newer - AppArmor restricts them. There the installer leaves the system's `bwrap` as
+restricted as it was and installs a copy, `/usr/lib/nox/bwrap`, that only the `nox` user can run,
+with an AppArmor profile (`/etc/apparmor.d/nox-bwrap`) for that path alone; whatever runs inside
+the sandbox gets no capabilities and no further user namespaces. Raspberry Pi OS and Debian need
+neither.
 
 ## What runs where
 
@@ -211,7 +214,7 @@ sudo rm -r /opt/nox            # the program
 sudo rm -r /var/lib/nox        # your data: memory, settings, secrets - only if you mean it
 sudo rm -r /var/backups/nox    # the update snapshots
 sudo userdel nox
-sudo rm -f /etc/apparmor.d/nox-bwrap   # only on Ubuntu, if the installer added it
+sudo rm -rf /etc/apparmor.d/nox-bwrap /usr/lib/nox   # only on Ubuntu, if the installer added them
 ```
 
 Only the two lines marked as data delete anything of yours. They are listed separately on purpose.

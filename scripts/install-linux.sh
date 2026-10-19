@@ -176,11 +176,11 @@ define bwrap_missing \
   'Hinweis: bubblewrap (bwrap) fehlt - ohne es führt Nox keine Befehle aus. Bitte installieren.' \
   'Note: bubblewrap (bwrap) is missing - without it Nox runs no commands. Please install it.'
 define step_apparmor \
-  'AppArmor: bubblewrap darf Namensräume anlegen (Ubuntu)' \
-  'AppArmor: allowing bubblewrap to create namespaces (Ubuntu)'
+  'AppArmor: eigene bwrap-Kopie für die Sandbox (Ubuntu)' \
+  'AppArmor: a separate bwrap copy for the sandbox (Ubuntu)'
 define apparmor_failed \
-  'Hinweis: AppArmor-Profil für bwrap ließ sich nicht laden.' \
-  'Note: the AppArmor profile for bwrap could not be loaded.'
+  'Hinweis: AppArmor-Profil für die Sandbox ließ sich nicht laden.' \
+  'Note: the AppArmor profile for the sandbox could not be loaded.'
 define prefix_foreign \
   '%s existiert schon, ist aber keine Nox-Installation. Bitte prüfen und den Ordner entfernen oder umbenennen.' \
   '%s already exists but is not a Nox installation. Please check it, then remove or rename the folder.'
@@ -519,25 +519,6 @@ else
   command -v bwrap >/dev/null 2>&1 || note "$(msg bwrap_missing)"
 fi
 
-# Ubuntu 23.10+ lets unprivileged programs create user namespaces only with an AppArmor profile
-# that allows it; bwrap needs one. Raspberry Pi OS and Debian have no such restriction. Only
-# added when the restriction is on and the system has no bwrap profile of its own.
-restrict=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
-if [ -r "$restrict" ] && [ "$(cat "$restrict")" = "1" ] && [ -x /usr/bin/bwrap ] && [ ! -e /etc/apparmor.d/bwrap-userns-restrict ] && command -v apparmor_parser >/dev/null 2>&1; then
-  say "$(msg step_apparmor)"
-  cat > /etc/apparmor.d/nox-bwrap <<'APPARMOR'
-# Installed by Nox: lets bubblewrap create the user namespace its sandbox is built in.
-abi <abi/4.0>,
-include <tunables/global>
-
-profile nox-bwrap /usr/bin/bwrap flags=(unconfined) {
-  userns,
-  include if exists <local/nox-bwrap>
-}
-APPARMOR
-  apparmor_parser -r /etc/apparmor.d/nox-bwrap || note "$(msg apparmor_failed)"
-fi
-
 if [ -e "$PREFIX" ] && [ ! -d "$SRC/.git" ] && [ -n "$(ls -A "$PREFIX" 2>/dev/null)" ]; then
   fail "$(msg prefix_foreign "$PREFIX")"
 fi
@@ -591,6 +572,69 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home-dir "$NOX_HOME_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$NOX_HOME_DIR"
+
+# ---- the command sandbox on Ubuntu 23.10+ -------------------------------------------------------
+# There AppArmor lets a program create user namespaces only with a profile that allows it, and
+# bwrap needs one. Nothing is changed for /usr/bin/bwrap or any other user: Nox gets its own copy,
+# executable only by the service user, and a profile attached to that path alone. What bwrap
+# starts inside its sandbox runs under a second profile that denies every capability and new user
+# namespaces (modelled on Ubuntu's own bwrap-userns-restrict). Raspberry Pi OS and Debian have no
+# such restriction: nothing is installed there, and leftovers of an earlier install are removed.
+nox_bwrap=/usr/lib/nox/bwrap
+nox_profile=/etc/apparmor.d/nox-bwrap
+restrict=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+if [ -r "$restrict" ] && [ "$(cat "$restrict")" = "1" ] && [ -x /usr/bin/bwrap ] && command -v apparmor_parser >/dev/null 2>&1; then
+  say "$(msg step_apparmor)"
+  install -d -m 0755 /usr/lib/nox
+  install -m 0750 -o root -g "$SERVICE_USER" /usr/bin/bwrap "$nox_bwrap"
+  cat > "$nox_profile" <<'APPARMOR'
+# Installed by Nox (scripts/install-linux.sh). Only Nox's own copy of bwrap, which only the nox
+# service user can execute, may create user namespaces; what runs inside gets no capabilities.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile nox-bwrap /usr/lib/nox/bwrap flags=(attach_disconnected,mediate_deleted) {
+  allow capability,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  allow px /** -> nox-bwrap-sandboxed,
+  include if exists <local/nox-bwrap>
+}
+
+profile nox-bwrap-sandboxed flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkmix /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  audit deny capability,
+  audit deny userns,
+  include if exists <local/nox-bwrap-sandboxed>
+}
+APPARMOR
+  apparmor_parser -r "$nox_profile" || note "$(msg apparmor_failed)"
+elif [ -e "$nox_profile" ] || [ -e "$nox_bwrap" ]; then
+  if command -v apparmor_parser >/dev/null 2>&1 && [ -e "$nox_profile" ]; then
+    apparmor_parser -R "$nox_profile" 2>/dev/null || true
+  fi
+  rm -f "$nox_profile" "$nox_bwrap"
+fi
 
 # ---- build the release (the running version is untouched) ----------------------------------------
 

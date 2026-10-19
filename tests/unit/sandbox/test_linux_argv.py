@@ -30,7 +30,7 @@ EGRESS = EgressDecl(hosts=("example.com:443",))
 
 
 def _backend(monkeypatch: pytest.MonkeyPatch, *, python: bool = True) -> LinuxSandbox:
-    monkeypatch.setattr(linux_mod, "bwrap_available", lambda: True)
+    monkeypatch.setattr(linux_mod, "bwrap_path", lambda: "bwrap")
     sandbox = LinuxSandbox(probe=False)  # no bwrap on this machine needed to build the argv
     sandbox._python = ("/usr/bin/python3", ()) if python else None  # noqa: SLF001
     return sandbox
@@ -242,3 +242,18 @@ async def test_sandbox_gives_a_unix_backend_a_socket_not_a_port() -> None:
     assert str(seen["proxy_auth"]).startswith("nox:")
     gone = not os.path.exists(str(seen["proxy_socket"]))  # noqa: ASYNC240
     assert gone, "the socket goes with the run"
+
+
+def test_no_nested_user_namespaces_inside() -> None:
+    argv = build_bwrap_argv(["x"], work="/w", bwrap="/usr/lib/nox/bwrap")
+    assert argv[:3] == ["/usr/lib/nox/bwrap", "--unshare-user", "--disable-userns"]
+    old = build_bwrap_argv(["x"], work="/w", disable_userns=False)
+    assert "--disable-userns" not in old
+
+
+def test_an_old_bwrap_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    sandbox = _backend(monkeypatch)
+    sandbox.disables_userns = False
+    assert any("nested user namespaces" in n for n in sandbox.guarantees().notes)
+    argv = sandbox.command(["x"], work="/w", egress=EgressDecl(), limits=Limits())
+    assert "--disable-userns" not in argv

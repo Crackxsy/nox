@@ -37,10 +37,10 @@ TimeoutStopSec=20
 #   unprivileged user namespace holding no capability outside itself).
 # * SystemCallFilter= adds @mount: bwrap mounts its read-only view inside that namespace. Without
 #   capabilities in the host namespace, the core itself still cannot mount anything there.
-# * No ProtectKernelTunables=/ProtectKernelLogs=/ProtectControlGroups=: they over-mount parts of
-#   /proc (the kernel then refuses the sandbox its own /proc) and make the delegated cgroup
-#   read-only. Without root or capabilities, /proc/sys, /sys and foreign cgroups stay read-only to
-#   this user anyway.
+# * No ProtectKernelTunables=/ProtectKernelLogs=/ProtectHostname=/ProtectControlGroups=: they
+#   over-mount parts of /proc (the kernel then refuses the sandbox its own /proc) and make the
+#   delegated cgroup read-only. Without root or capabilities, /proc/sys, /sys, the hostname and
+#   foreign cgroups stay read-only to this user anyway.
 Delegate=memory pids
 StateDirectory=nox
 StateDirectoryMode=0700
@@ -52,7 +52,6 @@ PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelModules=yes
 ProtectClock=yes
-ProtectHostname=yes
 ProtectProc=invisible
 SystemCallArchitectures=native
 SystemCallFilter=@system-service @mount

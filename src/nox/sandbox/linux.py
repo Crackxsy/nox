@@ -48,10 +48,11 @@ import subprocess
 import sys
 import tempfile
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from nox.core.logging import get_logger
 from nox.sandbox._cgroup import DelegatedCgroups
@@ -69,6 +70,8 @@ log = get_logger(__name__)
 
 __all__ = [
     "EGRESS_PORT",
+    "bwrap_path",
+    "bwrap_version",
     "Ceiling",
     "LinuxSandbox",
     "build_bwrap_argv",
@@ -93,8 +96,34 @@ _UNAVAILABLE_HINT = (
 )
 
 
+#: Nox's own copy of bwrap, executable only by the service user, which an AppArmor profile lets
+#: create user namespaces on Ubuntu 23.10+ (see scripts/install-linux.sh). Preferred when present.
+_NOX_BWRAP = "/usr/lib/nox/bwrap"
+#: First bwrap release with `--disable-userns` (no nested user namespaces inside the sandbox).
+_DISABLE_USERNS_SINCE = (0, 8)
+
+
+def bwrap_path() -> str | None:
+    """The bwrap binary to use: Nox's own copy when installed, else the one on PATH."""
+    if os.access(_NOX_BWRAP, os.X_OK):
+        return _NOX_BWRAP
+    return shutil.which("bwrap")
+
+
 def bwrap_available() -> bool:
-    return shutil.which("bwrap") is not None
+    return bwrap_path() is not None
+
+
+def bwrap_version(bwrap: str) -> tuple[int, ...] | None:
+    """`bwrap --version` as numbers (`bubblewrap 0.9.0` -> (0, 9, 0)), or None."""
+    try:
+        done = subprocess.run(  # noqa: S603 - the bwrap binary itself
+            [bwrap, "--version"], capture_output=True, timeout=10, check=False
+        )
+        text = done.stdout.decode("ascii", errors="replace").split()[-1]
+        return tuple(int(part) for part in text.split("."))
+    except (OSError, subprocess.TimeoutExpired, ValueError, IndexError):
+        return None
 
 
 def _under_system_dirs(path: str) -> bool:
@@ -181,8 +210,14 @@ def build_bwrap_argv(
     egress_socket: str | None = None,
     python: str = "/usr/bin/python3",
     python_binds: tuple[str, ...] = (),
+    bwrap: str = "bwrap",
+    disable_userns: bool = True,
 ) -> list[str]:
     """The `bwrap` command line for one run. Pure, so it can be asserted in a unit test.
+
+    `disable_userns` (bwrap 0.8+) gives the sandbox a user namespace in which no further user
+    namespace can be created, so a confined process cannot build its own namespaces - the kernel
+    attack surface unprivileged user namespaces open stays closed inside.
 
     `egress_socket` is the host path of the run's proxy socket when egress was declared: it is
     bound in and the target is wrapped by the forwarder (see the module docstring). Without it
@@ -194,7 +229,8 @@ def build_bwrap_argv(
     (`LinuxSandbox.environment`), which only the same user can read; bwrap passes it through.
     """
     cmd = [
-        "bwrap",
+        bwrap,
+        *(["--unshare-user", "--disable-userns"] if disable_userns else []),
         "--die-with-parent",
         "--new-session",
         "--unshare-pid",
@@ -265,7 +301,9 @@ _PROBE_CLIENT = (
 )
 
 
-def _egress_probe(python: str, binds: tuple[str, ...]) -> str | None:
+def _egress_probe(
+    build: Callable[..., list[str]], python: str, binds: tuple[str, ...]
+) -> str | None:
     """Prove the egress path end to end on this machine: a child in the sandbox connects to its
     loopback port and must reach a Unix socket outside. `None` when it does, else why not."""
     if sys.platform == "win32":
@@ -287,7 +325,7 @@ def _egress_probe(python: str, binds: tuple[str, ...]) -> str | None:
 
         threading.Thread(target=answer, name="egress-probe", daemon=True).start()
         with tempfile.TemporaryDirectory(prefix="nox-sbx-probe-") as work:
-            cmd = build_bwrap_argv(
+            cmd = build(
                 [python, "-I", "-S", "-c", _PROBE_CLIENT],
                 work=work,
                 egress_socket=path,
@@ -366,23 +404,30 @@ class LinuxSandbox:
     proxy_transport = "unix"
 
     def __init__(self, *, probe: bool = True) -> None:
-        if not bwrap_available():
+        bwrap = bwrap_path()
+        if bwrap is None:
             raise SandboxUnavailable(
                 "bwrap (bubblewrap) is not installed; the sandbox fails closed"
             )
         self.mode = SandboxMode.LINUX_BWRAP
+        self._bwrap = bwrap
+        self.disables_userns = True
         self._python = forwarder_python()
         self._cgroups: DelegatedCgroups | None = None
         self.ceiling = Ceiling.NONE
         if probe:
+            version = bwrap_version(bwrap)
+            self.disables_userns = version is not None and version >= _DISABLE_USERNS_SINCE
+            if not self.disables_userns:
+                log.warning("sandbox.bwrap_old", version=version, needed=_DISABLE_USERNS_SINCE)
             with tempfile.TemporaryDirectory(prefix="nox-sbx-probe-") as work:
-                why = _probe(build_bwrap_argv(["true"], work=work))
+                why = _probe(self._bwrap_argv(["true"], work=work))
             if why is not None:
                 raise SandboxUnavailable(
                     f"bwrap cannot build its sandbox here ({why}); {_UNAVAILABLE_HINT}"
                 )
             if self._python is not None:
-                egress_why = _egress_probe(*self._python)
+                egress_why = _egress_probe(self._bwrap_argv, *self._python)
                 if egress_why is not None:
                     log.warning("sandbox.egress_unavailable", error=egress_why)
                     self._python = None
@@ -391,6 +436,12 @@ class LinuxSandbox:
             "sandbox.linux_ready",
             ceiling=self.ceiling.value,
             egress=self._python is not None,
+            nested_userns=not self.disables_userns,
+        )
+
+    def _bwrap_argv(self, argv: list[str], **kwargs: Any) -> list[str]:
+        return build_bwrap_argv(
+            argv, bwrap=self._bwrap, disable_userns=self.disables_userns, **kwargs
         )
 
     def _pick_ceiling(self) -> Ceiling:
@@ -423,6 +474,8 @@ class LinuxSandbox:
             notes.append("no cgroup or systemd scope available: no memory/process ceiling")
         if self._python is None:
             notes.append("egress forwarder unavailable: declared egress is refused (fail closed)")
+        if not self.disables_userns:
+            notes.append("bwrap older than 0.8: sandboxed code may create nested user namespaces")
         return Guarantees(
             backend=self.mode.value,
             confines_writes=True,
@@ -466,7 +519,7 @@ class LinuxSandbox:
         Never contains the environment - see `build_bwrap_argv`."""
         socket_path = self._egress_socket(egress, proxy_socket)
         python, binds = self._python or ("", ())
-        inner = build_bwrap_argv(
+        inner = self._bwrap_argv(
             argv, work=work, egress_socket=socket_path, python=python, python_binds=binds
         )
         if self.ceiling is Ceiling.CGROUP and cgroup is not None:

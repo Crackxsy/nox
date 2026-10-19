@@ -209,6 +209,20 @@ jobs:
           echo "$log" | grep -E "sandbox\.linux_ready" | grep -E "ceiling=.?cgroup" | grep -qE "egress=.?True"
           ! echo "$log" | grep -qE "hands\.sandbox_unavailable|sandbox\.egress_unavailable"
 
+      # Ubuntu restricts user namespaces through AppArmor. The installer must not lift that for
+      # the system: only its own bwrap copy (executable by the nox user alone) gets a profile.
+      - name: Only Nox's bwrap copy may create user namespaces
+        run: |
+          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = "1" ]; then
+            test "$(stat -c '%U:%G %a' /usr/lib/nox/bwrap)" = "root:nox 750"
+            ! /usr/lib/nox/bwrap --ro-bind / / true
+            if [ ! -e /etc/apparmor.d/bwrap-userns-restrict ]; then
+              ! /usr/bin/bwrap --unshare-user --ro-bind / / true
+            fi
+          else
+            test ! -e /usr/lib/nox/bwrap
+          fi
+
       - name: Same version again changes nothing
         run: |
           sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh
