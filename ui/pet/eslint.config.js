@@ -10,7 +10,8 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**', 'public/**', '../shared/generated/**'] },
+  // spikes/ holds throwaway prototypes with their own package.json and tsconfig
+  { ignores: ['dist/**', 'node_modules/**', 'public/**', '../shared/generated/**', 'spikes/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
