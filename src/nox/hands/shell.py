@@ -397,12 +397,8 @@ def register_shell_tools(
         ToolSpec(
             name="shell.run",
             description=(
-                "Run a command in the sandbox. Give 'argv' (a pre-split list, run without a shell; "
-                "argv[0] is a bare program name such as 'whoami', never a path) or 'command' (one "
-                "line for the OS shell). A few read-only commands (whoami, hostname, df, uname, "
-                "ls, ...) run without a confirmation; everything else asks first and can be "
-                "remembered per program and subcommand for the session. 'egress' lists the hosts "
-                "the command may reach (default: none)."
+                "Run a command sandboxed: argv (bare program name) or one shell line; egress = "
+                "hosts it may reach."
             ),
             input_model=ShellInput,
             risk=Risk.HIGH,

@@ -70,9 +70,7 @@ def register_mic_tool(
     registry.register(
         ToolSpec(
             name="mic.record_long",
-            description="Record and transcribe a longer stretch of speech. Needs stored consent "
-            "for the given context when others may be recorded; raw audio is deleted after "
-            "transcription.",
+            description="Record and transcribe speech; needs a stored consent for the context.",
             input_model=MicInput,
             risk=Risk.HIGH,
             handler=record,

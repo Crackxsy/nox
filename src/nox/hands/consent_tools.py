@@ -1,4 +1,4 @@
-"""Storing a consent: `consent.grant/list/revoke` as tools and as dashboard IPC requests.
+"""Storing a consent: `consent.grant/list/revoke` over dashboard IPC, and `consent.grant` as a tool.
 
 `mic.record_long` refuses unless a consent for its context is stored, so there has to be a way to
 store one - and it must not be one the model can use on its own. Two ways in, both deliberate:
@@ -45,10 +45,6 @@ class ConsentRevoke(BaseModel):
     context: str = Field(min_length=1, max_length=200)
 
 
-class _NoInput(BaseModel):
-    pass
-
-
 def _row(row: ConsentRow) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -77,13 +73,6 @@ def register_consent_tools(registry: ToolRegistry, consents: ConsentRepository) 
         log.info("consent.granted", via="tool")
         return {"ok": True, "consent": _row(row)}
 
-    async def list_(_payload: dict[str, Any]) -> dict[str, Any]:
-        return {"ok": True, "consents": [_row(r) for r in consents.list_active()]}
-
-    async def revoke(payload: dict[str, Any]) -> dict[str, Any]:
-        model = ConsentRevoke.model_validate(payload)
-        return {"ok": True, "revoked": consents.revoke(model.context)}
-
     class _GrantInput(BaseModel):
         context: str = Field(min_length=1, max_length=200)
         who: str = Field(min_length=1, max_length=200)
@@ -92,11 +81,7 @@ def register_consent_tools(registry: ToolRegistry, consents: ConsentRepository) 
     registry.register(
         ToolSpec(
             name="consent.grant",
-            description=(
-                "Store that the named people agreed to be recorded in one context (needed before "
-                "mic.record_long). Give the context key, who agreed and their exact wording. The "
-                "user must confirm every grant."
-            ),
+            description="Store who agreed to be recorded in a context, verbatim.",
             input_model=_GrantInput,
             risk=Risk.HIGH,
             handler=grant,
@@ -106,29 +91,8 @@ def register_consent_tools(registry: ToolRegistry, consents: ConsentRepository) 
             targets=_grant_target,
         )
     )
-    registry.register(
-        ToolSpec(
-            name="consent.list",
-            description="List the stored, active recording consents.",
-            input_model=_NoInput,
-            risk=Risk.READ,
-            handler=list_,
-            side_effects=False,
-            local=True,
-        )
-    )
-    registry.register(
-        ToolSpec(
-            name="consent.revoke",
-            description="Withdraw the stored consent for one context (the record is kept).",
-            input_model=ConsentRevoke,
-            risk=Risk.LOW,
-            handler=revoke,
-            side_effects=True,
-            local=True,
-            targets=lambda p: str(p.get("context", "")),
-        )
-    )
+    # Listing and withdrawing live in the dashboard (`register_consent_ipc`); the model only
+    # needs the grant, and every tool in the offer costs tokens on every turn.
 
 
 def register_consent_ipc(registry: Any, consents: ConsentRepository, gate: Any) -> None:

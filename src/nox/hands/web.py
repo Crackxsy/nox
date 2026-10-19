@@ -312,8 +312,7 @@ def register_web_tools(
     registry.register(
         ToolSpec(
             name="web.fetch",
-            description="Fetch a public http(s) page with GET and return its text (<=2 MiB). "
-            "Never reaches the LAN, loopback or a metadata address.",
+            description="Fetch a public web page as text.",
             input_model=FetchInput,
             risk=Risk.LOW,
             handler=fetch,
@@ -326,7 +325,7 @@ def register_web_tools(
     registry.register(
         ToolSpec(
             name="web.search",
-            description="Search the web via the configured SearXNG instance; returns top results.",
+            description="Search the web; returns the top results.",
             input_model=SearchInput,
             risk=Risk.LOW,
             handler=search,
