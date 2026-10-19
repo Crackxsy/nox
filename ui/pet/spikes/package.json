@@ -1,0 +1,23 @@
+{
+  "name": "nox-pet-animation-spikes",
+  "private": true,
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Throwaway prototypes comparing pet animation approaches. Not part of the product build.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "record": "node tools/record.mjs",
+    "bench": "node tools/bench.mjs"
+  },
+  "dependencies": {
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "0.186.0",
+    "playwright": "1.64.1",
+    "typescript": "6.0.3",
+    "vite": "^8.3.2"
+  }
+}

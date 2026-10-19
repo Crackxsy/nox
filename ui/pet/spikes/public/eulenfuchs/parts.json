@@ -1,0 +1,138 @@
+{
+  "source": "ui/pet/public/variants/eulenfuchs/rig/base.png",
+  "size": 512,
+  "parts": [
+    {
+      "name": "tail_l",
+      "file": "tail_l.png",
+      "depth": "tail_l_depth.png",
+      "rect": [
+        83,
+        410,
+        133,
+        94
+      ],
+      "relief": 22
+    },
+    {
+      "name": "body",
+      "file": "body.png",
+      "depth": "body_depth.png",
+      "rect": [
+        161,
+        241,
+        211,
+        271
+      ],
+      "relief": 46
+    },
+    {
+      "name": "tail_r",
+      "file": "tail_r.png",
+      "depth": "tail_r_depth.png",
+      "rect": [
+        333,
+        407,
+        96,
+        98
+      ],
+      "relief": 24
+    },
+    {
+      "name": "wing_l",
+      "file": "wing_l.png",
+      "depth": "wing_l_depth.png",
+      "rect": [
+        154,
+        301,
+        47,
+        101
+      ],
+      "relief": 10
+    },
+    {
+      "name": "wing_r",
+      "file": "wing_r.png",
+      "depth": "wing_r_depth.png",
+      "rect": [
+        324,
+        300,
+        46,
+        106
+      ],
+      "relief": 10
+    },
+    {
+      "name": "head",
+      "file": "head.png",
+      "depth": "head_depth.png",
+      "rect": [
+        162,
+        156,
+        197,
+        186
+      ],
+      "relief": 58
+    },
+    {
+      "name": "ear_l",
+      "file": "ear_l.png",
+      "depth": "ear_l_depth.png",
+      "rect": [
+        162,
+        131,
+        76,
+        88
+      ],
+      "relief": 8
+    },
+    {
+      "name": "ear_r",
+      "file": "ear_r.png",
+      "depth": "ear_r_depth.png",
+      "rect": [
+        282,
+        130,
+        76,
+        90
+      ],
+      "relief": 8
+    },
+    {
+      "name": "jaw",
+      "file": "jaw.png",
+      "depth": "jaw_depth.png",
+      "rect": [
+        226,
+        295,
+        71,
+        30
+      ],
+      "relief": 14
+    }
+  ],
+  "eyes": [
+    {
+      "name": "eye_l",
+      "file": "eye_l.png",
+      "closed": "eye_l_closed.png",
+      "rect": [
+        199,
+        216,
+        64,
+        63
+      ]
+    },
+    {
+      "name": "eye_r",
+      "file": "eye_r.png",
+      "closed": "eye_r_closed.png",
+      "rect": [
+        260,
+        211,
+        63,
+        64
+      ]
+    }
+  ]
+}
