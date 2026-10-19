@@ -18,10 +18,12 @@
  *   settings.ts       config, secrets, PIN, Twitch device flow, personality
  *   notifications.ts  the toast rows
  *   chat.ts           chat turns and the kill-switch confirm machine
+ *   capabilities.ts   MCP servers, learned skills and watchers (the "Fähigkeiten" page)
  *   reduce.ts         `reduceEvent`, the only writer of `DashboardState`
  *   wire.ts           the compile-time link to `shared/generated/ipc.ts`
  */
 
+export * from './capabilities';
 export * from './chat';
 export * from './clips';
 export * from './day';
