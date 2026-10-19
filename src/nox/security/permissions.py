@@ -116,6 +116,14 @@ SCREENSHOT_TOOL_PATTERNS: tuple[str, ...] = (
     "vision",
     "vision.*",
 )
+#: The tools that take a picture of the screen itself (not ones that look at a given image).
+SCREEN_CAPTURE_TOOL_PATTERNS: tuple[str, ...] = (
+    "screen",
+    "screen.*",
+    "screenshot",
+    "screenshot.*",
+    "capture.screen*",
+)
 MEMORY_TOOL_PATTERNS: tuple[str, ...] = ("memory", "memory.*", "vault", "vault.*")
 FILESYSTEM_TOOL_PATTERNS: tuple[str, ...] = (
     "filesystem",
@@ -325,7 +333,8 @@ def is_scoped_prefix(value: str, prefix: str) -> bool:
 
 
 def grant_matches(grant: TemporaryGrant, request: PermissionRequest, now: datetime) -> bool:
-    """Scope grammar: task:<id> | project:<id> | repo:<path> | session:<tool-glob>/<action-glob>."""
+    """Scope grammar: task:<id> | project:<id> | repo:<path> | session:<tool-glob>/<action-glob>
+    | cmd:<shell pattern> | site:<browser action>@<origin>."""
     if grant.expires_at <= now:
         return False
     if request.risk is Risk.CRITICAL or RISK_ORDER[request.risk] > RISK_ORDER[grant.max_risk]:
@@ -351,6 +360,18 @@ def grant_matches(grant: TemporaryGrant, request: PermissionRequest, now: dateti
         # non-curated command as target `cmd:<pattern>`; a command with a shell operator, an env
         # prefix or an interpreter `-c` is encoded differently and so can never equal this scope.
         return request.tool == "shell" and request.target == f"cmd:{value}"
+    if kind == "site":
+        # A remembered browser action on one origin (`site:click@https://shop.example`). The
+        # target is `origin:<origin>` from `browser.*`'s own `targets()`, so the grant covers
+        # exactly that action on exactly that origin - never another site, never another action.
+        action, _, origin = value.partition("@")
+        return (
+            request.tool == "browser"
+            and bool(action)
+            and bool(origin)
+            and request.action == action
+            and request.target == f"origin:{origin}"
+        )
     return False
 
 
@@ -422,6 +443,24 @@ def _privacy_memory_write(ctx: EvaluationContext) -> PermissionResult | None:
         decision=Decision.DENY,
         rule_id="privacy.private.memory_write",
         reason="PRIVATE mode keeps everything session-only",
+    )
+
+
+def _privacy_screen_local(ctx: EvaluationContext) -> PermissionResult | None:
+    """Screen capture only in FULL and BALANCED - PRIVATE and OFFLINE never look at the screen.
+
+    The same rule the creative-app screenshot follows. `vision.*` is not caught here: it can run
+    on a local model in any mode, and decides where an image may go itself.
+    """
+    if ctx.snapshot.mode not in (PrivacyMode.PRIVATE, PrivacyMode.OFFLINE):
+        return None
+    if not value_matches_any(ctx.request.tool, SCREEN_CAPTURE_TOOL_PATTERNS):
+        return None
+    mode = ctx.snapshot.mode.value
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id=f"privacy.{mode}.screen",
+        reason=f"privacy mode {mode} does not capture the screen",
     )
 
 
@@ -577,6 +616,7 @@ EVALUATION_GUARDS: tuple[Guard, ...] = (
     _safe_mode,
     _privacy_cloud,
     _privacy_memory_write,
+    _privacy_screen_local,
     _privacy_zone,
     _privacy_capture_flag,
     _critical_risk,
@@ -944,6 +984,13 @@ class DefaultPermissionEngine:
             return None
         if request.tool == "shell":
             return request.target if request.target.startswith("cmd:") else None
+        if request.tool == "browser":
+            # Per action and origin, never "the browser": clicking on one shop is not clicking
+            # everywhere. A target without a valid origin produces no grant.
+            origin = request.target.removeprefix("origin:")
+            if not request.target.startswith("origin:") or origin in ("", "invalid"):
+                return None
+            return f"site:{request.action}@{origin}"
         return f"session:{request.tool}/{request.action or '*'}"
 
     def _can_remember(self, request: PermissionRequest) -> bool:

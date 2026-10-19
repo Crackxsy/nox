@@ -412,6 +412,12 @@ hands:                           # the machine-and-world tools: shell, packages,
                                  # or loopback isolation not enforced). Off = such runs are refused
   trusted_program_dirs: []       # extra folders shell.run may find a bare program name in (e.g.
                                  # Git's cmd folder); system folders only by default
+  browser_enabled: true          # browser.* in Nox's own headless Chromium (never your browser):
+                                 # reading allowed, click/type/submit always ask; public hosts only
+  senses_enabled: true           # screen.capture / camera.snapshot (always ask; privacy capture
+                                 # flags and zones decide) and vision.describe
+  vision_model: ""               # local Ollama vision model; empty = first installed one. Never
+                                 # downloaded automatically
 
 presets:                         # one phrase, several systems at once: lights, Nox's own mode,
                                  # and programs you registered here. Both lists ship empty, so a

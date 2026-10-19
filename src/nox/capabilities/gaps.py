@@ -32,7 +32,9 @@ CURATED_GAPS: tuple[Gap, ...] = (
     # what `stale_gaps()` is for.
     # `desktop.process_start` was removed here: `shell.run` starts programs now (sandboxed, with a
     # confirmation and per-command-pattern remembering). `desktop.software_install` likewise moved
-    # out when `package.install`/`package.remove` shipped.
+    # out when `package.install`/`package.remove` shipped. `browser.control` and
+    # `desktop.screen_capture` moved out with `browser.*` (Nox's own headless Chromium) and
+    # `screen.capture` / `camera.snapshot` / `vision.describe`.
     Gap(
         name="desktop.input_send",
         what="press a key combination, or click and move the mouse",
@@ -41,18 +43,6 @@ CURATED_GAPS: tuple[Gap, ...] = (
             "typing text into an ordinary window exists - `desktop.type_text` - and it types "
             "characters only. Shortcuts like Ctrl+S and every kind of mouse input do not exist"
         ),
-    ),
-    Gap(
-        name="browser.control",
-        what="open and drive a web page",
-        reason=GapReason.MISSING,
-        detail="no browser automation of any kind",
-    ),
-    Gap(
-        name="desktop.screen_capture",
-        what="show what is on the screen right now",
-        reason=GapReason.MISSING,
-        detail="screenshots exist only for a creative application's own window, consent-gated",
     ),
     Gap(
         name="desktop.audio",

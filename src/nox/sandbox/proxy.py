@@ -13,9 +13,15 @@ For each `CONNECT host:port` the proxy:
    metadata and the Home Assistant host are refused, which also defeats DNS rebinding),
 3. opens the upstream connection to a vetted address and tunnels bytes both ways.
 
-The proxy speaks only `CONNECT`; a sandboxed HTTP client is configured to tunnel even plain HTTP
-through it, so there is no second, un-vetted forwarding path. Each decision is handed to an audit
-callback. The listener binds `127.0.0.1` on an ephemeral port and hands callers that port.
+The sandbox's proxy speaks only `CONNECT`; a sandboxed HTTP client is configured to tunnel even
+plain HTTP through it, so there is no second, un-vetted forwarding path. A browser cannot be told
+that - it sends a plain `http://` URL as `GET http://host/path` to its proxy - so the browser's
+proxy is built with `forward_plain_http=True`: such a request is authorized exactly like a
+`CONNECT` (same declaration, same `NetGuard` check on the resolved address), sent upstream in
+origin form with `Connection: close`, and the connection ends with that one exchange, so a second
+request on a kept-alive connection can never reach a host that was not checked. Each decision is
+handed to an audit callback. The listener binds `127.0.0.1` on an ephemeral port and hands
+callers that port. Name resolution runs in a worker thread, never on the event loop.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ import ipaddress
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from nox.core.logging import get_logger
 from nox.sandbox.netguard import BlockedAddress, NetGuard, resolve_all
@@ -41,6 +48,19 @@ log = get_logger(__name__)
 __all__ = ["EgressProxy", "ProxyDecision", "allow_entry_matches"]
 
 _CRLF = b"\r\n"
+#: Request headers that belong to the hop between client and proxy, never forwarded upstream.
+_HOP_HEADERS = frozenset(
+    {
+        b"proxy-connection",
+        b"proxy-authorization",
+        b"connection",
+        b"keep-alive",
+        b"te",
+        b"trailer",
+        b"upgrade",
+    }
+)
+_MAX_HEADER_LINES = 200
 
 
 def allow_entry_matches(entry: str, host: str, port: int) -> bool:
@@ -73,8 +93,10 @@ class EgressProxy:
         audit: AuditFn | None = None,
         resolver: Resolver = resolve_all,
         open_connection: Callable[[str, int], Awaitable[StreamPair]] | None = None,
+        forward_plain_http: bool = False,
     ) -> None:
         self._allow = tuple(allow)
+        self._forward_plain = forward_plain_http
         self._guard = guard
         self._audit = audit
         self._resolver = resolver
@@ -141,6 +163,9 @@ class EgressProxy:
             await _close(writer)
             return
         parts = request.decode("latin-1").strip().split()
+        if len(parts) == 3 and self._forward_plain and parts[0].upper() != "CONNECT":
+            await self._forward(parts[0], parts[1], parts[2], reader, writer)
+            return
         if len(parts) < 2 or parts[0].upper() != "CONNECT":
             await _respond(writer, 405, "Method Not Allowed")
             return
@@ -158,7 +183,7 @@ class EgressProxy:
                 if line == _CRLF:
                     break
 
-        decision = self.authorize(host, port)
+        decision = await asyncio.to_thread(self.authorize, host, port)
         if self._audit is not None:
             self._audit(decision)
         if not decision.allowed:
@@ -182,10 +207,69 @@ class EgressProxy:
             return
         await _tunnel(reader, writer, up_reader, up_writer)
 
+    async def _forward(
+        self,
+        method: str,
+        target: str,
+        version: str,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """One plain-HTTP request in absolute form (`GET http://host/path`), vetted and relayed."""
+        url = urlsplit(target)
+        if url.scheme.lower() != "http" or not url.hostname:
+            await _respond(writer, 400, "Bad Request")
+            return
+        try:
+            port = url.port or 80
+        except ValueError:
+            await _respond(writer, 400, "Bad Request")
+            return
+        headers: list[bytes] = []
+        try:
+            while True:
+                line = await asyncio.wait_for(reader.readuntil(_CRLF), timeout=5.0)
+                if line == _CRLF:
+                    break
+                headers.append(line)
+                if len(headers) > _MAX_HEADER_LINES:
+                    raise ValueError("too many header lines")
+        except (TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError):
+            await _respond(writer, 400, "Bad Request")
+            return
+        host = url.hostname
+        decision = await asyncio.to_thread(self.authorize, host, port)
+        if self._audit is not None:
+            self._audit(decision)
+        if not decision.allowed:
+            log.warning("sandbox.proxy_denied", host=host, port=port, reason=decision.reason)
+            await _respond(writer, 403, "Forbidden")
+            return
+        try:
+            up_reader, up_writer = await asyncio.wait_for(self._open(host, port), timeout=10.0)
+        except (OSError, TimeoutError) as exc:
+            log.warning("sandbox.proxy_upstream_failed", host=host, port=port, error=str(exc))
+            await _respond(writer, 502, "Bad Gateway")
+            return
+        path = url.path or "/"
+        if url.query:
+            path += "?" + url.query
+        kept = [h for h in headers if h.split(b":", 1)[0].strip().lower() not in _HOP_HEADERS]
+        head = f"{method} {path} {version}\r\n".encode("latin-1")
+        head += b"".join(kept) + b"Connection: close\r\n\r\n"
+        try:
+            up_writer.write(head)
+            await up_writer.drain()
+        except OSError:
+            await _close(up_writer)
+            await _respond(writer, 502, "Bad Gateway")
+            return
+        await _tunnel(reader, writer, up_reader, up_writer)
+
     async def _open_upstream(self, host: str, port: int) -> StreamPair:
-        # Connect to a vetted address, not the name again: authorize() already resolved and judged
-        # it, and reconnecting by name would open a second resolution a rebind could race.
-        addresses = self._resolver(host, port)
+        # Dial a vetted address, never the name: the resolution that is judged here is the one
+        # that is dialed, so a rebind between check and connect has nothing to race.
+        addresses = await asyncio.to_thread(self._resolver, host, port)
         self._guard.check_addresses(host, addresses)
         return await asyncio.open_connection(str(addresses[0]), port)
 
