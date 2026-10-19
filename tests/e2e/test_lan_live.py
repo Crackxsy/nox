@@ -3,13 +3,21 @@
 A PC (the local dashboard), a phone and a tablet - headless Chromium at their real sizes, each
 recorded on video, with a screenshot at every step - go through what a household does:
 
-  1. the PC makes a pairing code; the phone opens the pairing link and pairs itself,
+  1. the PC makes a pairing code with a name; the phone opens the pairing link, leaves its own
+     name field empty and pairs - and is listed under the name the PC gave it,
   2. the PC sees the phone appear in its list without reloading,
-  3. Nox asks for permission; the prompt shows on the PC and the phone at once, the phone allows,
-     the PC's prompt disappears with "decided on another device", and the audit names the phone,
-  4. the PC denies the next one; a third one runs out and is denied by the core on its own,
-  5. the tablet, never paired, says so, takes a typed code and pairs,
-  6. the PC removes the phone, and the phone says it was removed.
+  3. Nox asks for permission at high risk; the prompt shows on the PC and the phone at once. With
+     no security PIN set the phone cannot allow it (it says where that works) - the PC allows,
+     and the phone is told another device decided,
+  4. a PIN is set; the next high-risk question asks the phone for it, the phone allows with it,
+     the PC is told, and the audit names the phone,
+  5. the PC denies the next one; a fourth one runs out, and both say nobody answered,
+  6. the tablet, never paired, says so; the PC - which now needs the PIN to make a code - makes
+     one, and the tablet takes it typed,
+  7. the PC removes the phone, and the phone says it was removed.
+
+Along the way axe-core (from `ui/dashboard/node_modules`) checks every screen it passes for
+serious and critical WCAG 2.2 A/AA violations, and the test fails on any.
 
 The confirmation round trip runs over the real WebSocket IPC and the network bridge - the part no
 unit test reaches. Artifacts go to `NOX_E2E_ARTIFACTS` (CI uploads them) or the test's tmp folder.
@@ -42,6 +50,12 @@ pytestmark = pytest.mark.e2e
 T = TypeVar("T")
 START_TIMEOUT_S = 60
 UI_TIMEOUT_MS = 15000
+PIN = "4711"
+
+#: axe-core, pinned in the dashboard's devDependencies (`npm ci` in ui/dashboard provides it).
+AXE_JS = DASHBOARD_DIST.parent / "node_modules" / "axe-core" / "axe.min.js"
+#: What the dashboard promises: WCAG 2.2 A and AA.
+AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]
 
 #: Name, viewport, user agent - what each window pretends to be.
 DEVICES: dict[str, dict[str, Any]] = {
@@ -82,6 +96,9 @@ def _config(tmp_path: Path) -> NoxConfig:
         "privacy": {"mode": "offline"},
         "health": {"check_interval_s": 3600},
         "logging": {"level": "WARNING"},
+        # Secrets (the PIN set below) in the test's own folder, never the OS keyring of whoever
+        # runs the suite.
+        "security": {"secret_store": "file"},
     }
     (tmp_path / "vault").mkdir()
     return load_config(DEFAULTS_PATH, None, None, overrides)
@@ -159,6 +176,36 @@ def artifacts(tmp_path: Path) -> Path:
     return folder
 
 
+def _axe(page: Page, where: str) -> None:
+    """Fail on any serious or critical WCAG 2.2 A/AA violation on the page as it is now.
+
+    axe is evaluated through the DevTools protocol, which the page's Content-Security-Policy does
+    not govern - the page itself stays exactly as strict as it is for a person.
+    """
+    if not AXE_JS.is_file():
+        pytest.fail(f"{AXE_JS} is missing - run `npm ci` in ui/dashboard")
+    if not page.evaluate("() => typeof window.axe === 'object'"):
+        page.evaluate(AXE_JS.read_text(encoding="utf-8") + "\n;undefined")
+    violations = page.evaluate(
+        """async (tags) => {
+            const result = await window.axe.run(document, {
+                runOnly: { type: 'tag', values: tags },
+                resultTypes: ['violations'],
+            });
+            return result.violations
+                .filter((v) => v.impact === 'serious' || v.impact === 'critical')
+                .map((v) => ({
+                    id: v.id,
+                    impact: v.impact,
+                    help: v.help,
+                    nodes: v.nodes.slice(0, 5).map((n) => n.target.join(' ')),
+                }));
+        }""",
+        AXE_TAGS,
+    )
+    assert not violations, f"accessibility violations on {where}: {violations}"
+
+
 def _until(condition: Callable[[], bool], what: str, timeout_s: float = 15) -> None:
     deadline = time.monotonic() + timeout_s
     while not condition():
@@ -208,37 +255,54 @@ def test_a_household_pairs_confirms_and_removes(
         )
         desktop.get_by_role("tab", name="Geräte").click()
         expect(desktop.get_by_text("Noch kein Gerät gekoppelt.")).to_be_visible()
+        # An unused Telegram is one quiet line, not a second big tile.
+        expect(desktop.get_by_text("Handy über Telegram (aus)")).to_be_visible()
         shot(desktop, "desktop-devices-empty")
+        _axe(desktop, "the PC's Devices tab")
         desktop.get_by_label("Name des Geräts (freiwillig)").fill("Handy")
         desktop.get_by_role("button", name="Code erzeugen").click()
         expect(desktop.get_by_role("img", name=re.compile("QR-Code zum Koppeln"))).to_be_visible()
+        expect(desktop.get_by_text("Fingerabdruck des Zertifikats (SHA-256)")).to_be_visible()
         shot(desktop, "desktop-pairing-code")
-        code = desktop.locator(".code-display").inner_text().replace(" ", "")
+        _axe(desktop, "the PC's pairing code")
+        code = desktop.locator(".code-display-value").inner_text().replace(" ", "")
         assert re.fullmatch(r"[23456789A-HJKMNP-TV-Z]{8}", code), code
 
         phone = window("phone")
         phone.goto(f"{lan_base}#pair={code}")
         expect(phone.get_by_role("heading", name="Dieses Gerät mit Nox koppeln")).to_be_visible()
         assert "pair=" not in phone.url  # the code left the address bar at once
-        expect(phone.get_by_label("Name dieses Geräts")).to_have_value("iPhone")
+        name_field = phone.get_by_label("Name dieses Geräts (freiwillig)")
+        expect(name_field).to_have_value("")
+        expect(name_field).to_have_attribute("placeholder", "iPhone")
         shot(phone, "phone-pair-screen")
+        _axe(phone, "the phone's pairing screen")
         phone.get_by_role("button", name="Koppeln").click()
         expect(phone.get_by_role("status").filter(has_text="verbunden")).to_be_visible(
             timeout=UI_TIMEOUT_MS
         )
         shot(phone, "phone-dashboard")
 
-        # ---- 2. the PC sees it arrive --------------------------------------------------------
-        expect(desktop.get_by_text("iPhone ist gekoppelt.")).to_be_visible(timeout=UI_TIMEOUT_MS)
+        # ---- 2. the PC sees it arrive, under the name the PC gave it --------------------------
+        expect(desktop.get_by_text("Handy ist gekoppelt.")).to_be_visible(timeout=UI_TIMEOUT_MS)
+        expect(desktop.get_by_label("Name des Geräts (freiwillig)")).to_have_value("")
         devices = desktop.get_by_role("list", name="Gekoppelte Geräte")
-        expect(devices.get_by_role("listitem").filter(has_text="iPhone")).to_be_visible()
+        expect(devices.get_by_role("listitem").filter(has_text="Handy")).to_be_visible()
         shot(desktop, "desktop-device-arrived")
         phone.get_by_role("tab", name="Geräte").click()
         expect(phone.get_by_text("dieses Gerät", exact=True)).to_be_visible()
+        # No PIN is set: a phone cannot pair others, and says where that works.
+        expect(
+            phone.get_by_text("Neue Geräte koppelst du am Rechner, auf dem Nox läuft")
+        ).to_be_visible()
+        expect(
+            phone.get_by_text("Fingerabdruck der Nox-Zertifizierungsstelle (SHA-256)")
+        ).to_be_visible()
         shot(phone, "phone-devices")
-        phone_id = next(d.id for d in lan.devices.devices() if d.name == "iPhone")
+        _axe(phone, "the phone's Devices tab")
+        phone_id = next(d.id for d in lan.devices.devices() if d.name == "Handy")
 
-        # ---- 3. a permission prompt, answered on the phone ------------------------------------
+        # ---- 3. high risk without a PIN: only the PC can allow --------------------------------
         engine = core.security.engine  # type: ignore[union-attr]
 
         async def ask(target: str, timeout: float) -> tuple[str, Decision]:
@@ -254,22 +318,6 @@ def test_a_household_pairs_confirms_and_removes(
             result = await engine.await_confirmation(grant, timeout=timeout)
             return grant, result.decision
 
-        pending = runner.submit(ask("Archiv/alt.zip", 30))
-        dialog_phone = phone.get_by_role("alertdialog", name="Nox möchte etwas tun")
-        dialog_desktop = desktop.get_by_role("alertdialog", name="Nox möchte etwas tun")
-        expect(dialog_phone).to_be_visible(timeout=UI_TIMEOUT_MS)
-        expect(dialog_desktop).to_be_visible(timeout=UI_TIMEOUT_MS)
-        expect(dialog_phone.get_by_role("button", name="Immer erlauben")).to_have_count(0)
-        expect(dialog_desktop.get_by_role("button", name="Immer erlauben")).to_be_visible()
-        shot(phone, "phone-permission-prompt")
-        shot(desktop, "desktop-permission-prompt")
-        dialog_phone.get_by_role("button", name="Erlauben").click()
-        grant, decision = pending.result(15)
-        assert decision is Decision.ALLOW
-        expect(dialog_desktop).to_have_count(0, timeout=UI_TIMEOUT_MS)
-        expect(desktop.get_by_text("Auf einem anderen Gerät entschieden.")).to_be_visible()
-        shot(desktop, "desktop-decided-elsewhere")
-
         def audit_by(request_id: str) -> str | None:
             store = core.security.audit_store  # type: ignore[union-attr]
             for entry in store.entries(limit=500):
@@ -278,10 +326,52 @@ def test_a_household_pairs_confirms_and_removes(
                     return str(details.get("by"))
             return None
 
+        dialog_phone = phone.get_by_role("alertdialog", name="Darf Nox das?")
+        dialog_desktop = desktop.get_by_role("alertdialog", name="Darf Nox das?")
+
+        pending = runner.submit(ask("Archiv/alt.zip", 30))
+        expect(dialog_phone).to_be_visible(timeout=UI_TIMEOUT_MS)
+        expect(dialog_desktop).to_be_visible(timeout=UI_TIMEOUT_MS)
+        expect(dialog_phone.get_by_text("Nox möchte löschen: Archiv/alt.zip")).to_be_visible()
+        expect(dialog_phone.get_by_role("button", name="Erlauben", exact=True)).to_have_count(0)
+        expect(dialog_phone.get_by_text("Erlauben geht dafür nur am Rechner")).to_be_visible()
+        expect(dialog_phone.get_by_role("button", name=re.compile("Stunde"))).to_have_count(0)
+        expect(dialog_desktop.get_by_role("button", name="Für 8 Stunden erlauben")).to_be_visible()
+        expect(dialog_desktop.get_by_text(re.compile(r"Noch \d+ s"))).to_be_visible()
+        assert "immer" not in dialog_desktop.inner_text().lower()
+        shot(phone, "phone-permission-no-pin")
+        shot(desktop, "desktop-permission-prompt")
+        _axe(phone, "the phone's permission prompt")
+        _axe(desktop, "the PC's permission prompt")
+        dialog_desktop.get_by_role("button", name="Erlauben", exact=True).click()
+        grant, decision = pending.result(15)
+        assert decision is Decision.ALLOW
+        expect(dialog_phone).to_have_count(0, timeout=UI_TIMEOUT_MS)
+        expect(phone.get_by_text("Auf einem anderen Gerät entschieden.")).to_be_visible()
+        _until(lambda: audit_by(grant) is not None, "the audit entry of the PC's answer")
+        assert str(audit_by(grant)).startswith("dashboard:")
+
+        # ---- 4. with a PIN set, the phone allows with it ---------------------------------------
+        async def set_pin() -> None:
+            core.security.pin.set_pin(PIN)  # type: ignore[union-attr]
+
+        runner.run(set_pin())
+        pending = runner.submit(ask("Archiv/neu.zip", 30))
+        expect(dialog_phone).to_be_visible(timeout=UI_TIMEOUT_MS)
+        pin_field = dialog_phone.get_by_label("Sicherheits-PIN")
+        expect(pin_field).to_be_visible(timeout=UI_TIMEOUT_MS)
+        pin_field.fill(PIN)
+        shot(phone, "phone-permission-pin")
+        dialog_phone.get_by_role("button", name="Erlauben", exact=True).click()
+        grant, decision = pending.result(15)
+        assert decision is Decision.ALLOW
+        expect(dialog_desktop).to_have_count(0, timeout=UI_TIMEOUT_MS)
+        expect(desktop.get_by_text("Auf einem anderen Gerät entschieden.")).to_be_visible()
+        shot(desktop, "desktop-decided-elsewhere")
         _until(lambda: audit_by(grant) is not None, "the audit entry of the phone's answer")
         assert audit_by(grant) == f"device:{phone_id}"
 
-        # ---- 4. denied on the PC; and one that nobody answers ---------------------------------
+        # ---- 5. denied on the PC; and one that nobody answers ---------------------------------
         pending = runner.submit(ask("Bilder/urlaub", 30))
         expect(dialog_desktop).to_be_visible(timeout=UI_TIMEOUT_MS)
         dialog_desktop.get_by_role("button", name="Ablehnen").click()
@@ -297,32 +387,49 @@ def test_a_household_pairs_confirms_and_removes(
         assert decision is Decision.DENY  # unanswered means no
         expect(dialog_phone).to_have_count(0, timeout=UI_TIMEOUT_MS)
         expect(dialog_desktop).to_have_count(0, timeout=UI_TIMEOUT_MS)
+        no_answer = "Keine Antwort – Nox hat es nicht getan."
+        expect(phone.get_by_text(no_answer)).to_be_visible()
+        expect(desktop.get_by_text(no_answer)).to_be_visible()
+        shot(phone, "phone-no-answer")
 
-        # ---- 5. the tablet, never paired, types a code ----------------------------------------
+        # ---- 6. the tablet, never paired, types a code the PC made with the PIN --------------
         tablet = window("tablet")
         tablet.goto(lan_base)
         expect(
             tablet.get_by_role("heading", name="Dieses Gerät ist nicht gekoppelt")
         ).to_be_visible()
         shot(tablet, "tablet-not-paired")
+        _axe(tablet, "the tablet's not-paired screen")
         tablet.get_by_role("button", name="Ich habe einen Code").click()
+        # The PC's page still believes no PIN is set: the refusal says one is needed, and the
+        # field for it appears right there.
         desktop.get_by_role("button", name="Code erzeugen").click()
-        expect(desktop.locator(".code-display")).to_be_visible()
-        second = desktop.locator(".code-display").inner_text()
-        tablet.get_by_label("Code").fill(second.lower())
+        expect(desktop.get_by_role("alert").filter(has_text="PIN")).to_be_visible()
+        desktop.get_by_label("Sicherheits-PIN").fill(PIN)
+        shot(desktop, "desktop-pair-with-pin")
+        desktop.get_by_role("button", name="Code erzeugen").click()
+        expect(desktop.locator(".code-display-value")).to_be_visible()
+        second = desktop.locator(".code-display-value").inner_text()
+        tablet.get_by_label("Code", exact=True).fill(second.lower())
         shot(tablet, "tablet-code-entry")
         tablet.get_by_role("button", name="Koppeln").click()
         expect(tablet.get_by_role("status").filter(has_text="verbunden")).to_be_visible(
             timeout=UI_TIMEOUT_MS
         )
         shot(tablet, "tablet-dashboard")
+        tablet.get_by_role("tab", name="Geräte").click()
+        expect(tablet.get_by_text("dieses Gerät", exact=True)).to_be_visible()
+        shot(tablet, "tablet-devices")
+        _axe(tablet, "the tablet's Devices tab")
 
-        # ---- 6. the PC removes the phone ------------------------------------------------------
-        row = devices.get_by_role("listitem").filter(has_text="iPhone")
+        # ---- 7. the PC removes the phone - no PIN needed there --------------------------------
+        row = devices.get_by_role("listitem").filter(has_text="Handy")
         row.get_by_role("button", name="Entfernen").click()
-        expect(row.get_by_text("Noch einmal tippen")).to_be_visible()
+        expect(row.get_by_text("Zum Bestätigen noch einmal")).to_be_visible()
+        armed = row.get_by_role("button", name="Wirklich entfernen")
+        expect(armed).to_be_visible()
         shot(desktop, "desktop-remove-confirm")
-        row.get_by_role("button", name="Entfernen").click()
+        row.get_by_role("button", name="Wirklich entfernen").click()
         expect(phone.get_by_text("Dieses Gerät wurde entfernt.", exact=False)).to_be_visible(
             timeout=UI_TIMEOUT_MS
         )
