@@ -295,10 +295,12 @@ async def test_a_kill_during_a_slow_start_leaves_nothing_running(
     started = time.perf_counter()
     await provider.kill()
     assert time.perf_counter() - started < KILL_BUDGET_S
+    while not _gone(pid):  # the kill is synchronous; allow only the OS a moment to reap
+        assert time.perf_counter() - started < KILL_BUDGET_S, "the starting CLI survived the kill"
+        await asyncio.sleep(0.01)
 
     with pytest.raises(ProviderUnavailableError):
-        await turn
-    assert _gone(pid)
+        await asyncio.wait_for(turn, timeout=KILL_BUDGET_S)
     assert provider.pid is None, "a start overtaken by the kill switch must not be stored"
     assert ("retire", "mcp:0") in bridge.events
 
@@ -316,3 +318,26 @@ async def test_after_resume_a_new_session_starts(
         assert "".join(c.delta for c in chunks) == "Hallo Welt."
     finally:
         await provider.close()
+
+
+async def test_a_kill_while_the_process_is_being_spawned_discards_the_session(
+    tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The kill lands before the process exists, so there is nothing to kill yet: the start must
+    notice afterwards and throw its session away instead of storing it."""
+    provider, bridge = _provider(tmp_path, log, monkeypatch)
+    kills: list[asyncio.Task[None]] = []
+
+    def executable() -> list[str]:
+        kills.append(asyncio.get_running_loop().create_task(provider.kill()))
+        return [sys.executable, str(FAKE)]
+
+    provider._executable = executable  # noqa: SLF001 - the spawn moment is the point of the test
+
+    with pytest.raises(ProviderUnavailableError):
+        await _collect(provider.stream(_request("Hallo")))
+    await asyncio.gather(*kills)
+
+    assert provider.pid is None
+    pids = [e["pid"] for e in await asyncio.to_thread(_log_lines_if_any, log) if "pid" in e]
+    assert all(_gone(pid) for pid in pids)

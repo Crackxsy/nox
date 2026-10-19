@@ -321,3 +321,27 @@ async def test_the_mcp_role_cannot_subscribe_to_events(world: World) -> None:
         assert caught.value.code == ERR_PERMISSION
     finally:
         await client.close()
+
+
+async def test_a_token_that_is_not_the_open_turn_s_is_refused(world: World) -> None:
+    """Possession of the bridge's connection is not enough: the call must name its turn."""
+    launch = world.gate.prepare()
+    env = json.loads(launch.config_path.read_text(encoding="utf-8"))["mcpServers"]["nox"]["env"]
+    client = await _client(world, env["NOX_WORKER_TOKEN"], "mcp", launch.client_id)
+    try:
+        world.loop.begin("open-turn")
+        with pytest.raises(IpcError) as caught:
+            await client.request(
+                "mcp.tools.call", {"token": "x" * 43, "name": "home-light", "arguments": {}}
+            )
+        assert caught.value.code == ERR_PERMISSION
+        assert world.recorder.calls == []
+    finally:
+        await client.close()
+
+
+def test_the_mcp_requests_are_registered_for_the_mcp_role_only(world: World) -> None:
+    registry = world.hub.registry
+    for name in ("mcp.tools.list", "mcp.tools.call"):
+        registration = registry.get(name)
+        assert registration is not None and registration.allowed_roles == frozenset({"mcp"})
