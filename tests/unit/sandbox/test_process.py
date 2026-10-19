@@ -371,3 +371,21 @@ async def test_windows_child_gets_its_own_proxy_credentials() -> None:
     assert url.startswith("http://nox:") and "@127.0.0.1:" in url
     second = await sandbox.run(echo, egress=egress, limits=Limits(timeout_s=20))
     assert second.stdout.strip() != url, "a fresh secret (and port) per run"
+
+
+@windows_only
+async def test_windows_proxy_secret_is_never_on_the_command_line() -> None:
+    """CreateProcess gets the secret in the environment block only; the command line is
+    readable by other processes, the environment of a low-IL child is not handed out."""
+    proc = await _windows_sandbox().start(
+        [sys.executable, "-I", "-B", "-u", "-c", ECHO_SERVER],
+        egress=EgressDecl(hosts=("example.com:443",)),
+        env={"MCP_TOKEN": "tok-12345"},
+    )
+    async with proc:
+        await proc.send(b"HTTPS_PROXY\n")
+        url = (await asyncio.wait_for(proc.readline(), 30)).strip().decode()
+        secret = url.split(":", 2)[2].split("@", 1)[0]
+        assert url.startswith("http://nox:") and len(secret) >= 32
+        cmdline = " ".join(psutil.Process(proc.pid).cmdline())
+        assert secret not in cmdline and "tok-12345" not in cmdline

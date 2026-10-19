@@ -494,6 +494,24 @@ async def test_the_in_page_origin_check_is_the_authority(
 
 
 @pytestmark_browser
+async def test_the_browser_proxy_secret_is_on_no_command_line(session: BrowserSession) -> None:
+    import psutil
+
+    proxy = session._proxy  # noqa: SLF001
+    assert proxy is not None and proxy.credentials is not None
+    secret = proxy.credentials[1]
+    seen = 0
+    for child in psutil.Process().children(recursive=True):
+        try:
+            cmdline = " ".join(child.cmdline())
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        seen += 1
+        assert secret not in cmdline, child.name()
+    assert seen > 0, "the driver and Chromium run as child processes"
+
+
+@pytestmark_browser
 async def test_the_browser_proxy_serves_only_its_browser(session: BrowserSession) -> None:
     proxy = session._proxy  # noqa: SLF001
     assert proxy is not None and proxy.credentials is not None

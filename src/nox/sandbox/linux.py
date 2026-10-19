@@ -51,10 +51,15 @@ def build_bwrap_argv(
     argv: list[str],
     *,
     work: str,
-    env: dict[str, str],
     share_loopback: bool,
 ) -> list[str]:
-    """The `bwrap` command line for one run. Pure, so it can be asserted in a unit test."""
+    """The `bwrap` command line for one run. Pure, so it can be asserted in a unit test.
+
+    The environment is deliberately *not* in it: a command line is world-readable
+    (`/proc/<pid>/cmdline`, `ps`), and the child's environment carries its egress proxy's secret
+    and possibly a server's settings. It is handed over as the process environment instead
+    (`LinuxSandbox.environment`), which only the same user can read; bwrap passes it through.
+    """
     cmd = ["bwrap", "--die-with-parent", "--new-session", "--unshare-pid", "--unshare-ipc"]
     if not share_loopback:
         cmd += ["--unshare-net"]
@@ -76,11 +81,8 @@ def build_bwrap_argv(
         work,
         "--chdir",
         work,
-        "--clearenv",
+        "--",
     ]
-    for key, value in sorted(env.items()):
-        cmd += ["--setenv", key, value]
-    cmd += ["--"]
     cmd += argv
     return cmd
 
@@ -105,7 +107,7 @@ class LinuxSandbox:
             notes=notes,
         )
 
-    def _env(
+    def environment(
         self,
         work: str,
         proxy_port: int | None,
@@ -123,25 +125,11 @@ class LinuxSandbox:
         return env
 
     def command(
-        self,
-        argv: list[str],
-        *,
-        work: str,
-        egress: EgressDecl,
-        limits: Limits,
-        proxy_port: int | None,
-        extra_env: Mapping[str, str] | None = None,
-        proxy_auth: str = "",
+        self, argv: list[str], *, work: str, egress: EgressDecl, limits: Limits
     ) -> list[str]:
-        """The full command line (`systemd-run` scope around `bwrap`) for one confined process."""
-        inner = build_bwrap_argv(
-            argv,
-            work=work,
-            env=self._env(
-                work, proxy_port if egress.wants_network else None, extra_env, proxy_auth
-            ),
-            share_loopback=egress.wants_network,
-        )
+        """The full command line (`systemd-run` scope around `bwrap`) for one confined process.
+        Never contains the environment - see `build_bwrap_argv`."""
+        inner = build_bwrap_argv(argv, work=work, share_loopback=egress.wants_network)
         if not self._has_systemd_run:
             return inner
         return [
@@ -176,18 +164,14 @@ class LinuxSandbox:
             raise SandboxUnavailable("egress declared but no proxy is running; failing closed")
         work = cwd or tempfile.mkdtemp(prefix="nox-sbx-")
         created = cwd is None
-        cmd = self.command(
-            argv,
-            work=work,
-            egress=egress,
-            limits=limits,
-            proxy_port=proxy_port,
-            extra_env=extra_env,
-            proxy_auth=proxy_auth,
+        cmd = self.command(argv, work=work, egress=egress, limits=limits)
+        env = self.environment(
+            work, proxy_port if egress.wants_network else None, extra_env, proxy_auth
         )
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
+                env=env,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -248,17 +232,13 @@ class LinuxSandbox:
             raise SandboxUnavailable("egress declared but no proxy is running; failing closed")
         work = cwd or tempfile.mkdtemp(prefix="nox-sbx-")
         created = cwd is None
-        cmd = self.command(
-            argv,
-            work=work,
-            egress=egress,
-            limits=limits,
-            proxy_port=proxy_port,
-            extra_env=extra_env,
-            proxy_auth=proxy_auth,
+        cmd = self.command(argv, work=work, egress=egress, limits=limits)
+        env = self.environment(
+            work, proxy_port if egress.wants_network else None, extra_env, proxy_auth
         )
         proc = await asyncio.create_subprocess_exec(
             *cmd,
+            env=env,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
