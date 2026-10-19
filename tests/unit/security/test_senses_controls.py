@@ -195,9 +195,13 @@ def test_a_remembered_click_asks_again_after_browser_content_tainted_the_turn() 
             expires_at=NOW + timedelta(hours=1),
         )
     )
-    assert engine.check(_req("browser", "click", Risk.MEDIUM, SHOP)).decision is Decision.ALLOW
-    engine.set_tainted(True)  # browser.read put untrusted page text into the turn
-    assert engine.check(_req("browser", "click", Risk.MEDIUM, SHOP)).decision is Decision.CONFIRM
+    click = _req("browser", "click", Risk.MEDIUM, SHOP, conversation="chat:1")
+    assert engine.check(click).decision is Decision.ALLOW
+    engine.mark_tainted("chat:1")  # browser.read put untrusted page text into the conversation
+    assert engine.check(click).decision is Decision.CONFIRM
+    # Another conversation's taint does not touch this one, and vice versa.
+    other = _req("browser", "click", Risk.MEDIUM, SHOP, conversation="voice:2")
+    assert engine.check(other).decision is Decision.ALLOW
 
 
 @pytest.mark.parametrize(

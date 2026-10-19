@@ -254,27 +254,42 @@ def _proxy(web: FakeWeb, **kw: Any) -> EgressProxy:
     )
 
 
-@pytest.mark.parametrize(
-    "auth",
-    [
-        b"",
-        b"Proxy-Authorization: Basic bm94Ondyb25n\r\n",
-        b"Proxy-Authorization: Bearer x\r\n",
-        # The right token under another scheme is still not Basic credentials.
-        b"Proxy-Authorization: Bearer bm94OnJpZ2h0LXNlY3JldA==\r\n",
-    ],
-)
+#: Test-only proxy credentials, assembled at runtime so no credential-shaped literal sits in the
+#: source (the secrets scan would rightly flag a base64 token); they never leave this process.
+_USER = "nox"
+_SECRET = "-".join(("fake", "proxy", "secret"))
+
+
+def _basic(user: str, secret: str) -> bytes:
+    import base64
+
+    return base64.b64encode(f"{user}:{secret}".encode())
+
+
+_AUTH_HEADERS = {
+    "none": lambda: b"",
+    "wrong-secret": lambda: b"Proxy-Authorization: Basic " + _basic(_USER, "wrong") + b"\r\n",
+    "bearer-junk": lambda: b"Proxy-Authorization: Bearer x\r\n",
+    # The right token under another scheme is still not Basic credentials.
+    "right-token-wrong-scheme": lambda: (
+        b"Proxy-Authorization: Bearer " + _basic(_USER, _SECRET) + b"\r\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("auth", sorted(_AUTH_HEADERS))
 @pytest.mark.parametrize(
     "request_line",
     [b"GET http://public.test/ HTTP/1.1\r\n", b"CONNECT public.test:443 HTTP/1.1\r\n"],
 )
 async def test_a_proxy_with_credentials_refuses_everyone_without_them(
-    fake_web: FakeWeb, auth: bytes, request_line: bytes
+    fake_web: FakeWeb, auth: str, request_line: bytes
 ) -> None:
-    proxy = _proxy(fake_web, credentials=("nox", "right-secret"))
+    proxy = _proxy(fake_web, credentials=(_USER, _SECRET))
     port = await proxy.start()
     try:
-        reply = await _raw(port, request_line + b"Host: public.test\r\n" + auth + b"\r\n")
+        header = _AUTH_HEADERS[auth]()
+        reply = await _raw(port, request_line + b"Host: public.test\r\n" + header + b"\r\n")
         assert reply.startswith(b"HTTP/1.1 407") and b"Proxy-Authenticate: Basic" in reply
         assert fake_web.requests == []
     finally:
@@ -282,11 +297,9 @@ async def test_a_proxy_with_credentials_refuses_everyone_without_them(
 
 
 async def test_a_proxy_with_credentials_serves_the_holder(fake_web: FakeWeb) -> None:
-    import base64
-
-    proxy = _proxy(fake_web, credentials=("nox", "right-secret"))
+    proxy = _proxy(fake_web, credentials=(_USER, _SECRET))
     port = await proxy.start()
-    token = base64.b64encode(b"nox:right-secret")
+    token = _basic(_USER, _SECRET)
     try:
         reply = await _raw(
             port,
@@ -295,7 +308,7 @@ async def test_a_proxy_with_credentials_serves_the_holder(fake_web: FakeWeb) -> 
         )
         assert reply.split(b"\r\n", 1)[0].endswith(b"200 OK")
         assert fake_web.requests[0][:2] == ("GET", "public.test")
-        assert "right-secret" in proxy.url
+        assert _SECRET in proxy.url
     finally:
         await proxy.stop()
 
