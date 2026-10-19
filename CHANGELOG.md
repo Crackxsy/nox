@@ -57,6 +57,27 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 - **A server without a screen kept restarting the pet window.** The supervisor no longer starts the
   desktop shell or global hotkeys where there is no display.
 - Plugin workers on Linux started without `HOME`, a locale or `XDG_*`; they now inherit those.
+- **A calendar invite could stall the server.** A FREQ=SECONDLY/MINUTELY series (anyone can drop
+  one into a Google calendar) expanded into hundreds of thousands of events. Sub-hourly series now
+  count once, impossible rules are dropped, every series is walked from close to today with a step
+  and occurrence cap, the feed's series share a time budget, your single appointments are always
+  read first, and a feed that had to be cut says so on the dashboard and to the model (at most 50
+  events per answer). The credential store is no longer read on every calendar question, and an
+  unavailable one is reported as such instead of "no calendar connected".
+- **A reminder could be lost when the voice timed out.** It was marked fired, then the speech
+  error aborted the toast as well. The toast now always goes out; a callout that fails outright is
+  retried on the next poll (three tries), and a failing reminder loop shows in the health check.
+- **Failed PIN attempts could break another transaction** on the shared database connection (the
+  same bug class as the audit log in 0.5.0): the counter now uses the database's lock and never
+  commits a transaction it did not open.
+- **One prompt injection could become a permanent memory.** Facts learned from a phone message or
+  from pasted text are now kept unconfirmed - listed on the dashboard, never in the prompt - until
+  you confirm them there; recently learned facts are marked "new".
+- **Linux installer:** uv is installed from its release archive checked against a pinned SHA-256
+  instead of a script piped into a root shell; running the same version again no longer deletes the
+  release `nox rollback` points to; the health wait follows the port the core actually bound.
+- A bare `pytest` no longer reaches real services or builds the UIs (e2e, network, hardware and
+  spike tests are opt-in with `-m`).
 
 
 ## [0.5.0] - 2026-10-14
