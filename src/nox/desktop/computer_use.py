@@ -24,10 +24,26 @@ the third-party automation libraries and the process-memory calls stay forbidden
 (Security Model §10 names them; the CI scan cannot tell a mention from a call, so they are not
 written out). The Win32 calls below are Nox's own.
 
-**Not on itself.** Nox may not click into or send keys to its own windows - its confirmation
-dialogs are in them, and a model that can click "Allow" has no permissions left. Combinations
-that hand control to something else are refused outright: Win+R, Win+X, Ctrl+Alt+Del,
-Ctrl+Shift+Esc, the stop hotkey itself, and Alt+F4 when Nox is in front.
+**Not on itself.** Nox may not click into, move onto or send keys to its own windows - its
+confirmation dialogs are in them, and a model that can click "Allow" has no permissions left.
+Before *every* event - each button down and up, each wheel turn, each key down - the window under
+the cursor (`WindowFromPoint(GetCursorPos())`) and the foreground window are checked against
+Nox's windows: its processes, its Qt window classes, and a title naming Nox (which covers the
+dashboard tab in a browser while it is the active tab). A move whose destination is a Nox window
+is refused too, and nothing at all is sent while a Nox confirmation is waiting for an answer.
+
+That check is a race by nature (a window can appear between the check and the event), so it is
+not the guard that matters most. **A confirmation cannot be given by synthetic input:** while a
+session is open and for a few seconds after Nox's last event, the core refuses an "allow" answer
+and every privileged dashboard request (`blocks_confirmation`, wired in `nox.desktop.install`).
+The user ends the session with the stop hotkey - a combination this module never sends - and then
+answers. The combination blocklist (anything with Win, Ctrl+Esc, Alt+Tab, Alt+Esc, Alt+Space,
+Ctrl+Alt+Del, Ctrl+Shift+Esc, the stop hotkey, Alt+F4 on Nox) only keeps the obvious ways of
+handing control to something else out; it is not the boundary.
+
+**Releasing keys respects the game rule too.** Keys that were pressed are released in a `finally`,
+but not into a game: if a game came to the foreground or started meanwhile, the key-ups are
+skipped and logged, and the session ends (the user's next physical key press clears the state).
 """
 
 from __future__ import annotations
@@ -107,7 +123,9 @@ KEYS: dict[str, int] = {
     "down": 0x28,
 }
 
-#: Combinations that hand control to something Nox cannot see, or end the guard itself.
+#: Combinations that hand control to something Nox cannot see, or end the guard itself. Any
+#: combination with the Windows key is refused as well (`combo_refusal`): Win+R/S/E/X/L/D/Tab and
+#: Win+<number> all launch or switch something.
 BLOCKED_COMBOS: frozenset[frozenset[str]] = frozenset(
     {
         frozenset({"win", "r"}),
@@ -115,8 +133,16 @@ BLOCKED_COMBOS: frozenset[frozenset[str]] = frozenset(
         frozenset({"ctrl", "alt", "delete"}),
         frozenset({"ctrl", "shift", "escape"}),
         frozenset({"ctrl", "alt", "shift", "k"}),
+        frozenset({"ctrl", "escape"}),
+        frozenset({"alt", "tab"}),
+        frozenset({"alt", "shift", "tab"}),
+        frozenset({"ctrl", "alt", "tab"}),
+        frozenset({"alt", "escape"}),
+        frozenset({"alt", "space"}),
     }
 )
+#: Seconds after Nox's last synthetic event during which a confirmation is still refused.
+CONFIRMATION_QUIET_S = 3.0
 #: Refused when Nox itself is in front: closing it would close the dialogs that guard it.
 BLOCKED_ON_NOX: frozenset[frozenset[str]] = frozenset({frozenset({"alt", "f4"})})
 MAX_KEYS = 4
@@ -148,7 +174,7 @@ def parse_combo(combo: str) -> tuple[list[str], str]:
 
 def combo_refusal(mods: Sequence[str], key: str, *, nox_in_front: bool) -> str | None:
     pressed = frozenset([*mods, key])
-    if pressed in BLOCKED_COMBOS:
+    if pressed in BLOCKED_COMBOS or "win" in pressed:
         return f"{'+'.join([*mods, key])} is never sent"
     if nox_in_front and pressed in BLOCKED_ON_NOX:
         return "Nox is in front; it does not close itself"
@@ -164,11 +190,14 @@ class Sender(Protocol):
     def screen(self) -> tuple[int, int, int, int]:
         """(left, top, width, height) of the virtual desktop."""
 
-    def window_at(self, x: int, y: int) -> tuple[int, str]:
-        """(process id, title) of the top-level window at a point."""
+    def window_at(self, x: int, y: int) -> tuple[Any, ...]:
+        """(process id, title[, window class]) of the top-level window at a point."""
 
-    def foreground(self) -> tuple[int, str]:
-        """(process id, title) of the foreground window."""
+    def foreground(self) -> tuple[Any, ...]:
+        """(process id, title[, window class]) of the foreground window."""
+
+    def cursor(self) -> tuple[int, int]:
+        """Where the pointer is now (`GetCursorPos`)."""
 
     def stop_pressed(self) -> bool: ...
     def mouse(self, dx: int, dy: int, flags: int, data: int = 0) -> None: ...
@@ -221,21 +250,28 @@ class Win32Sender:
             int(metric(SM_CYVIRTUALSCREEN)),
         )
 
-    def _describe(self, handle: int) -> tuple[int, str]:
+    def _describe(self, handle: int) -> tuple[int, str, str]:
         if not handle:
-            return 0, ""
+            return 0, "", ""
         root = int(self._user32.GetAncestor(handle, 2)) or handle  # GA_ROOT
         pid = wintypes.DWORD()
         self._user32.GetWindowThreadProcessId(root, ctypes.byref(pid))
         buffer = ctypes.create_unicode_buffer(512)
         self._user32.GetWindowTextW(root, buffer, 512)
-        return int(pid.value), buffer.value
+        klass = ctypes.create_unicode_buffer(256)
+        self._user32.GetClassNameW(root, klass, 256)
+        return int(pid.value), buffer.value, klass.value
 
-    def window_at(self, x: int, y: int) -> tuple[int, str]:
+    def window_at(self, x: int, y: int) -> tuple[int, str, str]:
         return self._describe(int(self._user32.WindowFromPoint(wintypes.POINT(x, y))))
 
-    def foreground(self) -> tuple[int, str]:
+    def foreground(self) -> tuple[int, str, str]:
         return self._describe(int(self._user32.GetForegroundWindow()))
+
+    def cursor(self) -> tuple[int, int]:
+        point = wintypes.POINT()
+        self._user32.GetCursorPos(ctypes.byref(point))
+        return int(point.x), int(point.y)
 
     def stop_pressed(self) -> bool:
         state = self._user32.GetAsyncKeyState
@@ -270,6 +306,9 @@ class DryRunSender:
 
     def foreground(self) -> tuple[int, str]:
         return (0, "")
+
+    def cursor(self) -> tuple[int, int]:
+        return (0, 0)
 
     def stop_pressed(self) -> bool:
         return False
@@ -309,6 +348,8 @@ class ComputerUse:
         audit: Audit,
         notice: Notice = lambda _active, _reason: None,
         clock: Callable[[], float] = time.monotonic,
+        nox_process: Callable[[int], bool] | None = None,
+        confirmation_pending: Callable[[], bool] = lambda: False,
     ) -> None:
         self._enabled = enabled
         self._game_running = game_running
@@ -320,6 +361,10 @@ class ComputerUse:
         self._notice = notice
         self._clock = clock
         self._session: Session | None = None
+        #: Whether a process id is one of Nox's (core, workers, shell) - by process, not title.
+        self._nox_process = nox_process or (lambda pid: pid in self._nox_pids())
+        self._confirmation_pending = confirmation_pending
+        self._last_event: float | None = None
 
     # -- sessions ------------------------------------------------------------------------------
 
@@ -377,8 +422,38 @@ class ComputerUse:
             raise ComputerUseError("stopped by the user's hotkey")
         return self._sender
 
-    def _is_nox(self, pid: int, title: str) -> bool:
-        return pid in self._nox_pids() or "nox" in title.lower()
+    def blocks_confirmation(self) -> bool:
+        """True while a session is open and for `CONFIRMATION_QUIET_S` after Nox's last event:
+        the core then refuses an "allow" answer and privileged dashboard requests, so no click
+        Nox synthesised can count as the user's decision."""
+        if self.active:
+            return True
+        last = self._last_event
+        return last is not None and self._clock() - last < CONFIRMATION_QUIET_S
+
+    def _is_nox(self, window: tuple[Any, ...]) -> bool:
+        pid, title = int(window[0]), str(window[1])
+        klass = str(window[2]) if len(window) > 2 else ""
+        if pid and (pid in self._nox_pids() or self._nox_process(pid)):
+            return True
+        if "nox" in title.lower():
+            return True  # Nox's dialogs, and the dashboard while it is the browser's active tab
+        # A Qt window whose process could not be read is treated as Nox's shell.
+        return klass.startswith("Qt") and not pid
+
+    def _event_guard(self, *, pointer: bool) -> Sender:
+        """Everything that must hold right before one single input event."""
+        sender = self._guard()
+        if self._confirmation_pending():
+            raise ComputerUseError(
+                "a Nox confirmation is waiting for your answer; nothing is sent until it is given"
+            )
+        if self._is_nox(sender.foreground()):
+            raise ComputerUseError("a Nox window is in front; Nox does not click itself")
+        if pointer and self._is_nox(sender.window_at(*sender.cursor())):
+            raise ComputerUseError("the pointer is on a Nox window; Nox does not click itself")
+        self._last_event = self._clock()
+        return sender
 
     def _spend(self) -> None:
         assert self._session is not None
@@ -394,18 +469,14 @@ class ComputerUse:
             left, top, width, height = sender.screen()
             if not (left <= x < left + width and top <= y < top + height):
                 raise ComputerUseError(f"({x}, {y}) is outside the screen")
-            pid, title = sender.window_at(x, y)
-            if action != "move" and self._is_nox(pid, title):
+            if self._is_nox(sender.window_at(x, y)):
+                # Not even a move: a pointer resting on a Nox dialog is one click from "Allow".
                 raise ComputerUseError("that point is on a Nox window; Nox does not click itself")
             ax = round((x - left) * 65535 / max(1, width - 1))
             ay = round((y - top) * 65535 / max(1, height - 1))
-            self._guard().mouse(
+            self._event_guard(pointer=False).mouse(
                 ax, ay, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
             )
-        elif action != "scroll":
-            pid, title = sender.foreground()
-            if self._is_nox(pid, title):
-                raise ComputerUseError("a Nox window is in front; Nox does not click itself")
         steps: list[tuple[int, int]] = {
             "move": [],
             "click": [(MOUSEEVENTF_LEFTDOWN, 0), (MOUSEEVENTF_LEFTUP, 0)],
@@ -414,7 +485,9 @@ class ComputerUse:
             "scroll": [(MOUSEEVENTF_WHEEL, max(-10, min(10, amount)) * WHEEL_DELTA)],
         }[action]
         for flags, data in steps:
-            self._guard().mouse(0, 0, flags, data)
+            # Before every down, up and wheel event: game, stop key, Nox under the cursor, Nox in
+            # front, a confirmation waiting.
+            self._event_guard(pointer=True).mouse(0, 0, flags, data)
         self._spend()
         target = "" if x is None else f"{x},{y}"
         self._audit(f"pointer.{action}", target, "ok")
@@ -423,8 +496,7 @@ class ComputerUse:
     def keys(self, combo: str) -> str:
         mods, key = parse_combo(combo)
         sender = self._guard()
-        pid, title = sender.foreground()
-        nox_in_front = self._is_nox(pid, title)
+        nox_in_front = self._is_nox(sender.foreground())
         refusal = combo_refusal(mods, key, nox_in_front=nox_in_front)
         if refusal is not None:
             self._audit("keys", "+".join([*mods, key]), "refused")
@@ -435,17 +507,26 @@ class ComputerUse:
         pressed: list[int] = []
         try:
             for vk in vks:
-                self._guard().key(vk, up=False)
+                self._event_guard(pointer=False).key(vk, up=False)
                 pressed.append(vk)
         finally:
-            # Whatever happened, nothing is left held down.
-            for vk in reversed(pressed):
-                if self._sender is not None:
-                    self._sender.key(vk, up=True)
+            self._release(pressed)
         self._spend()
         name = "+".join([*mods, key])
         self._audit("keys", name, "ok")
         return name
+
+    def _release(self, pressed: list[int]) -> None:
+        """Release what was pressed - but never into a game (the rule holds for key-ups too)."""
+        if not pressed or self._sender is None:
+            return
+        game_running = self._game_running() or self._game_in_foreground()
+        if game_running:
+            log.warning("desktop.computer_use_keyups_skipped", keys=len(pressed))
+            self.end_session("a game came to the foreground")
+            return
+        for vk in reversed(pressed):
+            self._sender.key(vk, up=True)
 
 
 def foreground_pid() -> int:

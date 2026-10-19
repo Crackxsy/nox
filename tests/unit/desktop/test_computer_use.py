@@ -38,6 +38,9 @@ class Recorder:
     def foreground(self) -> tuple[int, str]:
         return self.front
 
+    def cursor(self) -> tuple[int, int]:
+        return (500, 500)
+
     def stop_pressed(self) -> bool:
         return self.stop
 

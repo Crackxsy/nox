@@ -329,6 +329,15 @@ class CoreHandlers:
         for something through the chat and then allow it itself (`nox.security.device_pin`). The
         audit trail names the client that answered."""
         assert self._core.security is not None
+        lock = getattr(self._core.registry, "input_lock", None)
+        if p.decision is Decision.ALLOW and lock is not None and lock():
+            # Nox may be the one clicking: an "allow" while it controls the input is not the
+            # user's. The dialog stays open; ending the session with the stop hotkey (which Nox
+            # never sends) makes the answer count. A "deny" always counts.
+            return {
+                "ok": False,
+                "reason": "Nox controls mouse and keyboard; press the stop hotkey, then allow",
+            }
         engine = self._core.security.engine
         if ctx.role == DEVICE_ROLE and p.decision is Decision.ALLOW:
             request = engine.pending_request(p.grant_id)

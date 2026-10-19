@@ -119,6 +119,21 @@ def _nox_pids() -> set[int]:
     return pids
 
 
+def _is_nox_process(pid: int) -> bool:
+    """Nox's own processes - the core and its children, or a Nox process started separately
+    (the shell from a shortcut): judged by the process, never by a window title alone."""
+    if pid in _nox_pids():
+        return True
+    try:
+        process = psutil.Process(pid)
+        name = process.name().lower()
+        if not name.startswith(("python", "pythonw", "nox")):
+            return False
+        return any("nox" in part.lower() for part in process.cmdline()[1:3])
+    except (psutil.Error, ValueError, OSError):
+        return False
+
+
 def _install_computer_use(core: CoreLike) -> None:
     """The second input-synthesis module (`nox.desktop.computer_use`); off until enabled."""
     settings = core.config.desktop.computer_use
@@ -162,7 +177,13 @@ def _install_computer_use(core: CoreLike) -> None:
         ),
         audit=audit,
         notice=notice,
+        nox_process=_is_nox_process,
+        confirmation_pending=lambda: bool(engine.pending()),
     )
+    registry = getattr(core, "registry", None)
+    if registry is not None:
+        # The core refuses "allow" answers and privileged UI requests while this could click.
+        registry.input_lock = computer.blocks_confirmation
 
     def grant(minutes: int) -> str:
         grant_id = f"computer-{uuid.uuid4().hex[:12]}"
