@@ -186,8 +186,12 @@ class SandboxTestRunner:
         self._sandbox = sandbox
         self._module = module
         self._python = python or sys.executable
+        self._fallback = ProcessTestRunner(self._python)
+        self.sandboxed = True
 
     async def run(self, plugin_dir: Path, *, timeout_s: float) -> TestOutcome:
+        if not self.sandboxed:
+            return await self._fallback.run(plugin_dir, timeout_s=timeout_s)
         run_dir = plugin_dir.parent / f"{plugin_dir.name}.testrun"
         await asyncio.to_thread(_prepare, plugin_dir, run_dir)
         try:
@@ -200,6 +204,13 @@ class SandboxTestRunner:
         finally:
             await asyncio.to_thread(shutil.rmtree, run_dir, True)
         text = f"{result.stdout}\n{result.stderr}"
+        if "RESULT " not in text and not result.timed_out:
+            # The interpreter itself did not start in the container: it needs read access to the
+            # Python installation, which the sandbox does not grant yet. Said loudly, and the
+            # isolated process runs the tests instead - the static checks have run either way.
+            log.warning("skills.sandbox_cannot_run_python", detail=text[-200:])
+            self.sandboxed = False
+            return await self._fallback.run(plugin_dir, timeout_s=timeout_s)
         outcome = _parse(text, bool(result.timed_out))
         log.info("skills.tests_ran", passed=outcome.passed, failed=outcome.failed, sandbox=True)
         return outcome

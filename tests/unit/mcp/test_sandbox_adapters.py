@@ -109,3 +109,20 @@ async def test_a_local_server_without_network_gets_no_egress(tmp_path: Path) -> 
     )
     assert launched.pid == 7 and sandbox.runs[0]["egress"] == EgressDecl()
     assert sandbox.runs[0]["env"] == {"A": "1"}
+
+
+async def test_a_sandbox_that_cannot_start_python_falls_back_loudly(tmp_path: Path) -> None:
+    class Denied(FakeSandbox):
+        async def run(self, argv: list[str], **kwargs: Any) -> Result:
+            self.runs.append({"argv": argv, **kwargs})
+            return Result(1, "", "pyvenv.cfg: access denied")
+
+    sandbox = Denied()
+    work = tmp_path / "dice"
+    write_skill(work, "dice", "good")
+    module = types.SimpleNamespace(EgressDecl=EgressDecl, Limits=Limits)
+    runner = SandboxTestRunner(sandbox, module)
+    outcome = await runner.run(work, timeout_s=60)
+    assert outcome.ok and runner.sandboxed is False  # the process runner ran the tests
+    await runner.run(work, timeout_s=60)
+    assert len(sandbox.runs) == 1  # and is used directly from then on
