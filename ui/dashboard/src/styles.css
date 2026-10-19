@@ -2686,3 +2686,197 @@ a:hover {
   width: 100%;
   margin: var(--s-2) 0;
 }
+
+/* ----------------------------------------------------------- capabilities - */
+
+.caps-section {
+  margin-top: clamp(40px, 6vw, 72px);
+}
+
+.caps-section .tiles + .tile-actions {
+  padding-top: var(--s-5);
+}
+
+.caps-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-2) var(--s-4);
+  margin-bottom: var(--s-4);
+}
+
+.caps-block {
+  display: block;
+}
+
+/* A hint that must not be overlooked: still grey type, but with a warning rule on the left. */
+.caps-emph {
+  margin-top: var(--s-3);
+  padding-left: var(--s-3);
+  border-left: 3px solid var(--warn);
+  color: var(--ink);
+}
+
+.caps-approve {
+  margin-top: var(--s-5);
+  padding: var(--s-4);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-field);
+}
+
+.caps-pre {
+  margin: var(--s-3) 0;
+  padding: var(--s-3);
+  max-height: 18rem;
+  overflow: auto;
+  border-radius: var(--radius-field);
+  background: var(--page-soft);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.caps-details {
+  margin-top: var(--s-4);
+}
+
+.caps-details > summary {
+  min-height: var(--hit);
+  display: flex;
+  align-items: center;
+  color: var(--link);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.caps-tools,
+.caps-bullets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.caps-tool,
+.caps-bullets > li {
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--hairline);
+  overflow-wrap: anywhere;
+}
+
+.caps-tool:first-child,
+.caps-bullets > li:first-child {
+  border-top: 0;
+}
+
+.caps-tool .badge {
+  margin-left: var(--s-2);
+  white-space: normal;
+}
+
+.caps-tool-name {
+  font-weight: 600;
+}
+
+/* A refused tool stays listed, visibly out of use. */
+.caps-tool--blocked {
+  color: var(--ink-2);
+}
+
+.caps-tool--blocked .caps-tool-name {
+  text-decoration: line-through;
+}
+
+/* Text a third party wrote: set apart, labelled, never formatted. */
+.caps-untrusted {
+  margin-top: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-left: 2px dashed var(--hairline);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+}
+
+.caps-untrusted-label {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+
+.caps-choice,
+.caps-rows {
+  margin: var(--s-4) 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.caps-radio,
+.caps-check {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: var(--hit);
+}
+
+.caps-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--s-3);
+  margin: var(--s-3) 0;
+}
+
+.caps-row-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-4);
+}
+
+.caps-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+}
+
+.caps-inline-form .field {
+  flex: 1 1 220px;
+}
+
+.mono-input {
+  font-family: var(--mono);
+}
+
+.argv {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin: var(--s-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.argv > li {
+  padding: 2px var(--s-2);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  max-width: 100%;
+}
+
+.confirm-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.tile-actions--tight {
+  padding-top: 0;
+}
+
+@media (max-width: 719px) {
+  .caps-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

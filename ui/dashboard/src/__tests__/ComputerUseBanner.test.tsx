@@ -97,7 +97,8 @@ describe('ComputerUseBanner in the app', () => {
     render(<App token="tok" lang="de" theme="system" />);
     await vi.waitFor(() => expect(captured.handlers).not.toBeNull());
     emit({ active: true, reason: '', stop: '' });
-    act(() => screen.getByRole('tab', { name: t('tab_settings') }).click());
+    act(() => screen.getByRole('tab', { name: t('tab_capabilities') }).click());
+    expect(screen.getByRole('tab', { name: t('tab_capabilities') }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('alert').textContent).toBe(t('computer_use_banner_no_hotkey'));
   });
 
