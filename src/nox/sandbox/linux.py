@@ -446,6 +446,12 @@ class LinuxSandbox:
             version = bwrap_version(bwrap)
             self.disables_userns = version is not None and version >= _DISABLE_USERNS_SINCE
             if not self.disables_userns:
+                if bwrap == _NOX_BWRAP:
+                    # Nox's own copy may create user namespaces where the system forbids it; it
+                    # must be able to forbid them to what it runs (fail closed).
+                    raise SandboxUnavailable(
+                        f"{bwrap} is older than 0.8 and cannot forbid nested user namespaces"
+                    )
                 log.warning("sandbox.bwrap_old", version=version, needed=_DISABLE_USERNS_SINCE)
             with tempfile.TemporaryDirectory(prefix="nox-sbx-probe-") as work:
                 why = _probe(self._bwrap_argv(["true"], work=work))

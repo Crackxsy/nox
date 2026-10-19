@@ -224,8 +224,9 @@ Raspberry Pi that is bubblewrap (`bwrap`):
 - **No nested namespaces:** with bwrap 0.8+ the sandbox's user namespace forbids creating
   further ones (`--disable-userns`); older bwrap is reported in `guarantees()`. On Ubuntu 23.10+
   the installer gives only Nox's own bwrap copy (executable by the `nox` user alone) an AppArmor
-  profile that allows user namespaces - the system's `bwrap` stays restricted - and what runs
-  inside gets no capabilities.
+  profile that allows user namespaces - the system's `bwrap` stays restricted; inside, bwrap
+  drops every capability and forbids further user namespaces (that copy is refused if it is
+  older than 0.8 or differs from `/usr/bin/bwrap`).
 - **Fail closed:** bwrap and the egress path are probed when the sandbox is built. If bwrap
   cannot build its namespaces, nothing runs; if only the egress path fails, runs without declared
   egress still work and declared egress is refused.

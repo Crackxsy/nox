@@ -189,7 +189,7 @@ namespaces (`sysctl kernel.unprivileged_userns_clone` must be 1 where it exists)
 23.10 and newer - AppArmor restricts them. There the installer leaves the system's `bwrap` as
 restricted as it was and installs a copy, `/usr/lib/nox/bwrap`, that only the `nox` user can run,
 with an AppArmor profile (`/etc/apparmor.d/nox-bwrap`) for that path alone; whatever runs inside
-the sandbox gets no capabilities and no further user namespaces. An apt hook keeps the copy
+the sandbox gets no capabilities and no further user namespaces (bwrap's own `--disable-userns`). An apt hook keeps the copy
 identical to the `bubblewrap` package; if it ever differs, Nox refuses to run commands until the
 installer is run again. Raspberry Pi OS and Debian need none of this.
 

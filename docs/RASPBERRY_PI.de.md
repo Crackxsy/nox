@@ -200,7 +200,7 @@ User-Namespaces (`sysctl kernel.unprivileged_userns_clone` muss, wo es existiert
 ab Ubuntu 23.10 – AppArmor schränkt sie ein. Dort lässt der Installer das `bwrap` des Systems so
 eingeschränkt, wie es ist, und legt eine Kopie `/usr/lib/nox/bwrap` an, die nur der Benutzer `nox`
 ausführen darf, mit einem AppArmor-Profil (`/etc/apparmor.d/nox-bwrap`) nur für diesen Pfad; was in
-der Sandbox läuft, bekommt keine Capabilities und keine weiteren User-Namespaces. Ein apt-Hook hält
+der Sandbox läuft, bekommt keine Capabilities und keine weiteren User-Namespaces (`--disable-userns` von bwrap). Ein apt-Hook hält
 die Kopie gleich mit dem Paket `bubblewrap`; weicht sie je ab, führt Nox keine Befehle aus, bis der
 Installer erneut gelaufen ist. Raspberry Pi OS und Debian brauchen nichts davon.
 

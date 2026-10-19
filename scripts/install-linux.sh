@@ -576,11 +576,10 @@ install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$NOX_HOME_DIR"
 # ---- the command sandbox on Ubuntu 23.10+ -------------------------------------------------------
 # There AppArmor lets a program create user namespaces only with a profile that allows it, and
 # bwrap needs one. Nothing is changed for /usr/bin/bwrap or any other user: Nox gets its own copy,
-# executable only by the service user, and a profile attached to that path alone. What bwrap
-# starts inside its sandbox runs stacked under a second profile that denies every capability and
-# new user namespaces (modelled on Ubuntu's own bwrap-userns-restrict; stacking is what AppArmor
-# permits under no_new_privs, which both the service and bwrap set). Raspberry Pi OS and Debian have no
-# such restriction: nothing is installed there, and leftovers of an earlier install are removed.
+# executable only by the service user (root:nox 0750), and a profile attached to that path alone.
+# Inside the sandbox bwrap drops every capability and, with --disable-userns, forbids further user
+# namespaces. Raspberry Pi OS and Debian have no such restriction: nothing is installed there, and
+# leftovers of an earlier install are removed.
 nox_bwrap=/usr/lib/nox/bwrap
 nox_profile=/etc/apparmor.d/nox-bwrap
 nox_apt_hook=/etc/apt/apt.conf.d/99nox-bwrap
@@ -604,44 +603,15 @@ if [ -r "$restrict" ] && [ "$(cat "$restrict")" = "1" ] && [ -x /usr/bin/bwrap ]
 DPkg::Post-Invoke { "if [ -e $nox_bwrap ] && [ -x /usr/bin/bwrap ] && ! cmp -s /usr/bin/bwrap $nox_bwrap; then install -m 0750 -o root -g $SERVICE_USER /usr/bin/bwrap $nox_bwrap; fi"; };
 APTHOOK
   cat > "$nox_profile" <<'APPARMOR'
-# Installed by Nox (scripts/install-linux.sh). Only Nox's own copy of bwrap, which only the nox
-# service user can execute, may create user namespaces; what runs inside gets no capabilities.
+# Installed by Nox (scripts/install-linux.sh). Only Nox's own copy of bwrap - executable by the
+# nox service user alone - may create user namespaces; /usr/bin/bwrap stays restricted. Inside,
+# bwrap drops every capability and forbids further user namespaces (--disable-userns).
 abi <abi/4.0>,
 include <tunables/global>
 
-profile nox-bwrap /usr/lib/nox/bwrap flags=(attach_disconnected,mediate_deleted) {
-  allow capability,
-  allow file rwlkm /{**,},
-  allow network,
-  allow unix,
-  allow ptrace,
-  allow signal,
-  allow mqueue,
-  allow io_uring,
-  allow userns,
-  allow mount,
-  allow umount,
-  allow pivot_root,
-  allow dbus,
-  allow px /** -> &nox-bwrap-sandboxed,
+profile nox-bwrap /usr/lib/nox/bwrap flags=(unconfined) {
+  userns,
   include if exists <local/nox-bwrap>
-}
-
-profile nox-bwrap-sandboxed flags=(attach_disconnected,mediate_deleted) {
-  allow file rwlkmix /{**,},
-  allow network,
-  allow unix,
-  allow ptrace,
-  allow signal,
-  allow mqueue,
-  allow io_uring,
-  allow mount,
-  allow umount,
-  allow pivot_root,
-  allow dbus,
-  audit deny capability,
-  audit deny userns,
-  include if exists <local/nox-bwrap-sandboxed>
 }
 APPARMOR
   if ! apparmor_parser -r "$nox_profile"; then
