@@ -205,6 +205,7 @@ jobs:
       - name: The command sandbox works inside the service
         run: |
           log="$(sudo journalctl -u nox --no-pager)"
+          sudo dmesg | grep -i 'apparmor=' | tail -20 || true
           echo "$log" | grep -E "sandbox\.(linux_ready|egress_unavailable|cgroup_unavailable)|hands\.sandbox_unavailable" || true
           echo "$log" | grep -E "sandbox\.linux_ready" | grep -E "ceiling=.?cgroup" | grep -qE "egress=.?True"
           ! echo "$log" | grep -qE "hands\.sandbox_unavailable|sandbox\.egress_unavailable"
