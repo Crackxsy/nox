@@ -17,6 +17,7 @@ import type { IpcClient } from '../../ipc';
 import type { StreamPluginStatus } from '../../model';
 import { Hero } from '../../ui';
 import { ConfigForm, groupId, groupsOf } from './ConfigForm';
+import { ConsentTile } from './ConsentTile';
 import { HealthHistoryTable } from './HealthHistoryTable';
 import { IntegrationsSection } from './IntegrationsSection';
 import { PersonalityTile } from './PersonalityTile';
@@ -127,6 +128,7 @@ export function SettingsPage({
           onSaved={data.setPersonality}
         />
         <ProfileTile t={t} lang={lang} client={client} />
+        <ConsentTile t={t} lang={lang} client={client} pinConfigured={data.pinConfigured} />
       </div>
 
       <HealthHistoryTable t={t} lang={lang} history={data.history} />

@@ -2070,6 +2070,58 @@ a:hover {
   gap: 8px;
 }
 
+/* ---- recording consents (settings) ----------------------------------------------------------- */
+
+.consent-row {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-field);
+  background: var(--field);
+}
+
+.consent-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.consent-context {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* The wording is shown exactly as stored, line breaks included. */
+.consent-wording {
+  margin: 0;
+  padding-left: var(--s-3);
+  border-left: 2px solid var(--hairline);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.consent-facts {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-sm);
+}
+
+.consent-facts > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.consent-facts dt {
+  color: var(--ink-2);
+}
+
+.consent-facts dd {
+  overflow-wrap: anywhere;
+}
+
 /* ---- Dein Tag (Home) ----------------------------------------------------------------------- */
 
 .day-list > li {

@@ -179,6 +179,7 @@ def _online() -> bool:
         return False
 
 
+@pytest.mark.network
 async def test_appcontainer_declared_egress_reaches_only_the_declared_host() -> None:
     # Review finding 11: the declared egress path must really work in an AppContainer (named pipe
     # to the proxy + in-container forwarder), and still only through the proxy.
@@ -189,14 +190,27 @@ async def test_appcontainer_declared_egress_reaches_only_the_declared_host() -> 
     decisions: list[ProxyDecision] = []
     sandbox = _appcontainer(decisions)
     allowed = await sandbox.run(
-        [CURL, "-s", "-o", "NUL", "-m", "20", "-w", "%{http_code}", "https://example.com/"],
-        egress=EgressDecl(hosts=("example.com",)),
+        # `-p` tunnels plain HTTP through CONNECT too: no TLS stack (and no certificate revocation
+        # lookup, which cannot leave the container either) between the test and the pipe path.
+        [CURL, "-s", "-p", "-o", "NUL", "-m", "20", "-w", "%{http_code}", "http://example.com/"],
+        egress=EgressDecl(hosts=("example.com:80",)),
         limits=Limits(timeout_s=60),
     )
     assert allowed.stdout.strip() == "200", (allowed.stdout, allowed.stderr)
     denied = await sandbox.run(
-        [CURL, "-s", "-o", "NUL", "-m", "20", "-w", "%{http_code}", "https://www.wikipedia.org/"],
-        egress=EgressDecl(hosts=("example.com",)),
+        [
+            CURL,
+            "-s",
+            "-p",
+            "-o",
+            "NUL",
+            "-m",
+            "20",
+            "-w",
+            "%{http_code}",
+            "http://www.wikipedia.org/",
+        ],
+        egress=EgressDecl(hosts=("example.com:80",)),
         limits=Limits(timeout_s=60),
     )
     assert denied.stdout.strip() != "200"
