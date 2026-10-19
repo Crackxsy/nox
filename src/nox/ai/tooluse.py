@@ -28,6 +28,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from nox.ai.base import ToolDefinition
+from nox.ai.prompting import untrusted
 
 __all__ = [
     "SENTINEL",
@@ -214,8 +215,13 @@ def parse_directive(text: str, allowed: Sequence[str]) -> ToolCall | str | None:
 
 
 def render_result(name: str, *, ok: bool, data: object = None, error: str = "") -> str:
-    """The tool's outcome, as the message the model reads before answering the user."""
+    """The tool's outcome, as the message the model reads before answering the user.
+
+    What a tool returns is data from outside - a file, a web page, a window title, a calendar
+    entry - and may contain text written to look like an instruction. It travels in a
+    `[[DATA ...]]` block, which the operating rules tell the model never to obey.
+    """
     if ok:
         body = json.dumps(data, ensure_ascii=False, default=str) if data is not None else "done"
-        return f"Result of {name}: {body}"
+        return f"Result of {name}:\n{untrusted(body, f'tool:{name}')}"
     return f"{name} did not work: {error or 'no reason given'}"
