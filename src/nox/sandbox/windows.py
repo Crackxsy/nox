@@ -52,7 +52,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -267,6 +267,8 @@ def _contains(outer: Path, inner: Path) -> bool:
 
 
 Runner = Callable[[list[str]], int]
+#: ALL APPLICATION PACKAGES: never granted any more; only removed where an old build put it.
+_LEGACY_BROAD_SID = "S-1-15-2-1"
 
 
 def _icacls(argv: list[str]) -> int:
@@ -323,6 +325,28 @@ class RuntimeGrants:
         if ok:
             self._write([*recorded, entry])
         return ok
+
+    def migrate_legacy(self, folders: Iterable[Path], *, force: bool = False) -> int:
+        """Remove the broad `ALL APPLICATION PACKAGES` read ACE an earlier build of this branch put
+        on the runtime folders. Once per installation (a marker next to the manifest) unless
+        `force`; returns how many folders were cleaned. `/remove:g` drops only explicit grants on
+        the folder itself, never inherited ones."""
+        marker = self.manifest.with_name("legacy-acl-migrated")
+        if marker.exists() and not force:
+            return 0
+        cleaned = 0
+        for folder in folders:
+            if (
+                folder.exists()
+                and self._run(["icacls", str(folder), "/remove:g", f"*{_LEGACY_BROAD_SID}", "/Q"])
+                == 0
+            ):
+                cleaned += 1
+        log.info("sandbox.legacy_acl_migrated", folders=cleaned)
+        with contextlib.suppress(OSError):
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("done\n", encoding="utf-8")
+        return cleaned
 
     def reset(self) -> int:
         """Remove every recorded ACE; returns how many were removed. Failures stay recorded."""
@@ -390,6 +414,7 @@ class WindowsSandbox:
         self.proxy_transport = "pipe" if self._sid else "none"
         self._runtime_ready = False
         self._grants = grants or RuntimeGrants()
+        self._grants.migrate_legacy(python_runtime_dirs())
         if self._sid is None and self._grants.recorded():
             # Container-SID ACEs on the interpreter break low-IL Python (module docstring).
             removed = self._grants.reset()

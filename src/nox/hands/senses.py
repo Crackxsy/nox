@@ -496,9 +496,7 @@ def register_sense_tools(registry: ToolRegistry, senses: Senses) -> None:
     registry.register(
         ToolSpec(
             name="screen.capture",
-            description="Take a screenshot of the main screen and save it locally (returns its "
-            "path; describe it with vision.describe). Asks first; refused in PRIVATE/OFFLINE "
-            "and while a privacy zone is in the foreground.",
+            description="Screenshot of the main screen, saved locally (returns the path).",
             input_model=_NoInput,
             risk=Risk.MEDIUM,
             handler=screen,
@@ -511,8 +509,7 @@ def register_sense_tools(registry: ToolRegistry, senses: Senses) -> None:
     registry.register(
         ToolSpec(
             name="camera.snapshot",
-            description="Take one picture with the camera and keep it locally (returns its "
-            "path). Asks every time; needs camera capture turned on; never sent to the cloud.",
+            description="One camera picture, kept locally (returns the path).",
             input_model=_NoInput,
             risk=Risk.MEDIUM,
             handler=camera,
@@ -525,9 +522,8 @@ def register_sense_tools(registry: ToolRegistry, senses: Senses) -> None:
     registry.register(
         ToolSpec(
             name="vision.describe",
-            description="Describe a capture Nox made (screen.capture, camera.snapshot or "
-            "browser.screenshot path). Uses a local vision model when one is installed; "
-            "otherwise Claude, only where privacy allows - the result says where it went.",
+            description="Describe a capture Nox made (its path); a local model first, and the "
+            "result says where the image went.",
             input_model=DescribeInput,
             risk=Risk.LOW,
             handler=describe,

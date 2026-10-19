@@ -416,3 +416,17 @@ def test_runtime_dirs_never_include_nox_home_or_the_profile(tmp_path) -> None:  
     assert python_runtime_dirs(home=tmp_path / "h", base=str(broad), prefix=str(py)) == (
         py.resolve(),
     )
+
+
+def test_the_legacy_broad_ace_is_removed_once(tmp_path) -> None:  # noqa: ANN001
+    from nox.sandbox.windows import RuntimeGrants
+
+    runner = _Recorder()
+    grants = RuntimeGrants(tmp_path / "m.json", runner=runner)
+    folder = tmp_path / "py"
+    folder.mkdir()
+    assert grants.migrate_legacy([folder, tmp_path / "gone"]) == 1
+    assert runner.calls == [["icacls", str(folder), "/remove:g", "*S-1-15-2-1", "/Q"]]
+    assert grants.migrate_legacy([folder]) == 0  # second start: a no-op
+    assert len(runner.calls) == 1
+    assert grants.migrate_legacy([folder], force=True) == 1  # `nox sandbox reset` re-checks

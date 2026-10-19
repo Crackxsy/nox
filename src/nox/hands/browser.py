@@ -574,23 +574,21 @@ def register_browser_tools(registry: ToolRegistry, session: BrowserSession) -> N
     reads: list[tuple[str, str, type[BaseModel], Any, Callable[[dict[str, Any]], str]]] = [
         (
             "browser.open",
-            "Open a public http(s) page in Nox's own headless browser. Never reaches the LAN, "
-            "loopback or a metadata address; redirects are checked too.",
+            "Open a public web page in Nox's own browser (never the LAN).",
             OpenInput,
             open_,
             lambda p: str(p.get("url", "")),
         ),
         (
             "browser.read",
-            "Read the visible text (and links) of the page open in Nox's browser, truncated.",
+            "Text and links of the page open in Nox's browser.",
             ReadInput,
             read,
             lambda _p: session.current_url,
         ),
         (
             "browser.screenshot",
-            "Save a screenshot of the page open in Nox's browser to a local file (it stays "
-            "local; describe it with vision.describe if needed).",
+            "Save a local screenshot of the page in Nox's browser.",
             ScreenshotInput,
             screenshot,
             lambda _p: session.current_url,
@@ -610,19 +608,19 @@ def register_browser_tools(registry: ToolRegistry, session: BrowserSession) -> N
             )
         )
     actions: list[tuple[str, type[BaseModel], str]] = [
-        ("click", ClickInput, "Click an element (CSS selector) on the page open in Nox's browser."),
-        ("type", TypeInput, "Fill text into a field (CSS selector) on the page in Nox's browser."),
+        ("click", ClickInput, "Click an element (CSS selector) on the open page."),
+        ("type", TypeInput, "Fill a text field (CSS selector) on the open page."),
         (
             "submit",
             ClickInput,
-            "Submit the form that contains the element (CSS selector) in Nox's browser.",
+            "Submit the form around an element on the open page.",
         ),
     ]
     for action, action_model, description in actions:
         registry.register(
             ToolSpec(
                 name=f"browser.{action}",
-                description=description + " Needs the page's origin; asks first.",
+                description=description,
                 input_model=action_model,
                 risk=Risk.MEDIUM,
                 handler=actor(action),
