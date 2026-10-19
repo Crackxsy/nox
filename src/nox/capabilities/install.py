@@ -15,7 +15,7 @@ Two things this module knows that the catalogue cannot:
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any, Protocol
 
 from nox.ai.tooluse import OfferedTool, Unavailable
@@ -98,6 +98,16 @@ def _plugin_status(core: CoreLike) -> list[Any]:
     except Exception as exc:  # noqa: BLE001 - a broken manager must not break the catalogue
         log.warning("capabilities.plugin_status_failed", error=f"{type(exc).__name__}: {exc}")
         return []
+
+
+class CapabilitiesRuntime:
+    """Gives other extensions the live report (`nox.skills` asks it which gaps exist)."""
+
+    def __init__(self, report: Callable[[], CapabilityReport]) -> None:
+        self.report = report
+
+    def stop(self) -> None:
+        return None
 
 
 def install(core: CoreLike) -> ExtensionRuntime:
@@ -210,7 +220,13 @@ def install(core: CoreLike) -> ExtensionRuntime:
             agent=DEFAULT_AGENT, name=name, arguments=arguments, mode=_mode(core)
         )
 
-    register_capability_tools(core.tool_registry, report)
+    def learnable() -> bool:
+        extensions = getattr(core, "extensions", None) or {}
+        skills = extensions.get("skills")
+        service = getattr(skills, "service", None)
+        return service is not None and service.builder.unavailable() is None
+
+    register_capability_tools(core.tool_registry, report, learnable)
     register_capability_ipc(core.registry, report)
 
     engine = getattr(core.security, "engine", None)
@@ -243,4 +259,4 @@ def install(core: CoreLike) -> ExtensionRuntime:
     else:
         log.warning("capabilities.no_orchestrator", detail="conversations will have no tools")
     log.info("capabilities.installed")
-    return None
+    return CapabilitiesRuntime(report)

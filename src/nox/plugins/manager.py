@@ -300,12 +300,19 @@ _LIVE_STATES = frozenset(
 )
 
 
+#: Where a plugin came from. `bundled` ships with Nox (`plugins.dir`); `self_built` is a skill Nox
+#: built for itself, activated by the user, and living under `<nox home>/plugins`.
+ORIGIN_BUNDLED = "bundled"
+ORIGIN_SELF_BUILT = "self_built"
+
+
 class PluginStatus(BaseModel):
     """Honest, serializable status of one plugin (dashboard/health)."""
 
     model_config = ConfigDict(frozen=True)
     plugin_id: str
     state: PluginState
+    origin: str = ORIGIN_BUNDLED
     version: str = ""
     enabled: bool = False
     reason: str = ""
@@ -319,6 +326,7 @@ class PluginRecord:
     plugin_id: str
     path: Path
     state: PluginState = PluginState.DISCOVERED
+    origin: str = ORIGIN_BUNDLED
     manifest: PluginManifest | None = None
     reason: str = ""
     enabled: bool = False
@@ -340,6 +348,7 @@ class PluginRecord:
         return PluginStatus(
             plugin_id=self.plugin_id,
             state=self.state,
+            origin=self.origin,
             version=self.version,
             enabled=self.enabled,
             reason=self.reason,
@@ -421,8 +430,12 @@ class PluginManager:
         loopback_allowlist: Sequence[str] = (),
         process_factory: ProcessFactory | None = None,
         clock: Callable[[], float] = time.monotonic,
+        extra_dirs: Mapping[str, Path] | None = None,
     ) -> None:
         self.plugins_dir = plugins_dir
+        #: Further plugin folders by origin (`self_built` -> `<nox home>/plugins`). A plugin there
+        #: can never shadow a bundled one: the bundled folder is discovered first and wins.
+        self.extra_dirs: dict[str, Path] = dict(extra_dirs or {})
         self.settings = settings or PluginManagerSettings()
         self._bus = bus
         self._hub = hub
@@ -495,14 +508,29 @@ class PluginManager:
             if rec.enabled:
                 await self._spawn(rec)
 
+    def _manifest_paths(self) -> list[tuple[str, Path]]:
+        """`(origin, manifest path)` for every folder, bundled first; a duplicate id is skipped."""
+        seen: set[str] = set()
+        found: list[tuple[str, Path]] = []
+        folders = [(ORIGIN_BUNDLED, self.plugins_dir), *self.extra_dirs.items()]
+        for origin, folder in folders:
+            for path in discover_manifest_paths(folder):
+                plugin_id = path.parent.name
+                if plugin_id in seen:
+                    log.warning("plugin.shadowed", plugin=plugin_id, origin=origin)
+                    continue
+                seen.add(plugin_id)
+                found.append((origin, path))
+        return found
+
     async def discover(self) -> None:
         """`discovered -> validated -> enabled`; a bad manifest lands in `failed` and is skipped."""
-        for path in discover_manifest_paths(self.plugins_dir):
+        for origin, path in self._manifest_paths():
             plugin_id = path.parent.name
             rec = self._records.get(plugin_id)
             if rec is not None and rec.state in _LIVE_STATES:
                 continue
-            rec = PluginRecord(plugin_id=plugin_id, path=path.parent)
+            rec = PluginRecord(plugin_id=plugin_id, path=path.parent, origin=origin)
             self._records[plugin_id] = rec
             self._register_health_check(rec)
             try:
@@ -525,6 +553,64 @@ class PluginManager:
                 await self._fail(rec, str(exc))
                 continue
             self._apply_enablement(rec)
+
+    # -- runtime changes (self-built skills: no restart, no merge) -------------------------------
+
+    @property
+    def global_egress_allowlist(self) -> tuple[str, ...]:
+        return self._global_egress
+
+    def allow_egress(self, entries: Iterable[str]) -> None:
+        """Add `host:port` entries the user approved for a skill to the global allow-list."""
+        merged = list(self._global_egress)
+        for entry in entries:
+            if entry not in merged:
+                merged.append(entry)
+        self._global_egress = tuple(merged)
+
+    async def rescan(self) -> None:
+        """Pick up plugin folders that appeared or changed since the last discovery and start
+        the ones that are now enabled. Running plugins are left alone."""
+        await self.discover()
+        for rec in list(self._records.values()):
+            if rec.enabled and rec.state is PluginState.ENABLED and not self._safe_mode():
+                await self._spawn(rec)
+
+    async def enable(self, plugin_id: str) -> PluginStatus | None:
+        """Add `plugin_id` to the enabled set of this running core and start it if it can run."""
+        if plugin_id not in self.settings.enabled:
+            self.settings = self.settings.model_copy(
+                update={"enabled": [*self.settings.enabled, plugin_id]}
+            )
+        await self.rescan()
+        rec = self._records.get(plugin_id)
+        return rec.status() if rec is not None else None
+
+    async def disable(self, plugin_id: str, reason: str = "disabled") -> None:
+        """Stop `plugin_id` and take it out of the enabled set of this running core."""
+        if plugin_id in self.settings.enabled:
+            self.settings = self.settings.model_copy(
+                update={"enabled": [p for p in self.settings.enabled if p != plugin_id]}
+            )
+        rec = self._records.get(plugin_id)
+        if rec is None:
+            return
+        if rec.state in _LIVE_STATES:
+            await self._stop_plugin(rec, reason, None)
+        if rec.monitor is not None:
+            rec.monitor.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await rec.monitor
+            rec.monitor = None
+        rec.enabled = False
+        rec.reason = reason
+
+    async def remove(self, plugin_id: str) -> None:
+        """Disable `plugin_id` and forget its record (its folder is the caller's to delete)."""
+        await self.disable(plugin_id, "removed")
+        self._records.pop(plugin_id, None)
+        if self._health is not None:
+            self._health.remove_check(f"plugin.{plugin_id}")
 
     async def stop(self, reason: str = "shutdown") -> None:
         """Graceful shutdown of every plugin; also stops the crash monitors."""
@@ -672,7 +758,7 @@ class PluginManager:
         env = _worker_environment()
         env.update(self._tokens.worker_env(client_id))
         env["NOX_HUB_URL"] = self._hub.url
-        env["NOX_PLUGINS_DIR"] = str(self.plugins_dir)
+        env["NOX_PLUGINS_DIR"] = str(rec.path.parent)
         command = [*self._worker_command, "--plugin", rec.plugin_id]
         rec.stopping = False
         rec.registered = asyncio.Event()
@@ -842,6 +928,12 @@ class PluginManager:
     ) -> None:
         for declaration in declarations:
             permission = validate_tool_name(manifest, declaration.name)
+            if rec.origin == ORIGIN_SELF_BUILT and permission.risk in (Risk.READ, Risk.LOW):
+                # A self-built tool asks first until the user says "remember"; its manifest was
+                # checked for that before activation, and this catches one edited afterwards.
+                raise ManifestError(
+                    f"self-built tool {declaration.name!r} must be at least medium risk"
+                )
             if declaration.risk is not permission.risk:
                 raise ManifestError(
                     f"tool {declaration.name!r} declares risk {declaration.risk.value!r} "

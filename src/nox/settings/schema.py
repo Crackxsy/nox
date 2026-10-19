@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
 from nox.core.config import NoxConfig
-from nox.paths import PLUGINS_DIR
+from nox.paths import PLUGINS_DIR, nox_home
 from nox.plugins.manifest import discover_manifest_paths
 from nox.settings.devices import device_choices
 from nox.voice.models import engine_models_dir
@@ -218,7 +218,10 @@ def _installed_plugins(config: NoxConfig | None) -> list[str]:
     directory = (
         Path(str(config.plugins.dir)) if config is not None and config.plugins.dir else PLUGINS_DIR
     )
-    return sorted(path.parent.name for path in discover_manifest_paths(directory))
+    found = {path.parent.name for path in discover_manifest_paths(directory)}
+    # Skills Nox built for itself and the user activated live next to the bundled ones.
+    found |= {path.parent.name for path in discover_manifest_paths(nox_home() / "plugins")}
+    return sorted(found)
 
 
 def _installed_voices(config: NoxConfig | None) -> list[str] | None:

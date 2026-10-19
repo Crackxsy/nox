@@ -93,12 +93,6 @@ CURATED_GAPS: tuple[Gap, ...] = (
     ),
     # ---- on the roadmap, and honest about it --------------------------------------------------
     Gap(
-        name="self.extend",
-        what="write and activate a new capability for itself",
-        reason=GapReason.MISSING,
-        detail="the parts exist (coding sessions, plugin manifests, tests) and are not connected",
-    ),
-    Gap(
         name="view.render",
         what="draw a chart, a table or a live view of its own",
         reason=GapReason.MISSING,

@@ -270,7 +270,13 @@ def install(core: _Core) -> SettingsRuntime:
         bus=core.bus,
         gate=security.gate,
     )
-    secrets = SecretsService(security.secrets, pin=security.pin, audit=security.audit)
+    hooks = getattr(core, "secret_name_hooks", None)
+    secrets = SecretsService(
+        security.secrets,
+        pin=security.pin,
+        audit=security.audit,
+        extra_names=(lambda name: any(hook(name) for hook in hooks)) if hooks is not None else None,
+    )
     twitch_auth = TwitchAuthService(
         secrets=security.secrets,
         client_factory=security.egress.client,

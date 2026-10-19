@@ -50,6 +50,8 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "stream",
     "remote",
     "watch",
+    # After watch and before capabilities: learning offers depend on the gaps it reports.
+    "skills",
     # Network access for paired devices; inert unless `ipc.lan.enabled`.
     "lan",
     # Late on purpose: it describes the others, and reads the registry they filled.
