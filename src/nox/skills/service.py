@@ -238,7 +238,7 @@ class SkillService:
             return {"ok": False, "reason": "learning new skills is switched off (skills.enabled)"}
         if self._halted:
             return {"ok": False, "reason": "the kill switch is engaged"}
-        reason = self.builder.unavailable()
+        reason = self.builder.unavailable() or self._tests.unavailable()
         if reason is not None:
             return {"ok": False, "reason": reason}
         busy = self.building()

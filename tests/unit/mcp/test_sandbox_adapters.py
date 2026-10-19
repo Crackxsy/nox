@@ -11,8 +11,7 @@ from typing import Any
 import pytest
 
 from nox.mcp.launch import ProcessLauncher, SandboxLauncher, default_launcher
-from nox.skills.testing import ProcessTestRunner, SandboxTestRunner, default_test_runner
-from tests._fake_skill_builder import write_skill
+from nox.skills.testing import SandboxTestRunner, UnavailableTestRunner, default_test_runner
 
 
 @dataclass(frozen=True)
@@ -26,22 +25,13 @@ class Limits:
 
 
 @dataclass
-class Result:
-    exit_code: int | None
-    stdout: str
-    stderr: str
-    timed_out: bool = False
-
-
-@dataclass
 class FakeSandbox:
     with_start: bool = True
+    strong: bool = True
     runs: list[dict[str, Any]] = field(default_factory=list)
 
-    async def run(self, argv: list[str], **kwargs: Any) -> Result:
-        self.runs.append({"argv": argv, **kwargs})
-        assert (Path(kwargs["cwd"]) / argv[-1]).is_file()  # the runner is in the confined folder
-        return Result(0, "PASS a\nRESULT passed=2 failed=0", "")
+    def guarantees(self) -> Any:
+        return types.SimpleNamespace(strong=self.strong)
 
     def __getattr__(self, name: str) -> Any:
         if name == "start" and self.with_start:
@@ -61,15 +51,16 @@ def install(monkeypatch: pytest.MonkeyPatch, factory: Any) -> None:
     monkeypatch.setitem(sys.modules, "nox.sandbox", module)
 
 
-def test_without_a_sandbox_module_the_process_runners_are_used(
+def test_without_a_sandbox_module_nothing_runs_skill_tests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setitem(sys.modules, "nox.sandbox", None)
     assert isinstance(default_launcher(), ProcessLauncher)
-    assert isinstance(default_test_runner(), ProcessTestRunner)
+    runner = default_test_runner()
+    assert isinstance(runner, UnavailableTestRunner) and runner.unavailable()
 
 
-def test_a_sandbox_that_cannot_be_built_falls_back_honestly(
+def test_a_sandbox_that_cannot_be_built_means_no_skill_tests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def broken() -> Any:
@@ -78,7 +69,14 @@ def test_a_sandbox_that_cannot_be_built_falls_back_honestly(
     install(monkeypatch, broken)
     launcher, runner = default_launcher(), default_test_runner()
     assert isinstance(launcher, ProcessLauncher) and launcher.sandboxed is False
-    assert isinstance(runner, ProcessTestRunner) and runner.sandboxed is False
+    assert isinstance(runner, UnavailableTestRunner) and runner.sandboxed is False
+
+
+def test_a_weak_sandbox_is_not_good_enough_for_model_written_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install(monkeypatch, lambda: FakeSandbox(strong=False))
+    assert isinstance(default_test_runner(), UnavailableTestRunner)
 
 
 def test_servers_need_the_long_running_variant(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,18 +87,6 @@ def test_servers_need_the_long_running_variant(monkeypatch: pytest.MonkeyPatch) 
     assert isinstance(default_test_runner(), SandboxTestRunner)
 
 
-async def test_skill_tests_run_inside_the_sandbox_without_egress(tmp_path: Path) -> None:
-    sandbox = FakeSandbox()
-    work = tmp_path / "dice"
-    write_skill(work, "dice", "good")
-    module = types.SimpleNamespace(EgressDecl=EgressDecl, Limits=Limits)
-    outcome = await SandboxTestRunner(sandbox, module).run(work, timeout_s=30)
-    assert outcome.ok and outcome.passed == 2
-    run = sandbox.runs[0]
-    assert run["egress"] == EgressDecl() and run["limits"].timeout_s == 30
-    assert run["argv"][1] == "-I"
-
-
 async def test_a_local_server_without_network_gets_no_egress(tmp_path: Path) -> None:
     sandbox = FakeSandbox()
     module = types.SimpleNamespace(EgressDecl=EgressDecl, Limits=Limits)
@@ -109,20 +95,3 @@ async def test_a_local_server_without_network_gets_no_egress(tmp_path: Path) -> 
     )
     assert launched.pid == 7 and sandbox.runs[0]["egress"] == EgressDecl()
     assert sandbox.runs[0]["env"] == {"A": "1"}
-
-
-async def test_a_sandbox_that_cannot_start_python_falls_back_loudly(tmp_path: Path) -> None:
-    class Denied(FakeSandbox):
-        async def run(self, argv: list[str], **kwargs: Any) -> Result:
-            self.runs.append({"argv": argv, **kwargs})
-            return Result(1, "", "pyvenv.cfg: access denied")
-
-    sandbox = Denied()
-    work = tmp_path / "dice"
-    write_skill(work, "dice", "good")
-    module = types.SimpleNamespace(EgressDecl=EgressDecl, Limits=Limits)
-    runner = SandboxTestRunner(sandbox, module)
-    outcome = await runner.run(work, timeout_s=60)
-    assert outcome.ok and runner.sandboxed is False  # the process runner ran the tests
-    await runner.run(work, timeout_s=60)
-    assert len(sandbox.runs) == 1  # and is used directly from then on

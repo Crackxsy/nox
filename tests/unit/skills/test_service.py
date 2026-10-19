@@ -11,8 +11,9 @@ import pytest
 from nox.core.config.hands import SkillsConfig
 from nox.plugins.manifest import PluginManifest
 from nox.skills.service import SkillService, SkillState, skill_id_for
-from nox.skills.testing import ProcessTestRunner
+from nox.skills.testing import UnavailableTestRunner
 from tests._fake_skill_builder import FakeSkillBuilder
+from tests._local_skill_test_runner import LocalTestRunner
 
 
 class Plugins:
@@ -65,6 +66,7 @@ def service(
     *,
     gate: Gate | None = None,
     allowed_hosts: tuple[str, ...] = (),
+    tests: Any = None,
 ) -> tuple[SkillService, Plugins, list[tuple[str, bool]], list[str], Audit]:
     plugins = Plugins()
     enabled: list[tuple[str, bool]] = []
@@ -84,7 +86,7 @@ def service(
         root=tmp_path / "skills",
         plugins_root=tmp_path / "plugins",
         builder=builder,
-        tests=ProcessTestRunner(),
+        tests=tests or LocalTestRunner(),
         config=lambda: SkillsConfig(test_timeout_s=60),
         plugins=plugins,
         taken_namespaces=lambda: {"file", "web", "skill"},
@@ -193,6 +195,14 @@ async def test_without_a_builder_learning_is_honestly_impossible(tmp_path: Path)
     answer = await svc.learn("Wuerfeln", capability="dice", by="companion")
     assert answer == {"ok": False, "reason": "Claude Code is not installed"}
     assert svc.records() == []
+
+
+async def test_without_a_sandbox_nothing_is_learned_or_run(tmp_path: Path) -> None:
+    builder = FakeSkillBuilder()
+    svc, *_ = service(tmp_path, builder, tests=UnavailableTestRunner())
+    answer = await svc.learn("Wuerfeln", capability="dice", by="companion")
+    assert answer["ok"] is False and "sandbox" in answer["reason"]
+    assert builder.requests == [] and svc.records() == []
 
 
 async def test_halt_stops_a_build_and_blocks_activation(tmp_path: Path) -> None:

@@ -10,8 +10,8 @@ from nox.capabilities.gaps import CURATED_GAPS
 from nox.capabilities.model import Gap, GapReason
 from nox.skills.checks import check_skill, scan_code, tree_hash
 from nox.skills.gaps import Verdict, assess
-from nox.skills.testing import ProcessTestRunner
 from tests._fake_skill_builder import TEMPLATES, write_skill
+from tests._local_skill_test_runner import LocalTestRunner
 
 
 def build(tmp_path: Path, template: str, sid: str = "dice") -> Path:
@@ -136,7 +136,7 @@ def test_tree_hash_sees_every_change(tmp_path: Path) -> None:
 
 
 async def test_the_tests_run_offline_and_report(tmp_path: Path) -> None:
-    runner = ProcessTestRunner()
+    runner = LocalTestRunner()
     good = await runner.run(build(tmp_path, "good"), timeout_s=60)
     assert good.ok and good.passed == 2
     bad = await runner.run(build(tmp_path / "b", "failing_tests"), timeout_s=60)
@@ -150,7 +150,7 @@ async def test_the_test_process_has_no_network(tmp_path: Path) -> None:
         "    socket.create_connection(('example.com', 80), timeout=2)\n",
         encoding="utf-8",
     )
-    outcome = await ProcessTestRunner().run(work, timeout_s=60)
+    outcome = await LocalTestRunner().run(work, timeout_s=60)
     assert outcome.failed == 1 and "network access is not available" in outcome.output
 
 
@@ -219,7 +219,7 @@ async def test_raw_sockets_are_refused_in_the_test_process(tmp_path: Path) -> No
         "    s = socket.socket()\n    s.settimeout(2)\n    s.connect(('127.0.0.1', 9))\n",
         encoding="utf-8",
     )
-    outcome = await ProcessTestRunner().run(work, timeout_s=60)
+    outcome = await LocalTestRunner().run(work, timeout_s=60)
     assert outcome.failed == 1 and "network access is not available" in outcome.output
 
 
@@ -227,3 +227,34 @@ def test_a_forbidden_gap_is_refused_even_with_an_ordinary_name() -> None:
     gaps = [Gap(name="drone.fly", what="fly a drone", reason=GapReason.FORBIDDEN, detail="no")]
     verdict = assess(capability="drone.fly", intent="flieg die Drohne", gaps=gaps, usable_tools=[])
     assert verdict.verdict is Verdict.REFUSE
+
+
+async def test_a_result_line_printed_by_a_test_is_not_the_verdict(tmp_path: Path) -> None:
+    work = build(tmp_path, "good")
+    (work / "tests" / "test_forge.py").write_text(
+        "def test_forge():\n"
+        "    print('RESULT passed=99 failed=0', flush=True)\n"
+        "    raise AssertionError('really failed')\n",
+        encoding="utf-8",
+    )
+    outcome = await LocalTestRunner().run(work, timeout_s=60)
+    assert not outcome.ok  # two trailers: the runner's own and the forged one
+
+
+@pytest.mark.parametrize("body", ["raise SystemExit(0)", "raise KeyboardInterrupt"])
+async def test_ending_the_run_from_a_test_is_a_failure(tmp_path: Path, body: str) -> None:
+    work = build(tmp_path, "good")
+    (work / "tests" / "test_exit.py").write_text(
+        "def test_exit():\n    " + body + "\n", encoding="utf-8"
+    )
+    outcome = await LocalTestRunner().run(work, timeout_s=60)
+    assert not outcome.ok and outcome.failed == 1 and outcome.passed == 2
+
+
+def test_a_trailer_that_counts_other_tests_is_a_failure() -> None:
+    from nox.skills.testing import parse_outcome
+
+    good = parse_outcome("RESULT passed=2 failed=0", "", exit_code=0, timed_out=False, expected=2)
+    assert good.ok
+    short = parse_outcome("RESULT passed=1 failed=0", "", exit_code=0, timed_out=False, expected=2)
+    assert not short.ok
