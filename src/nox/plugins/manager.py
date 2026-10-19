@@ -52,6 +52,8 @@ WORKER_TOKEN_ENV = "NOX_WORKER_TOKEN"  # noqa: S105 - an env var name, not a sec
 log = get_logger(__name__)
 
 PLUGIN_CLIENT_PREFIX = "plugin:"
+#: Events every plugin worker follows whatever its manifest says (`nox.worker.plugin`).
+PLUGIN_DEFAULT_LISTENS: tuple[str, ...] = ("security.*", "privacy.*", "system.stopping")
 WORKER_STOP_REQUEST = "plugin.stop"
 WORKER_TOOL_CALL = "tool.call"
 
@@ -504,6 +506,16 @@ class PluginManager:
         rec = self._records.get(plugin_id)
         return rec.state if rec is not None else None
 
+    def subscriptions_for(self, client_id: str) -> tuple[str, ...]:
+        """What the plugin behind `client_id` may subscribe to: the fixed defaults plus its
+        manifest's `events.listens` - nothing for an unknown client."""
+        if not client_id.startswith(PLUGIN_CLIENT_PREFIX):
+            return ()
+        rec = self._records.get(client_id[len(PLUGIN_CLIENT_PREFIX) :])
+        if rec is None or rec.manifest is None:
+            return ()
+        return (*PLUGIN_DEFAULT_LISTENS, *rec.manifest.events.listens)
+
     def register_handlers(self) -> None:
         """Register the three core-side plugin requests (role `plugin` only). Idempotent."""
         if self._handlers_registered:
@@ -517,6 +529,9 @@ class PluginManager:
         self._registry.register(
             "plugin.tool.call", PluginToolCall, self._h_tool_call, roles=("plugin",)
         )
+        if hasattr(self._hub, "plugin_subscriptions"):
+            # The hub keeps every plugin to the events its manifest declares (fail closed).
+            self._hub.plugin_subscriptions = self.subscriptions_for
         self._handlers_registered = True
 
     async def start(self) -> None:

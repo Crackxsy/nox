@@ -55,6 +55,7 @@ class Hub:
     async def send_event(self, name: str, payload: Any = None) -> None: ...
 
     async def subscribe(self, patterns: Any, handler: Any = None) -> list[str]:
+        self.subscribed = list(patterns)
         return list(patterns)
 
     def handle(self, name: str, handler: Any) -> None:
@@ -124,3 +125,16 @@ async def test_without_a_strong_sandbox_nothing_is_started() -> None:
             hub_url="",
             token="",  # type: ignore[arg-type]
         )
+
+
+async def test_undeclared_subscriptions_are_dropped_before_the_hub() -> None:
+    pipe, hub = Pipe(), Hub()
+    worker = SandboxedWorker(pipe, hub, "dice", ("x.y",))
+    worker.start()
+    pipe.say({"t": "sub", "patterns": ["*", "voice.*", "twitch.chat_message", "x.y", "privacy.*"]})
+    for _ in range(100):
+        if hasattr(hub, "subscribed"):
+            break
+        await asyncio.sleep(0.01)
+    assert hub.subscribed == ["x.y", "privacy.*"]
+    pipe.inbox.put_nowait(b"")

@@ -77,7 +77,10 @@ def _ipc_client(hub_url: str, token: str, client_id: str) -> HubClient:
 class SandboxedWorker:
     """The relay between one sandboxed skill worker and the hub; a `ProcessLike` for the manager."""
 
-    def __init__(self, process: Any, client: HubClient, plugin_id: str) -> None:
+    def __init__(
+        self, process: Any, client: HubClient, plugin_id: str, listens: tuple[str, ...] = ()
+    ) -> None:
+        self.listens = ("security.*", "privacy.*", "system.stopping", *listens)
         self._process = process
         self._client = client
         self.plugin_id = plugin_id
@@ -190,7 +193,9 @@ class SandboxedWorker:
         elif kind == "sub":
             patterns = message.get("patterns")
             if isinstance(patterns, list):
-                names = [str(p) for p in patterns][:32]
+                # Defence in depth: only what the manifest declares (the hub enforces it too).
+                declared = set(self.listens)
+                names = [str(p) for p in patterns if str(p) in declared][:32]
                 with contextlib.suppress(IpcError, OSError):
                     await self._client.subscribe(names, handler=self._forward_event)
         elif kind == "res":
@@ -294,7 +299,7 @@ class SkillWorkerLauncher:
             on_exit=on_exit,
         )
         client = self._client_factory(hub_url, token, f"plugin:{plugin_id}")
-        worker = SandboxedWorker(process, client, plugin_id)
+        worker = SandboxedWorker(process, client, plugin_id, tuple(manifest.events.listens))
         holder.append(worker)
         try:
             await process.send(data)

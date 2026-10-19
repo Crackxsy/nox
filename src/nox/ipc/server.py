@@ -407,6 +407,10 @@ class IpcHub:
         self._server: Server | None = None
         self._port: int | None = None
         self._clients: dict[str, ClientSession] = {}
+        #: What a `plugin` client may subscribe to beyond `system.*`: its manifest's
+        #: `events.listens` plus the fixed security/privacy defaults - set by the PluginManager.
+        #: Unset, a plugin gets the defaults only (fail closed).
+        self.plugin_subscriptions: Callable[[str], Iterable[str]] | None = None
         self._unsubscribe: Callable[[], None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         #: Hub-owned background tasks. A task nobody holds a reference to can be garbage-collected
@@ -881,8 +885,26 @@ class IpcHub:
                 corr=env.id,
                 details={"errors": exc.error_count()},
             )
-        client.subscriptions = list(dict.fromkeys([*DEFAULT_SUBSCRIPTIONS, *req.patterns]))
+        patterns = list(req.patterns)
+        if client.role == "plugin":
+            patterns = self._plugin_patterns(client, patterns)
+        client.subscriptions = list(dict.fromkeys([*DEFAULT_SUBSCRIPTIONS, *patterns]))
         return env.reply(NAME_SUBSCRIBE, {"patterns": list(client.subscriptions)}, CORE_SOURCE)
+
+    def _plugin_patterns(self, client: ClientSession, patterns: list[str]) -> list[str]:
+        """Keep the patterns a plugin declared (or narrower names inside them); log the rest."""
+        policy = self.plugin_subscriptions
+        allowed = list(policy(client.client_id)) if policy is not None else []
+        kept: list[str] = []
+        for pattern in patterns:
+            declared = pattern in allowed or (
+                "*" not in pattern and name_matches_any(pattern, allowed)
+            )
+            if declared:
+                kept.append(pattern)
+            else:
+                log.warning("ipc.plugin_subscription_refused", client=client.client_id)
+        return kept
 
     async def _handle_inbound_event(self, client: ClientSession, env: Envelope) -> None:
         allowed = client.role in ("worker", "plugin") and name_matches_any(
