@@ -200,8 +200,10 @@ function CondAt([IntPtr]$a, [int]$off, [string]$kind, $sid, [int]$plo, [int]$phi
     $M::WriteInt32($p, 24, 256); $M::WriteIntPtr($p, 32, $v)
   } else {
     $v = Alloc 32
-    $M::WriteInt32($v, 0, 2); $M::WriteInt16($v, 8, [int16]$plo)
-    $M::WriteInt32($v, 16, 2); $M::WriteInt16($v, 24, [int16]$phi)
+    # FWP_UINT16 ports above 32767: written as the low half of a 32-bit value (the union slot is 8
+    # zeroed bytes), since [int16] cannot hold them.
+    $M::WriteInt32($v, 0, 2); $M::WriteInt32($v, 8, $plo)
+    $M::WriteInt32($v, 16, 2); $M::WriteInt32($v, 24, $phi)
     $M::WriteInt32($p, 16, 5); $M::WriteInt32($p, 24, 258); $M::WriteIntPtr($p, 32, $v)
   }
 }

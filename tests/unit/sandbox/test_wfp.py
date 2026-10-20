@@ -266,6 +266,10 @@ def test_the_helper_is_ascii_deterministic_and_self_contained() -> None:
         "csharpcodeprovider",
     ):
         assert banned not in lowered, banned
+    # Forwarder ports are above 32767: never squeezed through an [int16] cast (a live-engine run
+    # caught that once).
+    assert "[int16]$plo" not in script and "[int16]$phi" not in script
+    assert "$M::WriteInt32($v, 8, $plo)" in script
     # fwpuclnt.dll by full system path only.
     assert "[Environment]::SystemDirectory, 'fwpuclnt.dll'" in script
     for key in (wfp.PROVIDER_KEY, wfp.SUBLAYER_KEY, *wfp.LAYERS.values()):
