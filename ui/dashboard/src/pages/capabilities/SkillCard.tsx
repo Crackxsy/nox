@@ -266,6 +266,8 @@ export function SkillCard({
               label={fill(t('caps_skill_tests_result'), summary.testsPassed, summary.testsFailed)}
             />
           </p>
+          {/* A status word stays one line; the caveat is a sentence and wraps on a phone. */}
+          <p className="hint">{t('caps_skill_tests_caveat')}</p>
           {summary.testOutput && (
             <details className="caps-details">
               <summary>{t('caps_skill_test_output')}</summary>

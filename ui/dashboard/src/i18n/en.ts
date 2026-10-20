@@ -1063,8 +1063,8 @@ export const en: Record<Key, string> = {
   caps_skill_secret_save: 'Save',
   caps_skill_secrets_first: 'Store the missing secrets first, otherwise the skill cannot work.',
   caps_skill_tests: 'Tests',
-  caps_skill_tests_result:
-    '{0} passed, {1} failed (written by the skill itself, not a security check)',
+  caps_skill_tests_result: '{0} passed, {1} failed',
+  caps_skill_tests_caveat: 'Written by the skill itself, not a security check.',
   caps_skill_test_output: 'Test output',
   caps_skill_activate: 'Activate',
   caps_skill_deactivate: 'Deactivate',

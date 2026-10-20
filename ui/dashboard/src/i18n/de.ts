@@ -1096,8 +1096,8 @@ export const de = {
   caps_skill_secrets_first:
     'Speichere zuerst die fehlenden Geheimnisse, sonst kann die Fähigkeit nicht arbeiten.',
   caps_skill_tests: 'Tests',
-  caps_skill_tests_result:
-    '{0} bestanden, {1} fehlgeschlagen (vom Skill selbst geschrieben, kein Sicherheitsnachweis)',
+  caps_skill_tests_result: '{0} bestanden, {1} fehlgeschlagen',
+  caps_skill_tests_caveat: 'Vom Skill selbst geschrieben, kein Sicherheitsnachweis.',
   caps_skill_test_output: 'Ausgabe der Tests',
   caps_skill_activate: 'Aktivieren',
   caps_skill_deactivate: 'Deaktivieren',

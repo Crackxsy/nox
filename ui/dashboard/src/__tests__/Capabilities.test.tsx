@@ -461,11 +461,8 @@ describe("self-taught skills", () => {
     expect(within(card).getByText(t("caps_risk_low"))).toBeTruthy();
     expect(within(card).getByText("<b>fett</b> Abfahrten")).toBeTruthy();
     expect(card.querySelector("b")).toBeNull();
-    expect(
-      within(card).getByText(
-        "4 bestanden, 0 fehlgeschlagen (vom Skill selbst geschrieben, kein Sicherheitsnachweis)",
-      ),
-    ).toBeTruthy();
+    expect(within(card).getByText("4 bestanden, 0 fehlgeschlagen")).toBeTruthy();
+    expect(within(card).getByText("Vom Skill selbst geschrieben, kein Sicherheitsnachweis.")).toBeTruthy();
   });
 
   it("asks for the PIN only after the core said it needs one", async () => {
