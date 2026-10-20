@@ -68,6 +68,11 @@ export const deMore = {
   board_clear: 'Board leeren',
   tab_presets: 'Presets',
   presets_title: 'Abläufe',
+  ux_mode_rules_companion:
+    'Darf: Zuhause, Kalender, Telegram. Fragt vorher bei allem mit mittlerem oder hohem Risiko.',
+  ux_mode_rules_stream: 'Darf: OBS und Twitch. Fragt vor jeder Änderung in OBS; Bildschirmfotos bleiben hier.',
+  ux_mode_rules_coding: 'Darf: nur in deinen Projektordnern schreiben. Zuhause, Telegram und OBS sind aus.',
+  ux_mode_rules_research: 'Darf: im Netz suchen und Seiten lesen. Kauft nichts und schickt keine Formulare ab.',
   presets_load_failed: 'Abläufe konnten nicht geladen werden.',
   presets_lede:
     'Ein Satz, mehrere Systeme: Licht, Nox’ eigener Modus und Programme, die du hier einträgst.',

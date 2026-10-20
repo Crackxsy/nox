@@ -639,6 +639,11 @@ def test_household_journey(journey: Journey) -> None:  # noqa: PLR0915 - one jou
     assert stub.values["voice.tts.engine"] == "supertonic"
     expect(page.get_by_role("region", name="Zuhause")).to_be_visible()
     journey.shot("02-heute")
+    # Dein Tag: time and place are words, not code.
+    place_font = page.evaluate(
+        "() => getComputedStyle(document.querySelector('.day-list .detail-sub')).fontFamily"
+    )
+    assert "mono" not in place_font.lower(), place_font
     journey.axe("heute")
     journey.no_sideways_scroll()
 
@@ -791,3 +796,71 @@ def test_household_journey(journey: Journey) -> None:  # noqa: PLR0915 - one jou
     journey.shot("16-privatsphaere")
     journey.axe("privatsphaere")
     journey.no_sideways_scroll()
+
+
+STOP_CASES = [("phone", "light"), ("desktop", "dark")]
+
+
+@pytest.mark.usefixtures("dashboard_built")
+@pytest.mark.parametrize(
+    "journey", STOP_CASES, indirect=True, ids=[f"stop-{s}-{c}" for s, c in STOP_CASES]
+)
+def test_stop_is_never_behind_a_sheet(journey: Journey) -> None:
+    """Stopp works during the first run, with a question open and with a menu open."""
+    page, stub = journey.page, journey.stub
+    page.goto(f"{ORIGIN}/dashboard/?ws={WS_PORT}&lang=de#token=e2e-token")
+    expect(page.locator(".app[data-conn=online]")).to_have_count(1, timeout=UI_TIMEOUT_MS)
+
+    def stop_in(surface: Locator, step: str) -> None:
+        button = surface.get_by_role("button", name="Stopp", exact=True)
+        expect(button).to_be_visible()
+        box = button.bounding_box()
+        assert box is not None
+        width = SIZES[journey.size]["width"]
+        assert box["x"] >= 0 and box["x"] + box["width"] <= width, f"{step}: Stopp off screen"
+        # At the header's Stopp spot, within the gutter.
+        header = page.locator("header.top .stop:not(.stop--corner)").bounding_box()
+        assert header is not None
+        assert abs(header["x"] - box["x"]) <= 2 and abs(header["y"] - box["y"]) <= 2, (
+            f"{step}: corner Stopp {box} is not over the header's {header}"
+        )
+        assert box["x"] + box["width"] <= width - 16, f"{step}: Stopp in the gutter"
+        journey.shot(f"stop-{step}")
+        before = stub.names().count("security.kill")
+        button.click()
+        expect(surface.get_by_role("button", name="Stopp", exact=True)).to_have_count(0)
+        assert stub.names().count("security.kill") == before + 1, step
+
+    def resume() -> None:
+        page.get_by_role("button", name="Fortsetzen").click()
+        expect(page.get_by_role("button", name="Stopp", exact=True)).to_be_visible(
+            timeout=UI_TIMEOUT_MS
+        )
+
+    # 1. During the first run.
+    first = page.get_by_role("dialog", name="Wie heißt du?")
+    expect(first).to_be_visible(timeout=UI_TIMEOUT_MS)
+    stop_in(first, "first-run")
+    page.get_by_role("button", name="Später einrichten").click()
+    resume()
+
+    # 2. With a question open as a sheet (the page behind it is inert).
+    journey.area("Einstellungen")
+    stub.ask_permission("s1", "delete", "Archiv/alt.zip", risk="high")
+    sheet = page.get_by_role("alertdialog", name="Darf Nox etwas löschen?")
+    expect(sheet).to_be_visible(timeout=UI_TIMEOUT_MS)
+    stop_in(sheet, "question")
+    # The core ends open questions on Stopp.
+    stub.push(
+        "security.permission_decided",
+        {"request_id": "s1", "decision": "deny", "rule_id": "kill", "by": "policy"},
+    )
+    expect(sheet).to_have_count(0, timeout=UI_TIMEOUT_MS)
+    resume()
+
+    # 3. With the Modus menu open (a native modal dialog).
+    page.locator(".presence").click()
+    menu = page.get_by_role("dialog", name="Modus")
+    expect(menu).to_be_visible()
+    stop_in(menu, "menu")
+    journey.axe("stop-in-menu")

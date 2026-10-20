@@ -69,6 +69,10 @@ export const enMore: Record<MoreKey, string> = {
   board_clear: 'Clear the board',
   tab_presets: 'Presets',
   presets_title: 'Flows',
+  ux_mode_rules_companion: 'May: home, calendar, Telegram. Asks first for anything of medium or high risk.',
+  ux_mode_rules_stream: 'May: OBS and Twitch. Asks before every change in OBS; screenshots stay here.',
+  ux_mode_rules_coding: 'May: write only in your project folders. Home, Telegram and OBS are off.',
+  ux_mode_rules_research: 'May: search the web and read pages. Buys nothing and sends no forms.',
   presets_load_failed: 'Flows could not be loaded.',
   presets_lede:
     'One sentence, several systems: lights, Nox’ own mode, and programs you register here.',

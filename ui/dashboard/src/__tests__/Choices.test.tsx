@@ -37,6 +37,16 @@ describe('ModeChoice', () => {
     expect(screen.getByRole('status').textContent).toBe(`Jetzt: Programmieren-Modus. Regeln: ${t('profile_coding')}.`);
   });
 
+  it('says for each mode, in one sentence, what changes in what Nox may do', () => {
+    render(<ModeChoice t={t} state={state} client={null} device={false} />);
+    const coding = screen.getByRole('radio', { name: /^Programmieren/ }).closest('label')!;
+    expect(coding.textContent).toContain(t('ux_mode_rules_coding'));
+    const stream = screen.getByRole('radio', { name: /^Stream/ }).closest('label')!;
+    expect(stream.textContent).toContain(t('ux_mode_rules_stream'));
+    const focus = screen.getByRole('radio', { name: /^Fokus/ }).closest('label')!;
+    expect(focus.textContent).toContain(t('ux_mode_rules_companion'));
+  });
+
   it('can be cancelled without sending anything', () => {
     const { c, calls } = client(() => Promise.resolve({}));
     render(<ModeChoice t={t} state={state} client={c} device={false} />);

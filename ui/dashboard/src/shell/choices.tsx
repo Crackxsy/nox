@@ -22,6 +22,14 @@ import { type IpcClient, IpcError, api } from '../ipc';
 import { type CaptureFlags, type DashboardState, PRIVACY_MODES, pinErrorKey } from '../model';
 import { MORE_MODES, PRIMARY_MODES, profileForMode } from './presence';
 
+/** What changes in what Nox may do, per security profile (config/profiles/*.yaml), in one sentence. */
+const RULES_OF_PROFILE: Record<string, Key> = {
+  companion: 'ux_mode_rules_companion',
+  stream: 'ux_mode_rules_stream',
+  coding: 'ux_mode_rules_coding',
+  research: 'ux_mode_rules_research',
+};
+
 const MODE_DESC: Record<string, Key> = {
   companion: 'ux_mode_desc_companion',
   stream: 'ux_mode_desc_stream',
@@ -83,6 +91,7 @@ export function ModeChoice({ t, state, client, device }: ModeChoiceProps) {
       />
       <span className="opt-t">{modeLabel(t, mode)}</span>
       <span className="opt-d">{t(MODE_DESC[mode] ?? 'ux_mode_desc_companion')}</span>
+      <span className="opt-d opt-r">{t(RULES_OF_PROFILE[profileForMode(mode)] ?? 'ux_mode_rules_companion')}</span>
     </label>
   );
 

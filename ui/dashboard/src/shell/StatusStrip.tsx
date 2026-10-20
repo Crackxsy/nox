@@ -59,15 +59,18 @@ export function StatusStrip({
     const sent = pin.trim();
     try {
       const reply = (await api.resume(client, sent)) as { ok?: unknown } | null;
-      if (reply && reply.ok === false) {
+      if (reply && reply.ok === true) {
+        setPinAsked(false);
+        setPin('');
+        onResumed();
+      } else if (reply && reply.ok === false) {
         setPinAsked(true);
         setPin('');
         setError(sent ? t('pin_wrong') : t('ux_resume_pin'));
         window.setTimeout(() => pinRef.current?.focus(), 0);
       } else {
-        setPinAsked(false);
-        setPin('');
-        onResumed();
+        // Only an explicit yes counts: an answer that says neither is not a resume.
+        setError(t('ux_resume_unclear'));
       }
     } catch (e) {
       setError(refusalText(t, e, sent !== ''));

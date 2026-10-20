@@ -156,6 +156,16 @@ describe('Stopp', () => {
     expect(screen.queryByText(t('ux_stopped_title'))).toBeNull();
   });
 
+  it('counts only an explicit ok as resumed', async () => {
+    harness.answers['security.resume'] = {};
+    await start();
+    await emit('security.kill_switch', { origin: 'ui' });
+    await act(async () => screen.getByRole('button', { name: t('ux_resume') }).click());
+    expect(screen.getByText(t('ux_stopped_title'))).toBeTruthy();
+    expect(screen.getByText(t('ux_resume_unclear'))).toBeTruthy();
+    expect(stopButton()).toBeNull();
+  });
+
   it('on a paired device: stopping works, resuming is not offered', async () => {
     harness.answers['security.kill'] = { ok: true };
     await start(DEVICE);
@@ -265,6 +275,15 @@ describe('the header', () => {
     expect(radios.every((r) => (r as HTMLInputElement).disabled)).toBe(true);
     expect(within(menu).getByText(t('ux_mode_device'))).toBeTruthy();
     expect((within(menu).getByRole('switch', { name: t('ux_mute') }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe('the privacy chip', () => {
+  it('carries a short word for the phone and the full name in its label', async () => {
+    harness.answers['state.get'] = { privacy: { mode: 'private' }, system: { level: 'running' } };
+    await start();
+    const chip = screen.getByRole('button', { name: /^Privatsphäre: Nur lokal/ });
+    expect(chip.querySelector('.chip-short')!.textContent).toBe(t('ux_privacy_short_private'));
   });
 });
 

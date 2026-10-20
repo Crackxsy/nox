@@ -384,6 +384,14 @@ code,
   cursor: pointer;
 }
 
+.chip-short {
+  display: none;
+}
+
+.chip-shield {
+  display: inline-flex;
+}
+
 .stop:hover:not(:disabled) {
   background: var(--danger-wash);
 }
@@ -1337,7 +1345,7 @@ details > summary:hover {
 }
 
 .opt input {
-  grid-row: 1 / span 2;
+  grid-row: 1 / span 3;
   width: 20px;
   height: 20px;
   margin: 3px 0 0;
@@ -1954,12 +1962,51 @@ details > summary:hover {
     display: none;
   }
 
+  .chip-shield {
+    display: none;
+  }
+
+  .chip-short {
+    display: inline;
+    font-size: var(--t-s);
+    font-weight: 600;
+  }
+
+  /* Presence, waiting, privacy and Stopp share 358 px: tight paddings, no wrapping. */
   .chip {
-    padding: 0 var(--s-3);
+    gap: 6px;
+    padding: 0 10px;
+  }
+
+  .chip-rec {
+    padding-left: 2px;
   }
 
   .stop {
-    padding: 0 14px;
+    padding: 0 12px;
+  }
+
+  /* The presence word gives way first (ellipsis), so the header never overflows its gutter. */
+  .presence {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 6px;
+    padding-right: 4px;
+  }
+
+  .presence-t {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .chip-rec {
+    border-left: 0;
+  }
+
+  .top .chip,
+  .top .stop {
+    flex: none;
   }
 
   .strip,
@@ -2886,6 +2933,12 @@ details > summary:hover {
   flex: 1 1 auto;
 }
 
+/* A place is words, not code: no monospace in Dein Tag. */
+.day-list .detail-sub {
+  font-family: inherit;
+  font-size: var(--t-s);
+}
+
 .day-subtitle {
   margin: var(--s-5) 0 var(--s-2);
   font-size: var(--t-m);
@@ -3629,4 +3682,10 @@ details > summary:hover {
     top: 10px;
     right: var(--s-4);
   }
+}
+
+/* The Modus menu's second line: what changes in what Nox may do. */
+.opt-r {
+  margin-top: 2px;
+  color: var(--ink-3);
 }

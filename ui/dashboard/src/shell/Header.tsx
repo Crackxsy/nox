@@ -13,7 +13,7 @@ import { Suspense, lazy, useRef, useState } from 'react';
 
 import { ChunkBoundary } from './ChunkBoundary';
 
-import { type T, fill, modeHeadline, privacyLabel, withCopy } from '../i18n';
+import { type Key, type T, fill, modeHeadline, privacyLabel, withCopy } from '../i18n';
 import type { DashboardState } from '../model';
 import { Icon } from './icons';
 import type { Presence } from './presence';
@@ -55,6 +55,13 @@ export interface HeaderProps {
   onWaiting: () => void;
   onOpenPrivacySettings: () => void;
 }
+
+const PRIVACY_SHORT: Record<string, Key> = {
+  full: 'ux_privacy_short_full',
+  balanced: 'ux_privacy_short_balanced',
+  private: 'ux_privacy_short_private',
+  offline: 'ux_privacy_short_offline',
+};
 
 export function Header({
   t,
@@ -123,9 +130,15 @@ export function Header({
           onClick={() => setMenu('privacy')}
           aria-label={`${t('privacy_title')}: ${privacy}${mic ? `, ${t('ux_mic_on')}` : ''}`}
         >
-          <Icon name="shield" size={18} />
+          <span className="chip-shield">
+            <Icon name="shield" size={18} />
+          </span>
           <span className="chip-long" aria-hidden="true">
             {privacy}
+          </span>
+          {/* On a phone a short word in place of the shield (the full name is in the label). */}
+          <span className="chip-short" aria-hidden="true">
+            {state.privacyMode ? t(PRIVACY_SHORT[state.privacyMode] ?? 'ux_privacy_short_balanced') : '?'}
           </span>
           {(mic || recording) && (
             <span className="chip-rec" aria-hidden="true">
