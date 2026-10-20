@@ -178,7 +178,9 @@ async def test_a_call_goes_through_the_permission_engine_and_asks_first(
     executor = ToolExecutor(registry, engine, audit, None, killswitch)
     try:
         call = asyncio.create_task(
-            executor.call("companion", "mcp.fake.get_weather", {"city": "Witten"}, mode="companion")
+            executor.call(
+                "companion", "mcp.fake.get_weather", {"city": "Springfield"}, mode="companion"
+            )
         )
         await wait_until(lambda: bool(engine.pending()))
         engine.reply(engine.pending()[0], Decision.ALLOW, remember=True)

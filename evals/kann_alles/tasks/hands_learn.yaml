@@ -5,7 +5,7 @@
   title: Use a weather MCP server the user added
   category: web
   kind: answer
-  prompt: "Wie wird das Wetter morgen in Witten? Frag meinen Wetterdienst."
+  prompt: "Wie wird das Wetter morgen in Springfield? Frag meinen Wetterdienst."
   env:
     mcp_servers: [wetter]
   confirm_tools: ['mcp\.wetter\..*']
