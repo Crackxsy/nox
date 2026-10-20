@@ -35,7 +35,6 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   answered without saying "lass uns streamen" first.
 - Twitch and OBS login health: an expired Twitch login starts the device-code login and shows the
   code; a rejected OBS password is reported once.
-
 - **Nox runs as a server on a Raspberry Pi or any Linux machine.** One command installs it as a
   hardened systemd service (`scripts/install-linux.sh`, `docs/RASPBERRY_PI.md`): its own system
   user, the program read-only in `/opt/nox`, everything it keeps in `/var/lib/nox`, Python 3.13
