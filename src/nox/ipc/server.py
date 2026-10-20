@@ -117,6 +117,9 @@ EVENT_POLICY: Mapping[str, str] = {
     "dashboard": "filtered",
     "supervisor": "filtered",
     "remote": "filtered",
+    # A paired device in the home network (`nox.lan`) is a dashboard: the filtered stream, with
+    # `security.audit` named for it in RESTRICTED_TO.
+    "device": "filtered",
     # The MCP bridge forwards tool calls and needs no event at all; chat, transcripts and memory
     # must never reach a process a language model drives.
     "mcp": "none",

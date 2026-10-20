@@ -14,7 +14,13 @@ import pytest
 from nox.ipc.dispatch import ROLE_ALLOWLIST
 from nox.ipc.protocol import Role
 from nox.ipc.server import EVENT_POLICY, role_may_see
-from nox.ipc.tokens import BOUND_ROLES, HUBLESS_ROLES, SESSION_ROLES, WORKER_ROLES
+from nox.ipc.tokens import (
+    BOUND_ROLES,
+    DEVICE_ROLES,
+    HUBLESS_ROLES,
+    SESSION_ROLES,
+    WORKER_ROLES,
+)
 
 ROLES = get_args(Role)
 
@@ -31,7 +37,7 @@ def test_every_role_has_an_event_policy(role: str) -> None:
 
 @pytest.mark.parametrize("role", ROLES)
 def test_every_role_authenticates_in_exactly_one_way(role: str) -> None:
-    classes = [SESSION_ROLES, WORKER_ROLES, BOUND_ROLES, HUBLESS_ROLES]
+    classes = [SESSION_ROLES, WORKER_ROLES, BOUND_ROLES, HUBLESS_ROLES, DEVICE_ROLES]
     assert sum(role in c for c in classes) == 1
 
 

@@ -49,6 +49,8 @@ DeviceVerifier = Callable[[str], "str | None"]
 BOUND_ROLES: frozenset[str] = frozenset({"mcp"})
 #: Roles that never authenticate over the hub (the core itself, the supervisor, the LAN gateway).
 HUBLESS_ROLES: frozenset[str] = frozenset({"core", "supervisor", "remote"})
+#: Paired devices: their own long-lived token, and only through the network listener.
+DEVICE_ROLES: frozenset[str] = frozenset({DEVICE_ROLE})
 
 _CREATE_NO_WINDOW = 0x08000000
 
