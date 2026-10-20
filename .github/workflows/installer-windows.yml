@@ -73,7 +73,13 @@ jobs:
           done
 
       - name: Build the payload (installer/build.py)
-        run: python installer/build.py --skip-lock-export
+        run: python installer/build.py
+
+      # build.py re-exports installer/requirements.lock from uv.lock: the committed lock must be
+      # exactly that, or the installer would ship other versions than the project is locked to.
+      - name: installer/requirements.lock matches uv.lock
+        shell: bash
+        run: git diff --exit-code --ignore-cr-at-eol -- installer/requirements.lock
 
       - name: Compile the installer (ISCC)
         working-directory: installer
