@@ -121,25 +121,25 @@ def test_program_not_in_a_trusted_directory_is_complex(trusted: ProgramResolver)
 def test_cmd_target_binds_the_resolved_path_and_hash(
     trusted: ProgramResolver, tmp_path: Path
 ) -> None:
-    first = classify(argv=["git", "push", "origin"], resolver=trusted, readonly_allowed=True)
+    first = classify(argv=["git", "log", "--oneline"], resolver=trusted, readonly_allowed=True)
     assert first.kind is ShellClass.SIMPLE
-    assert first.pattern == "git push"
+    assert first.pattern == "git log"
     path = str(Path(trusted.dirs[0]) / f"git{EXE}")
     assert first.target.startswith(f"cmd:{path}#")
-    assert first.target.endswith(" push")
+    assert first.target.endswith(" log")
     # Another git of the same name elsewhere (a planted copy) yields a different target...
     other_dir = tmp_path / "other"
     other_dir.mkdir()
     (other_dir / f"git{EXE}").write_bytes(b"a different git")
     other = classify(
-        argv=["git", "push"],
+        argv=["git", "log"],
         resolver=ProgramResolver(dirs=(str(other_dir),)),
         readonly_allowed=True,
     )
     assert other.target != first.target
     # ... and so does the same path once its bytes changed.
     (Path(trusted.dirs[0]) / f"git{EXE}").write_bytes(b"tampered git, longer than before")
-    changed = classify(argv=["git", "push"], resolver=trusted, readonly_allowed=True)
+    changed = classify(argv=["git", "log"], resolver=trusted, readonly_allowed=True)
     assert changed.target != first.target
 
 
@@ -193,9 +193,11 @@ def test_command_string_egress_changes_the_target() -> None:
 
 def test_argv_form_is_not_shell_parsed(trusted: ProgramResolver) -> None:
     # argv is run without a shell, so operators in a *value* are data, not operators.
-    info = classify(argv=["git", "commit", "-m", "fix; done && really"], resolver=trusted)
+    info = classify(argv=["git", "log", "--", "src;rm"], resolver=trusted)
+    assert info.kind is ShellClass.COMPLEX  # a value with shell syntax is not a plain path
+    info = classify(argv=["git", "diff", "--stat", "src/a.py"], resolver=trusted)
     assert info.kind is ShellClass.SIMPLE
-    assert info.pattern == "git commit"
+    assert info.pattern == "git diff"
 
 
 @pytest.mark.parametrize(
@@ -313,11 +315,81 @@ def test_launchers_and_exec_forms_are_complex(trusted: ProgramResolver, argv: li
 @pytest.mark.parametrize(
     "argv",
     [
-        ["git", "push", "origin"],
-        ["git", "log", "--oneline"],
-        ["find", ".", "-name", "x"],
-        ["tar", "-tf", "a.tar"],
+        ["git", "status"],
+        ["git", "log", "--oneline", "-n", "5"],
+        ["git", "diff", "--stat"],
+        ["df", "-h", "/"],
+        ["ls", "-la", "src"],
+        ["whoami"],
     ],
 )
-def test_ordinary_subcommands_stay_rememberable(trusted: ProgramResolver, argv: list[str]) -> None:
+def test_allowlisted_reading_commands_stay_rememberable(
+    trusted: ProgramResolver, argv: list[str]
+) -> None:
     assert classify(argv=argv, resolver=trusted).kind is ShellClass.SIMPLE
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["git", "push", "origin"],  # not a reading subcommand
+        ["git", "commit", "-m", "x"],
+        ["git", "diff", "--output=/tmp/x"],  # writes a file
+        ["git", "diff", "--ext-diff"],  # runs a configured program
+        ["git", "log", "--format=%h %s"],  # a value with a space
+        ["find", ".", "-name", "x"],  # not on the allowlist
+        ["tar", "-tf", "a.tar"],
+        ["tar", "-x", "--to-com=evil"],  # an abbreviation a denylist would miss
+        ["npm", "install"],
+        ["hostname", "evil"],  # sets the name on Linux
+    ],
+)
+def test_everything_else_is_complex(trusted: ProgramResolver, argv: list[str]) -> None:
+    assert classify(argv=argv, resolver=trusted).kind is ShellClass.COMPLEX
+
+
+def test_no_unknown_or_interpreter_like_program_is_ever_simple(tmp_path: Path) -> None:
+    # Property: a program that is not on the allowlist is never rememberable - whatever its name
+    # (versions, suffixes, look-alikes of allowlisted names) and whatever its arguments.
+    import random
+
+    from nox.hands.shell import SIMPLE_ALLOWLIST
+
+    rng = random.Random(20261020)
+    stems = [
+        "python",
+        "pypy",
+        "perl",
+        "ruby",
+        "node",
+        "lua",
+        "luajit",
+        "awk",
+        "sed",
+        "tar",
+        "gtar",
+        "gnutar",
+        "make",
+        "ssh",
+        "bash",
+        "pwsh",
+        "php",
+        "git2",
+        "lsx",
+        "dff",
+    ]
+    names = set()
+    for _ in range(300):
+        stem = rng.choice(stems + ["".join(rng.choices("abcdefghijklmnopqrstuvwxyz", k=5))])
+        suffix = rng.choice(["", "3", "3.12", "5.38", "-x", "_2", "w", "t", "-legacy"])
+        names.add(stem + suffix)
+    names -= set(SIMPLE_ALLOWLIST)
+    system = tmp_path / "rnd"
+    system.mkdir()
+    for name in names:
+        (system / f"{name}{EXE}").write_bytes(name.encode())
+    resolver = ProgramResolver(dirs=(str(system),))
+    arg_pool = ["status", "-h", "--version", "list", "a.txt", "/all", "-c", "x"]
+    for name in sorted(names):
+        argv = [name, *rng.sample(arg_pool, rng.randint(0, 3))]
+        assert classify(argv=argv, resolver=resolver).kind is not ShellClass.SIMPLE, argv

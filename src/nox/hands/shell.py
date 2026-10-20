@@ -16,12 +16,22 @@ without parsing commands itself:
   kind (AppContainer / bwrap) - never in the Windows low-integrity fallback, which can read the
   user's files. The engine then allows it without a confirmation (confirmation fatigue is a UX
   bug).
-* `cmd:<path>#<sha> <subcommand>` - a simple command; HIGH, CONFIRM, and "remember" stores exactly
-  this target as a `cmd:` grant for the session. It names the *resolved executable* and a hash of
-  its contents, so a remembered `git push` never covers a different `git.exe` (a download folder,
-  a planted copy) or the same path after the file changed.
-* `complex:<sha>` - a command line, any interpreter or launcher (below), a program given with a
-  path, or a program not found in the trusted directories; HIGH, CONFIRM, never remembered.
+* `cmd:<path>#<sha> <subcommand>` - a simple command: a program on the short `SIMPLE_ALLOWLIST`
+  with arguments its entry accepts; HIGH, CONFIRM, and "remember" stores exactly this target as a
+  `cmd:` grant for the session. It names the *resolved executable* and a hash of its contents, so
+  a remembered `git status` never covers a different `git.exe` (a download folder, a planted copy)
+  or the same path after the file changed.
+* `complex:<sha>` - everything else: a command line, any program not on the allowlist (an
+  interpreter, a launcher, `git push`, `tar`, an unknown tool), arguments the entry does not
+  accept, a program given with a path, or one not found in the trusted directories; HIGH,
+  CONFIRM, never remembered. Still allowed - only asked every time.
+
+**Only an allowlist is rememberable.** A denylist of interpreters and of options that run
+something (`tar --to-command`, `sed e`, versioned `python3.12`, ...) can never be complete, so it
+is not the boundary: a program is SIMPLE only when `SIMPLE_ALLOWLIST` names it, and only with the
+subcommands and argument shapes listed there (`git status|log|diff|show ...` with plain flags and
+paths, `df -h`, `ipconfig /all`, `winget list|search|show`, ...). The interpreter and launcher
+checks below stay as an extra signal.
 
 **Interpreters and launchers are always complex.** A `cmd:` grant covers one program's subcommand
 with any further arguments - right for `git push origin` vs `git push upstream`, wrong for a
@@ -66,6 +76,7 @@ log = get_logger(__name__)
 
 __all__ = [
     "CURATED_READONLY",
+    "SIMPLE_ALLOWLIST",
     "ProgramResolver",
     "ShellClass",
     "classify",
@@ -274,6 +285,92 @@ CURATED_READONLY: dict[str, tuple[str, ...] | None] = {
 }
 
 
+#: A plain flag (`-h`, `--human-readable`, `--format=short`, `/all`) - no spaces, no quotes, no
+#: shell syntax in a value.
+_FLAG_ARG = re.compile(
+    r"^(?:-[A-Za-z0-9]+|--[A-Za-z][A-Za-z0-9-]*(?:=[A-Za-z0-9._,:%-]*)?|/[A-Za-z?]+)$"
+)
+#: A plain path or name argument.
+_PLAIN_ARG = re.compile(r"^[A-Za-z0-9._~/][A-Za-z0-9._~/\\:@+-]*$")
+#: git options that write a file or run a configured program even for a reading subcommand.
+_GIT_UNSAFE_FLAGS = ("--output", "--ext-diff", "--textconv", "--exec", "--upload-pack", "-o")
+_GIT_READ_SUBCOMMANDS = frozenset(
+    {"status", "log", "diff", "show", "rev-parse", "describe", "blame", "shortlog", "ls-files"}
+)
+
+
+def _bare(args: Sequence[str]) -> bool:
+    return not args
+
+
+def _flags(args: Sequence[str]) -> bool:
+    return all(_FLAG_ARG.match(arg) for arg in args)
+
+
+def _flags_or_paths(args: Sequence[str]) -> bool:
+    return all(_FLAG_ARG.match(arg) or _PLAIN_ARG.match(arg) for arg in args)
+
+
+def _only(*allowed: tuple[str, ...]) -> Callable[[Sequence[str]], bool]:
+    return lambda args: tuple(args) in allowed
+
+
+def _subcommands(names: frozenset[str]) -> Callable[[Sequence[str]], bool]:
+    def check(args: Sequence[str]) -> bool:
+        return bool(args) and args[0] in names and _flags_or_paths(args[1:])
+
+    return check
+
+
+def _git_reading(args: Sequence[str]) -> bool:
+    if not args or args[0] not in _GIT_READ_SUBCOMMANDS:
+        return False
+    rest = args[1:]
+    return _flags_or_paths(rest) and not any(arg.startswith(_GIT_UNSAFE_FLAGS) for arg in rest)
+
+
+def _ip_show(args: Sequence[str]) -> bool:
+    return (
+        len(args) in (1, 2)
+        and args[0] in ("addr", "a", "link", "route")
+        and args[1:]
+        in (
+            [],
+            ["show"],
+        )
+    )
+
+
+#: The only programs a confirmation may be remembered for (a `cmd:` grant), each with the
+#: argument shapes that keep it so. Read-only or informational commands, nothing that writes,
+#: deletes, installs, runs code or reaches the network (`ping` is not here). Everything else is
+#: complex: allowed, confirmed every time, never remembered. Keep it short; extend it only with
+#: a program whose every accepted form changes nothing.
+SIMPLE_ALLOWLIST: dict[str, Callable[[Sequence[str]], bool]] = {
+    "whoami": _flags,
+    "hostname": _bare,  # `hostname NAME` sets the name on Linux
+    "uname": _flags,
+    "uptime": _flags,
+    "free": _flags,
+    "df": _flags_or_paths,
+    "du": _flags_or_paths,
+    "ls": _flags_or_paths,
+    "pwd": _bare,
+    "systeminfo": _bare,
+    "ipconfig": _only((), ("/all",)),  # not /release, /renew, /flushdns
+    "nvidia-smi": _only((), ("-L",), ("--list-gpus",)),  # not -pl, -ac, -r ...
+    "ip": _ip_show,  # `ip addr|link|route [show]`, never `add`/`del`/`set`
+    "git": _git_reading,
+    "winget": _subcommands(frozenset({"list", "search", "show"})),
+    "apt": _subcommands(frozenset({"list", "search", "show"})),
+}
+
+
+def _simple_allowed(program: str, tokens: Sequence[str]) -> bool:
+    check = SIMPLE_ALLOWLIST.get(program)
+    return check is not None and check([str(t) for t in tokens[1:]])
+
+
 def default_trusted_dirs() -> tuple[str, ...]:
     """Where a bare program name may be found: system directories only, never the user's PATH."""
     if sys.platform == "win32":
@@ -446,6 +543,10 @@ def classify(
         return Classification(
             ShellClass.READONLY, program, f"readonly:{program}", exec_argv, needs_shell=False
         )
+    if not _simple_allowed(program, tokens):
+        # Not on the allowlist (or with arguments its entry does not accept): allowed, but
+        # confirmed every time and never remembered.
+        return _complex(joined, tuple(tokens), needs_shell=False, suffix=suffix)
     subcommand = _subcommand(tokens)
     pattern = f"{program} {subcommand}".strip()
     key = f"{resolved.path}#{resolved.digest} {subcommand}".rstrip()
