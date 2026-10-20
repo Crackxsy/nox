@@ -8,6 +8,8 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-20
+
 ### Changed
 - **The dashboard is rebuilt around four areas** (Spec UX-Neubau): Heute, Nox (Gespräch, Ansichten,
   Clips, Verlauf), Geräte & Fähigkeiten, Einstellungen (eight pages instead of one form). Every page
@@ -32,6 +34,10 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   --progress-json` and refuses before starting it in the privacy modes `offline`/`private`), an
   optional step in `nox onboard`, and `nox voice setup`. Until the files are there, Nox speaks with
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
+
+- **Dependencies:** React and React DOM 19.3.1 (dashboard and pet, bumped together), typer
+  0.27.3, PyYAML 6.0.3, ruff 0.17, mypy 2.4, Playwright 1.64, mss 10.2, jsdom 30.1.3, globals
+  17.13, typescript-eslint 8.71.2, the UI dev-tooling groups and `actions/download-artifact` 8.
 
 ### Added
 - **Windows: the sandbox keeps off this computer's local services and the LAN.** Where Windows
@@ -169,6 +175,12 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   the Pi's architecture on every pull request.
 
 ### Fixed
+- **Remembering a shell command did nothing.** Since high risk was made never-rememberable, every
+  `shell.run` confirmation was asked again, even for `whoami /all`. A command that the strict
+  allowlist classifies as simple (exact program, subcommand and flags; bound to the resolved
+  executable and a hash of its bytes; no declared network) can again be remembered for the
+  session. Complex commands, command lines, `git` and interpreters are still asked every time, and
+  a permanent grant still exists only through the list in the dashboard.
 - An installed copy never started: the embedded Python's `._pth` did not name the app folder and
   the code looked for its configuration one folder too high. Shortcuts now start a launcher that
   reports a failed start; `installer/README.md` explains how to repair an old installation.
@@ -977,7 +989,8 @@ history, which 404 on the public repository (#29) - they now use the tag-based f
 foundation") predates the tagging process and never gets one, hence the single-tag link shape
 below instead of a compare for it and for `v0.1.0` (nothing tagged to compare either against).
 
-[Unreleased]: https://github.com/Crackxsy/nox/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Crackxsy/nox/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Crackxsy/nox/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Crackxsy/nox/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Crackxsy/nox/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Crackxsy/nox/releases/tag/v0.3.0

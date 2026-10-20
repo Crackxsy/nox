@@ -4,4 +4,4 @@ Package layout (see the Architecture section in README.md):
 core, security, ipc, ai, voice, memory, pet, supervisor, shell, worker, plugins.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
