@@ -50,6 +50,8 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "stream",
     # The dashboard's local-model setup (`ai.setup.*`); idle until the user starts a run.
     "localai",
+    # The dashboard's voice-model download (`voice.model.*`); idle until the user starts one.
+    "voice",
     "remote",
     "watch",
     # After watch and before capabilities: learning offers depend on the gaps it reports.

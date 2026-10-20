@@ -3,8 +3,10 @@
 It asks, in this order: the interface language (so everything after it is in one language), what
 Nox should be called, who the user is, where the data folder and the vault live, whether to
 connect a streaming account, microphone and camera consent, and which AI backend to use - the last
-one behind a live probe of the real providers, never an assumption. An optional last step sets up
-a local model with the same flow as `nox ai setup` (`nox.localai`); it is off by default.
+one behind a live probe of the real providers, never an assumption. Two optional steps follow:
+downloading the default voice's model files (Supertonic 3, ~400 MB, not part of the install;
+`nox.voice.model_setup`, the same as `nox voice setup`), suggested when they are missing, and
+setting up a local model with the same flow as `nox ai setup` (`nox.localai`), off by default.
 
 Every step has a safe default and can be skipped. A skipped step writes nothing, so the value from
 `config/defaults.yaml` keeps applying. The wizard only ever writes the user layer
@@ -50,6 +52,7 @@ __all__ = [
     "run_onboarding_cli",
     "store_secrets",
     "texts",
+    "voice_model_step",
     "write_user_config",
 ]
 
@@ -404,7 +407,7 @@ def render_capability_summary(
         t["summary_voice"],
         ", ".join(
             f"{module}={t['installed'] if _import_ok(module) else t['missing']}"
-            for module in ("faster_whisper", "sounddevice", "piper")
+            for module in ("faster_whisper", "sounddevice", "piper", "supertonic")
         ),
     )
     row(t["summary_backends"], "")
@@ -429,6 +432,16 @@ def render_capability_summary(
 
 
 # ---- interactive driver -------------------------------------------------------------------------
+
+VoiceModelStepFn = Callable[[str, Path], Awaitable[int]]
+
+
+async def voice_model_step(language: str, user_config_path: Path) -> int:
+    """Offer the configured voice's model files (`nox.voice.model_setup`)."""
+    from nox.voice.model_setup import run_onboarding_voice_step  # noqa: PLC0415 - one use
+
+    return run_onboarding_voice_step(language, user_config_path)
+
 
 #: Marks "the user asked for a probe" between the questions and the probe itself. It never reaches
 #: `build_user_layer_patch`; `run_onboarding_cli` replaces it with a real choice or with None.
@@ -508,6 +521,7 @@ async def run_onboarding_cli(
     secret_store: SecretStore | None = None,
     probe_fn: AiProbeFn | None = None,
     local_ai_fn: LocalAiStepFn | None = None,
+    voice_model_fn: VoiceModelStepFn | None = None,
 ) -> int:
     """The real `nox onboard`.
 
@@ -540,6 +554,12 @@ async def run_onboarding_cli(
     user_config_path = default_user_config_path(appdata)
     write_user_config(user_config_path, build_user_layer_patch(answers))
     stored = store_secrets(answers, store)
+
+    # The default voice's model files are not part of the install: offer them (asks first, and
+    # says yes by default only when Supertonic is configured and its files are missing).
+    await (voice_model_fn or voice_model_step)(
+        answers.ui_language or DEFAULT_LANGUAGE, user_config_path
+    )
 
     # Optional and off by default: it downloads gigabytes. Same flow as `nox ai setup`.
     if typer.confirm(t["local_ai_ask"], default=False):

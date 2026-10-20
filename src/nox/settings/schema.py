@@ -48,6 +48,8 @@ EDITABLE_PATHS: dict[str, str] = {
     "voice.tts.voice": "voice",
     "voice.tts.rate": "voice",
     "voice.tts.volume": "voice",
+    # Supertonic only: how many flow-matching steps a sentence gets (speed against naturalness).
+    "voice.tts.steps": "voice",
     "voice.channels.routing": "voice",
     # Where Nox speaks: the private device (headphones; empty = the system default) and the
     # stream device (a virtual cable OBS records Nox from; empty = none). `routing: both` plays
@@ -73,6 +75,11 @@ EDITABLE_PATHS: dict[str, str] = {
     "stream.twitch.rate_limit_min_gap_s": "integrations",
     "stream.twitch.min_backoff_s": "integrations",
     "stream.twitch.max_backoff_s": "integrations",
+    # Saying on stream that Nox's voice is AI-generated (`nox.stream.disclosure`). Read at start,
+    # like the Twitch knobs: the chat line is posted per session, the overlay label set at boot.
+    "stream.ai_voice_disclosure.enabled": "integrations",
+    "stream.ai_voice_disclosure.chat_text": "integrations",
+    "stream.ai_voice_disclosure.overlay_label": "integrations",
     # The Home Assistant connection. The `home` plugin worker reads these at start, so none of
     # them can be applied live - the same reason the Twitch knobs above are not on
     # `LIVE_APPLY_PATHS` either. The access token is not a setting: it lives in the credential
@@ -235,7 +242,7 @@ def _installed_voices(config: NoxConfig | None) -> list[str] | None:
     None for Kokoro: it keeps all its voices in one data file, so there is nothing to list, and
     its voice stays a free-text name.
     """
-    engine = config.voice.tts.engine if config is not None else "piper"
+    engine = config.voice.tts.engine if config is not None else "supertonic"  # the shipped default
     configured = config.voice.models_dir if config is not None else None
     if engine == "piper":
         directory, pattern = engine_models_dir("piper", configured or None), "*.onnx"

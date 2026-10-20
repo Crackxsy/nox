@@ -109,6 +109,8 @@ ADMINISTRATION = (
     "ai.setup.status",
     "ai.setup.check",
     "ai.setup.start",
+    "voice.model.status",
+    "voice.model.download",
     "mode.set",
     "presets.activate",
     "presets.test_action",

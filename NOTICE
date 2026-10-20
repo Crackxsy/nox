@@ -36,9 +36,9 @@ the `voice-kokoro` extra. Reaching an Apache-2.0-only installer needs a permissi
 grapheme-to-phoneme front end (or a Kokoro front end that accepts phonemes produced by one).
 This is an open decision for the project, not a solved problem.
 
-Supertonic 3 text-to-speech (optional `voice-supertonic` extra) - MODEL LICENSE: OpenRAIL-M
+Supertonic 3 text-to-speech (`voice-supertonic` extra) - MODEL LICENSE: OpenRAIL-M
 ------------------------------------------------------------------------------------------
-Nox can speak with Supertonic 3 (`voice.tts.engine: supertonic`). It is NOT the default engine.
+Supertonic 3 is Nox's default text-to-speech engine (`voice.tts.engine: supertonic`).
 
   * Code: the `supertonic` Python package (Supertone Inc.) is MIT-licensed. Its dependencies
     (ONNX Runtime, NumPy, soundfile, huggingface-hub) are permissive. It reads raw characters and
@@ -51,8 +51,15 @@ Nox can speak with Supertonic 3 (`voice.tts.engine: supertonic`). It is NOT the 
     without consent; do not present generated audio without disclosing that it is machine
     generated (for a stream co-host: say on stream that Nox's voice is AI-generated); no medical
     advice; nothing unlawful, harassing or harmful to minors.
-  * Nox does not ship or redistribute the weights. They are downloaded only on the user's request
-    (`python -m nox.worker --download-supertonic`), pinned to one upstream revision, verified by
-    SHA-256, and stored together with the upstream LICENSE file in <models_dir>/supertonic/.
-  * Selecting Supertonic does not remove Piper: Piper stays the default and the fallback, so a
-    bundled build that includes the `voice` extra keeps the GPL-3.0 obligations described above.
+  * Nox does not ship or redistribute the weights. They are downloaded only after the user agrees
+    (the "Voice" tile in the dashboard's settings, the optional step in `nox onboard`, or
+    `nox voice setup`; never in the privacy modes `offline` and `private`), pinned to one upstream
+    revision, verified by SHA-256, and stored together with the upstream LICENSE file in
+    <models_dir>/supertonic/.
+  * Disclosure: by default Nox says on stream that its voice is AI-generated - one line in the
+    Twitch chat per stream session and a small "KI-Stimme" label on the OBS overlay
+    (`stream.ai_voice_disclosure`). Turning this off moves the disclosure obligation of the
+    license to the person streaming; it does not remove it.
+  * Supertonic being the default does not remove Piper: Piper is the fallback whenever Supertonic
+    cannot load, so a bundled build that includes the `voice` extra keeps the GPL-3.0 obligations
+    described above.

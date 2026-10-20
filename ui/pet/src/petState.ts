@@ -295,6 +295,22 @@ export function deriveAnim(input: PetInput, palette: BasePalette = NEUTRAL_PALET
 
 // ---- event reducer -------------------------------------------------------------------------------
 
+/** Where the core keeps the overlay's AI-voice label (`src/nox/stream/disclosure.py`). */
+export const AI_VOICE_LABEL_PATH = 'system.ai_voice_label';
+
+/**
+ * The label out of a `state.get` reply: the pet and the overlay are answered with the public
+ * snapshot (`system` among its roots). Null when the reply carries no label at all, so a core that
+ * predates it leaves the state alone.
+ */
+export function aiVoiceLabelFromSnapshot(reply: unknown): string | null {
+  if (typeof reply !== 'object' || reply === null) return null;
+  const system = (reply as Record<string, unknown>).system;
+  if (typeof system !== 'object' || system === null) return null;
+  const label = (system as Record<string, unknown>).ai_voice_label;
+  return typeof label === 'string' ? label : null;
+}
+
 export interface PetState {
   connected: boolean;
   functional: Functional;
@@ -308,6 +324,8 @@ export interface PetState {
   muted: boolean;
   /** Counter, not a timestamp: a reducer that reads the clock cannot be tested for what it does. */
   feeds: number;
+  /** The overlay's "AI voice" label (`system.ai_voice_label`); empty = no label. */
+  aiVoiceLabel: string;
 }
 
 export const INITIAL_STATE: PetState = {
@@ -322,6 +340,7 @@ export const INITIAL_STATE: PetState = {
   privacyMode: 'balanced',
   muted: false,
   feeds: 0,
+  aiVoiceLabel: '',
 };
 
 const FUNCTIONALS: ReadonlySet<string> = new Set([
@@ -397,6 +416,9 @@ export function reduceEvent(state: PetState, name: string, payload: Record<strin
         return { ...state, sleep: payload.new as SleepTier };
       }
       if (path === 'assistant.muted') return { ...state, muted: payload.new === true };
+      if (path === AI_VOICE_LABEL_PATH) {
+        return { ...state, aiVoiceLabel: typeof payload.new === 'string' ? payload.new : '' };
+      }
       return state;
     }
     default:

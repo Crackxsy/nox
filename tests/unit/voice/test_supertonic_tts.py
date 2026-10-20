@@ -105,7 +105,8 @@ async def test_missing_models_are_unavailable_with_an_actionable_reason(tmp_path
     assert "nowhere" in reason
     assert "onnx/vocoder.onnx" in reason
     assert "voice_styles/F3.json" in reason
-    assert "--download-supertonic" in reason
+    assert "nox voice setup" in reason
+    assert "Settings -> Voice" in reason
     assert "OpenRAIL-M" in reason
 
 

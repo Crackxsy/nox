@@ -108,11 +108,18 @@ class SttConfig(StrictSection):
 
 
 class TtsConfig(StrictSection):
-    engine: Literal["piper", "kokoro", "supertonic"] = "piper"
+    #: Supertonic 3 is the default; when its model files or its extra are missing the worker speaks
+    #: with Piper and reports `limited` (`nox.worker.main.load_tts`).
+    engine: Literal["piper", "kokoro", "supertonic"] = "supertonic"
+    #: Empty = the engine's own default (Supertonic: F3). Deliberately not "F3" here: a voice name
+    #: belongs to one engine, and switching the engine to Piper must not inherit a Supertonic name.
     voice: str = ""
     rate: float = Field(default=1.0, gt=0.0, le=4.0)
     volume: float = Field(default=0.8, ge=0.0, le=1.0)
     streaming: bool = True
+    #: Supertonic flow-matching steps: fewer is faster, more is slightly more natural (upstream
+    #: uses 8). Ignored by the other engines.
+    steps: int = Field(default=5, ge=1, le=32)
 
 
 class VoiceChannelsConfig(StrictSection):

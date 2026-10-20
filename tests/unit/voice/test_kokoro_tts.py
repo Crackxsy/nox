@@ -71,7 +71,8 @@ async def test_missing_models_are_unavailable_with_an_actionable_reason(tmp_path
     assert "nowhere" in reason
     for name in KOKORO_FILES:
         assert name in reason
-    assert "--download-kokoro" in reason
+    assert "nox voice setup" in reason
+    assert "Settings -> Voice" in reason
 
 
 async def test_load_never_downloads_anything(tmp_path: Path) -> None:

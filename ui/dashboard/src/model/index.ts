@@ -13,6 +13,7 @@
  *   desktop.ts        the computer-use notice behind the global banner
  *   home.ts           Home Assistant areas, entities and their live state
  *   localai.ts        the local-model setup: hardware, recommendation, download, probe
+ *   voicemodel.ts     the voice-model download: files, size, license, progress, outcome
  *   remote.ts         paired devices and the one-time pairing code
  *   lan.ts            devices in the home network, pairing links, permission prompts
  *   settings.ts       config, secrets, PIN, Twitch device flow, personality
@@ -34,6 +35,7 @@ export * from './lan';
 export * from './localai';
 export * from './presets';
 export * from './views';
+export * from './voicemodel';
 export * from './notifications';
 export * from './providers';
 export * from './reduce';

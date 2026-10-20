@@ -21,6 +21,7 @@ import { ConsentTile } from './ConsentTile';
 import { HealthHistoryTable } from './HealthHistoryTable';
 import { IntegrationsSection } from './IntegrationsSection';
 import { LocalAiTile } from './LocalAiTile';
+import { VoiceModelTile } from './VoiceModelTile';
 import { PersonalityTile } from './PersonalityTile';
 import { ProfileTile } from './ProfileTile';
 import { useHomeTest } from './useHomeTest';
@@ -130,6 +131,7 @@ export function SettingsPage({
         />
         <ProfileTile t={t} lang={lang} client={client} />
         <ConsentTile t={t} lang={lang} client={client} pinConfigured={data.pinConfigured} />
+        <VoiceModelTile t={t} lang={lang} client={client} />
         <LocalAiTile t={t} lang={lang} client={client} />
       </div>
 

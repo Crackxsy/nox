@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { AiVoiceLabel } from './AiVoiceLabel';
 import { CaptureIndicator } from './CaptureIndicator';
 import {
   type ConnStatus,
@@ -11,7 +12,15 @@ import {
   variantFromStateReply,
 } from './ipc';
 import { Pet } from './Pet';
-import { INITIAL_STATE, type PetState, deriveAnim, reduceEvent, stillState, toInput } from './petState';
+import {
+  INITIAL_STATE,
+  type PetState,
+  aiVoiceLabelFromSnapshot,
+  deriveAnim,
+  reduceEvent,
+  stillState,
+  toInput,
+} from './petState';
 import { type LoadedRig, type RigRenderer, loadRig } from './rig';
 import { RiggedPet } from './RiggedPet';
 import { SpritePet, loadImageElement } from './SpritePet';
@@ -132,6 +141,26 @@ export function App({
       clientRef.current = null;
     };
   }, [token, ipcRole, still, animate, onEvent]);
+
+  // The overlay's AI-voice label is set once at core start, before OBS usually connects, so the
+  // overlay reads it from its public state snapshot on every (re)connect; later changes arrive as
+  // `state.changed`. The desktop pet never shows it and does not ask.
+  useEffect(() => {
+    if (!overlay || status !== 'online') return;
+    const client = clientRef.current;
+    if (!client) return;
+    let cancelled = false;
+    client
+      .request('state.get', {})
+      .then((reply) => {
+        const label = aiVoiceLabelFromSnapshot(reply);
+        if (!cancelled && label !== null) setState((s) => ({ ...s, aiVoiceLabel: label }));
+      })
+      .catch((err: unknown) => console.info('pet.ai_voice_label_unread', reasonOf(err)));
+    return () => {
+      cancelled = true;
+    };
+  }, [overlay, status]);
 
   // Sprite variants (#19): fetch + validate + preload the whole set before showing anything. Any
   // failure logs a reason and leaves `sprite` null, which renders the procedural variant instead.
@@ -260,6 +289,7 @@ export function App({
           label={variant.name}
         />
       )}
+      <AiVoiceLabel label={state.aiVoiceLabel} overlay={overlay && !still} />
       {!overlay && !still && (
         <CaptureIndicator
           t={t}

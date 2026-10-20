@@ -52,7 +52,7 @@ Nox is **pre-1.0**. Honest state as of the latest release:
 | --- | --- |
 | Core, supervisor, kill switch, privacy modes/zones, permission engine, audit chain | Works |
 | Local IPC hub, desktop shell (pet window, tray, hotkeys), dashboard | Works |
-| Voice: push-to-talk, wake word, local STT (faster-whisper) + TTS (Piper or Kokoro) | Works, needs the `voice` extra and a model download; see [Voice](#voice-microphone-and-speech) |
+| Voice: push-to-talk, wake word, local STT (faster-whisper) + TTS (Supertonic 3 by default, Piper as the fallback, Kokoro) | Works, needs the `voice` extras and a model download (one click in the dashboard); see [Voice](#voice-microphone-and-speech) |
 | AI routing: Claude Code CLI → Ollama → deterministic rules fallback | Works; each provider reports its real health |
 | Memory: SQLite + `sqlite-vec`, vault indexing | Works; first start indexes the whole vault once |
 | Twitch chat bot, OBS scene control, Funken ledger, dashboard Stream page | Works (stream profile only) |
@@ -101,7 +101,7 @@ git clone https://github.com/Crackxsy/nox.git
 cd nox
 
 python -m pip install uv
-python -m uv sync --extra dev --extra shell --extra voice   # add --extra rl for Rocket League
+python -m uv sync --extra dev --extra shell --extra voice --extra voice-supertonic   # add --extra rl for Rocket League
 
 cd ui\pet       ; npm ci ; npm run build ; cd ..\..
 cd ui\dashboard ; npm ci ; npm run build ; cd ..\..
@@ -113,8 +113,8 @@ cd ui\dashboard ; npm ci ; npm run build ; cd ..\..
 
 Other entry points: `nox dev` (core + shell in one console, no supervisor), `nox core --no-voice`,
 `nox shell`, `nox rl calibrate`, `python -m nox.worker --service voice --selftest` (devices,
-models, TTS, wake-word gate, a 3-second microphone check) and
-`python -m nox.worker --download-kokoro` (Kokoro TTS model files).
+models, TTS, wake-word gate, a 3-second microphone check) and `nox voice setup` (downloads the
+configured TTS engine's model files with progress, after asking).
 
 Runtime files live in `%APPDATA%\Nox\runtime\{session.token,ipc.json,supervisor.token}`, logs in
 `%APPDATA%\Nox\logs`. Your data and vault folders are chosen during onboarding and are never inside
@@ -259,28 +259,42 @@ cloud provider is unavailable, and the only allowed provider in the `offline` an
 
 ### Voice (microphone and speech)
 
-Voice needs the `voice` extra and model files. Nothing is ever downloaded on its own: a missing
-model is an `unavailable` health reason that names the path and the command that fetches it. All
+Voice needs the `voice` extra and model files. Nothing is downloaded without your go-ahead: a
+missing model is an `unavailable` health reason that names the path and the ways to fetch it. All
 voice models live under `<data_dir>/models/` (`piper/`, `kokoro/`, `supertonic/`,
 `openwakeword/`); if your
 `paths.data_dir` is not the default, set `voice.models_dir` in your user layer as well — the voice
 worker only ever receives the `voice` section of the configuration.
 
-**Text-to-speech engines.** `voice.tts.engine` is `piper` (default), `kokoro` or `supertonic`:
+**Text-to-speech engines.** `voice.tts.engine` is `supertonic` (default), `piper` (the fallback)
+or `kokoro`:
 
-| | `piper` | `kokoro` | `supertonic` |
+| | `supertonic` (default) | `piper` (fallback) | `kokoro` |
 | --- | --- | --- | --- |
-| German voice | yes (`de_DE-thorsten-medium`) | **no** — Kokoro v1.0 has no German voice; German text is read by the English `af_heart` voice, and health reports `limited` | yes — ten preset voices `F1`–`F5` / `M1`–`M5` (default `F3`); the most natural of the three |
-| Latency (CPU) | ~50-90 ms to first audio, RTF 0.02-0.03 | ~750-840 ms to first audio, RTF 0.22 | ~0.4-0.6 s per short sentence (4 threads), RTF ~0.13-0.19; no GPU needed |
-| Extra | `voice` | `voice-kokoro` + `python -m nox.worker --download-kokoro` (~354 MB) | `voice-supertonic` + `python -m nox.worker --download-supertonic` (~400 MB) |
-| License | `piper-tts` is GPL-3.0 | package and model are permissive, **but** `kokoro-onnx` still pulls GPL-3.0 `phonemizer`/espeak-ng | package MIT, no phonemizer (no GPL); **model weights are OpenRAIL-M** — free, commercial use allowed, but with use restrictions (disclose that the voice is AI-generated, no impersonation, no medical advice); see [`NOTICE`](NOTICE) |
+| German voice | yes — ten preset voices `F1`–`F5` / `M1`–`M5` (default `F3`); the most natural of the three | yes (`de_DE-thorsten-medium`) | **no** — Kokoro v1.0 has no German voice; German text is read by the English `af_heart` voice, and health reports `limited` |
+| Latency (CPU) | ~0.4-0.6 s per short sentence (4 threads, 5 steps), RTF ~0.13-0.19; no GPU needed | ~50-90 ms to first audio, RTF 0.02-0.03 | ~750-840 ms to first audio, RTF 0.22 |
+| Extra + model | `voice-supertonic`; model files ~400 MB, downloaded after you agree (dashboard, onboarding or `nox voice setup`) | `voice` | `voice-kokoro` + `nox voice setup` with `engine: kokoro` (~354 MB) |
+| License | package MIT, no phonemizer (no GPL); **model weights are OpenRAIL-M** — free, commercial use allowed, but with use restrictions (disclose that the voice is AI-generated, no impersonation, no medical advice); see [`NOTICE`](NOTICE) | `piper-tts` is GPL-3.0 | package and model are permissive, **but** `kokoro-onnx` still pulls GPL-3.0 `phonemizer`/espeak-ng |
 
-To use Supertonic: `uv sync --extra voice --extra voice-supertonic`, fetch the model with
-`python -m nox.worker --download-supertonic` (or `nox voice download-supertonic`), then set
-`voice.tts.engine: supertonic` - and optionally `voice.tts.voice` to one of `F1`–`F5` / `M1`–`M5`
-(the dashboard lists the installed ones) - in `%APPDATA%\Nox\user.yaml` and restart. If Supertonic
-or Kokoro cannot load (files not downloaded, extra not installed, unknown voice), Nox speaks with
-Piper instead and the voice health shows `limited` with the reason.
+**Getting the Supertonic model.** The model files are not part of the install. Fetch them with one
+click under *Settings → Voice* in the dashboard (it shows what is missing, the size, the license,
+and a progress bar), in the optional step of `nox onboard`, or with `nox voice setup` (asks first;
+`--yes` skips the question). None of them downloads anything in the privacy modes `offline` or
+`private`. The voice worker loads its engine at start, so the new voice is used from Nox's next
+start. Until then - and whenever Supertonic cannot load (files missing, extra not installed,
+unknown voice) - Nox speaks with Piper, and the voice health shows `limited` with the reason.
+`voice.tts.voice` picks one of `F1`–`F5` / `M1`–`M5` (empty = `F3`; the dashboard lists the
+installed ones), `voice.tts.steps` (1-32, default 5) trades speed for a slightly more natural
+sound. The explicit `nox voice download-supertonic` / `python -m nox.worker --download-supertonic`
+still work.
+
+**Disclosing the AI voice on stream.** The Supertonic license requires disclosing machine-generated
+audio, so Nox does it by default (`stream.ai_voice_disclosure`): when a stream session starts it
+posts one line to the Twitch chat - "Kurzer Hinweis: Die Stimme von Nox ist KI-generiert." (or the
+English equivalent, by `identity.speech_language`; `chat_text` replaces it) - once per session,
+not again on a reconnect, and the OBS overlay shows a small, semi-transparent "KI-Stimme" label in
+its corner (`overlay_label`; empty = no label). The desktop pet does not show the label. Both are
+editable under *Settings → Integrations* and apply at the next start.
 
 Switch with `voice.tts.engine: kokoro` in `%APPDATA%\Nox\user.yaml` and restart. Kokoro was added
 to get bundled builds out from under the GPL (see [`NOTICE`](NOTICE)); it does not get there on its

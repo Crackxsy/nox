@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from nox.core.config import VoiceConfig
 from nox.voice.models import (
@@ -74,8 +75,26 @@ def test_build_components_selects_supertonic(tmp_path: Path) -> None:
     assert set(tts.voice_names.values()) == {"M1"}
 
 
-def test_build_components_defaults_to_piper(tmp_path: Path) -> None:
+def test_build_components_defaults_to_supertonic_f3_with_five_steps(tmp_path: Path) -> None:
     cfg = VoiceConfig.model_validate({"models_dir": str(tmp_path)})
+    tts = build_components(cfg, service="tts")["tts"]
+    assert tts.id == "supertonic"
+    assert tts.models_dir == tmp_path / "supertonic"
+    assert set(tts.voice_names.values()) == {"F3"}
+    assert tts.steps == 5
+
+
+def test_the_configured_steps_reach_supertonic(tmp_path: Path) -> None:
+    cfg = VoiceConfig.model_validate({"models_dir": str(tmp_path), "tts": {"steps": 8}})
+    assert build_components(cfg, service="tts")["tts"].steps == 8
+    with pytest.raises(ValidationError):
+        VoiceConfig.model_validate({"tts": {"steps": 0}})
+    with pytest.raises(ValidationError):
+        VoiceConfig.model_validate({"tts": {"steps": 33}})
+
+
+def test_piper_is_still_selectable(tmp_path: Path) -> None:
+    cfg = VoiceConfig.model_validate({"models_dir": str(tmp_path), "tts": {"engine": "piper"}})
     components = build_components(cfg, service="tts")
     assert components["tts"].id == "piper"
     assert components["tts"].models_dir == tmp_path / "piper"

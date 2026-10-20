@@ -43,6 +43,10 @@ The first time Nox runs, `nox onboard` (or the installer's first-run step) walks
 6. **AI backend** — Claude Code (cloud reasoning, with local Ollama as a fallback) or an
    Ollama-only local setup. The wizard actually probes both backends before you choose (not a
    guess) and shows you which one is really available on your machine right now.
+7. **Nox's voice** (optional) — Nox speaks with Supertonic 3, whose model files (about 400 MB)
+   are not part of the install. The wizard offers to download them now, with progress; the
+   suggested answer is yes when they are missing. Declining is fine: Nox speaks with Piper until
+   you fetch them later (see §5, *Voice*).
 
 Every step has a safe default and can be skipped; skipped steps simply keep whatever
 `config/defaults.yaml` already specifies. The wizard only ever writes to your personal
@@ -99,7 +103,17 @@ cannot be turned off or hidden by configuration — if something is being captur
   one you picked. The five drawn shapes need no pictures at all. The change applies at once,
   without a restart.
 - **Voice**: push-to-talk (`ctrl+alt+space` by default) or the wake word "Nox"; local
-  speech-to-text (faster-whisper) and text-to-speech (Piper).
+  speech-to-text (faster-whisper) and text-to-speech with Supertonic 3 (natural German and
+  English, on the processor). Its model files (about 400 MB) are downloaded only when you say so:
+  Dashboard → Settings → *Voice* (in German: *Stimme*) shows what is missing, the size and the
+  license, and downloads with a progress bar; `nox voice setup` does the same in a terminal.
+  Nothing is downloaded in the privacy modes *offline* and *private*. The new voice is used from
+  Nox's next start; until then Nox speaks with Piper, and the voice health says `limited`.
+- **AI voice on stream**: the voice model's license (OpenRAIL-M) asks for synthetic speech to be
+  disclosed, so on stream Nox posts one short line in the Twitch chat per stream ("Kurzer Hinweis:
+  Die Stimme von Nox ist KI-generiert.") and the OBS overlay shows a small "KI-Stimme" label in a
+  corner. Change the text or the label, or turn it off, under Settings → *Integrations* - if you
+  turn it off, saying so on stream is up to you.
 - **What Nox knows about you**: durable facts from your conversations - people, games, projects,
   dated plans - are learned on their own a little after the conversation goes quiet, kept in every
   prompt, and listed under *Einstellungen → Was Nox über dich weiß*, where each one can be

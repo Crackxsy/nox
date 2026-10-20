@@ -7,7 +7,9 @@ Wires, on a started core:
 * Nox's own OBS audio track (`nox.stream.audio_track`) - IPC and tool `stream.audio_track.setup`;
 * the automatic stream session when OBS or the Twitch channel goes live (`nox.stream.autostart`);
 * login health and notices for Twitch and OBS, and the warning about a desktop pet on a captured
-  monitor (`nox.stream.notices`).
+  monitor (`nox.stream.notices`);
+* the AI-voice disclosure: one chat line per stream session and the overlay's label
+  (`nox.stream.disclosure`).
 
 Every change to OBS goes through the permission-checked `obs.*` tools, so each of these asks the
 user exactly as a direct request would.
@@ -15,6 +17,7 @@ user exactly as a direct request would.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -37,6 +40,7 @@ from nox.settings.twitch_auth import (
 )
 from nox.stream.audio_track import AudioTrackRequest, AudioTrackService
 from nox.stream.autostart import AutoStreamSession, TwitchLiveWatcher
+from nox.stream.disclosure import AiVoiceDisclosure, ai_voice_label, disclosure_text
 from nox.stream.notices import AuthWatch, CaptureWarning
 from nox.stream.overlay import OverlayService, OverlaySetupRequest
 from nox.tools.registry import ToolSpec
@@ -55,6 +59,8 @@ class StreamControlRuntime:
     watcher: TwitchLiveWatcher
     auth: AuthWatch
     capture: CaptureWarning
+    disclosure: AiVoiceDisclosure | None = None
+    _label_task: asyncio.Task[None] | None = None
     _stopped: bool = field(default=False)
 
     async def stop(self) -> None:
@@ -64,6 +70,11 @@ class StreamControlRuntime:
         self.auto.stop()
         self.auth.stop()
         self.capture.stop()
+        if self.disclosure is not None:
+            self.disclosure.stop()
+        if self._label_task is not None and not self._label_task.done():
+            self._label_task.cancel()
+            await asyncio.gather(self._label_task, return_exceptions=True)
         await self.watcher.stop()
 
 
@@ -200,9 +211,24 @@ def install(core: Any) -> StreamControlRuntime:
         if "obs" in config.plugins.enabled:
             health.add_check(Check("obs.login", auth.obs_health))
 
+    # -- AI-voice disclosure (read at start, like the rest of this section) -----------------------
+    disclosure = AiVoiceDisclosure(
+        core.bus,
+        executor,
+        text=lambda: disclosure_text(config),
+        label=lambda: ai_voice_label(config.stream.ai_voice_disclosure),
+        state=core.state,
+    )
+    disclosure.start()
+    label_task = asyncio.get_running_loop().create_task(
+        disclosure.publish_label(), name="nox-ai-voice-label"
+    )
+
     _register(core, overlay, audio)
     log.info("stream.control_installed", overlay=overlay is not None)
-    return StreamControlRuntime(overlay, audio, auto, watcher, auth, capture)
+    return StreamControlRuntime(
+        overlay, audio, auto, watcher, auth, capture, disclosure, label_task
+    )
 
 
 def _register(core: Any, overlay: OverlayService | None, audio: AudioTrackService) -> None:

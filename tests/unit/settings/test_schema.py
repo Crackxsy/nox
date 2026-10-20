@@ -108,3 +108,23 @@ def test_the_defaults_layer_carries_every_twitch_knob(config: NoxConfig) -> None
     assert twitch.rate_limit_min_gap_s == 1.5
     assert (twitch.min_backoff_s, twitch.max_backoff_s) == (1.0, 30.0)
     assert twitch.relevance_cooldown_s == 20.0
+
+
+def test_the_supertonic_steps_and_the_ai_voice_disclosure_are_editable() -> None:
+    steps = describe("voice.tts.steps")
+    assert steps.type == "int" and (steps.min, steps.max) == (1.0, 32.0)
+    assert steps.group == "voice" and steps.restart_required
+    assert describe("stream.ai_voice_disclosure.enabled").type == "bool"
+    for path in ("chat_text", "overlay_label"):
+        spec = describe(f"stream.ai_voice_disclosure.{path}")
+        assert spec.type == "string" and spec.group == "integrations" and spec.restart_required
+
+
+def test_the_shipped_voice_is_supertonic_f3_with_five_steps(config: NoxConfig) -> None:
+    """`config/defaults.yaml` and the model agree: Supertonic, its default voice, five steps."""
+    assert config.voice.tts.engine == "supertonic"
+    assert config.voice.tts.voice == ""  # = the engine default, F3 for Supertonic
+    assert config.voice.tts.steps == 5
+    disclosure = config.stream.ai_voice_disclosure
+    assert disclosure.enabled and disclosure.chat_text == ""
+    assert disclosure.overlay_label == "KI-Stimme"
