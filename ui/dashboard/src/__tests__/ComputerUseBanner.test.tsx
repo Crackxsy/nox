@@ -6,6 +6,7 @@
 import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { Auth } from '../auth';
 import type { DashboardIpcHandlers, IpcClient } from '../ipc';
 import { DASHBOARD_PATTERNS } from '../ipc';
 import { translator } from '../i18n';
@@ -17,7 +18,7 @@ vi.mock('../ipc', async (importOriginal) => {
   const original = await importOriginal<typeof import('../ipc')>();
   return {
     ...original,
-    createDashboardClient: (_token: string, handlers: DashboardIpcHandlers) => {
+    createDashboardClient: (_auth: Auth, handlers: DashboardIpcHandlers) => {
       captured.handlers = handlers;
       return Promise.resolve({
         close: () => undefined,
@@ -31,6 +32,7 @@ vi.mock('../ipc', async (importOriginal) => {
 const { App } = await import('../App');
 
 const t = translator('de');
+const LOCAL: Auth = { kind: 'local', token: 'tok' };
 
 function emit(payload: Record<string, unknown>) {
   act(() => {
@@ -76,7 +78,7 @@ describe('ComputerUseBanner in the app', () => {
   });
 
   it('appears while a session runs and disappears when it ends', async () => {
-    render(<App token="tok" lang="de" theme="system" />);
+    render(<App auth={LOCAL} lang="de" theme="system" />);
     await vi.waitFor(() => expect(captured.handlers).not.toBeNull());
     expect(screen.queryByText(/steuert gerade Maus und Tastatur/)).toBeNull();
 
@@ -94,7 +96,7 @@ describe('ComputerUseBanner in the app', () => {
   });
 
   it('stays on screen whichever section is open', async () => {
-    render(<App token="tok" lang="de" theme="system" />);
+    render(<App auth={LOCAL} lang="de" theme="system" />);
     await vi.waitFor(() => expect(captured.handlers).not.toBeNull());
     emit({ active: true, reason: '', stop: '' });
     act(() => screen.getByRole('tab', { name: t('tab_capabilities') }).click());
@@ -103,7 +105,7 @@ describe('ComputerUseBanner in the app', () => {
   });
 
   it('ignores a malformed event', async () => {
-    render(<App token="tok" lang="de" theme="system" />);
+    render(<App auth={LOCAL} lang="de" theme="system" />);
     await vi.waitFor(() => expect(captured.handlers).not.toBeNull());
     emit({ active: 'true' });
     expect(screen.queryByText(/steuert gerade Maus und Tastatur/)).toBeNull();
