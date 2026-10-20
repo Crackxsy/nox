@@ -35,3 +35,24 @@ Apache-2.0-only: the GPL obligations above apply unchanged to any distribution t
 the `voice-kokoro` extra. Reaching an Apache-2.0-only installer needs a permissively licensed
 grapheme-to-phoneme front end (or a Kokoro front end that accepts phonemes produced by one).
 This is an open decision for the project, not a solved problem.
+
+Supertonic 3 text-to-speech (optional `voice-supertonic` extra) - MODEL LICENSE: OpenRAIL-M
+------------------------------------------------------------------------------------------
+Nox can speak with Supertonic 3 (`voice.tts.engine: supertonic`). It is NOT the default engine.
+
+  * Code: the `supertonic` Python package (Supertone Inc.) is MIT-licensed. Its dependencies
+    (ONNX Runtime, NumPy, soundfile, huggingface-hub) are permissive. It reads raw characters and
+    has no grapheme-to-phoneme front end, so this extra pulls no espeak-ng / GPL-3.0 code - unlike
+    the `voice` (Piper) and `voice-kokoro` extras above.
+  * Model weights: "Supertonic 3" by Supertone Inc. is licensed under the BigScience Open RAIL-M
+    License. This is NOT an Apache-2.0 or other OSI license. Use, including commercial use, is
+    allowed, but the license's use-based restrictions (its Attachment A) bind everyone who uses
+    the model and must be passed on with it. Among them: do not use it to impersonate others
+    without consent; do not present generated audio without disclosing that it is machine
+    generated (for a stream co-host: say on stream that Nox's voice is AI-generated); no medical
+    advice; nothing unlawful, harassing or harmful to minors.
+  * Nox does not ship or redistribute the weights. They are downloaded only on the user's request
+    (`python -m nox.worker --download-supertonic`), pinned to one upstream revision, verified by
+    SHA-256, and stored together with the upstream LICENSE file in <models_dir>/supertonic/.
+  * Selecting Supertonic does not remove Piper: Piper stays the default and the fallback, so a
+    bundled build that includes the `voice` extra keeps the GPL-3.0 obligations described above.

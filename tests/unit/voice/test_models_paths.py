@@ -64,6 +64,16 @@ def test_build_components_selects_the_configured_engine(tmp_path: Path) -> None:
     assert tts.models_dir == tmp_path / "kokoro"
 
 
+def test_build_components_selects_supertonic(tmp_path: Path) -> None:
+    cfg = VoiceConfig.model_validate(
+        {"models_dir": str(tmp_path), "tts": {"engine": "supertonic", "voice": "M1"}}
+    )
+    tts = build_components(cfg, service="tts")["tts"]
+    assert tts.id == "supertonic"
+    assert tts.models_dir == tmp_path / "supertonic"
+    assert set(tts.voice_names.values()) == {"M1"}
+
+
 def test_build_components_defaults_to_piper(tmp_path: Path) -> None:
     cfg = VoiceConfig.model_validate({"models_dir": str(tmp_path)})
     components = build_components(cfg, service="tts")

@@ -261,18 +261,26 @@ cloud provider is unavailable, and the only allowed provider in the `offline` an
 
 Voice needs the `voice` extra and model files. Nothing is ever downloaded on its own: a missing
 model is an `unavailable` health reason that names the path and the command that fetches it. All
-voice models live under `<data_dir>/models/` (`piper/`, `kokoro/`, `openwakeword/`); if your
+voice models live under `<data_dir>/models/` (`piper/`, `kokoro/`, `supertonic/`,
+`openwakeword/`); if your
 `paths.data_dir` is not the default, set `voice.models_dir` in your user layer as well — the voice
 worker only ever receives the `voice` section of the configuration.
 
-**Text-to-speech engines.** `voice.tts.engine` is `piper` (default) or `kokoro`:
+**Text-to-speech engines.** `voice.tts.engine` is `piper` (default), `kokoro` or `supertonic`:
 
-| | `piper` | `kokoro` |
-| --- | --- | --- |
-| German voice | yes (`de_DE-thorsten-medium`) | **no** — Kokoro v1.0 has no German voice; German text is read by the English `af_heart` voice, and health reports `limited` |
-| Latency (7 s of speech, CPU) | ~90 ms to first audio, RTF 0.03 | ~750-840 ms to first audio, RTF 0.22 |
-| Extra | `voice` | `voice-kokoro` + `python -m nox.worker --download-kokoro` (~354 MB) |
-| License | `piper-tts` is GPL-3.0 | package and model are permissive, **but** `kokoro-onnx` still pulls GPL-3.0 `phonemizer`/espeak-ng |
+| | `piper` | `kokoro` | `supertonic` |
+| --- | --- | --- | --- |
+| German voice | yes (`de_DE-thorsten-medium`) | **no** — Kokoro v1.0 has no German voice; German text is read by the English `af_heart` voice, and health reports `limited` | yes — ten preset voices `F1`–`F5` / `M1`–`M5` (default `F3`); the most natural of the three |
+| Latency (CPU) | ~50-90 ms to first audio, RTF 0.02-0.03 | ~750-840 ms to first audio, RTF 0.22 | ~0.4-0.6 s per short sentence (4 threads), RTF ~0.13-0.19; no GPU needed |
+| Extra | `voice` | `voice-kokoro` + `python -m nox.worker --download-kokoro` (~354 MB) | `voice-supertonic` + `python -m nox.worker --download-supertonic` (~400 MB) |
+| License | `piper-tts` is GPL-3.0 | package and model are permissive, **but** `kokoro-onnx` still pulls GPL-3.0 `phonemizer`/espeak-ng | package MIT, no phonemizer (no GPL); **model weights are OpenRAIL-M** — free, commercial use allowed, but with use restrictions (disclose that the voice is AI-generated, no impersonation, no medical advice); see [`NOTICE`](NOTICE) |
+
+To use Supertonic: `uv sync --extra voice --extra voice-supertonic`, fetch the model with
+`python -m nox.worker --download-supertonic` (or `nox voice download-supertonic`), then set
+`voice.tts.engine: supertonic` - and optionally `voice.tts.voice` to one of `F1`–`F5` / `M1`–`M5`
+(the dashboard lists the installed ones) - in `%APPDATA%\Nox\user.yaml` and restart. If Supertonic
+or Kokoro cannot load (files not downloaded, extra not installed, unknown voice), Nox speaks with
+Piper instead and the voice health shows `limited` with the reason.
 
 Switch with `voice.tts.engine: kokoro` in `%APPDATA%\Nox\user.yaml` and restart. Kokoro was added
 to get bundled builds out from under the GPL (see [`NOTICE`](NOTICE)); it does not get there on its

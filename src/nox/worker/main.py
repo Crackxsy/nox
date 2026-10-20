@@ -8,7 +8,8 @@ everything in one `voice` worker. The worker token comes from the environment (`
 never from the command line, and is never logged.
 
 `--selftest` validates devices, models, playback and a three-second microphone transcription
-without a hub; `--download-kokoro` fetches the Kokoro TTS model files, always user-initiated.
+without a hub; `--download-kokoro` / `--download-supertonic` fetch TTS model files, always
+user-initiated.
 `--plugin <id>` runs this process as a plugin worker instead (`nox.worker.plugin`); it shares only
 token and hub-url handling with the voice path.
 """
@@ -482,7 +483,6 @@ def build_components(voice: VoiceConfig, *, service: str) -> dict[str, Any]:
     from nox.voice.audio import SoundDeviceInput, SoundDeviceOutput
     from nox.voice.models import engine_models_dir
     from nox.voice.stt.faster_whisper_engine import FasterWhisperStt
-    from nox.voice.tts.piper_engine import PiperTts
 
     caps = SERVICES[service]
     components: dict[str, Any] = {
@@ -513,14 +513,62 @@ def build_components(voice: VoiceConfig, *, service: str) -> dict[str, Any]:
                 models_dir=engine_models_dir("kokoro", voice.models_dir),
                 rate=voice.tts.rate,
             )
-        else:
-            voices = {"de": voice.tts.voice} if voice.tts.voice else None
-            components["tts"] = PiperTts(
+        elif voice.tts.engine == "supertonic":
+            from nox.voice.tts.supertonic_engine import DEFAULT_VOICES as SUPERTONIC_VOICES
+            from nox.voice.tts.supertonic_engine import SupertonicTts
+
+            voices = dict.fromkeys(SUPERTONIC_VOICES, voice.tts.voice) if voice.tts.voice else None
+            components["tts"] = SupertonicTts(
                 voices=voices,
-                models_dir=engine_models_dir("piper", voice.models_dir),
+                models_dir=engine_models_dir("supertonic", voice.models_dir),
                 rate=voice.tts.rate,
             )
+        else:
+            components["tts"] = build_piper(voice)
     return components
+
+
+def build_piper(voice: VoiceConfig, *, configured_voice: bool = True) -> Any:
+    """Piper, the default engine and the fallback for every other one.
+
+    As a fallback (`configured_voice=False`) it ignores `voice.tts.voice`: that names a voice of the
+    engine that failed, which Piper would not have either.
+    """
+    from nox.voice.models import engine_models_dir
+    from nox.voice.tts.piper_engine import PiperTts
+
+    voices = {"de": voice.tts.voice} if configured_voice and voice.tts.voice else None
+    return PiperTts(
+        voices=voices,
+        models_dir=engine_models_dir("piper", voice.models_dir),
+        rate=voice.tts.rate,
+    )
+
+
+async def load_tts(tts: Any, voice: VoiceConfig) -> Any:
+    """Load the configured TTS engine; if it is not Piper and cannot load, speak with Piper.
+
+    A missing model, a missing optional extra or an unknown voice must not leave Nox mute. The
+    fallback reports `limited` with the reason (`FallbackTts`); if Piper cannot load either, the
+    original error is raised.
+    """
+    try:
+        await tts.load()
+        return tts
+    except Exception as exc:
+        if tts.id in ("piper", "none"):
+            raise
+        reason = f"{type(exc).__name__}: {exc}"
+        log.warning("tts.fallback", wanted=tts.id, using="piper", reason=reason)
+        from nox.voice.tts.fallback import FallbackTts
+
+        piper = build_piper(voice, configured_voice=False)
+        try:
+            await piper.load()
+        except Exception:
+            log.warning("tts.fallback_failed", wanted=tts.id, using="piper")
+            raise exc from None
+        return FallbackTts(piper, wanted=tts.id, reason=reason)
 
 
 class _NoEngine:
@@ -580,7 +628,7 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
         stt = components["stt"] or _NoEngine()
         tts = components["tts"] or _NoEngine()
         await stt.load()
-        await tts.load()
+        tts = await load_tts(tts, cfg)
         devices.audio_in = components["audio_in"]
         devices.audio_out = components["audio_out"]
         worker.audio_output = devices.audio_out
@@ -650,7 +698,7 @@ async def run_selftest(voice_cfg: VoiceConfig, *, seconds: float = 3.0) -> int:
     t0 = time.perf_counter()
     await stt.load()
     echo(f"  stt {stt.id} {stt.model_size}: {stt.load_time_ms:.0f} ms")
-    await tts.load()
+    tts = await load_tts(tts, voice_cfg)
     echo(
         f"  tts {tts.id} {tts.loaded_voices}: {tts.load_time_ms:.0f} ms "
         f"(total {time.perf_counter() - t0:.1f} s)"
@@ -723,6 +771,18 @@ def voice_download_kokoro(
     raise typer.Exit(code)
 
 
+@voice_app.command("download-supertonic")
+def voice_download_supertonic(
+    models_dir: str = typer.Option("", help="override voice.models_dir"),
+    force: bool = typer.Option(False, "--force", help="re-download even if the files exist"),
+) -> None:
+    """Download the Supertonic 3 TTS model files (~400 MB, OpenRAIL-M). Never automatic."""
+    from nox.voice.models import download_supertonic, engine_models_dir
+
+    target = engine_models_dir("supertonic", models_dir)
+    raise typer.Exit(download_supertonic(target, echo=typer.echo, force=force))
+
+
 @voice_app.command("selftest")
 def voice_selftest() -> None:
     """Devices, model load, TTS playback and a 3 s microphone transcription (no hub)."""
@@ -741,10 +801,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="download the Kokoro TTS model files (~354 MB) into <models_dir>/kokoro",
     )
+    ap.add_argument(
+        "--download-supertonic",
+        action="store_true",
+        help="download the Supertonic 3 TTS model files (~400 MB) into <models_dir>/supertonic",
+    )
     ap.add_argument("--models-dir", default=None, help="override voice.models_dir for this run")
     ap.add_argument("--plugin", default=None, help="run as the worker of plugins/<id>")
     ap.add_argument("--stt-model", default=None, help="override voice.stt.model (base|small|...)")
-    ap.add_argument("--tts-engine", default=None, choices=["piper", "kokoro"])
+    ap.add_argument("--tts-engine", default=None, choices=["piper", "kokoro", "supertonic"])
     return ap.parse_args(argv)
 
 
@@ -772,6 +837,11 @@ def main(argv: list[str] | None = None) -> int:
         from nox.voice.models import download_kokoro, engine_models_dir
 
         return download_kokoro(engine_models_dir("kokoro", voice_cfg.models_dir), echo=typer.echo)
+    if args.download_supertonic:
+        from nox.voice.models import download_supertonic, engine_models_dir
+
+        target = engine_models_dir("supertonic", voice_cfg.models_dir)
+        return download_supertonic(target, echo=typer.echo)
     if args.stt_model:
         voice_cfg = voice_cfg.model_copy(
             update={"stt": voice_cfg.stt.model_copy(update={"model": args.stt_model})}

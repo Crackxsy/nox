@@ -222,17 +222,22 @@ def _installed_plugins(config: NoxConfig | None) -> list[str]:
 
 
 def _installed_voices(config: NoxConfig | None) -> list[str] | None:
-    """The Piper voices in the models folder, after "" (the default voice for each language).
+    """The installed voices of the configured engine, after "" (the engine's default voice).
 
-    None for any other engine: Kokoro keeps all its voices in one data file, so there is nothing
-    to list, and its voice stays a free-text name.
+    Piper has one `.onnx` per voice, Supertonic one style file per voice in `voice_styles/`.
+    None for Kokoro: it keeps all its voices in one data file, so there is nothing to list, and
+    its voice stays a free-text name.
     """
     engine = config.voice.tts.engine if config is not None else "piper"
-    if engine != "piper":
-        return None
     configured = config.voice.models_dir if config is not None else None
-    directory = engine_models_dir("piper", configured or None)
-    names = sorted(path.stem for path in directory.glob("*.onnx")) if directory.is_dir() else []
+    if engine == "piper":
+        directory, pattern = engine_models_dir("piper", configured or None), "*.onnx"
+    elif engine == "supertonic":
+        directory = engine_models_dir("supertonic", configured or None) / "voice_styles"
+        pattern = "*.json"
+    else:
+        return None
+    names = sorted(path.stem for path in directory.glob(pattern)) if directory.is_dir() else []
     return ["", *names]
 
 

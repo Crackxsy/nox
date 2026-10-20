@@ -61,6 +61,7 @@ export const de = {
   option_wake_text: 'Aus dem Transkript',
   option_tts_piper: 'Piper (deutsch)',
   option_tts_kokoro: 'Kokoro (englisch)',
+  option_tts_supertonic: 'Supertonic (natürlich, deutsch)',
   option_routing_private: 'Nur mich',
   option_routing_stream: 'Nur den Stream',
   option_routing_both: 'Beides',

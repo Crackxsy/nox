@@ -99,7 +99,7 @@ ipc:
   auth: token                    # per-start session tokens issued by core, stored under <data_dir>/runtime
 
 voice:
-  models_dir: ""                 # root for piper/kokoro/openwakeword model files;
+  models_dir: ""                 # root for piper/kokoro/supertonic/openwakeword models;
                                  # empty = <paths.data_dir>/models. The voice worker only receives
                                  # this section, so repeat the path here if paths.data_dir moved.
   stt:
@@ -127,12 +127,15 @@ voice:
     kill_phrase_watchdog: true   # short segments still reach Whisper so "Nox Notaus" keeps
     kill_watchdog_max_ms: 2500   # working; non-kill transcripts are discarded, never reported
   tts:
-    engine: piper                # piper | kokoro. Kokoro needs the voice-kokoro extra and its
-                                 # model files in <models_dir>/kokoro
-                                 # (python -m nox.worker --download-kokoro).
+    engine: piper                # piper | kokoro | supertonic. Kokoro needs the voice-kokoro
+                                 # extra and <models_dir>/kokoro (--download-kokoro);
+                                 # Supertonic needs the voice-supertonic extra and
+                                 # <models_dir>/supertonic (--download-supertonic). Either one
+                                 # falls back to Piper (health: limited) if it cannot load.
     voice: ""                    # engine-specific voice id; empty = the engine default
                                  # (piper: de_DE-thorsten-medium, kokoro: af_heart - no German
-                                 # voice exists in Kokoro v1.0, see README)
+                                 # voice exists in Kokoro v1.0; supertonic: F3, one of F1-F5 /
+                                 # M1-M5, see README)
     rate: 1.0
     volume: 0.8
     streaming: true
