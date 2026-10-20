@@ -318,7 +318,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # secrets_scan.py needs the full git history, not the default shallow clone
+          fetch-depth: 0 # secrets_scan.py needs the base branch and the history, not a shallow clone
 
       - uses: actions/setup-python@v7
         with:
@@ -342,10 +342,21 @@ jobs:
       - name: Third-party license audit
         run: python scripts/license_audit.py --check
 
-      # Fails on any un-accepted secret-shaped finding in the working tree or full git history.
-      # Exclusions/acceptances: docs/scan_policy_secrets.yaml.
-      - name: Secrets scan (working tree + full git history)
-        run: python scripts/secrets_scan.py --check
+      # Fails on any un-accepted secret-shaped finding in the working tree or in the history this
+      # run is about: for a pull request the commits it adds on top of its base branch, for a push
+      # the history of the pushed branch. Never every branch at once - a literal on one feature
+      # branch must not fail every other pull request. Exclusions/acceptances:
+      # docs/scan_policy_secrets.yaml.
+      - name: Secrets scan (working tree + this branch's history)
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            python scripts/secrets_scan.py --check --base "origin/$BASE_REF"
+          else
+            python scripts/secrets_scan.py --check
+          fi
 
       - name: Upload third-party license report
         if: always()

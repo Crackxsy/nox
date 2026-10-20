@@ -1,5 +1,11 @@
-"""Secrets scan of the working tree and the full git history. No network calls; runs `git` as a
-subprocess against the current repository.
+"""Secrets scan of the working tree and the git history of the checked-out branch. No network
+calls; runs `git` as a subprocess against the current repository.
+
+Which history: the commits reachable from HEAD - the whole branch by default, or with `--base REF`
+only what HEAD adds on top of REF (`merge-base(REF, HEAD)..HEAD`), which is what a pull request
+brings in. Never the history of every ref: a test literal on one feature branch must not turn
+every other pull request red, and a secret is found where it is introduced - in the pull request
+that adds it, and on the branch it is merged into.
 
 Patterns: generic high-entropy tokens, `sk-...` (OpenAI/Anthropic-style API keys), `oauth:...`
 (Twitch IRC OAuth tokens), `ghp_...` (GitHub tokens), a Telegram bot-token shape
@@ -11,6 +17,7 @@ Usage:
     python scripts/secrets_scan.py                 # scans tree + history, prints a report
     python scripts/secrets_scan.py --check          # exits 1 on any unaccepted finding
     python scripts/secrets_scan.py --tree-only       # skip the (slower) history scan
+    python scripts/secrets_scan.py --check --base origin/develop   # a pull request into develop
 """
 
 from __future__ import annotations
@@ -132,10 +139,10 @@ def _scan_line(line: str) -> list[tuple[str, str]]:
     return hits
 
 
-def _run_git(args: list[str]) -> str:
+def _run_git(args: list[str], repo: Path = REPO_ROOT) -> str:
     result = subprocess.run(  # noqa: S603
         ["git", *args],
-        cwd=REPO_ROOT,
+        cwd=repo,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -145,18 +152,18 @@ def _run_git(args: list[str]) -> str:
     return result.stdout
 
 
-def list_tree_files() -> list[str]:
+def list_tree_files(repo: Path = REPO_ROOT) -> list[str]:
     """Tracked + untracked-but-not-gitignored files (what would actually be published)."""
-    out = _run_git(["ls-files", "--cached", "--others", "--exclude-standard"])
+    out = _run_git(["ls-files", "--cached", "--others", "--exclude-standard"], repo)
     return [line for line in out.splitlines() if line.strip()]
 
 
-def scan_tree(policy: dict[str, Any]) -> list[Finding]:
+def scan_tree(policy: dict[str, Any], repo: Path = REPO_ROOT) -> list[Finding]:
     findings: list[Finding] = []
-    for rel_path in list_tree_files():
+    for rel_path in list_tree_files(repo):
         if is_excluded(rel_path, policy):
             continue
-        full = REPO_ROOT / rel_path
+        full = repo / rel_path
         try:
             text = full.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
@@ -184,10 +191,28 @@ _DIFF_FILE_RE = re.compile(r"^\+\+\+ b/(.+)$")
 _DIFF_COMMIT_RE = re.compile(r"^commit ([0-9a-f]{7,40})")
 
 
-def scan_history(policy: dict[str, Any]) -> list[Finding]:
-    """Scan every added line (`+...`) across the full history of every branch/ref."""
+class UnknownBaseError(ValueError):
+    """`--base` names a ref git does not know (not fetched?)."""
+
+
+def history_range(base: str | None, repo: Path = REPO_ROOT) -> str:
+    """The commits to scan: everything reachable from HEAD, or what HEAD adds on top of `base`."""
+    if not base:
+        return "HEAD"
+    merge_base = _run_git(["merge-base", base, "HEAD"], repo).strip()
+    if not merge_base:
+        raise UnknownBaseError(f"no merge base between {base!r} and HEAD - is {base!r} fetched?")
+    return f"{merge_base}..HEAD"
+
+
+def scan_history(
+    policy: dict[str, Any], base: str | None = None, repo: Path = REPO_ROOT
+) -> list[Finding]:
+    """Scan every added line (`+...`) in the commits reachable from HEAD (see `history_range`)."""
     findings: list[Finding] = []
-    diff_text = _run_git(["log", "--all", "-p", "--no-color", "--unified=0"])
+    diff_text = _run_git(
+        ["log", history_range(base, repo), "-p", "--no-color", "--unified=0"], repo
+    )
     current_commit = ""
     current_path = ""
     for raw_line in diff_text.splitlines():
@@ -241,7 +266,7 @@ def render_report(tree_findings: list[Finding], history_findings: list[Finding])
         lines.append("")
 
     render_group("Working tree", tree_findings)
-    render_group("Git history (all refs, added lines)", history_findings)
+    render_group("Git history (this branch, added lines)", history_findings)
 
     all_findings = tree_findings + history_findings
     open_findings = [f for f in all_findings if not f.accepted]
@@ -257,11 +282,21 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip the git-history scan (faster, for local use).",
     )
+    parser.add_argument(
+        "--base",
+        default=None,
+        help="Scan only the commits HEAD adds on top of this ref (a pull request's base branch, "
+        "e.g. origin/develop). Without it: the whole history reachable from HEAD.",
+    )
     args = parser.parse_args(argv)
 
     policy = load_policy()
     tree_findings = scan_tree(policy)
-    history_findings = [] if args.tree_only else scan_history(policy)
+    try:
+        history_findings = [] if args.tree_only else scan_history(policy, args.base)
+    except UnknownBaseError as exc:
+        print(f"secrets_scan: {exc}", file=sys.stderr)
+        return 2
     report = render_report(tree_findings, history_findings)
     print(report)
 

@@ -73,7 +73,8 @@ manifest can never turn them off. A pull request that weakens one of them will b
 2. **Secrets never live in code.** No key, token, password or OAuth secret in source, config,
    tests, fixtures, logs, prompts or documentation. Secrets go through
    `nox.security.secrets` into the Windows Credential Manager; tests use the in-memory backend.
-   The `release-hygiene` CI job scans the working tree *and* the full git history.
+   The `release-hygiene` CI job scans the working tree *and* the history: every commit a pull
+   request adds (a secret added and deleted again is still found), the whole branch on a push.
 3. **All egress goes through the guard.** Every outbound connection goes through
    `nox.security.egress` and the profile's allowlist. No library may open its own socket to the
    internet, and no new default endpoint may be added without a profile entry.
