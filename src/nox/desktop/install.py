@@ -134,7 +134,7 @@ def _is_nox_process(pid: int) -> bool:
         return False
 
 
-def _install_computer_use(core: CoreLike) -> None:
+def _install_computer_use(core: CoreLike) -> ComputerUse:
     """The second input-synthesis module (`nox.desktop.computer_use`); off until enabled."""
     settings = core.config.desktop.computer_use
     watched = {name.lower() for name in core.config.sensors.game.process_names}
@@ -212,6 +212,7 @@ def _install_computer_use(core: CoreLike) -> None:
 
     if core.bus is not None:
         core.bus.subscribe(E.SECURITY_KILL_SWITCH, on_kill)
+    return computer
 
 
 def install(core: CoreLike) -> ExtensionRuntime:
@@ -224,7 +225,10 @@ def install(core: CoreLike) -> ExtensionRuntime:
         log.warning("desktop.probe_unavailable", error=str(exc))
         return None
 
-    register_desktop_tools(core.tool_registry, probe, lambda: _game_pids(core))
-    _install_computer_use(core)
+    # Computer use first: typing shares its self-approval lock (`InputGuard`).
+    computer = _install_computer_use(core)
+    register_desktop_tools(
+        core.tool_registry, probe, lambda: _game_pids(core), input_guard=computer
+    )
     log.info("desktop.installed")
     return None

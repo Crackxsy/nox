@@ -37,7 +37,10 @@ not the guard that matters most. **A confirmation cannot be given by synthetic i
 session is open and for a few seconds after Nox's last event, the core refuses an "allow" answer
 and every privileged dashboard request (`blocks_confirmation`, wired in `nox.desktop.install`).
 The user ends the session with the stop hotkey - a combination this module never sends - and then
-answers. The combination blocklist (anything with Win, Ctrl+Esc, Alt+Tab, Alt+Esc, Alt+Space,
+answers. `desktop.type_text` shares this lock (`typing_refusal`, `mark_input`): it is refused into
+Nox's windows by the same check and while a confirmation waits, and its keystrokes - Enter
+included - arm the same quiet period, so typing cannot press a focused "Allow" either.
+The combination blocklist (anything with Win, Ctrl+Esc, Alt+Tab, Alt+Esc, Alt+Space,
 Ctrl+Alt+Del, Ctrl+Shift+Esc, the stop hotkey, Alt+F4 on Nox) only keeps the obvious ways of
 handing control to something else out; it is not the boundary.
 
@@ -436,6 +439,21 @@ class ComputerUse:
             return True
         last = self._last_event
         return last is not None and self._clock() - last < CONFIRMATION_QUIET_S
+
+    def typing_refusal(self, pid: int, title: str) -> str | None:
+        """`desktop.type_text`'s half of the lock (`nox.desktop.tools.InputGuard`): typing is
+        refused into Nox's windows by the same check as a click, and while a confirmation waits."""
+        if self._confirmation_pending():
+            return (
+                "a Nox confirmation is waiting for your answer; nothing is typed until it is given"
+            )
+        if self._is_nox((pid, title)):
+            return "that is a Nox window; Nox does not type into itself"
+        return None
+
+    def mark_input(self) -> None:
+        """Typed input counts as Nox's last event: `blocks_confirmation` holds after it too."""
+        self._last_event = self._clock()
 
     def _is_nox(self, window: tuple[Any, ...]) -> bool:
         pid, title = int(window[0]), str(window[1])

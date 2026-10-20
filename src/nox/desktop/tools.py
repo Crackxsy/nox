@@ -14,7 +14,7 @@ wrong one of the two costs the user work.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -28,13 +28,43 @@ from nox.tools.registry import ToolRegistry, ToolSpec
 
 log = get_logger(__name__)
 
-__all__ = ["register_desktop_tools"]
+__all__ = ["InputGuard", "register_desktop_tools"]
 
 #: Entries one process listing returns. A machine has hundreds; 25 by memory answers every question
 #: a person actually asks ("what is eating my RAM", "is Discord running").
 PROCESS_LIMIT = 25
 
 GamePids = Callable[[], set[int]]
+
+
+class InputGuard(Protocol):
+    """The self-approval lock typing shares with computer use (`ComputerUse` implements it).
+
+    Typing is synthetic input like a click: `press_enter` into a dashboard tab whose "Allow"
+    button has the focus would answer a confirmation. So typing is refused into any Nox window
+    (its processes, and a title naming Nox - the dashboard tab in a browser) and while a Nox
+    confirmation waits, and it arms the same lock as a click: for a few seconds after the last
+    keystroke the core refuses an "allow" answer and privileged dashboard requests.
+    """
+
+    def typing_refusal(self, pid: int, title: str) -> str | None:
+        """Why nothing may be typed into this window right now, or None."""
+
+    def mark_input(self) -> None:
+        """Synthetic input is about to go out (or just went out): arm the confirmation lock."""
+
+
+class _TitleGuard:
+    """Without computer use installed: still never type into a window naming Nox."""
+
+    def typing_refusal(self, pid: int, title: str) -> str | None:
+        del pid
+        if "nox" in title.lower():
+            return "that is a Nox window; Nox does not type into itself"
+        return None
+
+    def mark_input(self) -> None:
+        return None
 
 
 class Empty(BaseModel):
@@ -201,7 +231,7 @@ def _build_stop(game_pids: GamePids) -> ToolSpec:
     )
 
 
-def _build_type(probe: WindowProbe, game_pids: GamePids) -> ToolSpec:
+def _build_type(probe: WindowProbe, game_pids: GamePids, guard: InputGuard) -> ToolSpec:
     """The only tool that synthesises input, and the order of its checks is the safety.
 
     Refuse while a game runs, then find the window, then the boundary, then take focus and *verify*
@@ -227,11 +257,21 @@ def _build_type(probe: WindowProbe, game_pids: GamePids) -> ToolSpec:
         except BoundaryError as exc:
             log.info("desktop.type_refused", pid=window.pid, reason=str(exc))
             return {"ok": False, "error": str(exc)}
+        refusal = guard.typing_refusal(window.pid, window.title)
+        if refusal is not None:
+            log.info("desktop.type_refused", pid=window.pid, reason=refusal)
+            return {"ok": False, "error": refusal}
         if not probe.focus(window.handle):
             return {
                 "ok": False,
                 "error": "that window would not come to the front, so nothing was typed",
             }
+        # Again right before the keystrokes: a confirmation can open while focus moves.
+        refusal = guard.typing_refusal(window.pid, window.title)
+        if refusal is not None:
+            log.info("desktop.type_refused", pid=window.pid, reason=refusal)
+            return {"ok": False, "error": refusal}
+        guard.mark_input()
         try:
             typed = type_text(
                 ref.text,
@@ -242,6 +282,8 @@ def _build_type(probe: WindowProbe, game_pids: GamePids) -> ToolSpec:
         except TypingError as exc:
             log.info("desktop.type_failed", pid=window.pid, reason=str(exc))
             return {"ok": False, "error": str(exc)}
+        finally:
+            guard.mark_input()
         return {"ok": True, "window": _as_dict(window), "characters": typed}
 
     return ToolSpec(
@@ -260,8 +302,14 @@ def _build_type(probe: WindowProbe, game_pids: GamePids) -> ToolSpec:
     )
 
 
-def register_desktop_tools(registry: ToolRegistry, probe: WindowProbe, game_pids: GamePids) -> None:
-    """Register the `desktop.*` tools."""
+def register_desktop_tools(
+    registry: ToolRegistry,
+    probe: WindowProbe,
+    game_pids: GamePids,
+    *,
+    input_guard: InputGuard | None = None,
+) -> None:
+    """Register the `desktop.*` tools. `input_guard` is computer use's self-approval lock."""
     actions = (
         (
             "desktop.window_focus",
@@ -295,7 +343,7 @@ def register_desktop_tools(registry: ToolRegistry, probe: WindowProbe, game_pids
         for name, description, risk, act, verb in actions
     ]
     specs.append(_build_stop(game_pids))
-    specs.append(_build_type(probe, game_pids))
+    specs.append(_build_type(probe, game_pids, input_guard or _TitleGuard()))
     for spec in specs:
         registry.register(spec)
     log.info("desktop.tools_registered", count=len(specs))
