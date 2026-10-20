@@ -8,6 +8,7 @@ conservatively so the feature is safe out of the box, and they are meant to be t
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -47,6 +48,11 @@ __all__ = [
 
 
 # ---- stream bot ---------------------------------------------------------------------------------
+
+#: CR, LF and NUL end an IRC line; text that is sent to the Twitch chat must not contain them.
+_LINE_BREAKING = re.compile(r"[\r\n\x00]")
+#: A Twitch login name (what `JOIN #<channel>` takes), with the optional leading `#`; empty = none.
+_TWITCH_CHANNEL = re.compile(r"#?[A-Za-z0-9_]{0,25}")
 
 
 class FunkenConfig(StrictSection):
@@ -124,12 +130,27 @@ class StreamTwitchConfig(StrictSection):
     min_backoff_s: float = Field(default=1.0, gt=0.0)
     max_backoff_s: float = Field(default=30.0, gt=0.0)
 
+    @field_validator("channel")
+    @classmethod
+    def _twitch_login(cls, value: str) -> str:
+        # The channel goes into `JOIN #<channel>` and every `PRIVMSG #<channel>`: anything beyond a
+        # Twitch login name (letters, digits, underscore) could split or end that IRC line.
+        value = value.strip()
+        if not _TWITCH_CHANNEL.fullmatch(value):
+            raise ValueError(
+                "channel must be a Twitch login name: up to 25 letters, digits or underscores "
+                "(a leading # is optional)"
+            )
+        return value
+
     @field_validator("bot_names")
     @classmethod
     def _at_least_one_name(cls, value: list[str]) -> list[str]:
         names = [name.strip() for name in value if name.strip()]
         if not names:
             raise ValueError("bot_names must contain at least one name")
+        if any(_LINE_BREAKING.search(name) for name in names):
+            raise ValueError("bot_names must not contain line breaks or NUL")
         return names
 
     @model_validator(mode="after")
@@ -170,6 +191,15 @@ class StreamAiVoiceDisclosureConfig(StrictSection):
     chat_text: str = Field(default="", max_length=450)
     #: A small label in a corner of the OBS overlay. Empty = no label.
     overlay_label: str = Field(default="KI-Stimme", max_length=40)
+
+    @field_validator("chat_text", "overlay_label")
+    @classmethod
+    def _single_line(cls, value: str, info: ValidationInfo) -> str:
+        # `chat_text` becomes one IRC PRIVMSG line: a CR/LF would end it early and let the rest run
+        # as an IRC command of its own. Refused when the configuration is loaded, not at send time.
+        if _LINE_BREAKING.search(value):
+            raise ValueError(f"{info.field_name} must be a single line (no CR, LF or NUL)")
+        return value
 
 
 class StreamConfig(StrictSection):
