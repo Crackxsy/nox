@@ -172,6 +172,23 @@ describe('how a question ended without this page', () => {
     expect(screen.getByText(t('perm_decided_elsewhere'))).toBeTruthy();
   });
 
+  it('says it as a toast at the top right that takes no clicks and hides by itself', async () => {
+    await start(LOCAL);
+    await status('online');
+    await emit('security.permission_requested', requested('h'));
+    vi.useFakeTimers();
+    await emit('security.permission_decided', { request_id: 'h', decision: 'allow', rule_id: 'confirm.user', by: 'device:x' });
+    const note = document.querySelector('.perm-note')!;
+    expect(note.textContent).toBe(t('perm_decided_elsewhere'));
+    expect(note.closest('.toast-stack')).not.toBeNull();
+    expect(note.closest('.app')).toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(6000);
+    });
+    expect(note.textContent).toBe('');
+    vi.useRealTimers();
+  });
+
   it('says nothing about a question it never showed', async () => {
     await start(LOCAL);
     await status('online');

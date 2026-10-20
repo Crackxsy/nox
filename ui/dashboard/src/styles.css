@@ -2613,15 +2613,33 @@ details > summary:hover {
 
 /* ----------------------------------------------------------------- toasts - */
 
-.toasts {
+.toast-stack {
   position: fixed;
   right: var(--s-5);
   top: calc(var(--top-h) + var(--s-3));
-  z-index: 50;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  width: min(360px, calc(100vw - 2 * var(--gutter)));
+  /* The stack itself takes no clicks; only a toast's own buttons do. */
+  pointer-events: none;
+}
+
+.toasts {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  width: min(360px, calc(100vw - 24px));
+  width: 100%;
+  pointer-events: auto;
+}
+
+@media (max-width: 719px) {
+  .toast-stack {
+    top: calc(56px + var(--s-2));
+    right: var(--gutter);
+  }
 }
 
 .toast {
@@ -3325,34 +3343,20 @@ details > summary:hover {
 }
 
 /*
- * "Decided on another device" / "No answer": a toast at the bottom, on the page's own surface
- * with a border, so it stands out on a black feature tile and on the black page alike, clear of a
- * phone's home indicator. The element is always there (empty and invisible), so a screen reader
- * announces the sentence when it arrives.
+ * How a question ended ("Abgelehnt. Nox tut es nicht."): a toast at the top right under the
+ * header, in the toast stack. It takes no clicks and hides by itself. The element is always there
+ * (empty and invisible), so a screen reader announces the sentence when it arrives.
  */
 .perm-note {
-  position: fixed;
-  left: 50%;
-  /* Above the input bar (and on a phone above the bottom bar), never over it. */
-  bottom: calc(96px + env(safe-area-inset-bottom));
-  transform: translateX(-50%);
-  z-index: 60;
-  width: max-content;
-  max-width: calc(100vw - 2 * var(--gutter));
-  padding: var(--s-3) var(--s-5);
+  max-width: 100%;
+  padding: var(--s-3) var(--s-4);
   border: 1px solid var(--line-2);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-m);
   background: var(--surface);
   color: var(--ink);
   box-shadow: var(--shadow);
   font-size: var(--t-s);
-  text-align: center;
-}
-
-@media (max-width: 719px) {
-  .perm-note {
-    bottom: calc(150px + env(safe-area-inset-bottom));
-  }
+  pointer-events: none;
 }
 
 .perm-note--empty {

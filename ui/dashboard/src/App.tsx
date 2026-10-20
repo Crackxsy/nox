@@ -709,7 +709,12 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
 
         {!onTalk && <CommandBar t={t} stopped={stopped} onOpen={openPalette} />}
         <TabBar t={t} route={route} navigate={navigate} />
+      </div>
 
+      {/* Top right under the header: how a question ended, then Nox's own notices. One column, so
+          they never sit on each other; the note lets clicks through and hides by itself. */}
+      <div className="toast-stack">
+        <PermissionNote t={t} note={note?.kind ?? null} />
         <NotificationToasts
           t={t}
           notifications={state.notifications}
@@ -747,7 +752,6 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
           </Suspense>
         </ChunkBoundary>
       )}
-      <PermissionNote t={t} note={note?.kind ?? null} />
 
       {showFirstRun && (
         <ChunkBoundary t={t} floating>
