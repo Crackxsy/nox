@@ -512,3 +512,27 @@ def test_the_acl_reader_reports_explicit_aces_by_sid(tmp_path) -> None:  # noqa:
     )
     assert LEGACY in _explicit_aces(folder)
     assert all(not ace[0].startswith("S-1-15-2-1") for ace in _explicit_aces(tmp_path))
+
+
+async def test_a_run_cannot_read_the_work_folder_of_another_workload(tmp_path) -> None:  # noqa: ANN001
+    # Re-review N6: every run used one container SID, so a shell command could read the work
+    # folder of a running MCP server or skill. Each workload class has its own container now.
+    sandbox = _appcontainer()
+    backend = sandbox._backend  # type: ignore[attr-defined]
+    sid_b = backend.container_sid_for("skill:canary")
+    assert sid_b != backend.container_sid_for("shell")
+    work_b, _ = backend._prepare_workdir(None, sid_b)
+    try:
+        canary = work_b / "canary.txt"
+        canary.write_text("NOXCANARY-7f3a", encoding="ascii")
+        read = [PS, "-NoProfile", "-NonInteractive", "-Command", f"Get-Content '{canary}'"]
+        other = await sandbox.run(read, limits=Limits(timeout_s=30), workload="shell")
+        assert "NOXCANARY-7f3a" not in other.stdout
+        assert other.exit_code != 0 or "denied" in (other.stdout + other.stderr).lower()
+        # The same class still reads its own folder: the refusal above is the SID, not the path.
+        own = await sandbox.run(read, limits=Limits(timeout_s=30), workload="skill:canary")
+        assert "NOXCANARY-7f3a" in own.stdout
+    finally:
+        import shutil
+
+        shutil.rmtree(work_b, ignore_errors=True)

@@ -177,7 +177,13 @@ class Sandbox:
         # The first call may measure the backend (the Windows loopback probe): off the event loop.
         await asyncio.to_thread(self.check_usable)
 
-    async def _open_proxy(self, egress: EgressDecl) -> EgressProxy | None:
+    def _workload_kwargs(self, workload: str) -> dict[str, Any]:
+        """The workload class goes to a backend that runs each class in a container of its own
+        (Windows: one AppContainer SID per class). Linux needs none: every bwrap run already has
+        its own namespaces and work folder."""
+        return {"workload": workload} if getattr(self._backend, "isolates_workloads", False) else {}
+
+    async def _open_proxy(self, egress: EgressDecl, workload: str) -> EgressProxy | None:
         """Start the run's own proxy when it declared egress, on the transport its backend needs:
         loopback TCP, or a named pipe only the backend's AppContainer may open. A backend that
         offers no transport its child is held to (`"none"`) gets no network at all."""
@@ -191,7 +197,9 @@ class Sandbox:
         )
         transport = getattr(self._backend, "proxy_transport", "tcp")
         if transport == "pipe":
-            await proxy.start_pipe(str(self._backend.container_sid))  # type: ignore[attr-defined]
+            # Only the run's own container may open the pipe.
+            sid = self._backend.container_sid_for(workload)  # type: ignore[attr-defined]
+            await proxy.start_pipe(str(sid))
         elif transport == "tcp":
             await proxy.start()
         else:
@@ -209,12 +217,17 @@ class Sandbox:
         env: Mapping[str, str] | None = None,
         egress: EgressDecl = EgressDecl.NONE,  # type: ignore[attr-defined]
         limits: Limits | None = None,
+        workload: str = "shell",
     ) -> Result:
-        """Run `argv` confined to a work directory, reaching only the declared network (if any)."""
+        """Run `argv` confined to a work directory, reaching only the declared network (if any).
+
+        `workload` is the run's class (`shell`, `mcp:<id>`, `skill:<id>`): runs of different
+        classes cannot see each other's work folders or processes.
+        """
         extra = checked_env(dict(env) if env else None)
         await self._check_usable_async()
         limits = limits or Limits()
-        proxy = await self._open_proxy(egress)
+        proxy = await self._open_proxy(egress, workload)
         try:
             return await self._backend.run(
                 argv,
@@ -223,6 +236,7 @@ class Sandbox:
                 limits=limits,
                 extra_env=extra,
                 **_proxy_kwargs(proxy),
+                **self._workload_kwargs(workload),
             )
         finally:
             if proxy is not None:
@@ -238,6 +252,7 @@ class Sandbox:
         limits: Limits | None = None,
         lifetime_s: float | None = None,
         on_exit: Callable[[int | None], None] | None = None,
+        workload: str = "shell",
     ) -> SandboxProcess:
         """Start a long-running confined process with stdio pipes; see the module docstring.
 
@@ -249,7 +264,7 @@ class Sandbox:
             raise ValueError("lifetime_s must be positive")
         await self._check_usable_async()
         limits = limits or Limits()
-        proxy = await self._open_proxy(egress)
+        proxy = await self._open_proxy(egress, workload)
         try:
             io = await self._backend.start(
                 argv,
@@ -258,6 +273,7 @@ class Sandbox:
                 limits=limits,
                 extra_env=extra,
                 **_proxy_kwargs(proxy),
+                **self._workload_kwargs(workload),
             )
         except BaseException:
             if proxy is not None:

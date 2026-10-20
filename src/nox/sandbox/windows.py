@@ -32,6 +32,13 @@ Two variants, strongest first:
   could hold it to the proxy), and `Sandbox` refuses it altogether unless the user explicitly
   accepted the weaker mode (`hands.accept_weak_sandbox`).
 
+One container per workload class: a shell command, each MCP server and each skill run in an
+AppContainer of their own (`Nox.Sandbox` for shell commands, `Nox.Sandbox.<class>.<id>` for the
+rest, `container_name`), so concurrent runs of different workloads cannot read each other's work
+folders or open each other's processes - a work folder is granted to its own run's container SID
+only, and runtime grants are recorded per SID (`nox sandbox reset` removes them all). Runs of the
+same class share a container.
+
 Network with AppContainer: a run that declares egress gets the proxy over a named pipe whose DACL
 names only the container SID, plus a small forwarder started *inside the same container* that
 listens on the container's own `127.0.0.1:<port>` and relays into the pipe. The child's
@@ -77,6 +84,7 @@ __all__ = [
     "RuntimeGrants",
     "WindowsSandbox",
     "appcontainer_available",
+    "container_name",
     "default_grants_manifest",
     "host_loopback_reachable",
     "probe_verdict",
@@ -84,6 +92,31 @@ __all__ = [
 ]
 
 _APP_CONTAINER_NAME = "Nox.Sandbox"
+#: The workload class of a run that names none: a shell command.
+DEFAULT_WORKLOAD = "shell"
+#: AppContainer names are at most 64 characters; longer workload ids are shortened with a hash.
+_MAX_CONTAINER_NAME = 64
+
+
+def container_name(workload: str) -> str:
+    """The AppContainer profile of a workload class: `Nox.Sandbox` for shell commands (the name
+    every earlier build used), `Nox.Sandbox.<class>.<id>` for the rest (`mcp:github` ->
+    `Nox.Sandbox.mcp.github`). Anything but `<class>:<id>` of letters, digits and `-` - or an
+    over-long name - ends in a hash of the full workload instead, so no two workloads ever share
+    a container by sanitising or truncation."""
+    import hashlib
+    import re
+
+    if workload in ("", DEFAULT_WORKLOAD):
+        return _APP_CONTAINER_NAME
+    name = f"{_APP_CONTAINER_NAME}.{workload.replace(':', '.', 1)}"
+    if not re.fullmatch(r"[a-z]+:[A-Za-z0-9-]+", workload) or len(name) > _MAX_CONTAINER_NAME:
+        digest = hashlib.sha256(workload.encode("utf-8")).hexdigest()[:16]
+        prefix = re.sub(r"[^A-Za-z0-9-]+", "", workload.split(":", 1)[0])[:16] or "x"
+        name = f"{_APP_CONTAINER_NAME}.{prefix}.{digest}"
+    return name
+
+
 _SYSTEM32 = r"C:\Windows\System32"
 _POWERSHELL = _SYSTEM32 + r"\WindowsPowerShell\v1.0\powershell.exe"
 #: Environment the child inherits. Nothing that points at the user's profile or secrets.
@@ -518,7 +551,12 @@ class WindowsSandbox:
         self.mode = SandboxMode.WINDOWS_APPCONTAINER if self._sid else SandboxMode.WINDOWS_LOW_IL
         #: The proxy reaches an AppContainer child over a named pipe (see the module docstring).
         self.proxy_transport = "pipe" if self._sid else "none"
-        self._runtime_ready = False
+        #: `Sandbox` passes each run's workload class to this backend (`isolates_workloads`).
+        self.isolates_workloads = True
+        #: Container SID per workload class (`container_name`); created on first use.
+        self._sids: dict[str, str] = {DEFAULT_WORKLOAD: self._sid} if self._sid else {}
+        #: Container SIDs whose Python runtime grants are in place.
+        self._runtime_ready: set[str] = set()
         self._grants = grants or RuntimeGrants()
         self._grants.migrate_legacy()
         if self._sid is None and self._grants.recorded():
@@ -528,23 +566,41 @@ class WindowsSandbox:
 
     @property
     def container_sid(self) -> str | None:
+        """The container SID of shell commands (the default workload)."""
         return self._sid
 
-    def grant_read(self, folder: Path) -> bool:
-        """Give Nox's container SID read+execute on `folder` - recorded, once (`RuntimeGrants`)."""
+    def container_sid_for(self, workload: str) -> str | None:
+        """The container SID of `workload`'s class, creating its profile on first use; `None` in
+        the low-integrity fallback."""
         if self._sid is None:
-            return False
-        return self._grants.grant(folder, self._sid)
+            return None
+        key = workload or DEFAULT_WORKLOAD
+        sid = self._sids.get(key)
+        if sid is None:
+            try:
+                sid = self._w.app_container_sid(container_name(key))
+            except OSError as exc:
+                raise SandboxUnavailable(f"no AppContainer for {key!r}: {exc}") from exc
+            self._sids[key] = sid
+        return sid
 
-    async def _ensure_runtime(self, argv: list[str]) -> None:
-        """Make the Python runtime readable for the container (see above) - once per backend, and
-        only when a run actually starts that Python: `cmd`, PowerShell or curl need no access to
-        it, so their runs leave the runtime's ACL alone."""
-        if self._sid is None or self._runtime_ready or not _runs_python(argv):
+    def grant_read(self, folder: Path, sid: str | None = None) -> bool:
+        """Give a container SID (default: shell's) read+execute on `folder` - recorded, once
+        per SID (`RuntimeGrants`)."""
+        target = sid or self._sid
+        if target is None:
+            return False
+        return self._grants.grant(folder, target)
+
+    async def _ensure_runtime(self, argv: list[str], sid: str | None) -> None:
+        """Make the Python runtime readable for the run's container (see above) - once per
+        container SID, and only when a run actually starts that Python: `cmd`, PowerShell or curl
+        need no access to it, so their runs leave the runtime's ACL alone."""
+        if sid is None or sid in self._runtime_ready or not _runs_python(argv):
             return
-        self._runtime_ready = True
+        self._runtime_ready.add(sid)
         for folder in python_runtime_dirs():
-            ok = await asyncio.to_thread(self.grant_read, folder)
+            ok = await asyncio.to_thread(self.grant_read, folder, sid)
             log.info("sandbox.runtime_readable", ok=ok)
 
     def guarantees(self) -> Guarantees:
@@ -578,13 +634,14 @@ class WindowsSandbox:
             ),
         )
 
-    def _prepare_workdir(self, cwd: str | None) -> tuple[Path, bool]:
+    def _prepare_workdir(self, cwd: str | None, sid: str | None) -> tuple[Path, bool]:
         if cwd is not None:
             return Path(cwd), False
         work = Path(tempfile.mkdtemp(prefix="nox-sbx-"))
-        if self._sid is not None:
-            # Grant the container SID full control of its one writable place.
-            _grant_container(work, self._sid)
+        if sid is not None:
+            # Only this run's container SID gets its one writable place: a run of another
+            # workload class cannot read or write it.
+            _grant_container(work, sid)
         else:
             self._w.label_low(str(work))
         return work, True
@@ -617,18 +674,21 @@ class WindowsSandbox:
         extra_env: Mapping[str, str] | None = None,
         proxy_auth: str = "",
         proxy_socket: str | None = None,
+        workload: str = DEFAULT_WORKLOAD,
     ) -> Result:
-        """Run `argv` confined. With egress, `proxy_socket` is the proxy's named pipe;
-        a low-integrity run with egress is refused - nothing could hold it to the proxy."""
+        """Run `argv` confined, in the container of `workload`'s class. With egress,
+        `proxy_socket` is the proxy's named pipe; a low-integrity run with egress is refused -
+        nothing could hold it to the proxy."""
         self._check_egress(egress, proxy_socket)
-        await self._ensure_runtime(argv)
-        work, created = self._prepare_workdir(cwd)
+        sid = self.container_sid_for(workload)
+        await self._ensure_runtime(argv, sid)
+        work, created = self._prepare_workdir(cwd, sid)
         forwarder: Spawned | None = None
         try:
             port: int | None = None
             if egress.wants_network and proxy_socket:
                 forwarder, port = await asyncio.to_thread(
-                    self._start_forwarder, work, proxy_socket, limits
+                    self._start_forwarder, work, proxy_socket, limits, sid
                 )
             env = self._child_env(work, port, extra_env, proxy_auth)
             try:
@@ -638,7 +698,7 @@ class WindowsSandbox:
                     env=env,
                     memory_bytes=limits.memory_bytes,
                     max_processes=limits.max_processes,
-                    app_container=self._sid,
+                    app_container=sid,
                 )
             except OSError as exc:
                 raise SandboxUnavailable(f"could not start the sandboxed process: {exc}") from exc
@@ -676,6 +736,7 @@ class WindowsSandbox:
         extra_env: Mapping[str, str] | None = None,
         proxy_auth: str = "",
         proxy_socket: str | None = None,
+        workload: str = DEFAULT_WORKLOAD,
     ) -> ProcessIo:
         """Start `argv` confined exactly like `run`, but keep it running with stdio pipes.
 
@@ -685,8 +746,9 @@ class WindowsSandbox:
         and doing that in `asyncio.to_thread` would starve every other user of the pool.
         """
         self._check_egress(egress, proxy_socket)
-        await self._ensure_runtime(argv)
-        work, created = self._prepare_workdir(cwd)
+        sid = self.container_sid_for(workload)
+        await self._ensure_runtime(argv, sid)
+        work, created = self._prepare_workdir(cwd, sid)
         forwarder: Spawned | None = None
 
         def drop_forwarder() -> None:
@@ -698,7 +760,7 @@ class WindowsSandbox:
             port: int | None = None
             if egress.wants_network and proxy_socket:
                 forwarder, port = await asyncio.to_thread(
-                    self._start_forwarder, work, proxy_socket, limits
+                    self._start_forwarder, work, proxy_socket, limits, sid
                 )
             env = self._child_env(work, port, extra_env, proxy_auth)
             spawned = self._w.spawn(
@@ -708,7 +770,7 @@ class WindowsSandbox:
                 memory_bytes=limits.memory_bytes,
                 max_processes=limits.max_processes,
                 with_stdin=True,
-                app_container=self._sid,
+                app_container=sid,
             )
         except BaseException as exc:
             drop_forwarder()
@@ -772,9 +834,12 @@ class WindowsSandbox:
             cleanup=cleanup,
         )
 
-    def _start_forwarder(self, work: Path, pipe_path: str, limits: Limits) -> tuple[Spawned, int]:
-        """Start the in-container forwarder and return it with the loopback port it listens on."""
-        assert self._sid is not None
+    def _start_forwarder(
+        self, work: Path, pipe_path: str, limits: Limits, sid: str | None
+    ) -> tuple[Spawned, int]:
+        """Start the in-container forwarder (in the run's own container) and return it with the
+        loopback port it listens on."""
+        assert sid is not None
         short = pipe_path.rsplit("\\", 1)[-1]
         if not short.replace("-", "").isalnum():
             raise SandboxUnavailable("unexpected proxy pipe name; failing closed")
