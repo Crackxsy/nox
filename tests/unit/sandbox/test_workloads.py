@@ -14,16 +14,48 @@ from nox.sandbox.model import EgressDecl, Guarantees, Limits, Result, SandboxMod
 from nox.sandbox.netguard import NetGuard
 from nox.sandbox.windows import container_name
 
+KEY = b"k" * 32
+
 
 def test_each_workload_class_has_its_own_container_name() -> None:
-    assert container_name("shell") == "Nox.Sandbox"  # what every earlier build used
-    assert container_name("mcp:github") == "Nox.Sandbox.mcp.github"
-    assert container_name("skill:wetter") == "Nox.Sandbox.skill.wetter"
-    workloads = ("shell", "mcp:a", "mcp:b", "skill:a", "mcp:a b", "mcp:a.b", "mcp.a:b", "mcp:a_b")
-    names = {container_name(w) for w in workloads}
-    assert len(names) == len(workloads)  # never shared, also not by sanitising
-    long = container_name("mcp:" + "x" * 200)
-    assert len(long) <= 64 and long != container_name("mcp:" + "x" * 199)
+    assert container_name("shell", KEY) == "Nox.Sandbox"  # what every earlier build used
+    mcp = container_name("mcp:github", KEY)
+    assert mcp.startswith("Nox.Sandbox.mcp.") and len(mcp) <= 64
+    assert "github" not in mcp  # always the keyed hash, never the id itself
+    workloads = (
+        "shell",
+        "mcp:a",
+        "mcp:b",
+        "skill:a",
+        "skilltest:a",
+        "mcp:a b",
+        "mcp:a.b",
+        "mcp.a:b",
+        "mcp:a:b",
+        "mcp:a_b",
+        "mcp:" + "x" * 200,
+        "mcp:" + "x" * 199,
+    )
+    names = {container_name(w, KEY) for w in workloads}
+    assert len(names) == len(workloads)  # never shared, also not by sanitising or truncation
+
+
+def test_a_chosen_name_cannot_take_over_another_container() -> None:
+    # Before, `mcp:<id>` was the name itself, so an id could be chosen to equal another
+    # workload's (hashed) name. Now every name is a keyed hash: without the installation's key
+    # nobody can aim at one, and no workload but shell's ever gets `Nox.Sandbox`.
+    other_key = b"o" * 32
+    assert container_name("mcp:github", KEY) != container_name("mcp:github", other_key)
+    for workload in ("mcp:Sandbox", "Nox.Sandbox", "mcp:", ":", "x"):
+        assert container_name(workload, KEY) != "Nox.Sandbox"
+
+
+def test_the_container_key_is_created_once_per_installation(tmp_path) -> None:  # noqa: ANN001
+    from nox.sandbox.windows import container_key
+
+    first = container_key(tmp_path)
+    assert len(first) == 32 and container_key(tmp_path) == first
+    assert container_key(tmp_path / "other") != first
 
 
 class _Backend:

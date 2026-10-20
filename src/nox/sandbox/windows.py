@@ -33,11 +33,11 @@ Two variants, strongest first:
   accepted the weaker mode (`hands.accept_weak_sandbox`).
 
 One container per workload class: a shell command, each MCP server and each skill run in an
-AppContainer of their own (`Nox.Sandbox` for shell commands, `Nox.Sandbox.<class>.<id>` for the
-rest, `container_name`), so concurrent runs of different workloads cannot read each other's work
-folders or open each other's processes - a work folder is granted to its own run's container SID
-only, and runtime grants are recorded per SID (`nox sandbox reset` removes them all). Runs of the
-same class share a container.
+AppContainer of their own (`Nox.Sandbox` for shell commands, `Nox.Sandbox.<class>.<keyed hash>`
+for the rest, `container_name`), so concurrent runs of different workloads cannot read each
+other's work folders or open each other's processes - a work folder is granted to its own run's
+container SID only, and runtime grants are recorded per SID (`nox sandbox reset` removes them
+all). Runs of the same class share a container.
 
 Network with AppContainer: a run that declares egress gets the proxy over a named pipe whose DACL
 names only the container SID, plus a small forwarder started *inside the same container* that
@@ -84,6 +84,7 @@ __all__ = [
     "RuntimeGrants",
     "WindowsSandbox",
     "appcontainer_available",
+    "container_key",
     "container_name",
     "default_grants_manifest",
     "host_loopback_reachable",
@@ -98,23 +99,41 @@ DEFAULT_WORKLOAD = "shell"
 _MAX_CONTAINER_NAME = 64
 
 
-def container_name(workload: str) -> str:
+def container_name(workload: str, key: bytes) -> str:
     """The AppContainer profile of a workload class: `Nox.Sandbox` for shell commands (the name
-    every earlier build used), `Nox.Sandbox.<class>.<id>` for the rest (`mcp:github` ->
-    `Nox.Sandbox.mcp.github`). Anything but `<class>:<id>` of letters, digits and `-` - or an
-    over-long name - ends in a hash of the full workload instead, so no two workloads ever share
-    a container by sanitising or truncation."""
+    every earlier build used), `Nox.Sandbox.<class>.<hmac>` for every other workload - always a
+    keyed hash of the whole workload (`container_key`), never the workload's own text, so neither
+    sanitising nor truncation can make two workloads share a container, and a server or skill
+    named on purpose cannot pick the name of somebody else's container."""
     import hashlib
+    import hmac
     import re
 
     if workload in ("", DEFAULT_WORKLOAD):
         return _APP_CONTAINER_NAME
-    name = f"{_APP_CONTAINER_NAME}.{workload.replace(':', '.', 1)}"
-    if not re.fullmatch(r"[a-z]+:[A-Za-z0-9-]+", workload) or len(name) > _MAX_CONTAINER_NAME:
-        digest = hashlib.sha256(workload.encode("utf-8")).hexdigest()[:16]
-        prefix = re.sub(r"[^A-Za-z0-9-]+", "", workload.split(":", 1)[0])[:16] or "x"
-        name = f"{_APP_CONTAINER_NAME}.{prefix}.{digest}"
-    return name
+    digest = hmac.new(key, workload.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+    kind = re.sub(r"[^a-z]", "", workload.split(":", 1)[0].lower())[:16] or "x"
+    return f"{_APP_CONTAINER_NAME}.{kind}.{digest}"
+
+
+def container_key(home: Path | None = None) -> bytes:
+    """The installation's secret for `container_name`, created once (`<nox home>/sandbox/
+    container-key`). Without it nobody can tell which container a workload will get."""
+    import secrets
+
+    from nox.paths import nox_home
+
+    path = (home or nox_home()) / "sandbox" / "container-key"
+    try:
+        key = path.read_bytes()
+        if len(key) >= 32:
+            return key
+    except OSError:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    key = secrets.token_bytes(32)
+    path.write_bytes(key)
+    return key
 
 
 _SYSTEM32 = r"C:\Windows\System32"
@@ -563,6 +582,8 @@ class WindowsSandbox:
         self.isolates_workloads = True
         #: Container SID per workload class (`container_name`); created on first use.
         self._sids: dict[str, str] = {DEFAULT_WORKLOAD: self._sid} if self._sid else {}
+        #: The secret behind `container_name`, read on first use.
+        self._container_key: bytes | None = None
         #: Container SIDs whose Python runtime grants are in place.
         self._runtime_ready: set[str] = set()
         self._grants = grants or RuntimeGrants()
@@ -586,7 +607,9 @@ class WindowsSandbox:
         sid = self._sids.get(key)
         if sid is None:
             try:
-                sid = self._w.app_container_sid(container_name(key))
+                if self._container_key is None:
+                    self._container_key = container_key()
+                sid = self._w.app_container_sid(container_name(key, self._container_key))
             except OSError as exc:
                 raise SandboxUnavailable(f"no AppContainer for {key!r}: {exc}") from exc
             self._sids[key] = sid
