@@ -356,7 +356,11 @@ def test_the_protected_folder_acl_is_admin_only() -> None:
 def test_status_goes_to_hklm_never_a_user_folder() -> None:
     script = wfp_helper.helper_script()
     assert wfp_helper.STATUS_KEY == "SOFTWARE\\Nox\\SandboxRules"
-    assert "[Microsoft.Win32.Registry]::LocalMachine.CreateSubKey($RegPath)" in script
+    # The 64-bit view by name (a 32-bit PowerShell would otherwise write to WOW6432Node, where
+    # the installer's HKLM64 read never looks).
+    assert "[Microsoft.Win32.RegistryView]::Registry64)" in script
+    assert "$k = $HKLM.CreateSubKey($RegPath)" in script
+    assert "Registry]::LocalMachine" not in script
     assert "--status-file" not in script and "WriteAllText" not in script
     # The only file it ever writes is the protected copy, under Program Files.
     assert script.count("WriteAllBytes") == 1
@@ -374,6 +378,14 @@ def test_the_bootstrap_runs_only_bytes_that_match_the_pinned_hash() -> None:
     assert f"@('{hexed}')" in boot and "Jürgen" not in boot and boot.isascii()
     assert "[Convert]::ToInt32($x.Substring($i,4),16)" in boot
     assert '"' not in boot  # the whole bootstrap sits in one pair of double quotes
+    # A 32-bit PowerShell (started by the 32-bit Setup) first restarts the same command line in
+    # the 64-bit one - Windows folder from the API, never %windir% - before reading anything.
+    relaunch = boot.split("$b=$null;", 1)[0]
+    assert "-not [Environment]::Is64BitProcess" in relaunch
+    assert "[Environment]::GetFolderPath('Windows'),'Sysnative\\WindowsPowerShell" in relaunch
+    assert "'-NoProfile -NonInteractive -WindowStyle Hidden -Command '+[char]34" in relaunch
+    assert "$s.UseShellExecute=$false" in relaunch and "exit $q.ExitCode" in relaunch
+    assert "$env:" not in boot and "ReadAllBytes" not in relaunch
     # The bytes it checked are the bytes it runs (and hands on for the protected copy).
     assert "[ScriptBlock]::Create([Text.Encoding]::ASCII.GetString($b))) 'install' $b" in boot
     assert "exit 3" in boot

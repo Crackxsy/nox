@@ -6,6 +6,8 @@
 param([string]$Action = 'show', [byte[]]$Self = $null)
 $ErrorActionPreference = 'Stop'
 $M = [Runtime.InteropServices.Marshal]
+# The 64-bit registry view by name: the status key is read by a 32-bit Setup through HKLM64.
+$HKLM = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
 $Provider = [Guid]'@@PROVIDER@@'
 $Sublayer = [Guid]'@@SUBLAYER@@'
 $NsHex = '@@NAMESPACE@@'
@@ -326,7 +328,7 @@ function Protect {
 }
 
 function SetStatus([string]$what, [int]$code, [string]$msg, [int]$count) {
-  $k = [Microsoft.Win32.Registry]::LocalMachine.CreateSubKey($RegPath)
+  $k = $HKLM.CreateSubKey($RegPath)
   try {
     $seq = 0
     $old = $k.GetValue('Sequence')
@@ -342,12 +344,12 @@ function SetStatus([string]$what, [int]$code, [string]$msg, [int]$count) {
 }
 
 function Forget {
-  [Microsoft.Win32.Registry]::LocalMachine.DeleteSubKeyTree($RegPath, $false)
-  $parent = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('@@REGPARENT@@')
+  $HKLM.DeleteSubKeyTree($RegPath, $false)
+  $parent = $HKLM.OpenSubKey('@@REGPARENT@@')
   if ($null -ne $parent) {
     $empty = $parent.SubKeyCount -eq 0 -and $parent.ValueCount -eq 0
     $parent.Close()
-    if ($empty) { [Microsoft.Win32.Registry]::LocalMachine.DeleteSubKey('@@REGPARENT@@', $false) }
+    if ($empty) { $HKLM.DeleteSubKey('@@REGPARENT@@', $false) }
   }
   if ([IO.Directory]::Exists($Dir) -and ([IO.File]::GetAttributes($Dir) -band [IO.FileAttributes]::ReparsePoint) -eq 0) { [IO.Directory]::Delete($Dir, $true) }
 }

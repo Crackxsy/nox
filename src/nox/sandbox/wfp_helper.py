@@ -156,6 +156,8 @@ def helper_sha256() -> str:
     return hashlib.sha256(helper_bytes()).hexdigest().upper()
 
 
+#: The fixed switches in front of the bootstrap.
+_SWITCHES = "-NoProfile -NonInteractive -WindowStyle Hidden -Command "
 #: The bootstrap the installer runs with the system's PowerShell: read the helper into memory,
 #: check its SHA-256 against the pinned one, then run exactly the bytes it checked (passing them on,
 #: so `install` stores those very bytes). A file that changes after the check changes nothing.
@@ -164,9 +166,23 @@ def helper_sha256() -> str:
 #: apostrophe, a typographic quote PowerShell also reads as one, `$`, a backtick - can end a string
 #: literal in this elevated process. Single quotes only around the hex; the whole bootstrap sits
 #: inside one pair of double quotes on the command line.
+#:
+#: A 32-bit Setup can end up starting the 32-bit PowerShell (WOW64 redirects `System32` for it, and
+#: the elevation path does not honour Setup's own redirection switch). The WFP structures and the
+#: status key are 64-bit, so such a PowerShell first restarts this very command line in the 64-bit
+#: one, through the `Sysnative` alias of the Windows folder (from the API, not `%windir%`) - it is
+#: already elevated, so no second prompt - and hands back its exit code.
+_RELAUNCH_64 = (
+    "if([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess){{"
+    "$a=[Environment]::GetCommandLineArgs();"
+    "$s=[Diagnostics.ProcessStartInfo]::new([IO.Path]::Combine("
+    "[Environment]::GetFolderPath('Windows'),'Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe'),"
+    "'" + _SWITCHES + "'+[char]34+$a[$a.Length-1]+[char]34);"
+    "$s.UseShellExecute=$false;$q=[Diagnostics.Process]::Start($s);$q.WaitForExit();"
+    "exit $q.ExitCode}};"
+)
 _BOOTSTRAP = (
-    "$ErrorActionPreference='Stop';"
-    "$b=$null;"
+    "$ErrorActionPreference='Stop';" + _RELAUNCH_64 + "$b=$null;"
     "foreach($x in @({paths})){{"
     "$f='';for($i=0;$i -lt $x.Length;$i+=4){{$f+=[char][Convert]::ToInt32($x.Substring($i,4),16)}};"
     "try{{$c=[IO.File]::ReadAllBytes($f);"
@@ -175,8 +191,6 @@ _BOOTSTRAP = (
     "if($null -eq $b){{[Console]::Error.WriteLine('no helper matches its pinned SHA-256');exit 3}};"
     "& ([ScriptBlock]::Create([Text.Encoding]::ASCII.GetString($b))) '{action}' $b"
 )
-#: The fixed switches in front of the bootstrap.
-_SWITCHES = "-NoProfile -NonInteractive -WindowStyle Hidden -Command "
 #: The actions a bootstrap may name - fixed words, never data.
 ACTIONS = ("install", "uninstall", "status")
 #: Characters a helper path may never contain (defence in depth - the hex encoding already keeps

@@ -94,6 +94,13 @@ def check_installed() -> int:
     ):
         check((APP / rel).is_file(), f"installed {rel}")
     status = status_key()
+    if status is None:
+        # A 32-bit helper would have reported here instead - say so, it is the likely cause.
+        try:
+            winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\WOW6432Node\\Nox\\SandboxRules")
+            step("a status key exists in WOW6432Node: the helper ran as a 32-bit process")
+        except FileNotFoundError:
+            pass
     check(status is not None and status["Code"] == 0, f"rule step reported success: {status}")
     check((PROTECTED / wfp_helper.HELPER_FILE).is_file(), f"protected copy in {PROTECTED}")
     check(rules_present(), "Nox's WFP provider and filters are in place")
