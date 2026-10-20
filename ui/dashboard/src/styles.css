@@ -3590,3 +3590,12 @@ details > summary:hover {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.chunk-failed--floating {
+  position: fixed;
+  left: 50%;
+  bottom: calc(96px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 70;
+  max-width: calc(100vw - 2 * var(--gutter));
+}

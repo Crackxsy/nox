@@ -2,11 +2,13 @@
  * The route as React state, mirrored into the URL fragment.
  *
  * `navigate` pushes a history entry (so the back gesture on a phone goes back one page) and moves
- * focus to the main region, as the spec asks after every page change. A fragment that is not a
+ * focus to the main region, as the spec asks after every page change - a new area or a new
+ * settings page. Switching tabs inside an area is not a page change: focus stays on the tab, so
+ * the arrow keys of the tab list keep working. A fragment that is not a
  * route - the skip link's `#main`, a settings anchor - leaves the route alone.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { DEFAULT_ROUTE, type Route, hashToRoute, routeToHash, sameRoute } from './routes';
 
@@ -22,6 +24,10 @@ export function focusMain(): void {
 
 export function useRoute(): [Route, (next: Route) => void] {
   const [route, setRoute] = useState<Route>(initial);
+  const current = useRef(route);
+  useEffect(() => {
+    current.current = route;
+  }, [route]);
 
   useEffect(() => {
     const onHash = () => {
@@ -33,6 +39,10 @@ export function useRoute(): [Route, (next: Route) => void] {
   }, []);
 
   const navigate = useCallback((next: Route) => {
+    const before = current.current;
+    const newPage =
+      before.area !== next.area || (next.area === 'settings' && before.area === 'settings' && before.page !== next.page);
+    current.current = next;
     setRoute(next);
     const hash = routeToHash(next);
     if (window.location.hash !== hash) {
@@ -43,7 +53,7 @@ export function useRoute(): [Route, (next: Route) => void] {
       }
     }
     // After the new page has rendered.
-    window.setTimeout(focusMain, 0);
+    if (newPage) window.setTimeout(focusMain, 0);
   }, []);
 
   return [route, navigate];

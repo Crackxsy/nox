@@ -101,7 +101,7 @@ export function StatusStrip({
     const clock = stoppedAt ? clockTime(stoppedAt, lang) : '';
     const since = clock ? fill(t('ux_stopped_since'), clock) : '';
     lines.push(
-      <div key="stopped" role="alert" className="strip strip--danger">
+      <div key="stopped" id="stopped-strip" tabIndex={-1} role="alert" className="strip strip--danger">
         <p>
           <strong>{t('ux_stopped_title')}</strong> {since} {device ? t('ux_stopped_device') : t('ux_stopped_body')}
         </p>

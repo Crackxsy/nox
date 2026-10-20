@@ -369,6 +369,8 @@ function PromptDialog(props: PermissionPromptProps & { prompt: PermissionPrompt;
       const dialog = dialogRef.current;
       if (!dialog) return;
       if (e.key === 'Escape') {
+        // Escape that already closed something else (a menu still open) is not an answer.
+        if (e.defaultPrevented || document.querySelector('dialog[open]')) return;
         e.preventDefault();
         void answerRef.current?.('deny', false);
         return;

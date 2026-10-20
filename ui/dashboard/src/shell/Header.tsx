@@ -11,6 +11,8 @@
 
 import { Suspense, lazy, useRef, useState } from 'react';
 
+import { ChunkBoundary } from './ChunkBoundary';
+
 import { type T, fill, modeHeadline, privacyLabel, withCopy } from '../i18n';
 import type { DashboardState } from '../model';
 import { Icon } from './icons';
@@ -37,6 +39,8 @@ export function Lamp({ presence }: { presence: Presence }) {
 }
 
 export interface HeaderProps {
+  /** A permission sheet is open: the menus close. */
+  blocked?: boolean;
   t: T;
   state: DashboardState;
   presence: Presence;
@@ -65,8 +69,11 @@ export function Header({
   stopBusy,
   onWaiting,
   onOpenPrivacySettings,
+  blocked = false,
 }: HeaderProps) {
   const [menu, setMenu] = useState<'mode' | 'privacy' | null>(null);
+  // A permission question outranks the menus: they close, so the question can be answered.
+  if (blocked && menu !== null) setMenu(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const privacyCloseRef = useRef<HTMLButtonElement | null>(null);
   const mic = state.capture?.microphone === true;
@@ -162,10 +169,10 @@ export function Header({
           </button>
         </div>
         <p className="lede">{t('ux_mode_lede')}</p>
-        <Suspense fallback={<div className="skeleton skeleton-row" />}>
+        <ChunkBoundary t={t}><Suspense fallback={<div className="skeleton skeleton-row" />}>
           <ModeChoice t={t} state={state} client={client} device={device} />
           <MuteSwitch t={t} state={state} client={client} />
-        </Suspense>
+        </Suspense></ChunkBoundary>
       </Sheet>
 
       <Sheet
@@ -187,9 +194,9 @@ export function Header({
             <Icon name="close" />
           </button>
         </div>
-        <Suspense fallback={<div className="skeleton skeleton-row" />}>
+        <ChunkBoundary t={t}><Suspense fallback={<div className="skeleton skeleton-row" />}>
           <PrivacyChoice t={t} state={state} client={client} device={device} />
-        </Suspense>
+        </Suspense></ChunkBoundary>
         <div className="dlg-foot">
           <button
             type="button"

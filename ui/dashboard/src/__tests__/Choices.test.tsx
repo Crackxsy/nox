@@ -78,6 +78,21 @@ describe('PrivacyChoice', () => {
     expect(calls[1]?.payload).toEqual({ mode: 'balanced', pin: '1357' });
   });
 
+  it('never sends a PIN the core did not ask for, not even one typed before Cancel', async () => {
+    let tries = 0;
+    const { c, calls } = client(() =>
+      ++tries === 1 ? Promise.reject(new IpcError('permission.denied', 'PIN required')) : Promise.resolve({}),
+    );
+    render(<PrivacyChoice t={t} state={{ ...state, privacyMode: 'private' }} client={c} device={false} />);
+    fireEvent.click(screen.getByRole('radio', { name: /^Standard/ }));
+    await act(async () => screen.getByRole('button', { name: t('privacy_apply') }).click());
+    fireEvent.change(screen.getByLabelText(t('perm_pin')), { target: { value: '9999' } });
+    fireEvent.click(screen.getByRole('button', { name: t('kill_cancel') }));
+    fireEvent.click(screen.getByRole('radio', { name: /^Offline/ }));
+    await act(async () => screen.getByRole('button', { name: t('privacy_apply') }).click());
+    expect(calls[1]?.payload).toEqual({ mode: 'offline' });
+  });
+
   it('is read-only on a paired device', () => {
     render(<PrivacyChoice t={t} state={state} client={{} as IpcClient} device />);
     expect(screen.getAllByRole('radio').every((r) => (r as HTMLInputElement).disabled)).toBe(true);

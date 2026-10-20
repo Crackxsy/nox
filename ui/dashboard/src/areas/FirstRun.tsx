@@ -25,14 +25,20 @@ const PRIVACY_DESC: Record<string, Key> = {
 export interface FirstRunProps {
   t: T;
   client: IpcClient | null;
+  /** The privacy level in force now: preselected, so "Weiter" never changes it unasked. */
+  currentPrivacy?: string | null;
   onDone: () => void;
 }
 
-export default function FirstRun({ t, client, onDone }: FirstRunProps) {
+export default function FirstRun({ t, client, currentPrivacy, onDone }: FirstRunProps) {
   const base = useId();
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
-  const [privacy, setPrivacy] = useState('balanced');
+  const startPrivacy = currentPrivacy && (PRIVACY_MODES as readonly string[]).includes(currentPrivacy) ? currentPrivacy : 'balanced';
+  const [privacy, setPrivacy] = useState<string>(startPrivacy);
+  // "Alles erlaubt" needs an explicit yes (Einstellungen › Privatsphäre); the first run does not
+  // offer it unless it is already in force.
+  const privacyModes = PRIVACY_MODES.filter((mode) => mode !== 'full' || startPrivacy === 'full');
   const [engine, setEngine] = useState('');
   const [engines, setEngines] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -73,7 +79,7 @@ export default function FirstRun({ t, client, onDone }: FirstRunProps) {
       setError('');
       try {
         if (step === 0 && name.trim()) await api.configSet(client, { 'identity.user_display_name': name.trim() });
-        if (step === 1) await api.setPrivacy(client, privacy, '', privacy === 'full');
+        if (step === 1 && privacy !== startPrivacy) await api.setPrivacy(client, privacy, '', false);
         if (step === 2 && engine) await api.configSet(client, { 'voice.tts.engine': engine });
       } catch (e) {
         setError(errorText(t('error_prefix'), e));
@@ -129,7 +135,7 @@ export default function FirstRun({ t, client, onDone }: FirstRunProps) {
           {step === 1 && (
             <fieldset className="choice">
               <legend className="sr-only">{t('ux_first_privacy_title')}</legend>
-              {PRIVACY_MODES.map((mode) => (
+              {privacyModes.map((mode) => (
                 <label key={mode} className={privacy === mode ? 'opt opt--sel' : 'opt'}>
                   <input
                     type="radio"

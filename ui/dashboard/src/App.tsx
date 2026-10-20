@@ -20,6 +20,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { Auth } from './auth';
 import { DeviceContext } from './device';
 import { type Lang, type T, fill, translator, withCopy } from './i18n';
+import { ChunkBoundary, Mounted } from './shell/ChunkBoundary';
 import { type ConnStatus, type Envelope, type IpcClient, SIGNED_OUT_DETAIL, api, createDashboardClient } from './ipc';
 import {
   type ChatMessage,
@@ -379,6 +380,11 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
         // The core answered: it is stopped. Its event follows; the strip need not wait for it.
         stoppedRef.current = true;
         setState((s) => ({ ...s, systemLevel: 'safe_mode', stoppedAt: s.stoppedAt ?? new Date().toISOString() }));
+        // The Stopp button is gone now; focus goes to the strip that says what happened.
+        window.setTimeout(() => {
+          const lost = document.activeElement === null || document.activeElement === document.body;
+          if (lost) document.getElementById('stopped-strip')?.focus();
+        }, 0);
       })
       .catch((e: unknown) => setStopError(`${t('ux_stop_failed')} ${e instanceof Error ? e.message : ''}`.trim()))
       .finally(() => setStopBusy(false));
@@ -501,6 +507,31 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
   }
   const showFirstRun = firstRunStarted && !firstRunClosed;
 
+  // The page goes `inert` only once the sheet or the first run is really on screen: while its
+  // chunk loads (or if it fails to), Stopp and the page stay usable.
+  const [sheetMounted, setSheetMounted] = useState(false);
+  const [firstRunMounted, setFirstRunMounted] = useState(false);
+  const onSheetMounted = useCallback(() => setSheetMounted(true), []);
+  const onFirstRunMounted = useCallback(() => setFirstRunMounted(true), []);
+  // Where focus was when the sheet came, to give it back when the last question is answered.
+  const [sheetShown, setSheetShown] = useState(false);
+  const [focusBeforeSheet, setFocusBeforeSheet] = useState<Element | null>(null);
+  if (sheetPrompt !== sheetShown) {
+    setSheetShown(sheetPrompt);
+    if (sheetPrompt) {
+      setFocusBeforeSheet(document.activeElement);
+      // A question outranks the menus: the palette closes (the header's menus close themselves).
+      if (palette.open) closePalette();
+    } else {
+      setSheetMounted(false);
+    }
+  }
+  useEffect(() => {
+    if (sheetShown || !focusBeforeSheet) return;
+    // Runs once per closing: the next sheet replaces `focusBeforeSheet` before it can run again.
+    if (focusBeforeSheet instanceof HTMLElement && focusBeforeSheet.isConnected) focusBeforeSheet.focus();
+  }, [sheetShown, focusBeforeSheet]);
+
   const fallback = (
     <div className="page" aria-busy="true">
       <div className="skeleton skeleton-row" />
@@ -512,7 +543,7 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
     <>
       <div
         className="app"
-        inert={sheetPrompt || showFirstRun}
+        inert={(sheetPrompt && sheetMounted) || (showFirstRun && firstRunMounted)}
         data-conn={lanOff ? 'lan_off' : status}
         data-area={route.area}
       >
@@ -524,6 +555,7 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
 
         <Header
           t={t}
+          blocked={sheetPrompt}
           state={state}
           presence={presence}
           online={online}
@@ -594,9 +626,10 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
                 data={data}
                 navigate={navigate}
                 onAsk={ask}
+                offline={offline}
               />
             </div>
-            <Suspense fallback={fallback}>
+            <ChunkBoundary t={t}><Suspense fallback={fallback}>
               {visited.has('nox') && (
                 <div hidden={route.area !== 'nox'}>
                   <NoxArea
@@ -664,7 +697,7 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
                   />
                 </div>
               )}
-            </Suspense>
+            </Suspense></ChunkBoundary>
           </main>
         </DeviceContext.Provider>
 
@@ -679,7 +712,7 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
       </div>
 
       {palette.seq > 0 && (
-        <Suspense fallback={null}>
+        <ChunkBoundary t={t} floating><Suspense fallback={null}>
           <CommandPalette
             key={palette.seq}
             t={t}
@@ -690,27 +723,38 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
             onClose={closePalette}
             onRun={runItem}
           />
-        </Suspense>
+        </Suspense></ChunkBoundary>
       )}
 
       {sheetPrompt && (
-        <Suspense fallback={null}>
-          <PermissionPromptDialog
-            t={t}
-            client={liveClient}
-            queue={prompts}
-            device={device}
-            pinSet={pinSet}
-            onAnswered={onAnswered}
-          />
-        </Suspense>
+        <ChunkBoundary t={t} floating>
+          <Suspense fallback={null}>
+            <PermissionPromptDialog
+              t={t}
+              client={liveClient}
+              queue={prompts}
+              device={device}
+              pinSet={pinSet}
+              onAnswered={onAnswered}
+            />
+            <Mounted onMount={onSheetMounted} />
+          </Suspense>
+        </ChunkBoundary>
       )}
       <PermissionNote t={t} note={note?.kind ?? null} />
 
       {showFirstRun && (
-        <Suspense fallback={null}>
-          <FirstRun t={t} client={liveClient} onDone={() => setFirstRunClosed(true)} />
-        </Suspense>
+        <ChunkBoundary t={t} floating>
+          <Suspense fallback={null}>
+            <FirstRun
+              t={t}
+              client={liveClient}
+              currentPrivacy={state.privacyMode}
+              onDone={() => setFirstRunClosed(true)}
+            />
+            <Mounted onMount={onFirstRunMounted} />
+          </Suspense>
+        </ChunkBoundary>
       )}
     </>
   );

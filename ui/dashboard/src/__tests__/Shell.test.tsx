@@ -281,3 +281,53 @@ describe('a paired device', () => {
     expect(await screen.findByText(t('device_admin_note'))).toBeTruthy();
   });
 });
+
+describe('review fixes', () => {
+  const question = {
+    request_id: 'q1',
+    agent: 'companion',
+    tool: 'file',
+    action: 'delete',
+    mode: 'companion',
+    risk: 'medium',
+    target: 'a.txt',
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    remember_ttl_s: 0,
+  };
+
+  it('closes the Modus menu when a question comes, and gives focus back after the answer', async () => {
+    harness.answers['security.permission.reply'] = { ok: true };
+    await start(LOCAL, '#/settings');
+    const open = screen.getByRole('button', { name: new RegExp(t('ux_mode_open')) });
+    await act(async () => open.click());
+    const menu = await screen.findByRole('dialog', { name: t('mode_title') });
+    await emit('security.permission_requested', question);
+    expect(menu.hasAttribute('open')).toBe(false);
+    const sheet = await screen.findByRole('alertdialog');
+    await act(async () => within(sheet).getByRole('button', { name: t('perm_deny') }).click());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(called('security.permission.reply')[0]?.payload).toMatchObject({ decision: 'deny' });
+  });
+
+  it('keeps focus on the tab while the arrow keys move between tabs', async () => {
+    await start(LOCAL, '#/nox/talk');
+    const tab = await screen.findByRole('tab', { name: t('ux_tab_talk') });
+    tab.focus();
+    await act(async () => {
+      fireEvent.keyDown(tab, { key: 'ArrowRight' });
+    });
+    await act(async () => new Promise((r) => setTimeout(r, 5)));
+    expect(document.activeElement?.getAttribute('role')).toBe('tab');
+    expect(document.activeElement?.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('moves focus to the stopped strip when the pressed Stopp button goes away', async () => {
+    harness.answers['security.kill'] = { ok: true };
+    await start();
+    const button = stopButton()!;
+    button.focus();
+    await act(async () => button.click());
+    await act(async () => new Promise((r) => setTimeout(r, 5)));
+    expect(document.activeElement?.id).toBe('stopped-strip');
+  });
+});

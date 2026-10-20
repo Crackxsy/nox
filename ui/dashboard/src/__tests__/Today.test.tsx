@@ -154,4 +154,17 @@ describe('the first run', () => {
     expect(done).toHaveBeenCalled();
     expect(firstRunDone()).toBe(true);
   });
+
+  it('keeps the privacy level in force and does not offer "Alles erlaubt"', async () => {
+    window.localStorage.removeItem(FIRST_RUN_KEY);
+    const { client, calls } = fake();
+    await act(async () => {
+      render(<FirstRun t={t} client={client} currentPrivacy="private" onDone={vi.fn()} />);
+    });
+    await act(async () => screen.getByRole('button', { name: t('ux_first_next') }).click());
+    expect((screen.getByRole('radio', { name: /^Nur lokal/ }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByRole('radio', { name: /^Alles erlaubt/ })).toBeNull();
+    await act(async () => screen.getByRole('button', { name: t('ux_first_next') }).click());
+    expect(calls.some((c) => c.name === 'privacy.set')).toBe(false);
+  });
 });

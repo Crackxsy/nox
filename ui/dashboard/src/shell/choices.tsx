@@ -202,7 +202,8 @@ export function PrivacyChoice({ t, state, client, device }: PrivacyChoiceProps) 
   const apply = () => {
     if (!draft || draft === current) return;
     const mode = draft;
-    const sentPin = pin.trim();
+    // The PIN goes along only when the core asked for it (a field the person can see).
+    const sentPin = pinNeeded ? pin.trim() : '';
     void run('privacy', async (c) => {
       try {
         await api.setPrivacy(c, mode, sentPin, mode === 'full');
@@ -237,6 +238,7 @@ export function PrivacyChoice({ t, state, client, device }: PrivacyChoiceProps) 
               disabled={locked}
               onChange={() => {
                 setDraft(mode);
+                setPin('');
                 setDone('');
               }}
             />
@@ -282,6 +284,7 @@ export function PrivacyChoice({ t, state, client, device }: PrivacyChoiceProps) 
               className="btn btn--plain"
               onClick={() => {
                 setDraft(null);
+                setPin('');
                 setPinNeeded(false);
                 setError('');
               }}

@@ -7,7 +7,7 @@
  * sizes in light and dark.
  */
 
-import { act, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import axe from 'axe-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -44,10 +44,10 @@ async function violations(): Promise<string[]> {
   return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(' | ')}`);
 }
 
-async function start(hash: string, auth: Auth = { kind: 'local', token: 'tok' }) {
+async function start(hash: string, auth: Auth = { kind: 'local', token: 'tok' }, lang: 'de' | 'en' = 'de') {
   window.history.replaceState(null, '', hash);
   await act(async () => {
-    render(<App auth={auth} lang="de" theme="system" />);
+    render(<App auth={auth} lang={lang} theme="system" />);
   });
   await act(async () => {
     harness.handlers!.onStatus('online');
@@ -173,5 +173,17 @@ describe('axe-core: zero findings', () => {
   it('on a paired device', async () => {
     await start('#/settings/privacy', { kind: 'device', token: 'x'.repeat(43), clientId: 'device:a', deviceId: 'a', name: 'Handy' });
     expect(await violations()).toEqual([]);
+  });
+});
+
+describe('copy', () => {
+  // A string missing from a dictionary would show its key; every page is checked in both languages.
+  const KEY = /\b(?:ux|perm|caps|settings|stream|home|day|presets|lan|device|privacy|mode)_[a-z0-9_]+\b/;
+  it.each(['de', 'en'] as const)('shows no dictionary key on any page (%s)', async (lang) => {
+    for (const hash of ['#/today', '#/nox/talk', '#/nox/history', '#/devices/devices', '#/devices/skills', '#/settings', '#/settings/privacy', '#/settings/voice', '#/settings/system']) {
+      await start(hash, { kind: 'local', token: 'tok' }, lang);
+      expect(document.body.textContent ?? '', `${lang} ${hash}`).not.toMatch(KEY);
+      cleanup();
+    }
   });
 });

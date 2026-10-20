@@ -27,6 +27,7 @@ import type { HomeController } from '../pages/Home';
 import { EntityRow } from '../pages/Home';
 import { DayTile } from '../pages/home/DayTile';
 import type { PermissionPromptProps } from '../PermissionPrompt';
+import { ChunkBoundary } from '../shell/ChunkBoundary';
 import type { AppData } from '../shell/useAppData';
 import type { Route } from '../shell/routes';
 import { troublesOf } from '../shell/presence';
@@ -62,6 +63,8 @@ export interface TodayProps {
   data: AppData;
   navigate: (route: Route) => void;
   onAsk: (text: string) => void;
+  /** The core cannot be reached (not merely "still connecting"): Heute says what to try. */
+  offline?: boolean;
   /** Injected in tests. */
   now?: Date;
 }
@@ -79,6 +82,7 @@ export function Today({
   data,
   navigate,
   onAsk,
+  offline = false,
   now = new Date(),
 }: TodayProps) {
   const [day, setDay] = useState<DayToday | null>(null);
@@ -147,9 +151,9 @@ export function Today({
       ) : (
         <div className="stack">
           {prompts.length > 0 && (
-            <Suspense fallback={<div className="skeleton skeleton-row" />}>
+            <ChunkBoundary t={t}><Suspense fallback={<div className="skeleton skeleton-row" />}>
               <PermissionInline t={t} client={client} device={device} queue={prompts} idBase="today-perm" {...promptProps} />
-            </Suspense>
+            </Suspense></ChunkBoundary>
           )}
           {data.unconfirmed.map((fact) => (
             <div key={fact.id} className="ask ask--fact">
@@ -213,6 +217,19 @@ export function Today({
         <p className="summary">{summary.join(' ')}</p>
       </header>
 
+      {offline && (
+        <section className="sec" aria-labelledby="h-offline">
+          <h2 id="h-offline" className="sec-title">
+            {t('ux_offline_title')}
+          </h2>
+          <ol className="steps">
+            <li>{t('ux_offline_step_1')}</li>
+            <li>{t('ux_offline_step_2')}</li>
+            <li>{t('ux_offline_step_3')}</li>
+          </ol>
+        </section>
+      )}
+
       {nothingConnected && (
         <section className="sec" aria-labelledby="h-empty">
           <h2 id="h-empty" className="sec-title">
@@ -249,9 +266,9 @@ export function Today({
         <>
           {waitingCount > 0 && waiting}
           <section className="sec" aria-label={t('ux_live_title')}>
-            <Suspense fallback={<div className="skeleton skeleton-row" />}>
+            <ChunkBoundary t={t}><Suspense fallback={<div className="skeleton skeleton-row" />}>
               <StreamLive t={t} lang={lang} state={state} client={client} onState={onState} />
-            </Suspense>
+            </Suspense></ChunkBoundary>
           </section>
         </>
       ) : (
