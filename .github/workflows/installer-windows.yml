@@ -96,7 +96,8 @@ jobs:
         shell: pwsh
         run: |
           $setup = (Get-ChildItem installer/out/Nox-Setup-*.exe | Select-Object -First 1).FullName
-          python installer/ci_smoke.py $setup --logs "$env:RUNNER_TEMP/setup-logs"
+          # The built runtime has every dependency of the `nox` package the script imports.
+          build/runtime/python.exe installer/ci_smoke.py $setup --logs "$env:RUNNER_TEMP/setup-logs"
 
       - name: Setup logs
         if: always()

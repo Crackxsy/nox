@@ -6,7 +6,9 @@ starts `nox doctor` from the installed copy, installs over itself, uninstalls, a
 program files, the rules, their status key and the protected helper folder are gone. Run it only
 on a throw-away machine:
 
-    python installer/ci_smoke.py installer/out/Nox-Setup-<version>.exe --logs <folder>
+    build\runtime\python.exe installer/ci_smoke.py installer/out/Nox-Setup-<version>.exe --logs <dir>
+
+(the built runtime: it has every dependency of the `nox` package this script imports).
 """
 
 from __future__ import annotations
