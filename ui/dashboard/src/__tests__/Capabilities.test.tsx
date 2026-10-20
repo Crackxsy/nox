@@ -407,7 +407,7 @@ describe("adding an MCP server", () => {
 
 const READY = {
   id: "bahn",
-  intent: "Abfahrten am Bahnhof Witten ansagen",
+  intent: "Abfahrten am Bahnhof Springfield ansagen",
   state: "ready",
   created_at: "2026-10-19T08:00:00+00:00",
   updated_at: "2026-10-19T08:05:00+00:00",

@@ -57,7 +57,7 @@ class StubCore:
     def skill(self) -> dict[str, Any]:
         return {
             "id": "bahn",
-            "intent": "Abfahrten am Bahnhof Witten ansagen",
+            "intent": "Abfahrten am Bahnhof Springfield ansagen",
             "state": self.skill_state,
             "created_at": "2026-10-19T08:00:00+00:00",
             "updated_at": "2026-10-19T08:05:00+00:00",
@@ -274,7 +274,7 @@ def test_add_mcp_server_and_activate_skill(recorded: tuple[Page, StubCore]) -> N
     _no_horizontal_scroll(page)
 
     # -- activate the self-taught skill: the PIN is asked for only after needs_pin -----------------
-    skill = panel.get_by_role("region", name="Abfahrten am Bahnhof Witten ansagen")
+    skill = panel.get_by_role("region", name="Abfahrten am Bahnhof Springfield ansagen")
     skill.scroll_into_view_if_needed()
     expect(skill.get_by_text("neu – wird mit dem Aktivieren erlaubt")).to_be_visible()
     expect(skill.get_by_label("PIN")).to_have_count(0)
