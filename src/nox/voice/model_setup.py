@@ -9,8 +9,10 @@ Three ways in, one set of rules:
 * the optional step in `nox onboard`, and
 * `nox voice setup`, both through `run_voice_setup` in this process.
 
-Each one refuses in the privacy modes `offline` and `private` before anything is fetched, and none
-of them ever runs without the user's go-ahead. Which files are meant is decided once, here: the
+Each one refuses in the privacy modes `offline` and `private` before anything is fetched, and a
+switch to one of them stops a download that is already running (the core terminates the dashboard's
+downloader process; an in-process run checks `privacy_mode_now` between chunks). None of them ever
+runs without the user's go-ahead. Which files are meant is decided once, here: the
 configured engine's when Nox can fetch them (Supertonic, Kokoro), otherwise Supertonic's - the
 default engine, which is what a user looking at the tile with Piper configured would switch to.
 """
@@ -28,6 +30,7 @@ from typing import Any
 
 from nox.voice.models import (
     DOWNLOADABLE_ENGINES,
+    CancelFn,
     DownloadProgress,
     ProgressFn,
     download_engine,
@@ -47,6 +50,7 @@ __all__ = [
     "model_engine",
     "model_status",
     "parse_progress_line",
+    "privacy_cancel",
     "run_onboarding_voice_step",
     "run_voice_setup",
     "texts",
@@ -61,6 +65,17 @@ MODEL_LICENSES: dict[str, str] = {"supertonic": "OpenRAIL-M", "kokoro": "Apache-
 
 def download_allowed(privacy_mode: str) -> bool:
     return privacy_mode not in BLOCKING_PRIVACY_MODES
+
+
+def privacy_cancel(privacy_mode: Callable[[], str]) -> CancelFn:
+    """A `cancel` hook for `download_files` that stops the download as soon as the privacy mode
+    no longer allows one."""
+
+    def cancel() -> str | None:
+        mode = privacy_mode()
+        return None if download_allowed(mode) else f"privacy mode {mode!r} allows no downloads"
+
+    return cancel
 
 
 def model_engine(configured_engine: str) -> str:
@@ -284,10 +299,15 @@ def run_voice_setup(
     echo: Callable[[str], None],
     confirm: Callable[[str], bool] | None = None,
     download: DownloadFn = download_engine,
+    privacy_mode_now: Callable[[], str] | None = None,
 ) -> int:
     """Download the configured engine's model files with progress lines. Returns an exit code:
     0 when the files are there afterwards (or already were), 1 when the download failed or was
-    refused by the privacy mode, 0 when the user declined (an honest "no" is not an error)."""
+    refused by the privacy mode, 0 when the user declined (an honest "no" is not an error).
+
+    `privacy_mode_now`, when given, is read again after every received chunk: a switch to `offline`
+    or `private` while the download runs stops it and keeps nothing of the file in progress.
+    """
     t = texts(language)
     if configured_engine not in DOWNLOADABLE_ENGINES:
         echo(t["not_downloadable"].format(engine=configured_engine))
@@ -315,7 +335,16 @@ def run_voice_setup(
         echo(t["declined"])
         return 0
     progress: ProgressFn = _Printer(t, echo)
-    code = download(status.engine, status.directory, echo=echo, progress=progress)
+    if privacy_mode_now is None:
+        code = download(status.engine, status.directory, echo=echo, progress=progress)
+    else:
+        code = download(
+            status.engine,
+            status.directory,
+            echo=echo,
+            progress=progress,
+            cancel=privacy_cancel(privacy_mode_now),
+        )
     echo(t["done"] if code == 0 else t["failed"].format(code=code))
     return 0 if code == 0 else 1
 

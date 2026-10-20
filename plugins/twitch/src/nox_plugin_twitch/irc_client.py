@@ -6,11 +6,18 @@ widening egress on its own (the caller's `authorize` hook enforces the manifest-
 PASS/NICK, `CAP REQ` (tags, commands, membership), `JOIN`, PING/PONG, and a reconnect-with-backoff
 loop identical in shape to `ObsWebSocketClient._run`. `connected`/`joined` are reported honestly:
 `joined` only flips once the server echoes back our own JOIN.
+
+Every outgoing line is built from data (chat text, channel, nick, token), so none of them may carry
+a line break or NUL: one CR/LF pair inside a chat message would let the rest of it run as a second
+IRC command (CRLF injection). `send_privmsg` refuses such text, the channel is checked when the
+client is built, PASS/NICK when they are read, and `_send_raw` refuses any such line as a last line
+of defence.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 import ssl
 from collections.abc import Awaitable, Callable
 
@@ -22,6 +29,24 @@ from .protocol import ChatTags, parse_chat_tags, parse_line
 log = get_logger(__name__)
 
 REQUESTED_CAPS = "twitch.tv/tags twitch.tv/commands twitch.tv/membership"
+
+#: Characters that end or corrupt an IRC line; never allowed inside data we put on the wire.
+_LINE_BREAKING = re.compile(r"[\r\n\x00]")
+#: Also not allowed in a single IRC parameter (channel, nick, token): a space or comma would split
+#: it into several (`JOIN #a,#b`), a leading `:` would turn it into the trailing parameter.
+_PARAM_BREAKING = re.compile(r"[\r\n\x00 ,]")
+
+
+def has_line_break(text: str) -> bool:
+    """Whether `text` contains CR, LF or NUL - anything that would end an IRC line early."""
+    return _LINE_BREAKING.search(text) is not None
+
+
+def _require_param(value: str, what: str) -> str:
+    if not value or _PARAM_BREAKING.search(value) is not None or value.startswith(":"):
+        raise IrcInjectionError(f"{what} contains characters an IRC parameter may not have")
+    return value
+
 
 PrivmsgHandler = Callable[[ChatTags, str, str, str], Awaitable[None] | None]
 ConnectedHook = Callable[[], Awaitable[None]]
@@ -38,6 +63,11 @@ class TwitchCredentialsMissingError(RuntimeError):
 
 class TwitchAuthError(RuntimeError):
     """Twitch's server sent a NOTICE rejecting our PASS/NICK."""
+
+
+class IrcInjectionError(ValueError):
+    """Data meant for one IRC line or parameter contains CR/LF/NUL (or, for a parameter, a space
+    or comma). Nothing of it is sent."""
 
 
 async def _default_connector(
@@ -70,6 +100,8 @@ class TwitchIrcClient:
         self.host = host
         self.port = port
         self.channel = channel.lstrip("#")
+        if self.channel:
+            _require_param(self.channel, "channel")
         self.tls = tls
         self._token_provider = token_provider
         self._nick_provider = nick_provider
@@ -149,6 +181,8 @@ class TwitchIrcClient:
             raise TwitchCredentialsMissingError(
                 "nox/twitch/oauth_token and nox/twitch/bot_username must both be set"
             )
+        _require_param(token, "oauth token")
+        _require_param(nick, "bot username")
         self._nick = nick
         reader, writer = await self._connector(self.host, self.port, self.tls)
         self._reader, self._writer = reader, writer
@@ -196,11 +230,17 @@ class TwitchIrcClient:
     # -- sending -------------------------------------------------------------------------------
 
     async def send_privmsg(self, text: str) -> None:
+        if has_line_break(text):
+            raise IrcInjectionError("chat text contains a line break or NUL; not sent")
         if self._writer is None or not self.connected:
             raise ConnectionError(f"not connected to Twitch ({self.last_error or 'no session'})")
         await self._send_raw(f"PRIVMSG #{self.channel} :{text}")
 
     async def _send_raw(self, line: str) -> None:
+        # Last line of defence: whatever built `line`, it goes out as exactly one IRC line or not
+        # at all.
+        if has_line_break(line):
+            raise IrcInjectionError("refusing to send an IRC line containing CR, LF or NUL")
         writer = self._writer
         if writer is None:
             raise ConnectionError("not connected")
@@ -209,6 +249,7 @@ class TwitchIrcClient:
 
 
 __all__ = [
+    "IrcInjectionError",
     "TwitchAuthError",
     "TwitchCredentialsMissingError",
     "TwitchIrcClient",

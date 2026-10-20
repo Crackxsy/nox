@@ -81,4 +81,10 @@ def resolve_settings(api: PluginApi) -> StreamTwitchConfig:
         # A manifest that carries a value the model rejects is a packaging error, not a reason to
         # refuse to start: the configured values apply and the rejected override is named.
         api.log.warning("twitch.manifest_config_invalid", error=str(exc))
-        return settings.model_copy(update={"channel": channel})
+        try:
+            # Validated, not `model_copy`: the channel ends up in `JOIN #<channel>`, so a pinned
+            # manifest channel that is no Twitch login name (spaces, CR/LF, ...) is never used.
+            return StreamTwitchConfig.model_validate({**settings.model_dump(), "channel": channel})
+        except ValidationError:
+            api.log.warning("twitch.manifest_channel_invalid")
+            return settings

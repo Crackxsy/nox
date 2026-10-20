@@ -20,11 +20,11 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from nox.core.events import HealthStatus
-from nox.ipc.errors import ERR_PERMISSION, ERR_RATE_LIMITED, IpcError
+from nox.ipc.errors import ERR_PERMISSION, ERR_RATE_LIMITED, ERR_VALIDATION, IpcError
 from nox.plugins.api import PluginApi
 from nox.security.model import Risk
 
-from .irc_client import TwitchIrcClient
+from .irc_client import TwitchIrcClient, has_line_break
 from .moderation import ModerationGate
 from .protocol import ChatTags
 from .ratelimit import RateLimiter
@@ -43,7 +43,9 @@ class EmptyInput(BaseModel):
 
 
 class ChatSendInput(BaseModel):
-    text: str = Field(..., min_length=1, max_length=500)
+    #: One chat line: CR, LF and NUL are refused here (an IRC line ends at the first CR/LF, so the
+    #: rest would run as a command of its own); `TwitchIrcClient.send_privmsg` refuses them again.
+    text: str = Field(..., min_length=1, max_length=500, pattern=r"^[^\r\n\x00]+$")
 
 
 def _help_text(lang: str) -> str:
@@ -270,6 +272,8 @@ class TwitchPlugin:
         # re-wrapped into a generic "handler failed" message on its way back across the worker's
         # IPC boundary (`nox.ipc.client.IpcClient._answer`'s `except Exception` branch) - only an
         # `IpcError` survives that hop with its real message and a typed code intact.
+        if has_line_break(text):
+            raise IpcError(ERR_VALIDATION, "chat text must be one line (no CR, LF or NUL)")
         ok, reason = self.moderation.check(text)
         if not ok:
             raise IpcError(ERR_PERMISSION, f"message blocked by moderation gate: {reason}")
