@@ -106,10 +106,15 @@ class TemporaryGrant(BaseModel):
     """
 
     grant_id: str
-    scope: str  # task:<id> | project:<id> | repo:<path> | session:<tool>/<action> | cmd:<pattern>
+    #: task:<id> | project:<id> | repo:<path> | session:<tool>/<action> | site:<action>@<origin>
+    #: | cmd:<path>#<digest> argv=<digest> (a remembered shell command, by hash only)
+    scope: str
     max_risk: Risk
     expires_at: datetime
     granted_by: str = "user"
+    #: What the grant covers in words (the remembered command, `du -sh docs`), for the audit
+    #: entry and any list a person reads. Never matched against anything; `scope` decides.
+    label: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 from nox.core.config import NoxConfig
-from nox.core.events import EventBus
+from nox.core.events import E, Event, EventBus
 from nox.security._logging import get_logger
 from nox.security.audit import ChainVerification, SqliteAuditLog
 from nox.security.audit_sink import QueuedAuditLog
@@ -40,6 +40,26 @@ from nox.security.prohibitions import effective_hard_prohibitions
 from nox.security.secrets import PinManager, open_secret_store
 
 log = get_logger(__name__)
+
+
+def _revoke_command_grants_on_change(
+    engine: DefaultPermissionEngine, killswitch: KillSwitchService, bus: EventBus | None
+) -> None:
+    """A remembered shell command was confirmed under the conditions of that moment. When the
+    privacy mode changes or the kill switch fires, those conditions are gone, and so is every
+    `cmd:` grant. The kill switch uses its own stop hook, which runs even when publishing its
+    event failed; a privacy change is announced only on the bus (`privacy.mode_changed`, which
+    `set_mode` awaits, so the grants are gone before it returns)."""
+
+    async def on_kill() -> None:
+        engine.revoke_command_grants(reason="kill_switch")
+
+    def on_privacy(_event: Event) -> None:
+        engine.revoke_command_grants(reason="privacy_mode")
+
+    killswitch.register_stop_hook("permissions.cmd_grants", on_kill)
+    if bus is not None:
+        bus.subscribe(E.PRIVACY_MODE_CHANGED, on_privacy)
 
 
 class SecurityContext:
@@ -118,6 +138,7 @@ class SecurityContext:
             initial_profile=security.profile,
             session_id=session_id,
         )
+        _revoke_command_grants_on_change(engine, killswitch, bus)
         # An explicit argument narrows the list further; otherwise the global one from the
         # configuration applies. Without this the configured list was never wired at all.
         allowlist = tuple(global_egress_allowlist) or tuple(security.egress_allowlist)

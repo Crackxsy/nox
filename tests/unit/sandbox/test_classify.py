@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from nox.hands.shell import ProgramResolver, ShellClass, classify
+from nox.hands.shell import ProgramResolver, ShellClass, argv_digest, classify
 
 EXE = ".exe" if sys.platform == "win32" else ""
 
@@ -129,7 +129,9 @@ def test_cmd_target_binds_the_resolved_path_and_hash(
     assert first.pattern == "apt list"
     path = str(Path(trusted.dirs[0]) / f"apt{EXE}")
     assert first.target.startswith(f"cmd:{path}#")
-    assert first.target.endswith(" list")
+    # The whole argv is hashed into the target, and shown readably after the hashes.
+    assert f" argv={argv_digest('apt', ['list', '--installed'])} " in first.target
+    assert first.target.endswith(" apt list --installed")
     # Another git of the same name elsewhere (a planted copy) yields a different target...
     other_dir = tmp_path / "other"
     other_dir.mkdir()
@@ -144,6 +146,42 @@ def test_cmd_target_binds_the_resolved_path_and_hash(
     (Path(trusted.dirs[0]) / f"apt{EXE}").write_bytes(b"tampered apt, longer than before")
     changed = classify(argv=["apt", "list"], resolver=trusted, readonly_allowed=True)
     assert changed.target != first.target
+
+
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        (["ls", "-l", "a"], ["ls", "-l", "b"]),  # another path
+        (["ls", "-l", "a"], ["ls", "-la", "a"]),  # another flag
+        (["ls", "-l", "a"], ["ls", "-l", "a", "b"]),  # one more argument
+        (["ls", "a", "b"], ["ls", "b", "a"]),  # the same arguments in another order
+        (["ls", "Docs"], ["ls", "docs"]),  # arguments keep their case
+    ],
+)
+def test_different_arguments_are_different_cmd_targets(
+    trusted: ProgramResolver, first: list[str], second: list[str]
+) -> None:
+    a = classify(argv=first, resolver=trusted)
+    b = classify(argv=second, resolver=trusted)
+    assert a.kind is ShellClass.SIMPLE and b.kind is ShellClass.SIMPLE
+    assert a.target != b.target
+
+
+def test_the_same_normalised_argv_is_the_same_cmd_target(trusted: ProgramResolver) -> None:
+    a = classify(argv=["ls", "-l", "docs"], resolver=trusted)
+    assert a.kind is ShellClass.SIMPLE
+    assert classify(argv=["ls", "-l", "docs"], resolver=trusted).target == a.target
+    if sys.platform == "win32":
+        # `ls.exe` names the same file as `ls`, and the program name drops the extension.
+        assert classify(argv=["ls.exe", "-l", "docs"], resolver=trusted).target == a.target
+
+
+def test_argv_digest_is_unambiguous() -> None:
+    # Joining with a separator would make these collide; the JSON encoding keeps them apart.
+    assert argv_digest("du", ["a b"]) != argv_digest("du", ["a", "b"])
+    assert argv_digest("du", []) != argv_digest("du", [""])
+    assert argv_digest("du", ["a"]) == argv_digest("du", ("a",))
+    assert len(argv_digest("du", ["a"])) == 32
 
 
 def test_readonly_only_in_the_strong_sandbox(trusted: ProgramResolver) -> None:

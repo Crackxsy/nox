@@ -16,13 +16,17 @@ without parsing commands itself:
   kind (AppContainer / bwrap) - never in the Windows low-integrity fallback, which can read the
   user's files. The engine then allows it without a confirmation (confirmation fatigue is a UX
   bug).
-* `cmd:<path>#<sha> <subcommand>` - a simple command: a program on the short `SIMPLE_ALLOWLIST`
-  with arguments its entry accepts; HIGH, CONFIRM, and exactly this target is the scope a
-  "remember" may have - a `cmd:` grant for the session. It names the *resolved executable* and a
-  hash of its contents, so a remembered `df -h` never covers a different `df.exe` (a download
-  folder, a planted copy) or the same path after the file changed. This is the one HIGH-risk
-  target a "remember" may turn into a grant (`nox.security.permissions.is_simple_shell_target`),
-  and only for the session; with a declared network it is asked every time.
+* `cmd:<path>#<sha> argv=<argv sha> <program> <args>` - a simple command: a program on the short
+  `SIMPLE_ALLOWLIST` with arguments its entry accepts; HIGH, CONFIRM, and the part before the
+  readable command is the scope a "remember" may have - a `cmd:` grant for the session. It names
+  the *resolved executable* and a hash of its contents, so a remembered `df -h` never covers a
+  different `df.exe` (a download folder, a planted copy) or the same path after the file changed,
+  and a hash of the whole normalised argv (`argv_digest`: the program's canonical name plus every
+  argument exactly as given), so a remembered `du -sh a` never covers `du -sh b` or `du -h a`.
+  The trailing `<program> <args>` is only there so the confirmation shows what runs; the grant
+  stores the hashes. This is the one HIGH-risk target a "remember" may turn into a grant
+  (`nox.security.permissions.is_simple_shell_target`), and only for the session; with a declared
+  network it is asked every time.
 * `complex:<sha>` - everything else: a command line, any program not on the allowlist (an
   interpreter, a launcher, `git push`, `tar`, an unknown tool), arguments the entry does not
   accept, a program given with a path, or one not found in the trusted directories; HIGH,
@@ -37,10 +41,10 @@ abbreviation, an absolute, UNC or device path, a URL or `..` makes it complex. `
 simple (it runs programs named in a repository's configuration). The interpreter and launcher
 checks below stay as an extra signal.
 
-**Interpreters and launchers are always complex.** A `cmd:` grant covers one program's subcommand
-with any further arguments - right for `git push origin` vs `git push upstream`, wrong for a
-program whose arguments *are* the program: a remembered `python a.py` would cover `python evil.py`,
-a remembered `env X=1 foo` any other program. So in argv form every interpreter (`python`, `node`,
+**Interpreters and launchers are always complex.** A `cmd:` grant covers one exact argv, but
+for a program whose arguments *are* the program even that is too much to trust from a model:
+`python a.py` runs whatever `a.py` holds by then, `env X=1 foo` any program. So in argv form
+every interpreter (`python`, `node`,
 `pwsh`, `cmd`, `bash`, ...) and every wrapper that starts another program (`env`, `xargs`, `nice`,
 `timeout`, `sudo`, `runas`, `start`, `npx`, `uvx`, ...) is complex - confirmed each time, never
 remembered - and so are `find` with an `-exec`-like action and `git` with an option or subcommand
@@ -60,6 +64,7 @@ the resolved absolute path, so what was confirmed is what runs.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sys
@@ -82,6 +87,7 @@ __all__ = [
     "CURATED_READONLY",
     "SIMPLE_ALLOWLIST",
     "ProgramResolver",
+    "argv_digest",
     "ShellClass",
     "classify",
     "default_trusted_dirs",
@@ -506,6 +512,19 @@ def _starts_other_code(program: str, tokens: Sequence[str]) -> bool:
     return False
 
 
+def argv_digest(program: str, args: Sequence[str]) -> str:
+    """32 hex chars of the SHA-256 of one normalised argv, the part of a `cmd:` grant that pins
+    the arguments.
+
+    `program` is the canonical name (`_program`: lower-cased, `.exe`/`.com` dropped, so `DU.EXE`
+    and `du` are one program - the resolved path next to it in the target says which file), and
+    every argument is kept exactly as given: no case folding, no reordering, no path cleanup. The
+    list is JSON-encoded before hashing, so no two different argv can serialise alike.
+    """
+    canonical = json.dumps([program, *args], ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
+
+
 def _complex(
     key: str, argv: tuple[str, ...], *, needs_shell: bool, suffix: str = ""
 ) -> Classification:
@@ -567,7 +586,11 @@ def classify(
         return _complex(joined, tuple(tokens), needs_shell=False, suffix=suffix)
     subcommand = _subcommand(tokens)
     pattern = f"{program} {subcommand}".strip()
-    key = f"{resolved.path}#{resolved.digest} {subcommand}".rstrip()
+    args = tokens[1:]
+    # The hashes are what a remembered grant stores and compares; the readable command after them
+    # is what the confirmation shows (`nox.security.permissions.shell_grant_scope`).
+    readable = " ".join((program, *args))
+    key = f"{resolved.path}#{resolved.digest} argv={argv_digest(program, args)} {readable}"
     return Classification(
         ShellClass.SIMPLE, pattern, f"cmd:{key}{suffix}", exec_argv, needs_shell=False
     )

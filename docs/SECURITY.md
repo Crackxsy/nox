@@ -90,12 +90,26 @@ Evaluation order, first match wins:
 
 "Remember for this session" never applies to high risk, with one narrow exception: a
 `shell.run` command that the strict allowlist classified SIMPLE (`nox.hands.shell.SIMPLE_ALLOWLIST`:
-exact program, subcommand and flag spellings; the target names the resolved executable and a hash
-of its bytes). Such a confirmation may become a grant for exactly that target, for the session
-only (`end_session` revokes it). Complex commands, command lines, `git`, interpreters and any
+exact program, subcommand and flag spellings). Its target is
+`cmd:<resolved executable>#<hash of its bytes> argv=<hash of the argv> <program> <arguments>`. The
+argv hash (`nox.hands.shell.argv_digest`) covers the program's canonical name (lower-cased, without
+`.exe`/`.com`) and every argument exactly as given, so a remembered `du -sh docs` does not cover
+`du -sh notes` or `du -h docs`. The confirmation shows the readable command; the grant stores only
+the two hashes as its scope, with the command as its label in the audit entry. Such a confirmation
+may become a grant for exactly that argv, for the session only. A `cmd:` grant in any other shape -
+a hand-written `cmd:git push`, or the older `cmd:<path>#<hash> <subcommand>` that ignored the
+remaining arguments - matches nothing. Complex commands, command lines, `git`, interpreters and any
 command with declared network egress are asked every time; a permanent grant exists only through
-the visible list in the dashboard. While a conversation is tainted (see below), even a remembered
-command asks again.
+the visible list in the dashboard.
+
+When the session ends, every session grant (`session:` and `cmd:`) is revoked
+(`DefaultPermissionEngine.end_session`, audited as `grant.session_end` with its reason): when a
+conversation is discarded - the user asked for a new one, or it sat idle past
+`conversation_idle_s` (one hour by default) - and when the core shuts down. Grants are not per
+conversation, so ending any conversation ends them all. Remembered shell commands end even sooner
+(`revoke_command_grants`, audited as `grant.revoke_cmd`): when the privacy mode changes, when the
+kill switch fires, and whenever untrusted content enters a conversation (taint, see below). While a
+conversation is tainted, any other remembered grant above LOW asks again.
 
 Every decision — allowed or denied — is audited with the request fields (redacted per privacy
 class where appropriate). The engine is pure and deterministic given (request, profile, privacy
@@ -207,8 +221,10 @@ the real Windows Credential Manager or a real credential.
 Every tool result Nox did not compose itself (a web page, a file, a window title, an MCP result,
 the AI provider's own web search) taints the conversation it entered (`nox.security.taint`). Voice,
 each dashboard client and each paired phone are conversations of their own, with their own history,
-model context and taint. While a conversation is tainted, a remembered grant above LOW asks again,
-and any call that sends data off the machine asks - so injected text cannot exfiltrate silently.
+model context and taint. Every remembered shell command (`cmd:` grant) is revoked whenever
+untrusted content enters any conversation. While a conversation is tainted, any other remembered
+grant above LOW asks again, and any call that sends data off the machine asks - so injected text
+cannot exfiltrate silently.
 To keep this from turning into confirmation fatigue, a read-only lookup whose free text is
 demonstrably taken from what the user said runs without asking. Two conditions, both required.
 Positive: a `web.search` query (to the user's own search backend) is plain words forming an
