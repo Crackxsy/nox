@@ -335,5 +335,8 @@ async def test_the_childs_environment_never_reaches_the_launchers(backend: Any) 
             b"DBUS_SESSION_BUS_ADDRESS",
             # Set by systemd itself for the transient scope, not taken from any caller.
             b"INVOCATION_ID",
+            # Set by the cgroup trampoline's /bin/sh to the core's working directory before it
+            # execs bwrap; no caller chooses it.
+            b"PWD",
         }
         assert set(launcher) <= allowed, sorted(launcher)
