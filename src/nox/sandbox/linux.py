@@ -319,6 +319,40 @@ def _probe(cmd: list[str], extra_env: Mapping[str, str] | None = None) -> str | 
     return text.splitlines()[0] if text else f"exit code {done.returncode}"
 
 
+#: The AppArmor profile everything Nox's own bwrap copy starts must run under (stacked).
+_SANDBOXED_PROFILE = "nox-bwrap-sandboxed"
+
+
+def _probe_output(cmd: list[str]) -> str | None:
+    """Run a start-up check and return its stdout; `None` when it failed."""
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed argv built in this module
+            cmd,
+            env=dict(_PROBE_ENV),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=_PROBE_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return done.stdout.decode("utf-8", errors="replace").strip() if done.returncode == 0 else None
+
+
+def check_apparmor_stack(label: str | None) -> None:
+    """Refuse Nox's own bwrap copy unless what it starts really runs under the stacked
+    `nox-bwrap-sandboxed` profile. The copy may create user namespaces where the system forbids
+    it; if the `pix` transition fell back (an AppArmor version that cannot stack under
+    no_new_privs, a profile edited or not loaded), its children would run under the permissive
+    `nox-bwrap` profile instead - so the sandbox fails closed."""
+    if label is None or _SANDBOXED_PROFILE not in label.split(" (", 1)[0].split("//&"):
+        raise SandboxUnavailable(
+            f"the AppArmor profile {_SANDBOXED_PROFILE} is not applied to what the sandbox runs "
+            f"(label: {label or 'unreadable'}); run the Nox installer again - the sandbox fails "
+            "closed until then"
+        )
+
+
 _PROBE_CLIENT = (
     "import socket\n"
     f"s = socket.create_connection(('127.0.0.1', {EGRESS_PORT}), 10)\n"
@@ -459,6 +493,12 @@ class LinuxSandbox:
                 raise SandboxUnavailable(
                     f"bwrap cannot build its sandbox here ({why}); {_UNAVAILABLE_HINT}"
                 )
+            if bwrap == _NOX_BWRAP:
+                with tempfile.TemporaryDirectory(prefix="nox-sbx-probe-") as work:
+                    label = _probe_output(
+                        self._bwrap_argv(["/bin/cat", "/proc/self/attr/current"], work=work)
+                    )
+                check_apparmor_stack(label)
             if self._python is not None:
                 egress_why = _egress_probe(self._bwrap_argv, *self._python)
                 if egress_why is not None:

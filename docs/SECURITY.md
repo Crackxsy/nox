@@ -227,7 +227,9 @@ Raspberry Pi that is bubblewrap (`bwrap`):
   profile that allows user namespaces - the system's `bwrap` stays restricted. What it starts is
   stacked under a second profile that denies every capability and new user namespaces, on top of
   bwrap's own capability drop and `--disable-userns` (the copy is refused if it is older than 0.8
-  or differs from `/usr/bin/bwrap`).
+  or differs from `/usr/bin/bwrap`, and when the sandbox is built Nox reads the AppArmor label of a
+  process the copy started: unless it carries `nox-bwrap-sandboxed`, the stack did not apply and
+  the sandbox fails closed).
 - **Fail closed:** bwrap and the egress path are probed when the sandbox is built. If bwrap
   cannot build its namespaces, nothing runs; if only the egress path fails, runs without declared
   egress still work and declared egress is refused.
@@ -235,6 +237,11 @@ Raspberry Pi that is bubblewrap (`bwrap`):
 For this, `nox.service` allows the namespaces bwrap creates and the `@mount` system calls inside
 them, and does not over-mount `/proc` (`ProtectKernelTunables=`/`ProtectKernelLogs=` would make
 the kernel refuse the sandbox its own `/proc`). The core itself still holds no capabilities.
+This is a deliberate trade-off: the unit cannot set `RestrictNamespaces=` or deny `@mount` for the
+core, so code running *as the core* could create user namespaces and mount inside them (still
+without capabilities in the initial namespace, and on Ubuntu only through Nox's own bwrap copy).
+What the sandbox runs gets neither: bwrap's `--disable-userns`, its capability drop and, on
+Ubuntu, the stacked AppArmor profile forbid both.
 
 ## Plugin sandboxing boundary
 

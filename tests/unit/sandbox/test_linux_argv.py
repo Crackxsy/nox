@@ -280,3 +280,29 @@ def test_nox_bwrap_copy_must_match_the_system_bwrap(tmp_path: Path) -> None:
     system.write_bytes(b"bwrap 0.9.1 (security update)")
     with pytest.raises(SandboxUnavailable, match="installer again"):
         linux_mod.bwrap_path(str(copy), str(system))
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "nox-bwrap (enforce)",  # `pix` fell back: the permissive parent profile only
+        "unconfined",
+        "nox-bwrap-sandboxed-not (enforce)",
+        "",
+        None,
+    ],
+)
+def test_nox_bwrap_is_refused_unless_the_stacked_profile_applies(label: str | None) -> None:
+    from nox.sandbox.linux import check_apparmor_stack
+
+    with pytest.raises(SandboxUnavailable, match="nox-bwrap-sandboxed"):
+        check_apparmor_stack(label)
+
+
+@pytest.mark.parametrize(
+    "label", ["nox-bwrap//&nox-bwrap-sandboxed (enforce)", "nox-bwrap-sandboxed (enforce)"]
+)
+def test_the_stacked_profile_passes(label: str) -> None:
+    from nox.sandbox.linux import check_apparmor_stack
+
+    check_apparmor_stack(label)
