@@ -238,7 +238,7 @@ tqdm==4.70.0
     #   faster-whisper
     #   huggingface-hub
     #   openwakeword
-typer==0.27.2
+typer==0.27.3
     # via nox
 typing-extensions==4.16.0
     # via
