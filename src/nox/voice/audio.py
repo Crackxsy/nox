@@ -63,17 +63,43 @@ def list_devices() -> list[dict[str, str]]:
     return result
 
 
-def resolve_device(name_substring: str, *, kind: str) -> int | None:
-    """Map a case-insensitive name substring to a device index; '' means the system default (None).
+def output_device_names() -> list[str]:
+    """The output devices a user can choose from, one entry per device.
 
-    Preference order among matches: WASAPI, MME, DirectSound, then anything else. Raises
-    AudioUnavailableError when a non-empty name matches nothing.
+    The same device appears once per host API, MME with its name cut to 31 characters; the WASAPI
+    names are the full ones, so they are offered when there are any. Each name resolves back to
+    that device through `resolve_device`.
+    """
+    devices = [d for d in list_devices() if d["outputs"] != "0"]
+    wasapi = [d for d in devices if d["hostapi"] == "Windows WASAPI"]
+    return sorted({d["name"] for d in (wasapi or devices)}, key=str.casefold)
+
+
+def _device_index(value: str) -> int | None:
+    """`"#12"` or `"12"` names a device by its PortAudio index; anything else is a name."""
+    text = value.strip().removeprefix("#")
+    return int(text) if text.isdigit() else None
+
+
+def resolve_device(name_substring: str, *, kind: str) -> int | None:
+    """Map a device setting to a device index; '' means the system default (None).
+
+    The setting is a case-insensitive name substring, or an index written as `#12` (indices move
+    when devices are plugged in, so the settings page stores names). Preference order among name
+    matches: WASAPI, MME, DirectSound, then anything else. Raises AudioUnavailableError when a
+    non-empty setting matches nothing, or an index names a device without that direction.
     """
     needle = name_substring.strip().lower()
     if not needle:
         return None
     key = "max_output_channels" if kind == "output" else "max_input_channels"
     sd = _sd()
+    index = _device_index(needle)
+    if index is not None:
+        devices = sd.query_devices()
+        if index >= len(devices) or devices[index][key] <= 0:
+            raise AudioUnavailableError(f"no {kind} device with index {index}")
+        return index
     hostapis = sd.query_hostapis()
     candidates: list[tuple[int, int]] = []
     for index, dev in enumerate(sd.query_devices()):
@@ -208,6 +234,27 @@ class SoundDeviceOutput:
     def forget_devices(self) -> None:
         """Drop the resolved-device cache, e.g. after the user changed the audio configuration."""
         self._resolved.clear()
+
+    def set_devices(self, *, private_device: str, stream_device: str) -> None:
+        """Speak on other devices from the next utterance on (Settings -> Voice, live).
+
+        `private_device` is where Nox speaks to the user (empty: the system default);
+        `stream_device` is the virtual cable OBS records Nox from (empty: none). An utterance
+        already playing finishes where it started.
+        """
+        self._private_name = private_device
+        self._stream_name = stream_device
+        self._resolved.clear()
+        log.info(
+            "audio.devices_changed",
+            private=private_device or "default",
+            stream=stream_device or "none",
+        )
+
+    @property
+    def device_names(self) -> tuple[str, str]:
+        """The configured (private, stream) device settings."""
+        return self._private_name, self._stream_name
 
     async def _resolve(self, name: str) -> int | None:
         """Device index for a configured name, resolved once and then cached.

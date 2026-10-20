@@ -129,7 +129,11 @@ class ProactiveService:
         text: str,
         *,
         context_key: str = "",
+        speak: bool = True,
     ) -> AttentionDecision:
+        """`speak=False` keeps a notice off the speakers whatever the gates say: for text that
+        must not be heard on stream, a login code for instance. Only the lesser-urgent
+        categories take it; the others decide about speech themselves."""
         if not self._config.proactive.enabled:
             return await self._suppress(kind, priority, "proactive_disabled")
         if kind == "urgent":
@@ -138,7 +142,7 @@ class ProactiveService:
                 return await self._notify_interrupt_eligible(category, text)
             if category is UrgentCategory.REMINDER:
                 return await self._notify_reminder(text)
-            return await self._notify_lesser_urgent(category, text, context_key)
+            return await self._notify_lesser_urgent(category, text, context_key, speak=speak)
         return await self._notify_hint(priority, text, context_key)
 
     # ---- URGENT: security / data-loss (may interrupt) ---------------------------
@@ -204,9 +208,11 @@ class ProactiveService:
     # ---- URGENT: resources / task_result (visible warning, not an interruption) -----------
 
     async def _notify_lesser_urgent(
-        self, category: UrgentCategory, text: str, context_key: str
+        self, category: UrgentCategory, text: str, context_key: str, *, speak: bool = True
     ) -> AttentionDecision:
         _ceiling, allow_speech, reason = self._gate_hint(context_key)
+        if not speak:
+            allow_speech, reason = False, "toast_only"
         spoken = False
         announced = False
         if allow_speech and self._speaker is not None:

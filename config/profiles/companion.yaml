@@ -17,18 +17,22 @@ permissions:
   # entry in plugins/home/manifest.yaml.
   # calendar.google.com / *.webuntis.com: the user's own calendar feeds (private iCal URLs,
   # stored as secrets) for the `day` extension - read-only GETs, nothing is sent.
-  egress_allowlist: ["api.telegram.org:443", "id.twitch.tv:443", "homeassistant.local:8123",
-                     "calendar.google.com:443", "*.webuntis.com:443"]
+  # api.twitch.tv: asking whether the user's own channel went live, so the stream session can
+  # start by itself (nox.stream.autostart; once a minute, only with a Twitch login).
+  egress_allowlist: ["api.telegram.org:443", "id.twitch.tv:443", "api.twitch.tv:443",
+                     "homeassistant.local:8123", "calendar.google.com:443", "*.webuntis.com:443"]
   # 127.0.0.1:8123: a Home Assistant running on this machine (a container, usually). The entry is
   # what authorizes the `home` plugin's declared loopback egress at spawn time; it does NOT make
   # smart-home control survive privacy mode private/offline. The plugin refuses to connect in
   # those modes itself, in code, and reports `unavailable` with that reason (docs/PRIVACY.md).
-  loopback_allowlist: ["127.0.0.1:8123"]
+  # 127.0.0.1:4455: the OBS websocket, so the `obs` plugin can notice OBS going live and start
+  # the stream session (it runs in this profile for that reason).
+  loopback_allowlist: ["127.0.0.1:8123", "127.0.0.1:4455"]
   memory_writes_allowed: true
   screenshots_to_cloud: false
   filesystem_roots: []            # empty = inherit the global read/write roots
   tools_allowed: []
-  integrations_allowed: [ollama, claude_code, telegram, home_assistant]
+  integrations_allowed: [ollama, claude_code, telegram, home_assistant, obs]
   rules:
     # A preset step that starts a program the user registered. The decision turns on who is
     # asking, which is the whole point of the split: `agent: presets` is the core carrying out

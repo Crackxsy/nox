@@ -21,6 +21,20 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 - **Capability benchmark** (`evals/`, `nox eval kann-alles`): 50 everyday tasks in a simulated
   world, an answer-quality set and a latency probe, with a report per run.
 - `file.move` can create a missing destination folder when asked (`create_folders`).
+- **Nox controls OBS.** `obs.request` sends any obs-websocket request; the core classifies each
+  call by request type and fields - reads run, changes are confirmed (a "remember" covers that one
+  type), deleting, going live, recording and anything that could put a private microphone or
+  screen on air is asked every time, stopping the stream and reading the stream key stay hard
+  prohibitions, the privacy scene cannot be touched. Answers are redacted before the model sees
+  them. Plus `obs.screenshot` (local file only).
+- **A stream overlay that survives restarts**: a persistent, read-only overlay credential and
+  "Set up OBS overlay" (dashboard, tray) that creates the browser source after one confirmation.
+- **Nox's own OBS audio track** in one step (VB-Audio Virtual Cable), and the voice output
+  devices as pick lists in Settings, switched live.
+- **The stream session starts by itself** when OBS or the Twitch channel goes live, so chat is
+  answered without saying "lass uns streamen" first.
+- Twitch and OBS login health: an expired Twitch login starts the device-code login and shows the
+  code; a rejected OBS password is reported once.
 - **Nox runs as a server on a Raspberry Pi or any Linux machine.** One command installs it as a
   hardened systemd service (`scripts/install-linux.sh`, `docs/RASPBERRY_PI.md`): its own system
   user, the program read-only in `/opt/nox`, everything it keeps in `/var/lib/nox`, Python 3.13
@@ -74,6 +88,10 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   the Pi's architecture on every pull request.
 
 ### Fixed
+- An installed copy never started: the embedded Python's `._pth` did not name the app folder and
+  the code looked for its configuration one folder too high. Shortcuts now start a launcher that
+  reports a failed start; `installer/README.md` explains how to repair an old installation.
+- High-risk confirmations are never remembered, by the core or the shell.
 - **Memory did not start on a fresh server.** The vault folder did not exist yet, the vault watcher
   failed on it, and with it the whole memory extension - Nox would have remembered nothing on a new
   Pi. A missing vault inside Nox's own folder is now created; one elsewhere (a drive that is not

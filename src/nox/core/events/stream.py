@@ -88,6 +88,10 @@ class ObsConnectionChanged(BaseModel):
     reason: str = ""
 
 
+class ObsAuthFailed(BaseModel):
+    reason: str = ""
+
+
 class ObsDisconnected(BaseModel):
     reason: str = ""
     backoff_s: float = 0.0

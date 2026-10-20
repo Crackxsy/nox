@@ -62,8 +62,9 @@ def test_stream_profile_confirms_scene_switch_and_keeps_screenshots_local(
     assert stream.screenshots_to_cloud is False
     switch = next(r for r in stream.rules if r.action == "scene.switch")
     assert switch.decision is Decision.CONFIRM
+    # Deleting is confirmed rather than refused; being high risk, it is asked every time.
     delete = next(r for r in stream.rules if r.action == "scene.delete")
-    assert delete.decision is Decision.DENY
+    assert delete.decision is Decision.CONFIRM
 
 
 def test_coding_profile_limits_filesystem_roots(profiles: YamlProfileProvider) -> None:

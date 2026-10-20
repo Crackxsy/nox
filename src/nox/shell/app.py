@@ -29,6 +29,7 @@ from nox.shell.logic import (
     hotkey_map,
     kill_path,
     pet_url,
+    rememberable,
     toggle_privacy,
     ws_url,
 )
@@ -131,6 +132,7 @@ class ShellApp:
             on_kill=self._kill_from_tray,
             on_quit=self.quit,
             on_click_through=self.set_click_through,
+            on_obs_overlay=self.setup_obs_overlay,
             language=self.language,
         )
         self.pet: PetWindow | None = None
@@ -344,7 +346,7 @@ class ShellApp:
 
     def _handle_permission(self, payload: dict[str, Any]) -> None:
         key = (str(payload.get("agent")), str(payload.get("tool")), str(payload.get("action")))
-        remembered = self._session_permissions.get(key)
+        remembered = self._session_permissions.get(key) if rememberable(payload) else None
         if remembered is not None:
             reply = {
                 "grant_id": payload.get("request_id"),
@@ -356,7 +358,7 @@ class ShellApp:
             if answer is None:
                 return
             reply = answer
-            if reply.get("remember"):
+            if reply.get("remember") and rememberable(payload):
                 self._session_permissions[key] = reply["decision"] == "allow"
         self._request("security.permission.reply", reply)
 
@@ -381,6 +383,19 @@ class ShellApp:
             "voice.mute",
             {"muted": not self.model.muted},
             failure_text="Mikrofon nicht umgeschaltet",
+        )
+
+    def setup_obs_overlay(self) -> None:
+        """Tray: create/update the OBS browser source. The core asks for confirmation through the
+        same permission dialog as any other change to OBS."""
+        self._request(
+            "stream.overlay.setup",
+            {},
+            failure_text=(
+                "OBS-Overlay nicht eingerichtet"
+                if self.language.startswith("de")
+                else "OBS overlay not set up"
+            ),
         )
 
     def ptt(self, pressed: bool) -> None:

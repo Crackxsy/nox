@@ -33,12 +33,14 @@ class Kind(StrEnum):
 
 
 # `mcp` is Nox's MCP bridge for Claude Code (`nox.mcp`): two requests, a token bound to the role.
+# `overlay` is the stream overlay in OBS: a persistent read-only credential, a few events.
 Role = Literal[
     "core",
     "shell",
     "worker",
     "plugin",
     "pet",
+    "overlay",
     "dashboard",
     "supervisor",
     "remote",

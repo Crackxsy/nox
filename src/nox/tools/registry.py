@@ -20,6 +20,27 @@ Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 Targets = Callable[[dict[str, Any]], str]
 
 
+@dataclass(frozen=True, slots=True)
+class CallScope:
+    """The permission `action` and `risk` of one particular call.
+
+    Most tools have one risk whatever they are asked to do. A generic tool does not: an OBS
+    request that reads the scene list and one that deletes a scene go through the same tool, and
+    must not share one decision - nor one remembered "allow". `action` is what the permission
+    request, the audit entry and a session grant carry, so a distinct action per kind of call is
+    also what keeps a remembered answer to that kind.
+    """
+
+    action: str
+    risk: Risk
+    #: What the confirmation dialog and the audit entry name as the call's target; empty means
+    #: the tool's own `targets`.
+    target: str = ""
+
+
+Scope = Callable[[dict[str, Any]], CallScope]
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ToolSpec:
     """One row of the tool catalogue (Tool Model table).
@@ -41,6 +62,11 @@ class ToolSpec:
     #: How long one call may take, when the executor's default is too short by design - a coding
     #: session takes minutes. None means the executor's default.
     timeout_s: float | None = None
+    #: Derives the permission action and risk from the validated input, for a tool whose risk
+    #: depends on what it is asked to do (see `CallScope`). None means the tool's own action
+    #: (the part of its name after the first dot) and `risk`. Only core code supplies one: a
+    #: plugin cannot lower the risk of its own calls.
+    scope: Scope | None = None
 
 
 class ToolDescription(BaseModel):

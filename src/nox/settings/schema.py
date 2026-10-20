@@ -28,6 +28,7 @@ from pydantic.fields import FieldInfo
 from nox.core.config import NoxConfig
 from nox.paths import PLUGINS_DIR
 from nox.plugins.manifest import discover_manifest_paths
+from nox.settings.devices import device_choices
 from nox.voice.models import engine_models_dir
 
 #: Dotted path -> UI group. The order is the order the dashboard renders.
@@ -48,6 +49,11 @@ EDITABLE_PATHS: dict[str, str] = {
     "voice.tts.rate": "voice",
     "voice.tts.volume": "voice",
     "voice.channels.routing": "voice",
+    # Where Nox speaks: the private device (headphones; empty = the system default) and the
+    # stream device (a virtual cable OBS records Nox from; empty = none). `routing: both` plays
+    # to both - the stream track plus monitoring on the headphones. Picked from a list.
+    "voice.channels.private_device": "voice",
+    "voice.channels.stream_device": "voice",
     "privacy.capture.microphone": "privacy",
     "privacy.capture.camera": "privacy",
     "privacy.capture.screen": "privacy",
@@ -101,6 +107,11 @@ LIVE_APPLY_PATHS: frozenset[str] = frozenset(
         "privacy.capture.camera",
         "privacy.capture.screen",
         "pet.variant",
+        # The voice worker switches devices for the next utterance (`voice.devices.set`), and the
+        # orchestrator reads the routing per utterance.
+        "voice.channels.private_device",
+        "voice.channels.stream_device",
+        "voice.channels.routing",
         "presets.enabled",
         "presets.actions",
         "presets.items",
@@ -225,12 +236,24 @@ def _installed_voices(config: NoxConfig | None) -> list[str] | None:
     return ["", *names]
 
 
+def _output_devices(path: str) -> Callable[[NoxConfig | None], list[str] | None]:
+    """The audio output devices plugged in now (`nox.settings.devices`), for a device setting."""
+
+    def choices(config: NoxConfig | None) -> list[str] | None:
+        current = str(read_value(config, path)) if config is not None else ""
+        return device_choices(current)
+
+    return choices
+
+
 #: Settings whose valid values are not a fixed `Literal` but what is installed. They are offered as
 #: choices like any other, and a value outside them is refused when it is set. A source that
 #: returns None has nothing to list, and the setting stays as it is typed.
 COMPUTED_CHOICES: dict[str, Callable[[NoxConfig | None], list[str] | None]] = {
     "plugins.enabled": _installed_plugins,
     "voice.tts.voice": _installed_voices,
+    "voice.channels.private_device": _output_devices("voice.channels.private_device"),
+    "voice.channels.stream_device": _output_devices("voice.channels.stream_device"),
 }
 
 #: Lists whose order means something: the first backend is asked first.

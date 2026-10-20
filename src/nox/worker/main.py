@@ -126,6 +126,9 @@ class VoiceWorker:
         if service not in SERVICES:
             raise ValueError(f"unknown service {service!r}")
         self.client = client
+        #: The audio output the pipeline plays through, once built (`run_worker` sets it); the
+        #: live device switch in `voice.devices.set` acts on it.
+        self.audio_output: Any = None
         self.connect_deadline_s = connect_deadline_s
         self.connect_backoff_s = connect_backoff_s
         self._ran_once = False
@@ -175,6 +178,9 @@ class VoiceWorker:
             self.client.handle("stt.transcribe", self._on_stt_transcribe)
         self.client.handle("voice.ptt", self._on_voice_ptt)
         self.client.handle("voice.mute", self._on_voice_mute)
+        if "tts" in self.capabilities:
+            self.client.handle("voice.devices.list", self._on_devices_list)
+            self.client.handle("voice.devices.set", self._on_devices_set)
         self.client.on(E.SECURITY_KILL_SWITCH, self._on_kill_switch)
         self.client.on(E.SECURITY_PANIC, self._on_panic)
         self.client.on(E.PRIVACY_CAPTURE_CHANGED, self._on_capture_changed)
@@ -245,6 +251,23 @@ class VoiceWorker:
 
     async def _on_voice_mute(self, payload: dict[str, Any], _req: Any = None) -> dict[str, Any]:
         await self._pipeline_ready().set_muted(bool(payload.get("muted", True)))
+        return {"ok": True}
+
+    async def _on_devices_list(self, _payload: dict[str, Any], _req: Any = None) -> dict[str, Any]:
+        """The output devices Settings offers; enumerated here, where the audio stack lives."""
+        from nox.voice.audio import output_device_names
+
+        return {"outputs": await asyncio.to_thread(output_device_names)}
+
+    async def _on_devices_set(self, payload: dict[str, Any], _req: Any = None) -> dict[str, Any]:
+        """Switch the private/stream output devices live (Settings -> Voice)."""
+        output = self.audio_output
+        if output is None or not hasattr(output, "set_devices"):
+            return {"ok": False, "reason": "no audio output in this worker"}
+        output.set_devices(
+            private_device=str(payload.get("private_device", "")),
+            stream_device=str(payload.get("stream_device", "")),
+        )
         return {"ok": True}
 
     # ---- inbound events --------------------------------------------------------------------------
@@ -560,6 +583,7 @@ async def run_worker(service: str, hub_url: str, token: str, voice_cfg: VoiceCon
         await tts.load()
         devices.audio_in = components["audio_in"]
         devices.audio_out = components["audio_out"]
+        worker.audio_output = devices.audio_out
         return stt, tts
 
     def factory(emit: Emit, capture_allowed: Callable[[], bool], cfg: VoiceConfig) -> VoicePipeline:

@@ -43,6 +43,7 @@ from nox.plugins.manifest import (
     load_manifest,
     validate_tool_name,
 )
+from nox.plugins.scopes import scope_for
 from nox.security.model import Decision, PermissionRequest, Profile, Risk
 
 log = get_logger(__name__)
@@ -138,6 +139,8 @@ class PluginToolSpec:
     local: bool
     targets: Callable[[dict[str, Any]], str] | None
     handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+    timeout_s: float | None = None
+    scope: Callable[[dict[str, Any]], Any] | None = None
 
 
 class ToolRegistryLike(Protocol):
@@ -851,6 +854,7 @@ class PluginManager:
                     rec.plugin_id, declaration.name, permission.timeout_s
                 ),
                 timeout_s=permission.timeout_s,
+                scope=scope_for(rec.plugin_id, declaration.name, manifest.config),
             )
             self.tools.register(spec)
             rec.tools.append(declaration.name)
@@ -928,14 +932,24 @@ class PluginManager:
         if spec is None:
             raise IpcError(ERR_NOT_FOUND, f"unknown tool {p.name!r}")
         tool, _, action = p.name.partition(".")
+        risk = Risk(spec.risk)
+        target = str(p.input.get("target", ""))
+        scope = getattr(spec, "scope", None)
+        if scope is not None:
+            try:
+                call_scope = scope(dict(p.input))
+            except ValueError as exc:
+                raise IpcError(ERR_PERMISSION, f"{p.name}: {exc}") from exc
+            action, risk = call_scope.action, call_scope.risk
+            target = call_scope.target or target
         decision = self._engine.check(
             PermissionRequest(
                 agent="plugin",
                 tool=tool,
                 action=action,
                 mode=self._mode(),
-                risk=Risk(spec.risk),
-                target=str(p.input.get("target", "")),
+                risk=risk,
+                target=target,
                 origin="plugin",
             )
         )

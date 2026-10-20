@@ -4,7 +4,7 @@ security:
 
 permissions:
   id: stream
-  description: Live streaming. OBS scene switches are confirmed, scenes are never deleted, screenshots stay local.
+  description: Live streaming. OBS changes are confirmed, deleting scenes or sources every single time, screenshots stay local.
   cloud_allowed: true
   # Twitch chat and the Twitch API, for the twitch plugin.
   # Not loopback, so this only applies in FULL/BALANCED privacy mode - PRIVATE/OFFLINE still block it.
@@ -31,19 +31,24 @@ permissions:
       action: "run_action"
       decision: allow
       reason: "the program, the preset and the trigger were all configured by the user"
+    # Deleting or renaming a scene or source (obs.request RemoveScene/SetSceneName/RemoveInput)
+    # is high risk: asked every single time, and a "remember" never applies to it
+    # (nox.security.permissions.NEVER_REMEMBERED). The privacy scene cannot be touched at all.
     - id: stream.obs.scene_delete
       tool: "obs*"
       action: "scene.delete"
-      decision: deny
-      reason: "existing scenes and sources are never deleted"
+      decision: confirm
+      reason: "deleting a scene is confirmed every time"
     - id: stream.obs.scene_rename
       tool: "obs*"
       action: "scene.rename"
-      decision: deny
+      decision: confirm
+      reason: "renaming a scene is confirmed every time"
     - id: stream.obs.source_delete
       tool: "obs*"
       action: "source.delete"
-      decision: deny
+      decision: confirm
+      reason: "deleting a source is confirmed every time"
     - id: stream.obs.scene_switch
       tool: "obs*"
       action: "scene.switch"

@@ -207,13 +207,27 @@ def hotkey_map(config: dict[str, Any] | None = None) -> dict[frozenset[str], Hot
     return mapping
 
 
+#: Risk levels whose confirmation is never remembered (the core refuses to, too - see
+#: `nox.security.permissions.NEVER_REMEMBERED`); the dialog does not offer the checkbox for them.
+NEVER_REMEMBERED_RISKS: frozenset[str] = frozenset({"high", "critical"})
+
+
+def rememberable(request: dict[str, Any]) -> bool:
+    """Whether "remember for this session" may apply to this PermissionRequested payload."""
+    return str(request.get("risk", "")).lower() not in NEVER_REMEMBERED_RISKS
+
+
 def permission_reply(request: dict[str, Any], *, allow: bool, remember: bool) -> dict[str, Any]:
     """Payload for `security.permission.reply` from a PermissionRequested payload + decision."""
     grant_id = request.get("request_id") or request.get("grant_id")
     if not grant_id:
         raise ValueError("permission request without request_id")
     decision = "allow" if allow else "deny"
-    return {"grant_id": str(grant_id), "decision": decision, "remember": remember}
+    return {
+        "grant_id": str(grant_id),
+        "decision": decision,
+        "remember": remember and rememberable(request),
+    }
 
 
 def kill_path(model: ShellModel) -> str:

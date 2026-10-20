@@ -157,6 +157,12 @@ package_exceptions:
     ecosystem: python
     category: allow
     reason: "MPL-2.0, transitive dev-tooling dependency, unmodified - same reasoning as certifi."
+  - name: hypothesis
+    ecosystem: python
+    category: allow
+    reason: >
+      MPL-2.0, dev-only test dependency (property-based tests), never imported by or shipped with
+      the product; not redistributed to end users.
   - name: pytest-base-url
     ecosystem: python
     category: allow

@@ -24,6 +24,7 @@ from nox.core.logging import get_logger
 from nox.core.tasks import TaskQueue
 from nox.data.repos import TaskRepository, TaskRow
 from nox.data.rl_repos import RlEventRepository, RlMatchRepository, RlReplayRepository
+from nox.paths import PLUGINS_DIR
 from nox.rl import replay_parser
 from nox.rl.paths import default_replay_folder
 from nox.rl.services import (
@@ -45,7 +46,7 @@ def _import_callout_engine() -> Any:
     """The rule engine's class, or None. It lives in the plugin package, which the core does not
     depend on; without it callouts are honestly absent rather than silently wrong."""
     try:
-        plugin_src = Path(__file__).resolve().parents[3] / "plugins" / "rl" / "src"
+        plugin_src = PLUGINS_DIR / "rl" / "src"
         if str(plugin_src) not in sys.path and plugin_src.is_dir():
             sys.path.append(str(plugin_src))
         from nox_plugin_rl.callouts import CalloutEngine

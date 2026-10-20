@@ -21,6 +21,15 @@ def test_dialog_shows_request_and_builds_reply(qapp: Any) -> None:
     assert "git push" in d.box.informativeText() and "high" in d.box.informativeText()
     assert d.box.defaultButton() is d.deny_button
     assert d.decision(False) == {"grant_id": "req-7", "decision": "deny", "remember": False}
+    # High risk: no "remember" offered, and a checked box would not be sent either.
+    assert d.box.checkBox() is None
+    d.remember.setChecked(True)
+    assert d.decision(True) == {"grant_id": "req-7", "decision": "allow", "remember": False}
+
+
+def test_dialog_offers_remember_below_high_risk(qapp: Any) -> None:
+    d = PermissionDialog({**REQ, "risk": "medium"}, language="de")
+    assert d.box.checkBox() is d.remember
     d.remember.setChecked(True)
     assert d.decision(True) == {"grant_id": "req-7", "decision": "allow", "remember": True}
 

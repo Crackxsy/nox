@@ -59,13 +59,20 @@ export interface PetIpcHandlers {
   onStatus: (status: ConnStatus, detail?: string) => void;
 }
 
-export async function createPetClient(token: string, handlers: PetIpcHandlers): Promise<IpcClient> {
+/** `overlay`: an OBS browser source on its read-only overlay credential; it may watch, never act. */
+export type PetRole = 'pet' | 'overlay';
+
+export async function createPetClient(
+  token: string,
+  handlers: PetIpcHandlers,
+  role: PetRole = 'pet',
+): Promise<IpcClient> {
   const url = await resolveWsUrl(window.location);
   const client = new IpcClient({
     url,
     token,
-    role: 'pet',
-    id: `pet:${Math.random().toString(36).slice(2, 8)}`,
+    role,
+    id: `${role}:${Math.random().toString(36).slice(2, 8)}`,
     patterns: PET_PATTERNS,
     clientVersion: '0.1.0',
     onEvent: handlers.onEvent,

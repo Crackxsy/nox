@@ -84,6 +84,8 @@ class E:
     # The recording software's own recording toggle, which is a different thing from the
     # stream going live - that is STREAM_STARTED/STREAM_ENDED.
     OBS_RECORDING_CHANGED = "obs.recording_changed"
+    # OBS refused the websocket login (wrong or missing password). Once per run of failures.
+    OBS_AUTH_FAILED = "obs.auth_failed"
 
     TWITCH_CONNECTED = "twitch.connected"
     TWITCH_DISCONNECTED = "twitch.disconnected"

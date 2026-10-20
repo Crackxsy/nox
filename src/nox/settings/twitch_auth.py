@@ -70,6 +70,11 @@ ClientFactory = Callable[..., httpx.AsyncClient]
 Sleeper = Callable[[float], Awaitable[None]]
 
 
+def _rejected(exc: IpcError) -> bool:
+    """Twitch answered and said no (400/401), as opposed to not answering at all."""
+    return "rejected by Twitch (400)" in exc.message or "rejected by Twitch (401)" in exc.message
+
+
 class TwitchAuthService:
     """Owns the device-code flow and the stored Twitch tokens of one core."""
 
@@ -118,6 +123,11 @@ class TwitchAuthService:
     @property
     def state(self) -> TwitchAuthState:
         return self._state
+
+    @property
+    def needs_login(self) -> bool:
+        """Twitch no longer accepts the stored login: only signing in again helps."""
+        return self._state is TwitchAuthState.EXPIRED
 
     # -- device code flow ------------------------------------------------------------------------
 
@@ -283,8 +293,16 @@ class TwitchAuthService:
                     what="token refresh",
                 )
             except IpcError as exc:
-                self._set_state(TwitchAuthState.ERROR, error=exc.message)
+                if _rejected(exc):
+                    # "Invalid refresh token": retrying cannot help, the user has to sign in.
+                    self._set_state(
+                        TwitchAuthState.EXPIRED,
+                        error="Twitch rejected the stored login; sign in again",
+                    )
+                else:
+                    self._set_state(TwitchAuthState.ERROR, error=exc.message)
                 await self._publish()
+                log.warning("twitch.auth.refresh_failed", state=self._state.value)
                 return False
             if not data.get("access_token"):
                 self._set_state(TwitchAuthState.EXPIRED, error="refresh token rejected")
@@ -296,6 +314,10 @@ class TwitchAuthService:
 
     def _needs_refresh(self) -> bool:
         if self._stored_access_token() is None:
+            return True
+        if self._state is TwitchAuthState.ERROR:
+            # A refresh that failed for a passing reason (offline, Twitch down) is tried again on
+            # the next round instead of waiting for an expiry time nobody learned.
             return True
         if self._expires_at is None:
             return False

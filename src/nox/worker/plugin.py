@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from nox import paths
 from nox.core.events import E
 from nox.core.logging import get_logger
 from nox.ipc.protocol import Envelope
@@ -27,7 +28,7 @@ from nox.worker.heartbeat import heartbeat_loop
 log = get_logger(__name__)
 
 HEARTBEAT_S = 2.0
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = paths.REPO_ROOT
 
 
 def plugins_dir() -> Path:

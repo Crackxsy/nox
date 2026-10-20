@@ -363,8 +363,14 @@ export function reduceEvent(state: PetState, name: string, payload: Record<strin
     case 'tts.started':
       return { ...state, speakingLevel: Math.max(state.speakingLevel, 0.4) };
     case 'tts.chunk': {
-      const text = typeof payload.text === 'string' ? payload.text : '';
-      return { ...state, speakingLevel: bumpSpeaking(state.speakingLevel, text.length || 20) };
+      // The core sends the pet how much is said (`chars`), never what; `text` is the older shape.
+      const chars =
+        typeof payload.chars === 'number'
+          ? payload.chars
+          : typeof payload.text === 'string'
+            ? payload.text.length
+            : 0;
+      return { ...state, speakingLevel: bumpSpeaking(state.speakingLevel, chars || 20) };
     }
     case 'tts.finished':
     case 'tts.interrupted':

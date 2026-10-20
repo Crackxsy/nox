@@ -99,6 +99,13 @@ export const api = {
   profileForget: (c: IpcClient, id: number) => c.request('memory.profile.forget', { id }),
   profileConfirm: (c: IpcClient, id: number) => c.request('memory.profile.confirm', { id }),
   funkenTop: (c: IpcClient, limit = 10) => c.request('stream.funken.top', { limit }),
+  /** Whether an overlay credential exists - never the credential itself. */
+  overlayStatus: (c: IpcClient) => c.request('stream.overlay.status', {}),
+  /** Creates/updates the OBS browser source; the shell asks the user to confirm. */
+  overlaySetup: (c: IpcClient) => c.request('stream.overlay.setup', {}),
+  overlayRevoke: (c: IpcClient) => c.request('stream.overlay.revoke', {}),
+  audioTrackSetup: (c: IpcClient, tracks: number[]) =>
+    c.request('stream.audio_track.setup', { tracks }),
   remoteDevices: (c: IpcClient) => c.request('remote.devices.list', {}),
   remotePairStart: (c: IpcClient, name: string) => c.request('remote.pair.start', { name }),
   remoteUnpair: (c: IpcClient, deviceId: string) =>

@@ -36,6 +36,7 @@ import nox
 from nox.core.config import IpcConfig
 from nox.core.events import E, Event, EventBus
 from nox.core.globbing import name_matches, name_matches_any
+from nox.ipc import pet_view
 from nox.ipc._log import get_logger
 from nox.ipc.dispatch import RequestContext, RequestRegistry, service_patterns
 from nox.ipc.errors import (
@@ -93,15 +94,28 @@ CLOSE_GOING_AWAY = 1001
 #: same reason: the separation between the private and the stream channel is enforced here, not
 #: only inside the plugin that produces it.
 REDACTED_FROM: tuple[tuple[str, frozenset[str]], ...] = (
-    ("voice.transcript_*", frozenset({"pet", "remote", "plugin"})),
-    ("ai.response_*", frozenset({"pet", "remote", "plugin"})),
-    ("memory.*", frozenset({"pet", "remote", "plugin"})),
-    ("chat.*", frozenset({"pet", "remote", "plugin"})),
-    ("twitch.chat_message", frozenset({"pet", "remote"})),
+    ("voice.transcript_*", frozenset({"pet", "overlay", "remote", "plugin"})),
+    ("ai.response_*", frozenset({"pet", "overlay", "remote", "plugin"})),
+    ("memory.*", frozenset({"pet", "overlay", "remote", "plugin"})),
+    ("chat.*", frozenset({"pet", "overlay", "remote", "plugin"})),
+    ("twitch.chat_message", frozenset({"pet", "overlay", "remote"})),
 )
 # (pattern, the only roles that may receive it)
 RESTRICTED_TO: tuple[tuple[str, frozenset[str]], ...] = (
     ("security.audit", frozenset({"dashboard", "shell", "device"})),
+)
+
+
+#: The only events the stream overlay may receive: what the pet page needs to animate, nothing
+#: more. Its credential sits in an OBS scene file, so it is treated as the least trusted client.
+OVERLAY_EVENTS: tuple[str, ...] = (
+    "pet.*",
+    "privacy.*",
+    "system.*",
+    "tts.*",
+    "voice.*",
+    "state.changed",
+    "settings.changed",
 )
 
 
@@ -117,6 +131,8 @@ EVENT_POLICY: Mapping[str, str] = {
     "dashboard": "filtered",
     "supervisor": "filtered",
     "remote": "filtered",
+    # The stream overlay: only `OVERLAY_EVENTS` (see `role_may_see`).
+    "overlay": "filtered",
     # A paired device in the home network (`nox.lan`) is a dashboard: the filtered stream, with
     # `security.audit` named for it in RESTRICTED_TO.
     "device": "filtered",
@@ -133,6 +149,8 @@ def role_receives_events(role: str) -> bool:
 def role_may_see(role: str, name: str) -> bool:
     """Whether an event named `name` may be delivered to a client in `role`."""
     if not role_receives_events(role):
+        return False
+    if role == "overlay" and not name_matches_any(name, OVERLAY_EVENTS):
         return False
     for pattern, blocked in REDACTED_FROM:
         if role in blocked and name_matches(name, pattern):
@@ -342,6 +360,8 @@ class ClientSession:
     peer: str = ""
     #: The paired device behind a `device` session.
     device_id: str = ""
+    #: The persistent credential this connection authenticated with (overlay role only).
+    credential_id: str = ""
 
     @property
     def client_id(self) -> str:
@@ -399,6 +419,9 @@ class IpcHub:
         self._lan_peers: weakref.WeakKeyDictionary[ServerConnection, str] = (
             weakref.WeakKeyDictionary()
         )
+        #: The current privacy mode ("private", "offline", ...); the core sets it. The stream
+        #: overlay is told nothing but the mode itself while it is private or offline.
+        self.privacy_mode: Callable[[], str] = lambda: ""
 
     # -- lifecycle ------------------------------------------------------------------------------
 
@@ -572,6 +595,17 @@ class IpcHub:
             await self._close_client(c, code, reason)
         return len(sessions)
 
+    async def disconnect_credential(
+        self, credential_ids: Iterable[str], reason: str = "credential revoked"
+    ) -> int:
+        """Close every connection that authenticated with one of these persistent credentials -
+        a revoked overlay must stop receiving events now, not at its next reconnect."""
+        wanted = set(credential_ids)
+        doomed = [c for c in self._clients.values() if c.credential_id in wanted and not c.closing]
+        for c in doomed:
+            await self._close_client(c, CLOSE_POLICY_VIOLATION, reason)
+        return len(doomed)
+
     # -- connection handling ---------------------------------------------------------------------
 
     def _find(self, client_id: str) -> ClientSession | None:
@@ -706,6 +740,7 @@ class IpcHub:
             events=asyncio.Queue(maxsize=s.event_queue_size),
             via_lan=via_lan,
             device_id=decision.device_id,
+            credential_id=decision.credential_id,
         )
         response = AuthResponse(ok=True, session_id=session_id, core_version=s.core_version)
         await conn.send(
@@ -885,6 +920,23 @@ class IpcHub:
             if client.closing or not role_may_see(client.role, event.name):
                 continue
             if not name_matches_any(event.name, client.subscriptions):
+                continue
+            if client.role in pet_view.ROLES:
+                # The pet and the overlay get their own, allow-listed view of each event.
+                shown = pet_view.view(
+                    client.role, event.name, event.payload, privacy_mode=self.privacy_mode()
+                )
+                if shown is not None:
+                    self._enqueue_text(
+                        client,
+                        Envelope(
+                            kind=Kind.EVENT,
+                            name=event.name,
+                            corr=event.corr,
+                            src=CORE_SOURCE,
+                            payload=shown,
+                        ).model_dump_json(),
+                    )
                 continue
             if serialized is None:
                 serialized = Envelope(

@@ -51,6 +51,7 @@ from nox.core.events.names import E
 from nox.core.events.stream import (
     GameDetected,
     GameEnded,
+    ObsAuthFailed,
     ObsAutoRestarted,
     ObsConnectionChanged,
     ObsCrashDetected,
@@ -138,6 +139,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     E.STREAM_MINIGAME_ENDED: StreamMinigameEnded,
     E.OBS_CONNECTED: ObsConnectionChanged,
     E.OBS_DISCONNECTED: ObsDisconnected,
+    E.OBS_AUTH_FAILED: ObsAuthFailed,
     E.OBS_SCENE_CHANGED: ObsSceneChanged,
     E.OBS_HEALTH_CHANGED: ObsHealthChanged,
     E.OBS_CRASH_DETECTED: ObsCrashDetected,

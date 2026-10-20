@@ -2,14 +2,18 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { pickLang } from '../../shared/lang';
-import { queryFlag, queryInt, queryString, takeToken } from '../../shared/token';
+import { queryFlag, queryInt, queryString, takeCredential } from '../../shared/token';
 import { App } from './App';
 // Shared design tokens + pet chrome (#25). Imported here so the whole page, including the
 // transparent window's chips and notes, follows the same palette as the dashboard.
 import './styles.css';
 
-// Token: read once from the fragment, keep in memory only, remove from the address bar.
-const token = takeToken(window.location, window.history);
+// Credential: read once from the fragment, keep in memory only, remove from the address bar. An
+// OBS browser source carries a persistent overlay credential (`#overlay=`), shell windows the
+// session token (`#token=`).
+const credential = takeCredential(window.location, window.history);
+const token = credential?.token ?? null;
+const ipcRole = credential?.role === 'overlay' ? 'overlay' : 'pet';
 const overlay = queryFlag(window.location.search, 'overlay');
 // `?variant=<id>` picks the creature concept (non-secret dev/display flag, query is fine).
 const variantId = queryString(window.location.search, 'variant');
@@ -29,6 +33,7 @@ createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App
       token={token}
+      ipcRole={ipcRole}
       lang={lang}
       overlay={overlay}
       variantId={variantId}

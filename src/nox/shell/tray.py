@@ -60,6 +60,7 @@ class TrayController:
         on_kill: Callable[[], None],
         on_quit: Callable[[], None],
         on_click_through: Callable[[bool], None],
+        on_obs_overlay: Callable[[], None] | None = None,
         language: str = "de",
     ) -> None:
         self._language = language
@@ -94,6 +95,12 @@ class TrayController:
         self.action_mute.setCheckable(True)
         self.action_mute.triggered.connect(lambda _checked=False: on_mute())
         self.menu.addAction(self.action_mute)
+
+        # Nox on stream without screen-capturing the desktop pet: one click, then one confirmation.
+        self.action_obs_overlay = QAction("OBS-Overlay einrichten" if de else "Set up OBS overlay")
+        if on_obs_overlay is not None:
+            self.action_obs_overlay.triggered.connect(on_obs_overlay)
+            self.menu.addAction(self.action_obs_overlay)
 
         self.menu.addSeparator()
         self.action_dashboard = QAction("Dashboard öffnen" if de else "Open dashboard")

@@ -281,3 +281,14 @@ async def test_a_reminder_whose_voice_fails_still_arrives_as_a_toast() -> None:
     assert decision.allowed and decision.channel == "toast"
     assert events[-1][0] == "proactive.notification"
     assert events[-1][1]["text"] == "Erinnerung: Zahnarzt" and events[-1][1]["spoken"] is False
+
+
+async def test_toast_only_notice_is_never_spoken_even_when_speech_is_allowed() -> None:
+    speaker = FakeSpeaker()
+    service, events, _ = make_service(clock_hour=12, speaker=speaker)
+    decision = await service.notify(
+        "urgent", "resources", "Twitch code ABCD-1234", context_key="twitch.auth", speak=False
+    )
+    assert decision.allowed is True and decision.channel == "toast"
+    assert speaker.calls == []
+    assert events[0][0] == "proactive.notification"

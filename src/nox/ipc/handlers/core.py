@@ -27,6 +27,7 @@ from nox.core.modes import DEFAULT_PROFILE as MODE_DEFAULT_PROFILE
 from nox.core.modes import PROFILE_FOR_MODE as MODE_PROFILES
 from nox.core.modes import switch_mode
 from nox.core.state import Mode, PrivacyMode, SystemLevel
+from nox.ipc import pet_view
 from nox.ipc.dispatch import EmptyPayload, RequestContext
 from nox.ipc.errors import ERR_PERMISSION, ERR_UNAVAILABLE, IpcError
 from nox.ipc.roles import CONFIRMING_ROLES, DEVICE_ROLE, LOCAL_UI_ROLES, UI_ROLES
@@ -173,7 +174,7 @@ class CoreHandlers:
         assert self._core.registry is not None
         reg = self._core.registry.register
         ui = UI_ROLES
-        reg("state.get", StateGet, self.state_get, roles=(*ui, "pet", "plugin"))
+        reg("state.get", StateGet, self.state_get, roles=(*ui, "pet", "overlay", "plugin"))
         reg("health.get", EmptyPayload, self.health_get, roles=ui)
         # A mode switch changes which profile - and so which tools - Nox may use: administration.
         reg("mode.set", ModeSet, self.mode_set, roles=LOCAL_UI_ROLES)
@@ -214,10 +215,14 @@ class CoreHandlers:
         core = self._core
         assert core.state is not None
         snapshot = core.state.snapshot()
-        if ctx.role not in ("pet", "plugin"):
+        if ctx.role not in ("pet", "overlay", "plugin"):
             if p.path:
                 return {"path": p.path, "value": core.state.get(p.path)}
             return snapshot
+        if ctx.role in pet_view.ROLES:
+            # The pet and the overlay: the public roots without the paths that carry words.
+            mode = core.security.privacy.mode.value if core.security is not None else ""
+            return pet_view.public_snapshot(snapshot, ctx.role, mode)
         public = {root: snapshot[root] for root in PUBLIC_STATE_ROOTS}
         if ctx.role == "plugin" and p.path:
             if p.path.split(".", 1)[0] not in PUBLIC_STATE_ROOTS:

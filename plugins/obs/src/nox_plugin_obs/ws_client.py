@@ -53,6 +53,17 @@ class ObsAuthRequiredError(RuntimeError):
     """OBS's Hello carried an authentication challenge but no password is available."""
 
 
+class ObsAuthFailedError(RuntimeError):
+    """OBS refused the Identify: the stored websocket password is wrong (close code 4009)."""
+
+
+#: obs-websocket's `WebSocketCloseCode.AuthenticationFailed`.
+CLOSE_AUTHENTICATION_FAILED = 4009
+
+#: Handshake failures that will not fix themselves by retrying: the user has to set the password.
+AUTH_ERRORS: tuple[type[Exception], ...] = (ObsAuthRequiredError, ObsAuthFailedError)
+
+
 class ObsRequestError(RuntimeError):
     """A Request came back with `requestStatus.result: false`."""
 
@@ -72,6 +83,7 @@ def compute_auth_string(password: str, salt: str, challenge: str) -> str:
 EventHandler = Callable[[str, dict[str, Any]], Awaitable[None] | None]
 ConnectedHook = Callable[[], Awaitable[None]]
 DisconnectedHook = Callable[[str], Awaitable[None]]
+AuthFailedHook = Callable[[str], Awaitable[None]]
 PasswordProvider = Callable[[], Awaitable[str | None]]
 
 
@@ -99,6 +111,7 @@ class ObsWebSocketClient:
         request_timeout_s: float = 5.0,
         connector: Callable[[str], Any] | None = None,
         authorize: Callable[[], None] | None = None,
+        on_auth_failed: AuthFailedHook | None = None,
     ) -> None:
         self.url = url
         self._password_provider = password_provider
@@ -112,6 +125,10 @@ class ObsWebSocketClient:
         #: disallows it; that failure flows through the normal reconnect/backoff path like any
         #: other connection error.
         self._authorize = authorize
+        #: Called once per run of authentication failures (wrong or missing password), so the
+        #: caller can tell the user instead of retrying silently forever.
+        self._on_auth_failed = on_auth_failed
+        self.auth_failed = False
         self._min_backoff = min_backoff_s
         self._max_backoff = max_backoff_s
         self._request_timeout = request_timeout_s
@@ -150,6 +167,12 @@ class ObsWebSocketClient:
         while not self._stop.is_set():
             try:
                 await self._connect_once()
+            except AUTH_ERRORS as exc:
+                backoff.failed(exc)
+                first = not self.auth_failed
+                self.auth_failed = True
+                if first and self._on_auth_failed is not None:
+                    await self._on_auth_failed(str(exc))
             except Exception as exc:  # noqa: BLE001 - the reconnect loop must never die
                 backoff.failed(exc)
             else:
@@ -191,11 +214,19 @@ class ObsWebSocketClient:
                     password, str(auth["salt"]), str(auth["challenge"])
                 )
             await ws.send(json.dumps({"op": OP_IDENTIFY, "d": identify}))
-            identified = json.loads(await ws.recv())
+            try:
+                identified = json.loads(await ws.recv())
+            except websockets.ConnectionClosed as exc:
+                if exc.rcvd is not None and exc.rcvd.code == CLOSE_AUTHENTICATION_FAILED:
+                    raise ObsAuthFailedError(
+                        "OBS rejected the websocket password (nox/obs/websocket_password)"
+                    ) from exc
+                raise
             if identified.get("op") != OP_IDENTIFIED:
                 raise ObsProtocolError(f"Identify was refused: {identified}")
             self.connected = True
             self.identified = True
+            self.auth_failed = False
             self.last_error = ""
             if self._on_connected is not None:
                 await self._on_connected()

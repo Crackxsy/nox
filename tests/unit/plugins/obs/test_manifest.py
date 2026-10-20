@@ -16,7 +16,9 @@ def test_obs_manifest_loads_and_declares_the_expected_tools() -> None:
     assert manifest.id == "obs"
     assert manifest.entry == "nox_plugin_obs:create"
     assert manifest.matches_profile("stream") is True
-    assert manifest.matches_profile("companion") is False
+    # Companion too: that is how Nox notices OBS going live and starts the stream session.
+    assert manifest.matches_profile("companion") is True
+    assert manifest.matches_profile("coding") is False
     tools = {p.tool: p.risk for p in manifest.permissions}
     assert tools == {
         "obs.status.read": Risk.READ,
@@ -26,8 +28,14 @@ def test_obs_manifest_loads_and_declares_the_expected_tools() -> None:
         "obs.preflight.check": Risk.READ,
         "obs.replay_buffer.save": Risk.MEDIUM,
         "obs.replay_buffer.status.read": Risk.READ,
+        # Per request type at call time (nox.stream.obs_requests); high is the ceiling.
+        "obs.request": Risk.HIGH,
+        "obs.screenshot": Risk.READ,
+        "obs.overlay.setup": Risk.MEDIUM,
+        "obs.audio_track.setup": Risk.MEDIUM,
     }
-    # Never present, on top of being hard-prohibited/profile-denied.
+    # Never present as dedicated verbs, on top of being hard-prohibited/profile-denied: deleting
+    # goes through obs.request only (high, asked every time).
     assert "obs.scene.delete" not in tools
     assert "obs.scene.rename" not in tools
     assert "obs.source.delete" not in tools
@@ -43,6 +51,7 @@ def test_obs_manifest_events_match_events_py() -> None:
         "stream.started",
         "stream.ended",
         "obs.recording_changed",
+        "obs.auth_failed",
     }
     assert manifest.events.listens == ["security.panic"]
 
@@ -56,4 +65,11 @@ def test_obs_manifest_egress_is_authorized_by_the_real_stream_profile() -> None:
     manifest = load_manifest(OBS_PLUGIN_DIR)
     stream = load_profile(PROFILES_DIR / "stream.yaml")
     results = check_egress(manifest, stream)
+    assert [(r.entry, r.allowed) for r in results] == [("127.0.0.1:4455", True)]
+
+
+def test_obs_manifest_egress_is_authorized_by_the_real_companion_profile() -> None:
+    manifest = load_manifest(OBS_PLUGIN_DIR)
+    companion = load_profile(PROFILES_DIR / "companion.yaml")
+    results = check_egress(manifest, companion)
     assert [(r.entry, r.allowed) for r in results] == [("127.0.0.1:4455", True)]

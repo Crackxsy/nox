@@ -10,7 +10,7 @@ rule is a new guard function in that list, not another branch in a long function
 `check()` wraps `evaluate()` with auditing. Confirmation is a second step:
 `request_confirmation()` registers the question and emits it, `reply()` answers it, and
 `await_confirmation()` waits (a timeout denies). `remember=True` turns an allow into a
-session-scoped grant for that tool and action.
+session-scoped grant for that tool and action - except for high risk, which is asked every time.
 """
 
 from __future__ import annotations
@@ -217,6 +217,16 @@ class RepositoryGrantStore(InMemoryGrantStore):
         for gid in doomed:
             self.remove(gid)
         return len(doomed)
+
+
+#: Risk levels a "remember for this session" answer never turns into a grant: a hard-to-reverse
+#: action (deleting a scene, starting a broadcast) is confirmed every single time.
+NEVER_REMEMBERED: frozenset[Risk] = frozenset({Risk.HIGH, Risk.CRITICAL})
+
+
+def never_remembered(risk: Risk) -> bool:
+    """Whether a confirmed request of this risk is asked again next time, whatever the reply."""
+    return risk in NEVER_REMEMBERED
 
 
 # ---- matching helpers ----------------------------------------------------------------------------
@@ -725,7 +735,7 @@ class DefaultPermissionEngine:
 
         final = Decision.ALLOW if decision is Decision.ALLOW else Decision.DENY
         result_grant_id: str | None = None
-        if final is Decision.ALLOW and remember:
+        if final is Decision.ALLOW and remember and not never_remembered(request.risk):
             grant = TemporaryGrant(
                 grant_id=grant_id,
                 scope=f"session:{request.tool}/{request.action or '*'}",

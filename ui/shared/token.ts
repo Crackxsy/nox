@@ -15,11 +15,11 @@ export interface HistoryLike {
   replaceState(data: unknown, unused: string, url?: string | null): void;
 }
 
-export function tokenFromHash(hash: string): string | null {
+export function tokenFromHash(hash: string, key = 'token'): string | null {
   const h = hash.startsWith('#') ? hash.slice(1) : hash;
   for (const part of h.split('&')) {
     const [k, v] = part.split('=');
-    if (k === 'token' && v) {
+    if (k === key && v) {
       try {
         return decodeURIComponent(v);
       } catch {
@@ -30,10 +30,12 @@ export function tokenFromHash(hash: string): string | null {
   return null;
 }
 
-/** Strip only the token from the fragment, keep other fragment params (none today). */
+/** Strip the credentials (`token=`, `overlay=`) from the fragment, keep other fragment params. */
 export function hashWithoutToken(hash: string): string {
   const h = hash.startsWith('#') ? hash.slice(1) : hash;
-  const rest = h.split('&').filter((p) => p && !p.startsWith('token='));
+  const rest = h
+    .split('&')
+    .filter((p) => p && !p.startsWith('token=') && !p.startsWith('overlay='));
   return rest.length ? `#${rest.join('&')}` : '';
 }
 
@@ -43,6 +45,23 @@ export function takeToken(loc: LocationLike, history: HistoryLike): string | nul
     history.replaceState(null, '', `${loc.pathname}${loc.search}${hashWithoutToken(loc.hash)}`);
   }
   return token;
+}
+
+/** Which credential a page was opened with: the session token (`#token=`, shell-opened windows)
+ * or a persistent, read-only overlay credential (`#overlay=`, an OBS browser source). */
+export interface Credential {
+  token: string;
+  role: 'session' | 'overlay';
+}
+
+/** Like `takeToken`, for the pet page: an overlay credential wins over a session token (it is the
+ * one OBS keeps across restarts). Removed from the address bar either way. */
+export function takeCredential(loc: LocationLike, history: HistoryLike): Credential | null {
+  const overlay = tokenFromHash(loc.hash, 'overlay');
+  const session = tokenFromHash(loc.hash);
+  if (overlay === null && session === null) return null;
+  history.replaceState(null, '', `${loc.pathname}${loc.search}${hashWithoutToken(loc.hash)}`);
+  return overlay !== null ? { token: overlay, role: 'overlay' } : { token: session!, role: 'session' };
 }
 
 export function queryFlag(search: string, key: string): boolean {

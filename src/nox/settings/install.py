@@ -34,12 +34,14 @@ from nox.core.logging import get_logger
 from nox.ipc.dispatch import EmptyPayload, RequestContext
 from nox.ipc.errors import ERR_PERMISSION, IpcError
 from nox.ipc.roles import LOCAL_UI_ROLES, UI_ROLES
+from nox.settings.devices import OUTPUT_DEVICES, voice_worker_request
 from nox.settings.editor import Applier, ConfigEditor
 from nox.settings.layers import resolve_defaults_path, resolve_user_config_path
 from nox.settings.personality import PERSONALITY_FILENAME, PersonalityFile
 from nox.settings.schema import LIVE_APPLY_PATHS
 from nox.settings.secrets_ipc import SecretsService
-from nox.settings.twitch_auth import TwitchAuthService
+from nox.settings.twitch_auth import TwitchAuthService, TwitchAuthState
+from nox.voice.base import Channel
 
 log = get_logger(__name__)
 
@@ -136,6 +138,37 @@ def build_appliers(core: _Core) -> dict[str, Applier]:
         # it sees `settings.changed`; the core-side value is what it re-reads.
         config.pet.variant = str(value)
 
+    async def push_voice_devices() -> None:
+        """Hand the device settings to the voice worker, which switches for the next utterance.
+        Without a running voice worker there is nothing to switch; it reads them when it starts."""
+        ask = voice_worker_request(core)
+        if ask is None:
+            return
+        channels = config.voice.channels
+        try:
+            await ask(
+                "voice.devices.set",
+                {
+                    "private_device": channels.private_device,
+                    "stream_device": channels.stream_device,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - the setting is saved; the worker reads it later
+            log.warning("settings.voice_devices_not_applied", error=type(exc).__name__)
+
+    async def set_private_device(value: Any) -> None:
+        config.voice.channels.private_device = str(value)
+        await push_voice_devices()
+
+    async def set_stream_device(value: Any) -> None:
+        config.voice.channels.stream_device = str(value)
+        await push_voice_devices()
+
+    async def set_routing(value: Any) -> None:
+        config.voice.channels.routing = value
+        if core.orchestrator is not None:
+            core.orchestrator.config.channel = Channel(str(value))
+
     def capture_applier(kind: str) -> Applier:
         async def apply(value: Any) -> None:
             config.privacy.capture.__setattr__(kind, bool(value))
@@ -148,6 +181,9 @@ def build_appliers(core: _Core) -> dict[str, Applier]:
         "identity.user_display_name": set_user_display_name,
         "identity.ui_language": set_ui_language,
         "pet.variant": set_pet_variant,
+        "voice.channels.private_device": set_private_device,
+        "voice.channels.stream_device": set_stream_device,
+        "voice.channels.routing": set_routing,
         "privacy.capture.microphone": capture_applier("microphone"),
         "privacy.capture.camera": capture_applier("camera"),
         "privacy.capture.screen": capture_applier("screen"),
@@ -284,8 +320,12 @@ async def _twitch_token_loop(auth: TwitchAuthService, health: TokenHealth) -> No
         log.warning("settings.twitch_state_unavailable", error=type(exc).__name__)
     while True:
         try:
-            await auth.ensure_fresh_token()
-            health.succeeded()
+            usable = await auth.ensure_fresh_token()
+            if usable or auth.state is TwitchAuthState.IDLE:
+                health.succeeded()
+            else:
+                # `ensure_fresh_token` never raises; a failure is in its state, not an exception.
+                health.failed(RuntimeError(str(auth.status().get("error") or auth.state.value)))
         except Exception as exc:  # noqa: BLE001 - the loop outlives any single failure
             health.failed(exc)
         await asyncio.sleep(TOKEN_REFRESH_INTERVAL_S)
@@ -302,6 +342,8 @@ def _register(
     reg = core.registry.register
 
     async def h_config_get(_ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
+        # The device lists are what is plugged in now, so they are refreshed for every read.
+        await OUTPUT_DEVICES.refresh(voice_worker_request(core))
         return editor.snapshot()
 
     async def h_config_set(ctx: RequestContext, p: ConfigSetRequest) -> dict[str, Any]:
