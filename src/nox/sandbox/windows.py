@@ -893,7 +893,7 @@ class WindowsSandbox:
                 env=_base_env(work),
                 memory_bytes=min(limits.memory_bytes, 256 * 1024 * 1024),
                 max_processes=2,
-                app_container=self._sid,
+                app_container=sid,
             )
         except OSError as exc:
             raise SandboxUnavailable(f"could not start the egress forwarder: {exc}") from exc

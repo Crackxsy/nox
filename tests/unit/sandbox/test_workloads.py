@@ -135,3 +135,32 @@ def test_the_windows_forwarder_waits_instead_of_polling() -> None:
     assert "Start-Sleep" not in FORWARDER_PS
     assert "Pending()" not in FORWARDER_PS
     assert "WaitAny" in FORWARDER_PS and "AcceptTcpClientAsync" in FORWARDER_PS
+
+
+def test_the_windows_forwarder_never_gets_the_childs_environment(tmp_path) -> None:  # noqa: ANN001
+    # Re-review HIGH: only the confined child gets the caller's extra variables and the proxy
+    # credentials; the host-started egress forwarder runs with the fixed base environment.
+    import os
+    import types
+
+    from nox.sandbox.windows import WindowsSandbox, _base_env
+
+    seen: list[dict[str, str]] = []
+    containers: list[str] = []
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b"NOXFWD 4242\n")
+    os.close(write_fd)
+
+    def spawn(argv: list[str], **kw: Any) -> Any:
+        seen.append(kw["env"])
+        containers.append(kw["app_container"])
+        return types.SimpleNamespace(stdout_fd=read_fd, stderr_fd=None, close=lambda: None)
+
+    backend = WindowsSandbox.__new__(WindowsSandbox)
+    backend._w = types.SimpleNamespace(spawn=spawn)  # type: ignore[attr-defined]
+    _, port = backend._start_forwarder(tmp_path, r"\.\pipe\nox-abc", Limits(), "S-1-15-2-1-2")
+    assert port == 4242
+    assert seen == [_base_env(tmp_path)]
+    assert not any("PROXY" in key.upper() for key in seen[0])
+    # ... and in the run's own container, the only one the proxy pipe admits (N6).
+    assert containers == ["S-1-15-2-1-2"]
