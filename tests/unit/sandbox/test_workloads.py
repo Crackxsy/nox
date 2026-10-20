@@ -10,18 +10,29 @@ from collections.abc import Mapping
 from typing import Any
 
 from nox.sandbox import Sandbox
-from nox.sandbox.model import EgressDecl, Guarantees, Limits, Result, SandboxMode
+from nox.sandbox.containers import (
+    SHELL_CONTAINER,
+    WORKLOAD_SLOTS,
+    ContainerSlots,
+    container_name,
+)
+from nox.sandbox.model import (
+    EgressDecl,
+    Guarantees,
+    Limits,
+    Result,
+    SandboxMode,
+    SandboxUnavailable,
+)
 from nox.sandbox.netguard import NetGuard
-from nox.sandbox.windows import container_name
-
-KEY = b"k" * 32
 
 
-def test_each_workload_class_has_its_own_container_name() -> None:
-    assert container_name("shell", KEY) == "Nox.Sandbox"  # what every earlier build used
-    mcp = container_name("mcp:github", KEY)
-    assert mcp.startswith("Nox.Sandbox.mcp.") and len(mcp) <= 64
-    assert "github" not in mcp  # always the keyed hash, never the id itself
+def test_each_workload_class_has_its_own_container_name(tmp_path) -> None:  # noqa: ANN001
+    slots = ContainerSlots(tmp_path / "slots.json")
+    assert container_name("shell", slots) == "Nox.Sandbox"  # what every earlier build used
+    mcp = container_name("mcp:github", slots)
+    assert mcp == "Nox.Sandbox.w000" and len(mcp) <= 64
+    assert "github" not in mcp  # a pool slot, never the id itself
     workloads = (
         "shell",
         "mcp:a",
@@ -36,26 +47,46 @@ def test_each_workload_class_has_its_own_container_name() -> None:
         "mcp:" + "x" * 200,
         "mcp:" + "x" * 199,
     )
-    names = {container_name(w, KEY) for w in workloads}
+    names = {container_name(w, slots) for w in workloads}
     assert len(names) == len(workloads)  # never shared, also not by sanitising or truncation
+    # Recorded: the same workload gets the same container after a restart.
+    again = ContainerSlots(tmp_path / "slots.json")
+    assert {container_name(w, again) for w in workloads} == names
 
 
-def test_a_chosen_name_cannot_take_over_another_container() -> None:
-    # Before, `mcp:<id>` was the name itself, so an id could be chosen to equal another
-    # workload's (hashed) name. Now every name is a keyed hash: without the installation's key
-    # nobody can aim at one, and no workload but shell's ever gets `Nox.Sandbox`.
-    other_key = b"o" * 32
-    assert container_name("mcp:github", KEY) != container_name("mcp:github", other_key)
-    for workload in ("mcp:Sandbox", "Nox.Sandbox", "mcp:", ":", "x"):
-        assert container_name(workload, KEY) != "Nox.Sandbox"
+def test_a_chosen_name_cannot_take_over_another_container(tmp_path) -> None:  # noqa: ANN001
+    # The slot is assigned first come, first served: a workload's own name never picks it, and no
+    # workload but shell's ever gets `Nox.Sandbox`.
+    slots = ContainerSlots(tmp_path / "slots.json")
+    assert container_name("mcp:first", slots) == "Nox.Sandbox.w000"
+    for workload in ("mcp:w000", "Nox.Sandbox.w000", "mcp:Sandbox", "Nox.Sandbox", ":", "x"):
+        name = container_name(workload, slots)
+        assert name not in (SHELL_CONTAINER, "Nox.Sandbox.w000")
 
 
-def test_the_container_key_is_created_once_per_installation(tmp_path) -> None:  # noqa: ANN001
-    from nox.sandbox.windows import container_key
+def test_a_full_pool_and_a_damaged_table_fail_closed(tmp_path) -> None:  # noqa: ANN001
+    import pytest
 
-    first = container_key(tmp_path)
-    assert len(first) == 32 and container_key(tmp_path) == first
-    assert container_key(tmp_path / "other") != first
+    small = ContainerSlots(tmp_path / "small.json", size=2)
+    assert small.slot_for("mcp:a") == 0 and small.slot_for("mcp:b") == 1
+    with pytest.raises(SandboxUnavailable, match="taken"):
+        small.slot_for("mcp:c")
+    assert small.slot_for("mcp:a") == 0  # an owner keeps its slot
+
+    damaged = tmp_path / "damaged.json"
+    damaged.write_text("{not json", encoding="utf-8")
+    with pytest.raises(SandboxUnavailable, match="damaged"):
+        ContainerSlots(damaged).slot_for("mcp:a")
+    shared = tmp_path / "shared.json"
+    shared.write_text('{"slots": {"mcp:a": 3, "mcp:b": 3}}', encoding="utf-8")
+    with pytest.raises(SandboxUnavailable, match="inconsistent"):
+        ContainerSlots(shared).slot_for("mcp:c")
+    outside = tmp_path / "outside.json"
+    outside.write_text(f'{{"slots": {{"mcp:a": {WORKLOAD_SLOTS}}}}}', encoding="utf-8")
+    with pytest.raises(SandboxUnavailable, match="inconsistent"):
+        ContainerSlots(outside).slot_for("mcp:c")
+    with pytest.raises(ValueError, match="shell"):
+        ContainerSlots(tmp_path / "x.json").slot_for("shell")
 
 
 class _Backend:
@@ -148,7 +179,7 @@ def test_the_windows_forwarder_never_gets_the_childs_environment(tmp_path) -> No
     seen: list[dict[str, str]] = []
     containers: list[str] = []
     read_fd, write_fd = os.pipe()
-    os.write(write_fd, b"NOXFWD 4242\n")
+    os.write(write_fd, b"NOXFWD 47142\n")
     os.close(write_fd)
 
     def spawn(argv: list[str], **kw: Any) -> Any:
@@ -159,7 +190,7 @@ def test_the_windows_forwarder_never_gets_the_childs_environment(tmp_path) -> No
     backend = WindowsSandbox.__new__(WindowsSandbox)
     backend._w = types.SimpleNamespace(spawn=spawn)  # type: ignore[attr-defined]
     _, port = backend._start_forwarder(tmp_path, r"\.\pipe\nox-abc", Limits(), "S-1-15-2-1-2")
-    assert port == 4242
+    assert port == 47142  # a port of the range the network rules leave open
     assert seen == [_base_env(tmp_path)]
     assert not any("PROXY" in key.upper() for key in seen[0])
     # ... and in the run's own container, the only one the proxy pipe admits (N6).

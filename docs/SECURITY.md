@@ -278,6 +278,73 @@ without capabilities in the initial namespace, and on Ubuntu only through Nox's 
 What the sandbox runs gets neither: bwrap's `--disable-userns`, its capability drop and, on
 Ubuntu, the stacked AppArmor profile forbid both.
 
+## Command sandbox on Windows
+
+On Windows the same `nox.sandbox` runs each workload in an **AppContainer** (`nox.sandbox.windows`),
+falling back to a low-integrity token only where no AppContainer profile can be created:
+
+- **Containers:** shell commands run in `Nox.Sandbox`; every other workload class (each MCP server,
+  skill and skill test) gets one container of a fixed pool, `Nox.Sandbox.w000` to
+  `Nox.Sandbox.w127` (`nox.sandbox.containers`). Slots are assigned first come, first served, and
+  recorded in `<nox home>/sandbox/container-slots.json`; a workload's name never picks its slot, a
+  slot never passes to a second workload class, and a full pool refuses the run. The pool is fixed
+  so the container SIDs - a pure function of the name - are known at install time.
+- **Filesystem and secrets:** no capabilities, so no user files, no credential store; the work
+  folder is ACL'd to the user, SYSTEM and the run's own container SID only. Python runs get read
+  access to Nox's own runtime folders, recorded and removed by `nox sandbox reset`.
+- **Network without the rules:** no internet or LAN capability. Loopback isolation, which should
+  keep a container off the host's loopback services, is **not enforced on every Windows build**
+  (measured on Windows 11 build 26200 with the firewall on and no loopback exemption: a container
+  reached any host loopback listener).
+- **Network rules (installer, one UAC prompt):** the installer's task "Keep sandboxed commands away
+  from this computer's local services and the home network" runs `python -m nox.sandbox.wfp
+  install` elevated. It adds persistent **Windows Filtering Platform** filters - one provider, one
+  sublayer with the highest weight, five filters per container SID (shell's and all 128 pool slots)
+  at the outbound connect layer, IPv4 and IPv6:
+  1. permit TCP to `127.0.0.1` ports 47100-47227 (the in-container egress forwarder's range);
+  2. hard-block loopback, `0/8`, private (`10/8`, `172.16/12`, `192.168/16`), CGNAT `100.64/10`,
+     link-local `169.254/16`, `198.18/15`, multicast and reserved IPv4 ranges, and `::/127`,
+     IPv4-mapped, NAT64, `fc00::/7`, `fe80::/10`, `fec0::/10` and `ff00::/8`;
+  3. hard-block every connection WFP flags as loopback (this computer's own LAN or VPN address too).
+
+  WFP rather than Defender Firewall rules: the filters live in Nox's own top sublayer and clear the
+  action right, so no permit elsewhere overrides them; they are enforced by the Base Filtering
+  Engine even when a third-party firewall has replaced Defender Firewall; and they can match the
+  loopback flag, not just addresses. `nox sandbox firewall show` prints every filter; `install` and
+  `remove` (from an administrator prompt) do what the installer does. Uninstall removes every filter
+  of Nox's provider, the sublayer and the provider (a second UAC prompt).
+- **The probe decides:** the first run measures whether a container reaches a host loopback listener
+  (`host_loopback_reachable`). Only an explicit "refused" report counts as confined, and only while
+  nothing on the host listens in the forwarder's port range; then `confines_network` is true, the
+  AppContainer counts as strong and shell commands run without `hands.accept_weak_sandbox`. A
+  timeout, a crash, a connection or an unknown listener table counts as reachable (fail closed).
+  The rules are never assumed: without them, or if they do not take effect, the probe says so.
+- **Declared egress:** the run's proxy listens on a named pipe whose DACL names only the run's
+  container SID; a forwarder in the same container listens on `127.0.0.1` in the forwarder range
+  and relays into the pipe. The proxy checks the per-run credentials, the declaration and `NetGuard`.
+
+Known limits, accepted:
+
+- A **host** program that listens on `127.0.0.1` inside the forwarder range (47100-47227) would be
+  reachable from a container. The probe refuses "confined" while one is there when it runs; one
+  that starts later is not noticed until the next start of Nox.
+- The probe measures shell's container; the pool containers carry the same filters, built from the
+  same code, but are not probed one by one.
+- With the rules in place a workload cannot reach its **own** loopback outside the forwarder range
+  (a skill test that starts a local server and connects to it fails).
+- The installer is per-user, the rule step is elevated: where a standard user enters an
+  administrator's credentials, Nox's runtime from the per-user install folder runs once as that
+  administrator (the same trust any per-user installer's elevated step needs). The step creates
+  only the filters above and needs nothing from the user's profile - the SIDs come from the names.
+- If the uninstall's UAC prompt is declined, the filters stay. They only ever match Nox's own
+  container SIDs; install and uninstall again, or run `nox sandbox firewall remove` from an
+  administrator prompt before uninstalling, to remove them.
+- Not yet verified on a real installation by an automated test: CI runners cannot install WFP
+  filters, so the unit tests pin the exact rules, SIDs, address ranges, structure sizes and the
+  installer entries, and the probe logic with a mocked OS. A clean-VM pass (install with the rules,
+  `nox sandbox firewall show`, the probe reports confined, a shell command and declared egress
+  work, uninstall leaves no filter) is still to be done.
+
 ## Plugin sandboxing boundary
 
 A plugin is a manifest (`plugins/<id>/manifest.yaml`) plus a worker process; nothing is spawned

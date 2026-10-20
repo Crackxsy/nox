@@ -334,6 +334,38 @@ def sandbox_reset() -> None:
     typer.echo(f"removed {removed} sandbox access right(s) and {legacy} legacy one(s)")
 
 
+firewall_app = typer.Typer(
+    help="Windows: the network rules that keep the sandbox off loopback and the LAN."
+)
+sandbox_app.add_typer(firewall_app, name="firewall")
+
+
+def _firewall(action: str) -> None:
+    from nox.sandbox.wfp import main as wfp_main  # noqa: PLC0415
+
+    code = wfp_main([action])
+    if code:
+        raise typer.Exit(code=code)
+
+
+@firewall_app.command("install")
+def sandbox_firewall_install() -> None:
+    """Add the rules (needs an administrator prompt; the installer does this for you)."""
+    _firewall("install")
+
+
+@firewall_app.command("remove")
+def sandbox_firewall_remove() -> None:
+    """Remove the rules again (needs an administrator prompt; uninstall does this for you)."""
+    _firewall("remove")
+
+
+@firewall_app.command("show")
+def sandbox_firewall_show() -> None:
+    """Print every rule Nox installs: one line per filter, its container SID and addresses."""
+    _firewall("show")
+
+
 ai_app = typer.Typer(help="The local model: pick, download and check one that fits this machine.")
 app.add_typer(ai_app, name="ai")
 
