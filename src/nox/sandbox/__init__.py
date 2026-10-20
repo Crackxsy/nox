@@ -45,10 +45,14 @@ proxy. How the child reaches it is the backend's `proxy_transport`:
 
 The backend gets `proxy_port`, `proxy_socket` and `proxy_auth` and needs nothing else.
 
-`env` adds variables to the child's minimal environment (an MCP server's settings); the keys that
-carry the confinement (`PATH`, `HOME`/`USERPROFILE`/`TEMP`, the proxy variables, `LD_PRELOAD`,
-...) are refused with `ValueError` (`model.RESERVED_ENV_KEYS`). Nothing from the core's own
-environment is inherited beyond the backend's fixed safe list.
+`env` adds variables to the child's minimal environment (an MCP server's settings). It is an
+allowlist (`model.checked_env`): upper-case names only, never one that carries the confinement
+(`PATH`, `HOME`/`USERPROFILE`/`TEMP`, the proxy variables: `model.RESERVED_ENV_KEYS`) and never one
+of a family that steers a loader, libc or a runtime (`LD_*`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`,
+`HOSTALIASES`, `RES_OPTIONS`, `MALLOC_*`, `SYSTEMD_*`, `DBUS_*`, `PYTHON*`, `NODE_OPTIONS`, ...).
+Anything else is a `ValueError`. It reaches only the confined child: the host-side launchers
+(bwrap, systemd-run, the Windows egress forwarder) run with a fixed minimal environment of their
+own. Nothing from the core's own environment is inherited beyond the backend's fixed safe list.
 
 `guarantees()` reports what this machine's backend really enforces - measured where it depends on
 the machine (Windows loopback isolation) - and `run` and `start` alike refuse a backend whose

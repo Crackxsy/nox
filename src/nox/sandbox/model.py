@@ -22,6 +22,7 @@ Three rules the contract makes explicit, because they are the point of the sandb
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -64,17 +65,80 @@ RESERVED_ENV_KEYS: frozenset[str] = frozenset(
 )
 
 
+#: The only shape an extra variable may have: upper-case letters, digits and `_`.
+_ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+#: Families that change how a dynamic loader, libc, a language runtime, systemd or D-Bus behaves -
+#: on either side of the sandbox. Never accepted, whatever a server's configuration asks for.
+FORBIDDEN_ENV_PREFIXES: tuple[str, ...] = (
+    "LD_",
+    "DYLD_",
+    "SYSTEMD_",
+    "DBUS_",
+    "MALLOC_",
+    "GLIBC_",
+    "GCONV",
+    "LOC",
+    "LC_",
+    "NLS",
+    "PYTHON",
+    "PERL5",
+    "PERLLIB",
+    "RUBY",
+    "JAVA_TOOL",
+    "JDK_JAVA",
+    "_JAVA",
+    "GIT_",
+    "BASH_",
+    "XDG_",
+    "SSL_",
+    "OPENSSL_",
+)
+#: Single names with the same effect.
+FORBIDDEN_ENV_NAMES: frozenset[str] = frozenset(
+    {
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "HOSTALIASES",
+        "RES_OPTIONS",
+        "LOCALDOMAIN",
+        "ENV",
+        "IFS",
+        "SHELLOPTS",
+        "PS4",
+        "PROMPT_COMMAND",
+        "TZDIR",
+        "LANGUAGE",
+    }
+)
+#: Total size of the extra environment (it travels through a pipe on Linux).
+MAX_EXTRA_ENV_BYTES = 32 * 1024
+
+
 def checked_env(env: dict[str, str] | None) -> dict[str, str]:
-    """The caller's extra environment, or `ValueError` when it touches a reserved key."""
+    """The caller's extra environment (an MCP server's or a skill's settings), checked against an
+    allowlist: an upper-case name (`^[A-Z][A-Z0-9_]{0,63}$`) outside the families that steer a
+    loader or a runtime (`FORBIDDEN_ENV_PREFIXES`, `FORBIDDEN_ENV_NAMES`), no reserved key, no
+    NUL in a value. Anything else is a `ValueError` - refused, never silently dropped."""
     if not env:
         return {}
     clash = sorted(key for key in env if key.upper() in RESERVED_ENV_KEYS)
     if clash:
         raise ValueError(f"the sandbox owns these environment variables: {clash}")
-    bad = sorted(key for key in env if not key or "=" in key or chr(0) in key)
+    bad = sorted(
+        key
+        for key in env
+        if not _ENV_NAME.match(key)
+        or key in FORBIDDEN_ENV_NAMES
+        or key.startswith(FORBIDDEN_ENV_PREFIXES)
+    )
     if bad:
-        raise ValueError(f"invalid environment variable names: {bad}")
-    return {str(k): str(v) for k, v in env.items()}
+        raise ValueError(f"invalid or not allowed environment variable names: {bad}")
+    values = {str(k): str(v) for k, v in env.items()}
+    if any(chr(0) in value for value in values.values()):
+        raise ValueError("an environment value contains a NUL character")
+    if sum(len(k) + len(v) + 2 for k, v in values.items()) > MAX_EXTRA_ENV_BYTES:
+        raise ValueError("the extra environment is too large")
+    return values
 
 
 class SandboxUnavailable(RuntimeError):  # noqa: N818 - a state, not an error suffix, by design

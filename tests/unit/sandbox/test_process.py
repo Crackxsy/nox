@@ -218,6 +218,42 @@ def test_reserved_env_keys_are_refused(key: str) -> None:
         checked_env({key: "x"})
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        "LD_AUDIT",
+        "GCONV_PATH",
+        "LOCPATH",
+        "NLSPATH",
+        "HOSTALIASES",
+        "RES_OPTIONS",
+        "MALLOC_CHECK_",
+        "SYSTEMD_LOG_LEVEL",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "PYTHONSTARTUP",
+        "NODE_OPTIONS",
+        "PERL5OPT",
+        "RUBYOPT",
+        "BASH_ENV",
+        "GIT_CONFIG_GLOBAL",
+        "lower_case",
+        "WITH-DASH",
+        "1STARTS_WITH_DIGIT",
+    ],
+)
+def test_env_that_steers_a_loader_or_runtime_is_refused(key: str) -> None:
+    # Re-review HIGH: a denylist of names let these through to the host-side launchers.
+    with pytest.raises(ValueError):
+        checked_env({key: "x"})
+
+
+def test_env_values_may_not_hide_a_nul_or_be_huge() -> None:
+    with pytest.raises(ValueError, match="NUL"):
+        checked_env({"TOKEN": "a\x00b"})
+    with pytest.raises(ValueError, match="too large"):
+        checked_env({"BLOB": "x" * 40_000})
+
+
 def test_ordinary_env_passes_and_bad_names_are_refused() -> None:
     assert checked_env({"MCP_TOKEN_FILE": "t"}) == {"MCP_TOKEN_FILE": "t"}
     assert checked_env(None) == {}
