@@ -7,7 +7,6 @@ sequential core instances instead of one."""
 from __future__ import annotations
 
 import asyncio
-import random
 from pathlib import Path
 
 import pytest
@@ -16,12 +15,13 @@ from nox.app import DEFAULTS_PATH, PROFILES_DIR, NoxCore
 from nox.core.config import load_config
 from nox.proactive.install import install as install_proactive
 from nox.proactive.service import ProactiveService
+from tests._ports import free_port_base
 
 pytestmark = pytest.mark.timeout(120)
 
 
 def _config(tmp_path: Path):
-    base = random.randint(20000, 60000)  # noqa: S311
+    base = free_port_base()
     overrides = {
         "paths": {
             "data_dir": str(tmp_path / "data"),
