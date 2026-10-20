@@ -78,6 +78,7 @@ class ServerLauncher(Protocol):
         cwd: Path,
         env: Mapping[str, str],
         network: bool,
+        server_id: str,
     ) -> LaunchedServer: ...
 
 
@@ -156,8 +157,9 @@ class ProcessLauncher:
         cwd: Path,
         env: Mapping[str, str],
         network: bool,
+        server_id: str,
     ) -> LaunchedServer:
-        del network  # without the sandbox there is no way to take the network away
+        del network, server_id  # without the sandbox there is no way to take the network away
         await asyncio.to_thread(cwd.mkdir, parents=True, exist_ok=True)
         kwargs: dict[str, Any] = {}
         if sys.platform == "win32":
@@ -265,16 +267,18 @@ class SandboxLauncher:
         cwd: Path,
         env: Mapping[str, str],
         network: bool,
+        server_id: str,
     ) -> LaunchedServer:
-        # The sandbox's private work folder is used, not `cwd` (a folder under <nox home>); its
-        # name is the server's id, and each server runs in a sandbox container of its own.
+        # The sandbox's private work folder is used, not `cwd` (a folder under <nox home>). Each
+        # server runs in a sandbox container of its own, keyed by its configured id.
+        del cwd
         egress = self._module.EgressDecl(hosts=("*",)) if network else self._module.EgressDecl()
         process = await self._sandbox.start(
             list(argv),
             env=dict(env),
             egress=egress,
             limits=self._module.Limits(max_message_bytes=MAX_MESSAGE_BYTES),
-            workload=f"mcp:{cwd.name}",
+            workload=f"mcp:{server_id}",
         )
         log.info("mcp.server_process_started", pid=process.pid, sandboxed=True)
         return _SandboxedServer(process)
@@ -296,8 +300,9 @@ class RefusingLauncher:
         cwd: Path,
         env: Mapping[str, str],
         network: bool,
+        server_id: str,
     ) -> LaunchedServer:
-        del argv, cwd, env, network
+        del argv, cwd, env, network, server_id
         raise McpClientError(self.refusal)
 
 

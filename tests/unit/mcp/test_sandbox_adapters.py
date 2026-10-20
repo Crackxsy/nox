@@ -108,7 +108,7 @@ async def test_a_sandbox_that_cannot_be_built_fails_closed(
     assert isinstance(launcher, RefusingLauncher) and launcher.sandboxed is False
     assert str(failure) in launcher.refusal and "allow_unsandboxed" in launcher.refusal
     with pytest.raises(McpClientError):
-        await launcher.launch(["srv"], cwd=tmp_path / "w", env={}, network=False)
+        await launcher.launch(["srv"], cwd=tmp_path / "w", env={}, network=False, server_id="srv")
     assert not (tmp_path / "w").exists()
 
 
@@ -157,9 +157,21 @@ async def test_a_local_server_without_network_gets_no_egress(tmp_path: Path) -> 
     sandbox = FakeSandbox()
     module = types.SimpleNamespace(EgressDecl=EgressDecl, Limits=Limits)
     launched = await SandboxLauncher(sandbox, module).launch(
-        ["srv"], cwd=tmp_path / "w", env={"A": "1"}, network=False
+        ["srv"], cwd=tmp_path / "w", env={"A": "1"}, network=False, server_id="github"
     )
     assert launched.pid == 7 and sandbox.runs[0]["egress"] == EgressDecl()
     assert sandbox.runs[0]["env"] == {"A": "1"}
     assert "cwd" not in sandbox.runs[0]  # the sandbox's own folder, never one under <nox home>
-    assert sandbox.runs[0]["workload"] == "mcp:w"  # a sandbox container of its own (N6)
+    # A sandbox container of its own, keyed by the configured id - not the folder's name (N6).
+    assert sandbox.runs[0]["workload"] == "mcp:github"
+
+
+async def test_two_servers_in_same_named_folders_get_different_containers(tmp_path: Path) -> None:
+    sandbox = FakeSandbox()
+    module = types.SimpleNamespace(EgressDecl=EgressDecl, Limits=Limits)
+    launcher = SandboxLauncher(sandbox, module)
+    for server_id, parent in (("a", "x"), ("b", "y")):
+        await launcher.launch(
+            ["srv"], cwd=tmp_path / parent / "work", env={}, network=False, server_id=server_id
+        )
+    assert [run["workload"] for run in sandbox.runs] == ["mcp:a", "mcp:b"]

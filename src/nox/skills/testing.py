@@ -135,7 +135,7 @@ class TestRunner(Protocol):
     def unavailable(self) -> str | None:
         """Why no test can run here (learning is then refused up front), or None."""
 
-    async def run(self, plugin_dir: Path, *, timeout_s: float) -> TestOutcome: ...
+    async def run(self, plugin_dir: Path, *, timeout_s: float, skill_id: str) -> TestOutcome: ...
 
 
 def parse_outcome(
@@ -214,7 +214,7 @@ class SandboxTestRunner:
     def unavailable(self) -> str | None:
         return None
 
-    async def run(self, plugin_dir: Path, *, timeout_s: float) -> TestOutcome:
+    async def run(self, plugin_dir: Path, *, timeout_s: float, skill_id: str) -> TestOutcome:
         try:
             files = await asyncio.to_thread(bundle_files, plugin_dir, {RUNNER_FILE: RUNNER_SOURCE})
             data = encode_bundle(files)
@@ -226,8 +226,10 @@ class SandboxTestRunner:
                 [self._python, "-I", "-c", BOOTSTRAP, RUNNER_FILE],
                 egress=self._module.EgressDecl(),
                 limits=self._module.Limits(timeout_s=timeout_s),
-                # The skill's own sandbox container: no other workload can see its work folder.
-                workload=f"skill:{plugin_dir.name}",
+                # A container of the skill's tests, named by the skill's id (the folder is a
+                # work folder): never shared with another skill, nor with this skill's
+                # installed worker (`skill:<id>`).
+                workload=f"skilltest:{skill_id}",
                 lifetime_s=timeout_s,
             )
         except Exception as exc:  # noqa: BLE001 - the sandbox refused: that is a failed run
@@ -282,8 +284,8 @@ class UnavailableTestRunner:
     def unavailable(self) -> str | None:
         return self.reason
 
-    async def run(self, plugin_dir: Path, *, timeout_s: float) -> TestOutcome:
-        del plugin_dir, timeout_s
+    async def run(self, plugin_dir: Path, *, timeout_s: float, skill_id: str) -> TestOutcome:
+        del plugin_dir, timeout_s, skill_id
         return TestOutcome(0, 1, self.reason)
 
 

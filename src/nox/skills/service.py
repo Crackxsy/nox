@@ -333,7 +333,7 @@ class SkillService:
         )
         if not report.ok:
             return report.problems
-        tests = await self._tests.run(work, timeout_s=cfg.test_timeout_s)
+        tests = await self._tests.run(work, timeout_s=cfg.test_timeout_s, skill_id=record.id)
         if not tests.ok:
             tail = [line for line in tests.output.splitlines() if line.strip()][-12:]
             status = "timed out" if tests.timed_out else f"{tests.failed} failed"

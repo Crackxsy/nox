@@ -84,16 +84,31 @@ def dice(tmp_path: Path) -> Path:
 
 async def test_the_tests_run_in_the_sandbox_with_their_files_on_stdin(tmp_path: Path) -> None:
     sandbox = FakeSandbox()
-    outcome = await SandboxTestRunner(sandbox, MODULE).run(dice(tmp_path), timeout_s=30)
+    outcome = await SandboxTestRunner(sandbox, MODULE).run(
+        dice(tmp_path), timeout_s=30, skill_id="dice"
+    )
     assert outcome.ok and outcome.passed == 2
     start = sandbox.starts[0]
     assert start["egress"] == EgressDecl() and start["lifetime_s"] == 30
     assert "cwd" not in start  # the sandbox's own private folder, nothing under <nox home>
-    assert start["workload"] == "skill:dice"  # a sandbox container of its own (N6)
+    assert start["workload"] == "skilltest:dice"  # a sandbox container of its own (N6)
     assert start["argv"][1:3] == ["-I", "-c"] and start["argv"][-1] == RUNNER_FILE
     bundle = json.loads(sandbox.processes[0].sent[0])
     assert RUNNER_FILE in bundle and "manifest.yaml" in bundle
     assert sandbox.processes[0].stopped
+
+
+async def test_tests_run_in_a_container_of_the_skill_id_not_the_folder(tmp_path: Path) -> None:
+    # In production every skill is built in a folder called `work`: the container must come from
+    # the skill's id, and never be the installed worker's (`skill:<id>`).
+    sandbox = FakeSandbox()
+    for skill_id in ("wetter", "kalender"):
+        work = dice(tmp_path / skill_id).rename(tmp_path / skill_id / "work")
+        await SandboxTestRunner(sandbox, MODULE).run(work, timeout_s=30, skill_id=skill_id)
+    assert [start["workload"] for start in sandbox.starts] == [
+        "skilltest:wetter",
+        "skilltest:kalender",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -116,7 +131,7 @@ async def test_anything_but_one_clean_trailer_fails_and_nothing_runs_outside(
     sandbox = FakeSandbox(stdout=stdout, stderr=stderr, code=code)
     runner = SandboxTestRunner(sandbox, MODULE)
     for _ in range(2):
-        outcome = await runner.run(dice(tmp_path), timeout_s=60)
+        outcome = await runner.run(dice(tmp_path), timeout_s=60, skill_id="dice")
         assert not outcome.ok and outcome.failed >= 1
     assert runner.sandboxed is True and len(sandbox.starts) == 2  # the sandbox, every time
 
@@ -126,7 +141,9 @@ async def test_a_sandbox_that_refuses_to_start_is_a_failed_run(tmp_path: Path) -
         async def start(self, argv: list[str], **kwargs: Any) -> FakeProcess:
             raise OSError("no container")
 
-    outcome = await SandboxTestRunner(Refusing(), MODULE).run(dice(tmp_path), timeout_s=60)
+    outcome = await SandboxTestRunner(Refusing(), MODULE).run(
+        dice(tmp_path), timeout_s=60, skill_id="dice"
+    )
     assert not outcome.ok and "could not run" in outcome.output
 
 
@@ -138,5 +155,5 @@ async def test_without_a_sandbox_every_run_fails_and_nothing_starts(
 
     monkeypatch.setattr("asyncio.create_subprocess_exec", no_process)
     runner = UnavailableTestRunner()
-    outcome = await runner.run(dice(tmp_path), timeout_s=30)
+    outcome = await runner.run(dice(tmp_path), timeout_s=30, skill_id="dice")
     assert not outcome.ok and outcome.failed == 1 and runner.unavailable()

@@ -568,7 +568,11 @@ class McpServerManager:
         if cfg.command:
             env = {**self._env_base(), **self._secret_values(cfg, cfg.env)}
             server.process = await self._launcher.launch(
-                cfg.command, cwd=self._workdir / cfg.id, env=env, network=cfg.network
+                cfg.command,
+                cwd=self._workdir / cfg.id,
+                env=env,
+                network=cfg.network,
+                server_id=cfg.id,
             )
             transport: Transport = server.process.transport()
         else:

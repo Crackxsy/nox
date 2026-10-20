@@ -59,7 +59,11 @@ async def test_a_stdio_server_runs_and_answers_inside_the_sandbox(tmp_path: Path
     sandbox, module = _strong_sandbox()  # type: ignore[misc]
     launcher = SandboxLauncher(sandbox, module)
     launched = await launcher.launch(
-        [sys.executable, "-I", "-c", SERVER], cwd=tmp_path / "unused", env={}, network=False
+        [sys.executable, "-I", "-c", SERVER],
+        cwd=tmp_path / "unused",
+        env={},
+        network=False,
+        server_id="echo",
     )
     client = McpClient(launched.transport(), timeout_s=30.0)
     client.start()

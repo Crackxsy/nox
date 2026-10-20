@@ -26,7 +26,7 @@ class LocalTestRunner:
     def unavailable(self) -> str | None:
         return None
 
-    async def run(self, plugin_dir: Path, *, timeout_s: float) -> TestOutcome:
+    async def run(self, plugin_dir: Path, *, timeout_s: float, skill_id: str = "") -> TestOutcome:
         run_dir = plugin_dir.parent / f"{plugin_dir.name}.testrun"
         await asyncio.to_thread(_prepare, plugin_dir, run_dir)
         env = {k: v for k, v in worker_environment().items() if k != "PYTHONPATH"}
