@@ -3,7 +3,8 @@
 "Erinner mich morgen um 9 an den Zahnarzt" is the simplest promise an assistant can make and
 the one that is noticed most when it is broken. So the store is a table, not a task: a reminder
 survives a restart, is fired at most once (`fired_at` is set *before* Nox speaks), and stays
-visible on the dashboard for the rest of the day after it fired.
+visible on the dashboard for the rest of the day after it fired. A callout that fails outright
+(nothing was published) reopens the reminder for the next poll, up to `MAX_FIRE_ATTEMPTS` times.
 
 Every timestamp is stored as ISO-8601 UTC and handed back timezone-aware; callers format it in
 the local zone.
@@ -23,13 +24,24 @@ from nox.data.repos import Row, written_row
 
 log = get_logger(__name__)
 
-__all__ = ["MAX_AHEAD", "MAX_TEXT_CHARS", "ReminderRepository", "ReminderRow", "ReminderScheduler"]
+__all__ = [
+    "MAX_AHEAD",
+    "MAX_FIRE_ATTEMPTS",
+    "MAX_TEXT_CHARS",
+    "ReminderRepository",
+    "ReminderRow",
+    "ReminderScheduler",
+]
 
 #: Longest reminder text; anything longer is a note, and the vault is the place for notes.
 MAX_TEXT_CHARS = 300
 
 #: Furthest ahead a reminder may be set; a year is plenty and catches "2062" typos.
 MAX_AHEAD = timedelta(days=366)
+
+#: How often a reminder whose callout raised is tried again (one try per poll) before it is given
+#: up and left marked fired. A failed callout is one where nothing reached the user at all.
+MAX_FIRE_ATTEMPTS = 3
 
 
 class ReminderRow(Row):
@@ -111,6 +123,15 @@ class ReminderRepository:
         )
         return cur.rowcount == 1
 
+    def reopen(self, reminder_id: str) -> bool:
+        """Undo `mark_fired` for a callout that never reached the user (unless cancelled since)."""
+        cur = self._db.execute(
+            "UPDATE reminders SET fired_at = NULL WHERE id = ? AND fired_at IS NOT NULL "
+            "AND cancelled_at IS NULL",
+            (reminder_id,),
+        )
+        return cur.rowcount == 1
+
     def cancel(self, reminder_id: str, now: datetime | None = None) -> bool:
         cur = self._db.execute(
             "UPDATE reminders SET cancelled_at = ? WHERE id = ? AND fired_at IS NULL "
@@ -155,6 +176,12 @@ class ReminderScheduler:
         self._deliverable = deliverable
         self._poll_s = poll_s
         self._task: asyncio.Task[None] | None = None
+        self._attempts: dict[str, int] = {}
+        #: Ticks that raised since start (for the health check), and the last error's type.
+        self.tick_failures = 0
+        self.last_tick_error = ""
+        #: Whether the most recent tick raised.
+        self.failing = False
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop(), name="nox-reminders")
@@ -181,14 +208,38 @@ class ReminderScheduler:
             try:
                 await self._fire(reminder)
             except Exception as exc:  # noqa: BLE001 - one failed callout never stops the others
-                log.warning("reminders.fire_failed", id=reminder.id, error=type(exc).__name__)
+                attempts = self._attempts.get(reminder.id, 0) + 1
+                if attempts < MAX_FIRE_ATTEMPTS and self._repo.reopen(reminder.id):
+                    self._attempts[reminder.id] = attempts
+                    log.warning(
+                        "reminders.fire_failed_retrying",
+                        id=reminder.id,
+                        attempt=attempts,
+                        error=type(exc).__name__,
+                    )
+                else:
+                    self._attempts.pop(reminder.id, None)
+                    log.error("reminders.fire_failed", id=reminder.id, error=type(exc).__name__)
+                continue
+            self._attempts.pop(reminder.id, None)
             fired.append(reminder.id)
         if fired:
             log.info("reminders.fired", count=len(fired))
         return fired
 
+    async def run_once(self) -> None:
+        """One poll of the loop: a tick that raises is logged and counted, never fatal."""
+        try:
+            await self.tick()
+        except Exception as exc:  # noqa: BLE001 - the loop must survive; the health check reports it
+            self.tick_failures += 1
+            self.last_tick_error = type(exc).__name__
+            self.failing = True
+            log.error("reminders.tick_failed", error=self.last_tick_error, total=self.tick_failures)
+            return
+        self.failing = False
+
     async def _loop(self) -> None:
         while True:
-            with contextlib.suppress(Exception):
-                await self.tick()
+            await self.run_once()
             await asyncio.sleep(self._poll_s)

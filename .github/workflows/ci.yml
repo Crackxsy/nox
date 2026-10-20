@@ -57,7 +57,8 @@ jobs:
       # is green with or without Ollama installed on the runner (tests already accept "rules" as a
       # valid provider when Ollama is absent).
       - name: pytest integration
-        run: pytest tests/integration -p no:cacheprovider
+        # -m "": every marker, as before the hermetic default in pyproject.toml.
+        run: pytest tests/integration -m "" -p no:cacheprovider
 
   python-linux:
     name: Python on Linux (${{ matrix.runner }})
@@ -103,7 +104,8 @@ jobs:
         run: pytest tests/unit -m "not hardware and not network and not spike" -p no:cacheprovider
 
       - name: pytest integration
-        run: pytest tests/integration -p no:cacheprovider
+        # -m "": every marker, as before the hermetic default in pyproject.toml.
+        run: pytest tests/integration -m "" -p no:cacheprovider
 
   installer-linux:
     name: Installer on Linux (${{ matrix.runner }})
@@ -117,6 +119,21 @@ jobs:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v7
+
+      # Root runs uv, so it is never piped from a download into a shell: the archive is checked
+      # against hashes pinned in the script - which must be the ones uv published.
+      - name: uv is pinned and verified, never piped into a shell
+        run: |
+          if grep -nE '\|[[:space:]]*(sh|bash)([[:space:]]|$)' scripts/install-linux.sh | grep -v '^[0-9]*:#'; then
+            echo "the installer pipes a download into a shell"; exit 1
+          fi
+          version="$(sed -n 's/^UV_VERSION="\(.*\)"$/\1/p' scripts/install-linux.sh)"
+          for arch in aarch64 x86_64; do
+            var="UV_SHA256_$(echo "$arch" | tr '[:lower:]' '[:upper:]')"
+            pinned="$(sed -n "s/^$var=\"\([0-9a-f]\{64\}\)\"$/\1/p" scripts/install-linux.sh)"
+            upstream="$(curl -fsSL "https://github.com/astral-sh/uv/releases/download/$version/uv-$arch-unknown-linux-gnu.tar.gz.sha256" | cut -d' ' -f1)"
+            test -n "$pinned" && test "$pinned" = "$upstream"
+          done
 
       - name: First install
         run: sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh
@@ -150,6 +167,13 @@ jobs:
           test -d "/opt/nox/releases/$first"
           test "$(sudo find /var/backups/nox -name 'nox-*.tar.gz' | wc -l)" = 1
           curl -fsS http://127.0.0.1:47801/health
+
+      - name: Same version again keeps the way back
+        run: |
+          sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh
+          # The release `nox rollback` points to must survive the cleanup.
+          test -d "/opt/nox/releases/$FIRST"
+          test "$(cat /opt/nox/state/previous-release)" = "$FIRST"
 
       - name: nox rollback brings back version and data
         run: |
@@ -209,6 +233,22 @@ jobs:
                   archive.addfile(info, io.BytesIO(data))
           PY
           ! check dotdot.tar.gz
+
+      - name: The health check follows the port the core took
+        run: |
+          # Something else holds 47801 and answers 404 there: the core moves to the next free port
+          # and says so in runtime/ipc.json, and that is where the installer has to look.
+          sudo systemctl stop nox
+          python3 -m http.server 47801 --bind 127.0.0.1 >/dev/null 2>&1 &
+          squatter=$!
+          for _ in $(seq 1 50); do curl -s -o /dev/null http://127.0.0.1:47801/ && break; sleep 0.2; done
+          sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh
+          port="$(sudo sed -n 's/^ *"http_port": *\([0-9]*\),* *$/\1/p' /var/lib/nox/runtime/ipc.json)"
+          test -n "$port" && test "$port" != 47801
+          curl -fsS "http://127.0.0.1:$port/health"
+          # The last step that talks to the service: 47801 stays in TIME_WAIT for a minute after
+          # the squatter goes, so a restart now would move again - which is the point above.
+          kill "$squatter"
 
       - name: Files and permissions are what the docs promise
         run: |

@@ -29,6 +29,7 @@ from nox.core.modes import switch_mode
 from nox.core.state import Mode, PrivacyMode, SystemLevel
 from nox.ipc.dispatch import EmptyPayload, RequestContext
 from nox.ipc.errors import ERR_PERMISSION, ERR_UNAVAILABLE, IpcError
+from nox.memory.capture import turn_origin
 from nox.security.constants import RESUME_ROLES, USER_KILL_ORIGINS
 from nox.security.gate import PinRequiredError, relaxes_privacy
 from nox.security.model import Decision
@@ -340,9 +341,10 @@ class CoreHandlers:
         async def on_chunk(delta: str) -> None:
             await ctx.stream({"delta": delta}, False)
 
-        turn = await self._core.orchestrator.handle_text(
-            p.text, language=p.language, speak=p.speak, on_chunk=on_chunk
-        )
+        with turn_origin("chat"):  # facts learned from it count as the user's own words
+            turn = await self._core.orchestrator.handle_text(
+                p.text, language=p.language, speak=p.speak, on_chunk=on_chunk
+            )
         return {
             "request_id": turn.request_id,
             "text": turn.response,

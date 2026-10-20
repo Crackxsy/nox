@@ -108,6 +108,11 @@ export const en: Record<Key, string> = {
   profile_add_label: 'Nox should remember',
   profile_add_placeholder: 'e.g. My best friend is Tim.',
   profile_add: 'Remember',
+  profile_new: 'new',
+  profile_unconfirmed: 'not confirmed',
+  profile_unconfirmed_hint:
+    'Learned from a phone message or pasted text. Nox does not use it until you confirm it.',
+  profile_confirm: 'Confirm',
   option_lang_auto: 'Automatic',
 
   app_title: 'Nox dashboard',

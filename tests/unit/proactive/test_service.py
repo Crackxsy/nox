@@ -262,3 +262,22 @@ async def test_a_reminder_while_muted_is_a_toast_not_a_voice() -> None:
     assert decision.allowed and decision.channel == "toast"
     assert speaker.calls == []
     assert events[-1][1]["spoken"] is False
+
+
+async def test_a_reminder_whose_voice_fails_still_arrives_as_a_toast() -> None:
+    # The voice worker timing out must not swallow the user's own reminder: it is already marked
+    # fired, so the toast is the last chance for it to be seen.
+    from nox.ipc.errors import ERR_TIMEOUT, IpcError
+
+    class TimingOutSpeaker(FakeSpeaker):
+        async def say(self, text: str, *, language: str = "de") -> None:
+            self.calls.append(text)
+            raise IpcError(ERR_TIMEOUT, "voice worker did not answer")
+
+    speaker = TimingOutSpeaker()
+    service, events, _state = make_service(speaker=speaker)
+    decision = await service.notify("urgent", "reminder", "Erinnerung: Zahnarzt")
+    assert speaker.calls  # it was tried
+    assert decision.allowed and decision.channel == "toast"
+    assert events[-1][0] == "proactive.notification"
+    assert events[-1][1]["text"] == "Erinnerung: Zahnarzt" and events[-1][1]["spoken"] is False

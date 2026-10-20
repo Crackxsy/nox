@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
+import pytest
 
 from nox.day.calendar import CalendarService, CalendarSource, parse_ics
 
@@ -196,3 +197,209 @@ async def test_a_failing_feed_is_retried_on_the_interval_not_on_every_question()
     service = _service(PermissionError("denied"))
     await service.refresh()
     assert service.status()[0].error and not service.is_stale()
+
+
+def _series(rule: str, *, dtstart: str = "20261015T080000") -> str:
+    return (
+        "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//test//EN\nBEGIN:VEVENT\nUID:flood\n"
+        f"DTSTART;TZID=Europe/Berlin:{dtstart}\nDURATION:PT1S\nRRULE:{rule}\nSUMMARY:Flood\n"
+        "END:VEVENT\nEND:VCALENDAR\n"
+    )
+
+
+@pytest.mark.parametrize("freq", ["SECONDLY", "MINUTELY"])
+def test_a_sub_hourly_series_is_read_as_its_first_occurrence_only(freq: str) -> None:
+    # A stranger's invite lands in a Google feed unasked; FREQ=SECONDLY expanded over the lookahead
+    # window would be hundreds of thousands of events in one tool result.
+    start = datetime(2026, 10, 15, tzinfo=TZ)
+    events = parse_ics(
+        _series(f"FREQ={freq}"),
+        source="t",
+        window_start=start,
+        window_end=start + timedelta(days=8),
+        tz=TZ,
+    )
+    assert [e.start.strftime("%d.%m %H:%M:%S") for e in events] == ["15.10 08:00:00"]
+
+
+def test_an_hourly_series_that_expands_to_every_second_is_capped_per_series() -> None:
+    from nox.day.calendar import MAX_OCCURRENCES_PER_SERIES
+
+    every_second = ",".join(str(n) for n in range(60))
+    start = datetime(2026, 10, 15, tzinfo=TZ)
+    events = parse_ics(
+        _series(f"FREQ=HOURLY;BYMINUTE={every_second};BYSECOND={every_second}"),
+        source="t",
+        window_start=start,
+        window_end=start + timedelta(days=8),
+        tz=TZ,
+    )
+    assert len(events) == MAX_OCCURRENCES_PER_SERIES
+    assert events[0].start == datetime(2026, 10, 15, 8, 0, tzinfo=TZ)
+
+
+def test_an_old_daily_series_without_until_still_reaches_the_window() -> None:
+    # The iteration bound must not cut off an ordinary long-running series before today.
+    start = datetime(2026, 10, 15, tzinfo=TZ)
+    events = parse_ics(
+        _series("FREQ=DAILY", dtstart="19900101T070000"),
+        source="t",
+        window_start=start,
+        window_end=start + timedelta(days=1),
+        tz=TZ,
+    )
+    assert [e.start for e in events] == [datetime(2026, 10, 15, 7, 0, tzinfo=TZ)]
+
+
+def test_a_feed_with_too_many_events_keeps_only_the_earliest() -> None:
+    from nox.day.calendar import MAX_EVENTS_PER_FEED
+
+    body = "".join(
+        f"BEGIN:VEVENT\nUID:e{n}\nDTSTART;TZID=Europe/Berlin:20261015T{8 + n // 3600:02d}"
+        f"{n // 60 % 60:02d}{n % 60:02d}\nDURATION:PT1M\nSUMMARY:E{n}\nEND:VEVENT\n"
+        for n in range(MAX_EVENTS_PER_FEED + 50)
+    )
+    text = f"BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//test//EN\n{body}END:VCALENDAR\n"
+    start = datetime(2026, 10, 15, tzinfo=TZ)
+    events = parse_ics(
+        text, source="t", window_start=start, window_end=start + timedelta(days=1), tz=TZ
+    )
+    assert len(events) == MAX_EVENTS_PER_FEED
+    assert events[0].title == "E0" and events[-1].title == f"E{MAX_EVENTS_PER_FEED - 1}"
+
+
+async def test_reading_the_calendar_does_not_touch_the_credential_store() -> None:
+    # The keyring is a blocking call; day.today asked it ~6 times per request on the event loop.
+    reads: list[str] = []
+
+    def secret(name: str) -> str:
+        reads.append(name)
+        return "https://calendar.example/private/SECRET-TOKEN/basic.ics"
+
+    service = CalendarService(
+        [CalendarSource("google", "Google Kalender", "nox/calendar/google_ics_url")],
+        secret=secret,
+        client_factory=lambda **_kw: _FakeClient(FEED),
+        clock=lambda: datetime(2026, 10, 15, 8, 0, tzinfo=TZ),
+    )
+    await service.refresh()
+    assert len(reads) == 1
+    await service.ensure_fresh()
+    assert service.configured and service.status()[0].configured and not service.is_stale()
+    assert service.today()
+    assert len(reads) == 1
+
+
+async def test_an_unconfigured_feed_is_rechecked_soon_and_alone() -> None:
+    now = {"t": datetime(2026, 10, 15, 8, 0, tzinfo=TZ)}
+    urls = {"nox/calendar/google_ics_url": "https://calendar.example/a.ics"}
+    fetched: list[str] = []
+
+    class _Client(_FakeClient):
+        def stream(self, method: str, url: str, **_kw: Any) -> _FakeStream:
+            fetched.append(url)
+            return super().stream(method, url)
+
+    service = CalendarService(
+        [
+            CalendarSource("google", "Google Kalender", "nox/calendar/google_ics_url"),
+            CalendarSource("school", "Stundenplan", "nox/calendar/school_ics_url"),
+        ],
+        secret=urls.get,
+        client_factory=lambda **_kw: _Client(FEED),
+        clock=lambda: now["t"],
+    )
+    await service.refresh()
+    assert fetched == ["https://calendar.example/a.ics"]
+    # the user pastes the second URL; a minute later the dashboard sees it without a restart,
+    # and the first feed (fresh) is not fetched again
+    urls["nox/calendar/school_ics_url"] = "https://calendar.example/b.ics"
+    now["t"] += timedelta(seconds=CalendarService.UNCONFIGURED_RECHECK_S + 1)
+    assert service.is_stale()
+    await service.ensure_fresh()
+    assert fetched == ["https://calendar.example/a.ics", "https://calendar.example/b.ics"]
+    assert [f.configured for f in service.status()] == [True, True]
+
+
+def _timed_parse(text: str, days: int = 8) -> tuple[list[Any], float]:
+    import time
+
+    start = datetime(2026, 10, 15, tzinfo=TZ)
+    began = time.perf_counter()
+    events = parse_ics(
+        text, source="t", window_start=start, window_end=start + timedelta(days=days), tz=TZ
+    )
+    return events, time.perf_counter() - began
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "FREQ=MINUTELY",
+        "FREQ=HOURLY;BYMONTH=2;BYMONTHDAY=31",
+        "FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30,31",
+        "FREQ=HOURLY;BYMONTH=2;BYYEARDAY=200",  # never true, and not caught by a pattern check
+        "FREQ=HOURLY;COUNT=1000000000;BYMONTH=2;BYYEARDAY=200",
+    ],
+)
+def test_a_series_from_1900_or_one_that_never_matches_is_cheap(rule: str) -> None:
+    events, elapsed = _timed_parse(_series(rule, dtstart="19000101T080000"))
+    assert events == []
+    assert elapsed < 1.0, f"{rule} took {elapsed:.2f}s"
+
+
+def test_an_old_hourly_series_without_count_is_walked_from_the_window_not_from_1900() -> None:
+    events, elapsed = _timed_parse(_series("FREQ=HOURLY;INTERVAL=5", dtstart="19000101T080000"), 1)
+    # 1900-01-01 08:00 + k*5h (wall time): 1,111,384 h to 15 Oct 00:00, so 01:00 is on the grid.
+    assert [e.start.hour for e in events] == [1, 6, 11, 16, 21]
+    assert elapsed < 1.0
+
+
+def test_a_counted_series_keeps_counting_from_its_first_occurrence() -> None:
+    start = datetime(2026, 10, 12, tzinfo=TZ)
+    events = parse_ics(
+        _series("FREQ=DAILY;COUNT=5", dtstart="20261010T090000"),
+        source="t",
+        window_start=start,
+        window_end=start + timedelta(days=7),
+        tz=TZ,
+    )
+    assert [e.start.day for e in events] == [12, 13, 14]  # 10, 11 before the window; 5 in total
+
+
+def test_a_hostile_series_cannot_push_out_the_users_own_appointments() -> None:
+    from nox.day.calendar import parse_feed
+
+    every = ",".join(str(n) for n in range(60))
+    hostile = "".join(
+        f"BEGIN:VEVENT\nUID:spam{n}\nDTSTART;TZID=Europe/Berlin:20261001T000000\nDURATION:PT1S\n"
+        f"RRULE:FREQ=HOURLY;BYMINUTE={every};BYSECOND={every}\nSUMMARY:Spam\nEND:VEVENT\n"
+        for n in range(40)
+    ).replace("\n", "\n")
+    own = (
+        "BEGIN:VEVENT\nUID:a\nDTSTART;TZID=Europe/Berlin:20261015T090000\nDURATION:PT1H\n"
+        "SUMMARY:Zahnarzt\nEND:VEVENT\n"
+        "BEGIN:VEVENT\nUID:b\nDTSTART;TZID=Europe/Berlin:20261015T180000\nDURATION:PT1H\n"
+        "SUMMARY:Training\nEND:VEVENT\n"
+        "BEGIN:VEVENT\nUID:c\nDTSTART;TZID=Europe/Berlin:20260101T120000\nDURATION:PT1H\n"
+        "RRULE:FREQ=WEEKLY\nSUMMARY:Mittagessen\nEND:VEVENT\n"
+    )
+    text = f"BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//test//EN\n{hostile}{own}END:VCALENDAR\n"
+    start = datetime(2026, 10, 15, tzinfo=TZ)
+    parsed = parse_feed(
+        text, source="t", window_start=start, window_end=start + timedelta(days=1), tz=TZ
+    )
+    titles = {e.title for e in parsed.events}
+    assert {"Zahnarzt", "Training", "Mittagessen"} <= titles
+    assert parsed.truncated  # and the answer will say the feed was cut
+
+
+def test_when_the_feed_budget_is_spent_single_appointments_are_still_read() -> None:
+    from nox.day.calendar import parse_feed
+
+    parsed = parse_feed(
+        FEED, source="t", window_start=WEEK_START, window_end=WEEK_END, tz=TZ, max_seconds=0.0
+    )
+    assert "Zahnarzt" in [e.title for e in parsed.events]  # a single event
+    assert "Mathe" not in [e.title for e in parsed.events]  # the weekly series was skipped
+    assert parsed.truncated

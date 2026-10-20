@@ -101,3 +101,26 @@ async def test_calendar_tools_say_when_nothing_is_connected(
     assert today["calendars"][0]["label"] == "Google Kalender"
     upcoming = await _call(registry, "calendar.upcoming", days=3)
     assert upcoming["events"] == []
+
+
+def test_a_calendar_answer_is_capped_and_says_how_many_were_left_out() -> None:
+    from types import SimpleNamespace
+
+    from nox.day.calendar import CalendarEvent
+    from nox.day.tools import MAX_EVENTS_PER_ANSWER, _calendar_answer
+
+    events = [
+        CalendarEvent(
+            start=NOW + timedelta(minutes=n),
+            end=NOW + timedelta(minutes=n + 1),
+            title=f"E{n}",
+            source="google",
+        )
+        for n in range(MAX_EVENTS_PER_ANSWER + 7)
+    ]
+    calendar = SimpleNamespace(status=lambda: [], configured=True)
+    answer = _calendar_answer(calendar, events)  # type: ignore[arg-type]
+    assert [e["title"] for e in answer["events"]] == [f"E{n}" for n in range(MAX_EVENTS_PER_ANSWER)]
+    assert answer["omitted"] == 7
+    small = _calendar_answer(calendar, events[:3])  # type: ignore[arg-type]
+    assert len(small["events"]) == 3 and "omitted" not in small

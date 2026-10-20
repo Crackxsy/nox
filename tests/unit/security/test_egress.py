@@ -181,3 +181,31 @@ def test_client_refuses_transport_bypass(guard: EgressGuard) -> None:
     for key in ("transport", "mounts", "proxy"):
         with pytest.raises(ValueError, match=key):
             guard.client(**{key: object()})
+
+
+@pytest.mark.parametrize(
+    ("url", "port"),
+    [
+        ("http://example.com/x", 80),
+        ("https://example.com/x", 443),
+        ("http://example.com:8123/x", 8123),
+        ("https://example.com:8443/x", 8443),
+    ],
+)
+async def test_the_transport_authorizes_the_port_actually_used(url: str, port: int) -> None:
+    """A URL without a port goes to the scheme's default; that is the port the guard must see."""
+    import httpx
+
+    from nox.security.egress import GuardedTransport
+
+    seen: list[tuple[str, int, str]] = []
+
+    class _Guard:
+        def authorize(self, host: str, port: int, *, scheme: str = "", method: str = "") -> None:
+            seen.append((host, port, scheme))
+
+    inner = httpx.MockTransport(lambda _request: httpx.Response(204))
+    transport = GuardedTransport(_Guard(), inner)  # type: ignore[arg-type]
+    response = await transport.handle_async_request(httpx.Request("GET", url))
+    assert response.status_code == 204
+    assert seen == [("example.com", port, url.split(":", 1)[0])]

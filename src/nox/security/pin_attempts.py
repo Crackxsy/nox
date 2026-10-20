@@ -65,13 +65,23 @@ class InMemoryPinAttemptStore:
 
 
 class SqlitePinAttemptStore:
-    """Keeps the counter in the Nox database, so a restart does not reset a lockout."""
+    """Keeps the counter in the Nox database, so a restart does not reset a lockout.
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    The connection is the core's shared one (`nox.data.db.Database`), so `lock` must be that
+    database's lock - with a lock of its own the store wrote in the middle of another thread's
+    `db.transaction()`. And it never calls COMMIT on an autocommit connection: the only transaction
+    such a COMMIT could end is someone else's.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, *, lock: threading.RLock | None = None) -> None:
         self._conn = conn
-        self._lock = threading.RLock()
+        self._lock = lock or threading.RLock()
         with self._lock:
-            self._conn.executescript(_SCHEMA)
+            self._conn.execute(_SCHEMA)
+            self._commit()
+
+    def _commit(self) -> None:
+        if self._conn.isolation_level is not None:  # a connection with implicit transactions
             self._conn.commit()
 
     def load(self) -> PinAttemptState:
@@ -93,7 +103,7 @@ class SqlitePinAttemptStore:
                 " locked_until = excluded.locked_until",
                 (state.failed, locked),
             )
-            self._conn.commit()
+            self._commit()
 
     def clear(self) -> None:
         self.save(PinAttemptState())

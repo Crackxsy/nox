@@ -118,6 +118,11 @@ export const de = {
   profile_add_label: 'Nox soll sich merken',
   profile_add_placeholder: 'z. B. Mein bester Freund heißt Tim.',
   profile_add: 'Merken',
+  profile_new: 'neu',
+  profile_unconfirmed: 'nicht bestätigt',
+  profile_unconfirmed_hint:
+    'Aus einer Handy-Nachricht oder eingefügtem Text gelernt. Nox nutzt es erst, wenn du es bestätigst.',
+  profile_confirm: 'Bestätigen',
   option_lang_auto: 'Automatisch',
 
   // -- shell --------------------------------------------------------------------------------------

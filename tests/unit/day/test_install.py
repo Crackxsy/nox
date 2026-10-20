@@ -92,3 +92,39 @@ async def test_the_extension_can_be_switched_off(core: Any) -> None:
     core.config = NoxConfig.model_validate({"day": {"enabled": False}})
     assert install(core) is None
     await asyncio.sleep(0)
+
+
+async def test_an_unavailable_credential_store_is_reported_as_such_not_as_no_calendar(
+    core: Any,
+) -> None:
+    from nox.security.secret_names import SecretStoreUnavailableError
+
+    class _LockedSecrets:
+        def get(self, _name: str) -> str | None:
+            raise SecretStoreUnavailableError("OS keyring: locked")
+
+    core.security = SimpleNamespace(secrets=_LockedSecrets(), egress=SimpleNamespace(client=None))
+    runtime = install(core)
+    assert runtime is not None
+    try:
+        await runtime.calendar.refresh()
+        status, detail = await core.health.checks["day"].probe()
+        assert status is HealthStatus.LIMITED
+        assert "credential store unavailable" in detail and "no calendar" not in detail
+    finally:
+        await runtime.stop()
+
+
+async def test_a_failing_reminder_loop_shows_in_the_health_check(core: Any) -> None:
+    runtime = install(core)
+    assert runtime is not None
+    try:
+        await runtime.calendar.refresh()
+        runtime.scheduler.failing = True
+        runtime.scheduler.tick_failures = 3
+        runtime.scheduler.last_tick_error = "OperationalError"
+        status, detail = await core.health.checks["day"].probe()
+        assert status is HealthStatus.LIMITED
+        assert "reminders" in detail and "OperationalError" in detail and "3" in detail
+    finally:
+        await runtime.stop()

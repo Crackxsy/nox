@@ -86,6 +86,7 @@ def register_day_ipc(
                     "configured": f.configured,
                     "error": f.error,
                     "count": f.count,
+                    "incomplete": f.truncated,
                     "fetched_at": None
                     if f.fetched_at is None
                     else f.fetched_at.isoformat(timespec="minutes"),

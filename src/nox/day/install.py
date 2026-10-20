@@ -84,11 +84,9 @@ def install(core: _Core) -> DayRuntime | None:
         return None
 
     def read_secret(name: str) -> str | None:
-        try:
-            value = core.security.secrets.get(name)
-        except Exception as exc:  # noqa: BLE001 - an unavailable keyring is "no calendar"
-            log.warning("day.secret_read_failed", error=type(exc).__name__)
-            return None
+        # An unavailable keyring raises through to `CalendarService`, which reports it on the feed
+        # instead of pretending no calendar is connected.
+        value = core.security.secrets.get(name)
         return None if value is None else str(value)
 
     def client_factory(**kwargs: Any) -> httpx.AsyncClient:
@@ -145,13 +143,19 @@ def _add_health_check(core: _Core, runtime: DayRuntime) -> None:
         return
 
     async def probe() -> tuple[HealthStatus, str]:
+        scheduler = runtime.scheduler
+        if scheduler.failing:
+            return HealthStatus.LIMITED, (
+                f"reminders: the loop failed {scheduler.tick_failures} times "
+                f"(last: {scheduler.last_tick_error})"
+            )
         feeds = runtime.calendar.status()
+        failing = [f for f in feeds if f.error]
+        if failing:
+            return HealthStatus.LIMITED, "; ".join(f"{f.label}: {f.error}" for f in failing)
         configured = [f for f in feeds if f.configured]
         if not configured:
             return HealthStatus.LIMITED, "no calendar connected; reminders work"
-        failing = [f for f in configured if f.error]
-        if failing:
-            return HealthStatus.LIMITED, "; ".join(f"{f.label}: {f.error}" for f in failing)
         return HealthStatus.AVAILABLE, f"{sum(f.count for f in configured)} appointments ahead"
 
     try:
