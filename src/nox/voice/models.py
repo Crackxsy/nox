@@ -8,7 +8,10 @@ the optional step in `nox onboard`, `nox voice setup`, or the explicit `nox voic
 / `nox voice download-supertonic` (`python -m nox.worker --download-kokoro` /
 `--download-supertonic`).
 The privacy modes `offline` and `private` refuse the dashboard, onboarding and `nox voice setup`
-downloads before anything is fetched.
+downloads before anything is fetched, and switching to one of them stops a dashboard download that
+is already running (`nox.voice.service`). Every file is pinned to an immutable revision and its
+SHA-256, the stream is cut off past the expected size, and an existing file is kept only when it
+still matches its pin (`download_files`).
 
 Resolution order for the models root:
 1. `voice.models_dir` from the configuration, when set; 2. `$NOX_DATA_DIR/models`, when the process
@@ -32,12 +35,6 @@ from nox.voice._logging import get_logger
 
 log = get_logger(__name__)
 
-#: Model files Kokoro v1.0 needs, with their upstream source and expected size in bytes.
-KOKORO_RELEASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
-KOKORO_FILES: dict[str, tuple[str, int]] = {
-    "kokoro-v1.0.onnx": (f"{KOKORO_RELEASE}/kokoro-v1.0.onnx", 325_532_387),
-    "voices-v1.0.bin": (f"{KOKORO_RELEASE}/voices-v1.0.bin", 28_214_398),
-}
 KOKORO_DOWNLOAD_HINT = (
     "download them in the dashboard (Settings -> Voice) or run `nox voice setup` "
     "(~354 MB, Apache-2.0 model files)"
@@ -51,6 +48,28 @@ class ModelFile(NamedTuple):
     size: int
     sha256: str = ""
 
+
+#: Kokoro v1.0 (the `kokoro-onnx` model files, Apache-2.0), pinned to one Hugging Face commit of a
+#: mirror whose files are byte-identical to the upstream GitHub release `model-files-v1.0` of
+#: thewh1teagle/kokoro-onnx (same size, same SHA-256). A release asset can be replaced in place; a
+#: commit cannot, so the download is reproducible and every file is checked against its SHA-256.
+KOKORO_REPO = "fastrtc/kokoro-onnx"
+KOKORO_REVISION = "8d07950c9b6c87ce6809e9bba7bd494336217c2a"
+_KOKORO_BASE = f"https://huggingface.co/{KOKORO_REPO}/resolve/{KOKORO_REVISION}"
+_KOKORO_PINS: dict[str, tuple[int, str]] = {
+    "kokoro-v1.0.onnx": (
+        325_532_387,
+        "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5",
+    ),
+    "voices-v1.0.bin": (
+        28_214_398,
+        "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
+    ),
+}
+KOKORO_FILES: dict[str, ModelFile] = {
+    name: ModelFile(f"{_KOKORO_BASE}/{name}", size, digest)
+    for name, (size, digest) in _KOKORO_PINS.items()
+}
 
 #: Supertonic 3 (Supertone Inc.), pinned to one Hugging Face commit so a download is reproducible
 #: and every file is checked against its SHA-256. The layout below the target directory mirrors the
@@ -143,7 +162,7 @@ DOWNLOADABLE_ENGINES: tuple[str, ...] = ("supertonic", "kokoro")
 
 
 def kokoro_files() -> dict[str, ModelFile]:
-    return {name: ModelFile(url, size) for name, (url, size) in KOKORO_FILES.items()}
+    return dict(KOKORO_FILES)
 
 
 def engine_files(engine: str) -> dict[str, ModelFile]:
@@ -216,12 +235,61 @@ def missing_files(directory: Path, names: tuple[str, ...]) -> list[str]:
     return [n for n in names if not (directory / n).is_file()]
 
 
+#: How far a stream may run past a file's expected size before it is cut off. The pinned sizes are
+#: exact, so this is only a sanity margin: a server that keeps sending (by accident or on purpose)
+#: cannot fill the disk.
+SIZE_MARGIN_BYTES = 64 * 1024
+
+#: `download_files` exit codes besides 0: failed, and stopped by `cancel` (2 means "an engine Nox
+#: cannot fetch", see `download_engine`).
+EXIT_FAILED = 1
+EXIT_ABORTED = 3
+
+#: Asked before every file and after every received chunk; a non-empty string stops the download
+#: and is the reason (e.g. the privacy mode that no longer allows it).
+CancelFn = Callable[[], str | None]
+
+
+class DownloadAbortedError(Exception):
+    """`cancel` asked a running download to stop."""
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for block in iter(lambda: handle.read(1 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def max_download_bytes(source: ModelFile) -> int | None:
+    """The most bytes a download of `source` may receive; None when no size is known."""
+    return source.size + SIZE_MARGIN_BYTES if source.size > 0 else None
+
+
+def file_matches(path: Path, source: ModelFile) -> bool:
+    """Whether `path` is a complete copy of `source`: for a pinned file the exact size and the
+    SHA-256, otherwise (no pin) merely a non-empty file."""
+    if not path.is_file():
+        return False
+    size = path.stat().st_size
+    if size <= 0:
+        return False
+    if not source.sha256:
+        return True
+    return size == source.size and _sha256(path) == source.sha256
+
+
+def _declared_length(response: object) -> int | None:
+    headers = getattr(response, "headers", None)
+    value = headers.get("content-length") if headers is not None else None
+    return int(value) if isinstance(value, str) and value.isdigit() else None
+
+
+def _check_cancel(cancel: CancelFn | None) -> None:
+    reason = cancel() if cancel is not None else None
+    if reason:
+        raise DownloadAbortedError(reason)
 
 
 def download_files(
@@ -231,14 +299,18 @@ def download_files(
     echo: Callable[[str], None] = print,  # CLI helper; the caller passes typer.echo
     force: bool = False,
     progress: ProgressFn | None = None,
+    cancel: CancelFn | None = None,
 ) -> int:
     """Fetch `files` (path relative to `target_dir` -> source). User-initiated only.
 
     Streams to a `.part` file and renames on success, so an interrupted download never leaves a
-    half-written model behind that the engine would then load. A file with a pinned SHA-256 is
-    verified before the rename and discarded on a mismatch. `progress`, when given, is called after
-    every received chunk (about 1 MB) with the current file's and the whole run's byte counts.
-    Returns a process exit code.
+    half-written model behind that the engine would then load. The stream is cut off as soon as it
+    runs past the expected size (plus `SIZE_MARGIN_BYTES`); a file with a pinned SHA-256 is hashed
+    while it streams and discarded on a mismatch. A file that already exists is kept only when it
+    matches its pin - a corrupted or swapped one is reported and fetched again. `progress`, when
+    given, is called after every received chunk (about 1 MB) with the current file's and the whole
+    run's byte counts; `cancel`, when given, can stop the run between two chunks (`EXIT_ABORTED`,
+    nothing of the current file is kept). Returns a process exit code.
     """
     import httpx
 
@@ -246,9 +318,11 @@ def download_files(
     todo: list[tuple[str, ModelFile]] = []
     for name, source in files.items():
         target = target_dir / name
-        if target.is_file() and target.stat().st_size > 0 and not force:
-            echo(f"exists   {target}")
-            continue
+        if not force and target.is_file():
+            if file_matches(target, source):
+                echo(f"exists   {target}")
+                continue
+            echo(f"mismatch {target}: not the pinned size/SHA-256, fetching it again")
         todo.append((name, source))
     total = files_size(dict(todo))
     finished = 0  # bytes of the files this run has already completed
@@ -256,15 +330,26 @@ def download_files(
         target = target_dir / name
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".part")
+        limit = max_download_bytes(source)
         echo(f"fetching {source.url}\n      -> {target} ({source.size / 1e6:.1f} MB)")
         done = 0
         try:
+            _check_cancel(cancel)
+            digest = hashlib.sha256()
             with httpx.stream("GET", source.url, follow_redirects=True, timeout=120.0) as response:
                 response.raise_for_status()
+                declared = _declared_length(response)
+                if limit is not None and declared is not None and declared > limit:
+                    raise ValueError(f"server announces {declared} bytes, expected {source.size}")
                 with tmp.open("wb") as handle:
                     for chunk in response.iter_bytes(1 << 20):
-                        handle.write(chunk)
                         done += len(chunk)
+                        if limit is not None and done > limit:
+                            raise ValueError(
+                                f"stream exceeds the expected {source.size} bytes; aborted"
+                            )
+                        handle.write(chunk)
+                        digest.update(chunk)
                         if progress is not None:
                             progress(
                                 DownloadProgress(
@@ -277,12 +362,19 @@ def download_files(
                                     count=len(todo),
                                 )
                             )
-            if source.sha256 and _sha256(tmp) != source.sha256:
+                        _check_cancel(cancel)
+            if source.sha256 and digest.hexdigest() != source.sha256:
                 raise ValueError("SHA-256 does not match the pinned value; file discarded")
+            if source.size > 0 and done != source.size:
+                raise ValueError(f"received {done} bytes, expected {source.size}; file discarded")
+        except DownloadAbortedError as exc:
+            tmp.unlink(missing_ok=True)
+            echo(f"aborted  {name}: {exc}")
+            return EXIT_ABORTED
         except Exception as exc:  # noqa: BLE001 - a CLI download reports, it does not traceback
             tmp.unlink(missing_ok=True)
             echo(f"failed   {name}: {type(exc).__name__}: {exc}")
-            return 1
+            return EXIT_FAILED
         tmp.replace(target)
         finished += done
         echo(f"done     {name} ({done / 1e6:.1f} MB)")
@@ -295,9 +387,12 @@ def download_kokoro(
     echo: Callable[[str], None] = print,
     force: bool = False,
     progress: ProgressFn | None = None,
+    cancel: CancelFn | None = None,
 ) -> int:
     """Fetch the Kokoro v1.0 model files into `target_dir`. User-initiated only."""
-    code = download_files(target_dir, kokoro_files(), echo=echo, force=force, progress=progress)
+    code = download_files(
+        target_dir, kokoro_files(), echo=echo, force=force, progress=progress, cancel=cancel
+    )
     if code == 0:
         echo(f"Kokoro model files are in {target_dir}. Set `voice.tts.engine: kokoro` to use them.")
     return code
@@ -309,13 +404,16 @@ def download_supertonic(
     echo: Callable[[str], None] = print,
     force: bool = False,
     progress: ProgressFn | None = None,
+    cancel: CancelFn | None = None,
 ) -> int:
     """Fetch the pinned Supertonic 3 model files into `target_dir`. User-initiated only."""
     echo(
         "Supertonic 3 model files are licensed under BigScience OpenRAIL-M: free to use, but with "
         "use-based restrictions (e.g. disclose that the voice is machine-generated) - see NOTICE."
     )
-    code = download_files(target_dir, SUPERTONIC_FILES, echo=echo, force=force, progress=progress)
+    code = download_files(
+        target_dir, SUPERTONIC_FILES, echo=echo, force=force, progress=progress, cancel=cancel
+    )
     if code == 0:
         echo(
             f"Supertonic model files are in {target_dir}. Nox speaks with them from its next "
@@ -331,12 +429,15 @@ def download_engine(
     echo: Callable[[str], None] = print,
     force: bool = False,
     progress: ProgressFn | None = None,
+    cancel: CancelFn | None = None,
 ) -> int:
     """`download_supertonic` or `download_kokoro` by engine name; 2 for an engine Nox cannot
     fetch."""
     if engine == "supertonic":
-        return download_supertonic(target_dir, echo=echo, force=force, progress=progress)
+        return download_supertonic(
+            target_dir, echo=echo, force=force, progress=progress, cancel=cancel
+        )
     if engine == "kokoro":
-        return download_kokoro(target_dir, echo=echo, force=force, progress=progress)
+        return download_kokoro(target_dir, echo=echo, force=force, progress=progress, cancel=cancel)
     echo(f"Nox does not download model files for the {engine!r} engine.")
     return 2

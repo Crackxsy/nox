@@ -8,12 +8,13 @@ Clicking "download" is the consent. The core does not fetch the files itself - i
 network only through the egress guard, and the model host is on none of its allow-lists - but
 starts `python -m nox.worker --download-<engine> --progress-json --models-dir <root>` and reads the
 JSON lines it prints (`nox.voice.model_setup.JsonProgress`). The privacy modes `offline` and
-`private` refuse before that process is started. One run at a time; a second `download` while one
-is running is refused, not queued.
+`private` refuse before that process is started, and switching to one of them while a download runs
+terminates the process and removes its half-written `.part` files (`watch`). One run at a time; a
+second `download` while one is running is refused, not queued.
 
 Outcomes, each said as it is: `done` (the files are there; the voice worker loaded its engine at
-start, so Nox speaks with them from its next start), `already_present`, `privacy_blocked`, and
-`failed` with the reason the download gave.
+start, so Nox speaks with them from its next start), `already_present`, `privacy_blocked` (refused,
+or stopped mid-run by a privacy switch), and `failed` with the reason the download gave.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
+from nox.core.events.names import E
 from nox.ipc.dispatch import EmptyPayload, RequestContext, RequestRegistry
 from nox.ipc.roles import LOCAL_UI_ROLES
 from nox.voice._logging import get_logger
@@ -43,6 +45,8 @@ __all__ = ["VoiceModelService", "register_voice_model_ipc", "spawn_download"]
 _DETAIL_MAX = 300
 #: The fields of a `progress` line the tile gets to see.
 _PROGRESS_KEYS = ("file", "file_done", "file_total", "done", "total", "index", "count")
+#: How long a privacy abort waits for the terminated downloader before it stops waiting for it.
+_ABORT_WAIT_S = 10.0
 
 
 class _Stream(Protocol):
@@ -102,6 +106,10 @@ class VoiceModelService:
         self._on_spawn = on_spawn
         self._task: asyncio.Task[None] | None = None
         self._process: DownloadProcess | None = None
+        self._directory: Path | None = None
+        #: The privacy mode that stopped the running download, once one has.
+        self._abort_reason = ""
+        self._unsubs: list[Callable[[], None]] = []
         self.outcome: str | None = None
         self.detail = ""
         self.progress: dict[str, Any] | None = None
@@ -141,6 +149,8 @@ class VoiceModelService:
             log.info("voice.model_download_refused", privacy_mode=mode)
             return {"ok": False, "reason": "privacy_blocked", **self.status()}
         self.outcome = None
+        self._abort_reason = ""
+        self._directory = status.directory
         argv = [
             self._python,
             "-m",
@@ -163,6 +173,8 @@ class VoiceModelService:
             process = await self._spawn(argv)
             self._process = process
             self._on_spawn(process.pid)
+            if self._abort_reason:  # the privacy mode changed while the process was starting
+                self._terminate(process)
             if process.stdout is not None:
                 while raw := await process.stdout.readline():
                     message = parse_progress_line(raw.decode("utf-8", errors="replace"))
@@ -179,8 +191,11 @@ class VoiceModelService:
                         code = int(message.get("code", 1))
             exit_code = await process.wait()
         except asyncio.CancelledError:
-            self.outcome = "failed"
-            self.detail = "cancelled"
+            if self._abort_reason:
+                self._finish_privacy_abort(engine)
+            else:
+                self.outcome = "failed"
+                self.detail = "cancelled"
             raise
         except Exception as exc:  # noqa: BLE001 - the tile shows the reason instead of a traceback
             self.outcome = "failed"
@@ -189,6 +204,9 @@ class VoiceModelService:
             return
         finally:
             self._process = None
+        if self._abort_reason:
+            self._finish_privacy_abort(engine)
+            return
         code = exit_code if code is None else code
         after = model_status(self._engine(), self._root())
         if code == 0 and after.present:
@@ -205,13 +223,63 @@ class VoiceModelService:
             self.detail = f"exit code {code}"
         log.warning("voice.model_download_failed", engine=engine, error=self.detail)
 
-    async def stop(self) -> None:
+    # ---- privacy ---------------------------------------------------------------------------------
+
+    def watch(self, bus: Any) -> None:
+        """Stop a running download as soon as the privacy mode no longer allows one."""
+        self._unsubs.append(bus.subscribe(E.PRIVACY_MODE_CHANGED, self._on_privacy_mode))
+
+    async def _on_privacy_mode(self, event: Any) -> None:
+        payload = getattr(event, "payload", None) or {}
+        mode = str(payload.get("current") or self._privacy_mode())
+        if not download_allowed(mode):
+            await self.abort_for_privacy(mode)
+
+    async def abort_for_privacy(self, mode: str) -> bool:
+        """Terminate the running download (if any) because `mode` allows none; True when one was
+        stopped. Its half-written `.part` files are removed and the outcome is `privacy_blocked`."""
+        task = self._task
+        if task is None or task.done():
+            return False
+        self._abort_reason = mode
         process = self._process
-        if process is not None and process.returncode is None:
+        if process is not None:
+            self._terminate(process)
+        log.info("voice.model_download_aborted", privacy_mode=mode)
+        _done, pending = await asyncio.wait({task}, timeout=_ABORT_WAIT_S)
+        if pending:  # the process did not end after `terminate`: stop reading it regardless
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return True
+
+    @staticmethod
+    def _terminate(process: DownloadProcess) -> None:
+        if process.returncode is None:
             try:
                 process.terminate()
             except ProcessLookupError:
                 pass
+
+    def _finish_privacy_abort(self, engine: str) -> None:
+        self.outcome = "privacy_blocked"
+        self.detail = self._abort_reason
+        self.progress = None
+        directory = self._directory
+        if directory is not None and directory.is_dir():
+            for part in directory.rglob("*.part"):
+                try:
+                    part.unlink()
+                except OSError as exc:
+                    log.warning("voice.model_part_not_removed", file=part.name, error=str(exc))
+        log.info("voice.model_download_stopped", engine=engine, privacy_mode=self._abort_reason)
+
+    async def stop(self) -> None:
+        for unsub in self._unsubs:
+            unsub()
+        self._unsubs.clear()
+        process = self._process
+        if process is not None:
+            self._terminate(process)
         if self._task is not None and not self._task.done():
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)

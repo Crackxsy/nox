@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 
+from nox.core.events import Event
+from nox.core.events.names import E
 from nox.ipc.dispatch import EmptyPayload, RequestRegistry
 from nox.voice import install as voice_install
 from nox.voice.models import SUPERTONIC_FILES
@@ -45,7 +47,12 @@ class FakeProcess:
         return self.code
 
     def terminate(self) -> None:
+        # Like a real process: its stdout ends, and it exits with a failure code.
         self.terminated = True
+        self.code = 1
+        self.stdout.lines.clear()
+        if self.stdout.gate is not None:
+            self.stdout.gate.set()
 
 
 def _json(**payload: Any) -> bytes:
@@ -249,3 +256,89 @@ async def test_install_reads_engine_root_and_privacy_from_the_core(tmp_path: Pat
     assert status["directory"] == str(tmp_path / "models" / "supertonic")
     assert status["privacy_mode"] == "offline" and status["download_blocked"] is True
     assert service.download()["reason"] == "privacy_blocked"
+
+
+class FakeBus:
+    def __init__(self) -> None:
+        self.handlers: dict[str, list[Any]] = {}
+
+    def subscribe(self, pattern: str, handler: Any) -> Any:
+        self.handlers.setdefault(pattern, []).append(handler)
+        return lambda: self.handlers[pattern].remove(handler)
+
+    async def publish(self, name: str, payload: dict[str, Any]) -> None:
+        for handler in list(self.handlers.get(name, [])):
+            await handler(Event(name=name, payload=payload))
+
+
+def _privacy_event(current: str) -> dict[str, Any]:
+    return {"previous": "balanced", "current": current, "by": "user"}
+
+
+@pytest.mark.parametrize("mode", ["offline", "private"])
+async def test_a_privacy_switch_terminates_a_running_download(tmp_path: Path, mode: str) -> None:
+    h = Harness(tmp_path)
+    h.fill_on_success = False
+    h.gate = asyncio.Event()  # the downloader is mid-file and prints nothing more
+    bus = FakeBus()
+    h.service.watch(bus)
+    part = h.root / "supertonic" / "onnx" / "vocoder.onnx.part"
+    part.parent.mkdir(parents=True)
+    part.write_bytes(b"half a model")
+    h.service.download()
+    await asyncio.sleep(0.01)
+    assert h.service.running
+    h.mode = mode
+    await bus.publish(E.PRIVACY_MODE_CHANGED, _privacy_event(mode))
+    assert h.process is not None and h.process.terminated
+    assert not h.service.running
+    status = h.service.status()
+    assert status["outcome"] == "privacy_blocked" and status["detail"] == mode
+    assert status["progress"] is None
+    assert not part.exists()  # nothing half-written is left behind
+
+
+async def test_a_switch_to_a_permissive_mode_lets_the_download_run(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    h.gate = asyncio.Event()
+    h.lines = [_json(type="result", code=0)]
+    bus = FakeBus()
+    h.service.watch(bus)
+    h.service.download()
+    await asyncio.sleep(0.01)
+    await bus.publish(E.PRIVACY_MODE_CHANGED, _privacy_event("full"))
+    assert h.process is not None and not h.process.terminated
+    h.gate.set()
+    status = await h.finished()
+    assert status["outcome"] == "done"
+
+
+async def test_a_privacy_switch_without_a_download_changes_nothing(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    assert await h.service.abort_for_privacy("offline") is False
+    assert h.service.outcome is None
+
+
+async def test_stop_unsubscribes_from_the_bus(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    bus = FakeBus()
+    h.service.watch(bus)
+    assert bus.handlers[E.PRIVACY_MODE_CHANGED]
+    await h.service.stop()
+    assert bus.handlers[E.PRIVACY_MODE_CHANGED] == []
+
+
+async def test_install_watches_privacy_changes_on_the_core_bus(tmp_path: Path) -> None:
+    bus = FakeBus()
+    core: Any = SimpleNamespace(
+        config=SimpleNamespace(
+            voice=SimpleNamespace(tts=SimpleNamespace(engine="supertonic"), models_dir=""),
+            paths=SimpleNamespace(data_dir=str(tmp_path)),
+            privacy=SimpleNamespace(mode="balanced"),
+        ),
+        registry=RequestRegistry(),
+        bus=bus,
+    )
+    service = voice_install.install(core)
+    assert len(bus.handlers[E.PRIVACY_MODE_CHANGED]) == 1
+    await service.stop()

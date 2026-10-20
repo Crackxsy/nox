@@ -2,7 +2,8 @@
 
 Everything is read when it is needed, not at install time: the configured engine and models root
 from the configuration, and the privacy mode live from the security core, so switching to
-`offline` in the tray stops the next download before it starts. The downloader process joins the
+`offline` in the tray stops the next download before it starts - and, through the
+`privacy.mode_changed` event, a download that is already running. The downloader process joins the
 workers' job object, so it cannot outlive the core.
 """
 
@@ -45,5 +46,8 @@ def install(core: Any) -> VoiceModelService:
         engine=engine, models_root=root, privacy_mode=privacy_mode, on_spawn=joined
     )
     register_voice_model_ipc(core.registry, service)
+    bus = getattr(core, "bus", None)
+    if bus is not None:
+        service.watch(bus)
     log.info("voice.model_service_installed")
     return service

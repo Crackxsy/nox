@@ -3,6 +3,7 @@ the onboarding step. Nothing here reaches the network: `httpx.stream` is replace
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -13,6 +14,7 @@ import httpx
 import pytest
 import yaml
 
+from nox.voice import models
 from nox.voice.model_setup import (
     JsonProgress,
     configured_models_root,
@@ -113,8 +115,18 @@ def test_parse_progress_line_ignores_anything_but_typed_json() -> None:
 
 
 def test_the_worker_flag_prints_json_lines(
-    tmp_path: Path, served: dict[str, Any], capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    served: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The served bytes are not the real model, so the pins are swapped for ones matching them.
+    body = b"".join(served["chunks"])
+    pinned = {
+        name: ModelFile(source.url, len(body), hashlib.sha256(body).hexdigest())
+        for name, source in KOKORO_FILES.items()
+    }
+    monkeypatch.setattr(models, "KOKORO_FILES", pinned)
     code = main(["--download-kokoro", "--progress-json", "--models-dir", str(tmp_path)])
     assert code == 0
     messages = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line]
