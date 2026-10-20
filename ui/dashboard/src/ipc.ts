@@ -108,6 +108,10 @@ export const api = {
   /** Starts a run in the core; the tile then polls `ai.setup.status`. */
   localAiStart: (c: IpcClient, installOllama: boolean) =>
     c.request('ai.setup.start', { install_ollama: installOllama }),
+  // -- voice model download (Settings -> Stimme) ------------------------------------------------
+  voiceModelStatus: (c: IpcClient) => c.request('voice.model.status', {}),
+  /** Starts the download in the core (the click is the consent); the tile then polls `status`. */
+  voiceModelDownload: (c: IpcClient) => c.request('voice.model.download', {}),
   profileList: (c: IpcClient) => c.request('memory.profile.list', {}),
   profileAdd: (c: IpcClient, text: string) => c.request('memory.profile.add', { text }),
   profileForget: (c: IpcClient, id: number) => c.request('memory.profile.forget', { id }),

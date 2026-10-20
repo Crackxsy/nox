@@ -1,17 +1,21 @@
 """Where voice model files live, and how the user gets the Kokoro and Supertonic ones.
 
-Nox never downloads a model on its own. Engines resolve their files below a models root and, when a
-file is missing, report `unavailable` with the exact path plus the command that fetches it - the
-decision to pull a few hundred MB over the network stays with the user (`nox voice download-kokoro`
-or `nox voice download-supertonic`, i.e. `python -m nox.worker --download-kokoro` /
+Nox never downloads a model without the user's go-ahead. Engines resolve their files below a models
+root and, when a file is missing, report `unavailable` with the exact path plus the ways to fetch
+it. Every download is one the user started: the "Voice" tile in the dashboard's settings (the click
+is the consent; the core then runs `python -m nox.worker --download-supertonic --progress-json`),
+the optional step in `nox onboard`, `nox voice setup`, or the explicit `nox voice download-kokoro`
+/ `nox voice download-supertonic` (`python -m nox.worker --download-kokoro` /
 `--download-supertonic`).
+The privacy modes `offline` and `private` refuse the dashboard, onboarding and `nox voice setup`
+downloads before anything is fetched.
 
 Resolution order for the models root:
 1. `voice.models_dir` from the configuration, when set; 2. `$NOX_DATA_DIR/models`, when the process
-was started with that variable; 3. `models` in Nox's folder (`nox_home()`), which mirrors the
-`paths.data_dir` default in `config/defaults.yaml`. A deployment that moved `paths.data_dir`
-elsewhere sets `voice.models_dir` explicitly - the voice worker only ever receives the `voice`
-section of the configuration, never `paths`.
+was started with that variable (the core starts its workers with it); 3. `models` in Nox's folder
+(`nox_home()`), which mirrors the `paths.data_dir` default in `config/defaults.yaml`. A deployment
+that moved `paths.data_dir` elsewhere and starts the worker by hand sets `voice.models_dir`
+explicitly - the voice worker only ever receives the `voice` section of the configuration.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
@@ -34,7 +39,8 @@ KOKORO_FILES: dict[str, tuple[str, int]] = {
     "voices-v1.0.bin": (f"{KOKORO_RELEASE}/voices-v1.0.bin", 28_214_398),
 }
 KOKORO_DOWNLOAD_HINT = (
-    "run `python -m nox.worker --download-kokoro` (~354 MB, Apache-2.0 model files)"
+    "download them in the dashboard (Settings -> Voice) or run `nox voice setup` "
+    "(~354 MB, Apache-2.0 model files)"
 )
 
 
@@ -128,8 +134,54 @@ SUPERTONIC_VOICES: tuple[str, ...] = tuple(
     Path(n).stem for n in SUPERTONIC_FILES if n.startswith("voice_styles/")
 )
 SUPERTONIC_DOWNLOAD_HINT = (
-    "run `python -m nox.worker --download-supertonic` (~400 MB, OpenRAIL-M model files, see NOTICE)"
+    "download them in the dashboard (Settings -> Voice) or run `nox voice setup` "
+    "(~400 MB, OpenRAIL-M model files, see NOTICE)"
 )
+
+#: Engines whose model files Nox can fetch itself. Piper's voices are not among them.
+DOWNLOADABLE_ENGINES: tuple[str, ...] = ("supertonic", "kokoro")
+
+
+def kokoro_files() -> dict[str, ModelFile]:
+    return {name: ModelFile(url, size) for name, (url, size) in KOKORO_FILES.items()}
+
+
+def engine_files(engine: str) -> dict[str, ModelFile]:
+    """The files `engine` needs below `<models root>/<engine>`; empty for an engine Nox cannot
+    fetch (Piper)."""
+    if engine == "supertonic":
+        return dict(SUPERTONIC_FILES)
+    if engine == "kokoro":
+        return kokoro_files()
+    return {}
+
+
+def files_size(files: dict[str, ModelFile]) -> int:
+    return sum(source.size for source in files.values())
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadProgress:
+    """Where a running `download_files` is: the current file and the whole run, in bytes.
+
+    `total` counts only the files this run actually fetches (present ones are skipped), so a
+    resumed download does not start at 40 %.
+    """
+
+    file: str
+    file_done: int
+    file_total: int
+    done: int
+    total: int
+    index: int  # 1-based number of the current file among the fetched ones
+    count: int  # how many files this run fetches
+
+    @property
+    def fraction(self) -> float:
+        return min(1.0, self.done / self.total) if self.total > 0 else 0.0
+
+
+ProgressFn = Callable[[DownloadProgress], None]
 
 
 def default_data_dir() -> Path:
@@ -178,32 +230,53 @@ def download_files(
     *,
     echo: Callable[[str], None] = print,  # CLI helper; the caller passes typer.echo
     force: bool = False,
+    progress: ProgressFn | None = None,
 ) -> int:
-    """Fetch `files` (path relative to `target_dir` -> source). User-initiated only (CLI).
+    """Fetch `files` (path relative to `target_dir` -> source). User-initiated only.
 
     Streams to a `.part` file and renames on success, so an interrupted download never leaves a
     half-written model behind that the engine would then load. A file with a pinned SHA-256 is
-    verified before the rename and discarded on a mismatch. Returns a process exit code.
+    verified before the rename and discarded on a mismatch. `progress`, when given, is called after
+    every received chunk (about 1 MB) with the current file's and the whole run's byte counts.
+    Returns a process exit code.
     """
     import httpx
 
     target_dir.mkdir(parents=True, exist_ok=True)
+    todo: list[tuple[str, ModelFile]] = []
     for name, source in files.items():
         target = target_dir / name
-        target.parent.mkdir(parents=True, exist_ok=True)
         if target.is_file() and target.stat().st_size > 0 and not force:
             echo(f"exists   {target}")
             continue
+        todo.append((name, source))
+    total = files_size(dict(todo))
+    finished = 0  # bytes of the files this run has already completed
+    for index, (name, source) in enumerate(todo, start=1):
+        target = target_dir / name
+        target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".part")
         echo(f"fetching {source.url}\n      -> {target} ({source.size / 1e6:.1f} MB)")
+        done = 0
         try:
             with httpx.stream("GET", source.url, follow_redirects=True, timeout=120.0) as response:
                 response.raise_for_status()
-                done = 0
                 with tmp.open("wb") as handle:
                     for chunk in response.iter_bytes(1 << 20):
                         handle.write(chunk)
                         done += len(chunk)
+                        if progress is not None:
+                            progress(
+                                DownloadProgress(
+                                    file=name,
+                                    file_done=done,
+                                    file_total=source.size,
+                                    done=finished + done,
+                                    total=max(total, finished + done),
+                                    index=index,
+                                    count=len(todo),
+                                )
+                            )
             if source.sha256 and _sha256(tmp) != source.sha256:
                 raise ValueError("SHA-256 does not match the pinned value; file discarded")
         except Exception as exc:  # noqa: BLE001 - a CLI download reports, it does not traceback
@@ -211,6 +284,7 @@ def download_files(
             echo(f"failed   {name}: {type(exc).__name__}: {exc}")
             return 1
         tmp.replace(target)
+        finished += done
         echo(f"done     {name} ({done / 1e6:.1f} MB)")
     return 0
 
@@ -220,10 +294,10 @@ def download_kokoro(
     *,
     echo: Callable[[str], None] = print,
     force: bool = False,
+    progress: ProgressFn | None = None,
 ) -> int:
-    """Fetch the Kokoro v1.0 model files into `target_dir`. User-initiated only (CLI)."""
-    files = {name: ModelFile(url, size) for name, (url, size) in KOKORO_FILES.items()}
-    code = download_files(target_dir, files, echo=echo, force=force)
+    """Fetch the Kokoro v1.0 model files into `target_dir`. User-initiated only."""
+    code = download_files(target_dir, kokoro_files(), echo=echo, force=force, progress=progress)
     if code == 0:
         echo(f"Kokoro model files are in {target_dir}. Set `voice.tts.engine: kokoro` to use them.")
     return code
@@ -234,16 +308,35 @@ def download_supertonic(
     *,
     echo: Callable[[str], None] = print,
     force: bool = False,
+    progress: ProgressFn | None = None,
 ) -> int:
-    """Fetch the pinned Supertonic 3 model files into `target_dir`. User-initiated only (CLI)."""
+    """Fetch the pinned Supertonic 3 model files into `target_dir`. User-initiated only."""
     echo(
         "Supertonic 3 model files are licensed under BigScience OpenRAIL-M: free to use, but with "
         "use-based restrictions (e.g. disclose that the voice is machine-generated) - see NOTICE."
     )
-    code = download_files(target_dir, SUPERTONIC_FILES, echo=echo, force=force)
+    code = download_files(target_dir, SUPERTONIC_FILES, echo=echo, force=force, progress=progress)
     if code == 0:
         echo(
-            f"Supertonic model files are in {target_dir}. "
-            "Set `voice.tts.engine: supertonic` to use them."
+            f"Supertonic model files are in {target_dir}. Nox speaks with them from its next "
+            "start (`voice.tts.engine: supertonic`, the default)."
         )
     return code
+
+
+def download_engine(
+    engine: str,
+    target_dir: Path,
+    *,
+    echo: Callable[[str], None] = print,
+    force: bool = False,
+    progress: ProgressFn | None = None,
+) -> int:
+    """`download_supertonic` or `download_kokoro` by engine name; 2 for an engine Nox cannot
+    fetch."""
+    if engine == "supertonic":
+        return download_supertonic(target_dir, echo=echo, force=force, progress=progress)
+    if engine == "kokoro":
+        return download_kokoro(target_dir, echo=echo, force=force, progress=progress)
+    echo(f"Nox does not download model files for the {engine!r} engine.")
+    return 2

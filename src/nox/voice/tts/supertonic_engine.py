@@ -14,7 +14,8 @@ Licensing, stated where the engine is chosen:
 * The model weights are BigScience OpenRAIL-M: free, commercial use allowed, but with use-based
   restrictions that pass on to every user - among them, content must be disclosed as machine
   generated, and the model must not be used to impersonate people or give medical advice. See
-  `NOTICE`. Nox never downloads the files on its own (`--download-supertonic`).
+  `NOTICE`. Nox fetches the files only when the user starts the download (the dashboard's Voice
+  tile, `nox onboard` or `nox voice setup`).
 
 Synthesis is not frame-streamed: a sentence is rendered as a whole (about 0.4-0.6 s for a short
 sentence with 4 CPU threads), and `synthesize` streams sentence by sentence. A streaming speech

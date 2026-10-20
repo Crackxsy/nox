@@ -310,6 +310,16 @@ export function ConfigForm({ t, client, config, onApplied }: ConfigFormProps) {
                         {t("setting_desktop_computer_use_enabled_hint")}
                       </span>
                     )}
+                    {spec.path === "voice.tts.steps" && (
+                      <span id={`${id}-hint`} className="hint">
+                        {t("setting_voice_tts_steps_hint")}
+                      </span>
+                    )}
+                    {spec.path === "stream.ai_voice_disclosure.chat_text" && (
+                      <span id={`${id}-hint`} className="hint">
+                        {t("setting_stream_ai_voice_disclosure_chat_text_hint")}
+                      </span>
+                    )}
                     {spec.path === "pet.variant" && (
                       <>
                         <PetPreview

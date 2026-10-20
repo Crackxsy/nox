@@ -127,11 +127,11 @@ voice:
     kill_phrase_watchdog: true   # short segments still reach Whisper so "Nox Notaus" keeps
     kill_watchdog_max_ms: 2500   # working; non-kill transcripts are discarded, never reported
   tts:
-    engine: piper                # piper | kokoro | supertonic. Kokoro needs the voice-kokoro
-                                 # extra and <models_dir>/kokoro (--download-kokoro);
-                                 # Supertonic needs the voice-supertonic extra and
-                                 # <models_dir>/supertonic (--download-supertonic). Either one
-                                 # falls back to Piper (health: limited) if it cannot load.
+    engine: supertonic           # supertonic (default) | piper | kokoro. Supertonic needs the
+                                 # voice-supertonic extra and <models_dir>/supertonic (~400 MB,
+                                 # OpenRAIL-M: dashboard Settings -> Voice, `nox voice setup`);
+                                 # Kokoro the voice-kokoro extra and <models_dir>/kokoro. Either
+                                 # one falls back to Piper (health: limited) if it cannot load.
     voice: ""                    # engine-specific voice id; empty = the engine default
                                  # (piper: de_DE-thorsten-medium, kokoro: af_heart - no German
                                  # voice exists in Kokoro v1.0; supertonic: F3, one of F1-F5 /
@@ -139,6 +139,8 @@ voice:
     rate: 1.0
     volume: 0.8
     streaming: true
+    steps: 5                     # Supertonic flow-matching steps, 1-32: fewer = faster,
+                                 # more = slightly more natural (upstream default 8)
   channels:
     private_device: ""           # default output device when empty
     stream_device: ""            # e.g. VB-Audio Cable input, empty = disabled
@@ -237,6 +239,10 @@ stream:                          # the stream bot. Every rate below is a conserv
     enabled: true
     from_modes: [companion, idle]   # modes Nox leaves for stream mode by itself; never a game
     twitch_live_poll_s: 60.0     # ask Twitch while not streaming; 0 = only OBS starts it
+  ai_voice_disclosure:           # say on stream that Nox's voice is AI-generated (the Supertonic
+    enabled: true                # model license, OpenRAIL-M, requires it); once per stream session
+    chat_text: ""                # chat line; empty = built-in sentence in the identity's language
+    overlay_label: "KI-Stimme"   # small label in a corner of the OBS overlay; empty = none
 
 attention:
   proactivity_level: 3           # 0..5 global ceiling

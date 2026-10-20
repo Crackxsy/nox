@@ -8,6 +8,15 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+### Changed
+- **Supertonic 3 is now the default voice** (`voice.tts.engine: supertonic`, voice `F3`, new
+  `voice.tts.steps: 5`, editable 1-32). Its model files (~400 MB, OpenRAIL-M) are downloaded only
+  after the user agrees: a new "Voice" tile in the dashboard's settings (missing files, size,
+  license, download with a progress bar; the core runs `python -m nox.worker --download-supertonic
+  --progress-json` and refuses before starting it in the privacy modes `offline`/`private`), an
+  optional step in `nox onboard`, and `nox voice setup`. Until the files are there, Nox speaks with
+  Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
+
 ### Added
 - **Windows: the sandbox keeps off this computer's local services and the LAN.** Where Windows
   does not enforce AppContainer loopback isolation, the installer now adds Windows Filtering
@@ -18,6 +27,10 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   without `hands.accept_weak_sandbox`. Workloads other than shell commands now use a fixed pool of
   128 containers (`Nox.Sandbox.w000`...), assigned once per workload class, so the rules can name
   every container SID up front. `nox sandbox firewall show|install|remove`.
+- **Nox discloses its AI voice on stream** (`stream.ai_voice_disclosure`, on by default): one line
+  in the Twitch chat per stream session, through the permission-checked `twitch.chat.send`, and a
+  small, semi-transparent "KI-Stimme" label on the OBS overlay (`system.ai_voice_label`; not on
+  the desktop pet). The default chat line follows Nox's language and name.
 - **Nox has its own browser, and eyes.** `browser.open/read/screenshot` and, after a
   confirmation remembered per action and site, `browser.click/type/submit` drive a headless
   Chromium with its own profile - never your browser - that reaches public pages only: every

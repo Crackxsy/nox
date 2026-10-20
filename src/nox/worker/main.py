@@ -9,7 +9,8 @@ never from the command line, and is never logged.
 
 `--selftest` validates devices, models, playback and a three-second microphone transcription
 without a hub; `--download-kokoro` / `--download-supertonic` fetch TTS model files, always
-user-initiated.
+user-initiated (by hand, or by the core after the user clicked "download" in the dashboard - then
+with `--progress-json`, one JSON object per line on stdout).
 `--plugin <id>` runs this process as a plugin worker instead (`nox.worker.plugin`); it shares only
 token and hub-url handling with the voice path.
 """
@@ -522,6 +523,7 @@ def build_components(voice: VoiceConfig, *, service: str) -> dict[str, Any]:
                 voices=voices,
                 models_dir=engine_models_dir("supertonic", voice.models_dir),
                 rate=voice.tts.rate,
+                steps=voice.tts.steps,
             )
         else:
             components["tts"] = build_piper(voice)
@@ -783,6 +785,27 @@ def voice_download_supertonic(
     raise typer.Exit(download_supertonic(target, echo=typer.echo, force=force))
 
 
+@voice_app.command("setup")
+def voice_setup(
+    yes: bool = typer.Option(False, "--yes", "-y", help="do not ask before the download"),
+) -> None:
+    """Download the configured TTS engine's model files, with progress (asks first)."""
+    from nox.entrypoints import build_config
+    from nox.voice.model_setup import configured_models_root, run_voice_setup
+
+    config = build_config(None, None)
+    root = configured_models_root(config.voice.models_dir, config.paths.data_dir)
+    code = run_voice_setup(
+        configured_engine=config.voice.tts.engine,
+        root=root,
+        privacy_mode=config.privacy.mode,
+        language=config.identity.ui_language,
+        echo=typer.echo,
+        confirm=None if yes else (lambda question: typer.confirm(question, default=True)),
+    )
+    raise typer.Exit(code)
+
+
 @voice_app.command("selftest")
 def voice_selftest() -> None:
     """Devices, model load, TTS playback and a 3 s microphone transcription (no hub)."""
@@ -805,6 +828,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--download-supertonic",
         action="store_true",
         help="download the Supertonic 3 TTS model files (~400 MB) into <models_dir>/supertonic",
+    )
+    ap.add_argument(
+        "--progress-json",
+        action="store_true",
+        help="with --download-*: one JSON object per line (log, progress, result) for the core",
     )
     ap.add_argument("--models-dir", default=None, help="override voice.models_dir for this run")
     ap.add_argument("--plugin", default=None, help="run as the worker of plugins/<id>")
@@ -832,16 +860,18 @@ def main(argv: list[str] | None = None) -> int:
     voice_cfg = VoiceConfig()
     if args.models_dir:
         voice_cfg = voice_cfg.model_copy(update={"models_dir": args.models_dir})
-    if args.download_kokoro:
-        # User-initiated download from the worker process: no core, no egress guard involved.
-        from nox.voice.models import download_kokoro, engine_models_dir
+    if args.download_kokoro or args.download_supertonic:
+        # User-initiated download from the worker process: no core, no egress guard involved. The
+        # core starts it with `--progress-json` after the user clicked "download" in the dashboard.
+        from nox.voice.models import download_engine, engine_models_dir
 
-        return download_kokoro(engine_models_dir("kokoro", voice_cfg.models_dir), echo=typer.echo)
-    if args.download_supertonic:
-        from nox.voice.models import download_supertonic, engine_models_dir
+        engine = "kokoro" if args.download_kokoro else "supertonic"
+        target = engine_models_dir(engine, voice_cfg.models_dir)
+        if args.progress_json:
+            from nox.voice.model_setup import JsonProgress, download_with_json_progress
 
-        target = engine_models_dir("supertonic", voice_cfg.models_dir)
-        return download_supertonic(target, echo=typer.echo)
+            return download_with_json_progress(engine, target, JsonProgress())
+        return download_engine(engine, target, echo=typer.echo)
     if args.stt_model:
         voice_cfg = voice_cfg.model_copy(
             update={"stt": voice_cfg.stt.model_copy(update={"model": args.stt_model})}

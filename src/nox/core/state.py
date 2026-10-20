@@ -170,6 +170,9 @@ class SystemState(BaseModel):
     gpu: float = 0.0
     ram_mb: float = 0.0
     vram_mb: float = 0.0
+    #: The stream overlay's "AI voice" label (`stream.ai_voice_disclosure.overlay_label`), set at
+    #: start from the configuration; empty = no label (`nox.stream.disclosure`).
+    ai_voice_label: str = ""
 
 
 class ProjectState(BaseModel):

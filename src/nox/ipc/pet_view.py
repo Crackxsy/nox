@@ -5,7 +5,8 @@ Both pages only animate a creature, so they get exactly what the pet reducer
 state, no setting other than the pet's own. Every event not listed is dropped; a listed event
 loses every field not named. The stream overlay is stricter still: its credential sits in OBS's
 configuration (scene exports, screenshots of the properties dialog), so it gets nothing about
-speech meant only for the headphones, and nothing at all but the privacy mode itself while the
+speech meant only for the headphones, and nothing but the privacy mode itself - plus the "AI
+voice" label, a fixed text from the configuration that says nothing about the user - while the
 privacy mode is PRIVATE or OFFLINE.
 """
 
@@ -46,8 +47,9 @@ def public_state_path(path: str) -> bool:
     )
 
 
-#: What the overlay may know while privacy is PRIVATE or OFFLINE: the mode, nothing else.
-QUIET_STATE_PATHS: frozenset[str] = frozenset({"privacy.mode"})
+#: What the overlay may know while privacy is PRIVATE or OFFLINE: the mode, and the AI-voice
+#: disclosure label (a configured constant; the disclosure must not vanish with the privacy mode).
+QUIET_STATE_PATHS: frozenset[str] = frozenset({"privacy.mode", "system.ai_voice_label"})
 
 
 def _quiet(role: str, privacy_mode: str) -> bool:
@@ -60,8 +62,13 @@ def public_snapshot(
     """The `state.get` answer for the pet and the overlay - the same rules as the event view, so
     a page cannot learn by asking what it is not told."""
     if _quiet(role, privacy_mode):
-        privacy = snapshot.get("privacy") or {}
-        return {"privacy": {"mode": privacy.get("mode")}}
+        quiet: dict[str, Any] = {}
+        for path in sorted(QUIET_STATE_PATHS):
+            root, _, leaf = path.partition(".")
+            subtree = snapshot.get(root) or {}
+            if root == "privacy" or leaf in subtree:
+                quiet.setdefault(root, {})[leaf] = subtree.get(leaf)
+        return quiet
     public = {root: dict(snapshot.get(root) or {}) for root in PUBLIC_STATE_ROOTS}
     for hidden in HIDDEN_STATE_PATHS:
         root, _, leaf = hidden.partition(".")

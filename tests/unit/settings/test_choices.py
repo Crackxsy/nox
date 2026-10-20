@@ -41,7 +41,9 @@ def test_the_voice_is_picked_from_the_installed_piper_voices(tmp_path: Path) -> 
     piper = tmp_path / "piper"
     piper.mkdir()
     (piper / "de_DE-thorsten-medium.onnx").write_bytes(b"")
-    config = NoxConfig.model_validate({"voice": {"models_dir": str(tmp_path)}})
+    config = NoxConfig.model_validate(
+        {"voice": {"models_dir": str(tmp_path), "tts": {"engine": "piper"}}}
+    )
     spec = describe("voice.tts.voice", config)
     assert spec.type == "enum"
     assert spec.options == ["", "de_DE-thorsten-medium"]

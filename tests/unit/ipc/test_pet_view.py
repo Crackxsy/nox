@@ -172,3 +172,35 @@ def test_state_get_and_state_events_agree(role: str, mode: str) -> None:
 def test_quiet_overlay_state_is_the_mode_only(mode: str) -> None:
     assert public_snapshot(SNAPSHOT, "overlay", mode) == {"privacy": {"mode": "balanced"}}
     assert "assistant" in public_snapshot(SNAPSHOT, "pet", mode)
+
+
+LABELLED = {**SNAPSHOT, "system": {"level": "running", "ai_voice_label": "KI-Stimme"}}
+
+
+@pytest.mark.parametrize("mode", ["private", "offline"])
+def test_the_ai_voice_label_stays_on_the_quiet_overlay_and_nothing_else_joins_it(
+    mode: str,
+) -> None:
+    """The disclosure is a configured constant: it must not vanish with the privacy mode, and it
+    must not open a door for the rest of `system`."""
+    assert public_snapshot(LABELLED, "overlay", mode) == {
+        "privacy": {"mode": "balanced"},
+        "system": {"ai_voice_label": "KI-Stimme"},
+    }
+    changed = {"path": "system.ai_voice_label", "new": "AI voice", "old": "", "version": 3}
+    assert view("overlay", "state.changed", changed, privacy_mode=mode) == changed
+    level = {"path": "system.level", "new": "running"}
+    assert view("overlay", "state.changed", level, privacy_mode=mode) is None
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("mode", ["full", "balanced", "private", "offline"])
+def test_state_get_and_state_events_agree_with_the_label(role: str, mode: str) -> None:
+    asked = set(_leaves(public_snapshot(LABELLED, role, mode)))
+    told = {
+        path
+        for path, value in _leaves(LABELLED).items()
+        if view(role, "state.changed", {"path": path, "new": value}, privacy_mode=mode) is not None
+    }
+    assert asked == told
+    assert "system.ai_voice_label" in asked

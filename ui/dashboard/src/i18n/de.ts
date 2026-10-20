@@ -56,6 +56,14 @@ export const de = {
   setting_stream_twitch_rate_limit_min_gap_s: 'Mindestabstand zwischen Nachrichten (Sekunden)',
   setting_stream_twitch_min_backoff_s: 'Wartezeit vor dem ersten Neuverbinden (Sekunden)',
   setting_stream_twitch_max_backoff_s: 'Längste Wartezeit beim Neuverbinden (Sekunden)',
+  setting_stream_ai_voice_disclosure_enabled: 'Im Stream sagen, dass die Stimme KI-erzeugt ist',
+  setting_stream_ai_voice_disclosure_chat_text: 'Hinweis im Chat',
+  setting_stream_ai_voice_disclosure_chat_text_hint:
+    'Einmal pro Stream. Leer lassen für den Standardsatz: „Kurzer Hinweis: Die Stimme von Nox ist KI-generiert.“',
+  setting_stream_ai_voice_disclosure_overlay_label: 'Hinweis im Overlay (leer = keiner)',
+  setting_voice_tts_steps: 'Feinheit der Stimme (Supertonic-Schritte)',
+  setting_voice_tts_steps_hint:
+    'Weniger ist schneller, mehr klingt etwas natürlicher. 5 ist der Mittelweg; nur für Supertonic.',
 
   // -- enum option labels -------------------------------------------------------------------------
   option_listening_continuous: 'Dauerhaft, nach Wake-Word',
@@ -1129,6 +1137,33 @@ export const de = {
   caps_watch_delete_failed: 'Nicht gelöscht: {0}',
   computer_use_banner: 'Nox steuert gerade Maus und Tastatur – {0} beendet sofort.',
   computer_use_banner_no_hotkey: 'Nox steuert gerade Maus und Tastatur – der Not-Aus beendet sofort.',
+  voicemodel_title: 'Stimme',
+  voicemodel_hint:
+    'Nox spricht mit Supertonic 3 – natürlich, auf dem Prozessor, ohne Grafikkarte. Die Modelldateien gehören nicht zur Installation; Nox lädt sie erst, wenn du hier auf „Herunterladen“ klickst. Bis dahin spricht Nox mit Piper.',
+  voicemodel_loading: 'Prüfe die Sprachdateien …',
+  voicemodel_unavailable: 'Der Download der Stimme ist gerade nicht erreichbar.',
+  voicemodel_engine: 'Stimme erzeugt mit',
+  voicemodel_files: 'Modelldateien',
+  voicemodel_files_present: 'vorhanden ({0} Dateien)',
+  voicemodel_files_missing: '{0} von {1} fehlen',
+  voicemodel_size: 'Download',
+  voicemodel_size_value: 'etwa {0} MB',
+  voicemodel_folder: 'Ordner',
+  voicemodel_license: 'Lizenz',
+  voicemodel_license_openrail:
+    'Die Modelldateien stehen unter OpenRAIL-M: frei nutzbar, auch kommerziell, aber mit Auflagen. Eine davon: Es muss erkennbar sein, dass die Stimme KI-erzeugt ist. Nox sagt das im Stream von sich aus – einmal pro Stream im Chat und mit einem kleinen Hinweis im Overlay (abschaltbar unter Integrationen).',
+  voicemodel_other_engine:
+    'Eingestellt ist {0}. Die Dateien von Supertonic kannst du trotzdem schon laden; Nox nutzt sie, sobald „Stimme erzeugen mit“ auf Supertonic steht.',
+  voicemodel_blocked: 'Im Privatsphäre-Modus „{0}“ lädt Nox nichts herunter.',
+  voicemodel_download: 'Herunterladen',
+  voicemodel_running: 'Lade die Sprachdateien …',
+  voicemodel_progress_label: 'Fortschritt des Downloads',
+  voicemodel_progress: '{0} % von {1} MB – Datei {2} von {3}',
+  voicemodel_out_done: 'Heruntergeladen. Nox spricht mit der neuen Stimme ab dem nächsten Start.',
+  voicemodel_out_already_present: 'Die Dateien sind schon da; es wurde nichts heruntergeladen.',
+  voicemodel_out_privacy_blocked:
+    'Nicht heruntergeladen: Im aktuellen Privatsphäre-Modus lädt Nox nichts aus dem Netz.',
+  voicemodel_out_failed: 'Der Download ist fehlgeschlagen ({0}). Nox spricht weiter mit Piper.',
   localai_title: 'Lokale KI',
   localai_hint:
     'Ein Sprachmodell, das auf diesem Rechner läuft. Nox misst Arbeits- und Grafikspeicher, empfiehlt ein passendes Modell, lädt es über Ollama und prüft es, bevor es eingetragen wird.',

@@ -157,12 +157,30 @@ class StreamAutoSessionConfig(StrictSection):
         return value
 
 
+class StreamAiVoiceDisclosureConfig(StrictSection):
+    """Saying on stream that Nox's voice is AI-generated (`nox.stream.disclosure`).
+
+    On by default: the Supertonic model license (OpenRAIL-M) requires disclosing machine-generated
+    audio, and it is the honest thing to do with any synthetic voice.
+    """
+
+    enabled: bool = True
+    #: Posted once per stream session through the Twitch chat. Empty = a built-in sentence in the
+    #: identity's language naming Nox ("Kurzer Hinweis: Die Stimme von Nox ist KI-generiert.").
+    chat_text: str = Field(default="", max_length=450)
+    #: A small label in a corner of the OBS overlay. Empty = no label.
+    overlay_label: str = Field(default="KI-Stimme", max_length=40)
+
+
 class StreamConfig(StrictSection):
     funken: FunkenConfig = Field(default_factory=FunkenConfig)
     chat: StreamChatConfig = Field(default_factory=StreamChatConfig)
     relevance: RelevanceConfig = Field(default_factory=RelevanceConfig)
     twitch: StreamTwitchConfig = Field(default_factory=StreamTwitchConfig)
     auto_session: StreamAutoSessionConfig = Field(default_factory=StreamAutoSessionConfig)
+    ai_voice_disclosure: StreamAiVoiceDisclosureConfig = Field(
+        default_factory=StreamAiVoiceDisclosureConfig
+    )
 
 
 # ---- Rocket League ------------------------------------------------------------------------------

@@ -9,8 +9,10 @@ Steps (in order, each idempotent - re-running `build.py` from a clean `build/` i
    never be importable - uncomment `import site`, add the site-packages path explicitly, and add
    `..\\app`, the folder the `nox` package is copied to (step 5).
 3. Bootstrap pip into that runtime via `get-pip.py` (the embeddable zip has no pip of its own).
-4. Regenerate `installer/requirements.lock` via `uv export --extra shell --extra voice` (the
-   locked, reproducible dependency set - NOT `pyproject.toml`, which this script never touches)
+4. Regenerate `installer/requirements.lock` via `uv export --extra shell --extra voice
+   --extra voice-supertonic` (Supertonic 3 is the default voice; its ~400 MB of model files are
+   downloaded after the user agrees, never shipped) - the locked, reproducible dependency set,
+   NOT `pyproject.toml`, which this script never touches -
    and `pip install` everything in it except the `-e .` self-reference (nox's own source is copied
    in step 5, not pip-installed, so the payload has no build backend / editable-install machinery).
 5. Copy `src/nox`, `config/`, `plugins/`, `ui/pet/dist`, `ui/dashboard/dist` and the launcher
@@ -139,7 +141,8 @@ def step_export_lock() -> Path:
     """Step 4a: `uv export` - the locked, reproducible dependency set (not pyproject.toml)."""
     uv = shutil.which("uv") or sys.executable  # `python -m uv` also works (ENGINEERING.md)
     cmd = [uv, "export"] if shutil.which("uv") else [sys.executable, "-m", "uv", "export"]
-    cmd += ["--color", "never", "--extra", "shell", "--extra", "voice", "--no-hashes"]
+    cmd += ["--color", "never", "--extra", "shell", "--extra", "voice"]
+    cmd += ["--extra", "voice-supertonic", "--no-hashes"]
     log(f"exporting locked dependencies: {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=True)
     REQUIREMENTS_LOCK.write_text(result.stdout, encoding="utf-8")
