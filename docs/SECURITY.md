@@ -164,6 +164,23 @@ only ever see the exact `nox/<their-id>/...` names their own manifest declares (
 a persistent handle to the store itself. Automated tests use an in-memory backend and never touch
 the real Windows Credential Manager or a real credential.
 
+## Untrusted content in a conversation (taint)
+
+Every tool result Nox did not compose itself (a web page, a file, a window title, an MCP result,
+the AI provider's own web search) taints the conversation it entered (`nox.security.taint`). Voice,
+each dashboard client and each paired phone are conversations of their own, with their own history,
+model context and taint. While a conversation is tainted, a remembered grant above LOW asks again,
+and any call that sends data off the machine asks - so injected text cannot exfiltrate silently.
+To keep this from turning into confirmation fatigue, a call whose free text demonstrably comes from
+the user's own message of the turn runs without asking: a `web.search` (to the user's own search
+backend) that copies no 20-character run and no host out of untrusted content, a `web.fetch` of a
+URL the user typed, and a curated read-only shell command none of whose arguments appears in
+untrusted content. Everything else confirms. The taint is cleared only when the conversation's
+context is really discarded: the user says "neues Gespräch" / "new conversation", or the
+conversation sat idle for an hour (`conversation_idle_s`) - in both cases the next turn has no
+history and a new model session. Nox has no context compaction; the warm session keeps everything
+until then.
+
 ## Audit logging
 
 Append-only, hash-chained (`prev_hash`/`hash`, SHA-256 over the canonical JSON of each entry plus
