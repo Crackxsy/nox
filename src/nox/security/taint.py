@@ -22,12 +22,14 @@ The Security Model's "tainted turn" rule, made precise:
   call), the executor copies it into the `PermissionRequest`, and the engine keeps a `TaintLedger`
   entry per key, so a page read on the phone never makes the desktop ask.
 * **User-directed lookups stay quiet.** A tainted conversation still lets a read-only lookup run
-  without a confirmation when its free text demonstrably comes from the user and not from what a
-  tool returned (`TaintLedger.user_directed`): a `web.search` whose query copies no run of
-  `COPIED_RUN_CHARS` characters and no host from untrusted content (unless the user typed it this
-  turn), a `web.fetch` of a URL the user typed this turn, a curated read-only shell command none of
-  whose arguments appears in untrusted content. Anything else - a link from a search result, a
-  query that quotes a page, a result Nox could not read as text - confirms as before.
+  without a confirmation when its free text is demonstrably taken from what the *user* said in this
+  conversation (`TaintLedger.user_directed`) - a positive check, never "it copies nothing from the
+  page", because injected text can split or encode what it wants to leak: every significant word
+  of a `web.search` query, and every argument of a curated read-only shell command (bare option
+  flags aside), is a word of the user's own messages; a `web.fetch` URL is one the user typed,
+  compared after the same parsing the fetcher does, with no percent-encoding, non-ASCII or other
+  form that could read differently from what is fetched. Only the user's messages count - never
+  memory, replayed history, or tool output. Anything else confirms as before.
 
 What a taint changes is decided in `nox.security.permissions`: a remembered grant above LOW asks
 again, a curated read-only shell command asks, and any call that sends data off the machine
@@ -37,22 +39,18 @@ again, a curated read-only shell command asks, and any call that sends data off 
 from __future__ import annotations
 
 import re
-import unicodedata
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Literal
-from urllib.parse import unquote
+from urllib.parse import urlsplit
 
 __all__ = [
     "CONVERSATION",
-    "COPIED_RUN_CHARS",
-    "MAX_UNTRUSTED_CHARS",
     "TRUSTED_INTERNAL_TOOLS",
     "LookupKind",
     "TaintLedger",
     "current_conversation",
     "result_taints",
-    "untrusted_text",
 ]
 
 #: The conversation the current tool call belongs to; empty outside a conversation.
@@ -79,145 +77,107 @@ def result_taints(tool: str) -> bool:
     return tool not in TRUSTED_INTERNAL_TOOLS
 
 
-#: A run of this many characters copied from untrusted content makes a lookup not user-directed.
-COPIED_RUN_CHARS = 20
-#: Untrusted text kept per conversation for the provenance check. A conversation that read more is
-#: "opaque": nothing in it counts as user-directed any more (it confirms, as before).
-MAX_UNTRUSTED_CHARS = 512_000
+#: How many of a conversation's user messages count as the source of a lookup.
+MAX_USER_MESSAGES = 50
 #: Free text longer than this is never checked, only confirmed.
 MAX_CHECKED_CHARS = 2_048
-#: A shell argument this short ("-l", "/") says nothing about where it came from.
-MIN_ARGUMENT_CHARS = 3
 
 #: Which shape of lookup is being checked: a search query, a URL to fetch, a shell argv.
 LookupKind = Literal["search", "fetch", "shell"]
 
-_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}")
-_WORD = re.compile(r"\w[\w.\-/:~\\]*")
-_SPACE = re.compile(r"\s+")
-_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://")
-#: What may stand before and after a URL the user typed, so it is matched whole.
-_URL_BEFORE = r"(?:^|[\s(<\"'\[]|://|www\.)"
-_URL_AFTER = r"/?(?=$|[\s)>\"'\],;!?]|\.(?:\s|$))"
+#: Words a query may add without the user having said them: they carry no information.
+_STOPWORDS = frozenset(
+    "der die das den dem des ein eine einen einem einer eines und oder in im am an auf aus bei "
+    "fur fuer mit nach von vom zu zum zur uber ueber wie was wer wo wann warum welche welcher "
+    "ist sind wird werden hat haben gibt es the a an of in on for to and or is are what who how "
+    "when where why which with at by from".split()
+)
+_WORD = re.compile(r"\w+")
+#: A bare option flag of a curated command (`-h`, `-la`, `--human`): no data, no host, no path.
+_FLAG = re.compile(r"^--?[a-z]+(?:-[a-z]+)*$")
+_UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
+#: What a URL to compare may consist of: printable ASCII without percent-escapes, backslashes,
+#: userinfo or anything else two URL parsers could read differently.
+_PLAIN_URL = re.compile(
+    r"^(?:https?://)?[a-z0-9.-]+(?::\d{1,5})?(?:/[A-Za-z0-9._~/?&=+,;:!*$'()-]*)?$", re.I
+)
+_EDGE = "()<>[]\"'.,;:!?"
 
 
-def _normalise(text: str) -> str:
-    """Compare like with like: percent-decoded, NFKC, case-folded, whitespace collapsed."""
-    return _SPACE.sub(" ", unicodedata.normalize("NFKC", unquote(text)).casefold()).strip()
+def _words(text: str) -> list[str]:
+    """Case-folded words, umlauts spelled out - the only normalisation there is."""
+    return [w.translate(_UMLAUTS) for w in _WORD.findall(text.casefold())]
 
 
-def untrusted_text(data: object, error: str = "") -> str:
-    """Every string a tool result carries (keys and values), as one text for the provenance check.
-
-    The JSON the model reads escapes quotes and newlines; collecting the leaves keeps an injected
-    sentence one contiguous run.
-    """
-    parts: list[str] = []
-
-    def walk(value: object) -> None:
-        if isinstance(value, str):
-            parts.append(value)
-        elif isinstance(value, dict):
-            for key, item in value.items():
-                parts.append(str(key))
-                walk(item)
-        elif isinstance(value, list | tuple):
-            for item in value:
-                walk(item)
-        elif value is not None:
-            parts.append(str(value))
-
-    walk(data)
-    if error:
-        parts.append(error)
-    return "\n".join(parts)
-
-
-@dataclass(slots=True)
-class _Record:
-    text: str = ""
-    #: Content Nox could not read as text (a provider's own web search), or more than
-    #: `MAX_UNTRUSTED_CHARS`: the provenance of nothing can be shown, so nothing is user-directed.
-    opaque: bool = False
+def _url_key(raw: str) -> tuple[str, str] | None:
+    """(host, path+query) of a plain URL, parsed the way the fetcher parses it; `None` for anything
+    that is not plainly one URL (percent-escapes, non-ASCII, userinfo, a fragment, ...)."""
+    if not raw or len(raw) > MAX_CHECKED_CHARS or not raw.isascii() or not _PLAIN_URL.match(raw):
+        return None
+    parts = urlsplit(raw if "://" in raw else f"https://{raw}")
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname or parts.fragment:
+        return None
+    host = parts.hostname.lower().removeprefix("www.")
+    if "." not in host:
+        return None
+    port = f":{parts.port}" if parts.port else ""
+    path = parts.path.rstrip("/") + (f"?{parts.query}" if parts.query else "")
+    return host + port, path
 
 
 @dataclass(slots=True)
 class TaintLedger:
-    """Which conversations hold untrusted content, what that content was, and the user's words.
+    """Which conversations hold untrusted content, and what the user said in each.
 
     Lives in the permission engine; keyed by `PermissionRequest.conversation`.
     """
 
-    _records: dict[str, _Record] = field(default_factory=dict)
-    _user: dict[str, str] = field(default_factory=dict)
+    _tainted: set[str] = field(default_factory=set)
+    _user: dict[str, list[str]] = field(default_factory=dict)
 
-    def mark(self, conversation: str, content: str | None) -> bool:
-        """Record untrusted `content` (`None` = not readable as text) in `conversation`.
-
-        Returns True when the conversation was clean before.
-        """
-        if not conversation:
+    def mark(self, conversation: str) -> bool:
+        """Record untrusted content in `conversation`; True when it was clean before."""
+        if not conversation or conversation in self._tainted:
             return False
-        fresh = conversation not in self._records
-        record = self._records.setdefault(conversation, _Record())
-        if content is None:
-            record.opaque, record.text = True, ""
-        elif not record.opaque:
-            record.text += "\n" + _normalise(content)
-            if len(record.text) > MAX_UNTRUSTED_CHARS:
-                record.opaque, record.text = True, ""
-        return fresh
+        self._tainted.add(conversation)
+        return True
 
     def clear(self, conversation: str) -> bool:
         """The conversation's context was discarded. Returns True if it had been tainted."""
         self._user.pop(conversation, None)
-        return self._records.pop(conversation, None) is not None
+        if conversation in self._tainted:
+            self._tainted.discard(conversation)
+            return True
+        return False
 
     def is_tainted(self, conversation: str) -> bool:
-        return bool(conversation) and conversation in self._records
+        return bool(conversation) and conversation in self._tainted
 
     def note_user_message(self, conversation: str, text: str) -> None:
-        """The user's own words for the turn now running in `conversation`."""
-        if conversation:
-            self._user[conversation] = _normalise(text)
+        """What the user said in a turn of `conversation` (kept until the conversation ends)."""
+        if conversation and text.strip():
+            said = self._user.setdefault(conversation, [])
+            said.append(text)
+            del said[:-MAX_USER_MESSAGES]
 
     def user_directed(self, conversation: str, kind: LookupKind, value: str) -> bool:
-        """Whether a lookup's free text `value` comes from the user, not from untrusted content.
+        """Whether a lookup's free text `value` is taken from the user's own messages.
 
-        Conservative by construction: whatever it cannot show to be user-directed is not. Only
-        asked for a tainted conversation (a clean one needs no exemption).
+        A positive check: whatever cannot be shown to come from the user does not.
         """
-        record = self._records.get(conversation)
-        user = self._user.get(conversation, "")
-        if record is None or record.opaque or not user:
+        said = self._user.get(conversation, [])
+        if not said or not value.strip() or len(value) > MAX_CHECKED_CHARS:
             return False
-        wanted = _normalise(value)
-        if not wanted or len(wanted) > MAX_CHECKED_CHARS:
-            return False
-        untrusted = record.text
         if kind == "fetch":
-            return _typed_url(wanted, user)
-        if kind == "shell":
-            words = _WORD.findall(wanted)[1:]  # the program itself is vetted (curated read-only)
-            return not any(
-                len(word) >= MIN_ARGUMENT_CHARS and word in untrusted and word not in user
-                for word in words
+            wanted = _url_key(value)
+            return wanted is not None and any(
+                _url_key(token.strip(_EDGE)) == wanted for text in said for token in text.split()
             )
-        for host in _HOST.findall(wanted):
-            if host in untrusted and host not in user:
-                return False
-        for start in range(len(wanted) - COPIED_RUN_CHARS + 1):
-            run = wanted[start : start + COPIED_RUN_CHARS]
-            if run in untrusted and run not in user:
-                return False
-        return True
-
-
-def _typed_url(url: str, user: str) -> bool:
-    """A URL the user typed this turn, whole: scheme, `www.` and a trailing slash do not matter,
-    but it must stand on its own in the message - `ample.com` is not in "example.com", nor is
-    `example.com/a` in "example.com/a/b"."""
-    bare = _SCHEME.sub("", url).removeprefix("www.").rstrip("/")
-    if "." not in bare.split("/", 1)[0]:
-        return False
-    return re.search(_URL_BEFORE + re.escape(bare) + _URL_AFTER, user) is not None
+        user_words = {word for text in said for word in _words(text)}
+        if kind == "shell":
+            args = value.split()[1:]  # the program itself is vetted (curated read-only)
+            return all(
+                _FLAG.match(arg.casefold()) or set(_words(arg)) <= user_words for arg in args
+            )
+        words = [word for word in _words(value) if word not in _STOPWORDS]
+        return bool(words) and all(word in user_words for word in words)

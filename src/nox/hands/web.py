@@ -326,7 +326,7 @@ def register_web_tools(
     registry.register(
         ToolSpec(
             name="web.search",
-            description="Search the web; returns the top results.",
+            description="Search the web in the user's own words; returns the top results.",
             input_model=SearchInput,
             risk=Risk.LOW,
             handler=search,

@@ -37,7 +37,7 @@ from nox.ai.tooluse import OfferedTool, render_unavailable
 from nox.ai.tooluse import Unavailable as UnavailableItem
 from nox.core.logging import get_logger
 from nox.core.turnbudget import TurnBudget
-from nox.security.taint import CONVERSATION, result_taints, untrusted_text
+from nox.security.taint import CONVERSATION, result_taints
 
 log = get_logger(__name__)
 
@@ -62,9 +62,8 @@ Offer = Callable[[], Sequence[OfferedTool]]
 Call = Callable[[str, dict[str, Any]], Awaitable[ToolOutcome]]
 Unavailable = Callable[[], Sequence[UnavailableItem]]
 BudgetFactory = Callable[[], TurnBudget]
-#: Marks a conversation as holding content Nox did not author (`nox.security.taint`), with that
-#: content's text (`None` = not readable as text).
-TaintSetter = Callable[[str, str | None], None]
+#: Marks a conversation as holding content Nox did not author (`nox.security.taint`).
+TaintSetter = Callable[[str], None]
 #: Tells the permission engine the user's words of the turn starting in a conversation.
 UserMessage = Callable[[str, str], None]
 #: The conversation's context was discarded: its taint goes with it.
@@ -196,11 +195,11 @@ class ToolLoop:
         if self.clear_taint is not None and conversation:
             self.clear_taint(conversation)
 
-    def mark_external(self, turn: ActiveTurn, name: str) -> None:
+    def mark_external(self, conversation: str, name: str) -> None:
         """The provider ran a tool of its own (Claude Code's `WebSearch`): its result is in the
-        model's context but never passed through Nox, so it taints without readable content."""
-        if self.taint is not None and result_taints(name):
-            self.taint(turn.conversation, None)
+        model's context but never passed through Nox, so it taints like any other result."""
+        if self.taint is not None and conversation and result_taints(name):
+            self.taint(conversation)
 
     def by_token(self, token: str) -> ActiveTurn | None:
         """The open turn this token belongs to, compared in constant time against each token."""
@@ -267,7 +266,7 @@ class ToolLoop:
             raise
         except Exception as exc:  # noqa: BLE001 - a broken tool must not end the conversation
             log.warning("toolloop.call_raised", tool=name, error=f"{type(exc).__name__}: {exc}")
-            self._mark(turn, name, type(exc).__name__)
+            self._mark(turn, name)
             turn.budget.record(name, arguments, ok=False)
             turn.emit(ToolEvent("finished", name, ok=False))
             return ToolRun(name, ok=False, error=type(exc).__name__)
@@ -276,14 +275,14 @@ class ToolLoop:
         turn.budget.record(name, arguments, ok=outcome.ok)
         turn.used.append(name)
         # Whatever the tool returned - a result or an error text - is now in the model's context.
-        self._mark(turn, name, untrusted_text(outcome.data, outcome.error or ""))
+        self._mark(turn, name)
         turn.emit(ToolEvent("finished", name, ok=outcome.ok))
         log.info("toolloop.called", tool=name, ok=outcome.ok)
         return ToolRun(name, ok=outcome.ok, data=outcome.data, error=outcome.error or "")
 
-    def _mark(self, turn: ActiveTurn, name: str, content: str) -> None:
+    def _mark(self, turn: ActiveTurn, name: str) -> None:
         if self.taint is not None and result_taints(name):
-            self.taint(turn.conversation, content)
+            self.taint(turn.conversation)
 
 
 def _current_task_cancelling() -> bool:

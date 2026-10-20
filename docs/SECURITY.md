@@ -171,11 +171,13 @@ the AI provider's own web search) taints the conversation it entered (`nox.secur
 each dashboard client and each paired phone are conversations of their own, with their own history,
 model context and taint. While a conversation is tainted, a remembered grant above LOW asks again,
 and any call that sends data off the machine asks - so injected text cannot exfiltrate silently.
-To keep this from turning into confirmation fatigue, a call whose free text demonstrably comes from
-the user's own message of the turn runs without asking: a `web.search` (to the user's own search
-backend) that copies no 20-character run and no host out of untrusted content, a `web.fetch` of a
-URL the user typed, and a curated read-only shell command none of whose arguments appears in
-untrusted content. Everything else confirms. The taint is cleared only when the conversation's
+To keep this from turning into confirmation fatigue, a call whose free text is demonstrably taken
+from what the user said in this conversation runs without asking - a positive check, because
+injected text can split or encode what it wants to leak: a `web.search` (to the user's own search
+backend) whose every significant word is a word of the user's messages, a `web.fetch` of a URL the
+user typed (compared after the fetcher's own parsing; percent-escapes, non-ASCII and userinfo never
+match), and a curated read-only shell command whose arguments are the user's words or bare flags.
+Only the user's messages count, never memory, history or tool output. Everything else confirms. The taint is cleared only when the conversation's
 context is really discarded: the user says "neues Gespräch" / "new conversation", or the
 conversation sat idle for an hour (`conversation_idle_s`) - in both cases the next turn has no
 history and a new model session. Nox has no context compaction; the warm session keeps everything

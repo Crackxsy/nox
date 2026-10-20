@@ -544,8 +544,6 @@ class Orchestrator:
         """
         offered = tools.definitions() if tools is not None else []
         max_steps = (tools.budget.max_calls + 2) if tools is not None else 1
-        #: How many of the provider's own tool runs have tainted the conversation already.
-        tainted_by_provider = 0
         for _step in range(max_steps):
             request = self._request(
                 turn.request_id,
@@ -561,10 +559,6 @@ class Orchestrator:
                 conversation=turn.conversation,
             )
             produced, calls = await self._stream(request, turn, language, speech, on_chunk, started)
-            if tools is not None and self.tool_loop is not None:
-                for name in turn.provider_tools[tainted_by_provider:]:
-                    self.tool_loop.mark_external(tools, name)
-                tainted_by_provider = len(turn.provider_tools)
             if not calls:
                 return
             if tools is None or self.tool_loop is None:
@@ -723,11 +717,20 @@ class Orchestrator:
         self, names: list[str], speech: _TurnSpeech, language: str, turn: Turn
     ) -> None:
         log.debug("orchestrator.provider_tools", request_id=turn.request_id, tools=names)
-        # Nox's own tools are recorded by the tool loop when they run; only the provider's own
-        # (web search) would otherwise be invisible.
+        # Nox's own tools are recorded (and taint) in the tool loop when they run; only the
+        # provider's own (web search) would otherwise be invisible.
         own = set(self.tool_loop.current_offer_names()) if self.tool_loop is not None else set()
-        turn.provider_tools += [name for name in names if name not in own]
-        self._arm_filler(speech, language, turn)
+        theirs = [name for name in names if name not in own]
+        try:
+            turn.provider_tools += theirs
+            self._arm_filler(speech, language, turn)
+        finally:
+            # Taint now, while the stream is still running: the provider may call one of Nox's
+            # tools over the bridge right after its own search, and that call must already see
+            # the search result's taint. In `finally`, so a failing filler cannot skip it.
+            if self.tool_loop is not None:
+                for name in theirs:
+                    self.tool_loop.mark_external(turn.conversation, name)
 
     def _arm_filler(self, speech: _TurnSpeech, language: str, turn: Turn) -> None:
         """Say "let me check" if a tool loop keeps the user waiting with nothing said yet.

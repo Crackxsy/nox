@@ -374,8 +374,8 @@ class EvaluationContext:
     #: and an allowed call that sends data off the machine is turned into a confirmation.
     tainted: bool = False
     #: True when the conversation is tainted but this call is a read-only lookup whose free text
-    #: demonstrably comes from the user's own message, not from untrusted content
-    #: (`TaintLedger.user_directed`). Such a call is treated as if the conversation were clean.
+    #: is demonstrably taken from what the user said in this conversation, not from untrusted
+    #: content (`TaintLedger.user_directed`). Such a call is treated as if it were clean.
     user_directed: bool = False
 
 
@@ -671,22 +671,21 @@ class DefaultPermissionEngine:
         self._session_id = session_id or uuid.uuid4().hex[:12]
         self._profile: Profile = profiles.get(initial_profile)
         self._pending: dict[str, _Pending] = {}
-        #: Conversations (`PermissionRequest.conversation`) that hold untrusted content, what it
-        #: was, and the user's words of the turn running in each.
+        #: Conversations (`PermissionRequest.conversation`) that hold untrusted content, and
+        #: what the user said in each.
         self._taint = TaintLedger()
 
     # ---- PermissionEngine protocol ---------------------------------------------------------------
 
-    def mark_tainted(self, conversation: str, content: str | None = None) -> None:
+    def mark_tainted(self, conversation: str) -> None:
         """Record that `conversation` now holds content Nox did not author.
 
-        The tool loop calls this after every tool result that is not trusted-internal
-        (`nox.security.taint`), with the result's text; `None` means the content could not be
-        read as text, and then no later lookup in the conversation counts as user-directed. It
-        stays set until `clear_taint` - when the orchestrator discards that conversation's
+        The tool loop calls this after every tool result that is not trusted-internal, and the
+        orchestrator the moment the provider reports a tool of its own (`nox.security.taint`).
+        It stays set until `clear_taint` - when the orchestrator discards that conversation's
         context - never merely because a new turn began.
         """
-        if self._taint.mark(conversation, content):
+        if self._taint.mark(conversation):
             log.info("security.taint_changed", tainted=True)
 
     def clear_taint(self, conversation: str) -> None:
@@ -698,7 +697,7 @@ class DefaultPermissionEngine:
         return self._taint.is_tainted(conversation)
 
     def note_user_message(self, conversation: str, text: str) -> None:
-        """The user's words of the turn now running in `conversation` (for `user_directed`)."""
+        """What the user said in a turn of `conversation` (the source `user_directed` accepts)."""
         self._taint.note_user_message(conversation, text)
 
     def _user_directed(self, request: PermissionRequest) -> bool:

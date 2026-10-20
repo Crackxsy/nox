@@ -32,10 +32,10 @@ class _Taint:
         self.tainted: set[str] = set()
         self.cleared: list[str] = []
         self.user: dict[str, str] = {}
-        self.marks: list[tuple[str, str | None]] = []
+        self.marks: list[str] = []
 
-    def mark(self, conversation: str, content: str | None) -> None:
-        self.marks.append((conversation, content))
+    def mark(self, conversation: str) -> None:
+        self.marks.append(conversation)
         self.tainted.add(conversation)
 
     def clear(self, conversation: str) -> None:
@@ -159,20 +159,24 @@ def test_only_an_explicit_request_starts_over() -> None:
         assert not is_new_conversation_request(text), text
 
 
-async def test_the_providers_own_web_search_taints_without_readable_content() -> None:
+async def test_the_providers_own_web_search_taints_the_conversation_at_once() -> None:
     # Claude Code's WebSearch runs at Anthropic: its results are in the model's context but never
-    # pass through Nox, so the conversation is tainted and nothing in it can count as user-directed.
+    # pass through Nox. The conversation is tainted the moment the provider reports it.
     orch, _, router, _, _ = make()
     taint, begun = _with_tools(orch)
     plain_stream = router.stream
 
+    seen_during_stream: list[set[str]] = []
+
     async def searching(request: AiRequest) -> AsyncIterator[AiChunk]:
         yield AiChunk(request_id=request.request_id, delta="", tool_activity=["WebSearch"])
+        seen_during_stream.append(set(taint.tainted))
         async for chunk in plain_stream(request):
             yield chunk
 
     router.stream = searching  # type: ignore[method-assign]
     await orch.start()
     await orch.handle_text("Was gibt es Neues?", channel="chat:dashboard-1")
-    assert taint.marks == [(begun[0], None)]
+    assert taint.marks == [begun[0]]
+    assert seen_during_stream == [{begun[0]}]  # before the stream went on, not after it
     await orch.stop()
