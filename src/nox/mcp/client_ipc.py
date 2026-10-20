@@ -13,11 +13,10 @@ from pydantic import BaseModel, Field, ValidationError
 
 from nox.core.config.hands import SERVER_ID_PATTERN, McpServerConfig
 from nox.ipc.dispatch import EmptyPayload, RequestContext, RequestRegistry
+from nox.ipc.roles import LOCAL_UI_ROLES
 from nox.mcp.servers import McpServerManager
 
-__all__ = ["UI_ROLES", "register_mcp_client_ipc"]
-
-UI_ROLES = ("shell", "dashboard")
+__all__ = ["register_mcp_client_ipc"]
 
 
 class ServerAdd(BaseModel):
@@ -66,8 +65,8 @@ def register_mcp_client_ipc(registry: RequestRegistry, manager: McpServerManager
     async def remove(ctx: RequestContext, payload: ServerRef) -> dict[str, Any]:
         return await manager.remove(payload.id, by=ctx.role)
 
-    registry.register("mcp.servers.list", EmptyPayload, list_servers, roles=UI_ROLES)
-    registry.register("mcp.servers.add", ServerAdd, add, roles=UI_ROLES)
-    registry.register("mcp.servers.approve", ServerRef, approve, roles=UI_ROLES)
-    registry.register("mcp.servers.enable", ServerEnable, enable, roles=UI_ROLES)
-    registry.register("mcp.servers.remove", ServerRef, remove, roles=UI_ROLES)
+    registry.register("mcp.servers.list", EmptyPayload, list_servers, roles=LOCAL_UI_ROLES)
+    registry.register("mcp.servers.add", ServerAdd, add, roles=LOCAL_UI_ROLES)
+    registry.register("mcp.servers.approve", ServerRef, approve, roles=LOCAL_UI_ROLES)
+    registry.register("mcp.servers.enable", ServerEnable, enable, roles=LOCAL_UI_ROLES)
+    registry.register("mcp.servers.remove", ServerRef, remove, roles=LOCAL_UI_ROLES)

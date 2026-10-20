@@ -18,6 +18,7 @@ from nox.capabilities.model import Gap
 from nox.core.events import E, Event
 from nox.core.logging import get_logger
 from nox.ipc.dispatch import EmptyPayload, RequestContext
+from nox.ipc.roles import LOCAL_UI_ROLES
 from nox.paths import nox_home
 from nox.plugins.manager import ORIGIN_BUNDLED
 from nox.plugins.manifest import PluginManifest, authorize_egress
@@ -32,7 +33,6 @@ log = get_logger(__name__)
 
 __all__ = ["SkillsRuntime", "install"]
 
-UI_ROLES = ("shell", "dashboard")
 #: Namespaces of the core's own tool families that are not always registered (an extension may be
 #: off), so a skill can never claim one of them.
 CORE_NAMESPACES = frozenset(
@@ -180,10 +180,10 @@ def install(core: Any) -> SkillsRuntime | None:
         return await service.forget(p.id, by=ctx.role)
 
     if core.registry is not None:
-        core.registry.register("skills.list", EmptyPayload, list_skills, roles=UI_ROLES)
-        core.registry.register("skills.activate", SkillActivate, activate, roles=UI_ROLES)
-        core.registry.register("skills.deactivate", SkillRef, deactivate, roles=UI_ROLES)
-        core.registry.register("skills.forget", SkillRef, forget, roles=UI_ROLES)
+        core.registry.register("skills.list", EmptyPayload, list_skills, roles=LOCAL_UI_ROLES)
+        core.registry.register("skills.activate", SkillActivate, activate, roles=LOCAL_UI_ROLES)
+        core.registry.register("skills.deactivate", SkillRef, deactivate, roles=LOCAL_UI_ROLES)
+        core.registry.register("skills.forget", SkillRef, forget, roles=LOCAL_UI_ROLES)
     runtime = SkillsRuntime(service)
     runtime.watch(core)
     log.info("skills.installed", available=service.builder.unavailable() is None)

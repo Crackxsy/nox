@@ -21,14 +21,14 @@ from pydantic import BaseModel
 
 from nox.core.logging import get_logger
 from nox.ipc.dispatch import EmptyPayload, RequestContext, RequestRegistry
+from nox.ipc.roles import LOCAL_UI_ROLES
 from nox.localai.setup import Question, SetupDeps, SetupState, run_setup
 
 log = get_logger(__name__)
 
-__all__ = ["UI_ROLES", "LocalAiService", "SetupStart", "register_localai_ipc"]
+__all__ = ["LocalAiService", "SetupStart", "register_localai_ipc"]
 
 #: The two user-facing clients, never a plugin, a worker or a phone.
-UI_ROLES = ("shell", "dashboard")
 
 
 class SetupStart(BaseModel):
@@ -96,6 +96,6 @@ def register_localai_ipc(registry: RequestRegistry, service: LocalAiService) -> 
         log.info("localai.setup_requested", by=ctx.role)
         return service.start(install_ollama=payload.install_ollama)
 
-    registry.register("ai.setup.status", EmptyPayload, status, roles=UI_ROLES)
-    registry.register("ai.setup.check", EmptyPayload, check, roles=UI_ROLES)
-    registry.register("ai.setup.start", SetupStart, start, roles=UI_ROLES)
+    registry.register("ai.setup.status", EmptyPayload, status, roles=LOCAL_UI_ROLES)
+    registry.register("ai.setup.check", EmptyPayload, check, roles=LOCAL_UI_ROLES)
+    registry.register("ai.setup.start", SetupStart, start, roles=LOCAL_UI_ROLES)

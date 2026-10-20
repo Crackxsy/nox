@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from nox.core.logging import get_logger
 from nox.ipc.dispatch import EmptyPayload, RequestContext
+from nox.ipc.roles import LOCAL_UI_ROLES
 from nox.watch.tools import register_watch_tools, watcher_dict
 from nox.watch.watchers import WatcherRepository, WatcherRow, WatcherScheduler
 
@@ -25,7 +26,6 @@ log = get_logger(__name__)
 __all__ = ["WatchRuntime", "install"]
 
 AGENT = "watcher"
-UI_ROLES = ("shell", "dashboard")
 DEFAULT_MODE = "companion"
 
 
@@ -109,8 +109,8 @@ def install(core: Any) -> WatchRuntime | None:
         return {"ok": ok}
 
     if core.registry is not None:
-        core.registry.register("watch.list", EmptyPayload, list_watchers, roles=UI_ROLES)
-        core.registry.register("watch.delete", WatchDelete, delete, roles=UI_ROLES)
+        core.registry.register("watch.list", EmptyPayload, list_watchers, roles=LOCAL_UI_ROLES)
+        core.registry.register("watch.delete", WatchDelete, delete, roles=LOCAL_UI_ROLES)
     scheduler.start()
     log.info("watch.installed", watchers=repo.count_active())
     return WatchRuntime(repo=repo, scheduler=scheduler)
