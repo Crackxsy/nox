@@ -19,7 +19,7 @@ without parsing commands itself:
 * `cmd:<path>#<sha> <subcommand>` - a simple command: a program on the short `SIMPLE_ALLOWLIST`
   with arguments its entry accepts; HIGH, CONFIRM, and "remember" stores exactly this target as a
   `cmd:` grant for the session. It names the *resolved executable* and a hash of its contents, so
-  a remembered `git status` never covers a different `git.exe` (a download folder, a planted copy)
+  a remembered `df -h` never covers a different `df.exe` (a download folder, a planted copy)
   or the same path after the file changed.
 * `complex:<sha>` - everything else: a command line, any program not on the allowlist (an
   interpreter, a launcher, `git push`, `tar`, an unknown tool), arguments the entry does not
@@ -29,8 +29,10 @@ without parsing commands itself:
 **Only an allowlist is rememberable.** A denylist of interpreters and of options that run
 something (`tar --to-command`, `sed e`, versioned `python3.12`, ...) can never be complete, so it
 is not the boundary: a program is SIMPLE only when `SIMPLE_ALLOWLIST` names it, and only with the
-subcommands and argument shapes listed there (`git status|log|diff|show ...` with plain flags and
-paths, `df -h`, `ipconfig /all`, `winget list|search|show`, ...). The interpreter and launcher
+exact subcommands and flag spellings listed there plus relative paths or plain names where the
+entry allows them (`df -h`, `ipconfig /all`, `winget list|search|show --id X`, ...); a GNU option
+abbreviation, an absolute, UNC or device path, a URL or `..` makes it complex. `git` is never
+simple (it runs programs named in a repository's configuration). The interpreter and launcher
 checks below stay as an extra signal.
 
 **Interpreters and launchers are always complex.** A `cmd:` grant covers one program's subcommand
@@ -285,90 +287,102 @@ CURATED_READONLY: dict[str, tuple[str, ...] | None] = {
 }
 
 
-#: A plain flag (`-h`, `--human-readable`, `--format=short`, `/all`) - no spaces, no quotes, no
-#: shell syntax in a value.
-_FLAG_ARG = re.compile(
-    r"^(?:-[A-Za-z0-9]+|--[A-Za-z][A-Za-z0-9-]*(?:=[A-Za-z0-9._,:%-]*)?|/[A-Za-z?]+)$"
-)
-#: A plain path or name argument.
-_PLAIN_ARG = re.compile(r"^[A-Za-z0-9._~/][A-Za-z0-9._~/\\:@+-]*$")
-#: git options that write a file or run a configured program even for a reading subcommand.
-_GIT_UNSAFE_FLAGS = ("--output", "--ext-diff", "--textconv", "--exec", "--upload-pack", "-o")
-_GIT_READ_SUBCOMMANDS = frozenset(
-    {"status", "log", "diff", "show", "rev-parse", "describe", "blame", "shortlog", "ls-files"}
-)
+#: A relative path argument: plain characters, no `..` segment, no drive, no UNC or device prefix
+#: (`//`, `\\`, `\\?\`), no URL scheme, no home expansion. Absolute paths are never
+#: plain: the sandbox's work folder is a fresh temporary folder, so an absolute path always
+#: points outside it.
+_RELATIVE_PATH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)*/?$")
+#: A package or object name (`winget show --id Git.Git`, `apt show curl`).
+_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 
 
-def _bare(args: Sequence[str]) -> bool:
-    return not args
+@dataclass(frozen=True, slots=True)
+class SimpleSpec:
+    """The exact shapes of one allowlisted program that may be remembered.
+
+    `subcommands`: the first argument must be one of these (`None` = the program has none).
+    `flags`: exact flag spellings - no prefix matching, so a GNU abbreviation (`--hum`) is unknown.
+    `paths`: relative paths inside the work folder are accepted. `names`: plain names are.
+    `bare_only`: no argument at all.
+    """
+
+    flags: frozenset[str] = frozenset()
+    subcommands: frozenset[str] | None = None
+    paths: bool = False
+    names: bool = False
+    #: Exact trailing words allowed after the subcommand (`ip addr show`).
+    words: frozenset[str] = frozenset()
+
+    def accepts(self, args: Sequence[str]) -> bool:
+        rest = list(args)
+        if self.subcommands is not None:
+            if not rest or rest[0] not in self.subcommands:
+                return False
+            rest = rest[1:]
+        for arg in rest:
+            if arg in self.flags or arg in self.words:
+                continue
+            if self.names and _NAME.match(arg):
+                continue
+            if self.paths and _RELATIVE_PATH.match(arg) and ".." not in arg.split("/"):
+                continue
+            return False
+        return True
 
 
-def _flags(args: Sequence[str]) -> bool:
-    return all(_FLAG_ARG.match(arg) for arg in args)
+def _flags(*names: str) -> frozenset[str]:
+    return frozenset(names)
 
 
-def _flags_or_paths(args: Sequence[str]) -> bool:
-    return all(_FLAG_ARG.match(arg) or _PLAIN_ARG.match(arg) for arg in args)
-
-
-def _only(*allowed: tuple[str, ...]) -> Callable[[Sequence[str]], bool]:
-    return lambda args: tuple(args) in allowed
-
-
-def _subcommands(names: frozenset[str]) -> Callable[[Sequence[str]], bool]:
-    def check(args: Sequence[str]) -> bool:
-        return bool(args) and args[0] in names and _flags_or_paths(args[1:])
-
-    return check
-
-
-def _git_reading(args: Sequence[str]) -> bool:
-    if not args or args[0] not in _GIT_READ_SUBCOMMANDS:
-        return False
-    rest = args[1:]
-    return _flags_or_paths(rest) and not any(arg.startswith(_GIT_UNSAFE_FLAGS) for arg in rest)
-
-
-def _ip_show(args: Sequence[str]) -> bool:
-    return (
-        len(args) in (1, 2)
-        and args[0] in ("addr", "a", "link", "route")
-        and args[1:]
-        in (
-            [],
-            ["show"],
-        )
-    )
-
-
-#: The only programs a confirmation may be remembered for (a `cmd:` grant), each with the
-#: argument shapes that keep it so. Read-only or informational commands, nothing that writes,
-#: deletes, installs, runs code or reaches the network (`ping` is not here). Everything else is
-#: complex: allowed, confirmed every time, never remembered. Keep it short; extend it only with
-#: a program whose every accepted form changes nothing.
-SIMPLE_ALLOWLIST: dict[str, Callable[[Sequence[str]], bool]] = {
-    "whoami": _flags,
-    "hostname": _bare,  # `hostname NAME` sets the name on Linux
-    "uname": _flags,
-    "uptime": _flags,
-    "free": _flags,
-    "df": _flags_or_paths,
-    "du": _flags_or_paths,
-    "ls": _flags_or_paths,
-    "pwd": _bare,
-    "systeminfo": _bare,
-    "ipconfig": _only((), ("/all",)),  # not /release, /renew, /flushdns
-    "nvidia-smi": _only((), ("-L",), ("--list-gpus",)),  # not -pl, -ac, -r ...
-    "ip": _ip_show,  # `ip addr|link|route [show]`, never `add`/`del`/`set`
-    "git": _git_reading,
-    "winget": _subcommands(frozenset({"list", "search", "show"})),
-    "apt": _subcommands(frozenset({"list", "search", "show"})),
+#: The only programs a confirmation may be remembered for (a `cmd:` grant), each with the exact
+#: shapes that keep it so. Informational commands only: nothing that writes, deletes, installs,
+#: runs code, reads a repository's configuration (no `git`, which runs programs named in
+#: `.git/config`) or reaches the network (no `ping`). Everything else is complex: allowed,
+#: confirmed every time, never remembered. Extend it only with a program whose every accepted
+#: form changes nothing - and list its flags exactly.
+SIMPLE_ALLOWLIST: dict[str, SimpleSpec] = {
+    "whoami": SimpleSpec(flags=_flags("/all", "/groups", "/user", "/priv")),
+    "hostname": SimpleSpec(),  # `hostname NAME` sets the name on Linux
+    "uname": SimpleSpec(flags=_flags("-a", "-s", "-n", "-r", "-v", "-m", "-p", "-i", "-o")),
+    "uptime": SimpleSpec(flags=_flags("-p", "-s", "--pretty", "--since")),
+    "free": SimpleSpec(
+        flags=_flags("-h", "-m", "-g", "-k", "-b", "-t", "-w", "--human", "--total", "--wide")
+    ),
+    "df": SimpleSpec(
+        flags=_flags("-h", "-H", "-T", "-i", "-l", "-a", "-k", "-m", "--human-readable", "--total"),
+        paths=True,
+    ),
+    "du": SimpleSpec(
+        flags=_flags("-h", "-s", "-sh", "-c", "-a", "-k", "-m", "--human-readable", "--summarize"),
+        paths=True,
+    ),
+    "ls": SimpleSpec(
+        flags=_flags("-l", "-a", "-la", "-al", "-lh", "-lah", "-h", "-1", "-t", "-S", "-r", "-A"),
+        paths=True,
+    ),
+    "pwd": SimpleSpec(),
+    "systeminfo": SimpleSpec(),
+    "ipconfig": SimpleSpec(flags=_flags("/all")),  # not /release, /renew, /flushdns
+    "nvidia-smi": SimpleSpec(flags=_flags("-L", "--list-gpus")),  # not -pl, -ac, -r ...
+    "ip": SimpleSpec(  # `ip addr|link|route [show]`, never `add`/`del`/`set`
+        subcommands=_flags("addr", "a", "link", "route"), words=_flags("show")
+    ),
+    "winget": SimpleSpec(
+        subcommands=_flags("list", "search", "show"),
+        flags=_flags("--id", "--name", "--exact"),
+        names=True,
+    ),
+    "apt": SimpleSpec(
+        subcommands=_flags("list", "search", "show"),
+        flags=_flags("--installed", "--upgradable"),
+        names=True,
+    ),
 }
 
 
 def _simple_allowed(program: str, tokens: Sequence[str]) -> bool:
-    check = SIMPLE_ALLOWLIST.get(program)
-    return check is not None and check([str(t) for t in tokens[1:]])
+    spec = SIMPLE_ALLOWLIST.get(program)
+    return spec is not None and spec.accepts([str(t) for t in tokens[1:]])
 
 
 def default_trusted_dirs() -> tuple[str, ...]:
@@ -454,11 +468,13 @@ def _subcommand(tokens: Sequence[str]) -> str:
 
 
 def _is_curated(program: str, tokens: Sequence[str]) -> bool:
+    """A curated read-only command whose arguments its allowlist entry accepts exactly (it runs
+    without a confirmation, so it gets no looser argument rules than a remembered one)."""
     if program not in CURATED_READONLY:
         return False
     allowed = CURATED_READONLY[program]
     if allowed is None:
-        return True
+        return _simple_allowed(program, tokens)
     return len(tokens) == 1 and allowed == ()
 
 

@@ -42,6 +42,9 @@ def trusted(tmp_path: Path) -> ProgramResolver:
         "find",
         "node",
         "xargs",
+        "apt",
+        "uname",
+        "ip",
         "python3.12",
         "perl5.38",
         "ruby3.2",
@@ -121,25 +124,25 @@ def test_program_not_in_a_trusted_directory_is_complex(trusted: ProgramResolver)
 def test_cmd_target_binds_the_resolved_path_and_hash(
     trusted: ProgramResolver, tmp_path: Path
 ) -> None:
-    first = classify(argv=["git", "log", "--oneline"], resolver=trusted, readonly_allowed=True)
+    first = classify(argv=["apt", "list", "--installed"], resolver=trusted, readonly_allowed=True)
     assert first.kind is ShellClass.SIMPLE
-    assert first.pattern == "git log"
-    path = str(Path(trusted.dirs[0]) / f"git{EXE}")
+    assert first.pattern == "apt list"
+    path = str(Path(trusted.dirs[0]) / f"apt{EXE}")
     assert first.target.startswith(f"cmd:{path}#")
-    assert first.target.endswith(" log")
+    assert first.target.endswith(" list")
     # Another git of the same name elsewhere (a planted copy) yields a different target...
     other_dir = tmp_path / "other"
     other_dir.mkdir()
-    (other_dir / f"git{EXE}").write_bytes(b"a different git")
+    (other_dir / f"apt{EXE}").write_bytes(b"a different apt")
     other = classify(
-        argv=["git", "log"],
+        argv=["apt", "list"],
         resolver=ProgramResolver(dirs=(str(other_dir),)),
         readonly_allowed=True,
     )
     assert other.target != first.target
     # ... and so does the same path once its bytes changed.
-    (Path(trusted.dirs[0]) / f"git{EXE}").write_bytes(b"tampered git, longer than before")
-    changed = classify(argv=["git", "log"], resolver=trusted, readonly_allowed=True)
+    (Path(trusted.dirs[0]) / f"apt{EXE}").write_bytes(b"tampered apt, longer than before")
+    changed = classify(argv=["apt", "list"], resolver=trusted, readonly_allowed=True)
     assert changed.target != first.target
 
 
@@ -193,11 +196,11 @@ def test_command_string_egress_changes_the_target() -> None:
 
 def test_argv_form_is_not_shell_parsed(trusted: ProgramResolver) -> None:
     # argv is run without a shell, so operators in a *value* are data, not operators.
-    info = classify(argv=["git", "log", "--", "src;rm"], resolver=trusted)
+    info = classify(argv=["ls", "-l", "src;rm"], resolver=trusted)
     assert info.kind is ShellClass.COMPLEX  # a value with shell syntax is not a plain path
-    info = classify(argv=["git", "diff", "--stat", "src/a.py"], resolver=trusted)
+    info = classify(argv=["apt", "show", "curl"], resolver=trusted)
     assert info.kind is ShellClass.SIMPLE
-    assert info.pattern == "git diff"
+    assert info.pattern == "apt show"
 
 
 @pytest.mark.parametrize(
@@ -315,12 +318,12 @@ def test_launchers_and_exec_forms_are_complex(trusted: ProgramResolver, argv: li
 @pytest.mark.parametrize(
     "argv",
     [
-        ["git", "status"],
-        ["git", "log", "--oneline", "-n", "5"],
-        ["git", "diff", "--stat"],
-        ["df", "-h", "/"],
-        ["ls", "-la", "src"],
+        ["df", "-h", "src"],
+        ["ls", "-la", "src/sub"],
         ["whoami"],
+        ["uname", "-a"],
+        ["ip", "addr", "show"],
+        ["apt", "list", "--upgradable"],
     ],
 )
 def test_allowlisted_reading_commands_stay_rememberable(
@@ -332,11 +335,22 @@ def test_allowlisted_reading_commands_stay_rememberable(
 @pytest.mark.parametrize(
     "argv",
     [
-        ["git", "push", "origin"],  # not a reading subcommand
-        ["git", "commit", "-m", "x"],
-        ["git", "diff", "--output=/tmp/x"],  # writes a file
-        ["git", "diff", "--ext-diff"],  # runs a configured program
-        ["git", "log", "--format=%h %s"],  # a value with a space
+        ["git", "status"],  # git runs programs named in a repository's configuration
+        ["git", "push", "origin"],
+        ["git", "log", "--oneline"],
+        ["df", "-h", "/"],  # absolute paths point outside the work folder
+        ["ls", "../x"],
+        ["ls", "//server/share"],
+        ["ls", "\\\\server\\share"],
+        ["ls", "\\\\?\\C:\\x"],
+        ["ls", "C:/Users"],
+        ["ls", "file://x"],
+        ["ls", "~"],
+        ["df", "--human"],  # a GNU abbreviation of --human-readable
+        ["apt", "list", "-o", "Dir::Etc=x"],
+        ["apt", "list", "--option=x"],
+        ["apt", "install", "curl"],
+        ["ip", "addr", "add", "1.2.3.4/24", "dev", "eth0"],
         ["find", ".", "-name", "x"],  # not on the allowlist
         ["tar", "-tf", "a.tar"],
         ["tar", "-x", "--to-com=evil"],  # an abbreviation a denylist would miss
@@ -346,6 +360,62 @@ def test_allowlisted_reading_commands_stay_rememberable(
 )
 def test_everything_else_is_complex(trusted: ProgramResolver, argv: list[str]) -> None:
     assert classify(argv=argv, resolver=trusted).kind is ShellClass.COMPLEX
+
+
+def test_allowlisted_programs_are_simple_only_in_their_exact_shapes(
+    trusted: ProgramResolver,
+) -> None:
+    # Property: for every allowlisted program, random flags, abbreviations of its own flags and
+    # path shapes are never simple unless the entry lists them exactly.
+    import random
+
+    from nox.hands.shell import SIMPLE_ALLOWLIST
+
+    rng = random.Random(4711)
+    system = Path(trusted.dirs[0])
+    for name in SIMPLE_ALLOWLIST:
+        (system / f"{name}{EXE}").write_bytes(name.encode())
+    bad_paths = [
+        "/",
+        "/etc",
+        "../a",
+        "a/../b",
+        "//h/s",
+        "\\\\h\\s",
+        "\\\\?\\C:\\",
+        "\\\\.\\pipe\\x",
+        "C:\\x",
+        "C:/x",
+        "http://x",
+        "file:///x",
+        "~",
+        "~/x",
+        "a b",
+        "a;b",
+        "$(x)",
+        "-",
+        "--",
+    ]
+    for name, spec in SIMPLE_ALLOWLIST.items():
+        prefix = [next(iter(sorted(spec.subcommands)))] if spec.subcommands else []
+        candidates = list(bad_paths)
+        for flag in spec.flags:
+            if flag.startswith("--") and len(flag) > 4:
+                candidates.append(flag[: rng.randint(3, len(flag) - 1)])  # an abbreviation
+            candidates.append(flag + "x")
+            candidates.append(flag + "=1")
+        candidates += [
+            "-" + "".join(rng.choices("abcdefghijklmnopqrstuvwxyzXYZ", k=rng.randint(1, 3)))
+            for _ in range(20)
+        ]
+        candidates += [
+            "--" + "".join(rng.choices("abcdefghij-", k=rng.randint(2, 9))) for _ in range(20)
+        ]
+        for arg in candidates:
+            if arg in spec.flags or arg in spec.words:
+                continue
+            argv = [name, *prefix, arg]
+            assert classify(argv=argv, resolver=trusted).kind is not ShellClass.SIMPLE, argv
 
 
 def test_no_unknown_or_interpreter_like_program_is_ever_simple(tmp_path: Path) -> None:
