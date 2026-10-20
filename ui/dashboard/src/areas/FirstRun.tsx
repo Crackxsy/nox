@@ -37,9 +37,11 @@ export default function FirstRun({ t, client, currentPrivacy, onDone }: FirstRun
   const [name, setName] = useState('');
   const startPrivacy = currentPrivacy && (PRIVACY_MODES as readonly string[]).includes(currentPrivacy) ? currentPrivacy : 'balanced';
   const [privacy, setPrivacy] = useState<string>(startPrivacy);
-  // "Alles erlaubt" needs an explicit yes (Einstellungen › Privatsphäre); the first run does not
-  // offer it unless it is already in force.
-  const privacyModes = PRIVACY_MODES.filter((mode) => mode !== 'full' || startPrivacy === 'full');
+  // Only the level in force or a stricter one (PRIVACY_MODES runs from open to strict): relaxing
+  // privacy belongs in Einstellungen, where the core can ask for the PIN and "Alles erlaubt" for
+  // an explicit yes.
+  const strictness = (PRIVACY_MODES as readonly string[]).indexOf(startPrivacy);
+  const privacyModes = PRIVACY_MODES.filter((_, index) => index >= strictness);
   const [engine, setEngine] = useState('');
   const [engines, setEngines] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
