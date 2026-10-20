@@ -1,0 +1,23 @@
+# Personal-data guard list (scripts/pii_guard.py).
+#
+# Every non-comment line is HMAC-SHA256(key, term) of one private term - the maintainer's real
+# name, home town, employer and school platforms, e-mail local part, home-directory name - that
+# must never appear in this public repository (file contents or paths, any case). The terms are
+# not written down anywhere in the repository, and the key is not either: it is the GitHub Actions
+# secret PII_GUARD_KEY (CI) and a credential-store entry on the maintainer's machine (keyring
+# service "nox-dev", name "pii_guard_key"). Without the key these lines cannot be tested against
+# guessed words.
+#
+# Matching: whole tokens only - a word (letters/digits), a camelCase part of a word, or a run
+# with dots/dashes such as an e-mail local part - after NFKC normalisation and case-folding.
+# A finding names file, line and a fingerprint prefix, never the term.
+#
+# To add a term, run from the repository root and type the term when asked (stdin, never argv,
+# so it does not end up in shell history; the key comes from PII_GUARD_KEY or the keyring, or is
+# asked for first):
+#
+#     python scripts/pii_guard.py --add-term
+#
+# then confirm "python scripts/pii_guard.py --check --require-key" still reports zero findings (a
+# common word would flag unrelated text - pick the most specific form of the term). Rotating the
+# key means re-adding every term.
