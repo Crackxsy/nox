@@ -616,19 +616,34 @@ async def test_the_system_modules_load_inside_the_container() -> None:
     )
     if result.stdout.strip() != "a\\b":
         # Why: the module path, what the container can see of each folder, the import error.
-        diagnose = (
+        experiments = [
             "$p = $env:PSModulePath; [Console]::Out.WriteLine('PSMP=' + $p); "
-            "foreach ($d in $p.Split(';')) { try { [Console]::Out.WriteLine('DIR ' + $d + ' '"
-            " + [IO.Directory]::GetDirectories($d).Length) } catch { [Console]::Out.WriteLine("
-            "'DIR ' + $d + ' ERR ' + $_.Exception.Message) } }; "
-            "try { Import-Module Microsoft.PowerShell.Management -ErrorAction Stop; "
-            "[Console]::Out.WriteLine('IMPORT OK') } catch { [Console]::Out.WriteLine("
-            "'IMPORT ERR ' + $_.Exception.ToString()) }; "
             "[Console]::Out.WriteLine('LANG ' + $ExecutionContext.SessionState.LanguageMode); "
-            "[Console]::Out.WriteLine('PSHOME ' + $PSHOME + ' ' + $PSVersionTable.PSVersion)"
-        )
-        why = await sandbox.run(
-            [PS, "-NoProfile", "-NonInteractive", "-Command", diagnose],
-            limits=Limits(timeout_s=60),
-        )
-        pytest.fail(f"exe={PS}\n{result.stderr[:300]}\n{why.stdout}\n{why.stderr[:800]}")
+            "[Console]::Out.WriteLine('PSHOME ' + $PSHOME + ' ' + $PSVersionTable.PSVersion); "
+            "[Console]::Out.WriteLine('MAC ' + $env:PSModuleAnalysisCachePath)",
+            r"$env:PSModulePath = $PSHOME + '\Modules'; Join-Path 'a' 'b'",
+            "$pf = $env:PSModulePath.Split(';')[0]; "
+            "foreach ($m in [IO.Directory]::GetDirectories($pf)) { try { $n = "
+            "[IO.Directory]::GetFiles($m, '*.psd1', 'AllDirectories').Length; "
+            "[Console]::Out.WriteLine('MOD ' + $m + ' ' + $n) } catch { "
+            "[Console]::Out.WriteLine('MOD ' + $m + ' ERR ' + $_.Exception.Message) } }",
+            r"Import-Module Microsoft.PowerShell.Utility; $t = $env:TEMP + '\trace.txt'; "
+            "Trace-Command -Name CommandDiscovery,Modules -FilePath $t -Expression { "
+            "try { Join-Path 'a' 'b' } catch { } }; $k = 0; $all = [IO.File]::ReadAllLines($t); "
+            "[Console]::Out.WriteLine('TRLINES ' + $all.Length); "
+            "foreach ($l in $all) { if ($k -lt 60 -and $l -match "
+            "'exception|error|denied|fail|skip|Found in module|Attempting|not |Management') { "
+            "$k++; [Console]::Out.WriteLine('TR ' + $l) } }; "
+            "foreach ($l in ($all | Select-Object -Last 25)) { "
+            "[Console]::Out.WriteLine('TRLAST ' + $l) }; "
+            "[Console]::Out.WriteLine('MACEXISTS ' + "
+            "[IO.File]::Exists($env:PSModuleAnalysisCachePath))",
+        ]
+        report = []
+        for script in experiments:
+            why = await sandbox.run(
+                [PS, "-NoProfile", "-NonInteractive", "-Command", script],
+                limits=Limits(timeout_s=120),
+            )
+            report.append(f"{why.stdout[:6000]}\n{why.stderr[:600]}")
+        pytest.fail(f"exe={PS}\n{result.stderr[:300]}\n" + "\n---\n".join(report))
