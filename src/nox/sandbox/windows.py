@@ -135,8 +135,10 @@ _FORWARDER_READY_S = 20.0
 _READ_CHUNK = 64 * 1024
 
 #: The in-container egress forwarder: listen on the container's own loopback, relay each
-#: connection into the proxy's named pipe. `{pipe}` is the pipe's short name. Polls instead of
-#: using callbacks because a PowerShell script block cannot run on a thread-pool thread.
+#: connection into the proxy's named pipe. `{pipe}` is the pipe's short name. It blocks in
+#: `Task.WaitAny` on the pending accept and every relay until one of them finishes - no polling,
+#: no idle wake-ups (a PowerShell script block cannot run as a callback on a pool thread, so the
+#: .NET tasks do the I/O and the script only waits for them).
 FORWARDER_PS = r"""
 $ErrorActionPreference = 'Stop'
 $pipe = '{pipe}'
@@ -145,9 +147,16 @@ $l.Start()
 [Console]::Out.WriteLine('NOXFWD ' + $l.LocalEndpoint.Port)
 [Console]::Out.Flush()
 $open = [System.Collections.ArrayList]::new()
+$accept = $l.AcceptTcpClientAsync()
 while ($true) {
-  while ($l.Pending()) {
-    $c = $l.AcceptTcpClient()
+  $waits = [System.Collections.Generic.List[System.Threading.Tasks.Task]]::new()
+  $waits.Add($accept)
+  foreach ($x in $open) { $waits.Add($x[2]); $waits.Add($x[3]) }
+  [void][System.Threading.Tasks.Task]::WaitAny($waits.ToArray())
+  if ($accept.IsCompleted) {
+    if ($accept.IsFaulted) { exit 1 }
+    $c = $accept.Result
+    $accept = $l.AcceptTcpClientAsync()
     try {
       $p = [System.IO.Pipes.NamedPipeClientStream]::new('.', $pipe,
         [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::Asynchronous)
@@ -161,7 +170,6 @@ while ($true) {
       $x[1].Dispose(); $x[0].Close(); [void]$open.Remove($x)
     }
   }
-  Start-Sleep -Milliseconds 10
 }
 """
 

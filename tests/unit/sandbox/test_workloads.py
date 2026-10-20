@@ -92,3 +92,14 @@ async def test_a_backend_without_workload_classes_is_called_as_before() -> None:
 
     backend = _Linux()
     await Sandbox(backend, guard=NetGuard()).run(["x"], workload="skill:a")  # type: ignore[arg-type]
+
+
+def test_the_windows_forwarder_waits_instead_of_polling() -> None:
+    # Re-review LOW: the forwarder woke up every 10 ms for the whole life of a long-running MCP
+    # server. It now blocks on the pending accept and the relays (the real relay is exercised by
+    # test_windows_run.test_appcontainer_declared_egress_reaches_only_the_declared_host).
+    from nox.sandbox.windows import FORWARDER_PS
+
+    assert "Start-Sleep" not in FORWARDER_PS
+    assert "Pending()" not in FORWARDER_PS
+    assert "WaitAny" in FORWARDER_PS and "AcceptTcpClientAsync" in FORWARDER_PS
