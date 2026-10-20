@@ -72,10 +72,10 @@ dev = [
     "types-PyYAML",
     "types-psutil",
 ]
-e2e = ["playwright>=1.62.0", "pytest-playwright>=0.9.0"]
+e2e = ["playwright>=1.64.0", "pytest-playwright>=0.9.0"]
 # `browser.*`: Nox's own headless Chromium. Apache-2.0. After installing, `playwright install
 # chromium` fetches the browser (on a Pi: `playwright install --with-deps chromium`).
-browser = ["playwright>=1.62.0"]
+browser = ["playwright>=1.64.0"]
 # `screen.capture` (mss, MIT) and `camera.snapshot` (OpenCV, Apache-2.0).
 senses = ["mss>=9.0", "opencv-python-headless>=5.0.0.93"]
 rl = ["mss>=9.0", "opencv-python-headless>=5.0.0.93", "numpy>=2.5.3"]
