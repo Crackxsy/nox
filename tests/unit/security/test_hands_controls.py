@@ -245,16 +245,21 @@ def test_non_rememberable_confirm_creates_no_grant(engine: DefaultPermissionEngi
     asyncio.run(scenario())
 
 
-def test_shell_remember_creates_cmd_grant_not_session(engine: DefaultPermissionEngine) -> None:
+def test_shell_remember_scope_is_the_command_pattern_and_high_risk_is_asked_again(
+    engine: DefaultPermissionEngine,
+) -> None:
     async def scenario() -> None:
         request = _shell_req("cmd:git push")
+        # What a "remember" scopes to: the command pattern, never the whole shell tool.
+        assert engine._remember_scope(request) == "cmd:git push"
         grant_id = engine.request_confirmation(request)
         engine.reply(grant_id, Decision.ALLOW, remember=True)
         result = await engine.await_confirmation(grant_id)
-        assert result.grant_id is not None
-        # The remembered grant is the command pattern, so it covers `git push` and nothing else.
-        assert engine.check(_shell_req("cmd:git push")).decision is Decision.ALLOW
-        assert engine.check(_shell_req("cmd:git status")).rule_id != "grant.cmd:git push"
+        assert result.decision is Decision.ALLOW
+        # A shell command is high risk, and high risk is never remembered (NEVER_REMEMBERED): the
+        # same command is confirmed again next time.
+        assert result.grant_id is None
+        assert engine.check(_shell_req("cmd:git push")).decision is Decision.CONFIRM
 
     asyncio.run(scenario())
 
@@ -266,5 +271,32 @@ def test_shell_remember_ignored_for_complex(engine: DefaultPermissionEngine) -> 
         engine.reply(grant_id, Decision.ALLOW, remember=True)
         result = await engine.await_confirmation(grant_id)
         assert result.grant_id is None  # a complex command can never be remembered
+
+    asyncio.run(scenario())
+
+
+def test_a_prompt_offers_remember_only_when_it_would_create_a_grant(
+    engine: DefaultPermissionEngine,
+) -> None:
+    def request(**kw: object) -> PermissionRequest:
+        base: dict[str, object] = {"agent": "companion", "mode": "companion", "target": "x"}
+        return PermissionRequest.model_validate({**base, **kw})
+
+    async def scenario() -> None:
+        def ttl(req: PermissionRequest) -> float:
+            grant_id = engine.request_confirmation(req)
+            (pending,) = [p for p in engine.pending_requests() if p.request_id == grant_id]
+            return pending.remember_ttl_s
+
+        # High risk is asked every time, and a complex command or a non-rememberable tool never
+        # produces a grant: the prompt must not offer "remember" for any of them.
+        assert ttl(_shell_req("cmd:git push")) == 0
+        assert ttl(_shell_req("complex:abc123")) == 0
+        not_rememberable = request(
+            tool="package", action="list", risk=Risk.MEDIUM, rememberable=False
+        )
+        assert ttl(not_rememberable) == 0
+        # A rememberable medium-risk request offers it, for the session grant's lifetime.
+        assert ttl(request(tool="files", action="read", risk=Risk.MEDIUM)) > 0
 
     asyncio.run(scenario())

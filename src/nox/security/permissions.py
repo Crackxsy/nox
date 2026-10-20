@@ -848,7 +848,10 @@ class DefaultPermissionEngine:
             risk=request.risk.value,
             target=request.target,
             expires_at=expires.isoformat(),
-            remember_ttl_s=self._session_grant_ttl.total_seconds(),
+            # 0 when "remember" would create no grant, so no prompt offers it.
+            remember_ttl_s=(
+                self._session_grant_ttl.total_seconds() if self._can_remember(request) else 0.0
+            ),
         )
 
     def pending_requests(self) -> list[PermissionRequested]:
@@ -903,7 +906,7 @@ class DefaultPermissionEngine:
             final is Decision.ALLOW
             and remember
             and scope is not None
-            and not never_remembered(request.risk)
+            and self._can_remember(request)
         ):
             grant = TemporaryGrant(
                 grant_id=grant_id,
@@ -942,6 +945,11 @@ class DefaultPermissionEngine:
         if request.tool == "shell":
             return request.target if request.target.startswith("cmd:") else None
         return f"session:{request.tool}/{request.action or '*'}"
+
+    def _can_remember(self, request: PermissionRequest) -> bool:
+        """Whether a "remember" answer would create a grant at all: a rememberable scope, and not
+        a risk that is asked every time. A prompt offers "remember" only then."""
+        return self._remember_scope(request) is not None and not never_remembered(request.risk)
 
     async def authorize(self, request: PermissionRequest) -> PermissionResult:
         """check() plus the confirmation round-trip; returns only ALLOW or DENY."""

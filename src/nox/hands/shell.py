@@ -17,10 +17,12 @@ without parsing commands itself:
   user's files. The engine then allows it without a confirmation (confirmation fatigue is a UX
   bug).
 * `cmd:<path>#<sha> <subcommand>` - a simple command: a program on the short `SIMPLE_ALLOWLIST`
-  with arguments its entry accepts; HIGH, CONFIRM, and "remember" stores exactly this target as a
-  `cmd:` grant for the session. It names the *resolved executable* and a hash of its contents, so
-  a remembered `df -h` never covers a different `df.exe` (a download folder, a planted copy)
-  or the same path after the file changed.
+  with arguments its entry accepts; HIGH, CONFIRM, and exactly this target is the scope a
+  "remember" may have - a `cmd:` grant for the session. It names the *resolved executable* and a
+  hash of its contents, so a remembered `df -h` never covers a different `df.exe` (a download
+  folder, a planted copy) or the same path after the file changed. While high risk is never
+  remembered at all (`nox.security.permissions.NEVER_REMEMBERED`), the engine creates no such
+  grant from a confirmation: a HIGH command is confirmed every time.
 * `complex:<sha>` - everything else: a command line, any program not on the allowlist (an
   interpreter, a launcher, `git push`, `tar`, an unknown tool), arguments the entry does not
   accept, a program given with a path, or one not found in the trusted directories; HIGH,
