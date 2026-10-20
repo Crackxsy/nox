@@ -11,9 +11,10 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [0.6.0] - 2026-10-20
 
 ### Changed
-- **The dashboard is rebuilt around four areas** (Spec UX-Neubau): Heute, Nox (Gespräch, Ansichten,
-  Clips, Verlauf), Geräte & Fähigkeiten, Einstellungen (eight pages instead of one form). Every page
-  has the same header - what Nox is doing and its Modus, "n warten auf dich", the privacy level and
+- **The dashboard is rebuilt around four areas** (#147, Spec UX-Neubau): Heute, Nox (Gespräch,
+  Ansichten, Clips, Verlauf), Geräte & Fähigkeiten, Einstellungen (eight pages instead of one
+  form). Every page has the same header - what Nox is doing and its Modus, "n warten auf dich",
+  the privacy level and
   **Stopp**, which now acts at once (Ctrl+Alt+Pause too) and is undone with "Fortsetzen" under the
   core's resume rules (PIN after a security-path stop; a paired device can stop but not resume). The
   old two-click Not-Aus with its optional "Grund" field is gone: every dashboard stop is recorded
@@ -27,6 +28,9 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   dark, WCAG 2.2 AA), phone-first layout with a bottom bar, areas loaded on demand; the start bundle
   fell from 118 KB to about 107 KB gzip including the dictionary (budget enforced in CI by `npm run
   size`). Old tab names (Status, Board, Presets, Remote, Audit) redirect to their new place.
+  Accessibility: skip link, focus moves to the page after every change, Alt+1..4 for the areas,
+  ARIA combobox/listbox palette and `alertdialog` permission sheet, reduced motion respected;
+  axe-core runs on every area, page and menu in the unit tests and in a real browser (0 findings).
 - **Supertonic 3 is now the default voice** (`voice.tts.engine: supertonic`, voice `F3`, new
   `voice.tts.steps: 5`, editable 1-32). Its model files (~400 MB, OpenRAIL-M) are downloaded only
   after the user agrees: a new "Voice" tile in the dashboard's settings (missing files, size,
@@ -40,6 +44,15 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   17.13, typescript-eslint 8.71.2, the UI dev-tooling groups and `actions/download-artifact` 8.
 
 ### Added
+- **The Eulenfuchs moves in relief** (#148): the painted art is cut into parts on a 22-bone
+  skeleton with spring bones (ears, cheek fur, wings, tails), squash and stretch, eyes with lids
+  and saccades, and a jaw that follows speech; every part has a relief height, so head and body
+  turn up to 20 degrees with the light following. All 21 expressions and the functional states
+  (sleep, listen, think, speak, mute, privacy) map onto its body language; reduced motion keeps
+  breathing, posture and the jaw only. Everything per vertex runs on the GPU (about 0.1 ms of
+  JavaScript per frame); the renderer loads only for a creature whose `rig.json` enables it and
+  falls back to the existing rig renderer without WebGL2. The other six creatures keep the rig
+  renderer for now; `ui/pet/scripts/relief/` builds a creature's relief deterministically.
 - **Windows: the sandbox keeps off this computer's local services and the LAN.** Where Windows
   does not enforce AppContainer loopback isolation, the installer now adds Windows Filtering
   Platform rules for Nox's sandbox containers (one optional step, ticked by default, one UAC
@@ -176,6 +189,8 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   the Pi's architecture on every pull request.
 
 ### Fixed
+- **No real place name in the test fixtures** (#146): a real town had crept back into tests and
+  evals; it is the neutral "Springfield" that CONTRIBUTING.md prescribes.
 - **Remembering a shell command did nothing.** Since high risk was made never-rememberable, every
   `shell.run` confirmation was asked again, even for `whoami /all`. A command that the strict
   allowlist classifies as simple (exact program, subcommand and flags; bound to the resolved
