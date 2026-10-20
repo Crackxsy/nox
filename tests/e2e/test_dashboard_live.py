@@ -10,10 +10,10 @@ token handshake (arrives once in the URL fragment, is cleared from the address b
 browser-only behaviour (IPC Model).
 
 Kept small on purpose (keep the asserted surface small and
-stable): auth -> fragment cleared -> Status page shows `ai.rules` available -> a chat turn streams
-a non-empty answer with a `rules`/`ollama` provider badge -> the pet's capture indicator and canvas
-exist. No pixel diffs — the pet is a continuously animated canvas and screenshot comparison would be
-flaky and would discredit the approach.
+stable): auth -> fragment cleared -> Settings › System shows `ai.rules` available -> a chat
+turn streams a non-empty answer with a `rules`/`ollama` provider badge -> the pet's capture
+indicator and canvas exist. No pixel diffs — the pet is a continuously animated canvas and
+screenshot comparison would be flaky and would discredit the approach.
 
 The dashboard/pet bundles discover the websocket port via `?ws=<port>` in the query string (checked
 before the `/health`-based fallback, `ui/shared/ipc.ts::resolveWsUrl`) because this test binds the
@@ -180,6 +180,22 @@ def _page_url(core: NoxCore, page_name: str) -> str:
     return f"{core.http.url}/{page_name}/?ws={core.hub.port}&lang=en#token={token}"
 
 
+def _dismiss_first_run(page: Page, later: str) -> None:
+    """A core without a name for its person opens the first-run flow; these tests skip it."""
+    button = page.get_by_role("button", name=later)
+    try:
+        expect(button).to_be_visible(timeout=3000)
+    except AssertionError:
+        return
+    button.click()
+    expect(button).to_have_count(0)
+
+
+def _open_area(page: Page, name: re.Pattern[str]) -> None:
+    """The side bar on wide screens, the bottom bar on a phone: whichever is shown."""
+    page.get_by_role("navigation").get_by_role("link", name=name).first.click()
+
+
 def test_dashboard_auth_status_and_chat(core: NoxCore, page: Page) -> None:
     page.goto(_page_url(core, "dashboard"))
 
@@ -188,21 +204,23 @@ def test_dashboard_auth_status_and_chat(core: NoxCore, page: Page) -> None:
     assert "token=" not in page.url
 
     # The client must actually reach the core (proves the ?ws= override worked).
-    expect(page.get_by_role("status").filter(has_text=re.compile("connected", re.I))).to_be_visible(
-        timeout=15000
-    )
+    expect(page.locator(".app[data-conn=online]")).to_have_count(1, timeout=15000)
+    _dismiss_first_run(page, "Set up later")
 
-    # Status page: ai.rules is always available offline (RulesProvider needs no network).
+    # Settings › System: ai.rules is always available offline (RulesProvider needs no network).
     # Scoped to the health table by its caption. Searching every `tbody tr` on the page also
     # matched the audit log and the health history once either recorded something about
     # ai.rules, which depends on timing - the same commit passed on one run and failed the next.
+    _open_area(page, re.compile("^Settings$"))
+    page.get_by_role("link", name=re.compile("^System")).click()
     health = page.get_by_role("table", name="System health")
     rules_row = health.locator("tbody tr", has_text="ai.rules")
     expect(rules_row).to_be_visible(timeout=10000)
     expect(rules_row.locator("td").first).to_have_text("available", timeout=10000)
 
     # Chat: send a message and expect a streamed, non-empty answer with a local provider badge.
-    page.get_by_role("tab", name=re.compile("^Chat")).click()
+    _open_area(page, re.compile("^Nox$"))
+    page.get_by_role("tab", name="Conversation").click()
     page.get_by_label("Message to Nox").fill("Hallo Nox")
     page.get_by_role("button", name="Send").click()
 

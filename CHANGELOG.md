@@ -9,6 +9,20 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 ## [Unreleased]
 
 ### Changed
+- **The dashboard is rebuilt around four areas** (Spec UX-Neubau): Heute, Nox (Gespräch,
+  Ansichten, Clips, Verlauf), Geräte & Fähigkeiten, Einstellungen (eight pages instead of one
+  form). Every page has the same header - what Nox is doing and its Modus, "n warten auf dich",
+  the privacy level and **Stopp**, which now acts at once (Ctrl+Alt+Pause too) and is undone with
+  "Fortsetzen" under the core's resume rules (PIN after a security-path stop; a paired device can
+  stop but not resume). Mode and security profile are one **Modus** control; `mode.set` switches
+  both. "Sag Nox, was er tun soll" at the bottom of every page opens a command palette (Ctrl+K):
+  lights and scenes, the home command layer, Abläufe, every page and setting, "Nox fragen". One
+  permission component in three places (inline on Heute and in the conversation, a sheet
+  elsewhere) asks in plain words with the risk as a word and the time left. A first-run flow
+  (name, privacy, voice) and empty states that say how to fill them. New design tokens (light and
+  dark, WCAG 2.2 AA), phone-first layout with a bottom bar, areas loaded on demand; the start
+  bundle fell from 118 KB to about 107 KB gzip including the dictionary (budget enforced in CI by
+  `npm run size`). Old tab names (Status, Board, Presets, Remote, Audit) redirect to their new place.
 - **Supertonic 3 is now the default voice** (`voice.tts.engine: supertonic`, voice `F3`, new
   `voice.tts.steps: 5`, editable 1-32). Its model files (~400 MB, OpenRAIL-M) are downloaded only
   after the user agrees: a new "Voice" tile in the dashboard's settings (missing files, size,
