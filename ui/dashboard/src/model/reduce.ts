@@ -195,9 +195,9 @@ export function reduceEvent(
       return computerUse ? { ...state, computerUse } : state;
     }
     case 'security.kill_switch':
-      return { ...state, systemLevel: 'safe_mode' };
+      return { ...state, systemLevel: 'safe_mode', stoppedAt: ts || state.stoppedAt };
     case 'system.started':
-      return { ...state, systemLevel: 'running' };
+      return { ...state, systemLevel: 'running', stoppedAt: null };
     case 'system.stopping':
       return { ...state, systemLevel: 'stopping' };
     case 'proactive.notification': {
@@ -270,7 +270,7 @@ export function reduceEvent(
       if (path === 'privacy.mode' && typeof value === 'string')
         return { ...state, privacyMode: value };
       if (path === 'system.level' && typeof value === 'string')
-        return { ...state, systemLevel: value };
+        return { ...state, systemLevel: value, stoppedAt: value === 'safe_mode' ? state.stoppedAt : null };
       if (path.startsWith('privacy.') && state.capture) {
         const field = path.slice('privacy.'.length);
         const key = field === 'cloud_request_active' ? 'cloud' : (field as keyof CaptureFlags);
