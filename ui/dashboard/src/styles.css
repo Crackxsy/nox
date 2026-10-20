@@ -2052,6 +2052,11 @@ details > summary:hover {
     padding: var(--s-5) var(--s-4) calc(var(--s-5) + env(safe-area-inset-bottom));
   }
 
+  /* The close button keeps the gutter too; the optical pull to the edge is for wide sheets only. */
+  .dlg-h .ib {
+    margin-right: 0;
+  }
+
   .chatfeed .who {
     width: 96px;
   }
@@ -2551,7 +2556,7 @@ details > summary:hover {
   padding: var(--s-3) var(--s-3) var(--s-3) var(--s-5);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
-  background: var(--nav-bg);
+  background: var(--surface);
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
 }
@@ -3132,7 +3137,7 @@ details > summary:hover {
   width: min(100%, 440px);
   display: grid;
   gap: var(--s-4);
-  padding: var(--tile-pad);
+  padding: var(--s-5);
   border-radius: var(--radius-tile);
   background: var(--tile);
   color: var(--ink);
@@ -3194,7 +3199,7 @@ details > summary:hover {
   overscroll-behavior: contain;
   display: grid;
   gap: var(--s-4);
-  padding: var(--tile-pad);
+  padding: 28px;
   border-radius: var(--radius-tile);
   border: 1px solid var(--hairline);
   background: var(--tile);
@@ -3370,7 +3375,8 @@ details > summary:hover {
   .perm-dialog {
     width: 100%;
     border-radius: var(--radius-tile) var(--radius-tile) 0 0;
-    padding-bottom: calc(var(--tile-pad) + env(safe-area-inset-bottom));
+    /* The page gutter on both sides, like every other sheet. */
+    padding: var(--s-5) var(--gutter) calc(var(--s-5) + env(safe-area-inset-bottom));
   }
 
   .perm-dialog {

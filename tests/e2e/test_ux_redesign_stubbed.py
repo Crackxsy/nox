@@ -31,7 +31,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from playwright.sync_api import Browser, Page, Route, ViewportSize, WebSocketRoute, expect
+from playwright.sync_api import (
+    Browser,
+    Locator,
+    Page,
+    Route,
+    ViewportSize,
+    WebSocketRoute,
+    expect,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -366,7 +374,7 @@ class StubCore:
                         "start": _now(3600)[:16],
                         "end": "",
                         "title": "Zahnarzt",
-                        "location": "Witten",
+                        "location": "Springfield",
                         "all_day": False,
                         "source": "google",
                     }
@@ -489,6 +497,7 @@ class Journey:
     size: str
     scheme: str
     shots: Path
+    _selector: str = ""
 
     def shot(self, step: str) -> None:
         self.page.screenshot(
@@ -509,6 +518,42 @@ class Journey:
             }"""
         )
         assert result == [], f"axe at {step} ({self.size}, {self.scheme}): {result}"
+
+    def gutter(self, container: Locator | None, what: str) -> None:
+        """Text and controls keep the page gutter (16 px) from the edges of a sheet, or of the
+        screen for a form in the page - nothing sits flush against the side."""
+        box = (
+            container.bounding_box()
+            if container is not None
+            else {"x": 0, "width": self.page.viewport_size["width"]}  # type: ignore[index]
+        )
+        assert box is not None, what
+        edges = self.page.evaluate(
+            """([sel, left, right]) => {
+                const root = sel ? document.querySelector(sel) : document.querySelector('main');
+                let min = Infinity, max = -Infinity, minEl = '', maxEl = '';
+                for (const el of root.querySelectorAll('button, p, h2, h3, label, input, a')) {
+                  const r = el.getBoundingClientRect();
+                  if (r.width <= 1 || r.height <= 1) continue; // hidden for the eye (sr-only)
+                  if (getComputedStyle(el).visibility === 'hidden') continue;
+                  if (r.bottom < 0 || r.top > innerHeight) continue;
+                  const text = (el.textContent || '').slice(0, 30);
+                  const name = el.tagName + '.' + el.className + ' ' + text;
+                  if (r.left < min) { min = r.left; minEl = name; }
+                  if (r.right > max) { max = r.right; maxEl = name; }
+                }
+                return [min - left, right - max, minEl, maxEl];
+            }""",
+            [
+                None if container is None else self._selector,
+                box["x"],
+                box["x"] + box["width"],
+            ],
+        )
+        assert edges[0] >= 16 and edges[1] >= 16, (
+            f"{what} ({self.size}, {self.scheme}): {edges[0]:.0f}px left ({edges[2]}), "
+            f"{edges[1]:.0f}px right ({edges[3]})"
+        )
 
     def no_sideways_scroll(self) -> None:
         overflow = self.page.evaluate(
@@ -632,6 +677,8 @@ def test_household_journey(journey: Journey) -> None:  # noqa: PLR0915 - one jou
     sheet = page.get_by_role("alertdialog", name="Darf Nox etwas löschen?")
     expect(sheet).to_be_visible(timeout=UI_TIMEOUT_MS)
     journey.shot("06-frage-sheet")
+    journey._selector = ".perm-dialog"
+    journey.gutter(page.locator(".perm-dialog"), "permission sheet")
     sheet.get_by_role("button", name="Ablehnen").click()
     expect(page.get_by_text("Abgelehnt. Nox tut es nicht.")).to_be_visible()
 
@@ -642,6 +689,7 @@ def test_household_journey(journey: Journey) -> None:  # noqa: PLR0915 - one jou
         timeout=UI_TIMEOUT_MS
     )
     journey.shot("07-koppeln")
+    journey.gutter(None, "pairing")
     stub.devices.append(
         {
             "id": "d1",
@@ -665,6 +713,7 @@ def test_household_journey(journey: Journey) -> None:  # noqa: PLR0915 - one jou
     form.get_by_label("Adresse (https)").fill("https://wetter.example/mcp")
     form.get_by_label("Version").fill("2.0.0")
     journey.shot("08-erweiterung")
+    journey.gutter(None, "extension form")
     form.get_by_role("button", name="Hinzufügen", exact=True).click()
     server = page.get_by_role("region", name="Wetterdienst")
     expect(server.get_by_text("wartet auf Erlaubnis")).to_be_visible(timeout=UI_TIMEOUT_MS)
@@ -678,6 +727,8 @@ def test_household_journey(journey: Journey) -> None:  # noqa: PLR0915 - one jou
     expect(menu).to_be_visible()
     menu.get_by_role("radio", name=re.compile("^Stream")).check()
     journey.shot("09-modus")
+    journey._selector = "dialog[open]"
+    journey.gutter(menu, "Modus menu")
     journey.axe("modus")
     menu.get_by_role("button", name="Zu „Stream“ wechseln").click()
     expect(menu.get_by_text(re.compile("Jetzt: Stream-Modus"))).to_be_visible(timeout=UI_TIMEOUT_MS)
