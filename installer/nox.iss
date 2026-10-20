@@ -123,6 +123,12 @@ english.SandboxRulesTask=Keep sandboxed commands away from this computer's local
 german.SandboxRulesTask=Sandbox von lokalen Diensten dieses Computers und vom Heimnetz fernhalten (fragt einmal nach Administratorrechten)
 english.SandboxRulesFailed=The sandbox network rules were not added (%1).%n%nNox works without them, but on this Windows build it then runs shell commands only if you accept the weaker sandbox in its settings. To add the rules later, run this setup again.
 german.SandboxRulesFailed=Die Netzwerkregeln der Sandbox wurden nicht angelegt (%1).%n%nNox funktioniert auch ohne sie, fuehrt Shell-Befehle auf diesem Windows-Build dann aber nur aus, wenn du die schwaechere Sandbox in den Einstellungen akzeptierst. Spaeter nachholen: dieses Setup erneut ausfuehren.
+english.SandboxRulesUninstallAsk=%1%n%nRemoving them needs administrator rights once: Windows will ask next. Remove Nox's sandbox network rules now?%n%n(If you say no, they stay until you run an administrator prompt with the command shown by "nox sandbox firewall remove".)
+german.SandboxRulesUninstallAsk=%1%n%nZum Entfernen braucht es einmal Administratorrechte: Windows fragt gleich danach. Die Netzwerkregeln der Nox-Sandbox jetzt entfernen?%n%n(Bei Nein bleiben sie bestehen, bis du den Befehl von "nox sandbox firewall remove" in einer Administrator-Eingabeaufforderung ausfuehrst.)
+english.SandboxRulesUninstallFound=This setup did not add sandbox network rules itself, but Windows still has rules from Nox (from an older version or added by hand).
+german.SandboxRulesUninstallFound=Dieses Setup hat selbst keine Netzwerkregeln angelegt, Windows hat aber noch Regeln von Nox (aus einer aelteren Version oder von Hand angelegt).
+english.SandboxRulesUninstallUnknown=This setup did not add sandbox network rules itself, and whether Windows still has rules from Nox could not be checked.
+german.SandboxRulesUninstallUnknown=Dieses Setup hat selbst keine Netzwerkregeln angelegt, und ob Windows noch Regeln von Nox hat, liess sich nicht pruefen.
 
 [Code]
 { No vault path is ever written or read by the installer itself - first-start config (vault path,
@@ -223,17 +229,27 @@ begin
   end;
 end;
 
-{ Whether Nox's rules may be in place: the helper's folder or status key exists, or the helper -
-  not elevated - finds Nox's WFP provider (rules an older build or its command line added). An
-  answer it cannot give counts as "maybe". }
-function SandboxRulesMayExist(): Boolean;
+const
+  RulesAbsent = 0;    { the helper, not elevated, found no provider of Nox's }
+  RulesRecorded = 1;  { the helper's protected folder or status key exists }
+  RulesFound = 2;     { no record, but the helper found Nox's provider (an older build, by hand) }
+  RulesUnknown = 3;   { no record, and the helper could not say: counts as "maybe" }
+
+{ Whether Nox's rules may be in place - independent of the install task. }
+function SandboxRulesState(): Integer;
 var
   ErrorCode: Integer;
 begin
-  Result := FileExists(SandboxProtectedCopy()) or RegKeyExists(HKLM64, SandboxStatusKey);
-  if not Result then
-    Result := not RunSandboxHelper('status', SandboxAppCopy(), '', False, ErrorCode)
-      or (ErrorCode <> 1);
+  if FileExists(SandboxProtectedCopy()) or RegKeyExists(HKLM64, SandboxStatusKey) then
+    Result := RulesRecorded
+  else if not RunSandboxHelper('status', SandboxAppCopy(), '', False, ErrorCode) then
+    Result := RulesUnknown
+  else if ErrorCode = 1 then
+    Result := RulesAbsent
+  else if ErrorCode = 0 then
+    Result := RulesFound
+  else
+    Result := RulesUnknown;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -256,17 +272,35 @@ end;
 
 { Uninstall removes the rules whenever they may be there - independent of the task, so rules an
   older build or "nox sandbox firewall install" added go too. It runs the protected copy when its
-  SHA-256 matches, else the (equally checked) copy in the install folder; never anything unchecked. }
+  SHA-256 matches, else the (equally checked) copy in the install folder; never anything unchecked.
+  Without a record of this setup's own rule step, a UAC prompt would come out of nowhere: the user
+  is told why first and may skip it (silent uninstalls remove them). }
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  ErrorCode: Integer;
+  ErrorCode, State: Integer;
+  Why: String;
 begin
-  if (CurUninstallStep = usUninstall) and SandboxRulesMayExist() then
+  if CurUninstallStep <> usUninstall then
+    Exit;
+  State := SandboxRulesState();
+  if State = RulesAbsent then
+    Exit;
+  if State <> RulesRecorded then
   begin
-    if RunSandboxHelper('uninstall', SandboxProtectedCopy(), SandboxAppCopy(), True,
-        ErrorCode) then
-      Log('Sandbox network rules: removal ran')
+    if State = RulesFound then
+      Why := CustomMessage('SandboxRulesUninstallFound')
     else
-      Log('Sandbox network rules not removed: ' + SysErrorMessage(ErrorCode));
+      Why := CustomMessage('SandboxRulesUninstallUnknown');
+    if SuppressibleMsgBox(FmtMessage(CustomMessage('SandboxRulesUninstallAsk'), [Why]),
+        mbConfirmation, MB_YESNO, IDYES) <> IDYES then
+    begin
+      Log('Sandbox network rules: removal skipped by the user');
+      Exit;
+    end;
   end;
+  if RunSandboxHelper('uninstall', SandboxProtectedCopy(), SandboxAppCopy(), True,
+      ErrorCode) then
+    Log('Sandbox network rules: removal ran')
+  else
+    Log('Sandbox network rules not removed: ' + SysErrorMessage(ErrorCode));
 end;

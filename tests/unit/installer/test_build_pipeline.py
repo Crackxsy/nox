@@ -30,13 +30,43 @@ def _build() -> ModuleType:
 def test_every_download_is_pinned_to_an_immutable_url_and_a_sha256() -> None:
     build = _build()
     zip_name = f"python-{build.DEFAULT_PYTHON_VERSION}-embed-amd64.zip"
-    assert set(build.PINNED_SHA256) == {zip_name, "get-pip.py"}
+    assert set(build.PINNED_SHA256) == {zip_name, build.PIP_WHEEL}
     for digest in build.PINNED_SHA256.values():
         assert len(digest) == 64 and int(digest, 16) >= 0
-    # A commit of pypa/get-pip, not the moving bootstrap.pypa.io URL.
-    assert build.GET_PIP_URL.startswith("https://raw.githubusercontent.com/pypa/get-pip/")
-    assert len(build.GET_PIP_URL.split("/")[5]) == 40
-    assert "https://bootstrap.pypa.io" not in (REPO / "installer" / "build.py").read_text("utf-8")
+    # The pip wheel from its immutable files.pythonhosted.org URL - never get-pip.py, which
+    # would install the newest pip from PyPI without a hash.
+    assert build.PIP_WHEEL_URL.startswith("https://files.pythonhosted.org/packages/")
+    assert build.PIP_WHEEL_URL.endswith("/" + build.PIP_WHEEL)
+    source = (REPO / "installer" / "build.py").read_text("utf-8")
+    assert "https://bootstrap.pypa.io" not in source and "get-pip" not in source
+
+
+def test_pip_installs_only_its_own_pinned_wheel(monkeypatch: pytest.MonkeyPatch) -> None:
+    build = _build()
+    wheel = Path("C:/cache") / build.PIP_WHEEL
+    cmd = build.pip_bootstrap_command(Path("C:/rt/python.exe"), wheel)
+    assert cmd[0] == str(Path("C:/rt/python.exe")) and cmd[1] == "-c"
+    assert cmd[3] == str(wheel)  # pip runs from the wheel itself ...
+    assert cmd[4:] == [
+        "install",
+        "--no-index",
+        "--no-deps",
+        "--no-warn-script-location",
+        str(wheel),
+    ]
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(build, "download", lambda url, dest: dest)
+
+    def run(cmd: list[str], **kw: Any) -> Any:
+        calls.append(cmd)
+        return type("R", (), {"returncode": 1})()
+
+    monkeypatch.setattr(build.subprocess, "run", run)
+    build.step_bootstrap_pip(Path("C:/rt"))
+    assert calls[1] == build.pip_bootstrap_command(
+        Path("C:/rt") / "python.exe", build.DOWNLOAD_CACHE / build.PIP_WHEEL
+    )
 
 
 def _fake_fetch(payload: bytes) -> Any:
@@ -95,6 +125,8 @@ def test_the_lock_is_installed_with_require_hashes(
     monkeypatch.setattr(build.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
     build.step_install_dependencies(tmp_path, REPO / "installer" / "requirements.lock")
     assert "--require-hashes" in calls[0]
+    # Wheels only: an sdist would build with dependencies no hash covers.
+    assert "--only-binary=:all:" in calls[0]
 
     unhashed = tmp_path / "plain.lock"
     unhashed.write_text("-e .\nrequests==2.0\n", encoding="utf-8")
@@ -166,3 +198,27 @@ def test_the_build_writes_the_pinned_sandbox_helper(
     digest = hashlib.sha256(script.read_bytes()).hexdigest().upper()
     assert digest == wfp_helper.helper_sha256()
     assert f"Result := '{digest}';" in include
+
+
+def test_the_release_build_writes_the_helper_with_the_shipped_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    build = _build()
+    monkeypatch.setattr(build, "SANDBOX_RULES_DIR", tmp_path / "rules")
+    calls: list[list[str]] = []
+
+    def run(cmd: list[str], **kw: Any) -> Any:
+        calls.append(cmd)
+        return type("R", (), {"stdout": "ABC", "returncode": 0})()
+
+    monkeypatch.setattr(build.subprocess, "run", run)
+    build.step_sandbox_rules(tmp_path / "runtime")
+    assert calls == [
+        [
+            str(tmp_path / "runtime" / "python.exe"),
+            "-c",
+            build._WRITE_HELPER,  # noqa: SLF001
+            str(tmp_path / "rules"),
+        ]
+    ]
+    assert "step_sandbox_rules(runtime_dir)" in (REPO / "installer" / "build.py").read_text("utf-8")

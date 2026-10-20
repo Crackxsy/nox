@@ -367,7 +367,9 @@ falling back to a low-integrity token only where no AppContainer profile can be 
   runs again.
 - **The command line refuses:** `nox sandbox firewall install|remove` (and `python -m
   nox.sandbox.wfp install|remove`) never change the rules - elevated or not, they refuse and print
-  the protected helper's command for an administrator prompt; `show` works for anyone.
+  the protected helper's command for an administrator prompt - by absolute paths from the Windows
+  API, never `%SystemRoot%`/`%ProgramFiles%`, which the user's own environment can redirect;
+  `show` works for anyone.
 - **The probe decides:** the first run measures whether a container reaches a host loopback listener
   (`host_loopback_reachable`). Only an explicit "refused" report counts as confined, and only while
   nothing on the host listens in the forwarder's port range; then `confines_network` is true, the
@@ -395,6 +397,10 @@ Known limits, accepted:
 
 - A **host** program that starts listening inside a container's port block *during* a run could be
   reached from that container for at most one check interval (1.5 s) before the run is ended.
+- Windows can **reserve** a container's port block at boot (an excluded port range, typically
+  Hyper-V, WSL or Docker). The forwarder then finds no free port and the run is refused, with the
+  reserved range and `netsh interface ipv4 show excludedportrange protocol=tcp` named in the error;
+  the fixed rules cannot move the block elsewhere.
 - The probe measures shell's container; the pool containers carry the same filters, built from the
   same code, but are not probed one by one.
 - With the rules in place a workload cannot reach its **own** loopback outside the forwarder range

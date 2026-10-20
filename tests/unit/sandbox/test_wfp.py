@@ -213,10 +213,39 @@ def test_install_refuses_when_elevated_from_the_user_writable_runtime(
     assert wfp.main([action]) == wfp.REFUSED
     err = capsys.readouterr().err
     assert "refusing to run as administrator" in err
-    # It points at the protected helper, run by the system's PowerShell.
-    assert "%ProgramFiles%\\Nox Sandbox Rules\\nox-sandbox-rules.ps1" in err
+    # It points at the protected helper, run by the system's PowerShell - by absolute paths.
+    files = wfp_helper.program_files_dir()
+    assert f'"{files}\\Nox Sandbox Rules\\nox-sandbox-rules.ps1"' in err
     assert err.rstrip().endswith(f" {action}")
-    assert "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" in err
+    assert f'"{wfp_helper.system_dir()}\\WindowsPowerShell\\v1.0\\powershell.exe"' in err
+    assert "%" not in err
+
+
+def test_the_admin_command_names_api_resolved_paths_never_environment_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # %SystemRoot% / %ProgramFiles% can be redirected by any process of the same user through
+    # HKCU\Environment; a pasted line would then start that process's program elevated.
+    monkeypatch.setattr(wfp_helper, "system_dir", lambda: "D:\\Win\\System32")
+    monkeypatch.setattr(wfp_helper, "program_files_dir", lambda: "D:\\Programme")
+    assert wfp_helper.admin_command("remove") == (
+        '"D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile '
+        '-ExecutionPolicy Bypass -File "D:\\Programme\\Nox Sandbox Rules\\nox-sandbox-rules.ps1" '
+        "remove"
+    )
+    source = (REPO / "src" / "nox" / "sandbox" / "wfp_helper.py").read_text(encoding="utf-8")
+    code = source.split('"""', 2)[2]  # past the module docstring
+    assert '"%SystemRoot%' not in code and '"%ProgramFiles%' not in code
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the Windows API")
+def test_the_paths_come_from_the_api_not_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected = (wfp_helper.system_dir(), wfp_helper.program_files_dir())
+    assert expected[0].lower().endswith("\\system32") and os.path.isabs(expected[1])
+    monkeypatch.setenv("SystemRoot", "C:\\Users\\x\\evil")
+    monkeypatch.setenv("ProgramFiles", "C:\\Users\\x\\evil")
+    monkeypatch.setenv("ProgramW6432", "C:\\Users\\x\\evil")
+    assert (wfp_helper.system_dir(), wfp_helper.program_files_dir()) == expected
 
 
 def test_install_without_administrator_names_the_helper_too(
@@ -605,6 +634,56 @@ def test_the_forwarder_listens_only_in_its_containers_block() -> None:
         forwarder_script("nox-abc", range(4000, 4004))
 
 
+NETSH_DE = """
+Portausschlussbereiche für das Protokoll "tcp"
+
+Startport      Endport
+----------    --------
+      5357        5357
+     47001       47101     *
+     47150       47150
+     50000       50059     *
+
+* - Verwaltete Portausschlüsse.
+"""
+
+
+def test_reserved_port_ranges_are_read_in_any_language() -> None:
+    from nox.sandbox.windows import excluded_overlap
+
+    assert excluded_overlap(NETSH_DE, range(47_100, 47_104)) == [(47_001, 47_101)]
+    assert excluded_overlap(NETSH_DE, range(47_148, 47_152)) == [(47_150, 47_150)]
+    assert excluded_overlap(NETSH_DE, range(47_200, 47_204)) == []
+    assert excluded_overlap("", range(47_100, 47_104)) == []
+
+
+def test_no_free_forwarder_port_is_explained_honestly(monkeypatch: pytest.MonkeyPatch) -> None:
+    import types
+
+    from nox.sandbox import windows
+    from nox.sandbox.model import SandboxUnavailable
+    from nox.sandbox.windows import no_forwarder_port_reason
+
+    ports = range(47_100, 47_104)
+    reserved = no_forwarder_port_reason(ports, [(47_001, 47_101)])
+    assert "47100-47103" in reserved and "47001-47101" in reserved
+    assert "excludedportrange" in reserved and "failing closed" in reserved
+    assert "reserved" not in no_forwarder_port_reason(ports, [])
+    assert "could not be read" in no_forwarder_port_reason(ports, None)
+
+    fwd = types.SimpleNamespace(pid=10, stdout_fd=1, close=lambda: None)
+    backend = object.__new__(windows.WindowsSandbox)
+    backend._w = types.SimpleNamespace(spawn=lambda *a, **k: fwd)  # type: ignore[attr-defined]
+    monkeypatch.setattr(windows, "_read_line", lambda fd, timeout: "NOXFWD NONE")
+    monkeypatch.setattr(windows, "_close_fds", lambda s: None)
+    monkeypatch.setattr(windows, "_excluded_ranges", lambda p: [(47_001, 47_101)])
+    limits = types.SimpleNamespace(memory_bytes=1 << 30)
+    with pytest.raises(SandboxUnavailable, match="Windows reserves 47001-47101"):
+        backend._start_forwarder(  # noqa: SLF001
+            Path("."), "\\\\.\\pipe\\nox-abc", limits, SHELL_SID
+        )
+
+
 OWN = (10, 1000.0)
 PORTS = range(47_148, 47_152)
 
@@ -784,18 +863,30 @@ def test_the_installer_never_runs_its_own_python_elevated() -> None:
 def test_uninstall_removes_the_rules_whenever_they_may_exist() -> None:
     script = _iss()
     code = script.split("procedure CurUninstallStepChanged", 1)[1]
-    assert "usUninstall" in code and "SandboxRulesMayExist()" in code
+    assert "usUninstall" in code and "State := SandboxRulesState();" in code
+    assert "if State = RulesAbsent then" in code
+    # No record of this setup's own rule step: the user hears why before the UAC prompt, and a
+    # silent uninstall (default IDYES) still removes them.
+    assert "if State <> RulesRecorded then" in code
+    assert "MB_YESNO, IDYES) <> IDYES then" in code
+    for name in ("SandboxRulesUninstallAsk", "SandboxRulesUninstallFound", "Unknown"):
+        assert f"english.{name.replace('Unknown', 'SandboxRulesUninstallUnknown')}=" in script
+        assert f"german.{name.replace('Unknown', 'SandboxRulesUninstallUnknown')}=" in script
     # The protected copy first, then the copy in {app}: both only after their hash matched.
     assert "RunSandboxHelper('uninstall', SandboxProtectedCopy(), SandboxAppCopy(), True," in code
     run = script.split("function RunSandboxHelper", 1)[1].split("\nend;", 1)[0]
     # Paths reach the bootstrap only hex-encoded and checked; a refused path starts nothing.
     assert "Paths := SandboxPathArg(First);" in run and "if Paths = '' then" in run
     assert "SandboxPsQuote" not in script
-    may = script.split("function SandboxRulesMayExist", 1)[1].split("end;", 1)[0]
-    # Independent of the install task: the folder, the status key, or Nox's WFP provider.
+    may = script.split("function SandboxRulesState", 1)[1].split("\nend;", 1)[0]
+    # Independent of the install task: the folder, the status key, or Nox's WFP provider; an
+    # answer the helper cannot give counts as "maybe".
     assert "FileExists(SandboxProtectedCopy())" in may
     assert "RegKeyExists(HKLM64, SandboxStatusKey)" in may
     assert "RunSandboxHelper('status'" in may
+    assert (
+        "Result := RulesUnknown" in may and "ErrorCode = 1 then\n    Result := RulesAbsent" in may
+    )
     assert "Tasks: sandboxrules" not in script.split("[UninstallRun]", 1)[1]
 
 

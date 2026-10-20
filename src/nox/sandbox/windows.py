@@ -196,6 +196,54 @@ def forwarder_port(line: str, ports: range) -> int | None:
     return port if port in ports and port in FORWARDER_PORTS else None
 
 
+def excluded_overlap(netsh_output: str, ports: range) -> list[tuple[int, int]]:
+    """The reserved TCP port ranges (`netsh interface ipv4 show excludedportrange protocol=tcp`,
+    any display language: every line of two numbers) that overlap `ports`."""
+    found: list[tuple[int, int]] = []
+    for line in netsh_output.splitlines():
+        parts = line.replace("*", " ").split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            lo, hi = int(parts[0]), int(parts[1])
+            if lo <= ports.stop - 1 and hi >= ports.start:
+                found.append((lo, hi))
+    return found
+
+
+def _excluded_ranges(ports: range) -> list[tuple[int, int]] | None:
+    """Windows' reserved port ranges over `ports`, or `None` if they cannot be read."""
+    try:
+        out = subprocess.run(
+            [_SYSTEM32 + r"\netsh.exe", "interface", "ipv4", "show", "excludedportrange", "tcp"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return excluded_overlap(out.stdout, ports) if out.returncode == 0 else None
+
+
+def no_forwarder_port_reason(ports: range, excluded: list[tuple[int, int]] | None) -> str:
+    """Why the forwarder found no free port - honestly, Windows' own reservations included."""
+    block = f"{ports.start}-{ports.stop - 1}"
+    if excluded:
+        ranges = ", ".join(f"{lo}-{hi}" for lo, hi in excluded)
+        return (
+            f"the egress forwarder found no free port in its block {block}: Windows reserves "
+            f"{ranges} (an excluded port range, usually taken by Hyper-V, WSL or Docker at boot; "
+            "`netsh interface ipv4 show excludedportrange protocol=tcp` lists them). Declared "
+            "network access is unavailable until that reservation moves - often after a "
+            "restart - and the run is refused (failing closed)"
+        )
+    unread = "" if excluded is not None else ", or reserved - the reservations could not be read"
+    return (
+        f"the egress forwarder found no free port in its block {block} (every port in use"
+        f"{unread}); the run is refused (failing closed)"
+    )
+
+
 def container_forwarder_ports(sid: str) -> range:
     """The forwarder ports the network rules open for container `sid` - its block alone."""
     ports = ports_by_sid().get(sid)
@@ -1178,6 +1226,10 @@ class WindowsSandbox:
         if port is None:
             fwd.close()
             _close_fds(fwd)
+            if line.strip() == "NOXFWD NONE":
+                reason = no_forwarder_port_reason(ports, _excluded_ranges(ports))
+                log.warning("sandbox.forwarder_no_port", ports=f"{ports.start}-{ports.stop - 1}")
+                raise SandboxUnavailable(reason)
             raise SandboxUnavailable("the egress forwarder did not start; failing closed")
         own = _identity(fwd.pid)
         problem = forwarder_port_problem(port, own, ports)

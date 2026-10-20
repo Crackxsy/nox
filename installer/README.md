@@ -19,10 +19,14 @@ What it does, in order:
 2. Fixes `build/runtime/python313._pth` (`import site` uncommented, `Lib\site-packages` added) -
    the embeddable distribution ships with both disabled, which would make a plain `pip install`
    invisible to the interpreter.
-3. Bootstraps `pip` into that runtime via `get-pip.py` (the embeddable zip has no pip).
+3. Installs `pip` into that runtime from its pinned wheel (URL and SHA-256 in `build.py`), with
+   `--no-index`: the wheel installs itself, nothing else is fetched (the embeddable zip has no
+   pip).
 4. Re-exports `installer/requirements.lock` via `uv export --extra shell --extra voice
-   --no-hashes` and `pip install`s everything in it *except* the `-e .` self-reference (nox's own
-   source is copied, not pip-installed - the payload never needs a build backend). Pass
+   --extra voice-supertonic` (with hashes) and `pip install --require-hashes
+   --only-binary=:all:`s everything in it *except* the `-e .` self-reference (wheels only, every
+   one hash-checked; nox's own source is copied, not pip-installed - the payload never needs a
+   build backend). Pass
    `--skip-lock-export` to reuse the committed lock file instead of re-resolving.
 5. Copies `src/nox`, `config/`, `plugins/`, `ui/pet/dist`, `ui/dashboard/dist` into `build/app/`.
    (The two dashboards must already be built: `cd ui/pet && npm run build`, same for

@@ -8,15 +8,19 @@ Steps (in order, each idempotent - re-running `build.py` from a clean `build/` i
    commented out and no `Lib\\site-packages` on `sys.path`, so a plain `pip install` target would
    never be importable - uncomment `import site`, add the site-packages path explicitly, and add
    `..\\app`, the folder the `nox` package is copied to (step 5).
-3. Bootstrap pip into that runtime via `get-pip.py` (the embeddable zip has no pip of its own).
-   Both downloads are pinned: the zip by version and SHA-256, `get-pip.py` by an immutable commit
-   URL and SHA-256 (`PINNED_SHA256`) - a file whose hash differs is refused, cached or not.
+3. Install pip into that runtime from its pinned wheel (the embeddable zip has no pip of its
+   own): the wheel runs itself (`pip.whl/pip install --no-index pip.whl`), so nothing is fetched
+   from PyPI and no unpinned pip ever lands in the runtime. Both downloads are pinned by an
+   immutable URL and SHA-256 (`PINNED_SHA256`) - a file whose hash differs is refused, cached or
+   not.
 4. Regenerate `installer/requirements.lock` via `uv export --extra shell --extra voice
    --extra voice-supertonic` (Supertonic 3 is the default voice; its ~400 MB of model files are
    downloaded after the user agrees, never shipped) - the locked, reproducible dependency set,
    NOT `pyproject.toml`, which this script never touches - *with* hashes, and `pip install
-   --require-hashes` everything in it except the `-e .` self-reference (nox's own source is copied
-   in step 5, not pip-installed, so the payload has no build backend / editable-install machinery).
+   --require-hashes --only-binary=:all:` everything in it (wheels only: an sdist's build
+   dependencies would not be hash-checked) except the `-e .` self-reference (nox's own source is
+   copied in step 5, not pip-installed, so the payload has no build backend / editable-install
+   machinery).
 5. Copy `src/nox`, `config/`, `plugins/`, `ui/pet/dist`, `ui/dashboard/dist` and the launcher
    `installer/start_nox.pyw` into `build/app/`.
 6. Write the sandbox-rules helper and its Inno include into `build/sandbox-rules/`
@@ -56,11 +60,12 @@ DOWNLOAD_CACHE = INSTALLER_DIR / ".cache"
 #: compiled-extension wheels (ctranslate2, onnxruntime, PySide6) resolved against cp313 match.
 DEFAULT_PYTHON_VERSION = "3.13.14"
 EMBED_URL_TMPL = "https://www.python.org/ftp/python/{v}/python-{v}-embed-amd64.zip"
-#: get-pip.py at a fixed commit of pypa/get-pip (pip 26.2.1) - the moving
-#: bootstrap.pypa.io URL would change under a pinned hash.
-GET_PIP_URL = (
-    "https://raw.githubusercontent.com/pypa/get-pip/"
-    "f6f644156f23dfe9acc06e7b9ca75eee311f2e37/public/get-pip.py"
+#: The pip wheel the runtime gets (files.pythonhosted.org URLs are immutable). It installs
+#: itself with `--no-index` (a bootstrap script would fetch the newest pip from PyPI, unhashed).
+PIP_WHEEL = "pip-26.2.1-py3-none-any.whl"
+PIP_WHEEL_URL = (
+    "https://files.pythonhosted.org/packages/f3/6e/"
+    "1736e5b4ae2b778ef2f81c47d797de9f891d4d8acb047a24ca37a60294dd/" + PIP_WHEEL
 )
 #: SHA-256 of every file the build downloads, by file name. A version without an entry here
 #: cannot be built until its hash is added (from python.org, checked by a person).
@@ -68,7 +73,7 @@ PINNED_SHA256 = {
     "python-3.13.14-embed-amd64.zip": (
         "90b4e5b9898b72d744650524bff92377c367f44bd5fbd09e3148656c080ad907"
     ),
-    "get-pip.py": "fb24e693bab954209a063d90953621412ccad4a500905a726286e038f508ddf6",
+    PIP_WHEEL: "71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e",
 }
 #: The public repository the written source offer points to.
 SOURCE_REPO = "https://github.com/Crackxsy/nox"
@@ -168,7 +173,7 @@ def _isolated_env() -> dict[str, str]:
 
 
 def step_bootstrap_pip(runtime_dir: Path) -> None:
-    """Step 3: get-pip.py into the embedded runtime (it ships with no pip)."""
+    """Step 3: pip into the embedded runtime (it ships with none), from the pinned wheel only."""
     python_exe = runtime_dir / "python.exe"
     env = _isolated_env()
     probe = subprocess.run(
@@ -177,11 +182,33 @@ def step_bootstrap_pip(runtime_dir: Path) -> None:
     if probe.returncode == 0:
         log("pip already present in runtime")
         return
-    get_pip = download(GET_PIP_URL, DOWNLOAD_CACHE / "get-pip.py")
-    subprocess.run(
-        [str(python_exe), str(get_pip), "--no-warn-script-location"], check=True, env=env
-    )
+    wheel = download(PIP_WHEEL_URL, DOWNLOAD_CACHE / PIP_WHEEL)
+    subprocess.run(pip_bootstrap_command(python_exe, wheel), check=True, env=env)
     log("pip bootstrapped into embedded runtime")
+
+
+def pip_bootstrap_command(python_exe: Path, wheel: Path) -> list[str]:
+    """pip, run from its own wheel, installing exactly that wheel - no index, no other file.
+
+    `-c` with an explicit `sys.path` entry rather than `wheel/pip` as a script: the embedded
+    runtime's `._pth` fixes `sys.path`, so a script's folder is not added to it. `sys.argv[0]`
+    becomes the wheel's path: pip refuses to replace itself on Windows when it was started as
+    `pip`/`pip.exe`."""
+    code = (
+        "import runpy, sys; sys.path.insert(0, sys.argv[1]); "
+        "sys.argv = sys.argv[1:]; runpy.run_module('pip', run_name='__main__')"
+    )
+    return [
+        str(python_exe),
+        "-c",
+        code,
+        str(wheel),
+        "install",
+        "--no-index",
+        "--no-deps",
+        "--no-warn-script-location",
+        str(wheel),
+    ]
 
 
 def step_export_lock() -> Path:
@@ -224,7 +251,8 @@ def filtered_requirements(text: str) -> list[str]:
 def step_install_dependencies(runtime_dir: Path, lock_path: Path) -> None:
     """Step 4b: pip-install everything in the lock file except `-e .` (nox's own source is
     copied, not pip-installed - the embedded runtime never needs a build backend). Every package
-    must match one of its locked hashes (`--require-hashes`)."""
+    must match one of its locked hashes (`--require-hashes`), and only wheels are accepted
+    (`--only-binary=:all:`): an sdist would pull its build dependencies unhashed."""
     deps = filtered_requirements(lock_path.read_text(encoding="utf-8"))
     if not deps or any("--hash=sha256:" not in dep for dep in deps):
         raise RuntimeError(f"{lock_path} has entries without hashes; export it again")
@@ -240,6 +268,7 @@ def step_install_dependencies(runtime_dir: Path, lock_path: Path) -> None:
             "install",
             "--no-warn-script-location",
             "--require-hashes",
+            "--only-binary=:all:",
             "-r",
             str(filtered),
         ],
@@ -271,15 +300,38 @@ def step_assemble_app() -> None:
     log(f"assembled app payload -> {APP_DIR}")
 
 
-def step_sandbox_rules() -> None:
-    """Step 6: the sandbox-rules helper script and the Inno include pinning its SHA-256."""
-    sys.path.insert(0, str(REPO_ROOT / "src"))
-    from nox.sandbox.wfp_helper import helper_sha256, write_build_files  # noqa: PLC0415
+#: Step 6 inside the embedded runtime: the helper written by exactly the code the installer ships.
+_WRITE_HELPER = (
+    "import sys; from pathlib import Path; "
+    "from nox.sandbox.wfp_helper import helper_sha256, write_build_files; "
+    "write_build_files(Path(sys.argv[1])); print(helper_sha256())"
+)
 
+
+def step_sandbox_rules(runtime_dir: Path | None = None) -> None:
+    """Step 6: the sandbox-rules helper script and the Inno include pinning its SHA-256.
+
+    With `runtime_dir`, the embedded runtime writes them from the `nox` package copied in step 5
+    (it has every dependency, so the build needs none of Nox's in the Python that runs it);
+    without, this process does, from `src/`."""
     if SANDBOX_RULES_DIR.exists():
         shutil.rmtree(SANDBOX_RULES_DIR)
-    write_build_files(SANDBOX_RULES_DIR)
-    log(f"sandbox-rules helper -> {SANDBOX_RULES_DIR} (SHA-256 {helper_sha256()})")
+    if runtime_dir is not None:
+        result = subprocess.run(
+            [str(runtime_dir / "python.exe"), "-c", _WRITE_HELPER, str(SANDBOX_RULES_DIR)],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=_isolated_env(),
+        )
+        digest = result.stdout.strip()
+    else:
+        sys.path.insert(0, str(REPO_ROOT / "src"))
+        from nox.sandbox.wfp_helper import helper_sha256, write_build_files  # noqa: PLC0415
+
+        write_build_files(SANDBOX_RULES_DIR)
+        digest = helper_sha256()
+    log(f"sandbox-rules helper -> {SANDBOX_RULES_DIR} (SHA-256 {digest})")
 
 
 def _git(*args: str) -> str:
@@ -422,7 +474,7 @@ def main() -> None:
     lock_path = REQUIREMENTS_LOCK if reuse_lock else step_export_lock()
     step_install_dependencies(runtime_dir, lock_path)
     step_assemble_app()
-    step_sandbox_rules()
+    step_sandbox_rules(runtime_dir)
     step_legal(app_version())
     step_record_sizes(args.python_version)
     log("done: build/app/ is ready for installer/nox.iss")

@@ -27,12 +27,17 @@ none of it. Instead:
 
 `build.py` writes the script and an Inno Setup include with the pinned hash and the command
 builder (`inno_include`); `nox.iss` includes it. `nox sandbox firewall install|remove` refuse and
-print `admin_command` - the protected copy, for an administrator prompt.
+print `admin_command` - the protected copy, for an administrator prompt, by absolute paths that
+the Windows API resolves (never `%SystemRoot%`/`%ProgramFiles%`: a process running as the same
+user can redirect those through `HKCU\\Environment`, and an administrator pasting the line would
+then start that process's program).
 """
 
 from __future__ import annotations
 
 import hashlib
+import sys
+import uuid
 from functools import cache
 from pathlib import Path
 
@@ -54,7 +59,7 @@ __all__ = [
     "HELPER_DIR",
     "HELPER_FILE",
     "MAX_COMMAND_LINE",
-    "POWERSHELL",
+    "POWERSHELL_IN_SYSTEM32",
     "PROTECTED_ACL",
     "STATUS_KEY",
     "admin_command",
@@ -62,6 +67,8 @@ __all__ = [
     "command_params",
     "path_arg",
     "path_is_safe",
+    "program_files_dir",
+    "system_dir",
     "helper_bytes",
     "helper_script",
     "helper_sha256",
@@ -75,8 +82,14 @@ HELPER_DIR = "Nox Sandbox Rules"
 HELPER_FILE = "nox-sandbox-rules.ps1"
 #: Where the helper reports (under HKEY_LOCAL_MACHINE): admin-write, user-read.
 STATUS_KEY = "SOFTWARE\\Nox\\SandboxRules"
-#: The only PowerShell the installer ever starts elevated: the system's own, by full path.
-POWERSHELL = "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+#: The only PowerShell the installer ever starts elevated: the system's own, by full path
+#: (`{sys}` in Inno, `system_dir()` here).
+POWERSHELL_IN_SYSTEM32 = "WindowsPowerShell\\v1.0\\powershell.exe"
+#: `FOLDERID_ProgramFiles` (KnownFolders.h).
+_FOLDERID_PROGRAM_FILES = uuid.UUID("905e63b6-c1bf-494e-b29c-65b732d3d21a")
+#: Windows' defaults - used only where the API is not there (tests on other systems).
+_DEFAULT_SYSTEM_DIR = "C:\\Windows\\System32"
+_DEFAULT_PROGRAM_FILES = "C:\\Program Files"
 #: The explicit ACL of the protected folder (inherited by the copy), as (SID, rights): nothing
 #: but administrators and SYSTEM may change it; the folder's inheritance from Program Files is cut.
 PROTECTED_ACL: tuple[tuple[str, str], ...] = (
@@ -210,7 +223,7 @@ def bootstrap(action: str, paths: list[str]) -> str:
 def command_params(action: str, paths: list[str]) -> str:
     """The parameters for the system's `powershell.exe`: fixed switches and the bootstrap."""
     params = f'{_SWITCHES}"{bootstrap(action, paths)}"'
-    if len(POWERSHELL) + 3 + len(params) >= MAX_COMMAND_LINE:
+    if 260 + 3 + len(params) >= MAX_COMMAND_LINE:  # MAX_PATH for the quoted powershell.exe
         raise RuntimeError("wfp_helper: the command line is too long")
     return params
 
@@ -285,12 +298,46 @@ def inno_include() -> str:
     return "\r\n".join(lines)
 
 
+def system_dir() -> str:
+    """The system folder from `GetSystemDirectoryW` - not `%SystemRoot%`, which the user's own
+    environment (`HKCU\\Environment`) can point elsewhere."""
+    import ctypes  # noqa: PLC0415
+
+    windll = getattr(ctypes, "windll", None)
+    if sys.platform != "win32" or windll is None:
+        return _DEFAULT_SYSTEM_DIR
+    buf = ctypes.create_unicode_buffer(32_768)
+    size = windll.kernel32.GetSystemDirectoryW(buf, len(buf))
+    if not 0 < size < len(buf):
+        raise OSError("GetSystemDirectoryW failed")
+    return str(buf.value)
+
+
+def program_files_dir() -> str:
+    """`FOLDERID_ProgramFiles` from `SHGetKnownFolderPath` - not `%ProgramFiles%`."""
+    import ctypes  # noqa: PLC0415
+
+    windll = getattr(ctypes, "windll", None)
+    if sys.platform != "win32" or windll is None:
+        return _DEFAULT_PROGRAM_FILES
+    guid = (ctypes.c_ubyte * 16).from_buffer_copy(_FOLDERID_PROGRAM_FILES.bytes_le)
+    out = ctypes.c_void_p()
+    hr = windll.shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(out))
+    try:
+        path = ctypes.wstring_at(out.value) if hr == 0 and out.value else ""
+    finally:
+        windll.ole32.CoTaskMemFree(out)
+    if not path:
+        raise OSError(f"SHGetKnownFolderPath failed (0x{hr & 0xFFFFFFFF:08X})")
+    return path
+
+
 def admin_command(action: str) -> str:
-    """What to run from an administrator prompt: the protected copy, by the system's PowerShell."""
-    return (
-        f"{POWERSHELL} -NoProfile -ExecutionPolicy Bypass -File "
-        f'"%ProgramFiles%\\{HELPER_DIR}\\{HELPER_FILE}" {action}'
-    )
+    """What to run from an administrator prompt: the protected copy, by the system's PowerShell -
+    both by absolute paths the Windows API resolved, no environment variable in the line."""
+    powershell = f"{system_dir()}\\{POWERSHELL_IN_SYSTEM32}"
+    helper = f"{program_files_dir()}\\{HELPER_DIR}\\{HELPER_FILE}"
+    return f'"{powershell}" -NoProfile -ExecutionPolicy Bypass -File "{helper}" {action}'
 
 
 def write_build_files(out_dir: Path) -> tuple[Path, Path]:
