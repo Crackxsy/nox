@@ -395,6 +395,24 @@ files:                           # the folders Nox may look at and change. Ships
   delete_to_recycle_bin: true    # with this off there is no delete tool at all: an unlink nobody
                                  # can undo is not something to hand a language model
 
+hands:                           # the machine-and-world tools: shell, packages, web. The sharp
+                                 # ones ship off, like files.roots ships empty - a fresh install
+                                 # answers questions but runs no commands until you turn it on.
+  shell_enabled: false           # shell.run (HIGH): runs only in the sandbox, with a confirm;
+                                 # curated read-only commands (df, ls/dir, git status, ...) need none
+  shell_timeout_s: 60.0
+  web_enabled: true              # web.fetch / web.search: read public pages; behind the cloud gate
+  searxng_base_url: ""           # a SearXNG instance (e.g. on the Pi) for web.search; empty = off
+  packages_enabled: false        # package.install / package.remove (HIGH, always asks, never
+                                 # remembered): winget source 'winget' on Windows, apt on Linux/Pi
+  windows_appcontainer: true     # prefer the stronger AppContainer sandbox; off forces the weaker
+                                 # low-integrity fallback (reported honestly by the sandbox)
+  accept_weak_sandbox: false     # run commands even when the sandbox cannot give every guarantee
+                                 # (low-integrity fallback: reads your files, reaches the network;
+                                 # or loopback isolation not enforced). Off = such runs are refused
+  trusted_program_dirs: []       # extra folders shell.run may find a bare program name in (e.g.
+                                 # Git's cmd folder); system folders only by default
+
 presets:                         # one phrase, several systems at once: lights, Nox's own mode,
                                  # and programs you registered here. Both lists ship empty, so a
                                  # fresh installation can run nothing at all until you add an entry.

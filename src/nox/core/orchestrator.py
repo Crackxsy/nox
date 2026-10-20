@@ -85,9 +85,12 @@ class TurnStore(Protocol):
         provider: str = "",
         latency_ms: int = 0,
         private: bool = False,
+        conversation: str = "",
     ) -> None: ...
     async def recent(self, session_id: str, limit: int) -> list[tuple[str, str]]: ...
-    async def recent_turns(self, session_id: str, limit: int) -> list[RecordedTurn]: ...
+    async def recent_turns(
+        self, session_id: str, limit: int, *, conversation: str = ""
+    ) -> list[RecordedTurn]: ...
 
 
 class MemoryPolicy(Protocol):
@@ -151,6 +154,38 @@ class Turn:
     #: Memory writes were not allowed at some point during the turn: nothing of it is stored.
     unrecordable: bool = False
     recorded: bool = False
+    #: The conversation the turn belongs to (`Orchestrator.conversation_for`).
+    conversation: str = ""
+
+
+#: The channel of a turn whose caller named none: the local chat.
+DEFAULT_CHANNEL = "chat"
+#: Channel of the voice pipeline.
+VOICE_CHANNEL = "voice"
+#: What the user says to start over: a fresh conversation, with nothing of the old one in it.
+_NEW_CONVERSATION = re.compile(
+    r"^(?:(?:hey |ok |okay )?nox[,:]? )?(?:bitte )?(?:lass uns (?:ein )?|starte? (?:ein |a )?)?"
+    r"(?:neues gespräch|neuer chat|new conversation|new chat|neu anfangen|start over)"
+    r"(?: (?:anfangen|beginnen|starten|bitte|please))?[.!]?$",
+    re.IGNORECASE,
+)
+#: The answer to `_NEW_CONVERSATION`.
+NEW_CONVERSATION_REPLY: dict[str, str] = {
+    "de": "Okay, neues Gespräch.",
+    "en": "Okay, new conversation.",
+}
+
+
+def is_new_conversation_request(text: str) -> bool:
+    """Whether `text` asks for a fresh conversation ("neues Gespräch", "new conversation")."""
+    return _NEW_CONVERSATION.match(text.strip()) is not None
+
+
+@dataclass(slots=True)
+class _Conversation:
+    channel: str
+    id: str
+    last_used: float
 
 
 @dataclass
@@ -162,6 +197,9 @@ class OrchestratorConfig:
     speak: bool = True
     #: How long a tool loop may keep a speaking user waiting in silence before the filler.
     filler_delay_s: float = 2.0
+    #: A conversation idle this long is over: the next turn on its channel starts a fresh one -
+    #: no history, a new model context, no taint. 0 = never.
+    conversation_idle_s: float = 3600.0
 
 
 @dataclass
@@ -220,11 +258,15 @@ class Orchestrator:
     cloud_allowed: Callable[[], bool] | None = None
     fast_path: FastPath = field(default_factory=FastPath)
     escalation: EscalationPolicy = field(default_factory=EscalationPolicy)
+    #: Monotonic seconds, for the idle timeout of conversations; a field so tests can move time.
+    clock: Callable[[], float] = time.monotonic
 
     _active: asyncio.Task[Turn] | None = None
     voice_turn: asyncio.Task[None] | None = None
     _unsubs: list[Callable[[], None]] = field(default_factory=list)
     _safe_mode: bool = False
+    #: The live conversation of each channel (`conversation_for`).
+    _conversations: dict[str, _Conversation] = field(default_factory=dict)
 
     async def start(self) -> None:
         self._unsubs = [
@@ -256,13 +298,19 @@ class Orchestrator:
         language: str | None = None,
         speak: bool | None = None,
         on_chunk: Callable[[str], Awaitable[None] | None] | None = None,
+        channel: str = DEFAULT_CHANNEL,
     ) -> Turn:
-        """Process a user utterance. Cancels an in-flight turn (barge-in semantics)."""
+        """Process a user utterance. Cancels an in-flight turn (barge-in semantics).
+
+        `channel` names where the user is talking: `voice`, `chat:<client>` for a dashboard client,
+        `remote:<device>` for a paired phone. Each channel has a conversation of its own - its own
+        history, model context and taint (`nox.security.taint`).
+        """
         if self._safe_mode:
             raise RuntimeError("safe mode: AI requests are disabled until resume")
         await self.cancel(reason="new_input")
         self._active = asyncio.create_task(
-            self._run(text, language or self.config.default_language, speak, on_chunk)
+            self._run(text, language or self.config.default_language, speak, on_chunk, channel)
         )
         try:
             return await self._active
@@ -283,6 +331,38 @@ class Orchestrator:
             except Exception as exc:
                 log.warning("orchestrator.interrupt_failed", error=str(exc))
 
+    # -- conversations -----------------------------------------------------------------------------
+    def conversation_for(self, channel: str) -> str:
+        """The id of `channel`'s live conversation; a fresh one after the idle timeout."""
+        now = self.clock()
+        live = self._conversations.get(channel)
+        idle = self.config.conversation_idle_s
+        if live is not None and idle > 0 and now - live.last_used > idle:
+            log.info("orchestrator.conversation_expired", channel=channel)
+            self._discard(live)
+            live = None
+        if live is None:
+            live = _Conversation(channel, f"{channel}#{uuid.uuid4().hex[:12]}", now)
+            self._conversations[channel] = live
+        live.last_used = now
+        return live.id
+
+    def new_conversation(self, channel: str) -> None:
+        """Start `channel` over: the next turn has no history, a new model context, no taint."""
+        live = self._conversations.pop(channel, None)
+        if live is not None:
+            self._discard(live)
+
+    def _discard(self, conversation: _Conversation) -> None:
+        """The conversation's context is gone for good: its history is no longer replayed (the
+        next one has another id), the warm model session is replaced on the next turn (it belongs
+        to another conversation), so whatever untrusted content it held is gone - and only now
+        does its taint go too."""
+        if self._conversations.get(conversation.channel) is conversation:
+            del self._conversations[conversation.channel]
+        if self.tool_loop is not None:
+            self.tool_loop.forget(conversation.id)
+
     # -- handlers ----------------------------------------------------------------------------------
     async def _on_transcript(self, ev: Event) -> None:
         if not ev.payload.get("addressed_to_nox", False):
@@ -301,7 +381,7 @@ class Orchestrator:
 
     async def _voice_turn(self, text: str, language: str) -> None:
         try:
-            await self.handle_text(text, language=language)
+            await self.handle_text(text, language=language, channel=VOICE_CHANNEL)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - a failed turn is logged, never fatal
@@ -326,11 +406,20 @@ class Orchestrator:
         language: str,
         speak: bool | None,
         on_chunk: Callable[[str], Awaitable[None] | None] | None = None,
+        channel: str = DEFAULT_CHANNEL,
     ) -> Turn:
         started = time.perf_counter()
         request_id = uuid.uuid4().hex
-        turn = Turn(request_id=request_id, text=text)
         speak_enabled = self.config.speak if speak is None else speak
+        if is_new_conversation_request(text):
+            self.new_conversation(channel)
+            turn = Turn(request_id=request_id, text=text, fast_path="new_conversation")
+            turn.conversation = self.conversation_for(channel)
+            reply = NEW_CONVERSATION_REPLY.get(language[:2], NEW_CONVERSATION_REPLY["en"])
+            return await self._deliver_fast_path(
+                turn, reply, language, speak=speak_enabled, on_chunk=on_chunk, started=started
+            )
+        turn = Turn(request_id=request_id, text=text, conversation=self.conversation_for(channel))
 
         if self.preset_gate is not None:
             spoken = await self.preset_gate.handle(text, language)
@@ -367,10 +456,16 @@ class Orchestrator:
 
         context = await self._retrieve_context(text, turn.timings)
         build_started = time.perf_counter()
-        tools = self.tool_loop.begin(request_id) if self.tool_loop is not None else None
+        tools = (
+            self.tool_loop.begin(request_id, conversation=turn.conversation, user_text=text)
+            if self.tool_loop is not None
+            else None
+        )
         messages = [Message(role="system", content=self.system_prompt())]
         if self.turns is not None:
-            for past in await self.turns.recent_turns(self.session_id, self.config.history_turns):
+            for past in await self.turns.recent_turns(
+                self.session_id, self.config.history_turns, conversation=turn.conversation
+            ):
                 messages.append(Message(role=past.role, content=past.text, private=past.private))
         messages.append(Message(role="user", content=text))
         turn_context = self._turn_context(context, with_caveats=tools is not None)
@@ -461,6 +556,7 @@ class Orchestrator:
                 timeout_s=(
                     tools.budget.wall_clock_s + TOOL_TURN_MARGIN_S if tools is not None else None
                 ),
+                conversation=turn.conversation,
             )
             produced, calls = await self._stream(request, turn, language, speech, on_chunk, started)
             if not calls:
@@ -514,8 +610,13 @@ class Orchestrator:
         tools: list[ToolDefinition] | None = None,
         tool_turn: str = "",
         timeout_s: float | None = None,
+        conversation: str = "",
     ) -> AiRequest:
-        """One model request. Built per step, because the messages grow with every tool result."""
+        """One model request. Built per step, because the messages grow with every tool result.
+
+        `conversation` goes out as the request's `session_id`: the warm Claude session belongs to
+        one conversation, and a request of another one replaces it (`PersistentClaude`).
+        """
         return AiRequest(
             request_id=request_id,
             role=role,
@@ -523,7 +624,7 @@ class Orchestrator:
             mode=str(self.state.get("assistant.mode")),
             privacy_mode=str(self.state.get("privacy.mode")),
             max_tokens=self.config.max_tokens,
-            metadata={"language": language, "session_id": self.session_id},
+            metadata={"language": language, "session_id": conversation},
             context=context,
             tools=list(tools or []),
             tool_turn=tool_turn,
@@ -616,11 +717,20 @@ class Orchestrator:
         self, names: list[str], speech: _TurnSpeech, language: str, turn: Turn
     ) -> None:
         log.debug("orchestrator.provider_tools", request_id=turn.request_id, tools=names)
-        # Nox's own tools are recorded by the tool loop when they run; only the provider's own
-        # (web search) would otherwise be invisible.
+        # Nox's own tools are recorded (and taint) in the tool loop when they run; only the
+        # provider's own (web search) would otherwise be invisible.
         own = set(self.tool_loop.current_offer_names()) if self.tool_loop is not None else set()
-        turn.provider_tools += [name for name in names if name not in own]
-        self._arm_filler(speech, language, turn)
+        theirs = [name for name in names if name not in own]
+        try:
+            turn.provider_tools += theirs
+            self._arm_filler(speech, language, turn)
+        finally:
+            # Taint now, while the stream is still running: the provider may call one of Nox's
+            # tools over the bridge right after its own search, and that call must already see
+            # the search result's taint. In `finally`, so a failing filler cannot skip it.
+            if self.tool_loop is not None:
+                for name in theirs:
+                    self.tool_loop.mark_external(turn.conversation, name)
 
     def _arm_filler(self, speech: _TurnSpeech, language: str, turn: Turn) -> None:
         """Say "let me check" if a tool loop keeps the user waiting with nothing said yet.
@@ -757,21 +867,38 @@ class Orchestrator:
         self._note_privacy(turn)
         if turn.unrecordable:
             return
-        await self._record("user", turn.text, private=turn.private)
+        await self._record("user", turn.text, conversation=turn.conversation, private=turn.private)
         if answer:
             await self._record(
-                "assistant", turn.response, provider=turn.provider, private=turn.private
+                "assistant",
+                turn.response,
+                conversation=turn.conversation,
+                provider=turn.provider,
+                private=turn.private,
             )
 
     async def _record(
-        self, role: str, text: str, *, provider: str = "", private: bool = False
+        self,
+        role: str,
+        text: str,
+        *,
+        conversation: str,
+        provider: str = "",
+        private: bool = False,
     ) -> None:
         if self.turns is None:
             return
         if self.memory_policy is not None and not self.memory_policy.allows_memory_write():
             return
         try:
-            await self.turns.record(self.session_id, role, text, provider=provider, private=private)
+            await self.turns.record(
+                self.session_id,
+                role,
+                text,
+                provider=provider,
+                private=private,
+                conversation=conversation,
+            )
         except Exception as exc:
             log.warning("orchestrator.record_failed", error=str(exc))
 

@@ -39,6 +39,7 @@ from nox.core.config.features import (
     StreamConfig,
 )
 from nox.core.config.files import FilesConfig
+from nox.core.config.hands import HandsConfig
 from nox.core.config.presets import PresetsConfig
 from nox.core.config.security import PrivacyConfig, SecurityConfig
 from nox.core.config.types import ConfigWarning, StrictSection, expand_path
@@ -74,6 +75,7 @@ class NoxConfig(StrictSection):
     day: DayConfig = Field(default_factory=DayConfig)
     presets: PresetsConfig = Field(default_factory=PresetsConfig)
     files: FilesConfig = Field(default_factory=FilesConfig)
+    hands: HandsConfig = Field(default_factory=HandsConfig)
     extend: ExtendConfig = Field(default_factory=ExtendConfig)
     creative: CreativeConfig = Field(default_factory=CreativeConfig)
     sensors: SensorsConfig = Field(default_factory=SensorsConfig)

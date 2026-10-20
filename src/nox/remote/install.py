@@ -112,13 +112,16 @@ def install(core: Any) -> RemoteRuntime:
         if not getattr(result, "ok", False):
             log.warning("remote.send_denied", reason=getattr(result, "error", ""))
 
-    async def chat(text: str) -> str:
+    async def chat(text: str, device_id: str) -> str:
         """Phone chat: the normal orchestrator, `speak=False`. No separate prompt, no relaxed
-        profile, and the active privacy mode applies exactly as it does on the desktop."""
+        profile, and the active privacy mode applies exactly as it does on the desktop. Each paired
+        device is a conversation of its own (history, model context, taint)."""
         # Marked `remote`: facts learned from a phone message wait for confirmation on the
         # dashboard before they reach the prompt (`nox.memory.capture`).
         with turn_origin("remote"):
-            turn = await core.orchestrator.handle_text(text, speak=False)
+            turn = await core.orchestrator.handle_text(
+                text, speak=False, channel=f"remote:{device_id}"
+            )
         return str(getattr(turn, "response", ""))
 
     def status() -> dict[str, str]:

@@ -107,6 +107,11 @@ permissions:
       action: "delete*"
       decision: confirm
       reason: "deletion moves to quarantine and is always confirmed"
+    - id: companion.shell.readonly
+      tool: "shell"
+      target: "readonly:*"
+      decision: allow
+      reason: "curated read-only commands (whoami, df, ls, ...) run in the strong sandbox, no confirm"
     - id: companion.shell
       tool: "shell*"
       decision: confirm

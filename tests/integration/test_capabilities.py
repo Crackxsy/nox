@@ -181,7 +181,7 @@ async def test_what_nox_cannot_do_reaches_the_model(core: NoxCore) -> None:
     result = await _as_model(core, "capabilities.list")
     missing = {gap["name"]: gap["why"] for gap in result.data["missing"]}
 
-    assert missing["desktop.software_install"] == "missing"
+    assert missing["desktop.input_send"] == "missing"
     # The two boundaries, and they must not read like backlog items.
     assert missing["game.input"] == "forbidden"
     assert missing["home.lock"] == "forbidden"
@@ -269,12 +269,15 @@ async def test_the_offer_stays_within_its_budget(core: NoxCore) -> None:
     prompt. Doing it properly means German and English trigger words supplied per tool at
     registration - a deliberate design step, not something to squeeze in behind a number.
 
-    So the budget is 8000 and the reason is written down. The per-tool average below is what still
-    catches the mistake this test is really for: one tool arriving with a paragraph about itself.
+    So the budget was 8000 and the reason is written down. The hands tools (shell, web, mic,
+    consent; one short sentence each) took it to 55 tools / about 8150 characters; the budget is
+    8500 now, for the same reason, until per-tool trigger words exist. The per-tool average below
+    is what still catches the mistake this test is really for: one tool arriving with a paragraph
+    about itself.
     """
     section = _sentinel_section(core)
     offered = len(core.orchestrator.tool_loop.offer())
     print(f"\ntool offer: {offered} tools, {len(section)} characters")
 
-    assert len(section) < 8000, f"{len(section)} characters is over the per-turn budget"
+    assert len(section) < 8500, f"{len(section)} characters is over the per-turn budget"
     assert len(section) / offered < 160, "some tool is describing itself at length"

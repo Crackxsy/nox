@@ -127,6 +127,7 @@ class SecurityContext:
             audit=audit,
             global_allowlist=allowlist,
             loopback_allowlist=tuple(security.loopback_allowlist),
+            read_only_hosts=tuple(security.read_only_hosts),
         )
         secrets = (
             secret_store if secret_store is not None else open_secret_store(security.secret_store)

@@ -68,6 +68,9 @@ class SecurityConfig(StrictSection):
     #: Loopback services that stay reachable in privacy mode private or offline. A profile adds
     #: entries to this list rather than replacing it.
     loopback_allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_LOOPBACK_ALLOWLIST))
+    #: Hosts that may only ever be read (GET/HEAD), never written to - school platforms above all.
+    #: A request to one of these with any other method is denied before it is sent.
+    read_only_hosts: list[str] = Field(default_factory=lambda: ["*.webuntis.com"])
     audit: AuditConfig = Field(default_factory=AuditConfig)
     #: Where stored credentials live. `auto`: the OS keyring (Windows Credential Manager, macOS
     #: Keychain, Secret Service), or - where none works, as on a headless Raspberry Pi - an
@@ -85,7 +88,7 @@ class SecurityConfig(StrictSection):
             )
         return sorted(set(value))  # stable order, no duplicates
 
-    @field_validator("egress_allowlist", "loopback_allowlist")
+    @field_validator("egress_allowlist", "loopback_allowlist", "read_only_hosts")
     @classmethod
     def _entries_parse(cls, value: list[str]) -> list[str]:
         return _validated_allowlist(value)

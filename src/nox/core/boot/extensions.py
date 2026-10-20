@@ -39,6 +39,7 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "creative",
     "home",
     "files",
+    "hands",
     "desktop",
     "views",
     "extend",

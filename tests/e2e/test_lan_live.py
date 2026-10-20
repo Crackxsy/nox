@@ -336,7 +336,10 @@ def test_a_household_pairs_confirms_and_removes(
         expect(dialog_phone.get_by_role("button", name="Erlauben", exact=True)).to_have_count(0)
         expect(dialog_phone.get_by_text("Erlauben geht dafür nur am Rechner")).to_be_visible()
         expect(dialog_phone.get_by_role("button", name=re.compile("Stunde"))).to_have_count(0)
-        expect(dialog_desktop.get_by_role("button", name="Für 8 Stunden erlauben")).to_be_visible()
+        # High risk is asked every time (NEVER_REMEMBERED), so no prompt offers to remember it -
+        # not even on the PC. The plain "Erlauben" is there.
+        expect(dialog_desktop.get_by_role("button", name=re.compile("Stunde"))).to_have_count(0)
+        expect(dialog_desktop.get_by_role("button", name="Erlauben", exact=True)).to_be_visible()
         expect(dialog_desktop.get_by_text(re.compile(r"Noch \d+ s"))).to_be_visible()
         assert "immer" not in dialog_desktop.inner_text().lower()
         shot(phone, "phone-permission-no-pin")

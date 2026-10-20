@@ -37,6 +37,7 @@ from nox.ai.tooluse import OfferedTool, render_unavailable
 from nox.ai.tooluse import Unavailable as UnavailableItem
 from nox.core.logging import get_logger
 from nox.core.turnbudget import TurnBudget
+from nox.security.taint import CONVERSATION, result_taints, untrusted_text
 
 log = get_logger(__name__)
 
@@ -61,6 +62,13 @@ Offer = Callable[[], Sequence[OfferedTool]]
 Call = Callable[[str, dict[str, Any]], Awaitable[ToolOutcome]]
 Unavailable = Callable[[], Sequence[UnavailableItem]]
 BudgetFactory = Callable[[], TurnBudget]
+#: Marks a conversation as holding content Nox did not author (`nox.security.taint`), with that
+#: content's text (`None` = not readable as text).
+TaintSetter = Callable[[str, str | None], None]
+#: Tells the permission engine the user's words of the turn starting in a conversation.
+UserMessage = Callable[[str, str], None]
+#: The conversation's context was discarded: its taint goes with it.
+TaintClear = Callable[[str], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +102,9 @@ class ActiveTurn:
     used: list[str] = field(default_factory=list)
     listeners: list[Callable[[ToolEvent], None]] = field(default_factory=list)
     closed: bool = False
+    #: The conversation this turn belongs to (taint is tracked per conversation, because the
+    #: model keeps earlier turns' tool results in its context). Defaults to the turn itself.
+    conversation: str = ""
     #: The MCP bridge the turn's token was handed to (`nox.mcp.gate`); empty for a turn whose
     #: calls come back through the orchestrator.
     client: str = ""
@@ -127,6 +138,15 @@ class ToolLoop:
     #: What cannot be done right now, and why; rendered into the turn context.
     unavailable: Unavailable | None = None
     budget_factory: BudgetFactory = TurnBudget
+    #: Marks the conversation tainted in the permission engine once a tool result that is not
+    #: trusted-internal entered it. Never cleared here: see `nox.security.taint`.
+    taint: TaintSetter | None = None
+    #: Hands the user's words of each turn to the permission engine, so it can tell a lookup the
+    #: user asked for from one that untrusted content suggested (`TaintLedger.user_directed`).
+    user_message: UserMessage | None = None
+    #: Clears a conversation's taint; the orchestrator calls `forget` exactly when it discards
+    #: that conversation's context.
+    clear_taint: TaintClear | None = None
     _turns: dict[str, ActiveTurn] = field(default_factory=dict)
 
     # -- offer -----------------------------------------------------------------------------------
@@ -156,15 +176,31 @@ class ToolLoop:
 
     # -- turns -------------------------------------------------------------------------------------
 
-    def begin(self, turn_id: str) -> ActiveTurn:
+    def begin(self, turn_id: str, *, conversation: str = "", user_text: str = "") -> ActiveTurn:
+        """Open a turn. `conversation` keys the taint; a new turn never clears it. `user_text` is
+        what the user said in this turn."""
         turn = ActiveTurn(
             turn_id=turn_id,
             token=secrets.token_urlsafe(32),
             offered={tool.name: tool for tool in self.current_offer()},
             budget=self.budget_factory(),
+            conversation=conversation or f"turn:{turn_id}",
         )
         self._turns[turn.token] = turn
+        if self.user_message is not None:
+            self.user_message(turn.conversation, user_text)
         return turn
+
+    def forget(self, conversation: str) -> None:
+        """`conversation`'s context was discarded (a fresh conversation): clear its taint."""
+        if self.clear_taint is not None and conversation:
+            self.clear_taint(conversation)
+
+    def mark_external(self, conversation: str, name: str) -> None:
+        """The provider ran a tool of its own (Claude Code's `WebSearch`): its result is in the
+        model's context but never passed through Nox: it taints, and as unreadable content."""
+        if self.taint is not None and conversation and result_taints(name):
+            self.taint(conversation, None)
 
     def by_token(self, token: str) -> ActiveTurn | None:
         """The open turn this token belongs to, compared in constant time against each token."""
@@ -214,7 +250,13 @@ class ToolLoop:
             log.info("toolloop.budget_refused", tool=name, calls=turn.budget.calls)
             return ToolRun(name, ok=False, error=f"{REFUSED_BUDGET}: {refusal}", refused=True)
         turn.emit(ToolEvent("started", name))
-        task = asyncio.ensure_future(self.call(name, arguments))
+        # The call's permission check reads the conversation from this context variable; the task
+        # copies the context when it is created, so parallel turns never see each other's key.
+        reset = CONVERSATION.set(turn.conversation)
+        try:
+            task = asyncio.ensure_future(self.call(name, arguments))
+        finally:
+            CONVERSATION.reset(reset)
         turn.tasks.add(task)
         try:
             outcome = await task
@@ -225,6 +267,7 @@ class ToolLoop:
             raise
         except Exception as exc:  # noqa: BLE001 - a broken tool must not end the conversation
             log.warning("toolloop.call_raised", tool=name, error=f"{type(exc).__name__}: {exc}")
+            self._mark(turn, name, type(exc).__name__)
             turn.budget.record(name, arguments, ok=False)
             turn.emit(ToolEvent("finished", name, ok=False))
             return ToolRun(name, ok=False, error=type(exc).__name__)
@@ -232,9 +275,15 @@ class ToolLoop:
             turn.tasks.discard(task)
         turn.budget.record(name, arguments, ok=outcome.ok)
         turn.used.append(name)
+        # Whatever the tool returned - a result or an error text - is now in the model's context.
+        self._mark(turn, name, untrusted_text(outcome.data, outcome.error or ""))
         turn.emit(ToolEvent("finished", name, ok=outcome.ok))
         log.info("toolloop.called", tool=name, ok=outcome.ok)
         return ToolRun(name, ok=outcome.ok, data=outcome.data, error=outcome.error or "")
+
+    def _mark(self, turn: ActiveTurn, name: str, content: str) -> None:
+        if self.taint is not None and result_taints(name):
+            self.taint(turn.conversation, content)
 
 
 def _current_task_cancelling() -> bool:

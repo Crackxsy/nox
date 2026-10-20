@@ -60,6 +60,7 @@ class DbTurnStore:
         provider: str = "",
         latency_ms: int = 0,
         private: bool = False,
+        conversation: str = "",
     ) -> None:
         retain_until = (
             datetime.now(UTC) + timedelta(days=self._retention_days)
@@ -75,13 +76,18 @@ class DbTurnStore:
             latency_ms=latency_ms or None,
             retain_until=retain_until,
             private=private,
+            conversation=conversation,
         )
 
     async def recent(self, session_id: str, limit: int) -> list[tuple[str, str]]:
         rows = await asyncio.to_thread(self._turns.list_for_session, session_id, 1000)
         return [(row.role, row.text) for row in rows[-limit:]]
 
-    async def recent_turns(self, session_id: str, limit: int) -> list[RecordedTurn]:
-        """Like `recent`, with each turn's privacy mark."""
-        rows = await asyncio.to_thread(self._turns.list_for_session, session_id, 1000)
-        return [RecordedTurn(row.role, row.text, row.private) for row in rows[-limit:]]
+    async def recent_turns(
+        self, session_id: str, limit: int, *, conversation: str = ""
+    ) -> list[RecordedTurn]:
+        """The last `limit` turns of one conversation, with each turn's privacy mark."""
+        rows = await asyncio.to_thread(
+            self._turns.latest_for_conversation, session_id, conversation, limit
+        )
+        return [RecordedTurn(row.role, row.text, row.private) for row in rows]

@@ -44,6 +44,7 @@ from nox.security.model import (
 )
 from nox.security.profiles import ProfileProvider
 from nox.security.prohibitions import hard_prohibition_for
+from nox.security.taint import LookupKind, TaintLedger
 
 log = get_logger(__name__)
 
@@ -99,6 +100,8 @@ CAPTURE_TOOL_PATTERNS: tuple[str, ...] = (
     "camera.*",
     "microphone",
     "microphone.*",
+    "mic",
+    "mic.*",
     "clipboard",
     "clipboard.*",
     "vision",
@@ -140,6 +143,17 @@ class PrivacySnapshot(BaseModel):
     zone_active: bool = False
     safe_mode: bool = False
     panic: bool = False
+    #: Capture kinds ("microphone", "camera", "screen") the user switched off
+    #: (`privacy.capture.*`). A tool of that kind is refused below the model.
+    capture_disabled: frozenset[str] = frozenset()
+
+
+#: Tool-id patterns per capture kind, for the `privacy.capture.*` switches.
+CAPTURE_KIND_PATTERNS: dict[str, tuple[str, ...]] = {
+    "microphone": ("microphone", "microphone.*", "mic", "mic.*"),
+    "camera": ("camera", "camera.*"),
+    "screen": ("screen", "screen.*", "screenshot", "screenshot.*", "capture", "capture.*"),
+}
 
 
 class PrivacyStateProvider(Protocol):
@@ -332,6 +346,11 @@ def grant_matches(grant: TemporaryGrant, request: PermissionRequest, now: dateti
         return value_matches(request.tool, tool_glob) and value_matches(
             request.action, action_glob or "*"
         )
+    if kind == "cmd":
+        # A remembered shell command pattern (argv0 + subcommand). `shell.run` encodes a simple,
+        # non-curated command as target `cmd:<pattern>`; a command with a shell operator, an env
+        # prefix or an interpreter `-c` is encoded differently and so can never equal this scope.
+        return request.tool == "shell" and request.target == f"cmd:{value}"
     return False
 
 
@@ -350,6 +369,14 @@ class EvaluationContext:
     #: Pre-computed, because four guards ask the same two questions.
     cloud: bool
     memory_write: bool
+    #: True once a tool result Nox did not author entered this request's conversation
+    #: (`nox.security.taint`). While it is, a remembered grant above LOW no longer silently allows,
+    #: and an allowed call that sends data off the machine is turned into a confirmation.
+    tainted: bool = False
+    #: True when the conversation is tainted but this call is a read-only lookup whose free text
+    #: is demonstrably taken from what the user said in this conversation, not from untrusted
+    #: content (`TaintLedger.user_directed`). Such a call is treated as if it were clean.
+    user_directed: bool = False
 
 
 #: A guard answers the request, or returns None to let the next one decide.
@@ -408,6 +435,24 @@ def _privacy_zone(ctx: EvaluationContext) -> PermissionResult | None:
     )
 
 
+def capture_kind(request: PermissionRequest) -> str | None:
+    for kind, patterns in CAPTURE_KIND_PATTERNS.items():
+        if value_matches_any(request.tool, patterns):
+            return kind
+    return None
+
+
+def _privacy_capture_flag(ctx: EvaluationContext) -> PermissionResult | None:
+    kind = capture_kind(ctx.request)
+    if kind is None or kind not in ctx.snapshot.capture_disabled:
+        return None
+    return PermissionResult(
+        decision=Decision.DENY,
+        rule_id=f"privacy.capture.{kind}",
+        reason=f"{kind} capture is switched off in the privacy settings",
+    )
+
+
 def _critical_risk(ctx: EvaluationContext) -> PermissionResult | None:
     if ctx.request.risk is not Risk.CRITICAL:
         return None
@@ -421,14 +466,46 @@ def _critical_risk(ctx: EvaluationContext) -> PermissionResult | None:
 
 def _temporary_grant(ctx: EvaluationContext) -> PermissionResult | None:
     for grant in ctx.grants:
-        if grant_matches(grant, ctx.request, ctx.now):
-            return PermissionResult(
-                decision=Decision.ALLOW,
-                rule_id=f"grant.{grant.scope}",
-                reason="temporary grant",
-                grant_id=grant.grant_id,
-            )
+        if not grant_matches(grant, ctx.request, ctx.now):
+            continue
+        if ctx.tainted and RISK_ORDER[ctx.request.risk] > RISK_ORDER[Risk.LOW]:
+            # Untrusted content is in the turn; a remembered grant above LOW must not act on its
+            # own. Skip it so the request falls through to a fresh confirmation.
+            log.info("security.taint_grant_fallback", tool=ctx.request.tool, scope=grant.scope)
+            return None
+        return PermissionResult(
+            decision=Decision.ALLOW,
+            rule_id=f"grant.{grant.scope}",
+            reason="temporary grant",
+            grant_id=grant.grant_id,
+        )
     return None
+
+
+def _shell_curated_readonly(ctx: EvaluationContext) -> PermissionResult | None:
+    """A curated, read-only shell command runs in the sandbox without a confirmation.
+
+    `shell.run` classifies the command and, when it is one of the vetted read-only commands given in
+    `argv` form (`df`, `ls`/`dir`, `git status`, `uname`, ...), sets the target to
+    `readonly:<pattern>`. Only `shell` can produce that prefix - the target comes from the tool's
+    own `targets()`, not the model - so no other tool can borrow this allowance. Confirmation
+    fatigue is a UX bug, and these commands change nothing.
+
+    This guard runs **last**, after every prohibition, privacy, safe-mode, grant and profile guard,
+    so it can only lift the HIGH *default* for `shell.run` - never an explicit profile DENY/CONFIRM
+    (those return first), and never privacy, safe mode or the kill switch. If a profile has any rule
+    that decides `shell`, that rule has already answered and this is not reached. A tainted turn
+    drops the exception too.
+    """
+    if ctx.request.tool != "shell" or not ctx.request.target.startswith("readonly:"):
+        return None
+    if ctx.tainted and not ctx.user_directed:
+        return None
+    return PermissionResult(
+        decision=Decision.ALLOW,
+        rule_id="shell.curated_readonly",
+        reason="curated read-only command, run in the sandbox without confirmation",
+    )
 
 
 def _profile_cloud(ctx: EvaluationContext) -> PermissionResult | None:
@@ -501,6 +578,7 @@ EVALUATION_GUARDS: tuple[Guard, ...] = (
     _privacy_cloud,
     _privacy_memory_write,
     _privacy_zone,
+    _privacy_capture_flag,
     _critical_risk,
     _temporary_grant,
     _profile_cloud,
@@ -509,7 +587,48 @@ EVALUATION_GUARDS: tuple[Guard, ...] = (
     _profile_tool_allowlist,
     _profile_filesystem_roots,
     _profile_rules,
+    # Last: the curated read-only exception may only lift the HIGH default for shell.run, never an
+    # explicit profile DENY/CONFIRM (which returned above), nor privacy/safe-mode/kill-switch.
+    _shell_curated_readonly,
 )
+
+
+def _lookup_kind(request: PermissionRequest) -> LookupKind | None:
+    """Which read-only lookup this is, if it is one that may be user-directed. Only these three:
+    a search goes to the user's own configured backend, a fetch only to a URL the user typed, and
+    a curated command changes nothing and runs in the strong sandbox."""
+    if request.tool == "web" and request.action in ("search", "fetch"):
+        return "search" if request.action == "search" else "fetch"
+    if request.tool == "shell" and request.target.startswith("readonly:"):
+        return "shell"
+    return None
+
+
+def tainted_escalation(ctx: EvaluationContext, result: PermissionResult) -> PermissionResult:
+    """Turn an ALLOW into a CONFIRM when the conversation is tainted and the call could act on
+    injected instructions without the user seeing it.
+
+    Applied after the guards, so it can only tighten: a DENY stays a DENY, a CONFIRM stays one.
+    Two cases: a call that sends data off the machine (a cloud/network tool such as `web.fetch`,
+    or a declared egress) - injected text could have chosen the URL or query to exfiltrate what is
+    in the context - and the curated read-only shell exception, which exists to save a click, not
+    to let a web page run commands.
+
+    A user-directed lookup (`EvaluationContext.user_directed`) is exempt: its query, URL or
+    arguments come from what the user said this turn, so injected text did not choose them.
+    """
+    if not ctx.tainted or ctx.user_directed or result.decision is not Decision.ALLOW:
+        return result
+    request = ctx.request
+    if ctx.cloud or request.network:
+        reason = "the conversation holds untrusted content and this call sends data out"
+        return PermissionResult(decision=Decision.CONFIRM, rule_id="taint.egress", reason=reason)
+    if request.tool == "shell" and request.target.startswith("readonly:"):
+        reason = "the conversation holds untrusted content; even read-only commands ask"
+        return PermissionResult(
+            decision=Decision.CONFIRM, rule_id="taint.shell_readonly", reason=reason
+        )
+    return result
 
 
 # ---- engine --------------------------------------------------------------------------------------
@@ -552,8 +671,41 @@ class DefaultPermissionEngine:
         self._session_id = session_id or uuid.uuid4().hex[:12]
         self._profile: Profile = profiles.get(initial_profile)
         self._pending: dict[str, _Pending] = {}
+        #: Conversations (`PermissionRequest.conversation`) that hold untrusted content, and
+        #: what the user said in each.
+        self._taint = TaintLedger()
 
     # ---- PermissionEngine protocol ---------------------------------------------------------------
+
+    def mark_tainted(self, conversation: str, content: str | None = None) -> None:
+        """Record that `conversation` now holds content Nox did not author.
+
+        The tool loop calls this after every tool result that is not trusted-internal, with the
+        result's text, and the orchestrator the moment the provider reports a tool of its own,
+        with `None` (not readable: nothing in the conversation is user-directed any more). It
+        stays set until `clear_taint` - when the orchestrator discards that conversation's
+        context - never merely because a new turn began.
+        """
+        if self._taint.mark(conversation, content):
+            log.info("security.taint_changed", tainted=True)
+
+    def clear_taint(self, conversation: str) -> None:
+        """The conversation's context was discarded: nothing untrusted is in it any more."""
+        if self._taint.clear(conversation):
+            log.info("security.taint_changed", tainted=False)
+
+    def is_tainted(self, conversation: str) -> bool:
+        return self._taint.is_tainted(conversation)
+
+    def note_user_message(self, conversation: str, text: str) -> None:
+        """What the user said in a turn of `conversation` (the source `user_directed` accepts)."""
+        self._taint.note_user_message(conversation, text)
+
+    def _user_directed(self, request: PermissionRequest) -> bool:
+        kind = _lookup_kind(request)
+        if kind is None:
+            return False
+        return self._taint.user_directed(request.conversation, kind, request.lookup)
 
     def check(self, request: PermissionRequest) -> PermissionResult:
         snapshot = self._privacy.snapshot()
@@ -624,8 +776,12 @@ class DefaultPermissionEngine:
     # ---- pure evaluation -------------------------------------------------------------------------
 
     def is_cloud_tool(self, request: PermissionRequest) -> bool:
-        return value_matches_any(request.tool, self._cloud_tool_patterns) or value_matches_any(
-            request.action, CLOUD_ACTION_PATTERNS
+        # A call that declares it sends data out (`ToolSpec.network`: shell egress, a package
+        # download) is a cloud call for every privacy rule, whatever its name.
+        return (
+            request.network
+            or value_matches_any(request.tool, self._cloud_tool_patterns)
+            or value_matches_any(request.action, CLOUD_ACTION_PATTERNS)
         )
 
     def evaluate(
@@ -637,6 +793,7 @@ class DefaultPermissionEngine:
         now: datetime,
     ) -> PermissionResult:
         """Deterministic decision; no I/O, no events. Guards run in `EVALUATION_GUARDS` order."""
+        tainted = self.is_tainted(request.conversation)
         context = EvaluationContext(
             request=request,
             profile=profile,
@@ -645,15 +802,20 @@ class DefaultPermissionEngine:
             now=now,
             cloud=self.is_cloud_tool(request),
             memory_write=is_memory_write(request),
+            tainted=tainted,
+            user_directed=tainted and self._user_directed(request),
         )
         for guard in EVALUATION_GUARDS:
             result = guard(context)
             if result is not None:
-                return result
-        return PermissionResult(
-            decision=DEFAULT_BY_RISK[request.risk],
-            rule_id=f"default.{request.risk.value}",
-            reason="default by risk",
+                return tainted_escalation(context, result)
+        return tainted_escalation(
+            context,
+            PermissionResult(
+                decision=DEFAULT_BY_RISK[request.risk],
+                rule_id=f"default.{request.risk.value}",
+                reason="default by risk",
+            ),
         )
 
     # ---- confirmation flow -----------------------------------------------------------------------
@@ -686,7 +848,10 @@ class DefaultPermissionEngine:
             risk=request.risk.value,
             target=request.target,
             expires_at=expires.isoformat(),
-            remember_ttl_s=self._session_grant_ttl.total_seconds(),
+            # 0 when "remember" would create no grant, so no prompt offers it.
+            remember_ttl_s=(
+                self._session_grant_ttl.total_seconds() if self._can_remember(request) else 0.0
+            ),
         )
 
     def pending_requests(self) -> list[PermissionRequested]:
@@ -735,10 +900,17 @@ class DefaultPermissionEngine:
 
         final = Decision.ALLOW if decision is Decision.ALLOW else Decision.DENY
         result_grant_id: str | None = None
-        if final is Decision.ALLOW and remember and not never_remembered(request.risk):
+        scope = self._remember_scope(request)
+        # Both rules: only a rememberable scope, and never for high risk (asked every time).
+        if (
+            final is Decision.ALLOW
+            and remember
+            and scope is not None
+            and self._can_remember(request)
+        ):
             grant = TemporaryGrant(
                 grant_id=grant_id,
-                scope=f"session:{request.tool}/{request.action or '*'}",
+                scope=scope,
                 max_risk=request.risk,
                 expires_at=self._clock() + self._session_grant_ttl,
                 granted_by=by,
@@ -758,6 +930,26 @@ class DefaultPermissionEngine:
             corr=grant_id,
         )
         return result
+
+    def _remember_scope(self, request: PermissionRequest) -> str | None:
+        """The grant scope a "remember" would create for this request, or None for "never".
+
+        `shell.run` remembers one command *pattern* (`cmd:git status`) and only for a simple
+        command, never the whole tool - a complex command (target `complex:...`) or a curated
+        read-only one (`readonly:...`) produces no grant. Every other rememberable tool gets the
+        session scope. A tool marked `rememberable=False` (`package.*`, `mic.record_long`,
+        `skill.*`) never produces one.
+        """
+        if not request.rememberable:
+            return None
+        if request.tool == "shell":
+            return request.target if request.target.startswith("cmd:") else None
+        return f"session:{request.tool}/{request.action or '*'}"
+
+    def _can_remember(self, request: PermissionRequest) -> bool:
+        """Whether a "remember" answer would create a grant at all: a rememberable scope, and not
+        a risk that is asked every time. A prompt offers "remember" only then."""
+        return self._remember_scope(request) is not None and not never_remembered(request.risk)
 
     async def authorize(self, request: PermissionRequest) -> PermissionResult:
         """check() plus the confirmation round-trip; returns only ALLOW or DENY."""

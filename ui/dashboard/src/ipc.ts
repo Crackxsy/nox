@@ -186,4 +186,24 @@ export const api = {
     ),
   /** The questions still open, for a dashboard that (re)connects while one waits. */
   permissionPending: (c: IpcClient) => c.request('security.permission.pending', {}),
+  // -- recording consents (Settings page) -------------------------------------------------------
+  /** `{consents: [...]}`, active ones only; `mic.record_long` looks these up by context. */
+  consentList: (c: IpcClient) => c.request('consent.list', {}),
+  /** Same PIN rule as `secretSet`: sent only when there is one, never stored here. */
+  consentGrant: (c: IpcClient, grant: ConsentGrantRequest, pin = '') =>
+    c.request(
+      'consent.grant',
+      pin
+        ? { context: grant.context, who: grant.who, wording: grant.wording, pin }
+        : { context: grant.context, who: grant.who, wording: grant.wording },
+    ),
+  /** Withdraws every active consent for `context`. No PIN: it can only make Nox stricter. */
+  consentRevoke: (c: IpcClient, context: string) => c.request('consent.revoke', { context }),
 };
+
+/** The fields of one `consent.grant` request, already trimmed and validated by the caller. */
+export interface ConsentGrantRequest {
+  context: string;
+  who: string;
+  wording: string;
+}

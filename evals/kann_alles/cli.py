@@ -44,6 +44,18 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--judge-model", default="opus")
     parser.add_argument("--privacy-mode", default="balanced")
     parser.add_argument("--log-level", default="WARNING", help="core log level (DEBUG for traces)")
+    parser.add_argument(
+        "--real",
+        action="store_true",
+        help="run against the real machine (tools may change it). HIGH-risk tools (shell, "
+        "package) are still refused unless --isolated-env confirms a VM/container with no data.",
+    )
+    parser.add_argument(
+        "--isolated-env",
+        action="store_true",
+        help="assert this is an isolated environment (VM, container, Windows Sandbox); only then "
+        "may --real approve HIGH-risk dialogs (shell, package).",
+    )
     return parser.parse_args(argv)
 
 
@@ -78,8 +90,14 @@ async def _run(ns: argparse.Namespace, nox_src: Path) -> int:
             "privacy_mode": ns.privacy_mode,
         },
     }
+    isolated = bool(getattr(ns, "real", False) and getattr(ns, "isolated_env", False))
     with tempfile.TemporaryDirectory(prefix="nox-eval-") as tmp:
-        world = World(Path(tmp), privacy_mode=ns.privacy_mode, log_level=ns.log_level)
+        world = World(
+            Path(tmp),
+            privacy_mode=ns.privacy_mode,
+            log_level=ns.log_level,
+            isolated=isolated,
+        )
         try:
             await world.start()
         except Exception as exc:  # noqa: BLE001 - reported with an exit code

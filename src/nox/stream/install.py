@@ -250,11 +250,9 @@ def _register(core: Any, overlay: OverlayService | None, audio: AudioTrackServic
     core.tool_registry.register(
         ToolSpec(
             name="stream.overlay.setup",
-            description=(
-                "Show Nox on stream: create or update the 'Nox Overlay' browser source in the "
-                "current OBS scene, with a URL that survives restarts. The user confirms the OBS "
-                "change; the URL's credential is never shown."
-            ),
+            # One short sentence: it rides along on every tool-enabled turn. The handler asks
+            # before OBS changes and never shows the overlay URL's credential.
+            description="Put Nox's overlay into the current OBS scene (asks first)",
             input_model=OverlaySetupRequest,
             risk=Risk.LOW,
             handler=t_overlay,
@@ -265,12 +263,9 @@ def _register(core: Any, overlay: OverlayService | None, audio: AudioTrackServic
     core.tool_registry.register(
         ToolSpec(
             name="stream.audio_track.setup",
-            description=(
-                "Give Nox its own OBS audio track: Nox speaks into the virtual audio cable (and "
-                "still into the headphones), OBS captures it as the 'Nox Voice' source, optionally "
-                "on chosen tracks 1-6. Needs VB-Audio Virtual Cable; the user confirms the OBS "
-                "change."
-            ),
+            # One short sentence (see above). The handler explains a missing VB-Audio Virtual Cable
+            # and asks before OBS changes.
+            description="Give Nox its own OBS audio track via a virtual cable (asks first)",
             input_model=AudioTrackRequest,
             risk=Risk.LOW,
             handler=t_audio,

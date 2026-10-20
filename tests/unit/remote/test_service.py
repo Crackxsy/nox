@@ -37,7 +37,7 @@ def privacy() -> FakePrivacy:
 
 @pytest.fixture
 def service(repo, pairing, killswitch, privacy, channel, bus, audit, clock):
-    async def chat(text: str) -> str:
+    async def chat(text: str, device_id: str) -> str:
         return f"Antwort auf: {text}"
 
     return RemoteService(
@@ -245,7 +245,7 @@ async def test_chat_goes_through_the_orchestrator_and_answers(service, pairing, 
 async def test_a_failing_ai_is_reported_honestly(
     repo, pairing, killswitch, privacy, bus, audit, clock, channel
 ):
-    async def broken_chat(text: str) -> str:
+    async def broken_chat(text: str, device_id: str) -> str:
         raise RuntimeError("router down")
 
     service = RemoteService(

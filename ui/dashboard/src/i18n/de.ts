@@ -127,6 +127,34 @@ export const de = {
   profile_unconfirmed_hint:
     'Aus einer Handy-Nachricht oder eingefügtem Text gelernt. Nox nutzt es erst, wenn du es bestätigst.',
   profile_confirm: 'Bestätigen',
+  consent_title: 'Einwilligungen zur Aufnahme',
+  consent_hint:
+    'Längere Aufnahmen, auf denen andere Menschen zu hören sind, startet Nox nur, wenn für den Anlass eine Einwilligung gespeichert ist (§ 201 StGB).',
+  consent_record_note:
+    'Der Wortlaut wird unverändert gespeichert, zusammen mit der Person, die zugestimmt hat, und dem Zeitpunkt. Jede erteilte Einwilligung wird protokolliert.',
+  consent_loading: 'Lade …',
+  consent_empty: 'Keine Einwilligung gespeichert.',
+  consent_list_label: 'Gespeicherte Einwilligungen',
+  consent_context_label: 'Anlass',
+  consent_context_placeholder: 'z. B. lesson:math',
+  consent_context_hint: 'Die Aufnahme muss genau diesen Anlass nennen.',
+  consent_who_label: 'Wer hat zugestimmt',
+  consent_who_placeholder: 'z. B. alle Teilnehmenden der Mathestunde',
+  consent_wording_label: 'Wortlaut der Einwilligung',
+  consent_wording_hint: 'So, wie die Zustimmung gegeben wurde.',
+  consent_required: 'Anlass, Person und Wortlaut sind Pflichtfelder.',
+  consent_too_long: 'Höchstens {0} Zeichen.',
+  consent_pin_label: 'PIN für diese Einwilligung',
+  consent_pin_hint:
+    'Solange eine PIN eingerichtet ist, verlangt der Kern sie für jede neue Einwilligung. Sie wird nur für diese eine Anfrage benutzt und nicht gespeichert.',
+  consent_grant: 'Einwilligung speichern',
+  consent_granting: 'Speichere …',
+  consent_granted: 'Einwilligung gespeichert.',
+  consent_withdraw: 'Widerrufen',
+  consent_withdrawn: 'Einwilligung widerrufen.',
+  consent_who: 'Zugestimmt hat',
+  consent_when: 'Erteilt',
+  consent_recorded_by: 'Eingetragen über',
   option_lang_auto: 'Automatisch',
 
   // -- shell --------------------------------------------------------------------------------------
