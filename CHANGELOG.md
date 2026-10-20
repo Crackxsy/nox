@@ -44,15 +44,20 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   17.13, typescript-eslint 8.71.2, the UI dev-tooling groups and `actions/download-artifact` 8.
 
 ### Added
-- **The Eulenfuchs moves in relief** (#148): the painted art is cut into parts on a 22-bone
-  skeleton with spring bones (ears, cheek fur, wings, tails), squash and stretch, eyes with lids
-  and saccades, and a jaw that follows speech; every part has a relief height, so head and body
-  turn up to 20 degrees with the light following. All 21 expressions and the functional states
-  (sleep, listen, think, speak, mute, privacy) map onto its body language; reduced motion keeps
-  breathing, posture and the jaw only. Everything per vertex runs on the GPU (about 0.1 ms of
-  JavaScript per frame); the renderer loads only for a creature whose `rig.json` enables it and
-  falls back to the existing rig renderer without WebGL2. The other six creatures keep the rig
-  renderer for now; `ui/pet/scripts/relief/` builds a creature's relief deterministically.
+- **All seven creatures move in relief** (#148, #150): the painted art is cut into parts on a
+  22-bone skeleton with spring bones (ears, cheek fur, wings, fins, tails), squash and stretch,
+  eyes with lids and saccades, and a jaw; every part has a relief height, so head and body turn up
+  to 20 degrees with the light following. All 21 expressions and the functional states (sleep,
+  listen, think, speak, mute, privacy) map onto each creature's body language; reduced motion
+  keeps breathing, posture and the jaw only. Everything per vertex runs on the GPU (under 0.1 ms
+  of JavaScript per frame); the renderer loads only for a creature whose `rig.json` enables it and
+  falls back to the rig renderer without WebGL2. `ui/pet/scripts/relief/` builds each creature
+  deterministically from recorded input hashes, and CI rebuilds and compares the bytes.
+- **The pet's mouth follows the voice you hear** (#150): while Nox speaks, the core publishes
+  `tts.level` - the loudness of the block the speaker just played, about 30 times a second - and
+  the pet and the stream overlay get only that number (no text, no audio, nothing for
+  headphone-only speech or in PRIVATE/OFFLINE). Without fresh levels the jaw falls back to a
+  syllable rhythm; muted keeps it shut.
 - **Windows: the sandbox keeps off this computer's local services and the LAN.** Where Windows
   does not enforce AppContainer loopback isolation, the installer now adds Windows Filtering
   Platform rules for Nox's sandbox containers (one optional step, ticked by default, one UAC
