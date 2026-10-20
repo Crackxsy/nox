@@ -3,7 +3,8 @@
 It asks, in this order: the interface language (so everything after it is in one language), what
 Nox should be called, who the user is, where the data folder and the vault live, whether to
 connect a streaming account, microphone and camera consent, and which AI backend to use - the last
-one behind a live probe of the real providers, never an assumption.
+one behind a live probe of the real providers, never an assumption. An optional last step sets up
+a local model with the same flow as `nox ai setup` (`nox.localai`); it is off by default.
 
 Every step has a safe default and can be skipped. A skipped step writes nothing, so the value from
 `config/defaults.yaml` keeps applying. The wizard only ever writes the user layer
@@ -102,6 +103,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "probe_ask": "AI-Backends jetzt prüfen (Claude Code / Ollama)?",
         "probing": "\nPrüfe AI-Backends ...",
         "backend": "AI-Backend ({claude}/{ollama})",
+        "local_ai_ask": (
+            "Lokale KI einrichten? (passendes Modell für diesen Rechner herunterladen und prüfen)"
+        ),
         "summary_title": "Einrichtung abgeschlossen.",
         "summary_config": "Konfiguration",
         "summary_data": "Datenordner",
@@ -158,6 +162,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "probe_ask": "Check the AI backends now (Claude Code / Ollama)?",
         "probing": "\nChecking AI backends ...",
         "backend": "AI backend ({claude}/{ollama})",
+        "local_ai_ask": "Set up a local model? (download and check one that fits this machine)",
         "summary_title": "Setup complete.",
         "summary_config": "configuration",
         "summary_data": "data folder",
@@ -248,6 +253,9 @@ async def probe_ai_backends(ai_config: AiConfig | None = None) -> list[AiProbeRe
 
 
 AiProbeFn = Callable[[], Awaitable[list[AiProbeResult]]]
+
+#: The optional local-model step: `(language, user.yaml path) -> exit code`.
+LocalAiStepFn = Callable[[str, Path], Awaitable[int]]
 
 
 # ---- answers ------------------------------------------------------------------------------------
@@ -499,6 +507,7 @@ async def run_onboarding_cli(
     appdata: Path | str | None = None,
     secret_store: SecretStore | None = None,
     probe_fn: AiProbeFn | None = None,
+    local_ai_fn: LocalAiStepFn | None = None,
 ) -> int:
     """The real `nox onboard`.
 
@@ -531,6 +540,14 @@ async def run_onboarding_cli(
     user_config_path = default_user_config_path(appdata)
     write_user_config(user_config_path, build_user_layer_patch(answers))
     stored = store_secrets(answers, store)
+
+    # Optional and off by default: it downloads gigabytes. Same flow as `nox ai setup`.
+    if typer.confirm(t["local_ai_ask"], default=False):
+        if local_ai_fn is None:
+            from nox.localai.cli import run_onboarding_step  # noqa: PLC0415 - only when chosen
+
+            local_ai_fn = run_onboarding_step
+        await local_ai_fn(answers.ui_language or DEFAULT_LANGUAGE, user_config_path)
 
     typer.echo(
         render_capability_summary(

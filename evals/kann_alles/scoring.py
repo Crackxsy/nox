@@ -33,6 +33,8 @@ class Observation:
     elapsed_s: float
     used_followup: bool
     sql: dict[str, int] = field(default_factory=dict)
+    #: Self-built skills after the task: id -> state.
+    skills: dict[str, str] = field(default_factory=dict)
 
 
 def evaluate_check(check: Check, sandbox: Path, obs: Observation, verdict: TaskVerdict) -> bool:
@@ -58,6 +60,11 @@ def evaluate_check(check: Check, sandbox: Path, obs: Observation, verdict: TaskV
         return bool(re.search(check.answer_matches, obs.answer, re.I | re.S))
     if check.answer_not_matches is not None:
         return not re.search(check.answer_not_matches, obs.answer, re.I | re.S)
+    if check.skill_ready is not None:
+        return any(
+            re.fullmatch(check.skill_ready, sid) and state in ("ready", "active")
+            for sid, state in obs.skills.items()
+        )
     if check.judge is not None:
         return verdict.questions.get(judge_key(check), False)
     raise AssertionError("unreachable: Check validates exactly one field")

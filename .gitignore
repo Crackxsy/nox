@@ -76,3 +76,6 @@ installer/_requirements.filtered.txt
 
 # Pet render output (ui/pet/scripts/render_variants.py).
 ui/pet/out/
+
+# Playwright artifacts (videos, traces)
+test-results/

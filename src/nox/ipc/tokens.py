@@ -52,6 +52,8 @@ DeviceVerifier = Callable[[str], "str | None"]
 #: only for that role, and the role works only with such a token. `mcp` is Nox's MCP bridge
 #: (`nox.mcp.bridge`), which may call `mcp.tools.list` and `mcp.tools.call` and nothing else.
 BOUND_ROLES: frozenset[str] = frozenset({"mcp"})
+#: The id prefix every plugin connection carries (`nox.plugins.manager.PLUGIN_CLIENT_PREFIX`).
+PLUGIN_ID_PREFIX = "plugin:"
 #: Roles that never authenticate over the hub (the core itself, the supervisor, the LAN gateway).
 HUBLESS_ROLES: frozenset[str] = frozenset({"core", "supervisor", "remote"})
 #: Paired devices: their own long-lived token, and only through the network listener.
@@ -249,7 +251,13 @@ class TokenStore:
                 return AuthDecision(ok=True, kind="session")
             return AuthDecision(ok=False, reason="invalid token")
         if role in WORKER_ROLES:
-            return self._authenticate_worker(token, client_id, role="")
+            # A plugin is `plugin:<id>` with role `plugin`, and only that: a plugin's token may
+            # not connect as a `worker` (which would skip what the hub applies to plugins), and
+            # a worker may not take a plugin's identity.
+            decision = self._authenticate_worker(token, client_id, role="")
+            if decision.ok and (role == "plugin") != client_id.startswith(PLUGIN_ID_PREFIX):
+                return AuthDecision(ok=False, reason="the client id does not match the role")
+            return decision
         if role in BOUND_ROLES:
             return self._authenticate_worker(token, client_id, role=role)
         if role in OVERLAY_ROLES:

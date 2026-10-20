@@ -15,7 +15,7 @@ Two things this module knows that the catalogue cannot:
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any, Protocol
 
 from nox.ai.tooluse import OfferedTool, Unavailable
@@ -100,8 +100,21 @@ def _plugin_status(core: CoreLike) -> list[Any]:
         return []
 
 
+class CapabilitiesRuntime:
+    """Gives other extensions the live report (`nox.skills` asks it which gaps exist)."""
+
+    def __init__(self, report: Callable[[], CapabilityReport]) -> None:
+        self.report = report
+
+    def stop(self) -> None:
+        return None
+
+
 def install(core: CoreLike) -> ExtensionRuntime:
     def probe(tool_name: str) -> tuple[CapabilityState, str] | None:
+        if tool_name.startswith("computer.") and not core.config.desktop.computer_use.enabled:
+            # Not offered while off: the answer is the setting, not a dialog that cannot succeed.
+            return CapabilityState.UNAVAILABLE, "off; the user can switch it on in the settings"
         for prefix, secrets, detail in _SECRET_PREREQUISITES:
             if tool_name.startswith(prefix) and not any(_has_secret(core, s) for s in secrets):
                 return CapabilityState.UNAVAILABLE, detail
@@ -210,7 +223,13 @@ def install(core: CoreLike) -> ExtensionRuntime:
             agent=DEFAULT_AGENT, name=name, arguments=arguments, mode=_mode(core)
         )
 
-    register_capability_tools(core.tool_registry, report)
+    def learnable() -> bool:
+        extensions = getattr(core, "extensions", None) or {}
+        skills = extensions.get("skills")
+        service = getattr(skills, "service", None)
+        return service is not None and service.builder.unavailable() is None
+
+    register_capability_tools(core.tool_registry, report, learnable)
     register_capability_ipc(core.registry, report)
 
     engine = getattr(core.security, "engine", None)
@@ -243,4 +262,4 @@ def install(core: CoreLike) -> ExtensionRuntime:
     else:
         log.warning("capabilities.no_orchestrator", detail="conversations will have no tools")
     log.info("capabilities.installed")
-    return None
+    return CapabilitiesRuntime(report)

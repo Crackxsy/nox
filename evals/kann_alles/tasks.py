@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -56,6 +56,8 @@ class Check(BaseModel):
     tool_attempted: str | None = None
     answer_matches: str | None = None
     answer_not_matches: str | None = None
+    #: A self-built skill whose id matches this regex is ready or active after the task.
+    skill_ready: str | None = None
     judge: str | None = None
 
     @model_validator(mode="after")
@@ -86,6 +88,14 @@ class Environment(BaseModel):
     reminders: list[tuple[str, int]] = Field(default_factory=list)
     #: The fake web server is started for every run; this only documents which pages a task uses.
     web_pages: list[str] = Field(default_factory=list)
+    #: Fake MCP servers (`envs/mcp_server.py`) added and approved for this task only.
+    mcp_servers: list[Literal["wetter", "fetch"]] = Field(default_factory=list)
+    #: Computer use switched on for this task (it always runs dry in the benchmark world).
+    computer_use: bool = False
+    #: The harness process itself is put on the watched-game list: "a game is running".
+    fake_game: bool = False
+    #: After the turn, the harness clicks "Aktivieren" for every ready skill, like the user would.
+    activate_skills: bool = False
 
 
 class Task(BaseModel):
@@ -108,10 +118,21 @@ class Task(BaseModel):
     #: is denied - a task that tests "asks before installing" leaves this empty on purpose.
     confirm_tools: list[str] = Field(default_factory=list)
     expected_confirmations: int = Field(default=0, ge=0)
+    #: High-risk tools the harness may approve, only where the world makes them harmless: the skill
+    #: builder is the world's fake and computer use sends nothing (`kann_alles.confirm`).
+    approve_high: list[str] = Field(default_factory=list)
     max_s: float = Field(default=90.0, gt=0)
     max_calls: int = Field(default=20, ge=0)
     #: Which wave is expected to make this solvable; informational, shown in the report.
     needs: str = ""
+
+    @model_validator(mode="after")
+    def _approve_high_only_where_harmless(self) -> Task:
+        allowed = {r"skill\.learn", r"computer\.session_start"}
+        extra = set(self.approve_high) - allowed
+        if extra:
+            raise ValueError(f"task {self.id}: approve_high may only name {sorted(allowed)}")
+        return self
 
     @model_validator(mode="after")
     def _checks_present(self) -> Task:

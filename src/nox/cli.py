@@ -334,6 +334,36 @@ def sandbox_reset() -> None:
     typer.echo(f"removed {removed} sandbox access right(s) and {legacy} legacy one(s)")
 
 
+ai_app = typer.Typer(help="The local model: pick, download and check one that fits this machine.")
+app.add_typer(ai_app, name="ai")
+
+
+@ai_app.command("setup")
+def ai_setup(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Measure and recommend only."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask before the download."),
+) -> None:
+    """Set up a local model: measure RAM/VRAM, check Ollama, download, probe, save."""
+    import asyncio  # noqa: PLC0415
+
+    from nox.entrypoints import build_config  # noqa: PLC0415
+    from nox.localai import cli as localai_cli  # noqa: PLC0415
+    from nox.settings.layers import resolve_user_config_path  # noqa: PLC0415
+
+    config = build_config(None, None)
+    deps = localai_cli.build_cli_deps(config, resolve_user_config_path())
+    raise typer.Exit(
+        asyncio.run(
+            localai_cli.run_local_ai_setup(
+                deps=deps,
+                dry_run=dry_run,
+                assume_yes=yes,
+                language=config.identity.ui_language,
+            )
+        )
+    )
+
+
 eval_app = typer.Typer(help="Benchmarks that measure what Nox can do (source checkout only).")
 app.add_typer(eval_app, name="eval")
 

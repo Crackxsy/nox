@@ -173,8 +173,8 @@ def _run_onboard(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stdin: str) ->
 
 #: Every question in order, so a test reads as the conversation it drives.
 #: language, Nox name, your name, data folder, vault folder, Twitch by hand?, OBS?, Telegram?,
-#: microphone?, camera?, probe backends?
-SKIP_EVERYTHING = "\n" * 5 + "n\nn\nn\n" + "\n\n" + "n\n"
+#: microphone?, camera?, probe backends?, set up a local model?
+SKIP_EVERYTHING = "\n" * 5 + "n\nn\nn\n" + "\n\n" + "n\n" + "\n"
 
 
 def test_onboard_cli_skip_everything_writes_only_confirmed_defaults(
@@ -203,7 +203,7 @@ def test_onboard_cli_in_german_asks_and_answers_in_german_only(
     assert "So geht es weiter:" in german and "nox supervisor" in german
     assert "Data folder" not in german and "What happens next" not in german
 
-    english_input = "en\n" + "\n" * 4 + "n\nn\nn\n" + "\n\n" + "n\n"
+    english_input = "en\n" + "\n" * 4 + "n\nn\nn\n" + "\n\n" + "n\n" + "\n"
     _, english = _run_onboard(monkeypatch, tmp_path, english_input)
     assert "Data folder" in english and "Vault folder" in english
     assert "What happens next:" in english
@@ -251,6 +251,7 @@ def test_onboard_cli_full_flow_stores_secrets_and_chosen_backend(
         "y\n"  # camera enabled
         "y\n"  # probe the AI backends
         "ollama\n"  # explicit backend choice
+        "\n"  # set up a local model (default no)
     )
     exit_code, output = _run_onboard(monkeypatch, tmp_path, stdin)
     assert exit_code == 0, output
@@ -273,12 +274,48 @@ def test_onboard_cli_full_flow_stores_secrets_and_chosen_backend(
 def test_onboard_cli_is_re_runnable_and_merges(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    first = "\nKumo\n" + "\n" * 3 + "n\nn\nn\n" + "\n\n" + "n\n"
+    first = "\nKumo\n" + "\n" * 3 + "n\nn\nn\n" + "\n\n" + "n\n" + "\n"
     _run_onboard(monkeypatch, tmp_path, first)
-    second = "en\n" + "\n" * 4 + "n\nn\nn\n" + "\n\n" + "n\n"
+    second = "en\n" + "\n" * 4 + "n\nn\nn\n" + "\n\n" + "n\n" + "\n"
     exit_code, output = _run_onboard(monkeypatch, tmp_path, second)
     assert exit_code == 0, output
 
     written = load_existing_user_layer(default_user_config_path(tmp_path / "AppData" / "Roaming"))
     assert written["identity"]["name"] == "Kumo"  # kept from the first run
     assert written["identity"]["ui_language"] == "en"  # updated by the second run
+
+
+def test_onboard_cli_local_model_step_is_skipped_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, Path]] = []
+
+    async def step(language: str, path: Path) -> int:
+        calls.append((language, path))
+        return 0
+
+    import nox.localai.cli as localai_cli
+
+    monkeypatch.setattr(localai_cli, "run_onboarding_step", step)
+    exit_code, output = _run_onboard(monkeypatch, tmp_path, SKIP_EVERYTHING)
+    assert exit_code == 0, output
+    assert "Lokale KI einrichten? (passendes Modell" in output
+    assert calls == []
+
+
+def test_onboard_cli_local_model_step_runs_the_setup_with_the_wizards_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, Path]] = []
+
+    async def step(language: str, path: Path) -> int:
+        calls.append((language, path))
+        return 0
+
+    import nox.localai.cli as localai_cli
+
+    monkeypatch.setattr(localai_cli, "run_onboarding_step", step)
+    stdin = "en\n" + "\n" * 4 + "n\nn\nn\n" + "\n\n" + "n\n" + "y\n"
+    exit_code, output = _run_onboard(monkeypatch, tmp_path, stdin)
+    assert exit_code == 0, output
+    assert calls == [("en", default_user_config_path(tmp_path / "AppData" / "Roaming"))]

@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import uuid
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -76,11 +76,25 @@ from nox.ipc.http import HttpServer, HttpSettings, create_app
 from nox.ipc.overlay_tokens import OVERLAY_TOKENS_FILE, OverlayTokenStore
 from nox.ipc.server import HubSettings, IpcHub
 from nox.ipc.tokens import TokenStore
-from nox.paths import DASHBOARD_DIST, DEFAULTS_PATH, PET_DIST, PLUGINS_DIR, PROFILES_DIR, REPO_ROOT
+from nox.paths import (
+    DASHBOARD_DIST,
+    DEFAULTS_PATH,
+    PET_DIST,
+    PLUGINS_DIR,
+    PROFILES_DIR,
+    REPO_ROOT,
+    nox_home,
+)
 from nox.pet.service import PetService
-from nox.plugins.manager import PluginManager, PluginManagerSettings, PluginState
+from nox.plugins.manager import (
+    ORIGIN_SELF_BUILT,
+    PluginManager,
+    PluginManagerSettings,
+    PluginState,
+)
 from nox.security.killswitch import KillReport
 from nox.security.service import SecurityContext
+from nox.skills.worker_launch import SkillWorkerLauncher, sandbox_factory_for
 from nox.stream.booking import FunkenBooking
 from nox.stream.funken import FunkenService
 from nox.stream.responder import StreamResponder
@@ -163,6 +177,9 @@ class NoxCore:
         self.tool_registry: ToolRegistry | None = None
         self.tool_executor: ToolExecutor | None = None
         self.plugins: PluginManager | None = None
+        #: Predicates for secret names something installed at runtime declared (a self-built
+        #: skill's manifest), so the Settings page may set them. Filled by `nox.skills`.
+        self.secret_name_hooks: list[Callable[[str], bool]] = []
         self.ai_providers: list[AiProvider] = []
         self.router: DefaultRouter | None = None
         self.provider_card: ProviderCard | None = None
@@ -387,6 +404,10 @@ class NoxCore:
             safe_mode=self.security.killswitch.is_engaged,
             global_egress_allowlist=tuple(self.config.security.egress_allowlist),
             loopback_allowlist=tuple(self.config.security.loopback_allowlist),
+            # Skills Nox built for itself and the user activated (`nox.skills`).
+            extra_dirs={ORIGIN_SELF_BUILT: nox_home() / "plugins"},
+            # ... which run only inside the sandbox, relayed to the hub by the core.
+            sandboxed_spawner=SkillWorkerLauncher(sandbox_factory_for(self.config)),
         )
         self.plugins.register_handlers()
 

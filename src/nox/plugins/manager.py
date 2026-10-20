@@ -30,6 +30,7 @@ from typing import Any, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
+from nox.ai.prompting import untrusted
 from nox.core.events import E, Event, EventBus, HealthStatus, PluginLifecycle
 from nox.core.health import Check
 from nox.core.logging import get_logger
@@ -46,9 +47,13 @@ from nox.plugins.manifest import (
 from nox.plugins.scopes import scope_for
 from nox.security.model import Decision, PermissionRequest, Profile, Risk
 
+WORKER_TOKEN_ENV = "NOX_WORKER_TOKEN"  # noqa: S105 - an env var name, not a secret
+
 log = get_logger(__name__)
 
 PLUGIN_CLIENT_PREFIX = "plugin:"
+#: Events every plugin worker follows whatever its manifest says (`nox.worker.plugin`).
+PLUGIN_DEFAULT_LISTENS: tuple[str, ...] = ("security.*", "privacy.*", "system.stopping")
 WORKER_STOP_REQUEST = "plugin.stop"
 WORKER_TOOL_CALL = "tool.call"
 
@@ -113,6 +118,22 @@ class ProcessLike(Protocol):
 
 
 ProcessFactory = Callable[[Sequence[str], Mapping[str, str]], ProcessLike]
+
+
+class SandboxedSpawner(Protocol):
+    """Starts a self-built skill's worker inside the sandbox (`nox.skills.worker_launch`)."""
+
+    def unavailable(self) -> str | None: ...
+
+    async def spawn(
+        self,
+        *,
+        plugin_id: str,
+        plugin_dir: Path,
+        manifest: PluginManifest,
+        hub_url: str,
+        token: str,
+    ) -> ProcessLike: ...
 
 
 class HealthRegistrar(Protocol):
@@ -219,6 +240,11 @@ def _worker_environment() -> dict[str, str]:
     return {name: os.environ[name] for name in _INHERITED_ENV if name in os.environ}
 
 
+#: Public name for the same allow-list, used for every other process the core starts for code it
+#: did not write (external MCP servers, a self-built skill's tests).
+worker_environment = _worker_environment
+
+
 def _manifest_of(rec: PluginRecord) -> PluginManifest:
     """The record's manifest, as a checked invariant rather than an `assert`.
 
@@ -295,12 +321,19 @@ _LIVE_STATES = frozenset(
 )
 
 
+#: Where a plugin came from. `bundled` ships with Nox (`plugins.dir`); `self_built` is a skill Nox
+#: built for itself, activated by the user, and living under `<nox home>/plugins`.
+ORIGIN_BUNDLED = "bundled"
+ORIGIN_SELF_BUILT = "self_built"
+
+
 class PluginStatus(BaseModel):
     """Honest, serializable status of one plugin (dashboard/health)."""
 
     model_config = ConfigDict(frozen=True)
     plugin_id: str
     state: PluginState
+    origin: str = ORIGIN_BUNDLED
     version: str = ""
     enabled: bool = False
     reason: str = ""
@@ -314,6 +347,7 @@ class PluginRecord:
     plugin_id: str
     path: Path
     state: PluginState = PluginState.DISCOVERED
+    origin: str = ORIGIN_BUNDLED
     manifest: PluginManifest | None = None
     reason: str = ""
     enabled: bool = False
@@ -335,6 +369,7 @@ class PluginRecord:
         return PluginStatus(
             plugin_id=self.plugin_id,
             state=self.state,
+            origin=self.origin,
             version=self.version,
             enabled=self.enabled,
             reason=self.reason,
@@ -416,8 +451,15 @@ class PluginManager:
         loopback_allowlist: Sequence[str] = (),
         process_factory: ProcessFactory | None = None,
         clock: Callable[[], float] = time.monotonic,
+        extra_dirs: Mapping[str, Path] | None = None,
+        sandboxed_spawner: SandboxedSpawner | None = None,
     ) -> None:
         self.plugins_dir = plugins_dir
+        #: Further plugin folders by origin (`self_built` -> `<nox home>/plugins`). A plugin there
+        #: can never shadow a bundled one: the bundled folder is discovered first and wins.
+        self.extra_dirs: dict[str, Path] = dict(extra_dirs or {})
+        #: Self-built skills run only through this, inside the sandbox; None means they never run.
+        self.sandboxed_spawner = sandboxed_spawner
         self.settings = settings or PluginManagerSettings()
         self._bus = bus
         self._hub = hub
@@ -443,6 +485,7 @@ class PluginManager:
         self._mode = mode
         self._safe_mode = safe_mode
         self._global_egress = tuple(global_egress_allowlist)
+        self._plugin_egress: dict[str, tuple[str, ...]] = {}
         self._loopback = tuple(loopback_allowlist)
         self._process_factory = process_factory or self._default_process_factory
         self._clock = clock
@@ -463,6 +506,16 @@ class PluginManager:
         rec = self._records.get(plugin_id)
         return rec.state if rec is not None else None
 
+    def subscriptions_for(self, client_id: str) -> tuple[str, ...]:
+        """What the plugin behind `client_id` may subscribe to: the fixed defaults plus its
+        manifest's `events.listens` - nothing for an unknown client."""
+        if not client_id.startswith(PLUGIN_CLIENT_PREFIX):
+            return ()
+        rec = self._records.get(client_id[len(PLUGIN_CLIENT_PREFIX) :])
+        if rec is None or rec.manifest is None:
+            return ()
+        return (*PLUGIN_DEFAULT_LISTENS, *rec.manifest.events.listens)
+
     def register_handlers(self) -> None:
         """Register the three core-side plugin requests (role `plugin` only). Idempotent."""
         if self._handlers_registered:
@@ -476,6 +529,9 @@ class PluginManager:
         self._registry.register(
             "plugin.tool.call", PluginToolCall, self._h_tool_call, roles=("plugin",)
         )
+        if hasattr(self._hub, "plugin_subscriptions"):
+            # The hub keeps every plugin to the events its manifest declares (fail closed).
+            self._hub.plugin_subscriptions = self.subscriptions_for
         self._handlers_registered = True
 
     async def start(self) -> None:
@@ -490,14 +546,29 @@ class PluginManager:
             if rec.enabled:
                 await self._spawn(rec)
 
+    def _manifest_paths(self) -> list[tuple[str, Path]]:
+        """`(origin, manifest path)` for every folder, bundled first; a duplicate id is skipped."""
+        seen: set[str] = set()
+        found: list[tuple[str, Path]] = []
+        folders = [(ORIGIN_BUNDLED, self.plugins_dir), *self.extra_dirs.items()]
+        for origin, folder in folders:
+            for path in discover_manifest_paths(folder):
+                plugin_id = path.parent.name
+                if plugin_id in seen:
+                    log.warning("plugin.shadowed", plugin=plugin_id, origin=origin)
+                    continue
+                seen.add(plugin_id)
+                found.append((origin, path))
+        return found
+
     async def discover(self) -> None:
         """`discovered -> validated -> enabled`; a bad manifest lands in `failed` and is skipped."""
-        for path in discover_manifest_paths(self.plugins_dir):
+        for origin, path in self._manifest_paths():
             plugin_id = path.parent.name
             rec = self._records.get(plugin_id)
             if rec is not None and rec.state in _LIVE_STATES:
                 continue
-            rec = PluginRecord(plugin_id=plugin_id, path=path.parent)
+            rec = PluginRecord(plugin_id=plugin_id, path=path.parent, origin=origin)
             self._records[plugin_id] = rec
             self._register_health_check(rec)
             try:
@@ -513,13 +584,78 @@ class PluginManager:
                     check_egress(
                         rec.manifest,
                         active,
-                        global_allowlist=self._global_egress,
+                        global_allowlist=self._egress_for(plugin_id),
                         loopback_allowlist=self._loopback,
                     )
             except ManifestError as exc:
                 await self._fail(rec, str(exc))
                 continue
             self._apply_enablement(rec)
+
+    # -- runtime changes (self-built skills: no restart, no merge) -------------------------------
+
+    @property
+    def global_egress_allowlist(self) -> tuple[str, ...]:
+        return self._global_egress
+
+    def allow_egress(self, plugin_id: str, entries: Iterable[str]) -> None:
+        """The `host:port` entries the user approved for one skill - for that plugin only.
+
+        Never merged into the global allow-list: another plugin or skill declaring the same host
+        is judged against the configuration alone. Replaces what was approved before (a new
+        version brings its own approval)."""
+        self._plugin_egress[plugin_id] = tuple(dict.fromkeys(entries))
+
+    def revoke_egress(self, plugin_id: str) -> None:
+        """Forget the hosts approved for `plugin_id` (deactivated, forgotten, replaced)."""
+        self._plugin_egress.pop(plugin_id, None)
+
+    def _egress_for(self, plugin_id: str) -> tuple[str, ...]:
+        return (*self._global_egress, *self._plugin_egress.get(plugin_id, ()))
+
+    async def rescan(self) -> None:
+        """Pick up plugin folders that appeared or changed since the last discovery and start
+        the ones that are now enabled. Running plugins are left alone."""
+        await self.discover()
+        for rec in list(self._records.values()):
+            if rec.enabled and rec.state is PluginState.ENABLED and not self._safe_mode():
+                await self._spawn(rec)
+
+    async def enable(self, plugin_id: str) -> PluginStatus | None:
+        """Add `plugin_id` to the enabled set of this running core and start it if it can run."""
+        if plugin_id not in self.settings.enabled:
+            self.settings = self.settings.model_copy(
+                update={"enabled": [*self.settings.enabled, plugin_id]}
+            )
+        await self.rescan()
+        rec = self._records.get(plugin_id)
+        return rec.status() if rec is not None else None
+
+    async def disable(self, plugin_id: str, reason: str = "disabled") -> None:
+        """Stop `plugin_id` and take it out of the enabled set of this running core."""
+        if plugin_id in self.settings.enabled:
+            self.settings = self.settings.model_copy(
+                update={"enabled": [p for p in self.settings.enabled if p != plugin_id]}
+            )
+        rec = self._records.get(plugin_id)
+        if rec is None:
+            return
+        if rec.state in _LIVE_STATES:
+            await self._stop_plugin(rec, reason, None)
+        if rec.monitor is not None:
+            rec.monitor.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await rec.monitor
+            rec.monitor = None
+        rec.enabled = False
+        rec.reason = reason
+
+    async def remove(self, plugin_id: str) -> None:
+        """Disable `plugin_id` and forget its record (its folder is the caller's to delete)."""
+        await self.disable(plugin_id, "removed")
+        self._records.pop(plugin_id, None)
+        if self._health is not None:
+            self._health.remove_check(f"plugin.{plugin_id}")
 
     async def stop(self, reason: str = "shutdown") -> None:
         """Graceful shutdown of every plugin; also stops the crash monitors."""
@@ -571,7 +707,7 @@ class PluginManager:
                     check_egress(
                         manifest,
                         profile,
-                        global_allowlist=self._global_egress,
+                        global_allowlist=self._egress_for(rec.plugin_id),
                         loopback_allowlist=self._loopback,
                     )
                 except ManifestError as exc:
@@ -667,10 +803,34 @@ class PluginManager:
         env = _worker_environment()
         env.update(self._tokens.worker_env(client_id))
         env["NOX_HUB_URL"] = self._hub.url
-        env["NOX_PLUGINS_DIR"] = str(self.plugins_dir)
+        env["NOX_PLUGINS_DIR"] = str(rec.path.parent)
         command = [*self._worker_command, "--plugin", rec.plugin_id]
         rec.stopping = False
         rec.registered = asyncio.Event()
+        if rec.origin == ORIGIN_SELF_BUILT:
+            # Code a model wrote: only ever inside the sandbox, never as a user-rights process.
+            spawner = self.sandboxed_spawner
+            reason = spawner.unavailable() if spawner is not None else "no sandbox"
+            if spawner is None or reason is not None:
+                await self._fail(rec, f"self-built skills run only in the sandbox: {reason}")
+                return
+            try:
+                rec.process = await spawner.spawn(
+                    plugin_id=rec.plugin_id,
+                    plugin_dir=rec.path,
+                    manifest=manifest,
+                    hub_url=self._hub.url,
+                    token=self._tokens.worker_env(client_id)[WORKER_TOKEN_ENV],
+                )
+            except Exception as exc:  # noqa: BLE001 - nothing runs; the record says why
+                await self._fail(rec, f"sandboxed spawn failed: {type(exc).__name__}: {exc}")
+                return
+            self._transition(rec, PluginState.SPAWNED)
+            log.info("plugin.spawned", plugin=rec.plugin_id, pid=rec.process.pid, sandboxed=True)
+            rec.monitor = asyncio.create_task(
+                self._monitor(rec), name=f"plugin-monitor-{rec.plugin_id}"
+            )
+            return
         try:
             rec.process = self._process_factory(command, env)
         except OSError as exc:
@@ -837,14 +997,24 @@ class PluginManager:
     ) -> None:
         for declaration in declarations:
             permission = validate_tool_name(manifest, declaration.name)
+            if rec.origin == ORIGIN_SELF_BUILT and permission.risk in (Risk.READ, Risk.LOW):
+                # A self-built tool asks first until the user says "remember"; its manifest was
+                # checked for that before activation, and this catches one edited afterwards.
+                raise ManifestError(
+                    f"self-built tool {declaration.name!r} must be at least medium risk"
+                )
             if declaration.risk is not permission.risk:
                 raise ManifestError(
                     f"tool {declaration.name!r} declares risk {declaration.risk.value!r} "
                     f"but the manifest says {permission.risk.value!r}"
                 )
+            description = declaration.description
+            if rec.origin == ORIGIN_SELF_BUILT:
+                # Written by a model, not reviewed by a person: data for the model, never orders.
+                description = untrusted(description, f"skill:{rec.plugin_id}")
             spec = self._spec_class(
                 name=declaration.name,
-                description=declaration.description,
+                description=description,
                 input_model=_input_model_for(declaration.name, declaration.input_schema),
                 risk=permission.risk,
                 side_effects=declaration.side_effects,

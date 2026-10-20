@@ -29,6 +29,7 @@ from nox.ipc.errors import (
     IpcError,
 )
 from nox.ipc.protocol import NAME_ERROR, RESPONSE_PAYLOAD_MODELS, Envelope, Kind
+from nox.ipc.roles import UI_ROLES
 
 log = get_logger(__name__)
 
@@ -150,11 +151,33 @@ class EmptyPayload(BaseModel):
     """For requests without parameters (`{}`)."""
 
 
+#: The UI roles a person clicks in - and so roles synthetic input could click in for them. A
+#: paired device counts too: its browser may run on the very machine Nox is steering.
+INPUT_ROLES: frozenset[str] = frozenset(UI_ROLES)
+#: What a UI client may still do while Nox controls mouse and keyboard: look, stop, mute.
+CALM_UI_REQUESTS: frozenset[str] = frozenset(
+    {"state.get", "health.get", "health.history", "config.effective", "config.get",
+     "security.kill", "security.panic", "security.pin.status", "voice.mute", "plugin.status",
+     "secrets.status", "security.permission.reply"}
+)  # fmt: skip
+
+
+def calm_ui_request(name: str) -> bool:
+    """A request that only reads or stops - allowed while synthetic input is in play."""
+    return (
+        name in CALM_UI_REQUESTS or name.startswith("ipc.") or name.endswith((".list", ".status"))
+    )
+
+
 class RequestRegistry:
     """name -> (payload model, async handler, allowed roles). Dispatches envelopes to handlers."""
 
     def __init__(self) -> None:
         self._handlers: dict[str, Registration] = {}
+        #: True while synthetic input could be in play (`nox.desktop.computer_use`): UI clients
+        #: then keep only `calm_ui_request`s, so no click Nox sends can activate, approve or
+        #: change anything. Set by the desktop extension.
+        self.input_lock: Callable[[], bool] | None = None
 
     def register(
         self,
@@ -218,6 +241,17 @@ class RequestRegistry:
             raise IpcError(ERR_NOT_FOUND, f"unknown request {envelope.name!r}")
         if not self.is_allowed(envelope.name, ctx.role, service_patterns(ctx.services)):
             raise IpcError(ERR_PERMISSION, f"role {ctx.role!r} may not call {envelope.name!r}")
+        lock = self.input_lock
+        if (
+            ctx.role in INPUT_ROLES
+            and lock is not None
+            and not calm_ui_request(envelope.name)
+            and lock()
+        ):
+            raise IpcError(
+                ERR_PERMISSION,
+                "Nox is controlling mouse and keyboard; end it with the stop hotkey and try again",
+            )
         try:
             model = reg.payload_model.model_validate(envelope.payload)
         except ValidationError as exc:

@@ -13,6 +13,7 @@ import {
   SIGNED_OUT_DETAIL,
   resolveWsUrl,
 } from '../../shared/ipc';
+import type { McpServerAddPayload } from './model/capabilities';
 import { CHAT_IDLE_TIMEOUT_MS } from './model/chat';
 
 export type { Envelope, ConnStatus };
@@ -48,6 +49,9 @@ export const DASHBOARD_PATTERNS = [
   // raw Telegram traffic, which no dashboard needs and a paired device must not see.
   'remote.paired',
   'remote.revoked',
+  // `desktop.computer_use {active, reason, stop}`: the global banner while Nox steers mouse and
+  // keyboard. Only this one event, not the whole `desktop.*` namespace.
+  'desktop.computer_use',
 ];
 
 export interface DashboardIpcHandlers {
@@ -76,6 +80,9 @@ export async function createDashboardClient(
   return client;
 }
 
+/** Longer than the core's default MCP start timeout, so its own refusal arrives first. */
+export const MCP_START_TIMEOUT_MS = 70_000;
+
 export const api = {
   stateGet: (c: IpcClient) => c.request('state.get', {}),
   healthGet: (c: IpcClient) => c.request('health.get', {}),
@@ -94,6 +101,13 @@ export const api = {
   dayReminderAdd: (c: IpcClient, text: string, dueAt: string) =>
     c.request('day.reminder.add', { text, due_at: dueAt }),
   dayReminderCancel: (c: IpcClient, id: string) => c.request('day.reminder.cancel', { id }),
+  // -- local model setup (Settings -> Lokale KI) -------------------------------------------------
+  localAiStatus: (c: IpcClient) => c.request('ai.setup.status', {}),
+  /** A dry run: measure, recommend, ask Ollama. Downloads and writes nothing. */
+  localAiCheck: (c: IpcClient) => c.request('ai.setup.check', {}),
+  /** Starts a run in the core; the tile then polls `ai.setup.status`. */
+  localAiStart: (c: IpcClient, installOllama: boolean) =>
+    c.request('ai.setup.start', { install_ollama: installOllama }),
   profileList: (c: IpcClient) => c.request('memory.profile.list', {}),
   profileAdd: (c: IpcClient, text: string) => c.request('memory.profile.add', { text }),
   profileForget: (c: IpcClient, id: number) => c.request('memory.profile.forget', { id }),
@@ -199,6 +213,27 @@ export const api = {
     ),
   /** Withdraws every active consent for `context`. No PIN: it can only make Nox stricter. */
   consentRevoke: (c: IpcClient, context: string) => c.request('consent.revoke', { context }),
+
+  // -- Fähigkeiten: external MCP servers, learned skills, watchers --------------------------------
+  mcpServers: (c: IpcClient) => c.request('mcp.servers.list', {}),
+  // add / approve / enable bring a server up before they answer, and a start may take the core's
+  // whole `mcp.start_timeout_s` (30 s by default) - well past the 10 s request default.
+  /** Secret values never travel here: the page stores them first and sends `secret:` references. */
+  mcpServerAdd: (c: IpcClient, payload: McpServerAddPayload) =>
+    c.request('mcp.servers.add', { ...payload }, undefined, MCP_START_TIMEOUT_MS),
+  mcpServerApprove: (c: IpcClient, id: string) =>
+    c.request('mcp.servers.approve', { id }, undefined, MCP_START_TIMEOUT_MS),
+  mcpServerEnable: (c: IpcClient, id: string, enabled: boolean) =>
+    c.request('mcp.servers.enable', { id, enabled }, undefined, MCP_START_TIMEOUT_MS),
+  mcpServerRemove: (c: IpcClient, id: string) => c.request('mcp.servers.remove', { id }),
+  skillsList: (c: IpcClient) => c.request('skills.list', {}),
+  /** Same PIN rule as `secretSet`: an empty PIN is not sent, so the core can ask for one. */
+  skillActivate: (c: IpcClient, id: string, pin = '') =>
+    c.request('skills.activate', pin ? { id, pin } : { id }),
+  skillDeactivate: (c: IpcClient, id: string) => c.request('skills.deactivate', { id }),
+  skillForget: (c: IpcClient, id: string) => c.request('skills.forget', { id }),
+  watchList: (c: IpcClient) => c.request('watch.list', {}),
+  watchDelete: (c: IpcClient, id: string) => c.request('watch.delete', { id }),
 };
 
 /** The fields of one `consent.grant` request, already trimmed and validated by the caller. */

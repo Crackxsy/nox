@@ -29,6 +29,14 @@ __all__ = ["ReportProvider", "register_capability_tools"]
 #: Built fresh per call: the answer depends on the profile, the mode and the privacy state, all of
 #: which change while Nox runs. A cached report would be a confident statement about the past.
 ReportProvider = Callable[[], CapabilityReport]
+#: Whether Nox can teach itself something right now (`nox.skills`); None = it cannot at all.
+LearnAvailable = Callable[[], bool]
+
+#: What to say when something is missing and learning is possible.
+LEARN_OFFER = (
+    "I cannot do that yet - offer to teach yourself, in the user's language "
+    "(skill.learn, after a yes)"
+)
 
 
 class CapabilityListInput(BaseModel):
@@ -86,6 +94,21 @@ def _matches(name: str, candidate: str) -> bool:
     return candidate.startswith(f"{name}.") or name.startswith(f"{candidate}.")
 
 
+def _with_offer(answer: dict[str, Any], learnable: bool) -> dict[str, Any]:
+    """Add the learning offer to an answer about something missing - and only to that.
+
+    A forbidden capability, a disabled plugin or a missing token never gets one: their honest
+    answer is "no" or the fix, not a self-built second copy.
+    """
+    missing = answer.get("why") == "missing" or (
+        answer.get("known") is False and "related" not in answer
+    )
+    if learnable and missing:
+        answer["learnable"] = True
+        answer["offer"] = LEARN_OFFER
+    return answer
+
+
 def _answer(report: CapabilityReport, name: str) -> dict[str, Any]:
     wanted = name.strip().lower().replace(" ", ".")
     exact = report.find(wanted)
@@ -136,9 +159,10 @@ def _build_list(report_of: ReportProvider) -> ToolSpec:
     )
 
 
-def _build_check(report_of: ReportProvider) -> ToolSpec:
+def _build_check(report_of: ReportProvider, learnable: LearnAvailable | None) -> ToolSpec:
     async def handler(payload: dict[str, Any]) -> dict[str, Any]:
-        return _answer(report_of(), str(payload["name"]))
+        answer = _answer(report_of(), str(payload["name"]))
+        return _with_offer(answer, learnable is not None and learnable())
 
     return ToolSpec(
         name="capabilities.check",
@@ -156,8 +180,10 @@ def _build_check(report_of: ReportProvider) -> ToolSpec:
     )
 
 
-def register_capability_tools(registry: ToolRegistry, report_of: ReportProvider) -> None:
+def register_capability_tools(
+    registry: ToolRegistry, report_of: ReportProvider, learnable: LearnAvailable | None = None
+) -> None:
     """Register `capabilities.list` and `capabilities.check`."""
-    for spec in (_build_list(report_of), _build_check(report_of)):
+    for spec in (_build_list(report_of), _build_check(report_of, learnable)):
         registry.register(spec)
     log.info("capabilities.tools_registered", count=2)

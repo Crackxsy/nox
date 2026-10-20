@@ -12,6 +12,7 @@ import {
   applyClipSaved,
   parseClipRecord,
 } from './clips';
+import { parseComputerUse } from './desktop';
 import { applyHealthChanged, parseHealthReport } from './health';
 import { applyHomeConnected, applyHomeDisconnected, applyHomeStateChanged } from './home';
 import { NOTIFICATION_LIMIT, dismiss, notificationRow } from './notifications';
@@ -188,6 +189,10 @@ export function reduceEvent(
     case 'twitch.auth.changed': {
       const twitchAuth = str(payload.state);
       return twitchAuth ? { ...state, twitchAuth } : state;
+    }
+    case 'desktop.computer_use': {
+      const computerUse = parseComputerUse(payload);
+      return computerUse ? { ...state, computerUse } : state;
     }
     case 'security.kill_switch':
       return { ...state, systemLevel: 'safe_mode' };

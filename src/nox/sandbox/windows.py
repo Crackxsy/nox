@@ -88,6 +88,8 @@ __all__ = [
     "container_name",
     "default_grants_manifest",
     "host_loopback_reachable",
+    "nox_runtime_dirs",
+    "package_import_root",
     "probe_verdict",
     "python_runtime_dirs",
 ]
@@ -636,6 +638,37 @@ def _runs_python(argv: list[str]) -> bool:
     return any(_contains(folder, exe) for folder in python_runtime_dirs())
 
 
+def package_import_root() -> Path:
+    """The folder `import nox` resolves from: site-packages, or `src` in an editable install."""
+    import nox
+
+    return Path(nox.__file__).resolve().parent.parent
+
+
+def nox_runtime_dirs(*, home: Path | None = None, root: Path | None = None) -> tuple[Path, ...]:
+    """`python_runtime_dirs()` plus the import root of the `nox` package itself, when it is not
+    inside them already (an editable install keeps it in the checkout's `src`).
+
+    A self-built skill's worker imports `nox.plugins.api` inside the container, so it needs read
+    access to Nox's own source - code, never data. The same refusals apply as for the runtime.
+    """
+    from nox.paths import nox_home
+
+    dirs = python_runtime_dirs(home=home)
+    folder = (root or package_import_root()).resolve()
+    nox = (home or nox_home()).resolve()
+    profile = Path.home().resolve()
+    if any(_contains(d, folder) for d in dirs):
+        return dirs
+    if len(folder.parts) <= 1 or _contains(folder, profile) or folder.parent == profile:
+        log.warning("sandbox.package_dir_refused", reason="root or broad profile folder")
+        return dirs
+    if _contains(folder, nox) or _contains(nox, folder):
+        log.warning("sandbox.package_dir_refused", reason="overlaps Nox's home")
+        return dirs
+    return (*dirs, folder)
+
+
 class WindowsSandbox:
     """Backend for `nox.sandbox.Sandbox` on Windows. One instance per core."""
 
@@ -703,7 +736,7 @@ class WindowsSandbox:
         if sid is None or sid in self._runtime_ready or not _runs_python(argv):
             return
         self._runtime_ready.add(sid)
-        for folder in python_runtime_dirs():
+        for folder in nox_runtime_dirs():
             ok = await asyncio.to_thread(self.grant_read, folder, sid)
             log.info("sandbox.runtime_readable", ok=ok)
 

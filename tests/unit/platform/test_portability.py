@@ -196,3 +196,18 @@ def _alive(pid: int) -> bool:
         return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
     except psutil.NoSuchProcess:
         return False
+
+
+def test_an_unreadable_checkout_config_does_not_break_importing_nox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Inside the Windows sandbox a skill worker can read Nox's package but not the checkout
+    # around it: `stat` says "access denied" there, and `nox.paths` is imported all the same.
+    from nox import paths
+
+    def denied(self: Path, *, follow_symlinks: bool = True) -> bool:
+        raise PermissionError(5, "Access is denied", str(self))
+
+    monkeypatch.delenv("NOX_REPO_ROOT", raising=False)
+    monkeypatch.setattr(Path, "is_file", denied)
+    assert paths.repo_root() == paths.PACKAGE_DIR

@@ -55,11 +55,13 @@ import {
   removePrompt,
   setConnected,
 } from "./model";
+import { ComputerUseBanner } from "./ComputerUseBanner";
 import { NotificationToasts } from "./NotificationToasts";
 import { AuditPage } from "./pages/Audit";
 import { DevicesSection, type PairedNotice } from "./pages/Devices";
 import { PermissionNote, PermissionPromptDialog } from "./PermissionPrompt";
 import { BoardPage } from "./pages/Board";
+import { CapabilitiesPage } from "./pages/Capabilities";
 import { ChatPage } from "./pages/Chat";
 import { ClipsPage } from "./pages/Clips";
 import { HomePage } from "./pages/Home";
@@ -81,6 +83,7 @@ export type TabId =
   | "clips"
   | "remote"
   | "audit"
+  | "capabilities"
   | "settings";
 const TABS: { id: TabId; label: Key }[] = [
   { id: "status", label: "tab_status" },
@@ -92,6 +95,8 @@ const TABS: { id: TabId; label: Key }[] = [
   { id: "clips", label: "tab_clips" },
   { id: "remote", label: "tab_remote" },
   { id: "audit", label: "tab_audit" },
+  // After Audit, so Alt+1..9 still reach the sections they always did.
+  { id: "capabilities", label: "tab_capabilities" },
   { id: "settings", label: "tab_settings" },
 ];
 
@@ -551,7 +556,8 @@ export function App({
                       id={`tab-${item.id}`}
                       aria-selected={selected}
                       aria-controls={`panel-${item.id}`}
-                      aria-keyshortcuts={`Alt+${i + 1}`}
+                      // Alt+1..9 exist; a tenth section has no digit and announces no shortcut.
+                      aria-keyshortcuts={i < 9 ? `Alt+${i + 1}` : undefined}
                       tabIndex={selected ? 0 : -1}
                       onClick={() => setTab(item.id)}
                       onKeyDown={(e) => onTabKey(e, i)}
@@ -595,6 +601,8 @@ export function App({
             </div>
           </div>
         </header>
+
+        <ComputerUseBanner t={t} lang={lang} notice={state.computerUse} />
 
         {!auth && (
           <p role="alert" className="banner banner--error">
@@ -733,6 +741,11 @@ export function App({
                 )}
                 {item.id === "audit" && (
                   <AuditPage t={t} lang={lang} rows={state.audit} />
+                )}
+                {item.id === "capabilities" && (
+                  <LocalOnly t={t} device={device} note="device_admin_note">
+                    <CapabilitiesPage t={t} lang={lang} client={liveClient} />
+                  </LocalOnly>
                 )}
                 {item.id === "settings" && (
                   <LocalOnly t={t} device={device} note="device_admin_note">

@@ -29,6 +29,14 @@ no firewall rule, no extra package beyond `bubblewrap` itself.
 root - or none, which `guarantees()` reports. An unprivileged service user may not create
 scopes, which is why the Pi uses cgroup delegation.
 
+**Nox's own Python** (a self-built skill's worker, its tests, a Python MCP server) needs more than
+the read-only system: it imports `nox` and its dependencies. A run whose program is Nox's own
+interpreter therefore also gets, read-only, exactly: the interpreter pieces (`_own_python_binds`:
+executable, standard library, `libpython`), the virtual environment's `pyvenv.cfg` and
+site-packages, and the folder `import nox` resolves from (the checkout's `src` in an editable
+install) - code, never data (`nox_python_binds`). If any of them would expose `/`, a home
+directory as such or Nox's own folder (secrets, database), the run is refused instead.
+
 The backend checks at start-up that `bwrap` can really build its namespaces on this machine (a
 kernel without unprivileged user namespaces, a systemd unit with `RestrictNamespaces=`, Ubuntu's
 AppArmor user-namespace restriction): if not, it reports itself unavailable and the sandbox fails
@@ -78,6 +86,8 @@ __all__ = [
     "build_bwrap_argv",
     "bwrap_available",
     "forwarder_python",
+    "nox_python_binds",
+    "runtime_bind_paths",
 ]
 
 _RO_SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc")
@@ -206,6 +216,69 @@ def _own_python_binds(real: str) -> tuple[str, ...] | None:
     return safe_python_binds(paths, private=private)
 
 
+def runtime_bind_paths(
+    argv0: str,
+    *,
+    executable: str,
+    real: str,
+    venv_cfg: str | None,
+    site_dirs: list[str],
+    package_root: str,
+    interpreter: tuple[str, ...],
+) -> list[str]:
+    """The paths a run of Nox's own Python needs (pure; `nox_python_binds` gathers the inputs).
+
+    Empty when `argv0` is not that interpreter: nothing beyond the system is bound then.
+    """
+    argv0 = posixpath.normpath(argv0)
+    if argv0 not in (posixpath.normpath(executable), posixpath.normpath(real)):
+        return []
+    paths = [argv0, *interpreter]
+    if venv_cfg:
+        paths.append(venv_cfg)
+    paths.extend(site_dirs)
+    if not any(_is_within(package_root, d) for d in site_dirs):
+        paths.append(package_root)
+    return paths
+
+
+def nox_python_binds(argv0: str) -> tuple[str, ...] | None:
+    """What to bind read-only so `argv0` - when it is Nox's own interpreter - can run and import
+    `nox` inside the sandbox (see the module docstring). `()` for any other program, None when a
+    needed path would expose a home directory or Nox's folder (the caller refuses the run)."""
+    import sysconfig  # noqa: PLC0415
+
+    import nox  # noqa: PLC0415
+    from nox.paths import nox_home  # noqa: PLC0415
+
+    executable = sys.executable or ""
+    if not executable or not argv0:
+        return ()
+    real = os.path.realpath(executable)
+    if os.path.abspath(argv0) not in (os.path.abspath(executable), real) and (
+        os.path.realpath(argv0) != real
+    ):
+        return ()
+    interpreter = () if _under_system_dirs(real) else _own_python_binds(real)
+    if interpreter is None:
+        return None
+    cfg = os.path.join(sys.prefix, "pyvenv.cfg")
+    site_dirs = sorted(
+        {os.path.realpath(sysconfig.get_path(key)) for key in ("purelib", "platlib")}
+    )
+    paths = runtime_bind_paths(
+        os.path.abspath(argv0),
+        executable=os.path.abspath(executable),
+        real=real,
+        venv_cfg=cfg if sys.prefix != sys.base_prefix and os.path.isfile(cfg) else None,
+        site_dirs=[d for d in site_dirs if os.path.isdir(d)],
+        package_root=str(Path(nox.__file__).resolve().parent.parent),
+        interpreter=interpreter,
+    )
+    private = [os.path.expanduser("~"), str(nox_home())]
+    return safe_python_binds(paths, private=private)
+
+
 def forwarder_python() -> tuple[str, tuple[str, ...]] | None:
     """The interpreter that runs the egress launcher inside the sandbox, and what to bind for it.
 
@@ -236,6 +309,7 @@ def build_bwrap_argv(
     egress_socket: str | None = None,
     python: str = "/usr/bin/python3",
     python_binds: tuple[str, ...] = (),
+    runtime_binds: tuple[str, ...] = (),
     bwrap: str = "bwrap",
     disable_userns: bool = True,
     env_fd: int | None = None,
@@ -245,6 +319,9 @@ def build_bwrap_argv(
     `disable_userns` (bwrap 0.8+) gives the sandbox a user namespace in which no further user
     namespace can be created, so a confined process cannot build its own namespaces - the kernel
     attack surface unprivileged user namespaces open stays closed inside.
+
+    `runtime_binds` are bound read-only for every run that starts Nox's own Python
+    (`nox_python_binds`).
 
     `egress_socket` is the host path of the run's proxy socket when egress was declared: it is
     bound in and the target is wrapped by the forwarder (see the module docstring). Without it
@@ -286,9 +363,12 @@ def build_bwrap_argv(
         work,
         work,
     ]
+    for path in runtime_binds:
+        cmd += ["--ro-bind", path, path]
     if egress_socket is not None:
         for path in python_binds:
-            cmd += ["--ro-bind", path, path]
+            if path not in runtime_binds:
+                cmd += ["--ro-bind", path, path]
         cmd += [
             "--ro-bind",
             _FORWARDER_SRC,
@@ -634,6 +714,7 @@ class LinuxSandbox:
         proxy_socket: str | None = None,
         cgroup: Path | None = None,
         env_fd: int | None = None,
+        runtime_binds: tuple[str, ...] = (),
     ) -> list[str]:
         """The full command line (the ceiling around `bwrap`) for one confined process.
         Never contains the environment - see `build_bwrap_argv`."""
@@ -646,6 +727,7 @@ class LinuxSandbox:
             python=python,
             python_binds=binds,
             env_fd=env_fd,
+            runtime_binds=runtime_binds,
         )
         if self.ceiling is Ceiling.CGROUP and cgroup is not None:
             return DelegatedCgroups.wrap(cgroup, inner)
@@ -684,6 +766,12 @@ class LinuxSandbox:
         proxy_socket: str | None,
     ) -> _Launch:
         socket_path = self._egress_socket(egress, proxy_socket)  # refuse before creating anything
+        runtime = nox_python_binds(argv[0]) if argv else ()
+        if runtime is None:
+            raise SandboxUnavailable(
+                "Nox's Python cannot be made readable in the sandbox without exposing a home "
+                "directory or Nox's own folder; refused"
+            )
         cgroup: Path | None = None
         if self.ceiling is Ceiling.CGROUP and self._cgroups is not None:
             try:
@@ -704,6 +792,7 @@ class LinuxSandbox:
             proxy_socket=socket_path,
             cgroup=cgroup,
             env_fd=env_fd,
+            runtime_binds=runtime,
         )
         launcher_env = dict(LAUNCHER_ENV)
         if self.ceiling is Ceiling.USER_SCOPE:

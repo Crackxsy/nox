@@ -623,3 +623,16 @@ async def test_the_system_modules_load_inside_the_container() -> None:
     assert folders[0] == (system + r"\WindowsPowerShell\v1.0\Modules").lower(), folders
     assert folders[-1].endswith(r"\windowspowershell\modules"), folders
     assert len(folders) == 2, folders  # never the user's profile folder
+
+
+def test_the_nox_package_root_is_readable_but_never_nox_home(tmp_path) -> None:  # noqa: ANN001
+    from pathlib import Path
+
+    from nox.sandbox.windows import nox_runtime_dirs, python_runtime_dirs
+
+    src = tmp_path / "checkout" / "src"
+    runtime = python_runtime_dirs(home=tmp_path / "h")
+    assert nox_runtime_dirs(home=tmp_path / "h", root=src) == (*runtime, src.resolve())
+    # A package root that contains Nox's home (or lies inside it) is never granted.
+    assert nox_runtime_dirs(home=src / "home", root=src) == python_runtime_dirs(home=src / "home")
+    assert nox_runtime_dirs(home=tmp_path / "h", root=Path.home()) == runtime

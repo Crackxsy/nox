@@ -141,6 +141,11 @@ export function ConfigForm({ t, client, config, onApplied }: ConfigFormProps) {
               type="checkbox"
               checked={value === true}
               disabled={disabled}
+              aria-describedby={
+                spec.path === "desktop.computer_use.enabled"
+                  ? `${id}-hint`
+                  : undefined
+              }
               onChange={(e) => setValue(spec.path, e.target.checked)}
             />
             <span className="switch-track" aria-hidden="true">
@@ -298,6 +303,11 @@ export function ConfigForm({ t, client, config, onApplied }: ConfigFormProps) {
                     {spec.path === "voice.stt.vocabulary" && (
                       <span className="hint">
                         {t("setting_voice_stt_vocabulary_hint")}
+                      </span>
+                    )}
+                    {spec.path === "desktop.computer_use.enabled" && (
+                      <span id={`${id}-hint`} className="hint">
+                        {t("setting_desktop_computer_use_enabled_hint")}
                       </span>
                     )}
                     {spec.path === "pet.variant" && (

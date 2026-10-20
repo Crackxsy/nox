@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
 from nox.core.config import NoxConfig
-from nox.paths import PLUGINS_DIR
+from nox.paths import PLUGINS_DIR, nox_home
 from nox.plugins.manifest import discover_manifest_paths
 from nox.settings.devices import device_choices
 from nox.voice.models import engine_models_dir
@@ -87,6 +87,9 @@ EDITABLE_PATHS: dict[str, str] = {
     "ipc.lan.enabled": "remote",
     "memory.full_scan_on_boot": "memory",
     "plugins.enabled": "plugins",
+    # Mouse and key combinations (`nox.desktop.computer_use`). A security setting: the PIN gate
+    # applies (`nox.security.gate.SECURITY_SETTING_PREFIXES`).
+    "desktop.computer_use.enabled": "privacy",
     # Presets are lists of models, not scalars, so they carry the "structured" kind: the
     # generic settings form skips them and the Presets page edits them with a form that
     # understands steps. The write path is the same one every other setting uses, which is
@@ -112,6 +115,7 @@ LIVE_APPLY_PATHS: frozenset[str] = frozenset(
         "voice.channels.private_device",
         "voice.channels.stream_device",
         "voice.channels.routing",
+        "desktop.computer_use.enabled",
         "presets.enabled",
         "presets.actions",
         "presets.items",
@@ -218,7 +222,10 @@ def _installed_plugins(config: NoxConfig | None) -> list[str]:
     directory = (
         Path(str(config.plugins.dir)) if config is not None and config.plugins.dir else PLUGINS_DIR
     )
-    return sorted(path.parent.name for path in discover_manifest_paths(directory))
+    found = {path.parent.name for path in discover_manifest_paths(directory)}
+    # Skills Nox built for itself and the user activated live next to the bundled ones.
+    found |= {path.parent.name for path in discover_manifest_paths(nox_home() / "plugins")}
+    return sorted(found)
 
 
 def _installed_voices(config: NoxConfig | None) -> list[str] | None:

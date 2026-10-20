@@ -137,19 +137,48 @@ things Nox's Rocket League feature does.
 
 No file anywhere in the repository may import a process-memory API (`ReadProcessMemory`,
 `WriteProcessMemory`) or a third-party input-automation library (`pydirectinput`, `pyautogui`).
-`SendInput` is permitted in exactly one file, `src/nox/desktop/keyboard.py`, which exists so Nox can
-type into an ordinary window - and which refuses to send anything at all while a watched game
-process is running anywhere on the machine, not merely when the game window is the target. It types
-characters (`KEYEVENTF_UNICODE`), which cannot express a key combination. There is no mouse input.
+`SendInput` is permitted in exactly two files, and each one refuses to send anything at all while
+a watched game process is running anywhere on the machine, not merely when the game window is the
+target:
+
+- `src/nox/desktop/keyboard.py` types into an ordinary window. It types characters
+  (`KEYEVENTF_UNICODE`), which cannot express a key combination.
+- `src/nox/desktop/computer_use.py` (owner approval of this change: 2026-10-18) moves and clicks
+  the mouse and presses key combinations. It is **off by default**
+  (`desktop.computer_use.enabled: false`); turning it on is a security setting and needs the PIN
+  when one is set. Use happens in **sessions**: `computer.session_start` (risk high) asks every
+  time - a "remember" on it is revoked the moment it is used - and only a confirmed session grants
+  `computer.pointer` / `computer.keys` (risk medium), for the session's length
+  (`session_minutes`) and action budget (`max_actions_per_session`) and no longer. While it runs,
+  a `desktop.computer_use` event drives a visible notice; every action is audited. The kill switch
+  and the stop hotkey (`ctrl+alt+shift+k`, read from the key state before every single event) end
+  it at once. It refuses - in the module itself, first, and again immediately before every event -
+  while a watched game or an anti-cheat service is running and while a game is in the foreground.
+  Before every single event (each button down and up, wheel turn, key down) it checks the window
+  under the cursor (`WindowFromPoint(GetCursorPos())`) and the foreground window against Nox's
+  own windows - by process, by Qt window class and by a title naming Nox (the dashboard tab, while
+  it is the browser's active tab) - refuses to move onto one, and sends nothing while a Nox
+  confirmation waits. That check races by nature, so it is not the boundary. **The boundary is in
+  the core:** while a session is open and for three seconds after Nox's last event, an "allow"
+  answer to a confirmation is refused (a "deny" always counts) and the dashboard and shell keep
+  only reading and stopping requests - no skill activation, no MCP approval, no settings. The user
+  ends the session with the stop hotkey, which this module never sends, and then answers. Every
+  combination with the Windows key, Ctrl+Esc, Alt+Tab, Alt+Esc, Alt+Space, Ctrl+Alt+Del,
+  Ctrl+Shift+Esc, the stop hotkey and Alt+F4 on Nox are refused as a convenience. Key-ups after an
+  interrupted combination are not sent into a game that came to the foreground; the session ends
+  instead.
 
 `game.input.send` remains in the immutable hard-prohibition list, which no profile, configuration,
 plugin or model can lift.
 
 All of this is enforced by CI rather than by convention. The `guard-security-model` job in
-`.github/workflows/ci.yml` runs two checks on every push and pull request: the process-memory and
-automation patterns must appear nowhere under `src/` or `plugins/rl/`, and `SendInput` must appear in
-that one file and nowhere else - *and* that file must still contain its game guard. The second half
-matters as much as the first: an exemption nobody re-checks is not an exemption, it is a hole.
+`.github/workflows/ci.yml` runs `scripts/check_input_synthesis.py` on every push and pull request,
+over `src/` and every plugin under `plugins/`: the process-memory and automation patterns must
+appear nowhere; `SendInput`, `keybd_event`, `mouse_event` and `SetCursorPos` only in those two
+files; `PostMessage`/`SendMessage` with keyboard or mouse-button messages nowhere - *and* each of
+the two files must still contain its game guard (`GameRunningError` and `if game_running:`). The
+second half matters as much as the first: an exemption nobody re-checks is not an exemption, it is
+a hole. `tests/unit/security/test_input_synthesis_guard.py` runs the same script locally.
 
 ## Secrets handling
 
@@ -236,7 +265,8 @@ Raspberry Pi that is bubblewrap (`bwrap`):
   `--args <fd>`), never its command line or its environment, and only names on the allowlist
   (`model.checked_env`) are accepted at all.
 - **Fail closed:** bwrap and the egress path are probed when the sandbox is built. If bwrap
-  cannot build its namespaces, nothing runs; if only the egress path fails, runs without declared
+  cannot build its namespaces, nothing runs - no command, no skill test, no local MCP server
+  (only the user's `mcp.allow_unsandboxed` starts those as plain processes); if only the egress path fails, runs without declared
   egress still work and declared egress is refused.
 
 For this, `nox.service` allows the namespaces bwrap creates and the `@mount` system calls inside
@@ -259,6 +289,83 @@ the plugin process beyond the call), and reach only the `host:port` entries in i
 the worker is ever spawned, then enforced a second time inside the worker by its own scoped
 `EgressGuard`. Nothing a plugin does can widen what the core already validated. See
 `PLUGIN_AUTHORING.md` for the manifest schema and full detail.
+
+## External MCP servers
+
+Nox can use other people's MCP servers (`mcp.servers`, or "Faehigkeit hinzufuegen" in the
+dashboard). Their tools appear as `mcp.<server>.<tool>`, always risk **medium** (the permission
+engine asks; "remember" is a grant for that one tool) unless the *user* marked a tool read-only -
+what a server claims about itself (`readOnlyHint`) is shown, never trusted. Before a server starts:
+`npx`/`uvx`/`pipx run`/`pnpm dlx` commands must name the exact version the user pinned; a shell is
+never the program; environment values and headers that look like credentials must be secret
+references `secret:nox/mcp/<id>/<name>` resolved from the secret store at start; variables that
+change what code an interpreter loads (`NODE_OPTIONS`, `PYTHONPATH`, `LD_PRELOAD`, ...) and Nox's
+own are refused; remote servers need HTTPS (plain HTTP only to loopback), go through the egress
+guard and never to the Home Assistant host. The first start, and every start after the command
+changed, waits for the user's approval of that exact command (bound to a fingerprint). Names are
+checked against the hard prohibitions in every spelling, the reserved namespaces (`security`,
+`home`, `desktop`, `game`, `permission`, `mcp`) and the home boundary; descriptions and schemas
+are cut, cleaned of control and direction-override characters and labelled as untrusted data;
+results are labelled the same way. A call whose arguments name a lock, alarm, valve or garage door
+is refused before the server sees it, and a server that uses the network is not called in the
+privacy modes private and offline. The client offers servers nothing - no sampling, no roots, no
+elicitation. Where the sandbox can be built, a local server runs inside it (`Sandbox.start`,
+its own private work folder, no egress unless it declares network, then public hosts only through
+its own proxy, with the same network guard as a shell command - the Home Assistant host and its
+addresses refused, every egress decision audited). Where it cannot (no backend, `bwrap` missing
+or not the pinned build, the user-namespace probe failing, any other error), local servers fail
+closed: none is started and its status says why (`blocked`). Only `mcp.allow_unsandboxed: true`,
+set by the user in `user.yaml` (not a dashboard setting, not reachable by any tool), runs them
+without the sandbox - with the plugin workers' environment allow-list, inside the core's job
+object, without a console window: process hygiene, not isolation; the dashboard says
+`sandboxed: false`. Every tool of a remote server, and of a local server that declares network,
+is a network tool for the permission engine: refused in private and offline, and asked again in a
+conversation that holds untrusted content, even when the user marked it read-only. Removing or switching off a server and approving a changed command revoke
+every "remember" for its tools (`session:mcp/<id>.`).
+
+## Self-built skills
+
+`skill.learn` (risk high) lets Nox build a missing capability as a plugin under `<nox home>`, never
+in its source tree. The builder is a Claude Code session with `--tools Read,Edit,Write,Glob,Grep`
+on one work folder - no shell. What it may read or write is pinned, not left to the CLI's
+defaults: `dontAsk` mode with exactly `Read(./**)` and `Edit(./**)` allowed (its work folder; Read
+binds Glob and Grep, Edit binds Write) and `--setting-sources ""`, so no settings file - not even
+one it wrote into its own folder - can widen that; a canary next to the folder stays unread
+(`tests/integration/test_skill_builder_isolation.py`). The confirmation shows the whole wish, and
+the wish reaches the builder with its delimiter tags defused. The core, not the model, then checks the result: manifest, id and
+tool names (reserved namespaces, hard prohibitions, home boundary, core namespaces), every tool at
+least risk medium, events only in its own namespace, egress only to declared public hosts (never
+loopback, LAN or the Home Assistant host, and every URL in the source must be declared), and a
+static scan (`nox.skills.scan`) - an allow-list of imports, module attributes and names - as
+defence in depth.
+
+**The sandbox is the boundary.** A skill's tests and its worker run only inside `nox.sandbox`
+(AppContainer / `bwrap`), never as a process with the user's rights: no hub token, no access to
+`<nox home>` or the keyring, egress only to the hosts its manifest declares through the process's
+own proxy. Its files reach the sandbox as a bundle on stdin; the worker speaks JSON lines and the
+core relays only `plugin.register`, `plugin.secret.get` (declared secrets, per call), `state.get`
+and `worker.heartbeat`, plus the events the manifest declares. Without a sandbox that hides files
+and secrets (`Guarantees.strong`) nothing is learned or switched on (fail closed). **The test
+verdict is advisory, not a security control:** the same model writes the skill and its tests, so a
+hostile skill can always pass its own tests; the summary says so. Reviews that call the verdict
+forgeable are right, and that is accepted here.
+
+A passing version is frozen and bound by a hash; activation is the user's click in the dashboard -
+never a tool - and needs the PIN (when one is set) only when the skill wants a host outside the
+allow-list or a secret. An approved host belongs to that skill only; deactivating, forgetting or
+replacing the skill drops it and every "remember" for its tools. `skill.*` is never rememberable.
+Learning is offered only for a missing capability: forbidden wishes are refused and a disabled
+capability gets its fix. Everything is audited; "Vergessen" deletes it with its versions.
+
+## Watchers
+
+A watcher (`watch.create`, risk medium, asks every time - never remembered) calls exactly one
+tool on an interval of at least five minutes and reports through the proactive service. The tool
+must declare no side effects and be risk read, or be one of the named read-only fetchers
+(`web.fetch`, `web.search`); the confirmation shows the address a fetcher will call. This is
+checked again before every run, so a tool re-registered with more power is never called. The
+condition is data (`lt`/`gt`/`contains`/`changed` on a dotted path), never code; a threshold must
+come from the user or from memory, never a guess.
 
 ## IPC authentication
 

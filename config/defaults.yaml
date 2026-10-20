@@ -515,3 +515,41 @@ memory:                          # the vault watcher, indexer and retrieval. The
   capture_batch_turns: 4         # ... or sooner, after this many turns
   profile_max_chars: 1500        # longest "what you know about the user" block in the prompt
   retention_note_version_days: 30 # how long rollback copies of a note are kept
+
+mcp:                             # other people's MCP servers, as tools named mcp.<server>.<tool>.
+                                 # Add one in the dashboard (Faehigkeiten) or here. Every tool asks
+                                 # first; a server's first start is approved in the dashboard.
+  enabled: true
+  servers: []                    # e.g. {id: weather, command: ["npx", "-y", "pkg@1.2.3"],
+                                 #       version: "1.2.3", env: {API_KEY: "secret:nox/mcp/weather/key"}}
+  start_timeout_s: 30.0
+  call_timeout_s: 60.0
+  max_tools_per_server: 64
+  allow_unsandboxed: false       # true starts local servers as plain processes when no sandbox can
+                                 # be built here; false (default) leaves them stopped and says why.
+
+skills:                          # capabilities Nox builds for itself (never in its source tree):
+                                 # a plugin under <nox home>/plugins, checked, tested and only
+                                 # active after you press "Aktivieren".
+  enabled: true
+  max_repair_rounds: 3
+  build_timeout_s: 900.0
+  test_timeout_s: 120.0
+  max_turns: 40
+  model: ""                      # Claude Code model for building; empty = its default
+  keep_versions: 5
+
+watch:                           # "sag mir, wenn ...": one read-only tool, a condition, an interval
+  enabled: true
+  poll_s: 30.0
+  min_interval_min: 5            # the floor; a watcher never checks more often
+  default_cooldown_min: 60
+  max_watchers: 50
+  call_timeout_s: 30.0
+
+desktop:
+  computer_use:                  # mouse and key combinations. Off by default; turning it on needs
+    enabled: false               # the security PIN (when one is set). Never while a game runs.
+    stop_hotkey: "ctrl+alt+shift+k"
+    max_actions_per_session: 200
+    session_minutes: 15

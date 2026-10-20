@@ -80,3 +80,37 @@ def test_approves_data_dir_tools_without_a_path(world: tuple[Path, Path]) -> Non
         confirm_tools=[r"vault\.append_inbox"],
     )
     assert decision is Decision.ALLOW
+
+
+def test_high_risk_only_when_the_task_names_it_in_approve_high(world: tuple[Path, Path]) -> None:
+    learn = {"tool": "skill", "action": "learn", "risk": "high", "target": "",
+             "confirm_tools": [r"skill\.learn"]}  # fmt: skip
+    assert _decide(world, **learn) is Decision.DENY
+    assert _decide(world, **learn, approve_high=[r"skill\.learn"]) is Decision.ALLOW
+    assert _decide(world, **learn, approve_high=[r"computer\..*"]) is Decision.DENY
+    critical = {**learn, "risk": "critical"}
+    assert _decide(world, **critical, approve_high=[r"skill\.learn"]) is Decision.DENY
+
+
+def test_fake_world_families_are_approvable_but_still_need_listing(
+    world: tuple[Path, Path],
+) -> None:
+    mcp = {"tool": "mcp", "action": "wetter.forecast", "risk": "medium", "target": "forecast"}
+    assert _decide(world, **mcp, confirm_tools=[r"mcp\.wetter\..*"]) is Decision.ALLOW
+    assert _decide(world, **mcp, confirm_tools=[]) is Decision.DENY
+
+
+def test_tasks_cannot_approve_other_high_risk_tools() -> None:
+    from kann_alles.tasks import Task
+
+    with pytest.raises(ValueError):
+        Task.model_validate(
+            {
+                "id": "x-task",
+                "title": "t",
+                "category": "pc",
+                "kind": "refuse",
+                "prompt": "p",
+                "approve_high": [r"package\.install"],
+            }  # fmt: skip
+        )

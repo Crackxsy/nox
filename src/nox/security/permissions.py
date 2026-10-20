@@ -813,6 +813,22 @@ class DefaultPermissionEngine:
             result="ok" if removed else "failed",
         )
 
+    def revoke_scope(self, prefix: str, *, by: str = "system") -> int:
+        """Revoke every grant whose scope starts with `prefix` (e.g. a "remember" for a tool that
+        must ask every time). Returns how many were removed; audited when any were."""
+        removed = self._grants.remove_scope_prefix(prefix)
+        if removed:
+            self._audit.append(
+                actor=by,
+                tool="security",
+                action="grant.revoke_scope",
+                target=prefix,
+                decision=Decision.ALLOW.value,
+                result="ok",
+                details={"removed": str(removed)},
+            )
+        return removed
+
     # ---- pure evaluation -------------------------------------------------------------------------
 
     def is_cloud_tool(self, request: PermissionRequest) -> bool:

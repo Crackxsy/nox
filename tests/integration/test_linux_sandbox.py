@@ -340,3 +340,56 @@ async def test_the_childs_environment_never_reaches_the_launchers(backend: Any) 
             b"PWD",
         }
         assert set(launcher) <= allowed, sorted(launcher)
+
+
+#: A self-built skill's worker as the launcher ships it (bundle on stdin, run by `BOOTSTRAP`),
+#: run by Nox's own interpreter: it must import `nox`, reach its declared host through the proxy
+#: and nothing else, and see neither Nox's folder nor the host.
+SKILL_WORKER = CHILD.replace(
+    "if len(sys.argv) > 1:",
+    "import nox.plugins.api  # Nox's own package, from its venv or checkout\n"
+    "print(json.dumps('ready'), flush=True)\n"
+    "if False:",
+).replace(
+    '    return sorted(k for k in os.environ if "proxy" in k.lower())',
+    '    if op["op"] == "read":\n'
+    "        try:\n"
+    '            open(op["path"], encoding="utf-8").read()\n'
+    '            return "read"\n'
+    "        except OSError as exc:\n"
+    "            return type(exc).__name__\n"
+    '    return sorted(k for k in os.environ if "proxy" in k.lower())',
+)
+
+
+async def test_a_skill_worker_runs_noxs_python_in_bwrap(
+    backend: Any, host_server: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nox.paths import nox_home
+    from nox.skills.bundle import BOOTSTRAP, encode_bundle
+
+    assert "import nox.plugins.api" in SKILL_WORKER and '"read"' in SKILL_WORKER
+    secret = nox_home() / "secret-for-the-test.txt"
+    secret.parent.mkdir(parents=True, exist_ok=True)
+    secret.write_text("never visible inside", encoding="utf-8")
+    sandbox = _routed_sandbox(backend, monkeypatch, host_server)
+    proc = await sandbox.start(
+        [sys.executable, "-I", "-c", BOOTSTRAP, "worker.py", "skill-test"],
+        egress=EgressDecl(hosts=("example.test:80",)),
+    )
+    async with proc:
+        await proc.send(encode_bundle({"worker.py": SKILL_WORKER}))
+        ready = await asyncio.wait_for(proc.readline(), 60)
+        assert json.loads(ready or b"null") == "ready", proc.stderr_tail()
+
+        async def ask(op: dict[str, Any]) -> Any:
+            await proc.send((json.dumps(op) + "\n").encode())
+            return json.loads(await asyncio.wait_for(proc.readline(), 30))
+
+        declared = await ask({"op": "proxy_get", "target": "example.test:80"})
+        assert " 200 " in declared["status"] and MARKER in declared["body"], declared
+        undeclared = await ask({"op": "proxy_get", "target": "undeclared.test:80"})
+        assert " 403 " in undeclared["status"], undeclared
+        direct = await ask({"op": "direct", "host": "127.0.0.1", "port": host_server})
+        assert direct != "connected"
+        assert await ask({"op": "read", "path": str(secret)}) != "read"

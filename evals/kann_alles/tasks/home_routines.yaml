@@ -82,6 +82,8 @@
   prompt: "Sag mir Bescheid, sobald das Spiel Sternenfahrer im Shop {web}/shop.html weniger als 10 Euro kostet."
   checks:
     - tool_called: "watch\\.create"
+    # The tool answering is not the watcher existing: watch.create reports a refusal as data.
+    - sql_rows: ["SELECT id FROM watchers WHERE deleted_at IS NULL", 1]
   confirm_tools: ['watch\.create']
   expected_confirmations: 1
   max_s: 90
@@ -91,8 +93,11 @@
   category: routines
   kind: solve
   prompt: "Sag mir jeden Morgen Bescheid, wenn meine Bahn laut {web}/fahrplan.html Verspätung hat."
+  followup: "Die RB 40."
   checks:
     - tool_called: "watch\\.create"
+    # The tool answering is not the watcher existing: watch.create reports a refusal as data.
+    - sql_rows: ["SELECT id FROM watchers WHERE deleted_at IS NULL", 1]
   confirm_tools: ['watch\.create']
   expected_confirmations: 1
   max_s: 90

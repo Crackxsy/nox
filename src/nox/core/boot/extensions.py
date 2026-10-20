@@ -48,7 +48,12 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "settings",
     # After settings and proactive: it uses the Twitch login and the notices.
     "stream",
+    # The dashboard's local-model setup (`ai.setup.*`); idle until the user starts a run.
+    "localai",
     "remote",
+    "watch",
+    # After watch and before capabilities: learning offers depend on the gaps it reports.
+    "skills",
     # Network access for paired devices; inert unless `ipc.lan.enabled`.
     "lan",
     # Late on purpose: it describes the others, and reads the registry they filled.

@@ -176,7 +176,12 @@ def build_appliers(core: _Core) -> dict[str, Applier]:
 
         return apply
 
+    async def set_computer_use(value: Any) -> None:
+        # Read before every input event, so switching it off ends a running session at once.
+        config.desktop.computer_use.enabled = bool(value)
+
     return {
+        "desktop.computer_use.enabled": set_computer_use,
         "identity.name": set_identity_name,
         "identity.user_display_name": set_user_display_name,
         "identity.ui_language": set_ui_language,
@@ -270,7 +275,13 @@ def install(core: _Core) -> SettingsRuntime:
         bus=core.bus,
         gate=security.gate,
     )
-    secrets = SecretsService(security.secrets, pin=security.pin, audit=security.audit)
+    hooks = getattr(core, "secret_name_hooks", None)
+    secrets = SecretsService(
+        security.secrets,
+        pin=security.pin,
+        audit=security.audit,
+        extra_names=(lambda name: any(hook(name) for hook in hooks)) if hooks is not None else None,
+    )
     twitch_auth = TwitchAuthService(
         secrets=security.secrets,
         client_factory=security.egress.client,

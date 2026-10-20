@@ -21,6 +21,7 @@ import ipaddress
 import os
 import shutil
 import socket
+import sys
 import threading
 import time
 import uuid
@@ -31,7 +32,10 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+import psutil
+
 from kann_alles.confirm import ConfirmDecision, decide
+from kann_alles.skill_builder import WorldSkillBuilder
 from kann_alles.tasks import Environment
 from nox.app import DEFAULTS_PATH, PROFILES_DIR, NoxCore
 from nox.core.config import load_config
@@ -39,7 +43,8 @@ from nox.core.events import E, Event
 
 START_TIMEOUT_S = 180.0
 #: Environment the world replaces while it runs, and restores afterwards.
-ISOLATED_ENV = ("NOX_HOME", "NOX_USER_CONFIG")
+ISOLATED_ENV = ("NOX_HOME", "NOX_USER_CONFIG", "NOX_COMPUTER_USE_DRY_RUN")
+MCP_SERVER = Path(__file__).resolve().parent / "envs" / "mcp_server.py"
 STOP_TIMEOUT_S = 30.0
 WEB_ROOT = Path(__file__).resolve().parent / "envs" / "web"
 SENSES_ROOT = Path(__file__).resolve().parent / "envs" / "senses"
@@ -161,6 +166,8 @@ class World:
         self.probe = Probe()
         self.confirm_tools: list[str] = []
         self.forbidden_tools: list[str] = []
+        self.approve_high: list[str] = []
+        self._activate_skills = False
         self._privacy_mode = privacy_mode
         self._log_level = log_level
         #: Only true in a declared isolated environment (VM/container). It is the one thing that
@@ -169,6 +176,7 @@ class World:
         self.core: NoxCore | None = None
         #: Tool families whose backends this world replaced by simulations (see the docstring).
         self.simulated: frozenset[str] = frozenset()
+        self._games: list[str] = []
         self._saved_env: dict[str, str | None] = {}
         self._unsub: Callable[[], None] | None = None
 
@@ -212,6 +220,8 @@ class World:
         self._saved_env = {key: os.environ.get(key) for key in ISOLATED_ENV}
         os.environ["NOX_HOME"] = str(home)
         os.environ.pop("NOX_USER_CONFIG", None)
+        # Computer use runs every guard but never sends input from the benchmark's world.
+        os.environ["NOX_COMPUTER_USE_DRY_RUN"] = "1"
 
     def _restore_env(self) -> None:
         for key, value in self._saved_env.items():
@@ -226,10 +236,15 @@ class World:
         core = NoxCore(self._config(), voice=False, profiles_dir=PROFILES_DIR)
         await asyncio.wait_for(core.start(), timeout=START_TIMEOUT_S)
         self.core = core
+        self._games = list(core.config.sensors.game.process_names)
         assert core.orchestrator is not None and core.bus is not None
         core.orchestrator.speaker = RecordingSpeaker(self.probe)
         self._wrap_executor(core)
         await self.simulate(core)
+        skills = self._skills()
+        if skills is not None:
+            # Learning in this world writes a known plugin; see `kann_alles.skill_builder`.
+            skills.builder = WorldSkillBuilder()
         self._unsub = core.bus.subscribe(E.SECURITY_PERMISSION_REQUESTED, self._on_confirm)
         return core
 
@@ -281,6 +296,7 @@ class World:
             root=self.root,
             isolated=self._isolated,
             simulated=self.simulated,
+            approve_high=self.approve_high,
         )
         self.probe.confirmations += 1
         self.probe.decisions.append(verdict)
@@ -301,6 +317,7 @@ class World:
         confirm_tools: list[str] | None = None,
         forbidden_tools: list[str] | None = None,
         fresh_session: bool = True,
+        approve_high: list[str] | None = None,
     ) -> None:
         """Reset the sandbox, seed files/notes/reminders and (by default) start a new
         conversation, so no task sees what the previous one talked about."""
@@ -308,6 +325,8 @@ class World:
         self.probe.reset()
         self.confirm_tools = list(confirm_tools or [])
         self.forbidden_tools = list(forbidden_tools or [])
+        self.approve_high = list(approve_high or [])
+        await self._prepare_hands(env)
         shutil.rmtree(self.sandbox, ignore_errors=True)
         self.sandbox.mkdir(parents=True)
         for relative, content in env.files.items():
@@ -344,6 +363,70 @@ class World:
                     now.isoformat(),
                 ),
             )
+
+    # -- MCP servers, skills, watchers, computer use ------------------------------------------
+
+    def _skills(self) -> Any:
+        assert self.core is not None
+        runtime = (self.core.extensions or {}).get("skills")
+        return getattr(runtime, "service", None)
+
+    def _mcp(self) -> Any:
+        assert self.core is not None
+        runtime = (self.core.extensions or {}).get("mcp")
+        client = getattr(runtime, "client", None)
+        return getattr(client, "manager", None)
+
+    async def _prepare_hands(self, env: Environment) -> None:
+        """Per task: only the fake MCP servers it names, no skills or watchers left from the last
+        task, computer use and the fake game exactly as it asks."""
+        assert self.core is not None and self.core.db is not None
+        from nox.core.config.hands import McpServerConfig  # noqa: PLC0415 - newer checkouts only
+
+        manager = self._mcp()
+        if manager is not None:
+            for server_id in manager.server_ids():
+                await manager.remove(server_id, by="eval")
+            for name in env.mcp_servers:
+                cfg = McpServerConfig(
+                    id=name,
+                    name=f"Fake {name}",
+                    command=[sys.executable, str(MCP_SERVER), name, self.web.url],
+                    network=False,
+                    read_only_tools=["fetch"] if name == "fetch" else [],
+                )
+                await manager.add(cfg, by="eval")
+                await manager.approve(name, by="eval")
+        skills = self._skills()
+        if skills is not None:
+            await skills.wait()
+            for record in skills.records():
+                await skills.forget(record.id, by="eval")
+        with contextlib.suppress(Exception):
+            self.core.db.execute("DELETE FROM watchers")
+        config = self.core.config
+        config.desktop.computer_use.enabled = env.computer_use
+        config.sensors.game.process_names = (
+            [psutil.Process().name()] if env.fake_game else self._games
+        )
+        self._activate_skills = env.activate_skills
+
+    async def settle(self) -> None:
+        """Before checks: let a skill build finish, then click "Aktivieren" if the task says so."""
+        skills = self._skills()
+        if skills is None:
+            return
+        await skills.wait()
+        if self._activate_skills:
+            for record in skills.records():
+                if record.state.value == "ready":
+                    await skills.activate(record.id, pin=None, by="eval-user")
+
+    def skill_states(self) -> dict[str, str]:
+        skills = self._skills()
+        if skills is None:
+            return {}
+        return {record.id: record.state.value for record in skills.records()}
 
     def sql_rows(self, query: str) -> list[tuple[Any, ...]]:
         assert self.core is not None and self.core.db is not None
