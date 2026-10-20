@@ -521,6 +521,11 @@ class McpServerManager:
                 server.state, server.reason = ServerState.BLOCKED, str(exc)
                 log.warning("mcp.server_blocked", server=cfg.id, reason=str(exc))
                 return
+            refusal = str(getattr(self._launcher, "refusal", "") or "") if cfg.command else ""
+            if refusal:
+                # No sandbox and no opt-in: say so instead of starting the process unsandboxed.
+                server.state, server.reason = ServerState.BLOCKED, refusal
+                return
             if not self._approvals.approved(cfg.id, fingerprint(cfg)):
                 self._forget_grants(cfg.id)
                 server.state = ServerState.NEEDS_APPROVAL

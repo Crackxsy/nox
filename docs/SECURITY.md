@@ -265,7 +265,8 @@ Raspberry Pi that is bubblewrap (`bwrap`):
   `--args <fd>`), never its command line or its environment, and only names on the allowlist
   (`model.checked_env`) are accepted at all.
 - **Fail closed:** bwrap and the egress path are probed when the sandbox is built. If bwrap
-  cannot build its namespaces, nothing runs; if only the egress path fails, runs without declared
+  cannot build its namespaces, nothing runs - no command, no skill test, no local MCP server
+  (only the user's `mcp.allow_unsandboxed` starts those as plain processes); if only the egress path fails, runs without declared
   egress still work and declared egress is refused.
 
 For this, `nox.service` allows the namespaces bwrap creates and the `@mount` system calls inside
@@ -310,9 +311,16 @@ is refused before the server sees it, and a server that uses the network is not 
 privacy modes private and offline. The client offers servers nothing - no sampling, no roots, no
 elicitation. Where the sandbox can be built, a local server runs inside it (`Sandbox.start`,
 its own private work folder, no egress unless it declares network, then public hosts only through
-its own proxy); otherwise it runs with the plugin workers' environment allow-list, inside the
-core's job object, without a console window - process hygiene, not isolation; the dashboard says
-`sandboxed: false`. Removing or switching off a server and approving a changed command revoke
+its own proxy, with the same network guard as a shell command - the Home Assistant host and its
+addresses refused, every egress decision audited). Where it cannot (no backend, `bwrap` missing
+or not the pinned build, the user-namespace probe failing, any other error), local servers fail
+closed: none is started and its status says why (`blocked`). Only `mcp.allow_unsandboxed: true`,
+set by the user in `user.yaml` (not a dashboard setting, not reachable by any tool), runs them
+without the sandbox - with the plugin workers' environment allow-list, inside the core's job
+object, without a console window: process hygiene, not isolation; the dashboard says
+`sandboxed: false`. Every tool of a remote server, and of a local server that declares network,
+is a network tool for the permission engine: refused in private and offline, and asked again in a
+conversation that holds untrusted content, even when the user marked it read-only. Removing or switching off a server and approving a changed command revoke
 every "remember" for its tools (`session:mcp/<id>.`).
 
 ## Self-built skills

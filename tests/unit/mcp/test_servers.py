@@ -14,7 +14,7 @@ import pytest
 from nox.core.config.hands import McpConfig, McpServerConfig
 from nox.core.state import PrivacyMode
 from nox.mcp.client import HttpTransport, McpClient, RemoteTool
-from nox.mcp.launch import ProcessLauncher
+from nox.mcp.launch import ProcessLauncher, RefusingLauncher, ServerLauncher
 from nox.mcp.policy import fingerprint
 from nox.mcp.servers import (
     ApprovalStore,
@@ -80,6 +80,7 @@ def manager(
     cloud: bool = True,
     approve: bool = True,
     revoked: list[str] | None = None,
+    launcher: ServerLauncher | None = None,
 ) -> McpServerManager:
     approvals = ApprovalStore(tmp_path / "approved.json")
     if approve:
@@ -88,7 +89,7 @@ def manager(
     return McpServerManager(
         config=lambda: holder.config,
         registry=registry,
-        launcher=ProcessLauncher(),
+        launcher=launcher or ProcessLauncher(),
         http_client=httpx.AsyncClient,
         secrets=secrets or Secrets(),
         approvals=approvals,
@@ -317,6 +318,22 @@ async def test_tools_of_a_remote_url_server_are_network_tools(
     spec = registry.get("mcp.remote.lookup")
     assert spec is not None and spec.risk is Risk.LOW
     assert spec.network is True and spec.local is False
+
+
+async def test_without_a_sandbox_a_local_server_is_blocked_and_never_started(
+    tmp_path: Path, registry: ToolRegistry
+) -> None:
+    holder = Holder([server()])
+    refusal = "no sandbox is available here (RuntimeError: bwrap is not installed)"
+    mgr = manager(tmp_path, registry, holder, launcher=RefusingLauncher(refusal))
+    await mgr.start()
+    try:
+        row = mgr.status()[0]
+        assert row["state"] == ServerState.BLOCKED.value and row["reason"] == refusal
+        assert row["sandboxed"] is False and registry.names() == []
+        assert not (tmp_path / "servers" / "fake").exists()  # no process, no work folder
+    finally:
+        await mgr.stop()
 
 
 async def test_arguments_naming_a_lock_are_refused_before_the_server_sees_them(

@@ -9,7 +9,10 @@ it dies with the core, and stderr kept only as a short tail for the status line.
 That is process hygiene, not a sandbox: the process still runs as the user. The sandbox (Low
 Integrity token and network through the Nox proxy on Windows, `bwrap` on Linux) is built in
 `nox.sandbox`. `ServerLauncher` is the interface it implements; `default_launcher()` returns it
-when it is installed and says honestly - through `sandboxed` - when it is not.
+when it can be built. When it cannot (no backend, `bwrap` missing or not the pinned build, the
+user-namespace probe failing), local servers fail closed: `RefusingLauncher` starts nothing and
+its `refusal` is the honest status line. Only the user's own `mcp.allow_unsandboxed: true` in
+`user.yaml` - not settable from the dashboard or by the model - falls back to `ProcessLauncher`.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ import json
 import subprocess
 import sys
 from collections import deque
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -33,6 +36,7 @@ log = get_logger(__name__)
 __all__ = [
     "LaunchedServer",
     "ProcessLauncher",
+    "RefusingLauncher",
     "SandboxLauncher",
     "ServerLauncher",
     "default_launcher",
@@ -274,21 +278,70 @@ class SandboxLauncher:
         return _SandboxedServer(process)
 
 
-def default_launcher(job: JobLike | None = None) -> ServerLauncher:
-    """The sandbox when it can start long-running processes here, else `ProcessLauncher`.
+class RefusingLauncher:
+    """No usable sandbox and no opt-in: a local server is never started. `refusal` says why; the
+    manager shows it as the server's status instead of trying (fail closed)."""
+
+    sandboxed = False
+
+    def __init__(self, refusal: str) -> None:
+        self.refusal = refusal
+
+    async def launch(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        network: bool,
+    ) -> LaunchedServer:
+        del argv, cwd, env, network
+        raise McpClientError(self.refusal)
+
+
+def _without_sandbox(job: JobLike | None, why: str, *, allow_unsandboxed: bool) -> ServerLauncher:
+    if allow_unsandboxed:
+        log.warning("mcp.sandbox_unavailable_running_unsandboxed", error=why)
+        return ProcessLauncher(job)
+    log.warning("mcp.sandbox_unavailable_servers_refused", error=why)
+    return RefusingLauncher(
+        f"no sandbox is available here ({why}), so local MCP servers are not started; "
+        "only `mcp.allow_unsandboxed: true` in user.yaml runs them without one"
+    )
+
+
+def default_launcher(
+    job: JobLike | None = None,
+    *,
+    allow_unsandboxed: bool = False,
+    home_assistant_ips: Iterable[str] = (),
+    blocked_hosts: Iterable[str] = (),
+    audit: Callable[[Any], None] | None = None,
+    prefer_appcontainer: bool = True,
+    accept_weak: bool = False,
+) -> ServerLauncher:
+    """The sandbox when it can start long-running processes here; otherwise nothing runs.
 
     `nox.sandbox` is looked up, not imported, so this file works on a checkout without it. Its
     one-shot `run()` is not enough for a server that stays up: only a sandbox with `start()` is
-    used, and the dashboard says `sandboxed: false` otherwise.
+    used. Any failure to build it - a missing module included - fails closed (`RefusingLauncher`)
+    unless the user opted into `allow_unsandboxed`. The sandbox gets the same network guard as a
+    shell command (`nox.hands.install`): the Home Assistant addresses and host refused, and every
+    egress decision audited.
     """
     try:
         module = importlib.import_module("nox.sandbox")
-        sandbox = module.make_sandbox()
-    except ImportError:
-        return ProcessLauncher(job)
-    except Exception as exc:  # noqa: BLE001 - no backend here; the process launcher remains
-        log.warning("mcp.sandbox_unavailable", error=f"{type(exc).__name__}: {exc}")
-        return ProcessLauncher(job)
+        sandbox = module.make_sandbox(
+            home_assistant_ips=tuple(home_assistant_ips),
+            blocked_hosts=tuple(blocked_hosts),
+            audit=audit,
+            prefer_appcontainer=prefer_appcontainer,
+            accept_weak=accept_weak,
+        )
+    except Exception as exc:  # noqa: BLE001 - whatever failed, no server runs unsandboxed
+        why = f"{type(exc).__name__}: {exc}"
+        return _without_sandbox(job, why, allow_unsandboxed=allow_unsandboxed)
     if not callable(getattr(sandbox, "start", None)):
-        return ProcessLauncher(job)
+        why = "this sandbox cannot run long-lived processes"
+        return _without_sandbox(job, why, allow_unsandboxed=allow_unsandboxed)
     return SandboxLauncher(sandbox, module)

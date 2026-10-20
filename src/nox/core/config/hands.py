@@ -69,6 +69,10 @@ class McpConfig(StrictSection):
     start_timeout_s: float = Field(default=30.0, gt=0.0, le=300.0)
     call_timeout_s: float = Field(default=60.0, gt=0.0, le=600.0)
     max_tools_per_server: int = Field(default=64, ge=1, le=256)
+    #: Start local servers as plain processes when no sandbox can be built here. Off, such a
+    #: server is not started and its status says why (fail closed). Only the user sets this, in
+    #: `user.yaml`: it is not a dashboard setting and no tool can change it.
+    allow_unsandboxed: bool = False
 
     @model_validator(mode="after")
     def _unique_ids(self) -> McpConfig:

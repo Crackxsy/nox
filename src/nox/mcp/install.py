@@ -157,6 +157,39 @@ class McpExtension:
             await self.bridge.stop()
 
 
+def _sandbox_guard(config: Any) -> dict[str, Any]:
+    """The Home Assistant host and its addresses, refused to a sandboxed server exactly as to a
+    shell command (`nox.hands.install`)."""
+    host = str(config.home.host or "").strip().lower()
+    ips: set[str] = set()
+    if host:
+        with contextlib.suppress(ImportError, OSError, ValueError):
+            from nox.sandbox.netguard import resolve_all
+
+            ips = {str(ip) for ip in resolve_all(host, config.home.port)}
+    return {"home_assistant_ips": sorted(ips), "blocked_hosts": [host] if host else []}
+
+
+def _egress_audit(audit: Any) -> Callable[[Any], None] | None:
+    """Every egress decision of a sandboxed server's proxy, in the audit log."""
+    if audit is None:
+        return None
+
+    def record(decision: Any) -> None:
+        with contextlib.suppress(Exception):
+            audit.append(
+                actor="mcp",
+                tool="sandbox",
+                action="egress",
+                target=f"{decision.host}:{decision.port}",
+                decision="allow" if decision.allowed else "deny",
+                result="ok" if decision.allowed else "denied",
+                details={"reason": str(decision.reason)[:200]} if decision.reason else None,
+            )
+
+    return record
+
+
 def install_client(core: Any) -> McpClientRuntime | None:
     if core.tool_registry is None:
         return None
@@ -172,7 +205,14 @@ def install_client(core: Any) -> McpClientRuntime | None:
     manager = McpServerManager(
         config=lambda: core.config.mcp,
         registry=core.tool_registry,
-        launcher=default_launcher(getattr(core, "job", None)),
+        launcher=default_launcher(
+            getattr(core, "job", None),
+            allow_unsandboxed=core.config.mcp.allow_unsandboxed,
+            audit=_egress_audit(core.security.audit),
+            prefer_appcontainer=bool(core.config.hands.windows_appcontainer),
+            accept_weak=bool(core.config.hands.accept_weak_sandbox),
+            **_sandbox_guard(core.config),
+        ),
         http_client=core.security.egress.client,
         secrets=core.security.secrets,
         approvals=ApprovalStore(nox_home() / "mcp" / "approved.json"),

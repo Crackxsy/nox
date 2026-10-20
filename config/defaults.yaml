@@ -525,6 +525,8 @@ mcp:                             # other people's MCP servers, as tools named mc
   start_timeout_s: 30.0
   call_timeout_s: 60.0
   max_tools_per_server: 64
+  allow_unsandboxed: false       # true starts local servers as plain processes when no sandbox can
+                                 # be built here; false (default) leaves them stopped and says why.
 
 skills:                          # capabilities Nox builds for itself (never in its source tree):
                                  # a plugin under <nox home>/plugins, checked, tested and only
