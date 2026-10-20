@@ -500,6 +500,10 @@ export const enMore: Record<MoreKey, string> = {
   lan_ca_fingerprint_hint: 'Compare it before installing: the device shows it in the certificate’s details.',
   lan_devices_title: 'Paired devices',
   lan_devices_empty: 'No device paired yet.',
+  lan_devices_empty_body:
+    'A paired phone or tablet reaches Nox on your home network: answer questions, switch lights, press Stop - from the sofa too.',
+  lan_pair_open_first: 'Pair a phone',
+  lan_pair_open_more: 'Pair another device',
   lan_this_device: 'this device',
   lan_device_idle: 'Not seen for {0} days. If it is no longer in use, remove it.',
   lan_state_active: 'active',

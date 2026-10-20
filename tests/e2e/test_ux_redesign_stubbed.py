@@ -536,6 +536,8 @@ class Journey:
                   const r = el.getBoundingClientRect();
                   if (r.width <= 1 || r.height <= 1) continue; // hidden for the eye (sr-only)
                   if (getComputedStyle(el).visibility === 'hidden') continue;
+                  // Stopp sits at the header's spot, outside the sheet on purpose.
+                  if (el.classList.contains('stop--corner')) continue;
                   if (r.bottom < 0 || r.top > innerHeight) continue;
                   const text = (el.textContent || '').slice(0, 30);
                   const name = el.tagName + '.' + el.className + ' ' + text;
@@ -682,14 +684,20 @@ def test_household_journey(journey: Journey) -> None:  # noqa: PLR0915 - one jou
     sheet.get_by_role("button", name="Ablehnen").click()
     expect(page.get_by_text("Abgelehnt. Nox tut es nicht.")).to_be_visible()
 
-    # 4. Pair a phone.
+    # 4. Pair a phone: the empty list says what pairing is for and opens the pairing sheet.
+    expect(page.get_by_text("Noch kein Gerät gekoppelt.")).to_be_visible()
+    page.get_by_role("button", name="Handy koppeln").click()
+    pair_sheet = page.get_by_role("dialog", name="Neues Gerät koppeln")
+    expect(pair_sheet).to_be_visible()
     page.get_by_label("Name des Geräts (freiwillig)").fill("Handy")
     page.get_by_role("button", name="Code erzeugen").click()
     expect(page.get_by_role("img", name=re.compile("QR-Code zum Koppeln"))).to_be_visible(
         timeout=UI_TIMEOUT_MS
     )
     journey.shot("07-koppeln")
-    journey.gutter(None, "pairing")
+    journey._selector = "dialog[open]"
+    journey.gutter(pair_sheet, "pairing sheet")
+    journey.axe("koppeln")
     stub.devices.append(
         {
             "id": "d1",
@@ -701,6 +709,7 @@ def test_household_journey(journey: Journey) -> None:  # noqa: PLR0915 - one jou
     )
     stub.push("remote.paired", {"channel": "lan", "name": "Handy"})
     expect(page.get_by_text("Handy ist gekoppelt.")).to_be_visible(timeout=UI_TIMEOUT_MS)
+    expect(pair_sheet).to_have_count(0)
     journey.no_sideways_scroll()
 
     # 5. Add an extension under Fähigkeiten › Für Fortgeschrittene.

@@ -513,6 +513,10 @@ export const deMore = {
   lan_ca_fingerprint_hint: 'Vor dem Installieren vergleichen: Das Gerät zeigt ihn in den Details des Zertifikats.',
   lan_devices_title: 'Gekoppelte Geräte',
   lan_devices_empty: 'Noch kein Gerät gekoppelt.',
+  lan_devices_empty_body:
+    'Mit einem gekoppelten Handy oder Tablet erreichst du Nox im Heimnetz: Fragen beantworten, Licht schalten, Stopp drücken – auch vom Sofa aus.',
+  lan_pair_open_first: 'Handy koppeln',
+  lan_pair_open_more: 'Weiteres Gerät koppeln',
   lan_this_device: 'dieses Gerät',
   lan_device_idle: 'Seit {0} Tagen nicht gesehen. Wird es nicht mehr genutzt, entferne es.',
   lan_state_active: 'aktiv',

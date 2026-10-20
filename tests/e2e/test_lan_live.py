@@ -274,6 +274,7 @@ def test_a_household_pairs_confirms_and_removes(
         expect(desktop.get_by_text("Handy über Telegram (aus)")).to_be_visible()
         shot(desktop, "desktop-devices-empty")
         _axe(desktop, "the PC's Devices tab")
+        desktop.get_by_role("button", name="Handy koppeln").click()
         desktop.get_by_label("Name des Geräts (freiwillig)").fill("Handy")
         desktop.get_by_role("button", name="Code erzeugen").click()
         expect(desktop.get_by_role("img", name=re.compile("QR-Code zum Koppeln"))).to_be_visible()
@@ -298,7 +299,8 @@ def test_a_household_pairs_confirms_and_removes(
 
         # ---- 2. the PC sees it arrive, under the name the PC gave it --------------------------
         expect(desktop.get_by_text("Handy ist gekoppelt.")).to_be_visible(timeout=UI_TIMEOUT_MS)
-        expect(desktop.get_by_label("Name des Geräts (freiwillig)")).to_have_value("")
+        # The pairing sheet closed by itself once the phone arrived.
+        expect(desktop.get_by_label("Name des Geräts (freiwillig)")).to_have_count(0)
         devices = desktop.get_by_role("list", name="Gekoppelte Geräte")
         expect(devices.get_by_role("listitem").filter(has_text="Handy")).to_be_visible()
         shot(desktop, "desktop-device-arrived")
@@ -419,6 +421,7 @@ def test_a_household_pairs_confirms_and_removes(
         tablet.get_by_role("button", name="Ich habe einen Code").click()
         # The PC's page still believes no PIN is set: the refusal says one is needed, and the
         # field for it appears right there.
+        desktop.get_by_role("button", name="Weiteres Gerät koppeln").click()
         desktop.get_by_role("button", name="Code erzeugen").click()
         expect(desktop.get_by_role("alert").filter(has_text="PIN")).to_be_visible()
         desktop.get_by_label("Sicherheits-PIN").fill(PIN)

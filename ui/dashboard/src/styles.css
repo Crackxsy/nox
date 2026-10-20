@@ -3608,7 +3608,7 @@ details > summary:hover {
 /* Stopp inside a modal surface, at the header's Stopp spot (the header is inert behind it). */
 .stop--corner {
   position: fixed;
-  top: 10px;
+  top: 12px;
   right: 40px;
   z-index: 2;
   box-shadow: var(--shadow);
@@ -3622,7 +3622,7 @@ details > summary:hover {
 
 @media (max-width: 719px) {
   .stop--corner {
-    top: 6px;
+    top: 10px;
     right: var(--s-4);
   }
 }
