@@ -123,4 +123,10 @@ export interface RigDefinition {
   clips: Readonly<Record<string, Clip>>;
   poses: Readonly<Record<string, PoseFrame>>;
   mesh: { columns: number; rows: number };
+  /**
+   * Feature flag for the relief (2.5D) renderer. A converted creature names the directory of its
+   * relief assets (`relief.json` + atlases, made by `scripts/relief/build_relief.py`); everything
+   * else keeps this rig. `enabled: false` keeps the assets but switches the renderer off.
+   */
+  relief: { dir: string; enabled: boolean } | null;
 }

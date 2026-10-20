@@ -451,15 +451,24 @@ export function isStillExpressionName(x: string): x is StillExpressionName {
  * frame of a named state so `render_variants.py` can screenshot it headlessly. Unknown names fall
  * back to `normal`. */
 export function stillState(name: string | null): PetState {
-  const preset = name && isStillExpressionName(name) ? STILL_PRESETS[name] : STILL_PRESETS.normal;
+  const preset = name && isStillExpressionName(name) ? STILL_PRESETS[name] : previewPreset(name);
   return {
     ...INITIAL_STATE,
-    connected: true,
+    connected: name !== 'offline',
     functional: preset.functional,
     expression: preset.expression,
     intensity: 0.85,
     speakingLevel: preset.functional === 'speaking' ? 0.8 : 0,
   };
+}
+
+/** Beyond the six gallery presets, a preview may name any of the 21 expressions (idle and
+ * showing it), any functional state (with a neutral face), or `offline` (no core). Anything else
+ * is `normal`. Used by the relief renderer's per-state recordings. */
+function previewPreset(name: string | null): { functional: Functional; expression: Expression } {
+  if (name && isExpression(name)) return { functional: 'idle', expression: name };
+  if (name && FUNCTIONALS.has(name)) return { functional: name as Functional, expression: 'normal' };
+  return STILL_PRESETS.normal;
 }
 
 export function toInput(state: PetState): PetInput {

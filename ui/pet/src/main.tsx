@@ -24,6 +24,13 @@ const still = queryFlag(window.location.search, 'still');
 const animate = queryFlag(window.location.search, 'animate');
 const stillExpression = queryString(window.location.search, 'expression');
 const size = queryInt(window.location.search, 'size') ?? undefined;
+// Dev-only, with `?animate=1`: `?tour=idle,happy,feed,...` steps through preview states every
+// `?every=` ms (state transitions without a core), `?renderer=rig` forces the older rig renderer
+// for before/after recordings of a creature that has been converted to the relief renderer.
+const tourParam = animate ? queryString(window.location.search, 'tour') : null;
+const tour = tourParam ? tourParam.split(',').filter(Boolean) : null;
+const tourEveryMs = queryInt(window.location.search, 'every') ?? 3500;
+const forceRig = animate && queryString(window.location.search, 'renderer') === 'rig';
 // One language per window (#43/#55): the same rule the dashboard uses, so a German desktop shows
 // German in both. `<html lang>` follows, so a screen reader pronounces the words correctly.
 const lang = pickLang(window.location.search, navigator.languages ?? []);
@@ -41,6 +48,9 @@ createRoot(document.getElementById('root')!).render(
       animate={animate}
       stillExpression={stillExpression}
       size={size}
+      tour={tour}
+      tourEveryMs={tourEveryMs}
+      forceRig={forceRig}
     />
   </React.StrictMode>,
 );
