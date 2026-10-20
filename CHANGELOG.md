@@ -43,12 +43,13 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 - **Windows: the sandbox keeps off this computer's local services and the LAN.** Where Windows
   does not enforce AppContainer loopback isolation, the installer now adds Windows Filtering
   Platform rules for Nox's sandbox containers (one optional step, ticked by default, one UAC
-  prompt; uninstall removes them): loopback, private, link-local and CGNAT destinations are blocked
-  except the in-container egress forwarder's own ports. The loopback probe still decides: once it
-  observes the container being refused, the AppContainer counts as strong and shell commands run
-  without `hands.accept_weak_sandbox`. Workloads other than shell commands now use a fixed pool of
-  128 containers (`Nox.Sandbox.w000`...), assigned once per workload class, so the rules can name
-  every container SID up front. `nox sandbox firewall show|install|remove`.
+  prompt; uninstall removes them): each container is blocked from everything except its own
+  block of egress-forwarder ports on loopback (see Security). The loopback probe still decides:
+  once it observes the container being refused, the AppContainer counts as strong and shell
+  commands run without `hands.accept_weak_sandbox`. Workloads other than shell commands now use a
+  fixed pool of 128 containers (`Nox.Sandbox.w000`...), assigned once per workload class, so the
+  rules can name every container SID up front. `nox sandbox firewall show` lists the rules;
+  `install|remove` print the command for an administrator prompt.
 - **Nox discloses its AI voice on stream** (`stream.ai_voice_disclosure`, on by default): one line
   in the Twitch chat per stream session, through the permission-checked `twitch.chat.send`, and a
   small, semi-transparent "KI-Stimme" label on the OBS overlay (`system.ai_voice_label`; not on
@@ -222,6 +223,43 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   device list and revoking now only see Telegram devices.
 - Neither web server trusted `X-Forwarded-For` on purpose, but uvicorn's default did for loopback
   peers; it is off now, so rate limits and logs always see the real client address.
+
+### Security
+- **The installer never runs code from a user-writable folder elevated.** The sandbox-rules step
+  no longer starts Nox's own Python (per-user install, writable by the user's account) as an
+  administrator. A self-contained Windows PowerShell helper (.NET only, no cmdlet, no compiler, no
+  file of Nox's) is run by the system's `powershell.exe` through a bootstrap that checks its
+  SHA-256 against the value pinned into the installer and runs exactly the checked bytes; paths
+  reach it hex-encoded, never as source text. It keeps a copy in the admin-only
+  `%ProgramFiles%\Nox Sandbox Rules` (explicit, verified ACL) and reports to
+  `HKLM\SOFTWARE\Nox\SandboxRules` instead of a file in the user's temp folder. Uninstall runs that
+  protected copy whenever Nox's rules may exist - also rules an older build added - and a fresh
+  uninstall log drops 0.5.0's elevated `python.exe` uninstall step. `nox sandbox firewall
+  install|remove` now refuse and print the helper's command, by absolute paths from the Windows
+  API (never `%SystemRoot%`/`%ProgramFiles%`, which the user's own environment can redirect).
+- **Sandbox network rules are an allowlist by construction:** per container a hard block of
+  everything (connect and accept, IPv4 and IPv6) plus one permit to that container's own block of
+  forwarder ports (47100-47615, four ports per container). Before and during every run that uses
+  the egress forwarder, Nox checks that only its own forwarder (PID and creation time) listens in
+  that block; a foreign listener refuses or ends the run. When Windows has reserved the block
+  (an excluded port range), the error says so.
+- **Session grants end with the session** (#138): `end_session()` runs on a new conversation, the
+  idle timeout and core shutdown; remembered commands (`cmd:` grants) are revoked on a privacy
+  mode change, the kill switch and taint, and cover the exact command (program and every argument,
+  hashed) instead of program and subcommand.
+- **IRC/Twitch:** CR, LF and NUL are refused in `twitch.chat.send`, the IRC client, channel, nick
+  and token, and the disclosure texts in the config (no IRC command injection).
+- **Model downloads:** Kokoro files are pinned to an immutable revision and SHA-256; every model
+  download is size-capped while streaming, existing files are re-verified by hash, and a switch to
+  the privacy modes `offline`/`private` aborts a running download.
+- **Build supply chain:** the embeddable Python and the pip wheel are pinned by immutable URL and
+  SHA-256, and pip installs itself from that wheel without an index; the dependency lock is
+  exported with hashes and installed with `--require-hashes --only-binary=:all:`. A new CI job
+  builds the installer, installs it silently with the sandbox rules, runs `nox doctor`, installs
+  over itself, uninstalls and checks that files and rules are gone.
+- **Licenses:** the installer bundles GPL-3.0 components (Piper with espeak-ng) and now ships
+  LICENSE, NOTICE, COPYING (GPL-3.0), THIRD_PARTY_LICENSES.md and a written source offer
+  (SOURCE.txt, exact commit and build steps); the wizard shows the combined notice.
 
 
 ## [0.5.0] - 2026-10-14
