@@ -1,5 +1,5 @@
 """`ModerationGate.check` - each hard exclusion plus a benign message, and the configurable
-blocklist on top (Spec v0.2 Stream Bot §3.4/FR-9.9)."""
+blocklist on top."""
 
 from __future__ import annotations
 

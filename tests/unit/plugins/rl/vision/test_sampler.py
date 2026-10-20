@@ -1,6 +1,6 @@
-"""`FrameSampler` (ST-18-04/05): confidence gating before an event ever reaches the bus, the budget
+"""`FrameSampler`: confidence gating before an event ever reaches the bus, the budget
 guard's auto-disable after consecutive over-budget samples, cooldown-gated auto-recovery, and the
-manual override that always wins and never self-recovers (Spec v0.9 §4.4)."""
+manual override that always wins and never self-recovers."""
 
 from __future__ import annotations
 

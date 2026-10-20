@@ -1,5 +1,5 @@
-"""Template-matching recognizers against synthetic HUD fixtures (Spec §12.1 - deterministic,
-CI-safe; real-HUD-pixel accuracy is blocked on ES-04, see the module docstring in
+"""Template-matching recognizers against synthetic HUD fixtures (deterministic,
+CI-safe; real-HUD-pixel accuracy is blocked on real screenshots, see the module docstring in
 `nox_plugin_rl.recognizers`)."""
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def test_parse_clock_reads_m_ss() -> None:
 
 
 def test_parse_clock_rejects_invalid_seconds_gracefully() -> None:
-    """A blank/empty crop never produces a confident false reading (A129: silence over guessing)."""
+    """A blank/empty crop never produces a confident false reading (silence over guessing)."""
     templates = recognizers.render_digit_templates()
     import numpy as np
 

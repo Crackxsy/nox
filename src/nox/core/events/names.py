@@ -128,7 +128,7 @@ class E:
     # `clips` plugin never talks to OBS directly (no cross-plugin tool call in the Plugin API), so
     # it only emits CLIP_REQUESTED; the core-side `nox.clips` service calls `obs.replay_buffer.save`
     # through `ToolExecutor` and reports the outcome as CLIP_SAVED/CLIP_FAILED, and CLIP_EXPORTED is
-    # emitted by the core `clip.export` tool. Full spec §8 names (clip.captured/created/reviewed/
+    # emitted by the core `clip.export` tool. Further planned names (clip.captured/created/reviewed/
     # discarded/trim_created/marker_added) are not implemented in this pass - flagged in the report.
     CLIP_REQUESTED = "clip.requested"
     CLIP_SAVED = "clip.saved"
@@ -176,7 +176,7 @@ class E:
     # Proactivity: every `nox.proactive.notify()`
     # decision is observable, whether it was delivered or held back - the dashboard toast panel and
     # the telegram remote plugin both consume PROACTIVE_NOTIFICATION; PROACTIVE_SUPPRESSED never
-    # fires for URGENT security/data-loss cases (those always get through, per B.13).
+    # fires for URGENT security/data-loss cases (those always get through).
     PROACTIVE_NOTIFICATION = "proactive.notification"
     PROACTIVE_SUPPRESSED = "proactive.suppressed"
 

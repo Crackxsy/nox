@@ -25,7 +25,7 @@ events:
   emits: [remote.message, telegram.connected, telegram.disconnected]
   listens: []
 # The secret *name* only: set with `nox secrets set nox/telegram/bot_token` after
-# creating a bot with BotFather (ES-04). Without it the plugin reports UNAVAILABLE and polls nothing.
+# creating a bot with BotFather. Without it the plugin reports UNAVAILABLE and polls nothing.
 secrets: [nox/telegram/bot_token]
 network:
   egress: ["api.telegram.org:443"]

@@ -1,22 +1,23 @@
-"""Render OP-1 pet concept variants to static PNGs (Decision Plan 2026-09-11, OP-1 technical plan).
+"""Render the pet concept variants to static PNGs.
 
 Builds `ui/pet` (`npm run build`), serves the `dist` output with `python -m http.server` on a free
 port (mounted at `/pet/`, matching the vite `base` and the core's real mount point), then opens the
 pet app's dev-only still-frame override (`?variant=<id>&expression=<expr>&still=1&size=512`, see
-`petState.ts::stillState` / `App.tsx`) in headless Chromium via Playwright for each of the 4 OP-1
+`petState.ts::stillState` / `App.tsx`) in headless Chromium via Playwright for each of the 4
 creature concepts x the 6 representative states, and screenshots the transparent canvas at
-512x512. Also renders one HTML contact sheet per variant and one overall sheet — via Playwright,
-not Pillow (not guaranteed to be installed), per the Decision Plan's explicit instruction.
+512x512. Also renders one HTML contact sheet per variant and one overall sheet - via Playwright,
+not Pillow (not guaranteed to be installed).
 
 Run with the project venv (Playwright + Chromium are installed there):
-    .venv/Scripts/python.exe ui/pet/scripts/render_variants.py [--skip-build]
+    .venv/Scripts/python.exe ui/pet/scripts/render_variants.py [--out DIR] [--skip-build]
 
-Output: E:\\Nox\\vault\\16 - Assets\\pet-variants\\<variant>-<expression>.png (24),
-        <variant>-sheet.png (4), all-variants.png (1).
+Output (default `ui/pet/out/variants/`): <variant>-<expression>.png (24), <variant>-sheet.png (4),
+all-variants.png (1).
 """
 
 from __future__ import annotations
 
+import argparse
 import shutil
 import subprocess
 import sys
@@ -30,7 +31,8 @@ from playwright.sync_api import sync_playwright
 
 PET_DIR = Path(__file__).resolve().parents[1]
 DIST_DIR = PET_DIR / "dist"
-OUT_DIR = Path(r"E:\Nox\vault\16 - Assets\pet-variants")
+#: Where the renders go; `--out` replaces it.
+OUT_DIR = PET_DIR / "out" / "variants"
 
 CONCEPT_VARIANTS = ["imp", "fox", "owl", "cat"]
 EXPRESSIONS = ["normal", "happy", "thinking", "speaking", "privacy", "sleeping"]
@@ -171,7 +173,13 @@ def _screenshot_html(page, html: str, out_path: Path) -> None:
 
 
 def main() -> None:
-    if "--skip-build" not in sys.argv or not DIST_DIR.exists():
+    global OUT_DIR
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", type=Path, default=OUT_DIR, help="output folder")
+    parser.add_argument("--skip-build", action="store_true", help="reuse an existing dist/")
+    args = parser.parse_args()
+    OUT_DIR = args.out
+    if not args.skip_build or not DIST_DIR.exists():
         npm_build()
     if not DIST_DIR.exists():
         raise RuntimeError(f"build did not produce {DIST_DIR}")

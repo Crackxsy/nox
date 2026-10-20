@@ -3,11 +3,11 @@
 Names (Process Model §Supervisor): `sup.auth` (first frame on every connection: `{token, role,
 pid}`), `sup.auth_ok` (response), `sup.heartbeat` (core -> supervisor, event), `sup.kill`
 (supervisor -> core request; also shell/tray -> supervisor request), `sup.stop` (shell/tray ->
-supervisor request, and supervisor -> core request: `{reason}`, B-6 graceful shutdown), `sup.ack`
+supervisor request, and supervisor -> core request: `{reason}`, graceful shutdown), `sup.ack`
 (response), `sup.status` (request/response), `sup.resume` (request: leave safe mode), `sup.error`
 (error).
 
-B-1 (handshake-once auth): a connection authenticates exactly once, with the first frame it sends.
+Handshake-once auth: a connection authenticates exactly once, with the first frame it sends.
 That frame must be `sup.auth`; the supervisor checks `payload.token` and replies `sup.auth_ok` (or
 `sup.error`/close on a wrong token). Every frame after that carries no token at all - the connection
 itself is the credential. Frames received before authentication succeeds are dropped and logged
@@ -61,7 +61,7 @@ def make(
 
 
 def auth_frame(token: str, *, role: str, pid: int, src: Source) -> Envelope:
-    """The one frame per connection that carries a token (B-1)."""
+    """The one frame per connection that carries a token."""
     return make(NAME_AUTH, {"token": token, "role": role, "pid": pid}, src, kind=Kind.REQUEST)
 
 

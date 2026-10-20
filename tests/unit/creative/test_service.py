@@ -1,6 +1,5 @@
 """`CreativeModeService`: maps `creative.app_detected`/`creative.app_left` onto
-`assistant.mode` + `system.mode_changed`, mirroring `NoxCore._h_mode_set` (Spec v0.7 §3.1 step 3/4,
-acceptance criteria in §8)."""
+`assistant.mode` + `system.mode_changed`, mirroring `NoxCore._h_mode_set`."""
 
 from __future__ import annotations
 
@@ -35,7 +34,7 @@ class TestCreativeModeService:
 
     async def test_left_does_not_touch_a_different_current_mode(self) -> None:
         """If something else changed the mode away from creative in the meantime, `app_left` must
-        not clobber it (Spec v0.7 §3.1 step 4: "unchanged existing mode-arbitration logic")."""
+        not clobber it (the existing mode-arbitration logic stays unchanged)."""
         core = FakeCore(mode="research")
         service = CreativeModeService(core)
         service.start()

@@ -36,10 +36,10 @@ def test_defaults_load_and_match_schema() -> None:
 
 
 def test_egress_allowlists_have_defaults_and_are_overridable(tmp_path: Path) -> None:
-    """OP-7 C / B-11: both lists exist in defaults.yaml, and a config without them still validates
+    """Both lists exist in defaults.yaml, and a config without them still validates
     (the model's own default is an empty global list, Ollama on the loopback list)."""
     cfg = load_config(DEFAULTS)
-    # The single shipped global entry is the user-initiated Twitch OAuth login (EPIC-21) - a
+    # The single shipped global entry is the user-initiated Twitch OAuth login - a
     # deliberate, documented default (docs/PRIVACY.md), not a host Nox ever contacts on its own.
     assert cfg.security.egress_allowlist == ["id.twitch.tv:443"]
     assert cfg.security.loopback_allowlist == ["127.0.0.1:11434"]

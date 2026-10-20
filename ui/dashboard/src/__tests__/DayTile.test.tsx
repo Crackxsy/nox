@@ -20,7 +20,7 @@ const TODAY = {
       start: '2026-10-15T11:00',
       end: '2026-10-15T11:30',
       title: 'Zahnarzt',
-      location: 'Witten',
+      location: 'Springfield',
     },
     {
       start: '2026-10-15T00:00',
@@ -110,7 +110,7 @@ describe('DayTile', () => {
     const { client, sent } = fakeClient(TODAY);
     render(<DayTile t={t} lang="de" client={client} onOpenSettings={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('Zahnarzt')).toBeTruthy());
-    expect(screen.getByText('Witten')).toBeTruthy();
+    expect(screen.getByText('Springfield')).toBeTruthy();
     expect(screen.getByText(t('day_all_day'))).toBeTruthy();
     expect(screen.getByText(t('day_fired'))).toBeTruthy();
     expect(

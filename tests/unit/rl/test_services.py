@@ -1,6 +1,6 @@
 """Core-side services (nox.rl.services): mode bridge, DB persistence, the callout engine's
 private-channel-only contract, post-match announcer, and session-end summary skip-if-empty
-behavior (Spec v0.3 §3.1/§3.2/§3.3/§7)."""
+behavior."""
 
 from __future__ import annotations
 

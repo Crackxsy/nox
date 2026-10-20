@@ -45,7 +45,7 @@ const LIGHT_BG = relLuminance([0.96, 0.96, 0.97]); // near-white host background
 const DARK_BG = relLuminance([0.04, 0.04, 0.07]); // near-black host background (#0b0b12-ish)
 
 describe('variant registry', () => {
-  it('registers neutral plus exactly the four OP-1 concept variants', () => {
+  it('registers neutral plus exactly the four concept variants', () => {
     expect(DEFAULT_VARIANT_ID).toBe('neutral');
     expect([...VARIANT_IDS].sort()).toEqual(['cat', 'fox', 'imp', 'neutral', 'owl'].sort());
     expect([...CONCEPT_VARIANT_IDS].sort()).toEqual(['cat', 'fox', 'imp', 'owl'].sort());

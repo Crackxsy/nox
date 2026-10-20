@@ -1,4 +1,4 @@
-"""Pairing lifecycle (ST-17-01, Spec v0.8 §3.1/§9): issue, redeem, expire, re-use, race, revoke.
+"""Pairing lifecycle: issue, redeem, expire, re-use, race, revoke.
 
 The negative paths matter more than the happy one here, so each of them is its own test and each
 asserts that no device row was created.

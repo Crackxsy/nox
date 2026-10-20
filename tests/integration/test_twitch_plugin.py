@@ -2,7 +2,7 @@
 worker against a fake IRC server, and a chat message / tool call is forwarded core -> worker ->
 IRC -> back. Modelled on `tests/integration/test_obs_plugin.py`.
 
-No Twitch bot account exists yet (ES-01), so there is no "real Twitch" network test here (unlike
+No Twitch bot account exists yet, so there is no "real Twitch" network test here (unlike
 `test_obs_plugin.py`'s `test_real_obs_connection_and_scene_list`) - nothing to skip against.
 """
 
@@ -27,7 +27,7 @@ from tests.unit.plugins.twitch.fake_irc_server import FakeIrcServer
 
 pytestmark = pytest.mark.timeout(180)
 
-# No Twitch bot account exists yet (ES-01): `nox/twitch/oauth_token`/`bot_username` are never set
+# No Twitch bot account exists yet: `nox/twitch/oauth_token`/`bot_username` are never set
 # in the real Windows Credential Manager this machine uses. `SecurityContext.build` falls back to a
 # store from `open_secret_store` when `NoxCore` does not hand it one (and `NoxCore.__init__` takes
 # no such override - out of this plugin's scope to add), so a keyring store over this fake,
@@ -147,7 +147,7 @@ def _profiles_dir_with_test_port(tmp_path: Path, *, port: int) -> Path:
     server's ephemeral port - the core authorizes a plugin's declared `network.egress` against the
     *active profile* at spawn time (ADR-013), and `config/profiles/stream.yaml` (owned by the
     security/config area) is not touched: only this tmp_path copy is. The real, non-loopback
-    Twitch hosts already live in that file's `egress_allowlist` (ST-11-04)."""
+    Twitch hosts already live in that file's `egress_allowlist`."""
     directory = tmp_path / "profiles"
     shutil.copytree(PROFILES_DIR, directory)
     stream_path = directory / "stream.yaml"

@@ -259,7 +259,7 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   reach for a tool. `llama3.2:3b`, which was the shipped default, hit 1 of 4 at 14.6 seconds an
   answer: it writes a friendly paragraph where a tool directive belongs, so the local fallback could
   talk and do nothing. `qwen3:4b-instruct` hits 3 of 4 at 2.9. Measured on the development machine
-  (GTX 1060 6 GB, Ryzen 7 7800X3D), and the probe ships so anyone can measure their own.
+  (reference machine, 6 GB GPU), and the probe ships so anyone can measure their own.
   [`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) has the table and two findings behind it: a bigger
   model is not the win, because the larger open models reason before answering and an 8B that fits
   this card takes 32.7 seconds; and "does not fit the VRAM" is survivable while "does not fit the

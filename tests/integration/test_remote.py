@@ -1,4 +1,4 @@
-"""Mobile Companion integration (EPIC-17, Spec v0.8 §9/§10): boots the real `NoxCore` headless,
+"""Mobile Companion integration: boots the real `NoxCore` headless,
 calls `nox.remote.install.install(core)` the way the integrator will, registers a test double for
 the telegram plugin's `telegram.send` tool on the real `ToolRegistry`, and drives a full pairing
 round trip plus the security-relevant commands over the real event bus.
@@ -211,7 +211,7 @@ async def test_resume_is_refused_from_the_phone_and_from_the_remote_role(
     engaged the permission engine denies every side-effecting tool, `telegram.send` included, so
     the phone is not even told "no" - the kill switch really does stop everything. That is the
     conservative behaviour, not a bug, and it is deliberately *not* carved out for `remote`
-    (ST-17-07: no remote-specific exception anywhere in the permission path)."""
+    (no remote-specific exception anywhere in the permission path)."""
     await _pair(core)
     await _message(core, "/kill", update_id=2)
     sent.clear()
@@ -305,9 +305,9 @@ async def test_a_real_kill_silences_the_notification_channel_too(
     core: NoxCore, sent: list[dict[str, Any]]
 ):
     """The kill-switch event that a *real* kill emits arrives after safe mode is already on, so
-    `telegram.send` is denied with it. FR-12.4 wants the phone told about a kill; the permission
-    engine says no side effects in safe mode, and the permission engine wins. Open point for the
-    PO (see the SP-14 note): either the phone stays uninformed after a kill, or a narrowly scoped
+    `telegram.send` is denied with it. The design wants the phone told about a kill; the permission
+    engine says no side effects in safe mode, and the permission engine wins. Open product
+    question: either the phone stays uninformed after a kill, or a narrowly scoped
     notify-only exception is designed - which is a product decision, not one to make here."""
     await _pair(core)
     sent.clear()

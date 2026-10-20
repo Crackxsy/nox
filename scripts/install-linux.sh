@@ -384,8 +384,8 @@ fi
 if [ ! -e "$NOX_HOME_DIR/user.yaml" ]; then
   say "Grundeinstellungen für einen Server schreiben"
   cat > "$work/user.yaml" <<'YAML'
-# Nox als Server (einmal von install-linux.sh geschrieben; frei änderbar, wird nie überschrieben).
-# Desktop-Plugins (Twitch, OBS) gehören auf den PC, von dem aus gestreamt wird.
+# Nox as a server (written once by install-linux.sh; edit freely, it is never overwritten).
+# Desktop plugins (Twitch, OBS) belong on the PC you stream from.
 plugins:
   enabled: []
 YAML

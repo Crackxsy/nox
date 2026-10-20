@@ -1,10 +1,10 @@
 /**
  * Pet state machine (Component Model: functional × expression × mood → animation parameters).
- * Pure functions only; the renderer never decides anything (D226: state separated from rendering).
+ * Pure functions only; the renderer never decides anything (state separated from rendering).
  *
- * Product decisions applied: D34 (21 expressions emerge from parameters with intensity; colour is
- * supporting, never the only signal), FR-4.13 / A390 (60 fps, 30 fallback, 10–30 or paused when
- * throttled), A146 (sleep tiers keep light animation running).
+ * Product decisions applied: 21 expressions emerge from parameters with intensity (colour is
+ * supporting, never the only signal); 60 fps, 30 fallback, 10–30 or paused when throttled; sleep
+ * tiers keep light animation running.
  */
 
 export type Functional =
@@ -77,17 +77,17 @@ export interface AnimParams {
   ring: Ring;
   label: string | null;
   /**
-   * Skip drawing entirely (FR-4.13/A390 "… or paused when throttled"). `deriveAnim` never sets it
+   * Skip drawing entirely ("… or paused when throttled"). `deriveAnim` never sets it
    * — no core state means "stop animating" — but `App.tsx` does for `?still=1`, where exactly one
    * frame is wanted, and `Pet.tsx` honours it in its animation loop.
    */
   paused: boolean;
 }
 
-export const BASE_HUE = 255; // violet, the neutral placeholder tint (creature design is OP-A)
+export const BASE_HUE = 255; // violet, the neutral placeholder tint (the creature design is still open)
 
-/** Base tint fed into deriveAnim; comes from the active PetVariant's palette (OP-1). Expression
- * deltas (hueShift below) shift away from this, they never replace it (D34: colour only supports). */
+/** Base tint fed into deriveAnim; comes from the active PetVariant's palette. Expression
+ * deltas (hueShift below) shift away from this, they never replace it (colour only supports). */
 export interface BasePalette {
   hue: number;
   sat: number;
@@ -107,7 +107,7 @@ interface ExpressionDelta {
    * way round the colour wheel. Use whenever the expression means a specific colour ("angry is
    * red"), because a relative shift only lands on that colour for one body hue: `-255°` from the
    * neutral 255° violet is red, but from the imp's 320° it is yellow-green and from the cat's 276°
-   * it is orange. Alarm states have to look the same on every variant (D238 — never colour alone,
+   * it is orange. Alarm states have to look the same on every variant (never colour alone,
    * but when colour speaks it must not lie).
    */
   hueTarget?: number;
@@ -125,7 +125,7 @@ export function blendHue(from: number, to: number, k: number): number {
   return (((from + delta * clamp(k)) % 360) + 360) % 360;
 }
 
-/** Per-expression deltas at full intensity. Mimicry/posture first; hue only as support (D34). */
+/** Per-expression deltas at full intensity. Mimicry/posture first; hue only as support. */
 export const EXPRESSION_TABLE: Record<Expression, ExpressionDelta> = {
   normal: {},
   happy: { mouthCurve: 0.7, eyeOpen: -0.1, glow: 0.2, bob: 0.3 },
@@ -156,7 +156,7 @@ export function isExpression(x: string): x is Expression {
 
 export const clamp = (x: number, lo = 0, hi = 1): number => Math.min(hi, Math.max(lo, x));
 
-/** Frame-rate policy: sleep tiers and unavailability reduce work (A146, FR-4.13). */
+/** Frame-rate policy: sleep tiers and unavailability reduce work. */
 export function fpsFor(sleep: SleepTier, functional: Functional, connected: boolean): number {
   if (!connected) return 10;
   if (functional === 'unavailable') return 10;
@@ -398,10 +398,10 @@ export function reduceEvent(state: PetState, name: string, payload: Record<strin
   }
 }
 
-// ---- still-frame dev override (render_variants.py, OP-1) -----------------------------------------
+// ---- still-frame dev override (render_variants.py) -----------------------------------------------
 
-/** The 6 representative states rendered per variant for the OP-1 gallery (Decision Plan
- * 2026-09-11): a mix of `functional` (speaking, privacy) and `expression` (normal, happy, thinking,
+/** The 6 representative states rendered per variant for the concept
+ * gallery: a mix of `functional` (speaking, privacy) and `expression` (normal, happy, thinking,
  * sleeping) states, matched to what most clearly shows the variant's silhouette and motion. */
 export const STILL_EXPRESSIONS = ['normal', 'happy', 'thinking', 'speaking', 'privacy', 'sleeping'] as const;
 export type StillExpressionName = (typeof STILL_EXPRESSIONS)[number];

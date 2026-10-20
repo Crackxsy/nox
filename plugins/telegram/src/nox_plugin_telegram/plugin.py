@@ -11,7 +11,7 @@ no events at all. `src/nox/remote` is where a message becomes a decision, so the
 live below the AI layer and cannot be talked out of a plugin (Security Model).
 
 Health is reported honestly: AVAILABLE only while long polling is actually connected, UNAVAILABLE
-with the secret's *name* when no `nox/telegram/bot_token` exists yet (ES-04) - never a fake "ok".
+with the secret's *name* when no `nox/telegram/bot_token` exists yet - never a fake "ok".
 """
 
 from __future__ import annotations

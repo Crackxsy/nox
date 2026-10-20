@@ -1,5 +1,4 @@
-"""nox.memory.retrieval.RetrievalService: ranked hydration, hard token cap, honest not-found
-(ST-07-05 AC2/AC6)."""
+"""nox.memory.retrieval.RetrievalService: ranked hydration, hard token cap, honest not-found."""
 
 from __future__ import annotations
 

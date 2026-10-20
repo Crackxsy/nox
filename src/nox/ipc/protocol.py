@@ -198,7 +198,7 @@ class RemoteDevice(BaseModel):
 
 class RemotePairCode(BaseModel):
     """`remote.pair.start {name}` response. The code is shown locally, once: it is not stored, not
-    logged and never sent over the transport by Nox (Spec v0.8 §5.1, pairing-code interception)."""
+    logged and never sent over the transport by Nox (pairing-code interception)."""
 
     pairing_id: str
     code: str
@@ -256,7 +256,7 @@ class ClipTagResult(BaseModel):
 
 class ClipExportResult(BaseModel):
     """`clip.export {clip_id}` response. `ok=false` (never a raised error) when the source file is
-    missing - `export_path` stays `None` and `reason` carries the honest message (Spec v0.6 §9)."""
+    missing - `export_path` stays `None` and `reason` carries the honest message."""
 
     ok: bool
     export_path: str | None = None
@@ -265,7 +265,7 @@ class ClipExportResult(BaseModel):
 
 class ClipTrimResult(BaseModel):
     """`clip.trim {clip_id, in_s, out_s}` response. `ok=false` when no cutting backend (ffmpeg) is
-    available - a clear, non-crashing message instead of a raised error (Spec v0.6 §11)."""
+    available - a clear, non-crashing message instead of a raised error."""
 
     ok: bool
     clip_id: str | None = None

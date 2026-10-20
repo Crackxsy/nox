@@ -1,4 +1,4 @@
-"""B-10 UI smoke against a live core (Decision Plan B-10, Decision Evaluation B-10).
+"""UI smoke test against a live core.
 
 Boots the real `NoxCore(voice=False)` headless with temporary paths, exactly like
 `tests/integration/test_walking_skeleton.py` (offline privacy mode, health checks disabled via a
@@ -9,8 +9,8 @@ token handshake (arrives once in the URL fragment, is cleared from the address b
 `localStorage`) and the live IPC websocket the React apps open from inside the page are both
 browser-only behaviour (IPC Model).
 
-Kept small on purpose (Decision Evaluation B-10 "missing option: keep the asserted surface small and
-stable"): auth -> fragment cleared -> Status page shows `ai.rules` available -> a chat turn streams
+Kept small on purpose (keep the asserted surface small and
+stable): auth -> fragment cleared -> Status page shows `ai.rules` available -> a chat turn streams
 a non-empty answer with a `rules`/`ollama` provider badge -> the pet's capture indicator and canvas
 exist. No pixel diffs — the pet is a continuously animated canvas and screenshot comparison would be
 flaky and would discredit the approach.

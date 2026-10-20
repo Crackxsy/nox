@@ -1,5 +1,5 @@
 """nox.supervisor.main with a real fake child: heartbeats, restart rules, safe mode, kill switch,
-handshake auth (B-1), graceful stop (B-6)."""
+handshake auth, graceful stop."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def settings(tmp_path: Path, *fake_args: str, **overrides: object) -> Supervisor
         "kill_ack_timeout_s": 0.5,
         "stop_timeout_s": 0.5,
         "shutdown_grace_s": 0.5,
-        # The real default is 90 s (a cold boot takes 20-40 s on the product owner's machine);
+        # The real default is 90 s (a cold boot takes 20-40 s on a test machine);
         # scaled down here like every other timing, and overridden per test where it is the subject.
         "boot_grace_s": 0.4,
         "hotkey_enabled": False,
@@ -85,7 +85,7 @@ async def sup_factory(tmp_path: Path) -> AsyncIterator[Callable[..., Supervisor]
 def _auth_and_request(
     port: int, token: str, name: str, payload: dict[str, object]
 ) -> dict[str, object]:
-    """Raw handshake + one request, for asserting the wire protocol directly (B-1)."""
+    """Raw handshake + one request, for asserting the wire protocol directly."""
     auth = m.make(
         m.NAME_AUTH, {"token": token, "role": "shell", "pid": 0}, SHELL_SRC, kind=Kind.REQUEST
     )
@@ -151,7 +151,7 @@ async def test_slow_boot_is_not_counted_as_missed_heartbeats(
     sup_factory: Callable[..., Supervisor],
 ) -> None:
     """A cold boot legitimately takes 20-40 s (imports, vault index); counting missed beats from
-    spawn time restarted a core that was still booting (product owner's log, 2026-09-15)."""
+    spawn time restarted a core that was still booting (a field log, 2026-09-15)."""
     sup = sup_factory("--boot-delay", "1.2", "--interval", "0.05", boot_grace_s=3.0)
     await sup.start()
     await asyncio.sleep(1.0)  # 10 intervals of silence: twice the graceful threshold
@@ -179,7 +179,7 @@ async def test_booting_core_is_not_restarted_for_a_silence_inside_the_grace(
 ) -> None:
     """A core that says it is still booting may go quiet for up to `boot_grace_s`: on a cold
     machine with a spinning data drive, single install steps stalled its loop for 15 s, and the
-    restarts that followed repeated the same disk-bound work (product owner's log, 2026-10-01)."""
+    restarts that followed repeated the same disk-bound work (a field log, 2026-10-01)."""
     # Beats for 3 s - past the grace counted from the spawn - then falls silent mid-boot.
     sup = sup_factory("--booting", "--beats", "60", "--interval", "0.05", boot_grace_s=2.0)
     await sup.start()
@@ -276,7 +276,7 @@ async def test_control_channel_from_shell(sup_factory: Callable[..., Supervisor]
     assert "tray" in sup.status().safe_mode_reason
 
 
-# ---- B-1: handshake-once auth ------------------------------------------------------------------
+# ---- handshake-once auth -----------------------------------------------------------------------
 
 
 async def test_wrong_token_is_denied_and_connection_closed(
@@ -330,7 +330,7 @@ async def test_frames_before_auth_are_ignored_not_fatal(
     assert reply["name"] == m.NAME_AUTH_OK  # the connection survived the pre-auth frames
 
 
-# ---- B-6: sup.stop graceful shutdown ------------------------------------------------------------
+# ---- sup.stop graceful shutdown -----------------------------------------------------------------
 
 
 async def test_graceful_stop_exits_within_budget(sup_factory: Callable[..., Supervisor]) -> None:

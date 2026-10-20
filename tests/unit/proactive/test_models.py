@@ -1,4 +1,4 @@
-"""ST-19-03: URGENT category ordering per B.13/F410 (security/system > backup/data-loss >
+"""URGENT category ordering (security/system > backup/data-loss >
 resources > expected task results), and which categories may interrupt at all."""
 
 from __future__ import annotations

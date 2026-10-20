@@ -1,5 +1,5 @@
 """PluginManager lifecycle, restart backoff, kill switch, health and the core-side plugin IPC
-handlers (ST-11-01 acceptance criteria 1, 3-7).
+handlers.
 
 No real process and no real socket: the process factory and the hub are fakes, so the state machine
 and the timings are deterministic.
@@ -444,7 +444,7 @@ async def test_status_report_is_serializable(harness: Harness) -> None:
     assert status["demo"].model_dump(mode="json")["enabled"] is True
 
 
-# ---- profile switching (ST-11-01 acceptance criterion 3) -----------------------------------------
+# ---- profile switching ------------------------------------------------------------------------
 
 
 async def test_profile_switch_spawns_and_stops_without_a_core_restart(plugins_dir: Path) -> None:
@@ -516,7 +516,7 @@ async def test_a_stream_plugin_started_outside_the_stream_profile_can_start_late
 ) -> None:
     """Twitch's egress used to be checked against the profile Nox booted in. Under `companion`
     that failed it for good, and a failed plugin is never started again - so switching to stream
-    later could not bring Twitch up (product owner's first stream attempt)."""
+    later could not bring Twitch up (a user report from a first stream)."""
     write_manifest(
         plugins_dir, "demo", profiles=["stream"], network={"egress": ["api.twitch.tv:443"]}
     )

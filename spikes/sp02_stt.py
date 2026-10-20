@@ -27,7 +27,7 @@ from nox.voice.stt.faster_whisper_engine import FasterWhisperStt  # noqa: E402
 from nox.voice.tts.piper_engine import PiperTts  # noqa: E402
 
 OUT = Path(__file__).resolve().parent / "out"
-TEXT_DE = "Nox, wie spät ist es und wie wird das Wetter morgen in Witten?"
+TEXT_DE = "Nox, wie spät ist es und wie wird das Wetter morgen in Springfield?"
 
 
 async def synthesize_utterance() -> tuple[np.ndarray, int]:

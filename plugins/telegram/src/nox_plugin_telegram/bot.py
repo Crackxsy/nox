@@ -25,7 +25,7 @@ OnMessage = Callable[[int, str, str, str], Awaitable[None]]
 OnConnected = Callable[[], Awaitable[None]]
 OnDisconnected = Callable[[str], Awaitable[None]]
 
-#: What the health check reports when no token has been provisioned yet (ES-04).
+#: What the health check reports when no token has been provisioned yet.
 log = get_logger(__name__)
 
 NO_TOKEN = "no bot token configured: nox/telegram/bot_token"  # noqa: S105 - a name, not a value

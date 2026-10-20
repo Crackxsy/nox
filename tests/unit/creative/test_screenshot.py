@@ -1,4 +1,4 @@
-"""`CreativeScreenshotService.decide_and_capture` (Spec v0.7 §3.2/§5, ST-16-05): the consent-gate
+"""`CreativeScreenshotService.decide_and_capture`: the consent-gate
 and privacy-zone-refusal logic the `creative` plugin cannot implement itself."""
 
 from __future__ import annotations

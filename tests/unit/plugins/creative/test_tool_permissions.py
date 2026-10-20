@@ -1,5 +1,5 @@
-"""Manifest validity and tool-registry negative test (Spec v0.7 §8/§9 acceptance criteria,
-Plan v0.7 DoD): no `mouse.*`/`keyboard.*`/UI-automation tool exists anywhere in this plugin, and
+"""Manifest validity and tool-registry negative test (acceptance
+criteria): no `mouse.*`/`keyboard.*`/UI-automation tool exists anywhere in this plugin, and
 every registered tool's risk matches its manifest permission exactly."""
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ class TestToolRegistry:
 
     def test_no_tool_targets_mouse_or_keyboard(self) -> None:
         """Registry-level twin of the manifest test: even a future tool added only in code, not
-        the manifest, would be caught here (Plan v0.7 DoD)."""
+        the manifest, would be caught here."""
         api = make_api(FakeClient())
         create(api)
         for name in api.tools.names():

@@ -222,7 +222,7 @@ def kill_path(model: ShellModel) -> str:
 
 
 def toggle_privacy(model: ShellModel) -> PrivacyMode:
-    """Hotkey semantics (D235): jump to PRIVATE, or back to the last normal mode."""
+    """Hotkey semantics: jump to PRIVATE, or back to the last normal mode."""
     if model.privacy_mode in (PrivacyMode.PRIVATE, PrivacyMode.OFFLINE):
         return model.previous_normal_privacy
     return PrivacyMode.PRIVATE

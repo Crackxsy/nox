@@ -1,6 +1,6 @@
 """Runtime files the shell reads/writes: session.token, ipc.json, supervisor.token, shell.json.
 
-Location (IPC Model handshake step 2 / D223): `runtime` in Nox's folder (`nox_home()`) by default,
+Location (IPC handshake, step 2): `runtime` in Nox's folder (`nox_home()`) by default,
 overridable with `NOX_RUNTIME_DIR` or with `paths.runtime_dir` in the user configuration. Tokens are
 read from files only and never logged.
 
@@ -38,7 +38,7 @@ class IpcEndpoints(BaseModel):
 
 
 class ShellState(BaseModel):
-    """Persisted UI state (D223: UI state lives in AppData, never secrets)."""
+    """Persisted UI state (UI state lives in AppData, never secrets)."""
 
     x: int | None = None
     y: int | None = None

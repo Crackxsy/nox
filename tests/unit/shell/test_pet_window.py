@@ -1,4 +1,4 @@
-"""PetWindow: shared off-the-record QWebEngineProfile, hardened settings (B-7, ADR-004)."""
+"""PetWindow: shared off-the-record QWebEngineProfile, hardened settings."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""`creative.screenshot.analyze` from the plugin's side (Spec v0.7 §3.2/§5, ST-16-05): the actual
+"""`creative.screenshot.analyze` from the plugin's side: the actual
 consent-gate/zone-refusal decision is core-side and covered by `tests/unit/creative/
 test_screenshot.py`; this file covers the plugin's half of the contract - it never assumes
 success, relays the core's decision verbatim, and degrades honestly if the core never answers."""

@@ -1,4 +1,4 @@
-"""`RemoteCommandPolicy` (ST-17-02/04/07): the decision table, in isolation. Every rule in the
+"""`RemoteCommandPolicy`: the decision table, in isolation. Every rule in the
 module docstring of `nox.remote.policy` has at least one test here, and the denials are the point.
 """
 
@@ -103,7 +103,7 @@ def test_kill_is_allowed_from_a_paired_phone(policy: RemoteCommandPolicy):
 
 
 def test_resume_is_never_allowed_from_the_phone(policy: RemoteCommandPolicy):
-    """Security Model §6 / OP-6 D: resume stays local-only. It is denied by name so the attempt is
+    """Security Model §6: resume stays local-only. It is denied by name so the attempt is
     audited as such instead of looking like a typo."""
     decision = policy.decide(message("/resume"), device())
 

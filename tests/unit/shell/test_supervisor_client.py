@@ -29,7 +29,7 @@ def _read_one(conn: socket.socket) -> tuple[bytes, dict]:
 
 @pytest.fixture
 def fake_supervisor() -> Iterator[tuple[int, list[dict]]]:
-    """Requires the B-1 handshake (`sup.auth` -> `sup.auth_ok`) before the real request."""
+    """Requires the handshake (`sup.auth` -> `sup.auth_ok`) before the real request."""
     received: list[dict] = []
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.bind(("127.0.0.1", 0))
@@ -79,7 +79,7 @@ def test_kill_message_shape() -> None:
     assert msg["name"] == "sup.kill" and msg["kind"] == "request" and msg["v"] == 1
     assert msg["src"] == {"role": "shell", "id": "shell"}
     assert msg["payload"] == {"reason": "user", "origin": "tray"}
-    assert "token" not in msg["payload"]  # B-1: no token outside the sup.auth frame
+    assert "token" not in msg["payload"]  # no token outside the sup.auth frame
 
 
 def test_stop_message_shape() -> None:

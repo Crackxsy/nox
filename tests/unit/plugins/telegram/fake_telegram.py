@@ -1,4 +1,4 @@
-"""A fake Telegram Bot API, good enough for everything the plugin does (Spec v0.8 §10: unit tests
+"""A fake Telegram Bot API, good enough for everything the plugin does (unit tests
 never touch `api.telegram.org`).
 
 It is an `httpx.MockTransport` handler rather than a socket server: the plugin's only way out is

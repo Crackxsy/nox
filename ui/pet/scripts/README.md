@@ -10,7 +10,7 @@ None of it runs at build time.
 .venv/Scripts/python.exe ui/pet/scripts/make_pet_layers.py      # the Meereswolf's own matte repair
 .venv/Scripts/python.exe ui/pet/scripts/render_rig.py --variant ID   # review renders + cost
 node ui/pet/scripts/weights_probe.mjs                           # bone weights at landmarks
-.venv/Scripts/python.exe ui/pet/scripts/render_variants.py      # the older OP-1 concept gallery
+.venv/Scripts/python.exe ui/pet/scripts/render_variants.py      # the older concept gallery
 ```
 
 ## Adding a creature

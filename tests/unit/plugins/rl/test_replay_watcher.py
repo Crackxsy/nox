@@ -1,4 +1,4 @@
-"""Replay watcher (ST-12-02): new-file detection, stability wait, backlog vs. new-file separation,
+"""Replay watcher: new-file detection, stability wait, backlog vs. new-file separation,
 and never crashing when the folder is temporarily unreachable."""
 
 from __future__ import annotations

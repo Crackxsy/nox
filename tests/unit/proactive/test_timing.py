@@ -1,4 +1,4 @@
-"""ST-19-06: the timing learner is data-sparing (hour-of-day + accepted only) and bounded."""
+"""The timing learner is data-sparing (hour-of-day + accepted only) and bounded."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Integration: boot the real core headless with a tmp vault, install EPIC-07 Memory & Vault,
+"""Integration: boot the real core headless with a tmp vault, install Memory & Vault,
 write a note through the `vault.append_inbox` tool, confirm it is indexed and found by
 `memory.search`, and confirm PRIVATE privacy mode blocks `memory.write` - all through
 `core.tool_executor.call()`, the same pipeline every agent/tool call goes through."""

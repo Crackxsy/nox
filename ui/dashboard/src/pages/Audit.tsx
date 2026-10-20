@@ -1,5 +1,5 @@
 /**
- * Audit page: the `security.audit` events received over this connection (A258: every action,
+ * Audit page: the `security.audit` events received over this connection (every action,
  * including denied, aborted and failed ones, is auditable). This view is explicitly only the live
  * session feed — the append-only log itself lives in the core, and the page says so instead of
  * pretending to show the complete history.

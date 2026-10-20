@@ -24,7 +24,7 @@ def test_twitch_manifest_loads_and_declares_the_expected_tools() -> None:
         "twitch.chat.send": Risk.LOW,
         "twitch.chat.status.read": Risk.READ,
     }
-    # Not autonomous in the MVP (Spec v0.2 §3.4) and never present here at all.
+    # Not autonomous in the MVP and never present here at all.
     assert "twitch.moderation.timeout" not in tools
     assert "twitch.moderation.ban" not in tools
 

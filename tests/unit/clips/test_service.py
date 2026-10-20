@@ -1,4 +1,4 @@
-"""`ClipCaptureService` (ST-15-02/03): `clip.requested` -> `obs.replay_buffer.save` (via a fake
+"""`ClipCaptureService`: `clip.requested` -> `obs.replay_buffer.save` (via a fake
 `ToolExecutor`) -> file copied into the library -> `clips` row -> `clip.saved`/`clip.failed`."""
 
 from __future__ import annotations

@@ -11,9 +11,9 @@ script therefore does two jobs, in one reproducible pass:
    closing over an eyeball, and the socket underneath is inpainted with surrounding fur so the
    closed eye shows fur rather than a hole.
 
-Run with the project venv (numpy only, no Pillow):
+Run with the project venv (numpy only, no Pillow), pointing it at the 1024 px source image:
 
-    .venv/Scripts/python.exe ui/pet/scripts/make_pet_layers.py
+    .venv/Scripts/python.exe ui/pet/scripts/make_pet_layers.py --source <path>/idle_1024.png
 
 Writes into `ui/pet/public/variants/meereswolf/rig/` and prints a measurement table. Pass
 `--report-only` to measure without writing. Landmarks are in `LANDMARKS_1024` and are stated in
@@ -43,7 +43,6 @@ from pngio import read_rgba, write_rgba  # noqa: E402  (needs the path above)
 LOG = logging.getLogger("nox.pet." + Path(__file__).stem)
 
 PET_DIR = Path(__file__).resolve().parents[1]
-SOURCE = Path(r"E:\Nox\vault\16 - Assets\pet-art\meereswolf\idle_1024.png")
 OUT_DIR = PET_DIR / "public" / "variants" / "meereswolf" / "rig"
 
 #: Texture size written out. The pet window is 260 px, so 512 is a 2x reserve for HiDPI and keeps
@@ -267,10 +266,10 @@ def _to_png(rgb: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     ).astype(np.uint8)
 
 
-def build(write: bool) -> dict[str, object]:
+def build(source_path: Path, *, write: bool) -> dict[str, object]:
     if write:
         OUT_DIR.mkdir(parents=True, exist_ok=True)
-    source = read_rgba(SOURCE).astype(np.float32) / 255.0
+    source = read_rgba(source_path).astype(np.float32) / 255.0
     rgb, alpha = source[:, :, :3], source[:, :, 3]
     before = measure(rgb, alpha)
 
@@ -318,7 +317,7 @@ def build(write: bool) -> dict[str, object]:
         write_rgba(OUT_DIR / "base.png", _to_png(base[:, :, :3], base[:, :, 3]))
 
     report = {
-        "source": SOURCE.name,
+        "source": source_path.name,
         "measured_background_rgb": [round(float(c), 4) for c in background],
         "erode_px": ERODE_PX,
         "before": before.__dict__,
@@ -340,13 +339,16 @@ def build(write: bool) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--source", type=Path, required=True, help="the 1024 px source image (idle_1024.png)"
+    )
     parser.add_argument("--report-only", action="store_true", help="measure without writing files")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
-    if not SOURCE.exists():
-        LOG.error("source image missing: %s", SOURCE)
+    if not args.source.exists():
+        LOG.error("source image missing: %s", args.source)
         return 1
-    build(write=not args.report_only)
+    build(args.source, write=not args.report_only)
     return 0
 
 

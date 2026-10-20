@@ -1,4 +1,4 @@
-"""Vision Stage 2, end to end (Spec v0.9 EPIC-18): a real `NoxCore` (headless, no plugin
+"""Vision Stage 2, end to end: a real `NoxCore` (headless, no plugin
 subprocess - the confidence-gating/budget-guard themselves are already covered directly against
 `FrameSampler` in `tests/unit/plugins/rl/vision/test_sampler.py`). `NoxCore.start()` already calls
 `nox.rl.install.install(core)` itself (`app.py`'s generic `nox.<name>.install` release-extension

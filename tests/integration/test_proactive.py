@@ -53,7 +53,7 @@ async def _boot(tmp_path: Path) -> tuple[NoxCore, ProactiveService]:
 async def test_notification_and_dismissal_survive_a_restart(tmp_path: Path) -> None:
     first, first_proactive = await _boot(tmp_path)
     try:
-        # "urgent"/"security" bypasses zone/privacy-mode/quiet-hours gating (B.13) - keeps this
+        # "urgent"/"security" bypasses zone/privacy-mode/quiet-hours gating - keeps this
         # test deterministic regardless of the wall-clock time it happens to run at.
         kept = await first_proactive.notify("urgent", "security", "You have 3 new emails")
         assert kept.allowed is True

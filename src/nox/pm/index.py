@@ -1,5 +1,5 @@
-"""SQLite mirror of PM vault notes (`pm_items`, migration `0004_pm.sql`): a fast-query index rebuilt
-from the vault, which always wins on conflict (Data Model "vault wins", layer 3).
+"""SQLite mirror of project-management vault notes (`pm_items`, migration `0004_pm.sql`): a
+fast-query index rebuilt from the vault, which always wins on conflict ("vault wins", layer 3).
 """
 
 from __future__ import annotations

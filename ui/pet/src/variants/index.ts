@@ -1,6 +1,6 @@
 /**
- * Variant registry (OP-1): looked up from the `?variant=` query flag in main.tsx. Unknown or
- * missing ids fall back to `neutral` (D31 default until the PO chooses, Decision Plan 2026-09-11).
+ * Variant registry: looked up from the `?variant=` query flag in main.tsx. Unknown or
+ * missing ids fall back to `neutral` (the default until a final design is chosen).
  */
 
 import { cat } from './cat';
@@ -15,7 +15,7 @@ export { cat, fox, imp, neutral, owl };
 
 export const DEFAULT_VARIANT_ID = 'neutral';
 
-/** neutral (placeholder default) plus the four OP-1 concept variants. */
+/** neutral (placeholder default) plus the four concept variants. */
 export const VARIANTS: Readonly<Record<string, PetVariant>> = {
   neutral,
   imp,
@@ -26,7 +26,7 @@ export const VARIANTS: Readonly<Record<string, PetVariant>> = {
 
 export const VARIANT_IDS: readonly string[] = Object.keys(VARIANTS);
 
-/** The four OP-1 gallery candidates, excluding the neutral placeholder. */
+/** The four gallery candidates, excluding the neutral placeholder. */
 export const CONCEPT_VARIANT_IDS: readonly string[] = ['imp', 'fox', 'owl', 'cat'];
 
 export function getVariant(id: string | null | undefined): PetVariant {

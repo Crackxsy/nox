@@ -40,7 +40,7 @@ RUNTIME_DIR = BUILD_DIR / "runtime"
 APP_DIR = BUILD_DIR / "app"
 DOWNLOAD_CACHE = INSTALLER_DIR / ".cache"
 
-#: Pinned to match the dev venv (ENGINEERING.md: "venv `E:\Nox\repo\.venv` (Python 3.13.14)") so
+#: Pinned to match the development venv (ENGINEERING.md: Python 3.13.14) so
 #: compiled-extension wheels (ctranslate2, onnxruntime, PySide6) resolved against cp313 match.
 DEFAULT_PYTHON_VERSION = "3.13.14"
 EMBED_URL_TMPL = "https://www.python.org/ftp/python/{v}/python-{v}-embed-amd64.zip"

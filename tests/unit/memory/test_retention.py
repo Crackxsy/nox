@@ -1,4 +1,4 @@
-"""nox.memory.retention.RetentionJob: nightly forgetting, audited (ST-07-01/07 subset)."""
+"""nox.memory.retention.RetentionJob: nightly forgetting, audited."""
 
 from __future__ import annotations
 

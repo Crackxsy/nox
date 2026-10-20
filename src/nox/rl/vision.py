@@ -170,7 +170,7 @@ def compute_rotation_analysis(frames: list[FrameLike]) -> RotationAnalysis:
 def _coaching_text(
     frames_analyzed: int, ball_side_ratio: float | None, avg_distance: float | None
 ) -> str:
-    """right after the match, very short - rather silent than wrong (D69)."""
+    """right after the match, very short - rather silent than wrong."""
     if frames_analyzed == 0:
         return ""
     bits: list[str] = []

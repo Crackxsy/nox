@@ -4,7 +4,7 @@
  * "shadow creature" read distinct from the impish variant despite sharing the slit eye style
  * (differentiated by silhouette, palette and motion, not by eye shape alone). Deep plum body with a faint
  * magenta-glow accent; the second-lowest idle amplitude of the four
- * (composed, deliberate movement) with all 21 expressions carried through posture (D34).
+ * (composed, deliberate movement) with all 21 expressions carried through posture.
  */
 
 import type { PetVariant } from './types';

@@ -1,4 +1,4 @@
-"""nox.memory.importance: explicit-command top priority, passive throttling (ST-07-01 AC1/AC2)."""
+"""nox.memory.importance: explicit-command top priority, passive throttling."""
 
 from __future__ import annotations
 

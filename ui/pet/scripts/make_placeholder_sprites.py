@@ -1,6 +1,6 @@
 """Generate the placeholder sprite set for the `sprite:<id>` pet variant (#19).
 
-The product owner has not picked the real creature yet and no art exists. This script draws a
+No final creature has been chosen yet and no art exists. This script draws a
 deliberately simple, clean silhouette — a seated twilight night-creature in the same violet/amber
 family the procedural variants use, so the placeholder drops into the window without looking like a
 different product — and writes it out as one PNG with alpha per frame, plus the `sprites.json`

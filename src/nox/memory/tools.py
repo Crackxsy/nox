@@ -1,4 +1,4 @@
-"""Memory & vault tool catalogue (ST-07 tools): `memory.search` (read), `memory.write` (medium,
+"""Memory & vault tool catalogue: `memory.search` (read), `memory.write` (medium,
 profile/privacy gated), `vault.read` (read, zones enforced), `vault.append_inbox` (medium)."""
 
 from __future__ import annotations

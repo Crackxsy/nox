@@ -1,4 +1,4 @@
-"""Core `clip.*` ToolSpecs (ST-15-01/06): `clip.list`/`clip.tag` read/update the repository,
+"""Core `clip.*` ToolSpecs: `clip.list`/`clip.tag` read/update the repository,
 `clip.export` copies into `export_root` and emits `clip.exported`, `clip.trim` fails safely
 without a backend and links parent/child clips when one is available."""
 

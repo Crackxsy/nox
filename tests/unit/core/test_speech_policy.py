@@ -1,4 +1,4 @@
-"""OP-10: `SpeechPolicy.may_speak` is the single gate for unsolicited speech (greeting/proactive);
+"""`SpeechPolicy.may_speak` is the single gate for unsolicited speech (greeting/proactive);
 `reply` is only ever blocked by mute. Covers every deny reason plus the allow path."""
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def test_privacy_zone_blocks_greeting_and_proactive() -> None:
 @pytest.mark.parametrize("mode", ["private", "offline"])
 def test_privacy_mode_blocks_when_quiet_in_private_modes_set(mode: str) -> None:
     cfg = NoxConfig()
-    assert cfg.pet.quiet_in_private_modes is True  # decided default (OP-10 B)
+    assert cfg.pet.quiet_in_private_modes is True  # decided default
     policy = make_policy(privacy_mode=mode, config=cfg)
     assert policy.may_speak("greeting") == (False, "privacy_mode")
     assert policy.may_speak("proactive") == (False, "privacy_mode")
@@ -108,7 +108,7 @@ def test_quiet_hours_outside_window_allows() -> None:
     assert policy.may_speak("greeting") == (True, "ok")
 
 
-# ---- ST-19-03: "urgent" kind (bypasses zone/privacy-mode/quiet-hours, never mute) --------------
+# ---- "urgent" kind (bypasses zone/privacy-mode/quiet-hours, never mute) --------------
 
 
 def test_urgent_bypasses_zone_privacy_mode_and_quiet_hours() -> None:

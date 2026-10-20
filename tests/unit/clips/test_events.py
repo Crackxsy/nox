@@ -1,4 +1,4 @@
-"""Event payload round-trips for the Clip Pipeline additions (Spec v0.6 §8, EPIC-15): every new
+"""Event payload round-trips for the Clip Pipeline additions: every new
 `clip.*` name in `E` has a registered model in `PAYLOAD_MODELS` and validates a representative
 payload (Event Model testing rule, same pattern as `tests/unit/core/test_events.py`)."""
 
@@ -20,7 +20,7 @@ CLIP_EVENTS: dict[str, dict[str, Any]] = {
     },
     E.CLIP_SAVED: {
         "clip_id": "c1",
-        "file_path": r"E:\Nox\data\clips\library\c1.mp4",
+        "file_path": r"C:\NoxData\clips\library\c1.mp4",
         "trigger_kind": "rl.goal",
         "source": "event",
         "duration_s": 12.5,
@@ -31,7 +31,7 @@ CLIP_EVENTS: dict[str, dict[str, Any]] = {
         "source": "event",
         "reason": "OBS's replay buffer is not enabled/active",
     },
-    E.CLIP_EXPORTED: {"clip_id": "c1", "export_path": r"E:\Nox\data\clips\export\c1.mp4"},
+    E.CLIP_EXPORTED: {"clip_id": "c1", "export_path": r"C:\NoxData\clips\export\c1.mp4"},
 }
 
 

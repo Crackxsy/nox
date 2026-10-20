@@ -1,4 +1,4 @@
-"""System tray icon and menu (D35, D235, D239): capture-tinted icon, privacy, mute, dashboard."""
+"""System tray icon and menu: capture-tinted icon, privacy, mute, dashboard."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ PRIVACY_LABELS: dict[PrivacyMode, tuple[str, str]] = {
 
 
 def make_tray_icon(tint: TrayTint, size: int = 32) -> QIcon:
-    """Filled circle in the tint colour; inner glyph differs per tint, not colour-only (D238)."""
+    """Filled circle in the tint colour; inner glyph differs per tint, not colour-only."""
     pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pix)

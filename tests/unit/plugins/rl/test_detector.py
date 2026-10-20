@@ -1,4 +1,4 @@
-"""Game detection (ST-12-01): process-list polling only, no window handle/memory API."""
+"""Game detection: process-list polling only, no window handle/memory API."""
 
 from __future__ import annotations
 

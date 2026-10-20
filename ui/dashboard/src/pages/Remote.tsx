@@ -1,5 +1,5 @@
 /**
- * Remote page (EPIC-17, Spec v0.8 §8): pair a phone, see which devices are paired, revoke one.
+ * Remote page: pair a phone, see which devices are paired, revoke one.
  *
  * Three honesty rules, same as everywhere else in this dashboard:
  * - the one-time code is shown exactly as the core returned it and never re-requested or cached;

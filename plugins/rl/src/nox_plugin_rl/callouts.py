@@ -1,11 +1,11 @@
 """Prepared-clip callout engine: priority (danger > tactical_error > pattern > opportunity >
-rare_praise, F131), cooldown + 2-4/minute rate cap (A131), silence-on-low-confidence (A129). Only
+rare_praise), cooldown + 2-4/minute rate cap, silence-on-low-confidence. Only
 wires rules whose trigger is satisfiable from the `rl.event` kinds Stage 1 actually produces (goal,
-overtime, boost_low, demo - `save` is replay-only, never real-time; AC).
+overtime, boost_low, demo - `save` is replay-only, never real-time).
 
-The initial A130 clip list ("Don't challenge, you're last.", "Rotate back post.",...) is mostly
-position-based and therefore *not* reachable in Stage 1 (no object detection until v0.9's Stage 2,
-Spec) - this engine registers only the HUD-derivable subset plus reasonable additions for
+The initial clip list ("Don't challenge, you're last.", "Rotate back post.",...) is mostly
+position-based and therefore *not* reachable in Stage 1 (no object detection until Stage 2) -
+this engine registers only the HUD-derivable subset plus reasonable additions for
 goal/overtime, and leaves the rest as an explicit, documented gap rather than registering
 unreachable rules."""
 
@@ -30,7 +30,7 @@ _TIER_PRIORITY = {
 @dataclass(frozen=True, slots=True)
 class CalloutRule:
     id: str
-    tier: str  # danger | tactical_error | pattern | opportunity | rare_praise (F131)
+    tier: str  # danger | tactical_error | pattern | opportunity | rare_praise
     kind: str  # rl.event kind this reacts to
     clip_id: str
     fallback_text: str
@@ -48,8 +48,8 @@ def _team_scored(payload: dict[str, Any], team: str) -> bool:
     return str(payload.get("team", "")) == team
 
 
-#: Stage 1's reachable rule set (Spec honest per-kind note; AC). Kickoff-only-with-
-#: value (Spec/A131) is not wired: event catalogue has no distinct `kickoff` kind
+#: Stage 1's reachable rule set (an honest per-kind note). Kickoff-only-with-
+#: value is not wired: event catalogue has no distinct `kickoff` kind
 #: (only a "kickoff/replay camera" banner category, folded into no emitted `rl.event` kind) -
 #: flagged as an open point rather than guessed at.
 DEFAULT_RULES: tuple[CalloutRule, ...] = (
@@ -125,7 +125,7 @@ class CalloutEngine:
     ) -> CalloutDecision | None:
         """One `rl.event` in, at most one `CalloutDecision` out. Never raises."""
         if confidence < self._min_confidence:
-            return None  # silence over guessing (A129)
+            return None  # silence over guessing
         if kind == "save" and source != "replay":
             return None  # Spec: `save` is never real-time in Stage 1
         payload = payload or {}

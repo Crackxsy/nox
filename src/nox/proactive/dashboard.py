@@ -50,7 +50,7 @@ def make_health_history_handler(db: Database) -> Any:
     repo = HealthHistoryRepository(db)
 
     async def handler(_ctx: RequestContext, p: HealthHistoryRequest) -> dict[str, Any]:
-        # ST-08: "code defensively if not yet present" - an empty/missing table is not an error;
+        # "code defensively if not yet present" - an empty/missing table is not an error;
         # `list_recent` already returns [] rather than raising when there is nothing to show.
         try:
             rows = repo.list_recent(limit=p.limit, component=p.component or None)

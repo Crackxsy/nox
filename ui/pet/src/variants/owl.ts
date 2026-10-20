@@ -3,8 +3,8 @@
  * feather-tuft ears, no visible tail (owls read as round when perched) and large wide-oval eyes
  * that do most of the expressive work. Slate-blue body with a pale moon-glow accent — cool where the fox is warm, so the two read as
  * different creatures and not as two poses of one. Idle motion
- * is deliberately the slowest of the four variants (a calm night watcher, not an energetic mascot,
- * A73), while still carrying all 21 expressions through eye/brow/mouth posture (D34).
+ * is deliberately the slowest of the four variants (a calm night watcher, not an energetic mascot),
+ * while still carrying all 21 expressions through eye/brow/mouth posture.
  */
 
 import type { PetVariant } from './types';

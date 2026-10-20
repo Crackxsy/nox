@@ -7,7 +7,7 @@
  * Amber-rust body with cool moonlight accents. The four concepts used to sit at hue 248–320, i.e.
  * five shades of violet that differed only by ear and tail silhouette; at 220 px on a dark desktop
  * that is not four creatures, it is one creature four times. Each concept now owns a family of
- * colour as well as a shape (A57 still holds: colour *supports*, posture and ear/tail motion carry
+ * colour as well as a shape (colour still only *supports*; posture and ear/tail motion carry
  * the character).
  */
 

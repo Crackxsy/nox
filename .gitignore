@@ -64,3 +64,15 @@ installer/_requirements.filtered.txt
 
 # Claude Code working state: per-task git worktrees live here and must never be committed.
 .claude/
+
+# Recordings and clips (voice tests, OBS replays, renders) are personal and large; never tracked.
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.mp4
+*.webm
+*.mkv
+
+# Pet render output (ui/pet/scripts/render_variants.py).
+ui/pet/out/

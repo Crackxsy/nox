@@ -32,7 +32,7 @@ Connector = Callable[[str, int, bool], Awaitable[tuple[asyncio.StreamReader, asy
 
 
 class TwitchCredentialsMissingError(RuntimeError):
-    """`nox/twitch/oauth_token` and/or `nox/twitch/bot_username` are not set yet (ES-01: no bot
+    """`nox/twitch/oauth_token` and/or `nox/twitch/bot_username` are not set yet (no bot
     account exists at all until the operator creates one)."""
 
 

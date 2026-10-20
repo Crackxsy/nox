@@ -42,7 +42,7 @@ def test_work_profile_is_local_only_without_memory(profiles: YamlProfileProvider
 def test_offline_profile_has_no_egress_but_keeps_ollama_on_loopback(
     profiles: YamlProfileProvider,
 ) -> None:
-    """OP-7 C: no host is reachable; the allow-listed local chat service stays (A165/D89)."""
+    """No host is reachable; the allow-listed local chat service stays."""
     offline = profiles.get("offline")
     assert offline.cloud_allowed is False
     assert offline.egress_allowlist == []

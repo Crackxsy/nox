@@ -1,5 +1,5 @@
 /**
- * Mobile Companion view model (EPIC-17): the paired device list and the one-time pairing code.
+ * Mobile Companion view model: the paired device list and the one-time pairing code.
  *
  * These two used to be `as unknown as` casts straight into JSX, which is how `paired_at` could
  * reach a table cell as `undefined`. They are parsers now, like every other payload in this app.

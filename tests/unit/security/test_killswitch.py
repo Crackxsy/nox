@@ -107,7 +107,7 @@ async def test_engaged_kill_switch_makes_engine_deny_side_effects(
 async def test_user_kill_resumes_without_a_pin_and_is_audited(
     bus: FakeBus, audit: SqliteAuditLog, privacy: PrivacyService
 ) -> None:
-    """OP-6 D: a user-initiated kill (tray/hotkey/UI/voice) needs an explicit action, no PIN."""
+    """A user-initiated kill (tray/hotkey/UI/voice) needs an explicit action, no PIN."""
     ks = KillSwitchService(bus=bus, audit=audit, privacy=privacy)
     report = await ks.engage("tray")
     assert report.security_path is False and ks.security_path is False

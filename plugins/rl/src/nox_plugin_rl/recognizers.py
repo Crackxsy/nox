@@ -2,14 +2,14 @@
 opencv -
 no OCR/Tesseract dependency.
 
-Real HUD pixel templates need ES-04 (the PO's screenshot set, Plan v0.3 - "not provided yet" as of
+Real HUD pixel templates need a real screenshot set ("not provided yet" as of
 this release); this module ships a synthetic digit-template set rendered with `cv2.putText` on a
 fixed monospace-style cell grid, so the matcher and every self-check/unit test are real and CI-safe
 today. Both the templates and `render_digits`'s fixtures use the same per-cell renderer
 (`_render_glyph`), so cell boundaries always line up exactly - real HUD digits are also fixed-width
 in Rocket League's HUD font, so `read_digits`'s fixed-cell-grid approach carries over unchanged;
 only the template source (`render_digit_templates` vs. a real-crop loader) needs to change once
-ES-04 lands - flagged as an open point in the/05 report, not silently pretended to be validated
+real screenshots exist - flagged as an open point, not silently pretended to be validated
 against the real game.
 """
 
@@ -22,7 +22,7 @@ import numpy as np
 
 DIGITS = "0123456789"
 CELL = (24, 16)  # (height, width) px - one fixed-width glyph cell
-_MATCH_THRESHOLD = 0.5  # cv2.TM_CCOEFF_NORMED score below this = "no confident match" (A129)
+_MATCH_THRESHOLD = 0.5  # cv2.TM_CCOEFF_NORMED score below this = "no confident match"
 
 
 def _render_glyph(ch: str, *, font_scale: float = 0.7, thickness: int = 1) -> np.ndarray:
@@ -60,7 +60,7 @@ def read_digits(
 ) -> MatchResult | None:
     """Match each `CELL`-wide column of `crop` (left to right, up to `max_digits` cells) against
     the digit templates. Returns None the moment any cell is not a confident digit match (silence
-    over guessing, A129) rather than returning a partially-guessed number."""
+    over guessing) rather than returning a partially-guessed number."""
     if crop.ndim == 3:
         crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     h, w = CELL

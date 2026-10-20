@@ -1,4 +1,4 @@
-"""`creative.artifact.inspect` metadata extraction (Spec v0.7 §3.3/§6, narrowed to file/header
+"""`creative.artifact.inspect` metadata extraction (narrowed to file/header
 metadata - see `artifact.py` module docstring). Sample fixtures are generated on the fly with
 stdlib only, so these tests need no binary fixtures checked into the repo."""
 

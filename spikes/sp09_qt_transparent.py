@@ -162,7 +162,7 @@ def main() -> int:
         OUT_DIR.mkdir(parents=True, exist_ok=True)
         shot = screen.grabWindow(0, rect.x() - 40, rect.y() - 40, WIN_SIZE + 80, WIN_SIZE + 80)
         shot.save(str(OUT_DIR / "sp09.png"), "PNG")
-        result["screenshot"] = str(OUT_DIR / "sp09.png")
+        result["screenshot"] = "spikes/out/sp09.png"  # repo-relative: no local path in results
 
         def got(v: object) -> None:
             if isinstance(v, str) and v:

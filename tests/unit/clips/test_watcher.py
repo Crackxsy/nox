@@ -1,4 +1,4 @@
-"""`ClipWatcher` (ST-15-04): picks up files in the watch folder that never went through
+"""`ClipWatcher`: picks up files in the watch folder that never went through
 `clip.requested`, indexes them with checksum/thumbnail (opencv optional), and never writes to,
 renames or deletes anything under `watch_dir`."""
 

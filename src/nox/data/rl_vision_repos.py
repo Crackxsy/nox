@@ -1,7 +1,7 @@
-"""Typed repositories over the Vision Stage 2 tables (Spec v0.9 §7, migration `0009_vision.sql`).
+"""Typed repositories over the Vision Stage 2 tables (migration `0009_vision.sql`).
 Mirrors `nox.data.rl_repos`'s conventions: frozen pydantic rows, ISO-8601 UTC timestamps,
 `purge_expired` for the nightly retention job. `rl_vision_frames` is short-retention by design
-(`rl.vision.detections_retain_hours`, Spec §7 open point's proposed minimization default); the
+(`rl.vision.detections_retain_hours`, a data-minimising default); the
 per-match `rl_vision_analysis` row it feeds is the durable artifact."""
 
 from __future__ import annotations

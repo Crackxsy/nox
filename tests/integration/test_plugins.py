@@ -1,6 +1,6 @@
 """Plugin runtime end to end: a real `NoxCore` (headless) spawns the real `echo` plugin worker.
 
-Covers ST-11-01's integration criteria: one misconfigured plugin next to a good one, the full
+Covers the integration criteria: one misconfigured plugin next to a good one, the full
 lifecycle over the real IPC hub, a tool call forwarded core -> worker -> back, an emitted event
 reaching the bus, the hub refusing an event outside a plugin's declared namespaces, honest health
 and the kill switch stopping every plugin worker.
@@ -138,7 +138,10 @@ async def test_hub_rejects_events_outside_a_plugins_namespaces(core: NoxCore):
     try:
         await rogue.send_event("echo.pong", {"text": "spoofed"})
         await asyncio.sleep(0.5)
-        assert [e.payload for e in seen] == []
+        # The real worker announces itself with `{"text": "ready"}` on start; on a slow runner that
+        # arrives after RUNNING. That is the worker's own event; anything else - above all the
+        # rogue's spoofed pong - must never have reached the bus.
+        assert all(e.payload == {"text": "ready"} for e in seen), [e.payload for e in seen]
     finally:
         await rogue.close()
         unsubscribe()

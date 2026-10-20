@@ -1,6 +1,6 @@
-"""nox.memory.embeddings: FTS5 fallback branching when Ollama is unreachable (ST-07-02 AC2), and
-the vector path against a fake provider (no live Ollama dependency for this suite - SP-07 exercises
-the real provider separately)."""
+"""nox.memory.embeddings: FTS5 fallback branching when Ollama is unreachable, and
+the vector path against a fake provider (no live Ollama dependency for this suite - a spike
+exercises the real provider separately)."""
 
 from __future__ import annotations
 

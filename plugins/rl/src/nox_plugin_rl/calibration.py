@@ -1,7 +1,7 @@
 """HUD calibration: one `mss` screenshot, fixed percentage-based 1920x1080 default region layout,
-self-check via the exact same recognizers uses at runtime (Spec - "no separate calibration-only
-recognizer"). Honest `calibrated`/`uncalibrated` state: perception never activates from unverified
-regions (A129, Spec)."""
+self-check via the exact same recognizers uses at runtime (no separate calibration-only
+recognizer). Honest `calibrated`/`uncalibrated` state: perception never activates from unverified
+regions (silence over guessing)."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ import numpy as np
 from . import recognizers
 
 # Percentage-based regions (left%, top%, width%, height% of the captured frame), calibrated
-# against a 1920x1080 borderless reference layout (Spec) - scales to other resolutions since
-# the values are fractions, not pixels. Placeholder ratios pending ES-04's real screenshot set;
+# against a 1920x1080 borderless reference layout - scales to other resolutions since
+# the values are fractions, not pixels. Placeholder ratios pending a real screenshot set;
 # flagged in the report, not silently presented as validated against the real HUD.
 DEFAULT_REGIONS: dict[str, tuple[float, float, float, float]] = {
     "boost": (0.02, 0.90, 0.06, 0.06),

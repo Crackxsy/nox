@@ -1,4 +1,4 @@
-"""PC Awareness Sensors integration (SP-15/ST-20-04): boots the real `NoxCore` headless, wires the
+"""PC Awareness Sensors integration: boots the real `NoxCore` headless, wires the
 sensors with `nox.sensors.install.install(core)`, then swaps the real `RealWin32Probe` the
 foreground sensor got wired with for a fake one (no ctypes/real desktop dependency in a test) and
 drives one poll cycle with a window title matching a configured privacy zone. Asserts the zone

@@ -1,4 +1,4 @@
-"""Wake-word and local kill-phrase matching on transcripts (kill switch D139).
+"""Wake-word and local kill-phrase matching on transcripts (the spoken kill switch).
 
 Whisper spells the name in many ways ("Nox", "Knox", "Nocks", "Nocs"); the matcher normalizes the
 text, skips a leading greeting ("hey", "hallo", "ok") and fuzzy-matches the first token. The kill

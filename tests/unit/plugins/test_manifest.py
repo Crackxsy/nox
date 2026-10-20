@@ -1,5 +1,4 @@
-"""Manifest schema, loader and core-side egress authorization (ST-11-01 acceptance criteria 1-2,
-7-8).
+"""Manifest schema, loader and core-side egress authorization.
 
 Every negative path here is a security boundary: namespace escape, secret-name escape, a
 hard-prohibited tool and an egress endpoint the active profile does not allow.

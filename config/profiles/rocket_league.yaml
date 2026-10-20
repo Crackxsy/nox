@@ -19,7 +19,7 @@ permissions:
   filesystem_roots:
     # Placeholder. At runtime the real folder is resolved via nox.rl.paths.default_replay_folder() /
     # SHGetFolderPathW - the OneDrive-redirected Documents special folder, not a hardcoded drive
-    # letter; the user layer overrides this entry if the install machine differs (Spec §6.5/§15).
+    # letter; the user layer overrides this entry if the install machine differs.
     - "%USERPROFILE%/Documents/My Games/Rocket League/TAGame/DemosEpic"
   tools_allowed: []
   integrations_allowed: [rl]

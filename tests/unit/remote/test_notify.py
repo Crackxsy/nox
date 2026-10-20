@@ -1,4 +1,4 @@
-"""`RemoteNotifier` gating (ST-17-06, Spec v0.8 §7, FR-12.4/FR-12.5).
+"""`RemoteNotifier` gating.
 
 The three gates are tested as their own properties rather than as a side effect of a happy path:
 an event outside the allow-list can never be sent, a zone-active moment suppresses everything

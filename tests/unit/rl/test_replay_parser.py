@@ -1,6 +1,6 @@
-"""Pure-Python replay header/property-tree parser (ST-12-03, executes SP-17). Runs against the
+"""Pure-Python replay header/property-tree parser. Runs against the
 user's real replay batch on disk - ordinary local files, not a hardware dependency, so these tests
-are not marked `hardware` (Spec §12.2) and simply skip if the folder is absent (e.g. a CI runner
+are not marked `hardware` and simply skip if the folder is absent (e.g. a CI runner
 without this machine's Documents folder)."""
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def test_parses_a_sample_of_the_real_replay_batch_with_a_high_success_rate() -> 
             failed += 1
     success_rate = (ok + partial) / len(files)
     # Measured against the real 2,426-file batch: ~98.4% ok, 0% partial, ~1.6% failed (tiny/
-    # corrupt files with engine_version==0) - see the SP-17 spike note for the full-batch numbers.
+    # corrupt files with engine_version==0) - the spike measured the full batch.
     assert success_rate >= 0.90, f"ok={ok} partial={partial} failed={failed} of {len(files)}"
 
 

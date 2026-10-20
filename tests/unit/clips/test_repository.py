@@ -1,5 +1,5 @@
-"""`ClipRepository`/`ClipMarkerRepository` over the real migration `0006_clips.sql` (ST-15-01
-acceptance criteria: insert/read/status-transition operations are covered by unit tests)."""
+"""`ClipRepository`/`ClipMarkerRepository` over the real migration `0006_clips.sql` (acceptance
+criteria: insert/read/status-transition operations are covered by unit tests)."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def test_insert_and_get_round_trip(repo: ClipRepository) -> None:
     row = repo.insert(
         source="event",
         trigger_kind="rl.goal",
-        file_path=r"E:\Nox\data\clips\library\goal.mp4",
+        file_path=r"C:\NoxData\clips\library\goal.mp4",
         session_id="s1",
         duration_s=12.5,
         tags=["goal", "hype"],
@@ -44,7 +44,7 @@ def test_insert_and_get_round_trip(repo: ClipRepository) -> None:
     assert row.status == "new"
     fetched = repo.get(row.id)
     assert fetched is not None
-    assert fetched.file_path == r"E:\Nox\data\clips\library\goal.mp4"
+    assert fetched.file_path == r"C:\NoxData\clips\library\goal.mp4"
     assert fetched.tags == ["goal", "hype"]
     assert fetched.duration_s == 12.5
 

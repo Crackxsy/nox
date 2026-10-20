@@ -1,5 +1,5 @@
-"""nox.memory.vault_watcher: a burst of rapid saves collapses into exactly one re-index (ST-07-03
-AC1 / SP-13 debounce measurement). Uses a real filesystem + real `watchdog` observer thread since
+"""nox.memory.vault_watcher: a burst of rapid saves collapses into exactly one re-index (the
+measured debounce). Uses a real filesystem + real `watchdog` observer thread since
 the debounce logic is exactly what is under test; kept fast with a short debounce window."""
 
 from __future__ import annotations

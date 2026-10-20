@@ -156,7 +156,7 @@ async def test_preflight_check_flags_a_missing_scene(obs_server, fake_client: Fa
         await plugin.stop()
 
 
-# ---- ST-15-02: obs.replay_buffer.save / .status.read (Spec v0.6 Clip Pipeline) -----------------
+# ---- obs.replay_buffer.save / .status.read ------------------------------------------------
 
 
 async def test_replay_buffer_status_read_reports_active(
@@ -177,11 +177,11 @@ async def test_replay_buffer_save_resolves_the_written_path(
     try:
         call = asyncio.ensure_future(api.tools.call("obs.replay_buffer.save", {}))
         await asyncio.sleep(0.05)  # let SaveReplayBuffer land before the event fires
-        await obs_server.replay_buffer_saved(r"E:\Nox\data\clips\incoming\replay_001.mp4")
+        await obs_server.replay_buffer_saved(r"C:\NoxData\clips\incoming\replay_001.mp4")
         result = await asyncio.wait_for(call, timeout=5.0)
         assert result == {
             "ok": True,
-            "file_path": r"E:\Nox\data\clips\incoming\replay_001.mp4",
+            "file_path": r"C:\NoxData\clips\incoming\replay_001.mp4",
             "reason": "",
         }
         assert ("SaveReplayBuffer", {}) in obs_server.requests
