@@ -26,7 +26,7 @@ import {
   parseRunResult,
   slugify,
 } from '../model';
-import { Hero, Tile } from '../ui';
+import { Tile } from '../ui';
 import { ActionCard } from './presets/ActionCard';
 import { ActionForm } from './presets/ActionForm';
 import { PresetCard } from './presets/PresetCard';
@@ -117,15 +117,15 @@ export function PresetsPage({ t, client }: PresetsPageProps) {
 
   return (
     <>
-      <Hero title={t('presets_title')} sub={t('presets_lede')} />
 
       {saveError && <p className="alert">{`${t('presets_save_failed')}: ${saveError}`}</p>}
       {action.error && <p className="alert">{action.error}</p>}
 
-      <section aria-labelledby="h-presets">
-        <h3 id="h-presets" className="rail-title">
+      <section aria-labelledby="h-presets" className="sec">
+        <h2 id="h-presets" className="sec-title">
           {t('presets_title')}
-        </h3>
+        </h2>
+        <p className="lede">{t('presets_lede')}</p>
 
         {data.presets.length === 0 && !addingPreset && (
           <Tile level={4} title={t('presets_none')}>
@@ -181,8 +181,10 @@ export function PresetsPage({ t, client }: PresetsPageProps) {
         )}
       </section>
 
+      <details className="more">
+      <summary>{t('ux_more_options')}</summary>
       <section aria-labelledby="h-preset-actions">
-        <h3 id="h-preset-actions" className="rail-title">
+        <h3 id="h-preset-actions" className="sub-h">
           {t('presets_actions_title')}
         </h3>
         <p className="muted">{t('presets_actions_lede')}</p>
@@ -237,6 +239,7 @@ export function PresetsPage({ t, client }: PresetsPageProps) {
           </button>
         )}
       </section>
+      </details>
     </>
   );
 }
