@@ -239,6 +239,33 @@ def test_the_ctypes_plumbing_is_gone() -> None:
 # ---- the protected helper ------------------------------------------------------------------
 
 
+def test_no_helper_function_shadows_a_script_variable() -> None:
+    # PowerShell names are case-insensitive and scoped dynamically: a local `$n` inside a function
+    # hid the P/Invoke type `$N` from that function (a live-engine run caught it once).
+    import re
+
+    script = wfp_helper.helper_script()
+    lines = script.splitlines()
+    top = {m.group(1).lower() for line in lines if (m := re.match(r"\$(\w+)\s*=", line))}
+    top.add("fwp")  # assigned inside the main try block
+    used_in_functions: set[str] = set()
+    inside = False
+    for line in lines:
+        if line.startswith("function "):
+            inside = True
+            params = line.split("(", 1)[1].split(") {", 1)[0] if "(" in line else ""
+            used_in_functions |= {n.lower() for n in re.findall(r"\$(\w+)", params)}
+            body = line.split(") {", 1)[1] if ") {" in line else ""
+            used_in_functions |= {n.lower() for n in re.findall(r"\$(\w+)\s*=(?!=)", body)}
+        elif line.startswith("}"):
+            inside = False
+        elif inside:
+            used_in_functions |= {m.lower() for m in re.findall(r"\$(\w+)\s*=(?!=)", line)} | {
+                m.lower() for m in re.findall(r"foreach \(\$(\w+) in", line)
+            }
+    assert top & used_in_functions == set()
+
+
 def test_the_helper_is_ascii_deterministic_and_self_contained() -> None:
     script = wfp_helper.helper_script()
     data = wfp_helper.helper_bytes()

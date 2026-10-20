@@ -63,10 +63,10 @@ function SidOf([string]$name) {
 }
 
 function KeyOf([string]$name) {
-  $n = [Text.Encoding]::UTF8.GetBytes($name)
-  $data = [byte[]]::new(16 + $n.Length)
+  $nb = [Text.Encoding]::UTF8.GetBytes($name)
+  $data = [byte[]]::new(16 + $nb.Length)
   [Array]::Copy($NsBytes, 0, $data, 0, 16)
-  [Array]::Copy($n, 0, $data, 16, $n.Length)
+  [Array]::Copy($nb, 0, $data, 16, $nb.Length)
   $h = [Security.Cryptography.SHA1]::Create().ComputeHash($data)
   $h[6] = ($h[6] -band 0x0F) -bor 0x50
   $h[8] = ($h[8] -band 0x3F) -bor 0x80
@@ -119,8 +119,8 @@ function Native {
   }
   $dll = [IO.Path]::Combine([Environment]::SystemDirectory, 'fwpuclnt.dll')
   foreach ($k in $sigs.Keys) {
-    $m = $tb.DefinePInvokeMethod($k, $dll, [Reflection.MethodAttributes]'Public, Static, PinvokeImpl', [Reflection.CallingConventions]::Standard, [UInt32], [Type[]]$sigs[$k], [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Unicode)
-    $m.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
+    $meth = $tb.DefinePInvokeMethod($k, $dll, [Reflection.MethodAttributes]'Public, Static, PinvokeImpl', [Reflection.CallingConventions]::Standard, [UInt32], [Type[]]$sigs[$k], [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Unicode)
+    $meth.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
   }
   return $tb.CreateType()
 }
@@ -153,7 +153,7 @@ function Blob([byte[]]$b) { $p = Alloc $b.Length; $M::Copy($b, 0, $p, $b.Length)
 
 function Open {
   $pe = Alloc 8
-  [void](Check 'FwpmEngineOpen0' ($N::FwpmEngineOpen0([IntPtr]::Zero, [UInt32]10, [IntPtr]::Zero, [IntPtr]::Zero, $pe)))
+  [void](Check 'FwpmEngineOpen0' ($Fwp::FwpmEngineOpen0([IntPtr]::Zero, [UInt32]10, [IntPtr]::Zero, [IntPtr]::Zero, $pe)))
   return $M::ReadIntPtr($pe)
 }
 
@@ -164,12 +164,12 @@ function ProviderFilters($E) {
     $t = Alloc 72
     $M::WriteIntPtr($t, 0, $pk); GuidAt $t 8 $layer; $M::WriteInt32($t, 24, 1); $M::WriteInt32($t, 56, -1)
     $ph = Alloc 8
-    [void](Check 'FwpmFilterCreateEnumHandle0' ($N::FwpmFilterCreateEnumHandle0($E, $t, $ph)))
+    [void](Check 'FwpmFilterCreateEnumHandle0' ($Fwp::FwpmFilterCreateEnumHandle0($E, $t, $ph)))
     $h = $M::ReadIntPtr($ph)
     try {
       while ($true) {
         $pp = Alloc 8; $pc = Alloc 4
-        [void](Check 'FwpmFilterEnum0' ($N::FwpmFilterEnum0($E, $h, [UInt32]256, $pp, $pc)))
+        [void](Check 'FwpmFilterEnum0' ($Fwp::FwpmFilterEnum0($E, $h, [UInt32]256, $pp, $pc)))
         $entries = $M::ReadIntPtr($pp); $count = $M::ReadInt32($pc)
         try {
           for ($i = 0; $i -lt $count; $i++) {
@@ -178,12 +178,12 @@ function ProviderFilters($E) {
             if ($owner -ne [IntPtr]::Zero -and (GuidFrom $owner 0) -eq $Provider) { [void]$found.Add((GuidFrom $f 0)) }
           }
         } finally {
-          if ($entries -ne [IntPtr]::Zero) { [void]$N::FwpmFreeMemory0($pp) }
+          if ($entries -ne [IntPtr]::Zero) { [void]$Fwp::FwpmFreeMemory0($pp) }
         }
         if ($count -lt 256) { break }
       }
     } finally {
-      [void]$N::FwpmFilterDestroyEnumHandle0($E, $h)
+      [void]$Fwp::FwpmFilterDestroyEnumHandle0($E, $h)
     }
   }
   return , $found
@@ -210,8 +210,8 @@ function CondAt([IntPtr]$a, [int]$off, [string]$kind, $sid, [int]$plo, [int]$phi
 
 function AddFilter($E, $r, [IntPtr]$pk) {
   $conds = @($r.Conds)
-  $n = 1 + $conds.Count
-  $ca = Alloc (40 * $n)
+  $count = 1 + $conds.Count
+  $ca = Alloc (40 * $count)
   CondAt $ca 0 'pkg' $r.Sid.Bytes 0 0
   for ($i = 0; $i -lt $conds.Count; $i++) { CondAt $ca (40 * ($i + 1)) $conds[$i] $null $r.PLo $r.PHi }
   $f = Alloc 200
@@ -224,50 +224,50 @@ function AddFilter($E, $r, [IntPtr]$pk) {
   GuidAt $f 64 $Layers[$r.Layer]
   GuidAt $f 80 $Sublayer
   $M::WriteInt32($f, 96, 1); $M::WriteByte($f, 104, [byte]$r.Weight)
-  $M::WriteInt32($f, 112, $n); $M::WriteIntPtr($f, 120, $ca)
+  $M::WriteInt32($f, 112, $count); $M::WriteIntPtr($f, 120, $ca)
   $M::WriteInt32($f, 128, $act)
-  [void](Check ('FwpmFilterAdd0(' + $r.Name + ')') ($N::FwpmFilterAdd0($E, $f, [IntPtr]::Zero, [IntPtr]::Zero)))
+  [void](Check ('FwpmFilterAdd0(' + $r.Name + ')') ($Fwp::FwpmFilterAdd0($E, $f, [IntPtr]::Zero, [IntPtr]::Zero)))
 }
 
 function Change([bool]$add) {
   $E = Open
   try {
-    [void](Check 'FwpmTransactionBegin0' ($N::FwpmTransactionBegin0($E, [UInt32]0)))
+    [void](Check 'FwpmTransactionBegin0' ($Fwp::FwpmTransactionBegin0($E, [UInt32]0)))
     try {
       $pk = PtrGuid $Provider
-      $rules = AllRules
+      $want = AllRules
       if ($add) {
         $pv = Alloc 64
         GuidAt $pv 0 $Provider; $M::WriteIntPtr($pv, 16, (Str 'Nox')); $M::WriteIntPtr($pv, 24, (Str $Desc)); $M::WriteInt32($pv, 32, 1)
-        [void](Check 'FwpmProviderAdd0' ($N::FwpmProviderAdd0($E, $pv, [IntPtr]::Zero)) $Exists)
+        [void](Check 'FwpmProviderAdd0' ($Fwp::FwpmProviderAdd0($E, $pv, [IntPtr]::Zero)) $Exists)
         $sl = Alloc 72
         GuidAt $sl 0 $Sublayer; $M::WriteIntPtr($sl, 16, (Str 'Nox sandbox')); $M::WriteIntPtr($sl, 24, (Str $Desc))
         $M::WriteInt32($sl, 32, 1); $M::WriteIntPtr($sl, 40, $pk); $M::WriteInt16($sl, 64, [int16]-1)
-        [void](Check 'FwpmSubLayerAdd0' ($N::FwpmSubLayerAdd0($E, $sl, [IntPtr]::Zero)) $Exists)
+        [void](Check 'FwpmSubLayerAdd0' ($Fwp::FwpmSubLayerAdd0($E, $sl, [IntPtr]::Zero)) $Exists)
       }
       # Every filter of Nox's provider goes, also ones an older build or another tool added.
       $keys = ProviderFilters $E
-      foreach ($r in $rules) { [void]$keys.Add($r.Key) }
+      foreach ($r in $want) { [void]$keys.Add($r.Key) }
       $removed = 0
       foreach ($k in $keys) {
-        if ((Check 'FwpmFilterDeleteByKey0' ($N::FwpmFilterDeleteByKey0($E, (PtrGuid $k))) $NotFoundFilter) -eq 0) { $removed++ }
+        if ((Check 'FwpmFilterDeleteByKey0' ($Fwp::FwpmFilterDeleteByKey0($E, (PtrGuid $k))) $NotFoundFilter) -eq 0) { $removed++ }
       }
       if ($add) {
-        foreach ($r in $rules) { AddFilter $E $r $pk }
-        $result = $rules.Count
+        foreach ($r in $want) { AddFilter $E $r $pk }
+        $result = $want.Count
       } else {
-        [void](Check 'FwpmSubLayerDeleteByKey0' ($N::FwpmSubLayerDeleteByKey0($E, (PtrGuid $Sublayer))) $NotFoundSublayer)
-        [void](Check 'FwpmProviderDeleteByKey0' ($N::FwpmProviderDeleteByKey0($E, $pk)) $NotFoundProvider)
+        [void](Check 'FwpmSubLayerDeleteByKey0' ($Fwp::FwpmSubLayerDeleteByKey0($E, (PtrGuid $Sublayer))) $NotFoundSublayer)
+        [void](Check 'FwpmProviderDeleteByKey0' ($Fwp::FwpmProviderDeleteByKey0($E, $pk)) $NotFoundProvider)
         $result = $removed
       }
-      [void](Check 'FwpmTransactionCommit0' ($N::FwpmTransactionCommit0($E)))
+      [void](Check 'FwpmTransactionCommit0' ($Fwp::FwpmTransactionCommit0($E)))
       return $result
     } catch {
-      [void]$N::FwpmTransactionAbort0($E)
+      [void]$Fwp::FwpmTransactionAbort0($E)
       throw
     }
   } finally {
-    [void]$N::FwpmEngineClose0($E)
+    [void]$Fwp::FwpmEngineClose0($E)
   }
 }
 
@@ -275,11 +275,11 @@ function Present {
   $E = Open
   try {
     $pp = Alloc 8
-    $code = Check 'FwpmProviderGetByKey0' ($N::FwpmProviderGetByKey0($E, (PtrGuid $Provider), $pp)) $NotFoundProvider
-    if ($code -eq 0) { [void]$N::FwpmFreeMemory0($pp); return $true }
+    $code = Check 'FwpmProviderGetByKey0' ($Fwp::FwpmProviderGetByKey0($E, (PtrGuid $Provider), $pp)) $NotFoundProvider
+    if ($code -eq 0) { [void]$Fwp::FwpmFreeMemory0($pp); return $true }
     return $false
   } finally {
-    [void]$N::FwpmEngineClose0($E)
+    [void]$Fwp::FwpmEngineClose0($E)
   }
 }
 
@@ -352,14 +352,14 @@ function Forget {
   if ([IO.Directory]::Exists($Dir) -and ([IO.File]::GetAttributes($Dir) -band [IO.FileAttributes]::ReparsePoint) -eq 0) { [IO.Directory]::Delete($Dir, $true) }
 }
 
-$N = $null
+$Fwp = $null
 try {
   if ($Action -eq 'show') {
     foreach ($r in (AllRules)) { [Console]::Out.WriteLine((Line $r)) }
     exit 0
   }
   if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { throw 'run the 64-bit Windows PowerShell (System32)' }
-  $N = Native
+  $Fwp = Native
   if ($Action -eq 'status') {
     if (Present) { [Console]::Out.WriteLine('present'); exit 0 }
     [Console]::Out.WriteLine('absent')
@@ -369,13 +369,13 @@ try {
   if (-not (IsAdmin)) { throw 'needs an administrator' }
   if ($Action -eq 'install') {
     Protect
-    $n = Change $true
-    SetStatus 'install' 0 ('installed ' + $n + ' filter(s)') $n
-    [Console]::Out.WriteLine('sandbox network rules: installed ' + $n + ' filter(s)')
+    $count = Change $true
+    SetStatus 'install' 0 ('installed ' + $count + ' filter(s)') $count
+    [Console]::Out.WriteLine('sandbox network rules: installed ' + $count + ' filter(s)')
   } else {
-    $n = Change $false
-    if ($Action -eq 'uninstall') { Forget } else { SetStatus 'remove' 0 ('removed ' + $n + ' filter(s)') 0 }
-    [Console]::Out.WriteLine('sandbox network rules: removed ' + $n + ' filter(s)')
+    $count = Change $false
+    if ($Action -eq 'uninstall') { Forget } else { SetStatus 'remove' 0 ('removed ' + $count + ' filter(s)') 0 }
+    [Console]::Out.WriteLine('sandbox network rules: removed ' + $count + ' filter(s)')
   }
   exit 0
 } catch {
