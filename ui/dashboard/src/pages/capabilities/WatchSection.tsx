@@ -81,9 +81,9 @@ export function WatchSection({ t, lang, client, revision }: WatchSectionProps) {
     <section className="caps-section" aria-labelledby="h-caps-watch">
       <div className="rail-head">
         <div>
-          <h3 id="h-caps-watch" className="rail-title">
+          <h2 id="h-caps-watch" className="sec-title">
             {t('caps_watch_title')}
-          </h3>
+          </h2>
           <p className="rail-sub">{t('caps_watch_lede')}</p>
         </div>
       </div>

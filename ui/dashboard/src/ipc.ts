@@ -87,10 +87,25 @@ export const api = {
   stateGet: (c: IpcClient) => c.request('state.get', {}),
   healthGet: (c: IpcClient) => c.request('health.get', {}),
   providers: (c: IpcClient) => c.request('ai.providers', {}),
-  setPrivacy: (c: IpcClient, mode: string) => c.request('privacy.set', { mode }),
+  /**
+   * Same PIN rule as `secretSet`: sent only when there is one (relaxing privacy may need it).
+   * `confirmed` is the person's explicit yes to "Alles erlaubt" - the core ignores that switch
+   * without it - and is only ever set after the page asked.
+   */
+  setPrivacy: (c: IpcClient, mode: string, pin = '', confirmed = false) =>
+    c.request('privacy.set', {
+      mode,
+      ...(pin ? { pin } : {}),
+      ...(confirmed ? { confirmed: true } : {}),
+    }),
   setMode: (c: IpcClient, mode: string) => c.request('mode.set', { mode }),
   setMuted: (c: IpcClient, muted: boolean) => c.request('voice.mute', { muted }),
   kill: (c: IpcClient, reason: string) => c.request('security.kill', { reason, origin: 'ui' }),
+  /**
+   * Leave safe mode (`{ok}`). Only the machine Nox runs on may ask; after a security-path stop the
+   * core wants the PIN, and answers `ok: false` without one. An empty PIN is not sent.
+   */
+  resume: (c: IpcClient, pin = '') => c.request('security.resume', pin ? { pin } : {}),
   // A model on a cold cache can take well past the 10 s default before the first token; the
   // timeout is an idle timeout (`shared/ipc.ts`), so every arriving frame restarts it.
   chat: (c: IpcClient, text: string, onChunk: (env: Envelope) => void) =>

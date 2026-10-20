@@ -214,6 +214,22 @@ def _until(condition: Callable[[], bool], what: str, timeout_s: float = 15) -> N
         time.sleep(0.05)
 
 
+def _dismiss_first_run(page: Page, later: str) -> None:
+    """A core without a name for its person opens the first-run flow; these tests skip it."""
+    button = page.get_by_role("button", name=later)
+    try:
+        expect(button).to_be_visible(timeout=3000)
+    except AssertionError:
+        return
+    button.click()
+    expect(button).to_have_count(0)
+
+
+def _open_area(page: Page, name: re.Pattern[str]) -> None:
+    """The side bar on wide screens, the bottom bar on a phone: whichever is shown."""
+    page.get_by_role("navigation").get_by_role("link", name=name).first.click()
+
+
 def test_a_household_pairs_confirms_and_removes(
     runner: _CoreThread, browser: Browser, artifacts: Path
 ) -> None:
@@ -250,15 +266,15 @@ def test_a_household_pairs_confirms_and_removes(
         token = read_session_token(Path(core.config.paths.runtime_dir))
         desktop = window("desktop")
         desktop.goto(f"{core.http.url}/dashboard/?ws={core.hub.port}&lang=de#token={token}")
-        expect(desktop.get_by_role("status").filter(has_text="verbunden")).to_be_visible(
-            timeout=UI_TIMEOUT_MS
-        )
-        desktop.get_by_role("tab", name="Geräte").click()
+        expect(desktop.locator(".app[data-conn=online]")).to_have_count(1, timeout=UI_TIMEOUT_MS)
+        _dismiss_first_run(desktop, "Später einrichten")
+        _open_area(desktop, re.compile("^Geräte"))
         expect(desktop.get_by_text("Noch kein Gerät gekoppelt.")).to_be_visible()
         # An unused Telegram is one quiet line, not a second big tile.
         expect(desktop.get_by_text("Handy über Telegram (aus)")).to_be_visible()
         shot(desktop, "desktop-devices-empty")
         _axe(desktop, "the PC's Devices tab")
+        desktop.get_by_role("button", name="Handy koppeln").click()
         desktop.get_by_label("Name des Geräts (freiwillig)").fill("Handy")
         desktop.get_by_role("button", name="Code erzeugen").click()
         expect(desktop.get_by_role("img", name=re.compile("QR-Code zum Koppeln"))).to_be_visible()
@@ -278,18 +294,17 @@ def test_a_household_pairs_confirms_and_removes(
         shot(phone, "phone-pair-screen")
         _axe(phone, "the phone's pairing screen")
         phone.get_by_role("button", name="Koppeln").click()
-        expect(phone.get_by_role("status").filter(has_text="verbunden")).to_be_visible(
-            timeout=UI_TIMEOUT_MS
-        )
+        expect(phone.locator(".app[data-conn=online]")).to_have_count(1, timeout=UI_TIMEOUT_MS)
         shot(phone, "phone-dashboard")
 
         # ---- 2. the PC sees it arrive, under the name the PC gave it --------------------------
         expect(desktop.get_by_text("Handy ist gekoppelt.")).to_be_visible(timeout=UI_TIMEOUT_MS)
-        expect(desktop.get_by_label("Name des Geräts (freiwillig)")).to_have_value("")
+        # The pairing sheet closed by itself once the phone arrived.
+        expect(desktop.get_by_label("Name des Geräts (freiwillig)")).to_have_count(0)
         devices = desktop.get_by_role("list", name="Gekoppelte Geräte")
         expect(devices.get_by_role("listitem").filter(has_text="Handy")).to_be_visible()
         shot(desktop, "desktop-device-arrived")
-        phone.get_by_role("tab", name="Geräte").click()
+        _open_area(phone, re.compile("^Geräte"))
         expect(phone.get_by_text("dieses Gerät", exact=True)).to_be_visible()
         # No PIN is set: a phone cannot pair others, and says where that works.
         expect(
@@ -326,8 +341,8 @@ def test_a_household_pairs_confirms_and_removes(
                     return str(details.get("by"))
             return None
 
-        dialog_phone = phone.get_by_role("alertdialog", name="Darf Nox das?")
-        dialog_desktop = desktop.get_by_role("alertdialog", name="Darf Nox das?")
+        dialog_phone = phone.get_by_role("alertdialog", name="Darf Nox etwas löschen?")
+        dialog_desktop = desktop.get_by_role("alertdialog", name="Darf Nox etwas löschen?")
 
         pending = runner.submit(ask("Archiv/alt.zip", 30))
         expect(dialog_phone).to_be_visible(timeout=UI_TIMEOUT_MS)
@@ -340,7 +355,7 @@ def test_a_household_pairs_confirms_and_removes(
         # not even on the PC. The plain "Erlauben" is there.
         expect(dialog_desktop.get_by_role("button", name=re.compile("Stunde"))).to_have_count(0)
         expect(dialog_desktop.get_by_role("button", name="Erlauben", exact=True)).to_be_visible()
-        expect(dialog_desktop.get_by_text(re.compile(r"Noch \d+ s"))).to_be_visible()
+        expect(dialog_desktop.get_by_text(re.compile(r"Noch \d+ Sekunden"))).to_be_visible()
         assert "immer" not in dialog_desktop.inner_text().lower()
         shot(phone, "phone-permission-no-pin")
         shot(desktop, "desktop-permission-prompt")
@@ -406,6 +421,7 @@ def test_a_household_pairs_confirms_and_removes(
         tablet.get_by_role("button", name="Ich habe einen Code").click()
         # The PC's page still believes no PIN is set: the refusal says one is needed, and the
         # field for it appears right there.
+        desktop.get_by_role("button", name="Weiteres Gerät koppeln").click()
         desktop.get_by_role("button", name="Code erzeugen").click()
         expect(desktop.get_by_role("alert").filter(has_text="PIN")).to_be_visible()
         desktop.get_by_label("Sicherheits-PIN").fill(PIN)
@@ -416,11 +432,9 @@ def test_a_household_pairs_confirms_and_removes(
         tablet.get_by_label("Code", exact=True).fill(second.lower())
         shot(tablet, "tablet-code-entry")
         tablet.get_by_role("button", name="Koppeln").click()
-        expect(tablet.get_by_role("status").filter(has_text="verbunden")).to_be_visible(
-            timeout=UI_TIMEOUT_MS
-        )
+        expect(tablet.locator(".app[data-conn=online]")).to_have_count(1, timeout=UI_TIMEOUT_MS)
         shot(tablet, "tablet-dashboard")
-        tablet.get_by_role("tab", name="Geräte").click()
+        _open_area(tablet, re.compile("^Geräte"))
         expect(tablet.get_by_text("dieses Gerät", exact=True)).to_be_visible()
         shot(tablet, "tablet-devices")
         _axe(tablet, "the tablet's Devices tab")

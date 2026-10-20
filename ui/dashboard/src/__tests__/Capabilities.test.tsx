@@ -41,7 +41,11 @@ const t = translator("de");
 
 type Handler = (payload: Record<string, unknown>) => unknown;
 
-function fakeClient(handlers: Record<string, Handler | unknown>) {
+// The page embeds the flows (Abläufe); a test that is not about them gets an empty listing.
+const DEFAULTS: Record<string, unknown> = { "presets.list": { enabled: true, presets: [], actions: [] } };
+
+function fakeClient(given: Record<string, Handler | unknown>) {
+  const handlers = { ...DEFAULTS, ...given };
   const sent: [string, Record<string, unknown>][] = [];
   const client = {
     request: async (name: string, payload: Record<string, unknown> = {}) => {
@@ -407,7 +411,7 @@ describe("adding an MCP server", () => {
 
 const READY = {
   id: "bahn",
-  intent: "Abfahrten am Bahnhof Witten ansagen",
+  intent: "Abfahrten am Bahnhof Springfield ansagen",
   state: "ready",
   created_at: "2026-10-19T08:00:00+00:00",
   updated_at: "2026-10-19T08:05:00+00:00",

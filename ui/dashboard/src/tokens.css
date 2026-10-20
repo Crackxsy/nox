@@ -1,0 +1,196 @@
+/**
+ * Dashboard design tokens (Spec UX-Neubau §11). One palette per theme, one type scale, one spacing
+ * grid, three radii. A component that needs a number reaches for a token.
+ *
+ * Colour roles, not colour names: `--ink` is text and primary buttons, `--lamp` means only "Nox is
+ * here / Nox waits for you", red (`--danger*`) means only Stop, Live and errors, green (`--ok*`)
+ * only "done / fine". Nothing else gets a colour.
+ *
+ * Dark mode is declared twice on purpose and the two blocks are kept identical by
+ * `__tests__/tokens.test.ts`: once under `prefers-color-scheme` (guarded so an explicit light
+ * choice wins) and once for an explicit `data-theme="dark"`.
+ *
+ * Contrast (WCAG formula, light / dark), measured by the token test:
+ *   ink / bg 18.0 / 15.4 · ink-2 / bg 8.8 / 9.7 · ink-3 / bg 5.9 / 6.8
+ *   accent-ink / accent-wash 6.9 / 9.5 · danger / bg 6.6 / 7.8 · white / danger-fill 6.6 / 5.3
+ *   ok / ok-wash 5.4 / 7.2 · ctl / bg 3.7 / 3.8 (WCAG 1.4.11, borders of inputs and switches)
+ *
+ * The block at the end maps the names the older page styles use onto these roles, so every page
+ * picks up the new palette without each rule being rewritten at once.
+ *
+ * No web fonts: system faces only (no external request, works in "Offline" and "Nur lokal").
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --font: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI", -apple-system, BlinkMacSystemFont,
+    "SF Pro Display", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", monospace;
+
+  /* type scale: major third (1.25) */
+  --t-xs: 13px;
+  --t-s: 14px;
+  --t-m: 16px;
+  --t-l: 20px;
+  --t-xl: 25px;
+  --t-2xl: 31px;
+  --t-3xl: 39px;
+  --t-4xl: 49px;
+
+  /* spacing: 4 px grid */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+
+  /* radii: small, buttons and fields, sheets and the permission box, chips */
+  --r-s: 6px;
+  --r-m: 10px;
+  --r-l: 16px;
+  --r-pill: 999px;
+
+  /* motion: switches 120 ms, sheets 200 ms; the lamp breathes 2.4 s only while Nox listens */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --d-fast: 120ms;
+  --d-med: 200ms;
+
+  /* layout */
+  --hit: 44px;
+  --top-h: 64px;
+  --side-w: 232px;
+  --read: 720px;
+
+  /* light palette */
+  --bg: #ffffff;
+  --bg-2: #f3f4f5;
+  --surface: #ffffff;
+  --ink: #15171a;
+  --ink-2: #454b52;
+  --ink-3: #5f656c;
+  --line: #e3e5e8;
+  --line-2: #c9cdd2;
+  --ctl: #80868d;
+  --lamp: #e9a12f;
+  --accent-ink: #7a4600;
+  --accent-wash: #fcf1dd;
+  --accent-line: #ebcb93;
+  --danger: #b42318;
+  --danger-fill: #b42318;
+  --danger-wash: #fcebe9;
+  --ok: #17703f;
+  --ok-wash: #e6f3eb;
+  --shadow: 0 18px 48px rgba(16, 18, 20, 0.18);
+  --scrim: rgba(16, 18, 20, 0.42);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #17191c;
+    --bg-2: #202327;
+    --surface: #202327;
+    --ink: #eef0f2;
+    --ink-2: #bcc1c7;
+    --ink-3: #9ba1a8;
+    --line: #2e3237;
+    --line-2: #454a50;
+    --ctl: #6e757c;
+    --lamp: #f0b03c;
+    --accent-ink: #f4c574;
+    --accent-wash: #2c2516;
+    --accent-line: #5a4724;
+    --danger: #ff8c80;
+    --danger-fill: #c6372c;
+    --danger-wash: #371c1a;
+    --ok: #62cc93;
+    --ok-wash: #16301f;
+    --shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+    --scrim: rgba(0, 0, 0, 0.6);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #17191c;
+  --bg-2: #202327;
+  --surface: #202327;
+  --ink: #eef0f2;
+  --ink-2: #bcc1c7;
+  --ink-3: #9ba1a8;
+  --line: #2e3237;
+  --line-2: #454a50;
+  --ctl: #6e757c;
+  --lamp: #f0b03c;
+  --accent-ink: #f4c574;
+  --accent-wash: #2c2516;
+  --accent-line: #5a4724;
+  --danger: #ff8c80;
+  --danger-fill: #c6372c;
+  --danger-wash: #371c1a;
+  --ok: #62cc93;
+  --ok-wash: #16301f;
+  --shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+  --scrim: rgba(0, 0, 0, 0.6);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* Names the page styles were written against, pointed at the roles above. */
+:root {
+  --page: var(--bg);
+  --page-soft: var(--bg-2);
+  --tile: var(--bg);
+  --field: var(--surface);
+  --hairline: var(--line-2);
+  --link: var(--ink);
+  --link-hover: var(--ink-2);
+  --blue: var(--ink);
+  --blue-hover: var(--ink-2);
+  --blue-ink: var(--bg);
+  --eyebrow: var(--ink-3);
+  --warn: var(--accent-ink);
+  --danger-action: var(--danger-fill);
+  --danger-action-hover: var(--danger-fill);
+  --danger-action-armed: var(--danger-fill);
+  --danger-action-ink: #ffffff;
+  --switch-off: var(--ctl);
+  --switch-on: var(--ink);
+  --switch-knob: #ffffff;
+  --switch-knob-line: rgba(0, 0, 0, 0.25);
+
+  --text-2xs: var(--t-xs);
+  --text-xs: var(--t-xs);
+  --text-sm: var(--t-s);
+  --text-base: var(--t-m);
+  --text-md: var(--t-m);
+  --text-lg: var(--t-l);
+  --display-1: var(--t-3xl);
+  --display-2: var(--t-l);
+  --display-3: var(--t-l);
+  --display-4: var(--t-m);
+  --hero-sub: var(--t-m);
+
+  --s-9: 96px;
+  --section: var(--s-7);
+  --gutter: var(--s-4);
+  --tile-pad: 0px;
+  --wrap: var(--read);
+  --nav-h: var(--top-h);
+  --radius-tile: var(--r-l);
+  --radius-field: var(--r-m);
+  --radius-pill: var(--r-pill);
+  --dur-fast: var(--d-fast);
+  --dur-base: var(--d-med);
+  --dur-slow: var(--d-med);
+  --dur-arm: 6000ms;
+  --ease-in: var(--ease);
+}

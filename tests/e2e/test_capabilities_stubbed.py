@@ -57,7 +57,7 @@ class StubCore:
     def skill(self) -> dict[str, Any]:
         return {
             "id": "bahn",
-            "intent": "Abfahrten am Bahnhof Witten ansagen",
+            "intent": "Abfahrten am Bahnhof Springfield ansagen",
             "state": self.skill_state,
             "created_at": "2026-10-19T08:00:00+00:00",
             "updated_at": "2026-10-19T08:05:00+00:00",
@@ -224,15 +224,14 @@ def _no_horizontal_scroll(page: Page) -> None:
 def test_add_mcp_server_and_activate_skill(recorded: tuple[Page, StubCore]) -> None:
     page, stub = recorded
     page.goto(f"{ORIGIN}/dashboard/?ws={WS_PORT}&lang=de#token=e2e-token")
-    expect(page.get_by_role("status").filter(has_text=re.compile("verbunden", re.I))).to_be_visible(
-        timeout=15000
-    )
+    expect(page.locator(".app[data-conn=online]")).to_have_count(1, timeout=15000)
 
+    # Geräte & Fähigkeiten › Fähigkeiten; extensions sit under "Für Fortgeschrittene".
+    page.get_by_role("navigation").get_by_role("link", name=re.compile("^Geräte")).first.click()
     tab = page.get_by_role("tab", name="Fähigkeiten")
-    tab.scroll_into_view_if_needed()
     tab.click()
     panel = page.get_by_role("tabpanel", name="Fähigkeiten")
-    expect(panel.get_by_role("heading", name="MCP-Server", exact=True)).to_be_visible()
+    expect(panel.get_by_role("heading", name="Erweiterungen", exact=True)).to_be_visible()
     expect(panel.get_by_text("Nicht isoliert:")).to_be_visible()
     _no_horizontal_scroll(page)
 
@@ -275,7 +274,7 @@ def test_add_mcp_server_and_activate_skill(recorded: tuple[Page, StubCore]) -> N
     _no_horizontal_scroll(page)
 
     # -- activate the self-taught skill: the PIN is asked for only after needs_pin -----------------
-    skill = panel.get_by_role("region", name="Abfahrten am Bahnhof Witten ansagen")
+    skill = panel.get_by_role("region", name="Abfahrten am Bahnhof Springfield ansagen")
     skill.scroll_into_view_if_needed()
     expect(skill.get_by_text("neu – wird mit dem Aktivieren erlaubt")).to_be_visible()
     expect(skill.get_by_label("PIN")).to_have_count(0)

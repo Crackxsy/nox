@@ -1,6 +1,6 @@
 /**
- * The Settings page as a component: the secret/PIN flow, and the two reload bugs that only a
- * mounted page can show.
+ * Einstellungen as a component: the eight pages, the secret/PIN flow, and the reload bug that only
+ * a mounted page can show.
  *
  * What is pinned here:
  *  - a secret's value is write-only and a PIN is sent exactly when the core says one is configured;
@@ -8,7 +8,8 @@
  *    so typing in one filled all three and announced the same error three times);
  *  - a reload triggered from elsewhere never overwrites the personality text somebody is editing —
  *    the previous check compared against the first render's empty string and therefore always did;
- *  - credentials come first on the page, because that is what a first-time user has to reach.
+ *  - the overview says, per page, how it is set right now - in words;
+ *  - every setting lands on exactly the page the spec names, and nothing the core offers is lost.
  */
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -16,8 +17,9 @@ import { describe, expect, it } from 'vitest';
 
 import { translator } from '../i18n';
 import { IpcError, type IpcClient } from '../ipc';
-import { SettingsPage } from '../pages/settings/SettingsPage';
-import { INITIAL_PLUGIN_STATUS } from '../model';
+import SettingsArea from '../areas/SettingsArea';
+import { INITIAL_STATE } from '../model';
+import type { SettingsPageId } from '../shell/routes';
 
 const t = translator('de');
 
@@ -58,6 +60,7 @@ function fakeClient(options: FakeOptions = {}) {
                 restart_required: false,
                 group: 'privacy',
               },
+              { path: 'some.future.setting', type: 'string', restart_required: true, group: 'future' },
             ],
             user_config_path: 'C:\\Users\\x\\user.yaml',
           });
@@ -89,22 +92,30 @@ function fakeClient(options: FakeOptions = {}) {
   return { client, sent };
 }
 
-async function renderSettings(options: FakeOptions = {}, revision = 0) {
-  const { client, sent } = fakeClient(options);
-  const view = render(
-    <SettingsPage
+function area(client: IpcClient, page: SettingsPageId | null, revision = 0) {
+  return (
+    <SettingsArea
       t={t}
       lang="de"
+      state={{ ...INITIAL_STATE, settingsRevision: revision, privacyMode: 'balanced', mode: 'companion' }}
       client={client}
-      revision={revision}
-      twitchAuthEvent={null}
-      plugins={INITIAL_PLUGIN_STATUS}
-      onOpenRemote={() => undefined}
-    />,
+      device={false}
+      page={page}
+      navigate={() => undefined}
+      theme="system"
+      onTheme={() => undefined}
+      providersFailed={false}
+      onRefreshProviders={() => undefined}
+    />
   );
-  // Wait for the *loaded* page, not the shell: the personality box and the credential tiles exist
-  // before the first answer arrives, the config group headings do not.
-  await screen.findByRole('heading', { level: 4, name: t('settings_group_identity') });
+}
+
+async function renderSettings(options: FakeOptions = {}, page: SettingsPageId | null = 'stream') {
+  const { client, sent } = fakeClient(options);
+  const view = render(area(client, page));
+  // Wait for the loaded page, not the shell: the configuration arrives after the first answer.
+  await waitFor(() => expect(sent.some((s) => s.name === 'config.get')).toBe(true));
+  await act(async () => undefined);
   return { sent, view, client };
 }
 
@@ -169,52 +180,50 @@ describe('credentials', () => {
   });
 });
 
-describe('the page as a whole', () => {
-  it('puts the credentials section before the configuration form', async () => {
-    await renderSettings();
-    const headings = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
-    expect(headings.indexOf(t('integrations_title'))).toBeLessThan(
-      headings.indexOf(t('settings_title')),
-    );
+describe('the pages', () => {
+  it('lists the eight pages, each with its state in words', async () => {
+    await renderSettings({}, null);
+    const links = screen.getAllByRole('link');
+    expect(links).toHaveLength(8);
+    expect(links[0]!.textContent).toContain(t('ux_set_privacy'));
+    expect(links[0]!.textContent).toContain(t('privacy_balanced'));
+    expect(links[4]!.textContent).toContain('Nox');
   });
 
-  it('says where settings are kept without printing a path under the headline', async () => {
-    await renderSettings();
+  it('says where settings are kept without printing a path (System)', async () => {
+    await renderSettings({}, 'system');
     expect(screen.getByText(t('settings_file'))).toBeDefined();
     expect(screen.queryByText(/user\.yaml/)).toBeNull();
   });
 
-  it('explains computer control next to its switch', async () => {
-    await renderSettings();
-    const box = screen.getByLabelText(t('setting_desktop_computer_use_enabled'));
+  it('keeps a setting no page names, under System › Mehr Optionen', async () => {
+    await renderSettings({}, 'system');
+    const field = await screen.findByLabelText('some.future.setting');
+    expect(field.closest('details')).not.toBeNull();
+  });
+
+  it('explains computer control next to its switch (Privatsphäre)', async () => {
+    await renderSettings({}, 'privacy');
+    const box = await screen.findByLabelText(t('setting_desktop_computer_use_enabled'));
     expect(box.getAttribute('type')).toBe('checkbox');
     expect((box as HTMLInputElement).checked).toBe(false);
     const hint = document.getElementById(box.getAttribute('aria-describedby') ?? '');
     expect(hint?.textContent).toBe(t('setting_desktop_computer_use_enabled_hint'));
   });
 
-  it('labels an enum option with words, not with its value', async () => {
-    await renderSettings();
-    expect(screen.getByRole('option', { name: 'Dauerhaft, nach Wake-Word' })).toBeDefined();
+  it('labels an enum option with words, not with its value (Stimme)', async () => {
+    await renderSettings({}, 'voice');
+    expect(await screen.findByRole('option', { name: 'Dauerhaft, nach Wake-Word' })).toBeDefined();
     expect(screen.queryByRole('option', { name: 'ptt_only' })).toBeNull();
   });
 
-  it('does not overwrite a personality the user is editing when a reload arrives', async () => {
-    const { client } = await renderSettings();
-    const box = screen.getByLabelText(t('personality_label')) as HTMLTextAreaElement;
+  it('does not overwrite a personality the user is editing when a reload arrives (Nox)', async () => {
+    const { client, view } = await renderSettings({}, 'nox');
+    const box = (await screen.findByLabelText(t('personality_label'))) as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: 'Mein eigener Text' } });
     // A `settings.changed` elsewhere bumps the revision, which reloads everything.
-    render(
-      <SettingsPage
-        t={t}
-        lang="de"
-        client={client}
-        revision={1}
-        twitchAuthEvent={null}
-        plugins={INITIAL_PLUGIN_STATUS}
-        onOpenRemote={() => undefined}
-      />,
-    );
+    view.rerender(area(client, 'nox', 1));
+    await act(async () => undefined);
     expect(box.value).toBe('Mein eigener Text');
   });
 });

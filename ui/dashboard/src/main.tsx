@@ -1,14 +1,18 @@
-import React, { useCallback, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { takeToken } from '../../shared/token';
 import './styles.css';
 import { App } from './App';
 import { type Auth, type DeviceCredentials, forgetDevice, loadDevice, takePairCode } from './auth';
-import { PairScreen, type UnpairedReason, UnpairedScreen } from './Gate';
-import { type Lang, pickLang, translator } from './i18n';
+import type { UnpairedReason } from './Gate';
+import { type Lang, loadLang, pickLang, translator, withCopy } from './i18n';
 import { currentPlatform, isStandalone } from './platform';
 import { type ThemePref, applyTheme, readTheme } from './theme';
+
+// The pairing screens are only ever needed on a device that is not paired yet.
+const PairScreen = lazy(() => withCopy(() => import('./Gate')).then((m) => ({ default: m.PairScreen })));
+const UnpairedScreen = lazy(() => withCopy(() => import('./Gate')).then((m) => ({ default: m.UnpairedScreen })));
 
 // Token: read once from the fragment, keep in memory only, remove it from the address bar.
 const token = takeToken(window.location, window.history);
@@ -66,14 +70,22 @@ function Root({ language, appearance }: { language: Lang; appearance: ThemePref 
     setScreen({ kind: 'unpaired', reason });
   }, []);
 
-  if (screen.kind === 'pair') return <PairScreen t={t} code={screen.code} onPaired={paired} />;
+  if (screen.kind === 'pair') {
+    return (
+      <Suspense fallback={null}>
+        <PairScreen t={t} code={screen.code} onPaired={paired} />
+      </Suspense>
+    );
+  }
   if (screen.kind === 'unpaired') {
     return (
-      <UnpairedScreen
-        t={t}
-        reason={screen.reason}
-        onHaveCode={() => setScreen({ kind: 'pair', code: null })}
-      />
+      <Suspense fallback={null}>
+        <UnpairedScreen
+          t={t}
+          reason={screen.reason}
+          onHaveCode={() => setScreen({ kind: 'pair', code: null })}
+        />
+      </Suspense>
     );
   }
   return (
@@ -87,8 +99,13 @@ function Root({ language, appearance }: { language: Lang; appearance: ThemePref 
   );
 }
 
-createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <Root language={lang} appearance={theme} />
-  </React.StrictMode>,
-);
+// The dictionary first: a page that switches language after its first paint would flash German.
+void loadLang(lang)
+  .catch(() => undefined)
+  .then(() => {
+    createRoot(document.getElementById('root')!).render(
+      <React.StrictMode>
+        <Root language={lang} appearance={theme} />
+      </React.StrictMode>,
+    );
+  });

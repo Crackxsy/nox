@@ -37,6 +37,8 @@ import {
 } from '../model';
 import { type PlatformInput, currentPlatform, isIosBrowserTab } from '../platform';
 import { StateWord, Tile } from '../ui';
+import { Sheet } from '../shell/Sheet';
+import { Icon } from '../shell/icons';
 
 /** A device that paired while this dashboard was open (`remote.paired`); `seq` makes each new. */
 export interface PairedNotice {
@@ -128,6 +130,8 @@ export function DevicesSection({
 }: DevicesSectionProps) {
   const [view, setView] = useState<View>({ kind: 'loading' });
   const [pairing, setPairing] = useState<LanPairing | null>(null);
+  /** The pairing sheet (Spec §6: Koppeln als Sheet). */
+  const [pairOpen, setPairOpen] = useState(false);
   const [name, setName] = useState('');
   const [pin, setPin] = useState('');
   const [copy, setCopy] = useState<CopyState>('idle');
@@ -183,6 +187,7 @@ export function DevicesSection({
   if (justPaired && justPaired.seq !== seenPaired) {
     setSeenPaired(justPaired.seq);
     setBanner(justPaired.name);
+    setPairOpen(false);
     if (pairing) {
       setPairing(null);
       setName('');
@@ -334,7 +339,7 @@ export function DevicesSection({
 
   return (
     <>
-      {error && (
+      {error && !pairOpen && (
         <p role="alert" className="alert">
           {error}
         </p>
@@ -343,127 +348,18 @@ export function DevicesSection({
         {banner ? fill(t('lan_pair_done'), banner) : ''}
       </p>
 
-      <div className="tiles tiles--single">
-        <Tile feature id="lan" title={t('lan_pair_title')} lede={lede}>
-          {technical && (
-            <details className="tile-technical">
-              <summary>{t('lan_technical')}</summary>
-              <p className="mono break">{status.error || status.warning}</p>
-            </details>
-          )}
-          {!canPair ? (
-            <p className="hint">{t('lan_pair_only_at_computer')}</p>
-          ) : !shown ? (
-            <div className="row-controls">
-              <div className="field field--grow">
-                <label htmlFor="lan-name" className="label">
-                  {t('lan_pair_name')}
-                </label>
-                <input
-                  id="lan-name"
-                  className="input"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  maxLength={64}
-                  autoComplete="off"
-                />
-              </div>
-              {status.pinSet && (
-                <div className="field">
-                  <label htmlFor="lan-pin" className="label">
-                    {t('lan_pair_pin')}
-                  </label>
-                  <input
-                    id="lan-pin"
-                    className="input input--pin"
-                    type="password"
-                    inputMode="numeric"
-                    autoComplete="off"
-                    value={pin}
-                    onChange={(e) => setPin(e.target.value)}
-                    aria-describedby="lan-pin-hint"
-                  />
-                </div>
-              )}
-              <button
-                type="button"
-                className="btn"
-                disabled={!client || notRunning || busy === 'pair'}
-                onClick={() => void pair()}
-              >
-                {expired ? t('lan_pair_again') : t('lan_pair_button')}
-              </button>
-              {status.pinSet && (
-                <p id="lan-pin-hint" className="hint field--full">
-                  {t('lan_pair_pin_hint')}
-                </p>
-              )}
-            </div>
-          ) : (
-            <div className="pairing">
-              {shown.qr && <img className="pairing-qr" src={shown.qr} alt={t('lan_pair_qr_alt')} />}
-              <div className="pairing-facts">
-                <p className="label">{t('lan_pair_link')}</p>
-                <p className="pairing-url">
-                  <a href={shown.url} className="link link--plain" rel="noreferrer">
-                    {shown.url}
-                  </a>
-                </p>
-                <div className="pairing-buttons">
-                  <button type="button" className="btn btn--quiet btn--sm" onClick={() => void copyLink(shown.url)}>
-                    {t('lan_pair_copy')}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--quiet btn--sm"
-                    onClick={() => {
-                      setPairing(null);
-                      setCopy('idle');
-                    }}
-                  >
-                    {t('lan_pair_discard')}
-                  </button>
-                </div>
-                <p className="label">{t('lan_pair_code')}</p>
-                <p className="code-display">
-                  <span className="code-display-value" aria-hidden="true">
-                    {groupCode(shown.code)}
-                  </span>
-                  <span className="sr-only">{fill(t('lan_pair_code_spelled'), spellCode(shown.code))}</span>
-                </p>
-                <p className="hint">{fill(t('lan_pair_valid_until'), formatTimestamp(shown.expiresAt, lang))}</p>
-                {shown.fingerprint && (
-                  <>
-                    <p className="label">{t('lan_fingerprint')}</p>
-                    <p className="fingerprint">{shortFingerprint(shown.fingerprint)}</p>
-                    <p className="hint">{t('lan_fingerprint_hint')}</p>
-                  </>
-                )}
-              </div>
-            </div>
-          )}
-          <p
-            role="status"
-            className={
-              statusVisible
-                ? copy === 'failed'
-                  ? 'hint pairing-status pairing-status--warn'
-                  : 'hint pairing-status'
-                : 'sr-only'
-            }
-          >
-            {pairingStatus}
-          </p>
-        </Tile>
-      </div>
-
       <section aria-labelledby="h-lan-devices">
         <div className="rail-head">
           <div>
             <h3 id="h-lan-devices" className="rail-title">
               {t('lan_devices_title')}
             </h3>
-            {devices.length === 0 && <p className="rail-sub">{t('lan_devices_empty')}</p>}
+            {devices.length === 0 && (
+              <>
+                <p className="rail-sub">{t('lan_devices_empty')}</p>
+                <p className="muted">{t('lan_devices_empty_body')}</p>
+              </>
+            )}
           </div>
         </div>
         {devices.length > 0 && (
@@ -539,7 +435,147 @@ export function DevicesSection({
             })}
           </ul>
         )}
+        {canPair ? (
+          <div className="btns">
+            <button
+              type="button"
+              className={devices.length === 0 ? 'btn btn--primary' : 'btn'}
+              disabled={!client || notRunning}
+              onClick={() => setPairOpen(true)}
+            >
+              {devices.length === 0 ? t('lan_pair_open_first') : t('lan_pair_open_more')}
+            </button>
+            {notRunning && <p className="hint">{lede}</p>}
+          </div>
+        ) : (
+          <p className="hint">{t('lan_pair_only_at_computer')}</p>
+        )}
+        {technical && (
+          <details className="tile-technical">
+            <summary>{t('lan_technical')}</summary>
+            <p className="mono break">{status.error || status.warning}</p>
+          </details>
+        )}
       </section>
+
+      <Sheet open={pairOpen} onClose={() => setPairOpen(false)} labelledBy="lan-pair-title">
+        <div className="dlg-h">
+          <h2 id="lan-pair-title">{t('lan_pair_title')}</h2>
+          <button type="button" className="ib" aria-label={t('ux_close')} onClick={() => setPairOpen(false)}>
+            <Icon name="close" />
+          </button>
+        </div>
+        <p className="lede">{lede}</p>
+        {error && (
+          <p role="alert" className="alert">
+            {error}
+          </p>
+        )}
+        {!canPair ? (
+          <p className="hint">{t('lan_pair_only_at_computer')}</p>
+        ) : !shown ? (
+          <div className="row-controls">
+            <div className="field field--grow">
+              <label htmlFor="lan-name" className="label">
+                {t('lan_pair_name')}
+              </label>
+              <input
+                id="lan-name"
+                data-autofocus
+                className="input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                maxLength={64}
+                autoComplete="off"
+              />
+            </div>
+            {status.pinSet && (
+              <div className="field">
+                <label htmlFor="lan-pin" className="label">
+                  {t('lan_pair_pin')}
+                </label>
+                <input
+                  id="lan-pin"
+                  className="input input--pin"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value)}
+                  aria-describedby="lan-pin-hint"
+                />
+              </div>
+            )}
+            <button
+              type="button"
+              className="btn"
+              disabled={!client || notRunning || busy === 'pair'}
+              onClick={() => void pair()}
+            >
+              {expired ? t('lan_pair_again') : t('lan_pair_button')}
+            </button>
+            {status.pinSet && (
+              <p id="lan-pin-hint" className="hint field--full">
+                {t('lan_pair_pin_hint')}
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="pairing">
+            {shown.qr && <img className="pairing-qr" src={shown.qr} alt={t('lan_pair_qr_alt')} />}
+            <div className="pairing-facts">
+              <p className="label">{t('lan_pair_link')}</p>
+              <p className="pairing-url">
+                <a href={shown.url} className="link link--plain" rel="noreferrer">
+                  {shown.url}
+                </a>
+              </p>
+              <div className="pairing-buttons">
+                <button type="button" className="btn btn--quiet btn--sm" onClick={() => void copyLink(shown.url)}>
+                  {t('lan_pair_copy')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--quiet btn--sm"
+                  onClick={() => {
+                    setPairing(null);
+                    setCopy('idle');
+                  }}
+                >
+                  {t('lan_pair_discard')}
+                </button>
+              </div>
+              <p className="label">{t('lan_pair_code')}</p>
+              <p className="code-display">
+                <span className="code-display-value" aria-hidden="true">
+                  {groupCode(shown.code)}
+                </span>
+                <span className="sr-only">{fill(t('lan_pair_code_spelled'), spellCode(shown.code))}</span>
+              </p>
+              <p className="hint">{fill(t('lan_pair_valid_until'), formatTimestamp(shown.expiresAt, lang))}</p>
+              {shown.fingerprint && (
+                <>
+                  <p className="label">{t('lan_fingerprint')}</p>
+                  <p className="fingerprint">{shortFingerprint(shown.fingerprint)}</p>
+                  <p className="hint">{t('lan_fingerprint_hint')}</p>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+        <p
+          role="status"
+          className={
+            statusVisible
+              ? copy === 'failed'
+                ? 'hint pairing-status pairing-status--warn'
+                : 'hint pairing-status'
+              : 'sr-only'
+          }
+        >
+          {pairingStatus}
+        </p>
+      </Sheet>
 
       {device && (
         <section aria-labelledby="h-lan-ca" className="tiles tiles--single">

@@ -7,7 +7,7 @@
  */
 
 import { type T } from '../../i18n';
-import { type Preset, type PresetAction, type PresetRunResult } from '../../model';
+import { type Preset, type PresetAction, type PresetRunResult, runOutcomeKey } from '../../model';
 import { Detail, StateWord, Tile } from '../../ui';
 import { PresetForm } from './PresetForm';
 
@@ -44,9 +44,7 @@ function triggerLine(preset: Preset): string {
 }
 
 function runLabel(t: T, run: PresetRunResult): string {
-  const failures = run.steps.filter((step) => !step.ok).length;
-  if (failures === 0) return t('presets_run_ok');
-  return failures === 1 ? t('presets_run_partial') : t('presets_run_partial_many');
+  return t(runOutcomeKey(run));
 }
 
 export function PresetCard(props: PresetCardProps) {

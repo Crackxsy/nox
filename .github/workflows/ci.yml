@@ -430,7 +430,13 @@ jobs:
         working-directory: ui/${{ matrix.app }}
         run: npm run build
 
+      # Spec UX-Neubau §12: start bundle <= 110 KB gzip, each lazy area <= 35 KB, CSS <= 12 KB.
       - name: Bundle budget
+        if: matrix.app == 'dashboard'
+        working-directory: ui/dashboard
+        run: npm run size
+
+      - name: Bundle budget (pet)
         if: matrix.app == 'pet'
         working-directory: ui/pet
         run: npm run check:bundle

@@ -75,9 +75,17 @@ interface ShowOptions {
   device?: boolean;
   answers?: Answers;
   platform?: PlatformInput;
+  /** Open the pairing sheet when it can be opened (most tests are about what is in it). */
+  open?: boolean;
 }
 
-async function show({ device = false, answers = {}, platform = DESKTOP }: ShowOptions = {}) {
+/** The button under the list that opens the pairing sheet. */
+function pairButton(): HTMLButtonElement | null {
+  return (screen.queryByRole('button', { name: t('lan_pair_open_first') }) ??
+    screen.queryByRole('button', { name: t('lan_pair_open_more') })) as HTMLButtonElement | null;
+}
+
+async function show({ device = false, answers = {}, platform = DESKTOP, open = true }: ShowOptions = {}) {
   const { client, calls } = core(answers);
   const signedOut = vi.fn();
   const openSettings = vi.fn();
@@ -96,6 +104,12 @@ async function show({ device = false, answers = {}, platform = DESKTOP }: ShowOp
   await act(async () => {
     view = render(<DevicesSection {...props} />);
   });
+  const button = pairButton();
+  if (open && button && !button.disabled) {
+    await act(async () => {
+      fireEvent.click(button);
+    });
+  }
   const rerender = async (over: Partial<typeof props>) => {
     await act(async () => {
       view!.rerender(<DevicesSection {...props} {...over} />);
@@ -157,17 +171,17 @@ describe('the states before there is anything to pair', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: t('lan_retry') }));
     });
-    expect(screen.getByRole('heading', { name: t('lan_pair_title') })).toBeTruthy();
+    expect(pairButton()).toBeTruthy();
     expect(calls.filter((c) => c.name === 'lan.status')).toHaveLength(2);
   });
 
   it('keeps the core\'s own reason out of the lede when the listener failed', async () => {
     await show({ answers: { 'lan.status': { ...RUNNING, running: false, error: 'certificate: /var/lib/nox/tls/server.key unreadable' } } });
-    const tile = screen.getByRole('heading', { name: t('lan_pair_title') }).closest('section')!;
-    expect(within(tile).getByText(t('lan_failed'))).toBeTruthy();
-    const details = within(tile).getByText(t('lan_technical')).closest('details')!;
+    const list = screen.getByRole('heading', { name: t('lan_devices_title') }).closest('section')!;
+    expect(within(list).getByText(t('lan_failed'))).toBeTruthy();
+    const details = within(list).getByText(t('lan_technical')).closest('details')!;
     expect(details.textContent).toContain('server.key');
-    expect(screen.getByRole('button', { name: t('lan_pair_button') })).toHaveProperty('disabled', true);
+    expect(pairButton()).toHaveProperty('disabled', true);
   });
 });
 
@@ -186,8 +200,8 @@ describe('pairing a new device', () => {
     expect(screen.getByText('AA:BB:CC:DD:EE:FF:00:11')).toBeTruthy();
     expect(screen.getByText(t('lan_fingerprint_hint'))).toBeTruthy();
     // The one live line says the code is ready.
-    const tile = screen.getByRole('heading', { name: t('lan_pair_title') }).closest('section')!;
-    expect(within(tile).getByRole('status').textContent).toContain('Code erzeugt.');
+    const sheet = screen.getByRole('dialog', { name: t('lan_pair_title') });
+    expect(within(sheet).getByRole('status').textContent).toContain('Code erzeugt.');
   });
 
   it('can throw a code away', async () => {
@@ -287,12 +301,31 @@ describe('pairing a new device', () => {
     vi.useFakeTimers();
     await rerender({ revision: 1, justPaired: { name: 'Küche', seq: 1 } });
     expect(screen.getByText('Küche ist gekoppelt.')).toBeTruthy();
+    // The sheet closed; opened again, it starts empty.
     expect(screen.queryByRole('img', { name: t('lan_pair_qr_alt') })).toBeNull();
+    expect(screen.queryByLabelText(t('lan_pair_name'))).toBeNull();
+    act(() => {
+      fireEvent.click(pairButton()!);
+    });
     expect((screen.getByLabelText(t('lan_pair_name')) as HTMLInputElement).value).toBe('');
     act(() => {
       vi.advanceTimersByTime(PAIRED_BANNER_MS + 10);
     });
     expect(screen.queryByText('Küche ist gekoppelt.')).toBeNull();
+  });
+});
+
+describe('the empty list', () => {
+  it('says what appears here and offers "Handy koppeln", which opens the pairing sheet', async () => {
+    await show({ open: false, answers: { 'lan.devices.list': { devices: [] } } });
+    expect(screen.getByText(t('lan_devices_empty'))).toBeTruthy();
+    expect(screen.getByText(t('lan_devices_empty_body'))).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: t('lan_pair_open_first') }));
+    });
+    const sheet = screen.getByRole('dialog', { name: t('lan_pair_title') });
+    expect(within(sheet).getByRole('button', { name: t('lan_pair_button') })).toBeTruthy();
   });
 });
 

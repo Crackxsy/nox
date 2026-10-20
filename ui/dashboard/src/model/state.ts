@@ -69,6 +69,8 @@ export interface DashboardState {
   twitchAuth: string | null;
   /** Last `desktop.computer_use` notice; `null` until one arrives and again after a disconnect. */
   computerUse: ComputerUseNotice | null;
+  /** When the kill switch engaged, from its event; `null` while running or when only the level is known. */
+  stoppedAt: string | null;
   /**
    * Monotonic counter for rows this app has to give a React key to (toasts, live chat messages).
    * It lives in the state rather than in a module variable so the reducer stays pure and two tests
@@ -96,6 +98,7 @@ export const INITIAL_STATE: DashboardState = {
   viewsRevision: 0,
   twitchAuth: null,
   computerUse: null,
+  stoppedAt: null,
   seq: 0,
 };
 

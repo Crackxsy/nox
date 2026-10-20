@@ -28,6 +28,22 @@ export interface ConfigFormProps {
   client: IpcClient | null;
   config: EditableConfig;
   onApplied: (values: Record<string, unknown>) => void;
+  /**
+   * Only these paths, in this order, without group headings (one section of a Settings page).
+   * Paths the core does not report are skipped. Without it, every group is shown.
+   */
+  paths?: readonly string[];
+  /** Rarely needed paths, behind "Mehr Optionen" under the visible ones. */
+  morePaths?: readonly string[];
+  /** Section heading (level 2) shown above the rows, when there are rows to show. */
+  title?: string;
+}
+
+function pick(config: EditableConfig, paths: readonly string[]): SettingSpec[] {
+  const byPath = new Map(config.schema.map((spec) => [spec.path, spec]));
+  return paths
+    .map((path) => byPath.get(path))
+    .filter((spec): spec is SettingSpec => spec !== undefined && spec.type !== "structured");
 }
 
 /** Groups in reading order; anything the core reports beyond these is appended in schema order. */
@@ -82,13 +98,29 @@ export function groupsOf(
   return ordered.map((group) => ({ group, specs: byGroup.get(group) ?? [] }));
 }
 
-export function ConfigForm({ t, client, config, onApplied }: ConfigFormProps) {
+export function ConfigForm({
+  t,
+  client,
+  config,
+  onApplied,
+  paths,
+  morePaths,
+  title,
+}: ConfigFormProps) {
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<ConfigSetResult | null>(null);
   const [error, setError] = useState("");
 
-  const groups = useMemo(() => groupsOf(config), [config]);
+  const groups = useMemo(() => {
+    if (!paths) return groupsOf(config);
+    const main = pick(config, paths);
+    return main.length > 0 ? [{ group: "", specs: main }] : [];
+  }, [config, paths]);
+  const more = useMemo(
+    () => (morePaths ? pick(config, morePaths) : []),
+    [config, morePaths],
+  );
   const dirty = Object.keys(draft).length > 0;
   const disabled = client === null;
 
@@ -258,6 +290,77 @@ export function ConfigForm({ t, client, config, onApplied }: ConfigFormProps) {
     }
   };
 
+  const renderRow = (spec: SettingSpec, restartGroup: boolean) => {
+    const id = fieldId(spec.path);
+    const message = result?.errors[spec.path];
+    return (
+      <div key={spec.path} className="setting">
+        <span className="setting-name">
+          <label htmlFor={id}>{settingLabel(t, spec.path)}</label>
+          {spec.restartRequired && !restartGroup && (
+            <span className="badge badge--warn">
+              {t("settings_restart_badge")}
+            </span>
+          )}
+          {spec.path in draft && (
+            <span className="badge">{t("settings_dirty_badge")}</span>
+          )}
+        </span>
+        <span className="setting-control">
+          {renderControl(spec)}
+          {spec.type === "list[str]" &&
+            spec.path !== "voice.stt.vocabulary" && (
+              <span id={`${id}-hint`} className="hint">
+                {t("settings_list_hint")}
+              </span>
+            )}
+          {spec.path === "voice.stt.vocabulary" && (
+            <span className="hint">
+              {t("setting_voice_stt_vocabulary_hint")}
+            </span>
+          )}
+          {spec.path === "desktop.computer_use.enabled" && (
+            <span id={`${id}-hint`} className="hint">
+              {t("setting_desktop_computer_use_enabled_hint")}
+            </span>
+          )}
+          {spec.path === "voice.tts.steps" && (
+            <span id={`${id}-hint`} className="hint">
+              {t("setting_voice_tts_steps_hint")}
+            </span>
+          )}
+          {spec.path === "stream.ai_voice_disclosure.chat_text" && (
+            <span id={`${id}-hint`} className="hint">
+              {t("setting_stream_ai_voice_disclosure_chat_text_hint")}
+            </span>
+          )}
+          {spec.path === "pet.variant" && (
+            <>
+              <PetPreview
+                variant={String(
+                  valueOf(config, draft, spec.path) ?? "",
+                )}
+                alt={optionLabel(
+                  t,
+                  spec.path,
+                  String(valueOf(config, draft, spec.path) ?? ""),
+                )}
+              />
+              <span id={`${id}-hint`} className="hint">
+                {t("setting_pet_variant_hint")}
+              </span>
+            </>
+          )}
+        </span>
+        {message && (
+          <span role="alert" className="setting-error">
+            {message}
+          </span>
+        )}
+      </div>
+    );
+  };
+
   return (
     <>
       {error && (
@@ -266,91 +369,39 @@ export function ConfigForm({ t, client, config, onApplied }: ConfigFormProps) {
         </p>
       )}
 
-      {groups.length === 0 && <p className="muted">{t("settings_empty")}</p>}
+      {groups.length === 0 && more.length === 0 && !paths && (
+        <p className="muted">{t("settings_empty")}</p>
+      )}
 
+      {title && (groups.length > 0 || more.length > 0) && (
+        <h2 className="sec-title">{title}</h2>
+      )}
       {groups.map(({ group, specs }) => {
         const restartGroup = specs.every((s) => s.restartRequired);
         return (
-          <div key={group} id={groupId(group)} className="settings-group">
-            <h4 className="group-title">{groupLabel(t, group)}</h4>
+          <div
+            key={group || "section"}
+            id={group ? groupId(group) : undefined}
+            className="settings-group"
+          >
+            {group && <h4 className="group-title">{groupLabel(t, group)}</h4>}
             {restartGroup && (
               <p className="hint">{t("settings_restart_group")}</p>
             )}
-            {specs.map((spec) => {
-              const id = fieldId(spec.path);
-              const message = result?.errors[spec.path];
-              return (
-                <div key={spec.path} className="setting">
-                  <span className="setting-name">
-                    <label htmlFor={id}>{settingLabel(t, spec.path)}</label>
-                    {spec.restartRequired && !restartGroup && (
-                      <span className="badge badge--warn">
-                        {t("settings_restart_badge")}
-                      </span>
-                    )}
-                    {spec.path in draft && (
-                      <span className="badge">{t("settings_dirty_badge")}</span>
-                    )}
-                  </span>
-                  <span className="setting-control">
-                    {renderControl(spec)}
-                    {spec.type === "list[str]" &&
-                      spec.path !== "voice.stt.vocabulary" && (
-                        <span id={`${id}-hint`} className="hint">
-                          {t("settings_list_hint")}
-                        </span>
-                      )}
-                    {spec.path === "voice.stt.vocabulary" && (
-                      <span className="hint">
-                        {t("setting_voice_stt_vocabulary_hint")}
-                      </span>
-                    )}
-                    {spec.path === "desktop.computer_use.enabled" && (
-                      <span id={`${id}-hint`} className="hint">
-                        {t("setting_desktop_computer_use_enabled_hint")}
-                      </span>
-                    )}
-                    {spec.path === "voice.tts.steps" && (
-                      <span id={`${id}-hint`} className="hint">
-                        {t("setting_voice_tts_steps_hint")}
-                      </span>
-                    )}
-                    {spec.path === "stream.ai_voice_disclosure.chat_text" && (
-                      <span id={`${id}-hint`} className="hint">
-                        {t("setting_stream_ai_voice_disclosure_chat_text_hint")}
-                      </span>
-                    )}
-                    {spec.path === "pet.variant" && (
-                      <>
-                        <PetPreview
-                          variant={String(
-                            valueOf(config, draft, spec.path) ?? "",
-                          )}
-                          alt={optionLabel(
-                            t,
-                            spec.path,
-                            String(valueOf(config, draft, spec.path) ?? ""),
-                          )}
-                        />
-                        <span id={`${id}-hint`} className="hint">
-                          {t("setting_pet_variant_hint")}
-                        </span>
-                      </>
-                    )}
-                  </span>
-                  {message && (
-                    <span role="alert" className="setting-error">
-                      {message}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
+            {specs.map((spec) => renderRow(spec, restartGroup))}
           </div>
         );
       })}
+      {more.length > 0 && (
+        <details className="more">
+          <summary>{t("ux_more_options")}</summary>
+          <div className="settings-group">
+            {more.map((spec) => renderRow(spec, false))}
+          </div>
+        </details>
+      )}
 
-      {groups.length > 0 && (dirty || result) && (
+      {(groups.length > 0 || more.length > 0) && (dirty || result) && (
         <div className="savebar">
           <p role="status" aria-live="polite" className="hint">
             {saving

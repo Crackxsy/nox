@@ -26,7 +26,7 @@ import {
   parseRunResult,
   slugify,
 } from '../model';
-import { Hero, Tile } from '../ui';
+import { Tile } from '../ui';
 import { ActionCard } from './presets/ActionCard';
 import { ActionForm } from './presets/ActionForm';
 import { PresetCard } from './presets/PresetCard';
@@ -46,11 +46,19 @@ export function PresetsPage({ t, client }: PresetsPageProps) {
   const [runs, setRuns] = useState<Record<string, PresetRunResult>>({});
   const [tests, setTests] = useState<Record<string, ActionTestResult>>({});
   const [saveError, setSaveError] = useState('');
+  const [loadFailed, setLoadFailed] = useState(false);
   const action = useIpcAction(client, t);
 
+  // A failed listing is said in the page (with a way to try again), never an unhandled rejection.
   const load = useCallback(async (c: IpcClient, cancelled: () => boolean) => {
-    const payload = await api.presetsList(c);
-    if (!cancelled()) setData(parsePresets(payload));
+    try {
+      const payload = await api.presetsList(c);
+      if (cancelled()) return;
+      setData(parsePresets(payload));
+      setLoadFailed(false);
+    } catch {
+      if (!cancelled()) setLoadFailed(true);
+    }
   }, []);
 
   useRefreshOnConnect(client, load);
@@ -117,15 +125,23 @@ export function PresetsPage({ t, client }: PresetsPageProps) {
 
   return (
     <>
-      <Hero title={t('presets_title')} sub={t('presets_lede')} />
 
+      {loadFailed && client && (
+        <p role="alert" className="alert">
+          {t('presets_load_failed')}{' '}
+          <button type="button" className="btn btn--plain" onClick={() => void load(client, () => false)}>
+            {t('ux_reload')}
+          </button>
+        </p>
+      )}
       {saveError && <p className="alert">{`${t('presets_save_failed')}: ${saveError}`}</p>}
       {action.error && <p className="alert">{action.error}</p>}
 
-      <section aria-labelledby="h-presets">
-        <h3 id="h-presets" className="rail-title">
+      <section aria-labelledby="h-presets" className="sec">
+        <h2 id="h-presets" className="sec-title">
           {t('presets_title')}
-        </h3>
+        </h2>
+        <p className="lede">{t('presets_lede')}</p>
 
         {data.presets.length === 0 && !addingPreset && (
           <Tile level={4} title={t('presets_none')}>
@@ -181,8 +197,10 @@ export function PresetsPage({ t, client }: PresetsPageProps) {
         )}
       </section>
 
+      <details className="more">
+      <summary>{t('ux_more_options')}</summary>
       <section aria-labelledby="h-preset-actions">
-        <h3 id="h-preset-actions" className="rail-title">
+        <h3 id="h-preset-actions" className="sub-h">
           {t('presets_actions_title')}
         </h3>
         <p className="muted">{t('presets_actions_lede')}</p>
@@ -237,6 +255,7 @@ export function PresetsPage({ t, client }: PresetsPageProps) {
           </button>
         )}
       </section>
+      </details>
     </>
   );
 }
