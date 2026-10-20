@@ -90,6 +90,7 @@ ADMINISTRATION = (
     "twitch.auth.start",
     "twitch.auth.disconnect",
     "memory.profile.add",
+    "memory.profile.confirm",
     "memory.profile.forget",
     "mode.set",
     "presets.activate",
