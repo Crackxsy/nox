@@ -233,6 +233,7 @@ class FakeTurns:
     def __init__(self) -> None:
         self.rows: list[tuple[str, str, str]] = []
         self.private: list[bool] = []
+        self.conversations: list[str] = []
 
     async def record(
         self,
@@ -243,13 +244,21 @@ class FakeTurns:
         provider: str = "",
         latency_ms: int = 0,
         private: bool = False,
+        conversation: str = "",
     ) -> None:
         self.rows.append((session_id, role, text))
         self.private.append(private)
+        self.conversations.append(conversation)
 
     async def recent(self, session_id: str, limit: int) -> list[tuple[str, str]]:
         return [(r, t) for s, r, t in self.rows if s == session_id][-limit:]
 
-    async def recent_turns(self, session_id: str, limit: int) -> list[RecordedTurn]:
-        marked = zip(self.rows, self.private, strict=True)
-        return [RecordedTurn(r, t, p) for (s, r, t), p in marked if s == session_id][-limit:]
+    async def recent_turns(
+        self, session_id: str, limit: int, *, conversation: str = ""
+    ) -> list[RecordedTurn]:
+        marked = zip(self.rows, self.private, self.conversations, strict=True)
+        return [
+            RecordedTurn(r, t, p)
+            for (s, r, t), p, c in marked
+            if s == session_id and c == conversation
+        ][-limit:]

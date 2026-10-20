@@ -53,6 +53,9 @@ class PermissionRequest(BaseModel):
     #: The conversation the call belongs to (`nox.security.taint`); empty outside a conversation
     #: (a dashboard click). Taint is tracked per conversation.
     conversation: str = ""
+    #: The call's free text for the taint provenance check (`nox.security.taint`): a search query,
+    #: a URL, a shell argv. Never serialised - it is compared, not logged.
+    lookup: str = Field(default="", exclude=True, repr=False)
 
 
 class PermissionResult(BaseModel):

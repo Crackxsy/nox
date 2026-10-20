@@ -39,7 +39,8 @@ REMOTE_KILL_ORIGIN = "telegram"
 
 Sender = Callable[[str, str], Awaitable[None]]
 StatusProvider = Callable[[], Mapping[str, str]]
-ChatHandler = Callable[[str], Awaitable[str]]
+#: Answers a chat message: (text, device id) -> answer. The device keys the conversation.
+ChatHandler = Callable[[str, str], Awaitable[str]]
 
 
 class KillSwitchLike(Protocol):
@@ -185,14 +186,14 @@ class RemoteService:
             await self._reply(message, await self._set_privacy(decision.args[0].lower()))
             return
         if command == "chat":
-            await self._handle_chat(message, decision.args[0])
+            await self._handle_chat(message, decision.args[0], device.id)
 
-    async def _handle_chat(self, message: RemoteMessage, text: str) -> None:
+    async def _handle_chat(self, message: RemoteMessage, text: str, device_id: str) -> None:
         if self._chat is None:
             await self._reply(message, "Chat ist gerade nicht verfügbar.")
             return
         try:
-            answer = await self._chat(text)
+            answer = await self._chat(text, device_id)
         except Exception as exc:  # noqa: BLE001 - an AI failure must not kill the bus handler
             log.warning("remote.chat_failed", error=type(exc).__name__)
             await self._reply(message, "Antwort nicht möglich (KI nicht verfügbar).")

@@ -173,6 +173,8 @@ class TurnRow(Row):
     retain_until: datetime | None = None
     #: Said while cloud models were not allowed; never sent to a cloud provider (0012).
     private: bool = False
+    #: The conversation the turn belongs to: a channel's (0016).
+    conversation: str = ""
 
 
 class SessionRepository:
@@ -234,10 +236,11 @@ class TurnRepository:
         retain_until: datetime | None = None,
         ts: datetime | None = None,
         private: bool = False,
+        conversation: str = "",
     ) -> int:
         cur = self._db.execute(
             "INSERT INTO turns (session_id, ts, role, text, provider, latency_ms, retain_until, "
-            "private) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "private, conversation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 session_id,
                 _iso(ts or _now()),
@@ -247,6 +250,7 @@ class TurnRepository:
                 latency_ms,
                 _iso(retain_until),
                 int(private),
+                conversation,
             ),
         )
         return int(cur.lastrowid or 0)
@@ -260,6 +264,17 @@ class TurnRepository:
             "SELECT * FROM turns WHERE session_id = ? ORDER BY id LIMIT ?", (session_id, limit)
         )
         return [TurnRow(**dict(r)) for r in rows]
+
+    def latest_for_conversation(
+        self, session_id: str, conversation: str, limit: int
+    ) -> list[TurnRow]:
+        """The last `limit` turns of one conversation, oldest first."""
+        rows = self._db.fetch_all(
+            "SELECT * FROM turns WHERE session_id = ? AND conversation = ? ORDER BY id DESC "
+            "LIMIT ?",
+            (session_id, conversation, limit),
+        )
+        return [TurnRow(**dict(r)) for r in reversed(rows)]
 
     def purge_expired(self, now: datetime | None = None) -> int:
         """Delete turns whose `retain_until` has passed.

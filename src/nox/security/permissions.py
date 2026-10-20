@@ -44,6 +44,7 @@ from nox.security.model import (
 )
 from nox.security.profiles import ProfileProvider
 from nox.security.prohibitions import hard_prohibition_for
+from nox.security.taint import LookupKind, TaintLedger
 
 log = get_logger(__name__)
 
@@ -372,6 +373,10 @@ class EvaluationContext:
     #: (`nox.security.taint`). While it is, a remembered grant above LOW no longer silently allows,
     #: and an allowed call that sends data off the machine is turned into a confirmation.
     tainted: bool = False
+    #: True when the conversation is tainted but this call is a read-only lookup whose free text
+    #: demonstrably comes from the user's own message, not from untrusted content
+    #: (`TaintLedger.user_directed`). Such a call is treated as if the conversation were clean.
+    user_directed: bool = False
 
 
 #: A guard answers the request, or returns None to let the next one decide.
@@ -494,7 +499,7 @@ def _shell_curated_readonly(ctx: EvaluationContext) -> PermissionResult | None:
     """
     if ctx.request.tool != "shell" or not ctx.request.target.startswith("readonly:"):
         return None
-    if ctx.tainted:
+    if ctx.tainted and not ctx.user_directed:
         return None
     return PermissionResult(
         decision=Decision.ALLOW,
@@ -588,6 +593,17 @@ EVALUATION_GUARDS: tuple[Guard, ...] = (
 )
 
 
+def _lookup_kind(request: PermissionRequest) -> LookupKind | None:
+    """Which read-only lookup this is, if it is one that may be user-directed. Only these three:
+    a search goes to the user's own configured backend, a fetch only to a URL the user typed, and
+    a curated command changes nothing and runs in the strong sandbox."""
+    if request.tool == "web" and request.action in ("search", "fetch"):
+        return "search" if request.action == "search" else "fetch"
+    if request.tool == "shell" and request.target.startswith("readonly:"):
+        return "shell"
+    return None
+
+
 def tainted_escalation(ctx: EvaluationContext, result: PermissionResult) -> PermissionResult:
     """Turn an ALLOW into a CONFIRM when the conversation is tainted and the call could act on
     injected instructions without the user seeing it.
@@ -597,8 +613,11 @@ def tainted_escalation(ctx: EvaluationContext, result: PermissionResult) -> Perm
     or a declared egress) - injected text could have chosen the URL or query to exfiltrate what is
     in the context - and the curated read-only shell exception, which exists to save a click, not
     to let a web page run commands.
+
+    A user-directed lookup (`EvaluationContext.user_directed`) is exempt: its query, URL or
+    arguments come from what the user said this turn, so injected text did not choose them.
     """
-    if not ctx.tainted or result.decision is not Decision.ALLOW:
+    if not ctx.tainted or ctx.user_directed or result.decision is not Decision.ALLOW:
         return result
     request = ctx.request
     if ctx.cloud or request.network:
@@ -652,32 +671,41 @@ class DefaultPermissionEngine:
         self._session_id = session_id or uuid.uuid4().hex[:12]
         self._profile: Profile = profiles.get(initial_profile)
         self._pending: dict[str, _Pending] = {}
-        #: Conversations (`PermissionRequest.conversation`) that hold untrusted content.
-        self._tainted: set[str] = set()
+        #: Conversations (`PermissionRequest.conversation`) that hold untrusted content, what it
+        #: was, and the user's words of the turn running in each.
+        self._taint = TaintLedger()
 
     # ---- PermissionEngine protocol ---------------------------------------------------------------
 
-    def mark_tainted(self, conversation: str) -> None:
+    def mark_tainted(self, conversation: str, content: str | None = None) -> None:
         """Record that `conversation` now holds content Nox did not author.
 
         The tool loop calls this after every tool result that is not trusted-internal
-        (`nox.security.taint`). It stays set until `clear_taint` - when that conversation's
-        context is reset - never merely because a new turn began.
+        (`nox.security.taint`), with the result's text; `None` means the content could not be
+        read as text, and then no later lookup in the conversation counts as user-directed. It
+        stays set until `clear_taint` - when the orchestrator discards that conversation's
+        context - never merely because a new turn began.
         """
-        if not conversation:
-            return
-        if conversation not in self._tainted:
+        if self._taint.mark(conversation, content):
             log.info("security.taint_changed", tainted=True)
-        self._tainted.add(conversation)
 
     def clear_taint(self, conversation: str) -> None:
-        """The conversation's context was reset (a new session): nothing untrusted is in it."""
-        if conversation in self._tainted:
+        """The conversation's context was discarded: nothing untrusted is in it any more."""
+        if self._taint.clear(conversation):
             log.info("security.taint_changed", tainted=False)
-        self._tainted.discard(conversation)
 
     def is_tainted(self, conversation: str) -> bool:
-        return bool(conversation) and conversation in self._tainted
+        return self._taint.is_tainted(conversation)
+
+    def note_user_message(self, conversation: str, text: str) -> None:
+        """The user's words of the turn now running in `conversation` (for `user_directed`)."""
+        self._taint.note_user_message(conversation, text)
+
+    def _user_directed(self, request: PermissionRequest) -> bool:
+        kind = _lookup_kind(request)
+        if kind is None:
+            return False
+        return self._taint.user_directed(request.conversation, kind, request.lookup)
 
     def check(self, request: PermissionRequest) -> PermissionResult:
         snapshot = self._privacy.snapshot()
@@ -765,6 +793,7 @@ class DefaultPermissionEngine:
         now: datetime,
     ) -> PermissionResult:
         """Deterministic decision; no I/O, no events. Guards run in `EVALUATION_GUARDS` order."""
+        tainted = self.is_tainted(request.conversation)
         context = EvaluationContext(
             request=request,
             profile=profile,
@@ -773,7 +802,8 @@ class DefaultPermissionEngine:
             now=now,
             cloud=self.is_cloud_tool(request),
             memory_write=is_memory_write(request),
-            tainted=self.is_tainted(request.conversation),
+            tainted=tainted,
+            user_directed=tainted and self._user_directed(request),
         )
         for guard in EVALUATION_GUARDS:
             result = guard(context)

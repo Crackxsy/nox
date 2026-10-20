@@ -498,5 +498,6 @@ def register_shell_tools(
             rememberable=True,
             targets=lambda payload: classify_payload(payload).target,
             network=lambda payload: bool(payload.get("egress")),
+            lookup=lambda payload: " ".join(payload.get("argv") or [payload.get("command") or ""]),
         )
     )

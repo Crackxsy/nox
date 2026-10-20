@@ -320,6 +320,7 @@ def register_web_tools(
             local=False,
             targets=lambda p: str(p.get("url", "")),
             network=True,
+            lookup=lambda p: str(p.get("url", "")),
         )
     )
     registry.register(
@@ -333,5 +334,6 @@ def register_web_tools(
             local=False,
             targets=lambda p: str(p.get("query", "")),
             network=True,
+            lookup=lambda p: str(p.get("query", "")),
         )
     )

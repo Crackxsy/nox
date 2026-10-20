@@ -68,6 +68,11 @@ class ToolSpec:
     #: refused in privacy mode OFFLINE/PRIVATE, and confirmed again once the conversation holds
     #: untrusted content (exfiltration).
     network: bool | Callable[[dict[str, Any]], bool] = False
+    #: The call's free text (query, URL, argv) that the permission engine compares with the
+    #: untrusted content of a tainted conversation, to let a user-directed lookup run without a
+    #: confirmation (`nox.security.taint`). Only `web.search`, `web.fetch` and a curated read-only
+    #: `shell.run` can benefit; for every other tool it is ignored.
+    lookup: Targets | None = None
     #: How long one call may take, when the executor's default is too short by design - a coding
     #: session takes minutes. None means the executor's default.
     timeout_s: float | None = None

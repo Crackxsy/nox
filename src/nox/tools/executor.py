@@ -177,6 +177,7 @@ class ToolExecutor:
             rememberable=spec.rememberable,
             network=spec.network(payload) if callable(spec.network) else spec.network,
             conversation=current_conversation(),
+            lookup=spec.lookup(payload) if spec.lookup is not None else "",
         )
 
         result = self._permission_engine.check(request)

@@ -384,9 +384,14 @@ class CoreHandlers:
         async def on_chunk(delta: str) -> None:
             await ctx.stream({"delta": delta}, False)
 
+        # Each dashboard client is a conversation of its own (history, model context, taint).
         with turn_origin("chat"):  # facts learned from it count as the user's own words
             turn = await self._core.orchestrator.handle_text(
-                p.text, language=p.language, speak=p.speak, on_chunk=on_chunk
+                p.text,
+                language=p.language,
+                speak=p.speak,
+                on_chunk=on_chunk,
+                channel=f"chat:{ctx.client_id}",
             )
         return {
             "request_id": turn.request_id,
