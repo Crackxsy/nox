@@ -8,8 +8,11 @@ Two variants, strongest first:
   container SID so that is the one place it can read and write. Whether it can reach a *loopback*
   port of the host depends on Windows network isolation, which is not enforced on every machine
   (measured: on some Windows 11 builds a desktop AppContainer reaches any host loopback listener).
-  So the backend measures it (`host_loopback_reachable`, fail closed: anything but an explicit
-  "blocked" report counts as reachable) and reports `confines_network` honestly: where loopback
+  The installer's one elevated step therefore adds network rules (`nox.sandbox.wfp`: WFP filters
+  per container SID) that block loopback and the LAN for every Nox container except the egress
+  forwarder's own ports. Either way the backend measures the result (`host_loopback_reachable`,
+  fail closed: anything but an explicit "blocked" report counts as reachable, and so does a host
+  listener in the forwarder's port range) and reports `confines_network` honestly: where loopback
   leaks, local services (a model server, a browser's debug port) would be reachable from inside, and
   the sandbox is not "strong". To run Python (a skill's tests, an MCP server written in Python),
   Nox's container SID additionally gets *read and execute* on exactly the Python runtime Nox itself
@@ -33,18 +36,19 @@ Two variants, strongest first:
   accepted the weaker mode (`hands.accept_weak_sandbox`).
 
 One container per workload class: a shell command, each MCP server and each skill run in an
-AppContainer of their own (`Nox.Sandbox` for shell commands, `Nox.Sandbox.<class>.<keyed hash>`
-for the rest, `container_name`), so concurrent runs of different workloads cannot read each
-other's work folders or open each other's processes - a work folder is granted to its own run's
-container SID only, and runtime grants are recorded per SID (`nox sandbox reset` removes them
-all). Runs of the same class share a container.
+AppContainer of their own (`Nox.Sandbox` for shell commands, one slot of a fixed pool
+`Nox.Sandbox.w000`... for each other class, `nox.sandbox.containers`), so concurrent runs of
+different workloads cannot read each other's work folders or open each other's processes - a work
+folder is granted to its own run's container SID only, and runtime grants are recorded per SID
+(`nox sandbox reset` removes them all). Runs of the same class share a container.
 
 Network with AppContainer: a run that declares egress gets the proxy over a named pipe whose DACL
 names only the container SID, plus a small forwarder started *inside the same container* that
-listens on the container's own `127.0.0.1:<port>` and relays into the pipe. The child's
-`HTTPS_PROXY` points at that port. Loopback to its own container is allowed under network
-isolation, and the pipe does not depend on it at all - so declared egress works on machines that
-enforce loopback isolation and on those that do not, and still goes only through the proxy.
+listens on the container's own `127.0.0.1:<port>` (a port of `FORWARDER_PORTS`, the one range the
+network rules leave open) and relays into the pipe. The child's `HTTPS_PROXY` points at that port.
+Loopback to its own container is allowed under network isolation, and the pipe does not depend on
+it at all - so declared egress works on machines that enforce loopback isolation, on those that do
+not, and with the network rules in place, and still goes only through the proxy.
 """
 
 from __future__ import annotations
@@ -64,6 +68,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from nox.core.logging import get_logger
+from nox.sandbox.containers import (
+    DEFAULT_WORKLOAD,
+    SHELL_CONTAINER,
+    ContainerSlots,
+    container_name,
+)
 from nox.sandbox.model import (
     EgressDecl,
     Guarantees,
@@ -73,6 +83,7 @@ from nox.sandbox.model import (
     SandboxUnavailable,
 )
 from nox.sandbox.process import ProcessIo
+from nox.sandbox.wfp import FORWARDER_PORTS
 
 if TYPE_CHECKING:
     from nox.sandbox._win32 import Spawned
@@ -84,9 +95,9 @@ __all__ = [
     "RuntimeGrants",
     "WindowsSandbox",
     "appcontainer_available",
-    "container_key",
-    "container_name",
+    "forwarder_script",
     "default_grants_manifest",
+    "forwarder_range_listeners",
     "host_loopback_reachable",
     "nox_runtime_dirs",
     "package_import_root",
@@ -94,48 +105,7 @@ __all__ = [
     "python_runtime_dirs",
 ]
 
-_APP_CONTAINER_NAME = "Nox.Sandbox"
-#: The workload class of a run that names none: a shell command.
-DEFAULT_WORKLOAD = "shell"
-#: AppContainer names are at most 64 characters; longer workload ids are shortened with a hash.
-_MAX_CONTAINER_NAME = 64
-
-
-def container_name(workload: str, key: bytes) -> str:
-    """The AppContainer profile of a workload class: `Nox.Sandbox` for shell commands (the name
-    every earlier build used), `Nox.Sandbox.<class>.<hmac>` for every other workload - always a
-    keyed hash of the whole workload (`container_key`), never the workload's own text, so neither
-    sanitising nor truncation can make two workloads share a container, and a server or skill
-    named on purpose cannot pick the name of somebody else's container."""
-    import hashlib
-    import hmac
-    import re
-
-    if workload in ("", DEFAULT_WORKLOAD):
-        return _APP_CONTAINER_NAME
-    digest = hmac.new(key, workload.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
-    kind = re.sub(r"[^a-z]", "", workload.split(":", 1)[0].lower())[:16] or "x"
-    return f"{_APP_CONTAINER_NAME}.{kind}.{digest}"
-
-
-def container_key(home: Path | None = None) -> bytes:
-    """The installation's secret for `container_name`, created once (`<nox home>/sandbox/
-    container-key`). Without it nobody can tell which container a workload will get."""
-    import secrets
-
-    from nox.paths import nox_home
-
-    path = (home or nox_home()) / "sandbox" / "container-key"
-    try:
-        key = path.read_bytes()
-        if len(key) >= 32:
-            return key
-    except OSError:
-        pass
-    path.parent.mkdir(parents=True, exist_ok=True)
-    key = secrets.token_bytes(32)
-    path.write_bytes(key)
-    return key
+_APP_CONTAINER_NAME = SHELL_CONTAINER
 
 
 _SYSTEM32 = r"C:\Windows\System32"
@@ -155,16 +125,26 @@ _SAFE_ENV_KEYS = (
 _FORWARDER_READY_S = 20.0
 _READ_CHUNK = 64 * 1024
 
-#: The in-container egress forwarder: listen on the container's own loopback, relay each
-#: connection into the proxy's named pipe. `{pipe}` is the pipe's short name. It blocks in
+#: The in-container egress forwarder: listen on the container's own loopback, on a free port of
+#: `FORWARDER_PORTS` (`{lo}`-`{hi}`, tried from a random start; the network rules leave only that
+#: range open), and relay each connection into the proxy's named pipe. `{pipe}` is the pipe's
+#: short name. It blocks in
 #: `Task.WaitAny` on the pending accept and every relay until one of them finishes - no polling,
 #: no idle wake-ups (a PowerShell script block cannot run as a callback on a pool thread, so the
 #: .NET tasks do the I/O and the script only waits for them).
 FORWARDER_PS = r"""
 $ErrorActionPreference = 'Stop'
 $pipe = '{pipe}'
-$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
-$l.Start()
+$lo = {lo}; $n = {hi} - $lo + 1
+$start = [System.Random]::new().Next($n)
+$l = $null
+for ($i = 0; $i -lt $n -and $null -eq $l; $i++) {
+  $t = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback,
+    $lo + (($start + $i) % $n))
+  $t.ExclusiveAddressUse = $true
+  try { $t.Start(); $l = $t } catch { }
+}
+if ($null -eq $l) { [Console]::Out.WriteLine('NOXFWD NONE'); exit 1 }
 [Console]::Out.WriteLine('NOXFWD ' + $l.LocalEndpoint.Port)
 [Console]::Out.Flush()
 $open = [System.Collections.ArrayList]::new()
@@ -193,6 +173,24 @@ while ($true) {
   }
 }
 """
+
+
+def forwarder_script(pipe: str) -> str:
+    """`FORWARDER_PS` for the pipe `pipe` (its short name) and the forwarder's port range."""
+    return (
+        FORWARDER_PS.replace("{pipe}", pipe)
+        .replace("{lo}", str(FORWARDER_PORTS.start))
+        .replace("{hi}", str(FORWARDER_PORTS.stop - 1))
+    )
+
+
+def forwarder_port(line: str) -> int | None:
+    """The port in the forwarder's ready line - only one of `FORWARDER_PORTS`, else `None`."""
+    parts = line.split()
+    if len(parts) != 2 or parts[0] != "NOXFWD" or not parts[1].isdigit():
+        return None
+    port = int(parts[1])
+    return port if port in FORWARDER_PORTS else None
 
 
 def appcontainer_available() -> bool:
@@ -235,11 +233,21 @@ def host_loopback_reachable(sid: str) -> bool:
     later "blocked" could flip the answer between `guarantees()` and the check a run makes, so
     one call would refuse what the next one allows. One answer per process and container; a
     restart measures again.
+
+    A "blocked" report is not enough on its own: the network rules (`nox.sandbox.wfp`) leave the
+    egress forwarder's port range open on `127.0.0.1`, so a *host* program listening in that range
+    would be reachable from inside. While anything listens there when the probe runs (or the
+    listeners cannot be listed), the answer is "reachable" too.
     """
     with _probe_lock:
         if sid in _loopback_probe:
             return _loopback_probe[sid]
         measured = _probe_loopback(sid)
+        if measured is False:
+            in_range = forwarder_range_listeners()
+            if in_range != []:
+                log.warning("sandbox.forwarder_range_in_use", ports=in_range)
+                measured = True
         log.info("sandbox.loopback_probe", reachable=measured, conclusive=measured is not None)
         # An inconclusive probe counts as reachable and stays so for this process: re-measuring
         # could flip the answer between `guarantees()` and the next run's check, and the weaker
@@ -247,6 +255,25 @@ def host_loopback_reachable(sid: str) -> bool:
         reachable = True if measured is None else measured
         _loopback_probe[sid] = reachable
         return reachable
+
+
+def forwarder_range_listeners() -> list[int] | None:
+    """The ports of `FORWARDER_PORTS` something on this computer listens on; `None` when the
+    listeners cannot be listed (which the probe reads as "in use": fail closed)."""
+    import psutil
+
+    try:
+        conns = psutil.net_connections(kind="tcp")
+    except (OSError, psutil.Error) as exc:
+        log.warning("sandbox.listeners_unknown", error=f"{type(exc).__name__}: {exc}")
+        return None
+    return sorted(
+        {
+            c.laddr.port
+            for c in conns
+            if c.status == psutil.CONN_LISTEN and c.laddr and c.laddr.port in FORWARDER_PORTS
+        }
+    )
 
 
 def probe_verdict(*, connected: bool, result: Result | None) -> bool | None:
@@ -263,11 +290,26 @@ def probe_verdict(*, connected: bool, result: Result | None) -> bool | None:
     return None
 
 
+def _probe_listener() -> socket.socket:
+    """A socket bound to a free `127.0.0.1` port outside `FORWARDER_PORTS` - the range the network
+    rules leave open, so a probe there would say nothing about the rest of loopback."""
+    for _ in range(16):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        if sock.getsockname()[1] not in FORWARDER_PORTS:
+            return sock
+        sock.close()
+    raise OSError("no free loopback port outside the forwarder range")
+
+
 def _probe_loopback(sid: str) -> bool | None:
     from nox.sandbox import _win32
 
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.bind(("127.0.0.1", 0))
+    try:
+        listener = _probe_listener()
+    except OSError as exc:
+        log.warning("sandbox.loopback_probe_failed", error=str(exc))
+        return None
     listener.listen(1)
     listener.settimeout(8.0)
     port = listener.getsockname()[1]
@@ -673,7 +715,11 @@ class WindowsSandbox:
     """Backend for `nox.sandbox.Sandbox` on Windows. One instance per core."""
 
     def __init__(
-        self, *, prefer_appcontainer: bool = True, grants: RuntimeGrants | None = None
+        self,
+        *,
+        prefer_appcontainer: bool = True,
+        grants: RuntimeGrants | None = None,
+        slots: ContainerSlots | None = None,
     ) -> None:
         from nox.sandbox import _win32
 
@@ -688,8 +734,8 @@ class WindowsSandbox:
         self.isolates_workloads = True
         #: Container SID per workload class (`container_name`); created on first use.
         self._sids: dict[str, str] = {DEFAULT_WORKLOAD: self._sid} if self._sid else {}
-        #: The secret behind `container_name`, read on first use.
-        self._container_key: bytes | None = None
+        #: Which pool container each workload class owns (`nox.sandbox.containers`).
+        self._slots = slots or ContainerSlots()
         #: Container SIDs whose Python runtime grants are in place.
         self._runtime_ready: set[str] = set()
         self._grants = grants or RuntimeGrants()
@@ -713,9 +759,7 @@ class WindowsSandbox:
         sid = self._sids.get(key)
         if sid is None:
             try:
-                if self._container_key is None:
-                    self._container_key = container_key()
-                sid = self._w.app_container_sid(container_name(key, self._container_key))
+                sid = self._w.app_container_sid(container_name(key, self._slots))
             except OSError as exc:
                 raise SandboxUnavailable(f"no AppContainer for {key!r}: {exc}") from exc
             self._sids[key] = sid
@@ -748,7 +792,9 @@ class WindowsSandbox:
                 notes.append(
                     "Windows does not enforce loopback isolation for the container on this "
                     "machine: services listening on this computer's loopback are reachable "
-                    "from inside the sandbox"
+                    "from inside the sandbox. The sandbox network rules close this: the "
+                    "installer adds them (it asks for administrator rights once), or run "
+                    "`nox sandbox firewall install` from an administrator prompt"
                 )
             return Guarantees(
                 backend=self.mode.value,
@@ -983,7 +1029,7 @@ class WindowsSandbox:
         short = pipe_path.rsplit("\\", 1)[-1]
         if not short.replace("-", "").isalnum():
             raise SandboxUnavailable("unexpected proxy pipe name; failing closed")
-        script = FORWARDER_PS.replace("{pipe}", short)
+        script = forwarder_script(short)
         encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
         try:
             fwd = self._w.spawn(
@@ -997,11 +1043,12 @@ class WindowsSandbox:
         except OSError as exc:
             raise SandboxUnavailable(f"could not start the egress forwarder: {exc}") from exc
         line = _read_line(fwd.stdout_fd, _FORWARDER_READY_S)
-        if not line.startswith("NOXFWD "):
+        port = forwarder_port(line)
+        if port is None:
             fwd.close()
             _close_fds(fwd)
             raise SandboxUnavailable("the egress forwarder did not start; failing closed")
-        return fwd, int(line.split()[1])
+        return fwd, port
 
 
 class _Lane:

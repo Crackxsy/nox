@@ -47,8 +47,22 @@ Output: `installer/out/Nox-Setup-<version>.exe` (git-ignored, like `installer/bu
 
 ## What the installer does
 
-- Installs to `%LOCALAPPDATA%\Programs\Nox` (per-user, `PrivilegesRequired=lowest` - no UAC
-  prompt, no admin rights needed).
+- Installs to `%LOCALAPPDATA%\Programs\Nox` (per-user, `PrivilegesRequired=lowest` - the install
+  itself needs no admin rights).
+- **One optional elevated step** (task "Keep sandboxed commands away from this computer's local
+  services and the home network", ticked by default): after the files are in place, setup starts
+  `runtime\python.exe -m nox.sandbox.wfp install` with the `runas` verb, so Windows shows **one UAC
+  prompt** for that process alone. It adds persistent Windows Filtering Platform filters that keep
+  Nox's sandbox containers off this computer's loopback services and the LAN, except the egress
+  forwarder's ports (details and limits: `docs/SECURITY.md`, "Command sandbox on Windows"). The step
+  reports back through a status file; if the prompt is declined or the step fails, setup says so in
+  a message box (logged, suppressed in silent installs) and finishes anyway - Nox then reports its
+  sandbox as weaker on Windows builds without enforced loopback isolation and runs shell commands
+  only if the user accepts that. To add the rules later: run setup again, or
+  `nox sandbox firewall install` from an administrator prompt (`show` lists them).
+- Uninstall (when the task was ticked) runs `python -m nox.sandbox.wfp remove` elevated first -
+  a second UAC prompt - which removes every filter of Nox's WFP provider, its sublayer and the
+  provider. Declined, the filters stay; they only ever match Nox's own container SIDs.
 - Start-menu shortcut running `runtime\pythonw.exe "{app}\app\start_nox.pyw"` - the launcher
   puts `{app}\app` on `sys.path` itself and, if Nox cannot start, writes the reason to
   `%LOCALAPPDATA%\Nox\startup-error.log` and shows it in a message box.
