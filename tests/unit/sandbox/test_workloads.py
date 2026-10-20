@@ -183,3 +183,15 @@ def test_a_work_folder_names_its_user_system_and_one_container_only() -> None:
         "*S-1-15-2-9:(OI)(CI)F",
     ]
     assert strip[2] == "/remove:g" and "*S-1-15-2-1" in strip  # never ALL APPLICATION PACKAGES
+
+
+def test_the_loopback_probe_reads_only_a_refused_connection_as_blocked() -> None:
+    # The probe used `New-Object` inside a catch-all: where the container cannot load a cmdlet,
+    # the failure itself printed "blocked" and the sandbox claimed loopback isolation (fail open).
+    from nox.sandbox.model import Result
+    from nox.sandbox.windows import _PROBE_PS, probe_verdict
+
+    assert "New-Object" not in _PROBE_PS
+    assert "catch [System.Net.Sockets.SocketException]" in _PROBE_PS
+    error = Result(exit_code=0, stdout="NOXPROBE ERROR\n", stderr="")
+    assert probe_verdict(connected=False, result=error) is None

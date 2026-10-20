@@ -209,10 +209,16 @@ _probe_lock = threading.Lock()
 #: What the probe child prints after its connection attempt failed. Only this, with exit code 0
 #: and no connection seen by the core, counts as "isolated".
 _PROBE_BLOCKED = "NOXPROBE BLOCKED"
+#: Plain .NET, no cmdlet: a cmdlet that cannot be loaded inside the container (module autoload
+#: can fail there) would throw too, and a catch-all would read that as "blocked" - fail open. Only
+#: a refused connection (`SocketException`) is "blocked"; anything else is inconclusive.
 _PROBE_PS = (
-    "try {{ (New-Object Net.Sockets.TcpClient).Connect('127.0.0.1', {port}); "
+    "try {{ [System.Net.Sockets.TcpClient]::new().Connect('127.0.0.1', {port}); "
     "[Console]::Out.WriteLine('NOXPROBE OPEN') }} "
-    "catch {{ [Console]::Out.WriteLine('" + _PROBE_BLOCKED + "') }}; exit 0"
+    "catch [System.Net.Sockets.SocketException] {{ [Console]::Out.WriteLine('"
+    + _PROBE_BLOCKED
+    + "') }} "
+    "catch {{ [Console]::Out.WriteLine('NOXPROBE ERROR') }}; exit 0"
 )
 
 
@@ -223,18 +229,22 @@ def host_loopback_reachable(sid: str) -> bool:
     happened, and the core watches for the connection. Fail closed: only an explicit "blocked"
     report from a probe that ran to its end (exit code 0) and no connection seen counts as
     isolated. A timeout, a crash, a missing report or a probe that could not start counts as
-    reachable - and such an inconclusive result is not cached, so a later call measures again
-    instead of keeping a guess. A conclusive result is measured once per process and container.
+    reachable, and stays so for this process like any measured result: were it measured again, a
+    later "blocked" could flip the answer between `guarantees()` and the check a run makes, so
+    one call would refuse what the next one allows. One answer per process and container; a
+    restart measures again.
     """
     with _probe_lock:
         if sid in _loopback_probe:
             return _loopback_probe[sid]
         measured = _probe_loopback(sid)
         log.info("sandbox.loopback_probe", reachable=measured, conclusive=measured is not None)
-        if measured is None:
-            return True
-        _loopback_probe[sid] = measured
-        return measured
+        # An inconclusive probe counts as reachable and stays so for this process: re-measuring
+        # could flip the answer between `guarantees()` and the next run's check, and the weaker
+        # reading must be the one that holds (fail closed). A restart measures again.
+        reachable = True if measured is None else measured
+        _loopback_probe[sid] = reachable
+        return reachable
 
 
 def probe_verdict(*, connected: bool, result: Result | None) -> bool | None:
@@ -365,6 +375,10 @@ def _base_env(work: Path) -> dict[str, str]:
     env["USERPROFILE"] = env["LOCALAPPDATA"] = env["APPDATA"] = work_s
     # PowerShell writes a module cache; keep it in the work dir, not the (unwritable) profile.
     env["PSModuleAnalysisCachePath"] = str(work / "psmac")
+    # Only the system's own modules, by their long path: the default list also names folders in
+    # the user's profile and under Program Files that the container cannot read.
+    root = env.get("SystemRoot", r"C:\Windows")
+    env["PSModulePath"] = root + r"\System32\WindowsPowerShell\v1.0\Modules"
     return env
 
 

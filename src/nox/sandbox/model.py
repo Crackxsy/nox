@@ -55,6 +55,7 @@ RESERVED_ENV_KEYS: frozenset[str] = frozenset(
         "windir",
         "ComSpec",
         "PSModuleAnalysisCachePath",
+        "PSModulePath",
         "HTTPS_PROXY",
         "HTTP_PROXY",
         "ALL_PROXY",

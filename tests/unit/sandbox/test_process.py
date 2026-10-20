@@ -416,8 +416,10 @@ async def test_windows_stop_kills_the_whole_tree(tmp_path: Path) -> None:
 
 async def _probe_internet(sandbox: Sandbox) -> bytes:
     probe = (
-        "try { (New-Object Net.Sockets.TcpClient).Connect('1.1.1.1', 443); 'OPEN' } "
-        "catch { 'BLOCKED' }"
+        # .NET only, and only a refused connection is "blocked": a cmdlet that cannot load would
+        # otherwise also land in the catch and read as blocked.
+        "try { [System.Net.Sockets.TcpClient]::new().Connect('1.1.1.1', 443); 'OPEN' } "
+        "catch [System.Net.Sockets.SocketException] { 'BLOCKED' } catch { 'ERROR' }"
     )
     argv = [_PS, "-NoProfile", "-NonInteractive", "-Command", probe]
     async with await sandbox.start(argv) as p:

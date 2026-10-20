@@ -76,7 +76,8 @@ async def test_no_network_without_declaration() -> None:
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "try{(New-Object Net.Sockets.TcpClient).Connect('1.1.1.1',443);'OPEN'}catch{'BLOCKED'}",
+            "try{[System.Net.Sockets.TcpClient]::new().Connect('1.1.1.1',443);'OPEN'}"
+            "catch [System.Net.Sockets.SocketException]{'BLOCKED'}catch{'ERROR'}",
         ],
         limits=Limits(timeout_s=40),
     )
@@ -269,7 +270,7 @@ def test_probe_verdict_is_isolated_only_on_an_explicit_blocked_report(
     assert probe_verdict(connected=connected, result=results[result]) is expected
 
 
-def test_an_inconclusive_probe_counts_as_reachable_and_is_not_cached(
+def test_an_inconclusive_probe_counts_as_reachable_for_good(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from nox.sandbox import windows
@@ -279,9 +280,10 @@ def test_an_inconclusive_probe_counts_as_reachable_and_is_not_cached(
     monkeypatch.setattr(windows, "_loopback_probe", {})
     sid = "S-1-15-2-99-98-97"
     assert windows.host_loopback_reachable(sid) is True  # inconclusive: fail closed
-    assert sid not in windows._loopback_probe  # noqa: SLF001 - never cached as a guess
-    assert windows.host_loopback_reachable(sid) is False  # measured again, now conclusive
-    assert windows._loopback_probe[sid] is False  # noqa: SLF001
+    # ... and consistently so: guarantees() and every later check give the same answer (the
+    # hosted runner showed one call weak and the next strong).
+    assert windows.host_loopback_reachable(sid) is True
+    assert windows._loopback_probe[sid] is True  # noqa: SLF001
 
 
 async def test_an_inconclusive_probe_means_the_appcontainer_is_not_strong(
@@ -525,8 +527,9 @@ async def test_a_run_cannot_read_the_work_folder_of_another_workload(tmp_path) -
     try:
         # Workload B writes into its own folder, the way a running MCP server or skill does ...
         write = (
-            "$f = Join-Path $env:TEMP canary.txt; Set-Content -Path $f -Value NOXCANARY-7f3a; "
-            "Get-Content $f"
+            "$f = [System.IO.Path]::Combine($env:TEMP, 'canary.txt'); "
+            "[System.IO.File]::WriteAllText($f, 'NOXCANARY-7f3a'); "
+            "[Console]::Out.WriteLine([System.IO.File]::ReadAllText($f))"
         )
         own = await sandbox.run(
             [PS, "-NoProfile", "-NonInteractive", "-Command", write],
@@ -555,7 +558,13 @@ async def test_a_run_cannot_read_the_work_folder_of_another_workload(tmp_path) -
             )
         # ... and a shell command, in a container of its own, cannot read it.
         canary = work_b / "canary.txt"
-        read = [PS, "-NoProfile", "-NonInteractive", "-Command", f"Get-Content '{canary}'"]
+        read = [
+            PS,
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            f"[Console]::Out.WriteLine([System.IO.File]::ReadAllText('{canary}'))",
+        ]
         other = await sandbox.run(read, limits=Limits(timeout_s=30), workload="shell")
         assert "NOXCANARY-7f3a" not in other.stdout
         assert other.exit_code != 0 or "denied" in (other.stdout + other.stderr).lower()
@@ -583,8 +592,9 @@ async def test_a_work_folder_under_a_short_name_is_usable(monkeypatch: pytest.Mo
         monkeypatch.setattr(tempfile, "tempdir", buf.value)  # what the runner's TEMP looks like
         sandbox = _appcontainer()
         script = (
-            "$f = Join-Path $env:TEMP canary.txt; Set-Content -Path $f -Value NOXSHORT; "
-            "Get-Content $f"
+            "$f = [System.IO.Path]::Combine($env:TEMP, 'canary.txt'); "
+            "[System.IO.File]::WriteAllText($f, 'NOXSHORT'); "
+            "[Console]::Out.WriteLine([System.IO.File]::ReadAllText($f))"
         )
         own = await sandbox.run(
             [PS, "-NoProfile", "-NonInteractive", "-Command", script],
@@ -594,3 +604,14 @@ async def test_a_work_folder_under_a_short_name_is_usable(monkeypatch: pytest.Mo
         assert "NOXSHORT" in own.stdout, own.stderr
     finally:
         shutil.rmtree(parent, ignore_errors=True)
+
+
+async def test_the_system_modules_load_inside_the_container() -> None:
+    # On the hosted runner no cmdlet could be found inside the container (`Join-Path` "not
+    # recognized"): the default module path names folders the container cannot read.
+    sandbox = _appcontainer()
+    result = await sandbox.run(
+        [PS, "-NoProfile", "-NonInteractive", "-Command", "Join-Path 'a' 'b'"],
+        limits=Limits(timeout_s=60),
+    )
+    assert result.stdout.strip() == "a\\b", result.stderr
