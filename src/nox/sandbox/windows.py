@@ -302,23 +302,51 @@ def _probe_loopback(sid: str) -> bool | None:
     return probe_verdict(connected=connected.is_set(), result=result)
 
 
+#: LocalSystem: kept on a work folder so the system can clean it up like any temporary folder.
+_SYSTEM_SID = "S-1-5-18"
+#: What Python's `mkdtemp` (0o700) or an inherited ACL may put on a fresh folder besides the
+#: user: removed, so the folder names exactly its user, SYSTEM and one container.
+_STRIP_SIDS = ("S-1-5-32-544", "S-1-3-4", "S-1-5-32-545", "S-1-5-11", "S-1-15-2-1")
+
+
+def _work_folder_dacl(work: Path, sid: str, user_sid: str) -> list[list[str]]:
+    """The icacls calls that give `work` exactly this DACL, inheritance removed: the core's user
+    (full control), SYSTEM (full control) and the run's container SID (full control).
+
+    An AppContainer child passes a *dual* access check: its token's user and groups must be
+    granted, and its container SID too. A folder that names only the container SID is therefore
+    unusable by the container itself (measured on the hosted Windows runner, where the core runs
+    elevated and a fresh folder's owner is Administrators); one that names the user but another
+    container SID is unusable by this one - which is the isolation between workloads.
+    """
+    icacls = _SYSTEM32 + r"\icacls.exe"
+    grant = [f"*{who}:(OI)(CI)F" for who in (user_sid, _SYSTEM_SID, sid)]
+    return [
+        [icacls, str(work), "/inheritance:r", "/grant:r", *grant],
+        [icacls, str(work), "/remove:g", *(f"*{who}" for who in _STRIP_SIDS)],
+    ]
+
+
 def _grant_container(work: Path, sid: str) -> None:
-    """Give the container SID full control of its work folder - or fail closed: a folder the
-    container cannot use is a run that fails later, with a misleading "access denied"."""
-    done = subprocess.run(  # noqa: S603 - fixed argv, our own temp path
-        [_SYSTEM32 + r"\icacls.exe", str(work), "/grant", f"*{sid}:(OI)(CI)F"],
-        capture_output=True,
-        text=True,
-        errors="replace",
-        check=False,
-        creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined,unused-ignore]
-    )
-    if done.returncode != 0:
-        detail = (done.stderr or done.stdout).strip().splitlines()[:1]
-        raise SandboxUnavailable(
-            f"could not give the sandbox its work folder (icacls {done.returncode}: "
-            f"{detail[0] if detail else 'no output'})"
+    """Give `work` its DACL (`_work_folder_dacl`) - or fail closed: a folder the container cannot
+    use is a run that fails later, with a misleading "access denied"."""
+    from nox.sandbox import _win32
+
+    for argv in _work_folder_dacl(work, sid, _win32.current_user_sid()):
+        done = subprocess.run(  # noqa: S603 - fixed argv, our own temp path
+            argv,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined,unused-ignore]
         )
+        if done.returncode != 0:
+            detail = (done.stderr or done.stdout).strip().splitlines()[:1]
+            raise SandboxUnavailable(
+                f"could not give the sandbox its work folder (icacls {done.returncode}: "
+                f"{detail[0] if detail else 'no output'})"
+            )
 
 
 def _base_env(work: Path) -> dict[str, str]:

@@ -509,6 +509,14 @@ _userenv.DeriveAppContainerSidFromAppContainerName.argtypes = [
 _userenv.DeriveAppContainerSidFromAppContainerName.restype = ctypes.c_long
 _adv.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
 _adv.ConvertSidToStringSidW.restype = BOOL
+_adv.GetTokenInformation.argtypes = [
+    wintypes.HANDLE,
+    ctypes.c_int,
+    ctypes.c_void_p,
+    wintypes.DWORD,
+    ctypes.POINTER(wintypes.DWORD),
+]
+_adv.GetTokenInformation.restype = BOOL
 _k32.InitializeProcThreadAttributeList.argtypes = [
     ctypes.c_void_p,
     DWORD,
@@ -585,6 +593,33 @@ class _AttributeList:
         if self._initialised:
             _k32.DeleteProcThreadAttributeList(self.buffer)
             self._initialised = False
+
+
+_TOKEN_QUERY = 0x0008
+_TOKEN_USER_CLASS = 1
+
+
+def current_user_sid() -> str:
+    """The SID string of the user this process runs as (its token's user)."""
+    token = wintypes.HANDLE()
+    if not _adv.OpenProcessToken(_k32.GetCurrentProcess(), _TOKEN_QUERY, ctypes.byref(token)):
+        raise _fail("OpenProcessToken")
+    try:
+        size = wintypes.DWORD()
+        _adv.GetTokenInformation(token, _TOKEN_USER_CLASS, None, 0, ctypes.byref(size))
+        buffer = ctypes.create_string_buffer(size.value)
+        if not _adv.GetTokenInformation(token, _TOKEN_USER_CLASS, buffer, size, ctypes.byref(size)):
+            raise _fail("GetTokenInformation")
+        sid = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_void_p))[0]
+        text = wintypes.LPWSTR()
+        if not _adv.ConvertSidToStringSidW(sid, ctypes.byref(text)):
+            raise _fail("ConvertSidToStringSidW")
+        try:
+            return str(text.value)
+        finally:
+            _k32.LocalFree(text)
+    finally:
+        _k32.CloseHandle(token)
 
 
 #: HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS): the profile is there from an earlier start.

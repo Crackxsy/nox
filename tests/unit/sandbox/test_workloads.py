@@ -164,3 +164,22 @@ def test_the_windows_forwarder_never_gets_the_childs_environment(tmp_path) -> No
     assert not any("PROXY" in key.upper() for key in seen[0])
     # ... and in the run's own container, the only one the proxy pipe admits (N6).
     assert containers == ["S-1-15-2-1-2"]
+
+
+def test_a_work_folder_names_its_user_system_and_one_container_only() -> None:
+    # The dual access check of an AppContainer child: without the user the container cannot use
+    # its own folder (the hosted runner's failure); with another container SID the isolation
+    # between workloads would be gone.
+    from pathlib import Path
+
+    from nox.sandbox.windows import _work_folder_dacl
+
+    calls = _work_folder_dacl(Path("w"), "S-1-15-2-9", "S-1-5-21-1-2-3-1001")
+    grant, strip = calls
+    assert grant[1:4] == ["w", "/inheritance:r", "/grant:r"]
+    assert grant[4:] == [
+        "*S-1-5-21-1-2-3-1001:(OI)(CI)F",
+        "*S-1-5-18:(OI)(CI)F",
+        "*S-1-15-2-9:(OI)(CI)F",
+    ]
+    assert strip[2] == "/remove:g" and "*S-1-15-2-1" in strip  # never ALL APPLICATION PACKAGES
