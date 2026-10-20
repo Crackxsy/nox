@@ -171,6 +171,8 @@ class TurnRow(Row):
     provider: str = ""
     latency_ms: int | None = None
     retain_until: datetime | None = None
+    #: Said while cloud models were not allowed; never sent to a cloud provider (0012).
+    private: bool = False
 
 
 class SessionRepository:
@@ -231,11 +233,21 @@ class TurnRepository:
         latency_ms: int | None = None,
         retain_until: datetime | None = None,
         ts: datetime | None = None,
+        private: bool = False,
     ) -> int:
         cur = self._db.execute(
-            "INSERT INTO turns (session_id, ts, role, text, provider, latency_ms, retain_until) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (session_id, _iso(ts or _now()), role, text, provider, latency_ms, _iso(retain_until)),
+            "INSERT INTO turns (session_id, ts, role, text, provider, latency_ms, retain_until, "
+            "private) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                session_id,
+                _iso(ts or _now()),
+                role,
+                text,
+                provider,
+                latency_ms,
+                _iso(retain_until),
+                int(private),
+            ),
         )
         return int(cur.lastrowid or 0)
 

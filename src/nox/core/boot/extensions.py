@@ -48,8 +48,10 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "remote",
     # Network access for paired devices; inert unless `ipc.lan.enabled`.
     "lan",
-    # Last on purpose: it describes the others, and reads the registry they filled.
+    # Late on purpose: it describes the others, and reads the registry they filled.
     "capabilities",
+    # After capabilities: serves its tool loop to Claude Code over MCP.
+    "mcp",
 )
 
 

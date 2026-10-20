@@ -24,9 +24,16 @@ from typing import Any
 import httpx
 
 from nox.ai._log import get_logger
-from nox.ai.base import AiChunk, AiRequest, AiResponse, AiRole, ProviderInfo
+from nox.ai.base import AiChunk, AiRequest, AiResponse, AiRole, ProviderInfo, ToolCallRequest
 from nox.ai.config import OllamaConfig
 from nox.ai.errors import ProviderError, ProviderTimeoutError, ProviderUnavailableError
+from nox.ai.providers.ollama_tools import (
+    SentinelSniffer,
+    native_messages,
+    parse_tool_calls,
+    sentinel_messages,
+)
+from nox.ai.providers.ollama_tools import native_tools as native_tools_payload
 from nox.core.events import HealthStatus
 
 PROVIDER_ID = "ollama"
@@ -90,6 +97,7 @@ class OllamaProvider:
             reason="not probed yet",
         )
         self._last: dict[str, AiResponse] = {}
+        self._tool_support: dict[str, bool] = {}
         self._warm_task: asyncio.Task[bool] | None = None
 
     @property
@@ -189,20 +197,50 @@ class OllamaProvider:
             return self._cfg.cpu_model
         return self._cfg.model
 
-    def build_payload(self, request: AiRequest, *, stream: bool) -> dict[str, Any]:
+    def build_payload(
+        self, request: AiRequest, *, stream: bool, native_tools: bool = False
+    ) -> dict[str, Any]:
+        """The `/api/chat` body. With tools on offer, `native_tools` picks the protocol: the
+        `tools` field for a model that supports it, the text offer for one that does not."""
         options: dict[str, Any] = {
             "temperature": request.temperature,
             "num_predict": request.max_tokens,
         }
         if not self.gpu_allowed(request):
             options["num_gpu"] = 0
-        return {
+        payload: dict[str, Any] = {
             "model": self.model_for(request),
-            "messages": [{"role": m.role, "content": m.content} for m in request.messages],
+            "messages": (native_messages(request) if native_tools else sentinel_messages(request)),
             "stream": stream,
             "options": options,
             "keep_alive": self._cfg.keep_alive,
         }
+        if native_tools and request.tools:
+            payload["tools"] = native_tools_payload(request)
+        return payload
+
+    async def supports_tools(self, model: str) -> bool:
+        """Whether `model` declares native tool calling (`/api/show` -> `capabilities`).
+
+        Asked once per model and remembered; a server that cannot answer means "no", which only
+        costs the model the native protocol - the sentinel fallback still gives it the tools.
+        """
+        cached = self._tool_support.get(model)
+        if cached is not None:
+            return cached
+        supported = False
+        try:
+            async with self._client_factory() as client:
+                response = await client.post(
+                    self._url("/api/show"), json={"model": model}, timeout=httpx.Timeout(5.0)
+                )
+            if response.status_code < 400:
+                capabilities = response.json().get("capabilities") or []
+                supported = isinstance(capabilities, list) and "tools" in capabilities
+        except (httpx.HTTPError, ValueError) as exc:
+            log.info("ai.ollama.show_failed", model=model, error=f"{type(exc).__name__}: {exc}")
+        self._tool_support[model] = supported
+        return supported
 
     def _timeout(self, request: AiRequest) -> httpx.Timeout:
         total = min(request.timeout_s, self._cfg.timeout_s)
@@ -253,7 +291,14 @@ class OllamaProvider:
 
     async def stream(self, request: AiRequest) -> AsyncIterator[AiChunk]:
         started = time.perf_counter()
-        payload = self.build_payload(request, stream=True)
+        native = bool(request.tools) and await self.supports_tools(self.model_for(request))
+        payload = self.build_payload(request, stream=True, native_tools=native)
+        sniffer = (
+            SentinelSniffer([t.name for t in request.tools])
+            if request.tools and not native
+            else None
+        )
+        calls: list[ToolCallRequest] = []
         parts: list[str] = []
         saw_thinking = False
         tokens_in: int | None = None
@@ -273,10 +318,13 @@ class OllamaProvider:
                     if "error" in chunk:
                         raise ProviderError(PROVIDER_ID, str(chunk["error"]))
                     message = chunk.get("message", {})
+                    calls += parse_tool_calls(message)
                     delta = str(message.get("content", ""))
                     if delta:
                         parts.append(delta)
-                        yield AiChunk(request_id=request.request_id, delta=delta, done=False)
+                        shown = sniffer.feed(delta) if sniffer is not None else delta
+                        if shown:
+                            yield AiChunk(request_id=request.request_id, delta=shown, done=False)
                     if isinstance(message.get("thinking"), str) and message["thinking"]:
                         saw_thinking = True
                     if chunk.get("done"):
@@ -292,7 +340,12 @@ class OllamaProvider:
             raise ProviderError(PROVIDER_ID, f"{type(exc).__name__}: {exc}") from exc
         except json.JSONDecodeError as exc:
             raise ProviderError(PROVIDER_ID, f"invalid NDJSON: {exc}") from exc
-        if not "".join(parts).strip():
+        if sniffer is not None:
+            held, sniffed = sniffer.finish()
+            calls += sniffed
+            if held:
+                yield AiChunk(request_id=request.request_id, delta=held, done=False)
+        if not "".join(parts).strip() and not calls:
             _refuse_thinking_only({"thinking": "yes" if saw_thinking else ""})
         self._last[request.request_id] = AiResponse(
             request_id=request.request_id,
@@ -302,7 +355,7 @@ class OllamaProvider:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
         )
-        yield AiChunk(request_id=request.request_id, delta="", done=True)
+        yield AiChunk(request_id=request.request_id, delta="", done=True, tool_calls=calls)
 
     def last_response(self, request_id: str) -> AiResponse | None:
         """Usage of the last streamed request (the router reads it after the stream finished)."""

@@ -94,6 +94,9 @@ ROLE_ALLOWLIST: Mapping[str, tuple[str, ...]] = {
     # it the speech routing and returns the voice configuration. A plugin registers through
     # `plugin.register`, which is scoped to its own manifest.
     "plugin": ("ipc.*", "plugin.**", "state.get", "worker.heartbeat"),
+    # The MCP bridge: nothing by pattern. Its two requests (`mcp.tools.list`, `mcp.tools.call`)
+    # are registered with `roles=("mcp",)` next to their handlers in `nox.mcp.gate`.
+    "mcp": (),
     # core, supervisor and remote never authenticate over the hub.
     "core": (),
     "supervisor": (),

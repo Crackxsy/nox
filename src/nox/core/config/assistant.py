@@ -163,6 +163,14 @@ class ClaudeCodeProviderConfig(StrictSection):
     safe_mode: bool = True  # no user hooks, plugins or tool servers in Nox's requests
     max_budget_usd: float = Field(default=0.0, ge=0.0)
     health_roundtrip: bool = True  # health() does a one-token request, which costs quota
+    # The conversation session (`nox.ai.providers.claude_persistent`); see `nox.ai.config`.
+    persistent: bool = True
+    prewarm: bool = True
+    effort: str = Field(default="low", pattern=r"^(|low|medium|high|xhigh|max)$")
+    reason_model: str = "opus"
+    session_turns: int = Field(default=40, ge=1)
+    session_max_turns: int = Field(default=25, ge=1)
+    web_search: bool = True
 
 
 class OllamaProviderConfig(StrictSection):

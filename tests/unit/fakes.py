@@ -11,6 +11,7 @@ from typing import Any
 
 from nox.ai.base import AiChunk, AiRequest, AiResponse, ProviderInfo
 from nox.core.events import Event, Handler
+from nox.core.orchestrator import RecordedTurn
 from nox.core.state import NoxState
 from nox.voice.base import TtsRequest
 
@@ -231,11 +232,24 @@ class FakeSpeaker:
 class FakeTurns:
     def __init__(self) -> None:
         self.rows: list[tuple[str, str, str]] = []
+        self.private: list[bool] = []
 
     async def record(
-        self, session_id: str, role: str, text: str, *, provider: str = "", latency_ms: int = 0
+        self,
+        session_id: str,
+        role: str,
+        text: str,
+        *,
+        provider: str = "",
+        latency_ms: int = 0,
+        private: bool = False,
     ) -> None:
         self.rows.append((session_id, role, text))
+        self.private.append(private)
 
     async def recent(self, session_id: str, limit: int) -> list[tuple[str, str]]:
         return [(r, t) for s, r, t in self.rows if s == session_id][-limit:]
+
+    async def recent_turns(self, session_id: str, limit: int) -> list[RecordedTurn]:
+        marked = zip(self.rows, self.private, strict=True)
+        return [RecordedTurn(r, t, p) for (s, r, t), p in marked if s == session_id][-limit:]

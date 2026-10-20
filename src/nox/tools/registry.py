@@ -61,6 +61,10 @@ class ToolRegistry:
         self._tools: dict[str, ToolSpec] = {}
 
     def register(self, spec: ToolSpec) -> None:
+        # `-` is the wire form of `.` (`nox.tools.names`); a name containing it would make the
+        # mapping ambiguous, and a model could reach one tool by spelling another.
+        if "-" in spec.name:
+            raise ValueError(f"tool names may not contain '-': {spec.name!r}")
         if spec.name in self._tools:
             raise ValueError(f"tool already registered: {spec.name!r}")
         self._tools[spec.name] = spec

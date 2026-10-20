@@ -43,6 +43,14 @@ WORKER_ROLES: frozenset[str] = frozenset({"worker", "plugin"})
 DEVICE_CLIENT_PREFIX = "device:"
 #: token -> the paired device's id, or None for an unknown or revoked token.
 DeviceVerifier = Callable[[str], "str | None"]
+#: Roles whose one-time token is bound to the role itself: a token issued for one of these works
+#: only for that role, and the role works only with such a token. `mcp` is Nox's MCP bridge
+#: (`nox.mcp.bridge`), which may call `mcp.tools.list` and `mcp.tools.call` and nothing else.
+BOUND_ROLES: frozenset[str] = frozenset({"mcp"})
+#: Roles that never authenticate over the hub (the core itself, the supervisor, the LAN gateway).
+HUBLESS_ROLES: frozenset[str] = frozenset({"core", "supervisor", "remote"})
+#: Paired devices: their own long-lived token, and only through the network listener.
+DEVICE_ROLES: frozenset[str] = frozenset({DEVICE_ROLE})
 
 _CREATE_NO_WINDOW = 0x08000000
 
@@ -109,6 +117,8 @@ def read_session_token(runtime_dir: Path) -> str:
 class WorkerToken:
     worker_id: str
     expires_at: float
+    #: Empty for worker/plugin tokens; one of `BOUND_ROLES` for a role-bound token.
+    role: str = ""
 
 
 @dataclass(frozen=True)
@@ -165,12 +175,19 @@ class TokenStore:
 
     # -- worker tokens ------------------------------------------------------------
 
-    def issue_worker_token(self, worker_id: str, *, ttl_s: float | None = None) -> str:
-        """Issue a one-time token for a spawn of `worker_id` (e.g. "worker:stt")."""
+    def issue_worker_token(
+        self, worker_id: str, *, ttl_s: float | None = None, role: str = ""
+    ) -> str:
+        """Issue a one-time token for a spawn of `worker_id` (e.g. "worker:stt"); `role` binds it
+        to one of `BOUND_ROLES` (e.g. the MCP bridge) instead of the worker roles."""
+        if role and role not in BOUND_ROLES:
+            raise ValueError(f"role {role!r} cannot hold a bound token")
         self.purge_expired()
         ttl = self._worker_ttl_s if ttl_s is None else ttl_s
         token = generate_token()
-        self._worker[token] = WorkerToken(worker_id=worker_id, expires_at=self._clock() + ttl)
+        self._worker[token] = WorkerToken(
+            worker_id=worker_id, expires_at=self._clock() + ttl, role=role
+        )
         log.debug("worker_token_issued", worker_id=worker_id, ttl_s=ttl)
         return token
 
@@ -216,10 +233,12 @@ class TokenStore:
                 return AuthDecision(ok=True, kind="session")
             return AuthDecision(ok=False, reason="invalid token")
         if role in WORKER_ROLES:
-            return self._authenticate_worker(token, client_id)
+            return self._authenticate_worker(token, client_id, role="")
+        if role in BOUND_ROLES:
+            return self._authenticate_worker(token, client_id, role=role)
         return AuthDecision(ok=False, reason=f"role {role!r} cannot authenticate over the hub")
 
-    def _authenticate_worker(self, token: str, client_id: str) -> AuthDecision:
+    def _authenticate_worker(self, token: str, client_id: str, *, role: str) -> AuthDecision:
         now = self._clock()
         matched: str | None = None
         # Scan every outstanding token with a constant-time compare (no early exit on match).
@@ -233,6 +252,8 @@ class TokenStore:
             return AuthDecision(ok=False, reason="token expired")
         if meta.worker_id != client_id:
             return AuthDecision(ok=False, reason="token was issued for a different worker id")
+        if meta.role != role:
+            return AuthDecision(ok=False, reason="token was issued for a different role")
         return AuthDecision(ok=True, kind="worker")
 
     def _authenticate_device(self, token: str, client_id: str) -> AuthDecision:

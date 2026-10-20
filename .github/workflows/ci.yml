@@ -39,13 +39,18 @@ jobs:
         run: Add-Content -Path $env:GITHUB_PATH -Value "$pwd\.venv\Scripts"
 
       - name: ruff check
-        run: ruff check src tests
+        run: ruff check src tests evals
 
       - name: ruff format --check
-        run: ruff format --check src tests
+        run: ruff format --check src tests evals
 
       - name: mypy
         run: mypy src/nox
+
+      - name: mypy (benchmark harness)
+        env:
+          MYPYPATH: evals
+        run: mypy evals/kann_alles evals/run_kann_alles.py
 
       - name: generated TypeScript types are up to date
         run: python scripts/gen_ts_types.py --check

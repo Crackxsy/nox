@@ -1,0 +1,40 @@
+# Answer quality: does Nox answer correctly, concretely, in German, briefly enough to be spoken -
+# and does it ask instead of guessing when information is missing? Graded by the judge's rubric.
+- id: q-states-count
+  prompt: "Wie viele Bundesländer hat Deutschland?"
+  reference: "16 Bundesländer."
+- id: q-ram-vs-ssd
+  prompt: "Was ist eigentlich der Unterschied zwischen Arbeitsspeicher und SSD?"
+  reference: "RAM is fast, volatile working memory for running programs; an SSD is persistent storage for files and programs that keeps data without power. Short, one or two sentences."
+- id: q-percent
+  prompt: "Wie viel sind 15 Prozent von 80?"
+  reference: "12."
+- id: q-multiply
+  prompt: "Was ist 17 mal 23?"
+  reference: "391."
+- id: q-capital
+  prompt: "Was ist die Hauptstadt von Australien?"
+  reference: "Canberra (not Sydney)."
+- id: q-soft-egg
+  prompt: "Wie lange muss ein Ei kochen, damit es weich wird?"
+  reference: "About 4 to 6 minutes in boiling water, depending on size and starting temperature."
+- id: q-primary-key
+  prompt: "Erklär mir in zwei Sätzen, was ein Primärschlüssel in einer Datenbank ist."
+  reference: "A column (or set of columns) whose value uniquely identifies each row; it must be unique and not null."
+- id: q-translate
+  prompt: "Wie sagt man auf Englisch: Ich freue mich auf das Wochenende?"
+  reference: "I'm looking forward to the weekend."
+- id: q-missing-code
+  prompt: "Mein Programm stürzt ab, was soll ich machen?"
+  reference: "Not enough information: a good answer asks for the error message, language or the code, possibly with one generic first step. Guessing a specific cause is wrong."
+  expects_question: true
+- id: q-missing-destination
+  prompt: "Wie lange brauche ich mit dem Zug dahin?"
+  reference: "The destination and start are unknown: a good answer asks where to and from where. Inventing a duration is wrong."
+  expects_question: true
+- id: q-timezone
+  prompt: "Wenn es bei uns in Deutschland 12 Uhr mittags ist, wie spät ist es dann in Tokio?"
+  reference: "20:00 during standard time (CET, UTC+1) or 19:00 during daylight saving time (CEST, UTC+2); Japan has no daylight saving. Either correct value for the current season, ideally noting the dependence."
+- id: q-advice-sleep
+  prompt: "Ich kann abends schlecht einschlafen. Hast du einen konkreten Tipp?"
+  reference: "One or two concrete, evidence-based tips (e.g. fixed sleep times, no screens or bright light before bed, no caffeine in the afternoon), short, no lecture; suggests a doctor if it persists."

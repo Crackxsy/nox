@@ -159,6 +159,14 @@ ai:
       timeout_s: 120
       model: "sonnet"              # same first-token latency as the CLI default, lower cost
       health_roundtrip: true       # 1-token probe at startup/health check (set false to save quota)
+      persistent: true             # one warm Claude Code process for the conversation, with Nox's
+                                   # tools over MCP (measured: first token ~1 s instead of 4-7 s)
+      prewarm: true                # start that process at boot, not at the first turn
+      effort: "low"                # --effort of the conversation; "" = the CLI default
+      reason_model: "opus"         # model for "denk nach" / long ungrounded questions; "" = same
+      session_turns: 40            # replace the session after this many turns (bounded context)
+      session_max_turns: 25        # Claude Code's own agent steps per turn; Nox's TurnBudget rules
+      web_search: true             # Anthropic's web search, only in privacy mode full/balanced
     ollama:
       enabled: true
       base_url: "http://127.0.0.1:11434"

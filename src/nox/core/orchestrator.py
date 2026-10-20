@@ -16,21 +16,33 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
-from nox.ai.base import AiRequest, AiRole, Message, Router
+from nox.ai.base import AiRequest, AiRole, Message, Router, ToolCallRequest, ToolDefinition
 from nox.ai.escalation import EscalationPolicy
 from nox.ai.fastpath import FastPath
-from nox.ai.tooluse import decided_prose
+from nox.ai.tooluse import render_result
 from nox.core.events import E, Event, EventBus
 from nox.core.logging import get_logger
 from nox.core.state import StateManager
-from nox.core.toolloop import ToolGate
+from nox.core.toolloop import ActiveTurn, ToolEvent, ToolLoop
 from nox.voice.base import Channel, TtsRequest
 
 log = get_logger(__name__)
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+|(?<=[.!?…])$")
+
+#: Clause boundaries the first utterance of a turn may be cut at, and the length from which a long
+#: opening sentence is worth starting early: below ~40 characters the sentence ends soon anyway,
+#: and a two-word fragment spoken alone sounds broken.
+_CLAUSE_MARKS = (", ", ": ", " - ", " – ", "; ")
+FIRST_CLAUSE_MIN_CHARS = 40
+
+#: A turn with tools may take its whole budget plus time for dialogs and the final answer.
+TOOL_TURN_MARGIN_S = 30.0
+
+#: Said once when a tool loop keeps the user waiting with nothing said yet (`filler_delay_s`).
+TOOL_FILLER = {"de": "Moment, ich schau nach.", "en": "One moment, let me check."}
 
 #: Said when the model kept asking for tools until the turn ran out of rounds. Deliberately
 #: short: the user only needs to know that nothing happened, and the detail belongs in the log.
@@ -55,11 +67,27 @@ class PresetGate(Protocol):
     async def handle(self, text: str, language: str) -> str | None: ...
 
 
+class RecordedTurn(NamedTuple):
+    """One turn of the history, with whether it was said while cloud models were not allowed."""
+
+    role: str
+    text: str
+    private: bool = False
+
+
 class TurnStore(Protocol):
     async def record(
-        self, session_id: str, role: str, text: str, *, provider: str = "", latency_ms: int = 0
+        self,
+        session_id: str,
+        role: str,
+        text: str,
+        *,
+        provider: str = "",
+        latency_ms: int = 0,
+        private: bool = False,
     ) -> None: ...
     async def recent(self, session_id: str, limit: int) -> list[tuple[str, str]]: ...
+    async def recent_turns(self, session_id: str, limit: int) -> list[RecordedTurn]: ...
 
 
 class MemoryPolicy(Protocol):
@@ -115,6 +143,14 @@ class Turn:
     #: Tools this turn used, in order. Empty for the great majority of turns, and that is the
     #: point: it is data, so "did it actually do something" is answerable without the transcript.
     tools_used: list[str] = field(default_factory=list)
+    #: Tools the provider ran on its own side (Claude Code's web search), outside Nox's tool loop.
+    provider_tools: list[str] = field(default_factory=list)
+    #: Cloud models were not allowed at some point during this turn. Sticky, and shared by the
+    #: user's message and the answer: both are stored private, whatever the mode at the end.
+    private: bool = False
+    #: Memory writes were not allowed at some point during the turn: nothing of it is stored.
+    unrecordable: bool = False
+    recorded: bool = False
 
 
 @dataclass
@@ -124,6 +160,27 @@ class OrchestratorConfig:
     default_language: str = "de"
     channel: Channel = Channel.PRIVATE
     speak: bool = True
+    #: How long a tool loop may keep a speaking user waiting in silence before the filler.
+    filler_delay_s: float = 2.0
+
+
+@dataclass
+class _TurnSpeech:
+    """Speech state of one turn: whether anything was said yet, and the pending filler."""
+
+    speak: bool
+    spoken: bool = False
+    filler_task: asyncio.Task[None] | None = None
+
+    def text_arrived(self) -> None:
+        """The model's own words are here: a filler that has not started yet is not needed."""
+        task = self.filler_task
+        if task is not None and not task.done() and not self.spoken:
+            task.cancel()
+
+    def cancel_filler(self) -> None:
+        if self.filler_task is not None and not self.filler_task.done():
+            self.filler_task.cancel()
 
 
 @dataclass
@@ -154,9 +211,13 @@ class Orchestrator:
     #: themselves wins over the built-in one. Same contract as `PresetGate`.
     mode_gate: PresetGate | None = None
     #: Set by `nox.capabilities.install` so that everything reachable from the dashboard is
-    #: also reachable by saying it. `None` = the model can only talk, which was the state
-    #: until now.
-    tool_gate: ToolGate | None = None
+    #: also reachable by saying it. `None` = the model can only talk.
+    tool_loop: ToolLoop | None = None
+    #: Current facts (time, mode, privacy) for the turn context; `None` = none.
+    facts: Callable[[], str] | None = None
+    #: Whether cloud models are allowed right now. Turns recorded while they are not are marked
+    #: private, and cloud providers never send them, not even later as history. `None` = always.
+    cloud_allowed: Callable[[], bool] | None = None
     fast_path: FastPath = field(default_factory=FastPath)
     escalation: EscalationPolicy = field(default_factory=EscalationPolicy)
 
@@ -249,6 +310,8 @@ class Orchestrator:
     async def _on_kill(self, _: Event) -> None:
         self._safe_mode = True
         await self.cancel(reason="kill_switch")
+        if self.tool_loop is not None:
+            await self.tool_loop.end_all()
 
     async def _on_started(self, _: Event) -> None:
         self._safe_mode = False
@@ -304,20 +367,21 @@ class Orchestrator:
 
         context = await self._retrieve_context(text, turn.timings)
         build_started = time.perf_counter()
-        tools = self.tool_gate.prompt() if self.tool_gate is not None else ""
-        messages = [Message(role="system", content=self._prompt_with(context, tools))]
+        tools = self.tool_loop.begin(request_id) if self.tool_loop is not None else None
+        messages = [Message(role="system", content=self.system_prompt())]
         if self.turns is not None:
-            for role, content in await self.turns.recent(
-                self.session_id, self.config.history_turns
-            ):
-                messages.append(Message(role=role, content=content))
+            for past in await self.turns.recent_turns(self.session_id, self.config.history_turns):
+                messages.append(Message(role=past.role, content=past.text, private=past.private))
         messages.append(Message(role="user", content=text))
+        turn_context = self._turn_context(context, with_caveats=tools is not None)
         decision = self.escalation.decide(text, relevance=context.relevance)
         turn.escalated = decision.reason
         turn.timings.prompt_build_ms = (time.perf_counter() - build_started) * 1000
         if decision.reason:
             log.info("orchestrator.escalated", request_id=request_id, reason=decision.reason)
-        await self._record("user", text)
+        # Both messages are stored when the turn ends, with the privacy the whole turn had: a
+        # switch in the middle must not leave the question public and the answer private.
+        self._note_privacy(turn)
         ready: dict[str, object] = {}
 
         def _capture_ready(ev: Event) -> None:
@@ -325,45 +389,21 @@ class Orchestrator:
                 ready.update(ev.payload)
 
         unsub = self.bus.subscribe(E.AI_RESPONSE_READY, _capture_ready)
-        rounds = self.tool_gate.max_rounds if self.tool_gate is not None and tools else 0
+        speech = _TurnSpeech(speak=speak_enabled and self.speaker is not None)
+        if tools is not None:
+            tools.listeners.append(lambda event: self._on_tool_event(event, speech, language, turn))
         try:
-            for attempt in range(rounds + 1):
-                final_attempt = attempt == rounds
-                if final_attempt and rounds:
-                    # Out of tool rounds. Take the offer away so the model has to answer with what
-                    # it has; the alternative is a user left with silence or with a protocol line.
-                    messages[0] = Message(role="system", content=self._prompt_with(context))
-                    log.info("orchestrator.tool_rounds_spent", request_id=request_id)
-                produced, directive = await self._stream(
-                    self._request(request_id, decision.role, messages, language),
-                    turn,
-                    language,
-                    speak=speak_enabled,
-                    on_chunk=on_chunk,
-                    started=started,
-                    # Held on every attempt, the last one included: a model that asks for a tool
-                    # after the offer was withdrawn must still never be read aloud.
-                    hold=rounds > 0,
-                )
-                if not directive or self.tool_gate is None:
-                    break
-                if final_attempt:
-                    log.warning("orchestrator.directive_without_an_offer", request_id=request_id)
-                    await self._deliver_plain(
-                        turn,
-                        GAVE_UP_ON_TOOLS.get(language[:2], GAVE_UP_ON_TOOLS["en"]),
-                        language,
-                        speak=speak_enabled,
-                        on_chunk=on_chunk,
-                    )
-                    break
-                used = await self.tool_gate.advance(produced)
-                if used is None:  # the sniffer was wrong about the head; nothing to hand back
-                    break
-                if used.tool:
-                    turn.tools_used.append(used.tool)
-                messages.append(Message(role="assistant", content=produced))
-                messages.append(Message(role="user", content=used.feedback))
+            await self._converse(
+                turn,
+                messages,
+                decision.role,
+                language,
+                turn_context,
+                tools,
+                speech,
+                on_chunk,
+                started,
+            )
             if not ready:  # router emitted ready after the generator finished: ask it
                 explain = self.router.explain(request_id)
                 ready = {
@@ -374,11 +414,84 @@ class Orchestrator:
             turn.degraded = bool(ready.get("degraded", False))
             self._note_first_sentence(turn, started)
             turn.timings.total_ms = (time.perf_counter() - started) * 1000
-            await self._record("assistant", turn.response, provider=turn.provider)
+            await self._record_turn(turn)
             self._notify_turn_complete(text, turn.response)
             return turn
         finally:
             unsub()
+            speech.cancel_filler()
+            if not turn.recorded:
+                # The turn failed or was cancelled: the question still belongs in the history.
+                await self._record_turn(turn, answer=False)
+            if tools is not None and self.tool_loop is not None:
+                turn.tools_used = list(tools.used)
+                await self.tool_loop.end(tools)
+
+    async def _converse(
+        self,
+        turn: Turn,
+        messages: list[Message],
+        role: AiRole,
+        language: str,
+        turn_context: str,
+        tools: ActiveTurn | None,
+        speech: _TurnSpeech,
+        on_chunk: Callable[[str], Awaitable[None] | None] | None,
+        started: float,
+    ) -> None:
+        """Model steps until the model answers without asking for a tool.
+
+        A provider that runs its own agent loop (Claude Code through the MCP bridge) finishes in
+        one step: its tool calls reach `ToolLoop.execute` from the bridge. A provider Nox drives
+        (Ollama, native or through the sentinel adapter) hands its calls back here; Nox runs them
+        and asks again with the results. Either way the turn's `TurnBudget` decides how far it
+        goes, and once it is spent the tools are withdrawn so the model has to answer.
+        """
+        offered = tools.definitions() if tools is not None else []
+        max_steps = (tools.budget.max_calls + 2) if tools is not None else 1
+        for _step in range(max_steps):
+            request = self._request(
+                turn.request_id,
+                role,
+                messages,
+                language,
+                context=turn_context,
+                tools=offered,
+                tool_turn=tools.token if tools is not None else "",
+                timeout_s=(
+                    tools.budget.wall_clock_s + TOOL_TURN_MARGIN_S if tools is not None else None
+                ),
+            )
+            produced, calls = await self._stream(request, turn, language, speech, on_chunk, started)
+            if not calls:
+                return
+            if tools is None or self.tool_loop is None:
+                log.warning("orchestrator.tool_calls_without_an_offer", request_id=turn.request_id)
+                break
+            messages.append(Message(role="assistant", content=produced, tool_calls=calls))
+            for call in calls:
+                run = await self.tool_loop.execute(tools, call.name, call.arguments)
+                messages.append(
+                    Message(
+                        role="tool",
+                        content=render_result(call.name, ok=run.ok, data=run.data, error=run.error),
+                        tool_name=call.name,
+                        tool_call_id=call.id,
+                    )
+                )
+            if tools.budget.exhausted:
+                # Out of budget. Take the offer away so the model answers with what it has; the
+                # alternative is a user left with silence or with a refusal loop.
+                offered = []
+                log.info("orchestrator.tool_budget_spent", request_id=turn.request_id)
+        if not turn.response.strip():
+            await self._deliver_plain(
+                turn,
+                GAVE_UP_ON_TOOLS.get(language[:2], GAVE_UP_ON_TOOLS["en"]),
+                language,
+                speak=speech.speak,
+                on_chunk=on_chunk,
+            )
 
     def _notify_turn_complete(self, user_text: str, response: str) -> None:
         if self.on_turn_complete is None or not response.strip():
@@ -391,9 +504,18 @@ class Orchestrator:
             log.warning("orchestrator.turn_listener_failed", error=f"{type(exc).__name__}: {exc}")
 
     def _request(
-        self, request_id: str, role: AiRole, messages: list[Message], language: str
+        self,
+        request_id: str,
+        role: AiRole,
+        messages: list[Message],
+        language: str,
+        *,
+        context: str = "",
+        tools: list[ToolDefinition] | None = None,
+        tool_turn: str = "",
+        timeout_s: float | None = None,
     ) -> AiRequest:
-        """One model request. Built per round, because the messages grow with every tool result."""
+        """One model request. Built per step, because the messages grow with every tool result."""
         return AiRequest(
             request_id=request_id,
             role=role,
@@ -402,6 +524,10 @@ class Orchestrator:
             privacy_mode=str(self.state.get("privacy.mode")),
             max_tokens=self.config.max_tokens,
             metadata={"language": language, "session_id": self.session_id},
+            context=context,
+            tools=list(tools or []),
+            tool_turn=tool_turn,
+            **({"timeout_s": timeout_s} if timeout_s is not None else {}),
         )
 
     async def _deliver_plain(
@@ -431,60 +557,91 @@ class Orchestrator:
         request: AiRequest,
         turn: Turn,
         language: str,
-        *,
-        speak: bool,
+        speech: _TurnSpeech,
         on_chunk: Callable[[str], Awaitable[None] | None] | None,
         started: float,
-        hold: bool,
-    ) -> tuple[str, bool]:
-        """Stream one model answer; returns the whole text and whether it was a tool directive.
+    ) -> tuple[str, list[ToolCallRequest]]:
+        """Stream one model step; returns its text and the tool calls it asked Nox to run.
 
-        `hold` is what keeps the user from hearing `NOX_TOOL_CALL` read aloud. While the first
-        characters could still turn into the sentinel, nothing is emitted, spoken or added to the
-        turn; once it is clear this is prose, the held text is released in one piece and the rest
-        streams as before. The cost is the latency of about a dozen characters, paid only in turns
-        where tools are on offer at all.
+        Text is released as it arrives - there is no protocol line to hide any more: native tool
+        calls arrive as data, and the sentinel fallback is parsed inside the provider. Speech
+        starts at the first complete sentence (or, for a long opening sentence, its first clause).
         """
         produced = ""
-        pending = ""
         buffer = ""
-        directive = False
-        decided = not hold
-
+        calls: list[ToolCallRequest] = []
         async for chunk in self.router.stream(request):
             turn.chunks += 1
-            produced += chunk.delta
+            self._note_privacy(turn)
+            if chunk.tool_activity:
+                self._on_provider_tools(chunk.tool_activity, speech, language, turn)
+            calls.extend(chunk.tool_calls)
+            if not chunk.delta and not chunk.done:
+                continue
             if chunk.delta and turn.timings.first_token_ms == 0.0:
                 turn.timings.first_token_ms = (time.perf_counter() - started) * 1000
-            release = chunk.delta
-            if not decided:
-                pending += chunk.delta
-                verdict = decided_prose(pending)
-                if verdict is None and not chunk.done:
-                    continue
-                decided = True
-                directive = verdict is False
-                release, pending = ("" if directive else pending), ""
-            if directive:
-                continue
-            turn.response += release
-            buffer += release
-            if on_chunk is not None and release:
-                result = on_chunk(release)
+            produced += chunk.delta
+            turn.response += chunk.delta
+            buffer += chunk.delta
+            if chunk.delta:
+                speech.text_arrived()
+            if on_chunk is not None and chunk.delta:
+                result = on_chunk(chunk.delta)
                 if result is not None:
                     await result
-            if speak and self.speaker is not None:
-                sentences, buffer = self._split(buffer, final=chunk.done)
+            if speech.speak:
+                sentences, buffer = self._split(buffer, final=chunk.done, first=not speech.spoken)
                 for sentence in sentences:
                     self._note_first_sentence(turn, started)
+                    speech.spoken = True
                     await self._speak(sentence, language, turn.request_id)
             elif turn.timings.first_sentence_ms == 0.0 and _SENTENCE_END.search(buffer):
                 # Not speaking, but the number still matters: it is when speech *could* start.
                 self._note_first_sentence(turn, started)
-        if not directive and speak and self.speaker is not None and buffer.strip():
+        if speech.speak and buffer.strip():
             self._note_first_sentence(turn, started)
+            speech.spoken = True
             await self._speak(buffer.strip(), language, turn.request_id)
-        return produced, directive
+        return produced, calls
+
+    # -- tool activity and the "let me check" filler -------------------------------------------
+
+    def _on_tool_event(
+        self, event: ToolEvent, speech: _TurnSpeech, language: str, turn: Turn
+    ) -> None:
+        if event.kind == "started":
+            self._arm_filler(speech, language, turn)
+
+    def _on_provider_tools(
+        self, names: list[str], speech: _TurnSpeech, language: str, turn: Turn
+    ) -> None:
+        log.debug("orchestrator.provider_tools", request_id=turn.request_id, tools=names)
+        # Nox's own tools are recorded by the tool loop when they run; only the provider's own
+        # (web search) would otherwise be invisible.
+        own = set(self.tool_loop.current_offer_names()) if self.tool_loop is not None else set()
+        turn.provider_tools += [name for name in names if name not in own]
+        self._arm_filler(speech, language, turn)
+
+    def _arm_filler(self, speech: _TurnSpeech, language: str, turn: Turn) -> None:
+        """Say "let me check" if a tool loop keeps the user waiting with nothing said yet.
+
+        Once per turn, only when speaking, only if nothing has been said so far, and called off
+        the moment the model's own words arrive - a model that already said "ich schau nach"
+        must not be followed by Nox saying it again.
+        """
+        if not speech.speak or speech.spoken or speech.filler_task is not None:
+            return
+
+        async def _filler() -> None:
+            await asyncio.sleep(self.config.filler_delay_s)
+            if speech.spoken:
+                return
+            speech.spoken = True
+            text = TOOL_FILLER.get(language[:2], TOOL_FILLER["en"])
+            log.info("orchestrator.filler", request_id=turn.request_id)
+            await self._speak(text, language, turn.request_id)
+
+        speech.filler_task = asyncio.create_task(_filler(), name="nox-tool-filler")
 
     async def _retrieve_context(self, text: str, timings: TurnTimings) -> TurnContext:
         """Memory context for this turn. A failing provider degrades to no context, not a
@@ -502,15 +659,27 @@ class Orchestrator:
         finally:
             timings.context_ms = (time.perf_counter() - started) * 1000
 
-    def _prompt_with(self, context: TurnContext, tools: str = "") -> str:
-        """System message for one turn: personality, then memory, then the tools on offer.
+    def _turn_context(self, context: TurnContext, *, with_caveats: bool) -> str:
+        """Per-turn context: current facts, what Nox knows about the user, memory, and what is
+        not available right now (only when tools are on offer - a model told about caveats of a
+        protocol it cannot use will eventually try to use it anyway).
 
-        The tool section goes last so that the names the model may use are the freshest thing
-        in the prompt, and it is left out entirely when nothing is on offer - a model told
-        about a protocol it cannot use will eventually try to use it anyway.
+        Kept out of the system message so the stable prefix stays cacheable and a provider with a
+        long-lived session can send it along with the user's message.
         """
-        parts = [self.system_prompt(), self._profile(), context.block, tools]
+        facts = self._facts()
+        caveats = self.tool_loop.caveats() if with_caveats and self.tool_loop is not None else ""
+        parts = [facts, self._profile(), context.block, caveats]
         return "\n\n".join(part for part in parts if part)
+
+    def _facts(self) -> str:
+        if self.facts is None:
+            return ""
+        try:
+            return self.facts()
+        except Exception as exc:  # noqa: BLE001 - an answer without the clock beats no answer
+            log.warning("orchestrator.facts_failed", error=str(exc))
+            return ""
 
     def _profile(self) -> str:
         """What Nox knows about the user, or nothing: a broken profile must not fail the turn."""
@@ -543,7 +712,7 @@ class Orchestrator:
         tell the difference apart from the provider badge, which says `fastpath` so the user can
         see that no language model was involved.
         """
-        await self._record("user", turn.text)
+        self._note_privacy(turn)
         turn.response = text
         turn.chunks = 1
         turn.provider = FAST_PATH_PROVIDER
@@ -558,7 +727,7 @@ class Orchestrator:
                 await self._speak(sentence, language, turn.request_id)
         turn.timings.first_sentence_ms = (time.perf_counter() - started) * 1000
         turn.timings.total_ms = (time.perf_counter() - started) * 1000
-        await self._record("assistant", turn.response, provider=turn.provider)
+        await self._record_turn(turn)
         return turn
 
     async def _speak(self, sentence: str, language: str, request_id: str) -> None:
@@ -572,21 +741,56 @@ class Orchestrator:
             )
         )
 
-    async def _record(self, role: str, text: str, *, provider: str = "") -> None:
+    def _note_privacy(self, turn: Turn) -> None:
+        """Sticky privacy of the turn: private if cloud models were not allowed at any point, and
+        not to be stored at all if memory writes were not (privacy mode private, a zone)."""
+        if self.cloud_allowed is not None and not self.cloud_allowed():
+            turn.private = True
+        if self.memory_policy is not None and not self.memory_policy.allows_memory_write():
+            turn.unrecordable = True
+
+    async def _record_turn(self, turn: Turn, *, answer: bool = True) -> None:
+        """Store the user's message and (unless the turn failed) the answer, once, together."""
+        if turn.recorded:
+            return
+        turn.recorded = True
+        self._note_privacy(turn)
+        if turn.unrecordable:
+            return
+        await self._record("user", turn.text, private=turn.private)
+        if answer:
+            await self._record(
+                "assistant", turn.response, provider=turn.provider, private=turn.private
+            )
+
+    async def _record(
+        self, role: str, text: str, *, provider: str = "", private: bool = False
+    ) -> None:
         if self.turns is None:
             return
         if self.memory_policy is not None and not self.memory_policy.allows_memory_write():
             return
         try:
-            await self.turns.record(self.session_id, role, text, provider=provider)
+            await self.turns.record(self.session_id, role, text, provider=provider, private=private)
         except Exception as exc:
             log.warning("orchestrator.record_failed", error=str(exc))
 
     @staticmethod
-    def _split(buffer: str, *, final: bool) -> tuple[list[str], str]:
+    def _split(buffer: str, *, final: bool, first: bool = False) -> tuple[list[str], str]:
+        """Complete sentences out of `buffer`, and the rest.
+
+        With `first`, a long opening sentence is cut at its last clause boundary (comma, colon,
+        dash) once it is long enough to be worth saying on its own: the listener hears the first
+        words while the model is still writing the end of that sentence.
+        """
         parts = [p for p in _SENTENCE_END.split(buffer) if p is not None]
         if final:
             return [p.strip() for p in parts if p.strip()], ""
         if len(parts) <= 1:
+            if first and len(buffer) >= FIRST_CLAUSE_MIN_CHARS:
+                cut = max(buffer.rfind(mark) for mark in _CLAUSE_MARKS)
+                if cut >= FIRST_CLAUSE_MIN_CHARS // 2:
+                    head = buffer[: cut + 1].strip()
+                    return [head], buffer[cut + 1 :].lstrip()
             return [], buffer
         return [p.strip() for p in parts[:-1] if p.strip()], parts[-1]

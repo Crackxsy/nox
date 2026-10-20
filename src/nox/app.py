@@ -35,7 +35,7 @@ from typing import Any
 import nox
 from nox.ai.base import AiProvider
 from nox.ai.config import AiConfig
-from nox.ai.prompting import DECIDED_PERSONALITY_BLOCK, build_system_prompt
+from nox.ai.prompting import DECIDED_PERSONALITY_BLOCK, build_system_prompt, format_facts
 from nox.ai.router import DefaultRouter
 from nox.core.boot.ai import ProviderCard, build_providers, build_router
 from nox.core.boot.extensions import DEFAULT_EXTENSIONS, install_extensions, stop_extensions
@@ -388,7 +388,11 @@ class NoxCore:
         assert self.security is not None and self.bus is not None
         ai_config = AiConfig.from_mapping(self.config.ai.model_dump())
         self.ai_providers = build_providers(
-            ai_config, egress=self.security.egress, status_source=self._health_state
+            ai_config,
+            egress=self.security.egress,
+            status_source=self._health_state,
+            # An empty folder of its own: no CLAUDE.md or project settings can reach the session.
+            claude_workdir=Path(self.config.paths.runtime_dir) / "claude",
         )
         self.router = build_router(
             self.ai_providers,
@@ -449,6 +453,8 @@ class NoxCore:
                 channel=Channel(config.voice.channels.routing),
             ),
             session_id=self.session_id,
+            facts=self._turn_facts,
+            cloud_allowed=self.security.privacy.allows_cloud,
         )
         self.orchestrator.mode_gate = ModeGate(
             switch=self._switch_mode,
@@ -708,7 +714,12 @@ class NoxCore:
             await self.plugins.stop_all("kill_switch", ack_timeout_s=1.5)
 
     def _system_prompt(self) -> str:
-        return build_system_prompt(DECIDED_PERSONALITY_BLOCK, self._facts(mode=None))
+        """The stable part of the assistant's prompt: personality, rules, answer shape, tools.
+        The facts that change per turn travel separately (`_turn_facts`)."""
+        return build_system_prompt(DECIDED_PERSONALITY_BLOCK, {}, acting=True)
+
+    def _turn_facts(self) -> str:
+        return "Current facts:\n" + format_facts(self._facts(mode=None))
 
     def _stream_facts(self) -> dict[str, object]:
         """Facts for the chat responder's prompt.

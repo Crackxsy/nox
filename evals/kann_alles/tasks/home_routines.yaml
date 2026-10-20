@@ -1,0 +1,99 @@
+# Home: this world has no Home Assistant yet, so the honest answer is "not connected, here is how".
+# Routines: reminders work today; watchers ("tell me when ...") arrive with the watcher wave.
+- id: home-light-on
+  title: Switch on a light
+  category: home
+  kind: solve
+  prompt: "Mach das Licht im Wohnzimmer an."
+  checks:
+    - tool_called: "home\\..*"
+  max_s: 45
+  needs: "fake Home Assistant in the benchmark world"
+- id: home-temperature
+  title: Read a room temperature
+  category: home
+  kind: answer
+  prompt: "Wie warm ist es gerade im Schlafzimmer?"
+  checks:
+    - judge: "The answer gives a temperature that comes from a tool call in the tool log."
+  max_s: 45
+  needs: "fake Home Assistant in the benchmark world"
+- id: home-all-lights-off
+  title: Switch off all lights
+  category: home
+  kind: solve
+  prompt: "Schalte alle Lichter aus, ich geh schlafen."
+  checks:
+    - tool_called: "home\\..*"
+  max_s: 60
+  needs: "fake Home Assistant in the benchmark world"
+- id: home-movie-scene
+  title: Activate a scene
+  category: home
+  kind: solve
+  prompt: "Mach Kinostimmung im Wohnzimmer."
+  checks:
+    - tool_called: "(home|presets)\\..*"
+  max_s: 60
+  needs: "fake Home Assistant in the benchmark world"
+- id: home-open-windows
+  title: Check window sensors
+  category: home
+  kind: answer
+  prompt: "Ist irgendwo im Haus noch ein Fenster offen?"
+  checks:
+    - judge: "The answer is based on sensor data from a tool call in the tool log."
+  max_s: 45
+  needs: "fake Home Assistant in the benchmark world"
+- id: routine-remind-tea
+  title: Set a reminder
+  category: routines
+  kind: solve
+  prompt: "Erinnere mich in 20 Minuten an den Tee."
+  checks:
+    - sql_rows: ["SELECT id FROM reminders WHERE text LIKE '%Tee%' AND cancelled_at IS NULL", 1]
+  max_s: 45
+- id: routine-list-reminders
+  title: List open reminders
+  category: routines
+  kind: answer
+  prompt: "Welche Erinnerungen hab ich heute noch?"
+  env:
+    reminders: [["Müll rausbringen", 120], ["Paket abholen", 300]]
+  checks:
+    - answer_matches: "Müll"
+    - answer_matches: "Paket"
+  max_s: 45
+- id: routine-cancel-reminder
+  title: Cancel a reminder
+  category: routines
+  kind: solve
+  prompt: "Die Erinnerung an den Zahnarzt brauch ich nicht mehr, lösch die bitte."
+  env:
+    reminders: [["Zahnarzt anrufen", 90], ["Blumen giessen", 240]]
+  checks:
+    - sql_rows: ["SELECT id FROM reminders WHERE text LIKE '%Zahnarzt%' AND cancelled_at IS NOT NULL", 1]
+    - sql_rows: ["SELECT id FROM reminders WHERE text LIKE '%Blumen%' AND cancelled_at IS NULL", 1]
+  max_s: 60
+- id: routine-watch-price
+  title: Watch a price threshold
+  category: routines
+  kind: solve
+  prompt: "Sag mir Bescheid, sobald das Spiel Sternenfahrer im Shop {web}/shop.html weniger als 10 Euro kostet."
+  checks:
+    - tool_called: "watch\\.create"
+  confirm_tools: ['watch\.create']
+  expected_confirmations: 1
+  max_s: 90
+  needs: "wave 4: watch.create"
+- id: routine-watch-train
+  title: Watch a train for delays every morning
+  category: routines
+  kind: solve
+  prompt: "Sag mir jeden Morgen Bescheid, wenn meine Bahn laut {web}/fahrplan.html Verspätung hat."
+  checks:
+    - tool_called: "watch\\.create"
+  confirm_tools: ['watch\.create']
+  expected_confirmations: 1
+  max_s: 90
+  needs: "wave 4: watch.create"

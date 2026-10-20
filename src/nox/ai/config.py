@@ -56,6 +56,23 @@ class ClaudeCodeConfig(BaseModel):
     safe_mode: bool = True  # --safe-mode: no user hooks/plugins/MCP in Nox requests
     max_budget_usd: float = Field(default=0.0, ge=0.0)  # 0 = no per-request cap
     health_roundtrip: bool = True  # health() also does a 1-token request (costs quota)
+    #: Conversation turns go to one long-lived Claude Code process (`--input-format stream-json`)
+    #: with Nox's tools over MCP; off = a fresh `claude -p` per turn, without tools.
+    persistent: bool = True
+    #: Start that session at boot, so the first turn does not wait for a cold start.
+    prewarm: bool = True
+    #: `--effort` for the conversation session. "low" answers in about a second on sonnet with
+    #: no measurable loss on the answer-quality set; "" = the CLI's default.
+    effort: str = "low"
+    #: Model for turns routed to the reasoning chain ("denk nach", long ungrounded questions);
+    #: switched inside the running session. "" = the same model as every other turn.
+    reason_model: str = "opus"
+    #: A session is replaced after this many turns, so its context and cost per turn stay bounded.
+    session_turns: int = Field(default=40, ge=1)
+    #: Claude Code's own agent turns per user turn; the real limit is Nox's `TurnBudget`.
+    session_max_turns: int = Field(default=25, ge=1)
+    #: Allow Anthropic's server-side web search in privacy mode full/balanced.
+    web_search: bool = True
 
 
 class OllamaConfig(BaseModel):

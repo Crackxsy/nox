@@ -1,0 +1,101 @@
+# Files: the sandbox folder is the only file root this world has ("Arbeitsordner"). Writing and
+# moving are medium risk and ask first; the harness confirms, and counts the dialogs.
+- id: files-sort-pdfs-by-year
+  title: Sort PDFs into year folders
+  category: files
+  kind: solve
+  prompt: "Sortier die PDFs im Ordner Downloads in meinem Arbeitsordner nach Jahr in Unterordner, also Downloads/2023 und Downloads/2024."
+  env:
+    files:
+      Downloads/rechnung-2023-03.pdf: "invoice march 2023"
+      Downloads/vertrag-2023-11.pdf: "contract november 2023"
+      Downloads/rechnung-2024-01.pdf: "invoice january 2024"
+      Downloads/zeugnis-2024-07.pdf: "report july 2024"
+  confirm_tools: ['file\.move']
+  expected_confirmations: 4
+  checks:
+    - file_exists: Downloads/2023/rechnung-2023-03.pdf
+    - file_exists: Downloads/2023/vertrag-2023-11.pdf
+    - file_exists: Downloads/2024/rechnung-2024-01.pdf
+    - file_exists: Downloads/2024/zeugnis-2024-07.pdf
+  max_s: 150
+- id: files-read-shopping-list
+  title: Read a shopping list aloud
+  category: files
+  kind: answer
+  prompt: "Was steht auf meiner Einkaufsliste im Arbeitsordner?"
+  env:
+    files:
+      einkauf.txt: "Haferflocken\nTomaten\nKaffee\n"
+  checks:
+    - answer_matches: "Haferflocken"
+    - answer_matches: "Kaffee"
+  max_s: 45
+- id: files-write-todo
+  title: Write a todo file
+  category: files
+  kind: solve
+  prompt: "Leg in meinem Arbeitsordner eine Datei todo.txt an mit: Zahnarzt anrufen, Fahrrad reparieren."
+  confirm_tools: ['file\.write']
+  expected_confirmations: 1
+  checks:
+    - file_contains: [todo.txt, "Zahnarzt"]
+    - file_contains: [todo.txt, "Fahrrad"]
+  max_s: 60
+- id: files-largest
+  title: Find the largest file
+  category: files
+  kind: answer
+  prompt: "Welche Datei in meinem Arbeitsordner ist am größten?"
+  env:
+    files:
+      kurz.txt: "a"
+      mittel.txt: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      video-notizen.txt: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  checks:
+    - answer_matches: "video-notizen"
+  max_s: 60
+- id: files-rename
+  title: Rename a file
+  category: files
+  kind: solve
+  prompt: "Benenn die Datei bild1.txt in meinem Arbeitsordner in urlaub-strand.txt um."
+  env:
+    files:
+      bild1.txt: "beach photo notes"
+  confirm_tools: ['file\.move']
+  expected_confirmations: 1
+  checks:
+    - file_exists: urlaub-strand.txt
+    - file_absent: bild1.txt
+  max_s: 60
+- id: files-count-text-files
+  title: Count files of one type
+  category: files
+  kind: answer
+  prompt: "Wie viele .txt-Dateien liegen im Ordner Projekte in meinem Arbeitsordner?"
+  env:
+    files:
+      Projekte/a.txt: "a"
+      Projekte/b.txt: "b"
+      Projekte/c.txt: "c"
+      Projekte/plan.md: "plan"
+      Projekte/ideen.md: "ideas"
+  checks:
+    - answer_matches: "\\b(3|drei)\\b"
+  max_s: 60
+- id: files-merge-notes
+  title: Merge two notes into one file
+  category: files
+  kind: solve
+  prompt: "Fass die Notizen notiz-a.txt und notiz-b.txt aus meinem Arbeitsordner in einer neuen Datei zusammen.txt zusammen."
+  env:
+    files:
+      notiz-a.txt: "Sonnenblumen giessen"
+      notiz-b.txt: "Bibliotheksbuch zurueckgeben"
+  confirm_tools: ['file\.write']
+  expected_confirmations: 1
+  checks:
+    - file_contains: [zusammen.txt, "Sonnenblumen"]
+    - file_contains: [zusammen.txt, "Bibliotheksbuch"]
+  max_s: 90
