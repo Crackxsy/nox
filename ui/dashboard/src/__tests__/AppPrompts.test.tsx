@@ -4,7 +4,7 @@
  * what a refused device does with its pairing.
  */
 
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Auth } from '../auth';
@@ -35,7 +35,7 @@ vi.mock('../ipc', async (importOriginal) => {
 
 const { App } = await import('../App');
 const { DASHBOARD_PATTERNS, SIGNED_OUT_DETAIL } = await import('../ipc');
-const { translator } = await import('../i18n');
+const { fill, translator } = await import('../i18n');
 
 const t = translator('de');
 const LOCAL: Auth = { kind: 'local', token: 'tok' };
@@ -57,7 +57,9 @@ function event(name: string, payload: Record<string, unknown>) {
   return { v: 1, id: `e-${Math.random()}`, ts: new Date().toISOString(), kind: 'event' as const, name, corr: null, src: { role: 'core' as const, id: 'core' }, payload };
 }
 
-async function start(auth: Auth, onDeviceGone = vi.fn()) {
+async function start(auth: Auth, onDeviceGone = vi.fn(), hash = '#/devices/devices') {
+  // A page that does not show questions inline: the question is a sheet there.
+  window.history.replaceState(null, '', hash);
   await act(async () => {
     render(<App auth={auth} lang="de" theme="system" onDeviceGone={onDeviceGone} />);
   });
@@ -91,7 +93,7 @@ describe('questions after a (re)connect', () => {
     harness.answers['security.permission.pending'] = { pending: [requested('a')] };
     await start(LOCAL);
     await status('online');
-    expect(screen.getByRole('alertdialog', { name: t('perm_title') }).textContent).toContain('Archiv/a.zip');
+    expect((await screen.findByRole('alertdialog', { name: t('ux_perm_q_delete') })).textContent).toContain('Archiv/a.zip');
 
     // Answered elsewhere while this page was away: the core no longer lists it.
     await status('offline');
@@ -107,9 +109,45 @@ describe('questions after a (re)connect', () => {
     await emit('security.permission_requested', requested('b'));
     const app = document.querySelector('.app')!;
     expect(app.hasAttribute('inert')).toBe(true);
-    expect(screen.getByRole('alertdialog').closest('.app')).toBeNull();
+    expect((await screen.findByRole('alertdialog')).closest('.app')).toBeNull();
     await emit('security.permission_decided', { request_id: 'b', decision: 'allow', rule_id: 'confirm.user', by: 'device:x' });
     expect(app.hasAttribute('inert')).toBe(false);
+  });
+});
+
+describe('the question where it belongs', () => {
+  it('sits inline under "Wartet auf dich" on Heute, and nothing behind it is inert', async () => {
+    await start(LOCAL, vi.fn(), '#/today');
+    await status('online');
+    await emit('security.permission_requested', requested('h'));
+    const card = await screen.findByRole('region', { name: t('ux_perm_q_delete') });
+    expect(card.closest('#waiting')).not.toBeNull();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(document.querySelector('.app')!.hasAttribute('inert')).toBe(false);
+    expect(card.textContent).toContain(fill(t('ux_perm_risk'), t('perm_risk_medium')));
+  });
+
+  it('says "Erlaubt." after this page allowed it', async () => {
+    harness.answers['security.permission.reply'] = { ok: true };
+    await start(LOCAL, vi.fn(), '#/today');
+    await status('online');
+    await emit('security.permission_requested', requested('i'));
+    const card = await screen.findByRole('region', { name: t('ux_perm_q_delete') });
+    await act(async () => {
+      within(card).getByRole('button', { name: t('perm_allow') }).click();
+    });
+    expect(harness.calls).toContain('security.permission.reply');
+    expect(screen.getByText(t('ux_perm_allowed'))).toBeTruthy();
+  });
+
+  it('is cancelled by Stopp, and says so', async () => {
+    await start(LOCAL, vi.fn(), '#/today');
+    await status('online');
+    await emit('security.permission_requested', requested('j'));
+    await screen.findByRole('region', { name: t('ux_perm_q_delete') });
+    await emit('security.kill_switch', { origin: 'ui' });
+    await emit('security.permission_decided', { request_id: 'j', decision: 'deny', rule_id: 'kill', by: 'policy' });
+    expect(screen.getByText(t('ux_perm_stopped'))).toBeTruthy();
   });
 });
 
