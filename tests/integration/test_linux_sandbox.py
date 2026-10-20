@@ -333,5 +333,7 @@ async def test_the_childs_environment_never_reaches_the_launchers(backend: Any) 
         allowed = {key.encode() for key in LAUNCHER_ENV} | {
             b"XDG_RUNTIME_DIR",
             b"DBUS_SESSION_BUS_ADDRESS",
+            # Set by systemd itself for the transient scope, not taken from any caller.
+            b"INVOCATION_ID",
         }
         assert set(launcher) <= allowed, sorted(launcher)
