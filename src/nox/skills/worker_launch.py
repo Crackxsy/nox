@@ -119,6 +119,10 @@ class SandboxedWorker:
         self._code = code
         self._exited.set()
 
+    def stderr_tail(self) -> str:
+        """What the worker last wrote to stderr (bounded by the sandbox) - why it ended, mostly."""
+        return str(self._process.stderr_tail())
+
     # -- relay ----------------------------------------------------------------------------------
 
     def start(self) -> None:
@@ -176,7 +180,13 @@ class SandboxedWorker:
             for future in self._pending.values():
                 if not future.done():
                     future.set_exception(OSError("worker exited"))
-            self._process.kill()
+            # Its stdout closed: the worker is usually exiting. Let it, so its own exit code is
+            # kept (a kill reports none, and every crash looked like -9); one that lingers without
+            # its pipe is ended after the grace, and always if this relay itself is cancelled.
+            try:
+                await self._process.stop(grace_s=2.0)
+            finally:
+                self._process.kill()  # a no-op once it has exited
             with contextlib.suppress(Exception):
                 await self._client.close()
 

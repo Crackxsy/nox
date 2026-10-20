@@ -138,3 +138,50 @@ async def test_undeclared_subscriptions_are_dropped_before_the_hub() -> None:
         await asyncio.sleep(0.01)
     assert hub.subscribed == ["x.y", "privacy.*"]
     pipe.inbox.put_nowait(b"")
+
+
+class ExitingPipe(Pipe):
+    """A worker that ends by itself. As with a real pipe, its stdout closes a moment *before* the
+    exit is recorded - the window in which the relay used to kill it."""
+
+    def __init__(self, code: int, stderr: str) -> None:
+        super().__init__()
+        self._code = code
+        self._stderr = stderr
+
+    def kill(self) -> None:
+        if self.running:  # like SandboxProcess.kill: a killed process reports no exit code
+            super().kill()
+
+    async def stop(self, grace_s: float = 2.0) -> None:
+        # Like SandboxProcess.stop: wait for the process to end, kill only one that lingers.
+        for _ in range(int(grace_s * 100)):
+            if not self.running:
+                return
+            await asyncio.sleep(0.01)
+        self.kill()
+
+    def stderr_tail(self) -> str:
+        return self._stderr
+
+    def end(self) -> None:
+        self.inbox.put_nowait(b"")  # EOF first ...
+        asyncio.get_running_loop().call_later(0.05, self._exited_now)  # ... then the exit
+
+    def _exited_now(self) -> None:
+        self.running = False
+        self.returncode = self._code
+
+
+async def test_a_worker_that_exits_by_itself_keeps_its_exit_code_and_says_why() -> None:
+    # Before, the relay killed it as soon as its stdout closed: every crash read as -9.
+    pipe = ExitingPipe(1, "ModuleNotFoundError: No module named 'nox'")
+    worker = SandboxedWorker(pipe, Hub(), "dice")
+    worker.start()
+    pipe.end()
+    for _ in range(300):
+        if worker.poll() is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert worker.poll() == 1 and pipe.killed is False
+    assert "No module named 'nox'" in worker.stderr_tail()

@@ -84,7 +84,13 @@ async def test_a_skill_is_learned_activated_used_and_removed_without_a_restart(
     assert core.tool_registry.get("dice.roll") is None
 
     assert (await service.activate("dice", pin=None, by="dashboard"))["ok"]
-    await _until(lambda: core.plugins.state_of("dice") is PluginState.RUNNING)
+    try:
+        await _until(lambda: core.plugins.state_of("dice") is PluginState.RUNNING)
+    except AssertionError:
+        # Why the worker did not come up: the manager's reason and the worker's own stderr.
+        rec = core.plugins.records().get("dice")
+        tail = getattr(getattr(rec, "process", None), "stderr_tail", lambda: "")()
+        pytest.fail(f"the skill never ran: {rec.reason if rec else 'no record'}\n{tail[-3000:]}")
     assert core.plugins.records()["dice"].origin == ORIGIN_SELF_BUILT
     # The worker is the sandboxed relay, never a user-rights `python -m nox.worker` process.
     assert isinstance(core.plugins.records()["dice"].process, SandboxedWorker)
