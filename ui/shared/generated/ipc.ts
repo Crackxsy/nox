@@ -308,6 +308,12 @@ export interface TtsStarted {
   utterance_id: string;
 }
 
+export interface TtsLevel {
+  utterance_id: string;
+  channel: string;
+  level: number;
+}
+
 export interface AiRequestStarted {
   request_id: string;
   provider: string;

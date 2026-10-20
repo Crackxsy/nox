@@ -60,6 +60,14 @@ class TtsStarted(BaseModel):
     utterance_id: str
 
 
+class TtsLevel(BaseModel):
+    """RMS loudness (0..1) of the audio block just played, measured at the output device."""
+
+    utterance_id: str
+    channel: str  # private | stream | both
+    level: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+
 class AiRequestStarted(BaseModel):
     request_id: str
     provider: str

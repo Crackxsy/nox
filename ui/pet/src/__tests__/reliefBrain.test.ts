@@ -13,7 +13,7 @@ import { DEFAULT_MOOD, type PetInput, deriveAnim } from '../petState';
 import { type Face, ReliefBrain, hopShape } from '../relief/brain';
 import { parseReliefDefinition } from '../relief/reliefFile';
 import { Skeleton } from '../relief/skeleton';
-import { SpeechEnvelope } from '../relief/speech';
+import { FULL_OPEN_RMS, SpeechEnvelope, VOICE_FRESH_MS, VoiceTracker } from '../relief/speech';
 import { reliefTargets } from '../relief/stateMapping';
 import { PoseSwitch, SWITCH_MS, SWITCH_REDUCED_MS, switchMix, switchSquash } from '../relief/transition';
 
@@ -169,8 +169,33 @@ describe('speech envelope', () => {
   it('follows a measured amplitude when the core provides one', () => {
     const env = new SpeechEnvelope(3);
     let v = 0;
-    for (let i = 0; i < 30; i++) v = env.sample(i * DT, DT, 0, 0.7);
-    expect(v).toBeCloseTo(0.7, 2);
+    for (let i = 0; i < 30; i++) v = env.sample(i * DT, DT, 0, FULL_OPEN_RMS / 2);
+    expect(v).toBeCloseTo(Math.pow(0.5, 0.8), 2); // half the full-open loudness, a bit more than half open
+    for (let i = 30; i < 60; i++) v = env.sample(i * DT, DT, 0, FULL_OPEN_RMS * 3);
+    expect(v).toBeCloseTo(1, 2);
+  });
+
+  it('trusts a measured level only while new ones keep arriving', () => {
+    const tracker = new VoiceTracker();
+    expect(tracker.sample(0, 0, 0)).toBeNull(); // nothing has arrived since the pet started
+    expect(tracker.sample(100, 1, 0.3)).toBeCloseTo(0.3);
+    expect(tracker.sample(100 + VOICE_FRESH_MS - 1, 1, 0.3)).toBeCloseTo(0.3);
+    expect(tracker.sample(100 + VOICE_FRESH_MS + 1, 1, 0.3)).toBeNull(); // stalled: synthesise again
+    expect(tracker.sample(1000, 2, 0.1)).toBeCloseTo(0.1);
+  });
+
+  it('opens the jaw with the measured voice, and keeps it shut when muted', () => {
+    const run = (state: PetInput, voice: number | null) => {
+      const skel = new Skeleton(DEF.bones);
+      const brain = new ReliefBrain(DEF, 3);
+      const target = { ...reliefTargets(state, deriveAnim(state), false), voice };
+      let mouth = 0;
+      for (let i = 0; i < 30; i++) mouth = brain.update(i * DT, i ? DT : 0, skel, target).mouth;
+      return mouth;
+    };
+    expect(run(input({ functional: 'speaking', speakingLevel: 0.5 }), FULL_OPEN_RMS)).toBeGreaterThan(0.9);
+    expect(run(input({ functional: 'speaking', speakingLevel: 0.5 }), 0)).toBeLessThan(0.05);
+    expect(run(input({ functional: 'muted', speakingLevel: 0.5 }), FULL_OPEN_RMS)).toBeLessThan(0.05);
   });
 });
 

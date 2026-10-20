@@ -55,6 +55,8 @@ export interface ReliefTargets {
   talk: number;
   /** Speaking level for the envelope, 0..1. */
   speech: number;
+  /** Measured loudness of the voice (`tts.level`) while it is fresh; null = synthesise. */
+  voice: number | null;
   /** 0..1 lifts the body and opens the stance (proud, hype). */
   puff: number;
   /** Unprompted life allowed: blinks, glances, ear twitches. */
@@ -132,6 +134,7 @@ export function reliefTargets(input: PetInput, params: AnimParams, reduced: bool
     crouch: clamp(s(shape.crouch)),
     talk: 0,
     speech: 0,
+    voice: null,
     puff: clamp(s(shape.puff)),
     ambient: 'full',
     light: 1,

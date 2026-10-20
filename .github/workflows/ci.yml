@@ -445,6 +445,24 @@ jobs:
         working-directory: ui/pet
         run: npm run check:bundle
 
+      # The relief assets (parts atlas, depth maps, rig) must be exactly what
+      # scripts/relief/build_relief.py makes from the checked-in configs and art; the script's
+      # dependencies are pinned in its header. vitest already compares the recorded hashes
+      # (reliefAssets.test.ts); this rebuilds every creature and compares the bytes.
+      - uses: actions/setup-python@v7
+        if: matrix.app == 'pet'
+        with:
+          python-version: "3.13"
+
+      - name: Relief assets reproducible
+        if: matrix.app == 'pet'
+        shell: bash
+        run: |
+          python -m pip install uv
+          for config in ui/pet/scripts/relief/creatures/*.json; do
+            python -m uv run --no-project ui/pet/scripts/relief/build_relief.py "$(basename "$config" .json)" --check
+          done
+
   guard-security-model:
     name: Guard - no input-synthesis / process-memory APIs (Security Model §10)
     runs-on: windows-latest

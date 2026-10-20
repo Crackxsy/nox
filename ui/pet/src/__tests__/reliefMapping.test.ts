@@ -11,8 +11,11 @@ import {
   EXPRESSIONS,
   type Functional,
   type PetInput,
+  INITIAL_STATE,
   deriveAnim,
+  reduceEvent,
   stillState,
+  toInput,
 } from '../petState';
 import { type ReliefTargets, reliefTargets } from '../relief/stateMapping';
 
@@ -175,6 +178,22 @@ describe('relief state mapping', () => {
       expect(t.ambient).toBe('none');
     }
     expect(targets(input({ expression: 'sad' }), true).ears).toBe(targets(input({ expression: 'sad' })).ears);
+  });
+});
+
+describe('tts.level in the reducer', () => {
+  it('keeps the loudness as a number, counts it, and drops anything else', () => {
+    let s = reduceEvent(INITIAL_STATE, 'tts.level', { level: 0.42 });
+    expect(s.voiceLevel).toBe(0.42);
+    expect(s.voiceSeq).toBe(1);
+    s = reduceEvent(s, 'tts.level', { level: 3 });
+    expect(s.voiceLevel).toBe(1);
+    for (const bad of ['loud', null, Number.NaN, undefined]) {
+      expect(reduceEvent(s, 'tts.level', { level: bad })).toBe(s);
+    }
+    s = reduceEvent(s, 'tts.finished', {});
+    expect(s.voiceLevel).toBe(0);
+    expect(toInput(s).voiceSeq).toBe(2);
   });
 });
 

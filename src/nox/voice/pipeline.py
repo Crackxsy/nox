@@ -21,6 +21,8 @@ utterance order.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import math
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -36,6 +38,11 @@ from nox.voice.base import AudioInput, AudioOutput, SttEngine, TtsEngine, TtsReq
 from nox.voice.stt.wake_gate import GateDecision, WakeGate
 from nox.voice.stt.wake_word import WakeWordMatcher
 from nox.voice.vad import EnergyVad, Segmenter, SegmentEvent, SegmentKind
+
+#: How often the loudness of what is playing is published (`tts.level`), per second.
+LEVEL_HZ = 30
+#: Smallest change in loudness worth an event.
+LEVEL_STEP = 0.01
 
 log = get_logger(__name__)
 
@@ -411,6 +418,11 @@ class DefaultVoicePipeline:
             audio = self._tts.synthesize(request)
             self._current_audio = audio
             reported = False
+            pacer = (
+                asyncio.create_task(self._pace_levels(request))
+                if hasattr(self._audio_out, "level") and str(request.channel) != "mute"
+                else None
+            )
             try:
                 await self._audio_out.play(
                     audio, self._tts.sample_rate, request.channel, utterance_id=request.utterance_id
@@ -432,11 +444,43 @@ class DefaultVoicePipeline:
                 await self._finish(request, ok=False, reason=type(exc).__name__)
                 raise
             finally:
+                if pacer is not None:
+                    pacer.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await pacer
                 self._speaking = False
                 self._current_audio = None
                 await aclose(audio)
                 if not reported:
                     await self._finish(request, ok=True, reason="")
+
+    async def _pace_levels(self, request: TtsRequest) -> None:
+        """While an utterance plays: its loudness as `tts.level`, about LEVEL_HZ times a second.
+
+        The level is measured where the audio leaves (the output device's block RMS), so the
+        pet's mouth moves with what is heard, not with synthesis running ahead of playback. Only
+        changes are sent; silence costs one event, not thirty a second. Never the words.
+        """
+        last = -1.0
+        while True:
+            raw = float(getattr(self._audio_out, "level", 0.0) or 0.0)
+            level = round(min(1.0, max(0.0, raw)), 3) if math.isfinite(raw) else 0.0
+            if abs(level - last) >= LEVEL_STEP or (level == 0.0 and last != 0.0):
+                last = level
+                try:
+                    await self._emit(
+                        E.TTS_LEVEL,
+                        {
+                            "utterance_id": request.utterance_id,
+                            "channel": str(request.channel),
+                            "level": level,
+                        },
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - a lost level must never stop speech
+                    log.debug("voice.tts_level_dropped", error=str(exc))
+            await asyncio.sleep(1.0 / LEVEL_HZ)
 
     async def _finish(self, request: TtsRequest, *, ok: bool, reason: str) -> None:
         """Exactly one terminal event per utterance, so no `say` ever dangles."""

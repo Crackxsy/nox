@@ -14,6 +14,12 @@
 
 import { approach, clamp, mulberry32 } from './math';
 
+/**
+ * Voice RMS at which the jaw is fully open. Speech peaks around 0.2-0.3 RMS at full scale; quieter
+ * syllables open it less (a gentle curve, so whispers still move it).
+ */
+export const FULL_OPEN_RMS = 0.22;
+
 /** Mean syllable length in seconds (~5 syllables per second, conversational German/English). */
 const SYLLABLE_S = 0.19;
 
@@ -48,7 +54,7 @@ export class SpeechEnvelope {
   sample(t: number, dt: number, level: number, measured?: number): number {
     let raw: number;
     if (measured !== undefined) {
-      raw = clamp(measured);
+      raw = clamp(Math.pow(clamp(measured) / FULL_OPEN_RMS, 0.8));
     } else if (level <= 0.001) {
       raw = 0;
       this.nextAt = Math.min(this.nextAt, t);
@@ -81,5 +87,26 @@ export class SpeechEnvelope {
     this.peakAt = t + 0.35 * this.dur;
     this.peak = clamp(level) * (0.55 + r() * 0.45);
     this.nextAt = t + this.dur;
+  }
+}
+
+/** How long a measured level counts as live; after that the envelope is synthetic again. */
+export const VOICE_FRESH_MS = 250;
+
+/**
+ * Turns the reducer's `voiceLevel` + `voiceSeq` (pure state, no clock) into "the measured level,
+ * if one arrived recently": a level is only trusted while new ones keep coming, so a dropped
+ * `tts.finished` or a stalled connection cannot freeze the mouth open.
+ */
+export class VoiceTracker {
+  private seq: number | undefined;
+  private at = Number.NEGATIVE_INFINITY;
+
+  sample(nowMs: number, seq: number | undefined, level: number | undefined): number | null {
+    if (seq !== undefined && seq !== this.seq) {
+      if (this.seq !== undefined) this.at = nowMs; // the first value seen is old news
+      this.seq = seq;
+    }
+    return nowMs - this.at < VOICE_FRESH_MS && level !== undefined ? clamp(level) : null;
   }
 }

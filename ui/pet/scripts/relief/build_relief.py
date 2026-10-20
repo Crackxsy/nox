@@ -42,8 +42,11 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -65,11 +68,72 @@ Poly = list[list[float]]
 # ---- config -------------------------------------------------------------------------------------
 
 
+#: Landmarks read off a variant's `rig.json` (`"landmarks": "rig"`): its hand-placed bone pivots
+#: and eye layers. Every rigged creature has them, so a template fit needs no clicking at all.
+RIG_LANDMARKS = {
+    "nose": "muzzle",
+    "chin": "jaw",
+    "ear_l": "ear.l",
+    "ear_r": "ear.r",
+    "neck": "neck",
+    "chest": "chest",
+    "belly": "body",
+    "crown": "head",
+    "ground": "root",
+}
+#: Landmark groups a template part is fitted with (`"fit"` on a template part names one).
+FIT_GROUPS = {
+    "head": ["eye_l", "eye_r", "nose", "chin", "ear_l", "ear_r", "crown"],
+    "body": ["neck", "chest", "belly", "ground", "nose", "chin"],
+}
+
+
+def rig_landmarks(variant_id: str) -> dict[str, list[float]]:
+    rig = json.loads((VARIANTS / variant_id / "rig.json").read_text(encoding="utf-8"))
+    size = Image.open(VARIANTS / variant_id / rig.get("assetDir", "rig") / rig["base"]).width
+    pivots = {b["name"]: b["pivot"] for b in rig["bones"]}
+    out = {
+        k: [round(pivots[v][0] * size, 1), round(pivots[v][1] * size, 1)]
+        for k, v in RIG_LANDMARKS.items()
+        if v in pivots
+    }
+    for layer in rig.get("layers", []):
+        x0, y0, x1, y1 = layer["rect"]
+        name = layer["name"].replace(".", "_")
+        out[name] = [round((x0 + x1) / 2 * size, 1), round((y0 + y1) / 2 * size, 1)]
+    return out
+
+
+def rig_eyes(variant_id: str, ellipse: dict[str, Any]) -> list[dict[str, Any]]:
+    """Eye patches as the older rig ships them (`rig/eye_l.png` at its layer rect)."""
+    rig = json.loads((VARIANTS / variant_id / "rig.json").read_text(encoding="utf-8"))
+    size = Image.open(VARIANTS / variant_id / rig.get("assetDir", "rig") / rig["base"]).width
+    out = []
+    for layer in rig.get("layers", []):
+        if not layer.get("lid"):
+            continue
+        out.append(
+            {
+                "name": layer["name"].replace(".", "_"),
+                "file": f"{rig.get('assetDir', 'rig')}/{layer['file']}",
+                "at": [round(layer["rect"][0] * size), round(layer["rect"][1] * size)],
+                "ellipse": ellipse,
+            }
+        )
+    return out
+
+
 def load_config(name: str) -> dict[str, Any]:
     path = Path(name) if name.endswith(".json") else CREATURES / f"{name}.json"
     cfg = json.loads(path.read_text(encoding="utf-8"))
+    cfg.setdefault("_configs", []).append(path)
+    if cfg.get("landmarks") == "rig":
+        cfg["landmarks"] = rig_landmarks(cfg["id"])
     if "template" in cfg:
-        cfg = derive_from_template(load_config(cfg["template"]), cfg)
+        tpl = load_config(cfg["template"])
+        configs = [*cfg["_configs"], *tpl["_configs"]]
+        cfg = derive_from_template(tpl, cfg)
+        cfg["_configs"] = configs
     return cfg
 
 
@@ -79,12 +143,20 @@ def fit_axes(src: list[list[float]], dst: list[list[float]]) -> tuple[float, flo
     d = np.asarray(dst, np.float64)
     out = []
     for k in (0, 1):
-        if np.ptp(s[:, k]) < 1e-6:
-            out += [1.0, float((d[:, k] - s[:, k]).mean())]
+        if np.ptp(s[:, k]) < 20:  # landmarks all on one line (the midline): no scale to read
+            out += [float("nan"), 0.0]
             continue
         a, b = np.polyfit(s[:, k], d[:, k], 1)
         out += [float(a), float(b)]
-    return out[0], out[2], out[1], out[3]  # sx, sy, tx, ty
+    sx, tx, sy, ty = out
+    # an axis without spread borrows the other axis' scale (a uniform scale is the best guess)
+    if np.isnan(sx):
+        sx = sy if not np.isnan(sy) else 1.0
+        tx = float((d[:, 0] - sx * s[:, 0]).mean())
+    if np.isnan(sy):
+        sy = sx
+        ty = float((d[:, 1] - sy * s[:, 1]).mean())
+    return sx, sy, tx, ty
 
 
 class Warp:
@@ -127,6 +199,44 @@ def warp_rule(rule: dict[str, Any], w: Warp) -> dict[str, Any]:
     return r
 
 
+def auto_pose_scales(variant_id: str) -> dict[str, dict[str, float]]:
+    """Key-pose art comes out of the generator a little larger than the base picture. The eating
+    pose sits like the base, so the ratio of their heights is the art's scale; the same scale is
+    used for every pose of the creature (they were made together). Override with `"poses"`."""
+    rig = json.loads((VARIANTS / variant_id / "rig.json").read_text(encoding="utf-8"))
+    folder = VARIANTS / variant_id / rig.get("assetDir", "rig")
+
+    def height(name: str) -> int:
+        a = np.asarray(Image.open(folder / name).getchannel("A")) > 8
+        rows = np.nonzero(a.any(axis=1))[0]
+        return int(rows[-1] - rows[0] + 1)
+
+    eat = rig.get("poses", {}).get("eat")
+    if not eat:
+        return {}
+    scale = round(min(1.0, height(rig["base"]) / height(eat["file"])), 3)
+    return {name: {"scale": scale} for name in sorted(rig.get("poses", {}))}
+
+
+def parents_first(bones: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stable order in which every bone comes after its parent (an override may re-parent one,
+    e.g. a fin that rides on the head instead of the chest)."""
+    out: list[dict[str, Any]] = []
+    placed: set[str | None] = {None}
+    pending = list(bones)
+    while pending:
+        ready = [b for b in pending if b["parent"] in placed]
+        if not ready:
+            raise SystemExit(
+                f"bone parents form a cycle or name a missing bone: {[b['name'] for b in pending]}"
+            )
+        b = ready[0]
+        out.append(b)
+        placed.add(b["name"])
+        pending.remove(b)
+    return out
+
+
 def derive_from_template(tpl: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
     """A new creature from a converted one: every coordinate is moved by an axis-aligned fit of
     the template's landmarks onto the new creature's (globally, or per part with `fit`), then the
@@ -136,7 +246,9 @@ def derive_from_template(tpl: dict[str, Any], cfg: dict[str, Any]) -> dict[str, 
     if len(names) < 3:
         raise SystemExit("template and creature need at least 3 landmarks in common")
 
-    def warp_for(subset: list[str] | None) -> Warp:
+    def warp_for(subset: list[str] | str | None) -> Warp:
+        if isinstance(subset, str):
+            subset = FIT_GROUPS[subset]
         use = [n for n in (subset or names) if n in tpl["landmarks"] and n in cfg["landmarks"]]
         if len(use) < 2:
             raise SystemExit(f"fit {subset}: needs two landmarks known to both configs")
@@ -147,22 +259,29 @@ def derive_from_template(tpl: dict[str, Any], cfg: dict[str, Any]) -> dict[str, 
     g = warp_for(None)
     out = copy.deepcopy(tpl)
     out.pop("template", None)
+    out.pop("_configs", None)
     for key in ("id", "source", "landmarks", "eyes", "comment"):
         if key in cfg:
             out[key] = cfg[key]
-    out["ground"] = g.pt(tpl["ground"])
-    out["artHeight"] = round(tpl["artHeight"] * g.sy, 1)
+    if cfg.get("eyes", "rig") == "rig":
+        out["eyes"] = rig_eyes(
+            cfg["id"], cfg.get("eyeEllipse", {"c": [0.5, 0.52], "r": [0.28, 0.27]})
+        )
+    out["ground"] = cfg["landmarks"].get("ground") or g.pt(tpl["ground"])
+    # ground to the top of the painting (ear tips): how far a bounce lifts is measured in this
+    alpha = np.asarray(
+        Image.open(VARIANTS / cfg["id"] / cfg.get("source", tpl["source"])).getchannel("A")
+    )
+    top = int(np.nonzero((alpha > 8).any(axis=1))[0][0])
+    out["artHeight"] = round(out["ground"][1] - top, 1)
     overrides = cfg.get("parts", {})
     drop = set(cfg.get("drop", []))
     parts = []
     for p in tpl["parts"]:
         if p["name"] in drop:
             continue
-        w = (
-            warp_for(overrides.get(p["name"], {}).get("fit"))
-            if overrides.get(p["name"], {}).get("fit")
-            else g
-        )
+        fit = overrides.get(p["name"], {}).get("fit") or p.get("fit")
+        w = warp_for(fit) if fit else g
         q = copy.deepcopy(p)
         q["poly"] = [w.pt(v) for v in p["poly"]]
         q["underlay"] = [[w.pt(v) for v in poly] for poly in p.get("underlay", [])]
@@ -173,27 +292,30 @@ def derive_from_template(tpl: dict[str, Any], cfg: dict[str, Any]) -> dict[str, 
         q["weights"] = warp_rule(p["weights"], w)
         q["relief"] = w.len(p["relief"])
         q.update({k: v for k, v in overrides.get(p["name"], {}).items() if k != "fit"})
+        q.pop("fit", None)
         parts.append(q)
     out["parts"] = parts
-    out["order"] = [n for n in tpl["order"] if n not in drop]
+    out["order"] = cfg.get("order") or [n for n in tpl["order"] if n not in drop]
     drop_bones = set(cfg.get("dropBones", []))
     bone_over = cfg.get("bones", {})
+    hg = warp_for("head")
+    bg = warp_for("body")
     out["bones"] = []
     for b in tpl["bones"]:
         if b["name"] in drop_bones:
             continue
-        nb = {**b, "pivot": g.pt(b["pivot"]), "tip": g.pt(b["tip"])}
+        bw = hg if b["name"] in tpl["headBones"] else bg
+        nb = {**b, "pivot": bw.pt(b["pivot"]), "tip": bw.pt(b["tip"])}
         nb.update(bone_over.get(b["name"], {}))
         out["bones"].append(nb)
+    out["bones"] = parents_first(out["bones"])
+    if "poses" not in cfg:
+        out["poses"] = auto_pose_scales(cfg["id"])
     head = next((p for p in out["parts"] if p["name"] == "head"), None)
-    hw = (
-        warp_for(overrides.get("head", {}).get("fit"))
-        if head and overrides.get("head", {}).get("fit")
-        else g
-    )
+    hw = warp_for(overrides.get("head", {}).get("fit") or "head") if head else g
     out["headCenter"] = [*hw.pt(tpl["headCenter"][:2]), tpl["headCenter"][2]]
     out["lookAnchor"] = hw.pt(tpl["lookAnchor"])
-    out["bodyCenter"] = [*g.pt(tpl["bodyCenter"][:2]), tpl["bodyCenter"][2]]
+    out["bodyCenter"] = [*bg.pt(tpl["bodyCenter"][:2]), tpl["bodyCenter"][2]]
     out["headBones"] = [b for b in tpl["headBones"] if b not in drop_bones]
     roles = copy.deepcopy(tpl["roles"])
     roles["ears"] = {k: [b for b in v if b not in drop_bones] for k, v in roles["ears"].items()}
@@ -496,9 +618,37 @@ def build(cfg: dict[str, Any], out_dir: Path, debug_dir: Path | None) -> float:
     )
 
     psnr = report(base, layers)
+    write_manifest(cfg, out_dir, psnr)
     if debug_dir is not None:
         write_debug(cfg, src, layers, debug_dir)
     return psnr
+
+
+def sha256(path: Path) -> str:
+    """Content hash; text files with LF line ends, so a checkout's line ending does not count."""
+    data = path.read_bytes()
+    if path.suffix in (".json", ".py"):
+        data = data.replace(b"\r\n", b"\n")
+    return hashlib.sha256(data).hexdigest()
+
+
+def write_manifest(cfg: dict[str, Any], out_dir: Path, psnr: float) -> None:
+    """`build.json`: what the assets were made from and what they are, by hash. CI compares it
+    with the files in the repository (`src/__tests__/reliefAssets.test.ts`): an edited config,
+    script or art without a rebuild, or a hand-edited output, fails there."""
+    variant = VARIANTS / cfg["id"]
+    inputs = [Path(__file__).resolve(), *cfg.get("_configs", []), variant / cfg["source"]]
+    inputs += [variant / e["file"] for e in cfg["eyes"]]
+    rel = lambda p: Path(p).resolve().relative_to(PET).as_posix()  # noqa: E731
+    manifest = {
+        "generator": "scripts/relief/build_relief.py",
+        "inputs": {rel(p): sha256(Path(p)) for p in sorted({Path(p).resolve() for p in inputs})},
+        "outputs": {n: sha256(out_dir / n) for n in ("parts.png", "depth.png", "relief.json")},
+        "psnr": round(psnr, 1),
+    }
+    (out_dir / "build.json").write_text(
+        json.dumps(manifest, indent=1, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
 
 
 def report(base: np.ndarray, layers: list[dict[str, Any]]) -> float:
@@ -528,6 +678,10 @@ def write_debug(
     k = 2
     bg = Image.new("RGBA", src.size, (40, 40, 48, 255))
     bg.alpha_composite(src)
+    for e in cfg["eyes"]:  # the eye patches where the renderer puts them, to check the ellipses
+        bg.alpha_composite(
+            Image.open(VARIANTS / cfg["id"] / e["file"]).convert("RGBA"), tuple(e["at"])
+        )
     im = bg.resize((src.width * k, src.height * k), Image.Resampling.LANCZOS)
     dr = ImageDraw.Draw(im, "RGBA")
     palette = [
@@ -555,7 +709,16 @@ def write_debug(
         dr.ellipse([px * k - 4, py * k - 4, px * k + 4, py * k + 4], outline=col, width=2)
     for e in cfg["eyes"]:
         x, y = e["at"]
-        dr.rectangle([x * k, y * k, (x + 64) * k, (y + 64) * k], outline=(255, 255, 255, 120))
+        w, h = Image.open(VARIANTS / cfg["id"] / e["file"]).size
+        dr.rectangle([x * k, y * k, (x + w) * k, (y + h) * k], outline=(255, 255, 255, 120))
+        (cu, cv), (ru, rv) = e["ellipse"]["c"], e["ellipse"]["r"]
+        box = [
+            (x + (cu - ru) * w) * k,
+            (y + (cv - rv) * h) * k,
+            (x + (cu + ru) * w) * k,
+            (y + (cv + rv) * h) * k,
+        ]
+        dr.ellipse(box, outline=(0, 255, 255, 220), width=2)
     im.save(d / "overlay.png")
     strip = Image.new("RGBA", (src.width * len(layers) // 2, src.height // 2), (40, 40, 48, 255))
     for i, layer in enumerate(layers):
@@ -576,6 +739,30 @@ def enable_in_rig(variant_id: str, dir_name: str) -> None:
     print(f"{path.name}: relief renderer enabled")
 
 
+def check(name: str) -> int:
+    """Reproducibility: the checked-in assets must be exactly what the script makes from the
+    checked-in config and art."""
+    cfg = load_config(name)
+    shipped = VARIANTS / cfg["id"] / "relief"
+    scratch = Path(tempfile.mkdtemp(prefix="nox-relief-check-"))
+    try:
+        build(cfg, scratch / "relief", None)
+        diff = [
+            n
+            for n in ("parts.png", "depth.png", "relief.json", "build.json")
+            if (scratch / "relief" / n).read_bytes() != (shipped / n).read_bytes()
+        ]
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    if diff:
+        print(
+            f"{cfg['id']}: rebuilt assets differ from the checked-in ones: {diff}", file=sys.stderr
+        )
+        return 1
+    print(f"{cfg['id']}: reproducible")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("creature", help="config name in scripts/relief/creatures, or a path to one")
@@ -589,10 +776,19 @@ def main() -> int:
     ap.add_argument(
         "--enable", action="store_true", help="switch the variant to the relief renderer"
     )
+    ap.add_argument(
+        "--check",
+        action="store_true",
+        help="rebuild into a scratch folder and fail if it differs from the checked-in assets",
+    )
     args = ap.parse_args()
+    if args.check:
+        return check(args.creature)
     cfg = load_config(args.creature)
     if args.emit_config:
-        args.emit_config.write_text(json.dumps(cfg, indent=1) + "\n", encoding="utf-8")
+        args.emit_config.parent.mkdir(parents=True, exist_ok=True)
+        resolved = {k: v for k, v in cfg.items() if k != "_configs"}  # paths, for build.json
+        args.emit_config.write_text(json.dumps(resolved, indent=1) + "\n", encoding="utf-8")
     out_dir = args.out_dir or VARIANTS / cfg["id"] / "relief"
     psnr = build(cfg, out_dir, args.debug_dir)
     print(f"wrote {out_dir}")

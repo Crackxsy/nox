@@ -120,6 +120,7 @@ from nox.core.events.system import (
     PrivacyModeChanged,
     StateChanged,
     TranscriptReady,
+    TtsLevel,
     TtsStarted,
     VoiceKillPhrase,
 )
@@ -210,6 +211,7 @@ __all__ = [
     "StreamStarted",
     "StreamViewerSeen",
     "TranscriptReady",
+    "TtsLevel",
     "TtsStarted",
     "TwitchAuthChanged",
     "ViewShown",

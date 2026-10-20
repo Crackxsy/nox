@@ -204,3 +204,44 @@ def test_state_get_and_state_events_agree_with_the_label(role: str, mode: str) -
     }
     assert asked == told
     assert "system.ai_voice_label" in asked
+
+
+# ---- tts.level: the voice's loudness, for the mouth ----------------------------------------------
+
+
+@pytest.mark.parametrize("role", ROLES)
+def test_tts_level_is_one_number(role: str) -> None:
+    shown = view(role, "tts.level", {"utterance_id": "u1", "channel": "stream", "level": 0.4567})
+    assert shown == {"level": 0.457}
+    assert all(isinstance(v, float) for v in shown.values())
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("bad", ["loud", None, True, float("nan"), float("inf"), [0.5]])
+def test_tts_level_that_is_not_a_number_is_dropped(role: str, bad: object) -> None:
+    payload = {"utterance_id": "u1", "channel": "stream", "level": bad}
+    assert view(role, "tts.level", payload) is None
+
+
+def test_tts_level_is_clamped() -> None:
+    assert view("pet", "tts.level", {"channel": "stream", "level": 7}) == {"level": 1.0}
+    assert view("pet", "tts.level", {"channel": "stream", "level": -1}) == {"level": 0.0}
+
+
+def test_overlay_gets_no_level_of_headphone_speech_nor_in_quiet_modes() -> None:
+    private = {"utterance_id": "u1", "channel": "private", "level": 0.5}
+    assert view("overlay", "tts.level", private) is None
+    assert view("pet", "tts.level", private) == {"level": 0.5}
+    stream = {"utterance_id": "u1", "channel": "stream", "level": 0.5}
+    for mode in ("private", "offline"):
+        assert view("overlay", "tts.level", stream, privacy_mode=mode) is None
+
+
+def test_only_the_pet_and_the_overlay_receive_levels() -> None:
+    from nox.ipc.server import role_may_see
+
+    assert role_may_see("pet", "tts.level")
+    assert role_may_see("overlay", "tts.level")
+    for role in ("dashboard", "shell", "remote", "plugin", "worker"):
+        assert not role_may_see(role, "tts.level"), role
+    assert role_may_see("dashboard", "tts.started")

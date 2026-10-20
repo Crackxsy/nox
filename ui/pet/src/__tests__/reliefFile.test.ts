@@ -53,15 +53,12 @@ describe('relief.json', () => {
 describe('relief feature flag in rig.json', () => {
   const rigged = readdirSync(VARIANTS).filter((v) => existsSync(join(VARIANTS, v, 'rig.json')));
 
-  it('is on for the eulenfuchs, and only for creatures that ship relief assets', () => {
+  it('is on for every creature that ships relief assets, and only for those', () => {
     const on = rigged.filter((v) => parseRigDefinition(read(v, 'rig.json'), v).relief?.enabled);
     expect(on).toContain('eulenfuchs');
     for (const v of rigged) {
-      if (!on.includes(v)) continue;
-      expect(existsSync(join(VARIANTS, v, 'relief', 'relief.json')), v).toBe(true);
+      expect(existsSync(join(VARIANTS, v, 'relief', 'relief.json')), v).toBe(on.includes(v));
     }
-    // the others keep the older rig renderer until they are converted
-    expect(on.length).toBeLessThan(rigged.length);
   });
 
   it('points every enabled variant at relief assets that exist', () => {
