@@ -51,6 +51,12 @@ export default tseslint.config(
     },
   },
   {
+    // Build-time Node scripts (the bundle budget).
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { globals: { ...globals.node } },
+    rules: { 'no-console': 'off' },
+  },
+  {
     files: ['**/__tests__/**/*.{ts,tsx}'],
     languageOptions: { globals: { ...globals.browser, ...globals.node } },
   },

@@ -9,7 +9,8 @@
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "size": "node scripts/bundle-budget.mjs"
   },
   "dependencies": {
     "react": "^19.3.1",
