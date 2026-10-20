@@ -26,6 +26,7 @@ from nox.core.modes import switch_mode
 from nox.core.state import Mode
 from nox.ipc.dispatch import EmptyPayload, RequestContext
 from nox.ipc.overlay_tokens import OverlayTokenStore
+from nox.ipc.roles import LOCAL_UI_ROLES
 from nox.security.model import Risk
 from nox.settings.devices import OUTPUT_DEVICES, voice_worker_request
 from nox.settings.twitch_auth import (
@@ -42,7 +43,6 @@ from nox.tools.registry import ToolSpec
 
 log = get_logger(__name__)
 
-UI_ROLES = ("shell", "dashboard")
 #: The agent name the core's own stream actions use towards the permission engine.
 AGENT = "nox.stream"
 
@@ -226,10 +226,12 @@ def _register(core: Any, overlay: OverlayService | None, audio: AudioTrackServic
     async def h_audio_setup(ctx: RequestContext, p: AudioTrackRequest) -> dict[str, Any]:
         return await audio.setup(p, agent=ctx.role, origin="local")
 
-    reg("stream.overlay.status", EmptyPayload, h_overlay_status, roles=UI_ROLES)
-    reg("stream.overlay.setup", OverlaySetupRequest, h_overlay_setup, roles=UI_ROLES)
-    reg("stream.overlay.revoke", EmptyPayload, h_overlay_revoke, roles=UI_ROLES)
-    reg("stream.audio_track.setup", AudioTrackRequest, h_audio_setup, roles=UI_ROLES)
+    # The overlay's credential and Nox's own audio track change how Nox is set up: the machine
+    # Nox runs on only, never a paired device (`nox.ipc.roles`).
+    reg("stream.overlay.status", EmptyPayload, h_overlay_status, roles=LOCAL_UI_ROLES)
+    reg("stream.overlay.setup", OverlaySetupRequest, h_overlay_setup, roles=LOCAL_UI_ROLES)
+    reg("stream.overlay.revoke", EmptyPayload, h_overlay_revoke, roles=LOCAL_UI_ROLES)
+    reg("stream.audio_track.setup", AudioTrackRequest, h_audio_setup, roles=LOCAL_UI_ROLES)
 
     # The model's way to the same actions. Low risk on their own: the one change they make in
     # OBS goes through `obs.overlay.setup` / `obs.audio_track.setup`, which ask the user.
