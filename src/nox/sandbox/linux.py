@@ -1,31 +1,62 @@
 """The Linux / Raspberry Pi sandbox backend: `bwrap` for isolation, `systemd-run` for limits.
 
 `bubblewrap` (`bwrap`) builds the view the process gets: the system mounted read-only, the work
-directory the only writable place, a private `/tmp`, no access to the user's home. Network:
+directory the only writable place, a private `/tmp` and `/dev`, no access to the user's home.
 
-* no declared egress ⇒ `--unshare-net`, so the process has no network namespace at all;
-* declared egress ⇒ a network namespace that can reach only the loopback proxy. In Wave 1 that is
-  done by keeping loopback (`--share-net` is too wide) - the proxy listens on `127.0.0.1` and the
-  process reaches it there, while the firewall/nftables rule the installer adds blocks every other
-  outbound packet from the sandbox's cgroup. Without that rule we fail closed when egress is asked
-  for, exactly like Windows without its firewall rule.
+**Network.** Every run gets `--unshare-net`: a network namespace of its own that holds nothing but
+its own loopback - no route to the internet, the LAN, the Home Assistant host or any service on
+the host's loopback (abstract Unix sockets are per namespace too, so the host's D-Bus/X11 are out
+of reach as well). That alone is "no egress declared".
 
-`systemd-run --scope -p MemoryMax= -p TasksMax=` wraps the whole thing so the Pi's systemd kills it
-on the memory or process ceiling, and the scope dies with the core. If `bwrap` is not installed the
-backend reports itself unavailable and the sandbox fails closed - running unconfined is never an
-option. This module builds the argv and is unit-tested on that; it is exercised for real only on
-Linux (CI's `ubuntu-24.04` and `ubuntu-24.04-arm`), never on the Windows dev box.
+Declared egress adds exactly one path out, and it is not a network path:
+
+* the run's egress proxy (`EgressProxy.start_unix`) listens on a Unix domain socket in a private
+  `0700` directory; `bwrap` binds that one socket file into the sandbox, read-only;
+* the target is started by a tiny launcher (`_egress_forwarder.py`, run with the system's
+  `python3 -I -S`) that listens on `127.0.0.1:EGRESS_PORT` - the *sandbox's* loopback - and relays
+  every connection byte for byte to that socket path, nowhere else;
+* `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` point at that port with the proxy's per-run credentials,
+  which travel in the environment (never on a command line - `/proc/<pid>/cmdline` is readable
+  by everyone).
+
+So the child can reach the proxy and nothing else; the proxy, outside, checks the credentials,
+the declaration and `NetGuard` (no loopback, LAN, link-local/metadata or Home Assistant). No root,
+no firewall rule, no extra package beyond `bubblewrap` itself.
+
+**Ceilings** (memory, processes) come from the first mechanism that really works here
+(`Ceiling`): the service's delegated cgroup v2 subtree (`nox.service`, see `_cgroup`), a
+`systemd-run --user --scope` of a desktop session's user manager, a system scope when running as
+root - or none, which `guarantees()` reports. An unprivileged service user may not create
+scopes, which is why the Pi uses cgroup delegation.
+
+The backend checks at start-up that `bwrap` can really build its namespaces on this machine (a
+kernel without unprivileged user namespaces, a systemd unit with `RestrictNamespaces=`, Ubuntu's
+AppArmor user-namespace restriction): if not, it reports itself unavailable and the sandbox fails
+closed - running unconfined is never an option. The argv is built by pure functions and
+unit-tested on any OS; the real thing runs in CI on `ubuntu-24.04` and `ubuntu-24.04-arm`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import os
+import posixpath
 import shutil
+import socket
+import subprocess
+import sys
 import tempfile
-from collections.abc import Mapping
+import threading
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
+from typing import Any
 
 from nox.core.logging import get_logger
+from nox.sandbox._cgroup import DelegatedCgroups
 from nox.sandbox.model import (
     EgressDecl,
     Guarantees,
@@ -38,40 +69,215 @@ from nox.sandbox.process import ProcessIo
 
 log = get_logger(__name__)
 
-__all__ = ["LinuxSandbox", "bwrap_available", "build_bwrap_argv"]
+__all__ = [
+    "EGRESS_PORT",
+    "bwrap_path",
+    "bwrap_version",
+    "Ceiling",
+    "LinuxSandbox",
+    "build_bwrap_argv",
+    "bwrap_available",
+    "forwarder_python",
+]
 
 _RO_SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc")
+#: Where the launcher and the proxy socket appear inside the sandbox (bwrap creates the folder).
+_IN_SANDBOX_DIR = "/run/nox-sandbox"
+_FORWARDER_IN = f"{_IN_SANDBOX_DIR}/egress_forwarder.py"
+_SOCKET_IN = f"{_IN_SANDBOX_DIR}/egress.sock"
+_FORWARDER_SRC = str(Path(__file__).with_name("_egress_forwarder.py"))
+#: The proxy port on the sandbox's own loopback. Fixed: the namespace is new and empty, so
+#: nothing else can hold it, and the environment can be built before the process starts.
+EGRESS_PORT = 3128
+_PROBE_ENV = {"PATH": "/usr/bin:/bin"}
+_PROBE_TIMEOUT_S = 20.0
+_UNAVAILABLE_HINT = (
+    "unprivileged user namespaces are off, the service unit restricts namespaces or mounts, or "
+    "Ubuntu's AppArmor user-namespace restriction applies - see docs/RASPBERRY_PI.md"
+)
+
+
+#: Nox's own copy of bwrap, executable only by the service user, which an AppArmor profile lets
+#: create user namespaces on Ubuntu 23.10+ (see scripts/install-linux.sh). Preferred when present.
+_NOX_BWRAP = "/usr/lib/nox/bwrap"
+#: First bwrap release with `--disable-userns` (no nested user namespaces inside the sandbox).
+_DISABLE_USERNS_SINCE = (0, 8)
+
+
+_SYSTEM_BWRAP = "/usr/bin/bwrap"
+
+
+def _digest(path: str) -> str:
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+
+
+def bwrap_path(nox_copy: str = _NOX_BWRAP, system: str = _SYSTEM_BWRAP) -> str | None:
+    """The bwrap binary to use: Nox's own copy when this user may run it, else the one on PATH.
+
+    The copy must be byte-identical to the system's bwrap - otherwise it missed a security
+    update of the `bubblewrap` package (the installer's apt hook normally refreshes it), and
+    `SandboxUnavailable` says so instead of running an outdated sandbox (fail closed).
+    """
+    if os.path.exists(nox_copy) and os.access(nox_copy, os.X_OK):
+        try:
+            same = _digest(nox_copy) == _digest(system)
+        except OSError:
+            same = False
+        if not same:
+            raise SandboxUnavailable(
+                f"{nox_copy} differs from {system} (bubblewrap was updated): run the Nox "
+                "installer again to refresh it; the sandbox fails closed until then"
+            )
+        return nox_copy
+    return shutil.which("bwrap")
 
 
 def bwrap_available() -> bool:
-    return shutil.which("bwrap") is not None
+    try:
+        return bwrap_path() is not None
+    except SandboxUnavailable:
+        return False
+
+
+def bwrap_version(bwrap: str) -> tuple[int, ...] | None:
+    """`bwrap --version` as numbers (`bubblewrap 0.9.0` -> (0, 9, 0)), or None."""
+    try:
+        done = subprocess.run(  # noqa: S603 - the bwrap binary itself
+            [bwrap, "--version"], capture_output=True, timeout=10, check=False
+        )
+        text = done.stdout.decode("ascii", errors="replace").split()[-1]
+        return tuple(int(part) for part in text.split("."))
+    except (OSError, subprocess.TimeoutExpired, ValueError, IndexError):
+        return None
+
+
+def _under_system_dirs(path: str) -> bool:
+    return any(path == d or path.startswith(d + "/") for d in _RO_SYSTEM)
+
+
+def _is_within(path: str, folder: str) -> bool:
+    return path == folder or path.startswith(folder.rstrip("/") + "/")
+
+
+def safe_python_binds(paths: list[str], *, private: list[str]) -> tuple[str, ...] | None:
+    """The paths to bind for an interpreter outside `/usr`, or None when one is too wide.
+
+    Each path must be a file or a folder of the interpreter itself; `/`, a home directory or
+    anything that *contains* one of the `private` folders (the user's home, Nox's own folder with
+    its secrets and database) would hand the sandbox far more than an interpreter, so the egress
+    path is refused instead (fail closed).
+    """
+    out: list[str] = []
+    for raw in paths:
+        path = posixpath.normpath(raw)
+        if path in ("/", "/home", "/root", "/var", "/opt", "/srv", "/tmp"):  # noqa: S108
+            return None
+        if posixpath.dirname(path) == "/home":  # /home/<user> itself
+            return None
+        if any(_is_within(folder, path) for folder in private if folder):
+            return None
+        if not _under_system_dirs(path) and path not in out:
+            out.append(path)
+    return tuple(out)
+
+
+def _own_python_binds(real: str) -> tuple[str, ...] | None:
+    """The minimum Nox's own interpreter needs inside the sandbox with `-I -S`: the executable,
+    its standard library (with `lib-dynload`) and `libpython` when it is linked dynamically -
+    never its prefix as a whole, which may be a home directory."""
+    import sysconfig  # noqa: PLC0415 - only for this rare fallback
+
+    from nox.paths import nox_home  # noqa: PLC0415
+
+    paths = [real]
+    for key in ("stdlib", "platstdlib"):
+        folder = sysconfig.get_path(key)
+        if folder and os.path.isdir(folder):
+            paths.append(os.path.realpath(folder))
+    libdir = sysconfig.get_config_var("LIBDIR") or ""
+    if sysconfig.get_config_var("Py_ENABLE_SHARED"):
+        for name in {sysconfig.get_config_var("LDLIBRARY"), sysconfig.get_config_var("INSTSONAME")}:
+            lib = os.path.join(libdir, str(name)) if name else ""
+            if lib and os.path.isfile(lib):
+                paths.append(lib)
+                paths.append(os.path.realpath(lib))
+    private = [os.path.expanduser("~"), str(nox_home())]
+    return safe_python_binds(paths, private=private)
+
+
+def forwarder_python() -> tuple[str, tuple[str, ...]] | None:
+    """The interpreter that runs the egress launcher inside the sandbox, and what to bind for it.
+
+    The system `python3` (always there on Raspberry Pi OS, Debian and Ubuntu; the installer makes
+    sure) lives in the read-only `/usr` the sandbox already sees. Without one, Nox's own
+    interpreter is used with only its executable, standard library and `libpython` bound
+    read-only (`_own_python_binds`). `None` when neither works: declared egress then fails closed.
+    """
+    for candidate in ("/usr/bin/python3", "/bin/python3"):
+        if os.access(candidate, os.X_OK):
+            return candidate, ()
+    real = os.path.realpath(sys.executable) if sys.executable else ""
+    if not real or not os.access(real, os.X_OK):
+        return None
+    if _under_system_dirs(real):
+        return real, ()
+    binds = _own_python_binds(real)
+    if binds is None:
+        log.warning("sandbox.forwarder_python_refused", python=real)
+        return None
+    return real, binds
 
 
 def build_bwrap_argv(
     argv: list[str],
     *,
     work: str,
-    share_loopback: bool,
+    egress_socket: str | None = None,
+    python: str = "/usr/bin/python3",
+    python_binds: tuple[str, ...] = (),
+    bwrap: str = "bwrap",
+    disable_userns: bool = True,
+    env_fd: int | None = None,
 ) -> list[str]:
     """The `bwrap` command line for one run. Pure, so it can be asserted in a unit test.
 
+    `disable_userns` (bwrap 0.8+) gives the sandbox a user namespace in which no further user
+    namespace can be created, so a confined process cannot build its own namespaces - the kernel
+    attack surface unprivileged user namespaces open stays closed inside.
+
+    `egress_socket` is the host path of the run's proxy socket when egress was declared: it is
+    bound in and the target is wrapped by the forwarder (see the module docstring). Without it
+    the process has no way out at all.
+
     The environment is deliberately *not* in it: a command line is world-readable
     (`/proc/<pid>/cmdline`, `ps`), and the child's environment carries its egress proxy's secret
-    and possibly a server's settings. It is handed over as the process environment instead
-    (`LinuxSandbox.environment`), which only the same user can read; bwrap passes it through.
+    and possibly a server's settings. Nor is it bwrap's own environment, where it would steer
+    the host-side launchers (`LD_AUDIT`, `GCONV_PATH`, `SYSTEMD_*`, ... in a server's settings
+    would act *outside* the sandbox). With `env_fd`, bwrap starts with `--clearenv` and reads
+    the child's `--setenv` pairs from that pipe (`--args`, NUL-separated: `env_args`), so the
+    launchers run with a fixed minimal environment (`LAUNCHER_ENV`).
     """
-    cmd = ["bwrap", "--die-with-parent", "--new-session", "--unshare-pid", "--unshare-ipc"]
-    if not share_loopback:
-        cmd += ["--unshare-net"]
-    else:
-        # A private net namespace with only loopback up: the proxy is on 127.0.0.1, and nothing
-        # else is reachable. The installer's nftables rule blocks the rest at the host edge.
-        cmd += ["--unshare-net", "--dev", "/dev"]
+    cmd = [
+        bwrap,
+        *(["--clearenv", "--args", str(env_fd)] if env_fd is not None else []),
+        *(["--unshare-user", "--disable-userns"] if disable_userns else []),
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        # Always: a private network namespace with only its own loopback. Declared egress goes
+        # through the proxy socket below, never through a network interface.
+        "--unshare-net",
+    ]
     for path in _RO_SYSTEM:
         # `--ro-bind-try` binds the path read-only when it exists and skips it otherwise, so the
         # argv is the same whatever the host looks like (and a missing /lib64 is not a hard error).
         cmd += ["--ro-bind-try", path, path]
     cmd += [
+        "--dev",
+        "/dev",
         "--proc",
         "/proc",
         "--tmpfs",
@@ -79,32 +285,323 @@ def build_bwrap_argv(
         "--bind",
         work,
         work,
-        "--chdir",
-        work,
-        "--",
     ]
+    if egress_socket is not None:
+        for path in python_binds:
+            cmd += ["--ro-bind", path, path]
+        cmd += [
+            "--ro-bind",
+            _FORWARDER_SRC,
+            _FORWARDER_IN,
+            # Read-only is enough to connect(); the child cannot replace or remove it.
+            "--ro-bind",
+            egress_socket,
+            _SOCKET_IN,
+        ]
+    cmd += ["--chdir", work, "--"]
+    if egress_socket is not None:
+        cmd += [python, "-I", "-S", _FORWARDER_IN, _SOCKET_IN, str(EGRESS_PORT), "--"]
     cmd += argv
     return cmd
+
+
+#: The whole environment of the host-side launchers (bwrap, systemd-run, the cgroup trampoline).
+#: Fixed: nothing of a run's settings, nothing of the core's own environment.
+LAUNCHER_ENV: Mapping[str, str] = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+
+
+def env_args(env: Mapping[str, str]) -> bytes:
+    """The child's environment as bwrap `--args` input: `--setenv`, name, value, NUL-separated."""
+    parts: list[str] = []
+    for key, value in env.items():
+        if "\0" in key or "\0" in value or "=" in key or not key:
+            raise SandboxUnavailable("an environment variable cannot be passed to the sandbox")
+        parts += ["--setenv", key, value]
+    return b"".join(part.encode("utf-8") + b"\0" for part in parts)
+
+
+def _env_pipe(env: Mapping[str, str]) -> int:
+    """A pipe holding the child's environment for bwrap; returns its read end."""
+    data = env_args(env)
+    read_fd, write_fd = os.pipe()
+    try:
+        if len(data) > 60_000:  # stays inside the pipe buffer, so writing never blocks
+            raise SandboxUnavailable("the sandbox environment is too large")
+        os.write(write_fd, data)
+    except BaseException:
+        os.close(read_fd)
+        raise
+    finally:
+        os.close(write_fd)
+    return read_fd
+
+
+def _probe(cmd: list[str], extra_env: Mapping[str, str] | None = None) -> str | None:
+    """Run a start-up check; `None` when it worked, else why not (first line of stderr)."""
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed argv built in this module
+            cmd,
+            env={**_PROBE_ENV, **(extra_env or {})},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=_PROBE_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return str(exc)
+    if done.returncode == 0:
+        return None
+    text = done.stderr.decode("utf-8", errors="replace").strip()
+    return text.splitlines()[0] if text else f"exit code {done.returncode}"
+
+
+#: The AppArmor profile everything Nox's own bwrap copy starts must run under (stacked).
+_SANDBOXED_PROFILE = "nox-bwrap-sandboxed"
+
+
+def _probe_output(cmd: list[str]) -> str | None:
+    """Run a start-up check and return its stdout; `None` when it failed."""
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed argv built in this module
+            cmd,
+            env=dict(_PROBE_ENV),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=_PROBE_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return done.stdout.decode("utf-8", errors="replace").strip() if done.returncode == 0 else None
+
+
+def check_apparmor_stack(label: str | None) -> None:
+    """Refuse Nox's own bwrap copy unless what it starts really runs under the stacked
+    `nox-bwrap-sandboxed` profile. The copy may create user namespaces where the system forbids
+    it; if the `pix` transition fell back (an AppArmor version that cannot stack under
+    no_new_privs, a profile edited or not loaded), its children would run under the permissive
+    `nox-bwrap` profile instead - so the sandbox fails closed."""
+    if label is None or _SANDBOXED_PROFILE not in label.split(" (", 1)[0].split("//&"):
+        raise SandboxUnavailable(
+            f"the AppArmor profile {_SANDBOXED_PROFILE} is not applied to what the sandbox runs "
+            f"(label: {label or 'unreadable'}); run the Nox installer again - the sandbox fails "
+            "closed until then"
+        )
+
+
+_PROBE_CLIENT = (
+    "import socket\n"
+    f"s = socket.create_connection(('127.0.0.1', {EGRESS_PORT}), 10)\n"
+    "s.sendall(b'ping')\n"
+    "print(s.recv(64).decode())\n"
+)
+
+
+def _egress_probe(
+    build: Callable[..., list[str]], python: str, binds: tuple[str, ...]
+) -> str | None:
+    """Prove the egress path end to end on this machine: a child in the sandbox connects to its
+    loopback port and must reach a Unix socket outside. `None` when it does, else why not."""
+    if sys.platform == "win32":
+        return "not on Linux"
+    folder = tempfile.mkdtemp(prefix="nox-egress-probe-")
+    path = os.path.join(folder, "egress.sock")
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        server.bind(path)
+        server.listen(1)
+        server.settimeout(_PROBE_TIMEOUT_S)
+
+        def answer() -> None:
+            with contextlib.suppress(OSError):
+                conn, _ = server.accept()
+                with conn:
+                    conn.settimeout(_PROBE_TIMEOUT_S)
+                    conn.sendall(b"pong:" + conn.recv(16))
+
+        threading.Thread(target=answer, name="egress-probe", daemon=True).start()
+        with tempfile.TemporaryDirectory(prefix="nox-sbx-probe-") as work:
+            cmd = build(
+                [python, "-I", "-S", "-c", _PROBE_CLIENT],
+                work=work,
+                egress_socket=path,
+                python=python,
+                python_binds=binds,
+            )
+            try:
+                done = subprocess.run(  # noqa: S603 - fixed argv built in this module
+                    cmd,
+                    env=dict(_PROBE_ENV),
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    timeout=_PROBE_TIMEOUT_S,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return str(exc)
+        if done.stdout.decode("utf-8", errors="replace").strip() == "pong:ping":
+            return None
+        text = done.stderr.decode("utf-8", errors="replace").strip()
+        return text.splitlines()[-1] if text else f"exit code {done.returncode}"
+    finally:
+        server.close()
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+#: Variables `systemd-run --user` needs to find the user manager; never passed into the sandbox.
+_USER_BUS_ENV = ("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")
+
+
+def _scope_prefix(limits: Limits, *, user: bool) -> list[str]:
+    return [
+        "systemd-run",
+        *(["--user"] if user else []),
+        "--scope",
+        "--quiet",
+        "--collect",
+        "--no-ask-password",
+        f"-pMemoryMax={limits.memory_bytes}",
+        "-pMemorySwapMax=0",  # a machine with swap would page instead of hitting the ceiling
+        f"-pTasksMax={limits.max_processes}",
+    ]
+
+
+class Ceiling(StrEnum):
+    """How the memory/process ceiling is enforced on this machine (first that works wins)."""
+
+    #: The service's delegated cgroup subtree (`nox.service`, `Delegate=yes`) - the Pi.
+    CGROUP = "cgroup"
+    #: A transient scope of the user's own systemd manager - a desktop Linux session.
+    USER_SCOPE = "user-scope"
+    #: A transient system scope - only when the core runs as root.
+    SCOPE = "scope"
+    NONE = "none"
+
+
+@dataclass(slots=True)
+class _Launch:
+    cmd: list[str]
+    #: The launchers' environment (`LAUNCHER_ENV`, plus the bus variables systemd-run needs).
+    env: dict[str, str]
+    work: str
+    created: bool
+    cgroup: Path | None
+    #: Read end of the pipe that carries the child's environment to bwrap (`env_args`).
+    env_fd: int | None = None
+
+    def close_env(self) -> None:
+        if self.env_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(self.env_fd)
+            self.env_fd = None
+
+    def finish(self) -> None:
+        """Kill what is left of the tree, drop its cgroup and its own work directory."""
+        self.close_env()
+        if self.cgroup is not None:
+            DelegatedCgroups.remove(self.cgroup)
+        if self.created:
+            shutil.rmtree(self.work, ignore_errors=True)
 
 
 class LinuxSandbox:
     """Backend for `nox.sandbox.Sandbox` on Linux and the Raspberry Pi."""
 
-    def __init__(self) -> None:
-        if not bwrap_available():
-            raise SandboxUnavailable("bwrap is not installed; the sandbox fails closed")
-        self._has_systemd_run = shutil.which("systemd-run") is not None
+    #: The child has no network path to the host, so its proxy listens on a Unix socket.
+    proxy_transport = "unix"
+
+    def __init__(self, *, probe: bool = True) -> None:
+        bwrap = bwrap_path()
+        if bwrap is None:
+            raise SandboxUnavailable(
+                "bwrap (bubblewrap) is not installed; the sandbox fails closed"
+            )
         self.mode = SandboxMode.LINUX_BWRAP
+        self._bwrap = bwrap
+        self.disables_userns = True
+        self._python = forwarder_python()
+        self._cgroups: DelegatedCgroups | None = None
+        self.ceiling = Ceiling.NONE
+        if probe:
+            version = bwrap_version(bwrap)
+            self.disables_userns = version is not None and version >= _DISABLE_USERNS_SINCE
+            if not self.disables_userns:
+                if bwrap == _NOX_BWRAP:
+                    # Nox's own copy may create user namespaces where the system forbids it; it
+                    # must be able to forbid them to what it runs (fail closed).
+                    raise SandboxUnavailable(
+                        f"{bwrap} is older than 0.8 and cannot forbid nested user namespaces"
+                    )
+                log.warning("sandbox.bwrap_old", version=version, needed=_DISABLE_USERNS_SINCE)
+            with tempfile.TemporaryDirectory(prefix="nox-sbx-probe-") as work:
+                why = _probe(self._bwrap_argv(["true"], work=work))
+            if why is not None:
+                raise SandboxUnavailable(
+                    f"bwrap cannot build its sandbox here ({why}); {_UNAVAILABLE_HINT}"
+                )
+            if bwrap == _NOX_BWRAP:
+                with tempfile.TemporaryDirectory(prefix="nox-sbx-probe-") as work:
+                    label = _probe_output(
+                        self._bwrap_argv(["/bin/cat", "/proc/self/attr/current"], work=work)
+                    )
+                check_apparmor_stack(label)
+            if self._python is not None:
+                egress_why = _egress_probe(self._bwrap_argv, *self._python)
+                if egress_why is not None:
+                    log.warning("sandbox.egress_unavailable", error=egress_why)
+                    self._python = None
+            self.ceiling = self._pick_ceiling()
+        log.info(
+            "sandbox.linux_ready",
+            ceiling=self.ceiling.value,
+            egress=self._python is not None,
+            nested_userns=not self.disables_userns,
+        )
+
+    def _bwrap_argv(self, argv: list[str], **kwargs: Any) -> list[str]:
+        return build_bwrap_argv(
+            argv, bwrap=self._bwrap, disable_userns=self.disables_userns, **kwargs
+        )
+
+    def _pick_ceiling(self) -> Ceiling:
+        """The first ceiling mechanism that really works here (each one is tried, not assumed)."""
+        self._cgroups = DelegatedCgroups.setup()
+        if self._cgroups is not None:
+            try:
+                DelegatedCgroups.remove(self._cgroups.create(Limits()))
+                return Ceiling.CGROUP
+            except OSError as exc:
+                log.warning("sandbox.cgroup_unavailable", error=str(exc))
+                self._cgroups = None
+        if shutil.which("systemd-run") is None:
+            return Ceiling.NONE
+        if os.environ.get("XDG_RUNTIME_DIR") and (
+            _probe([*_scope_prefix(Limits(), user=True), "true"], self._bus_env()) is None
+        ):
+            return Ceiling.USER_SCOPE
+        if _probe([*_scope_prefix(Limits(), user=False), "true"]) is None:
+            return Ceiling.SCOPE
+        return Ceiling.NONE
+
+    @staticmethod
+    def _bus_env() -> dict[str, str]:
+        return {k: os.environ[k] for k in _USER_BUS_ENV if os.environ.get(k)}
 
     def guarantees(self) -> Guarantees:
-        notes = () if self._has_systemd_run else ("systemd-run missing: no memory/process ceiling",)
+        notes: list[str] = []
+        if self.ceiling is Ceiling.NONE:
+            notes.append("no cgroup or systemd scope available: no memory/process ceiling")
+        if self._python is None:
+            notes.append("egress forwarder unavailable: declared egress is refused (fail closed)")
+        if not self.disables_userns:
+            notes.append("bwrap older than 0.8: sandboxed code may create nested user namespaces")
         return Guarantees(
             backend=self.mode.value,
             confines_writes=True,
             confines_reads=True,
             hides_secrets=True,
             confines_network=True,
-            notes=notes,
+            notes=tuple(notes),
         )
 
     def environment(
@@ -114,6 +611,8 @@ class LinuxSandbox:
         extra: Mapping[str, str] | None = None,
         proxy_auth: str = "",
     ) -> dict[str, str]:
+        """The child's whole environment. `proxy_port` is the port on the sandbox's own loopback
+        (`EGRESS_PORT`), where the forwarder leads to the run's proxy."""
         # The caller's extra variables first, so the sandbox's own always win (reserved keys are
         # also refused up front by `checked_env`).
         env = dict(extra or {})
@@ -121,26 +620,111 @@ class LinuxSandbox:
         if proxy_port is not None:
             userinfo = f"{proxy_auth}@" if proxy_auth else ""
             url = f"http://{userinfo}127.0.0.1:{proxy_port}"
-            env |= {"HTTPS_PROXY": url, "HTTP_PROXY": url, "https_proxy": url, "http_proxy": url}
+            for key in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"):
+                env[key] = env[key.lower()] = url
         return env
 
     def command(
-        self, argv: list[str], *, work: str, egress: EgressDecl, limits: Limits
+        self,
+        argv: list[str],
+        *,
+        work: str,
+        egress: EgressDecl,
+        limits: Limits,
+        proxy_socket: str | None = None,
+        cgroup: Path | None = None,
+        env_fd: int | None = None,
     ) -> list[str]:
-        """The full command line (`systemd-run` scope around `bwrap`) for one confined process.
+        """The full command line (the ceiling around `bwrap`) for one confined process.
         Never contains the environment - see `build_bwrap_argv`."""
-        inner = build_bwrap_argv(argv, work=work, share_loopback=egress.wants_network)
-        if not self._has_systemd_run:
-            return inner
-        return [
-            "systemd-run",
-            "--scope",
-            "--quiet",
-            "--collect",
-            f"-pMemoryMax={limits.memory_bytes}",
-            f"-pTasksMax={limits.max_processes}",
-            *inner,
-        ]
+        socket_path = self._egress_socket(egress, proxy_socket)
+        python, binds = self._python or ("", ())
+        inner = self._bwrap_argv(
+            argv,
+            work=work,
+            egress_socket=socket_path,
+            python=python,
+            python_binds=binds,
+            env_fd=env_fd,
+        )
+        if self.ceiling is Ceiling.CGROUP and cgroup is not None:
+            return DelegatedCgroups.wrap(cgroup, inner)
+        if self.ceiling is Ceiling.USER_SCOPE:
+            # systemd-run needs the bus variables; the confined process must not inherit them.
+            unset = [arg for key in _USER_BUS_ENV for arg in ("--unsetenv", key)]
+            inner = [inner[0], *unset, *inner[1:]]
+            return [*_scope_prefix(limits, user=True), *inner]
+        if self.ceiling is Ceiling.SCOPE:
+            return [*_scope_prefix(limits, user=False), *inner]
+        return inner
+
+    def _egress_socket(self, egress: EgressDecl, proxy_socket: str | None) -> str | None:
+        """The proxy socket to bind in, or `SandboxUnavailable` when egress cannot be honoured."""
+        if not egress.wants_network:
+            return None
+        if not proxy_socket:
+            raise SandboxUnavailable(
+                "egress declared but no proxy socket is running; failing closed"
+            )
+        if self._python is None:
+            raise SandboxUnavailable(
+                "egress declared but the in-sandbox forwarder is unavailable here; failing closed"
+            )
+        return proxy_socket
+
+    def _prepare(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None,
+        egress: EgressDecl,
+        limits: Limits,
+        extra_env: Mapping[str, str] | None,
+        proxy_auth: str,
+        proxy_socket: str | None,
+    ) -> _Launch:
+        socket_path = self._egress_socket(egress, proxy_socket)  # refuse before creating anything
+        cgroup: Path | None = None
+        if self.ceiling is Ceiling.CGROUP and self._cgroups is not None:
+            try:
+                cgroup = self._cgroups.create(limits)
+            except OSError as exc:
+                # The ceiling was promised by guarantees(); without it, refuse (fail closed).
+                raise SandboxUnavailable(f"could not create the run's cgroup: {exc}") from exc
+        work = cwd or tempfile.mkdtemp(prefix="nox-sbx-")
+        child_env = self.environment(
+            work, EGRESS_PORT if socket_path is not None else None, extra_env, proxy_auth
+        )
+        env_fd = _env_pipe(child_env)
+        cmd = self.command(
+            argv,
+            work=work,
+            egress=egress,
+            limits=limits,
+            proxy_socket=socket_path,
+            cgroup=cgroup,
+            env_fd=env_fd,
+        )
+        launcher_env = dict(LAUNCHER_ENV)
+        if self.ceiling is Ceiling.USER_SCOPE:
+            launcher_env |= self._bus_env()  # for systemd-run only; bwrap clears its environment
+        return _Launch(cmd, launcher_env, work, cwd is None, cgroup, env_fd)
+
+    async def _spawn(self, launch: _Launch, *, stdin: int) -> asyncio.subprocess.Process:
+        try:
+            return await asyncio.create_subprocess_exec(
+                *launch.cmd,
+                env=launch.env,
+                stdin=stdin,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                pass_fds=(launch.env_fd,) if launch.env_fd is not None else (),
+            )
+        except OSError as exc:
+            await asyncio.to_thread(launch.finish)
+            raise SandboxUnavailable(f"could not start the sandboxed process: {exc}") from exc
+        finally:
+            launch.close_env()  # the child has its own copy; bwrap reads it at start
 
     async def start(
         self,
@@ -149,40 +733,31 @@ class LinuxSandbox:
         cwd: str | None,
         egress: EgressDecl,
         limits: Limits,
-        proxy_port: int | None,
+        proxy_port: int | None = None,  # noqa: ARG002 - the proxy is a socket here, see Backend
         extra_env: Mapping[str, str] | None = None,
         proxy_auth: str = "",
-        proxy_socket: str | None = None,  # noqa: ARG002 - loopback TCP here, see Backend
+        proxy_socket: str | None = None,
     ) -> ProcessIo:
         """Start `argv` confined exactly like `run`, kept running with stdio pipes.
 
         `bwrap --die-with-parent` ties the tree to the core: if Nox dies, the kernel kills it.
         `--unshare-pid` makes the confined process PID 1 of its namespace, so killing `bwrap`
-        ends every process it started.
+        ends every process it started (and with a cgroup ceiling, `cgroup.kill` does too).
         """
-        if egress.wants_network and proxy_port is None:
-            raise SandboxUnavailable("egress declared but no proxy is running; failing closed")
-        work = cwd or tempfile.mkdtemp(prefix="nox-sbx-")
-        created = cwd is None
-        cmd = self.command(argv, work=work, egress=egress, limits=limits)
-        env = self.environment(
-            work, proxy_port if egress.wants_network else None, extra_env, proxy_auth
+        launch = self._prepare(
+            argv,
+            cwd=cwd,
+            egress=egress,
+            limits=limits,
+            extra_env=extra_env,
+            proxy_auth=proxy_auth,
+            proxy_socket=proxy_socket,
         )
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                env=env,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except OSError as exc:
-            if created:
-                shutil.rmtree(work, ignore_errors=True)
-            raise SandboxUnavailable(f"could not start the sandboxed process: {exc}") from exc
+        proc = await self._spawn(launch, stdin=asyncio.subprocess.PIPE)
         stdin, stdout, stderr = proc.stdin, proc.stdout, proc.stderr
         if stdin is None or stdout is None or stderr is None:
             proc.kill()
+            await asyncio.to_thread(launch.finish)
             raise SandboxUnavailable("the sandboxed process has no stdio pipes")
 
         async def write_in(data: bytes) -> None:
@@ -197,13 +772,14 @@ class LinuxSandbox:
             return await proc.wait()
 
         def kill() -> None:
+            if launch.cgroup is not None:
+                DelegatedCgroups.kill(launch.cgroup)
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
 
         async def cleanup() -> None:
             close_in()
-            if created:
-                await asyncio.to_thread(shutil.rmtree, work, True)
+            await asyncio.to_thread(launch.finish)
 
         return ProcessIo(
             pid=proc.pid,
@@ -223,36 +799,33 @@ class LinuxSandbox:
         cwd: str | None,
         egress: EgressDecl,
         limits: Limits,
-        proxy_port: int | None,
+        proxy_port: int | None = None,  # noqa: ARG002 - the proxy is a socket here, see Backend
         extra_env: Mapping[str, str] | None = None,
         proxy_auth: str = "",
-        proxy_socket: str | None = None,  # noqa: ARG002 - loopback TCP here, see Backend
+        proxy_socket: str | None = None,
     ) -> Result:
-        if egress.wants_network and proxy_port is None:
-            raise SandboxUnavailable("egress declared but no proxy is running; failing closed")
-        work = cwd or tempfile.mkdtemp(prefix="nox-sbx-")
-        created = cwd is None
-        cmd = self.command(argv, work=work, egress=egress, limits=limits)
-        env = self.environment(
-            work, proxy_port if egress.wants_network else None, extra_env, proxy_auth
+        launch = self._prepare(
+            argv,
+            cwd=cwd,
+            egress=egress,
+            limits=limits,
+            extra_env=extra_env,
+            proxy_auth=proxy_auth,
+            proxy_socket=proxy_socket,
         )
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            env=env,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        proc = await self._spawn(launch, stdin=asyncio.subprocess.DEVNULL)
         timed_out = False
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=limits.timeout_s)
         except TimeoutError:
             timed_out = True
-            proc.kill()
+            if launch.cgroup is not None:
+                DelegatedCgroups.kill(launch.cgroup)
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
             out, err = b"", b""
         finally:
-            if created:
-                shutil.rmtree(work, ignore_errors=True)
+            await asyncio.to_thread(launch.finish)
         cap = limits.max_output_bytes
         return Result(
             exit_code=None if timed_out else proc.returncode,

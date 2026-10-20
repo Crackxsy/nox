@@ -164,14 +164,23 @@ define arch_unsupported \
   'nicht unterstützte Architektur: %s' \
   'unsupported architecture: %s'
 define step_packages \
-  'Pakete installieren (git, curl)' \
-  'Installing packages (git, curl)'
+  'Pakete installieren (git, curl, bubblewrap)' \
+  'Installing packages (git, curl, bubblewrap)'
 define untested_system \
   'Hinweis: getestet ist Nox auf Raspberry Pi OS, Debian und Ubuntu. Auf diesem System kann etwas fehlen.' \
   'Note: Nox is tested on Raspberry Pi OS, Debian and Ubuntu. Something may be missing on this system.'
 define tool_missing \
   '%s fehlt, bitte installieren.' \
   '%s is missing, please install it.'
+define bwrap_missing \
+  'Hinweis: bubblewrap (bwrap) fehlt - ohne es führt Nox keine Befehle aus. Bitte installieren.' \
+  'Note: bubblewrap (bwrap) is missing - without it Nox runs no commands. Please install it.'
+define step_apparmor \
+  'AppArmor: eigene bwrap-Kopie für die Sandbox (Ubuntu)' \
+  'AppArmor: a separate bwrap copy for the sandbox (Ubuntu)'
+define apparmor_failed \
+  'Hinweis: AppArmor-Profil für die Sandbox ließ sich nicht laden - Nox führt keine Befehle aus, bis das geklärt ist.' \
+  'Note: the AppArmor profile for the sandbox could not be loaded - Nox runs no commands until that is sorted out.'
 define prefix_foreign \
   '%s existiert schon, ist aber keine Nox-Installation. Bitte prüfen und den Ordner entfernen oder umbenennen.' \
   '%s already exists but is not a Nox installation. Please check it, then remove or rename the folder.'
@@ -499,12 +508,15 @@ case "$(uname -m)" in
 esac
 
 if command -v apt-get >/dev/null 2>&1; then
+  # bubblewrap + python3: the command sandbox (bwrap, and the tiny relay that gives a sandboxed
+  # program its only way out - the egress proxy). Without them Nox refuses to run commands.
   say "$(msg step_packages)"
   apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates tar sudo >/dev/null
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates tar sudo bubblewrap python3 >/dev/null
 else
   note "$(msg untested_system)"
   for tool in git curl tar sha256sum sudo; do command -v "$tool" >/dev/null 2>&1 || fail "$(msg tool_missing "$tool")"; done
+  command -v bwrap >/dev/null 2>&1 || note "$(msg bwrap_missing)"
 fi
 
 if [ -e "$PREFIX" ] && [ ! -d "$SRC/.git" ] && [ -n "$(ls -A "$PREFIX" 2>/dev/null)" ]; then
@@ -560,6 +572,89 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home-dir "$NOX_HOME_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$NOX_HOME_DIR"
+
+# ---- the command sandbox on Ubuntu 23.10+ -------------------------------------------------------
+# There AppArmor lets a program create user namespaces only with a profile that allows it, and
+# bwrap needs one. Nothing is changed for /usr/bin/bwrap or any other user: Nox gets its own copy,
+# executable only by the service user (root:nox 0750), and a profile attached to that path alone.
+# What it starts runs stacked under a second profile that denies every capability and new user
+# namespaces (like Ubuntu's bwrap-userns-restrict) - on top of bwrap's own capability drop and
+# --disable-userns. Raspberry Pi OS and Debian have no such restriction: nothing is installed there, and
+# leftovers of an earlier install are removed.
+nox_bwrap=/usr/lib/nox/bwrap
+nox_profile=/etc/apparmor.d/nox-bwrap
+nox_apt_hook=/etc/apt/apt.conf.d/99nox-bwrap
+restrict=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+remove_nox_bwrap() {
+  # Unload first: a profile that stays loaded keeps applying after its file is gone.
+  if [ -e "$nox_profile" ] && command -v apparmor_parser >/dev/null 2>&1; then
+    apparmor_parser -R "$nox_profile" 2>/dev/null || true
+  fi
+  rm -f "$nox_profile" "$nox_bwrap" "$nox_apt_hook"
+}
+if [ -r "$restrict" ] && [ "$(cat "$restrict")" = "1" ] && [ -x /usr/bin/bwrap ] && command -v apparmor_parser >/dev/null 2>&1; then
+  say "$(msg step_apparmor)"
+  remove_nox_bwrap  # also unloads a profile an earlier installer version attached elsewhere
+  install -d -m 0755 /usr/lib/nox
+  install -m 0750 -o root -g "$SERVICE_USER" /usr/bin/bwrap "$nox_bwrap"
+  # bubblewrap security updates reach the copy too: refreshed after every dpkg run. (Nox also
+  # refuses to use a copy that differs from /usr/bin/bwrap.)
+  cat > "$nox_apt_hook" <<APTHOOK
+// Installed by Nox: keep its bwrap copy identical to the bubblewrap package's.
+DPkg::Post-Invoke { "if [ -e $nox_bwrap ] && [ -x /usr/bin/bwrap ] && ! cmp -s /usr/bin/bwrap $nox_bwrap; then install -m 0750 -o root -g $SERVICE_USER /usr/bin/bwrap $nox_bwrap; fi"; };
+APTHOOK
+  cat > "$nox_profile" <<'APPARMOR'
+# Installed by Nox (scripts/install-linux.sh). Only Nox's own copy of bwrap - executable by the
+# nox service user alone - may create user namespaces; /usr/bin/bwrap stays restricted. What it
+# runs is stacked under nox-bwrap-sandboxed: no capabilities, no further user namespaces (in
+# addition to bwrap's own capability drop and --disable-userns).
+abi <abi/4.0>,
+include <tunables/global>
+
+profile nox-bwrap /usr/lib/nox/bwrap flags=(attach_disconnected,mediate_deleted) {
+  allow capability,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  # Stack the restricted profile on exec. (`px` finds no stacked target under no_new_privs on
+  # AppArmor 4.0; `pix` applies the stack - CI checks the resulting label and the denials.)
+  allow pix /** -> &nox-bwrap-sandboxed,
+  include if exists <local/nox-bwrap>
+}
+
+profile nox-bwrap-sandboxed flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkmix /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  audit deny capability,
+  audit deny userns,
+  include if exists <local/nox-bwrap-sandboxed>
+}
+APPARMOR
+  if ! apparmor_parser -r "$nox_profile"; then
+    remove_nox_bwrap
+    note "$(msg apparmor_failed)"
+  fi
+elif [ -e "$nox_profile" ] || [ -e "$nox_bwrap" ] || [ -e "$nox_apt_hook" ]; then
+  remove_nox_bwrap
+fi
 
 # ---- build the release (the running version is untouched) ----------------------------------------
 

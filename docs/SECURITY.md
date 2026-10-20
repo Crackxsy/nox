@@ -201,6 +201,53 @@ after a *security-path* kill (see "Kill switch" above — a user-initiated kill 
 Stored as an Argon2id hash in the keyring (`nox/security/pin`); 5 failed attempts trigger a 15
 minute lockout, itself audited.
 
+## Command sandbox on Linux
+
+Commands, self-built skills and foreign MCP servers run in `nox.sandbox`; on Linux and the
+Raspberry Pi that is bubblewrap (`bwrap`):
+
+- **Filesystem:** the system read-only, the work directory the only writable place, a private
+  `/tmp`, `/dev` and `/proc`, no home directory and nothing of Nox's own folder.
+- **Network:** every run gets its own network namespace with only its own loopback - no route
+  to the internet, the LAN, the Home Assistant host or services on the host's loopback (abstract
+  Unix sockets are per namespace, so the host's D-Bus/X11 are out of reach too).
+- **Declared egress** adds exactly one path, and it is not a network path: the run's egress proxy
+  listens on a Unix socket in a private `0700` directory, bwrap binds that one socket read-only
+  into the sandbox, and a stdlib-only forwarder relays the sandbox's `127.0.0.1:3128` to it. The
+  forwarder never parses or dials anything; the proxy outside checks the per-run credentials
+  (passed in the environment, never on a command line), the declaration and `NetGuard`
+  (loopback, private, link-local/metadata and the Home Assistant host are refused, even for `*`).
+  Plain-HTTP clients must tunnel (`CONNECT`); the sandbox proxy does not forward `GET http://…`.
+- **Ceilings:** memory and process limits through the service's delegated cgroup
+  (`nox.service`: `Delegate=memory pids`), a `systemd-run` scope where one is allowed, otherwise
+  none - `Sandbox.guarantees()` says which.
+- **No nested namespaces:** with bwrap 0.8+ the sandbox's user namespace forbids creating
+  further ones (`--disable-userns`); older bwrap is reported in `guarantees()`. On Ubuntu 23.10+
+  the installer gives only Nox's own bwrap copy (executable by the `nox` user alone) an AppArmor
+  profile that allows user namespaces - the system's `bwrap` stays restricted. What it starts is
+  stacked under a second profile that denies every capability and new user namespaces, on top of
+  bwrap's own capability drop and `--disable-userns` (the copy is refused if it is older than 0.8
+  or differs from `/usr/bin/bwrap`, and when the sandbox is built Nox reads the AppArmor label of a
+  process the copy started: unless it carries `nox-bwrap-sandboxed`, the stack did not apply and
+  the sandbox fails closed).
+- **Environment:** bwrap, systemd-run and the cgroup trampoline run with a fixed environment
+  (`PATH`, `LANG`; plus the bus variables `systemd-run --user` needs). The child's own variables
+  - a server's settings, the proxy credentials - reach bwrap through a pipe (`--clearenv`,
+  `--args <fd>`), never its command line or its environment, and only names on the allowlist
+  (`model.checked_env`) are accepted at all.
+- **Fail closed:** bwrap and the egress path are probed when the sandbox is built. If bwrap
+  cannot build its namespaces, nothing runs; if only the egress path fails, runs without declared
+  egress still work and declared egress is refused.
+
+For this, `nox.service` allows the namespaces bwrap creates and the `@mount` system calls inside
+them, and does not over-mount `/proc` (`ProtectKernelTunables=`/`ProtectKernelLogs=` would make
+the kernel refuse the sandbox its own `/proc`). The core itself still holds no capabilities.
+This is a deliberate trade-off: the unit cannot set `RestrictNamespaces=` or deny `@mount` for the
+core, so code running *as the core* could create user namespaces and mount inside them (still
+without capabilities in the initial namespace, and on Ubuntu only through Nox's own bwrap copy).
+What the sandbox runs gets neither: bwrap's `--disable-userns`, its capability drop and, on
+Ubuntu, the stacked AppArmor profile forbid both.
+
 ## Plugin sandboxing boundary
 
 A plugin is a manifest (`plugins/<id>/manifest.yaml`) plus a worker process; nothing is spawned

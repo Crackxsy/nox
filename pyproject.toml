@@ -142,6 +142,7 @@ module = [
     "nox.sensors.win32",
     "nox.files.recycle",
     "nox.rl.paths",
+    "nox.sandbox._win32",
 ]
 disable_error_code = ["attr-defined", "has-type", "name-defined"]
 

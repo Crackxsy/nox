@@ -38,8 +38,9 @@ proxy. How the child reaches it is the backend's `proxy_transport`:
 
 * `"pipe"` (Windows AppContainer): the proxy listens on a fresh named pipe whose DACL admits only
   the container SID; a forwarder inside the same container offers the child the loopback port.
-* `"tcp"`: loopback TCP (the Linux bwrap backend, which shares the host's loopback for a run
-  that declared egress; test backends).
+* `"unix"` (Linux bwrap, whose network namespace has no route anywhere): a Unix socket in a
+  private `0700` folder, bound into the sandbox, with a forwarder inside the namespace.
+* `"tcp"`: loopback TCP (test backends).
 * anything else (`"none"`: the Windows low-integrity fallback, whose sockets nothing restricts):
   a run that declares egress is refused.
 
@@ -187,23 +188,30 @@ class Sandbox:
         its own namespaces and work folder."""
         return {"workload": workload} if getattr(self._backend, "isolates_workloads", False) else {}
 
-    async def _open_proxy(self, egress: EgressDecl, workload: str) -> EgressProxy | None:
-        """Start the run's own proxy when it declared egress, on the transport its backend needs:
-        loopback TCP, or a named pipe only the backend's AppContainer may open. A backend that
-        offers no transport its child is held to (`"none"`) gets no network at all."""
-        if not egress.wants_network:
-            return None
-        proxy = EgressProxy(
+    def _new_proxy(self, egress: EgressDecl) -> EgressProxy:
+        """The proxy for one run or process: its declaration, the guard, fresh credentials."""
+        return EgressProxy(
             allow=egress.hosts,
             guard=self._guard,
             audit=self._audit,
             credentials=EgressProxy.new_credentials(),
         )
+
+    async def _open_proxy(self, egress: EgressDecl, workload: str) -> EgressProxy | None:
+        """Start the run's own proxy when it declared egress, on the transport its backend needs:
+        loopback TCP, a named pipe only the backend's AppContainer may open, or a Unix socket for
+        a backend whose child has no network path at all. A backend that offers no transport its
+        child is held to (`"none"`) gets no network at all."""
+        if not egress.wants_network:
+            return None
+        proxy = self._new_proxy(egress)
         transport = getattr(self._backend, "proxy_transport", "tcp")
         if transport == "pipe":
             # Only the run's own container may open the pipe.
             sid = self._backend.container_sid_for(workload)  # type: ignore[attr-defined]
             await proxy.start_pipe(str(sid))
+        elif transport == "unix":
+            await proxy.start_unix()
         elif transport == "tcp":
             await proxy.start()
         else:

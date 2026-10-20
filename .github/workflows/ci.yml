@@ -105,12 +105,37 @@ jobs:
       - name: mypy
         run: mypy src/nox
 
+      # The command sandbox: bubblewrap, as scripts/install-linux.sh installs it. Ubuntu 24.04
+      # restricts unprivileged user namespaces through AppArmor; the installer adds a profile for
+      # bwrap (proven in installer-linux below), this job simply lifts the restriction.
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get install -y -qq bubblewrap
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       - name: pytest unit
+        env:
+          NOX_REQUIRE_BWRAP: "1"
         run: pytest tests/unit -m "not hardware and not network and not spike" -p no:cacheprovider
 
       - name: pytest integration
+        env:
+          NOX_REQUIRE_BWRAP: "1"
         # -m "": every marker, as before the hermetic default in pyproject.toml.
         run: pytest tests/integration -m "" -p no:cacheprovider
+
+      # What nox.service gives the core (Delegate=yes): a cgroup subtree it owns. The sandbox
+      # tests run once more inside such a delegated scope, so the memory and process ceilings
+      # are proven to kill / refuse for real.
+      - name: Sandbox ceilings in a delegated cgroup
+        run: |
+          sudo systemd-run --scope --quiet -p Delegate=yes -- sh -c '
+            cg="/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)"
+            chown -R "$0:$1" "$cg"
+            exec setpriv --reuid="$0" --regid="$1" --init-groups env HOME="$2"               NOX_CGROUP_DELEGATED=1 NOX_EXPECT_CEILING=cgroup NOX_REQUIRE_BWRAP=1               "$3/.venv/bin/pytest" "$3/tests/integration/test_linux_sandbox.py" -p no:cacheprovider
+          ' "$(id -u)" "$(id -g)" "$HOME" "$PWD"
 
   installer-linux:
     name: Installer on Linux (${{ matrix.runner }})
@@ -174,6 +199,85 @@ jobs:
           # Pairing from the terminal, the way a server without a screen pairs its first device.
           nox pair --name ci | tee pair.txt
           grep -q '#pair=' pair.txt
+
+      # The hardened unit must still let the command sandbox work: bwrap's namespaces, the egress
+      # forwarder end to end and the delegated-cgroup ceiling are all probed when the core starts.
+      - name: The command sandbox works inside the service
+        run: |
+          log="$(sudo journalctl -u nox --no-pager)"
+          echo "$log" | grep -E "sandbox\.(linux_ready|egress_unavailable|cgroup_unavailable)|hands\.sandbox_unavailable" || true
+          echo "$log" | grep -E "sandbox\.linux_ready" | grep -E "ceiling=.?cgroup" | grep -qE "egress=.?True"
+          if echo "$log" | grep -qE "hands\.sandbox_unavailable|sandbox\.egress_unavailable"; then exit 1; fi
+
+      # An earlier installer draft attached an unconfined profile to /usr/bin/bwrap. Installing
+      # over it must unload it, so the system's bwrap is restricted again (checked next step).
+      - name: Upgrade over the old global bwrap profile
+        run: |
+          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = "1" ]; then
+            printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+              'profile nox-bwrap /usr/bin/bwrap flags=(unconfined) {' '  userns,' '}' \
+              | sudo tee /etc/apparmor.d/nox-bwrap >/dev/null
+            sudo apparmor_parser -r /etc/apparmor.d/nox-bwrap
+            /usr/bin/bwrap --unshare-user --ro-bind / / true  # the old profile really applied
+            sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh
+            sudo find /var/backups/nox -name 'nox-*.tar.gz' -delete 2>/dev/null || true
+          fi
+
+      # Ubuntu restricts user namespaces through AppArmor. The installer must not lift that for
+      # the system: only its own bwrap copy (executable by the nox user alone) gets a profile.
+      - name: Only Nox's bwrap copy may create user namespaces
+        run: |
+          if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = "1" ]; then
+            test "$(stat -c '%U:%G %a' /usr/lib/nox/bwrap)" = "root:nox 750"
+            if /usr/lib/nox/bwrap --ro-bind / / true; then exit 1; fi
+            if [ ! -e /etc/apparmor.d/bwrap-userns-restrict ]; then
+              if /usr/bin/bwrap --unshare-user --ro-bind / / true; then exit 1; fi
+            fi
+          else
+            test ! -e /usr/lib/nox/bwrap
+          fi
+
+      # What Nox's bwrap starts is confined by AppArmor itself, not only by bwrap's arguments:
+      # even with a deliberately weakened command line (no --disable-userns, a capability added)
+      # nested user namespaces and capabilities are refused.
+      - name: The sandboxed profile holds even without bwrap's own restrictions
+        run: |
+          if [ -e /usr/lib/nox/bwrap ]; then
+            bw() { sudo -u nox /usr/lib/nox/bwrap --unshare-user --ro-bind / / --proc /proc --dev /dev "$@"; }
+            bw /usr/bin/true
+            bw cat /proc/self/attr/current | grep -q "nox-bwrap-sandboxed"
+            if bw /usr/bin/unshare -U true; then exit 1; fi
+            if sudo -u nox /usr/lib/nox/bwrap --unshare-user --cap-add CAP_NET_RAW --ro-bind / / \
+                --proc /proc --dev /dev /usr/bin/python3 -c \
+                'import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, 1)'; then
+              exit 1
+            fi
+          fi
+
+      # A bubblewrap update the copy missed must stop the sandbox (fail closed); the apt hook
+      # refreshes the copy, and the sandbox works again.
+      - name: An outdated bwrap copy fails closed; the apt hook refreshes it
+        run: |
+          if [ -e /usr/lib/nox/bwrap ]; then
+            # The sandbox log lines of the service process started by this restart, once written.
+            fresh_log() {
+              sudo systemctl restart nox
+              pid="$(systemctl show -p MainPID --value nox)"
+              for _ in $(seq 90); do
+                sudo journalctl -u nox --no-pager _PID="$pid" | grep -E "sandbox\.linux_ready|hands\.sandbox_unavailable" && return 0
+                sleep 1
+              done
+              return 1
+            }
+            # Stop the service first: its start-up probes run this very binary, and writing to
+            # it while one runs fails with "Text file busy".
+            sudo systemctl stop nox
+            sudo sh -c 'printf x >> /usr/lib/nox/bwrap'
+            fresh_log | grep -q "differs from /usr/bin/bwrap"
+            sudo apt-get install --reinstall -y -qq bubblewrap >/dev/null
+            sudo cmp /usr/bin/bwrap /usr/lib/nox/bwrap
+            fresh_log | grep -E "sandbox\.linux_ready" | grep -q "egress=.\?True"
+          fi
 
       - name: Same version again changes nothing
         run: |
