@@ -608,42 +608,18 @@ async def test_a_work_folder_under_a_short_name_is_usable(monkeypatch: pytest.Mo
 
 async def test_the_system_modules_load_inside_the_container() -> None:
     # On the hosted runner no cmdlet could be found inside the container (`Join-Path` "not
-    # recognized"): the default module path names folders the container cannot read.
+    # recognized"): PowerShell 5.1 had put Program Files' third-party modules in front of the
+    # system's own, and command lookup gave up among them (see `windows._module_path`).
     sandbox = _appcontainer()
     result = await sandbox.run(
-        [PS, "-NoProfile", "-NonInteractive", "-Command", "Join-Path 'a' 'b'"],
+        [PS, "-NoProfile", "-NonInteractive", "-Command", "Join-Path 'a' 'b'; $env:PSModulePath"],
         limits=Limits(timeout_s=60),
     )
-    if result.stdout.strip() != "a\\b":
-        # Why: the module path, what the container can see of each folder, the import error.
-        experiments = [
-            "$p = $env:PSModulePath; [Console]::Out.WriteLine('PSMP=' + $p); "
-            "[Console]::Out.WriteLine('LANG ' + $ExecutionContext.SessionState.LanguageMode); "
-            "[Console]::Out.WriteLine('PSHOME ' + $PSHOME + ' ' + $PSVersionTable.PSVersion); "
-            "[Console]::Out.WriteLine('MAC ' + $env:PSModuleAnalysisCachePath)",
-            r"$env:PSModulePath = $PSHOME + '\Modules'; Join-Path 'a' 'b'",
-            "$pf = $env:PSModulePath.Split(';')[0]; "
-            "foreach ($m in [IO.Directory]::GetDirectories($pf)) { try { $n = "
-            "[IO.Directory]::GetFiles($m, '*.psd1', 'AllDirectories').Length; "
-            "[Console]::Out.WriteLine('MOD ' + $m + ' ' + $n) } catch { "
-            "[Console]::Out.WriteLine('MOD ' + $m + ' ERR ' + $_.Exception.Message) } }",
-            r"Import-Module Microsoft.PowerShell.Utility; $t = $env:TEMP + '\trace.txt'; "
-            "Trace-Command -Name CommandDiscovery,Modules -FilePath $t -Expression { "
-            "try { Join-Path 'a' 'b' } catch { } }; $k = 0; $all = [IO.File]::ReadAllLines($t); "
-            "[Console]::Out.WriteLine('TRLINES ' + $all.Length); "
-            "foreach ($l in $all) { if ($k -lt 60 -and $l -match "
-            "'exception|error|denied|fail|skip|Found in module|Attempting|not |Management') { "
-            "$k++; [Console]::Out.WriteLine('TR ' + $l) } }; "
-            "foreach ($l in ($all | Select-Object -Last 25)) { "
-            "[Console]::Out.WriteLine('TRLAST ' + $l) }; "
-            "[Console]::Out.WriteLine('MACEXISTS ' + "
-            "[IO.File]::Exists($env:PSModuleAnalysisCachePath))",
-        ]
-        report = []
-        for script in experiments:
-            why = await sandbox.run(
-                [PS, "-NoProfile", "-NonInteractive", "-Command", script],
-                limits=Limits(timeout_s=120),
-            )
-            report.append(f"{why.stdout[:6000]}\n{why.stderr[:600]}")
-        pytest.fail(f"exe={PS}\n{result.stderr[:300]}\n" + "\n---\n".join(report))
+    lines = result.stdout.splitlines()
+    assert lines and lines[0].strip() == "a\\b", result.stderr[:600]
+    # The order PowerShell really runs with: the system's modules first, Program Files last.
+    folders = [f.rstrip("\\").lower() for f in lines[1].strip().split(";")]
+    system = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    assert folders[0] == (system + r"\WindowsPowerShell\v1.0\Modules").lower(), folders
+    assert folders[-1].endswith(r"\windowspowershell\modules"), folders
+    assert len(folders) == 2, folders  # never the user's profile folder

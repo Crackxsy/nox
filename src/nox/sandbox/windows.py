@@ -375,11 +375,24 @@ def _base_env(work: Path) -> dict[str, str]:
     env["USERPROFILE"] = env["LOCALAPPDATA"] = env["APPDATA"] = work_s
     # PowerShell writes a module cache; keep it in the work dir, not the (unwritable) profile.
     env["PSModuleAnalysisCachePath"] = str(work / "psmac")
-    # Only the system's own modules, by their long path: the default list also names folders in
-    # the user's profile and under Program Files that the container cannot read.
-    root = env.get("SystemRoot", r"C:\Windows")
-    env["PSModulePath"] = root + r"\System32\WindowsPowerShell\v1.0\Modules"
+    env["PSModulePath"] = _module_path(env.get("SystemRoot", r"C:\Windows"))
     return env
+
+
+def _module_path(system_root: str) -> str:
+    r"""The container's `PSModulePath`: the system's own modules first, by their long path.
+
+    Never the user's profile folder. Windows PowerShell 5.1 puts
+    `%ProgramFiles%\WindowsPowerShell\Modules` back into any list that lacks it - *in front of*
+    `$PSHOME\Modules`. Command lookup then analysed every third-party module there before the
+    system's own, and on a host with many of them (the hosted CI runner: AWS, Microsoft.Graph and
+    one folder the container may not read) it gave up before it reached `Join-Path`: no cmdlet
+    could be found at all. Named here, last, the folder stays where it is put, so every built-in
+    cmdlet resolves from System32 before a third-party module is ever read.
+    """
+    system = rf"{system_root}\System32\WindowsPowerShell\v1.0\Modules"
+    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    return rf"{system};{program_files}\WindowsPowerShell\Modules"
 
 
 def _contains(outer: Path, inner: Path) -> bool:
