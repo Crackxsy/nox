@@ -269,6 +269,9 @@ jobs:
               done
               return 1
             }
+            # Stop the service first: its start-up probes run this very binary, and writing to
+            # it while one runs fails with "Text file busy".
+            sudo systemctl stop nox
             sudo sh -c 'printf x >> /usr/lib/nox/bwrap'
             fresh_log | grep -q "differs from /usr/bin/bwrap"
             sudo apt-get install --reinstall -y -qq bubblewrap >/dev/null
