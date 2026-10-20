@@ -12,16 +12,24 @@ import httpx
 import pytest
 
 from nox.core.config.hands import McpConfig, McpServerConfig
-from nox.mcp.client import HttpTransport, McpClient
+from nox.core.state import PrivacyMode
+from nox.mcp.client import HttpTransport, McpClient, RemoteTool
 from nox.mcp.launch import ProcessLauncher
 from nox.mcp.policy import fingerprint
-from nox.mcp.servers import ApprovalStore, McpServerManager, ServerState, clean_schema
+from nox.mcp.servers import (
+    ApprovalStore,
+    McpServerManager,
+    ServerState,
+    _Server,
+    clean_schema,
+)
 from nox.security.model import Decision, Risk
 from nox.security.permissions import DefaultPermissionEngine
+from nox.security.taint import CONVERSATION
 from nox.tools.executor import ToolExecutor
 from nox.tools.registry import ToolRegistry
 from tests.unit.fakes import wait_until
-from tests.unit.tools.conftest import FakeKillSwitch
+from tests.unit.tools.conftest import FakeKillSwitch, FakePrivacy
 
 FAKE = Path(__file__).resolve().parents[2] / "_fake_mcp_server.py"
 
@@ -230,6 +238,85 @@ async def test_network_servers_are_not_used_when_privacy_forbids_the_cloud(
         assert not result["ok"] and "privacy mode" in result["error"]
     finally:
         await mgr.stop()
+
+
+async def test_a_read_only_tool_of_a_network_server_asks_again_in_a_tainted_conversation(
+    tmp_path: Path,
+    registry: ToolRegistry,
+    engine: DefaultPermissionEngine,
+    audit: Any,
+    killswitch: FakeKillSwitch,
+) -> None:
+    # The user marked echo read-only (LOW), but the server can reach the network: once the
+    # conversation holds untrusted content, injected text could pick what it sends out.
+    holder = Holder([server(read_only_tools=["echo"]).model_copy(update={"network": True})])
+    mgr = manager(tmp_path, registry, holder)
+    await mgr.start()
+    executor = ToolExecutor(registry, engine, audit, None, killswitch)
+    spec = registry.get("mcp.fake.echo")
+    assert spec is not None and spec.network is True and spec.local is False
+    try:
+        token = CONVERSATION.set("clean")
+        try:
+            clean = await executor.call("companion", "mcp.fake.echo", {"text": "a"}, mode="m")
+        finally:
+            CONVERSATION.reset(token)
+        assert clean.ok and not engine.pending()
+        engine.mark_tainted("tainted")
+        token = CONVERSATION.set("tainted")
+        try:
+            call = asyncio.create_task(
+                executor.call("companion", "mcp.fake.echo", {"text": "b"}, mode="m")
+            )
+            await wait_until(lambda: bool(engine.pending()))
+        finally:
+            CONVERSATION.reset(token)
+        engine.reply(engine.pending()[0], Decision.DENY)
+        assert not (await call).ok
+    finally:
+        await mgr.stop()
+
+
+async def test_network_server_tools_are_refused_by_the_privacy_rule_offline(
+    tmp_path: Path,
+    registry: ToolRegistry,
+    engine: DefaultPermissionEngine,
+    audit: Any,
+    killswitch: FakeKillSwitch,
+    privacy: FakePrivacy,
+) -> None:
+    holder = Holder([server(read_only_tools=["echo"]).model_copy(update={"network": True})])
+    mgr = manager(tmp_path, registry, holder)
+    await mgr.start()
+    executor = ToolExecutor(registry, engine, audit, None, killswitch)
+    try:
+        for mode in (PrivacyMode.OFFLINE, PrivacyMode.PRIVATE):
+            privacy.mode = mode
+            result = await executor.call("companion", "mcp.fake.echo", {"text": "x"}, mode="m")
+            assert not result.ok and result.decision == Decision.DENY.value
+            assert not engine.pending()
+    finally:
+        await mgr.stop()
+
+
+class _ListOnlyClient:
+    async def list_tools(self, *, max_tools: int) -> list[RemoteTool]:
+        return [RemoteTool(name="lookup")]
+
+
+async def test_tools_of_a_remote_url_server_are_network_tools(
+    tmp_path: Path, registry: ToolRegistry
+) -> None:
+    remote = McpServerConfig(
+        id="remote", url="https://mcp.example.org/mcp", read_only_tools=["lookup"]
+    )
+    holder = Holder([remote])
+    mgr = manager(tmp_path, registry, holder)
+    srv = _Server(config=remote, client=_ListOnlyClient())  # type: ignore[arg-type]
+    await mgr._refresh_tools(srv)
+    spec = registry.get("mcp.remote.lookup")
+    assert spec is not None and spec.risk is Risk.LOW
+    assert spec.network is True and spec.local is False
 
 
 async def test_arguments_naming_a_lock_are_refused_before_the_server_sees_them(

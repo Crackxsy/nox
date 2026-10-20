@@ -604,6 +604,12 @@ class McpServerManager:
             def target(_payload: dict[str, Any], _name: str = tool.name) -> str:
                 return _name
 
+            # A remote (URL) server is reached over the network by definition; a local process
+            # is a network tool when its sandbox lets it reach the network. Either way every call
+            # is a cloud call for the permission engine: refused in OFFLINE/PRIVATE and confirmed
+            # again in a tainted conversation, even for a tool the user marked read-only.
+            network = cfg.network or not cfg.command
+
             spec = ToolSpec(
                 name=name,
                 description=(
@@ -617,7 +623,8 @@ class McpServerManager:
                 risk=Risk.LOW if tool.name in read_only else Risk.MEDIUM,
                 handler=self._handler(cfg.id, tool.name),
                 side_effects=tool.name not in read_only,
-                local=bool(cfg.command) and not cfg.network,
+                local=not network,
+                network=network,
                 targets=target,
                 timeout_s=self._config().call_timeout_s + 5.0,
             )
