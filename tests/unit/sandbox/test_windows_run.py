@@ -523,15 +523,24 @@ async def test_a_run_cannot_read_the_work_folder_of_another_workload(tmp_path) -
     assert sid_b != backend.container_sid_for("shell")
     work_b, _ = backend._prepare_workdir(None, sid_b)
     try:
+        # Workload B writes into its own folder, the way a running MCP server or skill does ...
+        write = (
+            "$f = Join-Path $env:TEMP canary.txt; Set-Content -Path $f -Value NOXCANARY-7f3a; "
+            "Get-Content $f"
+        )
+        own = await sandbox.run(
+            [PS, "-NoProfile", "-NonInteractive", "-Command", write],
+            cwd=str(work_b),
+            limits=Limits(timeout_s=30),
+            workload="skill:canary",
+        )
+        assert "NOXCANARY-7f3a" in own.stdout, own.stderr
+        # ... and a shell command, in a container of its own, cannot read it.
         canary = work_b / "canary.txt"
-        canary.write_text("NOXCANARY-7f3a", encoding="ascii")
         read = [PS, "-NoProfile", "-NonInteractive", "-Command", f"Get-Content '{canary}'"]
         other = await sandbox.run(read, limits=Limits(timeout_s=30), workload="shell")
         assert "NOXCANARY-7f3a" not in other.stdout
         assert other.exit_code != 0 or "denied" in (other.stdout + other.stderr).lower()
-        # The same class still reads its own folder: the refusal above is the SID, not the path.
-        own = await sandbox.run(read, limits=Limits(timeout_s=30), workload="skill:canary")
-        assert "NOXCANARY-7f3a" in own.stdout
     finally:
         import shutil
 
