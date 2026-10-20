@@ -45,6 +45,8 @@ export interface PermissionPromptProps {
   onAnswered: (id: string, decision: 'allow' | 'deny') => void;
   /** Injected in tests. */
   clock?: () => number;
+  /** How long "Erlauben" waits after a question appears; `ARM_DELAY_MS` unless a test says 0. */
+  armDelayMs?: number;
 }
 
 const RISK_KEYS: Record<string, Key> = {
@@ -91,6 +93,12 @@ const FOCUSABLE = 'button:not(:disabled), input:not(:disabled), summary, a[href]
 
 /* ------------------------------------------------------------------ body - */
 
+/**
+ * How long a new question's "Erlauben" buttons stay disabled. After one answer the next question
+ * appears with "Erlauben" in the same spot: a double click must not allow it unseen.
+ */
+export const ARM_DELAY_MS = 500;
+
 interface PromptBodyProps extends Omit<PermissionPromptProps, 'queue'> {
   prompt: PermissionPrompt;
   waiting: number;
@@ -119,6 +127,7 @@ function PromptBody({
   takeFocus,
   holdFocus,
   answerRef,
+  armDelayMs = ARM_DELAY_MS,
 }: PromptBodyProps) {
   const denyRef = useRef<HTMLButtonElement | null>(null);
   const pinRef = useRef<HTMLInputElement | null>(null);
@@ -128,6 +137,7 @@ function PromptBody({
   const [pin, setPin] = useState('');
   const [now, setNow] = useState(clock);
   const [announcement, setAnnouncement] = useState('');
+  const [armed, setArmed] = useState(armDelayMs <= 0);
   const announcedRef = useRef<number | null>(bucket(secondsLeft(prompt.deadline, clock())));
 
   const highRisk = needsDevicePin(prompt.risk);
@@ -142,6 +152,13 @@ function PromptBody({
     if (denyRef.current && !denyRef.current.disabled) denyRef.current.focus();
     else holdFocus?.();
   }, [takeFocus, holdFocus]);
+
+  // Allowing waits a moment after the question appears (Ablehnen never waits: it is the safe answer).
+  useEffect(() => {
+    if (armed) return;
+    const timer = window.setTimeout(() => setArmed(true), armDelayMs);
+    return () => window.clearTimeout(timer);
+  }, [armed, armDelayMs]);
 
   // One tick a second for the countdown; the screen reader hears it at 30 and 10 seconds only.
   useEffect(() => {
@@ -165,6 +182,7 @@ function PromptBody({
         setError(t('perm_offline'));
         return;
       }
+      if (decision === 'allow' && !armed) return;
       const sendPin = decision === 'allow' && pinNeeded;
       if (sendPin && !pin.trim()) {
         setError(t('perm_pin_missing'));
@@ -190,7 +208,7 @@ function PromptBody({
       busyRef.current = false;
       setBusy(false);
     },
-    [client, device, holdFocus, onAnswered, pin, pinNeeded, prompt.id, t],
+    [armed, client, device, holdFocus, onAnswered, pin, pinNeeded, prompt.id, t],
   );
 
   useEffect(() => {
@@ -278,7 +296,7 @@ function PromptBody({
           <button
             type="button"
             className={highRisk ? 'btn btn--risky' : 'btn btn--primary'}
-            disabled={disabled}
+            disabled={disabled || !armed}
             onClick={() => void answer('allow', false)}
           >
             {t('perm_allow')}
@@ -297,7 +315,7 @@ function PromptBody({
           <button
             type="button"
             className="btn btn--plain"
-            disabled={disabled}
+            disabled={disabled || !armed}
             onClick={() => void answer('allow', true)}
           >
             {remember}

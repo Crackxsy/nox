@@ -4,7 +4,7 @@
  * what a refused device does with its pairing.
  */
 
-import { act, render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Auth } from '../auth';
@@ -133,8 +133,12 @@ describe('the question where it belongs', () => {
     await status('online');
     await emit('security.permission_requested', requested('i'));
     const card = await screen.findByRole('region', { name: t('ux_perm_q_delete') });
+    const allow = within(card).getByRole('button', { name: t('perm_allow') }) as HTMLButtonElement;
+    // A new question's "Erlauben" waits a moment (no double click allows it unseen).
+    expect(allow.disabled).toBe(true);
+    await waitFor(() => expect(allow.disabled).toBe(false), { timeout: 2000 });
     await act(async () => {
-      within(card).getByRole('button', { name: t('perm_allow') }).click();
+      allow.click();
     });
     expect(harness.calls).toContain('security.permission.reply');
     expect(screen.getByText(t('ux_perm_allowed'))).toBeTruthy();

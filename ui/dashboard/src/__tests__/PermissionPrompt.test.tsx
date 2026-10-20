@@ -10,7 +10,7 @@ import { translator } from '../i18n';
 import { type IpcClient, IpcError } from '../ipc';
 import type { PermissionPrompt } from '../model';
 import { PermissionNote } from '../PermissionNote';
-import { PermissionPromptDialog } from '../PermissionPrompt';
+import { ARM_DELAY_MS, PermissionPromptDialog } from '../PermissionPrompt';
 
 const t = translator('de');
 const NOW = Date.parse('2026-10-19T10:00:00Z');
@@ -53,6 +53,7 @@ function show(
       pinSet={null}
       onAnswered={answered}
       clock={() => NOW}
+      armDelayMs={0}
       {...props}
     />,
   );
@@ -134,6 +135,31 @@ describe('the answers', () => {
   it('offers no timed allow when the core does not say for how long', () => {
     show({ queue: [{ ...PROMPT, rememberTtlS: 0 }] });
     expect(screen.queryByRole('button', { name: /Stunde|Minute/ })).toBeNull();
+  });
+});
+
+describe('a new question', () => {
+  it('keeps the allowing buttons disabled for a moment, so a double click cannot allow it', async () => {
+    vi.useFakeTimers();
+    const { calls } = show({ armDelayMs: ARM_DELAY_MS });
+    const allow = screen.getByRole('button', { name: t('perm_allow') }) as HTMLButtonElement;
+    const timed = screen.getByRole('button', { name: 'Für 8 Stunden erlauben' }) as HTMLButtonElement;
+    expect(allow.disabled).toBe(true);
+    expect(timed.disabled).toBe(true);
+    // Ablehnen is the safe answer and never waits.
+    expect((screen.getByRole('button', { name: t('perm_deny') }) as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(allow);
+    });
+    expect(calls).toEqual([]);
+    await act(async () => {
+      vi.advanceTimersByTime(ARM_DELAY_MS);
+    });
+    expect(allow.disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(allow);
+    });
+    expect(calls[0]?.payload).toMatchObject({ decision: 'allow' });
   });
 });
 
