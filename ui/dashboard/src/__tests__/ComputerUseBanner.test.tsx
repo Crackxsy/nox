@@ -72,7 +72,7 @@ describe('parseComputerUse', () => {
   });
 });
 
-describe('ComputerUseBanner in the app', () => {
+describe('the computer-use strip in the app', () => {
   beforeEach(() => {
     captured.handlers = null;
   });
@@ -84,7 +84,7 @@ describe('ComputerUseBanner in the app', () => {
 
     emit({ active: true, reason: 'user asked', stop: 'ctrl+alt+shift+k' });
     const banner = screen.getByText(/steuert gerade Maus und Tastatur/);
-    expect(banner.getAttribute('role')).toBe('alert');
+    expect(banner.closest('[role="alert"]')).not.toBeNull();
     expect(banner.textContent).toBe(
       'Nox steuert gerade Maus und Tastatur – Strg + Alt + Umschalt + K beendet sofort.',
     );
@@ -99,9 +99,10 @@ describe('ComputerUseBanner in the app', () => {
     render(<App auth={LOCAL} lang="de" theme="system" />);
     await vi.waitFor(() => expect(captured.handlers).not.toBeNull());
     emit({ active: true, reason: '', stop: '' });
-    act(() => screen.getByRole('tab', { name: t('tab_capabilities') }).click());
-    expect(screen.getByRole('tab', { name: t('tab_capabilities') }).getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByRole('alert').textContent).toBe(t('computer_use_banner_no_hotkey'));
+    const nav = screen.getAllByRole('link', { name: t('ux_area_devices') })[0]!;
+    await act(async () => nav.click());
+    expect(nav.getAttribute('aria-current')).toBe('page');
+    expect(screen.getByText(t('computer_use_banner_no_hotkey')).closest('[role="alert"]')).not.toBeNull();
   });
 
   it('ignores a malformed event', async () => {

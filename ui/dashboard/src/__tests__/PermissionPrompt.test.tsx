@@ -9,7 +9,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { translator } from '../i18n';
 import { type IpcClient, IpcError } from '../ipc';
 import type { PermissionPrompt } from '../model';
-import { PermissionNote, PermissionPromptDialog } from '../PermissionPrompt';
+import { PermissionNote } from '../PermissionNote';
+import { ARM_DELAY_MS, PermissionPromptDialog } from '../PermissionPrompt';
 
 const t = translator('de');
 const NOW = Date.parse('2026-10-19T10:00:00Z');
@@ -52,6 +53,7 @@ function show(
       pinSet={null}
       onAnswered={answered}
       clock={() => NOW}
+      armDelayMs={0}
       {...props}
     />,
   );
@@ -65,10 +67,11 @@ afterEach(() => {
 describe('what the prompt says', () => {
   it('asks in one plain sentence first, then the area and the risk in words', () => {
     show();
-    const dialog = screen.getByRole('alertdialog', { name: 'Darf Nox das?' });
+    // The heading is a yes/no question in everyday words, by action.
+    const dialog = screen.getByRole('alertdialog', { name: 'Darf Nox etwas löschen?' });
     const sentence = within(dialog).getByText('Nox möchte löschen: C:/tmp/report.txt');
-    // The sentence comes right after the title.
-    expect(dialog.querySelector('h2 + p')).toBe(sentence);
+    // The sentence comes right after the question.
+    expect(dialog.querySelector('.ask-head + p')).toBe(sentence);
     expect(dialog.getAttribute('aria-describedby')).toContain(sentence.id);
     expect(dialog.textContent).toContain(t('audit_tool_file'));
     expect(dialog.textContent).toContain(t('perm_risk_high'));
@@ -95,14 +98,19 @@ describe('what the prompt says', () => {
 });
 
 describe('the answers', () => {
-  it('puts Deny, Allow and the timed allow in reading order, and focus on Deny', () => {
+  it('offers Allow, Deny and the quiet timed allow, with focus on Deny (the safe answer)', () => {
     show();
     const dialog = screen.getByRole('alertdialog');
     const labels = within(dialog)
       .getAllByRole('button')
       .map((b) => b.textContent);
-    expect(labels).toEqual([t('perm_deny'), t('perm_allow'), 'Für 8 Stunden erlauben']);
+    expect(labels).toEqual([t('perm_allow'), t('perm_deny'), 'Für 8 Stunden erlauben']);
     expect(document.activeElement?.textContent).toBe(t('perm_deny'));
+  });
+
+  it('falls back to "Darf Nox das?" for an action it has no question for', () => {
+    show({ queue: [{ ...PROMPT, action: 'frobnicate' }] });
+    expect(screen.getByRole('alertdialog', { name: t('perm_title') })).toBeTruthy();
   });
 
   it('does not dress Allow as the inviting primary button at high risk', () => {
@@ -113,7 +121,7 @@ describe('the answers', () => {
 
   it('keeps Allow the primary button at medium risk', () => {
     show({ queue: [{ ...PROMPT, risk: 'medium' }] });
-    expect(screen.getByRole('button', { name: t('perm_allow') }).className).toBe('btn');
+    expect(screen.getByRole('button', { name: t('perm_allow') }).className).toBe('btn btn--primary');
   });
 
   it('lets the local dashboard allow for as long as the core keeps such a grant', async () => {
@@ -130,6 +138,31 @@ describe('the answers', () => {
   });
 });
 
+describe('a new question', () => {
+  it('keeps the allowing buttons disabled for a moment, so a double click cannot allow it', async () => {
+    vi.useFakeTimers();
+    const { calls } = show({ armDelayMs: ARM_DELAY_MS });
+    const allow = screen.getByRole('button', { name: t('perm_allow') }) as HTMLButtonElement;
+    const timed = screen.getByRole('button', { name: 'Für 8 Stunden erlauben' }) as HTMLButtonElement;
+    expect(allow.disabled).toBe(true);
+    expect(timed.disabled).toBe(true);
+    // Ablehnen is the safe answer and never waits.
+    expect((screen.getByRole('button', { name: t('perm_deny') }) as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(allow);
+    });
+    expect(calls).toEqual([]);
+    await act(async () => {
+      vi.advanceTimersByTime(ARM_DELAY_MS);
+    });
+    expect(allow.disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(allow);
+    });
+    expect(calls[0]?.payload).toMatchObject({ decision: 'allow' });
+  });
+});
+
 describe('Escape', () => {
   it('denies once, also when pressed again while the answer is on its way', async () => {
     let release: (value: unknown) => void = () => undefined;
@@ -142,7 +175,7 @@ describe('Escape', () => {
       { name: 'security.permission.reply', payload: { grant_id: 'g1', decision: 'deny', remember: false } },
     ]);
     await act(async () => release({ ok: true }));
-    expect(answered).toHaveBeenCalledWith('g1');
+    expect(answered).toHaveBeenCalledWith('g1', 'deny');
   });
 
   it('says so when the denial did not arrive', async () => {
@@ -221,7 +254,9 @@ describe('the countdown', () => {
     vi.useFakeTimers();
     let now = NOW;
     show({ clock: () => now });
-    expect(screen.getByText('Noch 42 s – ohne Antwort tut Nox es nicht.')).toBeTruthy();
+    expect(screen.getByText('Noch 42 Sekunden. Ohne Antwort tut Nox es nicht.')).toBeTruthy();
+    // The risk as a word, right before the time left.
+    expect(screen.getByText('Risiko hoch')).toBeTruthy();
     const live = document.querySelector('.perm-dialog [aria-live="polite"]')!;
     expect(live.textContent).toBe('');
     const tick = (seconds: number) => {

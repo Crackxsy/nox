@@ -235,3 +235,10 @@ export function slugify(name: string): string {
     .slice(0, 40);
   return base || 'preset';
 }
+
+/** How many steps of a run failed, as the i18n key that says so. */
+export function runOutcomeKey(run: PresetRunResult): 'presets_run_ok' | 'presets_run_partial' | 'presets_run_partial_many' {
+  const failures = run.steps.filter((step) => !step.ok).length;
+  if (failures === 0) return 'presets_run_ok';
+  return failures === 1 ? 'presets_run_partial' : 'presets_run_partial_many';
+}

@@ -16,6 +16,8 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: false,
     target: 'es2022',
+    // `scripts/bundle-budget.mjs` reads the chunk graph from it (Spec UX-Neubau §12).
+    manifest: true,
   },
   test: {
     environment: 'jsdom',

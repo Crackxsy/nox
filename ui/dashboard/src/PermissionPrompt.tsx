@@ -1,41 +1,37 @@
 /**
- * "May Nox do this?": the permission prompt, on every dashboard a person looks at.
+ * "Darf Nox …?": one permission component in three places (Spec UX-Neubau §5) - inline in the
+ * conversation, under "Wartet auf dich" on Heute, and as a sheet on every other page.
  *
  * The core asks every confirming client at once (`security.permission_requested`); the first answer
- * wins, and `security.permission_decided` takes the prompt away everywhere. A dashboard that did
- * not answer says how it ended: someone answered on another device, or nobody answered in time and
- * Nox did not do it (`PermissionNote`). A dashboard that (re)connects asks for the questions still
- * open (`security.permission.pending`), so a prompt is neither missed nor left standing stale.
+ * wins, and `security.permission_decided` takes the question away everywhere. A dashboard says how
+ * a question it showed ended (`PermissionNote`): allowed, denied, nobody answered in time, decided
+ * on another device, or cancelled by Stopp. A dashboard that (re)connects asks for the questions
+ * still open (`security.permission.pending`).
  *
- * What it says: one plain sentence first ("Nox möchte löschen: Archiv/alt.zip"), the area and the
- * risk in words, how long is left before no answer means no - and the identifiers behind a
- * "technical details" disclosure for whoever wants them.
+ * What it says: the heading is a yes/no question in everyday words ("Darf Nox ein Programm
+ * starten?"), then one sentence with the target, the risk as a word and the time left in words.
+ * Identifiers sit behind "Technische Angaben".
  *
- * Answers: Deny and Allow side by side, equal in size, in the order they are read; at high or
- * critical risk Allow is not the inviting blue button. On the machine Nox runs on, a quiet third
- * option allows for as long as the core keeps such a grant ("for 8 hours" - never "always"). A
- * paired device answers once, and allows at high or critical risk only with the security PIN; with
- * no PIN set it says where this can be allowed instead, and Deny still works.
+ * Answers: Erlauben (the primary button - but not at high or critical risk, where it is outlined
+ * like the rest), Ablehnen, and on the machine Nox runs on a quiet "Für 8 Stunden erlauben" (as long
+ * as the core keeps such a grant - never "always"). A paired device answers once, and allows at
+ * high or critical risk only with the security PIN; with no PIN set it says where this can be
+ * allowed instead, and Ablehnen still works.
  *
- * Accessibility: an `alertdialog` with a label and a description, focus on Deny (the answer that
- * can never do harm) or on the dialog itself while nothing can be pressed, Tab kept inside, the
- * page behind made `inert` by the app, Escape denies (once, also while a reply is in flight), and
- * focus goes back where it was afterwards. The countdown is announced at 30 and 10 seconds only.
+ * Accessibility: the sheet is an `alertdialog` with a label and a description, focus on Ablehnen
+ * (the answer that can never do harm), Tab kept inside, the page behind made `inert` by the app,
+ * Escape denies (once, also while a reply is in flight), focus goes back where it was afterwards.
+ * Inline, it is a labelled region and nothing is trapped. The countdown is announced at 30 and 10
+ * seconds only.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { refusalText } from './hooks';
-import {
-  auditActionLabel,
-  auditToolLabel,
-  fill,
-  type Key,
-  rememberLabel,
-  type T,
-} from './i18n';
+import { auditActionLabel, auditToolLabel, fill, type Key, rememberLabel, type T } from './i18n';
 import { type IpcClient, api } from './ipc';
-import { type DecidedNote, type PermissionPrompt, needsDevicePin, secondsLeft } from './model';
+import { type PermissionPrompt, needsDevicePin, secondsLeft } from './model';
+import { StopButton } from './shell/stop';
 
 export interface PermissionPromptProps {
   t: T;
@@ -45,10 +41,12 @@ export interface PermissionPromptProps {
   device: boolean;
   /** On a paired device: whether a security PIN is set; null while not known. */
   pinSet: boolean | null;
-  /** Called with the prompt id once this dashboard answered (the core's event removes it too). */
-  onAnswered: (id: string) => void;
+  /** Called once this dashboard answered (the core's event removes it too). */
+  onAnswered: (id: string, decision: 'allow' | 'deny') => void;
   /** Injected in tests. */
   clock?: () => number;
+  /** How long "Erlauben" waits after a question appears; `ARM_DELAY_MS` unless a test says 0. */
+  armDelayMs?: number;
 }
 
 const RISK_KEYS: Record<string, Key> = {
@@ -58,6 +56,28 @@ const RISK_KEYS: Record<string, Key> = {
   high: 'perm_risk_high',
   critical: 'perm_risk_critical',
 };
+
+/** The question in everyday words, by action; anything else asks "Darf Nox das?". */
+const QUESTION_KEYS: Record<string, Key> = {
+  process_start: 'ux_perm_q_process_start',
+  process_stop: 'ux_perm_q_process_stop',
+  delete: 'ux_perm_q_delete',
+  write: 'ux_perm_q_write',
+  move: 'ux_perm_q_move',
+  read: 'ux_perm_q_read',
+  type_text: 'ux_perm_q_input',
+  input_send: 'ux_perm_q_input',
+  screen_capture: 'ux_perm_q_screen',
+  software_install: 'ux_perm_q_install',
+  settings: 'ux_perm_q_settings',
+  set: 'ux_perm_q_settings',
+  request: 'ux_perm_q_request',
+};
+
+export function questionFor(t: T, action: string): string {
+  const key = QUESTION_KEYS[action];
+  return key ? t(key) : t('perm_title');
+}
 
 /** Seconds left at which the countdown is said out loud, once each. */
 const ANNOUNCE_AT = [30, 10] as const;
@@ -71,33 +91,29 @@ function bucket(left: number | null): number | null {
 
 const FOCUSABLE = 'button:not(:disabled), input:not(:disabled), summary, a[href]';
 
-export function PermissionPromptDialog(props: PermissionPromptProps) {
-  const prompt = props.queue[0];
-  const restoreRef = useRef<HTMLElement | null>(null);
-  const promptId = prompt?.id;
+/* ------------------------------------------------------------------ body - */
 
-  // Remember where focus was before the first prompt, and give it back after the last.
-  useEffect(() => {
-    if (promptId && !restoreRef.current && document.activeElement instanceof HTMLElement) {
-      restoreRef.current = document.activeElement;
-    }
-    if (!promptId && restoreRef.current) {
-      const target = restoreRef.current;
-      restoreRef.current = null;
-      if (target.isConnected) target.focus();
-    }
-  }, [promptId]);
+/**
+ * How long a new question's "Erlauben" buttons stay disabled. After one answer the next question
+ * appears with "Erlauben" in the same spot: a double click must not allow it unseen.
+ */
+export const ARM_DELAY_MS = 500;
 
-  if (!prompt) return null;
-  return <PromptDialog key={prompt.id} {...props} prompt={prompt} waiting={props.queue.length - 1} />;
-}
-
-interface PromptDialogProps extends PermissionPromptProps {
+interface PromptBodyProps extends Omit<PermissionPromptProps, 'queue'> {
   prompt: PermissionPrompt;
   waiting: number;
+  /** id prefix, so the dialog and an inline card can both be on a page. */
+  idBase: string;
+  /** The heading level: 2 in the sheet, 3 inline under a section heading. */
+  level: 2 | 3;
+  /** Focus Ablehnen on mount (the sheet does; an inline card must not steal focus). */
+  takeFocus: boolean;
+  /** Where focus should rest while a reply travels; the sheet passes itself. */
+  holdFocus?: () => void;
+  answerRef?: React.MutableRefObject<((d: 'allow' | 'deny', r: boolean) => Promise<void>) | null>;
 }
 
-function PromptDialog({
+function PromptBody({
   t,
   client,
   prompt,
@@ -106,8 +122,13 @@ function PromptDialog({
   pinSet,
   onAnswered,
   clock = Date.now,
-}: PromptDialogProps) {
-  const dialogRef = useRef<HTMLDivElement | null>(null);
+  idBase,
+  level,
+  takeFocus,
+  holdFocus,
+  answerRef,
+  armDelayMs = ARM_DELAY_MS,
+}: PromptBodyProps) {
   const denyRef = useRef<HTMLButtonElement | null>(null);
   const pinRef = useRef<HTMLInputElement | null>(null);
   const busyRef = useRef(false);
@@ -116,6 +137,7 @@ function PromptDialog({
   const [pin, setPin] = useState('');
   const [now, setNow] = useState(clock);
   const [announcement, setAnnouncement] = useState('');
+  const [armed, setArmed] = useState(armDelayMs <= 0);
   const announcedRef = useRef<number | null>(bucket(secondsLeft(prompt.deadline, clock())));
 
   const highRisk = needsDevicePin(prompt.risk);
@@ -125,11 +147,18 @@ function PromptDialog({
   const remember = device ? null : rememberLabel(t, prompt.rememberTtlS);
   const offline = client === null;
 
-  // Focus on Deny, or on the dialog itself while nothing in it can be pressed.
   useEffect(() => {
+    if (!takeFocus) return;
     if (denyRef.current && !denyRef.current.disabled) denyRef.current.focus();
-    else dialogRef.current?.focus();
-  }, []);
+    else holdFocus?.();
+  }, [takeFocus, holdFocus]);
+
+  // Allowing waits a moment after the question appears (Ablehnen never waits: it is the safe answer).
+  useEffect(() => {
+    if (armed) return;
+    const timer = window.setTimeout(() => setArmed(true), armDelayMs);
+    return () => window.clearTimeout(timer);
+  }, [armed, armDelayMs]);
 
   // One tick a second for the countdown; the screen reader hears it at 30 and 10 seconds only.
   useEffect(() => {
@@ -153,6 +182,7 @@ function PromptDialog({
         setError(t('perm_offline'));
         return;
       }
+      if (decision === 'allow' && !armed) return;
       const sendPin = decision === 'allow' && pinNeeded;
       if (sendPin && !pin.trim()) {
         setError(t('perm_pin_missing'));
@@ -162,17 +192,11 @@ function PromptDialog({
       busyRef.current = true;
       setBusy(true);
       setError('');
-      // The buttons are disabled while the answer travels; keep focus inside the dialog meanwhile.
-      dialogRef.current?.focus();
+      // The buttons are disabled while the answer travels; keep focus where it can stay.
+      holdFocus?.();
       try {
-        await api.permissionReply(
-          client,
-          prompt.id,
-          decision,
-          remembered && !device,
-          sendPin ? pin.trim() : '',
-        );
-        onAnswered(prompt.id);
+        await api.permissionReply(client, prompt.id, decision, remembered && !device, sendPin ? pin.trim() : '');
+        onAnswered(prompt.id, decision);
       } catch (e) {
         setError(refusalText(t, e, sendPin, t('perm_reply_failed')));
         if (sendPin) setPin('');
@@ -184,22 +208,190 @@ function PromptDialog({
       busyRef.current = false;
       setBusy(false);
     },
-    [client, device, onAnswered, pin, pinNeeded, prompt.id, t],
+    [armed, client, device, holdFocus, onAnswered, pin, pinNeeded, prompt.id, t],
   );
+
+  useEffect(() => {
+    if (answerRef) answerRef.current = answer;
+  });
+
+  const action = auditActionLabel(t, prompt.action);
+  const sentence = prompt.target
+    ? fill(t('perm_sentence'), action, prompt.target)
+    : fill(t('perm_sentence_no_target'), action);
+  const riskKey = RISK_KEYS[prompt.risk];
+  const left = secondsLeft(prompt.deadline, now);
+  const disabled = busy || offline;
+  const Heading = level === 2 ? 'h2' : 'h3';
+
+  return (
+    <>
+      <div className="ask-head">
+        <span className="lamp lamp--sm" aria-hidden="true" />
+        <Heading id={`${idBase}-title`} className="ask-title">
+          {questionFor(t, prompt.action)}
+        </Heading>
+      </div>
+      <p id={`${idBase}-sentence`} className="ask-what">
+        {sentence}
+      </p>
+      <p id={`${idBase}-risk`} className="ask-when">
+        {prompt.risk && (
+          <span className={`badge badge--risk badge--risk-${prompt.risk}`}>
+            {fill(t('ux_perm_risk'), riskKey ? t(riskKey) : prompt.risk)}
+          </span>
+        )}{' '}
+        {left !== null && (
+          <span className="ask-left">{left > 0 ? fill(t('perm_countdown'), left) : t('perm_countdown_over')}</span>
+        )}
+      </p>
+      <p className="sr-only" aria-live="polite">
+        {announcement}
+      </p>
+
+      {device && <p className="hint">{t('perm_device_note')}</p>}
+      {pinNeeded && canAllow && (
+        <div className="field">
+          <label htmlFor={`${idBase}-pin`} className="label">
+            {t('perm_pin')}
+          </label>
+          <input
+            ref={pinRef}
+            id={`${idBase}-pin`}
+            className="input input--pin"
+            type="password"
+            inputMode="numeric"
+            autoComplete="off"
+            value={pin}
+            disabled={disabled}
+            onChange={(e) => setPin(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                void answer('allow', false);
+              }
+            }}
+            aria-describedby={`${idBase}-pin-hint`}
+          />
+          <p id={`${idBase}-pin-hint`} className="hint">
+            {t('perm_pin_hint')}
+          </p>
+        </div>
+      )}
+      {pinNeeded && !canAllow && <p className="hint perm-only-here">{t('perm_only_at_computer')}</p>}
+
+      {offline && (
+        <p role="status" className="alert">
+          {t('perm_offline')}
+        </p>
+      )}
+      {error && !(offline && error === t('perm_offline')) && (
+        <p role="alert" className="alert">
+          {error}
+        </p>
+      )}
+
+      <div className="btns ask-btns">
+        {canAllow && (
+          <button
+            type="button"
+            className={highRisk ? 'btn btn--risky' : 'btn btn--primary'}
+            disabled={disabled || !armed}
+            onClick={() => void answer('allow', false)}
+          >
+            {t('perm_allow')}
+          </button>
+        )}
+        <button
+          ref={denyRef}
+          type="button"
+          className="btn"
+          disabled={disabled}
+          onClick={() => void answer('deny', false)}
+        >
+          {t('perm_deny')}
+        </button>
+        {remember && (
+          <button
+            type="button"
+            className="btn btn--plain"
+            disabled={disabled || !armed}
+            onClick={() => void answer('allow', true)}
+          >
+            {remember}
+          </button>
+        )}
+      </div>
+
+      <details className="tech">
+        <summary>{t('perm_technical')}</summary>
+        <dl className="tech-list">
+          {prompt.agent && (
+            <>
+              <dt>{t('perm_agent')}</dt>
+              <dd className="mono">{prompt.agent}</dd>
+            </>
+          )}
+          <dt>{t('perm_area')}</dt>
+          <dd>{auditToolLabel(t, prompt.tool)}</dd>
+          <dt>{t('perm_tool')}</dt>
+          <dd className="mono">{prompt.tool}</dd>
+          <dt>{t('perm_action')}</dt>
+          <dd className="mono">{prompt.action}</dd>
+          {prompt.target && (
+            <>
+              <dt>{t('perm_target')}</dt>
+              <dd>
+                <code className="code">{prompt.target}</code>
+              </dd>
+            </>
+          )}
+        </dl>
+      </details>
+      {waiting > 0 && <p className="hint perm-more">{fill(t('perm_more'), waiting)}</p>}
+    </>
+  );
+}
+
+/* ----------------------------------------------------------------- sheet - */
+
+export function PermissionPromptDialog(props: PermissionPromptProps) {
+  const prompt = props.queue[0];
+  const restoreRef = useRef<HTMLElement | null>(null);
+  const promptId = prompt?.id;
+
+  // Remember where focus was before the first prompt, and give it back after the last.
+  useEffect(() => {
+    if (promptId && !restoreRef.current && document.activeElement instanceof HTMLElement) {
+      restoreRef.current = document.activeElement;
+    }
+    if (!promptId && restoreRef.current) {
+      const target = restoreRef.current;
+      restoreRef.current = null;
+      if (target.isConnected) target.focus();
+    }
+  }, [promptId]);
+
+  if (!prompt) return null;
+  return <PromptDialog key={prompt.id} {...props} prompt={prompt} waiting={props.queue.length - 1} />;
+}
+
+function PromptDialog(props: PermissionPromptProps & { prompt: PermissionPrompt; waiting: number }) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const answerRef = useRef<((d: 'allow' | 'deny', r: boolean) => Promise<void>) | null>(null);
+  const hold = useCallback(() => dialogRef.current?.focus(), []);
 
   // Escape denies and Tab stays inside, wherever focus is while the dialog is open. On the document,
   // so it also works while focus sits on the dialog itself or was lost to a disabled button.
-  const answerRef = useRef(answer);
-  useEffect(() => {
-    answerRef.current = answer;
-  });
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const dialog = dialogRef.current;
       if (!dialog) return;
       if (e.key === 'Escape') {
+        // Escape that already closed something else (a menu still open) is not an answer.
+        if (e.defaultPrevented || document.querySelector('dialog[open]')) return;
         e.preventDefault();
-        void answerRef.current('deny', false);
+        void answerRef.current?.('deny', false);
         return;
       }
       if (e.key !== 'Tab') return;
@@ -225,14 +417,6 @@ function PromptDialog({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const action = auditActionLabel(t, prompt.action);
-  const sentence = prompt.target
-    ? fill(t('perm_sentence'), action, prompt.target)
-    : fill(t('perm_sentence_no_target'), action);
-  const riskKey = RISK_KEYS[prompt.risk];
-  const left = secondsLeft(prompt.deadline, now);
-  const disabled = busy || offline;
-
   return (
     <div className="perm-backdrop">
       <div
@@ -241,151 +425,42 @@ function PromptDialog({
         aria-modal="true"
         aria-labelledby="perm-title"
         aria-describedby="perm-sentence perm-risk"
-        aria-busy={busy || undefined}
         tabIndex={-1}
-        className="perm-dialog"
+        className="perm-dialog ask"
       >
-        <h2 id="perm-title" className="perm-title">
-          {t('perm_title')}
-        </h2>
-        <p id="perm-sentence" className="perm-sentence">
-          {sentence}
-        </p>
-        <dl className="perm-facts">
-          <div>
-            <dt>{t('perm_area')}</dt>
-            <dd>{auditToolLabel(t, prompt.tool)}</dd>
-          </div>
-          {prompt.risk && (
-            <div id="perm-risk">
-              <dt>{t('perm_risk')}</dt>
-              <dd>
-                <span className={`perm-risk perm-risk--${prompt.risk}`}>
-                  {riskKey ? t(riskKey) : prompt.risk}
-                </span>
-              </dd>
-            </div>
-          )}
-        </dl>
-        {left !== null && (
-          <p className="hint perm-countdown">
-            {left > 0 ? fill(t('perm_countdown'), left) : t('perm_countdown_over')}
-          </p>
-        )}
-        <p className="sr-only" aria-live="polite">
-          {announcement}
-        </p>
-
-        <details className="perm-technical">
-          <summary>{t('perm_technical')}</summary>
-          <dl className="perm-facts perm-facts--technical">
-            <div>
-              <dt>{t('perm_tool')}</dt>
-              <dd className="mono">{prompt.tool}</dd>
-            </div>
-            <div>
-              <dt>{t('perm_action')}</dt>
-              <dd className="mono">{prompt.action}</dd>
-            </div>
-            {prompt.agent && (
-              <div>
-                <dt>{t('perm_agent')}</dt>
-                <dd className="mono">{prompt.agent}</dd>
-              </div>
-            )}
-          </dl>
-        </details>
-
-        {device && <p className="hint">{t('perm_device_note')}</p>}
-        {pinNeeded && canAllow && (
-          <div className="field">
-            <label htmlFor="perm-pin" className="label">
-              {t('perm_pin')}
-            </label>
-            <input
-              ref={pinRef}
-              id="perm-pin"
-              className="input input--pin"
-              type="password"
-              inputMode="numeric"
-              autoComplete="off"
-              value={pin}
-              disabled={disabled}
-              onChange={(e) => setPin(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  void answer('allow', false);
-                }
-              }}
-              aria-describedby="perm-pin-hint"
-            />
-            <p id="perm-pin-hint" className="hint">
-              {t('perm_pin_hint')}
-            </p>
-          </div>
-        )}
-        {pinNeeded && !canAllow && <p className="hint perm-only-here">{t('perm_only_at_computer')}</p>}
-
-        {offline && (
-          <p role="status" className="alert">
-            {t('perm_offline')}
-          </p>
-        )}
-        {error && !(offline && error === t('perm_offline')) && (
-          <p role="alert" className="alert">
-            {error}
-          </p>
-        )}
-
-        <div className={canAllow ? 'perm-actions' : 'perm-actions perm-actions--single'}>
-          <button
-            ref={denyRef}
-            type="button"
-            className="btn btn--quiet"
-            disabled={disabled}
-            onClick={() => void answer('deny', false)}
-          >
-            {t('perm_deny')}
-          </button>
-          {canAllow && (
-            <button
-              type="button"
-              className={highRisk ? 'btn btn--risky' : 'btn'}
-              disabled={disabled}
-              onClick={() => void answer('allow', false)}
-            >
-              {t('perm_allow')}
-            </button>
-          )}
-        </div>
-        {remember && (
-          <div className="perm-remember">
-            <button
-              type="button"
-              className="btn btn--quiet btn--sm"
-              disabled={disabled}
-              onClick={() => void answer('allow', true)}
-            >
-              {remember}
-            </button>
-          </div>
-        )}
-        {waiting > 0 && <p className="hint perm-more">{fill(t('perm_more'), waiting)}</p>}
+        <PromptBody {...props} idBase="perm" level={2} takeFocus holdFocus={hold} answerRef={answerRef} />
+        {/* The page behind is inert; Stopp stays where it always is (Spec §5). */}
+        <StopButton placement="corner" />
       </div>
     </div>
   );
 }
 
+/* ---------------------------------------------------------------- inline - */
+
 /**
- * How a question this dashboard showed ended without its answer. The live region is always in the
- * page, so the sentence is announced when it appears; it is empty and invisible otherwise.
+ * The first open question as a card in the page (Heute, the conversation). Nothing is trapped and
+ * nothing is inert: the person reads it where it belongs and can still scroll past.
  */
-export function PermissionNote({ t, note }: { t: T; note: DecidedNote | null }) {
-  const text = note === 'timeout' ? t('perm_timed_out') : note === 'elsewhere' ? t('perm_decided_elsewhere') : '';
+export function PermissionInline(props: PermissionPromptProps & { idBase?: string }) {
+  const prompt = props.queue[0];
+  if (!prompt) return null;
+  const idBase = props.idBase ?? 'perm-inline';
   return (
-    <p role="status" className={text ? 'perm-note' : 'perm-note perm-note--empty'}>
-      {text}
-    </p>
+    <section
+      key={prompt.id}
+      className="ask"
+      aria-labelledby={`${idBase}-title`}
+      aria-describedby={`${idBase}-sentence ${idBase}-risk`}
+    >
+      <PromptBody
+        {...props}
+        prompt={prompt}
+        waiting={props.queue.length - 1}
+        idBase={idBase}
+        level={3}
+        takeFocus={false}
+      />
+    </section>
   );
 }

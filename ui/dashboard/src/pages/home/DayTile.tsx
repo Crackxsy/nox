@@ -1,5 +1,5 @@
 /**
- * "Dein Tag": today's appointments and reminders in one tile at the top of the Zuhause page.
+ * "Dein Tag": today's appointments and reminders, a section of Heute.
  *
  * Three honest states instead of an empty box: no calendar connected (with the way to connect
  * one), a calendar that could not be loaded just now (in the core's words), and a day with
@@ -28,9 +28,13 @@ export interface DayTileProps {
   lang: string;
   client: IpcClient | null;
   onOpenSettings: () => void;
+  /** Heading level inside the page (Heute uses 2). */
+  level?: 2 | 3;
+  /** Told about every loaded day, so Heute's summary sentence can count appointments. */
+  onDay?: (day: DayToday) => void;
 }
 
-export function DayTile({ t, lang, client, onOpenSettings }: DayTileProps) {
+export function DayTile({ t, lang, client, onOpenSettings, level = 3, onDay }: DayTileProps) {
   const [day, setDay] = useState<DayToday | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -44,6 +48,7 @@ export function DayTile({ t, lang, client, onOpenSettings }: DayTileProps) {
         const parsed = parseDayToday(await api.dayToday(c));
         if (cancelled()) return;
         setDay(parsed);
+        onDay?.(parsed);
         setError('');
       } catch (e) {
         if (cancelled()) return;
@@ -54,7 +59,7 @@ export function DayTile({ t, lang, client, onOpenSettings }: DayTileProps) {
         );
       }
     },
-    [t],
+    [t, onDay],
   );
   useRefreshOnConnect(client, load);
 
@@ -96,7 +101,7 @@ export function DayTile({ t, lang, client, onOpenSettings }: DayTileProps) {
   const failing = day?.calendars.find((feed) => feed.configured && feed.error);
 
   return (
-    <Tile id="day" title={t('day_title')} lede={t('day_hint')}>
+    <Tile id="day" level={level} title={t('day_title')} lede={t('day_hint')}>
       {error ? (
         <p className="muted">{error}</p>
       ) : day === null ? (
@@ -154,6 +159,8 @@ export function DayTile({ t, lang, client, onOpenSettings }: DayTileProps) {
             </ul>
           )}
 
+          <details className="more">
+          <summary>{t('ux_day_add_more')}</summary>
           <div className="field">
             <label htmlFor="day-add-text" className="label">
               {t('day_add_label')}
@@ -198,6 +205,7 @@ export function DayTile({ t, lang, client, onOpenSettings }: DayTileProps) {
               {t('day_add')}
             </button>
           </div>
+          </details>
         </>
       )}
     </Tile>

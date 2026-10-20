@@ -54,7 +54,7 @@ export interface TileProps {
    * Heading level of the tile title. A tile inside a `<section>` that already has an H3 heading
    * passes 4, so the accessibility tree nests instead of listing the tile as a sibling of the page.
    */
-  level?: 3 | 4;
+  level?: 2 | 3 | 4;
   id?: string;
   className?: string;
   children?: ReactNode;
@@ -76,7 +76,7 @@ export function Tile({
   if (feature) classes.push('tile--feature');
   if (wide) classes.push('tile--wide');
   if (className) classes.push(className);
-  const Heading = level === 4 ? 'h4' : 'h3';
+  const Heading = level === 4 ? 'h4' : level === 2 ? 'h2' : 'h3';
   return (
     <section id={id} className={classes.join(' ')} aria-labelledby={headingId}>
       {eyebrow && <span className="eyebrow">{eyebrow}</span>}

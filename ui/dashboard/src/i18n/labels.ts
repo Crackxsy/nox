@@ -13,8 +13,7 @@
  * hidden, and a reason nobody has translated yet still arrives on screen intact.
  */
 
-import { type Key, type Lang, type T, fill } from './core';
-import { de } from './de';
+import { type Key, type Lang, type T, fill, hasKey } from './core';
 
 function lookup(t: T, table: Record<string, Key>, value: string): string {
   const key = table[value];
@@ -315,7 +314,7 @@ export function groupLabel(t: T, group: string): string {
  */
 export function settingLabel(t: T, path: string): string {
   const key = `setting_${path.replace(/\./g, '_')}`;
-  return key in de ? t(key as Key) : path;
+  return hasKey(key) ? t(key as Key) : path;
 }
 
 /**

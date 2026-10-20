@@ -1,5 +1,5 @@
 /**
- * The Zuhause tab's four designed states, and the two things it must never do.
+ * Geräte › Zuhause: its designed states, and the two things it must never do.
  *
  * Never: show a toggle that looks as if it worked when Home Assistant refused it, and show a
  * device Nox is not allowed to touch. The first is why a failed switch gets its own line next to
@@ -21,7 +21,8 @@ import {
   parseHomeListing,
   reduceEvent,
 } from '../model';
-import { HomePage } from '../pages/Home';
+import { HomeRooms, useHome } from '../pages/Home';
+import type { T } from '../i18n';
 
 const t = translator('de');
 
@@ -86,22 +87,19 @@ async function renderPage(client: IpcClient | null, state: DashboardState = INIT
   const onState = (updater: (s: DashboardState) => DashboardState) => {
     current = updater(current);
   };
-  await act(async () => {
-    render(
-      <HomePage
-        t={t}
-        lang="de"
-        state={current}
-        client={client}
-        onState={onState}
-        onOpenSettings={() => undefined}
-      />,
+  function Harness({ tr }: { tr: T }) {
+    const home = useHome(tr, client, onState);
+    return (
+      <HomeRooms t={tr} lang="de" state={current} client={client} home={home} onOpenSettings={() => undefined} />
     );
+  }
+  await act(async () => {
+    render(<Harness tr={t} />);
   });
   return () => current;
 }
 
-describe('the Zuhause tab', () => {
+describe('Geräte › Zuhause', () => {
   it('explains a refused device list in German and keeps the core wording as a detail', async () => {
     const error = new IpcError('permission.denied', "role 'dashboard' may not call 'home.list'");
     await renderPage(refusing(error));
@@ -151,11 +149,13 @@ describe('the Zuhause tab', () => {
     };
     const { client, sent } = fakeClient();
     await renderPage(client, state);
+    const lamp = screen.getByRole('switch', { name: 'Deckenlampe' });
+    expect(lamp.getAttribute('aria-checked')).toBe('true');
     await act(async () => {
-      await userEvent.click(screen.getByRole('button', { name: t('home_turn_off') }));
+      await userEvent.click(lamp);
     });
     await act(async () => {
-      await userEvent.click(screen.getByRole('button', { name: t('home_turn_on') }));
+      await userEvent.click(screen.getByRole('switch', { name: 'Kaffeemaschine' }));
     });
     const calls = sent.filter((entry) => entry.name.startsWith('home.') && entry.name !== 'home.list' && entry.name !== 'home.status');
     expect(calls[0]).toEqual({
@@ -178,59 +178,14 @@ describe('the Zuhause tab', () => {
     });
     await renderPage(client, state);
     await act(async () => {
-      await userEvent.click(screen.getByRole('button', { name: t('home_turn_off') }));
+      await userEvent.click(screen.getByRole('switch', { name: 'Deckenlampe' }));
     });
     await waitFor(() =>
       expect(screen.getByText('Home Assistant lehnt das ab')).toBeDefined(),
     );
-    // Still switchable, and the other device is untouched by the failure.
-    expect(screen.getByRole('button', { name: t('home_turn_on') })).toBeDefined();
-  });
-
-  it('reports the deterministic latency of a matched sentence', async () => {
-    const { client } = fakeClient({
-      'home.command': {
-        matched: true,
-        refused: false,
-        reason: '',
-        tool: 'home.light',
-        summary: 'Licht Wohnzimmer: aus (1 Gerät)',
-        match_ms: 0.4,
-      },
-    });
-    await renderPage(client, {
-      ...INITIAL_STATE,
-      home: applyHome(INITIAL_STATE.home, parseHomeListing(LISTING)),
-    });
-    const input = screen.getByLabelText(t('home_command_label'));
-    await act(async () => {
-      await userEvent.type(input, 'mach das licht im wohnzimmer aus');
-      await userEvent.click(screen.getByRole('button', { name: t('home_command_send') }));
-    });
-    await waitFor(() => expect(screen.getByText(/Licht Wohnzimmer/)).toBeDefined());
-    expect(screen.getByText(/0,4 ms/)).toBeDefined();
-  });
-
-  it('says so plainly when a sentence was refused by the boundary', async () => {
-    const { client } = fakeClient({
-      'home.command': {
-        matched: false,
-        refused: true,
-        reason: 'locks ... are never controlled by Nox (hard boundary)',
-        tool: '',
-        summary: '',
-        match_ms: 0.2,
-      },
-    });
-    await renderPage(client, {
-      ...INITIAL_STATE,
-      home: applyHome(INITIAL_STATE.home, parseHomeListing(LISTING)),
-    });
-    await act(async () => {
-      await userEvent.type(screen.getByLabelText(t('home_command_label')), 'tür auf');
-      await userEvent.click(screen.getByRole('button', { name: t('home_command_send') }));
-    });
-    await waitFor(() => expect(screen.getByText(/hard boundary/)).toBeDefined());
+    // The failure sits in the lamp's own row, not in a banner; the other device is untouched.
+    expect(screen.getByText('Home Assistant lehnt das ab').closest('li')!.textContent).toContain('Deckenlampe');
+    expect(screen.getByRole('switch', { name: 'Kaffeemaschine' }).hasAttribute('disabled')).toBe(false);
   });
 });
 

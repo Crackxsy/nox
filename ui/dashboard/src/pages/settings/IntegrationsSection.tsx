@@ -38,7 +38,14 @@ export interface IntegrationsSectionProps {
   onOpenRemote: () => void;
   /** The Home Assistant connection test; it owns its own request and its own verdict. */
   homeTest: HomeTestController;
+  /**
+   * Only these credentials (each Settings page shows the ones of its function: Stream gets Twitch
+   * and OBS, Zuhause the Home Assistant token, ...). Without it, all of them under one heading.
+   */
+  only?: readonly IntegrationId[];
 }
+
+export type IntegrationId = 'twitch' | 'obs' | 'home' | 'calendar' | 'telegram';
 
 export function IntegrationsSection({
   t,
@@ -50,7 +57,9 @@ export function IntegrationsSection({
   plugins,
   onOpenRemote,
   homeTest,
+  only,
 }: IntegrationsSectionProps) {
+  const show = (id: IntegrationId) => !only || only.includes(id);
   const disabled = client === null;
   const twitchState = twitch.status?.state ?? 'idle';
 
@@ -79,15 +88,17 @@ export function IntegrationsSection({
   });
 
   return (
-    <section aria-labelledby="h-integrations" id="settings-integrations">
-      <div className="rail-head">
-        <div>
-          <h3 id="h-integrations" className="rail-title">
-            {t('integrations_title')}
-          </h3>
-          <p className="rail-sub">{t('integrations_hint')}</p>
+    <section aria-labelledby={only ? undefined : 'h-integrations'} id={only ? undefined : 'settings-integrations'}>
+      {!only && (
+        <div className="rail-head">
+          <div>
+            <h3 id="h-integrations" className="rail-title">
+              {t('integrations_title')}
+            </h3>
+            <p className="rail-sub">{t('integrations_hint')}</p>
+          </div>
         </div>
-      </div>
+      )}
 
       {secrets.error && (
         <p role="alert" className="alert">
@@ -99,6 +110,7 @@ export function IntegrationsSection({
         <p className="muted">{t('secrets_unavailable')}</p>
       ) : (
         <>
+          {show('twitch') && (
           <div className="tiles tiles--single">
             <Tile
               feature
@@ -177,8 +189,10 @@ export function IntegrationsSection({
               )}
             </Tile>
           </div>
+          )}
 
           <div className="tiles tiles--pair">
+            {show('obs') && (
             <Tile level={4} id="obs" title={t('stream_plugin_obs')}>
               <StateWord tone={toneFor(plugins.obs)} label={obsLabel(t, plugins.obs)} />
               <SecretField
@@ -187,7 +201,9 @@ export function IntegrationsSection({
                 hintKey="obs_hint"
               />
             </Tile>
+            )}
 
+            {show('home') && (
             <Tile level={4} id="home" title={t('settings_group_home')}>
               <ol className="steps">
                 <li>{t('home_step_1')}</li>
@@ -218,7 +234,9 @@ export function IntegrationsSection({
                 {homeTest.message && <Detail label={homeTest.message} detail={homeTest.detail} />}
               </p>
             </Tile>
+            )}
 
+            {show('calendar') && (
             <Tile level={4} id="calendar" title={t('settings_group_calendar')}>
               <p className="hint">{t('calendar_intro')}</p>
               <ol className="steps">
@@ -237,7 +255,9 @@ export function IntegrationsSection({
                 hintKey="calendar_school_hint"
               />
             </Tile>
+            )}
 
+            {show('telegram') && (
             <Tile level={4} id="telegram" title="Telegram">
               <SecretField
                 {...secretProps(TELEGRAM_TOKEN)}
@@ -250,6 +270,7 @@ export function IntegrationsSection({
                 </button>
               </div>
             </Tile>
+            )}
           </div>
         </>
       )}

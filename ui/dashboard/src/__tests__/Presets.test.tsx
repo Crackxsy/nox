@@ -81,6 +81,27 @@ describe('Presets page', () => {
     expect(screen.getByText('Licht · Programm starten')).toBeTruthy();
   });
 
+  it('says when the flows could not be loaded, and loads them again on request', async () => {
+    let fail = true;
+    const client = {
+      request: (name: string) =>
+        name === 'presets.list'
+          ? fail
+            ? Promise.reject(new Error('unknown request presets.list'))
+            : Promise.resolve(LISTING)
+          : Promise.resolve({ ok: true }),
+    } as unknown as IpcClient;
+
+    await renderPage(client);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain(t('presets_load_failed'));
+    fail = false;
+    await act(async () => screen.getByRole('button', { name: t('ux_reload') }).click());
+    expect(await screen.findByText('Gaming')).toBeTruthy();
+    expect(screen.queryByText(t('presets_load_failed'), { exact: false })).toBeNull();
+  });
+
   it('says so when nothing is configured yet', async () => {
     const { client } = fakeClient({ 'presets.list': { enabled: true, presets: [], actions: [] } });
 
