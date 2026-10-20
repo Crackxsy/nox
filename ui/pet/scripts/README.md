@@ -33,50 +33,52 @@ uv run --no-project ui/pet/scripts/relief/record_relief.py --out DIR [--variant 
 ```
 
 `build_relief.py` reads `relief/creatures/<id>.json` and writes `public/variants/<id>/relief/`
-(`parts.png` atlas, `depth.png` relief maps, `relief.json` rig). Dependencies are pinned in the
-script header and fetched by uv; the output is byte-identical for the same input. It prints the
-rest-pose reconstruction error and fails below 40 dB PSNR (the eulenfuchs is at 55.9 dB).
+(`parts.png` atlas, `depth.png` relief maps, `relief.json` rig, `build.json` manifest).
+Dependencies are pinned in the script header and fetched by uv; the output is byte-identical for
+the same input. It prints the rest-pose reconstruction error and fails below 40 dB PSNR.
+`build.json` records the hashes of every input (config, template, art, eye patches, the script)
+and output; `src/__tests__/reliefAssets.test.ts` checks them, so a config or script edited without
+a rebuild fails in CI, and the "Relief assets reproducible" CI step rebuilds every creature with
+`--check` and compares the bytes. After editing the script, rebuild all creatures.
 `record_relief.py` renders one video per pet state, a state tour next to the old renderer, checks
 the WebGL1 / Canvas 2D fallbacks and measures frame cost - all headless, nothing opens or plays.
+`--index` writes one page with every recorded creature side by side.
 
-### Per creature (the eulenfuchs is done)
+The mouth follows the real voice: while Nox speaks, the voice pipeline publishes `tts.level` (the
+RMS of each block the output device plays, ~30 per second, only on change), the pet and the
+overlay receive just that number (`src/nox/ipc/pet_view.py`; nothing for headphone-only speech
+or in the PRIVATE/OFFLINE privacy modes), and the jaw opens with it. Without levels (older core,
+muted channel) the jaw falls back to synthetic syllables.
 
-Start from the eulenfuchs as a template, so only what differs has to be written down:
+### Per creature (all seven are converted)
 
-1. **Config.** `relief/creatures/<id>.json`:
+Every creature starts from the eulenfuchs as a template, so only what differs is written down
+(see `relief/creatures/*.json`):
+
+1. **Config.**
    ```json
    {
-     "id": "<id>", "template": "eulenfuchs", "source": "rig/base.png",
-     "landmarks": { "eye_l": [x, y], "eye_r": [x, y], "nose": [x, y], "chin": [x, y],
-                    "ear_l_tip": [x, y], "ear_r_tip": [x, y], "paw_l": [x, y], "paw_r": [x, y],
-                    "ground": [x, y] },
-     "eyes": [ { "name": "eye_l", "file": "rig/eye_l.png", "at": [x, y],
-                 "ellipse": { "c": [0.5, 0.5], "r": [0.28, 0.27] } }, ... ],
-     "drop": ["wing_l", "wing_r"], "dropBones": ["wing_l", "wing_r"]
+     "id": "<id>", "template": "eulenfuchs", "source": "rig/base.png", "landmarks": "rig",
+     "drop": ["tail_l"], "dropBones": ["tail_l0", "tail_l1", "tail_l2"],
+     "order": ["wing_l", "wing_r", "body", "tail_r", "head", "#eyes", "ear_l", "ear_r", "jaw"],
+     "parts": { "<name>": { "poly": [...], "underlay": [...], "weights": {...} } },
+     "bones": { "<name>": { "pivot": [x, y], "tip": [x, y] } }
    }
    ```
-   Landmarks are art pixels; `eyes[].at` is the top-left of the eye layer (its `rect` in
-   `rig.json` times the art size), the ellipse is the eyeball inside that patch in 0..1. Every
-   coordinate of the template is moved by a scale-and-offset fit of the template's landmarks onto
-   these; a part can fit on its own landmarks with `"parts": {"head": {"fit": ["eye_l", ...]}}`.
+   `"landmarks": "rig"` reads the landmarks off the creature's existing `rig.json` (eye layers,
+   muzzle, jaw, ears, neck, chest, root pivots), and the eye patches come from there too. Head,
+   ears and jaw are fitted on the head landmarks, everything else on the body landmarks
+   (scale-and-offset per axis). `order` puts wings behind the body when they grow from the back.
+   Key-pose scales are measured automatically (base vs. eating-pose height); `"poses"` overrides.
 2. **Check.** `build_relief.py <id> --debug-dir DIR --emit-config DIR/resolved.json` and open
-   `DIR/overlay.png`: each polygon has to hug its part, each bone has to sit on its joint. A part
-   that does not fit gets its own `poly` (and `underlay`, the bit hidden behind front parts) under
-   `"parts": {"<name>": {...}}` - copy it from `resolved.json` and move the points. Tails and
-   wings that differ in shape need their `weights.points` / bone `pivot` / `tip` moved too
-   (`"bones": {"tail_l0": {"pivot": [...], "tip": [...]}}`).
-3. **Depth.** Usually nothing to do: the relief comes from each part's silhouette. Move the muzzle
-   and nose `depth.bumps` of the head onto the new muzzle if it sits elsewhere.
-4. **Poses.** Measure the key-pose art against the base (facial disc width) and set `"poses":
-   {"eat": {"scale": ...}, ...}` so the switch does not read as a zoom.
-5. **Look and enable.** `npm run build`, then `record_relief.py --variant <id> --only states
-   --states normal,happy,speaking,sleeping --out DIR` and watch the videos. Happy with it:
-   `build_relief.py <id> --enable` switches the creature over in `rig.json`.
+   `DIR/overlay.png` (eye patches and eyeball ellipses included): each polygon has to hug its part,
+   each bone has to sit on its joint. Override what does not fit under `"parts"` / `"bones"`.
+3. **Look and enable.** `npm run build`, then `record_relief.py --variant <id> --only tour --out
+   DIR` and watch the video. Happy with it: `build_relief.py <id> --enable`.
 
-Effort: for the front-sitting, symmetric creatures (Katzendrache, Koalaflughund, Mottenkatze,
-Kaninchenkatze) the template plus landmarks gets close and steps 1-5 take about 15-30 minutes. The
-Chamster (off-centre head, spiral tail) and the Meereswolf (taller, fins, cropped ears) need their
-body and tail polygons redrawn, closer to an hour.
+Effort, as measured converting the six: 10-20 minutes for each front-sitting creature (mostly
+wing and tail polygons), about 30 for the Chamster and the Meereswolf (off-centre head and spiral
+tail; fins that ride on the head).
 
 ## Adding a creature
 

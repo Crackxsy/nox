@@ -1,0 +1,82 @@
+{
+  "id": "meereswolf",
+  "template": "eulenfuchs",
+  "source": "rig/base.png",
+  "landmarks": "rig",
+  "comment": "White wolf pup, taller than the others and cropped at the ear tips, with fins beside the head (animated like wings, but riding on the head) and a big finned tail on the left.",
+  "drop": ["tail_r"],
+  "dropBones": ["tail_r0", "tail_r1"],
+  "order": ["tail_l", "body", "wing_l", "wing_r", "head", "#eyes", "ear_l", "ear_r", "jaw"],
+  "headBones": ["head", "jaw", "cheek_l", "cheek_r", "ear_l", "ear_l2", "ear_r", "ear_r2", "wing_l", "wing_r"],
+  "parts": {
+    "ear_l": {
+      "poly": [[208, 30], [218, 4], [232, 4], [250, 25], [262, 50], [258, 80], [240, 92], [220, 90], [210, 65]],
+      "weights": { "kind": "ear", "base": [240, 82], "tip": [224, 10], "parent": "head", "bones": ["ear_l", "ear_l2"] }
+    },
+    "ear_r": {
+      "poly": [[350, 50], [362, 25], [385, 4], [400, 6], [406, 40], [404, 80], [388, 95], [365, 92], [350, 75]],
+      "weights": { "kind": "ear", "base": [368, 82], "tip": [396, 12], "parent": "head", "bones": ["ear_r", "ear_r2"] }
+    },
+    "head": {
+      "poly": [[206, 60], [214, 110], [222, 160], [238, 196], [266, 216], [308, 226], [350, 216], [378, 196], [394, 160], [402, 110], [408, 60], [404, 0], [210, 0]],
+      "underlay": [[[226, 50], [262, 46], [262, 90], [232, 92]], [[350, 46], [390, 50], [386, 92], [354, 90]]],
+      "weights": {
+        "kind": "head",
+        "bone": "head",
+        "neck": { "bone": "neck", "weight": 0.75, "y": [204, 236] },
+        "cheeks": { "left": "cheek_l", "right": "cheek_r", "centerX": 308, "dx": [70, 95], "y": [120, 190] }
+      }
+    },
+    "jaw": {
+      "poly": [[286, 199], [297, 202], [308, 204], [320, 202], [330, 199], [336, 197], [338, 205], [330, 214], [318, 220], [298, 220], [288, 214], [284, 206]]
+    },
+    "body": {
+      "poly": [[222, 212], [398, 212], [420, 300], [430, 400], [432, 470], [420, 506], [225, 506], [190, 470], [184, 380], [168, 300], [196, 240]],
+      "underlay": [
+        [[238, 150], [380, 150], [388, 226], [232, 226]],
+        [[196, 420], [222, 420], [222, 492], [196, 492]]
+      ],
+      "weights": {
+        "kind": "spine",
+        "bones": ["neck", "chest", "spine", "hips"],
+        "ys": [228, 296, 380, 455],
+        "legs": [
+          { "bone": "leg_l", "x": 268, "halfWidth": [14, 26], "y": [372, 410] },
+          { "bone": "leg_r", "x": 360, "halfWidth": [14, 26], "y": [372, 410] }
+        ]
+      }
+    },
+    "wing_l": {
+      "poly": [[228, 112], [205, 104], [185, 113], [164, 160], [178, 172], [196, 200], [214, 206], [230, 190]],
+      "underlay": [[[218, 112], [238, 112], [238, 196], [218, 196]]],
+      "relief": 8,
+      "weights": { "kind": "chain", "points": [[222, 150], [168, 158]], "bones": ["wing_l"], "base": "head", "baseLen": 0.25 }
+    },
+    "wing_r": {
+      "poly": [[386, 112], [405, 102], [430, 104], [454, 155], [442, 170], [420, 196], [400, 200], [384, 186]],
+      "underlay": [[[376, 112], [396, 112], [396, 196], [376, 196]]],
+      "relief": 8,
+      "weights": { "kind": "chain", "points": [[392, 150], [450, 156]], "bones": ["wing_r"], "base": "head", "baseLen": 0.25 }
+    },
+    "tail_l": {
+      "poly": [[222, 400], [200, 380], [150, 372], [100, 372], [78, 380], [100, 395], [95, 420], [66, 450], [64, 482], [90, 496], [150, 496], [196, 482], [220, 452]],
+      "relief": 22,
+      "weights": { "kind": "chain", "points": [[208, 440], [150, 428], [104, 446], [70, 478]], "bones": ["tail_l0", "tail_l1", "tail_l2"], "base": "hips", "baseLen": 0.08 }
+    }
+  },
+  "bones": {
+    "wing_l": { "parent": "head", "pivot": [222, 150], "tip": [172, 158] },
+    "wing_r": { "parent": "head", "pivot": [392, 150], "tip": [446, 156] },
+    "leg_l": { "pivot": [268, 370], "tip": [268, 495] },
+    "leg_r": { "pivot": [360, 370], "tip": [360, 495] },
+    "tail_l0": { "pivot": [208, 440], "tip": [150, 426] },
+    "tail_l1": { "pivot": [150, 426], "tip": [104, 444] },
+    "tail_l2": { "pivot": [104, 444], "tip": [70, 476] },
+    "cheek_l": { "pivot": [240, 150], "tip": [224, 190] },
+    "cheek_r": { "pivot": [376, 150], "tip": [392, 190] },
+    "ear_l": { "pivot": [240, 82], "tip": [232, 46] },
+    "ear_l2": { "pivot": [232, 46], "tip": [224, 10] },
+    "ear_r": { "pivot": [368, 82], "tip": [382, 46] },
+    "ear_r2": { "pivot": [382, 46], "tip": [396, 12] }
+  }
+}

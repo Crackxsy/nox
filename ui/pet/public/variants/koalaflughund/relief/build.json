@@ -1,0 +1,17 @@
+{
+ "generator": "scripts/relief/build_relief.py",
+ "inputs": {
+  "public/variants/koalaflughund/rig/base.png": "6494ec56e50b39e6f0ac06fe1cd99e6f95da9beb7d01e6757a0ff220bfc9bd27",
+  "public/variants/koalaflughund/rig/eye_l.png": "f7b8eb66d5c03cd1c8ed02cc58676d11b058b0363e2e66d3603a62b2aa947855",
+  "public/variants/koalaflughund/rig/eye_r.png": "6351fcc4b0820eda3665791f08127026a7d14d60fa4338d148393c4172f7e338",
+  "scripts/relief/build_relief.py": "7b663d8bbee8650e6f32cea5c1df9e2dc78c338f95e273d7b7b6c2218eb97287",
+  "scripts/relief/creatures/eulenfuchs.json": "9d56766641dc2bb9e5d79965ab302e8c9888081f0eea95529ea9ce9b26d6669b",
+  "scripts/relief/creatures/koalaflughund.json": "1436d838177df33d0e7b42198a9c64fee864ac84fec8944fb25ed1bfb56ef4ec"
+ },
+ "outputs": {
+  "depth.png": "649e3f4ef4c3f18c915702a4dfc1d45ed2130180f32a21508a0a475be6a4f9ee",
+  "parts.png": "0a2dbd6f474c6afaccc589a1be3b62ae36c9eede45164199c40c2469f5e737eb",
+  "relief.json": "5ab057d6ca8bc38789a85807b7f9080822b17b37efc9d12a1473ae159bf42e73"
+ },
+ "psnr": 53.8
+}

@@ -34,7 +34,7 @@ export interface Face {
   light: number;
 }
 
-type Num = Exclude<keyof ReliefTargets, 'gaze' | 'ambient'>;
+type Num = Exclude<keyof ReliefTargets, 'gaze' | 'ambient' | 'voice'>;
 
 /** Ease time constants per channel (seconds): posture is slow, lids and ears are quick. */
 const TAU: Record<Num, number> = {
@@ -352,7 +352,9 @@ export class ReliefBrain {
     head.y -= 4 * startle;
 
     // ---- talking: the jaw follows the speech envelope -------------------------------------------------
-    const env0 = this.speech.sample(t, dt, c.talk > 0.05 ? c.speech * c.talk : 0);
+    // a measured voice level (tts.level) wins over the synthetic syllables; muted stays shut
+    const measured = target.voice !== null && target.talk > 0 ? target.voice : undefined;
+    const env0 = this.speech.sample(t, dt, c.talk > 0.05 ? c.speech * c.talk : 0, measured);
     let mouth = Math.max(env0, yawn * 1.25, 0.18 * c.lower * (1 - c.talk));
     if (dt === 0 && c.talk < 0.05) mouth = Math.max(yawn, 0.18 * c.lower);
     jaw.y += 10 * mouth;
@@ -406,6 +408,7 @@ export class ReliefBrain {
     for (const k of CHANNELS) c[k] += (target[k] - c[k]) * approach(dt, TAU[k]);
     c.gaze = target.gaze;
     c.ambient = target.ambient;
+    c.voice = target.voice;
     return c;
   }
 }

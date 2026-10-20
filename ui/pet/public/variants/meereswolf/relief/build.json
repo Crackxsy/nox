@@ -1,0 +1,17 @@
+{
+ "generator": "scripts/relief/build_relief.py",
+ "inputs": {
+  "public/variants/meereswolf/rig/base.png": "6e97e82d6b1422bc87fe7764abacb169da8e4220b93e5901ec9b3c59b44431ff",
+  "public/variants/meereswolf/rig/eye_l.png": "48355029958d79331de4ff142ffdf812edaf2d0a01c3dae69fbf53c019cd0dce",
+  "public/variants/meereswolf/rig/eye_r.png": "a7e8ea53bb15e0ff9026f8471e66738f3e162c685f5b8b80d5093415b45d79af",
+  "scripts/relief/build_relief.py": "7b663d8bbee8650e6f32cea5c1df9e2dc78c338f95e273d7b7b6c2218eb97287",
+  "scripts/relief/creatures/eulenfuchs.json": "9d56766641dc2bb9e5d79965ab302e8c9888081f0eea95529ea9ce9b26d6669b",
+  "scripts/relief/creatures/meereswolf.json": "adc402248272be957e718bab32da8068f4c00465a238f5a424637c3da7b1d4e0"
+ },
+ "outputs": {
+  "depth.png": "255ae70aeb891e10b9c32801da1b7e5f409c20d225f48da97e10b8d13a6da9f7",
+  "parts.png": "d8df5ac18c7f4b359db33d884a40c947f6c677b638e894cc11e665336ffb7917",
+  "relief.json": "2f3125cd68264191ea85e5d11cfde04a0303d3db2fa1e527914ebdfd272bb300"
+ },
+ "psnr": 56.6
+}

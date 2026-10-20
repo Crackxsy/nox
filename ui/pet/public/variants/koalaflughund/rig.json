@@ -990,5 +990,9 @@
         }
       ]
     }
+  },
+  "relief": {
+    "dir": "relief",
+    "enabled": true
   }
 }

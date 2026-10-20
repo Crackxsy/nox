@@ -338,13 +338,19 @@ def bundle_sizes() -> dict[str, object]:
 VERGLEICH = Path(__file__).with_name("vergleich_template.html")
 
 
-def write_vergleich(out: Path, states: list[str]) -> None:
+def write_vergleich(out: Path, states: list[str], name: str) -> None:
+    states = [s for s in states if (out / f"state-{s}.mp4").exists()]
     cells = "".join(
         f'<figure><video src="state-{s}.mp4" muted playsinline loop autoplay></video>'
         f"<figcaption>{s}</figcaption></figure>"
         for s in states
     )
-    page = VERGLEICH.read_text(encoding="utf-8").replace("__STATES__", cells)
+    page = (
+        VERGLEICH.read_text(encoding="utf-8")
+        .replace("__STATES__", cells)
+        .replace("__NAME__", name.capitalize())
+        .replace("__STATES_HIDDEN__", "" if states else "hidden")
+    )
     (out / "vergleich.html").write_text(page, encoding="utf-8")
     a, b = out / "tour-rig.mp4", out / "tour-relief.mp4"
     if a.exists() and b.exists():
@@ -374,6 +380,47 @@ def write_vergleich(out: Path, states: list[str]) -> None:
         )
 
 
+def write_index(root: Path) -> None:
+    """One page with every recorded creature: old renderer left, relief right, synchronised."""
+    rows = []
+    for d in [root, *sorted(p for p in root.iterdir() if p.is_dir())]:
+        if not (d / "tour-relief.mp4").exists():
+            continue
+        name = d.name if d != root else "eulenfuchs"
+        rel = "" if d == root else f"{d.name}/"
+        rows.append(
+            f'<section><h2>{name.capitalize()}</h2><div class="pair">'
+            f'<figure><video src="{rel}tour-rig.mp4" muted playsinline loop></video>'
+            "<figcaption>vorher: Rig-Renderer</figcaption></figure>"
+            f'<figure><video src="{rel}tour-relief.mp4" muted playsinline loop></video>'
+            "<figcaption>nachher: Relief 2.5D</figcaption></figure></div>"
+            f'<p><a href="{rel}vergleich.html">Einzelseite</a></p></section>'
+        )
+    page = (
+        INDEX_HEAD + "".join(rows) + "<script>const v=[...document.querySelectorAll('video')];"
+        "document.getElementById('play').onclick=()=>{const p=v[0].paused;"
+        "v.forEach(x=>{x.currentTime=0;p?x.play():x.pause();});};</script></main></body></html>"
+    )
+    (root / "vergleich-alle.html").write_text(page, encoding="utf-8")
+    print(f"wrote {root / 'vergleich-alle.html'} ({len(rows)} creatures)")
+
+
+INDEX_HEAD = """<!doctype html><html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relief: alle Kreaturen</title>
+<style>:root{color-scheme:dark}body{margin:0;padding:24px 16px;background:#141417;color:#e8e8ea;
+font:15px/1.5 system-ui,sans-serif}main{max-width:1100px;margin:0 auto}
+.pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+figure{margin:0}figcaption,p{color:#9a9aa3;font-size:13px}a{color:#9ab7ff}
+video{width:100%;background:#1e1e22;border:1px solid #2c2c33;border-radius:6px;display:block}
+button{background:#22222a;color:#e8e8ea;border:1px solid #2c2c33;border-radius:6px;padding:6px 12px}
+h2{font-size:16px;margin:28px 0 8px}</style></head><body><main>
+<h1>Alle Kreaturen: vorher und nachher</h1>
+<p>Gleiche Zustandsfolge je Kreatur, 520 × 520, OBS-Dunkelgrau, headless aufgenommen.</p>
+<button id="play">Alle abspielen / Pause</button>
+"""
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--out", type=Path, required=True)
@@ -383,7 +430,17 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=4.0)
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--states", help="comma list instead of all 28 states")
+    ap.add_argument("--tour", help="comma list of states for the before/after tour")
+    ap.add_argument("--every", type=int, default=TOUR_EVERY_MS, help="ms per tour step")
+    ap.add_argument(
+        "--index",
+        action="store_true",
+        help="only write OUT/vergleich-alle.html: every creature recorded under OUT, side by side",
+    )
     args = ap.parse_args()
+    if args.index:
+        write_index(args.out)
+        return 0
     only = set(args.only.split(","))
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
@@ -417,8 +474,9 @@ def main() -> int:
                         page.close()
                         print(f"state {s}: ok", flush=True)
                 if "tour" in only:
-                    tour = f"tour={','.join(TOUR)}&every={TOUR_EVERY_MS}"
-                    seconds = len(TOUR) * TOUR_EVERY_MS / 1000
+                    steps = args.tour.split(",") if args.tour else TOUR
+                    tour = f"tour={','.join(steps)}&every={args.every}"
+                    seconds = len(steps) * args.every / 1000
                     for name, extra, relief in (
                         ("relief", "", True),
                         ("rig", "&renderer=rig", False),
@@ -455,7 +513,7 @@ def main() -> int:
                 browser.close()
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-    write_vergleich(out, states)
+    write_vergleich(out, EXPRESSIONS + FUNCTIONALS, args.variant)
     metrics["page_errors"] = errors
     chunks = metrics["bundle"]["js_chunks"]  # type: ignore[index]
     over = {

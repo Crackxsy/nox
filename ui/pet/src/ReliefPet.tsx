@@ -25,6 +25,7 @@ import { type Pixels, buildGeometry } from './relief/mesh';
 import type { LoadedRelief } from './relief/reliefFile';
 import { ReliefRenderer } from './relief/renderer';
 import { Skeleton } from './relief/skeleton';
+import { VoiceTracker } from './relief/speech';
 import { EATING_POSE, poseFor, reliefTargets } from './relief/stateMapping';
 import { PoseSwitch } from './relief/transition';
 import type { LoadedRig } from './rig/rigFile';
@@ -153,6 +154,7 @@ export function ReliefPet({
 
     const startMs = performance.now();
     const clock = new FrameClock(startMs);
+    const voice = new VoiceTracker();
     let lastFunctional = inputRef.current.functional;
     let lastFeeds = inputRef.current.feeds;
     let eatingUntilMs = 0;
@@ -187,6 +189,7 @@ export function ReliefPet({
       const sw = poses.update(nowMs, wanted, reduced);
 
       const targets = reliefTargets(current, paramsRef.current, reduced);
+      targets.voice = voice.sample(nowMs, current.voiceSeq, current.voiceLevel);
       if (poses.involves('curl')) {
         // still asleep while curled up or uncurling; the brain wakes (yawn) once it is the creature
         targets.asleep = 1;

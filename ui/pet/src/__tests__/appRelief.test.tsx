@@ -75,7 +75,11 @@ beforeEach(() => {
     }
     return null;
   } as typeof HTMLCanvasElement.prototype.getContext);
-  vi.mocked(loadRig).mockImplementation(async (id: string) => rigFor(id));
+  vi.mocked(loadRig).mockImplementation(async (id: string) => {
+    const rig = rigFor(id);
+    // every shipped creature is converted now; the chamster stands in for one that is not
+    return id === 'chamster' ? { ...rig, definition: { ...rig.definition, relief: null } } : rig;
+  });
   vi.mocked(loadRelief).mockImplementation(async (id: string) => ({
     definition: parseReliefDefinition(json(id, 'relief', 'relief.json'), id),
     atlas: image,

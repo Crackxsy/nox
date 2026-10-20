@@ -51,6 +51,10 @@ export interface PetInput {
   speakingLevel: number;
   /** Monotonic count of treats. The view turns a change into a few seconds of the eating pose. */
   feeds: number;
+  /** Loudness of the voice being played (`tts.level`, RMS 0..1); 0 when silent. */
+  voiceLevel?: number;
+  /** Counts `tts.level` events, so the view can tell a fresh level from a stale one. */
+  voiceSeq?: number;
 }
 
 export type Ring = 'none' | 'pulse' | 'orbit' | 'segments' | 'shield' | 'cross' | 'alert' | 'bar';
@@ -326,6 +330,9 @@ export interface PetState {
   feeds: number;
   /** The overlay's "AI voice" label (`system.ai_voice_label`); empty = no label. */
   aiVoiceLabel: string;
+  /** Loudness of the voice being played (`tts.level`, 0..1) and how many levels have arrived. */
+  voiceLevel: number;
+  voiceSeq: number;
 }
 
 export const INITIAL_STATE: PetState = {
@@ -338,6 +345,8 @@ export const INITIAL_STATE: PetState = {
   speakingLevel: 0,
   capture: { microphone: false, camera: false, screen: false, cloud: false },
   privacyMode: 'balanced',
+  voiceLevel: 0,
+  voiceSeq: 0,
   muted: false,
   feeds: 0,
   aiVoiceLabel: '',
@@ -391,9 +400,15 @@ export function reduceEvent(state: PetState, name: string, payload: Record<strin
             : 0;
       return { ...state, speakingLevel: bumpSpeaking(state.speakingLevel, chars || 20) };
     }
+    case 'tts.level': {
+      // How loud the voice is right now - a number, never words. Anything else is ignored.
+      const level = payload.level;
+      if (typeof level !== 'number' || !Number.isFinite(level)) return state;
+      return { ...state, voiceLevel: clamp(level), voiceSeq: state.voiceSeq + 1 };
+    }
     case 'tts.finished':
     case 'tts.interrupted':
-      return { ...state, speakingLevel: 0 };
+      return { ...state, speakingLevel: 0, voiceLevel: 0 };
     case 'privacy.capture_changed':
       return {
         ...state,
@@ -481,5 +496,7 @@ export function toInput(state: PetState): PetInput {
     sleep: state.sleep,
     speakingLevel: state.speakingLevel,
     feeds: state.feeds,
+    voiceLevel: state.voiceLevel,
+    voiceSeq: state.voiceSeq,
   };
 }

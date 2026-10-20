@@ -1,0 +1,761 @@
+{
+ "version": 1,
+ "id": "mottenkatze",
+ "generator": "scripts/relief/build_relief.py",
+ "atlas": "parts.png",
+ "depth": "depth.png",
+ "artSize": 512,
+ "ground": [
+  256.0,
+  494.1
+ ],
+ "artHeight": 357.1,
+ "bones": [
+  {
+   "name": "root",
+   "parent": null,
+   "pivot": [
+    254.9,
+    504.9
+   ],
+   "tip": [
+    254.9,
+    457.9
+   ]
+  },
+  {
+   "name": "hips",
+   "parent": "root",
+   "pivot": [
+    254.9,
+    460.0
+   ],
+   "tip": [
+    254.9,
+    395.3
+   ]
+  },
+  {
+   "name": "spine",
+   "parent": "hips",
+   "pivot": [
+    254.9,
+    416.2
+   ],
+   "tip": [
+    254.9,
+    332.7
+   ]
+  },
+  {
+   "name": "chest",
+   "parent": "spine",
+   "pivot": [
+    254.9,
+    366.1
+   ],
+   "tip": [
+    254.9,
+    309.7
+   ]
+  },
+  {
+   "name": "leg_l",
+   "parent": "chest",
+   "pivot": [
+    222,
+    390
+   ],
+   "tip": [
+    222,
+    498
+   ]
+  },
+  {
+   "name": "leg_r",
+   "parent": "chest",
+   "pivot": [
+    288,
+    390
+   ],
+   "tip": [
+    288,
+    498
+   ]
+  },
+  {
+   "name": "wing_l",
+   "parent": "chest",
+   "pivot": [
+    190,
+    306
+   ],
+   "tip": [
+    96,
+    318
+   ],
+   "jiggle": {
+    "stiffness": 240,
+    "damping": 13,
+    "limit": 0.45
+   }
+  },
+  {
+   "name": "wing_r",
+   "parent": "chest",
+   "pivot": [
+    322,
+    306
+   ],
+   "tip": [
+    416,
+    318
+   ],
+   "jiggle": {
+    "stiffness": 240,
+    "damping": 13,
+    "limit": 0.45
+   }
+  },
+  {
+   "name": "neck",
+   "parent": "chest",
+   "pivot": [
+    254.9,
+    322.2
+   ],
+   "tip": [
+    254.9,
+    290.9
+   ]
+  },
+  {
+   "name": "head",
+   "parent": "neck",
+   "pivot": [
+    255.0,
+    309.3
+   ],
+   "tip": [
+    255.0,
+    198.7
+   ],
+   "jiggle": {
+    "stiffness": 520,
+    "damping": 26,
+    "limit": 0.1
+   }
+  },
+  {
+   "name": "jaw",
+   "parent": "head",
+   "pivot": [
+    255.0,
+    293.4
+   ],
+   "tip": [
+    255.0,
+    309.3
+   ]
+  },
+  {
+   "name": "cheek_l",
+   "parent": "head",
+   "pivot": [
+    190.0,
+    256.8
+   ],
+   "tip": [
+    167.7,
+    294.3
+   ],
+   "jiggle": {
+    "stiffness": 300,
+    "damping": 11,
+    "limit": 0.28
+   }
+  },
+  {
+   "name": "cheek_r",
+   "parent": "head",
+   "pivot": [
+    320.0,
+    256.8
+   ],
+   "tip": [
+    342.3,
+    294.3
+   ],
+   "jiggle": {
+    "stiffness": 300,
+    "damping": 11,
+    "limit": 0.28
+   }
+  },
+  {
+   "name": "ear_l",
+   "parent": "head",
+   "pivot": [
+    208,
+    210
+   ],
+   "tip": [
+    194,
+    180
+   ],
+   "jiggle": {
+    "stiffness": 420,
+    "damping": 15,
+    "limit": 0.35
+   }
+  },
+  {
+   "name": "ear_l2",
+   "parent": "ear_l",
+   "pivot": [
+    194,
+    180
+   ],
+   "tip": [
+    180,
+    158
+   ],
+   "jiggle": {
+    "stiffness": 260,
+    "damping": 9,
+    "limit": 0.5
+   }
+  },
+  {
+   "name": "ear_r",
+   "parent": "head",
+   "pivot": [
+    304,
+    210
+   ],
+   "tip": [
+    318,
+    180
+   ],
+   "jiggle": {
+    "stiffness": 420,
+    "damping": 15,
+    "limit": 0.35
+   }
+  },
+  {
+   "name": "ear_r2",
+   "parent": "ear_r",
+   "pivot": [
+    318,
+    180
+   ],
+   "tip": [
+    332,
+    158
+   ],
+   "jiggle": {
+    "stiffness": 260,
+    "damping": 9,
+    "limit": 0.5
+   }
+  },
+  {
+   "name": "tail_r0",
+   "parent": "hips",
+   "pivot": [
+    334,
+    480
+   ],
+   "tip": [
+    372,
+    468
+   ],
+   "jiggle": {
+    "stiffness": 150,
+    "damping": 10,
+    "limit": 0.45
+   }
+  },
+  {
+   "name": "tail_r1",
+   "parent": "tail_r0",
+   "pivot": [
+    372,
+    468
+   ],
+   "tip": [
+    410,
+    492
+   ],
+   "jiggle": {
+    "stiffness": 110,
+    "damping": 8,
+    "limit": 0.5
+   }
+  }
+ ],
+ "parts": [
+  {
+   "name": "body",
+   "atlas": [
+    4,
+    4,
+    382,
+    285
+   ],
+   "rect": [
+    65,
+    227,
+    382,
+    285
+   ],
+   "relief": 48.01,
+   "z": 0,
+   "cell": 5,
+   "weights": {
+    "kind": "spine",
+    "bones": [
+     "neck",
+     "chest",
+     "spine",
+     "hips"
+    ],
+    "ys": [
+     292,
+     338,
+     405,
+     462
+    ],
+    "legs": [
+     {
+      "bone": "leg_l",
+      "x": 222,
+      "halfWidth": [
+       12,
+       22
+      ],
+      "y": [
+       396,
+       430
+      ]
+     },
+     {
+      "bone": "leg_r",
+      "x": 288,
+      "halfWidth": [
+       12,
+       22
+      ],
+      "y": [
+       396,
+       430
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "tail_r",
+   "atlas": [
+    4,
+    476,
+    99,
+    84
+   ],
+   "rect": [
+    323,
+    428,
+    99,
+    84
+   ],
+   "relief": 25.05,
+   "z": 18,
+   "cell": 4,
+   "weights": {
+    "kind": "chain",
+    "points": [
+     [
+      334,
+      482
+     ],
+     [
+      372,
+      468
+     ],
+     [
+      412,
+      492
+     ]
+    ],
+    "bones": [
+     "tail_r0",
+     "tail_r1"
+    ],
+    "base": "hips",
+    "baseLen": 0.1
+   }
+  },
+  {
+   "name": "wing_l",
+   "atlas": [
+    156,
+    293,
+    149,
+    175
+   ],
+   "rect": [
+    65,
+    275,
+    149,
+    175
+   ],
+   "relief": 10,
+   "z": 14,
+   "cell": 4,
+   "weights": {
+    "kind": "chain",
+    "points": [
+     [
+      190,
+      306
+     ],
+     [
+      72,
+      318
+     ]
+    ],
+    "bones": [
+     "wing_l"
+    ],
+    "base": "chest",
+    "baseLen": 0.2
+   }
+  },
+  {
+   "name": "wing_r",
+   "atlas": [
+    4,
+    293,
+    148,
+    179
+   ],
+   "rect": [
+    299,
+    275,
+    148,
+    179
+   ],
+   "relief": 10,
+   "z": 14,
+   "cell": 4,
+   "weights": {
+    "kind": "chain",
+    "points": [
+     [
+      322,
+      306
+     ],
+     [
+      440,
+      318
+     ]
+    ],
+    "bones": [
+     "wing_r"
+    ],
+    "base": "chest",
+    "baseLen": 0.2
+   }
+  },
+  {
+   "name": "head",
+   "atlas": [
+    309,
+    293,
+    165,
+    174
+   ],
+   "rect": [
+    173,
+    135,
+    165,
+    174
+   ],
+   "relief": 54.13,
+   "z": 22,
+   "cell": 4,
+   "weights": {
+    "kind": "head",
+    "bone": "head",
+    "neck": {
+     "bone": "neck",
+     "weight": 0.75,
+     "y": [
+      280,
+      306
+     ]
+    },
+    "cheeks": {
+     "left": "cheek_l",
+     "right": "cheek_r",
+     "centerX": 256,
+     "dx": [
+      54,
+      78
+     ],
+     "y": [
+      222,
+      266
+     ]
+    }
+   }
+  },
+  {
+   "name": "ear_l",
+   "atlas": [
+    107,
+    476,
+    64,
+    82
+   ],
+   "rect": [
+    173,
+    148,
+    64,
+    82
+   ],
+   "relief": 7.47,
+   "z": 4,
+   "cell": 4,
+   "weights": {
+    "kind": "ear",
+    "base": [
+     208,
+     210
+    ],
+    "tip": [
+     180,
+     158
+    ],
+    "parent": "head",
+    "bones": [
+     "ear_l",
+     "ear_l2"
+    ]
+   }
+  },
+  {
+   "name": "ear_r",
+   "atlas": [
+    175,
+    476,
+    60,
+    81
+   ],
+   "rect": [
+    278,
+    149,
+    60,
+    81
+   ],
+   "relief": 7.47,
+   "z": 4,
+   "cell": 4,
+   "weights": {
+    "kind": "ear",
+    "base": [
+     304,
+     210
+    ],
+    "tip": [
+     332,
+     158
+    ],
+    "parent": "head",
+    "bones": [
+     "ear_r",
+     "ear_r2"
+    ]
+   }
+  },
+  {
+   "name": "jaw",
+   "atlas": [
+    4,
+    564,
+    59,
+    29
+   ],
+   "rect": [
+    227,
+    273,
+    59,
+    29
+   ],
+   "relief": 13.06,
+   "z": 30,
+   "cell": 3,
+   "weights": {
+    "kind": "rigid",
+    "bone": "jaw"
+   },
+   "surface": "head"
+  }
+ ],
+ "eyes": [
+  {
+   "name": "eye_l",
+   "atlas": [
+    239,
+    476,
+    64,
+    63
+   ],
+   "closedAtlas": [
+    307,
+    476,
+    64,
+    63
+   ],
+   "rect": [
+    197,
+    209,
+    64,
+    63
+   ],
+   "ellipse": {
+    "c": [
+     0.5,
+     0.52
+    ],
+    "r": [
+     0.28,
+     0.27
+    ]
+   },
+   "bone": "head",
+   "surface": "head"
+  },
+  {
+   "name": "eye_r",
+   "atlas": [
+    375,
+    476,
+    63,
+    63
+   ],
+   "closedAtlas": [
+    442,
+    476,
+    63,
+    63
+   ],
+   "rect": [
+    252,
+    210,
+    63,
+    63
+   ],
+   "ellipse": {
+    "c": [
+     0.5,
+     0.52
+    ],
+    "r": [
+     0.28,
+     0.27
+    ]
+   },
+   "bone": "head",
+   "surface": "head"
+  }
+ ],
+ "order": [
+  "wing_l",
+  "wing_r",
+  "body",
+  "tail_r",
+  "head",
+  "#eyes",
+  "ear_l",
+  "ear_r",
+  "jaw"
+ ],
+ "headBones": [
+  "head",
+  "jaw",
+  "cheek_l",
+  "cheek_r",
+  "ear_l",
+  "ear_l2",
+  "ear_r",
+  "ear_r2"
+ ],
+ "neck": {
+  "bone": "neck",
+  "headness": 0.45
+ },
+ "headCenter": [
+  255.0,
+  247.5,
+  20
+ ],
+ "bodyCenter": [
+  254.9,
+  416.2,
+  0
+ ],
+ "lookAnchor": [
+  255.0,
+  240.9
+ ],
+ "light": [
+  -0.45,
+  -0.65,
+  0.75
+ ],
+ "focal": 1500,
+ "turn": {
+  "yaw": 0.42,
+  "pitch": 0.28,
+  "body": 0.32
+ },
+ "roles": {
+  "ears": {
+   "left": [
+    "ear_l",
+    "ear_l2"
+   ],
+   "right": [
+    "ear_r",
+    "ear_r2"
+   ]
+  },
+  "wings": {
+   "left": "wing_l",
+   "right": "wing_r"
+  },
+  "tails": [
+   [
+    "tail_r0",
+    "tail_r1"
+   ]
+  ],
+  "legs": [
+   "leg_l",
+   "leg_r"
+  ]
+ },
+ "poses": {
+  "curl": {
+   "scale": 0.923
+  },
+  "eat": {
+   "scale": 0.923
+  },
+  "lie": {
+   "scale": 0.923
+  }
+ }
+}

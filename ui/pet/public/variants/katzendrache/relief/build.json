@@ -1,0 +1,17 @@
+{
+ "generator": "scripts/relief/build_relief.py",
+ "inputs": {
+  "public/variants/katzendrache/rig/base.png": "6f8fecc654dfd5df9a232156ad2e67e5eeea3758f8b5185fc904a9f60cf8dc48",
+  "public/variants/katzendrache/rig/eye_l.png": "95da70e7b193c014a676d6026cfaa7157925af6f54f77a3ea5c9b828d6b59160",
+  "public/variants/katzendrache/rig/eye_r.png": "e2cca1b9c529c735f40601d3b5fdc4701058037cbc6f65ddd5b18a055442e335",
+  "scripts/relief/build_relief.py": "7b663d8bbee8650e6f32cea5c1df9e2dc78c338f95e273d7b7b6c2218eb97287",
+  "scripts/relief/creatures/eulenfuchs.json": "9d56766641dc2bb9e5d79965ab302e8c9888081f0eea95529ea9ce9b26d6669b",
+  "scripts/relief/creatures/katzendrache.json": "6eca99ba9d50bf0186bf2dce88c48b8b689432b2fb1d92117b93d0cf1914ba9c"
+ },
+ "outputs": {
+  "depth.png": "638310236bb3c785510449c66df54362ddf816a062d82eff8bff6369480b6a26",
+  "parts.png": "74866adc216eb80f7b6722758e6705cba341aa55001a7875a1c2222f447306e0",
+  "relief.json": "b806db937500bd0f51f487c422bdb9eea75125ec1f7da0d02845a8817d803ea8"
+ },
+ "psnr": 53.9
+}
