@@ -28,6 +28,9 @@ class E:
 
     TTS_STARTED = "tts.started"
     TTS_CHUNK = "tts.chunk"
+    #: Loudness of what is being played right now, ~30 per second while Nox speaks: one number,
+    #: so the pet's mouth can follow the voice without ever being told the words.
+    TTS_LEVEL = "tts.level"
     TTS_FINISHED = "tts.finished"
     TTS_INTERRUPTED = "tts.interrupted"
 

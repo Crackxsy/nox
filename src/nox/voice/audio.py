@@ -127,6 +127,14 @@ def resample_linear(audio: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarr
 # ---- Output ------------------------------------------------------------------------------------
 
 
+def block_level(pcm: np.ndarray, frames: int) -> float:
+    """RMS of one int16 output block as 0..1 (full scale = 1), counting silence padding."""
+    if frames <= 0 or pcm.size == 0:
+        return 0.0
+    x = pcm.astype(np.float32) / 32768.0
+    return float(min(1.0, np.sqrt(float(np.dot(x, x)) / frames)))
+
+
 class _DevicePlayer:
     """One callback-driven int16 mono output stream fed from a byte buffer."""
 
@@ -140,6 +148,9 @@ class _DevicePlayer:
         self._drained = threading.Event()
         self._stream: Any = None
         self.underruns = 0
+        #: RMS loudness (0..1) of the block the device took last. Written by the audio thread,
+        #: read by the pipeline's level pacer; a float assignment is atomic, no lock needed.
+        self.level = 0.0
 
     def open(self) -> None:
         sd = _sd()
@@ -169,8 +180,10 @@ class _DevicePlayer:
                 pcm = (pcm.astype(np.float32) * self.volume).clip(-32768, 32767).astype(np.int16)
             outdata[: pcm.size, 0] = pcm
             outdata[pcm.size :, 0] = 0
+            self.level = block_level(pcm, frames)
         else:
             outdata.fill(0)
+            self.level = 0.0
         if eof:
             raise sd.CallbackStop
 
@@ -250,6 +263,11 @@ class SoundDeviceOutput:
             private=private_device or "default",
             stream=stream_device or "none",
         )
+
+    @property
+    def level(self) -> float:
+        """Loudness (0..1) of what is playing right now; 0 when nothing is."""
+        return max((p.level for p in self._players), default=0.0)
 
     @property
     def device_names(self) -> tuple[str, str]:

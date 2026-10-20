@@ -103,6 +103,8 @@ REDACTED_FROM: tuple[tuple[str, frozenset[str]], ...] = (
 # (pattern, the only roles that may receive it)
 RESTRICTED_TO: tuple[tuple[str, frozenset[str]], ...] = (
     ("security.audit", frozenset({"dashboard", "shell", "device"})),
+    # ~30 a second while Nox speaks and only of use to a mouth: the pet and the overlay.
+    ("tts.level", frozenset({"pet", "overlay"})),
 )
 
 

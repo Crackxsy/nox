@@ -12,6 +12,7 @@ privacy mode is PRIVATE or OFFLINE.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -91,6 +92,14 @@ def view(
             return None
     if name.startswith("pet."):
         return dict(payload)
+    if name == "tts.level":
+        # How loud, nothing else: not the utterance, not the channel - one number in 0..1.
+        level = payload.get("level")
+        if not isinstance(level, int | float) or isinstance(level, bool):
+            return None
+        if not math.isfinite(level):
+            return None
+        return {"level": round(min(1.0, max(0.0, float(level))), 3)}
     if name == "tts.chunk":
         # The mouth follows how much is said, never what.
         text = payload.get("text")
