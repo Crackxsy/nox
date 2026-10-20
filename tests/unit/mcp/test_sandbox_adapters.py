@@ -162,3 +162,4 @@ async def test_a_local_server_without_network_gets_no_egress(tmp_path: Path) -> 
     assert launched.pid == 7 and sandbox.runs[0]["egress"] == EgressDecl()
     assert sandbox.runs[0]["env"] == {"A": "1"}
     assert "cwd" not in sandbox.runs[0]  # the sandbox's own folder, never one under <nox home>
+    assert sandbox.runs[0]["workload"] == "mcp:w"  # a sandbox container of its own (N6)

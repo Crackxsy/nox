@@ -296,6 +296,7 @@ class SkillWorkerLauncher:
             [self._python, "-I", "-c", BOOTSTRAP, WORKER_FILE, plugin_id],
             egress=self._module.EgressDecl(hosts=tuple(manifest.network.egress)),
             limits=self._module.Limits(max_message_bytes=MAX_MESSAGE_BYTES),
+            workload=f"skill:{plugin_id}",
             on_exit=on_exit,
         )
         client = self._client_factory(hub_url, token, f"plugin:{plugin_id}")

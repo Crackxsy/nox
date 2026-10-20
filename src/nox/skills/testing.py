@@ -226,6 +226,8 @@ class SandboxTestRunner:
                 [self._python, "-I", "-c", BOOTSTRAP, RUNNER_FILE],
                 egress=self._module.EgressDecl(),
                 limits=self._module.Limits(timeout_s=timeout_s),
+                # The skill's own sandbox container: no other workload can see its work folder.
+                workload=f"skill:{plugin_dir.name}",
                 lifetime_s=timeout_s,
             )
         except Exception as exc:  # noqa: BLE001 - the sandbox refused: that is a failed run

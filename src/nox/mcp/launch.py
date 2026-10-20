@@ -266,13 +266,15 @@ class SandboxLauncher:
         env: Mapping[str, str],
         network: bool,
     ) -> LaunchedServer:
-        del cwd  # the sandbox's private work folder, not a folder under <nox home>
+        # The sandbox's private work folder is used, not `cwd` (a folder under <nox home>); its
+        # name is the server's id, and each server runs in a sandbox container of its own.
         egress = self._module.EgressDecl(hosts=("*",)) if network else self._module.EgressDecl()
         process = await self._sandbox.start(
             list(argv),
             env=dict(env),
             egress=egress,
             limits=self._module.Limits(max_message_bytes=MAX_MESSAGE_BYTES),
+            workload=f"mcp:{cwd.name}",
         )
         log.info("mcp.server_process_started", pid=process.pid, sandboxed=True)
         return _SandboxedServer(process)

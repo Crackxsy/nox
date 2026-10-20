@@ -89,6 +89,7 @@ async def test_the_tests_run_in_the_sandbox_with_their_files_on_stdin(tmp_path: 
     start = sandbox.starts[0]
     assert start["egress"] == EgressDecl() and start["lifetime_s"] == 30
     assert "cwd" not in start  # the sandbox's own private folder, nothing under <nox home>
+    assert start["workload"] == "skill:dice"  # a sandbox container of its own (N6)
     assert start["argv"][1:3] == ["-I", "-c"] and start["argv"][-1] == RUNNER_FILE
     bundle = json.loads(sandbox.processes[0].sent[0])
     assert RUNNER_FILE in bundle and "manifest.yaml" in bundle
