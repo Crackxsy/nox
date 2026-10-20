@@ -29,6 +29,7 @@ from nox.ipc.errors import (
     IpcError,
 )
 from nox.ipc.protocol import NAME_ERROR, RESPONSE_PAYLOAD_MODELS, Envelope, Kind
+from nox.ipc.roles import UI_ROLES
 
 log = get_logger(__name__)
 
@@ -150,8 +151,9 @@ class EmptyPayload(BaseModel):
     """For requests without parameters (`{}`)."""
 
 
-#: The UI roles a person clicks in - and so roles synthetic input could click in for them.
-INPUT_ROLES: frozenset[str] = frozenset({"dashboard", "shell"})
+#: The UI roles a person clicks in - and so roles synthetic input could click in for them. A
+#: paired device counts too: its browser may run on the very machine Nox is steering.
+INPUT_ROLES: frozenset[str] = frozenset(UI_ROLES)
 #: What a UI client may still do while Nox controls mouse and keyboard: look, stop, mute.
 CALM_UI_REQUESTS: frozenset[str] = frozenset(
     {"state.get", "health.get", "health.history", "config.effective", "config.get",

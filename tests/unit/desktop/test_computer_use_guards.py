@@ -186,6 +186,21 @@ async def test_privileged_ui_requests_are_refused_while_nox_could_be_clicking() 
     assert (await _dispatch(registry, "skills.activate")).kind is Kind.RESPONSE
 
 
+async def test_a_paired_device_is_locked_out_too_while_nox_could_be_clicking() -> None:
+    # A paired device is a browser as well - possibly on the very machine Nox is steering.
+    registry = RequestRegistry()
+
+    async def handler(_ctx: RequestContext, _p: Empty) -> dict[str, Any]:
+        return {"ok": True}
+
+    registry.register("plans.approve", Empty, handler, roles=("dashboard", "shell", "device"))
+    registry.register("plans.list", Empty, handler, roles=("dashboard", "shell", "device"))
+    registry.input_lock = lambda: True
+    reply = await _dispatch(registry, "plans.approve", role="device")
+    assert reply.kind is Kind.ERROR and "stop hotkey" in reply.payload["message"]
+    assert (await _dispatch(registry, "plans.list", role="device")).kind is Kind.RESPONSE
+
+
 async def test_an_allow_answer_does_not_count_while_nox_could_be_clicking() -> None:
     from types import SimpleNamespace
 
@@ -199,7 +214,7 @@ async def test_an_allow_answer_does_not_count_while_nox_could_be_clicking() -> N
     registry.input_lock = lambda: locked[0]
     core = SimpleNamespace(registry=registry, security=SimpleNamespace(engine=engine))
     handlers = CoreHandlers(core)  # type: ignore[arg-type]
-    ctx = None
+    ctx = SimpleNamespace(role="dashboard", client_id="dashboard:1")
     allow = PermissionReply(grant_id="g", decision=Decision.ALLOW)
     deny = PermissionReply(grant_id="g", decision=Decision.DENY)
     assert (await handlers.permission_reply(ctx, allow))["ok"] is False  # type: ignore[arg-type]
