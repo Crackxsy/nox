@@ -8,10 +8,13 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-20
+
 ### Changed
-- **The dashboard is rebuilt around four areas** (Spec UX-Neubau): Heute, Nox (Gespräch, Ansichten,
-  Clips, Verlauf), Geräte & Fähigkeiten, Einstellungen (eight pages instead of one form). Every page
-  has the same header - what Nox is doing and its Modus, "n warten auf dich", the privacy level and
+- **The dashboard is rebuilt around four areas** (#147, Spec UX-Neubau): Heute, Nox (Gespräch,
+  Ansichten, Clips, Verlauf), Geräte & Fähigkeiten, Einstellungen (eight pages instead of one
+  form). Every page has the same header - what Nox is doing and its Modus, "n warten auf dich",
+  the privacy level and
   **Stopp**, which now acts at once (Ctrl+Alt+Pause too) and is undone with "Fortsetzen" under the
   core's resume rules (PIN after a security-path stop; a paired device can stop but not resume). The
   old two-click Not-Aus with its optional "Grund" field is gone: every dashboard stop is recorded
@@ -25,6 +28,9 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   dark, WCAG 2.2 AA), phone-first layout with a bottom bar, areas loaded on demand; the start bundle
   fell from 118 KB to about 107 KB gzip including the dictionary (budget enforced in CI by `npm run
   size`). Old tab names (Status, Board, Presets, Remote, Audit) redirect to their new place.
+  Accessibility: skip link, focus moves to the page after every change, Alt+1..4 for the areas,
+  ARIA combobox/listbox palette and `alertdialog` permission sheet, reduced motion respected;
+  axe-core runs on every area, page and menu in the unit tests and in a real browser (0 findings).
 - **Supertonic 3 is now the default voice** (`voice.tts.engine: supertonic`, voice `F3`, new
   `voice.tts.steps: 5`, editable 1-32). Its model files (~400 MB, OpenRAIL-M) are downloaded only
   after the user agrees: a new "Voice" tile in the dashboard's settings (missing files, size,
@@ -33,16 +39,35 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   optional step in `nox onboard`, and `nox voice setup`. Until the files are there, Nox speaks with
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
 
+- **Dependencies:** React and React DOM 19.3.1 (dashboard and pet, bumped together), typer
+  0.27.3, PyYAML 6.0.3, ruff 0.17, mypy 2.4, Playwright 1.64, mss 10.2, jsdom 30.1.3, globals
+  17.13, typescript-eslint 8.71.2, the UI dev-tooling groups and `actions/download-artifact` 8.
+
 ### Added
+- **All seven creatures move in relief** (#148, #150): the painted art is cut into parts on a
+  22-bone skeleton with spring bones (ears, cheek fur, wings, fins, tails), squash and stretch,
+  eyes with lids and saccades, and a jaw; every part has a relief height, so head and body turn up
+  to 20 degrees with the light following. All 21 expressions and the functional states (sleep,
+  listen, think, speak, mute, privacy) map onto each creature's body language; reduced motion
+  keeps breathing, posture and the jaw only. Everything per vertex runs on the GPU (under 0.1 ms
+  of JavaScript per frame); the renderer loads only for a creature whose `rig.json` enables it and
+  falls back to the rig renderer without WebGL2. `ui/pet/scripts/relief/` builds each creature
+  deterministically from recorded input hashes, and CI rebuilds and compares the bytes.
+- **The pet's mouth follows the voice you hear** (#150): while Nox speaks, the core publishes
+  `tts.level` - the loudness of the block the speaker just played, about 30 times a second - and
+  the pet and the stream overlay get only that number (no text, no audio, nothing for
+  headphone-only speech or in PRIVATE/OFFLINE). Without fresh levels the jaw falls back to a
+  syllable rhythm; muted keeps it shut.
 - **Windows: the sandbox keeps off this computer's local services and the LAN.** Where Windows
   does not enforce AppContainer loopback isolation, the installer now adds Windows Filtering
   Platform rules for Nox's sandbox containers (one optional step, ticked by default, one UAC
-  prompt; uninstall removes them): loopback, private, link-local and CGNAT destinations are blocked
-  except the in-container egress forwarder's own ports. The loopback probe still decides: once it
-  observes the container being refused, the AppContainer counts as strong and shell commands run
-  without `hands.accept_weak_sandbox`. Workloads other than shell commands now use a fixed pool of
-  128 containers (`Nox.Sandbox.w000`...), assigned once per workload class, so the rules can name
-  every container SID up front. `nox sandbox firewall show|install|remove`.
+  prompt; uninstall removes them): each container is blocked from everything except its own
+  block of egress-forwarder ports on loopback (see Security). The loopback probe still decides:
+  once it observes the container being refused, the AppContainer counts as strong and shell
+  commands run without `hands.accept_weak_sandbox`. Workloads other than shell commands now use a
+  fixed pool of 128 containers (`Nox.Sandbox.w000`...), assigned once per workload class, so the
+  rules can name every container SID up front. `nox sandbox firewall show` lists the rules;
+  `install|remove` print the command for an administrator prompt.
 - **Nox discloses its AI voice on stream** (`stream.ai_voice_disclosure`, on by default): one line
   in the Twitch chat per stream session, through the permission-checked `twitch.chat.send`, and a
   small, semi-transparent "KI-Stimme" label on the OBS overlay (`system.ai_voice_label`; not on
@@ -169,6 +194,14 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   the Pi's architecture on every pull request.
 
 ### Fixed
+- **No real place name in the test fixtures** (#146): a real town had crept back into tests and
+  evals; it is the neutral "Springfield" that CONTRIBUTING.md prescribes.
+- **Remembering a shell command did nothing.** Since high risk was made never-rememberable, every
+  `shell.run` confirmation was asked again, even for `whoami /all`. A command that the strict
+  allowlist classifies as simple (exact program, subcommand and flags; bound to the resolved
+  executable and a hash of its bytes; no declared network) can again be remembered for the
+  session. Complex commands, command lines, `git` and interpreters are still asked every time, and
+  a permanent grant still exists only through the list in the dashboard.
 - An installed copy never started: the embedded Python's `._pth` did not name the app folder and
   the code looked for its configuration one folder too high. Shortcuts now start a launcher that
   reports a failed start; `installer/README.md` explains how to repair an old installation.
@@ -210,6 +243,43 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   device list and revoking now only see Telegram devices.
 - Neither web server trusted `X-Forwarded-For` on purpose, but uvicorn's default did for loopback
   peers; it is off now, so rate limits and logs always see the real client address.
+
+### Security
+- **The installer never runs code from a user-writable folder elevated.** The sandbox-rules step
+  no longer starts Nox's own Python (per-user install, writable by the user's account) as an
+  administrator. A self-contained Windows PowerShell helper (.NET only, no cmdlet, no compiler, no
+  file of Nox's) is run by the system's `powershell.exe` through a bootstrap that checks its
+  SHA-256 against the value pinned into the installer and runs exactly the checked bytes; paths
+  reach it hex-encoded, never as source text. It keeps a copy in the admin-only
+  `%ProgramFiles%\Nox Sandbox Rules` (explicit, verified ACL) and reports to
+  `HKLM\SOFTWARE\Nox\SandboxRules` instead of a file in the user's temp folder. Uninstall runs that
+  protected copy whenever Nox's rules may exist - also rules an older build added - and a fresh
+  uninstall log drops 0.5.0's elevated `python.exe` uninstall step. `nox sandbox firewall
+  install|remove` now refuse and print the helper's command, by absolute paths from the Windows
+  API (never `%SystemRoot%`/`%ProgramFiles%`, which the user's own environment can redirect).
+- **Sandbox network rules are an allowlist by construction:** per container a hard block of
+  everything (connect and accept, IPv4 and IPv6) plus one permit to that container's own block of
+  forwarder ports (47100-47615, four ports per container). Before and during every run that uses
+  the egress forwarder, Nox checks that only its own forwarder (PID and creation time) listens in
+  that block; a foreign listener refuses or ends the run. When Windows has reserved the block
+  (an excluded port range), the error says so.
+- **Session grants end with the session** (#138): `end_session()` runs on a new conversation, the
+  idle timeout and core shutdown; remembered commands (`cmd:` grants) are revoked on a privacy
+  mode change, the kill switch and taint, and cover the exact command (program and every argument,
+  hashed) instead of program and subcommand.
+- **IRC/Twitch:** CR, LF and NUL are refused in `twitch.chat.send`, the IRC client, channel, nick
+  and token, and the disclosure texts in the config (no IRC command injection).
+- **Model downloads:** Kokoro files are pinned to an immutable revision and SHA-256; every model
+  download is size-capped while streaming, existing files are re-verified by hash, and a switch to
+  the privacy modes `offline`/`private` aborts a running download.
+- **Build supply chain:** the embeddable Python and the pip wheel are pinned by immutable URL and
+  SHA-256, and pip installs itself from that wheel without an index; the dependency lock is
+  exported with hashes and installed with `--require-hashes --only-binary=:all:`. A new CI job
+  builds the installer, installs it silently with the sandbox rules, runs `nox doctor`, installs
+  over itself, uninstalls and checks that files and rules are gone.
+- **Licenses:** the installer bundles GPL-3.0 components (Piper with espeak-ng) and now ships
+  LICENSE, NOTICE, COPYING (GPL-3.0), THIRD_PARTY_LICENSES.md and a written source offer
+  (SOURCE.txt, exact commit and build steps); the wizard shows the combined notice.
 
 
 ## [0.5.0] - 2026-10-14
@@ -977,7 +1047,8 @@ history, which 404 on the public repository (#29) - they now use the tag-based f
 foundation") predates the tagging process and never gets one, hence the single-tag link shape
 below instead of a compare for it and for `v0.1.0` (nothing tagged to compare either against).
 
-[Unreleased]: https://github.com/Crackxsy/nox/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Crackxsy/nox/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Crackxsy/nox/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Crackxsy/nox/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Crackxsy/nox/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Crackxsy/nox/releases/tag/v0.3.0

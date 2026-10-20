@@ -27,6 +27,12 @@ on:
 permissions:
   contents: read
 
+# A newer commit on the same branch supersedes a run still in progress (per event, so a push run
+# never cancels the pull-request run of the same commit or the other way round).
+concurrency:
+  group: installer-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 env:
   INNO_URL: https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe
   INNO_SHA256: 9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
@@ -34,6 +40,9 @@ env:
 jobs:
   installer:
     name: Build, install, upgrade, uninstall
+    # A release branch is already built on every push; its pull request would run the same commit
+    # a second time.
+    if: github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release/')
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
