@@ -23,7 +23,7 @@ from nox.sandbox.linux import (
     forwarder_python,
     safe_python_binds,
 )
-from nox.sandbox.model import EgressDecl, Limits, SandboxUnavailable
+from nox.sandbox.model import EgressDecl, Guarantees, Limits, SandboxUnavailable
 from nox.sandbox.netguard import NetGuard
 
 EGRESS = EgressDecl(hosts=("example.com:443",))
@@ -230,6 +230,16 @@ async def test_sandbox_gives_a_unix_backend_a_socket_not_a_port() -> None:
     class Backend:
         mode = linux_mod.SandboxMode.LINUX_BWRAP
         proxy_transport = "unix"
+
+        def guarantees(self) -> Guarantees:
+            # Sandbox.run refuses a backend weaker than accepted, so the fake states its own.
+            return Guarantees(
+                backend="fake",
+                confines_writes=True,
+                confines_reads=True,
+                hides_secrets=True,
+                confines_network=True,
+            )
 
         async def run(self, argv, **kw):  # noqa: ANN001, ANN003, ANN202
             seen.update(kw)
