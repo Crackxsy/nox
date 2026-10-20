@@ -69,6 +69,7 @@ export const enMore: Record<MoreKey, string> = {
   board_clear: 'Clear the board',
   tab_presets: 'Presets',
   presets_title: 'Flows',
+  presets_load_failed: 'Flows could not be loaded.',
   presets_lede:
     'One sentence, several systems: lights, Nox’ own mode, and programs you register here.',
   presets_none: 'No flow yet.',

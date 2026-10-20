@@ -46,11 +46,19 @@ export function PresetsPage({ t, client }: PresetsPageProps) {
   const [runs, setRuns] = useState<Record<string, PresetRunResult>>({});
   const [tests, setTests] = useState<Record<string, ActionTestResult>>({});
   const [saveError, setSaveError] = useState('');
+  const [loadFailed, setLoadFailed] = useState(false);
   const action = useIpcAction(client, t);
 
+  // A failed listing is said in the page (with a way to try again), never an unhandled rejection.
   const load = useCallback(async (c: IpcClient, cancelled: () => boolean) => {
-    const payload = await api.presetsList(c);
-    if (!cancelled()) setData(parsePresets(payload));
+    try {
+      const payload = await api.presetsList(c);
+      if (cancelled()) return;
+      setData(parsePresets(payload));
+      setLoadFailed(false);
+    } catch {
+      if (!cancelled()) setLoadFailed(true);
+    }
   }, []);
 
   useRefreshOnConnect(client, load);
@@ -118,6 +126,14 @@ export function PresetsPage({ t, client }: PresetsPageProps) {
   return (
     <>
 
+      {loadFailed && client && (
+        <p role="alert" className="alert">
+          {t('presets_load_failed')}{' '}
+          <button type="button" className="btn btn--plain" onClick={() => void load(client, () => false)}>
+            {t('ux_reload')}
+          </button>
+        </p>
+      )}
       {saveError && <p className="alert">{`${t('presets_save_failed')}: ${saveError}`}</p>}
       {action.error && <p className="alert">{action.error}</p>}
 

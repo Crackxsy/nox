@@ -41,7 +41,11 @@ const t = translator("de");
 
 type Handler = (payload: Record<string, unknown>) => unknown;
 
-function fakeClient(handlers: Record<string, Handler | unknown>) {
+// The page embeds the flows (Abläufe); a test that is not about them gets an empty listing.
+const DEFAULTS: Record<string, unknown> = { "presets.list": { enabled: true, presets: [], actions: [] } };
+
+function fakeClient(given: Record<string, Handler | unknown>) {
+  const handlers = { ...DEFAULTS, ...given };
   const sent: [string, Record<string, unknown>][] = [];
   const client = {
     request: async (name: string, payload: Record<string, unknown> = {}) => {

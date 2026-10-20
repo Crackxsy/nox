@@ -68,6 +68,7 @@ export const deMore = {
   board_clear: 'Board leeren',
   tab_presets: 'Presets',
   presets_title: 'Abläufe',
+  presets_load_failed: 'Abläufe konnten nicht geladen werden.',
   presets_lede:
     'Ein Satz, mehrere Systeme: Licht, Nox’ eigener Modus und Programme, die du hier einträgst.',
   presets_none: 'Noch kein Ablauf angelegt.',
