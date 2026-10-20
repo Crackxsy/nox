@@ -215,10 +215,10 @@ def install(core: CoreLike) -> ExtensionRuntime:
 
     engine = getattr(core.security, "engine", None)
 
-    def set_tainted(conversation: str) -> None:
+    def set_tainted(conversation: str, content: str | None) -> None:
         marker = getattr(engine, "mark_tainted", None)
         if marker is not None:
-            marker(conversation)
+            marker(conversation, content)
 
     def user_message(conversation: str, text: str) -> None:
         note = getattr(engine, "note_user_message", None)

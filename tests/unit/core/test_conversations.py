@@ -32,10 +32,10 @@ class _Taint:
         self.tainted: set[str] = set()
         self.cleared: list[str] = []
         self.user: dict[str, str] = {}
-        self.marks: list[str] = []
+        self.marks: list[tuple[str, str | None]] = []
 
-    def mark(self, conversation: str) -> None:
-        self.marks.append(conversation)
+    def mark(self, conversation: str, content: str | None) -> None:
+        self.marks.append((conversation, content))
         self.tainted.add(conversation)
 
     def clear(self, conversation: str) -> None:
@@ -177,6 +177,6 @@ async def test_the_providers_own_web_search_taints_the_conversation_at_once() ->
     router.stream = searching  # type: ignore[method-assign]
     await orch.start()
     await orch.handle_text("Was gibt es Neues?", channel="chat:dashboard-1")
-    assert taint.marks == [begun[0]]
+    assert taint.marks == [(begun[0], None)]  # unreadable: nothing is user-directed after it
     assert seen_during_stream == [{begun[0]}]  # before the stream went on, not after it
     await orch.stop()

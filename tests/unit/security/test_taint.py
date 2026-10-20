@@ -56,7 +56,7 @@ def _loop(names: list[str], marked: list[str], seen: list[str] | None = None) ->
     return ToolLoop(
         offer=lambda: [OfferedTool(name=n, description=n, schema={}) for n in names],
         call=call,
-        taint=marked.append,
+        taint=lambda conversation, _content: marked.append(conversation),
     )
 
 
@@ -79,7 +79,7 @@ async def test_a_failed_call_still_taints() -> None:
     loop = ToolLoop(
         offer=lambda: [OfferedTool(name="web.fetch", description="", schema={})],
         call=call,
-        taint=marked.append,
+        taint=lambda conversation, _content: marked.append(conversation),
     )
     await loop.execute(loop.begin("t", conversation="s"), "web.fetch", {})
     assert marked == ["s"]
@@ -202,7 +202,7 @@ async def test_a_call_that_raised_still_taints() -> None:
     loop = ToolLoop(
         offer=lambda: [OfferedTool(name="mcp.thing", description="", schema={})],
         call=call,
-        taint=marked.append,
+        taint=lambda conversation, _content: marked.append(conversation),
     )
     await loop.execute(loop.begin("t", conversation="s"), "mcp.thing", {})
     assert marked == ["s"]

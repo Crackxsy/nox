@@ -677,15 +677,16 @@ class DefaultPermissionEngine:
 
     # ---- PermissionEngine protocol ---------------------------------------------------------------
 
-    def mark_tainted(self, conversation: str) -> None:
+    def mark_tainted(self, conversation: str, content: str | None = None) -> None:
         """Record that `conversation` now holds content Nox did not author.
 
-        The tool loop calls this after every tool result that is not trusted-internal, and the
-        orchestrator the moment the provider reports a tool of its own (`nox.security.taint`).
-        It stays set until `clear_taint` - when the orchestrator discards that conversation's
+        The tool loop calls this after every tool result that is not trusted-internal, with the
+        result's text, and the orchestrator the moment the provider reports a tool of its own,
+        with `None` (not readable: nothing in the conversation is user-directed any more). It
+        stays set until `clear_taint` - when the orchestrator discards that conversation's
         context - never merely because a new turn began.
         """
-        if self._taint.mark(conversation):
+        if self._taint.mark(conversation, content):
             log.info("security.taint_changed", tainted=True)
 
     def clear_taint(self, conversation: str) -> None:
