@@ -30,6 +30,23 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   rollback, a deliberately broken version that must roll itself back, and UI bundles with a
   symlink, a `..` path or an extra file that must be refused. Guide in English and German
   (`docs/RASPBERRY_PI.md`, `docs/RASPBERRY_PI.de.md`).
+- **Nox on every device in the home.** Phones, tablets and other PCs open the dashboard over
+  HTTPS once they are paired (`docs/NETWORK_ACCESS.md`, `ipc.lan.enabled`; on by default on a
+  Raspberry Pi). Pairing is one QR code and a five-minute, single-use code - from the dashboard's
+  new **Devices** tab or `nox pair` on a server without a screen. Nox issues its own certificate
+  authority, technically limited to the home network (name constraints), so installing it once
+  removes the browser warning for good and lets the dashboard go on the home screen as an app.
+  Every permission question appears on every dashboard at once and the first answer counts; a
+  paired device answers for that one time only, and the audit trail names the device. A paired
+  device does everything day to day - talk, the day, the house, the kill switch - but not change
+  how Nox is set up. Allowing something risky, approving a plan, pairing or removing another
+  device takes the security PIN on a paired device, and three wrong PINs remove that device
+  before the PIN itself could lock its owner out. Removing a device ends its sessions at once -
+  from the dashboard, or on a server without a screen with `nox devices` and `nox unpair <name>`.
+  The session token, the pet and the local HTTP API never reach the network; a network connection
+  can only ever be a paired device, only private networks are answered, and the listener checks
+  Host and Origin against DNS rebinding and foreign pages. A click test drives a PC, a phone and a
+  tablet through pairing, confirmations and removal in a real browser and records it on video.
 - **One folder per machine.** `nox_home()` is `%APPDATA%/Nox` on Windows and
   `~/.local/share/Nox` on Linux (`~/Library/Application Support/Nox` on macOS, path logic only -
   macOS is not supported yet), and `NOX_HOME` moves it (the Pi service uses `/var/lib/nox`). The
@@ -78,6 +95,10 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   release `nox rollback` points to; the health wait follows the port the core actually bound.
 - A bare `pytest` no longer reaches real services or builds the UIs (e2e, network, hardware and
   spike tests are opt-in with `-m`).
+- **The phone companion counted every paired device against its limit.** Its device limit, its
+  device list and revoking now only see Telegram devices.
+- Neither web server trusted `X-Forwarded-For` on purpose, but uvicorn's default did for loopback
+  peers; it is off now, so rate limits and logs always see the real client address.
 
 
 ## [0.5.0] - 2026-10-14

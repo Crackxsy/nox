@@ -83,6 +83,25 @@ describe('the Remote tab when remote access is off', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  it('inside the Devices tab, folds an unused Telegram into one quiet line', async () => {
+    await act(async () => {
+      render(
+        <RemotePage
+          t={t}
+          lang="de"
+          client={refusing(new IpcError('not_found', "unknown request 'remote.devices.list'"))}
+          onOpenSettings={() => undefined}
+          embedded
+        />,
+      );
+    });
+    const summary = await screen.findByText(t('remote_telegram_off'));
+    const details = summary.closest('details')!;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain(t('remote_disabled'));
+    expect(screen.queryByRole('heading', { name: t('remote_tile_title') })).toBeNull();
+  });
+
   it('offers pairing once the core reports the feature enabled', async () => {
     const client = {
       request: (name: string) =>

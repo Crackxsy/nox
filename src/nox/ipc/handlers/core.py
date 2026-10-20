@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from nox.core.events import E, Event
 from nox.core.logging import get_logger
@@ -29,10 +29,11 @@ from nox.core.modes import switch_mode
 from nox.core.state import Mode, PrivacyMode, SystemLevel
 from nox.ipc.dispatch import EmptyPayload, RequestContext
 from nox.ipc.errors import ERR_PERMISSION, ERR_UNAVAILABLE, IpcError
+from nox.ipc.roles import CONFIRMING_ROLES, DEVICE_ROLE, LOCAL_UI_ROLES, UI_ROLES
 from nox.memory.capture import turn_origin
 from nox.security.constants import RESUME_ROLES, USER_KILL_ORIGINS
 from nox.security.gate import PinRequiredError, relaxes_privacy
-from nox.security.model import Decision
+from nox.security.model import Decision, Risk
 
 if TYPE_CHECKING:
     from nox.app import NoxCore
@@ -70,8 +71,6 @@ PUBLIC_STATE_ROOTS: tuple[str, ...] = ("assistant", "privacy", "system")
 # the callers that read it from the handlers.
 PROFILE_FOR_MODE = MODE_PROFILES
 DEFAULT_PROFILE = MODE_DEFAULT_PROFILE
-
-UI_ROLES: tuple[str, ...] = ("shell", "dashboard")
 
 
 # ---- payload models -----------------------------------------------------------------------------
@@ -112,6 +111,8 @@ class PermissionReply(BaseModel):
     grant_id: str
     decision: Decision
     remember: bool = False
+    #: Needed from a paired device to allow anything at high or critical risk.
+    pin: str | None = Field(default=None, max_length=128)
 
 
 class VoicePtt(BaseModel):
@@ -174,12 +175,26 @@ class CoreHandlers:
         ui = UI_ROLES
         reg("state.get", StateGet, self.state_get, roles=(*ui, "pet", "plugin"))
         reg("health.get", EmptyPayload, self.health_get, roles=ui)
-        reg("mode.set", ModeSet, self.mode_set, roles=ui)
-        reg("privacy.set", PrivacySet, self.privacy_set, roles=(*ui, "supervisor"))
+        # A mode switch changes which profile - and so which tools - Nox may use: administration.
+        reg("mode.set", ModeSet, self.mode_set, roles=LOCAL_UI_ROLES)
+        # Changing privacy and resuming after the kill switch are administration; engaging the
+        # kill switch or panic mode is for everyone, a paired phone included.
+        reg("privacy.set", PrivacySet, self.privacy_set, roles=(*LOCAL_UI_ROLES, "supervisor"))
         reg("security.kill", SecurityKill, self.kill, roles=(*ui, "supervisor"))
         reg("security.panic", SecurityPanic, self.panic, roles=(*ui, "supervisor"))
-        reg("security.resume", SecurityResume, self.resume, roles=(*ui, "supervisor"))
-        reg("security.permission.reply", PermissionReply, self.permission_reply, roles=("shell",))
+        reg("security.resume", SecurityResume, self.resume, roles=(*LOCAL_UI_ROLES, "supervisor"))
+        reg(
+            "security.permission.reply",
+            PermissionReply,
+            self.permission_reply,
+            roles=CONFIRMING_ROLES,
+        )
+        reg(
+            "security.permission.pending",
+            EmptyPayload,
+            self.permission_pending,
+            roles=CONFIRMING_ROLES,
+        )
         reg("voice.ptt", VoicePtt, self.voice_ptt, roles=("shell",))
         reg("voice.mute", VoiceMute, self.voice_mute, roles=ui)
         reg("chat.send", ChatSend, self.chat_send, roles=ui)
@@ -302,12 +317,35 @@ class CoreHandlers:
             core.ensure_voice_worker()
         return {"ok": ok}
 
-    async def permission_reply(self, _ctx: RequestContext, p: PermissionReply) -> dict[str, Any]:
+    async def permission_reply(self, ctx: RequestContext, p: PermissionReply) -> dict[str, Any]:
+        """The first answer wins. A paired device answers this one request only: its "always" is
+        not turned into a lasting grant, so a lost phone cannot widen what Nox may do later. To
+        allow anything at high or critical risk it needs the PIN - otherwise a phone could ask Nox
+        for something through the chat and then allow it itself (`nox.security.device_pin`). The
+        audit trail names the client that answered."""
         assert self._core.security is not None
+        engine = self._core.security.engine
+        if ctx.role == DEVICE_ROLE and p.decision is Decision.ALLOW:
+            request = engine.pending_request(p.grant_id)
+            if request is not None and request.risk in (Risk.HIGH, Risk.CRITICAL):
+                guard = getattr(self._core, "device_pin_guard", None)
+                if guard is None:
+                    raise IpcError(ERR_PERMISSION, "a paired device cannot allow this")
+                await guard.require(ctx, p.pin, "security.permission.reply")
+        remember = p.remember and ctx.role != DEVICE_ROLE
         ok = self._core.security.engine.reply(
-            p.grant_id, p.decision, remember=p.remember, by="user"
+            p.grant_id, p.decision, remember=remember, by=ctx.client_id or ctx.role
         )
-        return {"ok": ok}
+        return {"ok": ok, "remembered": remember and ok}
+
+    async def permission_pending(self, _ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
+        """Questions still open, for a dashboard that (re)connects while one waits."""
+        assert self._core.security is not None
+        return {
+            "pending": [
+                r.model_dump(mode="json") for r in self._core.security.engine.pending_requests()
+            ]
+        }
 
     # ---- voice, chat, pet ------------------------------------------------------------------------
 

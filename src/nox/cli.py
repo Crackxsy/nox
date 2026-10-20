@@ -11,6 +11,7 @@ import contextlib
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -83,6 +84,71 @@ def where() -> None:
     width = max(len(label) for label, _ in rows)
     for label, value in rows:
         typer.echo(f"{label.ljust(width)}  {value}")
+
+
+@app.command()
+def pair(
+    name: str = typer.Option("", help="A name for the new device, e.g. 'Kitchen tablet'."),
+) -> None:
+    """Pair a phone, tablet or PC in the home network: prints a QR code and a link to open."""
+    from nox.core.config import load_config  # noqa: PLC0415
+    from nox.lan.terminal import PairingError, pair_in_terminal  # noqa: PLC0415
+    from nox.paths import resolve_config_paths  # noqa: PLC0415
+
+    config = load_config(*resolve_config_paths())
+    try:
+        pair_in_terminal(
+            Path(config.paths.runtime_dir),
+            name=name,
+            language=config.identity.ui_language,
+            ask_pin=lambda prompt: typer.prompt(prompt, hide_input=True),
+            say=typer.echo,
+        )
+    except PairingError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
+@app.command()
+def devices() -> None:
+    """List the phones, tablets and PCs paired with this Nox."""
+    from nox.lan.terminal import PairingError, devices_in_terminal  # noqa: PLC0415
+
+    config = _config()
+    try:
+        devices_in_terminal(
+            Path(config.paths.runtime_dir), language=config.identity.ui_language, say=typer.echo
+        )
+    except PairingError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
+@app.command()
+def unpair(
+    device: str = typer.Argument(..., help="The device's name, or the start of its id."),
+) -> None:
+    """Remove a paired device - a lost phone, say. Its open connections end at once."""
+    from nox.lan.terminal import PairingError, unpair_in_terminal  # noqa: PLC0415
+
+    config = _config()
+    try:
+        unpair_in_terminal(
+            Path(config.paths.runtime_dir),
+            device,
+            language=config.identity.ui_language,
+            say=typer.echo,
+        )
+    except PairingError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
+def _config() -> Any:
+    from nox.core.config import load_config  # noqa: PLC0415
+    from nox.paths import resolve_config_paths  # noqa: PLC0415
+
+    return load_config(*resolve_config_paths())
 
 
 @app.command()

@@ -81,6 +81,10 @@ ROLE_ALLOWLIST: Mapping[str, tuple[str, ...]] = {
     "pet": ("ipc.*", "pet.interact", "state.get"),
     "dashboard": _DASHBOARD,
     "shell": (*_DASHBOARD, "voice.ptt", "security.permission.reply"),
+    # A paired device in the home network (`nox.lan`) reaches only requests whose handler names it
+    # (`nox.ipc.roles.UI_ROLES`). Nothing falls back to a broad list for it: a request registered
+    # without roles is refused to a device.
+    "device": ("ipc.*",),
     "worker": ("ipc.*", "worker.*"),  # plus the service namespaces the connection declares
     # `plugin.**` covers plugin.register / plugin.secret.get / plugin.tool.call; `state.get` is
     # the read-only state view of the plugin API, filtered by role inside the handler.

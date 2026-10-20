@@ -38,7 +38,7 @@ export interface RlVisionDetection {
 }
 
 export interface Source {
-  role: "core" | "shell" | "worker" | "plugin" | "pet" | "dashboard" | "supervisor" | "remote";
+  role: "core" | "shell" | "worker" | "plugin" | "pet" | "dashboard" | "supervisor" | "remote" | "device";
   id: string;
 }
 
@@ -55,7 +55,7 @@ export interface Envelope {
 
 export interface AuthRequest {
   token: string;
-  role: "core" | "shell" | "worker" | "plugin" | "pet" | "dashboard" | "supervisor" | "remote";
+  role: "core" | "shell" | "worker" | "plugin" | "pet" | "dashboard" | "supervisor" | "remote" | "device";
   id: string;
   client_version?: string;
 }
@@ -366,6 +366,8 @@ export interface PermissionRequested {
   mode: string;
   risk: string;
   target?: string;
+  expires_at?: string;
+  remember_ttl_s?: number;
 }
 
 export interface PermissionDecided {

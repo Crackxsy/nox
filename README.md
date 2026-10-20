@@ -87,6 +87,8 @@ See [`CHANGELOG.md`](CHANGELOG.md) for what shipped when.
   ARM64 or x86-64. One command installs the core as a service and brings its own Python and the
   built dashboard: [`docs/RASPBERRY_PI.md`](docs/RASPBERRY_PI.md) (deutsch:
   [`docs/RASPBERRY_PI.de.md`](docs/RASPBERRY_PI.de.md)). macOS is not a supported target yet.
+- **Any phone, tablet or PC in your home network** opens the dashboard once it is paired - a QR
+  code, no app to install: [`docs/NETWORK_ACCESS.md`](docs/NETWORK_ACCESS.md).
 - **[Ollama](https://ollama.com) (optional)** for fully local language models and embeddings.
 - **[Claude Code CLI](https://claude.com/claude-code) (optional)** for cloud-grade reasoning and
   the coding agent.

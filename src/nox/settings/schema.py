@@ -76,6 +76,9 @@ EDITABLE_PATHS: dict[str, str] = {
     "home.tls": "home",
     "home.areas_allowed": "home",
     "remote.enabled": "remote",
+    # Network access for paired devices (`nox.lan`). Restart-only: the listener binds at start.
+    # Turning it on is a security change, so it needs the PIN when one is set.
+    "ipc.lan.enabled": "remote",
     "memory.full_scan_on_boot": "memory",
     "plugins.enabled": "plugins",
     # Presets are lists of models, not scalars, so they carry the "structured" kind: the

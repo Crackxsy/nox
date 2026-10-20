@@ -84,6 +84,18 @@ ipc:
   port: 47800                    # WebSocket hub
   http_port: 47801               # static UI (pet renderer, dashboard) and health endpoint
   schema_version: 1
+  # Network access: the dashboard for paired devices in the home network, over HTTPS with a
+  # certificate authority of this installation's own (docs/NETWORK_ACCESS.md). Off unless asked
+  # for; the Raspberry Pi installer turns it on, because a server nobody can reach is useless.
+  # Pairing: `nox pair` on the server, or "Geräte" -> "Gerät koppeln" in a paired dashboard.
+  lan:
+    enabled: false
+    host: 0.0.0.0                # every local address
+    port: 47843
+    max_devices: 20
+    pair_code_ttl_s: 300         # a pairing code is valid this long, and only once
+    pair_attempts_per_minute: 5  # per source address
+    allow_public_clients: false  # only loopback and private networks are answered
   auth: token                    # per-start session tokens issued by core, stored under <data_dir>/runtime
 
 voice:

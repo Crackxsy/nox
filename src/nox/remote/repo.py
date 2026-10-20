@@ -133,15 +133,17 @@ class RemoteRepository:
         sender_id: str,
         pairing_code_hash: str,
         paired_at: datetime,
+        role: str = "remote",
     ) -> DeviceRow:
         device_id = uuid.uuid4().hex
         key_salt = secrets.token_hex(16)
         self._db.execute(
             "INSERT INTO paired_devices (id, name, role, public_key, paired_at, channel,"
-            " key_salt, pairing_code_hash) VALUES (?, ?, 'remote', ?, ?, ?, ?, ?)",
+            " key_salt, pairing_code_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 device_id,
                 name,
+                role,
                 hash_value(key_salt, f"{channel}:{sender_id}"),
                 _iso(paired_at),
                 channel,
@@ -185,6 +187,12 @@ class RemoteRepository:
             (_iso(when), reason, device_id),
         )
         return cursor.rowcount == 1
+
+    def mark_seen(self, device_id: str, *, when: datetime) -> None:
+        """Record that a device was just seen, nothing else."""
+        self._db.execute(
+            "UPDATE paired_devices SET last_seen_at = ? WHERE id = ?", (_iso(when), device_id)
+        )
 
     def touch_device(self, device_id: str, *, when: datetime, update_id: int) -> None:
         """Record liveness and advance the replay watermark. `max` keeps it monotonic even if two

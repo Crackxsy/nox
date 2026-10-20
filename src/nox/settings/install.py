@@ -33,6 +33,7 @@ from nox.core.config import PresetsConfig
 from nox.core.logging import get_logger
 from nox.ipc.dispatch import EmptyPayload, RequestContext
 from nox.ipc.errors import ERR_PERMISSION, IpcError
+from nox.ipc.roles import LOCAL_UI_ROLES, UI_ROLES
 from nox.settings.editor import Applier, ConfigEditor
 from nox.settings.layers import resolve_defaults_path, resolve_user_config_path
 from nox.settings.personality import PERSONALITY_FILENAME, PersonalityFile
@@ -41,10 +42,6 @@ from nox.settings.secrets_ipc import SecretsService
 from nox.settings.twitch_auth import TwitchAuthService
 
 log = get_logger(__name__)
-
-#: UI roles allowed to read or change settings. Deliberately no `plugin`, `worker`, `pet`,
-#: `remote` or `supervisor`: a phone must not be able to rewrite the configuration or the keyring.
-UI_ROLES = ("shell", "dashboard")
 
 #: How often the background task checks whether the Twitch token is close to expiring.
 TOKEN_REFRESH_INTERVAL_S = 300.0
@@ -362,13 +359,15 @@ def _register(
         return {"ok": True}
 
     reg("config.get", EmptyPayload, h_config_get, roles=UI_ROLES)
-    reg("config.set", ConfigSetRequest, h_config_set, roles=UI_ROLES)
+    # Reading is for every UI; changing settings, secrets, accounts and the personality is
+    # administration and stays on this machine (`nox.ipc.roles`).
+    reg("config.set", ConfigSetRequest, h_config_set, roles=LOCAL_UI_ROLES)
     reg("security.pin.status", EmptyPayload, h_pin_status, roles=UI_ROLES)
     reg("secrets.status", EmptyPayload, h_secrets_status, roles=UI_ROLES)
-    reg("secrets.set", SecretSetRequest, h_secrets_set, roles=UI_ROLES)
-    reg("secrets.delete", SecretDeleteRequest, h_secrets_delete, roles=UI_ROLES)
-    reg("twitch.auth.start", EmptyPayload, h_twitch_start, roles=UI_ROLES)
+    reg("secrets.set", SecretSetRequest, h_secrets_set, roles=LOCAL_UI_ROLES)
+    reg("secrets.delete", SecretDeleteRequest, h_secrets_delete, roles=LOCAL_UI_ROLES)
+    reg("twitch.auth.start", EmptyPayload, h_twitch_start, roles=LOCAL_UI_ROLES)
     reg("twitch.auth.status", EmptyPayload, h_twitch_status, roles=UI_ROLES)
-    reg("twitch.auth.disconnect", EmptyPayload, h_twitch_disconnect, roles=UI_ROLES)
+    reg("twitch.auth.disconnect", EmptyPayload, h_twitch_disconnect, roles=LOCAL_UI_ROLES)
     reg("personality.get", EmptyPayload, h_personality_get, roles=UI_ROLES)
-    reg("personality.set", PersonalitySetRequest, h_personality_set, roles=UI_ROLES)
+    reg("personality.set", PersonalitySetRequest, h_personality_set, roles=LOCAL_UI_ROLES)

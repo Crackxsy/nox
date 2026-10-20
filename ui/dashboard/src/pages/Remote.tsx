@@ -8,6 +8,10 @@
  * - when the feature is off the page says so *and disables the form*. `remote.enabled` is false by
  *   default, and the core then never installs the `remote.*` requests at all, so the honest answer
  *   is "not found", not a red error banner over a form that still looks usable.
+ *
+ * Inside the Devices tab, under the devices in the home network, an unused Telegram is one quiet
+ * line ("Phone via Telegram (off)") that opens to the same explanation - not a big disabled tile
+ * competing with the pairing that does work.
  */
 
 import { useState } from 'react';
@@ -26,9 +30,11 @@ export interface RemotePageProps {
   client: IpcClient | null;
   /** Takes the user to the `remote.enabled` switch on the Settings tab. */
   onOpenSettings: () => void;
+  /** Inside the "Devices" tab, under the home-network devices: no own hero and page frame. */
+  embedded?: boolean;
 }
 
-export function RemotePage({ t, lang, client, onOpenSettings }: RemotePageProps) {
+export function RemotePage({ t, lang, client, onOpenSettings, embedded = false }: RemotePageProps) {
   const [devices, setDevices] = useState<RemoteDevice[]>([]);
   /** `null` only until the first answer; a failed request means "off", never "unknown forever". */
   const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -70,17 +76,33 @@ export function RemotePage({ t, lang, client, onOpenSettings }: RemotePageProps)
   const off = enabled === false;
   const disabled = client === null || off;
 
+  if (embedded && off) {
+    return (
+      <details className="remote-telegram remote-telegram--off">
+        <summary>{t('remote_telegram_off')}</summary>
+        <p className="hint">{t('remote_disabled')}</p>
+        <div className="tile-actions">
+          <button type="button" className="link" onClick={onOpenSettings}>
+            {t('remote_settings_link')}
+          </button>
+        </div>
+      </details>
+    );
+  }
+
   return (
-    <div className="page wrap">
-      <Hero
-        title={t('hero_remote')}
-        sub={t('hero_remote_sub')}
-        links={
-          <a className="link" href="#pair">
-            {t('jump_pair')}
-          </a>
-        }
-      />
+    <div className={embedded ? 'remote-telegram' : 'page wrap'}>
+      {!embedded && (
+        <Hero
+          title={t('hero_remote')}
+          sub={t('hero_remote_sub')}
+          links={
+            <a className="link" href="#pair">
+              {t('jump_pair')}
+            </a>
+          }
+        />
+      )}
 
       {error && (
         <p role="alert" className="alert">

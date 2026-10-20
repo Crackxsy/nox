@@ -20,7 +20,8 @@ export interface WebSocketLike {
 export interface IpcClientOptions {
   url: string;
   token: string;
-  role: Extract<Role, 'pet' | 'dashboard'>;
+  /** `device`: a paired device over the network listener (`nox.lan`), dashboard only. */
+  role: Extract<Role, 'pet' | 'dashboard' | 'device'>;
   id: string;
   patterns: string[];
   clientVersion?: string;
@@ -42,10 +43,40 @@ interface Pending {
 }
 
 export class IpcError extends Error {
-  constructor(public code: string, message: string, public retryable = false) {
+  /**
+   * `details` is the core's machine-readable side of the error (`ErrorPayload.details`), e.g.
+   * `{reason: 'pin_required'}`: the UI maps that to its own words instead of showing `message`,
+   * which is English operator text.
+   */
+  constructor(
+    public code: string,
+    message: string,
+    public retryable = false,
+    public details: Readonly<Record<string, unknown>> = {},
+  ) {
     super(message);
     this.name = 'IpcError';
   }
+}
+
+/**
+ * The close code the core uses when a paired device signed itself out (`nox.ipc.server`). The
+ * client then stops reconnecting and reports `auth_failed` with `SIGNED_OUT_DETAIL`, so the page
+ * can say "signed out" rather than "removed" - also in a second tab of the same device.
+ */
+export const CLOSE_SIGNED_OUT = 4001;
+export const SIGNED_OUT_DETAIL = 'signed out';
+
+function closeCode(ev: unknown): number | null {
+  if (typeof ev !== 'object' || ev === null) return null;
+  const code = (ev as { code?: unknown }).code;
+  return typeof code === 'number' ? code : null;
+}
+
+function detailsOf(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 export class IpcClient {
@@ -102,9 +133,15 @@ export class IpcClient {
     ws.onerror = () => {
       /* onclose follows */
     };
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (this.ws === ws) this.ws = null;
       this.failAll(new IpcError('unavailable', 'socket closed', true));
+      if (closeCode(ev) === CLOSE_SIGNED_OUT) {
+        // Signed out on purpose: reconnecting would only be refused.
+        this.closedByUser = true;
+        this.setStatus('auth_failed', SIGNED_OUT_DETAIL);
+        return;
+      }
       if (this.status !== 'auth_failed') this.setStatus('offline');
       this.scheduleReconnect();
     };
@@ -186,6 +223,7 @@ export class IpcClient {
           String(env.payload.code ?? 'internal'),
           String(env.payload.message ?? 'error'),
           env.payload.retryable === true,
+          detailsOf(env.payload.details),
         ),
       );
     } else {
@@ -255,11 +293,14 @@ export const HEALTH_PROBE_TIMEOUT_MS = 2000;
  * the default port is tried instead — a wrong port fails loudly, a hang does not fail at all.
  */
 export async function resolveWsUrl(
-  loc: { hostname: string; search: string; origin: string },
+  loc: { hostname: string; search: string; origin: string; protocol?: string; host?: string },
   fetchImpl: typeof fetch | null = typeof fetch === 'function' ? fetch : null,
   defaultPort = 47800,
   timeoutMs = HEALTH_PROBE_TIMEOUT_MS,
 ): Promise<string> {
+  // Served by the network listener (`nox.lan`): the hub is bridged on the page's own origin, so
+  // one certificate covers both and a device never needs a second port.
+  if (loc.protocol === 'https:' && loc.host) return `wss://${loc.host}/ws`;
   const host = loc.hostname || '127.0.0.1';
   const q = new URLSearchParams(loc.search).get('ws');
   const qPort = q ? Number.parseInt(q, 10) : NaN;

@@ -41,6 +41,16 @@ export function failureKind(e: unknown): FailureKind {
   }
 }
 
+/**
+ * The core's machine-readable reason (`details.reason`), or `''`. This is what a page maps to its
+ * own words; the message next to it is English operator text.
+ */
+export function ipcReason(e: unknown): string {
+  if (!(e instanceof IpcError)) return '';
+  const reason = e.details.reason;
+  return typeof reason === 'string' ? reason : '';
+}
+
 /** The core's own wording, or the JS error message, or `''`. Never a stack trace. */
 export function reasonText(e: unknown): string {
   if (e instanceof Error) return e.message;

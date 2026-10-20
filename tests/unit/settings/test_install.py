@@ -12,9 +12,10 @@ from nox.core.state import PrivacyMode
 from nox.ipc.dispatch import RequestRegistry, role_allows
 from nox.ipc.errors import ERR_PERMISSION, IpcError
 from nox.ipc.protocol import Envelope, Kind, Source
+from nox.ipc.roles import LOCAL_UI_ROLES, UI_ROLES
 from nox.security.gate import SecurityChangeGate
 from nox.security.secrets import InMemorySecretStore, PinManager
-from nox.settings.install import UI_ROLES, install
+from nox.settings.install import install
 from nox.settings.secrets_ipc import KNOWN_SECRETS
 from tests.unit.fakes import FakeBus
 from tests.unit.settings.conftest import FakeAudit
@@ -31,6 +32,16 @@ SETTINGS_REQUESTS = (
     "twitch.auth.disconnect",
     "personality.get",
     "personality.set",
+)
+SETTINGS_WRITES = frozenset(
+    {
+        "config.set",
+        "secrets.set",
+        "secrets.delete",
+        "twitch.auth.start",
+        "twitch.auth.disconnect",
+        "personality.set",
+    }
 )
 
 
@@ -106,7 +117,10 @@ async def test_install_registers_the_settings_requests_for_ui_roles_only(
         for name in SETTINGS_REQUESTS:
             reg = core.registry.get(name)
             assert reg is not None
-            assert reg.allowed_roles == frozenset(UI_ROLES)
+            # Reading is for every UI, a paired device included; changing anything is
+            # administration and stays on this machine (`nox.ipc.roles`).
+            expected = LOCAL_UI_ROLES if name in SETTINGS_WRITES else UI_ROLES
+            assert reg.allowed_roles == frozenset(expected), name
             # The hub's own per-role name allow-list has to know the name too.
             assert role_allows("dashboard", name)
             assert role_allows("shell", name)

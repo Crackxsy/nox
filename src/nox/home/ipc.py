@@ -28,12 +28,12 @@ from nox.home.intent import IntentMatch, IntentRefusal, IntentSnapshot, resolve_
 from nox.home.probe import probe_home_assistant
 from nox.ipc.dispatch import EmptyPayload, RequestContext, RequestRegistry
 from nox.ipc.errors import ERR_INTERNAL, ERR_PERMISSION, ERR_UNAVAILABLE, IpcError
+from nox.ipc.roles import UI_ROLES
 from nox.tools.executor import ERR_PERMISSION_DENIED, ERR_UNKNOWN_TOOL, ToolExecutor
 
 log = get_logger(__name__)
 
 #: The roles that may reach any of these: the two user-facing clients, never a plugin or a worker.
-UI_ROLES = ("shell", "dashboard")
 
 ModeProvider = Callable[[], str]
 SecretReader = Callable[[], str | None]

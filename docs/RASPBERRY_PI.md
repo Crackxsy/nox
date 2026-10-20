@@ -4,8 +4,7 @@ Nox's core can run as a server: always on, quiet, in a corner of the flat, on a 
 64-bit Linux machine. Your PC, laptop, phone and tablet then share one Nox - the same memory,
 reminders and calendar - instead of each having its own.
 
-> **Deutsch:** [`RASPBERRY_PI.de.md`](RASPBERRY_PI.de.md) ist dieselbe Anleitung auf Deutsch. The
-> installer itself talks German.
+> **Deutsch:** [`RASPBERRY_PI.de.md`](RASPBERRY_PI.de.md) ist dieselbe Anleitung auf Deutsch.
 
 ## What you need
 
@@ -30,9 +29,12 @@ Prefer to read it first? `curl -fsSLO <same address>`, `less install-linux.sh`, 
 catches a damaged download; it sits next to the script, so it does not protect against a release
 that someone with write access to the project had altered.
 
-The script prints each step in German and ends with **"Nox läuft"** once the service answers. From
+The script prints each step and ends with **"Nox is running"** once the service answers. From
 then on it starts by itself after every reboot. It installs the newest release that runs on Linux
-(v0.6.0 or later); once installed, `nox update <version>` picks another one.
+(v0.6.0 or later); once installed, `nox update <version>` picks another one. The installer and the
+`nox` command speak German when the system language is German (`LANG`, `LC_ALL` or `LC_MESSAGES`
+starting with `de`) and English otherwise; `NOX_LANG=de|en` overrides that, given after `sudo`,
+which passes on `LANG` and `LC_*` but not `NOX_LANG`: `curl ... | sudo NOX_LANG=en bash`.
 
 What it does, and nothing else:
 
@@ -92,6 +94,7 @@ acts less reliably; to use it anyway, set `ai.providers.ollama.model: "qwen3:1.7
 | Where are its files? | `nox where` |
 | Settings | `sudo nano /var/lib/nox/user.yaml`, then `sudo systemctl restart nox` |
 | Is there a new version? | `nox doctor` (last line) |
+| Pair a phone, tablet or PC | `nox pair` |
 | Update | `nox update` |
 
 **Updates can be undone.** Every version is a complete folder of its own under
@@ -128,11 +131,33 @@ in UTC; the installer warns about it. In Germany: `sudo timedatectl set-timezone
 
 ## Reaching it from your other devices
 
-Network access is the next part of this release: pairing a phone, tablet or PC with a one-time code
-shown on the server, after which that device - and only that device - opens the dashboard. Until it
-lands, the server listens on the Pi itself only and is not reachable from the network. That is
-deliberate: a dashboard that can change settings must not be open to anything that happens to be
-in the same Wi-Fi.
+The installer turns network access on: phones, tablets and PCs in your home network open the
+dashboard once they are paired, and only then.
+
+```bash
+nox pair            # prints a QR code and a link; scan it with the new device's camera
+```
+
+The browser warns once, because Nox has a certificate of its own. That is expected; to be sure,
+show the certificate in the browser and compare the first characters of its SHA-256 fingerprint
+with the one `nox pair` prints, then continue. Installing Nox's certificate authority on a device
+removes the warning for good and lets you add Nox to the home screen; the dashboard's **Devices**
+tab shows how. A paired device may do everything day to day but change how Nox is set up; pairing
+or removing other devices, and allowing anything at high risk, needs the security PIN there - so
+set one (`nox onboard` asks for it) if devices should do that.
+
+Every paired device sees everything the dashboard shows - the chat, the audit trail, clips. In a
+household with children, pair the adults' devices only for now.
+
+```bash
+nox devices                 # the paired devices
+nox unpair Tablet          # remove one (by name or id) - a lost phone, say
+```
+
+Give the Pi a fixed address in the router (a DHCP reservation): with a new address, paired devices
+no longer find it. Details and troubleshooting: [`NETWORK_ACCESS.md`](NETWORK_ACCESS.md).
+
+Firewall: with `ufw` active, `sudo ufw allow 47843/tcp`.
 
 ## Secrets without a desktop
 
@@ -155,7 +180,7 @@ The Pi is the shared brain; device-specific things stay on the device they belon
 | | On the Pi | On your Windows PC |
 | --- | --- | --- |
 | Conversation, memory, reminders, calendar, smart home, plans | ✓ | ✓ |
-| Dashboard from every device in the network | planned - network access (above) | ✓ (on that PC) |
+| Dashboard from every device in the network | ✓ (paired devices, above) | ✓ (paired devices; off by default) |
 | The pet window and global hotkeys | – (no screen) | ✓ |
 | Windows, programs, typing into a window | – | ✓ |
 | Speaking and listening | planned (a USB microphone and speaker) | ✓ |

@@ -22,6 +22,7 @@ Scope: every installed Python package (`importlib.metadata` against the project 
 | cloudpickle | 3.1.2 | BSD-3-Clause | allow | BSD-3-Clause |
 | colorama | 0.4.6 | BSD License | allow | BSD License |
 | coverage | 7.16.0 | Apache-2.0 | allow | Apache-2.0 |
+| cryptography | 50.0.1 | Apache-2.0 OR BSD-3-Clause | allow | OR expression, using the 'Apache-2.0' alternative (Apache-2.0 OR BSD-3-Clause) |
 | ctranslate2 | 4.8.2 | MIT | allow | MIT |
 | faster-whisper | 1.2.1 | MIT | allow | MIT |
 | filelock | 3.32.6 | MIT | allow | MIT |
@@ -47,6 +48,7 @@ Scope: every installed Python package (`importlib.metadata` against the project 
 | mdurl | 0.1.2 | MIT License | allow | MIT License |
 | more-itertools | 11.1.0 | MIT | allow | MIT |
 | mss | 10.2.0 | MIT License
+| segno | 1.6.6 | BSD License | allow | BSD License |
 Copyright (c) 2013-2026, Mickaël 'Tiger-222' Schoentgen
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
@@ -2683,7 +2685,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | side-channel-list | 1.0.1 | MIT | allow | MIT |
 | side-channel-map | 1.0.1 | MIT | allow | MIT |
 | side-channel-weakmap | 1.0.2 | MIT | allow | MIT |
-| source-map-js | 1.2.1 | BSD-3-Clause | allow | BSD-3-Clause |
+| source-map-js | 1.2.2 | BSD-3-Clause | allow | BSD-3-Clause |
 | std-env | 4.2.0 | MIT | allow | MIT |
 | stop-iteration-iterator | 1.1.0 | MIT | allow | MIT |
 | string.prototype.includes | 2.0.1 | MIT | allow | MIT |
@@ -3059,7 +3061,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 | side-channel-list | 1.0.1 | MIT | allow | MIT |
 | side-channel-map | 1.0.1 | MIT | allow | MIT |
 | side-channel-weakmap | 1.0.2 | MIT | allow | MIT |
-| source-map-js | 1.2.1 | BSD-3-Clause | allow | BSD-3-Clause |
+| source-map-js | 1.2.2 | BSD-3-Clause | allow | BSD-3-Clause |
 | std-env | 4.2.0 | MIT | allow | MIT |
 | stop-iteration-iterator | 1.1.0 | MIT | allow | MIT |
 | string.prototype.includes | 2.0.1 | MIT | allow | MIT |

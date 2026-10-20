@@ -16,13 +16,13 @@ from typing import Any
 from nox.capabilities.tools import ReportProvider
 from nox.core.logging import get_logger
 from nox.ipc.dispatch import EmptyPayload, RequestContext, RequestRegistry
+from nox.ipc.roles import UI_ROLES
 
 log = get_logger(__name__)
 
 __all__ = ["register_capability_ipc"]
 
 #: The two user-facing clients, never a plugin or a worker.
-UI_ROLES = ("shell", "dashboard")
 
 
 def register_capability_ipc(registry: RequestRegistry, report_of: ReportProvider) -> None:

@@ -22,7 +22,7 @@ import ipaddress
 import socket
 from collections.abc import Awaitable, Callable, Generator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import uvicorn
 from pydantic import BaseModel, Field, field_validator
@@ -201,15 +201,43 @@ class _EmbeddedServer(uvicorn.Server):
         yield
 
 
+class ListenSettings(Protocol):
+    """Where a server listens. `HttpSettings` (loopback only) and the network listener's own
+    settings (`nox.lan.app.LanSettings`) both fit."""
+
+    @property
+    def host(self) -> str: ...
+    @property
+    def port(self) -> int: ...
+    @property
+    def port_attempts(self) -> int: ...
+
+
 class HttpServer:
-    """Runs the app with uvicorn on the current loop; tries `port_attempts` consecutive ports."""
+    """Runs the app with uvicorn on the current loop; tries `port_attempts` consecutive ports.
+
+    With `ssl_certfile`/`ssl_keyfile` it serves HTTPS (the network listener); without, plain HTTP
+    on loopback.
+    """
 
     def __init__(
-        self, app: Starlette, settings: HttpSettings, *, runtime_dir: Path | None = None
+        self,
+        app: Starlette,
+        settings: ListenSettings,
+        *,
+        runtime_dir: Path | None = None,
+        ssl_certfile: Path | None = None,
+        ssl_keyfile: Path | None = None,
+        ws_max_size: int = 1024 * 1024,
+        name: str = "http",
     ) -> None:
         self._app = app
         self._settings = settings
         self._runtime_dir = runtime_dir
+        self._ssl_certfile = ssl_certfile
+        self._ssl_keyfile = ssl_keyfile
+        self._ws_max_size = ws_max_size
+        self._name = name
         self._server: _EmbeddedServer | None = None
         self._task: asyncio.Task[None] | None = None
         self._port: int | None = None
@@ -222,7 +250,8 @@ class HttpServer:
 
     @property
     def url(self) -> str:
-        return f"http://{self._settings.host}:{self.port}"
+        scheme = "https" if self._ssl_certfile is not None else "http"
+        return f"{scheme}://{self._settings.host}:{self.port}"
 
     def _bind(self) -> socket.socket:
         s = self._settings
@@ -235,7 +264,7 @@ class HttpServer:
             except OSError as exc:
                 sock.close()
                 last_error = exc
-                log.warning("http_port_busy", port=port, error=str(exc))
+                log.warning("http_port_busy", server=self._name, port=port, error=str(exc))
                 continue
             return sock
         raise OSError(f"no free HTTP port in {candidates[0]}..{candidates[-1]}") from last_error
@@ -256,9 +285,18 @@ class HttpServer:
             access_log=False,
             server_header=False,
             date_header=False,
+            # Nothing sits in front of these servers. Trusting X-Forwarded-For from a loopback
+            # peer (uvicorn's default) would let a forged header pick the client address that
+            # rate limits and logs see.
+            proxy_headers=False,
+            ws_max_size=self._ws_max_size,
+            ssl_certfile=str(self._ssl_certfile) if self._ssl_certfile else None,
+            ssl_keyfile=str(self._ssl_keyfile) if self._ssl_keyfile else None,
         )
         self._server = _EmbeddedServer(config)
-        self._task = asyncio.create_task(self._server.serve(sockets=[sock]), name="nox-http")
+        self._task = asyncio.create_task(
+            self._server.serve(sockets=[sock]), name=f"nox-{self._name}"
+        )
         deadline = asyncio.get_running_loop().time() + startup_timeout
         while not self._server.started:
             if self._task.done():
@@ -271,7 +309,7 @@ class HttpServer:
             await asyncio.sleep(0.01)
         if self._runtime_dir is not None:
             write_runtime_info(self._runtime_dir, http_port=self._port, http_url=self.url)
-        log.info("http_server_started", url=self.url)
+        log.info("http_server_started", server=self._name, url=self.url)
 
     async def stop(self) -> None:
         server, task = self._server, self._task
@@ -284,4 +322,4 @@ class HttpServer:
         except (TimeoutError, asyncio.CancelledError):
             task.cancel()
         self._port = None
-        log.info("http_server_stopped")
+        log.info("http_server_stopped", server=self._name)

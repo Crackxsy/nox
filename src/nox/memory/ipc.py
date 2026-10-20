@@ -16,6 +16,7 @@ from pydantic import BaseModel, StringConstraints
 from nox.core.logging import get_logger
 from nox.ipc.dispatch import EmptyPayload, RequestContext, RequestRegistry
 from nox.ipc.errors import ERR_PERMISSION, IpcError
+from nox.ipc.roles import LOCAL_UI_ROLES, UI_ROLES
 from nox.memory.capture import PROFILE_TYPES, UserProfile, confirmed_source, is_unconfirmed
 from nox.memory.importance import MemoryType
 from nox.memory.items import MemoryService, MemoryWriteRefusedError
@@ -25,7 +26,6 @@ log = get_logger(__name__)
 __all__ = ["register_memory_ipc"]
 
 #: The two user-facing clients, never a plugin, a worker or a phone.
-UI_ROLES = ("shell", "dashboard")
 
 _PROFILE_TYPE_NAMES = frozenset(t.value for t in PROFILE_TYPES)
 
@@ -92,6 +92,9 @@ def register_memory_ipc(
         return {"ok": ok}
 
     registry.register("memory.profile.list", EmptyPayload, p_list, roles=UI_ROLES)
-    registry.register("memory.profile.confirm", ProfileConfirm, p_confirm, roles=UI_ROLES)
-    registry.register("memory.profile.add", ProfileAdd, p_add, roles=UI_ROLES)
-    registry.register("memory.profile.forget", ProfileForget, p_forget, roles=UI_ROLES)
+    # What Nox knows about its person is changed on the machine it runs on: a fact added here is
+    # part of every prompt - and so is one Nox only picked up from a phone message or pasted text
+    # once it is confirmed - and a lost phone must not be able to erase what Nox knows either.
+    registry.register("memory.profile.confirm", ProfileConfirm, p_confirm, roles=LOCAL_UI_ROLES)
+    registry.register("memory.profile.add", ProfileAdd, p_add, roles=LOCAL_UI_ROLES)
+    registry.register("memory.profile.forget", ProfileForget, p_forget, roles=LOCAL_UI_ROLES)

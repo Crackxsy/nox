@@ -659,18 +659,38 @@ class DefaultPermissionEngine:
         publish_nowait(
             self._bus,
             E.SECURITY_PERMISSION_REQUESTED,
-            PermissionRequested(
-                request_id=grant_id,
-                agent=request.agent,
-                tool=request.tool,
-                action=request.action,
-                mode=request.mode,
-                risk=request.risk.value,
-                target=request.target,
-            ),
+            self._requested(grant_id, self._pending[grant_id]),
             corr=grant_id,
         )
         return grant_id
+
+    def _requested(self, grant_id: str, pending: _Pending) -> PermissionRequested:
+        request = pending.request
+        expires = pending.created_at + timedelta(seconds=self._confirm_timeout_s)
+        return PermissionRequested(
+            request_id=grant_id,
+            agent=request.agent,
+            tool=request.tool,
+            action=request.action,
+            mode=request.mode,
+            risk=request.risk.value,
+            target=request.target,
+            expires_at=expires.isoformat(),
+            remember_ttl_s=self._session_grant_ttl.total_seconds(),
+        )
+
+    def pending_requests(self) -> list[PermissionRequested]:
+        """The questions still waiting for an answer, as their `permission_requested` events - for
+        a dashboard that connects (or reconnects) while one is open."""
+        return [
+            self._requested(grant_id, pending)
+            for grant_id, pending in self._pending.items()
+            if not pending.future.done()
+        ]
+
+    def pending_request(self, grant_id: str) -> PermissionRequest | None:
+        pending = self._pending.get(grant_id)
+        return None if pending is None or pending.future.done() else pending.request
 
     def reply(
         self, grant_id: str, decision: Decision, *, remember: bool = False, by: str = "user"

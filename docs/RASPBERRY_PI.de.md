@@ -5,7 +5,8 @@ Raspberry Pi oder einem anderen 64-Bit-Linux-Rechner. PC, Laptop, Handy und Tabl
 ein Nox – mit demselben Gedächtnis, denselben Erinnerungen und demselben Kalender –, statt dass jedes
 Gerät sein eigenes hat.
 
-> **English:** [`RASPBERRY_PI.md`](RASPBERRY_PI.md) is the same guide in English.
+> **Maßgeblich ist die englische Fassung:** [`RASPBERRY_PI.md`](RASPBERRY_PI.md). Diese Übersetzung wird im selben
+> Pull Request mitgepflegt; weichen beide einmal voneinander ab, gilt die englische.
 
 ## Was du brauchst
 
@@ -32,7 +33,11 @@ einem Release, das jemand mit Schreibrechten am Projekt verändert hätte.
 
 Das Skript zeigt jeden Schritt an und endet mit **„Nox läuft“**, sobald der Dienst antwortet. Ab
 dann startet Nox nach jedem Neustart von selbst. Installiert wird die neueste Version, die unter
-Linux läuft (ab v0.6.0); später wählt `nox update <version>` eine andere.
+Linux läuft (ab v0.6.0); später wählt `nox update <version>` eine andere. Installer und
+`nox`-Befehl sprechen Deutsch, wenn die Systemsprache Deutsch ist (`LANG`, `LC_ALL` oder
+`LC_MESSAGES` beginnt mit `de`), sonst Englisch; `NOX_LANG=de|en` legt die Sprache fest – hinter
+`sudo` angegeben, weil sudo `LANG` und `LC_*` weitergibt, `NOX_LANG` aber nicht:
+`curl ... | sudo NOX_LANG=de bash`.
 
 Was es tut, und sonst nichts:
 
@@ -95,6 +100,7 @@ in `user.yaml`. `nox doctor` sagt, ob das gewünschte Modell da ist.
 | Wo liegen seine Dateien? | `nox where` |
 | Einstellungen | `sudo nano /var/lib/nox/user.yaml`, danach `sudo systemctl restart nox` |
 | Gibt es eine neue Version? | `nox doctor` (letzte Zeile) |
+| Handy, Tablet oder PC koppeln | `nox pair` |
 | Update | `nox update` |
 
 **Updates lassen sich zurücknehmen.** Jede Version ist ein vollständiger eigener Ordner unter
@@ -132,11 +138,35 @@ startet oft in UTC; der Installer weist darauf hin. In Deutschland:
 
 ## Von deinen anderen Geräten aus
 
-Der Netzwerkzugriff ist der nächste Teil dieses Releases: Handy, Tablet oder PC werden mit einem
-Einmalcode gekoppelt, den der Server anzeigt. Danach öffnet genau dieses Gerät das Dashboard – und
-kein anderes. Bis dahin hört der Server nur auf dem Pi selbst und ist aus dem Netzwerk nicht
-erreichbar. Das ist Absicht: Ein Dashboard, das Einstellungen ändern kann, darf nicht für jedes
-Gerät offen stehen, das zufällig im selben WLAN ist.
+Der Installer schaltet den Netzwerkzugriff ein: Handy, Tablet und PC im Heimnetz öffnen das
+Dashboard, sobald sie gekoppelt sind – und erst dann.
+
+```bash
+nox pair            # zeigt einen QR-Code und einen Link; mit der Kamera des neuen Geräts scannen
+```
+
+Der Browser warnt beim ersten Mal, weil Nox ein eigenes Zertifikat hat. Das ist erwartet; wer
+sichergehen will, lässt sich im Browser das Zertifikat anzeigen und vergleicht die ersten Zeichen
+des SHA-256-Fingerabdrucks mit dem, den `nox pair` zeigt, dann fortfahren. Wer die
+Zertifizierungsstelle von Nox auf dem Gerät installiert, sieht keine Warnung mehr und kann Nox auf
+den Startbildschirm legen; der Reiter **Geräte** im Dashboard zeigt, wie. Ein gekoppeltes Gerät darf
+alles im Alltag, nur nicht ändern, wie Nox eingerichtet ist; andere Geräte koppeln oder entfernen
+und bei hohem Risiko etwas erlauben geht dort nur mit der Sicherheits-PIN – richte also eine ein
+(`nox onboard` fragt danach), wenn Geräte das können sollen.
+
+Jedes gekoppelte Gerät sieht alles, was das Dashboard zeigt – den Chat, das Protokoll, die Clips.
+In einem Haushalt mit Kindern koppelst du vorerst nur die Geräte der Erwachsenen.
+
+```bash
+nox devices                 # die gekoppelten Geräte
+nox unpair Tablet          # eins entfernen (per Name oder ID) – etwa ein verlorenes Handy
+```
+
+Gib dem Pi im Router eine feste Adresse (eine DHCP-Reservierung): Mit einer neuen Adresse finden ihn
+gekoppelte Geräte nicht mehr. Mehr, auch wenn es nicht klappt:
+[`NETWORK_ACCESS.de.md`](NETWORK_ACCESS.de.md).
+
+Firewall: Ist `ufw` aktiv, `sudo ufw allow 47843/tcp`.
 
 ## Zugangsdaten ohne Desktop
 
@@ -161,7 +191,7 @@ Der Pi ist das gemeinsame Gehirn; Gerätespezifisches bleibt auf dem Gerät, zu 
 | | Auf dem Pi | Auf deinem Windows-PC |
 | --- | --- | --- |
 | Gespräch, Gedächtnis, Erinnerungen, Kalender, Smart Home, Pläne | ✓ | ✓ |
-| Dashboard von jedem Gerät im Netzwerk | geplant – mit dem Netzwerkzugriff (oben) | ✓ (auf diesem PC) |
+| Dashboard von jedem Gerät im Netzwerk | ✓ (gekoppelte Geräte, oben) | ✓ (gekoppelte Geräte; anfangs aus) |
 | Das Pet-Fenster und globale Tastenkürzel | – (kein Bildschirm) | ✓ |
 | Fenster, Programme, Tippen in ein Fenster | – | ✓ |
 | Sprechen und Zuhören | geplant (USB-Mikrofon und -Lautsprecher) | ✓ |

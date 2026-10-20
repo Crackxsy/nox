@@ -40,7 +40,8 @@ __all__ = [
 ]
 
 #: Configuration paths whose change is a security change.
-SECURITY_SETTING_PREFIXES: tuple[str, ...] = ("security.", "privacy.")
+#: `ipc.lan.` opens the dashboard to the home network.
+SECURITY_SETTING_PREFIXES: tuple[str, ...] = ("security.", "privacy.", "ipc.lan.")
 
 #: Privacy modes ordered from most to least protective. A move toward the end relaxes.
 _MODE_ORDER: tuple[PrivacyMode, ...] = (

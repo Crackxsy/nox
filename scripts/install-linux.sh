@@ -22,6 +22,9 @@
 # (NOX_SNAPSHOT=<file>) | verify-bundle (NOX_BUNDLE=<file>, for tests). NOX_REF picks a version;
 # NOX_SOURCE=<checkout> installs from a local checkout (CI uses it); root runs git in it, so it
 # must be a checkout you trust.
+#
+# Language: German when the system language is German (LC_ALL, LC_MESSAGES or LANG starting with
+# "de"), English otherwise; NOX_LANG=de|en overrides it (`curl ... | sudo NOX_LANG=en bash`).
 set -euo pipefail
 umask 022
 
@@ -51,6 +54,229 @@ if [ -n "${NOX_SOURCE:-}" ]; then
 fi
 ACTION="${NOX_ACTION:-install}"
 
+# ---- messages -------------------------------------------------------------------------------------
+
+#: "de" or "en": NOX_LANG when it names one of them, else the first locale variable that is set.
+detect_language() {
+  case "${NOX_LANG:-}" in de|en) printf '%s' "$NOX_LANG"; return ;; esac
+  case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in de*) printf 'de' ;; *) printf 'en' ;; esac
+}
+UI_LANG="$(detect_language)"
+
+declare -A MSG_DE=() MSG_EN=()
+#: One message in both languages: key, German, English. Placeholders are printf's %s.
+define() { MSG_DE[$1]="$2"; MSG_EN[$1]="$3"; }
+
+#: The message KEY in the user's language, its %s filled with the remaining arguments in order.
+msg() {
+  local key="$1" template
+  shift
+  if [ "$UI_LANG" = de ]; then template="${MSG_DE[$key]-}"; else template="${MSG_EN[$key]-}"; fi
+  [ -n "$template" ] || template="${MSG_EN[$key]-$key}"
+  # shellcheck disable=SC2059  # the templates are the tables below, written with %s on purpose
+  printf "$template" "$@"
+}
+
+# Failures and the undoing after them
+define error \
+  'Fehler: %s' \
+  'Error: %s'
+define step_failed \
+  'Schritt in Zeile %s fehlgeschlagen. Internetverbindung prüfen und den Befehl noch einmal starten - er macht dort weiter, wo es geht.' \
+  'Step on line %s failed. Check the internet connection and run the command again - it carries on where it can.'
+define old_running_again \
+  'Die bisherige Version läuft wieder, unverändert.' \
+  'The previous version is running again, unchanged.'
+define need_root \
+  'bitte mit sudo starten: curl -fsSL <Adresse> | sudo bash  (oder: sudo bash install-linux.sh)' \
+  'please run it with sudo: curl -fsSL <address> | sudo bash  (or: sudo bash install-linux.sh)'
+define not_linux \
+  'dieses Skript ist für Linux. Unter Windows: scripts/setup.ps1.' \
+  'this script is for Linux. On Windows: scripts/setup.ps1.'
+define locked \
+  'ein anderer Installations- oder Update-Lauf ist gerade aktiv. Bitte warten und erneut versuchen.' \
+  'another install or update is running right now. Please wait and try again.'
+define unknown_action \
+  'unbekannte Aktion: %s' \
+  'unknown action: %s'
+define bundle_missing \
+  'NOX_BUNDLE fehlt' \
+  'NOX_BUNDLE is missing'
+
+# Snapshots, restore and rollback
+define snapshot_missing \
+  'Schnappschuss %s gibt es nicht.' \
+  'Snapshot %s does not exist.'
+define snapshot_damaged \
+  'Schnappschuss %s ist beschädigt; nichts wurde geändert.' \
+  'Snapshot %s is damaged; nothing was changed.'
+define unpack_failed \
+  'Entpacken fehlgeschlagen (Speicher voll?); die bisherigen Daten sind unverändert zurück.' \
+  'Unpacking failed (disk full?); the previous data are back, unchanged.'
+define restored \
+  'Daten aus %s wiederhergestellt. Der Stand davor liegt in %s - löschen, sobald alles läuft.' \
+  'Data restored from %s. What was there before is in %s - delete it once everything works.'
+define no_step_back \
+  'Es gibt keinen weiteren Schritt zurück. Zu einer neueren Version: nox update' \
+  'There is no further step back. To a newer version: nox update'
+define rollback_title \
+  'Zurück zur vorherigen Version (%s)' \
+  'Back to the previous version (%s)'
+define rollback_aborted \
+  'Zurückschalten abgebrochen: Daten unverändert, es läuft weiter Version %s. Protokoll: journalctl -u nox -n 50' \
+  'Rollback stopped: data unchanged, version %s keeps running. Log: journalctl -u nox -n 50'
+define rollback_done \
+  'Die vorherige Version läuft wieder, mit den Daten von vor dem Update.' \
+  'The previous version is running again, with the data from before the update.'
+define rollback_since \
+  'Was seit dem Update dazukam, liegt im beiseitegelegten Ordner (siehe oben).' \
+  'Whatever came in since the update is in the folder set aside (see above).'
+define rollback_no_answer \
+  'Auch die vorherige Version antwortet nicht. Protokoll: journalctl -u nox -n 50' \
+  'The previous version does not answer either. Log: journalctl -u nox -n 50'
+define restore_which \
+  'welcher Schnappschuss? nox restore <datei>  (Liste: nox snapshots)' \
+  'which snapshot? nox restore <file>  (list: nox snapshots)'
+define restore_missing \
+  'Schnappschuss %s gibt es nicht. Liste: nox snapshots' \
+  'Snapshot %s does not exist. List: nox snapshots'
+define restore_outside \
+  'nur Schnappschüsse aus %s lassen sich wiederherstellen (Liste: nox snapshots).' \
+  'only snapshots from %s can be restored (list: nox snapshots).'
+define restore_not_root \
+  '%s gehört nicht root - so legt Nox keine Schnappschüsse an.' \
+  '%s is not owned by root - Nox does not make snapshots like that.'
+define restore_no_rollback \
+  'Ein `nox rollback` gibt es danach nicht mehr: es würde diese Daten wieder überschreiben.' \
+  'There is no `nox rollback` after this: it would overwrite these data again.'
+define restore_done \
+  'Nox läuft wieder, mit den Daten aus %s.' \
+  'Nox is running again, with the data from %s.'
+define restore_no_answer \
+  'Nox antwortet nach dem Wiederherstellen nicht. Protokoll: journalctl -u nox -n 50' \
+  'Nox does not answer after the restore. Log: journalctl -u nox -n 50'
+
+# Preconditions
+define arch_32bit \
+  '32-bit-System erkannt. Nox braucht Raspberry Pi OS 64-bit (Pi 3, 4, 5, 400 oder Zero 2 W).' \
+  '32-bit system detected. Nox needs Raspberry Pi OS 64-bit (Pi 3, 4, 5, 400 or Zero 2 W).'
+define arch_unsupported \
+  'nicht unterstützte Architektur: %s' \
+  'unsupported architecture: %s'
+define step_packages \
+  'Pakete installieren (git, curl)' \
+  'Installing packages (git, curl)'
+define untested_system \
+  'Hinweis: getestet ist Nox auf Raspberry Pi OS, Debian und Ubuntu. Auf diesem System kann etwas fehlen.' \
+  'Note: Nox is tested on Raspberry Pi OS, Debian and Ubuntu. Something may be missing on this system.'
+define tool_missing \
+  '%s fehlt, bitte installieren.' \
+  '%s is missing, please install it.'
+define prefix_foreign \
+  '%s existiert schon, ist aber keine Nox-Installation. Bitte prüfen und den Ordner entfernen oder umbenennen.' \
+  '%s already exists but is not a Nox installation. Please check it, then remove or rename the folder.'
+
+# Which version
+define step_source \
+  'Nox-Quelle aktualisieren' \
+  'Updating the Nox source'
+define no_version \
+  'keine Nox-Version gefunden. Internetverbindung prüfen.' \
+  'no Nox version found. Check the internet connection.'
+define invalid_version \
+  'ungültige Version: %s' \
+  'invalid version: %s'
+define version_missing \
+  'Version %s gibt es nicht.' \
+  'Version %s does not exist.'
+define windows_only \
+  'Nox %s läuft nur unter Windows. Linux-Server gibt es ab v%s.' \
+  'Nox %s runs on Windows only. Linux servers are supported from v%s on.'
+
+# Building the release
+define step_user \
+  'Systembenutzer %s anlegen' \
+  'Creating the system user %s'
+define release_ready \
+  'Nox %s ist schon vorbereitet' \
+  'Nox %s is already prepared'
+define step_release \
+  'Nox %s vorbereiten' \
+  'Preparing Nox %s'
+define step_python \
+  'Python 3.13 und Abhängigkeiten (uv %s, nur fertige Pakete)' \
+  'Python 3.13 and dependencies (uv %s, prebuilt packages only)'
+define step_ui \
+  'Oberflächen (Dashboard und Pet) installieren' \
+  'Installing the interfaces (dashboard and pet)'
+define ui_checksum \
+  'das Oberflächen-Paket stimmt nicht mit seiner Prüfsumme überein. Nichts wurde geändert.' \
+  'the interface package does not match its checksum. Nothing was changed.'
+define ui_unexpected \
+  'das Oberflächen-Paket enthält Unerwartetes (Verknüpfungen oder fremde Dateien). Nichts wurde geändert.' \
+  'the interface package contains something unexpected (links or foreign files). Nothing was changed.'
+define ui_none \
+  'Für %s gibt es kein fertiges Oberflächen-Paket (Entwicklungsversion).' \
+  'There is no prebuilt interface package for %s (development version).'
+define ui_none_hint \
+  'Der Kern läuft trotzdem; das Dashboard zeigt bis dahin eine Hinweisseite.' \
+  'The core runs anyway; until then the dashboard shows a notice page.'
+define settings_link \
+  '%s ist eine Verknüpfung. Aus Sicherheitsgründen wird sie nicht angefasst.' \
+  '%s is a symbolic link. For safety it is left untouched.'
+define step_settings \
+  'Grundeinstellungen für einen Server schreiben' \
+  'Writing the basic settings for a server'
+
+# Switching over
+define step_backup \
+  'Sicherung vor dem Update' \
+  'Backup before the update'
+define backup_failed \
+  'die Sicherung ist fehlgeschlagen (Speicher voll?). Nichts wurde umgestellt.' \
+  'the backup failed (disk full?). Nothing was switched.'
+define backup_done \
+  'Gesichert: %s (%s). Enthält auch Zugangsdaten - nur root kann es lesen.' \
+  'Saved: %s (%s). It holds credentials too - only root can read it.'
+define step_service \
+  'Dienst einrichten und starten' \
+  'Setting up and starting the service'
+define no_answer \
+  'Nox %s antwortet nicht. Die letzten Zeilen des Protokolls:' \
+  'Nox %s does not answer. The last lines of the log:'
+
+# Done: what to know and what to do next
+define running \
+  'Nox läuft (%s).' \
+  'Nox is running (%s).'
+define rollback_hint \
+  'Zurück zur vorherigen Version samt Daten: nox rollback' \
+  'Back to the previous version, data included: nox rollback'
+define kept_aside \
+  'Beiseitegelegt: %s (%s) - wenn alles läuft: sudo rm -r %s' \
+  'Set aside: %s (%s) - once everything works: sudo rm -r %s'
+define lan_off \
+  'Andere Geräte im Heimnetz erreichen Nox noch nicht. Einschalten: in %s' \
+  'Other devices in the home network cannot reach Nox yet. To turn it on, in %s'
+define lan_off_how \
+  '  ipc: / lan: / enabled: true eintragen, dann sudo systemctl restart nox' \
+  '  set ipc: / lan: / enabled: true, then sudo systemctl restart nox'
+define firewall \
+  'Die Firewall (ufw) ist aktiv. Damit Handy und Tablet Nox erreichen: sudo ufw allow 47843/tcp' \
+  'The firewall (ufw) is active. So that phones and tablets reach Nox: sudo ufw allow 47843/tcp'
+define no_ai \
+  'Noch keine KI angemeldet: Nox antwortet mit einfachen eingebauten Regeln, bis du "nox claude-login" ausführst.' \
+  'No AI signed in yet: Nox answers with simple built-in rules until you run "nox claude-login".'
+define timezone \
+  'Zeitzone: %s. Erinnerungen und Kalender richten sich danach.' \
+  'Time zone: %s. Reminders and the calendar follow it.'
+define timezone_unknown \
+  'unbekannt' \
+  'unknown'
+define timezone_hint \
+  'In Deutschland: sudo timedatectl set-timezone Europe/Berlin' \
+  'In Germany: sudo timedatectl set-timezone Europe/Berlin'
+
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
 
@@ -62,22 +288,26 @@ snapshot=""
 
 fail() {
   trap - ERR  # a failure while undoing must not start the undoing again
-  printf '\nFehler: %s\n' "$*" >&2
+  printf '\n%s\n' "$(msg error "$*")" >&2
   case "$phase" in
     stopped)
-      systemctl start nox 2>/dev/null && printf 'Die bisherige Version läuft wieder, unverändert.\n' >&2 ;;
+      systemctl start nox 2>/dev/null && printf '%s\n' "$(msg old_running_again)" >&2 ;;
     switched)
       rollback_to "$previous_release" "$snapshot" || true ;;
   esac
   exit 1
 }
-trap 'fail "Schritt in Zeile $LINENO fehlgeschlagen. Internetverbindung prüfen und den Befehl noch einmal starten - er macht dort weiter, wo es geht."' ERR
+trap 'fail "$(msg step_failed "$LINENO")"' ERR
 
 # ---- helpers --------------------------------------------------------------------------------------
 
 version_at_least() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
 
-docs_url() { printf '%s/blob/%s/docs/RASPBERRY_PI.de.md' "$REPO_URL" "${1:-develop}"; }
+docs_url() {
+  local page="RASPBERRY_PI.md"
+  [ "$UI_LANG" = de ] && page="RASPBERRY_PI.de.md"
+  printf '%s/blob/%s/docs/%s' "$REPO_URL" "${1:-develop}" "$page"
+}
 
 #: The HTTP port the core actually took. It moves to the next free port when 47801 is busy and
 #: writes the one it got to runtime/ipc.json at every start - stale until then, so it is re-read
@@ -136,16 +366,16 @@ install_service_files() {
 #: is also called from inside `|| true` (the automatic rollback), where `set -e` does not apply.
 restore_data() {
   local file="$1" stamp aside kept
-  [ -f "$file" ] || { printf 'Schnappschuss %s gibt es nicht.\n' "$file" >&2; return 1; }
+  [ -f "$file" ] || { printf '%s\n' "$(msg snapshot_missing "$file")" >&2; return 1; }
   # A truncated or corrupt archive is found before anything is moved.
-  tar -tzf "$file" >/dev/null 2>&1 || { printf 'Schnappschuss %s ist beschädigt; nichts wurde geändert.\n' "$file" >&2; return 1; }
+  tar -tzf "$file" >/dev/null 2>&1 || { printf '%s\n' "$(msg snapshot_damaged "$file")" >&2; return 1; }
   stamp="$(date +%Y%m%d-%H%M%S)"
   aside="$NOX_HOME_DIR.vor-wiederherstellung-$stamp"
   mv -T "$NOX_HOME_DIR" "$aside" || return 1
   if ! tar -xzf "$file" -C "$(dirname "$NOX_HOME_DIR")"; then
     rm -rf -- "$NOX_HOME_DIR"
     mv -T "$aside" "$NOX_HOME_DIR"
-    printf 'Entpacken fehlgeschlagen (Speicher voll?); die bisherigen Daten sind unverändert zurück.\n' >&2
+    printf '%s\n' "$(msg unpack_failed)" >&2
     return 1
   fi
   # What snapshots leave out (the AI's own install, caches, models) moves back from the old folder.
@@ -153,7 +383,7 @@ restore_data() {
     if [ -e "$aside/$kept" ] && [ ! -e "$NOX_HOME_DIR/$kept" ]; then mv "$aside/$kept" "$NOX_HOME_DIR/"; fi
   done
   chmod 0700 "$NOX_HOME_DIR"
-  note "Daten aus $file wiederhergestellt. Der Stand davor liegt in $aside - löschen, sobald alles läuft."
+  note "$(msg restored "$file" "$aside")"
 }
 
 #: Back to an earlier release, with the data as they were before the update that left it. Once:
@@ -164,16 +394,15 @@ rollback_to() {
   # Cleared first: a failure from here on must not make `fail` start another rollback.
   phase=""
   [ -n "$release" ] && [ -d "$RELEASES/$release" ] || {
-    printf 'Es gibt keinen weiteren Schritt zurück. Zu einer neueren Version: nox update\n' >&2
+    printf '%s\n' "$(msg no_step_back)" >&2
     return 1
   }
-  say "Zurück zur vorherigen Version ($release)"
+  say "$(msg rollback_title "$release")"
   systemctl stop nox 2>/dev/null || true
   if [ -n "$file" ]; then
     if ! restore_data "$file"; then
       systemctl start nox 2>/dev/null || true
-      printf 'Zurückschalten abgebrochen: Daten unverändert, es läuft weiter Version %s. Protokoll: journalctl -u nox -n 50\n' \
-        "$(basename "$(readlink "$CURRENT")")" >&2
+      printf '%s\n' "$(msg rollback_aborted "$(basename "$(readlink "$CURRENT")")")" >&2
       return 1
     fi
   fi
@@ -183,10 +412,10 @@ rollback_to() {
   phase=""
   rm -f -- "$STATE/previous-release" "$STATE/previous-snapshot"
   if wait_healthy 90; then
-    note "Die vorherige Version läuft wieder, mit den Daten von vor dem Update."
-    note "Was seit dem Update dazukam, liegt im beiseitegelegten Ordner (siehe oben)."
+    note "$(msg rollback_done)"
+    note "$(msg rollback_since)"
   else
-    note "Auch die vorherige Version antwortet nicht. Protokoll: journalctl -u nox -n 50"
+    note "$(msg rollback_no_answer)"
     return 1
   fi
 }
@@ -215,17 +444,18 @@ verify_bundle() {
 
 # ---- preconditions --------------------------------------------------------------------------------
 
-[ "$(id -u)" -eq 0 ] || fail "bitte mit sudo starten: curl -fsSL <Adresse> | sudo bash  (oder: sudo bash install-linux.sh)"
-[ "$(uname -s)" = "Linux" ] || fail "dieses Skript ist für Linux. Unter Windows: scripts/setup.ps1."
+[ "$(id -u)" -eq 0 ] || fail "$(msg need_root)"
+[ "$(uname -s)" = "Linux" ] || fail "$(msg not_linux)"
 
 # One installer at a time: two runs (two `nox update`s from two terminals, say) would race on the
 # release folders, the snapshot and the link.
 exec 9>/run/nox-install.lock
-flock -n 9 || fail "ein anderer Installations- oder Update-Lauf ist gerade aktiv. Bitte warten und erneut versuchen."
+flock -n 9 || fail "$(msg locked)"
 
 if [ "$ACTION" = "verify-bundle" ]; then
   trap - ERR
-  verify_bundle "${NOX_BUNDLE:?NOX_BUNDLE fehlt}"
+  [ -n "${NOX_BUNDLE:-}" ] || fail "$(msg bundle_missing)"
+  verify_bundle "$NOX_BUNDLE"
   exit $?
 fi
 
@@ -237,14 +467,15 @@ if [ "$ACTION" = "rollback" ]; then
 fi
 
 if [ "$ACTION" = "restore" ]; then
-  requested="${NOX_SNAPSHOT:?welcher Schnappschuss? nox restore <datei>  (Liste: nox snapshots)}"
+  [ -n "${NOX_SNAPSHOT:-}" ] || fail "$(msg restore_which)"
+  requested="$NOX_SNAPSHOT"
   # Root unpacks it into the service's home, so only what Nox itself made counts: a root-owned
   # snapshot directly in the backup folder. `realpath` resolves `..` and links before the check.
   file="$(realpath -e -- "$requested" 2>/dev/null || true)"
-  [ -n "$file" ] && [ -f "$file" ] || fail "Schnappschuss $requested gibt es nicht. Liste: nox snapshots"
+  [ -n "$file" ] && [ -f "$file" ] || fail "$(msg restore_missing "$requested")"
   [[ "$file" == "$BACKUP_DIR"/nox-*.tar.gz && "$(dirname "$file")" == "$BACKUP_DIR" ]] \
-    || fail "nur Schnappschüsse aus $BACKUP_DIR lassen sich wiederherstellen (Liste: nox snapshots)."
-  [ "$(stat -c %u "$file")" = 0 ] || fail "$file gehört nicht root - so legt Nox keine Schnappschüsse an."
+    || fail "$(msg restore_outside "$BACKUP_DIR")"
+  [ "$(stat -c %u "$file")" = 0 ] || fail "$(msg restore_not_root "$file")"
   systemctl stop nox 2>/dev/null || true
   phase="stopped"
   restore_data "$file"
@@ -253,36 +484,36 @@ if [ "$ACTION" = "restore" ]; then
   # A later `nox rollback` would put the pre-update snapshot over the data just restored.
   if [ -e "$STATE/previous-release" ]; then
     rm -f -- "$STATE/previous-release" "$STATE/previous-snapshot"
-    note "Ein \`nox rollback\` gibt es danach nicht mehr: es würde diese Daten wieder überschreiben."
+    note "$(msg restore_no_rollback)"
   fi
-  wait_healthy 90 && say "Nox läuft wieder, mit den Daten aus $file." || fail "Nox antwortet nach dem Wiederherstellen nicht. Protokoll: journalctl -u nox -n 50"
+  wait_healthy 90 && say "$(msg restore_done "$file")" || fail "$(msg restore_no_answer)"
   exit 0
 fi
 
-[ "$ACTION" = "install" ] || fail "unbekannte Aktion: $ACTION"
+[ "$ACTION" = "install" ] || fail "$(msg unknown_action "$ACTION")"
 
 case "$(uname -m)" in
   aarch64|arm64|x86_64) ;;
-  armv7l|armv6l) fail "32-bit-System erkannt. Nox braucht Raspberry Pi OS 64-bit (Pi 3, 4, 5, 400 oder Zero 2 W)." ;;
-  *) fail "nicht unterstützte Architektur: $(uname -m)" ;;
+  armv7l|armv6l) fail "$(msg arch_32bit)" ;;
+  *) fail "$(msg arch_unsupported "$(uname -m)")" ;;
 esac
 
 if command -v apt-get >/dev/null 2>&1; then
-  say "Pakete installieren (git, curl)"
+  say "$(msg step_packages)"
   apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates tar sudo >/dev/null
 else
-  note "Hinweis: getestet ist Nox auf Raspberry Pi OS, Debian und Ubuntu. Auf diesem System kann etwas fehlen."
-  for tool in git curl tar sha256sum sudo; do command -v "$tool" >/dev/null 2>&1 || fail "$tool fehlt, bitte installieren."; done
+  note "$(msg untested_system)"
+  for tool in git curl tar sha256sum sudo; do command -v "$tool" >/dev/null 2>&1 || fail "$(msg tool_missing "$tool")"; done
 fi
 
 if [ -e "$PREFIX" ] && [ ! -d "$SRC/.git" ] && [ -n "$(ls -A "$PREFIX" 2>/dev/null)" ]; then
-  fail "$PREFIX existiert schon, ist aber keine Nox-Installation. Bitte prüfen und den Ordner entfernen oder umbenennen."
+  fail "$(msg prefix_foreign "$PREFIX")"
 fi
 
 # ---- which version --------------------------------------------------------------------------------
 
-say "Nox-Quelle aktualisieren"
+say "$(msg step_source)"
 install -d -m 0755 "$PREFIX" "$RELEASES" "$STATE"
 if [ -d "$SRC/.git" ]; then
   "${GIT[@]}" -C "$SRC" remote set-url origin "$SOURCE"
@@ -302,9 +533,9 @@ if [ -z "${NOX_REF:-}" ]; then
     # Releases only: a tag like v0.7.0-rc1 sorts above v0.7.0 but is not "the newest version".
     NOX_REF="$("${GIT[@]}" -C "$SRC" tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+[.][0-9]+[.][0-9]+$' | head -n1 || true)"
   fi
-  [ -n "$NOX_REF" ] || fail "keine Nox-Version gefunden. Internetverbindung prüfen."
+  [ -n "$NOX_REF" ] || fail "$(msg no_version)"
 fi
-[[ "$NOX_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || fail "ungültige Version: $NOX_REF"
+[[ "$NOX_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || fail "$(msg invalid_version "$NOX_REF")"
 if "${GIT[@]}" -C "$SRC" rev-parse --verify --quiet "refs/remotes/origin/$NOX_REF^{commit}" >/dev/null; then
   commit="$("${GIT[@]}" -C "$SRC" rev-parse "refs/remotes/origin/$NOX_REF^{commit}")"
 elif "${GIT[@]}" -C "$SRC" rev-parse --verify --quiet "refs/tags/$NOX_REF^{commit}" >/dev/null; then
@@ -312,12 +543,12 @@ elif "${GIT[@]}" -C "$SRC" rev-parse --verify --quiet "refs/tags/$NOX_REF^{commi
 else
   commit="$("${GIT[@]}" -C "$SRC" rev-parse --verify --quiet "$NOX_REF^{commit}" || true)"
 fi
-[ -n "$commit" ] || fail "Version $NOX_REF gibt es nicht."
+[ -n "$commit" ] || fail "$(msg version_missing "$NOX_REF")"
 # The guard is about tags older than Linux support; a commit is judged by what it contains.
 "${GIT[@]}" -C "$SRC" cat-file -e "$commit:installer/linux/nox.service" 2>/dev/null \
-  || fail "Nox $NOX_REF läuft nur unter Windows. Linux-Server gibt es ab v$MIN_VERSION."
+  || fail "$(msg windows_only "$NOX_REF" "$MIN_VERSION")"
 if [[ "$NOX_REF" =~ ^v[0-9] ]] && ! version_at_least "${NOX_REF#v}" "$MIN_VERSION"; then
-  fail "Nox $NOX_REF läuft nur unter Windows. Linux-Server gibt es ab v$MIN_VERSION."
+  fail "$(msg windows_only "$NOX_REF" "$MIN_VERSION")"
 fi
 release="${commit:0:12}"
 label="$NOX_REF"; [[ "$NOX_REF" =~ ^[0-9a-f]{40}$ ]] && label="$release"
@@ -325,7 +556,7 @@ label="$NOX_REF"; [[ "$NOX_REF" =~ ^[0-9a-f]{40}$ ]] && label="$release"
 # ---- service user ---------------------------------------------------------------------------------
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
-  say "Systembenutzer $SERVICE_USER anlegen"
+  say "$(msg step_user "$SERVICE_USER")"
   useradd --system --home-dir "$NOX_HOME_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$NOX_HOME_DIR"
@@ -336,9 +567,9 @@ work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 
 if [ -f "$RELEASES/$release/.complete" ]; then
-  say "Nox $label ist schon vorbereitet"
+  say "$(msg release_ready "$label")"
 else
-  say "Nox $label vorbereiten"
+  say "$(msg step_release "$label")"
   # Built under its final name: a Python environment cannot be moved (its scripts carry absolute
   # paths). Until `.complete` exists the folder counts as unfinished and is rebuilt next time.
   staging="$RELEASES/$release"
@@ -346,7 +577,7 @@ else
   mkdir -p "$staging"
   "${GIT[@]}" -C "$SRC" archive "$commit" | tar -x -C "$staging"
 
-  say "Python 3.13 und Abhängigkeiten (uv $UV_VERSION, nur fertige Pakete)"
+  say "$(msg step_python "$UV_VERSION")"
   export UV_INSTALL_DIR="$PREFIX/.tools" UV_PYTHON_INSTALL_DIR="$PREFIX/.python" UV_NO_MODIFY_PATH=1
   export UV_CACHE_DIR="$PREFIX/.cache/uv"
   if [ ! -x "$UV_INSTALL_DIR/uv" ] || [ "$("$UV_INSTALL_DIR/uv" --version | awk '{print $2}')" != "$UV_VERSION" ]; then
@@ -357,14 +588,14 @@ else
   (cd "$staging" && UV_COMPILE_BYTECODE=1 "$UV_INSTALL_DIR/uv" sync --quiet --frozen --no-build --python 3.13)
   "$UV_INSTALL_DIR/uv" cache prune --ci --quiet || true  # an SD card is small
 
-  say "Oberflächen (Dashboard und Pet) installieren"
+  say "$(msg step_ui)"
   asset="nox-ui-${NOX_REF//\//-}.tar.gz"
   base="$REPO_URL/releases/download/$NOX_REF"
   if [ -z "${NOX_SOURCE:-}" ] \
     && "${CURL[@]}" -o "$work/$asset" "$base/$asset" 2>/dev/null \
     && "${CURL[@]}" -o "$work/$asset.sha256" "$base/$asset.sha256" 2>/dev/null; then
-    (cd "$work" && sha256sum --quiet -c "$asset.sha256") || fail "das Oberflächen-Paket stimmt nicht mit seiner Prüfsumme überein. Nichts wurde geändert."
-    verify_bundle "$work/$asset" || fail "das Oberflächen-Paket enthält Unerwartetes (Verknüpfungen oder fremde Dateien). Nichts wurde geändert."
+    (cd "$work" && sha256sum --quiet -c "$asset.sha256") || fail "$(msg ui_checksum)"
+    verify_bundle "$work/$asset" || fail "$(msg ui_unexpected)"
     mkdir "$work/extract"
     tar -xzf "$work/$asset" -C "$work/extract" --no-same-owner --no-same-permissions
     for app in dashboard pet; do
@@ -372,22 +603,27 @@ else
       mv "$work/extract/ui/$app/dist" "$staging/ui/$app/dist"
     done
   else
-    note "Für $label gibt es kein fertiges Oberflächen-Paket (Entwicklungsversion)."
-    note "Der Kern läuft trotzdem; das Dashboard zeigt bis dahin eine Hinweisseite."
+    note "$(msg ui_none "$label")"
+    note "$(msg ui_none_hint)"
   fi
   printf '%s\n' "$NOX_REF" > "$staging/.complete"
 fi
 
 # ---- settings (first install only) ---------------------------------------------------------------
 
-[ -L "$NOX_HOME_DIR/user.yaml" ] && fail "$NOX_HOME_DIR/user.yaml ist eine Verknüpfung. Aus Sicherheitsgründen wird sie nicht angefasst."
+[ -L "$NOX_HOME_DIR/user.yaml" ] && fail "$(msg settings_link "$NOX_HOME_DIR/user.yaml")"
 if [ ! -e "$NOX_HOME_DIR/user.yaml" ]; then
-  say "Grundeinstellungen für einen Server schreiben"
+  say "$(msg step_settings)"
   cat > "$work/user.yaml" <<'YAML'
 # Nox as a server (written once by install-linux.sh; edit freely, it is never overwritten).
 # Desktop plugins (Twitch, OBS) belong on the PC you stream from.
 plugins:
   enabled: []
+# Paired phones, tablets and PCs in the home network open the dashboard here (pair one with
+# `nox pair`). A server nobody can reach is of no use, so this is on.
+ipc:
+  lan:
+    enabled: true
 YAML
   # Written into a root-owned temp folder and installed with its final owner and mode, so root
   # never writes through a path inside the service user's folder.
@@ -400,7 +636,7 @@ previous_release="$(basename "$(readlink "$CURRENT" 2>/dev/null || true)")"
 [ "$previous_release" = "." ] && previous_release=""
 
 if [ -n "$previous_release" ] && [ "$previous_release" != "$release" ]; then
-  say "Sicherung vor dem Update"
+  say "$(msg step_backup)"
   install -d -m 0700 "$BACKUP_DIR"
   systemctl stop nox 2>/dev/null || true
   phase="stopped"
@@ -410,15 +646,15 @@ if [ -n "$previous_release" ] && [ "$previous_release" != "$release" ]; then
   (umask 077 && tar -czf "$snapshot" -C "$(dirname "$NOX_HOME_DIR")" \
     --exclude="./$home_name/.local" --exclude="./$home_name/.cache" \
     --exclude="./$home_name/models" --exclude="./$home_name/runtime" "./$home_name") \
-    || fail "die Sicherung ist fehlgeschlagen (Speicher voll?). Nichts wurde umgestellt."
+    || fail "$(msg backup_failed)"
   find "$BACKUP_DIR" -maxdepth 1 -name 'nox-*.tar.gz' -printf '%T@ %p\n' | sort -rn | tail -n +6 \
     | cut -d' ' -f2- | xargs -r rm -f --
-  note "Gesichert: $snapshot ($(du -h "$snapshot" | cut -f1)). Enthält auch Zugangsdaten - nur root kann es lesen."
+  note "$(msg backup_done "$snapshot" "$(du -h "$snapshot" | cut -f1)")"
   printf '%s\n' "$previous_release" > "$STATE/previous-release"
   printf '%s\n' "$snapshot" > "$STATE/previous-snapshot"
 fi
 
-say "Dienst einrichten und starten"
+say "$(msg step_service)"
 switch_to "$release"
 [ -n "$snapshot" ] && phase="switched"
 install_service_files
@@ -426,7 +662,7 @@ systemctl enable --quiet nox
 systemctl restart nox
 
 if ! wait_healthy 90; then
-  say "Nox $label antwortet nicht. Die letzten Zeilen des Protokolls:"
+  say "$(msg no_answer "$label")"
   journalctl -u nox -n 40 --no-pager || true
   if [ "$phase" = "switched" ]; then
     rollback_to "$previous_release" "$snapshot" || true
@@ -446,31 +682,39 @@ for old in "$RELEASES"/*/; do
     || rm -rf -- "$old"
 done
 
-say "Nox läuft ($label)."
+say "$(msg running "$label")"
 if [ -n "$snapshot" ]; then
-  note "Zurück zur vorherigen Version samt Daten: nox rollback"
+  note "$(msg rollback_hint)"
 fi
 # Folders kept aside by an earlier restore hold a full copy of the data (secrets included) and stay
 # until the user removes them; an SD card fills up otherwise.
 for kept_aside in "$NOX_HOME_DIR".vor-wiederherstellung-*; do
   [ -d "$kept_aside" ] || continue
-  note "Beiseitegelegt: $kept_aside ($(du -sh "$kept_aside" | cut -f1)) - wenn alles läuft: sudo rm -r $kept_aside"
+  note "$(msg kept_aside "$kept_aside" "$(du -sh "$kept_aside" | cut -f1)" "$kept_aside")"
 done
+if ! grep -qE '^[[:space:]]+enabled:[[:space:]]+true' <(sed -n '/^ipc:/,/^[^[:space:]#]/p' "$NOX_HOME_DIR/user.yaml" 2>/dev/null); then
+  note "$(msg lan_off "$NOX_HOME_DIR/user.yaml")"
+  note "$(msg lan_off_how)"
+elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+  note "$(msg firewall)"
+fi
 if ! sudo -u "$SERVICE_USER" test -s "$NOX_HOME_DIR/.claude/.credentials.json"; then
-  note "Noch keine KI angemeldet: Nox antwortet mit einfachen eingebauten Regeln, bis du \"nox claude-login\" ausführst."
+  note "$(msg no_ai)"
 fi
 case "$(timedatectl show -p Timezone --value 2>/dev/null || echo unknown)" in
   Etc/UTC|UTC|Europe/London|unknown)
-    note "Zeitzone: $(timedatectl show -p Timezone --value 2>/dev/null || echo unbekannt). Erinnerungen und Kalender richten sich danach."
-    note "In Deutschland: sudo timedatectl set-timezone Europe/Berlin" ;;
+    note "$(msg timezone "$(timedatectl show -p Timezone --value 2>/dev/null || msg timezone_unknown)")"
+    note "$(msg timezone_hint)" ;;
 esac
 guide="$(docs_url "$([[ "$NOX_REF" =~ ^v[0-9] ]] && echo "$NOX_REF" || echo develop)")"
-cat <<INFO
+if [ "$UI_LANG" = de ]; then
+  cat <<INFO
 
   Nächste Schritte:
     1. KI anmelden (empfohlen):   nox claude-login
     2. Name, PIN, Zugänge:        nox onboard
-    3. Prüfen:                    nox doctor
+    3. Handy oder Tablet koppeln: nox pair
+    4. Prüfen:                    nox doctor
   Anleitung: $guide
 
   Im Alltag:
@@ -481,3 +725,22 @@ cat <<INFO
     Zurück         nox rollback        (Version und Daten von vor dem letzten Update)
 
 INFO
+else
+  cat <<INFO
+
+  Next steps:
+    1. Sign in an AI (recommended): nox claude-login
+    2. Name, PIN, accounts:         nox onboard
+    3. Pair a phone or tablet:      nox pair
+    4. Check:                       nox doctor
+  Guide: $guide
+
+  Day to day:
+    Status         systemctl status nox
+    Log            journalctl -u nox -f
+    Files          nox where
+    Update         nox update          (a backup is taken first)
+    Back           nox rollback        (version and data from before the last update)
+
+INFO
+fi
