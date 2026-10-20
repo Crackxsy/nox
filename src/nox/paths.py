@@ -34,9 +34,22 @@ def repo_root() -> Path:
     # A checkout keeps the package at `src/nox`; an installed copy (installer/build.py) at
     # `app/nox`, right next to `app/config`.
     for candidate in (PACKAGE_DIR.parents[1], PACKAGE_DIR.parent):
-        if (candidate / "config" / "defaults.yaml").is_file():
+        if _readable_file(candidate / "config" / "defaults.yaml"):
             return candidate
     return PACKAGE_DIR
+
+
+def _readable_file(path: Path) -> bool:
+    """`Path.is_file`, with a file this process may not even look at counting as absent.
+
+    A self-built skill's worker imports Nox's code inside the sandbox, which can read the package
+    but nothing around it: there `stat` on the checkout's `config/` is "access denied", not "not
+    found", and `is_file` raises. Importing `nox.paths` must not fail on that.
+    """
+    try:
+        return path.is_file()
+    except OSError:
+        return False
 
 
 REPO_ROOT = repo_root()
