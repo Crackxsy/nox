@@ -75,7 +75,7 @@ jobs:
           (cd installer && sha256sum install-linux.sh > install-linux.sh.sha256)
 
       # Into its own folder, so nothing in the artifact can overwrite the installer above.
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: ui-bundle
           path: bundle
