@@ -534,7 +534,25 @@ async def test_a_run_cannot_read_the_work_folder_of_another_workload(tmp_path) -
             limits=Limits(timeout_s=30),
             workload="skill:canary",
         )
-        assert "NOXCANARY-7f3a" in own.stdout, own.stderr
+        if "NOXCANARY-7f3a" not in own.stdout:
+            acl = subprocess.run(  # noqa: ASYNC221 - diagnostics on failure only
+                [r"C:\Windows\System32\icacls.exe", str(work_b)],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                check=False,
+            ).stdout
+            parent = subprocess.run(  # noqa: ASYNC221
+                [r"C:\Windows\System32\icacls.exe", str(work_b.parent)],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                check=False,
+            ).stdout
+            pytest.fail(
+                f"own folder not usable\nsid={sid_b}\nstderr={own.stderr[:600]}\n"
+                f"acl={acl}\nparent_acl={parent}"
+            )
         # ... and a shell command, in a container of its own, cannot read it.
         canary = work_b / "canary.txt"
         read = [PS, "-NoProfile", "-NonInteractive", "-Command", f"Get-Content '{canary}'"]

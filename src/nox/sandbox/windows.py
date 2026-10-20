@@ -303,12 +303,22 @@ def _probe_loopback(sid: str) -> bool | None:
 
 
 def _grant_container(work: Path, sid: str) -> None:
-    subprocess.run(  # noqa: S603 - fixed argv, our own temp path
+    """Give the container SID full control of its work folder - or fail closed: a folder the
+    container cannot use is a run that fails later, with a misleading "access denied"."""
+    done = subprocess.run(  # noqa: S603 - fixed argv, our own temp path
         [_SYSTEM32 + r"\icacls.exe", str(work), "/grant", f"*{sid}:(OI)(CI)F"],
         capture_output=True,
+        text=True,
+        errors="replace",
         check=False,
         creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined,unused-ignore]
     )
+    if done.returncode != 0:
+        detail = (done.stderr or done.stdout).strip().splitlines()[:1]
+        raise SandboxUnavailable(
+            f"could not give the sandbox its work folder (icacls {done.returncode}: "
+            f"{detail[0] if detail else 'no output'})"
+        )
 
 
 def _base_env(work: Path) -> dict[str, str]:

@@ -587,6 +587,10 @@ class _AttributeList:
             self._initialised = False
 
 
+#: HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS): the profile is there from an earlier start.
+_HRESULT_ALREADY_EXISTS = 0x800700B7
+
+
 def app_container_sid(name: str) -> str:
     """The SID string of the AppContainer profile `name`, creating the profile on first use.
 
@@ -595,7 +599,14 @@ def app_container_sid(name: str) -> str:
     """
     sid = ctypes.c_void_p()
     status = _userenv.CreateAppContainerProfile(name, name, name, None, 0, ctypes.byref(sid))
-    if status != 0:  # already exists (HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)) or other
+    if status != 0:
+        if status & 0xFFFFFFFF != _HRESULT_ALREADY_EXISTS:
+            # Anything else means there is no profile: a SID derived without one would start a
+            # process Windows does not treat as that container. Fail closed, never silently.
+            raise SandboxWin32Error(
+                status,
+                f"AppContainer profile {name!r} could not be created ({status & 0xFFFFFFFF:#x})",
+            )
         status = _userenv.DeriveAppContainerSidFromAppContainerName(name, ctypes.byref(sid))
         if status != 0:
             raise SandboxWin32Error(status, f"AppContainer profile {name!r} unavailable")
