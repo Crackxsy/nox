@@ -614,4 +614,21 @@ async def test_the_system_modules_load_inside_the_container() -> None:
         [PS, "-NoProfile", "-NonInteractive", "-Command", "Join-Path 'a' 'b'"],
         limits=Limits(timeout_s=60),
     )
-    assert result.stdout.strip() == "a\\b", result.stderr
+    if result.stdout.strip() != "a\\b":
+        # Why: the module path, what the container can see of each folder, the import error.
+        diagnose = (
+            "$p = $env:PSModulePath; [Console]::Out.WriteLine('PSMP=' + $p); "
+            "foreach ($d in $p.Split(';')) { try { [Console]::Out.WriteLine('DIR ' + $d + ' '"
+            " + [IO.Directory]::GetDirectories($d).Length) } catch { [Console]::Out.WriteLine("
+            "'DIR ' + $d + ' ERR ' + $_.Exception.Message) } }; "
+            "try { Import-Module Microsoft.PowerShell.Management -ErrorAction Stop; "
+            "[Console]::Out.WriteLine('IMPORT OK') } catch { [Console]::Out.WriteLine("
+            "'IMPORT ERR ' + $_.Exception.ToString()) }; "
+            "[Console]::Out.WriteLine('LANG ' + $ExecutionContext.SessionState.LanguageMode); "
+            "[Console]::Out.WriteLine('PSHOME ' + $PSHOME + ' ' + $PSVersionTable.PSVersion)"
+        )
+        why = await sandbox.run(
+            [PS, "-NoProfile", "-NonInteractive", "-Command", diagnose],
+            limits=Limits(timeout_s=60),
+        )
+        pytest.fail(f"exe={PS}\n{result.stderr[:300]}\n{why.stdout}\n{why.stderr[:800]}")
