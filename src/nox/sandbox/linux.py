@@ -238,6 +238,7 @@ def build_bwrap_argv(
     python_binds: tuple[str, ...] = (),
     bwrap: str = "bwrap",
     disable_userns: bool = True,
+    env_fd: int | None = None,
 ) -> list[str]:
     """The `bwrap` command line for one run. Pure, so it can be asserted in a unit test.
 
@@ -251,11 +252,15 @@ def build_bwrap_argv(
 
     The environment is deliberately *not* in it: a command line is world-readable
     (`/proc/<pid>/cmdline`, `ps`), and the child's environment carries its egress proxy's secret
-    and possibly a server's settings. It is handed over as the process environment instead
-    (`LinuxSandbox.environment`), which only the same user can read; bwrap passes it through.
+    and possibly a server's settings. Nor is it bwrap's own environment, where it would steer
+    the host-side launchers (`LD_AUDIT`, `GCONV_PATH`, `SYSTEMD_*`, ... in a server's settings
+    would act *outside* the sandbox). With `env_fd`, bwrap starts with `--clearenv` and reads
+    the child's `--setenv` pairs from that pipe (`--args`, NUL-separated: `env_args`), so the
+    launchers run with a fixed minimal environment (`LAUNCHER_ENV`).
     """
     cmd = [
         bwrap,
+        *(["--clearenv", "--args", str(env_fd)] if env_fd is not None else []),
         *(["--unshare-user", "--disable-userns"] if disable_userns else []),
         "--die-with-parent",
         "--new-session",
@@ -298,6 +303,37 @@ def build_bwrap_argv(
         cmd += [python, "-I", "-S", _FORWARDER_IN, _SOCKET_IN, str(EGRESS_PORT), "--"]
     cmd += argv
     return cmd
+
+
+#: The whole environment of the host-side launchers (bwrap, systemd-run, the cgroup trampoline).
+#: Fixed: nothing of a run's settings, nothing of the core's own environment.
+LAUNCHER_ENV: Mapping[str, str] = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+
+
+def env_args(env: Mapping[str, str]) -> bytes:
+    """The child's environment as bwrap `--args` input: `--setenv`, name, value, NUL-separated."""
+    parts: list[str] = []
+    for key, value in env.items():
+        if "\0" in key or "\0" in value or "=" in key or not key:
+            raise SandboxUnavailable("an environment variable cannot be passed to the sandbox")
+        parts += ["--setenv", key, value]
+    return b"".join(part.encode("utf-8") + b"\0" for part in parts)
+
+
+def _env_pipe(env: Mapping[str, str]) -> int:
+    """A pipe holding the child's environment for bwrap; returns its read end."""
+    data = env_args(env)
+    read_fd, write_fd = os.pipe()
+    try:
+        if len(data) > 60_000:  # stays inside the pipe buffer, so writing never blocks
+            raise SandboxUnavailable("the sandbox environment is too large")
+        os.write(write_fd, data)
+    except BaseException:
+        os.close(read_fd)
+        raise
+    finally:
+        os.close(write_fd)
+    return read_fd
 
 
 def _probe(cmd: list[str], extra_env: Mapping[str, str] | None = None) -> str | None:
@@ -445,13 +481,23 @@ class Ceiling(StrEnum):
 @dataclass(slots=True)
 class _Launch:
     cmd: list[str]
+    #: The launchers' environment (`LAUNCHER_ENV`, plus the bus variables systemd-run needs).
     env: dict[str, str]
     work: str
     created: bool
     cgroup: Path | None
+    #: Read end of the pipe that carries the child's environment to bwrap (`env_args`).
+    env_fd: int | None = None
+
+    def close_env(self) -> None:
+        if self.env_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(self.env_fd)
+            self.env_fd = None
 
     def finish(self) -> None:
         """Kill what is left of the tree, drop its cgroup and its own work directory."""
+        self.close_env()
         if self.cgroup is not None:
             DelegatedCgroups.remove(self.cgroup)
         if self.created:
@@ -587,13 +633,19 @@ class LinuxSandbox:
         limits: Limits,
         proxy_socket: str | None = None,
         cgroup: Path | None = None,
+        env_fd: int | None = None,
     ) -> list[str]:
         """The full command line (the ceiling around `bwrap`) for one confined process.
         Never contains the environment - see `build_bwrap_argv`."""
         socket_path = self._egress_socket(egress, proxy_socket)
         python, binds = self._python or ("", ())
         inner = self._bwrap_argv(
-            argv, work=work, egress_socket=socket_path, python=python, python_binds=binds
+            argv,
+            work=work,
+            egress_socket=socket_path,
+            python=python,
+            python_binds=binds,
+            env_fd=env_fd,
         )
         if self.ceiling is Ceiling.CGROUP and cgroup is not None:
             return DelegatedCgroups.wrap(cgroup, inner)
@@ -640,6 +692,10 @@ class LinuxSandbox:
                 # The ceiling was promised by guarantees(); without it, refuse (fail closed).
                 raise SandboxUnavailable(f"could not create the run's cgroup: {exc}") from exc
         work = cwd or tempfile.mkdtemp(prefix="nox-sbx-")
+        child_env = self.environment(
+            work, EGRESS_PORT if socket_path is not None else None, extra_env, proxy_auth
+        )
+        env_fd = _env_pipe(child_env)
         cmd = self.command(
             argv,
             work=work,
@@ -647,13 +703,12 @@ class LinuxSandbox:
             limits=limits,
             proxy_socket=socket_path,
             cgroup=cgroup,
+            env_fd=env_fd,
         )
-        env = self.environment(
-            work, EGRESS_PORT if socket_path is not None else None, extra_env, proxy_auth
-        )
+        launcher_env = dict(LAUNCHER_ENV)
         if self.ceiling is Ceiling.USER_SCOPE:
-            env |= self._bus_env()  # for systemd-run only; bwrap unsets them (see command)
-        return _Launch(cmd, env, work, cwd is None, cgroup)
+            launcher_env |= self._bus_env()  # for systemd-run only; bwrap clears its environment
+        return _Launch(cmd, launcher_env, work, cwd is None, cgroup, env_fd)
 
     async def _spawn(self, launch: _Launch, *, stdin: int) -> asyncio.subprocess.Process:
         try:
@@ -663,10 +718,13 @@ class LinuxSandbox:
                 stdin=stdin,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                pass_fds=(launch.env_fd,) if launch.env_fd is not None else (),
             )
         except OSError as exc:
             await asyncio.to_thread(launch.finish)
             raise SandboxUnavailable(f"could not start the sandboxed process: {exc}") from exc
+        finally:
+            launch.close_env()  # the child has its own copy; bwrap reads it at start
 
     async def start(
         self,

@@ -307,3 +307,31 @@ async def test_no_nested_user_namespaces_inside(backend: Any) -> None:
     assert result.exit_code not in (0, None), result
     control = await sandbox.run(["/usr/bin/true"], limits=Limits(timeout_s=30))
     assert control.ok, control
+
+
+async def test_the_childs_environment_never_reaches_the_launchers(backend: Any) -> None:
+    # Re-review HIGH: a server's settings were bwrap's/systemd-run's own environment, where
+    # LD_AUDIT or GCONV_PATH would act outside the sandbox. The child still gets its variables;
+    # the launcher process (what `pid` names) carries only the fixed launcher environment.
+    from nox.sandbox.linux import LAUNCHER_ENV
+
+    sandbox = Sandbox(backend, guard=NetGuard())
+    code = (
+        "import os, sys, time\n"
+        "print(os.environ.get('NOX_TEST_SECRET', '-'), flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    proc = await sandbox.start([PY, "-I", "-u", "-c", code], env={"NOX_TEST_SECRET": "s3cr3t-env"})
+    async with proc:
+        line = (await asyncio.wait_for(proc.readline(), 30)).decode().strip()
+        assert line == "s3cr3t-env", proc.stderr_tail()
+        with open(f"/proc/{proc.pid}/environ", "rb") as handle:  # noqa: ASYNC230
+            launcher = dict(
+                item.split(b"=", 1) for item in handle.read().split(b"\0") if b"=" in item
+            )
+        assert b"s3cr3t-env" not in b"".join(launcher.values())
+        allowed = {key.encode() for key in LAUNCHER_ENV} | {
+            b"XDG_RUNTIME_DIR",
+            b"DBUS_SESSION_BUS_ADDRESS",
+        }
+        assert set(launcher) <= allowed, sorted(launcher)

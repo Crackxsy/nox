@@ -306,3 +306,52 @@ def test_the_stacked_profile_passes(label: str) -> None:
     from nox.sandbox.linux import check_apparmor_stack
 
     check_apparmor_stack(label)
+
+
+def test_the_launchers_get_a_fixed_environment_and_the_child_its_own_through_a_pipe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Re-review HIGH: the child's environment (a server's settings, the proxy secret) was the
+    # environment of the host-side launchers too, so LD_AUDIT, GCONV_PATH, SYSTEMD_* ... in it
+    # acted outside the sandbox. Now bwrap starts with --clearenv and reads the child's
+    # variables from a pipe; systemd-run and bwrap run with LAUNCHER_ENV only.
+    import os
+
+    from nox.sandbox.linux import LAUNCHER_ENV
+
+    sandbox = _backend(monkeypatch)
+    sandbox.ceiling = Ceiling.SCOPE
+    secret = "s3cr3t-proxy-token"
+    launch = sandbox._prepare(  # noqa: SLF001
+        ["srv"],
+        cwd=str(tmp_path),
+        egress=EGRESS,
+        limits=Limits(),
+        extra_env={"MCP_TOKEN": "tok"},
+        proxy_auth=f"nox:{secret}",
+        proxy_socket="/tmp/e/s",
+    )
+    try:
+        assert launch.env == dict(LAUNCHER_ENV)
+        assert launch.env_fd is not None
+        bwrap_at = launch.cmd.index("bwrap")
+        assert launch.cmd[bwrap_at + 1 : bwrap_at + 4] == [
+            "--clearenv",
+            "--args",
+            str(launch.env_fd),
+        ]
+        assert not any(secret in part or part == "tok" for part in launch.cmd)
+        data = os.read(launch.env_fd, 65536).split(b"\0")
+        assert data[:3] == [b"--setenv", b"MCP_TOKEN", b"tok"]
+        assert f"http://nox:{secret}@127.0.0.1:{EGRESS_PORT}".encode() in data
+    finally:
+        launch.close_env()
+
+
+def test_env_args_refuses_what_bwrap_could_misread() -> None:
+    from nox.sandbox.linux import env_args
+
+    assert env_args({"A": "1"}) == b"--setenv\0A\0" + b"1\0"
+    for bad in ({"A\0B": "1"}, {"A": "x\0y"}, {"A=B": "1"}, {"": "1"}):
+        with pytest.raises(SandboxUnavailable):
+            env_args(bad)

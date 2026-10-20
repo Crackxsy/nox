@@ -230,6 +230,11 @@ Raspberry Pi that is bubblewrap (`bwrap`):
   or differs from `/usr/bin/bwrap`, and when the sandbox is built Nox reads the AppArmor label of a
   process the copy started: unless it carries `nox-bwrap-sandboxed`, the stack did not apply and
   the sandbox fails closed).
+- **Environment:** bwrap, systemd-run and the cgroup trampoline run with a fixed environment
+  (`PATH`, `LANG`; plus the bus variables `systemd-run --user` needs). The child's own variables
+  - a server's settings, the proxy credentials - reach bwrap through a pipe (`--clearenv`,
+  `--args <fd>`), never its command line or its environment, and only names on the allowlist
+  (`model.checked_env`) are accepted at all.
 - **Fail closed:** bwrap and the egress path are probed when the sandbox is built. If bwrap
   cannot build its namespaces, nothing runs; if only the egress path fails, runs without declared
   egress still work and declared egress is refused.
