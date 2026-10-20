@@ -8,8 +8,13 @@ must never produce a grant, and a curated read-only command must run without a c
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import timedelta
+from pathlib import Path
 
+import pytest
+
+from nox.hands.shell import ProgramResolver, classify
 from nox.security.model import Decision, PermissionRequest, Risk, TemporaryGrant
 from nox.security.permissions import DefaultPermissionEngine
 
@@ -245,23 +250,94 @@ def test_non_rememberable_confirm_creates_no_grant(engine: DefaultPermissionEngi
     asyncio.run(scenario())
 
 
-def test_shell_remember_scope_is_the_command_pattern_and_high_risk_is_asked_again(
+def test_shell_remember_never_applies_to_a_hand_written_cmd_target(
     engine: DefaultPermissionEngine,
 ) -> None:
     async def scenario() -> None:
+        # `git` is never SIMPLE, so `shell.run` never produces `cmd:git push`; a target without
+        # the resolved path and digest is not a SIMPLE command and stays never-remembered.
         request = _shell_req("cmd:git push")
-        # What a "remember" scopes to: the command pattern, never the whole shell tool.
         assert engine._remember_scope(request) == "cmd:git push"
         grant_id = engine.request_confirmation(request)
         engine.reply(grant_id, Decision.ALLOW, remember=True)
         result = await engine.await_confirmation(grant_id)
         assert result.decision is Decision.ALLOW
-        # A shell command is high risk, and high risk is never remembered (NEVER_REMEMBERED): the
-        # same command is confirmed again next time.
         assert result.grant_id is None
         assert engine.check(_shell_req("cmd:git push")).decision is Decision.CONFIRM
 
     asyncio.run(scenario())
+
+
+#: What `shell.run` produces for a SIMPLE argv such as `["whoami", "/all"]`.
+SIMPLE_TARGET = "cmd:/usr/bin/whoami#0123456789abcdef /all"
+
+
+def test_a_simple_shell_command_is_remembered_for_the_session_only(
+    engine: DefaultPermissionEngine,
+) -> None:
+    async def scenario() -> None:
+        grant_id = engine.request_confirmation(_shell_req(SIMPLE_TARGET))
+        (pending,) = [p for p in engine.pending_requests() if p.request_id == grant_id]
+        assert pending.remember_ttl_s > 0  # the prompt offers "remember"
+        engine.reply(grant_id, Decision.ALLOW, remember=True)
+        result = await engine.await_confirmation(grant_id)
+        assert result.grant_id is not None
+        # Exactly this command runs without a question now ...
+        assert engine.check(_shell_req(SIMPLE_TARGET)).decision is Decision.ALLOW
+        # ... but never a different subcommand, a different binary or the same one with egress.
+        for other in (
+            "cmd:/usr/bin/whoami#0123456789abcdef /priv",
+            "cmd:/usr/bin/whoami#fedcba9876543210 /all",
+            SIMPLE_TARGET + " egress=a.example",
+            "complex:0123456789abcdef",
+        ):
+            assert engine.check(_shell_req(other)).decision is Decision.CONFIRM, other
+        # The grant ends with the session.
+        assert engine.end_session() >= 1
+        assert engine.check(_shell_req(SIMPLE_TARGET)).decision is Decision.CONFIRM
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "target,overrides",
+    [
+        ("cmd:git push", {}),  # no resolved path + digest: not produced by the SIMPLE classifier
+        ("cmd:/usr/bin/git#0123456789abcdef push", {"risk": Risk.CRITICAL}),
+        (SIMPLE_TARGET + " egress=a.example", {}),  # a declared network is always asked
+        (SIMPLE_TARGET, {"rememberable": False}),
+        (SIMPLE_TARGET, {"tool": "files"}),
+        ("complex:0123456789abcdef", {}),
+        ("readonly:whoami", {}),
+        ("cmd:/usr/bin/whoami#0123456789ABCDEF", {}),  # digest must be lowercase hex
+        ("cmd:/usr/bin/whoami#0123456789abcdef a b", {}),  # one word at most
+    ],
+)
+def test_nothing_but_a_simple_shell_command_is_rememberable_at_high_risk(
+    engine: DefaultPermissionEngine, target: str, overrides: dict[str, object]
+) -> None:
+    assert not engine._can_remember(_shell_req(target, **overrides))
+
+
+def test_the_real_classifier_output_is_what_may_be_remembered(
+    engine: DefaultPermissionEngine, tmp_path: Path
+) -> None:
+    exe = ".exe" if sys.platform == "win32" else ""
+    for name in ("whoami", "git", "python", "df"):
+        (tmp_path / f"{name}{exe}").write_bytes(name.encode())
+    resolver = ProgramResolver(dirs=(str(tmp_path),))
+
+    def rememberable(argv: list[str], egress: tuple[str, ...] = ()) -> bool:
+        info = classify(argv=argv, egress=egress, resolver=resolver)
+        return engine._can_remember(_shell_req(info.target))
+
+    assert rememberable(["whoami", "/all"])
+    assert rememberable(["df", "-h"])
+    assert not rememberable(["whoami", "/all"], egress=("a.example",))
+    assert not rememberable(["git", "status"])
+    assert not rememberable(["python", "-c", "print(1)"])
+    assert not rememberable(["df", "--hum"])  # a GNU abbreviation is not on the allowlist
+    assert not engine._can_remember(_shell_req(classify(command="whoami /all").target))
 
 
 def test_shell_remember_ignored_for_complex(engine: DefaultPermissionEngine) -> None:
@@ -291,6 +367,7 @@ def test_a_prompt_offers_remember_only_when_it_would_create_a_grant(
         # High risk is asked every time, and a complex command or a non-rememberable tool never
         # produces a grant: the prompt must not offer "remember" for any of them.
         assert ttl(_shell_req("cmd:git push")) == 0
+        assert ttl(_shell_req(SIMPLE_TARGET)) > 0
         assert ttl(_shell_req("complex:abc123")) == 0
         not_rememberable = request(
             tool="package", action="list", risk=Risk.MEDIUM, rememberable=False

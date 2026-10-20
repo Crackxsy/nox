@@ -88,6 +88,15 @@ Evaluation order, first match wins:
 6. **Default by risk**: `read` → allow, `low` → allow, `medium` → ask for confirmation,
    `high` → ask for confirmation, `critical` → deny.
 
+"Remember for this session" never applies to high risk, with one narrow exception: a
+`shell.run` command that the strict allowlist classified SIMPLE (`nox.hands.shell.SIMPLE_ALLOWLIST`:
+exact program, subcommand and flag spellings; the target names the resolved executable and a hash
+of its bytes). Such a confirmation may become a grant for exactly that target, for the session
+only (`end_session` revokes it). Complex commands, command lines, `git`, interpreters and any
+command with declared network egress are asked every time; a permanent grant exists only through
+the visible list in the dashboard. While a conversation is tainted (see below), even a remembered
+command asks again.
+
 Every decision — allowed or denied — is audited with the request fields (redacted per privacy
 class where appropriate). The engine is pure and deterministic given (request, profile, privacy
 state, grants, time), which makes it fully unit-testable, including every negative path.
