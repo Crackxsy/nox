@@ -89,3 +89,24 @@ async def test_tunnel_stays_open_after_the_connect_reply() -> None:
     finally:
         await proxy.stop()
         server.close()  # type: ignore[attr-defined]
+
+
+def test_a_star_declaration_means_any_public_host_and_never_the_lan() -> None:
+    """`EgressDecl(hosts=("*",))` (a network-enabled MCP server): any *public* host, any port,
+    through the run's proxy - NetGuard still refuses loopback, LAN, metadata and Home Assistant."""
+    table = {
+        "example.com": "93.184.216.34",
+        "router.lan": "192.168.0.1",
+        "self.test": "127.0.0.1",
+        "meta.test": "169.254.169.254",
+        "ha.local": "93.184.216.99",
+    }
+    proxy = EgressProxy(
+        allow=("*",),
+        guard=NetGuard(home_assistant_ips=frozenset({"93.184.216.99"})),
+        resolver=lambda h, p: [ipaddress.ip_address(table.get(h, h))],
+    )
+    assert proxy.authorize("example.com", 443).allowed
+    assert proxy.authorize("example.com", 8443).allowed
+    for host in ("router.lan", "self.test", "meta.test", "ha.local", "10.0.0.1", "::1"):
+        assert not proxy.authorize(host, 443).allowed, host

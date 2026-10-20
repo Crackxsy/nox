@@ -22,16 +22,124 @@ Three rules the contract makes explicit, because they are the point of the sandb
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 __all__ = [
+    "RESERVED_ENV_KEYS",
     "EgressDecl",
     "Guarantees",
     "Limits",
     "Result",
     "SandboxUnavailable",
+    "checked_env",
 ]
+
+
+#: Environment keys a caller may not set through `env=`: they are what point the child at its
+#: work directory and at the egress proxy, so overriding them would undo the confinement (a
+#: `HTTPS_PROXY` of the caller's choosing, a `HOME` in the user's profile).
+RESERVED_ENV_KEYS: frozenset[str] = frozenset(
+    key.upper()
+    for key in (
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "SystemRoot",
+        "windir",
+        "ComSpec",
+        "PSModuleAnalysisCachePath",
+        "PSModulePath",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+    )
+)
+
+
+#: The only shape an extra variable may have: upper-case letters, digits and `_`.
+_ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+#: Families that change how a dynamic loader, libc, a language runtime, systemd or D-Bus behaves -
+#: on either side of the sandbox. Never accepted, whatever a server's configuration asks for.
+FORBIDDEN_ENV_PREFIXES: tuple[str, ...] = (
+    "LD_",
+    "DYLD_",
+    "SYSTEMD_",
+    "DBUS_",
+    "MALLOC_",
+    "GLIBC_",
+    "GCONV",
+    "LOC",
+    "LC_",
+    "NLS",
+    "PYTHON",
+    "PERL5",
+    "PERLLIB",
+    "RUBY",
+    "JAVA_TOOL",
+    "JDK_JAVA",
+    "_JAVA",
+    "GIT_",
+    "BASH_",
+    "XDG_",
+    "SSL_",
+    "OPENSSL_",
+)
+#: Single names with the same effect.
+FORBIDDEN_ENV_NAMES: frozenset[str] = frozenset(
+    {
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "HOSTALIASES",
+        "RES_OPTIONS",
+        "LOCALDOMAIN",
+        "ENV",
+        "IFS",
+        "SHELLOPTS",
+        "PS4",
+        "PROMPT_COMMAND",
+        "TZDIR",
+        "LANGUAGE",
+    }
+)
+#: Total size of the extra environment (it travels through a pipe on Linux).
+MAX_EXTRA_ENV_BYTES = 32 * 1024
+
+
+def checked_env(env: dict[str, str] | None) -> dict[str, str]:
+    """The caller's extra environment (an MCP server's or a skill's settings), checked against an
+    allowlist: an upper-case name (`^[A-Z][A-Z0-9_]{0,63}$`) outside the families that steer a
+    loader or a runtime (`FORBIDDEN_ENV_PREFIXES`, `FORBIDDEN_ENV_NAMES`), no reserved key, no
+    NUL in a value. Anything else is a `ValueError` - refused, never silently dropped."""
+    if not env:
+        return {}
+    clash = sorted(key for key in env if key.upper() in RESERVED_ENV_KEYS)
+    if clash:
+        raise ValueError(f"the sandbox owns these environment variables: {clash}")
+    bad = sorted(
+        key
+        for key in env
+        if not _ENV_NAME.match(key)
+        or key in FORBIDDEN_ENV_NAMES
+        or key.startswith(FORBIDDEN_ENV_PREFIXES)
+    )
+    if bad:
+        raise ValueError(f"invalid or not allowed environment variable names: {bad}")
+    values = {str(k): str(v) for k, v in env.items()}
+    if any(chr(0) in value for value in values.values()):
+        raise ValueError("an environment value contains a NUL character")
+    if sum(len(k) + len(v) + 2 for k, v in values.items()) > MAX_EXTRA_ENV_BYTES:
+        raise ValueError("the extra environment is too large")
+    return values
 
 
 class SandboxUnavailable(RuntimeError):  # noqa: N818 - a state, not an error suffix, by design
@@ -42,7 +150,8 @@ class SandboxUnavailable(RuntimeError):  # noqa: N818 - a state, not an error su
 class EgressDecl:
     """What network a run is allowed to reach, as a request to the egress proxy.
 
-    `hosts` are `host` or `host:port` entries in the same grammar as `security.egress_allowlist`.
+    `hosts` are `host` or `host:port` entries in the same grammar as `security.egress_allowlist`;
+    `"*"` is any public host on any port (see `nox.sandbox`), never the LAN or loopback.
     An empty tuple (the default, `EgressDecl.NONE`) means no network at all. The proxy still vetoes
     anything its own policy forbids - the Home Assistant host and LAN ranges above all - so a
     declaration can only ever narrow what the proxy already permits, never widen it.
@@ -69,7 +178,11 @@ class Limits:
     #: Most processes the tree may hold at once (ActiveProcessLimit / TasksMax).
     max_processes: int = 32
     #: Bytes of stdout/stderr captured before the rest is dropped (the model never needs more).
+    #: For a long-running process (`Sandbox.start`) this is the size of the stderr ring buffer.
     max_output_bytes: int = 64 * 1024
+    #: Longest single stdout line a long-running process (`Sandbox.start`) may write - one
+    #: JSON-RPC message of an MCP stdio server. Longer lines raise `MessageTooLarge`.
+    max_message_bytes: int = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)

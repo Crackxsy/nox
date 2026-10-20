@@ -42,3 +42,12 @@ class HandsConfig(StrictSection):
     #: install's `cmd` folder). Only the system folders are trusted by default; argv0 with a path
     #: is never resolved anywhere. User-set only.
     trusted_program_dirs: list[str] = Field(default_factory=list)
+    #: `browser.*`: Nox's own headless Chromium (needs the `browser` extra and `playwright install
+    #: chromium`). Reading is allowed; clicking, typing and submitting always ask first.
+    browser_enabled: bool = True
+    #: `screen.capture`, `camera.snapshot`, `vision.describe`. Capturing always asks, and the
+    #: privacy capture flags (camera off by default) and zones still decide.
+    senses_enabled: bool = True
+    #: Preferred local vision model in Ollama for `vision.describe`; empty = the first installed
+    #: model that declares vision. Nox never downloads one by itself.
+    vision_model: str = ""

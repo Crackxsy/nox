@@ -8,24 +8,46 @@ applied - outside the sandbox, in the core's own trust domain.
 
 For each `CONNECT host:port` the proxy:
 
-1. checks `host:port` against the run's declared allow-list (nothing declared ⇒ nothing passes),
-2. resolves the host and runs every address through `NetGuard` (loopback, LAN, link-local,
+1. checks the per-proxy credentials (below),
+2. checks `host:port` against the run's declared allow-list (nothing declared ⇒ nothing passes),
+3. resolves the host and runs every address through `NetGuard` (loopback, LAN, link-local,
    metadata and the Home Assistant host are refused, which also defeats DNS rebinding),
-3. opens the upstream connection to a vetted address and tunnels bytes both ways.
+4. opens the upstream connection to the vetted address and tunnels bytes both ways.
 
-The proxy speaks only `CONNECT`; a sandboxed HTTP client is configured to tunnel even plain HTTP
-through it, so there is no second, un-vetted forwarding path. Each decision is handed to an audit
-callback. The listener binds `127.0.0.1` on an ephemeral port and hands callers that port.
+**Credentials.** Loopback is reachable by every local process, so a proxy without a secret would
+be an open egress path past the policy for any program on the machine - another run's sandboxed
+child included. Each proxy may therefore carry its own random credentials
+(`EgressProxy.new_credentials()`): every request must present them as `Proxy-Authorization:
+Basic`, compared in constant time, or gets `407` and a closed connection. The sandbox puts them
+into the child's proxy URL (`http://user:secret@127.0.0.1:port`), so a child can use the proxy of
+*its own* run and no other; the browser hands them to Chromium through Playwright. A proxy lives
+exactly as long as the run, process or browser session it was made for.
+
+**Plain HTTP.** The sandbox's proxy speaks only `CONNECT`; a sandboxed HTTP client tunnels even
+plain HTTP through it. A browser cannot be told that - it sends `GET http://host/path` to its
+proxy - so the browser's proxy is built with `forward_plain_http=True`. Such a connection carries
+exactly **one** exchange: the request is read completely (`Content-Length`, or `chunked` decoded;
+both at once, or any other transfer coding, is refused as a smuggling attempt), authorized like a
+`CONNECT`, sent upstream in origin form with `Connection: close`, and exactly one response is
+relayed back with `Connection: close` - then both sides are closed. Nothing the client sends after
+its first request is ever read, so a pipelined second request to another host goes nowhere.
+
+Each decision is handed to an audit callback. The listener binds `127.0.0.1` on an ephemeral port.
+Name resolution runs in a worker thread, never on the event loop.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import hmac
 import ipaddress
+import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from nox.core.logging import get_logger
 from nox.sandbox.netguard import BlockedAddress, NetGuard, resolve_all
@@ -41,6 +63,29 @@ log = get_logger(__name__)
 __all__ = ["EgressProxy", "ProxyDecision", "allow_entry_matches"]
 
 _CRLF = b"\r\n"
+#: Request headers that belong to the hop between client and proxy, never forwarded upstream.
+_HOP_HEADERS = frozenset(
+    {
+        b"proxy-connection",
+        b"proxy-authorization",
+        b"connection",
+        b"keep-alive",
+        b"te",
+        b"trailer",
+        b"upgrade",
+        b"content-length",
+        b"transfer-encoding",
+    }
+)
+_RESPONSE_HOP_HEADERS = frozenset({b"connection", b"keep-alive", b"proxy-connection"})
+_MAX_HEADER_LINES = 200
+#: Largest request body the browser proxy forwards (a form post, an upload).
+MAX_BODY_BYTES = 32 * 1024 * 1024
+_IDLE_S = 60.0
+
+
+class _BadRequestError(ValueError):
+    pass
 
 
 def allow_entry_matches(entry: str, host: str, port: int) -> bool:
@@ -63,7 +108,7 @@ Resolver = Callable[[str, int], list[_IpAddress]]
 
 
 class EgressProxy:
-    """A CONNECT-only proxy bound to loopback that enforces one run's egress declaration."""
+    """A loopback proxy that enforces one run's egress declaration (see the module docstring)."""
 
     def __init__(
         self,
@@ -73,18 +118,36 @@ class EgressProxy:
         audit: AuditFn | None = None,
         resolver: Resolver = resolve_all,
         open_connection: Callable[[str, int], Awaitable[StreamPair]] | None = None,
+        forward_plain_http: bool = False,
+        credentials: tuple[str, str] | None = None,
     ) -> None:
         self._allow = tuple(allow)
         self._guard = guard
         self._audit = audit
         self._resolver = resolver
         self._open = open_connection or self._open_upstream
+        self._forward_plain = forward_plain_http
+        self.credentials = credentials
+        self._expected_auth = (
+            base64.b64encode(f"{credentials[0]}:{credentials[1]}".encode()) if credentials else None
+        )
         self._server: asyncio.AbstractServer | None = None
         self._pipe: PipeListener | None = None
         self.port = 0
         #: Where a child reaches the proxy when it is not loopback TCP: a Windows named pipe path
         #: (`start_pipe`). Empty while the proxy only listens on TCP.
         self.socket_path = ""
+
+    @staticmethod
+    def new_credentials() -> tuple[str, str]:
+        """Fresh random credentials for one proxy's lifetime."""
+        return "nox", secrets.token_urlsafe(32)
+
+    @property
+    def url(self) -> str:
+        """The proxy URL a client is given, credentials included when the proxy has them."""
+        userinfo = f"{self.credentials[0]}:{self.credentials[1]}@" if self.credentials else ""
+        return f"http://{userinfo}127.0.0.1:{self.port}"
 
     async def start(self) -> int:
         self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
@@ -132,69 +195,247 @@ class EgressProxy:
             return ProxyDecision(False, host_l, port, f"resolution failed: {exc}")
         return ProxyDecision(True, host_l, port, "allowed by declaration and address policy")
 
+    def authenticated(self, headers: Sequence[bytes]) -> bool:
+        """Whether the request carries this proxy's credentials (always true without any)."""
+        if self._expected_auth is None:
+            return True
+        for line in headers:
+            name, _, value = line.partition(b":")
+            if name.strip().lower() != b"proxy-authorization":
+                continue
+            scheme, _, token = value.strip().partition(b" ")
+            if scheme.lower() == b"basic" and hmac.compare_digest(
+                token.strip(), self._expected_auth
+            ):
+                return True
+        return False
+
     # -- connection handling -------------------------------------------------------------------
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             request = await asyncio.wait_for(reader.readuntil(_CRLF), timeout=10.0)
-        except (TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+            headers = await _read_headers(reader)
+        except (
+            TimeoutError,
+            asyncio.IncompleteReadError,
+            asyncio.LimitOverrunError,
+            _BadRequestError,
+        ):
             await _close(writer)
             return
         parts = request.decode("latin-1").strip().split()
-        if len(parts) < 2 or parts[0].upper() != "CONNECT":
-            await _respond(writer, 405, "Method Not Allowed")
+        if len(parts) != 3:
+            await _respond(writer, 400, "Bad Request")
             return
-        host, _, port_s = parts[1].rpartition(":")
+        if not self.authenticated(headers):
+            log.warning("sandbox.proxy_unauthenticated")
+            await _respond(
+                writer,
+                407,
+                "Proxy Authentication Required",
+                b'Proxy-Authenticate: Basic realm="nox"\r\n',
+            )
+            return
+        method, target, version = parts
+        if method.upper() == "CONNECT":
+            await self._connect(target, reader, writer)
+        elif self._forward_plain:
+            await self._forward(method, target, version, headers, reader, writer)
+        else:
+            await _respond(writer, 405, "Method Not Allowed")
+
+    async def _decide(self, host: str, port: int) -> ProxyDecision:
+        decision = await asyncio.to_thread(self.authorize, host, port)
+        if self._audit is not None:
+            self._audit(decision)
+        if not decision.allowed:
+            log.warning("sandbox.proxy_denied", host=host, port=port, reason=decision.reason)
+        return decision
+
+    async def _dial(self, host: str, port: int, writer: asyncio.StreamWriter) -> StreamPair | None:
+        try:
+            return await asyncio.wait_for(self._open(host, port), timeout=10.0)
+        except (OSError, TimeoutError) as exc:
+            log.warning("sandbox.proxy_upstream_failed", host=host, port=port, error=str(exc))
+            await _respond(writer, 502, "Bad Gateway")
+            return None
+
+    async def _connect(
+        self, target: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        host, _, port_s = target.rpartition(":")
         host = host.strip("[]")
         try:
             port = int(port_s)
         except ValueError:
             await _respond(writer, 400, "Bad Request")
             return
-        # Drain the rest of the request headers.
-        with contextlib.suppress(Exception):
-            while True:
-                line = await asyncio.wait_for(reader.readuntil(_CRLF), timeout=5.0)
-                if line == _CRLF:
-                    break
-
-        decision = self.authorize(host, port)
-        if self._audit is not None:
-            self._audit(decision)
-        if not decision.allowed:
-            log.warning("sandbox.proxy_denied", host=host, port=port, reason=decision.reason)
+        if not (await self._decide(host, port)).allowed:
             await _respond(writer, 403, "Forbidden")
             return
-
-        try:
-            up_reader, up_writer = await asyncio.wait_for(self._open(host, port), timeout=10.0)
-        except (OSError, TimeoutError) as exc:
-            log.warning("sandbox.proxy_upstream_failed", host=host, port=port, error=str(exc))
-            await _respond(writer, 502, "Bad Gateway")
+        upstream = await self._dial(host, port, writer)
+        if upstream is None:
             return
-        # Not `_respond`: that closes the connection, which would end the tunnel before it began.
+        up_reader, up_writer = upstream
+        # A failed write of the 200 must not leave the upstream connection dangling.
         try:
-            writer.write(b"HTTP/1.1 200 Connection Established" + _CRLF + _CRLF)
-            await writer.drain()
+            await _respond_open(writer, 200, "Connection Established")
         except (OSError, ConnectionError):
             await _close(writer)
             await _close(up_writer)
             return
         await _tunnel(reader, writer, up_reader, up_writer)
 
+    async def _forward(
+        self,
+        method: str,
+        target: str,
+        version: str,
+        headers: list[bytes],
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Exactly one plain-HTTP exchange in absolute form (`GET http://host/path`)."""
+        url = urlsplit(target)
+        try:
+            if url.scheme.lower() != "http" or not url.hostname:
+                raise _BadRequestError("not an absolute http URL")
+            port = url.port or 80
+            body = await _read_body(headers, reader)
+        except (ValueError, TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+            await _respond(writer, 400, "Bad Request")
+            return
+        host = url.hostname
+        if not (await self._decide(host, port)).allowed:
+            await _respond(writer, 403, "Forbidden")
+            return
+        upstream = await self._dial(host, port, writer)
+        if upstream is None:
+            return
+        up_reader, up_writer = upstream
+        path = (url.path or "/") + (f"?{url.query}" if url.query else "")
+        kept = [h for h in headers if h.split(b":", 1)[0].strip().lower() not in _HOP_HEADERS]
+        head = f"{method} {path} {version}\r\n".encode("latin-1") + b"".join(kept)
+        if body or method.upper() in ("POST", "PUT", "PATCH"):
+            head += f"Content-Length: {len(body)}\r\n".encode("latin-1")
+        head += b"Connection: close\r\n\r\n"
+        try:
+            up_writer.write(head + body)
+            await up_writer.drain()
+            await _relay_one_response(up_reader, writer, head_only=method.upper() == "HEAD")
+        except (OSError, TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+            with contextlib.suppress(Exception):
+                await _respond(writer, 502, "Bad Gateway")
+        finally:
+            await _close(up_writer)
+            await _close(writer)
+
     async def _open_upstream(self, host: str, port: int) -> StreamPair:
-        # Connect to a vetted address, not the name again: authorize() already resolved and judged
-        # it, and reconnecting by name would open a second resolution a rebind could race.
-        addresses = self._resolver(host, port)
+        # Dial a vetted address, never the name: the resolution that is judged here is the one
+        # that is dialed, so a rebind between check and connect has nothing to race.
+        addresses = await asyncio.to_thread(self._resolver, host, port)
         self._guard.check_addresses(host, addresses)
         return await asyncio.open_connection(str(addresses[0]), port)
 
 
-async def _respond(writer: asyncio.StreamWriter, code: int, text: str) -> None:
+async def _read_headers(reader: asyncio.StreamReader) -> list[bytes]:
+    headers: list[bytes] = []
+    while True:
+        line = await asyncio.wait_for(reader.readuntil(_CRLF), timeout=10.0)
+        if line == _CRLF:
+            return headers
+        headers.append(line)
+        if len(headers) > _MAX_HEADER_LINES:
+            raise _BadRequestError("too many header lines")
+
+
+def _header(headers: Sequence[bytes], name: bytes) -> list[bytes]:
+    return [
+        line.partition(b":")[2].strip()
+        for line in headers
+        if line.partition(b":")[0].strip().lower() == name
+    ]
+
+
+async def _read_body(headers: Sequence[bytes], reader: asyncio.StreamReader) -> bytes:
+    """The complete request body - and nothing after it. Ambiguous framing is refused."""
+    lengths = _header(headers, b"content-length")
+    codings = _header(headers, b"transfer-encoding")
+    if codings and lengths:
+        raise _BadRequestError("both Content-Length and Transfer-Encoding")
+    if codings:
+        if len(codings) != 1 or codings[0].lower() != b"chunked":
+            raise _BadRequestError("unsupported transfer coding")
+        return await _read_chunked(reader)
+    if not lengths:
+        return b""
+    if len(set(lengths)) != 1 or not lengths[0].isdigit():
+        raise _BadRequestError("bad Content-Length")
+    size = int(lengths[0])
+    if size > MAX_BODY_BYTES:
+        raise _BadRequestError("request body too large")
+    return await asyncio.wait_for(reader.readexactly(size), timeout=_IDLE_S)
+
+
+async def _read_chunked(reader: asyncio.StreamReader) -> bytes:
+    body = bytearray()
+    while True:
+        line = await asyncio.wait_for(reader.readuntil(_CRLF), timeout=_IDLE_S)
+        size_text = line.split(b";", 1)[0].strip()
+        try:
+            size = int(size_text, 16)
+        except ValueError as exc:
+            raise _BadRequestError("bad chunk size") from exc
+        if size == 0:
+            await _read_headers(reader)  # trailers, discarded
+            return bytes(body)
+        if len(body) + size > MAX_BODY_BYTES:
+            raise _BadRequestError("request body too large")
+        body += await asyncio.wait_for(reader.readexactly(size), timeout=_IDLE_S)
+        if await reader.readexactly(2) != _CRLF:
+            raise _BadRequestError("bad chunk terminator")
+
+
+async def _relay_one_response(
+    up_reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *, head_only: bool
+) -> None:
+    """Relay one response, rewritten to `Connection: close`, then stop."""
+    status = await asyncio.wait_for(up_reader.readuntil(_CRLF), timeout=_IDLE_S)
+    headers = await _read_headers(up_reader)
+    kept = [h for h in headers if h.partition(b":")[0].strip().lower() not in _RESPONSE_HOP_HEADERS]
+    writer.write(status + b"".join(kept) + b"Connection: close\r\n\r\n")
+    await writer.drain()
+    if head_only:
+        return
+    lengths = _header(headers, b"content-length")
+    chunked = any(c.lower().endswith(b"chunked") for c in _header(headers, b"transfer-encoding"))
+    remaining = int(lengths[0]) if lengths and lengths[0].isdigit() and not chunked else None
+    while remaining is None or remaining > 0:
+        want = 65536 if remaining is None else min(65536, remaining)
+        chunk = await asyncio.wait_for(up_reader.read(want), timeout=_IDLE_S)
+        if not chunk:
+            return
+        writer.write(chunk)
+        await writer.drain()
+        if remaining is not None:
+            remaining -= len(chunk)
+
+
+async def _respond(writer: asyncio.StreamWriter, code: int, text: str, extra: bytes = b"") -> None:
     with contextlib.suppress(Exception):
-        writer.write(f"HTTP/1.1 {code} {text}\r\n\r\n".encode("latin-1"))
+        writer.write(
+            f"HTTP/1.1 {code} {text}\r\n".encode("latin-1")
+            + extra
+            + b"Content-Length: 0\r\nConnection: close\r\n\r\n"
+        )
         await writer.drain()
     await _close(writer)
+
+
+async def _respond_open(writer: asyncio.StreamWriter, code: int, text: str) -> None:
+    writer.write(f"HTTP/1.1 {code} {text}\r\n\r\n".encode("latin-1"))
+    await writer.drain()
 
 
 async def _close(writer: asyncio.StreamWriter) -> None:
@@ -209,6 +450,8 @@ async def _tunnel(
     u_reader: asyncio.StreamReader,
     u_writer: asyncio.StreamWriter,
 ) -> None:
+    """Bytes both ways - only ever for a vetted `CONNECT` (an opaque, usually TLS, stream)."""
+
     async def pipe(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
         with contextlib.suppress(Exception):
             while True:

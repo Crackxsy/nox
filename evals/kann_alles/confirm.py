@@ -7,7 +7,10 @@ the machine the benchmark runs on. So the default is DENY, and an approval needs
 * the tool is not in the task's `forbidden_tools`,
 * its risk is below HIGH (HIGH and CRITICAL are approved only in an isolated world, never here),
 * its effect stays inside the benchmark's temporary folder: a path target resolves inside it, and a
-  tool without a path target belongs to a family that only writes the core's own (temporary) data.
+  tool without a path target belongs to a family that only writes the core's own (temporary) data
+  - or to a family the world has replaced by a simulation (`simulated`): the browser wired to the
+  fake web, the screen and camera to fake images. Only the world can name those, and only after it
+  actually swapped the backends.
 
 Every decision is recorded with its reason and ends up in the report.
 """
@@ -62,6 +65,7 @@ def decide(
     sandbox: Path,
     root: Path,
     isolated: bool = False,
+    simulated: frozenset[str] = frozenset(),
 ) -> ConfirmDecision:
     """The harness's answer to one dialog. `tool`/`action` as in `PermissionRequest`."""
     name = f"{tool}.{action}" if action else tool
@@ -81,6 +85,6 @@ def decide(
         return result(Decision.DENY, "target outside the benchmark's temporary folder")
     if tool == "file" and not target:
         return result(Decision.DENY, "file tool without a target path")
-    if tool not in PATH_FAMILIES | DATA_DIR_FAMILIES and not isolated:
+    if tool not in PATH_FAMILIES | DATA_DIR_FAMILIES | simulated and not isolated:
         return result(Decision.DENY, f"{tool} acts outside the temporary world")
     return result(Decision.ALLOW, "listed, low enough risk, effect stays in the temporary world")

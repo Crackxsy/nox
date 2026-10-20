@@ -1,4 +1,4 @@
-"""`install(core)`: register the hands tools (shell, web, packages, mic) onto a booted core.
+"""`install(core)`: register the hands tools (shell, web, packages, mic, browser, senses).
 
 The sandbox is built once and shared: the shell tool and, later, self-built skills and foreign MCP
 servers all run through the same `Sandbox`, so there is one place where confinement and the egress
@@ -7,21 +7,27 @@ tool refuses every call - running a command unconfined is never a fallback.
 
 What gets registered depends on configuration, the same way the file tools do: `shell.run` and the
 package tools only when the user turned them on, `web.*` whenever the web is allowed, `mic` and the
-consent store whenever the database is present.
+consent store whenever the database is present, `browser.*` and the senses (`screen.capture`,
+`camera.snapshot`, `vision.describe`) unless switched off. The returned runtime closes the browser
+on shutdown and lets a test or the benchmark swap the capture backends (`runtime.senses`).
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from nox.core.config import NoxConfig
 from nox.core.extension import ExtensionRuntime
 from nox.core.logging import get_logger
+from nox.hands.browser import BrowserSession, BrowserSettings, register_browser_tools
 from nox.hands.consent_tools import register_consent_ipc, register_consent_tools
 from nox.hands.consents import ConsentRepository
 from nox.hands.packages import register_package_tools
+from nox.hands.senses import ClaudeVision, OllamaVision, Senses, register_sense_tools
 from nox.hands.shell import ShellSettings, register_shell_tools
 from nox.hands.web import (
     WebSettings,
@@ -29,6 +35,7 @@ from nox.hands.web import (
     register_web_tools,
     search_backend_client,
 )
+from nox.paths import nox_home
 from nox.sandbox import Sandbox, SandboxUnavailable, make_sandbox
 from nox.sandbox.netguard import NetGuard, resolve_all
 from nox.tools.registry import ToolRegistry
@@ -43,6 +50,18 @@ class CoreLike(Protocol):
     tool_registry: ToolRegistry
     security: Any
     db: Any
+
+
+@dataclass(slots=True)
+class HandsRuntime:
+    """What `install` leaves running: the browser (closed on stop) and the senses."""
+
+    browser: BrowserSession | None = None
+    senses: Senses | None = None
+
+    async def stop(self) -> None:
+        if self.browser is not None:
+            await self.browser.close()
 
 
 def _shell_program() -> tuple[str, ...]:
@@ -130,13 +149,81 @@ def install(core: CoreLike) -> ExtensionRuntime:
         if ipc is not None:
             register_consent_ipc(ipc, consents, getattr(core.security, "gate", None))
 
+    runtime = HandsRuntime()
+    captures = Path(config.paths.runtime_dir) / "hands" / "captures"
+    if config.hands.browser_enabled:
+        runtime.browser = BrowserSession(
+            lambda: BrowserSettings(
+                enabled=config.hands.browser_enabled,
+                profile_dir=str(nox_home() / "browser" / "profile"),
+                screenshots_dir=str(captures / "browser"),
+            ),
+            guard,
+        )
+        register_browser_tools(registry, runtime.browser)
+    privacy = getattr(getattr(core, "security", None), "privacy", None)
+    if config.hands.senses_enabled and privacy is not None:
+        runtime.senses = _build_senses(core, captures, privacy)
+        register_sense_tools(registry, runtime.senses)
+
     log.info(
         "hands.installed",
         shell=config.hands.shell_enabled,
         web=config.hands.web_enabled,
         packages=config.hands.packages_enabled,
+        browser=runtime.browser is not None,
+        senses=runtime.senses is not None,
+        sandbox=sandbox_factory() is not None,
     )
-    return None
+    return runtime
+
+
+def _build_senses(core: CoreLike, captures: Path, privacy: Any) -> Senses:
+    """The senses with their real backends: mss/OpenCV grabbers, Ollama and Claude vision."""
+    config = core.config
+    ollama_cfg = config.ai.providers.ollama
+    egress = getattr(core.security, "egress", None)
+
+    def gpu_allowed() -> bool:
+        state = getattr(getattr(core, "state", None), "state", None)
+        mode = getattr(getattr(state, "assistant", None), "mode", None)
+        return mode is None or str(getattr(mode, "value", mode)) in ollama_cfg.gpu_allowed_modes
+
+    senses = Senses(captures_root=captures, privacy=privacy)
+    if egress is not None and ollama_cfg.enabled:
+        local = OllamaVision(
+            lambda: egress.client(timeout=30.0),
+            base_url=ollama_cfg.base_url,
+            preferred=config.hands.vision_model,
+            gpu_allowed=gpu_allowed,
+        )
+        senses.local_vision = local.describe
+        senses.local_model = local.model
+
+    claude = next(
+        (p for p in getattr(core, "ai_providers", None) or [] if p.info.id == "claude_code"),
+        None,
+    )
+    if claude is not None:
+
+        def command() -> list[str]:
+            return [*claude.executable(), *claude.build_args("")]
+
+        senses.cloud_vision = ClaudeVision(command, env=getattr(claude, "_env", None)).describe
+
+    bus = getattr(core, "bus", None)
+    if bus is not None:
+
+        async def indicator(kind: str, active: bool) -> None:
+            from nox.core.events import E, Event
+
+            state = privacy.effective_capture()
+            if active:
+                state = state.model_copy(update={kind: True})
+            await bus.publish(Event(name=E.PRIVACY_CAPTURE_CHANGED, payload=state.model_dump()))
+
+        senses.indicator = indicator
+    return senses
 
 
 async def _real_package_runner(argv: list[str]) -> tuple[int, str, str]:

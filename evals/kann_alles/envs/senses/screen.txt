@@ -1,0 +1,1 @@
+Ein Bildschirm mit einem geoeffneten Kalender in der Wochenansicht. Am Donnerstag steht ein Termin: 'Zahnarzt 15:30'. Daneben ist ein Texteditor mit der Datei einkauf.txt offen.
