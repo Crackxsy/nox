@@ -116,7 +116,30 @@ _INTERPRETERS = frozenset(
         "java",
         "dotnet",
         "wsl",
+        # Stream editors and build tools are languages too: awk's system(), sed's `e` and `w`
+        # commands, a Makefile's recipes, a CMake script.
+        "awk",
+        "gawk",
+        "mawk",
+        "nawk",
+        "sed",
+        "gsed",
+        "make",
+        "gmake",
+        "cmake",
+        "pypy",
+        "pypy3",
+        "nodejs",
+        "jshell",
+        "julia",
+        "rscript",
+        "expect",
     }
+)
+#: Versioned interpreter names (`python3.12`, `perl5.38`, `ruby3.2`, `node18`, `pwsh7`, `php8.3`).
+_VERSIONED_INTERPRETER = re.compile(
+    r"^(?:python|pythonw|pypy|perl|ruby|node|nodejs|php|lua|luajit|tclsh|wish|pwsh|bash|zsh|ksh)"
+    r"[0-9][0-9.]*[a-z]?$"
 )
 #: Wrappers that start another program named in their arguments.
 _LAUNCHERS = frozenset(
@@ -152,7 +175,21 @@ _LAUNCHERS = frozenset(
         "pipx",
         "conhost",
         "explorer",
+        # Remote shells run a command line (and `-o ProxyCommand`/`LocalCommand` a local one);
+        # rsync's `-e` names the program it starts.
+        "ssh",
+        "scp",
+        "sftp",
+        "rsync",
     }
+)
+#: tar options that run a program.
+_TAR_EXEC_OPTIONS = (
+    "--to-command",
+    "--use-compress-program",
+    "--checkpoint-action",
+    "--info-script",
+    "--new-volume-script",
 )
 #: `find` actions that run (or delete) something.
 _FIND_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fls"})
@@ -330,9 +367,21 @@ def _is_curated(program: str, tokens: Sequence[str]) -> bool:
 
 def _starts_other_code(program: str, tokens: Sequence[str]) -> bool:
     """Whether the argv runs code its own arguments name (see the module docstring)."""
-    if program in _INTERPRETERS or program in _LAUNCHERS:
+    if program in _INTERPRETERS or program in _LAUNCHERS or _VERSIONED_INTERPRETER.match(program):
         return True
     args = [token.lower() for token in tokens[1:]]
+    if program in ("tar", "bsdtar"):
+        # The long forms that run a program, and `I`/`F` in a short-option cluster - also the
+        # old dash-less first argument (`tar xIf ...`). Case matters: `-f` is the archive.
+        for index, raw in enumerate(tokens[1:]):
+            if raw.lower().startswith(_TAR_EXEC_OPTIONS):
+                return True
+            cluster = raw[1:] if raw.startswith("-") and not raw.startswith("--") else ""
+            if index == 0 and not raw.startswith("-"):
+                cluster = raw
+            if "I" in cluster or "F" in cluster:
+                return True
+        return False
     if program == "find":
         return any(arg in _FIND_ACTIONS for arg in args)
     if program == "git":

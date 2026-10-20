@@ -42,6 +42,14 @@ def trusted(tmp_path: Path) -> ProgramResolver:
         "find",
         "node",
         "xargs",
+        "python3.12",
+        "perl5.38",
+        "ruby3.2",
+        "awk",
+        "sed",
+        "tar",
+        "make",
+        "ssh",
     ):
         (system / f"{name}{EXE}").write_bytes(f"binary of {name}".encode())
     return ProgramResolver(dirs=(str(system),))
@@ -283,6 +291,17 @@ def test_a_remembered_interpreter_run_never_covers_another_script(trusted: Progr
         ["git", "rebase", "--exec=evil", "main"],
         ["git", "submodule", "foreach", "evil"],
         ["git", "bisect", "run", "evil"],
+        # Re-review LOW: versioned interpreters, stream editors, build tools, remote shells.
+        ["python3.12", "a.py"],
+        ["perl5.38", "a.pl"],
+        ["ruby3.2", "a.rb"],
+        ["awk", 'BEGIN{system("evil")}'],
+        ["sed", "-n", "1e evil", "f"],
+        ["tar", "-xf", "a.tar", "--to-command=evil"],
+        ["tar", "-I", "evil", "-xf", "a.tar"],
+        ["tar", "--use-compress-program=evil", "-xf", "a.tar"],
+        ["make", "all"],
+        ["ssh", "-o", "ProxyCommand=evil", "host"],
     ],
 )
 def test_launchers_and_exec_forms_are_complex(trusted: ProgramResolver, argv: list[str]) -> None:
@@ -293,7 +312,12 @@ def test_launchers_and_exec_forms_are_complex(trusted: ProgramResolver, argv: li
 
 @pytest.mark.parametrize(
     "argv",
-    [["git", "push", "origin"], ["git", "log", "--oneline"], ["find", ".", "-name", "x"]],
+    [
+        ["git", "push", "origin"],
+        ["git", "log", "--oneline"],
+        ["find", ".", "-name", "x"],
+        ["tar", "-tf", "a.tar"],
+    ],
 )
 def test_ordinary_subcommands_stay_rememberable(trusted: ProgramResolver, argv: list[str]) -> None:
     assert classify(argv=argv, resolver=trusted).kind is ShellClass.SIMPLE
