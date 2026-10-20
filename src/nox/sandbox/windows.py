@@ -9,10 +9,11 @@ Two variants, strongest first:
   port of the host depends on Windows network isolation, which is not enforced on every machine
   (measured: on some Windows 11 builds a desktop AppContainer reaches any host loopback listener).
   The installer's one elevated step therefore adds network rules (`nox.sandbox.wfp`: WFP filters
-  per container SID) that block loopback and the LAN for every Nox container except the egress
-  forwarder's own ports. Either way the backend measures the result (`host_loopback_reachable`,
-  fail closed: anything but an explicit "blocked" report counts as reachable, and so does a host
-  listener in the forwarder's port range) and reports `confines_network` honestly: where loopback
+  per container SID) that block everything for every Nox container except the egress
+  forwarder's own loopback ports. Either way the backend measures the result
+  (`host_loopback_reachable`, fail closed: anything but an explicit "blocked" report counts as
+  reachable, and so does a host listener in the forwarder's port range) and reports
+  `confines_network` honestly: where loopback
   leaks, local services (a model server, a browser's debug port) would be reachable from inside, and
   the sandbox is not "strong". To run Python (a skill's tests, an MCP server written in Python),
   Nox's container SID additionally gets *read and execute* on exactly the Python runtime Nox itself
@@ -255,6 +256,51 @@ def host_loopback_reachable(sid: str) -> bool:
         reachable = True if measured is None else measured
         _loopback_probe[sid] = reachable
         return reachable
+
+
+#: The process ids of the egress forwarders this process started and has not closed yet. Their
+#: listeners in `FORWARDER_PORTS` are Nox's own; any other listener there is foreign.
+_forwarders: set[int] = set()
+_forwarders_lock = threading.Lock()
+
+
+def _release_forwarder(fwd: Spawned) -> None:
+    with _forwarders_lock:
+        _forwarders.discard(fwd.pid)
+    fwd.close()
+    _close_fds(fwd)
+
+
+def forwarder_port_problem(port: int, own_pid: int) -> str | None:
+    """`None` when `port` is held by the forwarder `own_pid` and every other listener in
+    `FORWARDER_PORTS` is one of Nox's own live forwarders; otherwise why not.
+
+    Checked before every run that uses the forwarder: the network rules permit the whole range,
+    so a foreign listener there - or a port the forwarder does not actually hold - would be
+    reachable from inside the container. A listener whose owner cannot be read counts as foreign,
+    and so does a listener list that cannot be read at all (fail closed)."""
+    import psutil
+
+    try:
+        conns = psutil.net_connections(kind="tcp")
+    except (OSError, psutil.Error) as exc:
+        return f"the listeners cannot be listed: {type(exc).__name__}"
+    with _forwarders_lock:
+        ours = set(_forwarders) | {own_pid}
+    held = False
+    foreign: set[int] = set()
+    for c in conns:
+        if c.status != psutil.CONN_LISTEN or not c.laddr or c.laddr.port not in FORWARDER_PORTS:
+            continue
+        if c.laddr.port == port and c.pid == own_pid:
+            held = True
+        elif c.laddr.port == port or c.pid not in ours:
+            foreign.add(c.laddr.port)
+    if foreign:
+        return f"a listener that is not Nox's forwarder holds port(s) {sorted(foreign)}"
+    if not held:
+        return f"port {port} is not held by the forwarder"
+    return None
 
 
 def forwarder_range_listeners() -> list[int] | None:
@@ -793,8 +839,8 @@ class WindowsSandbox:
                     "Windows does not enforce loopback isolation for the container on this "
                     "machine: services listening on this computer's loopback are reachable "
                     "from inside the sandbox. The sandbox network rules close this: the "
-                    "installer adds them (it asks for administrator rights once), or run "
-                    "`nox sandbox firewall install` from an administrator prompt"
+                    "installer adds them (it asks for administrator rights once); run setup "
+                    "again to add them later"
                 )
             return Guarantees(
                 backend=self.mode.value,
@@ -895,8 +941,7 @@ class WindowsSandbox:
                 _close_fds(spawned)
         finally:
             if forwarder is not None:
-                forwarder.close()
-                _close_fds(forwarder)
+                _release_forwarder(forwarder)
             if created:
                 _best_effort_rmtree(work)
 
@@ -939,8 +984,7 @@ class WindowsSandbox:
 
         def drop_forwarder() -> None:
             if forwarder is not None:
-                forwarder.close()
-                _close_fds(forwarder)
+                _release_forwarder(forwarder)
 
         try:
             port: int | None = None
@@ -1048,6 +1092,18 @@ class WindowsSandbox:
             fwd.close()
             _close_fds(fwd)
             raise SandboxUnavailable("the egress forwarder did not start; failing closed")
+        problem = forwarder_port_problem(port, fwd.pid)
+        if problem is not None:
+            fwd.close()
+            _close_fds(fwd)
+            log.warning("sandbox.forwarder_unverified", port=port, reason=problem)
+            raise SandboxUnavailable(
+                f"the egress forwarder could not be verified ({problem}); the network rules "
+                "leave the forwarder's port range open, so the run is refused rather than given "
+                "a path to a listener that is not Nox's (failing closed)"
+            )
+        with _forwarders_lock:
+            _forwarders.add(fwd.pid)
         return fwd, port
 
 

@@ -1,14 +1,18 @@
-"""The Windows sandbox network rules (`nox.sandbox.wfp`) and the probe that decides "strong".
+"""The Windows sandbox network rules (`nox.sandbox.wfp`), the protected helper that installs them
+(`nox.sandbox.wfp_helper`), the installer around it, and the probe that decides "strong".
 
-Runs on every platform: the rules are pure data, the WFP structures are plain ctypes, and the
-Windows API is replaced by a fake that records every call. Nothing here adds a real filter or
-needs an administrator - what a real installation does is the manual check in docs/SECURITY.md.
+Runs on every platform: the rules are pure data and the helper is generated text. On Windows one
+test runs the helper's `show` and compares it with Nox's own rules. Nothing here adds a real filter
+or needs an administrator - what a real installation does is the manual check in docs/SECURITY.md.
 """
 
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import ipaddress
+import os
+import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -16,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from nox.sandbox import wfp
+from nox.sandbox import wfp, wfp_helper
 from nox.sandbox.containers import (
     SHELL_CONTAINER,
     WORKLOAD_SLOTS,
@@ -26,10 +30,9 @@ from nox.sandbox.containers import (
 )
 from nox.sandbox.model import Result
 from nox.sandbox.wfp import (
-    BLOCKED_V4,
-    BLOCKED_V6,
     FORWARDER_PORTS,
-    Flags,
+    LocalAddress,
+    LocalPortRange,
     Package,
     PortRange,
     Protocol,
@@ -93,65 +96,46 @@ def test_sid_bytes_is_the_binary_sid_windows_expects() -> None:
             sid_bytes(bad)
 
 
-# ---- the rules -------------------------------------------------------------------------------
+# ---- the rules: an allowlist by construction ---------------------------------------------------
 
 
-def test_each_container_gets_exactly_these_five_filters() -> None:
-    permit, block_v4, loop_v4, block_v6, loop_v6 = rules_for(SHELL_CONTAINER)
+def test_each_container_gets_a_hard_block_of_everything_and_one_forwarder_exception() -> None:
+    rules = rules_for(SHELL_CONTAINER)
     pkg = Package(SHELL_SID)
+    by_id = {r.name.rsplit(": ", 1)[1]: r for r in rules}
+    assert list(by_id) == [rule_id for rule_id, _, _ in wfp.RULE_IDS]
 
-    assert (permit.layer, permit.action, permit.weight, permit.hard) == (
+    connect = by_id["permit-forwarder-connect-v4"]
+    assert (connect.layer, connect.action, connect.weight, connect.hard) == (
         "ALE_AUTH_CONNECT_V4",
         "PERMIT",
         15,
         False,
     )
-    assert permit.conditions == (
+    assert connect.conditions == (
         pkg,
         Protocol(6),
         Remote(ipaddress.IPv4Network("127.0.0.1/32")),
         PortRange(47_100, 47_227),
     )
-    assert (block_v4.layer, block_v4.action, block_v4.weight, block_v4.hard) == (
-        "ALE_AUTH_CONNECT_V4",
-        "BLOCK",
-        10,
-        True,
+    accept = by_id["permit-forwarder-accept-v4"]
+    assert accept.layer == "ALE_AUTH_RECV_ACCEPT_V4" and accept.action == "PERMIT"
+    assert accept.conditions == (
+        pkg,
+        Protocol(6),
+        LocalAddress(ipaddress.IPv4Network("127.0.0.1/32")),
+        LocalPortRange(47_100, 47_227),
     )
-    assert block_v4.conditions == (pkg, *(Remote(n) for n in BLOCKED_V4))
-    assert loop_v4.conditions == (pkg, Flags(0x1)) and loop_v4.hard and loop_v4.action == "BLOCK"
-    assert loop_v4.weight < block_v4.weight < permit.weight
-    assert block_v6.layer == loop_v6.layer == "ALE_AUTH_CONNECT_V6"
-    assert block_v6.conditions == (pkg, *(Remote(n) for n in BLOCKED_V6))
-    assert loop_v6.conditions == (pkg, Flags(0x1)) and loop_v6.hard
-    # No IPv6 permit: the forwarder listens on IPv4 loopback only.
-    assert not any(r.action == "PERMIT" for r in (block_v6, loop_v6))
-
-
-def test_the_blocked_ranges_cover_loopback_the_lan_and_metadata() -> None:
-    v4 = [
-        "127.0.0.1",
-        "127.5.5.5",
-        "10.1.2.3",
-        "172.16.0.1",
-        "172.31.255.254",
-        "192.168.178.1",
-        "169.254.169.254",
-        "100.100.100.100",
-        "0.0.0.0",
-        "224.0.0.251",
-        "255.255.255.255",
-    ]
-    for addr in v4:
-        assert any(ipaddress.IPv4Address(addr) in n for n in BLOCKED_V4), addr
-    v6 = ["::1", "::", "fe80::1", "fd00::1", "ff02::fb", "::ffff:127.0.0.1", "64:ff9b::a00:1"]
-    for addr in v6:
-        assert any(ipaddress.IPv6Address(addr) in n for n in BLOCKED_V6), addr
-    # The public internet is not touched by these rules (Windows' own isolation keeps a container
-    # without capabilities off it; declared egress goes through the proxy, never a direct socket).
-    for addr in ("1.1.1.1", "8.8.8.8", "140.82.112.3"):
-        assert not any(ipaddress.IPv4Address(addr) in n for n in BLOCKED_V4), addr
-    assert not any(ipaddress.IPv6Address("2606:4700::1111") in n for n in BLOCKED_V6)
+    blocks = [r for r in rules if r.action == "BLOCK"]
+    # Every layer Nox filters gets a block of everything: nothing but the package is matched, so
+    # no address family, range or tunnel (IPv4-mapped, NAT64, 6to4, Teredo, the LAN, the internet)
+    # is left out by a missing list entry.
+    assert {r.layer for r in blocks} == set(wfp.LAYERS)
+    for block in blocks:
+        assert block.conditions == (pkg,)
+        assert block.hard and block.weight < connect.weight
+    # The only permits are the two forwarder rules, both IPv4 loopback in the forwarder range.
+    assert [r for r in rules if r.action == "PERMIT"] == [connect, accept]
 
 
 def test_the_forwarder_range_is_below_the_dynamic_ports_and_open_only_to_tcp() -> None:
@@ -161,13 +145,13 @@ def test_the_forwarder_range_is_below_the_dynamic_ports_and_open_only_to_tcp() -
 
 def test_every_container_of_the_pool_is_covered_with_fixed_keys() -> None:
     rules = all_rules()
-    assert len(rules) == 5 * (WORKLOAD_SLOTS + 1) == 645
+    assert len(rules) == 6 * (WORKLOAD_SLOTS + 1) == 774
     assert len({r.key for r in rules}) == len(rules)
     sids = {c.sid for r in rules for c in r.conditions if isinstance(c, Package)}
     assert sids == {container_sid(n) for n in all_container_names()}
     # Keys are what uninstall deletes by: they must never change between builds.
-    assert wfp.filter_key("Nox.Sandbox", "block-local-v4") == uuid.uuid5(
-        uuid.UUID("ab693b13-a6ef-48c4-8c8c-b27790b328e1"), "Nox.Sandbox|block-local-v4"
+    assert wfp.filter_key("Nox.Sandbox", "block-all-connect-v4") == uuid.uuid5(
+        uuid.UUID("ab693b13-a6ef-48c4-8c8c-b27790b328e1"), "Nox.Sandbox|block-all-connect-v4"
     )
     assert all_rules() == rules  # deterministic
 
@@ -175,240 +159,225 @@ def test_every_container_of_the_pool_is_covered_with_fixed_keys() -> None:
 def test_show_lists_one_line_per_filter(capsys: pytest.CaptureFixture[str]) -> None:
     assert wfp.main(["show"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 645
+    assert len(lines) == 774
     assert lines[0].split()[1:4] == ["ALE_AUTH_CONNECT_V4", "PERMIT", "w=15"]
     assert f"package={SHELL_SID}" in lines[0] and "remote-port=47100-47227" in lines[0]
-    assert "BLOCK (hard)" in lines[1] and "remote=192.168.0.0/16" in lines[1]
+    assert "local-port=47100-47227" in lines[1]
+    assert lines[2].endswith(f"BLOCK (hard) w=1 package={SHELL_SID}")
 
 
-# ---- the installer's entry point -------------------------------------------------------------
+# ---- Nox's own Python never changes the rules ----------------------------------------------------
 
 
 def test_usage_errors_and_other_platforms(monkeypatch: pytest.MonkeyPatch) -> None:
     assert wfp.main([]) == 2
     assert wfp.main(["install", "extra"]) == 2
+    assert wfp.main(["install", "--status-file", "x"]) == 2
     assert wfp.main(["purge"]) == 2
     monkeypatch.setattr(sys, "platform", "linux")
     assert wfp.main(["install"]) == 3
 
 
-def test_install_reports_through_the_status_file(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("action", ["install", "remove"])
+def test_install_refuses_when_elevated_from_the_user_writable_runtime(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], action: str
 ) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(wfp, "apply", lambda: 645)
-    status = tmp_path / "status.txt"
-    assert wfp.main(["install", "--status-file", str(status)]) == 0
-    assert status.read_text(encoding="utf-8").splitlines() == [
-        "0",
-        "sandbox network rules: installed 645 filter(s)",
-    ]
-
-    def refused() -> int:
-        raise OSError(5, "FwpmEngineOpen0 failed with 0x5 (run it as administrator)")
-
-    monkeypatch.setattr(wfp, "remove", refused)
-    assert wfp.main(["remove", "--status-file", str(status)]) == 1
-    first, message = status.read_text(encoding="utf-8").splitlines()
-    assert first == "1" and "administrator" in message
+    monkeypatch.setattr(wfp, "is_elevated", lambda: True)
+    assert wfp.main([action]) == wfp.REFUSED
+    err = capsys.readouterr().err
+    assert "refusing to run as administrator" in err
+    # It points at the protected helper, run by the system's PowerShell.
+    assert "%ProgramFiles%\\Nox Sandbox Rules\\nox-sandbox-rules.ps1" in err
+    assert err.rstrip().endswith(f" {action}")
+    assert "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" in err
 
 
-# ---- the WFP structures and calls (fake engine) ----------------------------------------------
+def test_install_without_administrator_names_the_helper_too(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(wfp, "is_elevated", lambda: False)
+    assert wfp.main(["install"]) == wfp.REFUSED
+    err = capsys.readouterr().err
+    assert "needs an administrator" in err and "Nox Sandbox Rules" in err
 
 
-def test_the_structures_have_the_sdk_layout() -> None:
-    if ctypes.sizeof(ctypes.c_void_p) != 8:
-        pytest.skip("layouts pinned for 64-bit Windows")
-    from nox.sandbox import _wfp_win32 as w
-
-    sizes = {
-        w.GUID: 16,
-        w.FWP_VALUE0: 16,
-        w.FWP_CONDITION_VALUE0: 16,
-        w.FWP_RANGE0: 32,
-        w.FWP_V4_ADDR_AND_MASK: 8,
-        w.FWP_V6_ADDR_AND_MASK: 17,
-        w.FWPM_FILTER_CONDITION0: 40,
-        w.FWPM_ACTION0: 20,
-        w.FWPM_FILTER0: 200,
-        w.FWPM_PROVIDER0: 64,
-        w.FWPM_SUBLAYER0: 72,
-        w.FWPM_FILTER_ENUM_TEMPLATE0: 72,
-    }
-    for struct, size in sizes.items():
-        assert ctypes.sizeof(struct) == size, struct.__name__
-    offsets = {"layerKey": 64, "weight": 96, "filterCondition": 120, "action": 128, "filterId": 176}
-    for field, offset in offsets.items():
-        assert getattr(w.FWPM_FILTER0, field).offset == offset, field
-    assert w.FWPM_SUBLAYER0.weight.offset == 64
-    # A GUID is laid out as Windows does (little-endian first three fields).
-    key = uuid.UUID("c38d57d1-05a7-4c33-904f-7fbceee60e82")
-    g = w.guid(key)
-    assert (g.Data1, g.Data2, g.Data3) == (0xC38D57D1, 0x05A7, 0x4C33)
-    assert w.to_uuid(g) == key
+def test_the_ctypes_plumbing_is_gone() -> None:
+    # The elevated code path lives in the helper script only; nothing in the package can add
+    # filters from the user-writable runtime.
+    assert not (REPO / "src" / "nox" / "sandbox" / "_wfp_win32.py").exists()
+    assert not hasattr(wfp, "apply") and not hasattr(wfp, "remove")
 
 
-def test_a_rule_becomes_exactly_this_filter() -> None:
-    from nox.sandbox import _wfp_win32 as w
+# ---- the protected helper ------------------------------------------------------------------
 
-    permit, block_v4, loop_v4, block_v6, _ = rules_for(SHELL_CONTAINER)
 
-    built = w._Built(permit, w.guid(wfp.PROVIDER_KEY))  # noqa: SLF001
-    f = built.filter
-    assert w.to_uuid(f.filterKey) == permit.key
-    assert w.to_uuid(f.layerKey) == w.LAYERS["ALE_AUTH_CONNECT_V4"]
-    assert w.to_uuid(f.subLayerKey) == wfp.SUBLAYER_KEY
-    assert w.to_uuid(f.providerKey.contents) == wfp.PROVIDER_KEY
-    assert f.flags == w.FWPM_FILTER_FLAG_PERSISTENT  # a soft permit
-    assert (f.weight.type, f.weight.uint8) == (w.FWP_UINT8, 15)
-    assert f.action.type == w.FWP_ACTION_PERMIT
-    assert f.numFilterConditions == 4
-    pkg, proto, remote, ports = (f.filterCondition[i] for i in range(4))
-    assert w.to_uuid(pkg.fieldKey) == w.CONDITION_PACKAGE_ID
-    assert pkg.conditionValue.type == w.FWP_SID
-    blob = sid_bytes(SHELL_SID)
-    assert ctypes.string_at(pkg.conditionValue.pointer, len(blob)) == blob
-    assert w.to_uuid(proto.fieldKey) == w.CONDITION_PROTOCOL
-    assert (proto.conditionValue.type, proto.conditionValue.uint8) == (w.FWP_UINT8, 6)
-    assert w.to_uuid(remote.fieldKey) == w.CONDITION_REMOTE_ADDRESS
-    assert remote.conditionValue.type == w.FWP_V4_ADDR_MASK
-    v4 = w.FWP_V4_ADDR_AND_MASK.from_address(remote.conditionValue.pointer)
-    assert (v4.addr, v4.mask) == (0x7F000001, 0xFFFFFFFF)  # host byte order
-    assert ports.matchType == w.FWP_MATCH_RANGE
-    rng = w.FWP_RANGE0.from_address(ports.conditionValue.pointer)
-    assert (rng.valueLow.type, rng.valueLow.uint16, rng.valueHigh.uint16) == (
-        w.FWP_UINT16,
-        47_100,
-        47_227,
+def test_the_helper_is_ascii_deterministic_and_self_contained() -> None:
+    script = wfp_helper.helper_script()
+    data = wfp_helper.helper_bytes()
+    assert data.isascii() and b"\r\n" not in data and not data.startswith(b"\xef\xbb\xbf")
+    assert "@@" not in script
+    assert wfp_helper.helper_sha256() == hashlib.sha256(data).hexdigest().upper()
+    lowered = script.lower()
+    # .NET only: no cmdlet (module autoload could load a user-writable module), no compiler, no
+    # file of Nox's, no encoded command, no temp file.
+    for banned in (
+        "add-type",
+        "new-object",
+        "import-module",
+        "get-content",
+        "set-content",
+        "out-null",
+        "write-host",
+        "write-output",
+        "foreach-object",
+        "invoke-expression",
+        "iex ",
+        "$env:",
+        "gettemppath",
+        "-encodedcommand",
+        "csharpcodeprovider",
+    ):
+        assert banned not in lowered, banned
+    # fwpuclnt.dll by full system path only.
+    assert "[Environment]::SystemDirectory, 'fwpuclnt.dll'" in script
+    for key in (wfp.PROVIDER_KEY, wfp.SUBLAYER_KEY, *wfp.LAYERS.values()):
+        assert str(key) in script
+
+
+def test_the_protected_folder_acl_is_admin_only() -> None:
+    script = wfp_helper.helper_script()
+    assert wfp_helper.PROTECTED_ACL == (
+        ("S-1-5-32-544", "FullControl"),
+        ("S-1-5-18", "FullControl"),
+        ("S-1-5-32-545", "ReadAndExecute"),
     )
-
-    # Each `_Built` owns the memory its filter points at: keep it alive while reading.
-    hard_built = w._Built(block_v4, w.guid(wfp.PROVIDER_KEY))  # noqa: SLF001
-    hard = hard_built.filter
-    assert hard.flags == w.FWPM_FILTER_FLAG_PERSISTENT | w.FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT
-    assert hard.action.type == w.FWP_ACTION_BLOCK
-    assert hard.numFilterConditions == 1 + len(BLOCKED_V4)
-    ten = w.FWP_V4_ADDR_AND_MASK.from_address(hard.filterCondition[2].conditionValue.pointer)
-    assert (ten.addr, ten.mask) == (0x0A000000, 0xFF000000)  # 10.0.0.0/8
-
-    flags_built = w._Built(loop_v4, w.guid(wfp.PROVIDER_KEY))  # noqa: SLF001
-    flags = flags_built.filter.filterCondition[1]
-    assert w.to_uuid(flags.fieldKey) == w.CONDITION_FLAGS
-    assert flags.matchType == w.FWP_MATCH_FLAGS_ANY_SET
-    assert (flags.conditionValue.type, flags.conditionValue.uint32) == (w.FWP_UINT32, 1)
-
-    v6_built = w._Built(block_v6, w.guid(wfp.PROVIDER_KEY))  # noqa: SLF001
-    v6 = v6_built.filter
-    assert w.to_uuid(v6.layerKey) == w.LAYERS["ALE_AUTH_CONNECT_V6"]
-    loopback = w.FWP_V6_ADDR_AND_MASK.from_address(v6.filterCondition[1].conditionValue.pointer)
-    assert v6.filterCondition[1].conditionValue.type == w.FWP_V6_ADDR_MASK
-    assert bytes(loopback.addr) == bytes(16) and loopback.prefixLength == 127
+    assert "$Acl = @('S-1-5-32-544=FullControl', 'S-1-5-18=FullControl', " in script
+    assert "'S-1-5-32-545=ReadAndExecute')" in script
+    assert "$Writers = @('S-1-5-32-544', 'S-1-5-18')" in script
+    # Inheritance from Program Files is cut, the owner is Administrators, and the result is read
+    # back and checked for anyone else who could write, own or re-ACL it.
+    assert "$sec.SetAccessRuleProtection($true, $false)" in script
+    assert "$sec.SetOwner((Sid 'S-1-5-32-544'))" in script
+    assert "AssertAdminOnly ([IO.Directory]::GetAccessControl($Dir)) $Dir" in script
+    assert "AssertAdminOnly ([IO.File]::GetAccessControl($File)) $File" in script
+    assert "ReparsePoint" in script
+    write = 2 | 4 | 16 | 64 | 256 | 65536 | 262144 | 524288 | 0x40000000 | 0x10000000
+    assert f"$WriteMask = {write}" in script
 
 
-class _FakeEngine:
-    """Stands in for fwpuclnt.dll: records every call, answers like the real engine would."""
-
-    def __init__(self, *, existing: set[uuid.UUID] | None = None, fail_add: int = 0) -> None:
-        from nox.sandbox import _wfp_win32 as w
-
-        self.w = w
-        self.calls: list[str] = []
-        self.filters: set[uuid.UUID] = set(existing or ())
-        self.added: list[Any] = []
-        self.fail_add = fail_add
-        self.committed = False
-        self.aborted = False
-
-    def __getattr__(self, name: str) -> Any:
-        if name.startswith("_"):
-            raise AttributeError(name)
-
-        def call(*args: Any) -> int:
-            self.calls.append(name)
-            return getattr(self, "_" + name, lambda *a: 0)(*args)
-
-        return call
-
-    def _FwpmFilterEnum0(self, engine: Any, handle: Any, n: int, entries: Any, count: Any) -> int:  # noqa: N802
-        count._obj.value = 0  # nothing of an older build to find
-        return 0
-
-    def _FwpmFilterDeleteByKey0(self, engine: Any, key: Any) -> int:  # noqa: N802
-        found = self.w.to_uuid(key._obj)
-        if found in self.filters:
-            self.filters.discard(found)
-            return 0
-        return self.w.FWP_E_FILTER_NOT_FOUND
-
-    def _FwpmFilterAdd0(self, engine: Any, f: Any, sd: Any, out: Any) -> int:  # noqa: N802
-        if self.fail_add and len(self.added) + 1 == self.fail_add:
-            return 0x80320017  # FWP_E_INVALID_PARAMETER, say
-        self.added.append(self.w.to_uuid(f._obj.filterKey))
-        return 0
-
-    def _FwpmProviderAdd0(self, *args: Any) -> int:  # noqa: N802
-        return self.w.FWP_E_ALREADY_EXISTS  # an earlier install: not an error
-
-    def _FwpmTransactionCommit0(self, engine: Any) -> int:  # noqa: N802
-        self.committed = True
-        return 0
-
-    def _FwpmTransactionAbort0(self, engine: Any) -> int:  # noqa: N802
-        self.aborted = True
-        return 0
+def test_status_goes_to_hklm_never_a_user_folder() -> None:
+    script = wfp_helper.helper_script()
+    assert wfp_helper.STATUS_KEY == "SOFTWARE\\Nox\\SandboxRules"
+    assert "[Microsoft.Win32.Registry]::LocalMachine.CreateSubKey($RegPath)" in script
+    assert "--status-file" not in script and "WriteAllText" not in script
+    # The only file it ever writes is the protected copy, under Program Files.
+    assert script.count("WriteAllBytes") == 1
+    assert "[IO.File]::WriteAllBytes($File, $Self)" in script
+    assert "GetFolderPath('ProgramFiles'), 'Nox Sandbox Rules'" in script
 
 
-def test_install_replaces_every_filter_in_one_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
-    from nox.sandbox import _wfp_win32 as w
-
-    rules = all_rules()
-    fake = _FakeEngine(existing={rules[0].key})
-    monkeypatch.setattr(w, "_lib", lambda: fake)
-    assert w.install(rules) == 645
-    assert fake.added == [r.key for r in rules]
-    assert fake.calls[:4] == [
-        "FwpmEngineOpen0",
-        "FwpmTransactionBegin0",
-        "FwpmProviderAdd0",
-        "FwpmSubLayerAdd0",
-    ]
-    assert fake.calls.count("FwpmFilterCreateEnumHandle0") == 2  # both layers searched
-    assert fake.calls.count("FwpmFilterDeleteByKey0") == 645
-    assert fake.committed and not fake.aborted and fake.calls[-1] == "FwpmEngineClose0"
-
-
-def test_a_failed_filter_rolls_everything_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    from nox.sandbox import _wfp_win32 as w
-
-    fake = _FakeEngine(fail_add=3)
-    monkeypatch.setattr(w, "_lib", lambda: fake)
-    with pytest.raises(w.WfpError, match="0x80320017"):
-        w.install(all_rules())
-    assert fake.aborted and not fake.committed and fake.calls[-1] == "FwpmEngineClose0"
+def test_the_bootstrap_runs_only_bytes_that_match_the_pinned_hash() -> None:
+    sha = wfp_helper.helper_sha256()
+    boot = wfp_helper.bootstrap("install", ["C:\\Users\\O'Brien\\Nox\\sandbox\\x.ps1"])
+    assert f"-eq '{sha}'" in boot
+    assert "@('C:\\Users\\O''Brien\\Nox\\sandbox\\x.ps1')" in boot  # quoted, ' doubled
+    assert '"' not in boot  # the whole bootstrap sits in one pair of double quotes
+    # The bytes it checked are the bytes it runs (and hands on for the protected copy).
+    assert "[ScriptBlock]::Create([Text.Encoding]::ASCII.GetString($b))) 'install' $b" in boot
+    assert "exit 3" in boot
+    params = wfp_helper.command_params("uninstall", ["C:\\a.ps1", "C:\\b.ps1"])
+    assert params.startswith('-NoProfile -NonInteractive -WindowStyle Hidden -Command "')
+    assert "EncodedCommand" not in params and "Bypass" not in params
+    assert "@('C:\\a.ps1','C:\\b.ps1')" in params
+    with pytest.raises(ValueError):
+        wfp_helper.bootstrap("show", ["C:\\a.ps1"])
+    with pytest.raises(ValueError):
+        wfp_helper.bootstrap("install", ['C:\\"x".ps1'])
 
 
-def test_without_administrator_the_message_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
-    from nox.sandbox import _wfp_win32 as w
+def test_the_inno_include_embeds_the_pinned_hash_and_the_same_bootstrap() -> None:
+    include = wfp_helper.inno_include()
+    assert include.isascii()
+    assert f"Result := '{wfp_helper.helper_sha256()}';" in include
+    assert "function SandboxRulesParams(const Action, Paths: String): String;" in include
+    # Evaluate the Pascal concatenation by hand: it must give exactly `command_params`.
+    body = include.split("function SandboxRulesParams", 1)[1].split("begin", 1)[1]
+    expr = body.split("Result :=", 1)[1].split(";\r\nend;", 1)[0]
+    paths = "'C:\\x.ps1'"
+    parts = []
+    for token in _pascal_tokens(expr):
+        if token == "Paths":
+            parts.append(paths)
+        elif token == "SandboxHelperSha256()":
+            parts.append(wfp_helper.helper_sha256())
+        elif token == "Action":
+            parts.append("install")
+        else:
+            parts.append(token)
+    assert "".join(parts) == wfp_helper.command_params("install", ["C:\\x.ps1"])
 
-    fake = _FakeEngine()
-    fake._FwpmEngineOpen0 = lambda *a: 5  # type: ignore[attr-defined]  # noqa: SLF001
-    monkeypatch.setattr(w, "_lib", lambda: fake)
-    with pytest.raises(w.WfpError, match="administrator"):
-        w.install(all_rules())
-    assert "FwpmTransactionBegin0" not in fake.calls
+
+def _pascal_tokens(expr: str) -> list[str]:
+    """The operands of a Pascal `a + 'b' + c` expression, string literals unquoted."""
+    out: list[str] = []
+    i = 0
+    while i < len(expr):
+        ch = expr[i]
+        if ch == "'":
+            j, buf = i + 1, []
+            while True:
+                if expr[j] == "'" and j + 1 < len(expr) and expr[j + 1] == "'":
+                    buf.append("'")
+                    j += 2
+                elif expr[j] == "'":
+                    break
+                else:
+                    buf.append(expr[j])
+                    j += 1
+            out.append("".join(buf))
+            i = j + 1
+        elif ch.isalpha():
+            j = i
+            while j < len(expr) and (expr[j].isalnum() or expr[j] in "()"):
+                j += 1
+            out.append(expr[i:j])
+            i = j
+        else:
+            i += 1
+    return out
 
 
-def test_uninstall_removes_filters_sublayer_and_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    from nox.sandbox import _wfp_win32 as w
-
-    rules = all_rules()
-    fake = _FakeEngine(existing={r.key for r in rules[:10]})
-    monkeypatch.setattr(w, "_lib", lambda: fake)
-    assert w.uninstall(rules) == 10
-    assert not fake.filters and not fake.added
-    order = [c for c in fake.calls if c.endswith("DeleteByKey0") and "Filter" not in c]
-    assert order == ["FwpmSubLayerDeleteByKey0", "FwpmProviderDeleteByKey0"]
-    assert fake.committed
+@pytest.mark.skipif(sys.platform != "win32", reason="runs the helper in Windows PowerShell")
+def test_the_helper_derives_exactly_the_rules_nox_shows(tmp_path: Path) -> None:
+    script = tmp_path / "helper.ps1"
+    script.write_bytes(wfp_helper.helper_bytes())
+    result = subprocess.run(
+        [
+            str(
+                Path(os.environ.get("SystemRoot", "C:\\Windows"))
+                / "System32"
+                / "WindowsPowerShell"
+                / "v1.0"
+                / "powershell.exe"
+            ),
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "show",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == wfp.describe(wfp.all_rules())
 
 
 # ---- the probe stays the source of truth -----------------------------------------------------
@@ -518,6 +487,85 @@ def test_the_forwarder_listens_only_in_its_range() -> None:
         assert forwarder_port(bad) is None, bad
 
 
+def _listener(port: int, pid: int | None, status: str = "LISTEN") -> Any:
+    import types
+
+    return types.SimpleNamespace(laddr=types.SimpleNamespace(port=port), status=status, pid=pid)
+
+
+@pytest.mark.parametrize(
+    ("conns", "ours", "problem"),
+    [
+        ([(47_150, 10)], set(), None),  # the forwarder holds its port, nothing else in range
+        ([(47_150, 10), (47_160, 20)], {20}, None),  # another live Nox forwarder
+        ([(47_150, 10), (80, 99), (47_228, 99)], set(), None),  # outside the range: irrelevant
+        ([(47_150, 10), (47_160, 99)], set(), "47160"),  # a foreign listener in the range
+        ([(47_150, 10), (47_160, None)], set(), "47160"),  # owner unknown: foreign
+        ([(47_150, 99)], set(), "47150"),  # someone else holds the forwarder's port
+        ([], set(), "not held"),  # the forwarder's port is not listening at all
+    ],
+)
+def test_every_run_checks_who_holds_the_forwarder_range(
+    monkeypatch: pytest.MonkeyPatch,
+    conns: list[tuple[int, int | None]],
+    ours: set[int],
+    problem: str | None,
+) -> None:
+    import psutil
+
+    from nox.sandbox import windows
+
+    monkeypatch.setattr(windows, "_forwarders", set(ours))
+    listeners = [_listener(port, pid, psutil.CONN_LISTEN) for port, pid in conns]
+    monkeypatch.setattr(psutil, "net_connections", lambda kind: listeners)
+    found = windows.forwarder_port_problem(47_150, 10)
+    if problem is None:
+        assert found is None
+    else:
+        assert found is not None and problem in found
+
+
+def test_unlistable_listeners_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    import psutil
+
+    from nox.sandbox import windows
+
+    def denied(kind: str) -> Any:
+        raise psutil.AccessDenied()
+
+    monkeypatch.setattr(psutil, "net_connections", denied)
+    assert "cannot be listed" in (windows.forwarder_port_problem(47_150, 10) or "")
+
+
+def test_an_unverified_forwarder_refuses_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    import types
+
+    from nox.sandbox import windows
+    from nox.sandbox.model import SandboxUnavailable
+
+    closed: list[str] = []
+    fwd = types.SimpleNamespace(pid=10, stdout_fd=1, close=lambda: closed.append("closed"))
+    backend = object.__new__(windows.WindowsSandbox)
+    backend._w = types.SimpleNamespace(spawn=lambda *a, **k: fwd)  # type: ignore[attr-defined]
+    monkeypatch.setattr(windows, "_read_line", lambda fd, timeout: "NOXFWD 47150")
+    monkeypatch.setattr(windows, "_close_fds", lambda s: None)
+    monkeypatch.setattr(windows, "forwarder_port_problem", lambda port, pid: "foreign 47160")
+    limits = types.SimpleNamespace(memory_bytes=1 << 30)
+    with pytest.raises(SandboxUnavailable, match="could not be verified"):
+        backend._start_forwarder(  # noqa: SLF001
+            Path("."), "\\\\.\\pipe\\nox-abc", limits, SHELL_SID
+        )
+    assert closed == ["closed"] and 10 not in windows._forwarders  # noqa: SLF001
+
+    monkeypatch.setattr(windows, "forwarder_port_problem", lambda port, pid: None)
+    got, port = backend._start_forwarder(  # noqa: SLF001
+        Path("."), "\\\\.\\pipe\\nox-abc", limits, SHELL_SID
+    )
+    assert port == 47_150 and 10 in windows._forwarders  # noqa: SLF001
+    windows._release_forwarder(got)  # noqa: SLF001
+    assert 10 not in windows._forwarders  # noqa: SLF001
+
+
 # ---- the installer ---------------------------------------------------------------------------
 
 
@@ -525,28 +573,50 @@ def _iss() -> str:
     return (REPO / "installer" / "nox.iss").read_text(encoding="utf-8")
 
 
-def test_the_installer_asks_for_administrator_only_for_the_rules() -> None:
+def test_the_installer_never_runs_its_own_python_elevated() -> None:
     script = _iss()
     assert script.isascii()  # Inno reads a file without BOM as ANSI
     assert "PrivilegesRequired=lowest" in script  # the install itself stays per-user
     task = next(line for line in script.splitlines() if line.startswith('Name: "sandboxrules"'))
     assert "Flags: unchecked" not in task  # ticked by default
-    assert "ShellExec('runas', ExpandConstant('{app}\\runtime\\python.exe')," in script
-    assert "'-m nox.sandbox.wfp install --status-file \"' + StatusFile + '\"'" in script
-    assert "WizardIsTaskSelected('sandboxrules')" in script
-    # Elevated `runas` appears for the rule steps only.
     lines = script.splitlines()
-    runas = [line for line in lines if "ShellExec('runas'" in line or 'Verb: "runas"' in line]
-    assert len(runas) == 2
-    assert "nox.sandbox.wfp remove" in runas[0]  # [UninstallRun]
-    assert "python.exe" in runas[1]  # [Code]: the install step, parameters checked above
+    elevated = [ln for ln in lines if "'runas'" in ln or 'Verb: "runas"' in ln]
+    # One elevated call site: the system's PowerShell with the hash-checking bootstrap.
+    assert len(elevated) == 1
+    assert (
+        "ShellExec('runas', SandboxPowerShell(), SandboxRulesParams(Action, Paths)," in elevated[0]
+    )
+    assert "ExpandConstant('{sys}\\WindowsPowerShell\\v1.0\\powershell.exe')" in script
+    assert 'python.exe"; Parameters: "-m nox.sandbox.wfp' not in script
+    assert "nox.sandbox.wfp install" not in script and "--status-file" not in script
+    assert '#include "..\\build\\sandbox-rules\\sandbox_rules.iss"' in script
+    # An older build's uninstall log could still name the elevated python step: never keep it.
+    assert "UninstallLogMode=overwrite" in script
+    # Status comes from HKLM, not a file in the user's temp folder.
+    assert "RegQueryDWordValue(HKLM64, SandboxStatusKey, 'Sequence'" in script
+    assert "{tmp}" not in script
 
 
-def test_uninstall_removes_the_rules_before_the_runtime_is_gone() -> None:
-    lines = _iss().split("[UninstallRun]", 1)[1].split("[UninstallDelete]", 1)[0].splitlines()
-    entries = [line for line in lines if line.startswith("Filename:")]
-    remove = entries[0]
-    assert 'Parameters: "-m nox.sandbox.wfp remove"' in remove
-    assert 'Verb: "runas"' in remove and "shellexec" in remove and "waituntilterminated" in remove
-    assert "Tasks: sandboxrules" in remove and "RunOnceId:" in remove
-    assert "{app}\\runtime\\python.exe" in remove
+def test_uninstall_removes_the_rules_whenever_they_may_exist() -> None:
+    script = _iss()
+    code = script.split("procedure CurUninstallStepChanged", 1)[1]
+    assert "usUninstall" in code and "SandboxRulesMayExist()" in code
+    # The protected copy first, then the copy in {app}: both only after their hash matched.
+    assert "SandboxPsQuote(SandboxProtectedCopy()) + ','" in code
+    assert "SandboxPsQuote(SandboxAppCopy()), True" in code
+    may = script.split("function SandboxRulesMayExist", 1)[1].split("end;", 1)[0]
+    # Independent of the install task: the folder, the status key, or Nox's WFP provider.
+    assert "FileExists(SandboxProtectedCopy())" in may
+    assert "RegKeyExists(HKLM64, SandboxStatusKey)" in may
+    assert "RunSandboxHelper('status'" in may
+    assert "Tasks: sandboxrules" not in script.split("[UninstallRun]", 1)[1]
+
+
+def test_the_installer_ships_the_licenses_and_the_source_offer() -> None:
+    script = _iss()
+    assert "LicenseFile={#BuildLegalDir}\\INSTALLER_LICENSE.txt" in script
+    assert 'Source: "{#BuildLegalDir}\\*"; DestDir: "{app}"' in script
+    assert (
+        'Source: "{#BuildSandboxRulesDir}\\nox-sandbox-rules.ps1"; DestDir: "{app}\\sandbox"'
+        in (script)
+    )

@@ -168,14 +168,17 @@ def test_the_windows_forwarder_waits_instead_of_polling() -> None:
     assert "WaitAny" in FORWARDER_PS and "AcceptTcpClientAsync" in FORWARDER_PS
 
 
-def test_the_windows_forwarder_never_gets_the_childs_environment(tmp_path) -> None:  # noqa: ANN001
+def test_the_windows_forwarder_never_gets_the_childs_environment(tmp_path, monkeypatch) -> None:  # noqa: ANN001
     # Re-review HIGH: only the confined child gets the caller's extra variables and the proxy
     # credentials; the host-started egress forwarder runs with the fixed base environment.
     import os
     import types
 
+    from nox.sandbox import windows
     from nox.sandbox.windows import WindowsSandbox, _base_env
 
+    # Who holds the forwarder range is checked separately (test_wfp); here it is Nox's forwarder.
+    monkeypatch.setattr(windows, "forwarder_port_problem", lambda port, pid: None)
     seen: list[dict[str, str]] = []
     containers: list[str] = []
     read_fd, write_fd = os.pipe()
@@ -185,7 +188,9 @@ def test_the_windows_forwarder_never_gets_the_childs_environment(tmp_path) -> No
     def spawn(argv: list[str], **kw: Any) -> Any:
         seen.append(kw["env"])
         containers.append(kw["app_container"])
-        return types.SimpleNamespace(stdout_fd=read_fd, stderr_fd=None, close=lambda: None)
+        return types.SimpleNamespace(
+            pid=4242, stdout_fd=read_fd, stderr_fd=None, close=lambda: None
+        )
 
     backend = WindowsSandbox.__new__(WindowsSandbox)
     backend._w = types.SimpleNamespace(spawn=spawn)  # type: ignore[attr-defined]

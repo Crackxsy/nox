@@ -350,13 +350,13 @@ def _firewall(action: str) -> None:
 
 @firewall_app.command("install")
 def sandbox_firewall_install() -> None:
-    """Add the rules (needs an administrator prompt; the installer does this for you)."""
+    """Refuses here: prints the protected helper's command (setup adds the rules for you)."""
     _firewall("install")
 
 
 @firewall_app.command("remove")
 def sandbox_firewall_remove() -> None:
-    """Remove the rules again (needs an administrator prompt; uninstall does this for you)."""
+    """Refuses here: prints the protected helper's command (uninstall removes the rules)."""
     _firewall("remove")
 
 

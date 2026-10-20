@@ -9,15 +9,22 @@ Steps (in order, each idempotent - re-running `build.py` from a clean `build/` i
    never be importable - uncomment `import site`, add the site-packages path explicitly, and add
    `..\\app`, the folder the `nox` package is copied to (step 5).
 3. Bootstrap pip into that runtime via `get-pip.py` (the embeddable zip has no pip of its own).
+   Both downloads are pinned: the zip by version and SHA-256, `get-pip.py` by an immutable commit
+   URL and SHA-256 (`PINNED_SHA256`) - a file whose hash differs is refused, cached or not.
 4. Regenerate `installer/requirements.lock` via `uv export --extra shell --extra voice
    --extra voice-supertonic` (Supertonic 3 is the default voice; its ~400 MB of model files are
    downloaded after the user agrees, never shipped) - the locked, reproducible dependency set,
-   NOT `pyproject.toml`, which this script never touches -
-   and `pip install` everything in it except the `-e .` self-reference (nox's own source is copied
+   NOT `pyproject.toml`, which this script never touches - *with* hashes, and `pip install
+   --require-hashes` everything in it except the `-e .` self-reference (nox's own source is copied
    in step 5, not pip-installed, so the payload has no build backend / editable-install machinery).
 5. Copy `src/nox`, `config/`, `plugins/`, `ui/pet/dist`, `ui/dashboard/dist` and the launcher
    `installer/start_nox.pyw` into `build/app/`.
-6. Record sizes into `build/app/BUILD_INFO.txt` (installer size target: "< 400 MB without
+6. Write the sandbox-rules helper and its Inno include into `build/sandbox-rules/`
+   (`nox.sandbox.wfp_helper`: the installer's one elevated step, pinned by SHA-256).
+7. Collect the license files into `build/legal/`: LICENSE, NOTICE, COPYING (GPL-3.0 - the
+   bundled `voice` extra makes the installer a GPL-3.0 combined work), the third-party list, and
+   SOURCE.txt - the written source offer naming the exact commit this build is made from.
+8. Record sizes into `build/app/BUILD_INFO.txt` (installer size target: "< 400 MB without
    models").
 
 Run with the **system** Python (`uv` lives there per ENGINEERING.md), not `.venv`:
@@ -29,6 +36,7 @@ steps 4-6); `--python-version` overrides the pinned embeddable version.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
@@ -48,26 +56,65 @@ DOWNLOAD_CACHE = INSTALLER_DIR / ".cache"
 #: compiled-extension wheels (ctranslate2, onnxruntime, PySide6) resolved against cp313 match.
 DEFAULT_PYTHON_VERSION = "3.13.14"
 EMBED_URL_TMPL = "https://www.python.org/ftp/python/{v}/python-{v}-embed-amd64.zip"
-GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
+#: get-pip.py at a fixed commit of pypa/get-pip (pip 26.2.1) - the moving
+#: bootstrap.pypa.io URL would change under a pinned hash.
+GET_PIP_URL = (
+    "https://raw.githubusercontent.com/pypa/get-pip/"
+    "f6f644156f23dfe9acc06e7b9ca75eee311f2e37/public/get-pip.py"
+)
+#: SHA-256 of every file the build downloads, by file name. A version without an entry here
+#: cannot be built until its hash is added (from python.org, checked by a person).
+PINNED_SHA256 = {
+    "python-3.13.14-embed-amd64.zip": (
+        "90b4e5b9898b72d744650524bff92377c367f44bd5fbd09e3148656c080ad907"
+    ),
+    "get-pip.py": "fb24e693bab954209a063d90953621412ccad4a500905a726286e038f508ddf6",
+}
+#: The public repository the written source offer points to.
+SOURCE_REPO = "https://github.com/Crackxsy/nox"
 
 REQUIREMENTS_LOCK = INSTALLER_DIR / "requirements.lock"
 #: `{app}\runtime\python313._pth` -> `{app}\app`, where the `nox` package is copied to.
 APP_PTH_ENTRY = "..\\app"
 #: The launcher the shortcuts start (puts `app/` on `sys.path` itself and reports a failed start).
 LAUNCHER = INSTALLER_DIR / "start_nox.pyw"
+#: The sandbox-rules helper and its Inno include (`nox.sandbox.wfp_helper`).
+SANDBOX_RULES_DIR = BUILD_DIR / "sandbox-rules"
+#: License texts and the written source offer, installed into `{app}` (GPL-3.0 section 6).
+LEGAL_DIR = BUILD_DIR / "legal"
+#: Repository files copied into `LEGAL_DIR` unchanged.
+LEGAL_FILES = ("LICENSE", "NOTICE", "COPYING", "docs/THIRD_PARTY_LICENSES.md")
 
 
 def log(msg: str) -> None:
     print(f"[build] {msg}", flush=True)  # noqa: T201 - a standalone CLI build script, not `src/nox`
 
 
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def download(url: str, dest: Path) -> Path:
+    """`url` into `dest`, accepted only if its SHA-256 is the pinned one (`PINNED_SHA256`)."""
+    expected = PINNED_SHA256.get(dest.name)
+    if expected is None:
+        raise RuntimeError(f"no pinned SHA-256 for {dest.name}; add it to PINNED_SHA256 first")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists() and dest.stat().st_size > 0:
-        log(f"cached: {dest.name}")
+    if dest.exists() and sha256_of(dest) == expected:
+        log(f"cached: {dest.name} (SHA-256 ok)")
         return dest
     log(f"downloading {url}")
-    urllib.request.urlretrieve(url, dest)  # noqa: S310 - fixed https URLs, not user input
+    part = dest.with_suffix(dest.suffix + ".part")
+    urllib.request.urlretrieve(url, part)  # noqa: S310 - fixed https URLs, not user input
+    actual = sha256_of(part)
+    if actual != expected:
+        part.unlink(missing_ok=True)
+        raise RuntimeError(f"{dest.name}: SHA-256 {actual} is not the pinned {expected}")
+    os.replace(part, dest)
     return dest
 
 
@@ -141,8 +188,8 @@ def step_export_lock() -> Path:
     """Step 4a: `uv export` - the locked, reproducible dependency set (not pyproject.toml)."""
     uv = shutil.which("uv") or sys.executable  # `python -m uv` also works (ENGINEERING.md)
     cmd = [uv, "export"] if shutil.which("uv") else [sys.executable, "-m", "uv", "export"]
-    cmd += ["--color", "never", "--extra", "shell", "--extra", "voice"]
-    cmd += ["--extra", "voice-supertonic", "--no-hashes"]
+    cmd += ["--color", "never", "--frozen", "--extra", "shell", "--extra", "voice"]
+    cmd += ["--extra", "voice-supertonic"]
     log(f"exporting locked dependencies: {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=True)
     REQUIREMENTS_LOCK.write_text(result.stdout, encoding="utf-8")
@@ -150,13 +197,37 @@ def step_export_lock() -> Path:
     return REQUIREMENTS_LOCK
 
 
+def filtered_requirements(text: str) -> list[str]:
+    """The requirement entries of a hashed `uv export`, without `-e .` and without comments.
+
+    An entry spans its continuation lines (`pkg==1.0 \\` followed by `--hash=...` lines); each
+    returned entry is one joined line, hashes included."""
+    entries: list[str] = []
+    current = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not current and (not line or line.startswith("#")):
+            continue
+        continued = line.endswith("\\")
+        stripped = line.removesuffix("\\").strip()
+        current = f"{current} {stripped}".strip()
+        if continued:
+            continue
+        if not current.startswith("-e "):
+            entries.append(current)
+        current = ""
+    if current and not current.startswith("-e "):
+        entries.append(current)
+    return entries
+
+
 def step_install_dependencies(runtime_dir: Path, lock_path: Path) -> None:
     """Step 4b: pip-install everything in the lock file except `-e .` (nox's own source is
-    copied, not pip-installed - the embedded runtime never needs a build backend)."""
-    lines = lock_path.read_text(encoding="utf-8").splitlines()
-    deps = [
-        ln for ln in lines if ln.strip() and not ln.startswith("#") and not ln.startswith("-e ")
-    ]
+    copied, not pip-installed - the embedded runtime never needs a build backend). Every package
+    must match one of its locked hashes (`--require-hashes`)."""
+    deps = filtered_requirements(lock_path.read_text(encoding="utf-8"))
+    if not deps or any("--hash=sha256:" not in dep for dep in deps):
+        raise RuntimeError(f"{lock_path} has entries without hashes; export it again")
     filtered = INSTALLER_DIR / "_requirements.filtered.txt"
     filtered.write_text("\n".join(deps) + "\n", encoding="utf-8")
 
@@ -168,6 +239,7 @@ def step_install_dependencies(runtime_dir: Path, lock_path: Path) -> None:
             "pip",
             "install",
             "--no-warn-script-location",
+            "--require-hashes",
             "-r",
             str(filtered),
         ],
@@ -175,7 +247,7 @@ def step_install_dependencies(runtime_dir: Path, lock_path: Path) -> None:
         env=_isolated_env(),
     )
     filtered.unlink(missing_ok=True)
-    log(f"installed {len(deps)} locked dependencies into the embedded runtime")
+    log(f"installed {len(deps)} locked, hash-checked dependencies into the embedded runtime")
 
 
 def step_assemble_app() -> None:
@@ -197,6 +269,106 @@ def step_assemble_app() -> None:
     copy_tree(REPO_ROOT / "ui" / "dashboard" / "dist", APP_DIR / "ui" / "dashboard")
     shutil.copy2(LAUNCHER, APP_DIR / LAUNCHER.name)
     log(f"assembled app payload -> {APP_DIR}")
+
+
+def step_sandbox_rules() -> None:
+    """Step 6: the sandbox-rules helper script and the Inno include pinning its SHA-256."""
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    from nox.sandbox.wfp_helper import helper_sha256, write_build_files  # noqa: PLC0415
+
+    if SANDBOX_RULES_DIR.exists():
+        shutil.rmtree(SANDBOX_RULES_DIR)
+    write_build_files(SANDBOX_RULES_DIR)
+    log(f"sandbox-rules helper -> {SANDBOX_RULES_DIR} (SHA-256 {helper_sha256()})")
+
+
+def _git(*args: str) -> str:
+    result = subprocess.run(
+        ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=False
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def source_offer(version: str, commit: str, tag: str) -> str:
+    """SOURCE.txt: where the Corresponding Source of this exact build is, and how to build it."""
+    ref = tag or commit or "HEAD"
+    lines = [
+        f"Nox {version} - Corresponding Source and written offer",
+        "=" * 60,
+        "",
+        "This installer bundles the optional `voice` extra (piper-tts with espeak-ng, licensed",
+        "GPL-3.0-or-later). The installer as a whole is therefore distributed under the GNU",
+        "General Public License, version 3 or later (COPYING). Nox's own code is Apache-2.0",
+        "(LICENSE); the third-party components and their licenses are listed in",
+        "THIRD_PARTY_LICENSES.md, and NOTICE explains the combination.",
+        "",
+        "Corresponding Source (GPL-3.0 section 6):",
+        f"  Nox source of exactly this build: {SOURCE_REPO}/tree/{commit or 'unknown'}",
+    ]
+    if tag:
+        lines.append(f"  Release tag: {SOURCE_REPO}/releases/tag/{tag}")
+    lines += [
+        f"  Archive: {SOURCE_REPO}/archive/{ref}.zip",
+        "  The bundled third-party packages are the exact versions pinned (with SHA-256 hashes)",
+        "  in installer/requirements.lock of that commit; their sources are on https://pypi.org",
+        "  (e.g. https://pypi.org/project/piper-tts/#files) and in their upstream repositories",
+        "  (piper: https://github.com/OHF-Voice/piper1-gpl,",
+        "  espeak-ng: https://github.com/espeak-ng/espeak-ng).",
+        "",
+        "How to build this installer from that source (Windows; Python 3.13, uv, Node.js and",
+        "Inno Setup 6 installed):",
+        "  1. npm ci && npm run build   (in ui/pet and in ui/dashboard)",
+        "  2. python installer/build.py",
+        "  3. ISCC.exe installer\\nox.iss",
+        "",
+        "Written offer: for at least three years after this version was distributed, and for as",
+        "long as spare parts or support are offered for it, anyone may obtain the complete",
+        "Corresponding Source of this installer - including the source of every GPL-licensed",
+        "component in it - at no charge beyond the cost of physically performing the transfer,",
+        f"by opening an issue at {SOURCE_REPO}/issues. The links above are the primary,",
+        "equivalent way to get it at no charge.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def installer_license(offer: str) -> str:
+    """The text the setup wizard shows (`LicenseFile`): the licenses in short, then the offer."""
+    head = [
+        "Nox is free software. Please read this before installing.",
+        "",
+        "- Nox's own code: Apache License 2.0 (LICENSE, installed with Nox).",
+        "- This installer bundles GPL-3.0-or-later components (Piper text-to-speech with",
+        "  espeak-ng), so the installer as a whole is distributed under the GNU General Public",
+        "  License, version 3 or later (COPYING, installed with Nox).",
+        "- Third-party licenses: THIRD_PARTY_LICENSES.md and NOTICE (installed with Nox).",
+        "",
+        "The GPL grants you the rights to use, study, share and change this software. It comes",
+        "WITHOUT ANY WARRANTY, to the extent permitted by applicable law.",
+        "",
+        "",
+    ]
+    return "\n".join(head) + offer
+
+
+def step_legal(version: str) -> None:
+    """Step 7: license texts and the written source offer, for `{app}` and the wizard."""
+    if LEGAL_DIR.exists():
+        shutil.rmtree(LEGAL_DIR)
+    LEGAL_DIR.mkdir(parents=True)
+    for name in LEGAL_FILES:
+        src = REPO_ROOT / name
+        if not src.is_file():
+            raise RuntimeError(f"{name} is missing - the installer must ship it")
+        shutil.copy2(src, LEGAL_DIR / Path(name).name)
+    commit = _git("rev-parse", "HEAD")
+    tag = _git("describe", "--tags", "--exact-match", "HEAD")
+    offer = source_offer(version, commit, tag)
+    (LEGAL_DIR / "SOURCE.txt").write_text(offer, encoding="ascii", newline="\r\n")
+    (LEGAL_DIR / "INSTALLER_LICENSE.txt").write_text(
+        installer_license(offer), encoding="ascii", newline="\r\n"
+    )
+    log(f"license files and source offer -> {LEGAL_DIR} (commit {commit or 'unknown'})")
 
 
 def _dir_size_mb(path: Path) -> float:
@@ -223,6 +395,14 @@ def step_record_sizes(python_version: str) -> None:
     log(info.replace("\n", " | "))
 
 
+def app_version() -> str:
+    """Nox's version, as `nox.iss` names the installer."""
+    for line in (INSTALLER_DIR / "nox.iss").read_text(encoding="ascii").splitlines():
+        if line.startswith("#define MyAppVersion "):
+            return line.split('"')[1]
+    raise RuntimeError("nox.iss has no MyAppVersion")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python-version", default=DEFAULT_PYTHON_VERSION)
@@ -242,6 +422,8 @@ def main() -> None:
     lock_path = REQUIREMENTS_LOCK if reuse_lock else step_export_lock()
     step_install_dependencies(runtime_dir, lock_path)
     step_assemble_app()
+    step_sandbox_rules()
+    step_legal(app_version())
     step_record_sizes(args.python_version)
     log("done: build/app/ is ready for installer/nox.iss")
 
