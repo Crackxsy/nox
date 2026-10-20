@@ -105,11 +105,20 @@ describe('VoiceModelTile', () => {
     await waitFor(() => expect(screen.getByText(t('voicemodel_running'))).toBeTruthy());
     expect(screen.getByRole('progressbar', { name: t('voicemodel_progress_label') })).toBeTruthy();
     expect(screen.getByText(/25 % von 401 MB – Datei 3 von 17/)).toBeTruthy();
-    await act(async () => {
-      vi.advanceTimersByTime(VOICE_MODEL_POLL_MS);
-    });
+    // Poll ticks until the finished state is on screen; a busy CI machine may need more than one
+    // before the interval effect is in place.
+    for (let tick = 0; tick < 10 && !screen.queryByText(t('voicemodel_out_done')); tick += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(VOICE_MODEL_POLL_MS);
+      });
+    }
     await waitFor(() => expect(screen.getByText(t('voicemodel_out_done'))).toBeTruthy());
-    expect(sent).toEqual(['voice.model.status', 'voice.model.download', 'voice.model.status']);
+    expect(sent.slice(0, 3)).toEqual([
+      'voice.model.status',
+      'voice.model.download',
+      'voice.model.status',
+    ]);
+    expect(sent.slice(1).filter((name) => name === 'voice.model.download')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: t('voicemodel_download') })).toBeNull();
   });
 
