@@ -272,7 +272,7 @@ def _probe_loopback(sid: str) -> bool | None:
     watcher = threading.Thread(target=accept, daemon=True)
     watcher.start()
     argv = [_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", _PROBE_PS.format(port=port)]
-    work = Path(tempfile.mkdtemp(prefix="nox-sbx-probe-"))
+    work = _long_path(Path(tempfile.mkdtemp(prefix="nox-sbx-probe-")))
     try:
         _grant_container(work, sid)
         spawned = _win32.spawn(
@@ -347,6 +347,14 @@ def _grant_container(work: Path, sid: str) -> None:
                 f"could not give the sandbox its work folder (icacls {done.returncode}: "
                 f"{detail[0] if detail else 'no output'})"
             )
+
+
+def _long_path(path: Path) -> Path:
+    """`path` with every 8.3 component expanded (`RUNNER~1` -> `runneradmin`)."""
+    try:
+        return path.resolve(strict=True)
+    except OSError:
+        return path
 
 
 def _base_env(work: Path) -> dict[str, str]:
@@ -704,9 +712,12 @@ class WindowsSandbox:
         )
 
     def _prepare_workdir(self, cwd: str | None, sid: str | None) -> tuple[Path, bool]:
+        # Always the long path: an 8.3 name in it (`C:\Users\RUNNER~1`, a TEMP set that way)
+        # is expanded by listing each parent folder, which a container may not do - the child
+        # would be refused its own work folder.
         if cwd is not None:
-            return Path(cwd), False
-        work = Path(tempfile.mkdtemp(prefix="nox-sbx-"))
+            return _long_path(Path(cwd)), False
+        work = _long_path(Path(tempfile.mkdtemp(prefix="nox-sbx-")))
         if sid is not None:
             # Only this run's container SID gets its one writable place: a run of another
             # workload class cannot read or write it.

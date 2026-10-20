@@ -563,3 +563,34 @@ async def test_a_run_cannot_read_the_work_folder_of_another_workload(tmp_path) -
         import shutil
 
         shutil.rmtree(work_b, ignore_errors=True)
+
+
+async def test_a_work_folder_under_a_short_name_is_usable(monkeypatch: pytest.MonkeyPatch) -> None:
+    # On the hosted runner TEMP is `C:\Users\RUNNER~1\...`, an 8.3 name. Expanding it means
+    # listing the parent folders, which a container may not do - so there every run failed with
+    # "access denied" on its own work folder. The backend hands the child the long path.
+    import ctypes
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    parent = Path(tempfile.mkdtemp(prefix="nox-a-long-parent-name-"))
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        if not kernel32.GetShortPathNameW(str(parent), buf, 1024) or "~" not in buf.value:
+            pytest.skip("no 8.3 names on this volume")
+        monkeypatch.setattr(tempfile, "tempdir", buf.value)  # what the runner's TEMP looks like
+        sandbox = _appcontainer()
+        script = (
+            "$f = Join-Path $env:TEMP canary.txt; Set-Content -Path $f -Value NOXSHORT; "
+            "Get-Content $f"
+        )
+        own = await sandbox.run(
+            [PS, "-NoProfile", "-NonInteractive", "-Command", script],
+            limits=Limits(timeout_s=30),
+            workload="skill:shortname",
+        )
+        assert "NOXSHORT" in own.stdout, own.stderr
+    finally:
+        shutil.rmtree(parent, ignore_errors=True)
