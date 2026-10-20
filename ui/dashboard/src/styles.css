@@ -1705,13 +1705,12 @@ details > summary:hover {
   animation: rise var(--d-med) var(--ease);
 }
 
+/* Opacity only: a transform would make the dialog the box its fixed Stopp is placed in. */
 @keyframes rise {
   from {
-    transform: translateY(8px);
     opacity: 0;
   }
   to {
-    transform: none;
     opacity: 1;
   }
 }
@@ -3604,4 +3603,26 @@ details > summary:hover {
   transform: translateX(-50%);
   z-index: 70;
   max-width: calc(100vw - 2 * var(--gutter));
+}
+
+/* Stopp inside a modal surface, at the header's Stopp spot (the header is inert behind it). */
+.stop--corner {
+  position: fixed;
+  top: 10px;
+  right: 40px;
+  z-index: 2;
+  box-shadow: var(--shadow);
+}
+
+.stop--inline {
+  flex: none;
+  min-height: 36px;
+  padding: 0 var(--s-3);
+}
+
+@media (max-width: 719px) {
+  .stop--corner {
+    top: 6px;
+    right: var(--s-4);
+  }
 }

@@ -21,6 +21,7 @@ import type { Auth } from './auth';
 import { DeviceContext } from './device';
 import { type Lang, type T, fill, translator, withCopy } from './i18n';
 import { ChunkBoundary, Mounted } from './shell/ChunkBoundary';
+import { StopContext } from './shell/stop';
 import { type ConnStatus, type Envelope, type IpcClient, SIGNED_OUT_DETAIL, api, createDashboardClient } from './ipc';
 import {
   type ChatMessage,
@@ -390,6 +391,11 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
       .finally(() => setStopBusy(false));
   }, [client, stopBusy, t]);
 
+  const stopApi = useMemo(
+    () => ({ t, stop, busy: stopBusy, canStop: client !== null, stopped }),
+    [t, stop, stopBusy, client, stopped],
+  );
+
   const openPalette = useCallback((query: string) => {
     setPalette((p) => ({ open: true, query, seq: p.seq + 1 }));
   }, []);
@@ -540,7 +546,7 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
   );
 
   return (
-    <>
+    <StopContext.Provider value={stopApi}>
       <div
         className="app"
         inert={(sheetPrompt && sheetMounted) || (showFirstRun && firstRunMounted)}
@@ -756,6 +762,6 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
           </Suspense>
         </ChunkBoundary>
       )}
-    </>
+    </StopContext.Provider>
   );
 }

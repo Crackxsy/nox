@@ -13,6 +13,7 @@ import { errorText } from '../../../shared/errors';
 import { type Key, type T, optionLabel, privacyLabel } from '../i18n';
 import { type IpcClient, api } from '../ipc';
 import { PRIVACY_MODES, parseEditableConfig } from '../model';
+import { StopButton } from '../shell/stop';
 import { markFirstRunDone } from './firstRunFlag';
 
 const PRIVACY_DESC: Record<string, Key> = {
@@ -96,6 +97,7 @@ export default function FirstRun({ t, client, currentPrivacy, onDone }: FirstRun
 
   return (
     <div className="first" role="dialog" aria-modal="true" aria-labelledby={`${base}-h`}>
+      <StopButton placement="corner" />
       <div className="first-in">
         <p className="brand">
           <span className="lamp lamp--brand" aria-hidden="true" />

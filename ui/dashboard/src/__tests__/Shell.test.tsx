@@ -331,3 +331,59 @@ describe('review fixes', () => {
     expect(document.activeElement?.id).toBe('stopped-strip');
   });
 });
+
+describe('Stopp is always reachable', () => {
+  const question = {
+    request_id: 'q9',
+    agent: 'companion',
+    tool: 'file',
+    action: 'delete',
+    mode: 'companion',
+    risk: 'high',
+    target: 'b.txt',
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    remember_ttl_s: 0,
+  };
+
+  beforeEach(() => {
+    harness.answers['security.kill'] = { ok: true };
+  });
+
+  it('inside the permission sheet, while the page behind it is inert', async () => {
+    await start(LOCAL, '#/settings');
+    await emit('security.permission_requested', question);
+    const sheet = await screen.findByRole('alertdialog');
+    await act(async () => within(sheet).getByRole('button', { name: t('ux_stop') }).click());
+    expect(called('security.kill')).toHaveLength(1);
+  });
+
+  it('inside the Modus and privacy menus', async () => {
+    await start();
+    await act(async () => screen.getByRole('button', { name: new RegExp(t('ux_mode_open')) }).click());
+    const menu = await screen.findByRole('dialog', { name: t('mode_title') });
+    await act(async () => within(menu).getByRole('button', { name: t('ux_stop') }).click());
+    expect(called('security.kill')).toHaveLength(1);
+    // Stopped: no Stopp is offered anywhere any more.
+    expect(within(menu).queryByRole('button', { name: t('ux_stop') })).toBeNull();
+  });
+
+  it('inside the command line', async () => {
+    await start();
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    });
+    const palette = await screen.findByRole('dialog', { name: t('ux_palette') });
+    await act(async () => within(palette).getByRole('button', { name: t('ux_stop') }).click());
+    expect(called('security.kill')).toHaveLength(1);
+  });
+
+  it('during the first run', async () => {
+    window.localStorage.removeItem('nox.firstRun');
+    harness.answers['config.get'] = { values: { 'identity.user_display_name': '' }, schema: [] };
+    await start();
+    const first = await screen.findByRole('dialog', { name: t('ux_first_name_title') });
+    await act(async () => within(first).getByRole('button', { name: t('ux_stop') }).click());
+    expect(called('security.kill')).toHaveLength(1);
+    window.localStorage.setItem('nox.firstRun', 'done');
+  });
+});

@@ -10,6 +10,8 @@
 
 import { type ReactNode, type RefObject, useEffect, useRef } from 'react';
 
+import { StopButton } from './stop';
+
 export interface SheetProps {
   open: boolean;
   onClose: () => void;
@@ -21,6 +23,9 @@ export interface SheetProps {
   variant?: 'sheet' | 'pop' | 'palette';
   initialFocus?: RefObject<HTMLElement | null>;
   className?: string;
+  /** `corner` (default): Stopp at the header's spot, since the header is inert behind the sheet;
+   * `none`: the content shows its own (the command line). */
+  stop?: 'corner' | 'none';
   children: ReactNode;
 }
 
@@ -32,6 +37,7 @@ export function Sheet({
   variant = 'sheet',
   initialFocus,
   className,
+  stop = 'corner',
   children,
 }: SheetProps) {
   const ref = useRef<HTMLDialogElement | null>(null);
@@ -83,6 +89,7 @@ export function Sheet({
       }}
     >
       {open ? <div className="dlg-in">{children}</div> : null}
+      {open && stop === 'corner' ? <StopButton placement="corner" /> : null}
     </dialog>
   );
 }

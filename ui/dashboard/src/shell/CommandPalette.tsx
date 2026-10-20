@@ -15,6 +15,7 @@ import { gotoIndex } from './gotoIndex';
 import { Icon } from './icons';
 import { type PaletteGroup, type PaletteItem, type PaletteSources, paletteItems } from './palette';
 import { Sheet } from './Sheet';
+import { StopButton } from './stop';
 
 const GROUP_KEY = {
   now: 'ux_pal_now',
@@ -38,7 +39,7 @@ export interface CommandPaletteProps {
 
 export function CommandPalette(props: CommandPaletteProps) {
   return (
-    <Sheet open={props.open} onClose={props.onClose} label={props.t('ux_palette')} variant="palette">
+    <Sheet open={props.open} onClose={props.onClose} label={props.t('ux_palette')} variant="palette" stop="none">
       {props.open && <PaletteBody {...props} />}
     </Sheet>
   );
@@ -135,6 +136,7 @@ function PaletteBody({ t, initialQuery, sources, stopped, onClose, onRun }: Comm
           }}
           onKeyDown={onKeyDown}
         />
+        <StopButton placement="inline" />
         <button type="button" className="ib" aria-label={t('ux_close')} onClick={onClose}>
           <Icon name="close" />
         </button>

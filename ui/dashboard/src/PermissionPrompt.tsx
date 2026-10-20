@@ -31,6 +31,7 @@ import { refusalText } from './hooks';
 import { auditActionLabel, auditToolLabel, fill, type Key, rememberLabel, type T } from './i18n';
 import { type IpcClient, api } from './ipc';
 import { type PermissionPrompt, needsDevicePin, secondsLeft } from './model';
+import { StopButton } from './shell/stop';
 
 export interface PermissionPromptProps {
   t: T;
@@ -410,6 +411,8 @@ function PromptDialog(props: PermissionPromptProps & { prompt: PermissionPrompt;
         className="perm-dialog ask"
       >
         <PromptBody {...props} idBase="perm" level={2} takeFocus holdFocus={hold} answerRef={answerRef} />
+        {/* The page behind is inert; Stopp stays where it always is (Spec §5). */}
+        <StopButton placement="corner" />
       </div>
     </div>
   );
