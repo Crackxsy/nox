@@ -21,7 +21,7 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.13.5",
-    "pyyaml>=6.0",
+    "pyyaml>=6.0.3",
     # Round-trip YAML writer for `user.yaml` (#22): keeps the user's comments, key order and
     # quoting. MIT, compatible with Apache-2.0 (docs/THIRD_PARTY_LICENSES.md).
     "ruamel.yaml>=0.18",
