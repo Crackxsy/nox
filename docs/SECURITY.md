@@ -327,7 +327,12 @@ every "remember" for its tools (`session:mcp/<id>.`).
 
 `skill.learn` (risk high) lets Nox build a missing capability as a plugin under `<nox home>`, never
 in its source tree. The builder is a Claude Code session with `--tools Read,Edit,Write,Glob,Grep`
-on one work folder - no shell. The core, not the model, then checks the result: manifest, id and
+on one work folder - no shell. What it may read or write is pinned, not left to the CLI's
+defaults: `dontAsk` mode with exactly `Read(./**)` and `Edit(./**)` allowed (its work folder; Read
+binds Glob and Grep, Edit binds Write) and `--setting-sources ""`, so no settings file - not even
+one it wrote into its own folder - can widen that; a canary next to the folder stays unread
+(`tests/integration/test_skill_builder_isolation.py`). The confirmation shows the whole wish, and
+the wish reaches the builder with its delimiter tags defused. The core, not the model, then checks the result: manifest, id and
 tool names (reserved namespaces, hard prohibitions, home boundary, core namespaces), every tool at
 least risk medium, events only in its own namespace, egress only to declared public hosts (never
 loopback, LAN or the Home Assistant host, and every URL in the source must be declared), and a

@@ -2,10 +2,17 @@
 
 The arguments are the coding plugin's session shape (`plugins/coding`, `build_session_args`):
 `--tools Read,Edit,Write,Glob,Grep` - deliberately no shell, so the session cannot run what it
-writes - `--add-dir` the skill's own work folder, `acceptEdits` because nobody is there to click,
-`--strict-mcp-config` and `--setting-sources project` so neither the user's own Claude Code setup
-nor any MCP server reaches it. Measured on the coding plugin: only `--tools` restricts the tool set;
-`--allowedTools` alone does not.
+writes - `--add-dir` the skill's own work folder and `--strict-mcp-config`. Measured on the coding
+plugin: only `--tools` restricts the tool set; `--allowedTools` alone does not.
+
+What those tools may touch is not left to the CLI's defaults: the session runs in `dontAsk` mode
+(nobody is there to click, and anything not allowed is refused rather than asked) with exactly
+two allow rules from `--settings`, `Read(./**)` and `Edit(./**)` - the work folder, which is the
+session's working directory. Read rules also bind Glob and Grep, Edit rules also bind Write. So the
+builder cannot read the user's files, Nox's home or another skill, even on a CLI that would
+otherwise let a session read outside its folder. `--setting-sources ""` loads no settings file at
+all - not the user's, and not a `.claude/settings.json` the builder itself wrote into its folder
+in an earlier round to widen the next one.
 
 The session is told what a skill is (a Nox plugin) and what the core will refuse; it is not trusted
 to have listened. `nox.skills.checks` and the tests decide, and their findings come back as the
@@ -20,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -33,16 +41,30 @@ from nox.core.logging import get_logger
 log = get_logger(__name__)
 
 __all__ = [
+    "BUILDER_SETTINGS",
     "BUILD_TOOLS",
     "BuildOutcome",
     "BuildRequest",
     "ClaudeCodeSkillBuilder",
     "SkillBuilder",
     "build_prompt",
+    "neutralise_wish",
     "skill_builder_args",
 ]
 
 BUILD_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
+
+#: The builder's whole permission set: its own folder (the working directory), nothing else.
+BUILDER_SETTINGS: dict[str, Any] = {
+    "permissions": {
+        "defaultMode": "dontAsk",
+        "allow": ["Read(./**)", "Edit(./**)"],
+        "additionalDirectories": [],
+    }
+}
+
+#: Anything that could open or close the `<user_wish>` block, in any spelling.
+_WISH_TAG = re.compile(r"<\s*/?\s*user_wish[^>]*>?", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +97,9 @@ def skill_builder_args(work_dir: Path, *, max_turns: int, model: str = "") -> li
         "--output-format",
         "json",
         "--permission-mode",
-        "acceptEdits",
+        "dontAsk",
+        "--settings",
+        json.dumps(BUILDER_SETTINGS, separators=(",", ":")),
         "--add-dir",
         str(work_dir),
         "--tools",
@@ -84,7 +108,7 @@ def skill_builder_args(work_dir: Path, *, max_turns: int, model: str = "") -> li
         str(max_turns),
         "--strict-mcp-config",
         "--setting-sources",
-        "project",
+        "",
         "--no-session-persistence",
     ]
     if model:
@@ -92,12 +116,17 @@ def skill_builder_args(work_dir: Path, *, max_turns: int, model: str = "") -> li
     return args
 
 
+def neutralise_wish(intent: str) -> str:
+    """The user's wish as data: no tag inside it can close (or reopen) the `<user_wish>` block."""
+    return _WISH_TAG.sub("[user_wish]", intent).replace("<", "‹").replace(">", "›")
+
+
 def build_prompt(request: BuildRequest) -> str:
     sid = request.skill_id
     package = f"nox_skill_{sid}"
     lines = [
         "You are writing a small capability ('skill') for Nox, a local assistant. The user asked:",
-        f"<user_wish>{request.intent}</user_wish>",
+        f"<user_wish>{neutralise_wish(request.intent)}</user_wish>",
         "",
         f"Write a Nox plugin in the current folder ({request.work_dir.as_posix()}),",
         "and nowhere else:",

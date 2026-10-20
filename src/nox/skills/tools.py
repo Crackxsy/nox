@@ -80,7 +80,9 @@ def register_skill_tools(registry: ToolRegistry, service: SkillService, gaps: Ga
             # Every learning session is its own decision: a remembered "yes" would let the model
             # start coding sessions on its own for the rest of the session.
             rememberable=False,
-            targets=lambda payload: str(payload.get("intent") or "")[:200],
+            # The whole wish (at most 500 characters): the user approves what the builder is
+            # told, not a prefix of it with the rest hidden.
+            targets=lambda payload: str(payload.get("intent") or ""),
             timeout_s=30.0,
         )
     )
