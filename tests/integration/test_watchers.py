@@ -48,7 +48,15 @@ async def _boot(tmp_path: Path, base: int, reports: list[str]) -> Any:
         return {"ok": True, "content": PAGE["text"]}
 
     core.tool_registry.register(
-        ToolSpec(name="page.read", description="", input_model=Empty, risk=Risk.READ, handler=page)
+        ToolSpec(
+            name="page.read",
+            description="",
+            input_model=Empty,
+            risk=Risk.READ,
+            handler=page,
+            # A watcher only takes a tool that declares it changes nothing (unknown = may change).
+            side_effects=False,
+        )
     )
     service = core.extensions["proactive"].service
     original = service.notify
