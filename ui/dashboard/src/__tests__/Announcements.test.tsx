@@ -2,7 +2,8 @@
  * State that follows a prop, adjusted while rendering instead of from an effect.
  *
  * Pinned here: the personality box adopts what the core reports but never over unsaved edits, and
- * the audit page announces its count when the filter changes - not when a new event arrives.
+ * the history (formerly audit) page announces its count when the filter changes - not when a new
+ * event arrives.
  */
 
 import { fireEvent, render, screen } from '@testing-library/react';
@@ -10,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import { translator } from '../i18n';
 import type { AuditRow } from '../model';
-import { AuditPage } from '../pages/Audit';
+import { HistoryPage } from '../pages/History';
 import { PersonalityTile } from '../pages/settings/PersonalityTile';
 
 const t = translator('de');
@@ -53,19 +54,29 @@ describe('PersonalityTile', () => {
   });
 });
 
-describe('AuditPage announcement', () => {
+describe('HistoryPage announcement', () => {
   const live = () => screen.getByRole('status');
 
   it('announces the count when the filter changes, not when an event arrives', () => {
-    const { rerender } = render(<AuditPage t={t} lang="de" rows={[row(1, 'read'), row(2, 'write')]} />);
+    const denied = { ...row(4, 'delete'), decision: 'deny', result: 'denied' };
+    const { rerender } = render(<HistoryPage t={t} lang="de" rows={[row(1, 'read'), row(2, 'write')]} />);
     expect(live().textContent).toBe('2 Einträge');
 
-    rerender(<AuditPage t={t} lang="de" rows={[row(1, 'read'), row(2, 'write'), row(3, 'read')]} />);
+    rerender(<HistoryPage t={t} lang="de" rows={[row(1, 'read'), row(2, 'write'), denied]} />);
     expect(live().textContent).toBe('2 Einträge');
 
-    fireEvent.change(screen.getByLabelText(t('audit_filter')), { target: { value: 'read' } });
-    expect(live().textContent).toBe('2 Einträge');
-    fireEvent.change(screen.getByLabelText(t('audit_filter')), { target: { value: 'write' } });
+    fireEvent.click(screen.getByRole('button', { name: t('ux_hist_denied') }));
     expect(live().textContent).toBe('1 Einträge');
+    fireEvent.click(screen.getByRole('button', { name: t('ux_hist_allowed') }));
+    expect(live().textContent).toBe('2 Einträge');
+  });
+
+  it('says what happened in words and keeps the identifiers under "Technische Angaben"', () => {
+    render(<HistoryPage t={t} lang="de" rows={[{ ...row(7, 'delete'), target: 'Archiv/alt.zip', decision: 'deny', result: 'denied' }]} />);
+    const item = screen.getByText('Archiv/alt.zip').closest('li')!;
+    expect(item.textContent).toContain(t('ux_hist_outcome_denied'));
+    const details = item.querySelector('details')!;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain('delete');
   });
 });

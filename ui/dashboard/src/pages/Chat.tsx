@@ -1,5 +1,5 @@
 /**
- * Chat page: `chat.send` with streamed display, in a 760 px reading column. Stream frames append
+ * Nox › Gespräch: `chat.send` with streamed display, in the 720 px reading column. Stream frames append
  * their delta live, the final response replaces the accumulated text with the authoritative
  * `AiResponse.text` and names the provider. Failures are shown as failures — no placeholder answer
  * is ever invented.
@@ -15,14 +15,13 @@
  * component, and losing a conversation to a stray click is not an acceptable way to lose it.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 
 import { uuid } from '../../../shared/envelope';
 import { errorText } from '../../../shared/errors';
 import { type Key, type Lang, type T, providerByline } from '../i18n';
 import { type Envelope, type IpcClient, api } from '../ipc';
 import { type ChatMessage, type Provider, finalAnswer, providerName, streamDelta } from '../model';
-import { Hero } from '../ui';
 
 export interface ChatPageProps {
   t: T;
@@ -34,6 +33,12 @@ export interface ChatPageProps {
   onMessages: (update: (list: ChatMessage[]) => ChatMessage[]) => void;
   draft: string;
   onDraft: (value: string) => void;
+  /** Text sent from the command palette ("Nox fragen"); a new `seq` sends it once. */
+  outbox?: { text: string; seq: number } | null;
+  /** Nox is stopped: the field is locked and says why. */
+  stopped?: boolean;
+  /** The open permission question, at the place of the action (under the newest message). */
+  inline?: ReactNode;
 }
 
 const EXAMPLES: Key[] = ['chat_example_1', 'chat_example_2', 'chat_example_3'];
@@ -47,6 +52,9 @@ export function ChatPage({
   onMessages,
   draft,
   onDraft,
+  outbox = null,
+  stopped = false,
+  inline = null,
 }: ChatPageProps) {
   const [pending, setPending] = useState(false);
   const [announcement, setAnnouncement] = useState('');
@@ -120,25 +128,31 @@ export function ChatPage({
     }
   };
 
-  const disabled = client === null;
+  const sentSeq = useRef<number | null>(null);
+  const sendRef = useRef(send);
+  useEffect(() => {
+    sendRef.current = send;
+  });
+  useEffect(() => {
+    if (!outbox || outbox.seq === sentSeq.current || !client) return;
+    sentSeq.current = outbox.seq;
+    void sendRef.current(outbox.text);
+  }, [outbox, client]);
+
+  const disabled = client === null || stopped;
 
   return (
-    <div className="page wrap">
-      <Hero
-        title={t('hero_chat')}
-        sub={t('hero_chat_sub')}
-        links={
-          <button
-            type="button"
-            className="link"
-            onClick={() => onMessages(() => [])}
-            disabled={messages.length === 0 || pending}
-          >
-            {t('chat_clear')}
-          </button>
-        }
-      />
-
+    <div className="talk">
+      <div className="talk-tools">
+        <button
+          type="button"
+          className="btn btn--sm btn--plain"
+          onClick={() => onMessages(() => [])}
+          disabled={messages.length === 0 || pending}
+        >
+          {t('chat_clear')}
+        </button>
+      </div>
       <div className="chat">
         <p role="status" aria-live="polite" className="sr-only">
           {announcement}
@@ -195,6 +209,7 @@ export function ChatPage({
             </article>
           ))}
         </div>
+        {inline}
 
         <form
           onSubmit={(e) => {
@@ -212,7 +227,7 @@ export function ChatPage({
               rows={2}
               value={draft}
               disabled={disabled}
-              placeholder={t('chat_input_label')}
+              placeholder={stopped ? t('ux_input_stopped_short') : t('ux_composer_placeholder')}
               aria-describedby="chat-hint"
               aria-keyshortcuts="Control+Enter"
               className="textarea textarea--fixed"
@@ -226,7 +241,7 @@ export function ChatPage({
             />
             <div className="composer-row">
               <span id="chat-hint" className="hint">
-                {t('chat_hint')}
+                {stopped ? t('ux_input_stopped') : t('chat_hint')}
               </span>
               <button
                 type="submit"
