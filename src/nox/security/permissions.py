@@ -251,6 +251,28 @@ def never_remembered(risk: Risk) -> bool:
     return risk in NEVER_REMEMBERED
 
 
+#: The exact shape of a SIMPLE `shell.run` target: `cmd:<resolved path>#<16 hex digest>` plus at
+#: most one plain subcommand word, and no declared network. Anything else - `complex:`,
+#: `readonly:`, a hand-written `cmd:git push`, an `egress=` suffix - does not match.
+_SIMPLE_SHELL_TARGET = re.compile(r"^cmd:[^\s#][^#]*#[0-9a-f]{16}(?: [A-Za-z0-9._+/-]+)?$")
+
+
+def is_simple_shell_target(request: PermissionRequest) -> bool:
+    """Whether this is a `shell.run` request for a command the strict allowlist classified SIMPLE
+    (the only high-risk request a confirmation may be remembered for, and only for the session).
+
+    `shell.run` builds the target itself (`targets()`), so an agent cannot choose it; this check
+    additionally pins the exact format, so a malformed or egress-carrying `cmd:` never qualifies.
+    """
+    return (
+        request.tool == "shell"
+        and request.action == "run"
+        and request.risk is Risk.HIGH
+        and request.rememberable
+        and _SIMPLE_SHELL_TARGET.match(request.target) is not None
+    )
+
+
 # ---- matching helpers ----------------------------------------------------------------------------
 
 
@@ -1011,8 +1033,20 @@ class DefaultPermissionEngine:
 
     def _can_remember(self, request: PermissionRequest) -> bool:
         """Whether a "remember" answer would create a grant at all: a rememberable scope, and not
-        a risk that is asked every time. A prompt offers "remember" only then."""
-        return self._remember_scope(request) is not None and not never_remembered(request.risk)
+        a risk that is asked every time. A prompt offers "remember" only then.
+
+        The one exception to "high risk is never remembered" is a shell command that `shell.run`
+        classified SIMPLE (see `is_simple_shell_target`): an exact program, resolved and hashed,
+        with arguments its strict allowlist entry accepts. That may be remembered for the session
+        only. A complex command, a command line, `git`, an interpreter or a declared network is
+        never remembered; a permanent grant exists only through the visible dashboard list.
+        """
+        scope = self._remember_scope(request)
+        if scope is None:
+            return False
+        if is_simple_shell_target(request):
+            return True
+        return not never_remembered(request.risk)
 
     async def authorize(self, request: PermissionRequest) -> PermissionResult:
         """check() plus the confirmation round-trip; returns only ALLOW or DENY."""
@@ -1025,6 +1059,8 @@ class DefaultPermissionEngine:
     def end_session(self) -> int:
         """Revoke every session-scoped grant ("remember for this session")."""
         removed = self._grants.remove_scope_prefix("session:")
+        # Remembered simple shell commands are session grants too.
+        removed += self._grants.remove_scope_prefix("cmd:")
         if removed:
             self._audit.append(
                 actor="system",

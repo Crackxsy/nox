@@ -20,9 +20,9 @@ without parsing commands itself:
   with arguments its entry accepts; HIGH, CONFIRM, and exactly this target is the scope a
   "remember" may have - a `cmd:` grant for the session. It names the *resolved executable* and a
   hash of its contents, so a remembered `df -h` never covers a different `df.exe` (a download
-  folder, a planted copy) or the same path after the file changed. While high risk is never
-  remembered at all (`nox.security.permissions.NEVER_REMEMBERED`), the engine creates no such
-  grant from a confirmation: a HIGH command is confirmed every time.
+  folder, a planted copy) or the same path after the file changed. This is the one HIGH-risk
+  target a "remember" may turn into a grant (`nox.security.permissions.is_simple_shell_target`),
+  and only for the session; with a declared network it is asked every time.
 * `complex:<sha>` - everything else: a command line, any program not on the allowlist (an
   interpreter, a launcher, `git push`, `tar`, an unknown tool), arguments the entry does not
   accept, a program given with a path, or one not found in the trusted directories; HIGH,
