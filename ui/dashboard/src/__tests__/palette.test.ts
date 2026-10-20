@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import type { HomeEntity, Preset } from '../model';
 import { type PaletteSources, normalize, paletteItems } from '../shell/palette';
 import { hashToRoute, legacyRoute, routeToHash } from '../shell/routes';
+import { PLACED_PATHS, unplacedPaths } from '../areas/settings/layout';
 
 const entity = (entityId: string, name: string, area: string, state = 'off'): HomeEntity => ({
   entityId,
@@ -120,5 +121,12 @@ describe('routes', () => {
     expect(legacyRoute('board')).toEqual({ area: 'nox', tab: 'views' });
     expect(legacyRoute('status')).toEqual({ area: 'today' });
     expect(hashToRoute('#/whatever')).toEqual({ area: 'today' });
+  });
+});
+
+describe('settings layout', () => {
+  it('never shows the security profile as a field of its own: the Modus sets it', () => {
+    expect(PLACED_PATHS).not.toContain('security.profile');
+    expect(unplacedPaths(['security.profile', 'brand.new.setting'])).toEqual(['brand.new.setting']);
   });
 });

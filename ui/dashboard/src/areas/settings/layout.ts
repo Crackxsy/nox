@@ -37,7 +37,7 @@ export const SETTINGS_LAYOUT: readonly SettingsPageLayout[] = [
       },
       { title: 'ux_set_privacy_control', paths: ['desktop.computer_use.enabled'] },
     ],
-    more: ['ipc.lan.enabled', 'remote.enabled', 'security.profile'],
+    more: ['ipc.lan.enabled', 'remote.enabled'],
   },
   {
     id: 'voice',
@@ -135,9 +135,16 @@ export function pageOfPath(path: string): SettingsPageId {
   return 'system';
 }
 
+/**
+ * Settings the dashboard never shows as a raw field. `security.profile` is set by the Modus (one
+ * control for mode and rules, owner decision): a second, separate field for it would let the two
+ * disagree.
+ */
+export const NEVER_SHOWN: ReadonlySet<string> = new Set(['security.profile']);
+
 /** Paths the core reports that no page above names: System › Mehr Optionen shows them. */
 export function unplacedPaths(reported: readonly string[]): string[] {
-  return reported.filter((path) => !PLACED.has(path));
+  return reported.filter((path) => !PLACED.has(path) && !NEVER_SHOWN.has(path));
 }
 
 /** Every path the layout names, in page order (the palette indexes these). */
