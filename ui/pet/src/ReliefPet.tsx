@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { AnimParams, PetInput } from './petState';
 import { type Face, ReliefBrain } from './relief/brain';
+import { FrameClock, watchMedia, watchPixelRatio } from './relief/clock';
 import { type Pixels, buildGeometry } from './relief/mesh';
 import type { LoadedRelief } from './relief/reliefFile';
 import { ReliefRenderer } from './relief/renderer';
@@ -133,10 +134,16 @@ export function ReliefPet({
       onUnavailable(error instanceof Error ? error.message : String(error));
       return;
     }
-    const reduced = prefersReducedMotion();
+    // read live: the setting can change while the pet runs
+    let reduced = prefersReducedMotion();
+    const stopMotion = watchMedia('(prefers-reduced-motion: reduce)', (on) => {
+      reduced = on;
+    });
     const brain = new ReliefBrain(def, preview ? PREVIEW_SEED : (Math.random() * 2 ** 31) | 0);
     const poses = new PoseSwitch();
     renderer.resize(size, window.devicePixelRatio || 1);
+    // dragged to a monitor with another scale: re-size the backing store instead of blurring
+    const stopRatio = watchPixelRatio((ratio) => renderer.resize(size, ratio));
 
     const poseImage = (name: string | null): TexImageSource | null => {
       if (name === null) return null;
@@ -144,8 +151,8 @@ export function ReliefPet({
       return frame ? (rig.images[frame.file] ?? null) : null;
     };
 
-    let startMs = performance.now();
-    let lastMs = startMs;
+    const startMs = performance.now();
+    const clock = new FrameClock(startMs);
     let lastFunctional = inputRef.current.functional;
     let lastFeeds = inputRef.current.feeds;
     let eatingUntilMs = 0;
@@ -153,9 +160,7 @@ export function ReliefPet({
 
     const draw = (nowMs: number, first: boolean): Face => {
       const current = inputRef.current;
-      const t = (nowMs - startMs) / 1000;
-      const dt = first ? 0 : Math.min(0.1, (nowMs - lastMs) / 1000);
-      lastMs = nowMs;
+      const { t, dt } = clock.tick(nowMs, first);
       if (current.functional !== lastFunctional) {
         if (STARTLING.has(current.functional) && !reduced) brain.startle(t);
         lastFunctional = current.functional;
@@ -201,7 +206,13 @@ export function ReliefPet({
     };
 
     draw(startMs, true);
-    if (still) return () => renderer.dispose();
+    if (still) {
+      return () => {
+        stopMotion();
+        stopRatio();
+        renderer.dispose();
+      };
+    }
 
     let lastFrameMs = 0;
     const stats = preview ? (window as unknown as { __noxRelief: ReliefStats }).__noxRelief : null;
@@ -225,9 +236,7 @@ export function ReliefPet({
     const onVisibility = (): void => {
       if (document.hidden) return;
       // an hour hidden must not replay an hour of breathing in one frame
-      const nowMs = performance.now();
-      startMs += nowMs - lastMs;
-      lastMs = nowMs;
+      clock.resume(performance.now());
       lastFrameMs = 0;
     };
     document.addEventListener('visibilitychange', onVisibility);
@@ -235,6 +244,8 @@ export function ReliefPet({
     return () => {
       cancelAnimationFrame(raf);
       document.removeEventListener('visibilitychange', onVisibility);
+      stopMotion();
+      stopRatio();
       renderer.dispose();
     };
   }, [relief, rig, size, still, preview, onUnavailable]);

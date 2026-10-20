@@ -38,6 +38,9 @@ import {
   spriteVariantId,
 } from './variants/sprite';
 
+/** How long the relief renderer may take to load before the older rig is used instead. */
+export const RELIEF_LOAD_TIMEOUT_MS = 5000;
+
 export interface AppProps {
   token: string | null;
   /** Which IPC role the token is for: `overlay` when OBS loaded the page with `#overlay=`. */
@@ -104,6 +107,15 @@ export function App({
   const [reliefFailed, setReliefFailed] = useState(false);
   // A variant whose relief assets would not load: that one stays on the older rig.
   const [reliefBroken, setReliefBroken] = useState<string | null>(null);
+  // A creature without relief does not keep the previous creature's relief (and its textures)
+  // alive. Adjusted while rendering, like the variant above, not from an effect.
+  if (
+    loadedRelief &&
+    loadedRig &&
+    (!loadedRig.definition.relief?.enabled || loadedRelief.data.definition.id !== loadedRig.definition.id)
+  ) {
+    setRelief(null);
+  }
   const spriteId = spriteVariantId(activeVariant);
   const sprite = spriteId === null ? null : loadedSprite;
   const rig = spriteId === null ? null : loadedRig;
@@ -264,29 +276,47 @@ export function App({
   useEffect(() => {
     if (!reliefFlag?.enabled || reliefRigId === null) return;
     let cancelled = false;
-    Promise.all([import('./relief/reliefFile'), import('./ReliefPet')])
-      .then(async ([file, view]) => {
+    // A request that never answers must not leave the pet invisible (OBS included): after
+    // RELIEF_LOAD_TIMEOUT_MS the load is abandoned and the older rig takes over.
+    const abort = new AbortController();
+    const timer = window.setTimeout(
+      () => abort.abort(new Error(`relief load timed out after ${RELIEF_LOAD_TIMEOUT_MS} ms`)),
+      RELIEF_LOAD_TIMEOUT_MS,
+    );
+    const aborted = new Promise<never>((_, reject) => {
+      abort.signal.addEventListener('abort', () => reject(abort.signal.reason), { once: true });
+    });
+    const load = Promise.all([import('./relief/reliefFile'), import('./ReliefPet')]).then(
+      async ([file, view]) => {
         const data = await file.loadRelief(reliefRigId, {
           variantBase: spriteBaseUrl(import.meta.env.BASE_URL, reliefRigId),
           dir: reliefFlag.dir,
           fetchJson: async (url) => {
-            const res = await fetch(url, { cache: 'no-store' });
+            const res = await fetch(url, { cache: 'no-store', signal: abort.signal });
             if (res.status === 404) return null;
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return res.json();
           },
           loadImage: loadImageElement,
         });
-        if (!cancelled) setRelief({ data, View: view.ReliefPet });
+        return { data, View: view.ReliefPet };
+      },
+    );
+    Promise.race([load, aborted])
+      .then((loaded) => {
+        if (!cancelled) setRelief(loaded);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         console.warn('pet.relief_fallback', { variant: reliefRigId, reason: reasonOf(err) });
         setRelief(null);
         setReliefBroken(reliefRigId);
-      });
+      })
+      .finally(() => window.clearTimeout(timer));
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
+      abort.abort(new Error('relief load cancelled'));
     };
   }, [reliefFlag, reliefRigId]);
 

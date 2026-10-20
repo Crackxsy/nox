@@ -98,6 +98,9 @@ export interface ReliefDefinition {
   poses: Record<string, { scale: number }>;
 }
 
+/** Highest spring damping the fixed physics sub-step integrates stably (see `parseJiggle`). */
+export const MAX_DAMPING = 300;
+
 const SAFE_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const NAME = /^[a-z#][a-z0-9_.-]*$/;
 const REQUIRED_BONES = ['root', 'hips', 'spine', 'chest', 'neck', 'head', 'jaw'] as const;
@@ -144,7 +147,9 @@ function parseJiggle(v: unknown, where: string): Jiggle {
   const j = obj(v, where);
   return {
     stiffness: num(j.stiffness, `${where}.stiffness`, 1, 5000),
-    damping: num(j.damping, `${where}.damping`, 0, 500),
+    // the springs are integrated in fixed 1/240 s sub-steps (semi-implicit Euler), which stays
+    // stable while damping * step < 2: 300 keeps a safe margin (1.25)
+    damping: num(j.damping, `${where}.damping`, 0, MAX_DAMPING),
     limit: num(j.limit, `${where}.limit`, 0, Math.PI),
     gravity: num(j.gravity ?? 0, `${where}.gravity`, -5000, 5000),
   };
@@ -307,6 +312,12 @@ export function parseReliefDefinition(raw: unknown, expectedId: string): ReliefD
     };
   }
 
+  // Perspective divides by (focal - z): a focal length near the deepest relief point would blow a
+  // part up to infinity, so it has to stay well clear of it.
+  const focal = num(root.focal ?? 1500, 'focal', 100, 100000);
+  const deepest = Math.max(0, ...parts.map((p) => Math.abs(p.z) + p.relief));
+  if (focal <= 2 * deepest) fail('focal', `must be more than twice the deepest relief (${deepest}), got ${focal}`);
+
   return {
     version: 1,
     id,
@@ -325,7 +336,7 @@ export function parseReliefDefinition(raw: unknown, expectedId: string): ReliefD
     bodyCenter: nums(root.bodyCenter, 3, 'bodyCenter') as [number, number, number],
     lookAnchor: vec2(root.lookAnchor, 'lookAnchor'),
     light: nums(root.light, 3, 'light') as [number, number, number],
-    focal: num(root.focal ?? 1500, 'focal', 100, 100000),
+    focal,
     turn: {
       yaw: num(turn.yaw ?? 0.42, 'turn.yaw', 0, 1),
       pitch: num(turn.pitch ?? 0.28, 'turn.pitch', 0, 1),

@@ -156,23 +156,37 @@ void main(){
 }`;
 
 function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
-  const sh = (type: number, src: string): WebGLShader => {
-    const s = gl.createShader(type);
-    if (!s) throw new ReliefRendererError('out of shader objects');
-    gl.shaderSource(s, src);
-    gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
-      throw new ReliefRendererError(gl.getShaderInfoLog(s) ?? 'shader');
-    return s;
-  };
+  const shaders: WebGLShader[] = [];
   const p = gl.createProgram();
   if (!p) throw new ReliefRendererError('out of program objects');
-  gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
-  gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
-  gl.linkProgram(p);
-  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
-    throw new ReliefRendererError(gl.getProgramInfoLog(p) ?? 'link');
-  return p;
+  let linked = false;
+  try {
+    for (const [type, src] of [
+      [gl.VERTEX_SHADER, vs],
+      [gl.FRAGMENT_SHADER, fs],
+    ] as const) {
+      const sh = gl.createShader(type);
+      if (!sh) throw new ReliefRendererError('out of shader objects');
+      shaders.push(sh);
+      gl.shaderSource(sh, src);
+      gl.compileShader(sh);
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS))
+        throw new ReliefRendererError(gl.getShaderInfoLog(sh) ?? 'shader');
+      gl.attachShader(p, sh);
+    }
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+      throw new ReliefRendererError(gl.getProgramInfoLog(p) ?? 'link');
+    linked = true;
+    return p;
+  } finally {
+    // a linked program keeps its own copy: the shader objects are not needed any more either way
+    for (const sh of shaders) {
+      if (linked) gl.detachShader(p, sh);
+      gl.deleteShader(sh);
+    }
+    if (!linked) gl.deleteProgram(p);
+  }
 }
 
 type Uniforms = Record<string, WebGLUniformLocation | null>;
@@ -222,7 +236,11 @@ export class ReliefRenderer {
   private readonly quadVao: WebGLVertexArrayObject;
   private readonly atlasTex: WebGLTexture;
   private readonly poseTex = new Map<TexImageSource, WebGLTexture>();
+  // every GL object this renderer made, so a failed constructor and `dispose` free exactly these
   private readonly buffers: WebGLBuffer[] = [];
+  private readonly programs: WebGLProgram[] = [];
+  private readonly vaos: WebGLVertexArrayObject[] = [];
+  private readonly textures: WebGLTexture[] = [];
   private readonly before: { first: number; count: number };
   private readonly after: { first: number; count: number };
   private readonly boneData = new Float32Array(MAX_BONES * 8);
@@ -250,45 +268,51 @@ export class ReliefRenderer {
     if (!gl) throw new ReliefRendererError('WebGL2 is not available');
     this.gl = gl;
     canvas.addEventListener('webglcontextlost', this.onLost);
-    this.partProg = compile(gl, VS, PART_FS);
-    this.eyeProg = compile(gl, VS, EYE_FS);
-    this.shadowProg = compile(gl, QUAD_VS, SHADOW_FS);
-    this.mixProg = compile(gl, QUAD_VS, MIX_FS);
-    this.uPart = uniforms(gl, this.partProg, SKIN_UNIFORMS);
-    this.uEye = uniforms(gl, this.eyeProg, [
-      ...SKIN_UNIFORMS,
-      'u_open',
-      'u_closed',
-      'u_c',
-      'u_r',
-      'u_iris',
-      'u_lid',
-      'u_lower',
-    ]);
-    this.uShadow = uniforms(gl, this.shadowProg, ['u_rect', 'u_res', 'u_alpha']);
-    this.uMix = uniforms(gl, this.mixProg, [
-      'u_rect',
-      'u_res',
-      'u_pose',
-      'u_relief',
-      'u_mix',
-      'u_bright',
-      'u_useRelief',
-    ]);
-    this.partVao = this.meshVao(geo.vertices, geo.indices);
-    this.eyeVao = this.meshVao(geo.eyeVertices, geo.eyeIndices);
-    this.quadVao = this.makeQuad();
-    this.atlasTex = this.texture(atlas, true);
-    const split = geo.ranges.findIndex((r) => r.name === '#eyes');
-    const sum = (rs: typeof geo.ranges) => ({
-      first: rs[0]?.first ?? 0,
-      count: rs.reduce((s, r) => s + r.count, 0),
-    });
-    this.before = sum(split < 0 ? geo.ranges : geo.ranges.slice(0, split));
-    this.after = sum(split < 0 ? [] : geo.ranges.slice(split + 1));
-    const l = def.light;
-    const n = Math.hypot(l[0], l[1], l[2]) || 1;
-    this.light = new Float32Array([l[0] / n, l[1] / n, l[2] / n]);
+    try {
+      this.partProg = this.program(VS, PART_FS);
+      this.eyeProg = this.program(VS, EYE_FS);
+      this.shadowProg = this.program(QUAD_VS, SHADOW_FS);
+      this.mixProg = this.program(QUAD_VS, MIX_FS);
+      this.uPart = uniforms(gl, this.partProg, SKIN_UNIFORMS);
+      this.uEye = uniforms(gl, this.eyeProg, [
+        ...SKIN_UNIFORMS,
+        'u_open',
+        'u_closed',
+        'u_c',
+        'u_r',
+        'u_iris',
+        'u_lid',
+        'u_lower',
+      ]);
+      this.uShadow = uniforms(gl, this.shadowProg, ['u_rect', 'u_res', 'u_alpha']);
+      this.uMix = uniforms(gl, this.mixProg, [
+        'u_rect',
+        'u_res',
+        'u_pose',
+        'u_relief',
+        'u_mix',
+        'u_bright',
+        'u_useRelief',
+      ]);
+      this.partVao = this.meshVao(geo.vertices, geo.indices);
+      this.eyeVao = this.meshVao(geo.eyeVertices, geo.eyeIndices);
+      this.quadVao = this.makeQuad();
+      this.atlasTex = this.texture(atlas, true);
+      const split = geo.ranges.findIndex((r) => r.name === '#eyes');
+      const sum = (rs: typeof geo.ranges) => ({
+        first: rs[0]?.first ?? 0,
+        count: rs.reduce((s, r) => s + r.count, 0),
+      });
+      this.before = sum(split < 0 ? geo.ranges : geo.ranges.slice(0, split));
+      this.after = sum(split < 0 ? [] : geo.ranges.slice(split + 1));
+      const l = def.light;
+      const n = Math.hypot(l[0], l[1], l[2]) || 1;
+      this.light = new Float32Array([l[0] / n, l[1] / n, l[2] / n]);
+    } catch (error) {
+      // half a renderer must not leak: free what was made, then let the caller fall back
+      this.dispose();
+      throw error;
+    }
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   }
@@ -314,6 +338,7 @@ export class ReliefRenderer {
     const gl = this.gl;
     const vao = gl.createVertexArray();
     if (!vao) throw new ReliefRendererError('out of vertex arrays');
+    this.vaos.push(vao);
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer());
     gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
@@ -338,6 +363,7 @@ export class ReliefRenderer {
     const gl = this.gl;
     const vao = gl.createVertexArray();
     if (!vao) throw new ReliefRendererError('out of vertex arrays');
+    this.vaos.push(vao);
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer());
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
@@ -350,6 +376,7 @@ export class ReliefRenderer {
   private texture(img: TexImageSource, mip: boolean): WebGLTexture {
     const gl = this.gl;
     const t = gl.createTexture();
+    if (t) this.textures.push(t);
     if (!t) throw new ReliefRendererError('out of textures');
     gl.bindTexture(gl.TEXTURE_2D, t);
     // ImageBitmaps may arrive premultiplied already; images and canvases are premultiplied here.
@@ -557,18 +584,23 @@ export class ReliefRenderer {
     gl.activeTexture(gl.TEXTURE0);
   }
 
+  private program(vs: string, fs: string): WebGLProgram {
+    const p = compile(this.gl, vs, fs);
+    this.programs.push(p);
+    return p;
+  }
+
   dispose(): void {
     const gl = this.gl;
     this.canvas.removeEventListener('webglcontextlost', this.onLost);
     if (gl.isContextLost()) return;
-    for (const b of this.buffers) gl.deleteBuffer(b);
-    gl.deleteVertexArray(this.partVao);
-    gl.deleteVertexArray(this.eyeVao);
-    gl.deleteVertexArray(this.quadVao);
-    gl.deleteTexture(this.atlasTex);
-    for (const t of this.poseTex.values()) gl.deleteTexture(t);
+    for (const b of this.buffers.splice(0)) gl.deleteBuffer(b);
+    for (const v of this.vaos.splice(0)) gl.deleteVertexArray(v);
+    for (const t of this.textures.splice(0)) gl.deleteTexture(t);
+    this.poseTex.clear();
     if (this.fbo) gl.deleteFramebuffer(this.fbo);
     if (this.fboTex) gl.deleteTexture(this.fboTex);
-    for (const p of [this.partProg, this.eyeProg, this.shadowProg, this.mixProg]) gl.deleteProgram(p);
+    this.fbo = this.fboTex = null;
+    for (const p of this.programs.splice(0)) gl.deleteProgram(p);
   }
 }

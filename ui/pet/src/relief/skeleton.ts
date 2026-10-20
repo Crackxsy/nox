@@ -154,7 +154,7 @@ export class Skeleton {
    * `dt === 0` (a still frame, a reset) puts every spring at rest on its target.
    */
   update(dt: number): void {
-    const step = Math.min(Math.max(dt, 0), MAX_DT);
+    const step = Number.isFinite(dt) ? Math.min(Math.max(dt, 0), MAX_DT) : 0;
     for (let i = 0; i < this.bones.length; i++) {
       const pi = this.parentIdx[i];
       const parent = pi >= 0 ? this.world[pi] : this.placement;
@@ -168,8 +168,11 @@ export class Skeleton {
       const tgx = applyX(w, def.tip[0], def.tip[1]);
       const tgy = applyY(w, def.tip[0], def.tip[1]);
       const s = this.springs[i];
-      if (!s.live || step === 0) {
-        s.live = true;
+      // a non-finite pose or spring (a NaN that slipped in from anywhere) must not stick: the
+      // spring starts over at rest on its target instead of spreading NaN to every child bone
+      const finite = Number.isFinite(tgx + tgy + pvx + pvy);
+      if (!finite || !s.live || step === 0 || !Number.isFinite(s.px + s.py + s.vx + s.vy)) {
+        s.live = finite;
         s.px = tgx;
         s.py = tgy;
         s.vx = 0;
@@ -203,6 +206,11 @@ export class Skeleton {
       }
       s.tx = tgx;
       s.ty = tgy;
+      if (!Number.isFinite(s.px + s.py + s.vx + s.vy)) {
+        s.live = false;
+        s.offset = 0;
+        continue;
+      }
       let off = Math.atan2(s.py - pvy, s.px - pvx) - Math.atan2(tgy - pvy, tgx - pvx);
       off = Math.atan2(Math.sin(off), Math.cos(off));
       off = Math.max(-j.limit, Math.min(j.limit, off));

@@ -166,7 +166,10 @@ export class ReliefBrain {
    * Write the pose for time `t` (seconds) into `skel` and return the face. `dt === 0` jumps every
    * eased channel straight to its target (first frame, still frames).
    */
-  update(t: number, dt: number, skel: Skeleton, target: ReliefTargets): Face {
+  update(t: number, rawDt: number, skel: Skeleton, target: ReliefTargets): Face {
+    // the caller clamps too; this keeps a bad step (negative, NaN, a stalled tab) out of every
+    // integrator below even when the brain is driven from somewhere else
+    const dt = Number.isFinite(rawDt) ? Math.min(0.1, Math.max(0, rawDt)) : 0;
     const c = this.ease(target, dt);
     const roles = this.def.roles;
     const H = this.def.artHeight;
