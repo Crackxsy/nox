@@ -4,7 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="referrer" content="no-referrer" />
-    <meta name="theme-color" content="#000000" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#17191c" media="(prefers-color-scheme: dark)" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Nox" />
     <link rel="manifest" href="manifest.webmanifest" />
@@ -15,14 +16,14 @@
       /* Critical paint only — the design system lives in src/styles.css (no web fonts, no CDN). */
       :root { color-scheme: light dark; background: #ffffff; }
       @media (prefers-color-scheme: dark) {
-        :root:not([data-theme="light"]) { color-scheme: dark; background: #000000; }
+        :root:not([data-theme="light"]) { color-scheme: dark; background: #17191c; }
       }
-      :root[data-theme="dark"] { color-scheme: dark; background: #000000; }
+      :root[data-theme="dark"] { color-scheme: dark; background: #17191c; }
       :root[data-theme="light"] { color-scheme: light; background: #ffffff; }
       html, body, #root { margin: 0; padding: 0; }
       body {
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text",
-          "Segoe UI", system-ui, sans-serif;
+        font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "SF Pro Text",
+          Roboto, system-ui, sans-serif;
       }
     </style>
   </head>
