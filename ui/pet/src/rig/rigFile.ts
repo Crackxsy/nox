@@ -216,6 +216,12 @@ export function parseRigDefinition(raw: unknown, expectedId: string): RigDefinit
   }
 
   const mesh = asObject(root.mesh ?? {}, 'mesh');
+  let relief: RigDefinition['relief'] = null;
+  if (root.relief !== undefined && root.relief !== null) {
+    const r = asObject(root.relief, 'relief');
+    if (r.enabled !== undefined && typeof r.enabled !== 'boolean') fail('relief.enabled', 'must be true or false');
+    relief = { dir: asSegment(r.dir, 'relief.dir'), enabled: r.enabled !== false };
+  }
   return {
     id,
     base: asSegment(root.base, 'base'),
@@ -228,6 +234,7 @@ export function parseRigDefinition(raw: unknown, expectedId: string): RigDefinit
       columns: asNumber(mesh.columns ?? 20, 'mesh.columns', MIN_GRID, MAX_GRID),
       rows: asNumber(mesh.rows ?? 20, 'mesh.rows', MIN_GRID, MAX_GRID),
     },
+    relief,
   };
 }
 

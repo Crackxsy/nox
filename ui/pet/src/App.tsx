@@ -21,6 +21,8 @@ import {
   stillState,
   toInput,
 } from './petState';
+import type { LoadedRelief } from './relief/reliefFile';
+import type { ReliefPet as ReliefPetView } from './ReliefPet';
 import { type LoadedRig, type RigRenderer, loadRig } from './rig';
 import { RiggedPet } from './RiggedPet';
 import { SpritePet, loadImageElement } from './SpritePet';
@@ -57,6 +59,11 @@ export interface AppProps {
   stillExpression: string | null;
   /** `?size=` canvas size override in px, for exact-size screenshots (default 260). */
   size?: number;
+  /** Dev-only (`?animate=1&tour=a,b,c`): step through preview states; `feed` gives a treat. */
+  tour?: readonly string[] | null;
+  tourEveryMs?: number;
+  /** Dev-only (`?renderer=rig`): keep the older rig renderer even for a relief creature. */
+  forceRig?: boolean;
 }
 
 export function App({
@@ -69,6 +76,9 @@ export function App({
   animate,
   stillExpression,
   size,
+  tour = null,
+  tourEveryMs = 3500,
+  forceRig = false,
 }: AppProps) {
   const t = useMemo(() => petTranslator(lang), [lang]);
   // The variant is state, not just a prop: `config.set pet.variant` swaps it live, without a page
@@ -87,9 +97,22 @@ export function App({
   // the previous creature on screen until the next one has loaded.
   const [loadedSprite, setSprite] = useState<LoadedSprite | null>(null);
   const [loadedRig, setRig] = useState<LoadedRig | null>(null);
+  // The relief renderer is its own chunk, fetched only for a variant that switches it on, so the
+  // creatures still on the older rig do not pay for it.
+  const [loadedRelief, setRelief] = useState<{ data: LoadedRelief; View: typeof ReliefPetView } | null>(null);
+  // The relief renderer could not run here (no WebGL2, context lost): use the older rig for good.
+  const [reliefFailed, setReliefFailed] = useState(false);
+  // A variant whose relief assets would not load: that one stays on the older rig.
+  const [reliefBroken, setReliefBroken] = useState<string | null>(null);
   const spriteId = spriteVariantId(activeVariant);
   const sprite = spriteId === null ? null : loadedSprite;
   const rig = spriteId === null ? null : loadedRig;
+  const reliefUsable = !!rig && !reliefFailed && !forceRig && reliefBroken !== rig.definition.id;
+  const relief =
+    reliefUsable && loadedRelief?.data.definition.id === rig?.definition.id ? loadedRelief : null;
+  // Switched on but still loading: show nothing rather than the older rig for a moment and then a
+  // visibly different creature.
+  const reliefPending = reliefUsable && !!rig?.definition.relief?.enabled && !relief;
   const variant = useMemo(() => getVariant(activeVariant), [activeVariant]);
   const theme = useThemeMode();
   const [state, setState] = useState<PetState>(() =>
@@ -141,6 +164,22 @@ export function App({
       clientRef.current = null;
     };
   }, [token, ipcRole, still, animate, onEvent]);
+
+  // Dev preview tour: one state after another on a timer, so transitions can be recorded.
+  useEffect(() => {
+    if (!animate || !tour || tour.length === 0) return;
+    let step = 0;
+    const apply = (name: string): void =>
+      setState((s) =>
+        name === 'feed' ? { ...s, feeds: s.feeds + 1 } : { ...stillState(name), feeds: s.feeds },
+      );
+    apply(tour[0]);
+    const timer = window.setInterval(() => {
+      step = (step + 1) % tour.length;
+      apply(tour[step]);
+    }, tourEveryMs);
+    return () => window.clearInterval(timer);
+  }, [animate, tour, tourEveryMs]);
 
   // The overlay's AI-voice label is set once at core start, before OBS usually connects, so the
   // overlay reads it from its public state snapshot on every (re)connect; later changes arrive as
@@ -218,6 +257,44 @@ export function App({
     };
   }, [spriteId, activeVariant]);
 
+  // Relief (2.5D) renderer: only for a variant whose `rig.json` switches it on. Any failure keeps
+  // the older rig renderer, which is already loaded, and says why.
+  const reliefFlag = loadedRig?.definition.relief ?? null;
+  const reliefRigId = loadedRig?.definition.id ?? null;
+  useEffect(() => {
+    if (!reliefFlag?.enabled || reliefRigId === null) return;
+    let cancelled = false;
+    Promise.all([import('./relief/reliefFile'), import('./ReliefPet')])
+      .then(async ([file, view]) => {
+        const data = await file.loadRelief(reliefRigId, {
+          variantBase: spriteBaseUrl(import.meta.env.BASE_URL, reliefRigId),
+          dir: reliefFlag.dir,
+          fetchJson: async (url) => {
+            const res = await fetch(url, { cache: 'no-store' });
+            if (res.status === 404) return null;
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.json();
+          },
+          loadImage: loadImageElement,
+        });
+        if (!cancelled) setRelief({ data, View: view.ReliefPet });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        console.warn('pet.relief_fallback', { variant: reliefRigId, reason: reasonOf(err) });
+        setRelief(null);
+        setReliefBroken(reliefRigId);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reliefFlag, reliefRigId]);
+
+  const onReliefUnavailable = useCallback((reason: string) => {
+    console.warn('pet.relief_unavailable', reason);
+    setReliefFailed(true);
+  }, []);
+
   // A rig running on Canvas 2D is a working pet with a coarser mesh, not a failure — but it is a
   // downgrade, and the reason for it belongs in the log rather than nowhere.
   const onRigBackend = useCallback((backend: RigRenderer['backend'], reason: string | null) => {
@@ -251,7 +328,22 @@ export function App({
 
   return (
     <div className="pet-root">
-      {sprite && rig ? (
+      {sprite && reliefPending ? null : sprite && rig && relief ? (
+        <relief.View
+          relief={relief.data}
+          rig={rig}
+          input={input}
+          params={params}
+          expression={spriteExpressionFor(input)}
+          interactive={!overlay && !still}
+          onInteract={onInteract}
+          size={size}
+          still={still}
+          preview={still || animate}
+          petLabel={sprite.manifest.name}
+          onUnavailable={onReliefUnavailable}
+        />
+      ) : sprite && rig ? (
         <RiggedPet
           rig={rig}
           input={input}

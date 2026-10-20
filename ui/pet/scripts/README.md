@@ -10,8 +10,73 @@ None of it runs at build time.
 .venv/Scripts/python.exe ui/pet/scripts/make_pet_layers.py      # the Meereswolf's own matte repair
 .venv/Scripts/python.exe ui/pet/scripts/render_rig.py --variant ID   # review renders + cost
 node ui/pet/scripts/weights_probe.mjs                           # bone weights at landmarks
+uv run --no-project ui/pet/scripts/relief/build_relief.py ID    # relief (2.5D) parts + rig, see below
 .venv/Scripts/python.exe ui/pet/scripts/render_variants.py      # the older concept gallery
 ```
+
+## Relief renderer (2.5D): converting a creature
+
+The relief renderer (`src/relief/`, `src/ReliefPet.tsx`) keeps the painted art but cuts it into
+overlapping parts (body, head, ears, jaw, wings, tails), moves them with a 22-bone skeleton whose
+ears, cheek fur, wings and tails are springs, and gives every part a relief height so the head and
+body really turn (about ±20°) with the light following. Skinning, the 3D turn, perspective and
+relighting run in the vertex shader; the CPU only runs the skeleton (≈0.1 ms per frame).
+
+A creature uses it when its `rig.json` says so - `"relief": {"dir": "relief", "enabled": true}`
+- and keeps the older rig renderer otherwise (also the fallback when WebGL2 is missing). The
+key-pose drawings in `rig.json` (`curl`, `lie`, `eat`) stay in use for what the front view cannot
+do; the switch to them is hidden under a squash.
+
+```
+uv run --no-project ui/pet/scripts/relief/build_relief.py <id> [--debug-dir DIR] [--emit-config F] [--enable]
+uv run --no-project ui/pet/scripts/relief/record_relief.py --out DIR [--variant <id>] [--only states,tour,fallback,perf]
+```
+
+`build_relief.py` reads `relief/creatures/<id>.json` and writes `public/variants/<id>/relief/`
+(`parts.png` atlas, `depth.png` relief maps, `relief.json` rig). Dependencies are pinned in the
+script header and fetched by uv; the output is byte-identical for the same input. It prints the
+rest-pose reconstruction error and fails below 40 dB PSNR (the eulenfuchs is at 55.9 dB).
+`record_relief.py` renders one video per pet state, a state tour next to the old renderer, checks
+the WebGL1 / Canvas 2D fallbacks and measures frame cost - all headless, nothing opens or plays.
+
+### Per creature (the eulenfuchs is done)
+
+Start from the eulenfuchs as a template, so only what differs has to be written down:
+
+1. **Config.** `relief/creatures/<id>.json`:
+   ```json
+   {
+     "id": "<id>", "template": "eulenfuchs", "source": "rig/base.png",
+     "landmarks": { "eye_l": [x, y], "eye_r": [x, y], "nose": [x, y], "chin": [x, y],
+                    "ear_l_tip": [x, y], "ear_r_tip": [x, y], "paw_l": [x, y], "paw_r": [x, y],
+                    "ground": [x, y] },
+     "eyes": [ { "name": "eye_l", "file": "rig/eye_l.png", "at": [x, y],
+                 "ellipse": { "c": [0.5, 0.5], "r": [0.28, 0.27] } }, ... ],
+     "drop": ["wing_l", "wing_r"], "dropBones": ["wing_l", "wing_r"]
+   }
+   ```
+   Landmarks are art pixels; `eyes[].at` is the top-left of the eye layer (its `rect` in
+   `rig.json` times the art size), the ellipse is the eyeball inside that patch in 0..1. Every
+   coordinate of the template is moved by a scale-and-offset fit of the template's landmarks onto
+   these; a part can fit on its own landmarks with `"parts": {"head": {"fit": ["eye_l", ...]}}`.
+2. **Check.** `build_relief.py <id> --debug-dir DIR --emit-config DIR/resolved.json` and open
+   `DIR/overlay.png`: each polygon has to hug its part, each bone has to sit on its joint. A part
+   that does not fit gets its own `poly` (and `underlay`, the bit hidden behind front parts) under
+   `"parts": {"<name>": {...}}` - copy it from `resolved.json` and move the points. Tails and
+   wings that differ in shape need their `weights.points` / bone `pivot` / `tip` moved too
+   (`"bones": {"tail_l0": {"pivot": [...], "tip": [...]}}`).
+3. **Depth.** Usually nothing to do: the relief comes from each part's silhouette. Move the muzzle
+   and nose `depth.bumps` of the head onto the new muzzle if it sits elsewhere.
+4. **Poses.** Measure the key-pose art against the base (facial disc width) and set `"poses":
+   {"eat": {"scale": ...}, ...}` so the switch does not read as a zoom.
+5. **Look and enable.** `npm run build`, then `record_relief.py --variant <id> --only states
+   --states normal,happy,speaking,sleeping --out DIR` and watch the videos. Happy with it:
+   `build_relief.py <id> --enable` switches the creature over in `rig.json`.
+
+Effort: for the front-sitting, symmetric creatures (Katzendrache, Koalaflughund, Mottenkatze,
+Kaninchenkatze) the template plus landmarks gets close and steps 1-5 take about 15-30 minutes. The
+Chamster (off-centre head, spiral tail) and the Meereswolf (taller, fins, cropped ears) need their
+body and tail polygons redrawn, closer to an hour.
 
 ## Adding a creature
 
