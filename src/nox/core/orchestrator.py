@@ -256,6 +256,10 @@ class Orchestrator:
     #: Whether cloud models are allowed right now. Turns recorded while they are not are marked
     #: private, and cloud providers never send them, not even later as history. `None` = always.
     cloud_allowed: Callable[[], bool] | None = None
+    #: Set by `NoxCore`: told the id of every conversation that is discarded (a new conversation
+    #: was asked for, or it sat idle past `conversation_idle_s`), which ends the permission
+    #: session - every "remember for this session" grant goes with it. `None` = nobody listens.
+    on_conversation_end: Callable[[str], None] | None = None
     fast_path: FastPath = field(default_factory=FastPath)
     escalation: EscalationPolicy = field(default_factory=EscalationPolicy)
     #: Monotonic seconds, for the idle timeout of conversations; a field so tests can move time.
@@ -357,11 +361,13 @@ class Orchestrator:
         """The conversation's context is gone for good: its history is no longer replayed (the
         next one has another id), the warm model session is replaced on the next turn (it belongs
         to another conversation), so whatever untrusted content it held is gone - and only now
-        does its taint go too."""
+        does its taint go too. The remembered grants end with it (`on_conversation_end`)."""
         if self._conversations.get(conversation.channel) is conversation:
             del self._conversations[conversation.channel]
         if self.tool_loop is not None:
             self.tool_loop.forget(conversation.id)
+        if self.on_conversation_end is not None:
+            self.on_conversation_end(conversation.id)
 
     # -- handlers ----------------------------------------------------------------------------------
     async def _on_transcript(self, ev: Event) -> None:

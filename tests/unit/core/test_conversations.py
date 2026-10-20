@@ -180,3 +180,25 @@ async def test_the_providers_own_web_search_taints_the_conversation_at_once() ->
     assert taint.marks == [(begun[0], None)]  # unreadable: nothing is user-directed after it
     assert seen_during_stream == [{begun[0]}]  # before the stream went on, not after it
     await orch.stop()
+
+
+async def test_a_discarded_conversation_ends_the_permission_session() -> None:
+    # Issue #138: "remember for this session" had no session end. Both ways a conversation is
+    # discarded - the user asking for a new one, and the idle timeout - must report it.
+    orch, _, _, _, _ = make(conversation_idle_s=60.0)
+    now = [1000.0]
+    orch.clock = lambda: now[0]
+    ended: list[str] = []
+    orch.on_conversation_end = ended.append
+    _, begun = _with_tools(orch)
+    await orch.start()
+    await orch.handle_text("eins", channel=VOICE_CHANNEL)
+    await orch.handle_text("zwei", channel=VOICE_CHANNEL)
+    assert ended == []  # a new turn alone is no session end
+    await orch.handle_text("Neues Gespräch!", channel=VOICE_CHANNEL)
+    assert ended == [begun[0]]
+    await orch.handle_text("drei", channel=VOICE_CHANNEL)
+    now[0] += 61.0
+    await orch.handle_text("vier", channel=VOICE_CHANNEL)
+    assert ended == [begun[0], begun[2]]
+    await orch.stop()

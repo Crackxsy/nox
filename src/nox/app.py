@@ -483,6 +483,7 @@ class NoxCore:
             session_id=self.session_id,
             facts=self._turn_facts,
             cloud_allowed=self.security.privacy.allows_cloud,
+            on_conversation_end=self._end_permission_session,
         )
         self.orchestrator.mode_gate = ModeGate(
             switch=self._switch_mode,
@@ -490,6 +491,11 @@ class NoxCore:
             stream_plugins=self._stream_plugin_statuses,
         )
         await self.orchestrator.start()
+
+    def _end_permission_session(self, _conversation: str) -> None:
+        """A conversation was discarded: "remember for this session" ends with it."""
+        if self.security is not None:
+            self.security.engine.end_session(reason="conversation_end")
 
     async def _switch_mode(self, mode: Mode) -> str:
         assert self.state is not None and self.security is not None and self.bus is not None
@@ -688,6 +694,9 @@ class NoxCore:
             except Exception as exc:  # noqa: BLE001 - a lost checkpoint must not block shutdown
                 log.warning("core.state_close_failed", error=f"{type(exc).__name__}: {exc}")
         if self.security is not None:
+            # The app session is over: no remembered grant outlives it, even in a grant store
+            # that persists.
+            self.security.engine.end_session(reason="shutdown")
             self.security.audit_store.append(
                 actor="system",
                 tool="core",

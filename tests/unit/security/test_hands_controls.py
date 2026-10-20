@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from nox.hands.shell import ProgramResolver, classify
+from nox.hands.shell import ProgramResolver, argv_digest, classify
 from nox.security.model import Decision, PermissionRequest, Risk, TemporaryGrant
 from nox.security.permissions import DefaultPermissionEngine
 
@@ -36,21 +36,60 @@ def _shell_req(target: str, **kw: object) -> PermissionRequest:
 
 # ---- cmd: grants ---------------------------------------------------------------------------------
 
+#: The resolved program a SIMPLE target names: its path and the digest of its bytes.
+WHOAMI = "cmd:/usr/bin/whoami#0123456789abcdef"
 
-def test_cmd_grant_matches_only_its_pattern(
+
+def _simple_target(program: str, *args: str, binary: str = WHOAMI) -> str:
+    """What `shell.run` produces for a SIMPLE argv: the grant key, then the readable command."""
+    return f"{binary} argv={argv_digest(program, args)} {' '.join((program, *args))}"
+
+
+def _simple_scope(program: str, *args: str, binary: str = WHOAMI) -> str:
+    return f"{binary} argv={argv_digest(program, args)}"
+
+
+def test_cmd_grant_matches_only_its_exact_argv(
     engine: DefaultPermissionEngine, clock: MutableClock
 ) -> None:
     engine.grant_temporary(
         TemporaryGrant(
             grant_id="g",
-            scope="cmd:git status",
+            scope=_simple_scope("whoami", "/all"),
             max_risk=Risk.HIGH,
             expires_at=clock.now + timedelta(hours=1),
         )
     )
-    assert engine.check(_shell_req("cmd:git status")).decision is Decision.ALLOW
-    # The negative half: the same grant must NOT cover a different command pattern.
-    assert engine.check(_shell_req("cmd:git push")).decision is Decision.CONFIRM
+    assert engine.check(_shell_req(_simple_target("whoami", "/all"))).decision is Decision.ALLOW
+    # The negative half: the same grant must NOT cover other arguments.
+    for other in (("/priv",), ("/all", "/priv"), ()):
+        target = _simple_target("whoami", *other)
+        assert engine.check(_shell_req(target)).decision is Decision.CONFIRM, other
+
+
+@pytest.mark.parametrize(
+    "scope,target",
+    [
+        # Hand-written, and the format before the argv digest (program + subcommand only): a grant
+        # stored in either shape must match nothing - never widen to every argument.
+        ("cmd:git status", "cmd:git status"),
+        (f"{WHOAMI} /all", f"{WHOAMI} /all"),
+        (WHOAMI, f"{WHOAMI} argv={argv_digest('whoami', ())} whoami"),
+        (f"{WHOAMI} /all", _simple_target("whoami", "/all")),
+    ],
+)
+def test_a_cmd_grant_in_any_other_shape_matches_nothing(
+    engine: DefaultPermissionEngine, clock: MutableClock, scope: str, target: str
+) -> None:
+    engine.grant_temporary(
+        TemporaryGrant(
+            grant_id="old",
+            scope=scope,
+            max_risk=Risk.HIGH,
+            expires_at=clock.now + timedelta(hours=1),
+        )
+    )
+    assert engine.check(_shell_req(target)).decision is Decision.CONFIRM
 
 
 def test_cmd_grant_never_covers_a_complex_command(
@@ -59,7 +98,7 @@ def test_cmd_grant_never_covers_a_complex_command(
     engine.grant_temporary(
         TemporaryGrant(
             grant_id="g",
-            scope="cmd:git status",
+            scope=_simple_scope("whoami", "/all"),
             max_risk=Risk.HIGH,
             expires_at=clock.now + timedelta(hours=1),
         )
@@ -157,21 +196,23 @@ def test_profile_confirm_beats_curated_readonly(clock: MutableClock) -> None:
 def test_taint_drops_high_grant_to_confirmation(
     engine: DefaultPermissionEngine, clock: MutableClock
 ) -> None:
+    # A HIGH session grant (not a `cmd:` one, which taint revokes outright - see below).
     engine.grant_temporary(
         TemporaryGrant(
             grant_id="g",
-            scope="cmd:git push",
+            scope="session:shell/run",
             max_risk=Risk.HIGH,
             expires_at=clock.now + timedelta(hours=1),
         )
     )
-    req = _shell_req("cmd:git push", conversation="c1")
+    req = _shell_req("complex:0123456789abcdef", conversation="c1")
     assert engine.check(req).decision is Decision.ALLOW
     engine.mark_tainted("c1")
     # With untrusted content in the conversation the HIGH grant must no longer act on its own.
     assert engine.check(req).decision is Decision.CONFIRM
     # Another conversation is not affected ...
-    assert engine.check(_shell_req("cmd:git push", conversation="c2")).decision is Decision.ALLOW
+    other = _shell_req("complex:0123456789abcdef", conversation="c2")
+    assert engine.check(other).decision is Decision.ALLOW
     # ... and only a reset of the conversation's context clears it.
     engine.clear_taint("c1")
     assert engine.check(req).decision is Decision.ALLOW
@@ -255,9 +296,9 @@ def test_shell_remember_never_applies_to_a_hand_written_cmd_target(
 ) -> None:
     async def scenario() -> None:
         # `git` is never SIMPLE, so `shell.run` never produces `cmd:git push`; a target without
-        # the resolved path and digest is not a SIMPLE command and stays never-remembered.
+        # the resolved path and digests is not a SIMPLE command and stays never-remembered.
         request = _shell_req("cmd:git push")
-        assert engine._remember_scope(request) == "cmd:git push"
+        assert engine._remember_scope(request) is None
         grant_id = engine.request_confirmation(request)
         engine.reply(grant_id, Decision.ALLOW, remember=True)
         result = await engine.await_confirmation(grant_id)
@@ -269,7 +310,7 @@ def test_shell_remember_never_applies_to_a_hand_written_cmd_target(
 
 
 #: What `shell.run` produces for a SIMPLE argv such as `["whoami", "/all"]`.
-SIMPLE_TARGET = "cmd:/usr/bin/whoami#0123456789abcdef /all"
+SIMPLE_TARGET = _simple_target("whoami", "/all")
 
 
 def test_a_simple_shell_command_is_remembered_for_the_session_only(
@@ -282,13 +323,19 @@ def test_a_simple_shell_command_is_remembered_for_the_session_only(
         engine.reply(grant_id, Decision.ALLOW, remember=True)
         result = await engine.await_confirmation(grant_id)
         assert result.grant_id is not None
+        # The grant stores the hashes; the readable command is only its label.
+        grant = engine._grants.get(result.grant_id)
+        assert grant is not None
+        assert grant.scope == _simple_scope("whoami", "/all")
+        assert grant.label == "whoami /all"
         # Exactly this command runs without a question now ...
         assert engine.check(_shell_req(SIMPLE_TARGET)).decision is Decision.ALLOW
-        # ... but never a different subcommand, a different binary or the same one with egress.
+        # ... but never other arguments, a different binary or the same one with egress.
         for other in (
-            "cmd:/usr/bin/whoami#0123456789abcdef /priv",
-            "cmd:/usr/bin/whoami#fedcba9876543210 /all",
+            _simple_target("whoami", "/priv"),
+            _simple_target("whoami", "/all", binary="cmd:/usr/bin/whoami#fedcba9876543210"),
             SIMPLE_TARGET + " egress=a.example",
+            f"{WHOAMI} /all",  # the format before the argv digest
             "complex:0123456789abcdef",
         ):
             assert engine.check(_shell_req(other)).decision is Decision.CONFIRM, other
@@ -303,14 +350,17 @@ def test_a_simple_shell_command_is_remembered_for_the_session_only(
     "target,overrides",
     [
         ("cmd:git push", {}),  # no resolved path + digest: not produced by the SIMPLE classifier
-        ("cmd:/usr/bin/git#0123456789abcdef push", {"risk": Risk.CRITICAL}),
+        (SIMPLE_TARGET, {"risk": Risk.CRITICAL}),
         (SIMPLE_TARGET + " egress=a.example", {}),  # a declared network is always asked
         (SIMPLE_TARGET, {"rememberable": False}),
         (SIMPLE_TARGET, {"tool": "files"}),
         ("complex:0123456789abcdef", {}),
         ("readonly:whoami", {}),
-        ("cmd:/usr/bin/whoami#0123456789ABCDEF", {}),  # digest must be lowercase hex
-        ("cmd:/usr/bin/whoami#0123456789abcdef a b", {}),  # one word at most
+        (SIMPLE_TARGET.replace("#0123456789abcdef", "#0123456789ABCDEF"), {}),  # lowercase hex
+        (f"{WHOAMI} /all", {}),  # the format before the argv digest
+        (f"{WHOAMI} argv={argv_digest('whoami', ())}", {}),  # no readable command
+        (f"{WHOAMI} argv=0123 whoami", {}),  # a short argv digest
+        (SIMPLE_TARGET + "\n", {}),  # a trailing newline
     ],
 )
 def test_nothing_but_a_simple_shell_command_is_rememberable_at_high_risk(

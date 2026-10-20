@@ -251,10 +251,31 @@ def never_remembered(risk: Risk) -> bool:
     return risk in NEVER_REMEMBERED
 
 
-#: The exact shape of a SIMPLE `shell.run` target: `cmd:<resolved path>#<16 hex digest>` plus at
-#: most one plain subcommand word, and no declared network. Anything else - `complex:`,
-#: `readonly:`, a hand-written `cmd:git push`, an `egress=` suffix - does not match.
-_SIMPLE_SHELL_TARGET = re.compile(r"^cmd:[^\s#][^#]*#[0-9a-f]{16}(?: [A-Za-z0-9._+/-]+)?$")
+#: The grant part of a SIMPLE `shell.run` target: `cmd:<resolved path>#<16 hex file digest>
+#: argv=<32 hex argv digest>` (`nox.hands.shell.argv_digest`). This is what a remembered grant
+#: stores and the only `cmd:` scope `grant_matches` honours.
+_SHELL_GRANT_KEY = r"cmd:[^\s#][^#\x00-\x1f\x7f]*#[0-9a-f]{16} argv=[0-9a-f]{32}"
+_SHELL_GRANT_SCOPE = re.compile(rf"^{_SHELL_GRANT_KEY}\Z")
+#: The exact shape of a SIMPLE `shell.run` target: the grant key, then the readable command
+#: (program and arguments, the characters `SIMPLE_ALLOWLIST` accepts) for the confirmation, and no
+#: declared network. Anything else - `complex:`, `readonly:`, a hand-written `cmd:git push`, the
+#: pre-argv-digest `cmd:<path>#<digest> <subcommand>`, an `egress=` suffix - does not match.
+_SIMPLE_SHELL_TARGET = re.compile(
+    rf"^(?P<key>{_SHELL_GRANT_KEY}) [A-Za-z0-9._+/-]+(?: [A-Za-z0-9._+/-]+)*\Z"
+)
+
+
+def shell_grant_scope(target: str) -> str | None:
+    """The `cmd:` grant scope a SIMPLE shell target maps to (its hashes, without the readable
+    command), or None for any other target."""
+    match = _SIMPLE_SHELL_TARGET.match(target)
+    return None if match is None else match.group("key")
+
+
+def shell_grant_label(target: str) -> str:
+    """The readable command of a SIMPLE shell target (`du -sh docs`), or empty."""
+    match = _SIMPLE_SHELL_TARGET.match(target)
+    return "" if match is None else target[match.end("key") + 1 :]
 
 
 def is_simple_shell_target(request: PermissionRequest) -> bool:
@@ -356,7 +377,7 @@ def is_scoped_prefix(value: str, prefix: str) -> bool:
 
 def grant_matches(grant: TemporaryGrant, request: PermissionRequest, now: datetime) -> bool:
     """Scope grammar: task:<id> | project:<id> | repo:<path> | session:<tool-glob>/<action-glob>
-    | cmd:<shell pattern> | site:<browser action>@<origin>."""
+    | cmd:<path>#<digest> argv=<digest> | site:<browser action>@<origin>."""
     if grant.expires_at <= now:
         return False
     if request.risk is Risk.CRITICAL or RISK_ORDER[request.risk] > RISK_ORDER[grant.max_risk]:
@@ -378,10 +399,16 @@ def grant_matches(grant: TemporaryGrant, request: PermissionRequest, now: dateti
             request.action, action_glob or "*"
         )
     if kind == "cmd":
-        # A remembered shell command pattern (argv0 + subcommand). `shell.run` encodes a simple,
-        # non-curated command as target `cmd:<pattern>`; a command with a shell operator, an env
-        # prefix or an interpreter `-c` is encoded differently and so can never equal this scope.
-        return request.tool == "shell" and request.target == f"cmd:{value}"
+        # A remembered shell command: one resolved, hashed executable with one exact argv.
+        # `shell.run` encodes a SIMPLE command as `cmd:<path>#<digest> argv=<digest> <readable>`;
+        # a command with a shell operator, an env prefix or an interpreter is encoded differently
+        # and so can never match. A scope in any other shape - a hand-written `cmd:git push`, the
+        # older `cmd:<path>#<digest> <subcommand>` that ignored the arguments - matches nothing.
+        return (
+            request.tool == "shell"
+            and _SHELL_GRANT_SCOPE.match(grant.scope) is not None
+            and shell_grant_scope(request.target) == grant.scope
+        )
     if kind == "site":
         # A remembered browser action on one origin (`site:click@https://shop.example`). The
         # target is `origin:<origin>` from `browser.*`'s own `targets()`, so the grant covers
@@ -750,6 +777,8 @@ class DefaultPermissionEngine:
         """
         if self._taint.mark(conversation, content):
             log.info("security.taint_changed", tainted=True)
+        # Untrusted content may now steer the next tool call: no remembered shell command stays.
+        self.revoke_command_grants(reason="taint")
 
     def clear_taint(self, conversation: str) -> None:
         """The conversation's context was discarded: nothing untrusted is in it any more."""
@@ -810,6 +839,14 @@ class DefaultPermissionEngine:
         if grant.max_risk is Risk.CRITICAL:
             raise ValueError("temporary grants can never cover critical risk")
         self._grants.add(grant)
+        details = {
+            "grant_id": grant.grant_id,
+            "max_risk": grant.max_risk.value,
+            "expires_at": grant.expires_at.isoformat(),
+        }
+        if grant.label:
+            zone = self._privacy.snapshot().zone_active
+            details["label"] = "<redacted>" if zone else grant.label
         self._audit.append(
             actor=grant.granted_by,
             tool="security",
@@ -817,11 +854,7 @@ class DefaultPermissionEngine:
             target=grant.scope,
             decision=Decision.ALLOW.value,
             result="ok",
-            details={
-                "grant_id": grant.grant_id,
-                "max_risk": grant.max_risk.value,
-                "expires_at": grant.expires_at.isoformat(),
-            },
+            details=details,
         )
 
     def revoke(self, grant_id: str) -> None:
@@ -849,6 +882,27 @@ class DefaultPermissionEngine:
                 result="ok",
                 details={"removed": str(removed)},
             )
+        return removed
+
+    def revoke_command_grants(self, *, reason: str, by: str = "system") -> int:
+        """Revoke every remembered shell command (`cmd:` grants).
+
+        Called when what the user confirmed may no longer hold: the privacy mode changed, the
+        kill switch fired, or untrusted content entered a conversation (`mark_tainted`). Returns
+        how many were removed; audited when any were.
+        """
+        removed = self._grants.remove_scope_prefix("cmd:")
+        if removed:
+            self._audit.append(
+                actor=by,
+                tool="security",
+                action="grant.revoke_cmd",
+                target="cmd:",
+                decision=Decision.ALLOW.value,
+                result="ok",
+                details={"removed": str(removed), "reason": reason},
+            )
+            log.info("security.cmd_grants_revoked", removed=removed, reason=reason)
         return removed
 
     # ---- pure evaluation -------------------------------------------------------------------------
@@ -992,6 +1046,7 @@ class DefaultPermissionEngine:
                 max_risk=request.risk,
                 expires_at=self._clock() + self._session_grant_ttl,
                 granted_by=by,
+                label=shell_grant_label(request.target) if request.tool == "shell" else "",
             )
             self.grant_temporary(grant)
             result_grant_id = grant_id
@@ -1012,16 +1067,17 @@ class DefaultPermissionEngine:
     def _remember_scope(self, request: PermissionRequest) -> str | None:
         """The grant scope a "remember" would create for this request, or None for "never".
 
-        `shell.run` remembers one command *pattern* (`cmd:git status`) and only for a simple
-        command, never the whole tool - a complex command (target `complex:...`) or a curated
-        read-only one (`readonly:...`) produces no grant. Every other rememberable tool gets the
+        `shell.run` remembers one exact command (`cmd:<path>#<digest> argv=<digest>`, see
+        `shell_grant_scope`) and only for a SIMPLE one, never the whole tool - a complex command
+        (target `complex:...`), a curated read-only one (`readonly:...`) or any other `cmd:` shape
+        produces no grant. Every other rememberable tool gets the
         session scope. A tool marked `rememberable=False` (`package.*`, `mic.record_long`,
         `skill.*`) never produces one.
         """
         if not request.rememberable:
             return None
         if request.tool == "shell":
-            return request.target if request.target.startswith("cmd:") else None
+            return shell_grant_scope(request.target)
         if request.tool == "browser":
             # Per action and origin, never "the browser": clicking on one shop is not clicking
             # everywhere. A target without a valid origin produces no grant.
@@ -1056,8 +1112,13 @@ class DefaultPermissionEngine:
         grant_id = self.request_confirmation(request)
         return await self.await_confirmation(grant_id)
 
-    def end_session(self) -> int:
-        """Revoke every session-scoped grant ("remember for this session")."""
+    def end_session(self, *, reason: str = "session_end") -> int:
+        """Revoke every session-scoped grant ("remember for this session").
+
+        The session ends when a conversation is discarded (the user asked for a new one, or it
+        sat idle past `conversation_idle_s`) and when the core shuts down; `reason` says which.
+        Grants are not per conversation, so ending any one ends them all.
+        """
         removed = self._grants.remove_scope_prefix("session:")
         # Remembered simple shell commands are session grants too.
         removed += self._grants.remove_scope_prefix("cmd:")
@@ -1069,8 +1130,9 @@ class DefaultPermissionEngine:
                 target="",
                 decision=Decision.ALLOW.value,
                 result="ok",
-                details={"removed": str(removed)},
+                details={"removed": str(removed), "reason": reason},
             )
+            log.info("security.session_grants_revoked", removed=removed, reason=reason)
         return removed
 
     # ---- recording -------------------------------------------------------------------------------
