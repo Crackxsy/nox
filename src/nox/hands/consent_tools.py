@@ -23,14 +23,13 @@ from pydantic import BaseModel, Field
 
 from nox.core.logging import get_logger
 from nox.hands.consents import ConsentRepository, ConsentRow
+from nox.ipc.roles import LOCAL_UI_ROLES
 from nox.security.model import Risk
 from nox.tools.registry import ToolRegistry, ToolSpec
 
 log = get_logger(__name__)
 
 __all__ = ["ConsentGrant", "ConsentRevoke", "register_consent_ipc", "register_consent_tools"]
-
-UI_ROLES: tuple[str, ...] = ("shell", "dashboard")
 
 
 class ConsentGrant(BaseModel):
@@ -119,6 +118,8 @@ def register_consent_ipc(registry: Any, consents: ConsentRepository, gate: Any) 
     async def h_revoke(_ctx: RequestContext, p: ConsentRevoke) -> dict[str, Any]:
         return {"ok": True, "revoked": consents.revoke(p.context)}
 
-    registry.register("consent.list", EmptyPayload, h_list, roles=UI_ROLES)
-    registry.register("consent.grant", ConsentGrant, h_grant, roles=UI_ROLES)
-    registry.register("consent.revoke", ConsentRevoke, h_revoke, roles=UI_ROLES)
+    # Consent to record other people is administration of the machine Nox runs on (§ 201 StGB):
+    # never from a paired device (`nox.ipc.roles`).
+    registry.register("consent.list", EmptyPayload, h_list, roles=LOCAL_UI_ROLES)
+    registry.register("consent.grant", ConsentGrant, h_grant, roles=LOCAL_UI_ROLES)
+    registry.register("consent.revoke", ConsentRevoke, h_revoke, roles=LOCAL_UI_ROLES)
