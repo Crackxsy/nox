@@ -1,0 +1,108 @@
+# Builds the Windows installer exactly as a release is built (installer/build.py + Inno Setup) and
+# runs it end to end on a throw-away runner: a silent install with the sandbox network rules (the
+# hosted runner is an administrator, so the one elevated step runs without a prompt), `nox doctor`
+# from the installed copy, an install over itself, an uninstall, and checks that the program
+# files, the WFP filters, their status key and the protected helper folder are gone
+# (installer/ci_smoke.py). This is the only place the installer's [Code] section is compiled and
+# run.
+#
+# It downloads the whole dependency set and takes a while, so it runs on release branches, on
+# pull requests that touch the installer or the sandbox rules, and on demand - not on every PR.
+name: Installer (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["release/**"]
+  pull_request:
+    paths:
+      - "installer/**"
+      - "src/nox/sandbox/wfp.py"
+      - "src/nox/sandbox/wfp_helper.py"
+      - "src/nox/sandbox/wfp_helper.ps1.template"
+      - "src/nox/sandbox/containers.py"
+      - "uv.lock"
+      - ".github/workflows/installer-windows.yml"
+
+permissions:
+  contents: read
+
+env:
+  INNO_URL: https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe
+  INNO_SHA256: 9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
+
+jobs:
+  installer:
+    name: Build, install, upgrade, uninstall
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Inno Setup (pinned by SHA-256)
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
+          Invoke-WebRequest -Uri $env:INNO_URL -OutFile $setup
+          $actual = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLowerInvariant()
+          if ($actual -ne $env:INNO_SHA256) { throw "Inno Setup: SHA-256 $actual is not the pinned $env:INNO_SHA256" }
+          $dir = Join-Path $env:RUNNER_TEMP 'inno'
+          $p = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/CURRENTUSER',"/DIR=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Inno Setup install failed: $($p.ExitCode)" }
+          if (-not (Test-Path (Join-Path $dir 'ISCC.exe'))) { throw 'ISCC.exe not found' }
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+
+      - name: Build dashboard and pet
+        shell: bash
+        run: |
+          for app in dashboard pet; do
+            (cd "ui/$app" && npm ci --ignore-scripts && npm run build)
+          done
+
+      - name: Build the payload (installer/build.py)
+        run: python installer/build.py
+
+      # build.py re-exports installer/requirements.lock from uv.lock: the committed lock must be
+      # exactly that, or the installer would ship other versions than the project is locked to.
+      - name: installer/requirements.lock matches uv.lock
+        shell: bash
+        run: git diff --exit-code --ignore-cr-at-eol -- installer/requirements.lock
+
+      - name: Compile the installer (ISCC)
+        working-directory: installer
+        run: ISCC.exe /Q nox.iss
+
+      - name: Installer size and SHA-256
+        shell: pwsh
+        run: |
+          Get-ChildItem installer/out/Nox-Setup-*.exe | ForEach-Object {
+            "{0}  {1:N1} MB  {2}" -f $_.Name, ($_.Length / 1MB), (Get-FileHash -Algorithm SHA256 $_).Hash
+          }
+
+      - name: Install, doctor, upgrade, uninstall
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem installer/out/Nox-Setup-*.exe | Select-Object -First 1).FullName
+          # The built runtime has every dependency of the `nox` package the script imports.
+          build/runtime/python.exe installer/ci_smoke.py $setup --logs "$env:RUNNER_TEMP/setup-logs"
+
+      - name: Setup logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: setup-logs
+          path: ${{ runner.temp }}/setup-logs
+          if-no-files-found: ignore

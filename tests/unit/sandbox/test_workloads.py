@@ -168,33 +168,43 @@ def test_the_windows_forwarder_waits_instead_of_polling() -> None:
     assert "WaitAny" in FORWARDER_PS and "AcceptTcpClientAsync" in FORWARDER_PS
 
 
-def test_the_windows_forwarder_never_gets_the_childs_environment(tmp_path) -> None:  # noqa: ANN001
+def test_the_windows_forwarder_never_gets_the_childs_environment(tmp_path, monkeypatch) -> None:  # noqa: ANN001
     # Re-review HIGH: only the confined child gets the caller's extra variables and the proxy
     # credentials; the host-started egress forwarder runs with the fixed base environment.
     import os
     import types
 
+    from nox.sandbox import windows
     from nox.sandbox.windows import WindowsSandbox, _base_env
 
+    # Who holds the forwarder range is checked separately (test_wfp); here it is Nox's forwarder.
+    monkeypatch.setattr(windows, "forwarder_port_problem", lambda *a: None)
+    monkeypatch.setattr(windows, "_identity", lambda pid: (pid, 1.0))
+    from nox.sandbox.containers import container_sid, slot_container_name
+
+    sid = container_sid(slot_container_name(10))  # block 47144-47147
     seen: list[dict[str, str]] = []
     containers: list[str] = []
     read_fd, write_fd = os.pipe()
-    os.write(write_fd, b"NOXFWD 47142\n")
+    os.write(write_fd, b"NOXFWD 47145\n")
     os.close(write_fd)
 
     def spawn(argv: list[str], **kw: Any) -> Any:
         seen.append(kw["env"])
         containers.append(kw["app_container"])
-        return types.SimpleNamespace(stdout_fd=read_fd, stderr_fd=None, close=lambda: None)
+        return types.SimpleNamespace(
+            pid=4242, stdout_fd=read_fd, stderr_fd=None, close=lambda: None
+        )
 
     backend = WindowsSandbox.__new__(WindowsSandbox)
     backend._w = types.SimpleNamespace(spawn=spawn)  # type: ignore[attr-defined]
-    _, port = backend._start_forwarder(tmp_path, r"\.\pipe\nox-abc", Limits(), "S-1-15-2-1-2")
-    assert port == 47142  # a port of the range the network rules leave open
+    fwd, port, own, _ = backend._start_forwarder(tmp_path, r"\.\pipe\nox-abc", Limits(), sid)
+    assert port == 47145  # a port of the block the network rules leave open for this container
     assert seen == [_base_env(tmp_path)]
     assert not any("PROXY" in key.upper() for key in seen[0])
     # ... and in the run's own container, the only one the proxy pipe admits (N6).
-    assert containers == ["S-1-15-2-1-2"]
+    assert containers == [sid]
+    windows._release_forwarder(fwd, own)  # noqa: SLF001
 
 
 def test_a_work_folder_names_its_user_system_and_one_container_only() -> None:

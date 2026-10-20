@@ -139,7 +139,8 @@ class ContainerSlots:
             if free is None:
                 raise SandboxUnavailable(
                     f"all {self.size} sandbox containers are taken by other workloads; "
-                    f"{workload!r} is refused (fail closed)"
+                    f"{workload!r} is refused (fail closed). Slots are never reused, not even "
+                    "after a workload is removed (docs/SECURITY.md, 'Containers')"
                 )
             table[workload] = free
             self._save(table)

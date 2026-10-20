@@ -19,10 +19,14 @@ What it does, in order:
 2. Fixes `build/runtime/python313._pth` (`import site` uncommented, `Lib\site-packages` added) -
    the embeddable distribution ships with both disabled, which would make a plain `pip install`
    invisible to the interpreter.
-3. Bootstraps `pip` into that runtime via `get-pip.py` (the embeddable zip has no pip).
+3. Installs `pip` into that runtime from its pinned wheel (URL and SHA-256 in `build.py`), with
+   `--no-index`: the wheel installs itself, nothing else is fetched (the embeddable zip has no
+   pip).
 4. Re-exports `installer/requirements.lock` via `uv export --extra shell --extra voice
-   --no-hashes` and `pip install`s everything in it *except* the `-e .` self-reference (nox's own
-   source is copied, not pip-installed - the payload never needs a build backend). Pass
+   --extra voice-supertonic` (with hashes) and `pip install --require-hashes
+   --only-binary=:all:`s everything in it *except* the `-e .` self-reference (wheels only, every
+   one hash-checked; nox's own source is copied, not pip-installed - the payload never needs a
+   build backend). Pass
    `--skip-lock-export` to reuse the committed lock file instead of re-resolving.
 5. Copies `src/nox`, `config/`, `plugins/`, `ui/pet/dist`, `ui/dashboard/dist` into `build/app/`.
    (The two dashboards must already be built: `cd ui/pet && npm run build`, same for
@@ -51,18 +55,29 @@ Output: `installer/out/Nox-Setup-<version>.exe` (git-ignored, like `installer/bu
   itself needs no admin rights).
 - **One optional elevated step** (task "Keep sandboxed commands away from this computer's local
   services and the home network", ticked by default): after the files are in place, setup starts
-  `runtime\python.exe -m nox.sandbox.wfp install` with the `runas` verb, so Windows shows **one UAC
-  prompt** for that process alone. It adds persistent Windows Filtering Platform filters that keep
-  Nox's sandbox containers off this computer's loopback services and the LAN, except the egress
-  forwarder's ports (details and limits: `docs/SECURITY.md`, "Command sandbox on Windows"). The step
-  reports back through a status file; if the prompt is declined or the step fails, setup says so in
-  a message box (logged, suppressed in silent installs) and finishes anyway - Nox then reports its
+  the system's own `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` with the `runas`
+  verb, so Windows shows **one UAC prompt** for that process alone. It never runs Nox's own Python
+  or anything else from the (user-writable) install folder: a short bootstrap reads the helper
+  script `{app}\sandbox\nox-sandbox-rules.ps1` into memory, checks its SHA-256 against the value
+  pinned into this installer at build time (`build/sandbox-rules/sandbox_rules.iss`), and runs only
+  those bytes. The helper stores a protected copy in `%ProgramFiles%\Nox Sandbox Rules` (admin-only
+  ACL), adds persistent Windows Filtering Platform filters - a hard block of everything for Nox's
+  sandbox containers except the egress forwarder's loopback ports (details and limits:
+  `docs/SECURITY.md`, "Command sandbox on Windows") - and reports to
+  `HKLM\SOFTWARE\Nox\SandboxRules`. If the prompt is declined or the step fails, setup says so in a
+  message box (logged, suppressed in silent installs) and finishes anyway - Nox then reports its
   sandbox as weaker on Windows builds without enforced loopback isolation and runs shell commands
-  only if the user accepts that. To add the rules later: run setup again, or
-  `nox sandbox firewall install` from an administrator prompt (`show` lists them).
-- Uninstall (when the task was ticked) runs `python -m nox.sandbox.wfp remove` elevated first -
-  a second UAC prompt - which removes every filter of Nox's WFP provider, its sublayer and the
-  provider. Declined, the filters stay; they only ever match Nox's own container SIDs.
+  only if the user accepts that. To add the rules later: run setup again (`nox sandbox firewall
+  show` lists them; `install` and `remove` print the protected helper's command for an
+  administrator prompt).
+- Uninstall runs the protected copy (when its SHA-256 still matches; else the checked copy in the
+  install folder) elevated first - a second UAC prompt - whenever Nox's rules may be there,
+  independent of the task: it removes every filter of Nox's WFP provider (also ones an older build
+  added), its sublayer, the provider, the status key and the protected folder. Declined, the
+  filters stay; they only ever match Nox's own container SIDs.
+- Licenses: the wizard shows the license notice and the written source offer (the bundled `voice`
+  extra makes the installer GPL-3.0-or-later as a whole); `LICENSE`, `NOTICE`, `COPYING`,
+  `THIRD_PARTY_LICENSES.md` and `SOURCE.txt` are installed into `{app}`.
 - Start-menu shortcut running `runtime\pythonw.exe "{app}\app\start_nox.pyw"` - the launcher
   puts `{app}\app` on `sys.path` itself and, if Nox cannot start, writes the reason to
   `%LOCALAPPDATA%\Nox\startup-error.log` and shows it in a message box.

@@ -313,7 +313,12 @@ falling back to a low-integrity token only where no AppContainer profile can be 
   `Nox.Sandbox.w127` (`nox.sandbox.containers`). Slots are assigned first come, first served, and
   recorded in `<nox home>/sandbox/container-slots.json`; a workload's name never picks its slot, a
   slot never passes to a second workload class, and a full pool refuses the run. The pool is fixed
-  so the container SIDs - a pure function of the name - are known at install time.
+  so the container SIDs - a pure function of the name - are known at install time. **Limit:** a
+  slot is never freed, not even when its workload is removed (its profile folder could still hold
+  what the first workload left, and a second class must never see it). One Nox home can therefore
+  run at most 128 distinct non-shell workload classes over its lifetime; the 129th is refused with
+  a message saying so. Deleting `container-slots.json` resets the table only together with
+  `nox sandbox reset` and a fresh Nox home - it is not done automatically.
 - **Filesystem and secrets:** no capabilities, so no user files, no credential store; the work
   folder is ACL'd to the user, SYSTEM and the run's own container SID only. Python runs get read
   access to Nox's own runtime folders, recorded and removed by `nox sandbox reset`.
@@ -321,23 +326,66 @@ falling back to a low-integrity token only where no AppContainer profile can be 
   keep a container off the host's loopback services, is **not enforced on every Windows build**
   (measured on Windows 11 build 26200 with the firewall on and no loopback exemption: a container
   reached any host loopback listener).
-- **Network rules (installer, one UAC prompt):** the installer's task "Keep sandboxed commands away
-  from this computer's local services and the home network" runs `python -m nox.sandbox.wfp
-  install` elevated. It adds persistent **Windows Filtering Platform** filters - one provider, one
-  sublayer with the highest weight, five filters per container SID (shell's and all 128 pool slots)
-  at the outbound connect layer, IPv4 and IPv6:
-  1. permit TCP to `127.0.0.1` ports 47100-47227 (the in-container egress forwarder's range);
-  2. hard-block loopback, `0/8`, private (`10/8`, `172.16/12`, `192.168/16`), CGNAT `100.64/10`,
-     link-local `169.254/16`, `198.18/15`, multicast and reserved IPv4 ranges, and `::/127`,
-     IPv4-mapped, NAT64, `fc00::/7`, `fe80::/10`, `fec0::/10` and `ff00::/8`;
-  3. hard-block every connection WFP flags as loopback (this computer's own LAN or VPN address too).
+- **Network rules (installer, one UAC prompt) - an allowlist by construction:** the installer's task
+  "Keep sandboxed commands away from this computer's local services and the home network" adds
+  persistent **Windows Filtering Platform** filters - one provider, one sublayer with the highest
+  weight, six filters per container SID (shell's and all 128 pool slots):
+  1. at the outbound connect layer and the inbound accept layer, IPv4 and IPv6: a **hard block of
+     everything** (weight 1, clears the action right);
+  2. the one exception, weight 15: TCP to `127.0.0.1` on **that container's own block** of four
+     forwarder ports at the connect layer (shell's container 47100-47103, pool slot *n*
+     47104+4*n ... 47107+4*n; all blocks together are 47100-47615, below Windows' dynamic port
+     range), and the forwarder accepting exactly such a connection at the accept layer. The blocks
+     never overlap, so a workload cannot even connect to another workload's forwarder. Four ports
+     per container because concurrent runs of one workload class share its container.
 
-  WFP rather than Defender Firewall rules: the filters live in Nox's own top sublayer and clear the
-  action right, so no permit elsewhere overrides them; they are enforced by the Base Filtering
-  Engine even when a third-party firewall has replaced Defender Firewall; and they can match the
-  loopback flag, not just addresses. `nox sandbox firewall show` prints every filter; `install` and
-  `remove` (from an administrator prompt) do what the installer does. Uninstall removes every filter
-  of Nox's provider, the sublayer and the provider (a second UAC prompt).
+  There is no list of private ranges to keep complete: loopback, the LAN, this computer's own LAN
+  and VPN addresses, IPv4-mapped `::ffff:0:0/96`, NAT64, 6to4 `2002::/16`, Teredo and the public
+  internet are all covered by the block of everything. WFP rather than Defender Firewall rules: the
+  filters live in Nox's own top sublayer and the blocks clear the action right, so no permit
+  elsewhere - Windows' own loopback handling, a third-party firewall's rules - opens them; and they
+  are enforced by the Base Filtering Engine even when a third-party firewall has replaced Defender
+  Firewall. `nox sandbox firewall show` prints every filter.
+- **No code from a user-writable folder ever runs elevated.** Nox installs per user into
+  `%LOCALAPPDATA%\Programs\Nox`, which the user's account (and so any malware running as that
+  user) can change - a `.pth` file, the standard-library zip or a DLL next to `python.exe` would
+  run with administrator rights if that Python were started elevated. So the elevated step never
+  starts Nox's Python. It starts the system's own
+  `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` (by full path, `-NoProfile`) with a
+  short bootstrap on its command line that reads the helper script `nox-sandbox-rules.ps1` into
+  memory, checks its **SHA-256 against the value pinned into the installer at build time**, and
+  runs exactly the bytes it checked - a copy changed before the check is refused, one changed after
+  it is never read again. **No value is ever embedded as PowerShell source** in that elevated
+  command line: the helper's paths arrive as the hex digits of their UTF-16 code units and are
+  decoded by the bootstrap, so no character of a path (an apostrophe, a typographic quote U+2018 to
+  U+201F that PowerShell also reads as a quote, `$`, a backtick) can end a string literal. As a
+  second line of defence, the installer (`SandboxPathSafe`) and `wfp_helper.path_is_safe` refuse a
+  path with quotes, typographic quotes, `$`, backtick, `;`, `&` or control characters before
+  anything starts; letters outside ASCII (a user name like "Jürgen") stay allowed. The action is
+  one of three fixed words. The helper (`nox.sandbox.wfp_helper`) is self-contained: .NET only, no
+  cmdlet (so no module autoload from a user-writable module path), no compiler and no temporary
+  file (the WFP calls are P/Invoke methods emitted in memory, `fwpuclnt.dll` by its full system
+  path), and no input but its action - it derives the container names, SIDs and filter keys
+  itself, exactly as Nox does (a CI test runs it and compares the output line by line).
+- **Protected copy and status:** the elevated install first stores the verified bytes in
+  `%ProgramFiles%\Nox Sandbox Rules\nox-sandbox-rules.ps1`. The folder gets an explicit, protected
+  ACL - Administrators and SYSTEM full control, Users read and execute, owner Administrators,
+  inheritance from Program Files cut - and the helper reads the ACL of the folder and the file back
+  and refuses if anyone else could write, own or re-ACL them (or if the folder is a reparse
+  point). The result goes to `HKLM\SOFTWARE\Nox\SandboxRules` (admin-write, user-read), never to a
+  file in the user's temp folder. Uninstall runs **that protected copy** when its SHA-256 still
+  matches the pinned one (else the equally checked copy in the install folder), removes every
+  filter of Nox's provider - whoever added it, an older build or its command line included - the
+  sublayer, the provider, the status key and the protected folder. It does so whenever the rules
+  may be there (the folder, the status key, or Nox's provider found by a non-elevated check),
+  independent of the install task. The installer writes a fresh uninstall log
+  (`UninstallLogMode=overwrite`), so an older build's elevated `python.exe` uninstall step never
+  runs again.
+- **The command line refuses:** `nox sandbox firewall install|remove` (and `python -m
+  nox.sandbox.wfp install|remove`) never change the rules - elevated or not, they refuse and print
+  the protected helper's command for an administrator prompt - by absolute paths from the Windows
+  API, never `%SystemRoot%`/`%ProgramFiles%`, which the user's own environment can redirect;
+  `show` works for anyone.
 - **The probe decides:** the first run measures whether a container reaches a host loopback listener
   (`host_loopback_reachable`). Only an explicit "refused" report counts as confined, and only while
   nothing on the host listens in the forwarder's port range; then `confines_network` is true, the
@@ -345,30 +393,46 @@ falling back to a low-integrity token only where no AppContainer profile can be 
   timeout, a crash, a connection or an unknown listener table counts as reachable (fail closed).
   The rules are never assumed: without them, or if they do not take effect, the probe says so.
 - **Declared egress:** the run's proxy listens on a named pipe whose DACL names only the run's
-  container SID; a forwarder in the same container listens on `127.0.0.1` in the forwarder range
-  and relays into the pipe. The proxy checks the per-run credentials, the declaration and `NetGuard`.
+  container SID; a forwarder in the same container listens on `127.0.0.1` in that container's port
+  block and relays into the pipe. The proxy checks the per-run credentials (random per run, `407`
+  for anything else - another run's credentials included), the declaration and `NetGuard`.
+  **Before every run that uses the forwarder**, Nox checks the listener table: the forwarder's port
+  must be held by the forwarder process Nox just started, identified by PID *and* creation time
+  (a reused PID does not match; Nox also holds the process handle, so the PID cannot be reused
+  while the run lives), and every other listener in the container's block must be one of Nox's
+  own live forwarders. **While the run lives** the same check repeats every 1.5 seconds; a foreign
+  listener that appears in the block, or a forwarder that lost its port, ends the run (a finished
+  `run` is reported as refused, a long-running `start`ed process is killed). Otherwise - a foreign
+  listener, an owner that cannot be read, a table that cannot be listed - the run is refused (fail
+  closed) instead of being given a path to a listener that is not Nox's.
+- **Why not one port and one permit per run:** the filters are added once, by the elevated
+  installer step; Nox itself never runs as an administrator, so it cannot add or change a WFP
+  filter per run. The per-container block is the narrowest scope fixed rules can give.
 
 Known limits, accepted:
 
-- A **host** program that listens on `127.0.0.1` inside the forwarder range (47100-47227) would be
-  reachable from a container. The probe refuses "confined" while one is there when it runs; one
-  that starts later is not noticed until the next start of Nox.
+- A **host** program that starts listening inside a container's port block *during* a run could be
+  reached from that container for at most one check interval (1.5 s) before the run is ended.
+- Windows can **reserve** a container's port block at boot (an excluded port range, typically
+  Hyper-V, WSL or Docker). The forwarder then finds no free port and the run is refused, with the
+  reserved range and `netsh interface ipv4 show excludedportrange protocol=tcp` named in the error;
+  the fixed rules cannot move the block elsewhere.
 - The probe measures shell's container; the pool containers carry the same filters, built from the
   same code, but are not probed one by one.
 - With the rules in place a workload cannot reach its **own** loopback outside the forwarder range
   (a skill test that starts a local server and connects to it fails).
-- The installer is per-user, the rule step is elevated: where a standard user enters an
-  administrator's credentials, Nox's runtime from the per-user install folder runs once as that
-  administrator (the same trust any per-user installer's elevated step needs). The step creates
-  only the filters above and needs nothing from the user's profile - the SIDs come from the names.
+- UAC is the boundary Nox relies on, and Microsoft does not treat UAC as a security boundary
+  against malware already running as the same user: such malware can show its own UAC prompt, or
+  inject into elevated .NET processes through per-user environment settings. Nox's step adds no
+  new path - the code it runs elevated comes only from the pinned bytes - but it cannot close these
+  generic ones.
 - If the uninstall's UAC prompt is declined, the filters stay. They only ever match Nox's own
-  container SIDs; install and uninstall again, or run `nox sandbox firewall remove` from an
-  administrator prompt before uninstalling, to remove them.
-- Not yet verified on a real installation by an automated test: CI runners cannot install WFP
-  filters, so the unit tests pin the exact rules, SIDs, address ranges, structure sizes and the
-  installer entries, and the probe logic with a mocked OS. A clean-VM pass (install with the rules,
-  `nox sandbox firewall show`, the probe reports confined, a shell command and declared egress
-  work, uninstall leaves no filter) is still to be done.
+  container SIDs; run the protected helper's `uninstall` from an administrator prompt
+  (`nox sandbox firewall remove` prints the command) to remove them.
+- The real install/remove against the Base Filtering Engine is exercised only where CI runs as an
+  administrator (the hosted Windows runners do, `NOX_WFP_LIVE=1`); a clean-VM pass of the whole
+  installer (install with the rules, `nox sandbox firewall show`, the probe reports confined, a
+  shell command and declared egress work, uninstall leaves no filter) is still to be done by hand.
 
 ## Plugin sandboxing boundary
 

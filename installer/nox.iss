@@ -4,11 +4,21 @@
 ; existing vault path); uninstall removes only the program files it installed.
 ;
 ; The install itself needs no administrator. One optional step does (task "sandboxrules", ticked by
-; default): it starts `python -m nox.sandbox.wfp install` elevated - one UAC prompt - which adds
-; Windows Filtering Platform rules that keep Nox's sandboxed commands off this computer's loopback
-; services and the LAN (docs/SECURITY.md, "Command sandbox on Windows"). Uninstall removes them
-; again (a second UAC prompt). Declining the prompt is fine: Nox then reports its sandbox as weaker
-; and runs shell commands only if the user accepts that.
+; default): one UAC prompt for the system's own Windows PowerShell, which adds Windows Filtering
+; Platform rules that keep Nox's sandboxed commands off this computer's loopback services, the LAN
+; and the internet (docs/SECURITY.md, "Command sandbox on Windows"). That step never runs Nox's own
+; Python or any other code from {app}, which the user's account can change: a short bootstrap reads
+; the self-contained helper script into memory, checks its SHA-256 against the value pinned into
+; this installer at build time (build\sandbox-rules\sandbox_rules.iss), and runs only those bytes.
+; The helper keeps a copy in the admin-only "%ProgramFiles%\Nox Sandbox Rules" folder and reports to
+; HKLM\SOFTWARE\Nox\SandboxRules. Uninstall removes the rules again (a second UAC prompt) whenever
+; any are there - also ones an older build or its command line added. Declining the prompt is fine:
+; Nox then reports its sandbox as weaker and runs shell commands only if the user accepts that.
+;
+; Licenses: this installer bundles the `voice` extra (Piper with espeak-ng, GPL-3.0-or-later), so
+; it is distributed under GPL-3.0-or-later as a whole. The wizard shows the notice and written
+; source offer (LicenseFile), and LICENSE, NOTICE, COPYING, THIRD_PARTY_LICENSES.md and SOURCE.txt
+; are installed into {app} (all collected by build.py into build\legal).
 ;
 ; Build with (once Inno Setup is installed):
 ;   "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\nox.iss
@@ -21,6 +31,8 @@
 #define MyAppExeName "pythonw.exe"
 #define BuildAppDir "..\build\app"
 #define BuildRuntimeDir "..\build\runtime"
+#define BuildLegalDir "..\build\legal"
+#define BuildSandboxRulesDir "..\build\sandbox-rules"
 
 [Setup]
 AppId={{6F2F6C6E-2B6E-4B5B-9C2E-3B9E6B2C6A1D}
@@ -46,6 +58,12 @@ WizardStyle=modern
 SetupIconFile=
 UninstallDisplayName={#MyAppName}
 ChangesEnvironment=no
+; The combined license notice and the written source offer (GPL-3.0 section 6), shown before
+; anything is installed.
+LicenseFile={#BuildLegalDir}\INSTALLER_LICENSE.txt
+; A fresh uninstall log on every install: the log of an older build may hold an [UninstallRun]
+; entry that started {app}\runtime\python.exe elevated, and that must never run again.
+UninstallLogMode=overwrite
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -65,6 +83,10 @@ Name: "sandboxrules"; Description: "{cm:SandboxRulesTask}"; GroupDescription: "{
 Source: "{#BuildRuntimeDir}\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; nox's own source, config, plugins, and the two built web UIs (pet + dashboard).
 Source: "{#BuildAppDir}\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The license texts and the written source offer.
+Source: "{#BuildLegalDir}\*"; DestDir: "{app}"; Flags: ignoreversion
+; The sandbox-rules helper. Only ever run after its SHA-256 matched the pinned one ([Code]).
+Source: "{#BuildSandboxRulesDir}\nox-sandbox-rules.ps1"; DestDir: "{app}\sandbox"; Flags: ignoreversion
 
 [Icons]
 ; Every shortcut starts the launcher, not `-m nox.supervisor`: the launcher puts `{app}\app` on
@@ -81,9 +103,7 @@ Name: "{userstartup}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: ""
 Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; Description: "{cm:LaunchProgram,Nox}"; Flags: nowait postinstall skipifsilent unchecked
 
 [UninstallRun]
-; Remove the sandbox network rules (elevated: one UAC prompt). Recorded only when the task was
-; ticked at install time. Removes every filter of Nox's WFP provider, its sublayer and the provider.
-Filename: "{app}\runtime\python.exe"; Parameters: "-m nox.sandbox.wfp remove"; WorkingDir: "{app}\app"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Tasks: sandboxrules; RunOnceId: "NoxSandboxRulesRemove"
+; The sandbox network rules are removed in [Code] (CurUninstallStepChanged), before this runs.
 ; Remove the read rights Nox granted its AppContainer sandbox on the runtime folders (recorded in a
 ; manifest; exactly those ACEs, nothing else). Runs before the runtime itself is deleted.
 Filename: "{app}\runtime\python.exe"; Parameters: "-m nox.cli sandbox reset"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated; RunOnceId: "NoxSandboxReset"
@@ -93,52 +113,143 @@ Filename: "{app}\runtime\python.exe"; Parameters: "-m nox.cli sandbox reset"; Wo
 ; data folder and any config outside {app} are never named here and are never touched -
 ; uninstall must leave the vault and all user data exactly as it was.
 Type: filesandordirs; Name: "{app}\runtime"
-Type: filesandordirs; Name: "{app}\app\__pycache__"
+Type: filesandordirs; Name: "{app}\app"
+Type: filesandordirs; Name: "{app}\sandbox"
 
 [CustomMessages]
 english.SandboxRulesGroup=Security:
 german.SandboxRulesGroup=Sicherheit:
 english.SandboxRulesTask=Keep sandboxed commands away from this computer's local services and the home network (asks for administrator rights once)
 german.SandboxRulesTask=Sandbox von lokalen Diensten dieses Computers und vom Heimnetz fernhalten (fragt einmal nach Administratorrechten)
-english.SandboxRulesFailed=The sandbox network rules were not added (%1).%n%nNox works without them, but on this Windows build it then runs shell commands only if you accept the weaker sandbox in its settings. To add the rules later, run this setup again or run "nox sandbox firewall install" from an administrator prompt.
-german.SandboxRulesFailed=Die Netzwerkregeln der Sandbox wurden nicht angelegt (%1).%n%nNox funktioniert auch ohne sie, fuehrt Shell-Befehle auf diesem Windows-Build dann aber nur aus, wenn du die schwaechere Sandbox in den Einstellungen akzeptierst. Spaeter nachholen: dieses Setup erneut ausfuehren oder "nox sandbox firewall install" in einer Administrator-Eingabeaufforderung.
+english.SandboxRulesFailed=The sandbox network rules were not added (%1).%n%nNox works without them, but on this Windows build it then runs shell commands only if you accept the weaker sandbox in its settings. To add the rules later, run this setup again.
+german.SandboxRulesFailed=Die Netzwerkregeln der Sandbox wurden nicht angelegt (%1).%n%nNox funktioniert auch ohne sie, fuehrt Shell-Befehle auf diesem Windows-Build dann aber nur aus, wenn du die schwaechere Sandbox in den Einstellungen akzeptierst. Spaeter nachholen: dieses Setup erneut ausfuehren.
+english.SandboxRulesUninstallAsk=%1%n%nRemoving them needs administrator rights once: Windows will ask next. Remove Nox's sandbox network rules now?%n%n(If you say no, they stay until you run an administrator prompt with the command shown by "nox sandbox firewall remove".)
+german.SandboxRulesUninstallAsk=%1%n%nZum Entfernen braucht es einmal Administratorrechte: Windows fragt gleich danach. Die Netzwerkregeln der Nox-Sandbox jetzt entfernen?%n%n(Bei Nein bleiben sie bestehen, bis du den Befehl von "nox sandbox firewall remove" in einer Administrator-Eingabeaufforderung ausfuehrst.)
+english.SandboxRulesUninstallFound=This setup did not add sandbox network rules itself, but Windows still has rules from Nox (from an older version or added by hand).
+german.SandboxRulesUninstallFound=Dieses Setup hat selbst keine Netzwerkregeln angelegt, Windows hat aber noch Regeln von Nox (aus einer aelteren Version oder von Hand angelegt).
+english.SandboxRulesUninstallUnknown=This setup did not add sandbox network rules itself, and whether Windows still has rules from Nox could not be checked.
+german.SandboxRulesUninstallUnknown=Dieses Setup hat selbst keine Netzwerkregeln angelegt, und ob Windows noch Regeln von Nox hat, liess sich nicht pruefen.
 
 [Code]
 { No vault path is ever written or read by the installer itself - first-start config (vault path,
   name, language, optional Twitch/mic-camera/AI backend) is handled by nox's own first-start flow,
   not by this script, so the installer stays honest about what it actually configures. }
 
-{ The one elevated step: `python -m nox.sandbox.wfp install`, started with the "runas" verb so
-  Windows shows a UAC prompt for this process alone. The shell hands back no exit code, so the
-  step writes its result to a status file: "0" on the first line means every rule is in place.
-  Returns '' on success, otherwise why not. }
+#include "..\build\sandbox-rules\sandbox_rules.iss"
+
+const
+  SandboxStatusKey = 'SOFTWARE\Nox\SandboxRules';
+
+{ The system's own 64-bit Windows PowerShell, by full path (never one found on PATH). }
+function SandboxPowerShell(): String;
+begin
+  Result := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+end;
+
+function SandboxProtectedCopy(): String;
+begin
+  Result := ExpandConstant('{commonpf64}\Nox Sandbox Rules\nox-sandbox-rules.ps1');
+end;
+
+function SandboxAppCopy(): String;
+begin
+  Result := ExpandConstant('{app}\sandbox\nox-sandbox-rules.ps1');
+end;
+
+{ Runs the helper through the bootstrap: elevated ("runas", one UAC prompt) or not, reading the
+  helper from First (and, if that does not match the pinned hash, from Second, when given). The
+  paths reach the bootstrap only hex-encoded (SandboxPathArg); a path with a character that is not
+  allowed (quotes, typographic quotes, dollar, backtick, semicolon, ampersand, control characters)
+  is refused before anything starts. Returns False when it could not be started at all (ErrorCode
+  says why). }
+function RunSandboxHelper(const Action, First, Second: String; Elevated: Boolean; var ErrorCode: Integer): Boolean;
+var
+  Redirect: Boolean;
+  Paths, Params: String;
+begin
+  Result := False;
+  ErrorCode := 123; { ERROR_INVALID_NAME }
+  Paths := SandboxPathArg(First);
+  if Paths = '' then
+    Exit;
+  if Second <> '' then
+  begin
+    if SandboxPathArg(Second) = '' then
+      Exit;
+    Paths := Paths + ',' + SandboxPathArg(Second);
+  end;
+  Params := SandboxRulesParams(Action, Paths);
+  if Params = '' then
+    Exit;
+  Redirect := EnableFsRedirection(False);
+  try
+    if Elevated then
+      Result := ShellExec('runas', SandboxPowerShell(), Params,
+        ExpandConstant('{sys}'), SW_HIDE, ewWaitUntilTerminated, ErrorCode)
+    else
+      Result := Exec(SandboxPowerShell(), Params,
+        ExpandConstant('{sys}'), SW_HIDE, ewWaitUntilTerminated, ErrorCode);
+  finally
+    EnableFsRedirection(Redirect);
+  end;
+end;
+
+function SandboxSequence(): Cardinal;
+begin
+  if not RegQueryDWordValue(HKLM64, SandboxStatusKey, 'Sequence', Result) then
+    Result := 0;
+end;
+
+{ The one elevated step. The shell hands back no exit code, so the helper reports to
+  HKLM\SOFTWARE\Nox\SandboxRules (only administrators can write there): a new Sequence and
+  Code 0 mean every rule is in place. Returns '' on success, otherwise why not. }
 function AddSandboxRules(): String;
 var
-  StatusFile: String;
-  Status: AnsiString;
-  FirstLine: String;
+  Before, Code: Cardinal;
   ErrorCode: Integer;
+  Message: String;
 begin
   Result := '';
-  StatusFile := ExpandConstant('{tmp}\nox-sandbox-rules.txt');
-  DeleteFile(StatusFile);
-  if not ShellExec('runas', ExpandConstant('{app}\runtime\python.exe'),
-      '-m nox.sandbox.wfp install --status-file "' + StatusFile + '"',
-      ExpandConstant('{app}\app'), SW_HIDE, ewWaitUntilTerminated, ErrorCode) then
+  Before := SandboxSequence();
+  if not RunSandboxHelper('install', SandboxAppCopy(), '', True, ErrorCode) then
   begin
     Result := SysErrorMessage(ErrorCode);
     Exit;
   end;
-  if not LoadStringFromFile(StatusFile, Status) then
+  if SandboxSequence() = Before then
   begin
     Result := 'no result from the rule setup';
     Exit;
   end;
-  FirstLine := String(Status);
-  if Pos(#10, FirstLine) > 0 then
-    FirstLine := Copy(FirstLine, 1, Pos(#10, FirstLine) - 1);
-  if Trim(FirstLine) <> '0' then
-    Result := Trim(String(Status));
+  if not RegQueryDWordValue(HKLM64, SandboxStatusKey, 'Code', Code) or (Code <> 0) then
+  begin
+    if not RegQueryStringValue(HKLM64, SandboxStatusKey, 'Message', Message) then
+      Message := 'the rule setup failed';
+    Result := Message;
+  end;
+end;
+
+const
+  RulesAbsent = 0;    { the helper, not elevated, found no provider of Nox's }
+  RulesRecorded = 1;  { the helper's protected folder or status key exists }
+  RulesFound = 2;     { no record, but the helper found Nox's provider (an older build, by hand) }
+  RulesUnknown = 3;   { no record, and the helper could not say: counts as "maybe" }
+
+{ Whether Nox's rules may be in place - independent of the install task. }
+function SandboxRulesState(): Integer;
+var
+  ErrorCode: Integer;
+begin
+  if FileExists(SandboxProtectedCopy()) or RegKeyExists(HKLM64, SandboxStatusKey) then
+    Result := RulesRecorded
+  else if not RunSandboxHelper('status', SandboxAppCopy(), '', False, ErrorCode) then
+    Result := RulesUnknown
+  else if ErrorCode = 1 then
+    Result := RulesAbsent
+  else if ErrorCode = 0 then
+    Result := RulesFound
+  else
+    Result := RulesUnknown;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -157,4 +268,39 @@ begin
     else
       Log('Sandbox network rules added');
   end;
+end;
+
+{ Uninstall removes the rules whenever they may be there - independent of the task, so rules an
+  older build or "nox sandbox firewall install" added go too. It runs the protected copy when its
+  SHA-256 matches, else the (equally checked) copy in the install folder; never anything unchecked.
+  Without a record of this setup's own rule step, a UAC prompt would come out of nowhere: the user
+  is told why first and may skip it (silent uninstalls remove them). }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ErrorCode, State: Integer;
+  Why: String;
+begin
+  if CurUninstallStep <> usUninstall then
+    Exit;
+  State := SandboxRulesState();
+  if State = RulesAbsent then
+    Exit;
+  if State <> RulesRecorded then
+  begin
+    if State = RulesFound then
+      Why := CustomMessage('SandboxRulesUninstallFound')
+    else
+      Why := CustomMessage('SandboxRulesUninstallUnknown');
+    if SuppressibleMsgBox(FmtMessage(CustomMessage('SandboxRulesUninstallAsk'), [Why]),
+        mbConfirmation, MB_YESNO, IDYES) <> IDYES then
+    begin
+      Log('Sandbox network rules: removal skipped by the user');
+      Exit;
+    end;
+  end;
+  if RunSandboxHelper('uninstall', SandboxProtectedCopy(), SandboxAppCopy(), True,
+      ErrorCode) then
+    Log('Sandbox network rules: removal ran')
+  else
+    Log('Sandbox network rules not removed: ' + SysErrorMessage(ErrorCode));
 end;

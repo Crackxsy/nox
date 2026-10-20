@@ -1,4 +1,4 @@
-"""Network rules that keep Nox's AppContainers off this computer's loopback and the LAN.
+"""Network rules that keep Nox's AppContainers off this computer's loopback, the LAN and the net.
 
 Why they are needed: an AppContainer without capabilities has no internet or LAN access, and
 Windows' network isolation is meant to keep it off loopback services of the host too. That last
@@ -7,64 +7,78 @@ loopback exemption): a desktop AppContainer connected to any host loopback liste
 loopback probe (`nox.sandbox.windows.host_loopback_reachable`) reported "reachable", the
 AppContainer did not count as strong, and shell commands needed the weak-sandbox opt-in.
 
-What they are: Windows Filtering Platform (WFP) filters, added once by the installer's elevated
-step (`python -m nox.sandbox.wfp install`, which needs an administrator) and removed again on
-uninstall. Plain WFP rather than Windows Defender Firewall rules, because:
+What they are: Windows Filtering Platform (WFP) filters, added by the installer's one elevated
+step and removed again on uninstall. That step never runs Nox's own Python: Nox is installed per
+user, so its runtime is writable by the user's account, and code from there must never run as an
+administrator. The filters are added by a self-contained PowerShell script that ships *inside* the
+installer and is pinned by its SHA-256 (`nox.sandbox.wfp_helper`); a copy is kept in an admin-only
+folder for uninstall and repair. `python -m nox.sandbox.wfp install|remove` therefore refuses and
+names that helper; `show` lists the rules for anyone to check.
+
+Plain WFP rather than Windows Defender Firewall rules, because:
 
 * they sit in a sublayer of Nox's own with the highest weight, and the blocks clear the action
-  right ("hard" blocks), so no permit elsewhere - Windows' own loopback handling included - can
-  override them; Defender Firewall rules live in the firewall's sublayer, whose built-in loopback
-  handling decides first;
+  right ("hard" blocks), so no permit elsewhere - Windows' own loopback handling, a third-party
+  firewall's rules - can override them;
 * they are enforced by the Base Filtering Engine whether or not Defender Firewall is the active
   firewall (a third-party firewall turns the Defender rules off, not these);
-* they can match the "is loopback" flag of a connection, which also covers this computer's own
-  LAN and VPN addresses, not just `127.0.0.0/8`.
+* they match the connecting *package* (the AppContainer SID), so nothing but Nox's containers is
+  affected.
 
-Per container SID (shell's container and every pool slot, `nox.sandbox.containers`), at the
-outbound connect layer (TCP connects and the first UDP send), IPv4 and IPv6:
+An allowlist by construction, per container SID (shell's container and every pool slot,
+`nox.sandbox.containers`):
 
-1. permit TCP to `127.0.0.1` on the egress forwarder's ports (`FORWARDER_PORTS`) - the in-container
-   forwarder that relays to Nox's egress proxy listens there (`nox.sandbox.windows`);
-2. block every local, private, link-local, CGNAT, multicast and reserved destination
-   (`BLOCKED_V4`, `BLOCKED_V6`);
-3. block every connection WFP flags as loopback.
+1. at the outbound connect layer (TCP connects and the first UDP send) and the inbound accept
+   layer, IPv4 and IPv6: a hard **block of everything**, at a low weight;
+2. above it, the one exception, at the highest weight: TCP to `127.0.0.1` on *that container's
+   own* block of forwarder ports (`container_ports`, four ports each, all inside
+   `FORWARDER_PORTS`) at the connect layer, and the forwarder accepting exactly such a connection
+   at the accept layer - the in-container forwarder that relays to Nox's egress proxy listens
+   there (`nox.sandbox.windows`). A container cannot even connect to another container's
+   forwarder; the blocks never overlap.
 
-Rule 1 has the highest weight in the sublayer, so it wins over 2 and 3 for exactly that address and
-port range; everything else local is blocked. What the rules do not do: they cannot tell a
-listener in the forwarder range that belongs to the host from the forwarder itself - so the probe
-also refuses "confined" while anything on the host listens in that range - and they block a
-workload's own loopback outside that range (a skill test that starts a local server and connects to
-it). The probe stays the source of truth: the sandbox counts as strong only when it observes the
-container being refused.
+Nothing is listed as "blocked": there is no list of private ranges to keep complete. IPv4-mapped
+and NAT64 addresses, 6to4 (`2002::/16`), Teredo, the host's own LAN and VPN addresses, link-local,
+multicast and the public internet are all covered by the block of everything. What the rules do
+not do: they cannot tell a listener in the forwarder range that belongs to the host from the
+forwarder itself - so the probe refuses "confined" while anything foreign listens in that range,
+and every run keeps checking its own block while it lives (`nox.sandbox.windows`) - and they block a
+workload's own loopback outside that range (a skill test that starts a local server and connects
+to it). The probe stays the source of truth: the sandbox counts as strong only when it observes
+the container being refused.
 
-Everything here is pure Python and runs on any platform (the tests check the exact rules); only
-`apply`/`remove` talk to Windows (`nox.sandbox._wfp_win32`).
+Everything here is pure Python and runs on any platform (the tests check the exact rules, and that
+the helper script derives the very same ones).
 """
 
 from __future__ import annotations
 
+import ctypes
 import ipaddress
 import sys
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cache
 from typing import Literal
 
 from nox.sandbox.containers import all_container_names, container_sid
 
 __all__ = [
-    "BLOCKED_V4",
-    "BLOCKED_V6",
     "FORWARDER_PORTS",
+    "LAYERS",
     "PROVIDER_KEY",
     "SUBLAYER_KEY",
     "FilterRule",
-    "Flags",
+    "LocalAddress",
+    "LocalPortRange",
     "Package",
     "PortRange",
     "Protocol",
     "Remote",
     "all_rules",
+    "container_ports",
+    "ports_by_sid",
     "describe",
     "filter_key",
     "main",
@@ -76,50 +90,39 @@ __all__ = [
 PROVIDER_KEY = uuid.UUID("a8885a17-a31d-4472-8a83-5ac136984f68")
 SUBLAYER_KEY = uuid.UUID("c7d07ae0-4bf0-4fee-b6b1-61d9fca37220")
 #: Namespace of the per-rule filter keys (`filter_key`).
-_KEY_NAMESPACE = uuid.UUID("ab693b13-a6ef-48c4-8c8c-b27790b328e1")
+KEY_NAMESPACE = uuid.UUID("ab693b13-a6ef-48c4-8c8c-b27790b328e1")
 #: Highest sublayer weight: Nox's sublayer is evaluated first.
 SUBLAYER_WEIGHT = 0xFFFF
+#: Filter weights inside the sublayer (FWP_UINT8, 0-15): the highest matching filter decides.
+PERMIT_WEIGHT = 15
+BLOCK_WEIGHT = 1
 
-#: Where the in-container egress forwarder may listen: 128 ports below Windows' dynamic port range
-#: (49152-65535 by default), so a host program that asks for "any free port" never lands here.
-FORWARDER_PORTS = range(47_100, 47_228)
-
-#: IPv4 destinations a contained workload may never reach directly.
-BLOCKED_V4: tuple[ipaddress.IPv4Network, ...] = tuple(
-    ipaddress.IPv4Network(net)
-    for net in (
-        "0.0.0.0/8",  # "this network": reaches the host itself on some stacks
-        "10.0.0.0/8",
-        "100.64.0.0/10",  # CGNAT, Tailscale
-        "127.0.0.0/8",
-        "169.254.0.0/16",  # link-local, cloud metadata
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-        "198.18.0.0/15",
-        "224.0.0.0/4",  # multicast (LAN discovery)
-        "240.0.0.0/4",  # reserved, broadcast
-    )
-)
-#: IPv6 destinations a contained workload may never reach directly.
-BLOCKED_V6: tuple[ipaddress.IPv6Network, ...] = tuple(
-    ipaddress.IPv6Network(net)
-    for net in (
-        "::/127",  # unspecified and loopback (::1)
-        "::ffff:0:0/96",  # IPv4-mapped
-        "64:ff9b::/96",  # NAT64: embeds any IPv4 address, private ones included
-        "fc00::/7",  # unique local
-        "fe80::/10",  # link-local
-        "fec0::/10",  # site-local (deprecated, still routable on some LANs)
-        "ff00::/8",  # multicast
-    )
-)
-
-#: FWP_CONDITION_FLAG_IS_LOOPBACK: WFP sets it on every connection that stays on this computer.
-FLAG_IS_LOOPBACK = 0x00000001
+#: How many forwarder ports each container has: concurrent runs of one workload class share a
+#: container, and each run's forwarder needs a port of its own.
+PORTS_PER_CONTAINER = 4
+#: Where the in-container egress forwarders may listen: one block of `PORTS_PER_CONTAINER` ports
+#: per container (`container_ports`), all below Windows' dynamic port range (49152-65535 by
+#: default), so a host program that asks for "any free port" never lands here.
+FORWARDER_PORTS = range(47_100, 47_100 + PORTS_PER_CONTAINER * len(all_container_names()))
+#: The forwarder's address: the container's own IPv4 loopback.
+FORWARDER_ADDRESS = ipaddress.IPv4Network("127.0.0.1/32")
 TCP = 6
 
-Layer = Literal["ALE_AUTH_CONNECT_V4", "ALE_AUTH_CONNECT_V6"]
+Layer = Literal[
+    "ALE_AUTH_CONNECT_V4",
+    "ALE_AUTH_CONNECT_V6",
+    "ALE_AUTH_RECV_ACCEPT_V4",
+    "ALE_AUTH_RECV_ACCEPT_V6",
+]
 Action = Literal["PERMIT", "BLOCK"]
+
+#: The WFP layers Nox filters (fwpmu.h). Uninstall looks for Nox's filters in each.
+LAYERS: dict[Layer, uuid.UUID] = {
+    "ALE_AUTH_CONNECT_V4": uuid.UUID("c38d57d1-05a7-4c33-904f-7fbceee60e82"),
+    "ALE_AUTH_CONNECT_V6": uuid.UUID("4a72393b-319f-44bc-84c3-ba54dcb3b6b4"),
+    "ALE_AUTH_RECV_ACCEPT_V4": uuid.UUID("e1cd9fe7-f4b5-4273-96c0-592e487b8650"),
+    "ALE_AUTH_RECV_ACCEPT_V6": uuid.UUID("a3b42c97-9f04-4672-b87e-cee9c483257f"),
+}
 
 
 @dataclass(frozen=True)
@@ -131,14 +134,29 @@ class Package:
 
 @dataclass(frozen=True)
 class Remote:
-    """The destination address lies in `network` (FWPM_CONDITION_IP_REMOTE_ADDRESS)."""
+    """The remote address lies in `network` (FWPM_CONDITION_IP_REMOTE_ADDRESS)."""
 
-    network: ipaddress.IPv4Network | ipaddress.IPv6Network
+    network: ipaddress.IPv4Network
 
 
 @dataclass(frozen=True)
 class PortRange:
-    """The destination port lies in [low, high] (FWPM_CONDITION_IP_REMOTE_PORT, FWP_MATCH_RANGE)."""
+    """The remote port lies in [low, high] (FWPM_CONDITION_IP_REMOTE_PORT, FWP_MATCH_RANGE)."""
+
+    low: int
+    high: int
+
+
+@dataclass(frozen=True)
+class LocalAddress:
+    """The local address lies in `network` (FWPM_CONDITION_IP_LOCAL_ADDRESS)."""
+
+    network: ipaddress.IPv4Network
+
+
+@dataclass(frozen=True)
+class LocalPortRange:
+    """The local port lies in [low, high] (FWPM_CONDITION_IP_LOCAL_PORT, FWP_MATCH_RANGE)."""
 
     low: int
     high: int
@@ -151,19 +169,12 @@ class Protocol:
     number: int
 
 
-@dataclass(frozen=True)
-class Flags:
-    """Any of `mask` is set in the connection's flags (FWPM_CONDITION_FLAGS, FLAGS_ANY_SET)."""
-
-    mask: int
-
-
-Condition = Package | Remote | PortRange | Protocol | Flags
+Condition = Package | Remote | PortRange | LocalAddress | LocalPortRange | Protocol
 
 
 @dataclass(frozen=True)
 class FilterRule:
-    """One WFP filter. Conditions on the same field are OR'ed by WFP, different fields AND'ed."""
+    """One WFP filter. Conditions on different fields are AND'ed by WFP."""
 
     key: uuid.UUID
     name: str
@@ -176,55 +187,63 @@ class FilterRule:
     conditions: tuple[Condition, ...]
 
 
+#: The rules of one container, in the order the helper script adds them: (rule id, layer, action).
+RULE_IDS: tuple[tuple[str, Layer, Action], ...] = (
+    ("permit-forwarder-connect-v4", "ALE_AUTH_CONNECT_V4", "PERMIT"),
+    ("permit-forwarder-accept-v4", "ALE_AUTH_RECV_ACCEPT_V4", "PERMIT"),
+    ("block-all-connect-v4", "ALE_AUTH_CONNECT_V4", "BLOCK"),
+    ("block-all-connect-v6", "ALE_AUTH_CONNECT_V6", "BLOCK"),
+    ("block-all-accept-v4", "ALE_AUTH_RECV_ACCEPT_V4", "BLOCK"),
+    ("block-all-accept-v6", "ALE_AUTH_RECV_ACCEPT_V6", "BLOCK"),
+)
+
+
+def container_ports(container: str) -> range:
+    """The forwarder ports of `container` - its own block, which no other container's rules open."""
+    index = all_container_names().index(container)  # ValueError for a name outside the pool
+    start = FORWARDER_PORTS.start + PORTS_PER_CONTAINER * index
+    return range(start, start + PORTS_PER_CONTAINER)
+
+
+@cache
+def ports_by_sid() -> dict[str, range]:
+    """Every container SID's forwarder ports (what a run, which knows only its SID, looks up)."""
+    return {container_sid(name): container_ports(name) for name in all_container_names()}
+
+
 def filter_key(container: str, rule: str) -> uuid.UUID:
     """The fixed key of rule `rule` for `container` - the same on every install and every run."""
-    return uuid.uuid5(_KEY_NAMESPACE, f"{container}|{rule}")
+    return uuid.uuid5(KEY_NAMESPACE, f"{container}|{rule}")
 
 
 def rules_for(container: str) -> tuple[FilterRule, ...]:
     """The filters for one container, by its name (its SID is derived from the name)."""
-    sid = container_sid(container)
-    pkg = Package(sid)
-
-    def rule(
-        rule_id: str, layer: Layer, action: Action, weight: int, *conds: Condition
-    ) -> FilterRule:
-        return FilterRule(
+    pkg = Package(container_sid(container))
+    ports = container_ports(container)
+    low, high = ports.start, ports.stop - 1
+    extra: dict[str, tuple[Condition, ...]] = {
+        "permit-forwarder-connect-v4": (
+            Protocol(TCP),
+            Remote(FORWARDER_ADDRESS),
+            PortRange(low, high),
+        ),
+        "permit-forwarder-accept-v4": (
+            Protocol(TCP),
+            LocalAddress(FORWARDER_ADDRESS),
+            LocalPortRange(low, high),
+        ),
+    }
+    return tuple(
+        FilterRule(
             key=filter_key(container, rule_id),
             name=f"Nox sandbox {container}: {rule_id}",
             layer=layer,
             action=action,
-            weight=weight,
+            weight=PERMIT_WEIGHT if action == "PERMIT" else BLOCK_WEIGHT,
             hard=action == "BLOCK",
-            conditions=(pkg, *conds),
+            conditions=(pkg, *extra.get(rule_id, ())),
         )
-
-    return (
-        rule(
-            "permit-egress-forwarder",
-            "ALE_AUTH_CONNECT_V4",
-            "PERMIT",
-            15,
-            Protocol(TCP),
-            Remote(ipaddress.IPv4Network("127.0.0.1/32")),
-            PortRange(FORWARDER_PORTS.start, FORWARDER_PORTS.stop - 1),
-        ),
-        rule(
-            "block-local-v4",
-            "ALE_AUTH_CONNECT_V4",
-            "BLOCK",
-            10,
-            *(Remote(net) for net in BLOCKED_V4),
-        ),
-        rule("block-loopback-v4", "ALE_AUTH_CONNECT_V4", "BLOCK", 9, Flags(FLAG_IS_LOOPBACK)),
-        rule(
-            "block-local-v6",
-            "ALE_AUTH_CONNECT_V6",
-            "BLOCK",
-            10,
-            *(Remote(net) for net in BLOCKED_V6),
-        ),
-        rule("block-loopback-v6", "ALE_AUTH_CONNECT_V6", "BLOCK", 9, Flags(FLAG_IS_LOOPBACK)),
+        for rule_id, layer, action in RULE_IDS
     )
 
 
@@ -255,15 +274,17 @@ def _describe_condition(cond: Condition) -> str:
             return f"remote={network}"
         case PortRange(low, high):
             return f"remote-port={low}-{high}"
+        case LocalAddress(network):
+            return f"local={network}"
+        case LocalPortRange(low, high):
+            return f"local-port={low}-{high}"
         case Protocol(number):
             return f"protocol={number}"
-        case Flags(mask):
-            return f"flags-any={mask:#x}"
     raise TypeError(cond)  # pragma: no cover - the union is exhaustive
 
 
 def describe(rules: Sequence[FilterRule]) -> list[str]:
-    """One line per filter - what `nox sandbox firewall show` prints."""
+    """One line per filter - what `nox sandbox firewall show` and the helper's `show` print."""
     return [
         f"{r.key} {r.layer} {r.action}{' (hard)' if r.hard else ''} w={r.weight} "
         + " ".join(_describe_condition(c) for c in r.conditions)
@@ -271,21 +292,38 @@ def describe(rules: Sequence[FilterRule]) -> list[str]:
     ]
 
 
-def apply() -> int:
-    """Install every filter (idempotent: each one is replaced). Needs an administrator."""
-    from nox.sandbox import _wfp_win32
-
-    return _wfp_win32.install(all_rules())
-
-
-def remove() -> int:
-    """Remove every filter of Nox's provider, its sublayer and the provider itself."""
-    from nox.sandbox import _wfp_win32
-
-    return _wfp_win32.uninstall(all_rules())
+def is_elevated() -> bool:
+    """Whether this process runs with an administrator token (Windows only)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())  # type: ignore[attr-defined,unused-ignore]
+    except (AttributeError, OSError):
+        return False
 
 
-_USAGE = "usage: python -m nox.sandbox.wfp {install|remove|show} [--status-file PATH]"
+_USAGE = "usage: python -m nox.sandbox.wfp {install|remove|show}"
+#: Exit code of `install`/`remove`: Nox's own Python never changes the rules itself.
+REFUSED = 4
+
+
+def refusal(action: str, *, elevated: bool) -> str:
+    """Why `install`/`remove` refuse here, and the protected helper to use instead."""
+    from nox.sandbox.wfp_helper import admin_command
+
+    why = (
+        "refusing to run as administrator from Nox's own Python runtime: it lives in a folder "
+        "your user account can change, and code from there never runs elevated."
+        if elevated
+        else "changing them needs an administrator, and Nox's own Python never runs as one "
+        "(its folder is writable by your user account)."
+    )
+    return (
+        f"sandbox network rules: {why}\n"
+        "Use the protected helper instead: run the Nox setup again with the sandbox rules ticked "
+        "(it keeps the helper in an admin-only folder), or, once it is there, run from an "
+        f"administrator prompt:\n  {admin_command(action)}"
+    )
 
 
 def _run(action: str) -> tuple[int, str]:
@@ -293,37 +331,20 @@ def _run(action: str) -> tuple[int, str]:
         return 0, "\n".join(describe(all_rules()))
     if sys.platform != "win32":
         return 3, "the sandbox network rules exist on Windows only"
-    try:
-        count = apply() if action == "install" else remove()
-    except OSError as exc:
-        return 1, f"sandbox network rules: {exc}"
-    verb = "installed" if action == "install" else "removed"
-    return 0, f"sandbox network rules: {verb} {count} filter(s)"
+    return REFUSED, refusal(action, elevated=is_elevated())
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """The installer's entry point: `install` / `remove` (elevated), `show` (anyone).
+    """`show` (anyone) lists every rule; `install` / `remove` refuse and name the protected helper.
 
-    Exit codes: 0 done, 1 Windows refused (the message says why), 2 usage, 3 not Windows. With
-    `--status-file`, the exit code and the message are also written there (first line, rest) -
-    the installer starts this step elevated through the shell, which hands it no exit code.
+    Exit codes: 0 done, 2 usage, 3 not Windows, 4 refused (the message says what to run instead).
     """
     args = list(sys.argv[1:] if argv is None else argv)
-    status_file: str | None = None
-    if len(args) == 3 and args[1] == "--status-file":
-        status_file = args.pop(2)
-        args.pop(1)
     if len(args) != 1 or args[0] not in ("install", "remove", "show"):
         print(_USAGE, file=sys.stderr)  # noqa: T201 - a command-line entry point
         return 2
     code, message = _run(args[0])
     print(message, file=sys.stderr if code else sys.stdout)  # noqa: T201
-    if status_file is not None:
-        try:
-            with open(status_file, "w", encoding="utf-8") as fh:
-                fh.write(f"{code}\n{message}\n")
-        except OSError as exc:
-            print(f"could not write {status_file}: {exc}", file=sys.stderr)  # noqa: T201
     return code
 
 
