@@ -787,7 +787,8 @@ def main() -> int:
     cfg = load_config(args.creature)
     if args.emit_config:
         args.emit_config.parent.mkdir(parents=True, exist_ok=True)
-        args.emit_config.write_text(json.dumps(cfg, indent=1) + "\n", encoding="utf-8")
+        resolved = {k: v for k, v in cfg.items() if k != "_configs"}  # paths, for build.json
+        args.emit_config.write_text(json.dumps(resolved, indent=1) + "\n", encoding="utf-8")
     out_dir = args.out_dir or VARIANTS / cfg["id"] / "relief"
     psnr = build(cfg, out_dir, args.debug_dir)
     print(f"wrote {out_dir}")

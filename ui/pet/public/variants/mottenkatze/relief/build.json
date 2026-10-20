@@ -4,7 +4,7 @@
   "public/variants/mottenkatze/rig/base.png": "d0cebe70f20f481d071cda586fbd480b6d0dc799729468453e7ec2c55608aceb",
   "public/variants/mottenkatze/rig/eye_l.png": "92ed4fc0c4f2627ca39108fe1c821feef66af613e4c1ab7ec0a976fa8bc1856e",
   "public/variants/mottenkatze/rig/eye_r.png": "79002cc295b748e3e04d72d796f93c4dfd1191d06b44e143886d8116e21327da",
-  "scripts/relief/build_relief.py": "7b663d8bbee8650e6f32cea5c1df9e2dc78c338f95e273d7b7b6c2218eb97287",
+  "scripts/relief/build_relief.py": "053e78ebeda22abd584b5f29344fb603122d6c628685e12767cafff0b090c538",
   "scripts/relief/creatures/eulenfuchs.json": "9d56766641dc2bb9e5d79965ab302e8c9888081f0eea95529ea9ce9b26d6669b",
   "scripts/relief/creatures/mottenkatze.json": "8e167e6a52518a17ed44bcc8c07e7b4b9ae5202e7c2f295e99b3038a8a932884"
  },

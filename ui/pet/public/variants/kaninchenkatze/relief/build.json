@@ -4,7 +4,7 @@
   "public/variants/kaninchenkatze/rig/base.png": "7035e34870c0c545e8338e689177c5fa9241a23ace49a5171d242182273393e4",
   "public/variants/kaninchenkatze/rig/eye_l.png": "b996b0048be77a9c4be858f47dc21194eba35355be5f268a2b3e223c519999b5",
   "public/variants/kaninchenkatze/rig/eye_r.png": "07c07edea9cb7b054d6971ee908c1bdb3ced042f93d5b22579fb2bfe1f60d929",
-  "scripts/relief/build_relief.py": "7b663d8bbee8650e6f32cea5c1df9e2dc78c338f95e273d7b7b6c2218eb97287",
+  "scripts/relief/build_relief.py": "053e78ebeda22abd584b5f29344fb603122d6c628685e12767cafff0b090c538",
   "scripts/relief/creatures/eulenfuchs.json": "9d56766641dc2bb9e5d79965ab302e8c9888081f0eea95529ea9ce9b26d6669b",
   "scripts/relief/creatures/kaninchenkatze.json": "dd86da6d2ee107f21d8f85ade5c1bcf4e5c55154aaeb6ace4b49818f67fab3ba"
  },

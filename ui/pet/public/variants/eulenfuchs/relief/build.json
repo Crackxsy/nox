@@ -4,7 +4,7 @@
   "public/variants/eulenfuchs/rig/base.png": "b4472d6c8a5627e216566042466c2e82956406db3eaf6874c891baba20c79697",
   "public/variants/eulenfuchs/rig/eye_l.png": "51969c54c5217f6163d31cc1051cfb57ad85f9829246b476aa499d5a954ae18d",
   "public/variants/eulenfuchs/rig/eye_r.png": "7fcecf5d212735de58d9396ca5ca7926ec72aa00a07941aaf8a4de068ccf85eb",
-  "scripts/relief/build_relief.py": "7b663d8bbee8650e6f32cea5c1df9e2dc78c338f95e273d7b7b6c2218eb97287",
+  "scripts/relief/build_relief.py": "053e78ebeda22abd584b5f29344fb603122d6c628685e12767cafff0b090c538",
   "scripts/relief/creatures/eulenfuchs.json": "9d56766641dc2bb9e5d79965ab302e8c9888081f0eea95529ea9ce9b26d6669b"
  },
  "outputs": {

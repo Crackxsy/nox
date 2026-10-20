@@ -4,7 +4,7 @@
   "public/variants/chamster/rig/base.png": "0201a8d2c5458015cb01d400c67740791f7e01e2b9aeafb5ad7b19ef8dabd3ef",
   "public/variants/chamster/rig/eye_l.png": "6c586a20ef3e01229dc5af60534399a7285cf2056e119d1adf4b623634b7250d",
   "public/variants/chamster/rig/eye_r.png": "1e2a6194a3c87e949db1cbcb6a10e3fe7112a0925b23ef7c3f982a003bf52e5a",
-  "scripts/relief/build_relief.py": "7b663d8bbee8650e6f32cea5c1df9e2dc78c338f95e273d7b7b6c2218eb97287",
+  "scripts/relief/build_relief.py": "053e78ebeda22abd584b5f29344fb603122d6c628685e12767cafff0b090c538",
   "scripts/relief/creatures/chamster.json": "6b2d3ee66d7e2945bbbbfb1f26ba54b85e8387fec06f9bdde04641506a6ccf35",
   "scripts/relief/creatures/eulenfuchs.json": "9d56766641dc2bb9e5d79965ab302e8c9888081f0eea95529ea9ce9b26d6669b"
  },
