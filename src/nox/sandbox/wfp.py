@@ -30,17 +30,19 @@ An allowlist by construction, per container SID (shell's container and every poo
 
 1. at the outbound connect layer (TCP connects and the first UDP send) and the inbound accept
    layer, IPv4 and IPv6: a hard **block of everything**, at a low weight;
-2. above it, the one exception, at the highest weight: TCP to `127.0.0.1` on the egress
-   forwarder's ports (`FORWARDER_PORTS`) at the connect layer, and the forwarder accepting exactly
-   such a connection at the accept layer - the in-container forwarder that relays to Nox's egress
-   proxy listens there (`nox.sandbox.windows`).
+2. above it, the one exception, at the highest weight: TCP to `127.0.0.1` on *that container's
+   own* block of forwarder ports (`container_ports`, four ports each, all inside
+   `FORWARDER_PORTS`) at the connect layer, and the forwarder accepting exactly such a connection
+   at the accept layer - the in-container forwarder that relays to Nox's egress proxy listens
+   there (`nox.sandbox.windows`). A container cannot even connect to another container's
+   forwarder; the blocks never overlap.
 
 Nothing is listed as "blocked": there is no list of private ranges to keep complete. IPv4-mapped
 and NAT64 addresses, 6to4 (`2002::/16`), Teredo, the host's own LAN and VPN addresses, link-local,
 multicast and the public internet are all covered by the block of everything. What the rules do
 not do: they cannot tell a listener in the forwarder range that belongs to the host from the
 forwarder itself - so the probe refuses "confined" while anything foreign listens in that range,
-and every run checks its own forwarder's port (`nox.sandbox.windows`) - and they block a
+and every run keeps checking its own block while it lives (`nox.sandbox.windows`) - and they block a
 workload's own loopback outside that range (a skill test that starts a local server and connects
 to it). The probe stays the source of truth: the sandbox counts as strong only when it observes
 the container being refused.
@@ -57,6 +59,7 @@ import sys
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cache
 from typing import Literal
 
 from nox.sandbox.containers import all_container_names, container_sid
@@ -74,6 +77,8 @@ __all__ = [
     "Protocol",
     "Remote",
     "all_rules",
+    "container_ports",
+    "ports_by_sid",
     "describe",
     "filter_key",
     "main",
@@ -92,9 +97,13 @@ SUBLAYER_WEIGHT = 0xFFFF
 PERMIT_WEIGHT = 15
 BLOCK_WEIGHT = 1
 
-#: Where the in-container egress forwarder may listen: 128 ports below Windows' dynamic port range
-#: (49152-65535 by default), so a host program that asks for "any free port" never lands here.
-FORWARDER_PORTS = range(47_100, 47_228)
+#: How many forwarder ports each container has: concurrent runs of one workload class share a
+#: container, and each run's forwarder needs a port of its own.
+PORTS_PER_CONTAINER = 4
+#: Where the in-container egress forwarders may listen: one block of `PORTS_PER_CONTAINER` ports
+#: per container (`container_ports`), all below Windows' dynamic port range (49152-65535 by
+#: default), so a host program that asks for "any free port" never lands here.
+FORWARDER_PORTS = range(47_100, 47_100 + PORTS_PER_CONTAINER * len(all_container_names()))
 #: The forwarder's address: the container's own IPv4 loopback.
 FORWARDER_ADDRESS = ipaddress.IPv4Network("127.0.0.1/32")
 TCP = 6
@@ -189,6 +198,19 @@ RULE_IDS: tuple[tuple[str, Layer, Action], ...] = (
 )
 
 
+def container_ports(container: str) -> range:
+    """The forwarder ports of `container` - its own block, which no other container's rules open."""
+    index = all_container_names().index(container)  # ValueError for a name outside the pool
+    start = FORWARDER_PORTS.start + PORTS_PER_CONTAINER * index
+    return range(start, start + PORTS_PER_CONTAINER)
+
+
+@cache
+def ports_by_sid() -> dict[str, range]:
+    """Every container SID's forwarder ports (what a run, which knows only its SID, looks up)."""
+    return {container_sid(name): container_ports(name) for name in all_container_names()}
+
+
 def filter_key(container: str, rule: str) -> uuid.UUID:
     """The fixed key of rule `rule` for `container` - the same on every install and every run."""
     return uuid.uuid5(KEY_NAMESPACE, f"{container}|{rule}")
@@ -197,7 +219,8 @@ def filter_key(container: str, rule: str) -> uuid.UUID:
 def rules_for(container: str) -> tuple[FilterRule, ...]:
     """The filters for one container, by its name (its SID is derived from the name)."""
     pkg = Package(container_sid(container))
-    low, high = FORWARDER_PORTS.start, FORWARDER_PORTS.stop - 1
+    ports = container_ports(container)
+    low, high = ports.start, ports.stop - 1
     extra: dict[str, tuple[Condition, ...]] = {
         "permit-forwarder-connect-v4": (
             Protocol(TCP),

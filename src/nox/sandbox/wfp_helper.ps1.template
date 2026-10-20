@@ -9,8 +9,9 @@ $M = [Runtime.InteropServices.Marshal]
 $Provider = [Guid]'@@PROVIDER@@'
 $Sublayer = [Guid]'@@SUBLAYER@@'
 $NsHex = '@@NAMESPACE@@'
+# Each container's own block of forwarder ports starts at $Lo + $Per * (its index in $Names).
 $Lo = @@PORT_LO@@
-$Hi = @@PORT_HI@@
+$Per = @@PER@@
 $Desc = 'Keeps Nox''s sandbox off loopback, the LAN and the internet'
 $Names = [Collections.Generic.List[string]]::new()
 $Names.Add('@@SHELL@@')
@@ -29,9 +30,9 @@ $Field = @{
 $CondText = @{
   proto = 'protocol=@@TCP@@'
   raddr = 'remote=127.0.0.1/32'
-  rport = 'remote-port=' + $Lo + '-' + $Hi
+  rport = 'remote-port='
   laddr = 'local=127.0.0.1/32'
-  lport = 'local-port=' + $Lo + '-' + $Hi
+  lport = 'local-port='
 }
 # id|layer|action|conditions besides the package
 $Rules = @(
@@ -75,15 +76,18 @@ function KeyOf([string]$name) {
 
 function AllRules {
   $all = [Collections.Generic.List[object]]::new()
-  foreach ($name in $Names) {
+  for ($idx = 0; $idx -lt $Names.Count; $idx++) {
+    $name = $Names[$idx]
     $sid = SidOf $name
+    $plo = $Lo + $Per * $idx
+    $phi = $plo + $Per - 1
     foreach ($r in $Rules) {
       $p = $r.Split('|')
       $conds = @()
       if ($p[3]) { $conds = $p[3].Split(',') }
       $w = @@PERMIT_W@@
       if ($p[2] -eq 'BLOCK') { $w = @@BLOCK_W@@ }
-      $all.Add(@{ Key = (KeyOf ($name + '|' + $p[0])); Name = 'Nox sandbox ' + $name + ': ' + $p[0]; Layer = $p[1]; Action = $p[2]; Weight = $w; Sid = $sid; Conds = $conds })
+      $all.Add(@{ Key = (KeyOf ($name + '|' + $p[0])); Name = 'Nox sandbox ' + $name + ': ' + $p[0]; Layer = $p[1]; Action = $p[2]; Weight = $w; Sid = $sid; Conds = $conds; PLo = $plo; PHi = $phi })
     }
   }
   return , $all
@@ -93,7 +97,10 @@ function Line($r) {
   $hard = ''
   if ($r.Action -eq 'BLOCK') { $hard = ' (hard)' }
   $s = '{0} {1} {2}{3} w={4} package={5}' -f $r.Key, $r.Layer, $r.Action, $hard, $r.Weight, $r.Sid.Text
-  foreach ($c in $r.Conds) { $s += ' ' + $CondText[$c] }
+  foreach ($c in $r.Conds) {
+    $s += ' ' + $CondText[$c]
+    if ($c -eq 'rport' -or $c -eq 'lport') { $s += [string]$r.PLo + '-' + $r.PHi }
+  }
   return $s
 }
 
@@ -182,7 +189,7 @@ function ProviderFilters($E) {
   return , $found
 }
 
-function CondAt([IntPtr]$a, [int]$off, [string]$kind, $sid) {
+function CondAt([IntPtr]$a, [int]$off, [string]$kind, $sid, [int]$plo, [int]$phi) {
   $p = At $a $off
   GuidAt $p 0 $Field[$kind]
   if ($kind -eq 'pkg') { $M::WriteInt32($p, 24, 13); $M::WriteIntPtr($p, 32, (Blob $sid)) }
@@ -193,8 +200,8 @@ function CondAt([IntPtr]$a, [int]$off, [string]$kind, $sid) {
     $M::WriteInt32($p, 24, 256); $M::WriteIntPtr($p, 32, $v)
   } else {
     $v = Alloc 32
-    $M::WriteInt32($v, 0, 2); $M::WriteInt16($v, 8, [int16]$Lo)
-    $M::WriteInt32($v, 16, 2); $M::WriteInt16($v, 24, [int16]$Hi)
+    $M::WriteInt32($v, 0, 2); $M::WriteInt16($v, 8, [int16]$plo)
+    $M::WriteInt32($v, 16, 2); $M::WriteInt16($v, 24, [int16]$phi)
     $M::WriteInt32($p, 16, 5); $M::WriteInt32($p, 24, 258); $M::WriteIntPtr($p, 32, $v)
   }
 }
@@ -203,8 +210,8 @@ function AddFilter($E, $r, [IntPtr]$pk) {
   $conds = @($r.Conds)
   $n = 1 + $conds.Count
   $ca = Alloc (40 * $n)
-  CondAt $ca 0 'pkg' $r.Sid.Bytes
-  for ($i = 0; $i -lt $conds.Count; $i++) { CondAt $ca (40 * ($i + 1)) $conds[$i] $null }
+  CondAt $ca 0 'pkg' $r.Sid.Bytes 0 0
+  for ($i = 0; $i -lt $conds.Count; $i++) { CondAt $ca (40 * ($i + 1)) $conds[$i] $null $r.PLo $r.PHi }
   $f = Alloc 200
   GuidAt $f 0 $r.Key
   $M::WriteIntPtr($f, 16, (Str $r.Name)); $M::WriteIntPtr($f, 24, (Str $Desc))

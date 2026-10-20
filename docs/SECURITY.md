@@ -316,9 +316,12 @@ falling back to a low-integrity token only where no AppContainer profile can be 
   weight, six filters per container SID (shell's and all 128 pool slots):
   1. at the outbound connect layer and the inbound accept layer, IPv4 and IPv6: a **hard block of
      everything** (weight 1, clears the action right);
-  2. the one exception, weight 15: TCP to `127.0.0.1` ports 47100-47227 at the connect layer (the
-     in-container egress forwarder's range), and the forwarder accepting exactly such a connection
-     at the accept layer.
+  2. the one exception, weight 15: TCP to `127.0.0.1` on **that container's own block** of four
+     forwarder ports at the connect layer (shell's container 47100-47103, pool slot *n*
+     47104+4*n ... 47107+4*n; all blocks together are 47100-47615, below Windows' dynamic port
+     range), and the forwarder accepting exactly such a connection at the accept layer. The blocks
+     never overlap, so a workload cannot even connect to another workload's forwarder. Four ports
+     per container because concurrent runs of one workload class share its container.
 
   There is no list of private ranges to keep complete: loopback, the LAN, this computer's own LAN
   and VPN addresses, IPv4-mapped `::ffff:0:0/96`, NAT64, 6to4 `2002::/16`, Teredo and the public
@@ -336,7 +339,14 @@ falling back to a low-integrity token only where no AppContainer profile can be 
   short bootstrap on its command line that reads the helper script `nox-sandbox-rules.ps1` into
   memory, checks its **SHA-256 against the value pinned into the installer at build time**, and
   runs exactly the bytes it checked - a copy changed before the check is refused, one changed after
-  it is never read again. The helper (`nox.sandbox.wfp_helper`) is self-contained: .NET only, no
+  it is never read again. **No value is ever embedded as PowerShell source** in that elevated
+  command line: the helper's paths arrive as the hex digits of their UTF-16 code units and are
+  decoded by the bootstrap, so no character of a path (an apostrophe, a typographic quote U+2018 to
+  U+201F that PowerShell also reads as a quote, `$`, a backtick) can end a string literal. As a
+  second line of defence, the installer (`SandboxPathSafe`) and `wfp_helper.path_is_safe` refuse a
+  path with quotes, typographic quotes, `$`, backtick, `;`, `&` or control characters before
+  anything starts; letters outside ASCII (a user name like "Jürgen") stay allowed. The action is
+  one of three fixed words. The helper (`nox.sandbox.wfp_helper`) is self-contained: .NET only, no
   cmdlet (so no module autoload from a user-writable module path), no compiler and no temporary
   file (the WFP calls are P/Invoke methods emitted in memory, `fwpuclnt.dll` by its full system
   path), and no input but its action - it derives the container names, SIDs and filter keys
@@ -365,18 +375,26 @@ falling back to a low-integrity token only where no AppContainer profile can be 
   timeout, a crash, a connection or an unknown listener table counts as reachable (fail closed).
   The rules are never assumed: without them, or if they do not take effect, the probe says so.
 - **Declared egress:** the run's proxy listens on a named pipe whose DACL names only the run's
-  container SID; a forwarder in the same container listens on `127.0.0.1` in the forwarder range
-  and relays into the pipe. The proxy checks the per-run credentials, the declaration and `NetGuard`.
+  container SID; a forwarder in the same container listens on `127.0.0.1` in that container's port
+  block and relays into the pipe. The proxy checks the per-run credentials (random per run, `407`
+  for anything else - another run's credentials included), the declaration and `NetGuard`.
   **Before every run that uses the forwarder**, Nox checks the listener table: the forwarder's port
-  must be held by the forwarder process Nox just started (owner PID), and every other listener in
-  47100-47227 must be one of Nox's own live forwarders. Otherwise - a foreign listener, an owner
-  that cannot be read, a table that cannot be listed - the run is refused (fail closed) instead of
-  being given a path to a listener that is not Nox's.
+  must be held by the forwarder process Nox just started, identified by PID *and* creation time
+  (a reused PID does not match; Nox also holds the process handle, so the PID cannot be reused
+  while the run lives), and every other listener in the container's block must be one of Nox's
+  own live forwarders. **While the run lives** the same check repeats every 1.5 seconds; a foreign
+  listener that appears in the block, or a forwarder that lost its port, ends the run (a finished
+  `run` is reported as refused, a long-running `start`ed process is killed). Otherwise - a foreign
+  listener, an owner that cannot be read, a table that cannot be listed - the run is refused (fail
+  closed) instead of being given a path to a listener that is not Nox's.
+- **Why not one port and one permit per run:** the filters are added once, by the elevated
+  installer step; Nox itself never runs as an administrator, so it cannot add or change a WFP
+  filter per run. The per-container block is the narrowest scope fixed rules can give.
 
 Known limits, accepted:
 
-- A **host** program that starts listening inside the forwarder range (47100-47227) *during* a run
-  would be reachable from that run's container until the run ends; every new run checks again.
+- A **host** program that starts listening inside a container's port block *during* a run could be
+  reached from that container for at most one check interval (1.5 s) before the run is ended.
 - The probe measures shell's container; the pool containers carry the same filters, built from the
   same code, but are not probed one by one.
 - With the rules in place a workload cannot reach its **own** loopback outside the forwarder range

@@ -43,6 +43,7 @@ from nox.sandbox.wfp import (
     KEY_NAMESPACE,
     LAYERS,
     PERMIT_WEIGHT,
+    PORTS_PER_CONTAINER,
     PROVIDER_KEY,
     RULE_IDS,
     SUBLAYER_KEY,
@@ -59,6 +60,8 @@ __all__ = [
     "admin_command",
     "bootstrap",
     "command_params",
+    "path_arg",
+    "path_is_safe",
     "helper_bytes",
     "helper_script",
     "helper_sha256",
@@ -106,7 +109,7 @@ def helper_script() -> str:
         "SUBLAYER": str(SUBLAYER_KEY),
         "NAMESPACE": KEY_NAMESPACE.hex,
         "PORT_LO": str(FORWARDER_PORTS.start),
-        "PORT_HI": str(FORWARDER_PORTS.stop - 1),
+        "PER": str(PORTS_PER_CONTAINER),
         "SHELL": SHELL_CONTAINER,
         "SLOTS": str(WORKLOAD_SLOTS),
         "LAYERS": "\n".join(f"  '{name}' = [Guid]'{key}'" for name, key in LAYERS.items()),
@@ -143,12 +146,16 @@ def helper_sha256() -> str:
 #: The bootstrap the installer runs with the system's PowerShell: read the helper into memory,
 #: check its SHA-256 against the pinned one, then run exactly the bytes it checked (passing them on,
 #: so `install` stores those very bytes). A file that changes after the check changes nothing.
-#: Single quotes only - the whole bootstrap sits inside one pair of double quotes on the command
-#: line - and `{path}` is a single-quoted PowerShell string (any `'` in it doubled).
+#: No value is ever embedded as PowerShell source: each path arrives as the hex digits of its
+#: UTF-16 code units (`path_arg`) and is decoded by the script, so no character of a path - an
+#: apostrophe, a typographic quote PowerShell also reads as one, `$`, a backtick - can end a string
+#: literal in this elevated process. Single quotes only around the hex; the whole bootstrap sits
+#: inside one pair of double quotes on the command line.
 _BOOTSTRAP = (
     "$ErrorActionPreference='Stop';"
     "$b=$null;"
-    "foreach($f in @({paths})){{"
+    "foreach($x in @({paths})){{"
+    "$f='';for($i=0;$i -lt $x.Length;$i+=4){{$f+=[char][Convert]::ToInt32($x.Substring($i,4),16)}};"
     "try{{$c=[IO.File]::ReadAllBytes($f);"
     "if([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($c))"
     ".Replace('-','') -eq '{sha}'){{$b=$c;break}}}}catch{{}}}};"
@@ -157,24 +164,46 @@ _BOOTSTRAP = (
 )
 #: The fixed switches in front of the bootstrap.
 _SWITCHES = "-NoProfile -NonInteractive -WindowStyle Hidden -Command "
+#: The actions a bootstrap may name - fixed words, never data.
+ACTIONS = ("install", "uninstall", "status")
+#: Characters a helper path may never contain (defence in depth - the hex encoding already keeps
+#: every character out of the source): ASCII quotes, `$`, backtick, `;`, `&`, and the typographic
+#: quotes U+2018-U+201F, which PowerShell treats as single and double quotes. Control characters
+#: are refused too. Letters outside ASCII (a user name like "Jürgen") stay allowed.
+UNSAFE_PATH_CHARS = "'\"`$;&" + "".join(chr(c) for c in range(0x2018, 0x2020))
 
 
-def ps_quote(text: str) -> str:
-    """`text` as a single-quoted PowerShell string literal."""
-    return "'" + text.replace("'", "''") + "'"
+def path_is_safe(path: str) -> bool:
+    """Whether `path` may be handed to the elevated bootstrap at all."""
+    return bool(path) and not any(
+        ord(ch) < 0x20 or ord(ch) == 0x7F or ch in UNSAFE_PATH_CHARS for ch in path
+    )
+
+
+def path_arg(path: str) -> str:
+    """`path` for the bootstrap: the hex digits of its UTF-16 code units, single-quoted."""
+    if not path_is_safe(path):
+        raise ValueError(f"not a usable helper path: {path!r}")
+    units = path.encode("utf-16-le")
+    return (
+        "'"
+        + "".join(
+            f"{int.from_bytes(units[i : i + 2], 'little'):04X}" for i in range(0, len(units), 2)
+        )
+        + "'"
+    )
 
 
 def bootstrap(action: str, paths: list[str]) -> str:
     """The PowerShell the installer runs: the first of `paths` whose bytes match the pinned
-    SHA-256 is run with `action`. Install passes the copy in `{app}`; uninstall passes the
-    protected copy first and the one in `{app}` second (both checked, in memory)."""
-    if action not in ("install", "uninstall", "status"):
+    SHA-256 is run with `action`. Install passes the copy in the install folder; uninstall the
+    protected copy first and the install folder's second (both checked, in memory)."""
+    if action not in ACTIONS:
         raise ValueError(f"no bootstrap for {action!r}")
-    for path in paths:
-        if '"' in path or not path:
-            raise ValueError(f"not a usable path: {path!r}")
+    if not paths:
+        raise ValueError("no helper path")
     return _BOOTSTRAP.format(
-        paths=",".join(ps_quote(p) for p in paths), sha=helper_sha256(), action=action
+        paths=",".join(path_arg(p) for p in paths), sha=helper_sha256(), action=action
     )
 
 
@@ -193,17 +222,18 @@ def _pascal(text: str) -> str:
 def inno_include() -> str:
     """The `[Code]` include `nox.iss` pulls in: the pinned hash and the command builder.
 
-    `SandboxRulesParams(Action, Paths)` builds the same text as `command_params` - `Paths` is
-    the already-quoted, comma-separated list (`SandboxPsQuote` quotes one path)."""
+    `SandboxPathArg` is `path_arg` in Pascal (empty for an unsafe path - the caller refuses), and
+    `SandboxRulesParams(Action, Paths)` builds the same text as `command_params` from the
+    comma-separated `SandboxPathArg` values (empty for an action that is not one of `ACTIONS`)."""
     head, tail = _BOOTSTRAP.split("{paths}")
     before_sha, after_sha = tail.split("{sha}")
     before_action, after_action = after_sha.split("{action}")
-    piece = {
-        "head": head.replace("{{", "{").replace("}}", "}"),
-        "mid": before_sha.replace("{{", "{").replace("}}", "}"),
-        "mid2": before_action.replace("{{", "{").replace("}}", "}"),
-        "tail": after_action.replace("{{", "{").replace("}}", "}"),
-    }
+
+    def unbrace(text: str) -> str:
+        return text.replace("{{", "{").replace("}}", "}")
+
+    unsafe = " or ".join(f"(C = {ord(ch)})" for ch in UNSAFE_PATH_CHARS)
+    actions = " and ".join(f"(Action <> '{a}')" for a in ACTIONS)
     lines = [
         "{ Generated by nox.sandbox.wfp_helper (installer/build.py) - do not edit. }",
         "",
@@ -212,20 +242,43 @@ def inno_include() -> str:
         f"  Result := '{helper_sha256()}';",
         "end;",
         "",
-        "function SandboxPsQuote(const S: String): String;",
+        "function SandboxPathSafe(const S: String): Boolean;",
         "var",
-        "  T: String;",
+        "  I, C: Integer;",
         "begin",
-        "  T := S;",
-        "  StringChangeEx(T, '''', '''''', True);",
-        "  Result := '''' + T + '''';",
+        "  Result := Length(S) > 0;",
+        "  for I := 1 to Length(S) do",
+        "  begin",
+        "    C := Ord(S[I]);",
+        f"    if (C < 32) or (C = 127) or {unsafe} then",
+        "    begin",
+        "      Result := False;",
+        "      Exit;",
+        "    end;",
+        "  end;",
+        "end;",
+        "",
+        "function SandboxPathArg(const S: String): String;",
+        "var",
+        "  I: Integer;",
+        "begin",
+        "  Result := '';",
+        "  if not SandboxPathSafe(S) then",
+        "    Exit;",
+        "  for I := 1 to Length(S) do",
+        "    Result := Result + Format('%.4X', [Ord(S[I])]);",
+        "  Result := '''' + Result + '''';",
         "end;",
         "",
         "function SandboxRulesParams(const Action, Paths: String): String;",
         "begin",
-        f"  Result := {_pascal(_SWITCHES)} + '\"' + {_pascal(piece['head'])} + Paths",
-        f"    + {_pascal(piece['mid'])} + SandboxHelperSha256()",
-        f"    + {_pascal(piece['mid2'])} + Action + {_pascal(piece['tail'])} + '\"';",
+        "  Result := '';",
+        f"  if {actions} then",
+        "    Exit;",
+        f"  Result := {_pascal(_SWITCHES)} + '\"' + {_pascal(unbrace(head))} + Paths",
+        f"    + {_pascal(unbrace(before_sha))} + SandboxHelperSha256()",
+        f"    + {_pascal(unbrace(before_action))} + Action",
+        f"    + {_pascal(unbrace(after_action))} + '\"';",
         "end;",
         "",
     ]

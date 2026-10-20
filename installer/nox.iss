@@ -150,19 +150,38 @@ begin
   Result := ExpandConstant('{app}\sandbox\nox-sandbox-rules.ps1');
 end;
 
-{ Runs the helper through the bootstrap: elevated ("runas", one UAC prompt) or not. Returns False
-  when it could not be started at all (ErrorCode says why). }
-function RunSandboxHelper(const Action, Paths: String; Elevated: Boolean; var ErrorCode: Integer): Boolean;
+{ Runs the helper through the bootstrap: elevated ("runas", one UAC prompt) or not, reading the
+  helper from First (and, if that does not match the pinned hash, from Second, when given). The
+  paths reach the bootstrap only hex-encoded (SandboxPathArg); a path with a character that is not
+  allowed (quotes, typographic quotes, dollar, backtick, semicolon, ampersand, control characters)
+  is refused before anything starts. Returns False when it could not be started at all (ErrorCode
+  says why). }
+function RunSandboxHelper(const Action, First, Second: String; Elevated: Boolean; var ErrorCode: Integer): Boolean;
 var
   Redirect: Boolean;
+  Paths, Params: String;
 begin
+  Result := False;
+  ErrorCode := 123; { ERROR_INVALID_NAME }
+  Paths := SandboxPathArg(First);
+  if Paths = '' then
+    Exit;
+  if Second <> '' then
+  begin
+    if SandboxPathArg(Second) = '' then
+      Exit;
+    Paths := Paths + ',' + SandboxPathArg(Second);
+  end;
+  Params := SandboxRulesParams(Action, Paths);
+  if Params = '' then
+    Exit;
   Redirect := EnableFsRedirection(False);
   try
     if Elevated then
-      Result := ShellExec('runas', SandboxPowerShell(), SandboxRulesParams(Action, Paths),
+      Result := ShellExec('runas', SandboxPowerShell(), Params,
         ExpandConstant('{sys}'), SW_HIDE, ewWaitUntilTerminated, ErrorCode)
     else
-      Result := Exec(SandboxPowerShell(), SandboxRulesParams(Action, Paths),
+      Result := Exec(SandboxPowerShell(), Params,
         ExpandConstant('{sys}'), SW_HIDE, ewWaitUntilTerminated, ErrorCode);
   finally
     EnableFsRedirection(Redirect);
@@ -186,7 +205,7 @@ var
 begin
   Result := '';
   Before := SandboxSequence();
-  if not RunSandboxHelper('install', SandboxPsQuote(SandboxAppCopy()), True, ErrorCode) then
+  if not RunSandboxHelper('install', SandboxAppCopy(), '', True, ErrorCode) then
   begin
     Result := SysErrorMessage(ErrorCode);
     Exit;
@@ -213,7 +232,7 @@ var
 begin
   Result := FileExists(SandboxProtectedCopy()) or RegKeyExists(HKLM64, SandboxStatusKey);
   if not Result then
-    Result := not RunSandboxHelper('status', SandboxPsQuote(SandboxAppCopy()), False, ErrorCode)
+    Result := not RunSandboxHelper('status', SandboxAppCopy(), '', False, ErrorCode)
       or (ErrorCode <> 1);
 end;
 
@@ -244,8 +263,8 @@ var
 begin
   if (CurUninstallStep = usUninstall) and SandboxRulesMayExist() then
   begin
-    if RunSandboxHelper('uninstall', SandboxPsQuote(SandboxProtectedCopy()) + ','
-        + SandboxPsQuote(SandboxAppCopy()), True, ErrorCode) then
+    if RunSandboxHelper('uninstall', SandboxProtectedCopy(), SandboxAppCopy(), True,
+        ErrorCode) then
       Log('Sandbox network rules: removal ran')
     else
       Log('Sandbox network rules not removed: ' + SysErrorMessage(ErrorCode));

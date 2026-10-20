@@ -116,7 +116,7 @@ def test_each_container_gets_a_hard_block_of_everything_and_one_forwarder_except
         pkg,
         Protocol(6),
         Remote(ipaddress.IPv4Network("127.0.0.1/32")),
-        PortRange(47_100, 47_227),
+        PortRange(47_100, 47_103),  # shell's own block, nobody else's
     )
     accept = by_id["permit-forwarder-accept-v4"]
     assert accept.layer == "ALE_AUTH_RECV_ACCEPT_V4" and accept.action == "PERMIT"
@@ -124,7 +124,7 @@ def test_each_container_gets_a_hard_block_of_everything_and_one_forwarder_except
         pkg,
         Protocol(6),
         LocalAddress(ipaddress.IPv4Network("127.0.0.1/32")),
-        LocalPortRange(47_100, 47_227),
+        LocalPortRange(47_100, 47_103),
     )
     blocks = [r for r in rules if r.action == "BLOCK"]
     # Every layer Nox filters gets a block of everything: nothing but the package is matched, so
@@ -139,8 +139,33 @@ def test_each_container_gets_a_hard_block_of_everything_and_one_forwarder_except
 
 
 def test_the_forwarder_range_is_below_the_dynamic_ports_and_open_only_to_tcp() -> None:
-    assert FORWARDER_PORTS == range(47_100, 47_228) and len(FORWARDER_PORTS) == 128
+    assert FORWARDER_PORTS == range(47_100, 47_616) and len(FORWARDER_PORTS) == 4 * 129
     assert FORWARDER_PORTS.stop <= 49_152  # Windows' default dynamic range starts here
+
+
+def test_each_container_can_reach_only_its_own_forwarder_ports() -> None:
+    # Workload A can never even connect to workload B's forwarder: the permits name A's block.
+    blocks = [wfp.container_ports(n) for n in all_container_names()]
+    assert blocks[0] == range(47_100, 47_104)
+    assert blocks[-1] == range(47_612, 47_616)
+    seen: set[int] = set()
+    for block in blocks:
+        assert len(block) == wfp.PORTS_PER_CONTAINER and not seen & set(block)
+        seen |= set(block)
+    assert seen == set(FORWARDER_PORTS)
+    a, b = slot_container_name(0), slot_container_name(1)
+    a_ports = {
+        port
+        for rule in rules_for(a)
+        for cond in rule.conditions
+        if isinstance(cond, (PortRange, LocalPortRange))
+        for port in range(cond.low, cond.high + 1)
+    }
+    assert a_ports == set(wfp.container_ports(a))
+    assert not a_ports & set(wfp.container_ports(b))
+    assert wfp.ports_by_sid()[container_sid(b)] == wfp.container_ports(b)
+    with pytest.raises(ValueError):
+        wfp.container_ports("Someone.Else")
 
 
 def test_every_container_of_the_pool_is_covered_with_fixed_keys() -> None:
@@ -161,8 +186,9 @@ def test_show_lists_one_line_per_filter(capsys: pytest.CaptureFixture[str]) -> N
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 774
     assert lines[0].split()[1:4] == ["ALE_AUTH_CONNECT_V4", "PERMIT", "w=15"]
-    assert f"package={SHELL_SID}" in lines[0] and "remote-port=47100-47227" in lines[0]
-    assert "local-port=47100-47227" in lines[1]
+    assert f"package={SHELL_SID}" in lines[0] and "remote-port=47100-47103" in lines[0]
+    assert "local-port=47100-47103" in lines[1]
+    assert "remote-port=47104-47107" in lines[6]  # the next container's own block
     assert lines[2].endswith(f"BLOCK (hard) w=1 package={SHELL_SID}")
 
 
@@ -280,9 +306,13 @@ def test_status_goes_to_hklm_never_a_user_folder() -> None:
 
 def test_the_bootstrap_runs_only_bytes_that_match_the_pinned_hash() -> None:
     sha = wfp_helper.helper_sha256()
-    boot = wfp_helper.bootstrap("install", ["C:\\Users\\O'Brien\\Nox\\sandbox\\x.ps1"])
+    path = "C:\\Users\\Jürgen\\Nox\\sandbox\\x.ps1"
+    boot = wfp_helper.bootstrap("install", [path])
     assert f"-eq '{sha}'" in boot
-    assert "@('C:\\Users\\O''Brien\\Nox\\sandbox\\x.ps1')" in boot  # quoted, ' doubled
+    # The path is never source text: only the hex digits of its UTF-16 code units are.
+    hexed = "".join(f"{ord(ch):04X}" for ch in path)
+    assert f"@('{hexed}')" in boot and "Jürgen" not in boot and boot.isascii()
+    assert "[Convert]::ToInt32($x.Substring($i,4),16)" in boot
     assert '"' not in boot  # the whole bootstrap sits in one pair of double quotes
     # The bytes it checked are the bytes it runs (and hands on for the protected copy).
     assert "[ScriptBlock]::Create([Text.Encoding]::ASCII.GetString($b))) 'install' $b" in boot
@@ -290,11 +320,64 @@ def test_the_bootstrap_runs_only_bytes_that_match_the_pinned_hash() -> None:
     params = wfp_helper.command_params("uninstall", ["C:\\a.ps1", "C:\\b.ps1"])
     assert params.startswith('-NoProfile -NonInteractive -WindowStyle Hidden -Command "')
     assert "EncodedCommand" not in params and "Bypass" not in params
-    assert "@('C:\\a.ps1','C:\\b.ps1')" in params
+    assert f"@({wfp_helper.path_arg('C:\\a.ps1')},{wfp_helper.path_arg('C:\\b.ps1')})" in params
     with pytest.raises(ValueError):
         wfp_helper.bootstrap("show", ["C:\\a.ps1"])
     with pytest.raises(ValueError):
-        wfp_helper.bootstrap("install", ['C:\\"x".ps1'])
+        wfp_helper.bootstrap("install", [])
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "\u2019",  # right single quotation mark: PowerShell reads it as '
+        "\u2018",
+        "\u201a",
+        "\u201b",
+        "\u201c",  # PowerShell reads these as "
+        "\u201d",
+        "\u201e",
+        "'",
+        '"',
+        "$",
+        "`",
+        ";",
+        "&",
+        "\n",
+        "\x00",
+    ],
+)
+def test_a_path_with_a_quote_or_metacharacter_never_reaches_the_elevated_bootstrap(
+    bad: str,
+) -> None:
+    # e.g. a user name like O’Brien$(calc) - refused outright (defence in depth; the hex
+    # encoding alone already keeps every character out of the source).
+    path = f"C:\\Users\\O{bad}Brien\\AppData\\Local\\Programs\\Nox\\sandbox\\x.ps1"
+    assert not wfp_helper.path_is_safe(path)
+    with pytest.raises(ValueError):
+        wfp_helper.path_arg(path)
+    with pytest.raises(ValueError):
+        wfp_helper.command_params("uninstall", ["C:\\ok.ps1", path])
+    # The Pascal side refuses exactly the same characters.
+    include = wfp_helper.inno_include()
+    if ord(bad) >= 32 and ord(bad) != 127:
+        assert f"(C = {ord(bad)})" in include
+
+
+def test_the_pascal_path_check_matches_python() -> None:
+    include = wfp_helper.inno_include()
+    check = include.split("function SandboxPathSafe", 1)[1].split("end;\r\n\r\n", 1)[0]
+    codes = {int(part.split(")")[0]) for part in check.split("(C = ")[1:]}
+    assert codes == {ord(ch) for ch in wfp_helper.UNSAFE_PATH_CHARS} | {127}
+    assert "(C < 32)" in check
+    # The hex encoding: four upper-case hex digits per UTF-16 code unit, like `path_arg`.
+    assert "Format('%.4X', [Ord(S[I])])" in include
+    assert (
+        wfp_helper.path_arg("C:\\Jürgen")
+        == "'" + "".join(f"{ord(c):04X}" for c in "C:\\Jürgen") + "'"
+    )
+    # Only the three fixed actions build a command at all.
+    assert "(Action <> 'install') and (Action <> 'uninstall') and (Action <> 'status')" in include
 
 
 def test_the_inno_include_embeds_the_pinned_hash_and_the_same_bootstrap() -> None:
@@ -304,8 +387,8 @@ def test_the_inno_include_embeds_the_pinned_hash_and_the_same_bootstrap() -> Non
     assert "function SandboxRulesParams(const Action, Paths: String): String;" in include
     # Evaluate the Pascal concatenation by hand: it must give exactly `command_params`.
     body = include.split("function SandboxRulesParams", 1)[1].split("begin", 1)[1]
-    expr = body.split("Result :=", 1)[1].split(";\r\nend;", 1)[0]
-    paths = "'C:\\x.ps1'"
+    expr = body.split("Exit;", 1)[1].split("Result :=", 1)[1].split(";\r\nend;", 1)[0]
+    paths = wfp_helper.path_arg("C:\\x.ps1")
     parts = []
     for token in _pascal_tokens(expr):
         if token == "Paths":
@@ -435,9 +518,9 @@ def test_the_listener_check_looks_only_at_the_forwarder_range(
     def conn(port: int, status: str = psutil.CONN_LISTEN) -> Any:
         return types.SimpleNamespace(laddr=types.SimpleNamespace(port=port), status=status)
 
-    conns = [conn(80), conn(47_099), conn(47_100), conn(47_227), conn(47_228), conn(47_150, "X")]
+    conns = [conn(80), conn(47_099), conn(47_100), conn(47_615), conn(47_616), conn(47_150, "X")]
     monkeypatch.setattr(psutil, "net_connections", lambda kind: conns)
-    assert windows.forwarder_range_listeners() == [47_100, 47_227]
+    assert windows.forwarder_range_listeners() == [47_100, 47_615]
 
     def denied(kind: str) -> Any:
         raise psutil.AccessDenied()
@@ -474,17 +557,25 @@ def test_the_probe_listener_never_sits_in_the_forwarder_range(
     assert closed == [47_100, 47_227]
 
 
-def test_the_forwarder_listens_only_in_its_range() -> None:
+def test_the_forwarder_listens_only_in_its_containers_block() -> None:
     from nox.sandbox.windows import forwarder_port, forwarder_script
 
-    script = forwarder_script("nox-abc")
-    assert "'nox-abc'" in script and "$lo = 47100; $n = 47227 - $lo + 1" in script
+    ports = wfp.container_ports(SHELL_CONTAINER)
+    script = forwarder_script("nox-abc", ports)
+    assert "'nox-abc'" in script and "$lo = 47100; $n = 47103 - $lo + 1" in script
     assert "{pipe}" not in script and "{lo}" not in script and "{hi}" not in script
     assert "Loopback, 0)" not in script  # never "any free port"
-    assert forwarder_port("NOXFWD 47100") == 47_100
-    assert forwarder_port("NOXFWD 47227") == 47_227
-    for bad in ("NOXFWD 4242", "NOXFWD NONE", "NOXFWD", "", "NOXFWD 47100 x"):
-        assert forwarder_port(bad) is None, bad
+    assert forwarder_port("NOXFWD 47100", ports) == 47_100
+    assert forwarder_port("NOXFWD 47103", ports) == 47_103
+    # Another container's port - even one of the global range - is not this forwarder's.
+    for bad in ("NOXFWD 47104", "NOXFWD 4242", "NOXFWD NONE", "NOXFWD", "", "NOXFWD 47100 x"):
+        assert forwarder_port(bad, ports) is None, bad
+    with pytest.raises(ValueError):
+        forwarder_script("nox-abc", range(4000, 4004))
+
+
+OWN = (10, 1000.0)
+PORTS = range(47_148, 47_152)
 
 
 def _listener(port: int, pid: int | None, status: str = "LISTEN") -> Any:
@@ -496,19 +587,20 @@ def _listener(port: int, pid: int | None, status: str = "LISTEN") -> Any:
 @pytest.mark.parametrize(
     ("conns", "ours", "problem"),
     [
-        ([(47_150, 10)], set(), None),  # the forwarder holds its port, nothing else in range
-        ([(47_150, 10), (47_160, 20)], {20}, None),  # another live Nox forwarder
-        ([(47_150, 10), (80, 99), (47_228, 99)], set(), None),  # outside the range: irrelevant
-        ([(47_150, 10), (47_160, 99)], set(), "47160"),  # a foreign listener in the range
-        ([(47_150, 10), (47_160, None)], set(), "47160"),  # owner unknown: foreign
+        ([(47_150, 10)], set(), None),  # the forwarder holds its port, nothing else in its block
+        ([(47_150, 10), (47_151, 20)], {(20, 2000.0)}, None),  # a sibling run's live forwarder
+        ([(47_150, 10), (80, 99), (47_160, 99)], set(), None),  # outside its block: irrelevant
+        ([(47_150, 10), (47_151, 99)], set(), "47151"),  # a foreign listener in the block
+        ([(47_150, 10), (47_151, None)], set(), "47151"),  # owner unknown: foreign
+        ([(47_150, 10), (47_151, 20)], {(20, 1.0)}, "47151"),  # pid reused by another process
         ([(47_150, 99)], set(), "47150"),  # someone else holds the forwarder's port
         ([], set(), "not held"),  # the forwarder's port is not listening at all
     ],
 )
-def test_every_run_checks_who_holds_the_forwarder_range(
+def test_every_run_checks_who_holds_its_forwarder_ports(
     monkeypatch: pytest.MonkeyPatch,
     conns: list[tuple[int, int | None]],
-    ours: set[int],
+    ours: set[tuple[int, float]],
     problem: str | None,
 ) -> None:
     import psutil
@@ -516,16 +608,20 @@ def test_every_run_checks_who_holds_the_forwarder_range(
     from nox.sandbox import windows
 
     monkeypatch.setattr(windows, "_forwarders", set(ours))
+    created = {10: 1000.0, 20: 2000.0, 99: 9.0}
+    monkeypatch.setattr(windows, "_identity", lambda pid: (pid, created[pid]) if pid else None)
     listeners = [_listener(port, pid, psutil.CONN_LISTEN) for port, pid in conns]
     monkeypatch.setattr(psutil, "net_connections", lambda kind: listeners)
-    found = windows.forwarder_port_problem(47_150, 10)
+    found = windows.forwarder_port_problem(47_150, OWN, PORTS)
     if problem is None:
         assert found is None
     else:
         assert found is not None and problem in found
 
 
-def test_unlistable_listeners_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unlistable_listeners_or_an_unknown_forwarder_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import psutil
 
     from nox.sandbox import windows
@@ -534,7 +630,29 @@ def test_unlistable_listeners_fail_closed(monkeypatch: pytest.MonkeyPatch) -> No
         raise psutil.AccessDenied()
 
     monkeypatch.setattr(psutil, "net_connections", denied)
-    assert "cannot be listed" in (windows.forwarder_port_problem(47_150, 10) or "")
+    assert "cannot be listed" in (windows.forwarder_port_problem(47_150, OWN, PORTS) or "")
+    assert "cannot be identified" in (windows.forwarder_port_problem(47_150, None, PORTS) or "")
+
+
+def test_a_listener_that_appears_during_a_run_ends_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    from nox.sandbox import windows
+
+    answers = iter([None, None, "a listener that is not Nox's forwarder holds port(s) [47151]"])
+    monkeypatch.setattr(windows, "forwarder_port_problem", lambda *a: next(answers, None))
+    stopped = threading.Event()
+    watch = windows._PortWatch(47_150, OWN, PORTS, stopped.set, interval_s=0.01)  # noqa: SLF001
+    assert stopped.wait(5), "the run was not ended"
+    assert watch.problem is not None and "47151" in watch.problem
+    watch.close()
+
+    calm = windows._PortWatch(  # noqa: SLF001
+        47_150, OWN, PORTS, lambda: pytest.fail("stopped"), interval_s=0.01
+    )
+    monkeypatch.setattr(windows, "forwarder_port_problem", lambda *a: None)
+    calm.close()
+    assert calm.problem is None
 
 
 def test_an_unverified_forwarder_refuses_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -547,23 +665,59 @@ def test_an_unverified_forwarder_refuses_the_run(monkeypatch: pytest.MonkeyPatch
     fwd = types.SimpleNamespace(pid=10, stdout_fd=1, close=lambda: closed.append("closed"))
     backend = object.__new__(windows.WindowsSandbox)
     backend._w = types.SimpleNamespace(spawn=lambda *a, **k: fwd)  # type: ignore[attr-defined]
-    monkeypatch.setattr(windows, "_read_line", lambda fd, timeout: "NOXFWD 47150")
+    monkeypatch.setattr(windows, "_read_line", lambda fd, timeout: "NOXFWD 47101")
     monkeypatch.setattr(windows, "_close_fds", lambda s: None)
-    monkeypatch.setattr(windows, "forwarder_port_problem", lambda port, pid: "foreign 47160")
+    monkeypatch.setattr(windows, "_identity", lambda pid: OWN)
+    monkeypatch.setattr(windows, "forwarder_port_problem", lambda *a: "foreign 47102")
     limits = types.SimpleNamespace(memory_bytes=1 << 30)
     with pytest.raises(SandboxUnavailable, match="could not be verified"):
         backend._start_forwarder(  # noqa: SLF001
             Path("."), "\\\\.\\pipe\\nox-abc", limits, SHELL_SID
         )
-    assert closed == ["closed"] and 10 not in windows._forwarders  # noqa: SLF001
+    assert closed == ["closed"] and OWN not in windows._forwarders  # noqa: SLF001
 
-    monkeypatch.setattr(windows, "forwarder_port_problem", lambda port, pid: None)
-    got, port = backend._start_forwarder(  # noqa: SLF001
+    monkeypatch.setattr(windows, "forwarder_port_problem", lambda *a: None)
+    got, port, own, ports = backend._start_forwarder(  # noqa: SLF001
         Path("."), "\\\\.\\pipe\\nox-abc", limits, SHELL_SID
     )
-    assert port == 47_150 and 10 in windows._forwarders  # noqa: SLF001
-    windows._release_forwarder(got)  # noqa: SLF001
-    assert 10 not in windows._forwarders  # noqa: SLF001
+    assert (port, own, ports) == (47_101, OWN, wfp.container_ports(SHELL_CONTAINER))
+    assert OWN in windows._forwarders  # noqa: SLF001
+    windows._release_forwarder(got, own)  # noqa: SLF001
+    assert OWN not in windows._forwarders  # noqa: SLF001
+    # A container outside Nox's pool has no ports at all.
+    with pytest.raises(SandboxUnavailable, match="no forwarder ports"):
+        backend._start_forwarder(Path("."), "\\\\.\\pipe\\nox-abc", limits, "S-1-15-2-1-2")  # noqa: SLF001
+
+
+async def test_a_run_cannot_use_another_runs_proxy() -> None:
+    # Workload A reaching workload B's forwarder would land in B's proxy - which answers 407 to
+    # anything but B's own per-run credentials (and the rules keep A off B's ports anyway).
+    import asyncio
+    import base64
+
+    from nox.sandbox.netguard import NetGuard
+    from nox.sandbox.proxy import EgressProxy
+
+    run_a = EgressProxy.new_credentials()
+    run_b = EgressProxy.new_credentials()
+    assert run_a != run_b
+    proxy_b = EgressProxy(allow=["example.com:443"], guard=NetGuard(), credentials=run_b)
+    port = await proxy_b.start()
+    try:
+        for creds in (run_a, None):
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            auth = b""
+            if creds:
+                token = base64.b64encode(f"{creds[0]}:{creds[1]}".encode())
+                auth = b"Proxy-Authorization: Basic " + token + b"\r\n"
+            writer.write(b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n" + auth)
+            writer.write(b"\r\n")
+            await writer.drain()
+            reply = await asyncio.wait_for(reader.read(), 10)
+            assert reply.startswith(b"HTTP/1.1 407"), reply[:40]
+            writer.close()
+    finally:
+        await proxy_b.stop()
 
 
 # ---- the installer ---------------------------------------------------------------------------
@@ -583,9 +737,8 @@ def test_the_installer_never_runs_its_own_python_elevated() -> None:
     elevated = [ln for ln in lines if "'runas'" in ln or 'Verb: "runas"' in ln]
     # One elevated call site: the system's PowerShell with the hash-checking bootstrap.
     assert len(elevated) == 1
-    assert (
-        "ShellExec('runas', SandboxPowerShell(), SandboxRulesParams(Action, Paths)," in elevated[0]
-    )
+    assert "ShellExec('runas', SandboxPowerShell(), Params," in elevated[0]
+    assert "Params := SandboxRulesParams(Action, Paths);" in script
     assert "ExpandConstant('{sys}\\WindowsPowerShell\\v1.0\\powershell.exe')" in script
     assert 'python.exe"; Parameters: "-m nox.sandbox.wfp' not in script
     assert "nox.sandbox.wfp install" not in script and "--status-file" not in script
@@ -602,8 +755,11 @@ def test_uninstall_removes_the_rules_whenever_they_may_exist() -> None:
     code = script.split("procedure CurUninstallStepChanged", 1)[1]
     assert "usUninstall" in code and "SandboxRulesMayExist()" in code
     # The protected copy first, then the copy in {app}: both only after their hash matched.
-    assert "SandboxPsQuote(SandboxProtectedCopy()) + ','" in code
-    assert "SandboxPsQuote(SandboxAppCopy()), True" in code
+    assert "RunSandboxHelper('uninstall', SandboxProtectedCopy(), SandboxAppCopy(), True," in code
+    run = script.split("function RunSandboxHelper", 1)[1].split("\nend;", 1)[0]
+    # Paths reach the bootstrap only hex-encoded and checked; a refused path starts nothing.
+    assert "Paths := SandboxPathArg(First);" in run and "if Paths = '' then" in run
+    assert "SandboxPsQuote" not in script
     may = script.split("function SandboxRulesMayExist", 1)[1].split("end;", 1)[0]
     # Independent of the install task: the folder, the status key, or Nox's WFP provider.
     assert "FileExists(SandboxProtectedCopy())" in may

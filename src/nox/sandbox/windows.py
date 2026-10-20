@@ -84,7 +84,7 @@ from nox.sandbox.model import (
     SandboxUnavailable,
 )
 from nox.sandbox.process import ProcessIo
-from nox.sandbox.wfp import FORWARDER_PORTS
+from nox.sandbox.wfp import FORWARDER_PORTS, ports_by_sid
 
 if TYPE_CHECKING:
     from nox.sandbox._win32 import Spawned
@@ -176,22 +176,32 @@ while ($true) {
 """
 
 
-def forwarder_script(pipe: str) -> str:
-    """`FORWARDER_PS` for the pipe `pipe` (its short name) and the forwarder's port range."""
+def forwarder_script(pipe: str, ports: range) -> str:
+    """`FORWARDER_PS` for the pipe `pipe` (its short name) and its container's own ports."""
+    if not ports or ports.start not in FORWARDER_PORTS or ports.stop - 1 not in FORWARDER_PORTS:
+        raise ValueError(f"not a forwarder port block: {ports}")
     return (
         FORWARDER_PS.replace("{pipe}", pipe)
-        .replace("{lo}", str(FORWARDER_PORTS.start))
-        .replace("{hi}", str(FORWARDER_PORTS.stop - 1))
+        .replace("{lo}", str(ports.start))
+        .replace("{hi}", str(ports.stop - 1))
     )
 
 
-def forwarder_port(line: str) -> int | None:
-    """The port in the forwarder's ready line - only one of `FORWARDER_PORTS`, else `None`."""
+def forwarder_port(line: str, ports: range) -> int | None:
+    """The port in the forwarder's ready line - only one of its container's `ports`, else `None`."""
     parts = line.split()
     if len(parts) != 2 or parts[0] != "NOXFWD" or not parts[1].isdigit():
         return None
     port = int(parts[1])
-    return port if port in FORWARDER_PORTS else None
+    return port if port in ports and port in FORWARDER_PORTS else None
+
+
+def container_forwarder_ports(sid: str) -> range:
+    """The forwarder ports the network rules open for container `sid` - its block alone."""
+    ports = ports_by_sid().get(sid)
+    if ports is None:
+        raise SandboxUnavailable("the run's container has no forwarder ports; failing closed")
+    return ports
 
 
 def appcontainer_available() -> bool:
@@ -258,49 +268,104 @@ def host_loopback_reachable(sid: str) -> bool:
         return reachable
 
 
-#: The process ids of the egress forwarders this process started and has not closed yet. Their
-#: listeners in `FORWARDER_PORTS` are Nox's own; any other listener there is foreign.
-_forwarders: set[int] = set()
+#: The egress forwarders this process started and has not released yet, as (pid, creation time):
+#: their listeners are Nox's own. A pid alone could be reused by another process after a
+#: forwarder ended; the pair cannot.
+_forwarders: set[tuple[int, float]] = set()
 _forwarders_lock = threading.Lock()
+#: How often a running run's forwarder ports are checked again (`_PortWatch`).
+_WATCH_INTERVAL_S = 1.5
 
 
-def _release_forwarder(fwd: Spawned) -> None:
-    with _forwarders_lock:
-        _forwarders.discard(fwd.pid)
+def _identity(pid: int | None) -> tuple[int, float] | None:
+    """(pid, creation time) of a live process, `None` when it cannot be read (counts as foreign)."""
+    if pid is None:
+        return None
+    import psutil
+
+    try:
+        return pid, psutil.Process(pid).create_time()
+    except (psutil.Error, OSError):
+        return None
+
+
+def _release_forwarder(fwd: Spawned, identity: tuple[int, float] | None = None) -> None:
+    if identity is not None:
+        with _forwarders_lock:
+            _forwarders.discard(identity)
     fwd.close()
     _close_fds(fwd)
 
 
-def forwarder_port_problem(port: int, own_pid: int) -> str | None:
-    """`None` when `port` is held by the forwarder `own_pid` and every other listener in
-    `FORWARDER_PORTS` is one of Nox's own live forwarders; otherwise why not.
+def forwarder_port_problem(port: int, own: tuple[int, float] | None, ports: range) -> str | None:
+    """`None` when `port` is held by the forwarder `own` (pid, creation time) and every other
+    listener on its container's `ports` is one of Nox's own live forwarders; otherwise why not.
 
-    Checked before every run that uses the forwarder: the network rules permit the whole range,
-    so a foreign listener there - or a port the forwarder does not actually hold - would be
-    reachable from inside the container. A listener whose owner cannot be read counts as foreign,
-    and so does a listener list that cannot be read at all (fail closed)."""
+    Checked before every run that uses the forwarder and again every `_WATCH_INTERVAL_S` while it
+    runs (`_PortWatch`): the network rules permit the container's whole block, so a foreign
+    listener there - or a port the forwarder does not actually hold - would be reachable from
+    inside. A listener whose owner cannot be identified counts as foreign, and so does a listener
+    table that cannot be read at all (fail closed)."""
     import psutil
 
+    if own is None:
+        return "the forwarder process cannot be identified"
     try:
         conns = psutil.net_connections(kind="tcp")
     except (OSError, psutil.Error) as exc:
         return f"the listeners cannot be listed: {type(exc).__name__}"
     with _forwarders_lock:
-        ours = set(_forwarders) | {own_pid}
+        ours = set(_forwarders) | {own}
     held = False
     foreign: set[int] = set()
     for c in conns:
-        if c.status != psutil.CONN_LISTEN or not c.laddr or c.laddr.port not in FORWARDER_PORTS:
+        if c.status != psutil.CONN_LISTEN or not c.laddr or c.laddr.port not in ports:
             continue
-        if c.laddr.port == port and c.pid == own_pid:
+        who = own if c.pid == own[0] else _identity(c.pid)
+        if c.laddr.port == port and who == own:
             held = True
-        elif c.laddr.port == port or c.pid not in ours:
+        elif c.laddr.port == port or who not in ours:
             foreign.add(c.laddr.port)
     if foreign:
         return f"a listener that is not Nox's forwarder holds port(s) {sorted(foreign)}"
     if not held:
         return f"port {port} is not held by the forwarder"
     return None
+
+
+class _PortWatch:
+    """Re-checks a running run's forwarder ports every `_WATCH_INTERVAL_S` and ends the run
+    (`stop()`) as soon as a foreign listener appears there or the forwarder loses its port - so a
+    listener that starts after the run began is not reachable for longer than one interval."""
+
+    def __init__(
+        self,
+        port: int,
+        own: tuple[int, float],
+        ports: range,
+        stop: Callable[[], None],
+        interval_s: float = _WATCH_INTERVAL_S,
+    ) -> None:
+        self.problem: str | None = None
+        self._args = (port, own, ports)
+        self._stop = stop
+        self._interval = interval_s
+        self._done = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name="nox-sbx-portwatch", daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        while not self._done.wait(self._interval):
+            problem = forwarder_port_problem(*self._args)
+            if problem is not None:
+                self.problem = problem
+                log.warning("sandbox.forwarder_port_taken", reason=problem)
+                with contextlib.suppress(Exception):
+                    self._stop()
+                return
+
+    def close(self) -> None:
+        self._done.set()
 
 
 def forwarder_range_listeners() -> list[int] | None:
@@ -916,10 +981,13 @@ class WindowsSandbox:
         await self._ensure_runtime(argv, sid)
         work, created = self._prepare_workdir(cwd, sid)
         forwarder: Spawned | None = None
+        identity: tuple[int, float] | None = None
+        watch: _PortWatch | None = None
         try:
             port: int | None = None
+            ports = range(0)
             if egress.wants_network and proxy_socket:
-                forwarder, port = await asyncio.to_thread(
+                forwarder, port, identity, ports = await asyncio.to_thread(
                     self._start_forwarder, work, proxy_socket, limits, sid
                 )
             env = self._child_env(work, port, extra_env, proxy_auth)
@@ -935,13 +1003,22 @@ class WindowsSandbox:
             except OSError as exc:
                 raise SandboxUnavailable(f"could not start the sandboxed process: {exc}") from exc
             try:
-                return await asyncio.to_thread(_collect, spawned, limits)
+                if port is not None and identity is not None:
+                    watch = _PortWatch(port, identity, ports, spawned.kill)
+                result = await asyncio.to_thread(_collect, spawned, limits)
+                if watch is not None and watch.problem is not None:
+                    raise SandboxUnavailable(
+                        f"the run was ended: {watch.problem} while it ran (failing closed)"
+                    )
+                return result
             finally:
+                if watch is not None:
+                    watch.close()
                 spawned.close()
                 _close_fds(spawned)
         finally:
             if forwarder is not None:
-                _release_forwarder(forwarder)
+                _release_forwarder(forwarder, identity)
             if created:
                 _best_effort_rmtree(work)
 
@@ -981,15 +1058,20 @@ class WindowsSandbox:
         await self._ensure_runtime(argv, sid)
         work, created = self._prepare_workdir(cwd, sid)
         forwarder: Spawned | None = None
+        identity: tuple[int, float] | None = None
+        watch: list[_PortWatch] = []
 
         def drop_forwarder() -> None:
+            for w in watch:
+                w.close()
             if forwarder is not None:
-                _release_forwarder(forwarder)
+                _release_forwarder(forwarder, identity)
 
         try:
             port: int | None = None
+            ports = range(0)
             if egress.wants_network and proxy_socket:
-                forwarder, port = await asyncio.to_thread(
+                forwarder, port, identity, ports = await asyncio.to_thread(
                     self._start_forwarder, work, proxy_socket, limits, sid
                 )
             env = self._child_env(work, port, extra_env, proxy_auth)
@@ -1013,6 +1095,10 @@ class WindowsSandbox:
             spawned.close()
             drop_forwarder()
             raise SandboxUnavailable("the sandboxed process has no stdin pipe")
+        if port is not None and identity is not None:
+            # A long-running server: its forwarder's ports are watched for as long as it lives;
+            # a foreign listener there ends it (the caller sees the process exit).
+            watch.append(_PortWatch(port, identity, ports, spawned.kill))
         stdin_fd: list[int | None] = [spawned.stdin_fd]
         lanes = {name: _Lane(f"nox-sbx-{spawned.pid}-{name}") for name in ("out", "err", "in")}
         waiter = _Lane(f"nox-sbx-{spawned.pid}-wait")
@@ -1066,14 +1152,15 @@ class WindowsSandbox:
 
     def _start_forwarder(
         self, work: Path, pipe_path: str, limits: Limits, sid: str | None
-    ) -> tuple[Spawned, int]:
+    ) -> tuple[Spawned, int, tuple[int, float], range]:
         """Start the in-container forwarder (in the run's own container) and return it with the
-        loopback port it listens on."""
+        loopback port it listens on, its (pid, creation time) and its container's port block."""
         assert sid is not None
         short = pipe_path.rsplit("\\", 1)[-1]
         if not short.replace("-", "").isalnum():
             raise SandboxUnavailable("unexpected proxy pipe name; failing closed")
-        script = forwarder_script(short)
+        ports = container_forwarder_ports(sid)
+        script = forwarder_script(short, ports)
         encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
         try:
             fwd = self._w.spawn(
@@ -1087,13 +1174,14 @@ class WindowsSandbox:
         except OSError as exc:
             raise SandboxUnavailable(f"could not start the egress forwarder: {exc}") from exc
         line = _read_line(fwd.stdout_fd, _FORWARDER_READY_S)
-        port = forwarder_port(line)
+        port = forwarder_port(line, ports)
         if port is None:
             fwd.close()
             _close_fds(fwd)
             raise SandboxUnavailable("the egress forwarder did not start; failing closed")
-        problem = forwarder_port_problem(port, fwd.pid)
-        if problem is not None:
+        own = _identity(fwd.pid)
+        problem = forwarder_port_problem(port, own, ports)
+        if problem is not None or own is None:
             fwd.close()
             _close_fds(fwd)
             log.warning("sandbox.forwarder_unverified", port=port, reason=problem)
@@ -1103,8 +1191,8 @@ class WindowsSandbox:
                 "a path to a listener that is not Nox's (failing closed)"
             )
         with _forwarders_lock:
-            _forwarders.add(fwd.pid)
-        return fwd, port
+            _forwarders.add(own)
+        return fwd, port, own, ports
 
 
 class _Lane:
