@@ -12,6 +12,7 @@ import ssl
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from cryptography import x509
@@ -577,3 +578,37 @@ async def test_pending_blobs_are_bounded_in_number(
     assert answer["error"]["code"] == -32602
     assert len(listener.sessions[node.node_id].blobs) == MAX_PENDING_BLOBS
     await ws.close()
+
+
+async def test_a_revocation_during_the_replacement_window_closes_the_new_session(
+    listener: NodeListener, pairing: NodePairing, tls: TlsMaterial, tmp_path: Path
+) -> None:
+    """Closing the old session is an await between identify and registration. A revocation that
+    lands there must still close the new session at once, and it never gets another call."""
+    node = await pair_node(pairing, tmp_path)
+    first = await open_node(listener, client_context(tls, node))
+    await greet(first)
+    await _connected(listener, node.node_id)
+    in_window = asyncio.Event()
+    real_close = listener._close
+
+    async def slow_close(session: Any, code: int, reason: str) -> None:
+        if reason == "replaced by a new connection":
+            in_window.set()
+            await asyncio.sleep(0.3)  # the replacement window, stretched
+        await real_close(session, code, reason)
+
+    listener._close = slow_close  # type: ignore[method-assign]
+    second = await open_node(listener, client_context(tls, node))
+    await second.send(json.dumps(hello()))
+    await asyncio.wait_for(in_window.wait(), 5)
+    started = time.monotonic()
+    assert await pairing.revoke(node.node_id, reason="lost laptop") is not None
+    with pytest.raises(ConnectionClosed):
+        while True:
+            message = json.loads(await asyncio.wait_for(second.recv(), 2))
+            assert message.get("method") not in ("tools/call", "tools/list")
+    assert time.monotonic() - started < 1.0
+    assert node.node_id not in listener.sessions
+    await asyncio.sleep(0.2)
+    assert node.node_id not in listener.sessions

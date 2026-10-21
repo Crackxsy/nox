@@ -159,6 +159,9 @@ def test_a_well_formed_node_certificate_is_recognised() -> None:
         ),
         pytest.param(lambda: _hand_made(cn="node:" + "b" * 32), id="cn-disagrees"),
         pytest.param(lambda: _hand_made(uris=["urn:nox:node:ABC"]), id="bad-id"),
+        pytest.param(
+            lambda: _hand_made(uris=["urn:nox:node:ABC"], cn="node:ABC"), id="bad-id-agreeing"
+        ),
     ],
 )
 def test_anything_else_is_not_a_node(cert: object) -> None:

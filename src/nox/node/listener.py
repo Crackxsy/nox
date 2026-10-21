@@ -145,6 +145,10 @@ class NodeListener:
         self._identified: dict[ServerConnection, tuple[DeviceRow, x509.Certificate]] = {}
         #: device id -> monotonic time until which a node cut off for violations is refused.
         self._cooling: dict[str, float] = {}
+        #: Per device: replacing/registering a session and revoking it never interleave.
+        self._locks: dict[str, asyncio.Lock] = {}
+        #: Devices revoked while this listener runs; checked after every await of a new connection.
+        self._removed: set[str] = set()
         self.sessions: dict[str, NodeSession] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         self._ca_fingerprint = ""
@@ -261,7 +265,7 @@ class NodeListener:
             await connection.close(CLOSE_POLICY_VIOLATION, "initialize expected")
             return
         # Revoked while it was saying hello: the check before the upgrade is not enough.
-        if self._pairing.identify(cert) is None:
+        if self._is_removed(device.id, cert):
             await connection.close(CLOSE_POLICY_VIOLATION, "removed")
             return
         hello_msg, hello_id = hello
@@ -286,16 +290,29 @@ class NodeListener:
             compatible=compatible,
             transport=transport,
         )
-        previous = self.sessions.get(device.id)
-        if previous is not None:
-            await self._close(previous, CLOSE_POLICY_VIOLATION, "replaced by a new connection")
-        self.sessions[device.id] = session
+        # Replacing an older session and registering this one happen under the device's lock,
+        # which a revocation takes too: a revocation either sees this session registered and
+        # closes it, or ran before and is caught by the checks after registering.
+        async with self._lock(device.id):
+            if self._is_removed(device.id, cert):
+                await self._close(session, CLOSE_POLICY_VIOLATION, "removed")
+                return
+            previous = self.sessions.get(device.id)
+            if previous is not None:
+                await self._close(previous, CLOSE_POLICY_VIOLATION, "replaced by a new connection")
+            self.sessions[device.id] = session
+            if self._is_removed(device.id, cert):
+                await self._close(session, CLOSE_POLICY_VIOLATION, "removed")
+                return
         await asyncio.to_thread(
             self._nodes.update_hello,
             device.id,
             version=hello_msg.node_version,
             manifest_hash=hello_msg.manifest_hash,
         )
+        if self._is_removed(device.id) or client.closed:
+            await self._close(session, CLOSE_POLICY_VIOLATION, "removed")
+            return
         await transport.send(
             {
                 "jsonrpc": "2.0",
@@ -310,6 +327,9 @@ class NodeListener:
                 },
             }
         )
+        if self._is_removed(device.id) or client.closed:
+            await self._close(session, CLOSE_POLICY_VIOLATION, "removed")
+            return
         self._append_audit("node.connect", device.id, "allow", "ok" if compatible else "outdated")
         log.info("node.connected", device_id=device.id, compatible=compatible)
         client.start()
@@ -437,16 +457,34 @@ class NodeListener:
     # -- revocation ----------------------------------------------------------------------------
 
     async def disconnect(self, device_id: str, reason: str = "revoked") -> bool:
-        """Tell the node it was removed and close its connection; True when one was open."""
-        session = self.sessions.get(device_id)
-        if session is None:
-            return False
-        with contextlib.suppress(McpClientError, ConnectionClosed):
-            await asyncio.wait_for(
-                session.client.notify(p.M_REVOKED, {"reason": reason[:64]}), 0.25
-            )
-        await self._close(session, CLOSE_POLICY_VIOLATION, "removed")
-        return True
+        """Tell the node it was removed and close its connection; True when one was open.
+
+        The device is marked removed first - every later step of a connection that is still
+        saying hello checks the mark - and the close runs under the device's lock, so it cannot
+        slip between another connection's replacement and registration."""
+        self._removed.add(device_id)
+        async with self._lock(device_id):
+            session = self.sessions.get(device_id)
+            if session is None:
+                return False
+            with contextlib.suppress(McpClientError, ConnectionClosed, TimeoutError):
+                await asyncio.wait_for(
+                    session.client.notify(p.M_REVOKED, {"reason": reason[:64]}), 0.25
+                )
+            await self._close(session, CLOSE_POLICY_VIOLATION, "removed")
+            return True
+
+    def _lock(self, device_id: str) -> asyncio.Lock:
+        lock = self._locks.get(device_id)
+        if lock is None:
+            lock = self._locks[device_id] = asyncio.Lock()
+        return lock
+
+    def _is_removed(self, device_id: str, cert: x509.Certificate | None = None) -> bool:
+        """Revoked in this process, or (with `cert`) no longer a paired node in the database."""
+        if device_id in self._removed:
+            return True
+        return cert is not None and self._pairing.identify(cert) is None
 
     async def _close(self, session: NodeSession, code: int, reason: str) -> None:
         if self.sessions.get(session.device_id) is session:
