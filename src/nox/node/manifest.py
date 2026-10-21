@@ -59,6 +59,10 @@ class NodeManifest(BaseModel):
     #: A node without a screen cannot ask locally; high risk is then refused unless this was set
     #: here, on the device (spec C §1.6 step 5, a documented residual risk).
     trust_core_for_high: bool = False
+    #: The node's own budget, independent of the core's: calls with a side effect, and high-risk
+    #: calls, per hour (spec C §1.6 step 6).
+    max_calls_per_hour: int = Field(default=60, ge=0, le=1000)
+    max_high_per_hour: int = Field(default=5, ge=0, le=100)
 
     @field_validator("groups")
     @classmethod

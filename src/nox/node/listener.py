@@ -33,6 +33,7 @@ import time
 import weakref
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from cryptography import x509
@@ -105,6 +106,11 @@ class NodeSession:
     violations: int = 0
     #: Set once the node got its `initialize` answer: only then may the core send it requests.
     ready: asyncio.Event = field(default_factory=asyncio.Event)
+    #: Set when the node answered `nox/killed` after the last `nox/kill`.
+    killed: asyncio.Event = field(default_factory=asyncio.Event)
+    killed_calls: list[str] = field(default_factory=list)
+    #: The certificate's end: the session closes when it is reached (review N1).
+    cert_not_after: datetime | None = None
     blobs: dict[str, list[bytes]] = field(default_factory=dict)
     complete: set[str] = field(default_factory=set)
     blob_bytes: int = 0
@@ -147,6 +153,7 @@ class NodeListener:
         on_connected: SessionFn | None = None,
         on_disconnected: SessionFn | None = None,
         on_tools_changed: SessionFn | None = None,
+        receipt_key: str = "",
         ping_interval_s: float = PING_INTERVAL_S,
         allow_public_clients: bool = False,
         kill_engaged: Callable[[], bool] | None = None,
@@ -161,6 +168,7 @@ class NodeListener:
         self._on_connected = on_connected
         self._on_disconnected = on_disconnected
         self._on_tools_changed = on_tools_changed
+        self._receipt_key = receipt_key
         self._ping_interval_s = ping_interval_s
         self._allow_public = allow_public_clients
         self._server: Server | None = None
@@ -346,6 +354,7 @@ class NodeListener:
             serial=serial,
             compatible=compatible,
             transport=transport,
+            cert_not_after=cert.not_valid_after_utc,
         )
         # Replacing an older session and registering this one happen under the device's lock,
         # which a revocation takes too: a revocation either sees this session registered and
@@ -380,6 +389,8 @@ class NodeListener:
                     "compatible": compatible,
                     "core_id": self.core_id,
                     "node_id": device.id,
+                    "receipt_key": self._receipt_key,
+                    "engaged": bool(self._kill_engaged is not None and self._kill_engaged()),
                     "serverInfo": {"name": "nox-core", "version": str(p.NODE_PROTOCOL)},
                 },
             }
@@ -431,6 +442,11 @@ class NodeListener:
         while True:
             await asyncio.sleep(self._ping_interval_s)
             seq += 1
+            ends = session.cert_not_after
+            if ends is not None and ends <= datetime.now(UTC):
+                log.info("node.certificate_expired", device_id=session.device_id)
+                self._spawn(self._close(session, CLOSE_POLICY_VIOLATION, "certificate expired"))
+                return
             with contextlib.suppress(McpClientError, ConnectionClosed):
                 await session.client.notify(p.M_PING, {"seq": seq, "ts": time.time()})
 
@@ -471,6 +487,19 @@ class NodeListener:
             if msg_id is not None:
                 await session.answer({"jsonrpc": "2.0", "id": msg_id, "result": {"status": status}})
                 return
+        elif method == p.M_KILLED:
+            assert isinstance(params, p.Killed)
+            session.killed_calls = list(params.call_ids)
+            session.killed.set()
+        elif method == p.M_CONFIRM_RESULT:
+            assert isinstance(params, p.ConfirmResult)
+            # The decision was the device's (D1); the core records that it was asked there.
+            self._append_audit(
+                "node.confirm",
+                session.device_id,
+                "allow" if params.decision == "allow" else "deny",
+                f"{p.safe_name(params.call_id, 64)}:{params.decision}",
+            )
         elif method == p.M_BLOB:
             assert isinstance(params, p.Blob)
             if not self._take_chunk(session, params):
@@ -544,6 +573,34 @@ class NodeListener:
             await self._close(session, CLOSE_POLICY_VIOLATION, "too many refused messages")
 
     # -- revocation ----------------------------------------------------------------------------
+
+    async def broadcast_kill(self, reason: str = "", *, wait_s: float = 0.9) -> dict[str, bool]:
+        """`nox/kill` to every connected node at once (no queue: the sockets are open), then wait
+        up to `wait_s` for each `nox/killed`. Device id -> whether it acknowledged in time."""
+        sessions = list(self.sessions.values())
+        for session in sessions:
+            session.killed.clear()
+
+        async def send(session: NodeSession) -> None:
+            with contextlib.suppress(McpClientError, ConnectionClosed):
+                await session.client.notify(p.M_KILL, {"reason": reason[:200]})
+
+        await asyncio.gather(*(send(s) for s in sessions))
+        waits = {s.device_id: asyncio.ensure_future(s.killed.wait()) for s in sessions}
+        if waits:
+            await asyncio.wait(waits.values(), timeout=wait_s)
+        acked = {device_id: task.done() for device_id, task in waits.items()}
+        for task in waits.values():
+            task.cancel()
+        for device_id, ok in acked.items():
+            self._append_audit("node.kill", device_id, "allow", "ok" if ok else "no_ack")
+        return acked
+
+    async def broadcast_resume(self) -> None:
+        """`nox/resume`: nodes stopped by the core go on. A stop made on a device stays."""
+        for session in list(self.sessions.values()):
+            with contextlib.suppress(McpClientError, ConnectionClosed):
+                await session.client.notify(p.M_RESUME, {})
 
     async def disconnect(self, device_id: str, reason: str = "revoked") -> bool:
         """Tell the node it was removed and close its connection; True when one was open.

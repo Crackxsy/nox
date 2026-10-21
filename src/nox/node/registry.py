@@ -21,9 +21,11 @@ from typing import Any
 
 from nox.core.logging import get_logger
 from nox.mcp.client import McpClientError
+from nox.node.confirm import CONFIRM_TIMEOUT_S
 from nox.node.listener import NodeSession
 from nox.node.names import display_name, label
 from nox.node.pairing import NodePairing
+from nox.node.receipts import MAX_LIFETIME_S, ReceiptSigner
 from nox.node.repo import NodeRepository
 from nox.security.prohibitions import matching_hard_prohibition
 
@@ -59,6 +61,8 @@ class NodeEntry:
     last_seen: datetime | None = None
     linked_device_id: str | None = None
     session: NodeSession | None = None
+    #: The node can ask the person at the device (it said so at `initialize`).
+    confirmer: bool = False
 
     @property
     def label(self) -> str:
@@ -120,7 +124,9 @@ class NodeRegistry:
         nodes: NodeRepository,
         *,
         clock: Callable[[], datetime] | None = None,
+        signer: ReceiptSigner | None = None,
     ) -> None:
+        self._signer = signer
         self._pairing = pairing
         self._nodes = nodes
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -131,6 +137,7 @@ class NodeRegistry:
     async def on_connected(self, session: NodeSession) -> None:
         entry = self._entry(session.device_id, session.device.name)
         entry.session, entry.online, entry.compatible = session, True, session.compatible
+        entry.confirmer = session.hello.confirmer
         entry.last_seen = self._clock()
         await self.refresh(session)
 
@@ -205,17 +212,40 @@ class NodeRegistry:
         return any(e.offers(tool) for e in self._entries.values())
 
     async def call(
-        self, entry: NodeEntry, tool: str, arguments: dict[str, Any], *, risk: str, timeout_s: float
+        self,
+        entry: NodeEntry,
+        tool: str,
+        arguments: dict[str, Any],
+        *,
+        risk: str,
+        timeout_s: float,
+        confirm_on_device: bool = False,
     ) -> dict[str, Any]:
         """One call on one node. Offline at this moment: fail fast, nothing is queued."""
         session = entry.session
         if session is None or not entry.offers(tool):
             return offline_error(entry)
-        meta = {
-            "call_id": uuid.uuid4().hex,
+        call_id = uuid.uuid4().hex
+        deadline = time.time() + min(timeout_s, MAX_LIFETIME_S)
+        meta: dict[str, Any] = {
+            "call_id": call_id,
             "risk": risk,
-            "deadline": time.time() + timeout_s,
+            "deadline": deadline,
+            "decided_by": "core",
+            "confirm_on_device": confirm_on_device,
         }
+        if self._signer is not None:
+            meta["receipt"] = self._signer.sign(
+                call_id=call_id,
+                tool=tool,
+                arguments=arguments,
+                risk=risk,
+                decided_by="core",
+                confirm_on_device=confirm_on_device,
+                deadline=deadline,
+            )
+        if confirm_on_device:
+            timeout_s += CONFIRM_TIMEOUT_S  # the person at the device has a minute to answer
         try:
             raw = await session.client.request(
                 "tools/call",

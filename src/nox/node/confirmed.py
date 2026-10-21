@@ -200,7 +200,13 @@ def effective_manifest(
     groups = {g: bool(current.groups.get(g) and confirmed.groups.get(g)) for g in GROUPS}
     max_risk = min(current.max_risk, confirmed.max_risk, key=_RISKS.index)
     trust = current.trust_core_for_high and confirmed.trust_core_for_high
-    effective = NodeManifest(groups=groups, max_risk=max_risk, trust_core_for_high=trust)
+    effective = NodeManifest(
+        groups=groups,
+        max_risk=max_risk,
+        trust_core_for_high=trust,
+        max_calls_per_hour=min(current.max_calls_per_hour, confirmed.max_calls_per_hour),
+        max_high_per_hour=min(current.max_high_per_hour, confirmed.max_high_per_hour),
+    )
     widened = sorted(g for g in GROUPS if current.groups.get(g) and not groups[g])
     if confirmed is not MOST_RESTRICTIVE and widened:
         audit.append(

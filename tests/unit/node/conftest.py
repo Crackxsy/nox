@@ -126,8 +126,11 @@ async def pair_node(pairing: NodePairing, tmp_path: Path, name: str = "") -> Pai
 
 @pytest.fixture
 async def listener(
-    pairing: NodePairing, nodes: NodeRepository, tls: TlsMaterial
+    pairing: NodePairing, nodes: NodeRepository, tls: TlsMaterial, tmp_path: Path
 ) -> AsyncIterator[NodeListener]:
+    from nox.node.receipts import ReceiptSigner
+
+    signer = ReceiptSigner(tmp_path / "tls")
     kills: list[tuple[str, str]] = []
 
     async def on_kill(device_id: str, reason: str) -> None:
@@ -141,8 +144,10 @@ async def listener(
         port=0,
         on_security_kill=on_kill,
         ping_interval_s=3600,
+        receipt_key=signer.public_key,
     )
     server.kills = kills  # type: ignore[attr-defined]
+    server.signer = signer  # type: ignore[attr-defined]
     await server.start()
     try:
         yield server

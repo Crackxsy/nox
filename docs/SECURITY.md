@@ -690,10 +690,30 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   there is one. Residual risk: on a headless Linux node only its 0600 mode protects it.
 - **The gate, before any handler:** hard prohibitions (the core's immutable list, by name and
   glob), known tools only, the tool's capability group enabled in the device's `node.yaml` and not
-  narrowed by the core, a risk ceiling of *low* in this release (nothing medium or high runs on a
-  node until signed receipts and the local confirmation exist), strict argument models, and no
-  argument may name the node's own folder (key, certificate, `node.yaml`, confirmation key,
-  audit). The core can only narrow the groups (`nox/policy`).
+  narrowed by the core, the risk ceiling `max_risk` (default high, critical never) and the core
+  may not claim a lower risk than the node's own, strict argument models, no argument may name
+  the node's own folder (key, certificate, `node.yaml`, confirmation key, audit), and a **signed
+  core receipt** for every call with a side effect: an Ed25519 signature by the core's receipt
+  key (pinned at pairing) over call id, tool, the hash of the arguments, risk, who decided,
+  whether it was left to the device and the deadline (at most 60 s, clock skew measured from the
+  core's pings); missing, altered, expired or replayed -> refused. Then the node's **own budget**
+  (60 side effects and 5 high-risk calls per hour by default). The core can only narrow the
+  groups (`nox/policy`).
+- **High risk is confirmed on the device itself** (owner decision D1): whenever the node's tool,
+  the core's receipt or the core's delegation says high, the node asks in a system dialog on that
+  device - every argument in full (control characters escaped, no markup; too long to read ->
+  refused, never cut), 60 s, default **no**; a broken dialog is a no. The core leaves the
+  question to the device only when the node said at `initialize` that it can ask; otherwise the
+  core asks itself and the node still refuses high risk it cannot confirm, unless
+  `trust_core_for_high` was confirmed locally on that device (documented residual risk for nodes
+  without a screen). The answer comes back as `nox/confirm_result` and is audited on both sides.
+- **Stopping:** the core's kill switch sends `nox/kill` to every node over the open sockets; a
+  node cancels every running call at once, answers `nox/killed` and refuses everything until
+  `nox/resume` - p99 under a second to five nodes (tested). Dead man: no word from the core for
+  3 s while a side effect runs -> that call is aborted and the node refuses everything until the
+  core is back and not stopped. `nox node stop` on the device stops it there and the core
+  everywhere; only the device lifts it (`nox node resume`). A session ends when its certificate
+  does.
 - **Widening needs a person at the device:** `nox node allow` only in an interactive terminal
   and after a typed "yes" - a boundary against the core and remote tools, **not** against a local
   process of the same user (a real presence check, Windows Hello / UAC consent or polkit, is a
@@ -738,9 +758,9 @@ A typed name that breaks a rule is refused before the code is spent - and only c
 valid code, so nobody without one can probe which names exist. The model and the dashboard
 always see the name with a short id the device cannot choose ("Laptop · 3f2a").
 
-Still to come in wave C: signed core receipts, the local confirmation for high risk, the node's
-own sandbox and budgets, and the kill switch reaching every node (with a dead-man timer).
-Negative tests: `tests/unit/node/` (a deliberately permissive core in `test_agent.py`),
+Still to come in wave C: the node's own sandbox for shell and package tools (C5) - until then a
+node has none of those tools - certificate renewal (C7), and a real presence check for
+`nox node allow`. Negative tests: `tests/unit/node/` (a deliberately permissive core in `test_agent.py`),
 `tests/integration/test_nodes.py`.
 
 ## Known limits of network access

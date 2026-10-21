@@ -179,7 +179,14 @@ class FakeRegistry:
         return self._entries
 
     async def call(
-        self, entry: NodeEntry, tool: str, arguments: dict[str, Any], *, risk: str, timeout_s: float
+        self,
+        entry: NodeEntry,
+        tool: str,
+        arguments: dict[str, Any],
+        *,
+        risk: str,
+        timeout_s: float,
+        confirm_on_device: bool = False,
     ) -> dict[str, Any]:
         if not entry.online:
             return {"error": "device_offline", "device": entry.name}

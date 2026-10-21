@@ -149,6 +149,7 @@ async def enroll(
         node_port=answer.node_port,
         ca_fingerprint=link.ca_fingerprint,
         paired_at=datetime.now(UTC),
+        receipt_key=answer.receipt_key,
     )
     home.save_pairing(identity, cert_pem=answer.cert, ca_pem=ca_pem)
     return identity

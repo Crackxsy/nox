@@ -276,16 +276,25 @@ async def test_a_node_enrolls_runs_and_serves_the_core(core: NoxCore, tmp_path: 
             raise AssertionError("the node never connected")
         tools = await session.client.list_tools()
         assert {t.name for t in tools} == {"system.info", "notify.show"}
-        meta = {"call_id": "c1", "risk": "low", "deadline": 4102444800.0}
-        await session.client.request(
-            "tools/call",
-            {"name": "notify.show", "arguments": {"text": "Wäsche aufhängen"}, "_nox": meta},
+        registry = _nodes(core).registry
+        assert registry is not None
+        entry = next(e for e in registry.entries() if e.device_id == identity.node_id)
+        # Through the core's own call path: the call carries the core's signed receipt.
+        sent = await registry.call(
+            entry, "notify.show", {"text": "Wäsche aufhängen"}, risk="low", timeout_s=10
         )
+        assert "error" not in sent, sent
         assert shown == [("Nox", "Wäsche aufhängen")]
+        meta = {"call_id": "c1", "risk": "low", "deadline": 4102444800.0}
         refused = await session.client.request(
             "tools/call", {"name": "game.input.send", "arguments": {}, "_nox": meta}
         )
         assert refused["_nox"]["refused"] == "hard_prohibition"
+        unsigned = await session.client.request(
+            "tools/call",
+            {"name": "notify.show", "arguments": {"text": "x"}, "_nox": {**meta, "call_id": "c2"}},
+        )
+        assert unsigned["_nox"]["refused"] == "receipt_missing"
         await _local(core, "dashboard", "node.unpair", {"device_id": identity.node_id})
         assert await asyncio.wait_for(task, 5) == "revoked"
         assert not home.key_file.exists()

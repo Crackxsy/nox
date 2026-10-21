@@ -65,8 +65,20 @@ sind an; alles andere - Dateien, Befehle, Programme, Bildschirm, Kamera, Browser
 Tastatur - ist aus. Der Core kann Gruppen zeitweise abschalten, nie anschalten. `allow` geht nur in einem
 interaktiven Terminal mit Bestätigung; wer `node.yaml` von Hand ändert, kann nur etwas
 wegnehmen - was dazukommt, gilt erst nach `nox node allow`. `max_risk` senkt,
-was der Node annimmt; in dieser Version läuft auf einem Node nichts über „niedrig“, egal was der
-Core sagt.
+was der Node annimmt.
+
+**Hohes Risiko wird hier gefragt, an diesem Gerät**: Ein Systemdialog zeigt, was Nox tun will, mit
+allen Angaben, 60 Sekunden lang - keine Antwort heißt nein. Ein Node ohne Bildschirm lehnt hohes
+Risiko ab, außer du setzt dort `trust_core_for_high: true` (und bestätigst es mit `nox node
+allow`). Der Node hat außerdem ein eigenes Budget: 60 Aktionen und 5 mit hohem Risiko pro Stunde
+(`max_calls_per_hour`, `max_high_per_hour` in `node.yaml`).
+
+## Stoppen
+
+Der Stopp-Knopf von Nox stoppt jeden Node in unter einer Sekunde; laufende Aktionen werden
+abgebrochen. Am Gerät selbst: `nox node stop` stoppt es dort und Nox überall; aufheben kann das nur
+`nox node resume` an diesem Gerät. Hört ein Node 3 Sekunden lang nichts von Nox, während er etwas
+tut, bricht er das ab und wartet.
 
 Harte Verbote (Anti-Cheat, Spieleingaben, Stream-Schlüssel, ...) prüft auch der Node selbst.
 
