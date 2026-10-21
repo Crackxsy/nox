@@ -50,6 +50,7 @@ ROUTE_ERROR_KEY = "_route_error"
 #: How long a node call may take before the core gives up on it.
 NODE_CALL_TIMEOUT_S = 30.0
 _CORE_WORDS = frozenset({"core", "dieser core", "this core", "hier", "here"})
+_HERE_WORDS = frozenset({"hier", "here"})
 
 
 @dataclass(frozen=True)
@@ -117,7 +118,13 @@ def resolve(
 
     # (1) the user's (the model's) choice
     if requested is not None and requested.strip():
-        if requested.strip().casefold() in _CORE_WORDS:
+        word = requested.strip().casefold()
+        if word in _HERE_WORDS and origin is not None:
+            # "hier" from a browser on a PC with a node means that PC (review N5).
+            linked = [e for e in entries if e.linked_device_id == origin]
+            if len(linked) == 1:
+                return at(linked[0])
+        if word in _CORE_WORDS:
             return Resolution(CORE) if core_has else needs("not_on_core")
         found = _matches(entries, requested)
         if len(found) > 1:
@@ -238,6 +245,9 @@ def routed_spec(
             risk=node_risk,
             target=f"{entry.label}: {base_target or name}",
             device=resolution.device,
+            # Left to the device only when it can ask; otherwise the core asks itself (and the
+            # node still refuses high risk it cannot confirm, unless trusted there).
+            confirm_on_device=node_risk is Risk.HIGH and entry.confirmer,
         )
 
     async def handler(payload: dict[str, Any]) -> dict[str, Any]:
@@ -258,6 +268,7 @@ def routed_spec(
             inner(payload),
             risk=node_risk.value,
             timeout_s=NODE_CALL_TIMEOUT_S,
+            confirm_on_device=node_risk is Risk.HIGH and entry.confirmer,
         )
 
     template = core or ToolSpec(

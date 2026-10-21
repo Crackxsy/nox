@@ -32,6 +32,7 @@ from nox.node.listener import NodeListener
 from nox.node.names import label
 from nox.node.pairing import NodePairing
 from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink
+from nox.node.receipts import ReceiptSigner
 from nox.node.registry import NodeRegistry
 from nox.node.repo import NodeRepository
 from nox.node.router import install_routes, routed_spec
@@ -129,7 +130,9 @@ def install(core: Any) -> NodeRuntime:
     if not runtime.enabled or lan is None:
         return runtime
 
-    registry = NodeRegistry(pairing, NodeRepository(core.db))
+    # The core signs every call with a side effect; nodes pin the public half at pairing.
+    signer = ReceiptSigner(tls_dir)
+    registry = NodeRegistry(pairing, NodeRepository(core.db), signer=signer)
     runtime.registry = registry
 
     def tls() -> TlsMaterial | None:
@@ -153,11 +156,23 @@ def install(core: Any) -> NodeRuntime:
         on_security_kill=security_kill,
         allow_public_clients=cfg.allow_public_clients,
         kill_engaged=core.security.killswitch.is_engaged,
+        receipt_key=signer.public_key,
         on_connected=registry.on_connected,
         on_disconnected=registry.on_disconnected,
         on_tools_changed=registry.on_tools_changed,
     )
     runtime.listener = listener
+
+    async def stop_nodes() -> None:
+        # The stop reaches every node over the sockets that are already open (spec C §1.7).
+        await listener.broadcast_kill("kill switch")
+
+    async def resume_nodes() -> None:
+        await listener.broadcast_resume()
+
+    killswitch = core.security.killswitch
+    killswitch.register_stop_hook("nodes", stop_nodes)
+    killswitch.register_resume_hook("nodes", resume_nodes)
     _install_routes(core, registry)
 
     async def redeem(body: NodePairRequest) -> tuple[int, dict[str, Any]]:
@@ -174,6 +189,7 @@ def install(core: Any) -> NodeRuntime:
             ca_cert=issued.ca_pem,
             core_id=listener.core_id,
             node_port=listener.port,
+            receipt_key=signer.public_key,
         )
         return 201, answer.model_dump()
 

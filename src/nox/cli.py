@@ -381,6 +381,24 @@ def node_log(limit: int = typer.Option(50, min=1, max=10_000)) -> None:
         typer.echo(line)
 
 
+@node_app.command("stop")
+def node_stop() -> None:
+    """Stop Nox on this device at once - and everywhere (the core gets a stop too). Only this
+    device can undo it: nox node resume."""
+    home = _node_home()
+    home.ensure()
+    home.stop_file.write_text("stopped on this device\n", encoding="utf-8")
+    typer.echo("Stopped. Undo on this device with: nox node resume")
+
+
+@node_app.command("resume")
+def node_resume() -> None:
+    """Undo a stop made on this device. A stop of the core is resumed on the core."""
+    home = _node_home()
+    home.stop_file.unlink(missing_ok=True)
+    typer.echo("Resumed on this device.")
+
+
 @node_app.command("allow")
 def node_allow(
     group: str = typer.Argument(..., help="system, notify, media, files, shell, ..."),

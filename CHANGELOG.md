@@ -34,6 +34,15 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
 
 ### Added
+- **Nodes, part 4 (the node's gate and stopping):** every call with a side effect carries the
+  core's Ed25519 receipt (bound to call, tool, arguments, risk, deadline <= 60 s; replays and
+  altered calls are refused); the node keeps its own risk ceiling and budget (60 actions, 5
+  high-risk per hour); high risk is confirmed in a dialog on the device itself (D1; all details,
+  60 s, default no), delegated by the core only to a node that can ask; nodes without a screen
+  refuse it unless trusted locally. Stopping: the kill switch reaches every node in under a
+  second (p99, 5 nodes), running calls are aborted, `nox/resume` lifts it; a dead-man rule aborts
+  a side effect when the core goes silent for 3 s; `nox node stop` / `nox node resume` on the
+  device. Sessions end with their certificate.
 - **Nodes, part 3 (routing):** `system.info` and `notify.show` take an optional `device`
   ("core" or a device's name); without it Nox uses `devices.defaults` (`core`, `origin`, a name),
   then the only device that can, and never guesses a side effect onto a device. Offline devices

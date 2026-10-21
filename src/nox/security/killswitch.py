@@ -76,11 +76,21 @@ class KillSwitchService:
         self._hook_timeout = hook_timeout_s
         self._clock: Clock = clock or (lambda: datetime.now(UTC))
         self._hooks: dict[str, StopHook] = {}
+        self._resume_hooks: dict[str, StopHook] = {}
         self._engaged = False
         self._engaged_at: datetime | None = None
         self._origin = ""
         self._reason = ""
         self._security_path = False
+
+    def register_resume_hook(self, name: str, hook: StopHook) -> Callable[[], None]:
+        """Called (and awaited, errors logged) after a successful resume - nodes go on."""
+        self._resume_hooks[name] = hook
+
+        def _unregister() -> None:
+            self._resume_hooks.pop(name, None)
+
+        return _unregister
 
     def register_stop_hook(self, name: str, hook: StopHook) -> Callable[[], None]:
         self._hooks[name] = hook
@@ -233,6 +243,11 @@ class KillSwitchService:
             details={"security_path": str(security_path).lower(), "origin": origin},
         )
         log.info("security.kill_switch_resumed", by=by, origin=origin, security_path=security_path)
+        for hook_name, hook in list(self._resume_hooks.items()):
+            try:
+                await asyncio.wait_for(hook(), 2.0)
+            except Exception as exc:  # noqa: BLE001 - one hook must not keep Nox stopped
+                log.warning("security.resume_hook_failed", hook=hook_name, error=type(exc).__name__)
         return True
 
     async def panic(self, *, by: str = "user", reason: str = "panic") -> KillReport:

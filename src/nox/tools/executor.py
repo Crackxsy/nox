@@ -145,6 +145,7 @@ class ToolExecutor:
         payload = validated.model_dump(mode="json")
         risk = spec.risk
         device = ""
+        delegated = False
         if spec.scope is not None:
             try:
                 scope = spec.scope(payload)
@@ -163,6 +164,7 @@ class ToolExecutor:
                     error=ERR_INVALID_INPUT,
                 )
             action, risk, device = scope.action, scope.risk, scope.device
+            delegated = scope.confirm_on_device and bool(scope.device)
         target = spec.targets(payload) if spec.targets is not None else ""
         if spec.scope is not None and scope.target:
             target = scope.target
@@ -184,7 +186,11 @@ class ToolExecutor:
 
         result = self._permission_engine.check(request)
         decision = result.decision
-        if decision is Decision.CONFIRM:
+        if decision is Decision.CONFIRM and delegated:
+            # The node asks the person at the device itself and refuses without a yes there.
+            log.info("tools.confirm_delegated_to_device", tool=name)
+            decision = Decision.ALLOW
+        elif decision is Decision.CONFIRM:
             grant_id = self._permission_engine.request_confirmation(request)
             confirmed = await self._permission_engine.await_confirmation(grant_id)
             decision = confirmed.decision

@@ -62,8 +62,20 @@ Default: `system` (read system values), `notify` (show notices) and `media` (con
 on; everything else - files, commands, programs, screen, camera, browser, mouse and keyboard - is
 off. The core can switch groups off for a while, never on. `allow` works only in an
 interactive terminal with a typed confirmation; editing `node.yaml` by hand can only take
-something away - anything it adds is ignored until you confirm it with `nox node allow`. `max_risk` lowers what the node accepts;
-in this release nothing above "low" runs on a node at all, whatever the core says.
+something away - anything it adds is ignored until you confirm it with `nox node allow`. `max_risk` lowers what the node accepts.
+
+**High risk is asked here, on this device**: a system dialog shows what Nox wants to do, with every
+detail, for 60 s - no answer means no. A node without a screen refuses high risk unless you set
+`trust_core_for_high: true` there (and confirmed it with `nox node allow`). The node also keeps
+its own budget: 60 actions and 5 high-risk ones per hour (`max_calls_per_hour`,
+`max_high_per_hour` in `node.yaml`).
+
+## Stopping
+
+The stop button of Nox stops every node within a second; running actions are aborted. On the
+device itself: `nox node stop` stops it there and Nox everywhere; only `nox node resume` on that
+device lifts it. If a node hears nothing from Nox for 3 seconds while it is doing something, it
+aborts that and waits.
 
 Hard prohibitions (anti-cheat, game input, stream key, ...) are checked on the node itself as well.
 

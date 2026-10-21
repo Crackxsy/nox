@@ -35,6 +35,23 @@ class FakeNotifier:
         self.shown.append((title, text))
 
 
+class FakeConfirmer:
+    """The person at the device, scripted: never a real window in a test."""
+
+    def __init__(self, answer: str = "deny", *, available: bool = True) -> None:
+        self.answer = answer
+        self._available = available
+        self.asked: list[str] = []
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    async def ask(self, text: str, *, timeout_s: int = 60) -> str:
+        self.asked.append(text)
+        return self.answer
+
+
 class _Args(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -43,8 +60,35 @@ async def _never(_args: BaseModel) -> dict[str, Any]:
     raise AssertionError("a refused tool's handler ran")
 
 
-def _meta(call_id: str = "c1", risk: str = "low") -> dict[str, Any]:
-    return {"call_id": call_id, "risk": risk, "deadline": 4102444800.0}
+#: The core's receipt key of the running test (the listener fixture's signer).
+SIGNER: Any = None
+_CALLS = iter(range(10**6))
+
+
+def _meta(
+    name: str = "", arguments: Any = None, call_id: str = "", risk: str = "low"
+) -> dict[str, Any]:
+    import time as _time
+
+    call_id = call_id or f"c{next(_CALLS)}"
+    deadline = _time.time() + 30
+    meta: dict[str, Any] = {
+        "call_id": call_id,
+        "risk": risk,
+        "deadline": deadline,
+        "decided_by": "core",
+    }
+    if SIGNER is not None:
+        meta["receipt"] = SIGNER.sign(
+            call_id=call_id,
+            tool=name,
+            arguments=arguments,
+            risk=risk,
+            decided_by="core",
+            confirm_on_device=False,
+            deadline=deadline,
+        )
+    return meta
 
 
 async def _session(listener: NodeListener, node_id: str) -> NodeSession:
@@ -100,7 +144,16 @@ async def rig(
     tools["shell.run"] = NodeTool("shell.run", "shell", "medium", "test", _Args, _never)
     audit = SqliteAuditLog(__import__("sqlite3").connect(":memory:", check_same_thread=False))
     gate = NodeGate(tools, NodeManifest(), audit)
-    agent = NodeAgent(home, NodeKeyStore(home.key_file, None), gate, audit, ping_interval_s=3600)
+    global SIGNER
+    SIGNER = listener.signer  # type: ignore[attr-defined]
+    agent = NodeAgent(
+        home,
+        NodeKeyStore(home.key_file, None),
+        gate,
+        audit,
+        ping_interval_s=3600,
+        confirmer=FakeConfirmer("deny"),
+    )
     stop = asyncio.Event()
     task = asyncio.create_task(agent.run(stop))
     try:
@@ -113,9 +166,10 @@ async def rig(
 async def _call(
     session: NodeSession, name: str, arguments: Any = None, **meta: Any
 ) -> dict[str, Any]:
-    params: dict[str, Any] = {"name": name, "arguments": arguments if arguments is not None else {}}
+    args = arguments if arguments is not None else {}
+    params: dict[str, Any] = {"name": name, "arguments": args}
     if meta.get("no_meta") is not True:
-        params["_nox"] = _meta(**{k: v for k, v in meta.items() if k != "no_meta"})
+        params["_nox"] = _meta(name, args, **{k: v for k, v in meta.items() if k != "no_meta"})
     return await session.client.request("tools/call", params, timeout_s=5)
 
 
@@ -123,7 +177,7 @@ async def test_the_node_lists_only_what_it_offers(rig: Rig, listener: NodeListen
     session = await _session(listener, rig.node_id)
     tools = await session.client.list_tools()
     # system.reboot (high) and shell.run (group off) exist on the node but are not offered.
-    assert sorted(t.name for t in tools) == ["notify.show", "system.info"]
+    assert sorted(t.name for t in tools) == ["notify.show", "system.info", "system.reboot"]
 
 
 async def test_allowed_calls_run(rig: Rig, listener: NodeListener) -> None:
@@ -142,7 +196,7 @@ async def test_allowed_calls_run(rig: Rig, listener: NodeListener) -> None:
         ("anticheat.bypass", "hard_prohibition"),
         ("game.memory.read", "hard_prohibition"),
         ("shell.run", "capability_disabled"),
-        ("system.reboot", "risk_ceiling"),
+        ("system.reboot", "risk_understated"),
         ("desktop.type_text", "unknown_tool"),
     ],
 )
@@ -173,7 +227,7 @@ async def test_a_call_without_call_metadata_is_refused(rig: Rig, listener: NodeL
 async def test_the_core_can_narrow_but_never_widen(rig: Rig, listener: NodeListener) -> None:
     session = await _session(listener, rig.node_id)
     answer = await session.client.request("nox/policy", {"narrow": ["notify"], "widen": ["shell"]})
-    assert answer["offered"] == ["system.info"]
+    assert answer["offered"] == ["system.info", "system.reboot"]
     refused = await _call(session, "notify.show", {"text": "hi"})
     assert refused["_nox"]["refused"] == "capability_disabled"
     # "Un-narrowing" a group the device never enabled gives nothing either.

@@ -72,6 +72,8 @@ class NodeIdentity(BaseModel):
     #: SHA-256 of the authority, 64 hex digits: the pin. Another authority is never accepted.
     ca_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     paired_at: datetime
+    #: The core's receipt key, pinned at pairing (or on the first authenticated connection).
+    receipt_key: str = Field(default="", max_length=64)
 
 
 class NodeHome:
@@ -85,6 +87,9 @@ class NodeHome:
     manifest_file = property(lambda self: self.path / "node.yaml")
     audit_file = property(lambda self: self.path / "audit.db")
     status_file = property(lambda self: self.path / "status.json")
+    #: Present while the node was stopped on this device (`nox node stop`); only the device
+    #: removes it (`nox node resume`).
+    stop_file = property(lambda self: self.path / "stop.flag")
 
     def ensure(self) -> None:
         created = not self.path.exists()
@@ -111,6 +116,9 @@ class NodeHome:
         self.ensure()
         self.cert_file.write_text(cert_pem, encoding="utf-8")
         self.ca_file.write_text(ca_pem, encoding="utf-8")
+        self.identity_file.write_text(identity.model_dump_json(indent=2), encoding="utf-8")
+
+    def save_identity(self, identity: NodeIdentity) -> None:
         self.identity_file.write_text(identity.model_dump_json(indent=2), encoding="utf-8")
 
     def pinned_ca_ok(self, identity: NodeIdentity) -> bool:

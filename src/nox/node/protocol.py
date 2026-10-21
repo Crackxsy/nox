@@ -153,6 +153,9 @@ class NodeHello(_Strict):
     os: OsName
     arch: str = Field(max_length=16, pattern=r"^[A-Za-z0-9_]{1,16}$")
     manifest_hash: _Hex64
+    #: Whether the person at this device can be asked (a screen and a working dialog). Only then
+    #: does the core leave a high-risk confirmation to the device (D1).
+    confirmer: bool = False
     clientInfo: dict[_Short, _Short] = Field(default_factory=dict, max_length=4)  # noqa: N815
 
 
@@ -166,6 +169,10 @@ class NoxCallMeta(_Strict):
     risk: RiskName
     receipt: str | None = Field(default=None, max_length=512)
     deadline: float = Field(ge=0)
+    #: Who allowed it on the core (`policy`, `user`, `core`), as signed in the receipt.
+    decided_by: str = Field(default="", max_length=32)
+    #: High risk: the core left the decision to this device (owner decision D1).
+    confirm_on_device: bool = False
 
 
 class Ping(_Strict):
@@ -219,6 +226,8 @@ class NodePairResponse(_Strict):
     ca_cert: str
     core_id: str
     node_port: int
+    #: The core's receipt key (Ed25519, base64): the node pins it (`nox.node.receipts`).
+    receipt_key: str = ""
 
 
 # ---- the pairing link ------------------------------------------------------------------------
