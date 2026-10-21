@@ -54,8 +54,9 @@ DeviceVerifier = Callable[[str], "str | None"]
 BOUND_ROLES: frozenset[str] = frozenset({"mcp"})
 #: The id prefix every plugin connection carries (`nox.plugins.manager.PLUGIN_CLIENT_PREFIX`).
 PLUGIN_ID_PREFIX = "plugin:"
-#: Roles that never authenticate over the hub (the core itself, the supervisor, the LAN gateway).
-HUBLESS_ROLES: frozenset[str] = frozenset({"core", "supervisor", "remote"})
+#: Roles that never authenticate over the hub (the core itself, the supervisor, the LAN gateway,
+#: and `nox node`, which talks to its own listener with a client certificate).
+HUBLESS_ROLES: frozenset[str] = frozenset({"core", "supervisor", "remote", "node"})
 #: Paired devices: their own long-lived token, and only through the network listener.
 DEVICE_ROLES: frozenset[str] = frozenset({DEVICE_ROLE})
 #: Authenticated by a persistent overlay credential, never by the session token.

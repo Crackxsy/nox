@@ -46,6 +46,7 @@ Role = Literal[
     "remote",
     "device",
     "mcp",
+    "node",
 ]
 
 

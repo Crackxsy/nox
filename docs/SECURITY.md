@@ -28,6 +28,8 @@ requests.
 | A runaway or hung AI | Kill switch lives below the AI layer, in the supervisor; panic mode; budget limits. |
 | Tampering with audit or security config | Hash-chain verified at boot; changes to the security core require a PIN; config changes are themselves audited. |
 | Data loss | Checkpoints; the vault is the source of truth; Nox-written notes can be rolled back. |
+| A device in the home network reaches the node port (47844) | Mutual TLS 1.3: only a client certificate of this installation's authority completes the handshake; serial denylist, revoked pairings and the paired key are checked before the upgrade; no browser `Origin`. See "Nodes" below. |
+| A compromised node (malware on a laptop, a stolen laptop) | Role `node`: a fixed JSON-RPC allow-list - no chat, memory, audit, config, prompts or other nodes; refused messages are audited and cut the connection; revocation closes it at once; certificates live 30 days. |
 
 **Out of scope**: an attacker with local admin on the machine, physical access, or a compromised
 OS. Nox defends against a malicious/hallucinating AI layer and a malicious remote party — not
@@ -641,6 +643,39 @@ repository and is only available to the release workflow's protected `release-si
 environment. While no key is configured, every verifier says "not configured" and nothing claims
 to be verified. Negative tests: `tests/unit/release/` and the "Signed releases" step of the Linux
 installer CI job.
+
+## Nodes (`nox node`)
+
+A node is Nox on another PC in the home (spec wave C), paired like a phone but holding a **client
+certificate** of this installation's authority instead of a token. What protects the core so far
+(`nox.node`, `nox.lan.tls`):
+
+- **Pairing pins the authority.** The pairing link (`nox-node://pair?h=..&p=..&c=..&fp=..`, shown
+  on a trusted session - the dashboard on this machine, or a paired device with the PIN)
+  carries the authority's SHA-256 fingerprint, so the new node refuses a look-alike before it
+  sends the code. `POST /api/node/pair` refuses any request with an `Origin` header (no browser),
+  shares the pairing rate limit, and costs no code for a malformed certificate request.
+- **What the authority signs.** Only the request's P-256 key is used, with proof of possession;
+  the certificate says `CN=node:<id>`, SAN `urn:nox:node:<id>`, EKU clientAuth only, not a CA,
+  30 days. Whatever else the node asked for is ignored.
+- **The node listener** (`ipc.lan.node_port`, 47844) is separate from the dashboard's: TLS 1.3
+  only, client certificate required. After the handshake and before the WebSocket upgrade, the
+  certificate must be a node certificate whose serial was issued to that node and is not on the
+  denylist, whose pairing is not revoked, and whose key is the paired one. The standard library
+  has no verify callback inside the handshake; nothing is read from the peer before this check.
+- **Role `node`** never reaches the hub (`HUBLESS_ROLES`, no events). On its listener a node may
+  send only `nox.node.protocol.NODE_TO_CORE`; the first message must be `initialize`, models
+  forbid unknown fields, a frame is at most 1 MiB and a chunked result 8 MiB. Five refused
+  messages close the connection. A node's `security.kill` always engages the kill switch -
+  stopping is always safe, so a compromised node can at worst stop Nox until "Fortsetzen".
+- **Revocation** (`node.unpair`) revokes the pairing and every certificate of the node, sends
+  `nox/revoked` and closes the connection in under a second; a node revoked while offline is
+  refused on its next handshake.
+
+Still to come in wave C, and documented with it: the node's own gate (hard prohibitions,
+capabilities enabled only on the device, signed core receipts, the local confirmation for high
+risk, its own sandbox and audit) and the kill switch reaching every node. Negative tests:
+`tests/unit/node/`, `tests/integration/test_nodes.py`.
 
 ## Known limits of network access
 

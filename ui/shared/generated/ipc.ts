@@ -38,7 +38,7 @@ export interface RlVisionDetection {
 }
 
 export interface Source {
-  role: "core" | "shell" | "worker" | "plugin" | "pet" | "overlay" | "dashboard" | "supervisor" | "remote" | "device" | "mcp";
+  role: "core" | "shell" | "worker" | "plugin" | "pet" | "overlay" | "dashboard" | "supervisor" | "remote" | "device" | "mcp" | "node";
   id: string;
 }
 
@@ -55,7 +55,7 @@ export interface Envelope {
 
 export interface AuthRequest {
   token: string;
-  role: "core" | "shell" | "worker" | "plugin" | "pet" | "overlay" | "dashboard" | "supervisor" | "remote" | "device" | "mcp";
+  role: "core" | "shell" | "worker" | "plugin" | "pet" | "overlay" | "dashboard" | "supervisor" | "remote" | "device" | "mcp" | "node";
   id: string;
   client_version?: string;
 }

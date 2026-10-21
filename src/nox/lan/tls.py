@@ -24,7 +24,9 @@ from __future__ import annotations
 import datetime as dt
 import ipaddress
 import os
+import re
 import socket
+import ssl
 import sys
 import threading
 from collections.abc import Sequence
@@ -44,14 +46,21 @@ log = get_logger(__name__)
 
 __all__ = [
     "CA_VALIDITY_DAYS",
+    "NODE_CERT_VALIDITY_DAYS",
+    "CsrRefusedError",
+    "IssuedClientCert",
     "KeyNotProtectedError",
     "PERMITTED_NETWORKS",
     "SERVER_VALIDITY_DAYS",
     "TlsMaterial",
     "ensure_tls",
     "fingerprint",
+    "issue_client_certificate",
     "local_identity",
+    "node_id_of",
+    "node_server_context",
     "permitted_address",
+    "spki_sha256",
 ]
 
 #: One issuer at a time: a check that timed out may still be running in its thread when the next
@@ -60,6 +69,10 @@ _ISSUING = threading.Lock()
 
 CA_VALIDITY_DAYS = 3650
 SERVER_VALIDITY_DAYS = 825
+#: A node's client certificate. Short on purpose: a stolen laptop that stays offline loses its
+#: access within a month even if nobody revokes it (spec C §1.2).
+NODE_CERT_VALIDITY_DAYS = 30
+NODE_URI_PREFIX = "urn:nox:node:"
 RENEW_BEFORE = dt.timedelta(days=30)
 
 CA_KEY = "ca.key"
@@ -83,6 +96,10 @@ PERMITTED_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = 
 #: no public site can have: no bare host name (a machine called `dev` would otherwise cover a real
 #: top-level domain), no router suffix like `fritz.box` (`.box` is a public TLD).
 PERMITTED_DNS: tuple[str, ...] = ("localhost", "local", "home.arpa")
+
+
+class CsrRefusedError(ValueError):
+    """A certificate request the authority does not sign (wrong key type, bad signature)."""
 
 
 class KeyNotProtectedError(RuntimeError):
@@ -407,3 +424,133 @@ def _ensure_tls(directory: Path, names: Sequence[str], addresses: Sequence[str])
         server_serial=served.serial_number,
         server_fingerprint=fingerprint(served_der),
     )
+
+
+# ---- node client certificates (spec C §1.2) ----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class IssuedClientCert:
+    cert_pem: str
+    ca_pem: str
+    #: Hex, lower case - what `node_certs.serial` holds and the denylist is keyed by.
+    serial: str
+    spki_sha256: str
+    not_after: dt.datetime
+
+
+def spki_sha256(public_key: ec.EllipticCurvePublicKey) -> str:
+    """SHA-256 of the DER SubjectPublicKeyInfo, hex: the node's identity, whatever cert it holds."""
+    der = public_key.public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    digest = hashes.Hash(hashes.SHA256())
+    digest.update(der)
+    return digest.finalize().hex()
+
+
+def _csr_key(csr_pem: str) -> ec.EllipticCurvePublicKey:
+    try:
+        csr = x509.load_pem_x509_csr(csr_pem.encode("ascii"))
+    except (ValueError, UnicodeEncodeError) as exc:
+        raise CsrRefusedError("not a certificate request") from exc
+    if not csr.is_signature_valid:
+        raise CsrRefusedError("the request's signature does not match its key")
+    key = csr.public_key()
+    if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(key.curve, ec.SECP256R1):
+        raise CsrRefusedError("only P-256 keys are accepted")
+    return key
+
+
+def csr_spki_sha256(csr_pem: str) -> str:
+    """The SPKI hash of a request's key, after checking the request. CsrRefusedError otherwise."""
+    return spki_sha256(_csr_key(csr_pem))
+
+
+def issue_client_certificate(
+    directory: Path, csr_pem: str, node_id: str, *, validity_days: int = NODE_CERT_VALIDITY_DAYS
+) -> IssuedClientCert:
+    """Sign a node's certificate request with the authority in `directory`.
+
+    Only the request's *key* is used: subject, extensions and anything else the node asked for are
+    ignored and replaced by the authority's own choice - `CN=node:<id>`, the SAN URI
+    `urn:nox:node:<id>`, EKU clientAuth only, not a CA, `validity_days` long. So a node cannot
+    obtain a certificate that serves a name, signs other certificates or outlives its term.
+    """
+    if not re.fullmatch(r"[0-9a-f]{32}", node_id):
+        raise ValueError("a node id is 32 hex digits")
+    key = _csr_key(csr_pem)
+    with _ISSUING:
+        authority = _load_pair(directory / CA_KEY, directory / CA_CERT)
+        if authority is None:
+            raise RuntimeError("no certificate authority yet; network access must be on")
+        ca_key, ca = authority
+        now = _now()
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"node:{node_id}")]))
+            .issuer_name(ca.subject)
+            .public_key(key)
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - dt.timedelta(minutes=5))
+            .not_valid_after(now + dt.timedelta(days=validity_days))
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(_key_usage(sign_certificates=False), critical=True)
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
+            .add_extension(
+                x509.SubjectAlternativeName(
+                    [x509.UniformResourceIdentifier(f"{NODE_URI_PREFIX}{node_id}")]
+                ),
+                critical=False,
+            )
+            .add_extension(x509.SubjectKeyIdentifier.from_public_key(key), critical=False)
+            .add_extension(
+                x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+                critical=False,
+            )
+            .sign(ca_key, hashes.SHA256())
+        )
+    log.info("lan.tls_node_issued", node_id=node_id, serial=f"{cert.serial_number:x}")
+    return IssuedClientCert(
+        cert_pem=cert.public_bytes(serialization.Encoding.PEM).decode("ascii"),
+        ca_pem=ca.public_bytes(serialization.Encoding.PEM).decode("ascii"),
+        serial=f"{cert.serial_number:x}",
+        spki_sha256=spki_sha256(key),
+        not_after=cert.not_valid_after_utc,
+    )
+
+
+def node_id_of(cert: x509.Certificate) -> str | None:
+    """The node id a client certificate names, or None when it is not a node certificate: EKU
+    clientAuth (and no serverAuth), not a CA, exactly one `urn:nox:node:<id>` URI that agrees with
+    `CN=node:<id>`. The TLS handshake has already checked that the authority signed it."""
+    try:
+        eku = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+        basic = cert.extensions.get_extension_for_class(x509.BasicConstraints).value
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound:
+        return None
+    if basic.ca or ExtendedKeyUsageOID.CLIENT_AUTH not in eku:
+        return None
+    if ExtendedKeyUsageOID.SERVER_AUTH in eku:
+        return None
+    uris = san.get_values_for_type(x509.UniformResourceIdentifier)
+    if len(uris) != 1 or not uris[0].startswith(NODE_URI_PREFIX):
+        return None
+    node_id = uris[0].removeprefix(NODE_URI_PREFIX)
+    names = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+    if len(names) != 1 or names[0].value != f"node:{node_id}":
+        return None
+    return node_id if re.fullmatch(r"[0-9a-f]{32}", node_id) else None
+
+
+def node_server_context(material: TlsMaterial) -> ssl.SSLContext:
+    """The node listener's TLS: 1.3 only, and a client certificate from this installation's
+    authority is required - a peer without one never completes the handshake."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.verify_flags |= ssl.VERIFY_X509_STRICT
+    context.load_cert_chain(str(material.cert_file), str(material.key_file))
+    context.load_verify_locations(cafile=str(material.ca_file))
+    return context

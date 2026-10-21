@@ -13,14 +13,16 @@ pairing without the PIN. Those stay with the shell and the dashboard on this mac
 (`LOCAL_UI_ROLES`). The exact device surface is pinned by `tests/integration/test_lan.py`.
 
 `remote` (the Telegram companion) and `pet` are no UI roles at all; they have their own, much
-narrower surfaces.
+narrower surfaces. Neither is `node` (`nox node` on another PC): it never reaches the hub, may send
+only `nox.node.protocol.NODE_TO_CORE` on its own listener, and never answers a prompt.
 """
 
 from __future__ import annotations
 
-__all__ = ["CONFIRMING_ROLES", "DEVICE_ROLE", "LOCAL_UI_ROLES", "UI_ROLES"]
+__all__ = ["CONFIRMING_ROLES", "DEVICE_ROLE", "LOCAL_UI_ROLES", "NODE_ROLE", "UI_ROLES"]
 
 DEVICE_ROLE = "device"
+NODE_ROLE = "node"
 
 #: The desktop shell and the dashboard on this machine: everything, administration included.
 LOCAL_UI_ROLES: tuple[str, ...] = ("shell", "dashboard")

@@ -51,7 +51,7 @@ from nox.security.gate import PinRequiredError
 
 log = get_logger(__name__)
 
-__all__ = ["LanListener", "LanRuntime", "install", "lan_urls"]
+__all__ = ["LanListener", "LanRuntime", "authorize_admin", "install", "lan_urls"]
 
 #: How often the certificate is compared with this machine's current names and addresses.
 TLS_RECHECK_S = 600.0
@@ -91,7 +91,7 @@ def lan_urls(material: TlsMaterial, port: int) -> list[str]:
     return [f"https://{h}:{port}/dashboard/" for h in hosts]
 
 
-def _qr(url: str) -> str:
+def qr_data_uri(url: str) -> str:
     """The pairing link as an SVG data URI (shown as an <img>, never inlined as markup)."""
     return str(
         segno.make(url, error="m").svg_data_uri(scale=6, border=2, dark="#111", light="#fff")
@@ -121,6 +121,8 @@ class LanRuntime:
     #: Why the last certificate check failed while the listener kept serving the old one.
     warning: str = ""
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
+    #: Set by `nox.node.install`: redeems `POST /api/node/pair`. None: no such route.
+    node_pair: Any = None
     _core: Any = None
 
     @property
@@ -248,6 +250,8 @@ def install(core: Any) -> LanRuntime:
         max_devices=cfg.max_devices,
     )
     runtime = LanRuntime(devices=devices, enabled=bool(cfg.enabled), port=cfg.port, _core=core)
+    # `nox.node` installs after this extension and needs the certificates and the pairing route.
+    core.lan_runtime = runtime
     _register_requests(core, runtime)
     if not runtime.enabled:
         log.info("lan.disabled", note="network access is off (ipc.lan.enabled)")
@@ -288,6 +292,7 @@ def install(core: Any) -> LanRuntime:
             limiter=PairLimiter(per_address=cfg.pair_attempts_per_minute),
             allow_public_clients=cfg.allow_public_clients,
             max_frame_bytes=core.hub.settings.max_frame_bytes,
+            node_pair=lambda: runtime.node_pair,
         )
         return HttpServer(
             app,
@@ -354,6 +359,27 @@ def _add_health_check(core: Any, runtime: LanRuntime) -> None:
         health.add_check(Check("lan", probe))
 
 
+async def authorize_admin(
+    core: Any, ctx: RequestContext, pin: str | None, action: str, *, local_needs_pin: bool
+) -> None:
+    """From a paired device: the PIN, always (`DevicePinGuard`, which also removes a device after
+    repeated wrong PINs). Locally: the PIN gate as configured where `local_needs_pin`, nothing
+    otherwise - removing a device only ever narrows access, and a thief must not be able to block
+    it by locking the PIN. Shared by every pairing surface (`nox.lan`, `nox.node`)."""
+    if ctx.role == DEVICE_ROLE:
+        guard = getattr(core, "device_pin_guard", None)
+        if guard is None:
+            raise IpcError(ERR_PERMISSION, f"{action} is not possible from a paired device")
+        await guard.require(ctx, pin, action)
+        return
+    if not local_needs_pin:
+        return
+    try:
+        await core.security.gate.require(pin, action=action, by=ctx.client_id or ctx.role)
+    except PinRequiredError as exc:
+        raise IpcError(ERR_PERMISSION, exc.reason) from exc
+
+
 def _register_requests(core: Any, runtime: LanRuntime) -> None:
     devices = runtime.devices
 
@@ -403,22 +429,7 @@ def _register_requests(core: Any, runtime: LanRuntime) -> None:
     async def authorize(
         ctx: RequestContext, pin: str | None, action: str, *, local_needs_pin: bool
     ) -> None:
-        """From a paired device: the PIN, always (`DevicePinGuard`, which also removes a device
-        after repeated wrong PINs). Locally: the PIN gate as configured where `local_needs_pin`,
-        nothing otherwise - removing a device only ever narrows access, and a thief must not be
-        able to block it by locking the PIN."""
-        if ctx.role == DEVICE_ROLE:
-            guard = getattr(core, "device_pin_guard", None)
-            if guard is None:
-                raise IpcError(ERR_PERMISSION, f"{action} is not possible from a paired device")
-            await guard.require(ctx, pin, action)
-            return
-        if not local_needs_pin:
-            return
-        try:
-            await core.security.gate.require(pin, action=action, by=ctx.client_id or ctx.role)
-        except PinRequiredError as exc:
-            raise IpcError(ERR_PERMISSION, exc.reason) from exc
+        await authorize_admin(core, ctx, pin, action, local_needs_pin=local_needs_pin)
 
     async def h_pair_start(ctx: RequestContext, p: PairStartRequest) -> dict[str, Any]:
         material = require_running()
@@ -438,7 +449,7 @@ def _register_requests(core: Any, runtime: LanRuntime) -> None:
             "ttl_s": start.ttl_s,
             "url": urls[0],
             "urls": urls,
-            "qr": _qr(urls[0]),
+            "qr": qr_data_uri(urls[0]),
             "fingerprint": material.server_fingerprint,
             "ca_fingerprint": material.fingerprint,
         }

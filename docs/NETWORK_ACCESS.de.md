@@ -180,7 +180,9 @@ Server ohne Bildschirm mit `nox devices` (listet sie auf) und `nox unpair <Name 
 ## Firewall
 
 Unter Windows fragt der erste Start, ob Python in **privaten** Netzwerken Verbindungen annehmen darf –
-erlauben. Auf einem Linux-Server mit `ufw`: `sudo ufw allow 47843/tcp`.
+erlauben. Auf einem Linux-Server mit `ufw`: `sudo ufw allow 47843/tcp`. Nodes (`nox node` auf
+einem anderen PC) verbinden sich mit einem zweiten Port: `sudo ufw allow 47844/tcp`, nur wenn du
+Nodes nutzt.
 
 ## Einstellungen
 
@@ -194,6 +196,8 @@ ipc:
     pair_code_ttl_s: 300           # so lange gilt ein Koppel-Code, und nur einmal
     pair_attempts_per_minute: 5    # pro Absenderadresse
     allow_public_clients: false    # nur Loopback und private Netze bekommen eine Antwort
+    node_port: 47844               # `nox node` auf anderen PCs (Client-Zertifikate, TLS 1.3)
+    max_nodes: 10
 ```
 
 Änderungen wirken nach einem Neustart. `nox doctor` und die Statusseite des Dashboards zeigen, ob der
