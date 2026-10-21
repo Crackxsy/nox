@@ -88,6 +88,8 @@ class NodeSession:
     connected_at: float = field(default_factory=time.monotonic)
     last_seen: float = field(default_factory=time.monotonic)
     violations: int = 0
+    #: Set once the node got its `initialize` answer: only then may the core send it requests.
+    ready: asyncio.Event = field(default_factory=asyncio.Event)
     blobs: dict[str, list[bytes]] = field(default_factory=dict)
     complete: set[str] = field(default_factory=set)
     blob_bytes: int = 0
@@ -333,6 +335,7 @@ class NodeListener:
         self._append_audit("node.connect", device.id, "allow", "ok" if compatible else "outdated")
         log.info("node.connected", device_id=device.id, compatible=compatible)
         client.start()
+        session.ready.set()
         pinger = asyncio.create_task(self._ping(session), name=f"nox-node-ping-{device.id[:8]}")
         try:
             if self._on_connected is not None:

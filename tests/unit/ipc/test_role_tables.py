@@ -55,5 +55,14 @@ def test_bound_roles_see_no_event_at_all(role: str) -> None:
     assert ROLE_ALLOWLIST[role] == ()
 
 
+def test_a_node_never_reaches_the_hub_and_sees_no_event() -> None:
+    """`nox node` talks to its own listener only; chat, transcripts and memory never reach it."""
+    assert "node" in HUBLESS_ROLES
+    assert EVENT_POLICY["node"] == "none"
+    assert ROLE_ALLOWLIST["node"] == ()
+    for name in ("system.started", "chat.message", "voice.transcript_ready", "memory.updated"):
+        assert role_may_see("node", name) is False
+
+
 def test_an_unknown_role_sees_nothing() -> None:
     assert role_may_see("intruder", "system.started") is False

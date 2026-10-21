@@ -56,7 +56,8 @@ TLS_REFUSED = (
 
 async def _connected(listener: NodeListener, node_id: str) -> None:
     for _ in range(100):
-        if node_id in listener.sessions:
+        session = listener.sessions.get(node_id)
+        if session is not None and session.ready.is_set():
             return
         await asyncio.sleep(0.02)
     raise AssertionError("the node never showed up as a session")
@@ -261,7 +262,7 @@ async def test_the_first_message_must_be_initialize(
 ) -> None:
     node = await pair_node(pairing, tmp_path)
     ws = await open_node(listener, client_context(tls, node))
-    await ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "nox/ping", "params": {}}))
+    await ws.send(json.dumps({**hello(), "method": "nox/hello"}))  # a valid hello, wrong method
     with pytest.raises(ConnectionClosed) as closed:
         await asyncio.wait_for(ws.recv(), 5)
     assert closed.value.rcvd is not None and closed.value.rcvd.code == 1008

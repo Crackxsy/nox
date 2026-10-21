@@ -73,12 +73,28 @@ async def test_list_changed_goes_to_the_client() -> None:
     await ws.inbox.put(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}))
     await asyncio.wait_for(changed.wait(), 2)
     assert peer == []
+    # The same name as a *request* is the peer's own message, not the client's notification.
+    changed.clear()
+    request = {"jsonrpc": "2.0", "id": 5, "method": "notifications/tools/list_changed"}
+    await ws.inbox.put(json.dumps(request))
+    for _ in range(100):
+        if peer:
+            break
+        await asyncio.sleep(0.01)
+    assert peer == [request] and not changed.is_set()
     await client.close()
 
 
 @pytest.mark.parametrize(
     "frame",
-    [b"\x00binary", "not json", "[1, 2]", json.dumps({"id": 1, "result": {}}), "x" * 100],
+    [
+        b"\x00binary",
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}).encode(),  # valid JSON, binary frame
+        "not json",
+        "[1, 2]",
+        json.dumps({"id": 1, "result": {}}),
+        "x" * 100,
+    ],
 )
 async def test_a_broken_frame_ends_the_connection(frame: str | bytes) -> None:
     ws = FakeSocket()
