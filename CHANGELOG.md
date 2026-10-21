@@ -183,6 +183,9 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   the Pi's architecture on every pull request.
 
 ### Fixed
+- **certifi 2026.10.19** (Dependabot alert #40, critical) in `uv.lock` and
+  `installer/requirements.lock`. The lock is also re-synced with the minimum versions
+  `pyproject.toml` already required (ruff, mypy, playwright, pytest-playwright, typer).
 - An installed copy never started: the embedded Python's `._pth` did not name the app folder and
   the code looked for its configuration one folder too high. Shortcuts now start a launcher that
   reports a failed start; `installer/README.md` explains how to repair an old installation.
