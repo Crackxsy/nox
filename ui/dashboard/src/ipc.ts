@@ -200,6 +200,21 @@ export const api = {
     c.request('lan.pair.start', pin ? { name, pin } : { name }),
   lanUnpair: (c: IpcClient, deviceId: string, pin = '') =>
     c.request('lan.unpair', pin ? { device_id: deviceId, pin } : { device_id: deviceId }),
+  // -- PCs, laptops and servers as nodes (`nox.node`) -------------------------------------------
+  nodeList: (c: IpcClient) => c.request('node.list', {}),
+  nodePairStart: (c: IpcClient, name: string, pin = '') =>
+    c.request('node.pair.start', pin ? { name, pin } : { name }),
+  nodeUnpair: (c: IpcClient, nodeId: string, pin = '') =>
+    c.request('node.unpair', pin ? { device_id: nodeId, pin } : { device_id: nodeId }),
+  /** Turn a group off here (`narrowed`), or give back one the device allows - never more. */
+  nodeNarrow: (c: IpcClient, nodeId: string, group: string, narrowed: boolean, pin = '') =>
+    c.request(
+      'node.narrow',
+      pin ? { node_id: nodeId, group, narrowed, pin } : { node_id: nodeId, group, narrowed },
+    ),
+  /** `device`: `auto`, `core`, `origin` or a node id. */
+  nodeDefaultsSet: (c: IpcClient, group: string, device: string, pin = '') =>
+    c.request('node.defaults.set', pin ? { group, device, pin } : { group, device }),
   /**
    * The answer to a permission prompt; `remember` is ignored by the core for a paired device, which
    * needs the PIN to allow anything at high or critical risk. An empty PIN is not sent.

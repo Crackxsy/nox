@@ -166,3 +166,18 @@ class NodeRepository:
             (device_id,),
         )
         return {str(r["grp"]) for r in rows}
+
+    def capabilities(self, device_id: str) -> dict[str, tuple[bool, bool]]:
+        """Per group: (enabled on the node as it last said, narrowed on the core)."""
+        rows = self._db.fetch_all(
+            "SELECT grp, enabled_on_node, narrowed FROM node_capabilities WHERE device_id = ?",
+            (device_id,),
+        )
+        return {str(r["grp"]): (bool(r["enabled_on_node"]), bool(r["narrowed"])) for r in rows}
+
+    def narrowed_groups(self, device_id: str) -> set[str]:
+        rows = self._db.fetch_all(
+            "SELECT grp FROM node_capabilities WHERE device_id = ? AND narrowed = 1",
+            (device_id,),
+        )
+        return {str(r["grp"]) for r in rows}

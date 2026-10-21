@@ -65,6 +65,19 @@ const PATHS = {
       <path d="M12 11v5M12 7.5v.5" />
     </>
   ),
+  computer: (
+    <>
+      <rect x="3" y="4.5" width="18" height="11.5" rx="1.5" />
+      <path d="M8.5 20h7M12 16v4" />
+    </>
+  ),
+  board: (
+    <>
+      <rect x="4" y="5" width="16" height="14" rx="1.5" />
+      <rect x="9" y="9.5" width="6" height="5" rx="0.5" />
+      <path d="M7 2.5V5M12 2.5V5M17 2.5V5M7 19v2.5M12 19v2.5M17 19v2.5" />
+    </>
+  ),
 } as const;
 
 export type IconName = keyof typeof PATHS | 'stop';

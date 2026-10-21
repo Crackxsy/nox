@@ -149,7 +149,7 @@ def resolve(
             if side_effects and candidates:
                 # Not linked (or not asked from a browser): where the user is, is unknown.
                 return needs()
-        elif default not in (CORE, "origin"):
+        elif default not in (CORE, "origin", "auto"):  # `auto`: as if nothing was configured
             entry = _match(entries, default)
             if entry is not None:
                 # The configured device, or why not - never quietly another one.

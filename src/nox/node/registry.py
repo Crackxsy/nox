@@ -25,6 +25,7 @@ from nox.node.confirm import CONFIRM_TIMEOUT_S
 from nox.node.listener import NodeSession
 from nox.node.names import display_name, label
 from nox.node.pairing import NodePairing
+from nox.node.policy import NodePolicy, group_of, send_policy
 from nox.node.receipts import MAX_LIFETIME_S, ReceiptSigner
 from nox.node.repo import NodeRepository
 from nox.security.prohibitions import matching_hard_prohibition
@@ -134,6 +135,8 @@ class NodeRegistry:
         self._nodes = nodes
         self._clock = clock or (lambda: datetime.now(UTC))
         self._entries: dict[str, NodeEntry] = {}
+        #: What the owner narrowed per node on the core (`nox.node.policy`).
+        self.policy = NodePolicy(nodes, clock=self._clock)
 
     # -- listener hooks ----------------------------------------------------------------------------
 
@@ -163,8 +166,30 @@ class NodeRegistry:
             log.warning("node.tools_list_failed", device_id=session.device_id, error=str(exc))
             entry.tools = {}
             return
-        entry.tools = self._accept_tools(listed.get("tools"))
+        accepted = self._accept_tools(listed.get("tools"))
+        # A narrowed group is filtered here as well as on the node: nothing is routed to it even
+        # in the moment between a new connection and the node applying `nox/policy`.
+        entry.tools = self.policy.record_listing(session.device_id, accepted)
+        narrowed = self.policy.narrowed(session.device_id)
+        if narrowed:
+            await send_policy(session, narrowed)
         log.info("node.tools", device_id=session.device_id, tools=sorted(entry.tools))
+
+    async def set_narrowed(self, device_id: str, group: str, narrowed: bool) -> None:
+        """Narrow (or give back) one group of one node: at once on the core, and on the node as
+        soon as it is connected."""
+        self.policy.set_narrowed(device_id, group, narrowed)
+        entry = self._entries.get(device_id)
+        if entry is None:
+            return
+        if narrowed:
+            entry.tools = {t: r for t, r in entry.tools.items() if group_of(t) != group}
+        session = entry.session
+        if session is None or not entry.online:
+            return
+        await send_policy(session, self.policy.narrowed(device_id))
+        if not narrowed:
+            await self.refresh(session)  # the node lists the group's tools again
 
     @staticmethod
     def _accept_tools(raw: Any) -> dict[str, str]:
