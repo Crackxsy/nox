@@ -368,6 +368,69 @@ jobs:
           PY
           ! check dotdot.tar.gz
 
+      # The installer's own signature check (openssl + python3 from the system) against releases
+      # signed right here with throwaway keys made for this step only - never a release key. No
+      # secret is involved; the release key itself is only ever used by release-assets.yml.
+      - name: Signed releases - the installer refuses what it must
+        run: |
+          d="$(mktemp -d)"
+          nox_py=/opt/nox/current/.venv/bin/python
+          commit="$(git rev-parse HEAD)"
+          for name in test other; do
+            openssl genpkey -algorithm ed25519 -out "$d/$name.key" 2>/dev/null
+            openssl pkey -in "$d/$name.key" -pubout -out "$d/$name.pub"
+          done
+          entry() { /opt/nox/current/.venv/bin/nox release describe-key "$d/$1.pub" --not-after "$2" | sed -n 's/^  "\(.*\)"$/\1/p'; }
+          key="$(entry test 2999-12-31)"; expired="$(entry test 2020-01-01)"; other="$(entry other 2999-12-31)"
+          test -n "$key" && test -n "$expired" && test -n "$other"
+          # mk TAG: a release folder with a manifest built by Nox and signed by openssl.
+          mk() {
+            local dir="$d/rel-$1"
+            mkdir -p "$dir"
+            printf 'bundle' > "$dir/nox-ui-$1.tar.gz"
+            "$nox_py" -c 'import pathlib, sys
+          from nox.release.manifest import asset_for_file, build_manifest
+          d = pathlib.Path(sys.argv[1])
+          d.joinpath("release-manifest.json").write_bytes(build_manifest(tag=sys.argv[2], source_commit=sys.argv[3], assets=[asset_for_file(d / f"nox-ui-{sys.argv[2]}.tar.gz")]))' "$dir" "$1" "$commit"
+            openssl pkeyutl -sign -inkey "$d/test.key" -rawin -in "$dir/release-manifest.json" -out "$d/sig.bin"
+            printf '{"schema": "nox-release-signature/1", "algorithm": "ed25519", "key_id": "%s", "signature": "%s"}\n' \
+              "${key%%|*}" "$(base64 -w0 "$d/sig.bin")" > "$dir/release-manifest.json.sig"
+          }
+          # check DIR TAG [NAME=VALUE...]: the installer's verify-release action.
+          check() {
+            local dir="$1" tag="$2"; shift 2
+            sudo env NOX_ACTION=verify-release NOX_RELEASE_DIR="$dir" NOX_REF="$tag" NOX_EXPECT_COMMIT="$commit" \
+              NOX_TEST_TRUSTED_KEYS="$key" "$@" bash scripts/install-linux.sh
+          }
+          # `! cmd` never stops a `bash -e` script, so a refusal is asserted like this.
+          refused() { if check "$@"; then echo "accepted, but must be refused: $*"; return 1; fi; }
+          mk v0.7.0; mk v0.6.0
+          check "$d/rel-v0.7.0" v0.7.0 | grep -q "^verified ${key%%|*} [0-9a-f]\{64\} 0.7.0$"
+          # Nox's own verifier agrees about the very same files.
+          "$nox_py" -c 'import sys, pathlib
+          from nox.release.keys import TrustedKey
+          from nox.release.verify import verify_release
+          d = pathlib.Path(sys.argv[1]); kid, day, spki = sys.argv[2].split("|")
+          verify_release(d.joinpath("release-manifest.json").read_bytes(), d.joinpath("release-manifest.json.sig").read_bytes(), trusted_keys=[TrustedKey(kid, spki, day)], expect_tag="v0.7.0", expect_commit=sys.argv[3])' "$d/rel-v0.7.0" "$key" "$commit"
+          # Another tag, another commit, an untrusted or expired key, an older version.
+          refused "$d/rel-v0.7.0" v0.7.1
+          refused "$d/rel-v0.7.0" v0.7.0 NOX_EXPECT_COMMIT=ffffffffffffffffffffffffffffffffffffffff
+          refused "$d/rel-v0.7.0" v0.7.0 NOX_TEST_TRUSTED_KEYS="$other"
+          refused "$d/rel-v0.7.0" v0.7.0 NOX_TEST_TRUSTED_KEYS="$expired"
+          refused "$d/rel-v0.6.0" v0.6.0 NOX_RELEASE_FLOOR=0.7.0
+          check "$d/rel-v0.6.0" v0.6.0 NOX_RELEASE_FLOOR=0.7.0 NOX_ALLOW_DOWNGRADE=1 | grep -q ' 0.7.0$'
+          # One changed byte; a missing signature.
+          sed -i 's/"size": 6/"size": 7/' "$d/rel-v0.7.0/release-manifest.json"
+          refused "$d/rel-v0.7.0" v0.7.0
+          rm "$d/rel-v0.6.0/release-manifest.json.sig"
+          refused "$d/rel-v0.6.0" v0.6.0
+          # Without a trusted key: "not configured" (exit 3), never "verified".
+          status=0
+          sudo env NOX_ACTION=verify-release NOX_RELEASE_DIR="$d/rel-v0.7.0" NOX_REF=v0.7.0 bash scripts/install-linux.sh || status=$?
+          test "$status" = 3
+          status=0; nox release keys || status=$?
+          test "$status" = 3
+
       - name: The health check follows the port the core took
         run: |
           # Something else holds 47801 and answers 404 there: the core moves to the next free port

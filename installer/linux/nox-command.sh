@@ -8,8 +8,13 @@
 # account that may use sudo.
 #
 # Subcommands that exist only here:
-#   nox update [version]   install a newer (or the given) version; the data is snapshotted first.
-#                          An installation from a branch (develop) stays on that branch.
+#   nox update [version] [--allow-downgrade]
+#                          install a newer (or the given) version; the data is snapshotted first.
+#                          An installation from a branch (develop) stays on that branch. Once this
+#                          version trusts a release key, a release is checked against its signed
+#                          manifest with this version's own `nox release verify` before its
+#                          installer runs (docs/RELEASES.md); an older release only with
+#                          --allow-downgrade.
 #   nox doctor             as everywhere, plus one line on whether a newer release exists
 #   nox rollback           back to the version before the last update, with its data
 #   nox snapshots          list the snapshots taken before updates
@@ -91,6 +96,21 @@ define snapshots_none \
 define onboard_restart \
   'Nox neu starten, damit die Einstellungen gelten ...' \
   'Restarting Nox so that the settings take effect ...'
+define sig_not_configured \
+  'Hinweis: Release-Signaturen sind in dieser Version noch nicht eingerichtet - geprüft werden nur Prüfsummen.' \
+  'Note: release signatures are not set up in this version yet - only checksums are checked.'
+define sig_missing \
+  'Release %s hat kein signiertes Manifest. Aus Sicherheitsgründen wird es nicht installiert; nichts wurde geändert.' \
+  'Release %s has no signed manifest. For safety it is not installed; nothing was changed.'
+define sig_refused \
+  'Release %s wird nicht installiert (siehe oben); nichts wurde geändert.' \
+  'Release %s is not installed (see above); nothing was changed.'
+define sig_broken \
+  'Die Signaturprüfung dieser Version funktioniert nicht (%s release keys). Nichts wurde geändert.' \
+  'The signature check of this version does not work (%s release keys). Nothing was changed.'
+define unknown_option \
+  'unbekannte Option: %s' \
+  'unknown option: %s'
 define claude_install \
   'Claude Code für den Nox-Dienst installieren ...' \
   'Installing Claude Code for the Nox service ...'
@@ -106,7 +126,8 @@ as_service() {
 #: The copy of the installer, removed on exit. Global on purpose: the EXIT trap runs after
 #: `run_installer` has returned, when a local variable would no longer exist (and `set -u` fails).
 installer_copy=""
-trap 'if [ -n "$installer_copy" ]; then rm -f -- "$installer_copy"; fi' EXIT
+trap 'if [ -n "$installer_copy" ]; then rm -f -- "$installer_copy"; fi
+if [ -n "${verify_dir:-}" ]; then rm -rf -- "$verify_dir"; fi' EXIT
 
 #: The installer of the running version, run from a copy: an update replaces what it reads from.
 run_installer() {
@@ -124,6 +145,12 @@ newest_tag() {
   sudo git -C "$SRC" tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+[.][0-9]+[.][0-9]+$' | head -n1 || true
 }
 
+#: The version `fetch_target_installer` resolved: its name (a tag, a branch) and its commit.
+target_ref=""
+target_commit=""
+#: A folder for the downloaded manifest, removed on exit like the installer copy.
+verify_dir=""
+
 #: For an update: the installer of the version being installed, so a fix in it applies to this
 #: update and not only to the next one. Taken from that version's git tree in the checkout the
 #: installer keeps - the very code about to be installed, so it needs no trust beyond that code.
@@ -139,9 +166,39 @@ fetch_target_installer() {
     commit="$(sudo git -C "$SRC" rev-parse --verify --quiet "refs/tags/$ref^{commit}" || true)"
   fi
   [ -n "$commit" ] || return 1
+  target_ref="$ref"
+  target_commit="$commit"
   installer_copy="$(mktemp)"
   # Root reads the checkout; the copy belongs to the caller (pipefail keeps git's exit status).
   sudo git -C "$SRC" show "$commit:scripts/install-linux.sh" 2>/dev/null | tee "$installer_copy" >/dev/null
+}
+
+#: Exit status 0 when the release about to be installed may run: its manifest is signed by a key
+#: the RUNNING version trusts, names the commit its tag points to, and is not older than what this
+#: machine already accepted. The check is the running version's own code - never the new one's,
+#: which is what is being checked. Branches and commits have no manifest; the installer notes it.
+verify_target() {
+  local ref="$1" commit="$2" allow="$3" status=0 floor file
+  [[ "$ref" =~ ^v[0-9] ]] || return 0
+  verify_dir="$(mktemp -d)"
+  NOX_HOME="$verify_dir" "$PROGRAM" release keys >/dev/null 2>&1 || status=$?
+  case "$status" in
+    0) ;;
+    3) msgln sig_not_configured; return 0 ;;
+    *) msgln sig_broken "$PROGRAM" >&2; return 1 ;;
+  esac
+  for file in release-manifest.json release-manifest.json.sig; do
+    curl --proto '=https' --tlsv1.2 -fsSL -o "$verify_dir/$file" \
+      "$REPO_URL/releases/download/$ref/$file" 2>/dev/null || { msgln sig_missing "$ref" >&2; return 1; }
+  done
+  floor="$(sudo cat /opt/nox/state/release-floor 2>/dev/null || true)"
+  local args=(--expect-tag "$ref" --expect-commit "$commit")
+  if [ -n "$floor" ]; then args+=(--min-version "$floor"); fi
+  if [ "$allow" = 1 ]; then args+=(--allow-downgrade); fi
+  if ! NOX_HOME="$verify_dir" "$PROGRAM" release verify "$verify_dir/release-manifest.json" "${args[@]}"; then
+    msgln sig_refused "$ref" >&2
+    return 1
+  fi
 }
 
 #: One line in `nox doctor` when a newer release exists. Asked only when the owner runs it; GitHub
@@ -167,7 +224,15 @@ update_notice() {
 
 case "${1:-}" in
   update)
-    target="${2:-}"
+    target=""
+    allow_downgrade=0
+    for argument in "${@:2}"; do
+      case "$argument" in
+        --allow-downgrade) allow_downgrade=1 ;;
+        -*) msgln unknown_option "$argument" >&2; exit 2 ;;
+        *) target="$argument" ;;
+      esac
+    done
     if [ -n "$target" ] && [[ ! "$target" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
       msgln invalid_version "$target" >&2; exit 2
     fi
@@ -180,9 +245,10 @@ case "${1:-}" in
       msgln follows_branch "$target"
       msgln newest_release_hint "$(newest_tag)"
     fi
-    version=(NOX_ACTION=install "NOX_LANG=$UI_LANG")
+    version=(NOX_ACTION=install "NOX_LANG=$UI_LANG" "NOX_ALLOW_DOWNGRADE=$allow_downgrade")
     if [ -n "$target" ]; then version+=("NOX_REF=$target"); fi
     if fetch_target_installer "$target"; then
+      verify_target "$target_ref" "$target_commit" "$allow_downgrade" || exit 1
       sudo env "${version[@]}" bash "$installer_copy"
     else
       run_installer "${version[@]}"

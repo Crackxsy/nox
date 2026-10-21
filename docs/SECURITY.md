@@ -625,6 +625,23 @@ the read path:
 All ten requests are registered for the `shell` and `dashboard` roles only — never `plugin`,
 `worker`, `pet`, `supervisor` or the `remote` role a paired phone gets.
 
+## Signed releases
+
+Updates are code that runs as root on a server, so they are checked against a signature, not just
+a checksum ([`RELEASES.md`](RELEASES.md)). Each release carries `release-manifest.json` (version,
+tag, source commit, every file with size and SHA-256) and an Ed25519 signature by the project's
+release key. `scripts/install-linux.sh` and `nox update` - the latter with the *running* version's
+`nox release verify`, before the new version's installer runs - refuse a release when the manifest
+is missing, its signature is invalid or made by a key that is not trusted or has expired, it names
+another tag or commit, or it is older than the newest release the machine already accepted
+(rollback protection; a deliberate downgrade needs `--allow-downgrade`). Files are then accepted
+only with the size and SHA-256 the signed manifest lists. The trusted public keys are built into
+each release with an expiry date, which is how keys are rotated; the private key never enters the
+repository and is only available to the release workflow's protected `release-signing`
+environment. While no key is configured, every verifier says "not configured" and nothing claims
+to be verified. Negative tests: `tests/unit/release/` and the "Signed releases" step of the Linux
+installer CI job.
+
 ## Known limits of network access
 
 Paired devices in the home network (`nox.lan`, see [`NETWORK_ACCESS.md`](NETWORK_ACCESS.md)) are

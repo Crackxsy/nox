@@ -317,6 +317,15 @@ def _register_voice_commands() -> None:
 _register_voice_commands()
 
 
+def _register_release_commands() -> None:
+    from nox.release.cli import release_app  # noqa: PLC0415 - typer only; crypto loads per command
+
+    app.add_typer(release_app, name="release")
+
+
+_register_release_commands()
+
+
 sandbox_app = typer.Typer(help="The command sandbox (Windows: AppContainer access rights).")
 app.add_typer(sandbox_app, name="sandbox")
 

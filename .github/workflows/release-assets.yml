@@ -1,11 +1,20 @@
 # Attaches to every GitHub release: the built dashboard and pet window as nox-ui-<tag>.tar.gz, and
-# the installer itself as install-linux.sh, each with its SHA-256. scripts/install-linux.sh
-# downloads the bundle and refuses one that does not match, so a Raspberry Pi needs no Node.js
-# toolchain; the documented `releases/latest/download/install-linux.sh` is always a tagged version.
+# the installer itself as install-linux.sh, each with its SHA-256, plus release-manifest.json - the
+# list of those files with sizes and SHA-256 and the commit the tag points to - and its Ed25519
+# signature release-manifest.json.sig (docs/RELEASES.md). Once a release key is trusted,
+# scripts/install-linux.sh and `nox update` refuse a release whose signed manifest is missing or
+# does not match. A Raspberry Pi needs no Node.js toolchain; the documented
+# `releases/latest/download/install-linux.sh` is always a tagged version.
 #
-# Two jobs on purpose: the build runs third-party npm code and therefore has a read-only token and
-# no stored git credentials; only the upload job, which runs no repository or third-party code, may
-# write - and it takes the installer from its own clean checkout of the tag.
+# Three jobs on purpose: the build runs third-party npm code and therefore has a read-only token
+# and no stored git credentials; the manifest job is the only one that sees the release key (an
+# environment secret, released only after the owner approves the run when the environment has a
+# required reviewer) and runs no npm code; only the upload job, which runs no repository or
+# third-party code, may write - and it takes the installer from its own clean checkout of the tag.
+#
+# Without the secret NOX_RELEASE_SIGNING_KEY the manifest job writes an UNSIGNED manifest and a
+# warning; the upload job then attaches the checksummed files as before, refuses to publish that
+# manifest, and fails the run, so an unsigned release never looks like a signed one.
 name: Release assets
 
 on:
@@ -22,12 +31,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
 
@@ -44,15 +53,91 @@ jobs:
           tar --owner=0 --group=0 --numeric-owner -czf "nox-ui-$TAG.tar.gz" ui/dashboard/dist ui/pet/dist
           sha256sum "nox-ui-$TAG.tar.gz" > "nox-ui-$TAG.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-bundle
           path: nox-ui-*.tar.gz*
           if-no-files-found: error
 
+  manifest:
+    name: Release manifest (signed when the release key is configured)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The release key lives in this environment only. The owner gives the environment a required
+    # reviewer, so no release is signed without the owner approving that run (docs/RELEASES.md).
+    environment: release-signing
+    permissions:
+      contents: read
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+          path: source
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ui-bundle
+          path: bundle
+
+      - name: The files the release publishes
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          expected="$(printf '%s\n' "nox-ui-$TAG.tar.gz" "nox-ui-$TAG.tar.gz.sha256")"
+          actual="$(find bundle -mindepth 1 -printf '%P\n' | sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "unexpected artifact contents:"; echo "$actual"; exit 1
+          fi
+          (cd bundle && sha256sum --quiet -c "nox-ui-$TAG.tar.gz.sha256")
+          mkdir files
+          cp "bundle/nox-ui-$TAG.tar.gz" files/
+          cp source/scripts/install-linux.sh files/install-linux.sh
+
+      - name: The commit the tag points to
+        id: source
+        run: echo "commit=$(git -C source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # The process that holds the key may import exactly cryptography and what it needs: pinned
+      # by version and SHA-256 (copied from uv.lock), wheels only, into a folder of their own.
+      - name: Signer dependencies (hash-pinned, nothing else)
+        run: >-
+          python -m pip install --require-hashes --no-deps --only-binary :all:
+          --target "$RUNNER_TEMP/signer-lib" -r source/scripts/signing-requirements.txt
+
+      # The key reaches the signer on stdin only: `printf` is a shell builtin, and `env -u` takes it
+      # out of the environment before Python starts, so no process sees it on a command line or
+      # inherits it. `python -I -S`: no site-packages, no .pth files, no PYTHON* variables, no
+      # current folder - the signer (self-contained, imports nothing from nox) finds cryptography
+      # only in the folder above. GitHub masks the secret in logs; it is empty when not configured.
+      - name: Write the manifest and sign it
+        id: sign
+        env:
+          NOX_RELEASE_SIGNING_KEY: ${{ secrets.NOX_RELEASE_SIGNING_KEY }}
+          TAG: ${{ github.event.release.tag_name }}
+          COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          printf '%s\n' "$NOX_RELEASE_SIGNING_KEY" | env -u NOX_RELEASE_SIGNING_KEY \
+            python -I -S source/scripts/sign_release.py --key-stdin --allow-unsigned \
+            --lib "$RUNNER_TEMP/signer-lib" --tag "$TAG" --commit "$COMMIT" --out signed \
+            "files/nox-ui-$TAG.tar.gz" files/install-linux.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-manifest
+          path: signed/
+          if-no-files-found: error
+
   upload:
     name: Attach to the release
-    needs: build
+    needs: [build, manifest]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -60,7 +145,7 @@ jobs:
     steps:
       # The installer runs as root on every Pi, so it is taken from a clean checkout of the tag
       # here - never from the build job, where third-party npm code could have changed it.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
@@ -75,7 +160,7 @@ jobs:
           (cd installer && sha256sum install-linux.sh > install-linux.sh.sha256)
 
       # Into its own folder, so nothing in the artifact can overwrite the installer above.
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ui-bundle
           path: bundle
@@ -92,12 +177,58 @@ jobs:
           find bundle -mindepth 1 ! -type f -print -quit | grep -q . && { echo "non-regular file in artifact"; exit 1; }
           (cd bundle && sha256sum --quiet -c "nox-ui-$TAG.tar.gz.sha256")
 
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-manifest
+          path: manifest
+
+      # Every installation checks the signature itself; here the manifest must describe exactly
+      # the files about to be uploaded, so a mix-up never reaches a release.
+      - name: The manifest lists exactly the files that are uploaded
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          SIGNED: ${{ needs.manifest.outputs.signed }}
+        run: |
+          expected="release-manifest.json"
+          if [ "$SIGNED" = "true" ]; then
+            expected="$(printf '%s\n' release-manifest.json release-manifest.json.sig)"
+          fi
+          actual="$(find manifest -mindepth 1 -printf '%P\n' | sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "unexpected manifest artifact contents:"; echo "$actual"; exit 1
+          fi
+          find manifest -mindepth 1 ! -type f -print -quit | grep -q . && { echo "non-regular file in artifact"; exit 1; }
+          python3 -I - manifest/release-manifest.json "bundle/nox-ui-$TAG.tar.gz" installer/install-linux.sh <<'PY'
+          import hashlib, json, os, sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              manifest = json.load(handle)
+          listed = {a["name"]: (a["size"], a["sha256"]) for a in manifest["assets"]}
+          actual = {}
+          for path in sys.argv[2:]:
+              with open(path, "rb") as handle:
+                  data = handle.read()
+              actual[os.path.basename(path)] = (len(data), hashlib.sha256(data).hexdigest())
+          if listed != actual:
+              sys.exit(f"the manifest does not describe the uploaded files: {listed} != {actual}")
+          PY
+
       - name: Upload
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
           REPO: ${{ github.repository }}
-        run: >-
-          gh release upload "$TAG" --repo "$REPO"
-          "bundle/nox-ui-$TAG.tar.gz" "bundle/nox-ui-$TAG.tar.gz.sha256"
-          installer/install-linux.sh installer/install-linux.sh.sha256
+          SIGNED: ${{ needs.manifest.outputs.signed }}
+        run: |
+          files=("bundle/nox-ui-$TAG.tar.gz" "bundle/nox-ui-$TAG.tar.gz.sha256"
+                 installer/install-linux.sh installer/install-linux.sh.sha256)
+          # An unsigned manifest is never published: it would only look like a signed one.
+          if [ "$SIGNED" = "true" ]; then
+            files+=(manifest/release-manifest.json manifest/release-manifest.json.sig)
+          fi
+          gh release upload "$TAG" --repo "$REPO" "${files[@]}"
+
+      - name: Refuse to publish an unsigned release
+        if: needs.manifest.outputs.signed != 'true'
+        run: |
+          echo "::error title=Release not signed::The release key (secret NOX_RELEASE_SIGNING_KEY in the environment release-signing) is not configured, so this release has no signed manifest and installations that trust a release key will refuse it. See docs/RELEASES.md."
+          exit 1

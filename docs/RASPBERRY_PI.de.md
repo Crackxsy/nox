@@ -29,9 +29,13 @@ curl -fsSL https://github.com/Crackxsy/nox/releases/latest/download/install-linu
 ```
 
 Lieber erst lesen? `curl -fsSLO <dieselbe Adresse>`, dann `less install-linux.sh` und
-`sudo bash install-linux.sh`. Jedes Release enthält dazu `install-linux.sh.sha256`. Die Prüfsumme
-erkennt einen beschädigten Download; sie liegt aber neben dem Skript und schützt deshalb nicht vor
-einem Release, das jemand mit Schreibrechten am Projekt verändert hätte.
+`sudo bash install-linux.sh`. Jedes Release enthält dazu `install-linux.sh.sha256`, das nur einen
+beschädigten Download erkennt, und – sobald der Release-Schlüssel des Projekts eingerichtet ist –
+ein signiertes `release-manifest.json`, das alle Dateien des Release aufführt. Damit lehnen der
+Installer und `nox update` ein verändertes oder nicht mit dem Release-Schlüssel signiertes Release
+ab, ebenso ein älteres, das als Update angeboten wird; [Signierte Releases](RELEASES.md) (englisch)
+zeigt, wie man das Skript vor dem Start selbst prüft. Bis der Schlüssel eingerichtet ist, sagt der
+Installer das und prüft nur Prüfsummen.
 
 Das Skript zeigt jeden Schritt an und endet mit **„Nox läuft“**, sobald der Dienst antwortet. Ab
 dann startet Nox nach jedem Neustart von selbst. Installiert wird die neueste Version, die unter
@@ -131,7 +135,10 @@ selbst in `/var/backups/nox` angelegt hat, und lehnt jede andere Datei ab.
 
 `nox update` benutzt den Installer der Version, die es installiert – aus deren Git-Stand, also aus
 genau dem Code, der gleich installiert wird –, damit eine Korrektur am Installer schon bei dem
-Update greift, das sie mitbringt. Wer von einem Branch installiert hat (`nox update develop`),
+Update greift, das sie mitbringt. Ist der Release-Schlüssel eingerichtet, prüft die laufende Version
+vorher mit ihrem eigenen `nox release verify` das signierte Manifest des neuen Release – nur wenn
+das stimmt, läuft dessen Installer –, und eine Version, die älter ist als die neueste schon
+installierte, braucht `nox update <version> --allow-downgrade`. Wer von einem Branch installiert hat (`nox update develop`),
 bleibt mit `nox update` auf diesem Branch, statt auf das ältere letzte Release zurückzufallen.
 
 **Zeitzone.** Erinnerungen und Kalender richten sich nach der Uhr des Pi. Raspberry Pi OS Lite

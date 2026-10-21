@@ -34,6 +34,20 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
 
 ### Added
+- **Signed releases** (docs/RELEASES.md). Every release gets `release-manifest.json` (version, tag,
+  source commit, each file with size and SHA-256) and an Ed25519 signature made in the release
+  workflow's protected `release-signing` environment from the secret `NOX_RELEASE_SIGNING_KEY`
+  (`scripts/sign_release.py`: self-contained, run as `python -I -S` with only hash-pinned
+  `cryptography` importable, key on stdin only; workflow actions pinned to SHAs). Once a release
+  key is in the trust list (`src/nox/release/trusted_keys.py`, mirrored in
+  `scripts/install-linux.sh`), the Linux installer and `nox update` refuse a release whose manifest
+  is missing, badly signed, signed by an untrusted or expired key, for another tag or commit, or
+  older than the newest release already accepted (`--allow-downgrade` for a deliberate step back);
+  the dashboard package must match the signed manifest. `nox release verify|keys|describe-key`
+  check a manifest by hand and help the owner add a key; rotation works through several trusted
+  keys with expiry dates. The trust list is empty until the owner creates the key: until then
+  everything says "not configured", checksums are checked as before, and the release workflow
+  fails the run with "Release not signed" instead of publishing an unsigned manifest.
 - **Windows: the sandbox keeps off this computer's local services and the LAN.** Where Windows
   does not enforce AppContainer loopback isolation, the installer now adds Windows Filtering
   Platform rules for Nox's sandbox containers (one optional step, ticked by default, one UAC
