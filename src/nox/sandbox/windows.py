@@ -810,6 +810,7 @@ def python_runtime_dirs(
     from nox.paths import nox_home
 
     nox = (home or nox_home()).resolve()
+    node = _node_home()
     profile = Path.home().resolve()
     # Never a broad profile folder: the profile itself, anything above it, or a folder directly
     # in it (Documents, AppData, ...). A runtime lives deeper (AppData/Roaming/uv/python/...).
@@ -821,11 +822,23 @@ def python_runtime_dirs(
         if len(folder.parts) <= 1 or _contains(folder, profile) or folder.parent == profile:
             log.warning("sandbox.runtime_dir_refused", reason="root or broad profile folder")
             continue
-        if _contains(folder, nox) or _contains(nox, folder):
+        if (
+            _contains(folder, nox)
+            or _contains(nox, folder)
+            or _contains(folder, node)
+            or _contains(node, folder)
+        ):
             log.warning("sandbox.runtime_dir_refused", reason="overlaps Nox's home")
             continue
         out.append(folder)
     return tuple(out)
+
+
+def _node_home() -> Path:
+    """A node's own folder (key, certificates, audit trail): never granted to a container."""
+    from nox.node.home import default_home  # noqa: PLC0415
+
+    return Path(os.path.realpath(default_home()))
 
 
 def _runs_python(argv: list[str]) -> bool:
@@ -864,7 +877,7 @@ def nox_runtime_dirs(*, home: Path | None = None, root: Path | None = None) -> t
     if len(folder.parts) <= 1 or _contains(folder, profile) or folder.parent == profile:
         log.warning("sandbox.package_dir_refused", reason="root or broad profile folder")
         return dirs
-    if _contains(folder, nox) or _contains(nox, folder):
+    if _contains(folder, nox) or _contains(nox, folder) or _contains(folder, _node_home()):
         log.warning("sandbox.package_dir_refused", reason="overlaps Nox's home")
         return dirs
     return (*dirs, folder)

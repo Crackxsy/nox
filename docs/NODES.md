@@ -7,8 +7,9 @@ run a small **`nox node`**: it connects to the core and lets Nox do things *on t
 only the things you allowed there.
 
 > Status: wave C is being built. This release has pairing, the connection, the device's own
-> allow-list and audit trail, and two tools: `system.info` (read system values) and
-> `notify.show` (show a notice). Commands, files, the screen and the rest follow.
+> allow-list and audit trail, `system.info` (read system values), `notify.show` (show a notice)
+> and the hands: `file.list/read/write` in folders you allow, `shell.run` and
+> `package.install/remove` in the device's own sandbox. The screen and the rest follow.
 
 ## Pairing a node
 
@@ -54,7 +55,9 @@ and never queues the request. A remembered "allow" for the laptop covers only th
 The file `node.yaml` in the node folder decides, and **only this device can widen it**:
 
 ```text
-nox node allow shell     # let Nox run commands here (once that tool exists); asks "yes?"
+nox node allow shell     # let Nox run commands here, in this device's sandbox; asks "yes?"
+nox node allow files --folder "C:\Users\Alex\Documents\Nox"   # one folder Nox may open
+nox node deny files --folder "C:\Users\Alex\Documents\Nox"    # take that folder away again
 nox node deny notify     # no more notices on this device - at once, also while it runs
 ```
 
@@ -70,6 +73,20 @@ A node without a screen refuses high risk, unless a person confirmed it on Nox i
 allowed that on the device: `nox node allow trust_core_for_high`. The node also keeps
 its own budget: 60 actions and 5 high-risk ones per hour (`max_calls_per_hour`,
 `max_high_per_hour` in `node.yaml`).
+
+## Files, commands and programs on a node
+
+- **Files** (`files`): Nox opens only paths inside the folders you allowed with `--folder` (none
+  by default), and decides that on the real file at the moment it opens it - a link or junction
+  that leads elsewhere, `..`, `~`, a short name like `PROGRA~1`, a network path
+  (`\\server\share`) or a device path is refused, and so is anything in the node's own folder
+  or the keyring. A write never replaces a file unless asked and never creates folders.
+- **Commands** (`shell`) and **programs** (`packages`) run only in this device's own sandbox
+  (AppContainer on Windows, bubblewrap on Linux), which cannot see the node's folder. Without
+  such a sandbox - macOS for now, Linux without `bwrap` - they are refused, never run without
+  one. Both are high risk: asked on this device, or on Nox for a node without a screen.
+  Installing programs inside the sandbox fails on most systems today (a package manager needs
+  rights the sandbox does not give); the request is still checked and refused honestly.
 
 ## Stopping
 

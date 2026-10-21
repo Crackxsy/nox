@@ -96,6 +96,9 @@ class Environment(BaseModel):
     fake_game: bool = False
     #: After the turn, the harness clicks "Aktivieren" for every ready skill, like the user would.
     activate_skills: bool = False
+    #: Simulated nodes online for this task (`kann_alles.nodes`): a headless Pi whose real gate and
+    #: hands run with a fake sandbox, so nothing executes on the benchmark machine.
+    nodes: list[Literal["Wohnzimmer-Pi"]] = Field(default_factory=list)
 
 
 class Task(BaseModel):
@@ -128,7 +131,8 @@ class Task(BaseModel):
 
     @model_validator(mode="after")
     def _approve_high_only_where_harmless(self) -> Task:
-        allowed = {r"skill\.learn", r"computer\.session_start"}
+        # `shell.run` only ever on a simulated node (`kann_alles.confirm`), never on this machine.
+        allowed = {r"skill\.learn", r"computer\.session_start", r"shell\.run"}
         extra = set(self.approve_high) - allowed
         if extra:
             raise ValueError(f"task {self.id}: approve_high may only name {sorted(allowed)}")

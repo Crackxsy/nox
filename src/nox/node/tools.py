@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nox import __version__
 
-__all__ = ["NodeTool", "Notifier", "PlatformNotifier", "default_tools"]
+__all__ = ["NodeRefusal", "NodeTool", "Notifier", "PlatformNotifier", "default_tools"]
 
 _CREATE_NO_WINDOW = 0x08000000
 
@@ -46,6 +46,15 @@ class NotifyArgs(BaseModel):
 Handler = Callable[[BaseModel], Awaitable[dict[str, Any]]]
 
 
+class NodeRefusal(Exception):  # noqa: N818 - a refusal, named for what it is
+    """A tool refused on this device's own authority (outside the allowed folders, no sandbox):
+    answered and audited like a refusal of `NodeGate`. `reason` is a short machine token."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 @dataclass(frozen=True)
 class NodeTool:
     name: str
@@ -54,9 +63,10 @@ class NodeTool:
     description: str
     args: type[BaseModel]
     handler: Handler = field(compare=False)
-    #: Declared by every tool with a side effect: it opens no path, or it checks
-    #: `nox.node.gate.inside()` on the resolved real path at the moment it opens one. A tool
-    #: without this declaration is not offered at all (`NodeGate`).
+    #: Declared by every tool with a side effect: it opens no path, it opens every path through
+    #: `nox.node.safe_fs` (checked on the handle at open time), or it runs only inside the node's
+    #: sandbox, which cannot see the node's folder (`nox.node.hands`). A tool without this
+    #: declaration is not offered at all (`NodeGate`).
     path_safe: bool = False
 
     def describe(self) -> dict[str, Any]:

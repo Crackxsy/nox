@@ -177,6 +177,9 @@ class World:
         #: Tool families whose backends this world replaced by simulations (see the docstring).
         self.simulated: frozenset[str] = frozenset()
         self._games: list[str] = []
+        #: The simulated nodes (`kann_alles.nodes`), set up the first time a task asks for one.
+        self.nodes: Any = None
+        self.simulated_devices: frozenset[str] = frozenset()
         self._saved_env: dict[str, str | None] = {}
         self._unsub: Callable[[], None] | None = None
 
@@ -297,6 +300,8 @@ class World:
             isolated=self._isolated,
             simulated=self.simulated,
             approve_high=self.approve_high,
+            device=str(payload.get("device") or ""),
+            simulated_devices=self.simulated_devices,
         )
         self.probe.confirmations += 1
         self.probe.decisions.append(verdict)
@@ -327,6 +332,7 @@ class World:
         self.forbidden_tools = list(forbidden_tools or [])
         self.approve_high = list(approve_high or [])
         await self._prepare_hands(env)
+        self._prepare_nodes(env)
         shutil.rmtree(self.sandbox, ignore_errors=True)
         self.sandbox.mkdir(parents=True)
         for relative, content in env.files.items():
@@ -410,6 +416,21 @@ class World:
             [psutil.Process().name()] if env.fake_game else self._games
         )
         self._activate_skills = env.activate_skills
+
+    def _prepare_nodes(self, env: Environment) -> None:
+        """Exactly the simulated nodes the task names are online. The core's routes for nodes are
+        installed the first time a task needs one (an older checkout without nodes: none)."""
+        if env.nodes and self.nodes is None:
+            try:
+                from kann_alles.nodes import WorldNodes  # noqa: PLC0415 - newer checkouts only
+                from nox.node.install import _install_routes  # noqa: PLC0415
+            except ImportError:
+                return
+            self.nodes = WorldNodes(self.root / "node-receipts")
+            _install_routes(self.core, self.nodes)
+        if self.nodes is not None:
+            self.nodes.show(list(env.nodes))
+            self.simulated_devices = self.nodes.devices
 
     async def settle(self) -> None:
         """Before checks: let a skill build finish, then click "Aktivieren" if the task says so."""

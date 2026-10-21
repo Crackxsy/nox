@@ -207,9 +207,16 @@ def routed_spec(
     input_model: type[BaseModel] | None = None,
     defaults: Callable[[], Mapping[str, str]] = dict,
     rememberable: bool = True,
+    node_target: Callable[[dict[str, Any]], str] | None = None,
+    network: bool | Callable[[dict[str, Any]], bool] | None = None,
 ) -> ToolSpec:
     """One routable tool: the core's own spec (if the core has the tool) plus every node that
-    offers it. `input_model` describes the arguments when the core has no spec of its own."""
+    offers it. `input_model` describes the arguments when the core has no spec of its own.
+
+    `node_target` names what a call on a node does, for the confirmation and the audit - the
+    core's own `targets` may describe this machine (`shell.run` resolves programs here), so it
+    is used for a node only when no `node_target` is given. `network` overrides the template's
+    (a download is network whether or not the core has the tool itself)."""
     base = core.input_model if core is not None else input_model
     model = _routed_model(base, name)
 
@@ -242,7 +249,10 @@ def routed_spec(
             return CallScope(action=action, risk=core.risk, target=target)
         entry = next(e for e in registry.entries() if e.device_id == resolution.device)
         node_risk = _max_risk(risk, entry.tools.get(name, "high"))
-        base_target = core.targets(inner(payload)) if core is not None and core.targets else ""
+        if node_target is not None:
+            base_target = node_target(inner(payload))
+        else:
+            base_target = core.targets(inner(payload)) if core is not None and core.targets else ""
         # Left to the device only when it can ask; otherwise the core asks itself (and the
         # node still refuses high risk it cannot confirm, unless trusted there).
         delegate = node_risk is Risk.HIGH and entry.confirmer
@@ -302,6 +312,7 @@ def routed_spec(
         targets=None,
         scope=scope,
         local=False,
+        network=template.network if network is None else network,
     )
 
 

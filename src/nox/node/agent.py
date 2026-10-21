@@ -48,7 +48,7 @@ from nox.node.home import NodeHome, NodeIdentity
 from nox.node.keystore import NodeKeyStore
 from nox.node.manifest import GROUPS, NodeManifest, manifest_hash
 from nox.node.receipts import ReceiptVerifier, normalize_arguments
-from nox.node.tools import NodeTool
+from nox.node.tools import NodeRefusal, NodeTool
 from nox.security.model import AuditLog
 
 log = get_logger(__name__)
@@ -547,6 +547,17 @@ class NodeAgent:
             return False
         return True
 
+    def _audit_refusal(self, tool: str, call_id: str, reason: str) -> None:
+        if self._audit is not None:
+            self._audit.append(
+                actor="local",
+                tool=p.safe_name(tool),
+                action="node.refused",
+                target=p.safe_name(call_id, 64),
+                decision="deny",
+                result=reason,
+            )
+
     def _audit_event(self, action: str, by: str, result: str) -> None:
         if self._audit is not None:
             self._audit.append(
@@ -589,6 +600,13 @@ class NodeAgent:
             self.dead_man = True
             self._audit_event("node.dead_man", "local", p.safe_name(name))
             await self._refused(ws, msg_id, name, "dead_man")
+            return
+        except NodeRefusal as exc:
+            # The hand's own boundary (outside the allowed folders, no sandbox): a refusal on
+            # this device, audited like the gate's.
+            reason = p.safe_name(exc.reason, 64)
+            self._audit_refusal(name, meta.call_id, reason)
+            await self._refused(ws, msg_id, name, reason)
             return
         except Exception as exc:  # noqa: BLE001 - a failing tool is an error result, not a crash
             log.warning("node.tool_failed", tool=p.safe_name(name), error=type(exc).__name__)

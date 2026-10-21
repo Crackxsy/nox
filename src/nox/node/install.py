@@ -16,6 +16,7 @@ Requests, for the UI roles (`nox.ipc.roles`):
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -28,10 +29,11 @@ from nox.ipc.errors import ERR_NOT_FOUND, ERR_UNAVAILABLE, IpcError
 from nox.ipc.roles import UI_ROLES
 from nox.lan.install import authorize_admin, qr_data_uri
 from nox.lan.tls import TlsMaterial
+from nox.node.hands import PackageArgs, PathArgs, ShellArgs, WriteArgs
 from nox.node.listener import NodeListener
 from nox.node.names import label
 from nox.node.pairing import NodePairing
-from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink
+from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink, escape_controls
 from nox.node.receipts import ReceiptSigner
 from nox.node.registry import NodeRegistry
 from nox.node.repo import NodeRepository
@@ -235,11 +237,54 @@ def _keep(runtime: NodeRuntime, coro: Any, name: str) -> None:
     task.add_done_callback(runtime.tasks.discard)
 
 
+def _shell_target(payload: dict[str, Any]) -> str:
+    """What a node's `shell.run` call runs, as the confirmation and the audit show it: the words
+    as sent (control characters escaped) and any declared egress - never this core's view of
+    where the program lives, which says nothing about the other device."""
+    argv = payload.get("argv")
+    words = (
+        " ".join(str(a) for a in argv)
+        if isinstance(argv, list)
+        else str(payload.get("command") or "")
+    )
+    egress = payload.get("egress") or []
+    suffix = f" egress={','.join(str(h) for h in egress)}" if egress else ""
+    return escape_controls(words + suffix)[:400]
+
+
+def _field(name: str) -> Callable[[dict[str, Any]], str]:
+    return lambda payload: escape_controls(str(payload.get(name) or ""))[:400]
+
+
 def _install_routes(core: Any, registry: NodeRegistry) -> None:
-    """`system.info` (the core has it too) and `notify.show` (nodes only) become routable; the
-    capability report hides a node-only tool while no node offers it, and every turn's context
-    names the devices."""
+    """`system.info` (the core has it too), `notify.show` (nodes only) and the hands - `file.*`,
+    `shell.run`, `package.*`, each the core's own tool when the call stays here - become
+    routable; the capability report hides a node-only tool while no node offers it, and every
+    turn's context names the devices."""
     defaults = lambda: core.config.devices.defaults  # noqa: E731 - read per call
+    own = core.tool_registry.get
+    hands: list[tuple[str, str, Risk, bool, type[BaseModel], Callable[[dict[str, Any]], str]]] = [
+        ("file.list", "What is in one folder", Risk.READ, False, PathArgs, _field("path")),
+        ("file.read", "The text of one file", Risk.READ, False, PathArgs, _field("path")),
+        (
+            "file.write",
+            "Write or append text to a file",
+            Risk.MEDIUM,
+            True,
+            WriteArgs,
+            _field("path"),
+        ),
+        ("shell.run", "Run a command sandboxed", Risk.HIGH, True, ShellArgs, _shell_target),
+        (
+            "package.install",
+            "Install a program",
+            Risk.HIGH,
+            True,
+            PackageArgs,
+            _field("package_id"),
+        ),
+        ("package.remove", "Remove a program", Risk.HIGH, True, PackageArgs, _field("package_id")),
+    ]
     specs = [
         routed_spec(
             name="system.info",
@@ -261,8 +306,27 @@ def _install_routes(core: Any, registry: NodeRegistry) -> None:
             defaults=defaults,
         ),
     ]
+    for name, what, risk, side_effects, model, target in hands:
+        mine = own(name)
+        specs.append(
+            routed_spec(
+                name=name,
+                description=(mine.description if mine is not None else what + ".")
+                + " On this core or on a paired PC (`device`).",
+                risk=risk,
+                side_effects=side_effects,
+                registry=registry,
+                core=mine,
+                input_model=model,
+                defaults=defaults,
+                rememberable=not name.startswith("package."),
+                node_target=target,
+                network=True if name.startswith("package.") else None,
+            )
+        )
+    on_core = {spec.name for spec in specs if own(spec.name) is not None}
     install_routes(core.tool_registry, specs)
-    node_only = {spec.name for spec in specs} - {"system.info"}
+    node_only = {spec.name for spec in specs} - on_core
 
     def probe(tool_name: str) -> tuple[Any, str] | None:
         if tool_name in node_only and not registry.any_online_with(tool_name):

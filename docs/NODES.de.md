@@ -7,9 +7,10 @@ oder Laptop kann einen kleinen **`nox node`** laufen lassen: Er verbindet sich m
 lässt Nox Dinge *auf diesem Gerät* tun - und nur die, die du dort erlaubt hast.
 
 > Stand: Welle C entsteht gerade. Diese Version hat das Koppeln, die Verbindung, die eigene
-> Erlaubnisliste und das Protokoll des Geräts und zwei Werkzeuge: `system.info` (Systemwerte
-> lesen) und `notify.show` (einen Hinweis zeigen). Befehle, Dateien, Bildschirm und der Rest
-> folgen.
+> Erlaubnisliste und das Protokoll des Geräts, `system.info` (Systemwerte lesen), `notify.show`
+> (einen Hinweis zeigen) und die Hände: `file.list/read/write` in Ordnern, die du erlaubst,
+> `shell.run` und `package.install/remove` in der eigenen Sandbox des Geräts. Bildschirm und der
+> Rest folgen.
 
 ## Einen Node koppeln
 
@@ -56,7 +57,9 @@ Laptop.
 Das entscheidet die Datei `node.yaml` im Node-Ordner, und **nur dieses Gerät kann sie erweitern**:
 
 ```text
-nox node allow shell     # Nox darf hier Befehle ausführen (sobald es das Werkzeug gibt); fragt nach
+nox node allow shell     # Nox darf hier Befehle ausführen, in der Sandbox des Geräts; fragt nach
+nox node allow files --folder "C:\Users\Alex\Documents\Nox"   # ein Ordner, den Nox öffnen darf
+nox node deny files --folder "C:\Users\Alex\Documents\Nox"    # diesen Ordner wieder wegnehmen
 nox node deny notify     # keine Hinweise mehr auf diesem Gerät - sofort, auch im laufenden Betrieb
 ```
 
@@ -72,6 +75,22 @@ allen Angaben, 60 Sekunden lang - keine Antwort heißt nein, und ein „Ja“ in
 Sekunden zählt als nein. Ein Node ohne Bildschirm lehnt hohes Risiko ab, außer eine Person hat es
 an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trust_core_for_high`. Der Node hat außerdem ein eigenes Budget: 60 Aktionen und 5 mit hohem Risiko pro Stunde
 (`max_calls_per_hour`, `max_high_per_hour` in `node.yaml`).
+
+## Dateien, Befehle und Programme auf einem Node
+
+- **Dateien** (`files`): Nox öffnet nur Pfade in den Ordnern, die du mit `--folder` erlaubt hast
+  (standardmäßig keine), und entscheidet das an der echten Datei in dem Moment, in dem sie
+  geöffnet wird - ein Link oder eine Verknüpfung (Junction) woandershin, `..`, `~`, ein Kurzname
+  wie `PROGRA~1`, ein Netzwerkpfad (`\\server\freigabe`) oder ein Gerätepfad wird abgelehnt,
+  ebenso alles im Node-Ordner selbst oder im Schlüsselbund. Schreiben ersetzt eine Datei nur,
+  wenn du es sagst, und legt nie Ordner an.
+- **Befehle** (`shell`) und **Programme** (`packages`) laufen nur in der eigenen Sandbox des
+  Geräts (AppContainer unter Windows, bubblewrap unter Linux), die den Node-Ordner nicht sieht.
+  Ohne eine solche Sandbox - vorerst macOS, Linux ohne `bwrap` - werden sie abgelehnt, nie ohne
+  ausgeführt. Beides ist hohes Risiko: gefragt an diesem Gerät, bei einem Node ohne Bildschirm an
+  Nox. Programme in der Sandbox zu installieren scheitert heute auf den meisten Systemen (ein
+  Paketmanager braucht Rechte, die die Sandbox nicht gibt); die Anfrage wird trotzdem geprüft und
+  ehrlich abgelehnt.
 
 ## Stoppen
 

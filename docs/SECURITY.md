@@ -774,8 +774,31 @@ A typed name that breaks a rule is refused before the code is spent - and only c
 valid code, so nobody without one can probe which names exist. The model and the dashboard
 always see the name with a short id the device cannot choose ("Laptop · 3f2a").
 
-Still to come in wave C: the node's own sandbox for shell and package tools (C5) - until then a
-node has none of those tools - certificate renewal (C7), and a real presence check for
+**The hands on a node** (C5, `nox.node.hands`, `nox.node.safe_fs`) - each one holds its own
+boundary *after* `NodeGate`, the device's confirmation and the receipt:
+
+- `file.list/read/write` open only inside folders confirmed on the device
+  (`nox node allow files --folder`, none by default; an unconfirmed folder in `node.yaml` counts
+  for nothing). The text is checked first, unresolved (UNC and device paths, `..`, `~`, 8.3
+  names, NUL, alternate data streams, Windows device names, trailing dots/spaces), then the
+  **handle** decides: POSIX walks from the folder with `O_NOFOLLOW` on every step and compares each
+  directory with the protected ones by `(st_dev, st_ino)`; Windows opens with `CreateFileW`
+  without `FILE_SHARE_DELETE` and checks `GetFinalPathNameByHandleW` of that handle. Never inside
+  the node's own folder or the keyring's folders, never a hard link to a file in them, never a
+  FIFO, socket or device. A new file is `CREATE_NEW`/`O_EXCL` and is deleted through its own
+  handle if it landed wrong; an existing one is truncated only after the check. Residual: a
+  Windows listing enumerates by the verified path while the folder's handle is held, with the
+  folder's identity compared before and after.
+- `shell.run` and `package.*` run only in the device's own `make_sandbox()` with strong
+  guarantees (`accept_weak` is never set on a node); the node's folder is not bound (bwrap) or
+  granted (AppContainer; the folder is owner-only), and is refused as a runtime bind on both.
+  No sandbox (macOS, no bwrap, weak backend) means `sandbox_unavailable`, never an unconfined
+  run. A stopped call (`nox/kill`, dead man) kills the sandboxed tree (bwrap: the cancelled run
+  kills its cgroup and process; Windows: the job object). Residual: package managers need rights
+  the sandbox does not give, so installs on a node fail today instead of running unconfined.
+- A refusal by a hand is answered like the gate's and audited (`node.refused`).
+
+Still to come in wave C: certificate renewal (C7) and a real presence check for
 `nox node allow`. Negative tests: `tests/unit/node/` (a deliberately permissive core in `test_agent.py`),
 `tests/integration/test_nodes.py`.
 

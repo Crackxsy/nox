@@ -63,6 +63,23 @@ class NodeManifest(BaseModel):
     #: calls, per hour (spec C §1.6 step 6).
     max_calls_per_hour: int = Field(default=60, ge=0, le=1000)
     max_high_per_hour: int = Field(default=5, ge=0, le=100)
+    #: The folders `file.*` may open on this device (group `files`); none by default. Absolute,
+    #: local paths only, added on the device (`nox node allow files --folder <path>`).
+    folders: list[str] = Field(default_factory=list, max_length=16)
+
+    @field_validator("folders")
+    @classmethod
+    def _local_folders(cls, value: list[str]) -> list[str]:
+        out: list[str] = []
+        for raw in value:
+            text = str(raw).strip()
+            if not text or len(text) > 400 or "\x00" in text:
+                raise ValueError("a folder entry is empty or too long")
+            if text.startswith(("\\\\", "//")) or not Path(text).is_absolute():
+                raise ValueError(f"folders must be absolute local paths: {text!r}")
+            if text not in out:
+                out.append(text)
+        return out
 
     @field_validator("groups")
     @classmethod

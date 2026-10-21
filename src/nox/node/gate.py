@@ -17,8 +17,14 @@ authority (spec C §1.6). In order:
 8. High risk then still needs the **confirmation on this device** (`nox.node.agent`, D1).
 
 Every decision - allowed or refused - goes into the node's own hash-chained audit trail
-(`nox node log`), which the core cannot read or erase. Shell and package tools on nodes run only
-in the node's own sandbox (C5).
+(`nox node log`), which the core cannot read or erase.
+
+After the gate, each hand holds its own boundary when it acts (`nox.node.hands`): `file.*` open
+every path through `nox.node.safe_fs` - inside a folder this device allowed, decided on the real
+file at open time (on the handle), never the node's folder or the keyring's; `shell.run` and
+`package.*` run only inside this device's `make_sandbox()`, which cannot see the node's folder,
+and are refused (`sandbox_unavailable`) where there is none. A refusal there is audited like one
+of the gate's.
 """
 
 from __future__ import annotations
@@ -97,10 +103,9 @@ def touches(arguments: Any, forms: tuple[str, ...]) -> bool:
     SMB lookup could leak the user's NetNTLM hash) and never blocks the event loop.
 
     An early refusal (defence in depth), not the boundary: file tools on a node check the real
-    path at the moment they open it (`inside()`), and shell/package tools run only in the node's
-    sandbox without access to its folder or the keyring.
-    TODO(C5): node file tools call `inside()` at open time; shell/package tools on nodes only
-    inside `make_sandbox()` with the node folder not mounted."""
+    file on its handle at the moment they open it (`nox.node.safe_fs`), and shell/package tools
+    run only inside the node's `make_sandbox()`, where neither its folder nor the keyring is
+    mounted or granted (`nox.node.hands`)."""
     for text in _strings(arguments):
         flat = _norm(text)
         if any(form in flat for form in forms):
@@ -139,9 +144,11 @@ def is_remote_or_device_path(path: str) -> bool:
 
 
 def inside(path: str | Path, folder: Path) -> bool:
-    """For a node FILE tool, at the moment it opens `path`: whether the real path (symlinks,
-    junctions, 8.3 names) lies in `folder`. Remote and device paths count as inside (refused)
-    without being touched."""
+    """Whether the real path of `path` (symlinks, junctions, 8.3 names) lies in `folder`, resolved
+    by name. Remote and device paths count as inside (refused) without being touched.
+
+    A by-name answer can be outdated a moment later (a link swapped in between), so node file
+    tools do not rely on it: they decide on the opened handle (`nox.node.safe_fs`)."""
     if is_remote_or_device_path(str(path)):
         return True
     try:

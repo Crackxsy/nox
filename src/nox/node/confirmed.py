@@ -10,8 +10,9 @@ missing key is never trusted: the node then falls back to the most restrictive m
 values only) and says that the manifest needs to be confirmed again here.
 
 What the file says beyond the last confirmed manifest is not applied: the effective manifest is
-the intersection, every unconfirmed widening is audited, and the person is told how to confirm
-it. Narrowing (a group switched off in the file) always applies at once.
+the intersection (groups, limits and the folders `file.*` may open), every unconfirmed widening
+is audited, and the person is told how to confirm it. Narrowing (a group switched off in the
+file) always applies at once.
 
 Residual risk (SECURITY.md): malware running as this user with full user rights can read the
 keyring entry or the key file like any other secret of that user.
@@ -206,8 +207,11 @@ def effective_manifest(
         trust_core_for_high=trust,
         max_calls_per_hour=min(current.max_calls_per_hour, confirmed.max_calls_per_hour),
         max_high_per_hour=min(current.max_high_per_hour, confirmed.max_high_per_hour),
+        # A folder counts only when it was confirmed here, spelled the same.
+        folders=[f for f in current.folders if f in confirmed.folders],
     )
     widened = sorted(g for g in GROUPS if current.groups.get(g) and not groups[g])
+    widened += [f"folder:{f}" for f in current.folders if f not in effective.folders]
     if confirmed is not MOST_RESTRICTIVE and widened:
         audit.append(
             actor="local",

@@ -11,6 +11,9 @@ the machine the benchmark runs on. So the default is DENY, and an approval needs
   - or to a family the world has replaced by a simulation (`simulated`): the browser wired to the
   fake web, the screen and camera to fake images. Only the world can name those, and only after it
   actually swapped the backends.
+* on a device, only a node the world simulates (`kann_alles.nodes`): there - and only there - a
+  task may let the harness approve `shell.run` (its sandbox answers from fixed text). A dialog for
+  any other device is denied.
 
 Every decision is recorded with its reason and ends up in the report.
 """
@@ -70,16 +73,24 @@ def decide(
     isolated: bool = False,
     simulated: frozenset[str] = frozenset(),
     approve_high: Sequence[str] = (),
+    device: str = "",
+    simulated_devices: frozenset[str] = frozenset(),
 ) -> ConfirmDecision:
-    """The harness's answer to one dialog. `tool`/`action` as in `PermissionRequest`."""
+    """The harness's answer to one dialog. `tool`/`action` as in `PermissionRequest`; `device`
+    is the request's own device field (never parsed from the target)."""
     name = f"{tool}.{action}" if action else tool
+    on_fake_node = bool(device) and device in simulated_devices
 
     def result(decision: Decision, reason: str) -> ConfirmDecision:
         return ConfirmDecision(name, risk, target, decision, reason)
 
     if any(re.fullmatch(pattern, name) for pattern in forbidden_tools):
         return result(Decision.DENY, "forbidden in this task")
+    if device and not on_fake_node:
+        return result(Decision.DENY, "a device the world does not simulate")
     high_ok = risk.lower() == "high" and any(re.fullmatch(p, name) for p in approve_high)
+    if name == "shell.run" and not on_fake_node:
+        high_ok = False  # a command is approvable only where it runs against fakes
     if risk.lower() in NEVER_AUTO_APPROVED_RISKS and not isolated and not high_ok:
         return result(
             Decision.DENY, f"{risk} risk is never auto-approved outside an isolated world"
@@ -91,6 +102,8 @@ def decide(
     if tool == "file" and not target:
         return result(Decision.DENY, "file tool without a target path")
     in_world = PATH_FAMILIES | DATA_DIR_FAMILIES | WORLD_FAKE_FAMILIES | simulated
+    if on_fake_node and tool == "shell":
+        in_world = in_world | {"shell"}  # the simulated node's sandbox answers from fixed text
     if tool not in in_world and not isolated:
         return result(Decision.DENY, f"{tool} acts outside the temporary world")
     return result(Decision.ALLOW, "listed, low enough risk, effect stays in the temporary world")
