@@ -320,3 +320,37 @@ def test_nox_node_status_escapes_what_the_core_or_a_file_says(tmp_path: Path) ->
     home.save_pairing(identity, cert_pem="x", ca_pem="x")
     home.write_status({"state": "connected\r\nState:     removed", "at": "now"})
     assert all(_clean(line) for line in node_cli.status(home))
+
+
+async def test_a_paired_device_does_not_pair_again(tmp_path: Path) -> None:
+    home = NodeHome(tmp_path / "h")
+    home.ensure()
+    home.key_file.write_text("existing key")
+    home.save_pairing(_identity(), cert_pem="x", ca_pem="x")
+    link = PairLink.make(host="192.168.1.20", port=47843, code="ABCD2345", ca_fingerprint=FP_OTHER)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("an already paired device contacts nobody")
+
+    with pytest.raises(EnrollError) as refused:
+        await enroll(
+            link, home, NodeKeyStore(home.key_file, None), transport=httpx.MockTransport(handler)
+        )
+    assert refused.value.reason == "already_paired"
+    assert home.key_file.read_text() == "existing key"  # the existing key is untouched
+
+
+def test_the_node_speaks_tls_1_3_only(tmp_path: Path) -> None:
+    import ssl
+
+    from nox.lan.tls import ensure_tls, issue_client_certificate
+    from tests.unit.node.conftest import ADDRESSES, NAMES, make_csr
+
+    tls = ensure_tls(tmp_path / "tls", names=NAMES, addresses=ADDRESSES)
+    keystore = NodeKeyStore(tmp_path / "node.key", None)
+    key = keystore.create()
+    issued = issue_client_certificate(tmp_path / "tls", make_csr(key), "a" * 32)
+    (tmp_path / "node.crt").write_text(issued.cert_pem)
+    context = keystore.client_context(ca_file=tls.ca_file, cert_file=tmp_path / "node.crt")
+    assert context.minimum_version is ssl.TLSVersion.TLSv1_3
+    assert context.verify_mode is ssl.CERT_REQUIRED and context.check_hostname
