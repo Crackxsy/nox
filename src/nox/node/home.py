@@ -12,6 +12,7 @@ import contextlib
 import hashlib
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,24 @@ from pydantic import BaseModel, ConfigDict, Field
 __all__ = ["HOME_ENV", "NodeHome", "NodeIdentity", "default_home"]
 
 HOME_ENV = "NOX_NODE_HOME"
+
+
+def restrict_dir_to_owner(path: Path) -> bool:
+    """Windows: the folder - and, inherited, everything in it - for this user alone. Inherited
+    permissions (other users of the PC) are removed; True when `icacls` succeeded."""
+    user = os.environ.get("USERNAME", "")
+    domain = os.environ.get("USERDOMAIN", "")
+    if not user:
+        return False
+    account = f"{domain}\\{user}" if domain else user
+    icacls = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32" / "icacls.exe"
+    result = subprocess.run(  # noqa: S603 - fixed program, arguments are data
+        [str(icacls), str(path), "/inheritance:r", "/grant:r", f"{account}:(OI)(CI)F"],
+        capture_output=True,
+        check=False,
+        creationflags=0x08000000,  # CREATE_NO_WINDOW
+    )
+    return result.returncode == 0
 
 
 def default_home() -> Path:
@@ -68,9 +87,12 @@ class NodeHome:
     status_file = property(lambda self: self.path / "status.json")
 
     def ensure(self) -> None:
+        created = not self.path.exists()
         self.path.mkdir(parents=True, exist_ok=True)
         if sys.platform != "win32":
             os.chmod(self.path, 0o700)
+        elif created:
+            restrict_dir_to_owner(self.path)
 
     # -- identity -------------------------------------------------------------------------------
 

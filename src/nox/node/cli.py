@@ -11,15 +11,24 @@ import asyncio
 import contextlib
 import signal
 import sqlite3
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from nox.node.agent import NodeAgent
+from nox.node.confirmed import (
+    MOST_RESTRICTIVE,
+    ConfirmationKey,
+    effective_manifest,
+    last_confirmed,
+    manifest_key,
+    record_confirmed,
+)
 from nox.node.enroll import EnrollError, enroll
 from nox.node.gate import NodeGate
 from nox.node.home import NodeHome
 from nox.node.keystore import NodeKeyStore
-from nox.node.manifest import GROUPS, load_manifest, save_manifest
+from nox.node.manifest import GROUPS, NodeManifest, load_manifest, save_manifest
 from nox.node.protocol import PairLink, PairLinkError, escape_controls
 from nox.node.tools import default_tools
 from nox.security.audit import SqliteAuditLog
@@ -41,6 +50,7 @@ class NodeRuntime:
     keystore: NodeKeyStore
     gate: NodeGate
     audit: SqliteAuditLog
+    manifest_key: ConfirmationKey | None = None
 
 
 def secret_store() -> SecretStore | None:
@@ -55,14 +65,36 @@ def open_audit(home: NodeHome) -> SqliteAuditLog:
 
 
 def build(
-    home: NodeHome, *, secrets: SecretStore | None = None, notifier: object = None
+    home: NodeHome,
+    *,
+    secrets: SecretStore | None = None,
+    notifier: object = None,
+    say: Callable[[str], None] | None = None,
 ) -> NodeRuntime:
     home.ensure()
     audit = open_audit(home)
-    manifest = load_manifest(home.manifest_file)
-    gate = NodeGate(default_tools(notifier), manifest, audit)  # type: ignore[arg-type]
+    key = manifest_key(home.path, secrets)
+    manifest = effective_manifest(load_manifest(home.manifest_file), audit, key, say=say)
+    gate = NodeGate(
+        default_tools(notifier),  # type: ignore[arg-type]
+        manifest,
+        audit,
+        protected=home.path,
+    )
     keystore = NodeKeyStore(home.key_file, secrets)
-    return NodeRuntime(home, keystore, gate, audit)
+    return NodeRuntime(home, keystore, gate, audit, key)
+
+
+def manifest_source(runtime: NodeRuntime) -> Callable[[], NodeManifest]:
+    """Re-read `node.yaml` for the running node: narrowing applies at once, widening only as
+    far as it was confirmed in a terminal."""
+
+    def read() -> NodeManifest:
+        return effective_manifest(
+            load_manifest(runtime.home.manifest_file), runtime.audit, runtime.manifest_key
+        )
+
+    return read
 
 
 _REASONS = {
@@ -94,8 +126,29 @@ def pair(text: str, *, home: NodeHome, name: str = "", secrets: SecretStore | No
         identity = asyncio.run(enroll(link, home, keystore, name=name))
     except EnrollError as exc:
         raise NodeCliError(_REASONS.get(exc.reason, f"Pairing failed: {exc.reason}")) from exc
-    load_manifest(home.manifest_file)  # writes the defaults when there are none yet
+    # The defaults, written and recorded as what this device confirmed at pairing.
+    confirm_defaults(home, secrets)
     return f"Paired as {identity.name!r}. Start it with: nox node run"
+
+
+def confirm_defaults(home: NodeHome, secrets: SecretStore | None) -> NodeManifest:
+    """At pairing only the defaults are confirmed - never whatever a `node.yaml` that was there
+    before says. What the file widened is dropped from it."""
+    found = load_manifest(home.manifest_file)
+    defaults = NodeManifest()
+    start = NodeManifest(
+        groups={g: bool(found.groups.get(g) and defaults.groups[g]) for g in GROUPS},
+        max_risk=min(
+            found.max_risk, defaults.max_risk, key=("read", "low", "medium", "high").index
+        ),
+        trust_core_for_high=False,
+    )
+    save_manifest(home.manifest_file, start)
+    if not record_confirmed(
+        open_audit(home), start, manifest_key(home.path, secrets), by="pairing", create=True
+    ):
+        raise NodeCliError("No confirmation key could be stored on this device.")
+    return start
 
 
 def run(runtime: NodeRuntime, *, install_signals: bool = True) -> str:
@@ -106,7 +159,13 @@ def run(runtime: NodeRuntime, *, install_signals: bool = True) -> str:
             for sig in (signal.SIGINT, signal.SIGTERM):
                 with contextlib.suppress(NotImplementedError, RuntimeError):
                     loop.add_signal_handler(sig, stop.set)
-        agent = NodeAgent(runtime.home, runtime.keystore, runtime.gate, runtime.audit)
+        agent = NodeAgent(
+            runtime.home,
+            runtime.keystore,
+            runtime.gate,
+            runtime.audit,
+            manifest_source=manifest_source(runtime),
+        )
         return await agent.run(stop)
 
     outcome = asyncio.run(main())
@@ -151,13 +210,40 @@ def log_lines(home: NodeHome, *, limit: int = 50) -> list[str]:
     return lines
 
 
-def allow(home: NodeHome, group: str, enabled: bool, *, say: Callable[[str], None]) -> None:
+def allow(
+    home: NodeHome,
+    group: str,
+    enabled: bool,
+    *,
+    say: Callable[[str], None],
+    interactive: Callable[[], bool] = lambda: sys.stdin.isatty() and sys.stdout.isatty(),
+    confirm: Callable[[str], bool] = lambda _prompt: False,
+    secrets: SecretStore | None = None,
+) -> None:
+    """Change one group. Widening asks in an interactive terminal for a typed "yes", and the
+    new manifest is the last confirmed one plus this change, so unconfirmed edits of `node.yaml`
+    are never adopted.
+
+    The terminal check keeps the *core* and remote tools from widening a node - nothing they send
+    reaches a terminal. It is NOT a boundary against a local process of the same user, which can
+    open a terminal of its own; a real presence check (Windows Hello / UAC consent, polkit) is a
+    later task (SECURITY.md, residual risk)."""
     if group not in GROUPS:
         raise NodeCliError(f"Unknown group {group!r}. Known: {', '.join(GROUPS)}")
-    manifest = load_manifest(home.manifest_file)
+    audit = open_audit(home)
+    if enabled:
+        if not interactive():
+            raise NodeCliError("Allowing needs an interactive terminal on this device.")
+        prompt = f"Let Nox {GROUPS[group].label_en} on this device?"
+        if not confirm(prompt):
+            raise NodeCliError("Not allowed.")
+    key = manifest_key(home.path, secrets)
+    manifest = last_confirmed(audit, key) or NodeManifest(groups=dict(MOST_RESTRICTIVE.groups))
     manifest.groups[group] = enabled
     save_manifest(home.manifest_file, manifest)
-    audit = open_audit(home)
+    if not record_confirmed(audit, manifest, key, create=enabled):
+        if enabled:
+            raise NodeCliError("No confirmation key could be stored on this device.")
     audit.append(
         actor="local",
         tool="node",
@@ -166,4 +252,4 @@ def allow(home: NodeHome, group: str, enabled: bool, *, say: Callable[[str], Non
         decision="allow",
         result="ok",
     )
-    say(f"{'Allowed' if enabled else 'Denied'}: {GROUPS[group].label_en}. Restart `nox node run`.")
+    say(f"{'Allowed' if enabled else 'Denied'}: {GROUPS[group].label_en}.")

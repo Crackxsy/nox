@@ -45,8 +45,6 @@ __all__ = [
 
 CORE = "core"
 DEVICE_KEY = "device"
-#: `device:<id> ` in front of a permission target (`nox.security.permissions.split_device_target`).
-DEVICE_TARGET_PREFIX = "device:"
 #: Where a refused resolution travels from the scope to the handler, inside the call's payload.
 ROUTE_ERROR_KEY = "_route_error"
 #: How long a node call may take before the core gives up on it.
@@ -132,10 +130,14 @@ def resolve(
     if default:
         if default == CORE and core_has:
             return Resolution(CORE)
-        if default == "origin" and origin is not None:
-            linked = [e for e in online if e.linked_device_id == origin]
+        if default == "origin":
+            # The PC the user is at: its node, online or not - never another one instead.
+            linked = [e for e in entries if origin is not None and e.linked_device_id == origin]
             if len(linked) == 1:
-                return Resolution(linked[0].device_id)
+                return at(linked[0])
+            if side_effects and candidates:
+                # Not linked (or not asked from a browser): where the user is, is unknown.
+                return needs()
         elif default not in (CORE, "origin"):
             entry = _match(entries, default)
             if entry is not None:
@@ -229,9 +231,14 @@ def routed_spec(
         entry = next(e for e in registry.entries() if e.device_id == resolution.device)
         node_risk = _max_risk(risk, entry.tools.get(name, "high"))
         base_target = core.targets(inner(payload)) if core is not None and core.targets else ""
-        # The device is part of the target: the prompt, the audit and a remembered grant name it.
-        target = f"{DEVICE_TARGET_PREFIX}{resolution.device} {base_target or name}"
-        return CallScope(action=action, risk=node_risk, target=target)
+        # The device travels in its own field: the permission request, the audit and a
+        # remembered grant carry it; the target stays what the tool says (shown with the name).
+        return CallScope(
+            action=action,
+            risk=node_risk,
+            target=f"{entry.label}: {base_target or name}",
+            device=resolution.device,
+        )
 
     async def handler(payload: dict[str, Any]) -> dict[str, Any]:
         error = payload.get(ROUTE_ERROR_KEY)

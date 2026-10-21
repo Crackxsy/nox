@@ -20,7 +20,9 @@ jobs:
   python:
     name: Python (ruff, mypy, unit + integration tests)
     runs-on: windows-latest
-    timeout-minutes: 20
+    # The node and network-access integration tests start real cores over real TLS; on the
+    # Windows runner the job needs about 20 minutes now.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 

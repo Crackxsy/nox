@@ -116,12 +116,6 @@ def install(core: Any) -> NodeRuntime:
         max_nodes=cfg.max_nodes,
     )
     runtime = NodeRuntime(pairing=pairing, enabled=bool(cfg.enabled) and lan is not None)
-    _register_requests(core, runtime, lan)
-    if not runtime.enabled or lan is None:
-        return runtime
-
-    registry = NodeRegistry(pairing, NodeRepository(core.db))
-    runtime.registry = registry
 
     async def forget_grants(device_id: str, reason: str) -> None:
         # A removed node keeps no remembered "allow" that a re-paired one could inherit.
@@ -130,6 +124,13 @@ def install(core: Any) -> NodeRuntime:
             engine.revoke_device_grants(device_id, reason=f"node removed: {reason}"[:64])
 
     pairing.on_revoked(forget_grants)
+
+    _register_requests(core, runtime, lan)
+    if not runtime.enabled or lan is None:
+        return runtime
+
+    registry = NodeRegistry(pairing, NodeRepository(core.db))
+    runtime.registry = registry
 
     def tls() -> TlsMaterial | None:
         material: TlsMaterial | None = lan.tls
@@ -151,6 +152,7 @@ def install(core: Any) -> NodeRuntime:
         audit=core.security.audit,
         on_security_kill=security_kill,
         allow_public_clients=cfg.allow_public_clients,
+        kill_engaged=core.security.killswitch.is_engaged,
         on_connected=registry.on_connected,
         on_disconnected=registry.on_disconnected,
         on_tools_changed=registry.on_tools_changed,

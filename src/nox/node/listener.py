@@ -30,6 +30,7 @@ import contextlib
 import http
 import json
 import time
+import weakref
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -60,6 +61,20 @@ MAX_VIOLATIONS = 5
 #: as gone for routing even before its socket closes.
 PING_INTERVAL_S = 1.0
 ALIVE_WINDOW_S = 3.0
+#: TLS handshake budget per connection: a peer that starts one and stalls is dropped then.
+HANDSHAKE_TIMEOUT_S = 5.0
+#: Connections between the upgrade and the node's `initialize`: per node (a newer one
+#: displaces the oldest, so one node - or one address behind a NAT - can never lock out another)
+#: and in total. Before the certificate is known, the handshake timeout bounds a connection.
+MAX_PREAUTH_PER_DEVICE = 2
+MAX_PREAUTH_TOTAL = 16
+#: Pending TCP connections the operating system queues for the listener.
+BACKLOG = 32
+#: A node's `security.kill` always stops Nox when it is not stopped yet. While it already is,
+#: repeats change nothing and are audited at most once per this interval.
+KILL_MIN_INTERVAL_S = 10.0
+#: Blob chunks of a result that never completes are dropped after this long.
+BLOB_TTL_S = 60.0
 #: A node cut off for violations is refused this long, so it cannot flood the audit trail by
 #: reconnecting.
 VIOLATION_COOLDOWN_S = 30.0
@@ -93,6 +108,7 @@ class NodeSession:
     blobs: dict[str, list[bytes]] = field(default_factory=dict)
     complete: set[str] = field(default_factory=set)
     blob_bytes: int = 0
+    blob_started: dict[str, float] = field(default_factory=dict)
 
     @property
     def device_id(self) -> str:
@@ -107,6 +123,7 @@ class NodeSession:
         if call_id not in self.complete:
             return None
         self.complete.discard(call_id)
+        self.blob_started.pop(call_id, None)
         data = b"".join(self.blobs.pop(call_id, []))
         self.blob_bytes -= len(data)
         return data
@@ -132,6 +149,7 @@ class NodeListener:
         on_tools_changed: SessionFn | None = None,
         ping_interval_s: float = PING_INTERVAL_S,
         allow_public_clients: bool = False,
+        kill_engaged: Callable[[], bool] | None = None,
     ) -> None:
         self._pairing = pairing
         self._nodes = nodes
@@ -146,7 +164,16 @@ class NodeListener:
         self._ping_interval_s = ping_interval_s
         self._allow_public = allow_public_clients
         self._server: Server | None = None
-        self._identified: dict[ServerConnection, tuple[DeviceRow, x509.Certificate]] = {}
+        # Weak: a connection whose upgrade failed after the check leaves nothing behind.
+        self._identified: weakref.WeakKeyDictionary[
+            ServerConnection, tuple[DeviceRow, x509.Certificate]
+        ] = weakref.WeakKeyDictionary()
+        #: Connections past the certificate check that have not said hello yet -> (device, since).
+        self._preauth: weakref.WeakKeyDictionary[ServerConnection, tuple[str, float]] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._kill_engaged = kill_engaged
+        self._last_kill: dict[str, float] = {}
         #: device id -> monotonic time until which a node cut off for violations is refused.
         self._cooling: dict[str, float] = {}
         #: Per device: replacing/registering a session and revoking it never interleave.
@@ -197,6 +224,8 @@ class NodeListener:
             ping_interval=None,
             open_timeout=HELLO_TIMEOUT_S,
             server_header=None,
+            ssl_handshake_timeout=HANDSHAKE_TIMEOUT_S,
+            backlog=BACKLOG,
         )
         log.info("node.listener_ready", port=self.port)
 
@@ -252,6 +281,20 @@ class NodeListener:
             return connection.respond(http.HTTPStatus.FORBIDDEN, "forbidden\n")
         if self._cooling.get(device.id, 0.0) > time.monotonic():
             return connection.respond(http.HTTPStatus.TOO_MANY_REQUESTS, "later\n")
+        own = sorted(
+            ((since, conn) for conn, (dev, since) in self._preauth.items() if dev == device.id),
+            key=lambda item: item[0],
+        )
+        while len(own) >= MAX_PREAUTH_PER_DEVICE:
+            _since, oldest = own.pop(0)
+            self._preauth.pop(oldest, None)
+            self._identified.pop(oldest, None)
+            if oldest.transport is not None:
+                oldest.transport.abort()  # the newer attempt of the same node wins
+        if len(self._preauth) >= MAX_PREAUTH_TOTAL:
+            log.warning("node.preauth_full", device_id=device.id)
+            return connection.respond(http.HTTPStatus.SERVICE_UNAVAILABLE, "busy\n")
+        self._preauth[connection] = (device.id, time.monotonic())
         self._identified[connection] = (device, cert)
         return None
 
@@ -264,7 +307,10 @@ class NodeListener:
             return
         device, cert = identified
         serial = f"{cert.serial_number:x}"
-        hello = await self._hello(connection)
+        try:
+            hello = await self._hello(connection)
+        finally:
+            self._preauth.pop(connection, None)
         if hello is None:
             await connection.close(CLOSE_POLICY_VIOLATION, "initialize expected")
             return
@@ -421,9 +467,10 @@ class NodeListener:
             await session.client.notify(p.M_PONG, {"seq": params.seq, "ts": time.time()})
         elif method == p.M_SECURITY_KILL:
             assert isinstance(params, p.SecurityKill)
-            self._append_audit("node.security_kill", session.device_id, "allow", "ok")
-            if self._on_security_kill is not None:
-                self._spawn(self._on_security_kill(session.device_id, params.reason))
+            status = self._kill(session.device_id, params.reason)
+            if msg_id is not None:
+                await session.answer({"jsonrpc": "2.0", "id": msg_id, "result": {"status": status}})
+                return
         elif method == p.M_BLOB:
             assert isinstance(params, p.Blob)
             if not self._take_chunk(session, params):
@@ -432,7 +479,35 @@ class NodeListener:
         if msg_id is not None:
             await session.answer({"jsonrpc": "2.0", "id": msg_id, "result": {}})
 
+    def _kill(self, device_id: str, reason: str) -> str:
+        """A stop from the node. Never suppressed while Nox runs: every one engages the switch
+        and is audited. While Nox is already stopped a repeat changes nothing; it is answered
+        `already_engaged` and audited at most once per `KILL_MIN_INTERVAL_S`, so a node that
+        repeats it cannot flood the audit trail."""
+        now = time.monotonic()
+        if self._kill_engaged is not None and self._kill_engaged():
+            last = self._last_kill.get(device_id)
+            if last is None or now - last >= KILL_MIN_INTERVAL_S:
+                self._last_kill[device_id] = now
+                self._append_audit("node.security_kill", device_id, "allow", "already_engaged")
+            return "already_engaged"
+        self._last_kill[device_id] = now
+        self._append_audit("node.security_kill", device_id, "allow", "ok")
+        if self._on_security_kill is not None:
+            self._spawn(self._on_security_kill(device_id, reason))
+        return "ok"
+
+    @staticmethod
+    def _expire_blobs(session: NodeSession, now: float) -> None:
+        for call_id, started in list(session.blob_started.items()):
+            if now - started > BLOB_TTL_S:
+                session.blob_started.pop(call_id, None)
+                session.complete.discard(call_id)
+                dropped = session.blobs.pop(call_id, [])
+                session.blob_bytes -= sum(len(c) for c in dropped)
+
     def _take_chunk(self, session: NodeSession, blob: p.Blob) -> bool:
+        self._expire_blobs(session, time.monotonic())
         try:
             data = base64.b64decode(blob.data, validate=True)
         except ValueError:
@@ -440,6 +515,7 @@ class NodeListener:
         if blob.call_id not in session.blobs and len(session.blobs) >= MAX_PENDING_BLOBS:
             return False
         chunks = session.blobs.setdefault(blob.call_id, [])
+        session.blob_started.setdefault(blob.call_id, time.monotonic())
         if blob.call_id in session.complete or blob.seq != len(chunks):
             return False
         if session.blob_bytes + len(data) > p.MAX_RESULT_BYTES:

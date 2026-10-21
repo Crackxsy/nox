@@ -54,13 +54,15 @@ and never queues the request. A remembered "allow" for the laptop covers only th
 The file `node.yaml` in the node folder decides, and **only this device can widen it**:
 
 ```text
-nox node allow shell     # let Nox run commands here (once that tool exists)
-nox node deny notify     # no more notices on this device
+nox node allow shell     # let Nox run commands here (once that tool exists); asks "yes?"
+nox node deny notify     # no more notices on this device - at once, also while it runs
 ```
 
 Default: `system` (read system values), `notify` (show notices) and `media` (control music) are
 on; everything else - files, commands, programs, screen, camera, browser, mouse and keyboard - is
-off. The core can switch groups off for a while, never on. `max_risk` lowers what the node accepts;
+off. The core can switch groups off for a while, never on. `allow` works only in an
+interactive terminal with a typed confirmation; editing `node.yaml` by hand can only take
+something away - anything it adds is ignored until you confirm it with `nox node allow`. `max_risk` lowers what the node accepts;
 in this release nothing above "low" runs on a node at all, whatever the core says.
 
 Hard prohibitions (anti-cheat, game input, stream key, ...) are checked on the node itself as well.

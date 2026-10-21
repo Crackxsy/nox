@@ -663,11 +663,18 @@ certificate** of this installation's authority instead of a token. What protects
   certificate must be a node certificate whose serial was issued to that node and is not on the
   denylist, whose pairing is not revoked, and whose key is the paired one. The standard library
   has no verify callback inside the handshake; nothing is read from the peer before this check.
+  A TLS handshake gets 5 s, the HTTP upgrade and the `initialize` 5 s each; after the certificate
+  check at most 2 connections per node wait for their hello (a newer one displaces the oldest, so
+  one node - or one address behind a NAT - never locks out another) and 16 in total. Before the
+  certificate is known only the handshake timeout and the listen backlog bound a connection -
+  a flood from the home network can cost CPU, never access.
 - **Role `node`** never reaches the hub (`HUBLESS_ROLES`, no events). On its listener a node may
   send only `nox.node.protocol.NODE_TO_CORE`; the first message must be `initialize`, models
   forbid unknown fields, a frame is at most 1 MiB and a chunked result 8 MiB. Five refused
-  messages close the connection. A node's `security.kill` always engages the kill switch -
-  stopping is always safe, so a compromised node can at worst stop Nox until "Fortsetzen".
+  messages close the connection. A node's `security.kill` always engages the kill switch while
+  Nox runs - stopping is always safe, so a compromised node can at worst stop Nox until
+  "Fortsetzen" - and is never throttled then; while Nox is already stopped, repeats change
+  nothing, are answered `already_engaged` and audited at most once per 10 s.
 - **Revocation** (`node.unpair`) revokes the pairing and every certificate of the node, sends
   `nox/revoked` and closes the connection in under a second; a node revoked while offline is
   refused on its next handshake.
@@ -684,19 +691,41 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
 - **The gate, before any handler:** hard prohibitions (the core's immutable list, by name and
   glob), known tools only, the tool's capability group enabled in the device's `node.yaml` and not
   narrowed by the core, a risk ceiling of *low* in this release (nothing medium or high runs on a
-  node until signed receipts and the local confirmation exist), strict argument models. The core
-  can only narrow the groups (`nox/policy`); only `nox node allow` on the device widens them.
+  node until signed receipts and the local confirmation exist), strict argument models, and no
+  argument may name the node's own folder (key, certificate, `node.yaml`, confirmation key,
+  audit). The core can only narrow the groups (`nox/policy`).
+- **Widening needs a person at the device:** `nox node allow` only in an interactive terminal
+  and after a typed "yes" - a boundary against the core and remote tools, **not** against a local
+  process of the same user (a real presence check, Windows Hello / UAC consent or polkit, is a
+  later task). The confirmed manifest is recorded in the node's audit trail with an HMAC under a
+  key made at pairing (OS keyring, else `manifest.key` 0600 in the node folder); the MAC covers
+  the entry's place in the chain and a counter kept with the key, so an old confirmation appended
+  again is rejected. Pairing confirms only the defaults, never a `node.yaml` that was there.
+  The node applies `node.yaml` only as far as a valid confirmation reaches; an edit of the file
+  widens nothing, narrowing applies at once (also to a running node). A missing key, a broken
+  chain or a forged confirmation leave the node with system values only until it is confirmed
+  again locally.
 - **Only the core's methods** (`CORE_TO_NODE`) are answered; a node never acts while disconnected
   and queues nothing.
 - **Its own audit trail**: every decision, hash-chained, on the device (`nox node log`); the core
-  cannot read or erase it. `nox/revoked` deletes the key and the certificate.
+  cannot read or erase it. `nox/revoked` deletes the key and the certificate. The chain shows
+  tampering, it does not prevent it: whoever controls the user's account can rewrite the whole
+  file. A notice always starts with "Nox"; Windows PowerShell is started by its absolute path.
+- **Residual risk, stated plainly:** "local" means the logged-in user. Malware running as that
+  user with full user rights can read that user's keyring and files - the node key, the
+  confirmation key - and act as the node towards the core within what the node may do. Nox's
+  controls keep the *core* and the *AI* from widening a node; they do not defend a device whose
+  user account is already compromised.
 
 **Routing on the core** (`nox.node.registry`, `nox.node.router`): a node's tool list is
 filtered (only tools the core routes, never a hard-prohibited name, at most 64) and its reported
 risk can only raise the core's risk, never lower it. The device is resolved once, in the call's
-permission scope; the permission target and the audit say `device:<id> ...`, and a remembered
-grant is bound to that device (`device:<id>|<scope>`; a grant on the core never covers a node and
-one for a node never covers another). Every revocation path - session end, a privacy change, the kill
+permission scope and travels in its own field (`PermissionRequest.device`, `CallScope.device`,
+the audit entry's `device`) - never parsed from the target, which can hold free text such as a
+window title. A remembered grant is bound to that device (`device:<id>|<scope>`, written only from
+that field; a grant on the core never covers a node and one for a node never covers another).
+An `origin` default sends a side effect only to the node linked to the asking browser - offline
+means "offline", never another device - and without a link Nox asks. Every revocation path - session end, a privacy change, the kill
 switch, taint, an MCP server or skill removed - covers device-bound grants like the core's, and
 removing a node revokes all of its grants. Side effects are never guessed onto a device (`needs_device`);
 an offline device fails fast and is never substituted; nothing is queued. Results from a node are

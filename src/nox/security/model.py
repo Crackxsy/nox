@@ -56,6 +56,9 @@ class PermissionRequest(BaseModel):
     #: The call's free text for the taint provenance check (`nox.security.taint`): a search query,
     #: a URL, a shell argv. Never serialised - it is compared, not logged.
     lookup: str = Field(default="", exclude=True, repr=False)
+    #: The node the call runs on (`nox.node.router`), "" for this core. Its own field - never
+    #: read from `target`, which can hold free text (a window title, a purpose).
+    device: str = Field(default="", pattern=r"^(|[0-9a-f]{32})$")
 
 
 class PermissionResult(BaseModel):

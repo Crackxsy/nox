@@ -36,6 +36,8 @@ class CallScope:
     #: What the confirmation dialog and the audit entry name as the call's target; empty means
     #: the tool's own `targets`.
     target: str = ""
+    #: The node the call runs on (`nox.node.router`); "" for this core.
+    device: str = ""
 
 
 Scope = Callable[[dict[str, Any]], CallScope]

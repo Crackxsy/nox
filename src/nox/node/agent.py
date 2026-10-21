@@ -35,7 +35,7 @@ from nox.node.enroll import local_os
 from nox.node.gate import NodeGate
 from nox.node.home import NodeHome, NodeIdentity
 from nox.node.keystore import NodeKeyStore
-from nox.node.manifest import manifest_hash
+from nox.node.manifest import GROUPS, NodeManifest, manifest_hash
 from nox.security.model import AuditLog
 
 log = get_logger(__name__)
@@ -67,7 +67,10 @@ class NodeAgent:
         connector: Connector = connect,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         ping_interval_s: float = PING_INTERVAL_S,
+        manifest_source: Callable[[], NodeManifest] | None = None,
     ) -> None:
+        self._manifest_source = manifest_source
+        self._manifest_mtime: float | None = None
         self._home = home
         self._keystore = keystore
         self._gate = gate
@@ -212,11 +215,35 @@ class NodeAgent:
             pinger.cancel()
             stopper.cancel()
 
+    def reload_manifest(self) -> bool:
+        """Re-read `node.yaml` when it changed; True when what the node offers changed."""
+        if self._manifest_source is None:
+            return False
+        try:
+            mtime = self._home.manifest_file.stat().st_mtime
+        except OSError:
+            return False
+        if mtime == self._manifest_mtime:
+            return False
+        self._manifest_mtime = mtime
+        before = [t.name for t in self._gate.offered()]
+        try:
+            self._gate.set_manifest(self._manifest_source())
+        except ValueError as exc:
+            # A broken file allows nothing rather than everything.
+            log.error("node.manifest_unreadable", error=str(exc)[:200])
+            self._gate.set_manifest(NodeManifest(groups={g: False for g in GROUPS}))
+        return [t.name for t in self._gate.offered()] != before
+
     async def _ping(self, ws: ClientConnection) -> None:
         seq = 0
+        self.reload_manifest()
         while True:
             await asyncio.sleep(self._ping_interval_s)
             seq += 1
+            if self.reload_manifest():
+                with contextlib.suppress(ConnectionClosed):
+                    await ws.send(json.dumps({"jsonrpc": "2.0", "method": p.M_LIST_CHANGED}))
             with contextlib.suppress(ConnectionClosed):
                 await ws.send(
                     json.dumps(

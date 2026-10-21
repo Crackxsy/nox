@@ -347,9 +347,17 @@ async def test_the_core_routes_tool_calls_to_the_right_device(
         assert info.data["result"]["cpu_count"] >= 1
         here = await executor.call("companion", "system.info", {}, mode="companion")
         assert here.ok and here.data is not None and "device" not in here.data  # the core itself
+        # notify.show defaults to the PC the user is at; asked without a browser, Nox asks.
+        unsure = await executor.call(
+            "companion", "notify.show", {"text": "Wäsche aufhängen"}, mode="companion"
+        )
+        assert unsure.data is not None and unsure.data["error"] == "needs_device"
         sent = await asyncio.wait_for(
             executor.call(
-                "companion", "notify.show", {"text": "Wäsche aufhängen"}, mode="companion"
+                "companion",
+                "notify.show",
+                {"text": "Wäsche aufhängen", "device": "Laptop"},
+                mode="companion",
             ),
             30,
         )
@@ -357,8 +365,12 @@ async def test_the_core_routes_tool_calls_to_the_right_device(
         assert shown == [("Nox", "Wäsche aufhängen")]
         core.security.audit.flush()
         entries = core.security.audit_store.entries(limit=500)
-        targets = [e.target for e in entries if e.tool == "notify"]
-        assert f"device:{identity.node_id} notify.show" in targets
+        devices = [
+            core.security.audit_store.details(e.seq).get("device")
+            for e in entries
+            if e.tool == "notify"
+        ]
+        assert identity.node_id in devices
         unknown = await executor.call(
             "companion", "system.info", {"device": "Toaster"}, mode="companion"
         )
@@ -406,3 +418,50 @@ async def test_unpairing_a_node_revokes_its_remembered_grants(
     left = {g.scope for g in engine._grants.active(datetime.now(UTC))}
     assert f"device:{node_id}|session:notify/show" not in left
     assert "session:x/y" in left
+
+
+async def test_removing_a_node_revokes_its_grants_even_with_network_access_off(
+    tmp_path: Path,
+) -> None:
+    """Review N7: the grant clean-up does not depend on the listener running."""
+    from datetime import UTC, datetime, timedelta
+
+    from nox.remote.repo import RemoteRepository
+    from nox.security.model import Risk, TemporaryGrant
+
+    config = lan_config(tmp_path)
+    config = config.model_copy(
+        update={
+            "ipc": config.ipc.model_copy(
+                update={"lan": config.ipc.lan.model_copy(update={"enabled": False})}
+            )
+        }
+    )
+    core = NoxCore(config, voice=False, profiles_dir=PROFILES_DIR)
+    await core.start()
+    try:
+        runtime = _nodes(core)
+        assert not runtime.enabled
+        device = RemoteRepository(core.db).create_device(
+            name="Laptop",
+            channel="node",
+            role="node",
+            sender_id="k" * 64,
+            pairing_code_hash="",
+            paired_at=datetime.now(UTC),
+        )
+        engine = core.security.engine
+        engine.grant_temporary(
+            TemporaryGrant(
+                grant_id="g1",
+                scope=f"device:{device.id}|session:notify/show",
+                max_risk=Risk.LOW,
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                granted_by="user",
+            )
+        )
+        assert await runtime.pairing.revoke(device.id)
+        left = {g.scope for g in engine._grants.active(datetime.now(UTC))}
+        assert f"device:{device.id}|session:notify/show" not in left
+    finally:
+        await core.stop()

@@ -126,6 +126,18 @@ _WINDOWS_TOAST = (
 )
 
 
+def _powershell() -> Path:
+    """Windows PowerShell by absolute path: never a `powershell.exe` that happens to be first on
+    PATH or in the working folder."""
+    system_root = Path(os.environ.get("SystemRoot", "C:\\Windows"))
+    return system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+
+
+def notice_title(title: str) -> str:
+    """A notice always says it comes from Nox - a core cannot make it look like the system's."""
+    return "Nox" if title.strip() in ("", "Nox") else f"Nox: {title}"
+
+
 class PlatformNotifier:
     """Windows toast, freedesktop `notify-send`, macOS Notification Center."""
 
@@ -133,7 +145,7 @@ class PlatformNotifier:
         env = {**os.environ, "NOX_NOTIFY_TITLE": title, "NOX_NOTIFY_TEXT": text}
         kwargs: dict[str, Any] = {"env": env, "stdout": subprocess.DEVNULL}
         if sys.platform == "win32":
-            argv = ["powershell", "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_TOAST]
+            argv = [str(_powershell()), "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_TOAST]
             kwargs["creationflags"] = _CREATE_NO_WINDOW
         elif sys.platform == "darwin":
             script = (
@@ -160,7 +172,7 @@ def default_tools(notifier: Notifier | None = None) -> dict[str, NodeTool]:
 
     async def notify_show(args: BaseModel) -> dict[str, Any]:
         assert isinstance(args, NotifyArgs)
-        await shown.show(args.title, args.text)
+        await shown.show(notice_title(args.title), args.text)
         return {"shown": True}
 
     tools = [
