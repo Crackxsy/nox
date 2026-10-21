@@ -577,7 +577,9 @@ class NodeAgent:
     ) -> str | None:
         """High risk: the person at this device decides (D1). None when they allowed it."""
         if not self._confirmer.available:
-            if self._gate.manifest.trust_core_for_high:
+            # `trust_core_for_high` trusts a confirmation the CORE asked for. A call the core
+            # left to this device was confirmed by nobody yet: refuse it.
+            if self._gate.manifest.trust_core_for_high and not meta.confirm_on_device:
                 self._audit_event("node.confirm", "core", "trusted (no screen)")
                 return None
             return "high_needs_local_confirmation"

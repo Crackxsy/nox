@@ -47,6 +47,10 @@ CORE = "core"
 DEVICE_KEY = "device"
 #: Where a refused resolution travels from the scope to the handler, inside the call's payload.
 ROUTE_ERROR_KEY = "_route_error"
+#: Risk and delegation as decided in the permission scope - computed once, so the handler and the
+#: node act on exactly what the executor decided on (no second look at changing registry state).
+ROUTE_RISK_KEY = "_route_risk"
+ROUTE_DELEGATE_KEY = "_route_delegate"
 #: How long a node call may take before the core gives up on it.
 NODE_CALL_TIMEOUT_S = 30.0
 _CORE_WORDS = frozenset({"core", "dieser core", "this core", "hier", "here"})
@@ -210,7 +214,8 @@ def routed_spec(
     model = _routed_model(base, name)
 
     def inner(payload: dict[str, Any]) -> dict[str, Any]:
-        return {k: v for k, v in payload.items() if k not in (DEVICE_KEY, ROUTE_ERROR_KEY)}
+        hidden = (DEVICE_KEY, ROUTE_ERROR_KEY, ROUTE_RISK_KEY, ROUTE_DELEGATE_KEY)
+        return {k: v for k, v in payload.items() if k not in hidden}
 
     def scope(payload: dict[str, Any]) -> CallScope:
         resolution = resolve(
@@ -238,6 +243,11 @@ def routed_spec(
         entry = next(e for e in registry.entries() if e.device_id == resolution.device)
         node_risk = _max_risk(risk, entry.tools.get(name, "high"))
         base_target = core.targets(inner(payload)) if core is not None and core.targets else ""
+        # Left to the device only when it can ask; otherwise the core asks itself (and the
+        # node still refuses high risk it cannot confirm, unless trusted there).
+        delegate = node_risk is Risk.HIGH and entry.confirmer
+        payload[ROUTE_RISK_KEY] = node_risk.value
+        payload[ROUTE_DELEGATE_KEY] = delegate
         # The device travels in its own field: the permission request, the audit and a
         # remembered grant carry it; the target stays what the tool says (shown with the name).
         return CallScope(
@@ -245,9 +255,7 @@ def routed_spec(
             risk=node_risk,
             target=f"{entry.label}: {base_target or name}",
             device=resolution.device,
-            # Left to the device only when it can ask; otherwise the core asks itself (and the
-            # node still refuses high risk it cannot confirm, unless trusted there).
-            confirm_on_device=node_risk is Risk.HIGH and entry.confirmer,
+            confirm_on_device=delegate,
         )
 
     async def handler(payload: dict[str, Any]) -> dict[str, Any]:
@@ -261,14 +269,18 @@ def routed_spec(
         entry = next((e for e in registry.entries() if e.device_id == device), None)
         if entry is None:
             return {"error": "unknown_device", "tool": name}
-        node_risk = _max_risk(risk, entry.tools.get(name, "high"))
+        # Exactly what the scope decided - the registry may have changed since (a node
+        # reconnected without its dialog, reported another risk): never re-decide here.
+        decided_risk = payload.get(ROUTE_RISK_KEY)
+        if decided_risk not in ("read", "low", "medium", "high"):
+            return {"error": "not_routed", "tool": name}
         return await registry.call(
             entry,
             name,
             inner(payload),
-            risk=node_risk.value,
+            risk=str(decided_risk),
             timeout_s=NODE_CALL_TIMEOUT_S,
-            confirm_on_device=node_risk is Risk.HIGH and entry.confirmer,
+            confirm_on_device=bool(payload.get(ROUTE_DELEGATE_KEY)),
         )
 
     template = core or ToolSpec(

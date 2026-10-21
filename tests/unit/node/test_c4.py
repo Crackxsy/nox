@@ -359,8 +359,10 @@ async def test_nothing_high_ever_runs_without_a_confirmation(
             assert ran == (answer == "allow"), result
             assert confirmer.asked  # the person was asked
         else:
-            assert ran == trusted, result  # headless: only a locally trusted core
-            if not trusted:
+            # Headless: only a core that confirmed itself, and only when trusted locally. A call
+            # the core left to the device was confirmed by nobody - always refused.
+            assert ran == (trusted and not delegated), result
+            if not ran:
                 assert result["_nox"]["refused"] == "high_needs_local_confirmation"
     finally:
         node.stop.set()
@@ -860,3 +862,90 @@ def test_a_stop_on_the_device_holds_even_before_the_node_noticed(tmp_path: Path)
     home.stop_file.write_text("stop")
     assert agent.stopped_reason() == "stopped_on_device"
     assert gate.check("system.info", {}).reason == "stopped_on_device"
+
+
+async def test_the_handler_never_re_decides_what_the_scope_decided() -> None:
+    """Review follow-up (TOCTOU): the node's dialog disappears between the permission scope and
+    the handler - the call still goes out exactly as decided (delegated), so the node refuses it
+    instead of running it unconfirmed."""
+    from nox.node.registry import NodeEntry
+    from nox.node.router import routed_spec
+    from nox.node.tools import NotifyArgs
+    from nox.security.model import Risk
+
+    sent: list[dict[str, Any]] = []
+
+    class Registry:
+        def __init__(self, entry: NodeEntry) -> None:
+            self.entry = entry
+
+        def entries(self) -> list[NodeEntry]:
+            return [self.entry]
+
+        async def call(
+            self,
+            entry: NodeEntry,
+            tool: str,
+            arguments: dict[str, Any],
+            *,
+            risk: str,
+            timeout_s: float,
+            confirm_on_device: bool = False,
+        ) -> dict[str, Any]:
+            sent.append({"risk": risk, "confirm_on_device": confirm_on_device, "args": arguments})
+            return {"ok": True}
+
+    entry = NodeEntry(
+        device_id="a" * 32,
+        name="Laptop",
+        online=True,
+        tools={"notify.show": "high"},
+        confirmer=True,
+    )
+    registry = Registry(entry)
+    spec = routed_spec(
+        name="notify.show",
+        description="t",
+        risk=Risk.LOW,
+        side_effects=True,
+        registry=registry,
+        input_model=NotifyArgs,
+    )  # type: ignore[arg-type]
+    payload = spec.input_model.model_validate({"text": "x"}).model_dump()
+    assert spec.scope is not None
+    scope = spec.scope(payload)
+    assert scope.confirm_on_device is True
+    entry.confirmer = False  # the dialog went away ...
+    entry.tools["notify.show"] = "low"  # ... and the node now claims less risk
+    await spec.handler(payload)
+    assert sent == [
+        {"risk": "high", "confirm_on_device": True, "args": {"title": "Nox", "text": "x"}}
+    ]
+
+
+async def test_a_delegated_call_without_a_dialog_is_refused_even_when_trusted(
+    listener: NodeListener, pairing: NodePairing, tls: TlsMaterial, tmp_path: Path
+) -> None:
+    node = await start_node(
+        listener,
+        pairing,
+        tls,
+        tmp_path,
+        confirmer=Confirmer(available=False),
+        manifest=NodeManifest(trust_core_for_high=True),
+    )
+    try:
+        session = await session_of(listener, node.node_id)
+        result = await call(
+            session,
+            listener.signer,
+            "system.high",
+            risk="high",
+            confirm_on_device=True,  # type: ignore[attr-defined]
+        )
+        assert result["_nox"]["refused"] == "high_needs_local_confirmation" and not node.ran
+        trusted = await call(session, listener.signer, "system.high", risk="high")  # type: ignore[attr-defined]
+        assert "_nox" not in trusted and node.ran == ["high"]  # the core confirmed: trusted
+    finally:
+        node.stop.set()
+        await asyncio.wait_for(node.task, 5)
