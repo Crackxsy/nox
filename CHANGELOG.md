@@ -34,6 +34,13 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
 
 ### Added
+- **Nodes, part 3 (routing):** `system.info` and `notify.show` take an optional `device`
+  ("core" or a device's name); without it Nox uses `devices.defaults` (`core`, `origin`, a name),
+  then the only device that can, and never guesses a side effect onto a device. Offline devices
+  answer honestly and are never substituted, nothing is queued. Permission targets, the audit and
+  remembered grants are bound to the device. Node results are checked and bounded and taint the
+  conversation. Each turn names the devices ("Geräte: ..."). `node.link` ties a node to the
+  browser device on the same PC.
 - **Nodes, part 2 (the node):** `nox node pair <link>` pins the core's authority from the link
   before it sends the code, generates the key on the device (encrypted with a passphrase in the
   OS keyring where there is one) and stores the 30-day certificate; `nox node run` keeps the

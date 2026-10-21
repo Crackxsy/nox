@@ -112,6 +112,12 @@ class CapabilitiesRuntime:
 
 def install(core: CoreLike) -> ExtensionRuntime:
     def probe(tool_name: str) -> tuple[CapabilityState, str] | None:
+        # `nox.node`: a tool only nodes have is not offered while no node with it is online.
+        node_probe = getattr(core, "node_probe", None)
+        if node_probe is not None:
+            found = node_probe(tool_name)
+            if found is not None:
+                return found  # type: ignore[no-any-return]
         if tool_name.startswith("computer.") and not core.config.desktop.computer_use.enabled:
             # Not offered while off: the answer is the setting, not a dialog that cannot succeed.
             return CapabilityState.UNAVAILABLE, "off; the user can switch it on in the settings"

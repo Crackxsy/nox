@@ -30,6 +30,27 @@ lässt Nox Dinge *auf diesem Gerät* tun - und nur die, die du dort erlaubt hast
 
 `nox node status` zeigt, ob er gekoppelt und verbunden ist und was Nox hier darf.
 
+Namen: nur `A-Z a-z 0-9 ä ö ü ß`, Leerzeichen und `- _ .`, bis 40 Zeichen. Ein Name, den Nox
+schon hat (auch als „LAPTOP“ oder „Kueche“ für „Küche“), wird abgelehnt - dann mit `--name` einen
+anderen wählen. Nox zeigt ein Gerät immer mit einer kurzen Kennung: „Laptop · 3f2a“.
+
+## Welches Gerät macht es?
+
+Sag es: „Wie viel Akku hat mein Laptop?“ fragt `system.info` auf dem Laptop, „Zeig mir auf dem
+Laptop einen Hinweis: ...“ zeigt ihn dort. In jedem Gespräch steht für das Modell, welche Geräte
+es gibt und ob sie erreichbar sind („Geräte: dieser Core (core), Arbeits-PC (online), Laptop
+(offline seit 14:02)“). Sagst du nichts:
+
+1. gilt der Standard aus `devices.defaults` (`core`, `origin` - der PC, an dessen Dashboard du
+   gerade bist, sobald ein Node mit `node.link` mit ihm verbunden ist - oder ein Gerätename),
+2. sonst das einzige Gerät, das es kann,
+3. sonst darf eine Frage, die nur liest, auf dem Core bleiben; etwas, das etwas verändert, wird
+   **nie geraten**: Nox fragt, welches Gerät du meinst.
+
+Ein Gerät, das aus ist, bekommt ein ehrliches „offline seit 14:02“ - Nox nimmt nie ein anderes
+Gerät und hebt nichts für später auf. Ein gemerktes „Erlauben“ für den Laptop gilt nur für den
+Laptop.
+
 ## Was Nox auf diesem Gerät darf
 
 Das entscheidet die Datei `node.yaml` im Node-Ordner, und **nur dieses Gerät kann sie erweitern**:

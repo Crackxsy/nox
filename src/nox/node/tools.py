@@ -32,7 +32,7 @@ __all__ = ["NodeTool", "Notifier", "PlatformNotifier", "default_tools"]
 _CREATE_NO_WINDOW = 0x08000000
 
 
-class _NoArgs(BaseModel):
+class NoArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
@@ -169,7 +169,7 @@ def default_tools(notifier: Notifier | None = None) -> dict[str, NodeTool]:
             "system",
             "read",
             "System values of this device: OS, CPU, memory, disk, battery, temperature, uptime.",
-            _NoArgs,
+            NoArgs,
             system_info,
         ),
         NodeTool(

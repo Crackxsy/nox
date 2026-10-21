@@ -29,6 +29,26 @@ only the things you allowed there.
 
 `nox node status` shows whether it is paired and connected and what Nox may do here.
 
+Names: only `A-Z a-z 0-9 ä ö ü ß`, space and `- _ .`, up to 40 characters. A name Nox already
+has (also as "LAPTOP" or "Kueche" for "Küche") is refused - pick another with `--name`. Nox always
+shows a device with a short id: "Laptop · 3f2a".
+
+## Which device does it?
+
+Say it: "Wie viel Akku hat mein Laptop?" runs `system.info` on the laptop, "Zeig mir auf dem
+Laptop einen Hinweis: ..." shows it there. Every turn tells the model which devices exist and
+whether they are online ("Geräte: dieser Core (core), Arbeits-PC (online), Laptop (offline seit
+14:02)"). When you do not say:
+
+1. the default in `devices.defaults` (`core`, `origin` - the PC whose dashboard you are using,
+   once a node is linked to it with `node.link` - or a device name),
+2. otherwise the only device that can do it,
+3. otherwise a question that only reads may stay on the core; one that changes something is
+   **never guessed**: Nox asks which device you mean.
+
+An offline device gets an honest "offline since 14:02" - Nox never uses another device instead
+and never queues the request. A remembered "allow" for the laptop covers only the laptop.
+
 ## What Nox may do on this device
 
 The file `node.yaml` in the node folder decides, and **only this device can widen it**:

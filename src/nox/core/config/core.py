@@ -138,6 +138,31 @@ class LanConfig(StrictSection):
     max_nodes: int = Field(default=10, ge=1, le=50)
 
 
+class DevicesConfig(StrictSection):
+    """Which device a routable tool runs on when the user did not say (`nox.node.router`).
+
+    Per tool: `core`, `origin` (the node linked to the browser device the request came from) or a
+    node's name. A side effect is never guessed onto a device beyond this.
+    """
+
+    defaults: dict[str, str] = Field(
+        default_factory=lambda: {
+            "screen.capture": "origin",
+            "media.control": "origin",
+            "notify.show": "origin",
+            "shell.run": "core",
+        }
+    )
+
+    @field_validator("defaults")
+    @classmethod
+    def _bounded(cls, value: dict[str, str]) -> dict[str, str]:
+        for tool, device in value.items():
+            if not tool or len(tool) > 96 or not device or len(device) > 64:
+                raise ValueError(f"devices.defaults: {tool!r} -> {device!r} is not a valid entry")
+        return value
+
+
 class IpcConfig(StrictSection):
     host: str = "127.0.0.1"
     port: int = Field(default=47800, ge=1024, le=65535)

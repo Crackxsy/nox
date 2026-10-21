@@ -57,6 +57,7 @@ DEVICE_SURFACE = frozenset(
         "lan.status",
         "lan.unpair",
         "memory.profile.list",
+        "node.link",
         "node.list",
         "node.pair.start",
         "node.unpair",

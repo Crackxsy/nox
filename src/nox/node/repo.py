@@ -78,6 +78,10 @@ class NodeRepository:
             (version, manifest_hash, device_id),
         )
 
+    def rename(self, device_id: str, name: str) -> None:
+        """The pairing row's name, made plain and unique (`nox.node.names`)."""
+        self._db.execute("UPDATE paired_devices SET name = ? WHERE id = ?", (name, device_id))
+
     def set_linked_device(self, device_id: str, linked_device_id: str | None) -> None:
         self._db.execute(
             "UPDATE nodes SET linked_device_id = ? WHERE device_id = ?",
