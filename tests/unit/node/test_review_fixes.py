@@ -490,7 +490,9 @@ async def test_a_notice_always_says_nox_and_uses_the_systems_powershell(
     monkeypatch.setattr(node_tools.sys, "platform", "win32")
     monkeypatch.setattr(node_tools.asyncio, "create_subprocess_exec", fake_exec)
     await node_tools.PlatformNotifier().show("Nox", "z")
-    program = Path(seen[0][0])
+    from pathlib import PureWindowsPath
+
+    program = PureWindowsPath(seen[0][0])  # a Windows path, whatever the test runs on
     assert program.is_absolute() and program.name.lower() == "powershell.exe"
     assert "system32" in str(program).lower()
 
@@ -569,3 +571,53 @@ def test_a_link_or_short_name_into_the_node_folder_is_still_inside(tmp_path: Pat
         if ctypes.windll.kernel32.GetShortPathNameW(str(secret), buffer, 1024):  # type: ignore[attr-defined]
             assert inside(buffer.value, home.path)
     assert not inside(tmp_path / "elsewhere", home.path)
+
+
+def test_a_confirmation_with_the_right_counter_but_a_made_up_mac_is_rejected(
+    tmp_path: Path,
+) -> None:
+    import json as _json
+
+    from nox.node import cli as node_cli
+    from nox.node.confirmed import CONFIRM_ACTION, manifest_key
+    from nox.node.manifest import GROUPS, NodeManifest, save_manifest
+
+    home = _home(tmp_path)
+    loaded = manifest_key(home.path, None).load()
+    assert loaded is not None
+    everything = NodeManifest(groups={g: True for g in GROUPS})
+    save_manifest(home.manifest_file, everything)
+    node_cli.open_audit(home).append(
+        actor="local",
+        tool="node",
+        action=CONFIRM_ACTION,
+        target="",
+        decision="allow",
+        result="ok",
+        details={
+            "manifest": _json.dumps(everything.model_dump(), sort_keys=True),
+            "counter": str(loaded[1]),  # the current counter - only the MAC is wrong
+            "mac": "1" * 64,
+        },
+    )
+    assert _effective(home).enabled() == {"system"}
+
+
+def test_an_older_copy_of_the_audit_trail_restored_is_rejected(tmp_path: Path) -> None:
+    """The whole file swapped for an older copy: its last confirmation is genuine and in place,
+    but its counter is behind the one kept with the key."""
+    import shutil
+
+    from nox.node import cli as node_cli
+    from nox.node.manifest import load_manifest, save_manifest
+
+    home = _home(tmp_path)
+    _yes(home, "shell")
+    shutil.copy(home.audit_file, tmp_path / "audit-old.db")
+    node_cli.allow(home, "shell", False, say=lambda _t: None)
+    shutil.copy(tmp_path / "audit-old.db", home.audit_file)
+    manifest = load_manifest(home.manifest_file)
+    manifest.groups["shell"] = True
+    save_manifest(home.manifest_file, manifest)
+    assert node_cli.open_audit(home).verify_chain()  # a consistent chain ...
+    assert _effective(home).enabled() == {"system"}  # ... but not the current confirmation
