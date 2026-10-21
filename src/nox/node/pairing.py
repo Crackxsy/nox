@@ -33,6 +33,7 @@ from nox.lan.tls import (
     node_id_of,
     spki_sha256,
 )
+from nox.node.names import NameRejectedError, household_name
 from nox.node.protocol import NodePairRequest
 from nox.node.repo import NodeRepository
 from nox.remote.models import DeviceRow, PairingResult, PairingStart
@@ -101,12 +102,27 @@ class NodePairing:
         except CsrRefusedError as exc:
             log.warning("node.pair_csr_refused", reason=str(exc))
             return NodeRedeemed(PairingResult(ok=False, reason="bad_csr"))
+        if request.name.strip() and self._code_valid(request.code):
+            # A name typed on the new device that cannot be used costs no code either. Only
+            # checked behind a valid code: without one, every request gets the same refusal, so
+            # nobody can probe which names the household has.
+            try:
+                household_name(request.name, self._taken(), strict=True)
+            except NameRejectedError as exc:
+                log.warning("node.pair_name_refused", reason=exc.reason)
+                return NodeRedeemed(PairingResult(ok=False, reason=exc.reason))
         result = await self.pairing.redeem(
             request.code, sender_id=spki, name=request.name, fallback_name=request.os.title()
         )
         if not result.ok:
             return NodeRedeemed(result)
         device_id = result.device_id
+        # The name was typed on the new device: plain, bounded, never reserved, never another
+        # device's name or id (`nox.node.names`).
+        name = household_name(result.name, self._taken(but=device_id), fallback="Gerät")
+        if name != result.name:
+            self._nodes.rename(device_id, name)
+            result = result.model_copy(update={"name": name})
         try:
             issued = await asyncio.to_thread(
                 issue_client_certificate, self._tls_dir, request.csr, device_id
@@ -127,6 +143,18 @@ class NodePairing:
             await self.pairing.revoke(device_id, reason="issue_failed")
             return NodeRedeemed(PairingResult(ok=False, reason="issue_failed"))
         return NodeRedeemed(result, issued)
+
+    def _code_valid(self, code: str) -> bool:
+        """Whether `code` is a pending, unexpired node code - looked at, not spent."""
+        row = self._repo.find_pairing(code.strip().upper(), channel=CHANNEL)
+        if row is None or row["redeemed_at"] is not None:
+            return False
+        return datetime.fromisoformat(str(row["expires_at"])) > self._clock()
+
+    def _taken(self, *, but: str = "") -> list[str]:
+        """Every name and id a new device's name must not look like."""
+        others = [d for d in self.nodes() if not d.revoked and d.id != but]
+        return [n for d in others for n in (d.name, d.id)]
 
     def identify(self, cert: x509.Certificate) -> DeviceRow | None:
         """The paired node this (already chain-verified) certificate belongs to, or None."""

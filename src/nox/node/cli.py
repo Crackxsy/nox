@@ -75,6 +75,10 @@ _REASONS = {
     "unknown_code": "Nox does not know this code.",
     "max_devices": "Nox has as many nodes as it accepts.",
     "rate_limited": "Too many attempts. Wait a minute.",
+    "name_taken": "Name ähnelt einem vorhandenen Gerät - the name looks like a device Nox already "
+    "has. Choose another one with --name.",
+    "invalid_characters": "Bitte nur Buchstaben, Ziffern, Leerzeichen und - _ . "
+    "(letters A-Z, ä ö ü ß, digits, space, - _ .). Choose another name with --name.",
     "not_nox": "The device at that address does not answer like Nox.",
     "key_not_protected": "The key file could not be made readable by this user only.",
 }

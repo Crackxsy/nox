@@ -292,3 +292,91 @@ async def test_a_node_enrolls_runs_and_serves_the_core(core: NoxCore, tmp_path: 
     finally:
         stop.set()
         await asyncio.wait_for(task, 5)
+
+
+async def test_the_core_routes_tool_calls_to_the_right_device(
+    core: NoxCore, tmp_path: Path
+) -> None:
+    """C3 end to end: `device` resolves to the paired laptop, the permission target and the audit
+    name it, an unknown device is an honest error, and an offline one is never substituted."""
+    from nox.node.agent import NodeAgent
+    from nox.node.enroll import enroll
+    from nox.node.gate import NodeGate
+    from nox.node.home import NodeHome
+    from nox.node.keystore import NodeKeyStore
+    from nox.node.manifest import NodeManifest
+    from nox.node.tools import default_tools
+
+    start = await _local(core, "dashboard", "node.pair.start", {"name": "Laptop"})
+    printed = PairLink.parse(start["link"])
+    link = PairLink.make(
+        host="127.0.0.1",
+        port=_lan(core).port,
+        code=printed.code,
+        ca_fingerprint=printed.ca_fingerprint,
+    )
+    home = NodeHome(tmp_path / "laptop")
+    keystore = NodeKeyStore(home.key_file, None)
+    identity = await enroll(link, home, keystore, name="Laptop")
+    shown: list[tuple[str, str]] = []
+
+    class Notifier:
+        async def show(self, title: str, text: str) -> None:
+            shown.append((title, text))
+
+    agent = NodeAgent(
+        home, keystore, NodeGate(default_tools(Notifier()), NodeManifest(), None), None
+    )
+    stop = asyncio.Event()
+    task = asyncio.create_task(agent.run(stop))
+    registry = _nodes(core).registry
+    assert registry is not None
+    try:
+        for _ in range(250):
+            if registry.any_online_with("notify.show"):
+                break
+            await asyncio.sleep(0.02)
+        assert registry.any_online_with("notify.show")
+        assert f"Laptop · {identity.node_id[:4]} (online)" in registry.prompt_line()
+        executor = core.tool_executor
+        info = await executor.call(
+            "companion", "system.info", {"device": "laptop"}, mode="companion"
+        )
+        assert info.ok and info.data is not None
+        assert info.data["device"] == f"Laptop · {identity.node_id[:4]}"
+        assert info.data["result"]["cpu_count"] >= 1
+        here = await executor.call("companion", "system.info", {}, mode="companion")
+        assert here.ok and here.data is not None and "device" not in here.data  # the core itself
+        sent = await asyncio.wait_for(
+            executor.call(
+                "companion", "notify.show", {"text": "Wäsche aufhängen"}, mode="companion"
+            ),
+            30,
+        )
+        assert sent.ok, sent
+        assert shown == [("Nox", "Wäsche aufhängen")]
+        core.security.audit.flush()
+        entries = core.security.audit_store.entries(limit=500)
+        targets = [e.target for e in entries if e.tool == "notify"]
+        assert f"device:{identity.node_id} notify.show" in targets
+        unknown = await executor.call(
+            "companion", "system.info", {"device": "Toaster"}, mode="companion"
+        )
+        assert unknown.data is not None and unknown.data["error"] == "unknown_device"
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, 5)
+    for _ in range(250):
+        if not registry.any_online_with("notify.show"):
+            break
+        await asyncio.sleep(0.02)
+    offline = await core.tool_executor.call(
+        "companion", "system.info", {"device": "Laptop"}, mode="companion"
+    )
+    assert offline.data is not None and offline.data["error"] == "device_offline"
+    nobody = await core.tool_executor.call(
+        "companion", "notify.show", {"text": "x"}, mode="companion"
+    )
+    assert nobody.data is not None and nobody.data["error"] == "no_device"
+    assert shown == [("Nox", "Wäsche aufhängen")]  # nothing queued, nothing sent elsewhere
+    assert core.node_probe("notify.show") is not None  # not offered while no node has it

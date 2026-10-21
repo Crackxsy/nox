@@ -21,7 +21,7 @@ def _request(code: str, csr: str | None = None) -> NodePairRequest:
     return NodePairRequest(
         code=code,
         csr=csr or make_csr(make_key()),
-        name="Arbeits-PC",
+        name="",
         os="windows",
         arch="AMD64",
         version="0.7.0",

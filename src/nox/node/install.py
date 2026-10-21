@@ -29,11 +29,17 @@ from nox.ipc.roles import UI_ROLES
 from nox.lan.install import authorize_admin, qr_data_uri
 from nox.lan.tls import TlsMaterial
 from nox.node.listener import NodeListener
+from nox.node.names import label
 from nox.node.pairing import NodePairing
 from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink
+from nox.node.registry import NodeRegistry
 from nox.node.repo import NodeRepository
+from nox.node.router import install_routes, routed_spec
+from nox.node.tools import NoArgs, NotifyArgs, system_info
 from nox.remote.models import DeviceRow
 from nox.remote.repo import RemoteRepository
+from nox.security.model import Risk
+from nox.tools.registry import ToolSpec
 
 log = get_logger(__name__)
 
@@ -59,8 +65,20 @@ class EmptyRequest(BaseModel):
     pass
 
 
+class LinkRequest(BaseModel):
+    node_id: str = Field(min_length=1, max_length=64)
+    device_id: str | None = Field(default=None, max_length=64)
+    pin: str | None = Field(default=None, max_length=128)
+
+
 #: Redemption reasons -> HTTP status of `POST /api/node/pair`.
-_STATUS = {"bad_csr": 400, "max_devices": 409, "issue_failed": 503}
+_STATUS = {
+    "bad_csr": 400,
+    "invalid_characters": 400,
+    "name_taken": 409,
+    "max_devices": 409,
+    "issue_failed": 503,
+}
 
 
 @dataclass
@@ -68,6 +86,7 @@ class NodeRuntime:
     pairing: NodePairing
     enabled: bool
     listener: NodeListener | None = None
+    registry: NodeRegistry | None = None
     error: str = ""
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
 
@@ -101,6 +120,9 @@ def install(core: Any) -> NodeRuntime:
     if not runtime.enabled or lan is None:
         return runtime
 
+    registry = NodeRegistry(pairing, NodeRepository(core.db))
+    runtime.registry = registry
+
     def tls() -> TlsMaterial | None:
         material: TlsMaterial | None = lan.tls
         return material
@@ -121,8 +143,12 @@ def install(core: Any) -> NodeRuntime:
         audit=core.security.audit,
         on_security_kill=security_kill,
         allow_public_clients=cfg.allow_public_clients,
+        on_connected=registry.on_connected,
+        on_disconnected=registry.on_disconnected,
+        on_tools_changed=registry.on_tools_changed,
     )
     runtime.listener = listener
+    _install_routes(core, registry)
 
     async def redeem(body: NodePairRequest) -> tuple[int, dict[str, Any]]:
         if not listener.running:
@@ -176,9 +202,80 @@ def _keep(runtime: NodeRuntime, coro: Any, name: str) -> None:
     task.add_done_callback(runtime.tasks.discard)
 
 
+def _install_routes(core: Any, registry: NodeRegistry) -> None:
+    """`system.info` (the core has it too) and `notify.show` (nodes only) become routable; the
+    capability report hides a node-only tool while no node offers it, and every turn's context
+    names the devices."""
+    defaults = lambda: core.config.devices.defaults  # noqa: E731 - read per call
+    specs = [
+        routed_spec(
+            name="system.info",
+            description="System values of a device: OS, CPU, memory, disk, battery, "
+            "temperature, uptime. On this core or on a paired PC (`device`).",
+            risk=Risk.READ,
+            side_effects=False,
+            registry=registry,
+            core=core_system_info_spec(),
+            defaults=defaults,
+        ),
+        routed_spec(
+            name="notify.show",
+            description="Show a notification on a paired PC or laptop (`device`).",
+            risk=Risk.LOW,
+            side_effects=True,
+            registry=registry,
+            input_model=NotifyArgs,
+            defaults=defaults,
+        ),
+    ]
+    install_routes(core.tool_registry, specs)
+    node_only = {spec.name for spec in specs} - {"system.info"}
+
+    def probe(tool_name: str) -> tuple[Any, str] | None:
+        if tool_name in node_only and not registry.any_online_with(tool_name):
+            from nox.capabilities.model import CapabilityState  # noqa: PLC0415
+
+            return CapabilityState.UNAVAILABLE, "no paired device with this is online"
+        return None
+
+    core.node_probe = probe
+    orchestrator = getattr(core, "orchestrator", None)
+    if orchestrator is not None:
+        base = orchestrator.facts
+
+        def facts() -> str:
+            text = base() if base is not None else ""
+            line = registry.prompt_line()
+            return f"{text}\n{line}" if text and line else (text or line)
+
+        orchestrator.facts = facts
+
+
+def core_system_info_spec() -> ToolSpec:
+    async def handler(_payload: dict[str, Any]) -> dict[str, Any]:
+        return await system_info(NoArgs())
+
+    return ToolSpec(
+        name="system.info",
+        description="System values of this machine.",
+        input_model=NoArgs,
+        risk=Risk.READ,
+        handler=handler,
+        side_effects=False,
+    )
+
+
 def _node_json(device: DeviceRow, runtime: NodeRuntime) -> dict[str, Any]:
     session = runtime.listener.sessions.get(device.id) if runtime.listener else None
+    entry = (
+        next((e for e in runtime.registry.entries() if e.device_id == device.id), None)
+        if runtime.registry is not None
+        else None
+    )
     return {
+        "label": label(device.name, device.id),
+        "tools": sorted(entry.tools) if entry is not None and entry.online else [],
+        "linked_device_id": entry.linked_device_id if entry is not None else None,
         "id": device.id,
         "name": device.name,
         "paired_at": device.paired_at.isoformat(),
@@ -256,3 +353,19 @@ def _register_requests(core: Any, runtime: NodeRuntime, lan: Any) -> None:
     reg("node.pair.start", PairStartRequest, h_pair_start, roles=UI_ROLES)
     reg("node.list", EmptyRequest, h_list, roles=UI_ROLES)
     reg("node.unpair", UnpairRequest, h_unpair, roles=UI_ROLES)
+
+    async def h_link(ctx: RequestContext, p: LinkRequest) -> dict[str, Any]:
+        """Which browser device sits on this node's machine (for `origin` routing). Changing it
+        decides where a request from that browser lands, so it is administration: the PIN from a
+        paired device, as for pairing."""
+        if pairing.get(p.node_id) is None:
+            raise IpcError(ERR_NOT_FOUND, "no such node")
+        if p.device_id is not None:
+            browser = core.lan_runtime.devices.get(p.device_id) if lan is not None else None
+            if browser is None or browser.revoked:
+                raise IpcError(ERR_NOT_FOUND, "no such paired device")
+        await authorize_admin(core, ctx, p.pin, "node.link", local_needs_pin=True)
+        await asyncio.to_thread(NodeRepository(core.db).set_linked_device, p.node_id, p.device_id)
+        return {"ok": True, "node_id": p.node_id, "device_id": p.device_id}
+
+    reg("node.link", LinkRequest, h_link, roles=UI_ROLES)

@@ -691,6 +691,22 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
 - **Its own audit trail**: every decision, hash-chained, on the device (`nox node log`); the core
   cannot read or erase it. `nox/revoked` deletes the key and the certificate.
 
+**Routing on the core** (`nox.node.registry`, `nox.node.router`): a node's tool list is
+filtered (only tools the core routes, never a hard-prohibited name, at most 64) and its reported
+risk can only raise the core's risk, never lower it. The device is resolved once, in the call's
+permission scope; the permission target and the audit say `device:<id> ...`, and a remembered
+grant is bound to that device (`device:<id>|<scope>`; a grant on the core never covers a node and
+one for a node never covers another). Side effects are never guessed onto a device (`needs_device`);
+an offline device fails fast and is never substituted; nothing is queued. Results from a node are
+untrusted: schema-checked, text only, bounded with a truncation marker, malformed answers become an
+error, and the conversation is tainted. Device names are typed on the device, so they are
+untrusted too: after NFKC only `A-Z a-z 0-9 ä ö ü Ä Ö Ü ß`, space and `- _ .` are allowed (no
+look-alikes from other scripts, no control or bidi characters), at most 40, never a reserved word
+such as "core" or "all", never shaped like a node id, and unique after case and umlaut folding.
+A typed name that breaks a rule is refused before the code is spent - and only checked behind a
+valid code, so nobody without one can probe which names exist. The model and the dashboard
+always see the name with a short id the device cannot choose ("Laptop · 3f2a").
+
 Still to come in wave C: signed core receipts, the local confirmation for high risk, the node's
 own sandbox and budgets, and the kill switch reaching every node (with a dead-man timer).
 Negative tests: `tests/unit/node/` (a deliberately permissive core in `test_agent.py`),

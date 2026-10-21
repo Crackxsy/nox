@@ -1,0 +1,251 @@
+"""`NodeRegistry`: which nodes are online on the core, what each one offers, and the one call path.
+
+Fed by the node listener (`on_connected`, `on_disconnected`, `on_tools_changed`). A node's tool
+list is the node's word, so it is filtered before anything else sees it: only names Nox itself
+routes (`ROUTABLE`), never a hard-prohibited name, never a name with the wire separator, at most
+`MAX_TOOLS`. The risk a node reports can only raise the core's view of a tool, never lower it.
+
+Results from a node are untrusted data: they are schema-checked here (`clean_result`), bounded,
+and the tool loop marks the conversation tainted like any other untrusted result.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+import uuid
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
+
+from nox.core.logging import get_logger
+from nox.mcp.client import McpClientError
+from nox.node.listener import NodeSession
+from nox.node.names import display_name, label
+from nox.node.pairing import NodePairing
+from nox.node.repo import NodeRepository
+from nox.security.prohibitions import matching_hard_prohibition
+
+log = get_logger(__name__)
+
+__all__ = [
+    "MAX_RESULT_CHARS",
+    "NodeEntry",
+    "NodeRegistry",
+    "ROUTABLE",
+    "clean_result",
+    "display_name",
+]
+
+#: Tools the core routes to nodes in this release. A node offering anything else is ignored.
+ROUTABLE: frozenset[str] = frozenset({"system.info", "notify.show"})
+MAX_TOOLS = 64
+#: What a node's result may put in front of the model, at most.
+MAX_RESULT_CHARS = 16_000
+RISKS = ("read", "low", "medium", "high", "critical")
+#: An incompatible (outdated) node offers only this (spec C §1.8).
+OUTDATED_TOOLS: frozenset[str] = frozenset({"system.info"})
+
+
+@dataclass
+class NodeEntry:
+    device_id: str
+    name: str
+    online: bool = False
+    compatible: bool = True
+    #: tool name -> the risk the node reports for it
+    tools: dict[str, str] = field(default_factory=dict)
+    last_seen: datetime | None = None
+    linked_device_id: str | None = None
+    session: NodeSession | None = None
+
+    @property
+    def label(self) -> str:
+        """What the model sees: the plain name and a short id the device cannot choose."""
+        return label(self.name, self.device_id)
+
+    def offers(self, tool: str) -> bool:
+        if not self.online or tool not in self.tools:
+            return False
+        return self.compatible or tool in OUTDATED_TOOLS
+
+
+def clean_result(raw: Any, *, device: str) -> dict[str, Any]:
+    """A node's `tools/call` answer, as data the model may see - or a plain error. Never the raw
+    answer: a node is not trusted to shape what reaches the model."""
+    if not isinstance(raw, dict):
+        return {"error": "malformed_result", "device": device}
+    texts: list[str] = []
+    content = raw.get("content")
+    if isinstance(content, list):
+        texts = [
+            str(item["text"])
+            for item in content[:16]
+            if isinstance(item, dict)
+            and item.get("type") == "text"
+            and isinstance(item.get("text"), str)
+        ]
+    elif content is not None:
+        return {"error": "malformed_result", "device": device}
+    if raw.get("isError") is True:
+        nox = raw.get("_nox")
+        refused = nox.get("refused") if isinstance(nox, dict) else None
+        if isinstance(refused, str):
+            return {"error": "refused_on_device", "reason": refused[:64], "device": device}
+        return {"error": "failed_on_device", "detail": " ".join(texts)[:500], "device": device}
+    out: dict[str, Any] = {"device": device}
+    structured = raw.get("structuredContent")
+    if isinstance(structured, dict):
+        encoded = json.dumps(structured, ensure_ascii=False)
+        if len(encoded) <= MAX_RESULT_CHARS:
+            out["result"] = structured
+            return out
+        texts = [encoded]
+    elif structured is not None:
+        return {"error": "malformed_result", "device": device}
+    text = "\n".join(texts)
+    if len(text) > MAX_RESULT_CHARS:
+        text = text[:MAX_RESULT_CHARS] + " [... truncated by Nox]"
+    out["text"] = text
+    return out
+
+
+class NodeRegistry:
+    def __init__(
+        self,
+        pairing: NodePairing,
+        nodes: NodeRepository,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._pairing = pairing
+        self._nodes = nodes
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._entries: dict[str, NodeEntry] = {}
+
+    # -- listener hooks ----------------------------------------------------------------------------
+
+    async def on_connected(self, session: NodeSession) -> None:
+        entry = self._entry(session.device_id, session.device.name)
+        entry.session, entry.online, entry.compatible = session, True, session.compatible
+        entry.last_seen = self._clock()
+        await self.refresh(session)
+
+    async def on_disconnected(self, session: NodeSession) -> None:
+        entry = self._entries.get(session.device_id)
+        if entry is not None and entry.session is session:
+            entry.online, entry.session = False, None
+            entry.last_seen = self._clock()
+
+    async def on_tools_changed(self, session: NodeSession) -> None:
+        await self.refresh(session)
+
+    async def refresh(self, session: NodeSession) -> None:
+        entry = self._entries.get(session.device_id)
+        if entry is None or entry.session is not session:
+            return
+        try:
+            listed = await session.client.request("tools/list", {}, timeout_s=5)
+        except McpClientError as exc:
+            log.warning("node.tools_list_failed", device_id=session.device_id, error=str(exc))
+            entry.tools = {}
+            return
+        entry.tools = self._accept_tools(listed.get("tools"))
+        log.info("node.tools", device_id=session.device_id, tools=sorted(entry.tools))
+
+    @staticmethod
+    def _accept_tools(raw: Any) -> dict[str, str]:
+        accepted: dict[str, str] = {}
+        for item in raw if isinstance(raw, list) else []:
+            if len(accepted) >= MAX_TOOLS:
+                break
+            if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+                continue
+            name = item["name"]
+            if name not in ROUTABLE or matching_hard_prohibition(name) is not None:
+                continue
+            nox = item.get("_nox")
+            risk = nox.get("risk") if isinstance(nox, dict) else None
+            accepted[name] = risk if risk in RISKS else "high"
+        return accepted
+
+    # -- what the router asks ------------------------------------------------------------------
+
+    def _entry(self, device_id: str, name: str) -> NodeEntry:
+        # The name was typed on the device: only its plain form is ever kept, so every result,
+        # error and candidate list the model sees carries that and nothing else.
+        shown = display_name(name)
+        entry = self._entries.get(device_id)
+        if entry is None:
+            entry = self._entries[device_id] = NodeEntry(device_id=device_id, name=shown)
+        entry.name = shown
+        return entry
+
+    def entries(self) -> list[NodeEntry]:
+        """Every paired node, online or not (an offline one is still a name the user may say)."""
+        known = {d.id: d for d in self._pairing.nodes() if not d.revoked}
+        for device_id in list(self._entries):
+            if device_id not in known:
+                del self._entries[device_id]  # revoked: no longer a device at all
+        for device in known.values():
+            entry = self._entry(device.id, device.name)
+            if entry.last_seen is None and device.last_seen_at is not None:
+                entry.last_seen = device.last_seen_at
+            row = self._nodes.get_node(device.id)
+            entry.linked_device_id = row.linked_device_id if row is not None else None
+        return sorted(self._entries.values(), key=lambda e: e.name.lower())
+
+    def online_with(self, tool: str) -> list[NodeEntry]:
+        return [e for e in self.entries() if e.offers(tool)]
+
+    def any_online_with(self, tool: str) -> bool:
+        return any(e.offers(tool) for e in self._entries.values())
+
+    async def call(
+        self, entry: NodeEntry, tool: str, arguments: dict[str, Any], *, risk: str, timeout_s: float
+    ) -> dict[str, Any]:
+        """One call on one node. Offline at this moment: fail fast, nothing is queued."""
+        session = entry.session
+        if session is None or not entry.offers(tool):
+            return offline_error(entry)
+        meta = {
+            "call_id": uuid.uuid4().hex,
+            "risk": risk,
+            "deadline": time.time() + timeout_s,
+        }
+        try:
+            raw = await session.client.request(
+                "tools/call",
+                {"name": tool, "arguments": arguments, "_nox": meta},
+                timeout_s=timeout_s,
+            )
+        except (TimeoutError, McpClientError) as exc:
+            log.warning("node.call_failed", device_id=entry.device_id, tool=tool, error=str(exc))
+            if not entry.online or session.client.closed:
+                return offline_error(entry)
+            return {"error": "failed_on_device", "detail": "no answer", "device": entry.label}
+        return clean_result(raw, device=entry.label)
+
+    def prompt_line(self) -> str:
+        """One line for the turn context: which devices exist and whether they are reachable."""
+        entries = self.entries()
+        if not entries:
+            return ""
+        parts = ["dieser Core (core)"]
+        for entry in entries:
+            if entry.online and entry.compatible:
+                state = "online"
+            elif entry.online:
+                state = "online, Update nötig"
+            elif entry.last_seen is not None:
+                state = f"offline seit {entry.last_seen.astimezone():%d.%m. %H:%M}"
+            else:
+                state = "offline"
+            parts.append(f"{entry.label} ({state})")
+        return "Geräte: " + ", ".join(parts)
+
+
+def offline_error(entry: NodeEntry) -> dict[str, Any]:
+    seen = entry.last_seen.isoformat() if entry.last_seen is not None else None
+    return {"error": "device_offline", "device": entry.label, "last_seen": seen}

@@ -129,6 +129,7 @@ class NodeListener:
         on_security_kill: SecurityKillFn | None = None,
         on_connected: SessionFn | None = None,
         on_disconnected: SessionFn | None = None,
+        on_tools_changed: SessionFn | None = None,
         ping_interval_s: float = PING_INTERVAL_S,
         allow_public_clients: bool = False,
     ) -> None:
@@ -141,6 +142,7 @@ class NodeListener:
         self._on_security_kill = on_security_kill
         self._on_connected = on_connected
         self._on_disconnected = on_disconnected
+        self._on_tools_changed = on_tools_changed
         self._ping_interval_s = ping_interval_s
         self._allow_public = allow_public_clients
         self._server: Server | None = None
@@ -282,7 +284,14 @@ class NodeListener:
         transport = WebSocketTransport(
             connection, on_peer=on_peer, max_message_bytes=p.MAX_FRAME_BYTES
         )
-        client = McpClient(transport, client_version=str(p.NODE_PROTOCOL))
+
+        async def tools_changed() -> None:
+            if session is not None and self._on_tools_changed is not None:
+                await self._on_tools_changed(session)
+
+        client = McpClient(
+            transport, client_version=str(p.NODE_PROTOCOL), on_tools_changed=tools_changed
+        )
         session = NodeSession(
             device=device,
             hello=hello_msg,

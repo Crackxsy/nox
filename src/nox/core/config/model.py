@@ -18,6 +18,7 @@ from nox.core.config.assistant import (
 )
 from nox.core.config.core import (
     DEFAULT_DATA_DIR,
+    DevicesConfig,
     HealthConfig,
     IdentityConfig,
     IpcConfig,
@@ -91,6 +92,7 @@ class NoxConfig(StrictSection):
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     watch: WatchConfig = Field(default_factory=WatchConfig)
     desktop: DesktopConfig = Field(default_factory=DesktopConfig)
+    devices: DevicesConfig = Field(default_factory=DevicesConfig)
 
     _warnings: list[ConfigWarning] = PrivateAttr(default_factory=list)
     _profile_id: str | None = PrivateAttr(default=None)

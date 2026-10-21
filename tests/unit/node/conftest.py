@@ -96,7 +96,7 @@ def pairing(
     return NodePairing(repo, nodes, tls_dir=tmp_path / "tls", bus=SimpleBus())  # type: ignore[arg-type]
 
 
-async def pair_node(pairing: NodePairing, tmp_path: Path, name: str = "Laptop") -> PairedNode:
+async def pair_node(pairing: NodePairing, tmp_path: Path, name: str = "") -> PairedNode:
     key = make_key()
     start = await pairing.start(name=name)
     redeemed = await pairing.redeem(

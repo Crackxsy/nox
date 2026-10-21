@@ -561,3 +561,10 @@ desktop:
     stop_hotkey: "ctrl+alt+shift+k"
     max_actions_per_session: 200
     session_minutes: 15
+
+devices:
+  defaults:                      # where a tool runs when you did not say (spec wave C)
+    screen.capture: origin       # origin: the PC whose dashboard you are using
+    media.control: origin
+    notify.show: origin
+    shell.run: core              # core: this Nox itself; or a node's name, e.g. Laptop
