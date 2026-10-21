@@ -49,8 +49,6 @@ RISK_ORDER = ("read", "low", "medium", "high", "critical")
 CEILING = "high"
 #: The budget's window.
 BUDGET_WINDOW_S = 3600.0
-#: Groups whose tools type or click: refused while a confirmation dialog is open (review M-c).
-INPUT_GROUPS = frozenset({"computer", "desktop"})
 
 
 @dataclass(frozen=True)
@@ -155,6 +153,7 @@ def inside(path: str | Path, folder: Path) -> bool:
 
 
 def _rank(risk: str) -> int:
+    """A risk's rank; anything not understood ranks above critical (fail closed)."""
     return RISK_ORDER.index(risk) if risk in RISK_ORDER else len(RISK_ORDER)
 
 
@@ -193,9 +192,10 @@ class NodeGate:
     def manifest(self) -> NodeManifest:
         return self._manifest
 
-    def group_of(self, name: str) -> str:
+    def risk_of(self, name: str) -> str:
+        """A tool's own risk; an unknown tool counts as a side effect."""
         tool = self._tools.get(name)
-        return tool.group if tool is not None else ""
+        return tool.risk if tool is not None else "critical"
 
     def set_manifest(self, manifest: NodeManifest) -> None:
         """The device's manifest changed (`nox node deny` takes effect without a restart)."""
@@ -236,8 +236,9 @@ class NodeGate:
             return GateDecision(False, "capability_disabled", tool)
         if not self._within(tool.risk):
             return GateDecision(False, "risk_ceiling", tool)
-        if self.dialog_open() and tool.group in INPUT_GROUPS:
-            # Nothing may type or click while the person is being asked (review M-c).
+        if self.dialog_open() and tool.risk != "read":
+            # While the person is being asked, nothing else with a side effect runs - typing,
+            # clicking, a shell, a browser or a voice could all act on the dialog (review M-c).
             return GateDecision(False, "dialog_open", tool)
         if tool.risk != "read":
             # The core's signature first: nothing the core sent is looked at before it is known
@@ -257,13 +258,15 @@ class NodeGate:
             return GateDecision(False, "path_alias_refused", tool)
         charged = ""
         if tool.risk != "read":
-            charged = (
-                tool.risk if meta is None or _rank(tool.risk) >= _rank(meta.risk) else meta.risk
-            )
+            # By rank, never by spelling: the higher of the node's and the core's risk, an
+            # unknown value as the highest, clamped to the ceiling's name for the books.
+            rank = max(_rank(tool.risk), _rank(meta.risk) if meta is not None else 0)
+            charged = RISK_ORDER[min(rank, _rank(CEILING))]
             if not self._spend(charged):
                 return GateDecision(False, "budget", tool)
-        local = tool.risk == "high" or (
-            meta is not None and (meta.risk == "high" or meta.confirm_on_device)
+        high = _rank("high")
+        local = _rank(tool.risk) >= high or (
+            meta is not None and (_rank(meta.risk) >= high or meta.confirm_on_device)
         )
         charged_risk = "" if tool.risk == "read" else charged
         return GateDecision(
@@ -298,10 +301,11 @@ class NodeGate:
                 window.popleft()
         if len(self._side_effects) >= self._manifest.max_calls_per_hour:
             return False
-        if risk == "high" and len(self._high) >= self._manifest.max_high_per_hour:
+        is_high = _rank(risk) >= _rank("high")
+        if is_high and len(self._high) >= self._manifest.max_high_per_hour:
             return False
         self._side_effects.append(now)
-        if risk == "high":
+        if is_high:
             self._high.append(now)
         return True
 
@@ -327,10 +331,12 @@ class NodeGate:
                 charged = json.loads(details or "{}").get("charged", "")
             except (ValueError, TypeError):
                 continue
-            if charged in ("low", "medium", "high"):
-                self._side_effects.append(now - age)
-                if charged == "high":
-                    self._high.append(now - age)
+            if not charged or charged == "read":
+                continue
+            # Anything at or above high - or not understood - counts as high.
+            self._side_effects.append(now - age)
+            if _rank(str(charged)) >= _rank("high"):
+                self._high.append(now - age)
 
     def _record(self, name: str, decision: GateDecision, *, call_id: str, by: str) -> None:
         if self._audit is None:

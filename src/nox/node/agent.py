@@ -43,7 +43,7 @@ from nox.mcp.protocol import PROTOCOL_VERSION
 from nox.node import protocol as p
 from nox.node.confirm import Confirmer, PlatformConfirmer
 from nox.node.enroll import local_os
-from nox.node.gate import INPUT_GROUPS, NodeGate
+from nox.node.gate import NodeGate
 from nox.node.home import NodeHome, NodeIdentity
 from nox.node.keystore import NodeKeyStore
 from nox.node.manifest import GROUPS, NodeManifest, manifest_hash
@@ -473,12 +473,12 @@ class NodeAgent:
         return None
 
     async def _cancel_input_calls(self, ws: ClientConnection, *, own: str) -> None:
-        """Before a question appears, every running call that types or clicks is stopped - it
-        must not act on the dialog (review M-c)."""
+        """Before a question appears, every other running call with a side effect is stopped -
+        none may act on the dialog (review M-c)."""
         doomed = {
             key: entry
             for key, entry in self._calls.items()
-            if key != own and self._gate.group_of(entry[2]) in INPUT_GROUPS
+            if key != own and self._gate.risk_of(entry[2]) != "read"
         }
         for task, _msg_id, _name in doomed.values():
             task.cancel()

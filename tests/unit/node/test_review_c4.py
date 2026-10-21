@@ -264,13 +264,14 @@ async def test_the_executor_says_who_decided() -> None:
 # ---- M-c: nothing types while the person is asked; a reflex "yes" is a no ----
 
 
-def test_input_tools_are_refused_while_a_dialog_is_open(tmp_path: Path) -> None:
+def test_nothing_with_a_side_effect_runs_while_a_dialog_is_open(tmp_path: Path) -> None:
     gate, signer = _gate(tmp_path)
     gate.dialog_open = lambda: True
     args = {"text": "y"}
-    meta = _meta(signer, "desktop.type_text", args)
-    assert gate.check("desktop.type_text", args, meta=meta).reason == "dialog_open"
-    assert gate.check("system.info", {}).allowed  # anything else is unaffected
+    for name in ("desktop.type_text", "system.low", "notify.show"):
+        meta = _meta(signer, name, args)
+        assert gate.check(name, args, meta=meta).reason == "dialog_open", name
+    assert gate.check("system.info", {}).allowed  # reading is unaffected
 
 
 async def test_a_yes_faster_than_reading_is_a_no(
@@ -523,3 +524,77 @@ async def test_the_same_text_is_signed_shown_and_run(
     finally:
         node.stop.set()
         await asyncio.wait_for(node.task, 5)
+
+
+async def test_every_running_side_effect_stops_before_a_question(
+    listener: NodeListener, pairing: NodePairing, tls: TlsMaterial, tmp_path: Path
+) -> None:
+    """Not only typing: a plain low-risk call that is still running is stopped too."""
+    node = await start_node(listener, pairing, tls, tmp_path, confirmer=Confirmer("deny"))
+    try:
+        session = await session_of(listener, node.node_id)
+        waiting = asyncio.create_task(call(session, listener.signer, "system.wait", timeout=30))  # type: ignore[attr-defined]
+        for _ in range(100):
+            if "wait-start" in node.ran:
+                break
+            await asyncio.sleep(0.02)
+        await call(session, listener.signer, "system.high", risk="high")  # type: ignore[attr-defined]
+        result = await asyncio.wait_for(waiting, 5)
+        assert result["_nox"]["refused"] == "dialog_open" and "wait-end" not in node.ran
+    finally:
+        node.stop.set()
+        await asyncio.wait_for(node.task, 5)
+
+
+@pytest.mark.parametrize("core_risk", ["high", "critical"])
+def test_critical_from_the_core_is_never_cheaper_or_unconfirmed(
+    tmp_path: Path, core_risk: str
+) -> None:
+    manifest = NodeManifest(groups={g: True for g in GROUPS}, max_high_per_hour=1)
+    gate, signer = _gate(tmp_path, manifest)
+    args = {"text": "y"}
+    first = gate.check("system.low", args, meta=_meta(signer, "system.low", args, risk=core_risk))
+    assert first.allowed and first.needs_local_confirmation and first.charged == "high"
+    again = gate.check("system.low", args, meta=_meta(signer, "system.low", args, risk=core_risk))
+    assert again.reason == "budget"  # counted as high
+
+
+def test_an_unknown_risk_ranks_highest(tmp_path: Path) -> None:
+    from nox.node.gate import _rank
+
+    assert _rank("extreme") > _rank("critical") > _rank("high")
+
+    class Args(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+    async def run(_a: BaseModel) -> dict[str, Any]:
+        return {}
+
+    gate = NodeGate(
+        {"odd.tool": NodeTool("odd.tool", "system", "extreme", "t", Args, run, path_safe=True)},
+        NodeManifest(),
+        None,
+    )
+    assert gate.check("odd.tool", {}).reason == "risk_ceiling"  # fail closed
+
+
+def test_restored_budget_counts_anything_high_or_unknown_as_high(tmp_path: Path) -> None:
+    audit = SqliteAuditLog(sqlite3.connect(tmp_path / "a.db", check_same_thread=False))
+    for charged in ("critical", "weird"):
+        audit.append(
+            actor="core",
+            tool="x",
+            action="node.call",
+            target="",
+            decision="allow",
+            result="ok",
+            details={"charged": charged},
+        )
+    manifest = NodeManifest(groups={g: True for g in GROUPS}, max_high_per_hour=2)
+    gate, signer = _gate(tmp_path, manifest)
+    gate.restore_budget(audit)
+    args = {"text": "y"}
+    assert (
+        gate.check("system.low", args, meta=_meta(signer, "system.low", args, risk="high")).reason
+        == "budget"
+    )

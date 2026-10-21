@@ -712,8 +712,9 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   device - every argument in full (control characters escaped, no markup; too long or not
   valid Unicode -> refused, never cut), a warning when the conversation held foreign content,
   60 s, default **no**; a broken dialog is a no, and a "yes" within 1.5 s (a reflex or a stray
-  key) is a no. While it is open, running calls that type or click are stopped and new ones
-  refused. Linux uses zenity only (`--default-cancel`, `--no-markup`). The core leaves the
+  key) is a no. While it is open, every other running call with a side effect is stopped and
+  new ones are refused (only reads go on). Risk levels are compared by rank, never by spelling:
+  "critical" from the core counts at least as high, and an unknown value as the highest. Linux uses zenity only (`--default-cancel`, `--no-markup`). The core leaves the
   question to the device only when the node said at `initialize` that it can ask; otherwise the
   core asks itself, and a node without a screen runs high risk only when a **person** confirmed
   it on the core (`decided_by: user`) and `trust_core_for_high` was confirmed on that device
