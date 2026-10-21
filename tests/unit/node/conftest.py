@@ -33,6 +33,15 @@ ADDRESSES = ("127.0.0.1", "192.168.1.20")
 MANIFEST = "0" * 64
 
 
+@pytest.fixture(autouse=True)
+def _instant_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scripted confirmers answer at once; the 1.5 s rule against reflex answers is tested on
+    its own (`test_review_c4.py`)."""
+    from nox.node import agent as agent_module
+
+    monkeypatch.setattr(agent_module, "MIN_DECISION_S", 0.0)
+
+
 def make_key() -> ec.EllipticCurvePrivateKey:
     return ec.generate_private_key(ec.SECP256R1())
 

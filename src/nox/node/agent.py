@@ -28,6 +28,7 @@ import json
 import platform
 import random
 import time
+import unicodedata
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -46,7 +47,7 @@ from nox.node.gate import NodeGate
 from nox.node.home import NodeHome, NodeIdentity
 from nox.node.keystore import NodeKeyStore
 from nox.node.manifest import GROUPS, NodeManifest, manifest_hash
-from nox.node.receipts import ReceiptVerifier
+from nox.node.receipts import ReceiptVerifier, normalize_arguments
 from nox.node.tools import NodeTool
 from nox.security.model import AuditLog
 
@@ -76,18 +77,36 @@ Connector = Callable[..., Awaitable[ClientConnection]]
 
 #: Longest question the dialog shows; anything longer is refused, never cut.
 MAX_CONFIRM_CHARS = 1200
+#: A "yes" faster than this after the question appeared is a reflex or a stray key, not a
+#: decision: it counts as no (review M-c).
+MIN_DECISION_S = 1.5
+#: Consecutive pings from a core that is not stopped after which a dead-man stop lifts.
+DEAD_MAN_RESET_PINGS = 3
 
 
-def confirmation_text(tool: str, arguments: dict[str, Any]) -> str | None:
+def confirmation_text(tool: str, arguments: dict[str, Any], *, tainted: bool = False) -> str | None:
     """The question for the person at the device: every argument in full, control characters
     escaped, one per line. None when it would be too long to read - then nothing is asked and the
     call is refused (no silent truncation)."""
+    try:
+        json.dumps(arguments, ensure_ascii=False).encode("utf-8")
+    except (UnicodeEncodeError, TypeError, ValueError):
+        return None  # not valid Unicode (a lone surrogate): refused, not shown escaped
     lines = [f"Nox möchte auf diesem Gerät „{p.escape_controls(tool)}“ ausführen:"]
     for key, value in arguments.items():
         shown = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
         lines.append(f"  {p.escape_controls(str(key))}: {p.escape_controls(str(shown))}")
+    if tainted:
+        lines.append(
+            "Achtung: Die Anfrage kam aus einem Gespräch mit fremden Inhalten (Web, Dateien, "
+            "Nachrichten). Nur erlauben, wenn du das selbst wolltest."
+        )
     lines.append("Erlauben? (Ohne Antwort in 60 s: Ablehnen)")
-    text = "\n".join(lines)
+    text = unicodedata.normalize("NFC", "\n".join(lines))
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return None  # not valid Unicode: nothing to show honestly
     return text if len(text) <= MAX_CONFIRM_CHARS else None
 
 
@@ -112,11 +131,14 @@ class NodeAgent:
         self._confirmer: Confirmer = confirmer if confirmer is not None else PlatformConfirmer()
         self.core_killed = False
         self.dead_man = False
+        self._good_pings = 0
+        self._dialogs = 0
         self._local_stopped = False
         #: call id -> (the running call, its JSON-RPC id)
-        self._calls: dict[str, tuple[asyncio.Task[None], Any]] = {}
+        self._calls: dict[str, tuple[asyncio.Task[None], Any, str]] = {}
         self._last_core = time.monotonic()
         gate.stop_state = self.stopped_reason
+        gate.dialog_open = lambda: self._dialogs > 0
         self._manifest_source = manifest_source
         self._manifest_mtime: float | None = None
         self._home = home
@@ -349,12 +371,17 @@ class NodeAgent:
                 ping = p.Ping.model_validate(params)
                 if self._gate.receipts is not None:
                     self._gate.receipts.observe_core_time(ping.ts)
+                self._after_core_ping()
                 await ws.send(
                     json.dumps(
                         {
                             "jsonrpc": "2.0",
                             "method": p.M_PONG,
-                            "params": {"seq": ping.seq, "ts": time.time()},
+                            "params": {
+                                "seq": ping.seq,
+                                "ts": time.time(),
+                                "state": self.stopped_reason() or "",
+                            },
                         }
                     )
                 )
@@ -391,7 +418,7 @@ class NodeAgent:
                 call_id if isinstance(call_id, str) and call_id not in self._calls else f"#{msg_id}"
             )
             task = asyncio.create_task(self._call(ws, msg_id, params))
-            self._calls[key] = (task, msg_id)
+            self._calls[key] = (task, msg_id, str(params.get("name", "")))
 
             def forget(_done: asyncio.Task[None], key: str = key) -> None:
                 self._calls.pop(key, None)
@@ -423,6 +450,18 @@ class NodeAgent:
 
     # -- stopping ------------------------------------------------------------------------------
 
+    def _after_core_ping(self) -> None:
+        """The core is back: after `DEAD_MAN_RESET_PINGS` pings in a row while it is not stopped,
+        a dead-man stop lifts (the core learns the state from every `nox/pong`)."""
+        if not self.dead_man or self.core_killed:
+            self._good_pings = 0
+            return
+        self._good_pings += 1
+        if self._good_pings >= DEAD_MAN_RESET_PINGS:
+            self.dead_man = False
+            self._good_pings = 0
+            self._audit_event("node.dead_man_lifted", "core", "pings resumed")
+
     def stopped_reason(self) -> str | None:
         """Why this node refuses everything right now, or None."""
         if self._local_stopped or self._home.stop_file.exists():
@@ -433,16 +472,31 @@ class NodeAgent:
             return "dead_man"
         return None
 
+    async def _cancel_input_calls(self, ws: ClientConnection, *, own: str) -> None:
+        """Before a question appears, every other running call with a side effect is stopped -
+        none may act on the dialog (review M-c)."""
+        doomed = {
+            key: entry
+            for key, entry in self._calls.items()
+            if key != own and self._gate.risk_of(entry[2]) != "read"
+        }
+        for task, _msg_id, _name in doomed.values():
+            task.cancel()
+        for task, msg_id, name in doomed.values():
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+            await self._refused(ws, msg_id, name, "dialog_open")
+
     async def _cancel_calls(self, ws: ClientConnection | None = None) -> list[str]:
         """Cancel every running call; with `ws`, each is answered "stopped". Their ids."""
         running = dict(self._calls)
-        for task, _msg_id in running.values():
+        for task, _msg_id, _name in running.values():
             task.cancel()
-        for task, _msg_id in running.values():
+        for task, _msg_id, _name in running.values():
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         if ws is not None:
-            for _task, msg_id in running.values():
+            for _task, msg_id, _name in running.values():
                 await self._refused(ws, msg_id, "call", "stopped")
         return [k for k in running if not k.startswith("#")]
 
@@ -481,7 +535,13 @@ class NodeAgent:
             self._home.save_identity(identity)
         try:
             self._gate.receipts = (
-                ReceiptVerifier(identity.receipt_key) if identity.receipt_key else None
+                ReceiptVerifier(
+                    identity.receipt_key,
+                    device_id=identity.node_id,
+                    core_id=identity.ca_fingerprint,
+                )
+                if identity.receipt_key
+                else None
             )
         except ValueError:
             return False
@@ -507,7 +567,10 @@ class NodeAgent:
             decision_reason = "update_needed"
             await self._refused(ws, msg_id, name, decision_reason)
             return
-        decision = self._gate.check(name, params.get("arguments"), call_id=meta.call_id, meta=meta)
+        # One text for everything: the receipt's hash, the dialog and the handler all see the
+        # same NFC form of the arguments (review: never sign one and run another).
+        arguments = normalize_arguments(params.get("arguments"))
+        decision = self._gate.check(name, arguments, call_id=meta.call_id, meta=meta)
         if not decision.allowed or decision.tool is None or decision.args is None:
             await self._refused(ws, msg_id, name, decision.reason)
             return
@@ -577,22 +640,31 @@ class NodeAgent:
     ) -> str | None:
         """High risk: the person at this device decides (D1). None when they allowed it."""
         if not self._confirmer.available:
-            # `trust_core_for_high` trusts a confirmation the CORE asked for. A call the core
-            # left to this device was confirmed by nobody yet: refuse it.
-            if self._gate.manifest.trust_core_for_high and not meta.confirm_on_device:
+            # `trust_core_for_high` trusts a confirmation a PERSON gave on the core. A call the
+            # core left to this device, or allowed by a rule or a remembered answer, was
+            # confirmed by nobody for this call: refuse it (review M-b).
+            trusted = self._gate.manifest.trust_core_for_high
+            if trusted and not meta.confirm_on_device and meta.decided_by == "user":
                 self._audit_event("node.confirm", "core", "trusted (no screen)")
                 return None
             return "high_needs_local_confirmation"
-        text = confirmation_text(tool.name, args.model_dump())
+        text = confirmation_text(tool.name, args.model_dump(), tainted=meta.tainted)
         if text is None:
             # Never ask about something the person cannot see in full.
-            self._audit_event("node.confirm", "local", f"{p.safe_name(tool.name)}:too_long")
-            return "too_long_to_confirm"
+            self._audit_event("node.confirm", "local", f"{p.safe_name(tool.name)}:cannot_show")
+            return "cannot_show_in_full"
+        self._dialogs += 1  # from here on no new input call starts
+        await self._cancel_input_calls(ws, own=meta.call_id)
+        shown_at = time.monotonic()
         try:
             answer = await self._confirmer.ask(text)
         except Exception as exc:  # noqa: BLE001 - a broken dialog is a "no", never a "yes"
             log.warning("node.confirm_failed", error=type(exc).__name__)
             answer = "deny"
+        finally:
+            self._dialogs -= 1
+        if answer == "allow" and time.monotonic() - shown_at < MIN_DECISION_S:
+            answer = "deny"  # too fast to have been read: a reflex or a stray key
         self._audit_event("node.confirm", "local", f"{p.safe_name(tool.name)}:{answer}")
         with contextlib.suppress(ConnectionClosed):
             await ws.send(

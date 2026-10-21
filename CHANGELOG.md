@@ -216,6 +216,16 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   the Pi's architecture on every pull request.
 
 ### Fixed
+- **Nodes, external review of part 4:** the node's gate never resolves or opens anything the
+  core sent (a UNC path in a notice could make Windows reach out over SMB) and checks the receipt
+  before any argument; path aliases (`..`, `~`, 8.3, UNC, device paths) are refused on the text,
+  and every node tool with a side effect must declare its path handling. Receipts also bind the
+  node, the core, the issue time, taint and who decided on the core; `trust_core_for_high` needs
+  a person's yes on the core and can be set with `nox node allow trust_core_for_high`. The dialog
+  refuses invalid Unicode, warns about foreign content, treats a "yes" within 1.5 s as no and
+  stops typing/clicking calls while open; Linux uses zenity only. A dead-man stop lifts after
+  three pings from a running core and nodes report their state; the budget survives a restart
+  and is charged at the higher risk; arguments are NFC-normalised once for hash, dialog and run.
 - **Nodes, external review of wave C part 1-3:** an `origin` default never lands on another
   device when the asking PC's node is offline or not linked; the node port bounds TLS handshakes
   (5 s), waiting connections per node and in total; a node's stop always takes effect while Nox

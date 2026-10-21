@@ -28,6 +28,7 @@ from nox.node.pairing import NodePairing
 from nox.node.receipts import MAX_LIFETIME_S, ReceiptSigner
 from nox.node.repo import NodeRepository
 from nox.security.prohibitions import matching_hard_prohibition
+from nox.tools.executor import CALL_DECISION
 
 log = get_logger(__name__)
 
@@ -125,8 +126,10 @@ class NodeRegistry:
         *,
         clock: Callable[[], datetime] | None = None,
         signer: ReceiptSigner | None = None,
+        core_id: Callable[[], str] = lambda: "",
     ) -> None:
         self._signer = signer
+        self._core_id = core_id
         self._pairing = pairing
         self._nodes = nodes
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -226,24 +229,37 @@ class NodeRegistry:
         if session is None or not entry.offers(tool):
             return offline_error(entry)
         call_id = uuid.uuid4().hex
-        deadline = time.time() + min(timeout_s, MAX_LIFETIME_S)
+        decision = CALL_DECISION.get()
+        decided_by = decision.decided_by if decision is not None else "profile"
+        tainted = decision.tainted if decision is not None else False
+        issued_at = time.time()
+        deadline = issued_at + min(timeout_s, MAX_LIFETIME_S)
         meta: dict[str, Any] = {
             "call_id": call_id,
             "risk": risk,
             "deadline": deadline,
-            "decided_by": "core",
+            "issued_at": issued_at,
+            "decided_by": decided_by,
             "confirm_on_device": confirm_on_device,
+            "tainted": tainted,
         }
         if self._signer is not None:
-            meta["receipt"] = self._signer.sign(
-                call_id=call_id,
-                tool=tool,
-                arguments=arguments,
-                risk=risk,
-                decided_by="core",
-                confirm_on_device=confirm_on_device,
-                deadline=deadline,
-            )
+            try:
+                meta["receipt"] = self._signer.sign(
+                    call_id=call_id,
+                    device_id=entry.device_id,
+                    core_id=self._core_id(),
+                    tool=tool,
+                    arguments=arguments,
+                    risk=risk,
+                    decided_by=decided_by,
+                    confirm_on_device=confirm_on_device,
+                    tainted=tainted,
+                    issued_at=issued_at,
+                    deadline=deadline,
+                )
+            except ValueError:
+                return {"error": "invalid_arguments", "device": entry.label}
         if confirm_on_device:
             timeout_s += CONFIRM_TIMEOUT_S  # the person at the device has a minute to answer
         try:

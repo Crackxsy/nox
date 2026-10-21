@@ -65,8 +65,9 @@ interactive terminal with a typed confirmation; editing `node.yaml` by hand can 
 something away - anything it adds is ignored until you confirm it with `nox node allow`. `max_risk` lowers what the node accepts.
 
 **High risk is asked here, on this device**: a system dialog shows what Nox wants to do, with every
-detail, for 60 s - no answer means no. A node without a screen refuses high risk unless you set
-`trust_core_for_high: true` there (and confirmed it with `nox node allow`). The node also keeps
+detail, for 60 s - no answer means no, and a "yes" within the first 1.5 seconds counts as no.
+A node without a screen refuses high risk, unless a person confirmed it on Nox itself and you
+allowed that on the device: `nox node allow trust_core_for_high`. The node also keeps
 its own budget: 60 actions and 5 high-risk ones per hour (`max_calls_per_hour`,
 `max_high_per_hour` in `node.yaml`).
 

@@ -132,7 +132,13 @@ def install(core: Any) -> NodeRuntime:
 
     # The core signs every call with a side effect; nodes pin the public half at pairing.
     signer = ReceiptSigner(tls_dir)
-    registry = NodeRegistry(pairing, NodeRepository(core.db), signer=signer)
+    holder: list[NodeListener] = []
+    registry = NodeRegistry(
+        pairing,
+        NodeRepository(core.db),
+        signer=signer,
+        core_id=lambda: holder[0].core_id if holder else "",
+    )
     runtime.registry = registry
 
     def tls() -> TlsMaterial | None:
@@ -162,6 +168,7 @@ def install(core: Any) -> NodeRuntime:
         on_tools_changed=registry.on_tools_changed,
     )
     runtime.listener = listener
+    holder.append(listener)
 
     async def stop_nodes() -> None:
         # The stop reaches every node over the sockets that are already open (spec C §1.7).

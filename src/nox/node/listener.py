@@ -111,6 +111,8 @@ class NodeSession:
     killed_calls: list[str] = field(default_factory=list)
     #: The certificate's end: the session closes when it is reached (review N1).
     cert_not_after: datetime | None = None
+    #: What the node reported in its last `nox/pong`: why it refuses everything, or "".
+    node_state: str = ""
     blobs: dict[str, list[bytes]] = field(default_factory=dict)
     complete: set[str] = field(default_factory=set)
     blob_bytes: int = 0
@@ -481,6 +483,9 @@ class NodeListener:
         if method == p.M_PING:
             assert isinstance(params, p.Ping)
             await session.client.notify(p.M_PONG, {"seq": params.seq, "ts": time.time()})
+        elif method == p.M_PONG:
+            assert isinstance(params, p.Ping)
+            session.node_state = params.state
         elif method == p.M_SECURITY_KILL:
             assert isinstance(params, p.SecurityKill)
             status = self._kill(session.device_id, params.reason)

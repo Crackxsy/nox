@@ -54,6 +54,10 @@ class NodeTool:
     description: str
     args: type[BaseModel]
     handler: Handler = field(compare=False)
+    #: Declared by every tool with a side effect: it opens no path, or it checks
+    #: `nox.node.gate.inside()` on the resolved real path at the moment it opens one. A tool
+    #: without this declaration is not offered at all (`NodeGate`).
+    path_safe: bool = False
 
     def describe(self) -> dict[str, Any]:
         """The MCP `tools/list` entry, with the Nox extensions the core routes by."""
@@ -191,6 +195,7 @@ def default_tools(notifier: Notifier | None = None) -> dict[str, NodeTool]:
             "Show a notification on this device.",
             NotifyArgs,
             notify_show,
+            path_safe=True,  # opens no path
         ),
     ]
     return {tool.name: tool for tool in tools}
