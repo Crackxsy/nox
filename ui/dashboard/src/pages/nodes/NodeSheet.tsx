@@ -341,7 +341,7 @@ function NodeDetail({
             ))}
           </ul>
         )}
-        <button type="button" className="link" onClick={onOpenHistory}>
+        <button type="button" className="btn btn--quiet btn--sm" onClick={onOpenHistory}>
           {t('node_done_all')}
         </button>
       </section>
