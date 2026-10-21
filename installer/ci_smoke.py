@@ -185,9 +185,15 @@ def check_node_installed() -> None:
     check(principal.findtext(f"{TASK_NS}RunLevel") == "LeastPrivilege", "least privilege")
     check(principal.findtext(f"{TASK_NS}LogonType") == "InteractiveToken", "as the logged-in user")
     check("S-1-5-18" not in xml and "HighestAvailable" not in xml, "never SYSTEM, never elevated")
+    check("<Arguments>-I " in xml, "the task starts its Python isolated (-I)")
     check(aumid_present(), "the node's notification ID (HKCU, 64-bit view)")
     selftest = subprocess.run(
-        [str(APP / "runtime" / "python.exe"), str(APP / "app" / "start_node.pyw"), "--selftest"],
+        [
+            str(APP / "runtime" / "python.exe"),
+            "-I",
+            str(APP / "app" / "start_node.pyw"),
+            "--selftest",
+        ],
         cwd=APP / "app",
         capture_output=True,
         text=True,

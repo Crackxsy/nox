@@ -271,7 +271,16 @@ def test_a_release_without_a_node_bundle_says_so(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "name", ["../outside.py", "nox/../../outside.py", "other/file.py", "/abs.py", "nox/aux.py", "config/x.", "nox/a\x1b.py"]
+    "name",
+    [
+        "../outside.py",
+        "nox/../../outside.py",
+        "other/file.py",
+        "/abs.py",
+        "nox/aux.py",
+        "config/x.",
+        "nox/a\x1b.py",
+    ],
 )
 def test_a_bundle_with_unexpected_paths_is_refused(tmp_path: Path, name: str) -> None:
     key = Key()

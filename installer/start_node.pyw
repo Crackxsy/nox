@@ -149,11 +149,22 @@ def run_in_process(app: Path, args: list[str]) -> int:
     return 0
 
 
+def child_command(app: Path) -> tuple[list[str], dict[str, str], str]:
+    """argv, environment and working folder of the node's process: this interpreter isolated
+    (`-I`: no current folder or user site on sys.path, PYTHON* variables ignored - and removed),
+    this file by absolute path, the copy's own folder as the working folder."""
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PYTHON")}
+    env.update({APP_ENV: str(app), "NOX_NODE_LAUNCHER": "1"})
+    argv = [sys.executable, "-I", str(Path(__file__).resolve()), "--cli", "node", "run"]
+    return argv, env, str(app)
+
+
 def _run_child(app: Path) -> int:
-    env = {**os.environ, APP_ENV: str(app), "NOX_NODE_LAUNCHER": "1"}
+    argv, env, cwd = child_command(app)
     return subprocess.call(  # noqa: S603 - this interpreter and this file
-        [sys.executable, "-s", str(Path(__file__).resolve()), "--cli", "node", "run"],
+        argv,
         env=env,
+        cwd=cwd,
         creationflags=_CREATE_NO_WINDOW if sys.platform == "win32" else 0,
     )
 
@@ -256,7 +267,7 @@ def autostart(enable: bool) -> int:
     xml = task_xml(
         user=f"{domain}\\{user}" if domain else user,
         command=str(pythonw if pythonw.is_file() else sys.executable),
-        arguments=f'"{Path(__file__).resolve()}"',
+        arguments=f'-I "{Path(__file__).resolve()}"',
         workdir=str(_HERE),
     )
     definition = node_home().parent / "nox-node-task.xml"

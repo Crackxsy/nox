@@ -23,7 +23,8 @@ Environment=PYTHONUNBUFFERED=1
 Environment=NOX_NODE_TRAY=0
 Environment=NOX_CGROUP_DELEGATED=1
 WorkingDirectory=@PREFIX@/current
-ExecStart=@PREFIX@/current/.venv/bin/python @PREFIX@/current/installer/start_node.pyw
+# -I: isolated - no current folder, user site or PYTHON* variable decides what is imported.
+ExecStart=@PREFIX@/current/.venv/bin/python -I @PREFIX@/current/installer/start_node.pyw
 # The launcher restarts a crashed node itself; an unpaired or removed node ends with 0 and stays
 # off until `nox-node pair` starts it again.
 Restart=on-failure

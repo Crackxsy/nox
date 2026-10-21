@@ -14,7 +14,8 @@ After=network-online.target graphical-session.target
 [Service]
 Type=simple
 Environment=PYTHONUNBUFFERED=1
-ExecStart="@PREFIX@/current/.venv/bin/python" "@PREFIX@/current/installer/start_node.pyw"
+# -I: isolated - no current folder, user site or PYTHON* variable decides what is imported.
+ExecStart="@PREFIX@/current/.venv/bin/python" -I "@PREFIX@/current/installer/start_node.pyw"
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=20

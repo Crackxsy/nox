@@ -456,6 +456,9 @@ define node_next \
 define node_daily \
   'Zustand: nox-node status   Protokoll: nox-node log   Update: nox-node update   Entfernen: install-linux.sh --node%s --uninstall' \
   'Status: nox-node status   Log: nox-node log   Update: nox-node update   Remove: install-linux.sh --node%s --uninstall'
+define node_link_refused \
+  '%s (oder ein Ordner darüber oder darin) ist ein Link oder zeigt woanders hin. Aus Sicherheitsgründen wird nichts entfernt; bitte von Hand prüfen.' \
+  '%s (or a folder above or inside it) is a link or resolves elsewhere. For safety nothing is removed; please check it by hand.'
 define node_removed \
   'Nox-Knoten entfernt. Kennung und Protokoll bleiben in %s (löschen, um das Gerät zu vergessen; am Nox unter "Geräte" ebenfalls entfernen).' \
   'Nox node removed. Its identity and audit trail stay in %s (delete it to forget this device; remove it in Nox'"'"'s Devices page too).'
@@ -825,17 +828,41 @@ node_systemctl() {
 node_cli() {
   local python="$CURRENT/.venv/bin/python" launcher="$CURRENT/installer/start_node.pyw"
   if [ -n "$NODE_HEADLESS" ]; then
-    sudo -u "$NODE_USER" env NOX_NODE_HOME="$NODE_DIR" HOME="$NODE_HOME_DIR" "$python" "$launcher" "$@"
+    (cd / && sudo -u "$NODE_USER" env NOX_NODE_HOME="$NODE_DIR" HOME="$NODE_HOME_DIR" "$python" -I "$launcher" "$@")
   else
-    "$python" "$launcher" "$@"
+    "$python" -I "$launcher" "$@"
   fi
 }
 
+#: Headless: the node's folders belong to the nox-node user, who could have replaced one with a
+#: link to anywhere. Root acts on them only when none of them is a link and the folder resolves to
+#: exactly where it should be.
+node_paths_untampered() {
+  local path
+  for path in "$NODE_HOME_DIR" "$NODE_DIR" "$NODE_DIR/app"; do
+    [ -L "$path" ] && return 1
+  done
+  if [ -e "$NODE_DIR" ] && [ "$(realpath -e -- "$NODE_DIR")" != "$NODE_DIR" ]; then return 1; fi
+  return 0
+}
+
 node_uninstall() {
+  if [ -n "$NODE_HEADLESS" ] && ! node_paths_untampered; then
+    fail "$(msg node_link_refused "$NODE_DIR")"
+  fi
   node_systemctl disable --now nox-node >/dev/null 2>&1 || true
   rm -f -- "$NODE_UNIT" "$NODE_BIN"
   node_systemctl daemon-reload >/dev/null 2>&1 || true
-  rm -rf -- "$PREFIX" "$NODE_DIR/app"  # program files and the versions it installed itself
+  rm -rf -- "$PREFIX"  # program files (root's, headless)
+  # The versions the node installed itself live in its own folder: removed as the node's user
+  # (headless), so a link planted there can never make root delete something else.
+  if [ -d "$NODE_DIR/app" ]; then
+    if [ -n "$NODE_HEADLESS" ]; then
+      runuser -u "$NODE_USER" -- rm -rf --one-file-system -- "$NODE_DIR/app"
+    else
+      rm -rf --one-file-system -- "$NODE_DIR/app"
+    fi
+  fi
   say "$(msg node_removed "$NODE_DIR")"
 }
 
@@ -853,11 +880,11 @@ node_write_unit() {
     # bash, not sh: the paths below are quoted with printf %q.
     printf '#!/usr/bin/env bash\n# nox node ... for this device (written by install-linux.sh --node).\n'
     if [ -n "$NODE_HEADLESS" ]; then
-      printf 'run() { sudo -u %q env NOX_NODE_HOME=%q HOME=%q %q %q --cli node "$@"; }\n' \
+      printf 'run() { sudo -u %q env NOX_NODE_HOME=%q HOME=%q %q -I %q --cli node "$@"; }\n' \
         "$NODE_USER" "$NODE_DIR" "$NODE_HOME_DIR" "$CURRENT/.venv/bin/python" "$CURRENT/installer/start_node.pyw"
       printf 'run "$@" || exit $?\n[ "${1:-}" = pair ] && sudo systemctl restart nox-node\nexit 0\n'
     else
-      printf 'run() { %q %q --cli node "$@"; }\n' "$CURRENT/.venv/bin/python" "$CURRENT/installer/start_node.pyw"
+      printf 'run() { %q -I %q --cli node "$@"; }\n' "$CURRENT/.venv/bin/python" "$CURRENT/installer/start_node.pyw"
       printf 'run "$@" || exit $?\n[ "${1:-}" = pair ] && systemctl --user restart nox-node\nexit 0\n'
     fi
   } > "$NODE_BIN.next"

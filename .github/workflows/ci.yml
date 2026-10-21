@@ -521,6 +521,24 @@ jobs:
           test "$(stat -c %U /opt/nox-node)" = root
           sudo nox-node status | tee /dev/stderr | grep -q "Not paired."
 
+      # The node's folders belong to nox-node; root's uninstall must never follow a link planted
+      # there (to the node folder itself, or to its app/ folder).
+      - name: Headless node - uninstall refuses links planted by the node user
+        run: |
+          sudo mkdir -p /srv/nox-canary/app && sudo touch /srv/nox-canary/app/keep
+          for plant in node node/app; do
+            sudo rm -rf /var/lib/nox-node/node
+            if [ "$plant" = node/app ]; then sudo -u nox-node mkdir -p /var/lib/nox-node/node; fi
+            target=/srv/nox-canary; [ "$plant" = node/app ] && target=/srv/nox-canary/app
+            sudo -u nox-node ln -s "$target" "/var/lib/nox-node/$plant"
+            if sudo bash scripts/install-linux.sh --node --headless --uninstall; then
+              echo "uninstall followed a link at $plant"; exit 1
+            fi
+            test -e /srv/nox-canary/app/keep
+            test -e /etc/systemd/system/nox-node.service  # refused before anything was removed
+          done
+          sudo rm -rf /var/lib/nox-node/node
+
       - name: Headless node - uninstall
         run: |
           sudo bash scripts/install-linux.sh --node --headless --uninstall

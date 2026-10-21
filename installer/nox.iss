@@ -109,7 +109,7 @@ Name: "{autodesktop}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: ""
 Name: "{userstartup}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; Tasks: autostart
 ; Node: "Nox Node" starts the logon task now (never a second copy). Its AppUserModelID is the one
 ; the node's notifications carry (nox.node.appid), so a toast says "Nox", not "Windows PowerShell".
-Name: "{group}\Nox Node"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_node.pyw"" --start"; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"; AppUserModelID: "Nox.Node"; Check: IsNodeMode
+Name: "{group}\Nox Node"; Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --start"; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"; AppUserModelID: "Nox.Node"; Check: IsNodeMode
 
 [Registry]
 ; The node's notification sender, per user (no administrator). The 64-bit view explicitly: the
@@ -121,8 +121,8 @@ Root: HKCU64; Subkey: "Software\Classes\AppUserModelId\Nox.Node"; ValueType: str
 Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; Description: "{cm:LaunchProgram,Nox}"; Flags: nowait postinstall skipifsilent unchecked; Check: IsCoreMode
 ; Node: the per-user logon task ("Nox Node", least privilege, as this user - registered by this
 ; user's own Python, not elevated; the elevated step above never runs anything from {app}).
-Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_node.pyw"" --autostart on"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated; StatusMsg: "{cm:NodeTaskStatus}"; Check: IsNodeMode
-Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_node.pyw"" --start"; WorkingDir: "{app}\app"; Description: "{cm:NodeStartNow}"; Flags: nowait postinstall skipifsilent runhidden; Check: IsNodeMode
+Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --autostart on"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated; StatusMsg: "{cm:NodeTaskStatus}"; Check: IsNodeMode
+Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --start"; WorkingDir: "{app}\app"; Description: "{cm:NodeStartNow}"; Flags: nowait postinstall skipifsilent runhidden; Check: IsNodeMode
 
 [UninstallRun]
 ; The sandbox network rules are removed in [Code] (CurUninstallStepChanged), before this runs.
@@ -305,7 +305,7 @@ begin
     Exit;
   end;
   if Exec(ExpandConstant('{app}\runtime\python.exe'),
-      '"' + ExpandConstant('{app}\app\start_node.pyw') + '" --cli node pair "' + Link + '"',
+      '-I "' + ExpandConstant('{app}\app\start_node.pyw') + '" --cli node pair "' + Link + '"',
       ExpandConstant('{app}\app'), SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
     Log('Node paired')
   else

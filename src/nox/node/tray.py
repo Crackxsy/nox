@@ -92,9 +92,14 @@ def spawn_tray() -> subprocess.Popen[bytes] | None:
         "import os, sys; sys.path.insert(0, os.environ['NOX_NODE_APP']); "
         "from nox.node.tray import main; main()"
     )
+    from nox.node.update import python_env  # noqa: PLC0415
+
+    # -I: isolated - no current folder on sys.path, no PYTHON* variables, no user site; and the
+    # working folder is the app folder itself, never wherever the node was started from.
     return subprocess.Popen(  # noqa: S603 - this interpreter, fixed code
-        [sys.executable, "-s", "-c", code],
-        env={**os.environ, "NOX_NODE_APP": str(app)},
+        [sys.executable, "-I", "-c", code],
+        cwd=str(app),
+        env=python_env(NOX_NODE_APP=str(app)),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

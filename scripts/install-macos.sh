@@ -132,7 +132,7 @@ launcher="$CURRENT/installer/start_node.pyw"
 previous="$(basename "$(readlink "$CURRENT" 2>/dev/null || true)")"
 ln -sfn "$RELEASES/$release" "$CURRENT.next"
 mv -fh "$CURRENT.next" "$CURRENT"
-if ! "$python" "$launcher" --selftest >/dev/null; then
+if ! "$python" -I "$launcher" --selftest >/dev/null; then
   if [ -n "$previous" ] && [ "$previous" != "." ] && [ -d "$RELEASES/$previous" ]; then
     ln -sfn "$RELEASES/$previous" "$CURRENT.next"
     mv -fh "$CURRENT.next" "$CURRENT"
@@ -150,7 +150,7 @@ cat > "$PLIST.next" <<PLIST
 <dict>
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
-  <array><string>$(xml "$python")</string><string>$(xml "$launcher")</string></array>
+  <array><string>$(xml "$python")</string><string>-I</string><string>$(xml "$launcher")</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ProcessType</key><string>Background</string>
@@ -162,7 +162,7 @@ PLIST
 mv -f "$PLIST.next" "$PLIST"
 {
   printf '#!/usr/bin/env bash\n# nox node ... for this Mac (written by install-macos.sh --node).\n'
-  printf 'run() { %q %q --cli node "$@"; }\n' "$python" "$launcher"
+  printf 'run() { %q -I %q --cli node "$@"; }\n' "$python" "$launcher"
   # shellcheck disable=SC2016  # written literally into the wrapper
   printf 'run "$@" || exit $?\n[ "${1:-}" = pair ] && launchctl kickstart -k "gui/$(id -u)/%s"\nexit 0\n' "$LABEL"
 } > "$NODE_BIN.next"

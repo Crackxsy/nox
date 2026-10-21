@@ -175,3 +175,14 @@ def test_task_values_are_escaped() -> None:
     xml = launcher.task_xml(user="a&b", command="<c>", arguments='"x"', workdir="w")
     ElementTree.fromstring(xml.split("\n", 1)[1])  # still well-formed
     assert "a&amp;b" in xml and "&lt;c&gt;" in xml
+
+
+def test_the_node_process_starts_isolated_in_its_own_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYTHONPATH", "somewhere-else")
+    argv, env, cwd = launcher.child_command(tmp_path)
+    assert argv[1] == "-I" and Path(argv[2]).is_absolute()
+    assert cwd == str(tmp_path)
+    assert env["NOX_NODE_APP"] == str(tmp_path)
+    assert not any(k.upper().startswith("PYTHON") for k in env)

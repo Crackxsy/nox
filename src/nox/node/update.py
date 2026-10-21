@@ -216,6 +216,16 @@ def installed_version(name: str) -> str | None:
         return None
 
 
+def python_env(**extra: str) -> dict[str, str]:
+    """The environment for a Python this node starts: without any PYTHON* variable (no
+    PYTHONPATH, PYTHONHOME, PYTHONSTARTUP ... can redirect what it imports), plus `extra`.
+    Together with `-I` (isolated: no current folder, no user site, no PYTHON* variables) and a
+    trusted working folder, only the code that was chosen runs."""
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PYTHON")}
+    env.update(extra)
+    return env
+
+
 def _default_smoke(app: Path, python: str) -> str:
     """Import the new code with this Python, in a process of its own; its version, or ""."""
     code = (
@@ -223,8 +233,8 @@ def _default_smoke(app: Path, python: str) -> str:
         "import nox, nox.cli, nox.node.agent, nox.node.update; print(nox.__version__)"
     )
     result = subprocess.run(  # noqa: S603 - this interpreter, fixed code; the folder is data
-        [python, "-s", "-c", code],
-        env={**os.environ, "NOX_NODE_APP": str(app)},
+        [python, "-I", "-c", code],
+        env=python_env(NOX_NODE_APP=str(app)),
         cwd=str(app),
         capture_output=True,
         text=True,

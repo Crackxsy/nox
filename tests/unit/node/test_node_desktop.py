@@ -123,3 +123,50 @@ async def test_no_restart_while_a_call_runs_or_without_the_launcher(
     monkeypatch.delenv("NOX_NODE_LAUNCHER")
     agent.busy = False
     assert not (await _loop(tmp_path, updater, agent))[1].is_set()
+
+
+def test_the_tray_starts_isolated_in_the_app_folder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No module from the current folder, PYTHONPATH or a user site can stand in for Nox's."""
+    from nox.node import tray
+
+    seen: dict[str, object] = {}
+
+    def fake_popen(argv: list[str], **kwargs: object) -> object:
+        seen.update(argv=argv, **kwargs)
+        return object()
+
+    monkeypatch.setattr(tray, "tray_available", lambda: True)
+    monkeypatch.setattr(tray.subprocess, "Popen", fake_popen)
+    monkeypatch.setenv("PYTHONPATH", "somewhere-else")
+    monkeypatch.delenv("NOX_NODE_TRAY", raising=False)
+    assert tray.spawn_tray() is not None
+    argv = seen["argv"]
+    app = str(Path(tray.__file__).resolve().parents[2])
+    assert isinstance(argv, list) and argv[1] == "-I"
+    assert seen["cwd"] == app
+    env = seen["env"]
+    assert isinstance(env, dict) and env["NOX_NODE_APP"] == app
+    assert not any(k.upper().startswith("PYTHON") for k in env)
+
+
+def test_the_trial_start_runs_isolated_in_the_new_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nox.node import update
+
+    seen: dict[str, object] = {}
+
+    class Done:
+        returncode = 0
+        stdout = "0.5.1\n"
+
+    def fake_run(argv: list[str], **kwargs: object) -> Done:
+        seen.update(argv=argv, **kwargs)
+        return Done()
+
+    monkeypatch.setattr(update.subprocess, "run", fake_run)
+    monkeypatch.setenv("PYTHONHOME", "elsewhere")
+    assert update._default_smoke(tmp_path, "python-here") == "0.5.1"  # noqa: SLF001
+    assert seen["argv"][:2] == ["python-here", "-I"]  # type: ignore[index]
+    assert seen["cwd"] == str(tmp_path)
+    assert not any(k.upper().startswith("PYTHON") for k in seen["env"])  # type: ignore[attr-defined]
