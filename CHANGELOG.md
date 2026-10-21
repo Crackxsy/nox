@@ -34,6 +34,15 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
 
 ### Added
+- **Nodes, part 2 (the node):** `nox node pair <link>` pins the core's authority from the link
+  before it sends the code, generates the key on the device (encrypted with a passphrase in the
+  OS keyring where there is one) and stores the 30-day certificate; `nox node run` keeps the
+  connection (TLS 1.3, only the pinned authority, reconnect 1 s to 60 s, ping every second);
+  `nox node status`, `nox node log` (the device's own hash-chained audit trail), `nox node allow`
+  / `deny` (the only way to widen what Nox may do there; the core can only narrow). Tools
+  `system.info` and `notify.show`. The node's own gate refuses hard prohibitions, disabled groups,
+  unknown tools, invalid arguments and anything above low risk, whatever the core sent. On the
+  core: `nox pair --node`, `nox unpair --node`. Guide: `docs/NODES.md`.
 - **Nodes, part 1 (core side):** another PC in the home can be paired as a `nox node`. A trusted
   session creates a code and a `nox-node://pair?...` link that pins the installation's authority;
   the node redeems it at `POST /api/node/pair` for a 30-day client certificate (EKU clientAuth,

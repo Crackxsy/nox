@@ -89,15 +89,18 @@ def where() -> None:
 @app.command()
 def pair(
     name: str = typer.Option("", help="A name for the new device, e.g. 'Kitchen tablet'."),
+    node: bool = typer.Option(
+        False, "--node", help="Pair another PC as a `nox node` (its hands) instead of a browser."
+    ),
 ) -> None:
     """Pair a phone, tablet or PC in the home network: prints a QR code and a link to open."""
     from nox.core.config import load_config  # noqa: PLC0415
-    from nox.lan.terminal import PairingError, pair_in_terminal  # noqa: PLC0415
+    from nox.lan.terminal import PairingError, pair_in_terminal, pair_node_in_terminal  # noqa: PLC0415
     from nox.paths import resolve_config_paths  # noqa: PLC0415
 
     config = load_config(*resolve_config_paths())
     try:
-        pair_in_terminal(
+        (pair_node_in_terminal if node else pair_in_terminal)(
             Path(config.paths.runtime_dir),
             name=name,
             language=config.identity.ui_language,
@@ -127,6 +130,7 @@ def devices() -> None:
 @app.command()
 def unpair(
     device: str = typer.Argument(..., help="The device's name, or the start of its id."),
+    node: bool = typer.Option(False, "--node", help="Remove a `nox node` (another PC) instead."),
 ) -> None:
     """Remove a paired device - a lost phone, say. Its open connections end at once."""
     from nox.lan.terminal import PairingError, unpair_in_terminal  # noqa: PLC0415
@@ -138,6 +142,7 @@ def unpair(
             device,
             language=config.identity.ui_language,
             say=typer.echo,
+            node=node,
         )
     except PairingError as exc:
         typer.echo(str(exc), err=True)
@@ -324,6 +329,82 @@ def _register_release_commands() -> None:
 
 
 _register_release_commands()
+
+node_app = typer.Typer(help="Nox on this PC as a node of the Nox at home (its hands here).")
+app.add_typer(node_app, name="node")
+
+
+def _node_home() -> Any:
+    from nox.node.home import NodeHome  # noqa: PLC0415
+
+    return NodeHome()
+
+
+@node_app.command("pair")
+def node_pair(
+    link: str = typer.Argument(..., help='The link from `nox pair --node`: "nox-node://pair?..."'),
+    name: str = typer.Option("", help="A name for this device, e.g. 'Laptop'."),
+) -> None:
+    """Pair this device with the Nox at home. Checks Nox's fingerprint before sending anything."""
+    from nox.node.cli import NodeCliError, pair, secret_store  # noqa: PLC0415
+
+    try:
+        typer.echo(pair(link, home=_node_home(), name=name, secrets=secret_store()))
+    except NodeCliError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
+@node_app.command("run")
+def node_run() -> None:
+    """Connect to Nox and serve it until stopped (Ctrl+C). Reconnects on its own."""
+    from nox.node.cli import build, run, secret_store  # noqa: PLC0415
+
+    typer.echo(run(build(_node_home(), secrets=secret_store())))
+
+
+@node_app.command("status")
+def node_status() -> None:
+    """Whether this device is paired and connected, and what Nox may do here."""
+    from nox.node.cli import status  # noqa: PLC0415
+
+    for line in status(_node_home()):
+        typer.echo(line)
+
+
+@node_app.command("log")
+def node_log(limit: int = typer.Option(50, min=1, max=10_000)) -> None:
+    """What Nox did or was refused on this device (the local, hash-chained audit trail)."""
+    from nox.node.cli import log_lines  # noqa: PLC0415
+
+    for line in log_lines(_node_home(), limit=limit):
+        typer.echo(line)
+
+
+@node_app.command("allow")
+def node_allow(
+    group: str = typer.Argument(..., help="system, notify, media, files, shell, ..."),
+) -> None:
+    """Let Nox use a capability group on this device. Only possible here, never from the core."""
+    from nox.node.cli import NodeCliError, allow  # noqa: PLC0415
+
+    try:
+        allow(_node_home(), group, True, say=typer.echo)
+    except NodeCliError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
+@node_app.command("deny")
+def node_deny(group: str = typer.Argument(...)) -> None:
+    """Take a capability group away from Nox on this device."""
+    from nox.node.cli import NodeCliError, allow  # noqa: PLC0415
+
+    try:
+        allow(_node_home(), group, False, say=typer.echo)
+    except NodeCliError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
 
 
 sandbox_app = typer.Typer(help="The command sandbox (Windows: AppContainer access rights).")
