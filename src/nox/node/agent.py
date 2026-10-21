@@ -318,7 +318,7 @@ class NodeAgent:
         try:
             result = await asyncio.wait_for(decision.tool.handler(decision.args), 30)
         except Exception as exc:  # noqa: BLE001 - a failing tool is an error result, not a crash
-            log.warning("node.tool_failed", tool=name, error=type(exc).__name__)
+            log.warning("node.tool_failed", tool=p.safe_name(name), error=type(exc).__name__)
             await self._reply(
                 ws,
                 msg_id,
@@ -344,7 +344,7 @@ class NodeAgent:
         )
 
     async def _refused(self, ws: ClientConnection, msg_id: Any, name: str, reason: str) -> None:
-        log.warning("node.call_refused", tool=name[:64], reason=reason)
+        log.warning("node.call_refused", tool=p.safe_name(name, 64), reason=reason)
         await self._reply(
             ws,
             msg_id,

@@ -20,7 +20,7 @@ from nox.node.gate import NodeGate
 from nox.node.home import NodeHome
 from nox.node.keystore import NodeKeyStore
 from nox.node.manifest import GROUPS, load_manifest, save_manifest
-from nox.node.protocol import PairLink, PairLinkError
+from nox.node.protocol import PairLink, PairLinkError, escape_controls
 from nox.node.tools import default_tools
 from nox.security.audit import SqliteAuditLog
 from nox.security.model import SecretStore
@@ -122,10 +122,11 @@ def status(home: NodeHome) -> list[str]:
     manifest = load_manifest(home.manifest_file)
     state = home.read_status()
     allowed = [GROUPS[g].label_en for g in GROUPS if manifest.groups.get(g)]
+    x = escape_controls
     return [
-        f"Name:      {identity.name}",
-        f"Core:      {identity.core_host}:{identity.node_port}",
-        f"State:     {state.get('state', 'not running')} ({state.get('at', '-')})",
+        f"Name:      {x(identity.name)}",
+        f"Core:      {x(identity.core_host)}:{identity.node_port}",
+        f"State:     {x(str(state.get('state', 'not running')))} ({x(str(state.get('at', '-')))})",
         f"Nox may:   {', '.join(allowed) or 'nothing'}",
         f"Max risk:  {manifest.max_risk}",
     ]
@@ -134,8 +135,12 @@ def status(home: NodeHome) -> list[str]:
 def log_lines(home: NodeHome, *, limit: int = 50) -> list[str]:
     audit = open_audit(home)
     entries = audit.entries(since_seq=max(0, audit.count() - limit), limit=limit)
+    # Every field is escaped on the way out too: an entry written before this check existed,
+    # or by anything else, still cannot drive the terminal or fake a line.
+    x = escape_controls
     lines = [
-        f"{e.seq:>6}  {e.decision:<5}  {e.actor:<6} {e.tool:<14} {e.action:<12} {e.result}"
+        f"{e.seq:>6}  {x(e.decision):<5}  {x(e.actor):<6} {x(e.tool):<14} {x(e.action):<12} "
+        f"{x(e.target)} {x(e.result)}".rstrip()
         for e in entries
     ]
     lines.append("Chain intact." if audit.verify_chain() else "CHAIN BROKEN - the log was altered.")

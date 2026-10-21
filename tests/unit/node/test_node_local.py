@@ -266,3 +266,57 @@ async def test_a_key_file_that_cannot_be_protected_is_a_clean_refusal(
         )
     assert refused.value.reason == "key_not_protected"
     assert not home.key_file.exists()
+
+
+# ---- terminal safety (orchestrator review) ------------------------------------------------------
+
+EVIL = ["x\x1b[2J\x1b[31mDENY", "ok\r\n     1  allow  core  shell.run", "safe\u202etxt", "c1\x9b"]
+
+
+def _clean(line: str) -> bool:
+    return not any(
+        ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F or c in "\u202e\u2066\u2067" for c in line
+    )
+
+
+@pytest.mark.parametrize("evil", EVIL)
+def test_the_gate_records_a_hostile_tool_name_escaped(evil: str) -> None:
+    import sqlite3
+
+    from nox.node.gate import NodeGate
+    from nox.node.tools import default_tools
+    from nox.security.audit import SqliteAuditLog
+
+    audit = SqliteAuditLog(sqlite3.connect(":memory:", check_same_thread=False))
+    gate = NodeGate(default_tools(None), NodeManifest(), audit)
+    assert gate.check(evil, {}, call_id=evil).allowed is False
+    entry = audit.entries(limit=5)[-1]
+    assert _clean(entry.tool) and _clean(entry.target)
+
+
+def test_the_core_cannot_narrow_with_names_that_are_no_groups() -> None:
+    from nox.node.gate import NodeGate
+    from nox.node.tools import default_tools
+
+    gate = NodeGate(default_tools(None), NodeManifest(), None)
+    gate.narrow(["notify", "x\x1b[2Jfake"])
+    assert gate.narrowed == {"notify"}
+
+
+def test_nox_node_log_escapes_every_field_even_of_old_entries(tmp_path: Path) -> None:
+    home = NodeHome(tmp_path / "h")
+    audit = node_cli.open_audit(home)
+    for evil in EVIL:  # written directly, as an older release or another writer might have
+        audit.append(actor=evil, tool=evil, action=evil, target=evil, decision="deny", result=evil)
+    lines = node_cli.log_lines(home)
+    assert len(lines) == len(EVIL) + 1
+    assert all(_clean(line) for line in lines)
+    assert r"\x1b[2J" in lines[0]
+
+
+def test_nox_node_status_escapes_what_the_core_or_a_file_says(tmp_path: Path) -> None:
+    home = NodeHome(tmp_path / "h")
+    identity = _identity().model_copy(update={"name": "Lap\x1b[2Jtop\u202e"})
+    home.save_pairing(identity, cert_pem="x", ca_pem="x")
+    home.write_status({"state": "connected\r\nState:     removed", "at": "now"})
+    assert all(_clean(line) for line in node_cli.status(home))

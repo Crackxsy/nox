@@ -23,7 +23,8 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from nox.node.manifest import NodeManifest
+from nox.node.manifest import GROUPS, NodeManifest
+from nox.node.protocol import safe_name
 from nox.node.tools import NodeTool
 from nox.security.model import AuditLog
 from nox.security.prohibitions import matching_hard_prohibition
@@ -105,16 +106,16 @@ class NodeGate:
             return
         self._audit.append(
             actor=by,
-            tool=name[:96],
+            tool=safe_name(name),
             action="node.call",
-            target=call_id[:64],
+            target=safe_name(call_id, 64),
             decision="allow" if decision.allowed else "deny",
             result=decision.reason or "ok",
         )
 
     def narrow(self, groups: list[str]) -> None:
         """The core's `nox/policy`: take groups away for this connection. It cannot add any."""
-        self.narrowed = {g for g in groups if isinstance(g, str)}
+        self.narrowed = {g for g in groups if isinstance(g, str) and g in GROUPS}
         if self._audit is not None:
             self._audit.append(
                 actor="core",
@@ -122,5 +123,5 @@ class NodeGate:
                 action="node.policy",
                 target="",
                 decision="allow",
-                result="narrowed:" + ",".join(sorted(self.narrowed))[:200],
+                result="narrowed:" + ",".join(sorted(self.narrowed)),
             )
