@@ -6,7 +6,9 @@ What it serves, and nothing else:
   * `GET /api/lan/info` - the authority's fingerprint and this machine's addresses (public facts,
     shown on the pairing screen so a person can compare them),
   * `GET /nox-ca.crt` - the authority itself, for devices that want no browser warning,
-  * `/ws` - the device's WebSocket, bridged to the loopback hub.
+  * `/ws` - the device's WebSocket, bridged to the loopback hub,
+  * `POST /api/node/pair` - a new `nox node` redeems a one-time code for a client certificate
+    (`nox.node`). Not a browser route: a request with an `Origin` header is refused.
 
 What it never serves: the per-start session token, `/api/state`, `/api/providers` or the pet. A
 device authenticates on the hub with its own token, as role `device`, and the hub accepts nothing
@@ -38,7 +40,7 @@ import json
 import re
 import time
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -58,11 +60,16 @@ from nox.core.logging import get_logger
 from nox.ipc.server import LAN_BRIDGE_HEADER, LAN_PEER_HEADER, WS_PATH
 from nox.lan.devices import CLIENT_PREFIX, LanDevices
 from nox.lan.tls import TlsMaterial, permitted_address
+from nox.node.protocol import NodePairRequest
 
 log = get_logger(__name__)
 
+#: Redeems a node's pairing request: (HTTP status, JSON body).
+NodePairHandler = Callable[[NodePairRequest], Awaitable[tuple[int, dict[str, Any]]]]
+
 __all__ = [
     "LanSettings",
+    "NodePairHandler",
     "PairLimiter",
     "content_security_policy",
     "create_lan_app",
@@ -75,6 +82,8 @@ CLOSE_TRY_AGAIN_LATER = 1013
 CLOSE_INTERNAL_ERROR = 1011
 MAX_FRAME_BYTES = 1024 * 1024
 MAX_PAIR_BODY_BYTES = 1024
+#: A node's pairing body carries a certificate request (about 500 bytes of PEM).
+MAX_NODE_PAIR_BODY_BYTES = 8192
 #: WebSockets that have not authenticated yet, in total and per source address.
 MAX_PREAUTH_TOTAL = 16
 MAX_PREAUTH_PER_ADDRESS = 4
@@ -346,6 +355,7 @@ def create_lan_app(
     limiter: PairLimiter,
     allow_public_clients: bool = False,
     max_frame_bytes: int = MAX_FRAME_BYTES,
+    node_pair: Callable[[], NodePairHandler | None] = lambda: None,
 ) -> Starlette:
     """Build the listener's app. Everything is injected, so tests run it without a core."""
     preauth: dict[str, int] = {}
@@ -409,6 +419,34 @@ def create_lan_app(
             },
             status_code=201,
         )
+
+    async def pair_node(request: Request) -> Response:
+        """A new node: no browser may do this, so any `Origin` is refused before anything else.
+        The one-time code is the credential; the rate limit is the browser pairing's."""
+        handler = node_pair()
+        if handler is None:
+            return Response("not found\n", status_code=404)
+        address = _client_address(request.client)
+        if "origin" in request.headers:
+            log.warning("lan.node_pair_origin_refused", peer=address)
+            return JSONResponse({"error": "origin"}, status_code=403)
+        if not limiter.allow(address):
+            log.warning("lan.node_pair_rate_limited", peer=address)
+            return JSONResponse({"error": "rate_limited"}, status_code=429)
+        declared = request.headers.get("content-length", "")
+        if declared and (not declared.isdigit() or int(declared) > MAX_NODE_PAIR_BODY_BYTES):
+            return JSONResponse({"error": "invalid"}, status_code=413)
+        raw = await request.body()
+        if len(raw) > MAX_NODE_PAIR_BODY_BYTES:
+            return JSONResponse({"error": "invalid"}, status_code=413)
+        try:
+            body = NodePairRequest.model_validate(json.loads(raw))
+        except (ValidationError, ValueError, RecursionError):
+            return JSONResponse({"error": "invalid"}, status_code=400)
+        status, answer = await handler(body)
+        if status == 201:
+            log.info("lan.node_paired", peer=address)
+        return JSONResponse(answer, status_code=status)
 
     def take_slot(peer: str) -> bool:
         if (
@@ -524,6 +562,7 @@ def create_lan_app(
         Route("/", root, methods=["GET"]),
         Route("/api/lan/info", info, methods=["GET"]),
         Route("/api/pair", pair, methods=["POST"]),
+        Route("/api/node/pair", pair_node, methods=["POST"]),
         Route("/nox-ca.crt", ca_certificate, methods=["GET"]),
         WebSocketRoute(WS_PATH, bridge),
     ]

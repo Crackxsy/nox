@@ -100,10 +100,12 @@ ROLE_ALLOWLIST: Mapping[str, tuple[str, ...]] = {
     # The MCP bridge: nothing by pattern. Its two requests (`mcp.tools.list`, `mcp.tools.call`)
     # are registered with `roles=("mcp",)` next to their handlers in `nox.mcp.gate`.
     "mcp": (),
-    # core, supervisor and remote never authenticate over the hub.
+    # core, supervisor, remote and node never authenticate over the hub. A node's whole surface
+    # is the JSON-RPC allow-list on its own listener (`nox.node.protocol.NODE_TO_CORE`).
     "core": (),
     "supervisor": (),
     "remote": (),
+    "node": (),
 }
 
 

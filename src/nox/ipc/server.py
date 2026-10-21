@@ -141,6 +141,8 @@ EVENT_POLICY: Mapping[str, str] = {
     # The MCP bridge forwards tool calls and needs no event at all; chat, transcripts and memory
     # must never reach a process a language model drives.
     "mcp": "none",
+    # `nox node` never reaches the hub, and no event - chat, transcripts, memory - may reach it.
+    "node": "none",
 }
 
 

@@ -132,6 +132,10 @@ class LanConfig(StrictSection):
     #: answered, so a port forward or a public address on the machine does not expose the
     #: pairing page to the internet. Access from outside the home is its own feature (wave F).
     allow_public_clients: bool = False
+    #: Where `nox node`s connect (mutual TLS, `nox.node.listener`); only while `enabled`.
+    node_port: int = Field(default=47844, ge=0, le=65535)
+    #: Paired nodes at most (PCs, laptops, a second Pi).
+    max_nodes: int = Field(default=10, ge=1, le=50)
 
 
 class IpcConfig(StrictSection):

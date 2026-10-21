@@ -37,6 +37,7 @@ __all__ = [
     "RemoteTool",
     "StdioTransport",
     "Transport",
+    "WebSocketTransport",
 ]
 
 #: Largest single message accepted from a server. A tool list or a result larger than this is
@@ -213,6 +214,96 @@ class HttpTransport:
             await self._client.aclose()
 
 
+# ---- WebSocket (nodes) ---------------------------------------------------------------------------
+
+
+class _WebSocket(Protocol):
+    """What `WebSocketTransport` needs from a connection (`websockets`' server or client side)."""
+
+    async def send(self, message: str) -> None: ...
+    async def recv(self) -> str | bytes: ...
+    async def close(self, code: int = 1000, reason: str = "") -> None: ...
+
+
+#: A message for the peer's own handler rather than for the client: a request or notification the
+#: peer sends on its own initiative (a node's `nox/ping`, `security.kill`).
+PeerHandler = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+class WebSocketTransport:
+    """JSON-RPC over one WebSocket, one message per text frame (`nox node`, spec C §1.3).
+
+    The connection carries traffic in both directions: answers to the client's requests (and the
+    `notifications/tools/list_changed` notification) go to `McpClient`; every other request or
+    notification the peer sends goes to `on_peer`, which decides whether the peer may send it at
+    all. Binary frames, frames over `max_message_bytes` and frames that are not one JSON object
+    end the connection - a peer that breaks the framing is not given a second guess.
+    """
+
+    CLIENT_NOTIFICATIONS: frozenset[str] = frozenset({"notifications/tools/list_changed"})
+
+    def __init__(
+        self,
+        websocket: _WebSocket,
+        *,
+        on_peer: PeerHandler | None = None,
+        max_message_bytes: int = MAX_MESSAGE_BYTES,
+    ) -> None:
+        self._ws = websocket
+        self._on_peer = on_peer
+        self._max = max_message_bytes
+        self._send_lock = asyncio.Lock()
+
+    async def send(self, message: dict[str, Any]) -> None:
+        data = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        if len(data.encode("utf-8")) > self._max:
+            raise McpClientError("message larger than allowed")
+        from websockets.exceptions import ConnectionClosed  # noqa: PLC0415
+
+        async with self._send_lock:
+            try:
+                await self._ws.send(data)
+            except ConnectionClosed as exc:
+                raise McpClientError("the connection is closed") from exc
+
+    def _decode(self, frame: str | bytes) -> dict[str, Any]:
+        if not isinstance(frame, str):
+            raise McpClientError("the peer sent a binary frame")
+        if len(frame.encode("utf-8")) > self._max:
+            raise McpClientError("the peer sent a message larger than allowed")
+        try:
+            message = json.loads(frame)
+        except (json.JSONDecodeError, RecursionError) as exc:
+            raise McpClientError("the peer sent something that is not JSON") from exc
+        if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
+            raise McpClientError("the peer sent something that is not JSON-RPC")
+        return message
+
+    async def messages(self) -> AsyncIterator[dict[str, Any]]:
+        from websockets.exceptions import ConnectionClosed  # noqa: PLC0415 - optional at import
+
+        while True:
+            try:
+                frame = await self._ws.recv()
+            except ConnectionClosed:
+                return
+            message = self._decode(frame)
+            method = message.get("method")
+            if isinstance(method, str) and not (
+                "id" not in message and method in self.CLIENT_NOTIFICATIONS
+            ):
+                if self._on_peer is None:
+                    yield message  # McpClient answers a request with "method not found"
+                else:
+                    await self._on_peer(message)
+                continue
+            yield message
+
+    async def close(self) -> None:
+        with contextlib.suppress(Exception):
+            await self._ws.close()
+
+
 # ---- the client ----------------------------------------------------------------------------------
 
 
@@ -253,6 +344,10 @@ class McpClient:
     @property
     def closed(self) -> bool:
         return self._closed.is_set()
+
+    async def wait_closed(self) -> None:
+        """Until the reader ended: the peer went away or broke the protocol."""
+        await self._closed.wait()
 
     def start(self) -> None:
         if self._reader is None:

@@ -167,7 +167,8 @@ screen with `nox devices` (lists them) and `nox unpair <name or id>`.
 ## Firewall
 
 On Windows, the first start asks whether Python may accept connections in **private** networks -
-allow it. On a Linux server with `ufw`: `sudo ufw allow 47843/tcp`.
+allow it. On a Linux server with `ufw`: `sudo ufw allow 47843/tcp`. Nodes (`nox node` on another
+PC) connect to a second port: `sudo ufw allow 47844/tcp`, and only if you use nodes.
 
 ## Settings
 
@@ -181,6 +182,8 @@ ipc:
     pair_code_ttl_s: 300           # a pairing code is valid this long, and only once
     pair_attempts_per_minute: 5    # per source address
     allow_public_clients: false    # only loopback and private networks are answered
+    node_port: 47844               # `nox node` on other PCs (client certificates, TLS 1.3)
+    max_nodes: 10
 ```
 
 Changes take effect after a restart. `nox doctor` and the dashboard's Status page show whether the

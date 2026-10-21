@@ -96,6 +96,8 @@ ipc:
     pair_code_ttl_s: 300         # a pairing code is valid this long, and only once
     pair_attempts_per_minute: 5  # per source address
     allow_public_clients: false  # only loopback and private networks are answered
+    node_port: 47844             # `nox node` on other PCs connects here (client certificates)
+    max_nodes: 10
   auth: token                    # per-start session tokens issued by core, stored under <data_dir>/runtime
 
 voice:

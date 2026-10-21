@@ -58,6 +58,8 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "skills",
     # Network access for paired devices; inert unless `ipc.lan.enabled`.
     "lan",
+    # `nox node` on other PCs: its own listener, next to the network listener it builds on.
+    "node",
     # Late on purpose: it describes the others, and reads the registry they filled.
     "capabilities",
     # After capabilities: serves its tool loop to Claude Code over MCP.

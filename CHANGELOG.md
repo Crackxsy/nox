@@ -34,6 +34,14 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
 
 ### Added
+- **Nodes, part 1 (core side):** another PC in the home can be paired as a `nox node`. A trusted
+  session creates a code and a `nox-node://pair?...` link that pins the installation's authority;
+  the node redeems it at `POST /api/node/pair` for a 30-day client certificate (EKU clientAuth,
+  P-256, key generated on the node). Nodes connect to a separate listener
+  (`ipc.lan.node_port: 47844`, TLS 1.3, client certificate required, serial denylist, no browser
+  Origin) and speak JSON-RPC (the core is an MCP client of the node over the new
+  `WebSocketTransport`). Role `node` may send only a fixed method list; `node.pair.start`,
+  `node.list` and `node.unpair` (closes the connection at once). Migration `0017_nodes`.
 - **Signed releases** (docs/RELEASES.md). Every release gets `release-manifest.json` (version, tag,
   source commit, each file with size and SHA-256) and an Ed25519 signature made in the release
   workflow's protected `release-signing` environment from the secret `NOX_RELEASE_SIGNING_KEY`
