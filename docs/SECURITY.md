@@ -672,10 +672,29 @@ certificate** of this installation's authority instead of a token. What protects
   `nox/revoked` and closes the connection in under a second; a node revoked while offline is
   refused on its next handshake.
 
-Still to come in wave C, and documented with it: the node's own gate (hard prohibitions,
-capabilities enabled only on the device, signed core receipts, the local confirmation for high
-risk, its own sandbox and audit) and the kill switch reaching every node. Negative tests:
-`tests/unit/node/`, `tests/integration/test_nodes.py`.
+On the node itself (`nox node`, [`NODES.md`](NODES.md)) - a compromised core can send
+well-formed calls, so the node decides on its own authority (`nox.node.gate.NodeGate`):
+
+- **Pairing pins the authority** before the code leaves the device: the authority is fetched,
+  hashed and compared with the link's fingerprint; a mismatch sends nothing. The answer must be a
+  certificate for the node's own key from the pinned authority. Later connections trust only the
+  pinned authority (TLS 1.3); a stored authority that no longer matches the pin stops the node.
+- **The key never leaves the device**; it is encrypted with a passphrase in the OS keyring where
+  there is one. Residual risk: on a headless Linux node only its 0600 mode protects it.
+- **The gate, before any handler:** hard prohibitions (the core's immutable list, by name and
+  glob), known tools only, the tool's capability group enabled in the device's `node.yaml` and not
+  narrowed by the core, a risk ceiling of *low* in this release (nothing medium or high runs on a
+  node until signed receipts and the local confirmation exist), strict argument models. The core
+  can only narrow the groups (`nox/policy`); only `nox node allow` on the device widens them.
+- **Only the core's methods** (`CORE_TO_NODE`) are answered; a node never acts while disconnected
+  and queues nothing.
+- **Its own audit trail**: every decision, hash-chained, on the device (`nox node log`); the core
+  cannot read or erase it. `nox/revoked` deletes the key and the certificate.
+
+Still to come in wave C: signed core receipts, the local confirmation for high risk, the node's
+own sandbox and budgets, and the kill switch reaching every node (with a dead-man timer).
+Negative tests: `tests/unit/node/` (a deliberately permissive core in `test_agent.py`),
+`tests/integration/test_nodes.py`.
 
 ## Known limits of network access
 

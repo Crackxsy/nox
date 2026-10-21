@@ -227,3 +227,68 @@ async def test_a_stop_on_the_node_engages_the_kill_switch(core: NoxCore, tmp_pat
     assert killswitch.is_engaged()
     assert killswitch.origin == "node"
     await ws.close()
+
+
+async def test_a_node_enrolls_runs_and_serves_the_core(core: NoxCore, tmp_path: Path) -> None:
+    """`nox node pair` + `nox node run` end to end: the node pins the authority, gets its
+    certificate, connects, and the core calls its tools - which the node's gate checks."""
+    from nox.node.agent import NodeAgent
+    from nox.node.enroll import enroll
+    from nox.node.gate import NodeGate
+    from nox.node.home import NodeHome
+    from nox.node.keystore import NodeKeyStore
+    from nox.node.manifest import NodeManifest
+    from nox.node.tools import default_tools
+    from nox.security.secrets import InMemorySecretStore
+
+    start = await _local(core, "dashboard", "node.pair.start", {"name": "Laptop"})
+    printed = PairLink.parse(start["link"])
+    link = PairLink.make(
+        host="127.0.0.1",
+        port=_lan(core).port,
+        code=printed.code,
+        ca_fingerprint=printed.ca_fingerprint,
+    )
+    home = NodeHome(tmp_path / "laptop")
+    keystore = NodeKeyStore(home.key_file, InMemorySecretStore())
+    identity = await enroll(link, home, keystore, name="Laptop")
+    assert home.paired and b"ENCRYPTED" in home.key_file.read_bytes()
+
+    shown: list[tuple[str, str]] = []
+
+    class Notifier:
+        async def show(self, title: str, text: str) -> None:
+            shown.append((title, text))
+
+    gate = NodeGate(default_tools(Notifier()), NodeManifest(), None)
+    agent = NodeAgent(home, keystore, gate, None)
+    stop = asyncio.Event()
+    task = asyncio.create_task(agent.run(stop))
+    try:
+        listener = _nodes(core).listener
+        assert listener is not None
+        for _ in range(250):
+            session = listener.sessions.get(identity.node_id)
+            if session is not None and session.ready.is_set():
+                break
+            await asyncio.sleep(0.02)
+        else:
+            raise AssertionError("the node never connected")
+        tools = await session.client.list_tools()
+        assert {t.name for t in tools} == {"system.info", "notify.show"}
+        meta = {"call_id": "c1", "risk": "low", "deadline": 4102444800.0}
+        await session.client.request(
+            "tools/call",
+            {"name": "notify.show", "arguments": {"text": "Wäsche aufhängen"}, "_nox": meta},
+        )
+        assert shown == [("Nox", "Wäsche aufhängen")]
+        refused = await session.client.request(
+            "tools/call", {"name": "game.input.send", "arguments": {}, "_nox": meta}
+        )
+        assert refused["_nox"]["refused"] == "hard_prohibition"
+        await _local(core, "dashboard", "node.unpair", {"device_id": identity.node_id})
+        assert await asyncio.wait_for(task, 5) == "revoked"
+        assert not home.key_file.exists()
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, 5)
