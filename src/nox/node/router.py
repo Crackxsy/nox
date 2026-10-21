@@ -35,6 +35,7 @@ log = get_logger(__name__)
 
 __all__ = [
     "CORE",
+    "CannotShow",
     "DEVICE_KEY",
     "Resolution",
     "origin_device",
@@ -55,6 +56,10 @@ ROUTE_DELEGATE_KEY = "_route_delegate"
 NODE_CALL_TIMEOUT_S = 30.0
 _CORE_WORDS = frozenset({"core", "dieser core", "this core", "hier", "here"})
 _HERE_WORDS = frozenset({"hier", "here"})
+
+
+class CannotShow(ValueError):  # noqa: N818 - a refusal, named for what it says
+    """A node call's target would not fit a confirmation in full; the call is refused."""
 
 
 @dataclass(frozen=True)
@@ -215,7 +220,9 @@ def routed_spec(
 
     `node_target` names what a call on a node does, for the confirmation and the audit - the
     core's own `targets` may describe this machine (`shell.run` resolves programs here), so it
-    is used for a node only when no `node_target` is given. `network` overrides the template's
+    is used for a node only when no `node_target` is given. A `node_target` that cannot show the
+    call in full raises `CannotShow`, and the call is refused (`cannot_show_in_full`).
+    `network` overrides the template's
     (a download is network whether or not the core has the tool itself)."""
     base = core.input_model if core is not None else input_model
     model = _routed_model(base, name)
@@ -250,7 +257,17 @@ def routed_spec(
         entry = next(e for e in registry.entries() if e.device_id == resolution.device)
         node_risk = _max_risk(risk, entry.tools.get(name, "high"))
         if node_target is not None:
-            base_target = node_target(inner(payload))
+            try:
+                base_target = node_target(inner(payload))
+            except CannotShow as exc:
+                # Never a shortened target: nothing runs, nobody is asked about half a call.
+                payload[DEVICE_KEY] = ""
+                payload[ROUTE_ERROR_KEY] = {
+                    "error": "cannot_show_in_full",
+                    "tool": name,
+                    "detail": str(exc)[:200],
+                }
+                return CallScope(action=action, risk=Risk.READ, target="device:none")
         else:
             base_target = core.targets(inner(payload)) if core is not None and core.targets else ""
         # Left to the device only when it can ask; otherwise the core asks itself (and the

@@ -534,29 +534,73 @@ def test_the_core_routes_the_hands_and_names_a_node_call_plainly() -> None:
     )
     assert set(accepted) == {"shell.run", "file.write"}
     target = _shell_target({"argv": ["df", "-h"], "egress": ["deb.example.invalid"]})
-    assert target == "df -h egress=deb.example.invalid"
-    assert "\x1b" not in _shell_target({"command": "echo \x1b[2J"})
+    assert target == 'argv ["df", "-h"] egress ["deb.example.invalid"]'
+    assert _shell_target({"command": "ls", "egress": []}) == 'command "ls" egress [none]'
 
 
-def test_a_node_shell_call_is_high_and_names_the_device() -> None:
+def test_a_token_with_spaces_or_quotes_is_shown_as_one_token() -> None:
+    # `["rm", "-rf /"]` and `["rm", "-rf", "/"]` must never look alike.
+    assert _shell_target({"argv": ["rm", "-rf /"]}) != _shell_target({"argv": ["rm", "-rf", "/"]})
+    assert '"say \\"hi\\""' in _shell_target({"argv": ["echo", 'say "hi"']})
+
+
+def test_invisible_bidi_control_and_space_runs_are_made_visible() -> None:
+    sneaky = _shell_target({"command": "echo safe\u202e\u200b\x1b[2J" + " " * 40 + "&& curl x"})
+    assert "\u202e" not in sneaky and "\u200b" not in sneaky and "\x1b" not in sneaky
+    assert "\\u202e" in sneaky and "\\u200b" in sneaky and "\\u001b" in sneaky
+    assert "[40 spaces]" in sneaky and "&& curl x" in sneaky
+    assert "\\n" in _shell_target({"command": "echo a\nrm -rf ~"})
+
+
+def test_a_padded_call_is_refused_never_shortened() -> None:
+    from nox.node.install import MAX_TARGET_CHARS
+    from nox.node.router import CannotShow
+
+    padded = {"command": "echo " + "a" * MAX_TARGET_CHARS + " ; rm -rf ~", "egress": []}
+    with pytest.raises(CannotShow):
+        _shell_target(padded)
+    hosts = [f"h{i}.example.invalid" for i in range(8)]
+    shown = _shell_target({"argv": ["curl", "x"], "egress": hosts})
+    assert all(h in shown for h in hosts)  # the whole egress list, always
+
+
+def _node_shell_spec(confirmer: bool = True) -> Any:
     from nox.node.hands import ShellArgs
 
     laptop = _entry("a" * 32, "Laptop", tools={"shell.run": "high"})
-    laptop.confirmer = True
+    laptop.confirmer = confirmer
+    registry = FakeRegistry([laptop])
     spec = routed_spec(
         name="shell.run",
         description="t",
         risk=Risk.HIGH,
         side_effects=True,
-        registry=FakeRegistry([laptop]),  # type: ignore[arg-type]
+        registry=registry,  # type: ignore[arg-type]
         input_model=ShellArgs,
         node_target=_shell_target,
     )
+    return spec, registry
+
+
+def test_a_node_shell_call_is_high_and_names_the_device() -> None:
+    spec, _registry = _node_shell_spec()
     payload = spec.input_model.model_validate({"argv": ["whoami"], "device": "Laptop"}).model_dump()
-    assert spec.scope is not None
     scope = spec.scope(payload)
     assert scope.risk is Risk.HIGH and scope.device == "a" * 32 and scope.confirm_on_device
-    assert scope.target.endswith(": whoami")
+    assert scope.target.endswith(': argv ["whoami"] egress [none]')
+
+
+async def test_a_call_too_long_to_show_is_refused_before_anyone_is_asked() -> None:
+    from nox.node.install import MAX_TARGET_CHARS
+
+    spec, registry = _node_shell_spec(confirmer=False)
+    command = "echo " + " x" * MAX_TARGET_CHARS + " ; curl evil.example.invalid"
+    payload = spec.input_model.model_validate({"command": command, "device": "Laptop"}).model_dump()
+    scope = spec.scope(payload)
+    assert scope.risk is Risk.READ and scope.target == "device:none"  # nothing to confirm
+    answer = await spec.handler(payload)
+    assert answer["error"] == "cannot_show_in_full"
+    assert registry.calls == []  # never sent to the node
 
 
 # ---- allowing a folder: only on the device -------------------------------------------------------

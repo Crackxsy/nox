@@ -16,6 +16,8 @@ Requests, for the UI roles (`nox.ipc.roles`):
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,11 +35,11 @@ from nox.node.hands import PackageArgs, PathArgs, ShellArgs, WriteArgs
 from nox.node.listener import NodeListener
 from nox.node.names import label
 from nox.node.pairing import NodePairing
-from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink, escape_controls
+from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink
 from nox.node.receipts import ReceiptSigner
 from nox.node.registry import NodeRegistry
 from nox.node.repo import NodeRepository
-from nox.node.router import install_routes, routed_spec
+from nox.node.router import CannotShow, install_routes, routed_spec
 from nox.node.tools import NoArgs, NotifyArgs, system_info
 from nox.remote.models import DeviceRow
 from nox.remote.repo import RemoteRepository
@@ -237,23 +239,42 @@ def _keep(runtime: NodeRuntime, coro: Any, name: str) -> None:
     task.add_done_callback(runtime.tasks.discard)
 
 
+#: Longest permission target a node call may have. Longer is refused, never cut: a target the
+#: person cannot read in full is a target that can hide its dangerous tail (padding).
+MAX_TARGET_CHARS = 1000
+_SPACE_RUN = re.compile(r" {3,}")
+
+
+def _shown(value: str) -> str:
+    """One value, unambiguous: JSON-quoted with every non-ASCII character escaped (no bidi or
+    invisible character survives as such), runs of spaces counted aloud instead of shown."""
+    quoted = json.dumps(value, ensure_ascii=True)
+    return _SPACE_RUN.sub(lambda m: f"[{len(m.group())} spaces]", quoted)
+
+
+def _complete(text: str) -> str:
+    if len(text) > MAX_TARGET_CHARS:
+        raise CannotShow(f"the call is too long to be shown in full ({len(text)} characters)")
+    return text
+
+
 def _shell_target(payload: dict[str, Any]) -> str:
-    """What a node's `shell.run` call runs, as the confirmation and the audit show it: the words
-    as sent (control characters escaped) and any declared egress - never this core's view of
-    where the program lives, which says nothing about the other device."""
+    """What a node's `shell.run` call runs, as the confirmation and the audit show it - in full or
+    not at all (`CannotShow`): every argv token quoted on its own, so a space or a quote inside a
+    token is visible, a command line quoted as one value, and the whole egress list. Never this
+    core's view of where the program lives, which says nothing about the other device."""
     argv = payload.get("argv")
-    words = (
-        " ".join(str(a) for a in argv)
-        if isinstance(argv, list)
-        else str(payload.get("command") or "")
-    )
+    if isinstance(argv, list):
+        words = "argv [" + ", ".join(_shown(str(a)) for a in argv) + "]"
+    else:
+        words = "command " + _shown(str(payload.get("command") or ""))
     egress = payload.get("egress") or []
-    suffix = f" egress={','.join(str(h) for h in egress)}" if egress else ""
-    return escape_controls(words + suffix)[:400]
+    hosts = ", ".join(_shown(str(h)) for h in egress) if egress else "none"
+    return _complete(f"{words} egress [{hosts}]")
 
 
 def _field(name: str) -> Callable[[dict[str, Any]], str]:
-    return lambda payload: escape_controls(str(payload.get(name) or ""))[:400]
+    return lambda payload: _complete(_shown(str(payload.get(name) or "")))
 
 
 def _install_routes(core: Any, registry: NodeRegistry) -> None:
