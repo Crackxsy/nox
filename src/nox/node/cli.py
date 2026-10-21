@@ -82,6 +82,7 @@ def build(
         protected=home.path,
     )
     keystore = NodeKeyStore(home.key_file, secrets)
+    gate.restore_budget(audit)  # a restart does not refill the hour's budget
     return NodeRuntime(home, keystore, gate, audit, key)
 
 
@@ -210,6 +211,12 @@ def log_lines(home: NodeHome, *, limit: int = 50) -> list[str]:
     return lines
 
 
+#: Not a group, but confirmed the same way: on a device without a screen, let high risk run when
+#: a person confirmed it on the core (spec C §1.6 step 5, a documented residual risk).
+TRUST_SETTING = "trust_core_for_high"
+TRUST_LABEL = "run high-risk actions a person confirmed on the core (no screen here)"
+
+
 def allow(
     home: NodeHome,
     group: str,
@@ -228,18 +235,24 @@ def allow(
     reaches a terminal. It is NOT a boundary against a local process of the same user, which can
     open a terminal of its own; a real presence check (Windows Hello / UAC consent, polkit) is a
     later task (SECURITY.md, residual risk)."""
-    if group not in GROUPS:
-        raise NodeCliError(f"Unknown group {group!r}. Known: {', '.join(GROUPS)}")
+    trust = group == TRUST_SETTING
+    if group not in GROUPS and not trust:
+        known = ", ".join([*GROUPS, TRUST_SETTING])
+        raise NodeCliError(f"Unknown group {group!r}. Known: {known}")
+    label = TRUST_LABEL if trust else GROUPS[group].label_en
     audit = open_audit(home)
     if enabled:
         if not interactive():
             raise NodeCliError("Allowing needs an interactive terminal on this device.")
-        prompt = f"Let Nox {GROUPS[group].label_en} on this device?"
+        prompt = f"Let Nox {label} on this device?"
         if not confirm(prompt):
             raise NodeCliError("Not allowed.")
     key = manifest_key(home.path, secrets)
     manifest = last_confirmed(audit, key) or NodeManifest(groups=dict(MOST_RESTRICTIVE.groups))
-    manifest.groups[group] = enabled
+    if trust:
+        manifest.trust_core_for_high = enabled
+    else:
+        manifest.groups[group] = enabled
     save_manifest(home.manifest_file, manifest)
     if not record_confirmed(audit, manifest, key, create=enabled):
         if enabled:
@@ -252,4 +265,4 @@ def allow(
         decision="allow",
         result="ok",
     )
-    say(f"{'Allowed' if enabled else 'Denied'}: {GROUPS[group].label_en}.")
+    say(f"{'Allowed' if enabled else 'Denied'}: {label}.")

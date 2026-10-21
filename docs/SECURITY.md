@@ -691,27 +691,42 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
 - **The gate, before any handler:** hard prohibitions (the core's immutable list, by name and
   glob), known tools only, the tool's capability group enabled in the device's `node.yaml` and not
   narrowed by the core, the risk ceiling `max_risk` (default high, critical never) and the core
-  may not claim a lower risk than the node's own, strict argument models, no argument may name
-  the node's own folder (key, certificate, `node.yaml`, confirmation key, audit), and a **signed
-  core receipt** for every call with a side effect: an Ed25519 signature by the core's receipt
-  key (pinned at pairing) over call id, tool, the hash of the arguments, risk, who decided,
-  whether it was left to the device and the deadline (at most 60 s, clock skew measured from the
-  core's pings); missing, altered, expired or replayed -> refused. Then the node's **own budget**
-  (60 side effects and 5 high-risk calls per hour by default). The core can only narrow the
+  may not claim a lower risk than the node's own; a **signed core receipt** for every call with
+  a side effect, checked *before* any argument is looked at: an Ed25519 signature by the core's
+  receipt key (pinned at pairing) over call id, this node and this core, tool, the hash of the
+  NFC-normalised arguments, risk, who decided on the core (`user`, `grant`, `profile`,
+  `device`), delegation, taint, issue time and deadline (at most 60 s after issue, on the core's
+  clock as measured from its pings); missing, altered, for another node, from the future,
+  expired or replayed -> refused. The arguments are normalised once; the same text is hashed,
+  shown and run. Then strict argument models and a **text-only** check: no argument may name the
+  node's own folder, and any path alias that only the file system could resolve (`..`, `~`,
+  8.3 short names, UNC and device paths) is refused - the gate never resolves, expands or opens
+  anything the core sent (a UNC path would otherwise make Windows reach out over SMB). The real
+  path is checked by a file tool at the moment it opens it; every node tool with a side effect
+  must declare that (`path_safe`) or it is not offered. Then the node's **own budget** (60 side
+  effects and 5 high-risk calls per hour by default, charged at the higher of the node's and the
+  core's risk, read back from the node's audit after a restart). The core can only narrow the
   groups (`nox/policy`).
 - **High risk is confirmed on the device itself** (owner decision D1): whenever the node's tool,
   the core's receipt or the core's delegation says high, the node asks in a system dialog on that
-  device - every argument in full (control characters escaped, no markup; too long to read ->
-  refused, never cut), 60 s, default **no**; a broken dialog is a no. The core leaves the
+  device - every argument in full (control characters escaped, no markup; too long or not
+  valid Unicode -> refused, never cut), a warning when the conversation held foreign content,
+  60 s, default **no**; a broken dialog is a no, and a "yes" within 1.5 s (a reflex or a stray
+  key) is a no. While it is open, running calls that type or click are stopped and new ones
+  refused. Linux uses zenity only (`--default-cancel`, `--no-markup`). The core leaves the
   question to the device only when the node said at `initialize` that it can ask; otherwise the
-  core asks itself and the node still refuses high risk it cannot confirm, unless
-  `trust_core_for_high` was confirmed locally on that device (documented residual risk for nodes
-  without a screen). The answer comes back as `nox/confirm_result` and is audited on both sides.
+  core asks itself, and a node without a screen runs high risk only when a **person** confirmed
+  it on the core (`decided_by: user`) and `trust_core_for_high` was confirmed on that device
+  (`nox node allow trust_core_for_high`; documented residual risk). The answer comes back as
+  `nox/confirm_result` and is audited on both sides. A real presence check on the device
+  (Windows Hello, polkit) is a later task.
 - **Stopping:** the core's kill switch sends `nox/kill` to every node over the open sockets; a
   node cancels every running call at once, answers `nox/killed` and refuses everything until
-  `nox/resume` - p99 under a second to five nodes (tested). Dead man: no word from the core for
+  `nox/resume` - under a second to five nodes on loopback in the test suite (the real-hardware
+  p99 is on the release checklist). Dead man: no word from the core for
   3 s while a side effect runs -> that call is aborted and the node refuses everything until the
-  core is back and not stopped. `nox node stop` on the device stops it there and the core
+  core has pinged it three times in a row while not stopped; every `nox/pong` tells the core why
+  a node refuses (`state`). `nox node stop` on the device stops it there and the core
   everywhere; only the device lifts it (`nox node resume`). A session ends when its certificate
   does.
 - **Widening needs a person at the device:** `nox node allow` only in an interactive terminal

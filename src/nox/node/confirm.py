@@ -54,14 +54,16 @@ def _powershell() -> Path:
 
 
 class PlatformConfirmer:
-    """Windows: a system popup. Linux desktop: `zenity` or `kdialog`. Elsewhere: unavailable."""
+    """Windows: a system popup with "No" as the default button. Linux desktop: `zenity` with
+    `--default-cancel` (verifiably "No" by default; kdialog has no such option and is not used).
+    Elsewhere: unavailable."""
 
     @property
     def available(self) -> bool:
         if sys.platform == "win32":
             return True
         if sys.platform == "linux" and has_screen():
-            return bool(shutil.which("zenity") or shutil.which("kdialog"))
+            return bool(shutil.which("zenity"))
         return False
 
     async def ask(self, text: str, *, timeout_s: int = CONFIRM_TIMEOUT_S) -> Answer:
@@ -76,7 +78,7 @@ class PlatformConfirmer:
         if sys.platform == "win32":
             argv = [str(_powershell()), "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_POPUP]
             kwargs["creationflags"] = _CREATE_NO_WINDOW
-        elif shutil.which("zenity"):
+        else:
             argv = [
                 "zenity",
                 "--question",
@@ -89,10 +91,6 @@ class PlatformConfirmer:
                 "--text",
                 text,
             ]
-        else:
-            # kdialog reads rich text: the text is shown literally, never as markup.
-            plain = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            argv = ["kdialog", "--title", "Nox", "--yesno", plain]
         try:
             process = await asyncio.create_subprocess_exec(*argv, **kwargs)  # type: ignore[arg-type]
         except OSError:

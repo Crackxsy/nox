@@ -173,11 +173,17 @@ class NoxCallMeta(_Strict):
     decided_by: str = Field(default="", max_length=32)
     #: High risk: the core left the decision to this device (owner decision D1).
     confirm_on_device: bool = False
+    #: The conversation held content Nox did not write (the device's dialog says so).
+    tainted: bool = False
+    #: When the core made the receipt (its clock); validity is measured from here.
+    issued_at: float = Field(default=0.0, ge=0)
 
 
 class Ping(_Strict):
     seq: int = Field(ge=0)
     ts: float = Field(ge=0)
+    #: In a node's `nox/pong`: why it refuses everything right now ("" = it does not).
+    state: str = Field(default="", max_length=32)
 
 
 class Killed(_Strict):

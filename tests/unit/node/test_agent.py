@@ -60,8 +60,10 @@ async def _never(_args: BaseModel) -> dict[str, Any]:
     raise AssertionError("a refused tool's handler ran")
 
 
-#: The core's receipt key of the running test (the listener fixture's signer).
+#: The core's receipt key of the running test (the listener fixture's signer), and the node and
+#: core its receipts are for.
 SIGNER: Any = None
+TARGET: dict[str, str] = {"device": "", "core": ""}
 _CALLS = iter(range(10**6))
 
 
@@ -71,21 +73,27 @@ def _meta(
     import time as _time
 
     call_id = call_id or f"c{next(_CALLS)}"
-    deadline = _time.time() + 30
+    issued_at = _time.time()
+    deadline = issued_at + 30
     meta: dict[str, Any] = {
         "call_id": call_id,
         "risk": risk,
         "deadline": deadline,
-        "decided_by": "core",
+        "issued_at": issued_at,
+        "decided_by": "profile",
     }
     if SIGNER is not None:
         meta["receipt"] = SIGNER.sign(
             call_id=call_id,
+            device_id=TARGET["device"],
+            core_id=TARGET["core"],
             tool=name,
             arguments=arguments,
             risk=risk,
-            decided_by="core",
+            decided_by="profile",
             confirm_on_device=False,
+            tainted=False,
+            issued_at=issued_at,
             deadline=deadline,
         )
     return meta
@@ -140,12 +148,18 @@ async def rig(
     notifier = FakeNotifier()
     tools = default_tools(notifier)
     # A high-risk tool in an enabled group: it exists, but the node must still refuse it.
-    tools["system.reboot"] = NodeTool("system.reboot", "system", "high", "test", _Args, _never)
-    tools["shell.run"] = NodeTool("shell.run", "shell", "medium", "test", _Args, _never)
+    tools["system.reboot"] = NodeTool(
+        "system.reboot", "system", "high", "test", _Args, _never, path_safe=True
+    )
+    tools["shell.run"] = NodeTool(
+        "shell.run", "shell", "medium", "test", _Args, _never, path_safe=True
+    )
     audit = SqliteAuditLog(__import__("sqlite3").connect(":memory:", check_same_thread=False))
     gate = NodeGate(tools, NodeManifest(), audit)
     global SIGNER
     SIGNER = listener.signer  # type: ignore[attr-defined]
+    TARGET["device"] = node.node_id
+    TARGET["core"] = tls.fingerprint.replace(":", "").lower()
     agent = NodeAgent(
         home,
         NodeKeyStore(home.key_file, None),

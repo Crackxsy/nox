@@ -15,6 +15,8 @@ import asyncio
 import contextlib
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -48,6 +50,20 @@ class ConfirmingPermissionEngine(Protocol):
     async def await_confirmation(
         self, grant_id: str, *, timeout: float | None = None
     ) -> PermissionResult: ...
+
+
+@dataclass(frozen=True)
+class CallDecision:
+    """How the running call was allowed - for handlers that hand it on (a node's receipt)."""
+
+    #: `user` (answered a prompt), `grant` (a remembered answer), `profile` (the rules allow it
+    #: without asking), `device` (left to the device's own confirmation).
+    decided_by: str
+    tainted: bool = False
+
+
+#: Set by the executor around the handler of every allowed call.
+CALL_DECISION: ContextVar[CallDecision | None] = ContextVar("nox_call_decision", default=None)
 
 
 class ToolResult(BaseModel):
@@ -186,11 +202,14 @@ class ToolExecutor:
 
         result = self._permission_engine.check(request)
         decision = result.decision
+        decided_by = "grant" if result.grant_id else "profile"
         if decision is Decision.CONFIRM and delegated:
             # The node asks the person at the device itself and refuses without a yes there.
             log.info("tools.confirm_delegated_to_device", tool=name)
             decision = Decision.ALLOW
+            decided_by = "device"
         elif decision is Decision.CONFIRM:
+            decided_by = "user"
             grant_id = self._permission_engine.request_confirmation(request)
             confirmed = await self._permission_engine.await_confirmation(grant_id)
             decision = confirmed.decision
@@ -227,7 +246,15 @@ class ToolExecutor:
             )
 
         try:
-            data = await self._run(spec, payload)
+            tainted = False
+            is_tainted = getattr(self._permission_engine, "is_tainted", None)
+            if callable(is_tainted) and request.conversation:
+                tainted = bool(is_tainted(request.conversation))
+            reset = CALL_DECISION.set(CallDecision(decided_by=decided_by, tainted=tainted))
+            try:
+                data = await self._run(spec, payload)
+            finally:
+                CALL_DECISION.reset(reset)
         except ToolCancelledError:
             return self._finish(
                 agent=agent,

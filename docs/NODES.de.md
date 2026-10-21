@@ -68,9 +68,9 @@ wegnehmen - was dazukommt, gilt erst nach `nox node allow`. `max_risk` senkt,
 was der Node annimmt.
 
 **Hohes Risiko wird hier gefragt, an diesem Gerät**: Ein Systemdialog zeigt, was Nox tun will, mit
-allen Angaben, 60 Sekunden lang - keine Antwort heißt nein. Ein Node ohne Bildschirm lehnt hohes
-Risiko ab, außer du setzt dort `trust_core_for_high: true` (und bestätigst es mit `nox node
-allow`). Der Node hat außerdem ein eigenes Budget: 60 Aktionen und 5 mit hohem Risiko pro Stunde
+allen Angaben, 60 Sekunden lang - keine Antwort heißt nein, und ein „Ja“ in den ersten 1,5
+Sekunden zählt als nein. Ein Node ohne Bildschirm lehnt hohes Risiko ab, außer eine Person hat es
+an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trust_core_for_high`. Der Node hat außerdem ein eigenes Budget: 60 Aktionen und 5 mit hohem Risiko pro Stunde
 (`max_calls_per_hour`, `max_high_per_hour` in `node.yaml`).
 
 ## Stoppen

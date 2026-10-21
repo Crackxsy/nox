@@ -23,10 +23,13 @@ in the node's own sandbox (C5).
 
 from __future__ import annotations
 
+import json
+import re
 import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +49,8 @@ RISK_ORDER = ("read", "low", "medium", "high", "critical")
 CEILING = "high"
 #: The budget's window.
 BUDGET_WINDOW_S = 3600.0
+#: Groups whose tools type or click: refused while a confirmation dialog is open (review M-c).
+INPUT_GROUPS = frozenset({"computer", "desktop"})
 
 
 @dataclass(frozen=True)
@@ -58,6 +63,8 @@ class GateDecision:
     args: BaseModel | None = None
     #: High risk: the person at this device still has to say yes.
     needs_local_confirmation: bool = False
+    #: The risk counted against the budget ("" for reads and refusals).
+    charged: str = ""
 
 
 def _strings(value: Any) -> list[str]:
@@ -74,37 +81,71 @@ def _norm(text: str) -> str:
     return text.replace("\\", "/").rstrip("/").casefold()
 
 
-def touches(arguments: Any, folder: Path) -> bool:
-    """Whether any string in the arguments names `folder` or something inside it - as a path,
-    a word of a command line, or anywhere in the text. Errs on refusing.
-
-    An early refusal (defence in depth), not the boundary: the boundary is where access happens.
-    Paths are compared after `resolve()` (symlinks, junctions, 8.3 names, case); file tools on a
-    node must check the resolved real path themselves, and shell/package tools run only in the
-    node's sandbox without access to its folder or the keyring.
-    TODO(C5): node file tools check `inside()` on the resolved path at open time; shell/package
-    tools on nodes only inside `make_sandbox()` with the node folder not mounted."""
+def protected_forms(folder: Path) -> tuple[str, ...]:
+    """The node folder as text, in every spelling the gate compares against - resolved ONCE, here,
+    for the folder itself (never for anything the core sent)."""
+    forms = {_norm(str(folder)), _norm(str(folder.absolute()))}
     try:
-        root = _norm(str(folder.resolve()))
+        forms.add(_norm(str(folder.resolve())))
     except OSError:
-        root = _norm(str(folder))
-    plain = _norm(str(folder))
+        pass
+    return tuple(sorted(f for f in forms if f))
+
+
+def touches(arguments: Any, forms: tuple[str, ...]) -> bool:
+    """Whether any string in the arguments names the node folder, compared as **text only**:
+    normalised separators, case folded. Nothing the core sent is ever resolved, expanded or
+    opened here - `\\\\host\\share` stays a string, it never makes the device reach out (an
+    SMB lookup could leak the user's NetNTLM hash) and never blocks the event loop.
+
+    An early refusal (defence in depth), not the boundary: file tools on a node check the real
+    path at the moment they open it (`inside()`), and shell/package tools run only in the node's
+    sandbox without access to its folder or the keyring.
+    TODO(C5): node file tools call `inside()` at open time; shell/package tools on nodes only
+    inside `make_sandbox()` with the node folder not mounted."""
     for text in _strings(arguments):
         flat = _norm(text)
-        if root in flat or plain in flat:
+        if any(form in flat for form in forms):
             return True
-        for word in text.replace('"', " ").replace("'", " ").split():
-            try:
-                resolved = _norm(str(Path(word).expanduser().resolve()))
-            except (OSError, ValueError, RuntimeError):
-                continue
-            if resolved == root or resolved.startswith(root + "/"):
-                return True
     return False
 
 
+#: An 8.3 short name (`NOXNOD~1`): another spelling of a folder that text cannot compare.
+_SHORT_NAME = re.compile(r"(^|[\\/])[^\\/\s]{1,6}~\d")
+
+
+def names_a_path_alias(text: str) -> bool:
+    """Whether `text` holds a path spelling that only the file system could resolve - `..`
+    segments, `~` at the start of a path, 8.3 short names, UNC or device paths. Decided on the
+    text alone: the gate never asks the file system about a core string."""
+    for word in text.replace('"', " ").replace("'", " ").split():
+        if is_remote_or_device_path(word):
+            return True
+        if word == "~" or word.startswith(("~/", "~\\")):
+            return True
+        segments = re.split(r"[\\/]", word)
+        if ".." in segments and len(segments) > 1:
+            return True
+        if _SHORT_NAME.search(word):
+            return True
+    return False
+
+
+def is_remote_or_device_path(path: str) -> bool:
+    """UNC (`\\\\host\\share`, `//host/share`) and Win32 device paths (`\\\\?\\`,
+    `\\\\.\\`): never opened or resolved on behalf of the core."""
+    text = path.strip()
+    return text.startswith(("\\\\", "//")) or text.replace("/", "\\").startswith(
+        ("\\\\?\\", "\\\\.\\")
+    )
+
+
 def inside(path: str | Path, folder: Path) -> bool:
-    """Whether `path`, resolved (symlinks, junctions, 8.3 names), lies in `folder` (resolved)."""
+    """For a node FILE tool, at the moment it opens `path`: whether the real path (symlinks,
+    junctions, 8.3 names) lies in `folder`. Remote and device paths count as inside (refused)
+    without being touched."""
+    if is_remote_or_device_path(str(path)):
+        return True
     try:
         resolved = _norm(str(Path(path).expanduser().resolve()))
         root = _norm(str(folder.resolve()))
@@ -131,11 +172,16 @@ class NodeGate:
     ) -> None:
         #: Why the node refuses everything right now (set by the agent), or None.
         self.stop_state = stopped
+        #: Whether a confirmation dialog is open on this device right now (set by the agent).
+        self.dialog_open: Callable[[], bool] = lambda: False
+        self._protected_forms = protected_forms(protected) if protected is not None else ()
         self.receipts = receipts
         self._clock = clock
         self._side_effects: deque[float] = deque()
         self._high: deque[float] = deque()
-        self._tools = tools
+        # Registration rule: a tool with a side effect that has not declared how it treats
+        # paths (`NodeTool.path_safe`) is not offered at all.
+        self._tools = {n: t for n, t in tools.items() if t.risk == "read" or t.path_safe}
         self._manifest = manifest
         self._audit = audit
         #: The node's own folder (key, certificate, `node.yaml`, audit): no tool may touch it.
@@ -146,6 +192,10 @@ class NodeGate:
     @property
     def manifest(self) -> NodeManifest:
         return self._manifest
+
+    def group_of(self, name: str) -> str:
+        tool = self._tools.get(name)
+        return tool.group if tool is not None else ""
 
     def set_manifest(self, manifest: NodeManifest) -> None:
         """The device's manifest changed (`nox node deny` takes effect without a restart)."""
@@ -186,24 +236,39 @@ class NodeGate:
             return GateDecision(False, "capability_disabled", tool)
         if not self._within(tool.risk):
             return GateDecision(False, "risk_ceiling", tool)
+        if self.dialog_open() and tool.group in INPUT_GROUPS:
+            # Nothing may type or click while the person is being asked (review M-c).
+            return GateDecision(False, "dialog_open", tool)
+        if tool.risk != "read":
+            # The core's signature first: nothing the core sent is looked at before it is known
+            # to be the core's, for exactly this call.
+            refusal = self._check_receipt(tool, arguments, meta)
+            if refusal is not None:
+                return GateDecision(False, refusal, tool)
         try:
             args = tool.args.model_validate(arguments if isinstance(arguments, dict) else {})
         except ValidationError:
             return GateDecision(False, "invalid_arguments", tool)
         if not isinstance(arguments, dict):
             return GateDecision(False, "invalid_arguments", tool)
-        if self._protected is not None and touches(args.model_dump(), self._protected):
+        if self._protected_forms and touches(args.model_dump(), self._protected_forms):
             return GateDecision(False, "node_home_protected", tool)
+        if any(names_a_path_alias(text) for text in _strings(args.model_dump())):
+            return GateDecision(False, "path_alias_refused", tool)
+        charged = ""
         if tool.risk != "read":
-            refusal = self._check_receipt(tool, arguments, meta)
-            if refusal is not None:
-                return GateDecision(False, refusal, tool)
-            if not self._spend(tool.risk):
+            charged = (
+                tool.risk if meta is None or _rank(tool.risk) >= _rank(meta.risk) else meta.risk
+            )
+            if not self._spend(charged):
                 return GateDecision(False, "budget", tool)
         local = tool.risk == "high" or (
             meta is not None and (meta.risk == "high" or meta.confirm_on_device)
         )
-        return GateDecision(True, "", tool, args, needs_local_confirmation=local)
+        charged_risk = "" if tool.risk == "read" else charged
+        return GateDecision(
+            True, "", tool, args, needs_local_confirmation=local, charged=charged_risk
+        )
 
     def _check_receipt(
         self, tool: NodeTool, arguments: Any, meta: NoxCallMeta | None
@@ -220,6 +285,8 @@ class NodeGate:
             risk=meta.risk,
             decided_by=meta.decided_by,
             confirm_on_device=meta.confirm_on_device,
+            tainted=meta.tainted,
+            issued_at=meta.issued_at,
             deadline=meta.deadline,
         )
 
@@ -238,6 +305,33 @@ class NodeGate:
             self._high.append(now)
         return True
 
+    def restore_budget(self, audit: Any) -> None:
+        """After a restart the hour's spending is read back from the node's own audit trail, so a
+        restart does not refill the budget (review N1)."""
+        conn = getattr(audit, "_conn", None)
+        if conn is None:
+            return
+        since = datetime.now(UTC) - timedelta(seconds=BUDGET_WINDOW_S)
+        try:
+            rows = conn.execute(
+                "SELECT ts, details_json FROM audit_log WHERE action = 'node.call'"
+                " AND decision = 'allow' AND ts > ? ORDER BY seq",
+                (since.isoformat(),),
+            ).fetchall()
+        except Exception:  # noqa: BLE001 - no history means no restore, never a crash
+            return
+        now = self._clock()
+        for ts, details in rows:
+            try:
+                age = (datetime.now(UTC) - datetime.fromisoformat(str(ts))).total_seconds()
+                charged = json.loads(details or "{}").get("charged", "")
+            except (ValueError, TypeError):
+                continue
+            if charged in ("low", "medium", "high"):
+                self._side_effects.append(now - age)
+                if charged == "high":
+                    self._high.append(now - age)
+
     def _record(self, name: str, decision: GateDecision, *, call_id: str, by: str) -> None:
         if self._audit is None:
             return
@@ -248,6 +342,7 @@ class NodeGate:
             target=safe_name(call_id, 64),
             decision="allow" if decision.allowed else "deny",
             result=decision.reason or "ok",
+            details={"charged": decision.charged} if decision.charged else None,
         )
 
     def narrow(self, groups: list[str]) -> None:

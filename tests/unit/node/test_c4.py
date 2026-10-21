@@ -80,9 +80,13 @@ def _tools(ran: list[str]) -> dict[str, NodeTool]:
         return {"done": True}
 
     tools = default_tools(None)
-    tools["system.wait"] = NodeTool("system.wait", "system", "low", "t", _Args, wait)
-    tools["system.high"] = NodeTool("system.high", "system", "high", "t", _Args, high)
-    tools["system.low"] = NodeTool("system.low", "system", "low", "t", _Args, low)
+    tools["system.wait"] = NodeTool(
+        "system.wait", "system", "low", "t", _Args, wait, path_safe=True
+    )
+    tools["system.high"] = NodeTool(
+        "system.high", "system", "high", "t", _Args, high, path_safe=True
+    )
+    tools["system.low"] = NodeTool("system.low", "system", "low", "t", _Args, low, path_safe=True)
     return tools
 
 
@@ -114,6 +118,7 @@ async def start_node(
         cert_pem=node.cert_pem,
         ca_pem=tls.ca_file.read_text(),
     )
+    TARGET["core"] = tls.fingerprint.replace(":", "").lower()
     ran: list[str] = []
     audit = SqliteAuditLog(sqlite3.connect(":memory:", check_same_thread=False))
     gate = NodeGate(_tools(ran), manifest or NodeManifest(), audit, protected=home.path)
@@ -139,6 +144,10 @@ async def session_of(listener: NodeListener, node_id: str) -> NodeSession:
     raise AssertionError("the node never connected")
 
 
+#: The node and core the receipts of a test are for (set when a node starts).
+TARGET: dict[str, str] = {"device": "d" * 32, "core": "c" * 64}
+
+
 def signed(
     signer: ReceiptSigner,
     name: str,
@@ -147,23 +156,37 @@ def signed(
     risk: str = "low",
     confirm_on_device: bool = False,
     deadline: float | None = None,
+    issued_at: float | None = None,
     call_id: str | None = None,
+    decided_by: str = "user",
+    tainted: bool = False,
+    device_id: str | None = None,
+    core_id: str | None = None,
 ) -> dict[str, Any]:
     call_id = call_id or f"k{next(_IDS)}"
-    deadline = time.time() + 30 if deadline is None else deadline
+    issued_at = time.time() if issued_at is None else issued_at
+    deadline = issued_at + 30 if deadline is None else deadline
+    device_id = device_id or TARGET["device"]
+    core_id = core_id or TARGET["core"]
     return {
         "call_id": call_id,
         "risk": risk,
         "deadline": deadline,
-        "decided_by": "core",
+        "issued_at": issued_at,
+        "decided_by": decided_by,
         "confirm_on_device": confirm_on_device,
+        "tainted": tainted,
         "receipt": signer.sign(
             call_id=call_id,
+            device_id=device_id,
+            core_id=core_id,
             tool=name,
             arguments=arguments,
             risk=risk,
-            decided_by="core",
+            decided_by=decided_by,
             confirm_on_device=confirm_on_device,
+            tainted=tainted,
+            issued_at=issued_at,
             deadline=deadline,
         ),
     }
@@ -179,6 +202,7 @@ async def call(
     **meta: Any,
 ) -> dict[str, Any]:
     args = {} if arguments is None else arguments
+    meta.setdefault("device_id", session.device_id)
     params = {"name": name, "arguments": args, "_nox": signed(signer, name, args, **meta)}
     return await session.client.request("tools/call", params, timeout_s=timeout)
 
@@ -188,7 +212,7 @@ async def call(
 
 def _verifier_and_signer(tmp_path: Path) -> tuple[ReceiptVerifier, ReceiptSigner]:
     signer = ReceiptSigner(tmp_path / "r")
-    return ReceiptVerifier(signer.public_key), signer
+    return ReceiptVerifier(signer.public_key, device_id="d" * 32, core_id="c" * 64), signer
 
 
 def _check(
@@ -206,6 +230,8 @@ def _check(
         "arguments": {} if arguments is None else arguments,
         "risk": meta["risk"],
         "decided_by": meta["decided_by"],
+        "tainted": meta["tainted"],
+        "issued_at": meta["issued_at"],
         "confirm_on_device": meta["confirm_on_device"],
         "deadline": meta["deadline"],
     }
@@ -230,10 +256,12 @@ def test_a_receipt_binds_exactly_this_call(tmp_path: Path) -> None:
 
 def test_receipts_expire_and_cannot_be_made_long_lived(tmp_path: Path) -> None:
     verifier, signer = _verifier_and_signer(tmp_path)
-    old = signed(signer, "system.low", {}, deadline=time.time() - 30)
+    old = signed(signer, "system.low", {}, issued_at=time.time() - 60, deadline=time.time() - 30)
     assert _check(verifier, old) == "receipt_expired"
     long = signed(signer, "system.low", {}, deadline=time.time() + 600)
     assert _check(verifier, long) == "receipt_too_long"
+    future = signed(signer, "system.low", {}, issued_at=time.time() + 300)
+    assert _check(verifier, future) == "receipt_from_the_future"
     assert _check(verifier, {**old, "receipt": ""}) == "receipt_missing"
 
 
@@ -246,9 +274,15 @@ def test_another_key_signs_nothing(tmp_path: Path) -> None:
 def test_clock_skew_is_measured_from_the_cores_pings(tmp_path: Path) -> None:
     signer = ReceiptSigner(tmp_path / "r")
     core_ahead = 300.0
-    verifier = ReceiptVerifier(signer.public_key, clock=lambda: time.time() - core_ahead)
+    verifier = ReceiptVerifier(
+        signer.public_key,
+        device_id="d" * 32,
+        core_id="c" * 64,
+        clock=lambda: time.time() - core_ahead,
+    )
     meta = signed(signer, "system.low", {})
-    assert _check(verifier, meta) == "receipt_too_long"  # the node's clock is 5 min behind
+    # The node's clock is 5 min behind: the receipt looks issued in the future.
+    assert _check(verifier, meta) == "receipt_from_the_future"
     verifier.observe_core_time(time.time())
     assert _check(verifier, signed(signer, "system.low", {})) is None
 
@@ -258,7 +292,7 @@ def test_clock_skew_is_measured_from_the_cores_pings(tmp_path: Path) -> None:
 
 def _gate(manifest: NodeManifest | None = None, *, signer: ReceiptSigner) -> NodeGate:
     gate = NodeGate(_tools([]), manifest or NodeManifest(), None)
-    gate.receipts = ReceiptVerifier(signer.public_key)
+    gate.receipts = ReceiptVerifier(signer.public_key, device_id="d" * 32, core_id="c" * 64)
     return gate
 
 
@@ -361,7 +395,7 @@ async def test_nothing_high_ever_runs_without_a_confirmation(
         else:
             # Headless: only a core that confirmed itself, and only when trusted locally. A call
             # the core left to the device was confirmed by nobody - always refused.
-            assert ran == (trusted and not delegated), result
+            assert ran == (trusted and not delegated), result  # decided_by "user" here
             if not ran:
                 assert result["_nox"]["refused"] == "high_needs_local_confirmation"
     finally:
@@ -420,7 +454,7 @@ async def test_too_long_to_confirm_is_refused_not_cut(
             {"target": "z" * 5000},
             risk="high",  # type: ignore[attr-defined]
         )
-        assert result["_nox"]["refused"] == "too_long_to_confirm"
+        assert result["_nox"]["refused"] == "cannot_show_in_full"
         assert not confirmer.asked and not node.ran
     finally:
         node.stop.set()
@@ -580,16 +614,19 @@ async def test_an_expired_certificate_ends_the_session(
         await server.stop()
 
 
-async def test_the_stop_reaches_five_nodes_in_under_a_second(
+async def test_the_stop_reaches_five_loopback_nodes_quickly(
     listener: NodeListener, pairing: NodePairing, tls: TlsMaterial, tmp_path: Path
 ) -> None:
-    """Spec C §1.7: p99 of engage -> every node's nox/killed < 1 s, with a long call running on
-    each node; no call completes after its node said killed."""
+    """Spec C §1.7, as far as a single test runner can show it: five nodes on loopback in one
+    process, a long call on each, `broadcast_kill` -> every `nox/killed`. 20 rounds; the slowest
+    round (the p95 of 20) stays under a second and no call completes after its node said killed.
+    This is not the real-hardware p99 (Pi + PCs over Wi-Fi, a real sandboxed process): that
+    measurement belongs to the hardware checklist (spec §7)."""
     nodes = [await start_node(listener, pairing, tls, tmp_path) for _ in range(5)]
     try:
         sessions = [await session_of(listener, n.node_id) for n in nodes]
         durations: list[float] = []
-        for _round in range(10):
+        for _round in range(20):
             running = [
                 asyncio.create_task(call(s, listener.signer, "system.wait", timeout=30))  # type: ignore[attr-defined]
                 for s in sessions
@@ -610,8 +647,8 @@ async def test_the_stop_reaches_five_nodes_in_under_a_second(
                     break
                 await asyncio.sleep(0.01)
         assert not any("wait-end" in n.ran for n in nodes)
-        p99 = sorted(durations)[max(0, int(len(durations) * 0.99) - 1)]
-        assert p99 < 1.0, (p99, statistics.mean(durations))
+        slowest = max(durations)
+        assert slowest < 1.0, (slowest, statistics.mean(durations))
     finally:
         for n in nodes:
             n.stop.set()
