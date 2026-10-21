@@ -37,8 +37,9 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 - **Signed releases** (docs/RELEASES.md). Every release gets `release-manifest.json` (version, tag,
   source commit, each file with size and SHA-256) and an Ed25519 signature made in the release
   workflow's protected `release-signing` environment from the secret `NOX_RELEASE_SIGNING_KEY`
-  (`scripts/sign_release.py`; key from the environment or stdin, never the command line). Once a
-  release key is in the trust list (`src/nox/release/trusted_keys.py`, mirrored in
+  (`scripts/sign_release.py`: self-contained, run as `python -I -S` with only hash-pinned
+  `cryptography` importable, key on stdin only; workflow actions pinned to SHAs). Once a release
+  key is in the trust list (`src/nox/release/trusted_keys.py`, mirrored in
   `scripts/install-linux.sh`), the Linux installer and `nox update` refuse a release whose manifest
   is missing, badly signed, signed by an untrusted or expired key, for another tag or commit, or
   older than the newest release already accepted (`--allow-downgrade` for a deliberate step back);

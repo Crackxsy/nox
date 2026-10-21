@@ -31,12 +31,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
 
@@ -53,7 +53,7 @@ jobs:
           tar --owner=0 --group=0 --numeric-owner -czf "nox-ui-$TAG.tar.gz" ui/dashboard/dist ui/pet/dist
           sha256sum "nox-ui-$TAG.tar.gz" > "nox-ui-$TAG.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-bundle
           path: nox-ui-*.tar.gz*
@@ -72,13 +72,13 @@ jobs:
     outputs:
       signed: ${{ steps.sign.outputs.signed }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
           path: source
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ui-bundle
           path: bundle
@@ -97,32 +97,39 @@ jobs:
           cp "bundle/nox-ui-$TAG.tar.gz" files/
           cp source/scripts/install-linux.sh files/install-linux.sh
 
-      - uses: actions/setup-python@v7
+      - name: The commit the tag points to
+        id: source
+        run: echo "commit=$(git -C source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
-      # Only the locked, hash-checked wheels every Pi installs too; nothing is built, and the
-      # signing script imports nothing of them but `cryptography`.
-      - name: Dependencies from the lock file
-        working-directory: source
-        run: |
-          python -m pip install "uv==0.12.18"
-          python -m uv sync --frozen --no-dev --no-build --no-install-project
+      # The process that holds the key may import exactly cryptography and what it needs: pinned
+      # by version and SHA-256 (copied from uv.lock), wheels only, into a folder of their own.
+      - name: Signer dependencies (hash-pinned, nothing else)
+        run: >-
+          python -m pip install --require-hashes --no-deps --only-binary :all:
+          --target "$RUNNER_TEMP/signer-lib" -r source/scripts/signing-requirements.txt
 
+      # The key reaches the signer on stdin only: `printf` is a shell builtin, and `env -u` takes it
+      # out of the environment before Python starts, so no process sees it on a command line or
+      # inherits it. `python -I -S`: no site-packages, no .pth files, no PYTHON* variables, no
+      # current folder - the signer (self-contained, imports nothing from nox) finds cryptography
+      # only in the folder above. GitHub masks the secret in logs; it is empty when not configured.
       - name: Write the manifest and sign it
         id: sign
-        working-directory: source
         env:
-          # Read and removed from the environment by the script; never on a command line, never
-          # printed (GitHub masks it in logs as well). Empty when the secret does not exist.
           NOX_RELEASE_SIGNING_KEY: ${{ secrets.NOX_RELEASE_SIGNING_KEY }}
           TAG: ${{ github.event.release.tag_name }}
-        run: >-
-          .venv/bin/python scripts/sign_release.py --allow-unsigned
-          --tag "$TAG" --commit "$(git rev-parse HEAD)" --out ../signed
-          "../files/nox-ui-$TAG.tar.gz" ../files/install-linux.sh
+          COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          printf '%s\n' "$NOX_RELEASE_SIGNING_KEY" | env -u NOX_RELEASE_SIGNING_KEY \
+            python -I -S source/scripts/sign_release.py --key-stdin --allow-unsigned \
+            --lib "$RUNNER_TEMP/signer-lib" --tag "$TAG" --commit "$COMMIT" --out signed \
+            "files/nox-ui-$TAG.tar.gz" files/install-linux.sh
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-manifest
           path: signed/
@@ -138,7 +145,7 @@ jobs:
     steps:
       # The installer runs as root on every Pi, so it is taken from a clean checkout of the tag
       # here - never from the build job, where third-party npm code could have changed it.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
@@ -153,7 +160,7 @@ jobs:
           (cd installer && sha256sum install-linux.sh > install-linux.sh.sha256)
 
       # Into its own folder, so nothing in the artifact can overwrite the installer above.
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ui-bundle
           path: bundle
@@ -170,7 +177,7 @@ jobs:
           find bundle -mindepth 1 ! -type f -print -quit | grep -q . && { echo "non-regular file in artifact"; exit 1; }
           (cd bundle && sha256sum --quiet -c "nox-ui-$TAG.tar.gz.sha256")
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-manifest
           path: manifest

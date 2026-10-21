@@ -116,11 +116,16 @@ trusted key has a last valid day (`not_after`, UTC); after it, signatures by tha
 
 1. **build** - builds the dashboard bundle (third-party npm code; read-only token, no secrets).
 2. **manifest** - runs in the GitHub environment `release-signing`, the only place the secret
-   `NOX_RELEASE_SIGNING_KEY` is available. It checks out the tag, installs the locked
-   dependencies (wheels only, hash-checked) and runs `scripts/sign_release.py`, which reads the key
-   from the environment variable (never from the command line), removes it from its environment,
-   refuses a key that the tagged release does not itself trust or that has expired, signs, and
-   verifies the new signature exactly as an installation will before writing anything.
+   `NOX_RELEASE_SIGNING_KEY` is available. It checks out the tag and installs **only**
+   `cryptography` and its two dependencies, pinned by version and SHA-256
+   (`scripts/signing-requirements.txt`, copied from `uv.lock`; wheels only) into a folder of
+   their own. The signer `scripts/sign_release.py` is self-contained - it imports nothing from
+   Nox - and runs as `python -I -S` (no site-packages, no `.pth` files, no `PYTHON*` variables),
+   so no other installed package can run code in the process that holds the key. The key reaches
+   it on **stdin** only (`printf` builtin, removed from the environment with `env -u` before Python
+   starts): never on a command line, never inherited. It refuses a key that the tagged release
+   does not itself trust or that has expired, signs, and checks the new signature before writing
+   anything. All actions in the workflow are pinned to commit SHAs.
 3. **upload** - checks that the manifest lists exactly the files being uploaded, then attaches
    them. If the manifest is unsigned (no secret), it attaches the checksummed files as before but
    **not** the manifest, and fails the run with "Release not signed".
@@ -218,13 +223,13 @@ lists it, or until its `not_after` day - that is the window to close quickly.
 
    ```bash
    gh release download vX.Y.Z -p 'nox-ui-vX.Y.Z.tar.gz' -p install-linux.sh
+   python3 -m pip install --require-hashes --no-deps --only-binary :all: --target signer-lib \
+     -r scripts/signing-requirements.txt
    openssl pkey -in nox-release-recovery.key.enc | \
-     python3 scripts/sign_release.py --key-stdin --tag vX.Y.Z --commit <tag commit> --out signed/ \
-       nox-ui-vX.Y.Z.tar.gz install-linux.sh
+     python3 -I -S scripts/sign_release.py --key-stdin --lib signer-lib --tag vX.Y.Z \
+       --commit "$(git rev-parse 'vX.Y.Z^{commit}')" --out signed/ nox-ui-vX.Y.Z.tar.gz install-linux.sh
    gh release upload vX.Y.Z signed/release-manifest.json signed/release-manifest.json.sig
    ```
-
-   (`scripts/sign_release.py` needs the checkout of that tag and its `cryptography` - `uv sync`.)
 4. **Set the new CI key** as the secret (step 5).
 5. **Tell users:** a GitHub security advisory naming the leaked key id and the time window, the
    rotation release, and "update now with `nox update`". Delete any release or file that was

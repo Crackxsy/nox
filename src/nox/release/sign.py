@@ -1,9 +1,9 @@
-"""Signing a manifest - used only by `scripts/sign_release.py` in the release workflow and by tests.
+"""Signing a manifest inside Nox - for tests and tools working with throwaway keys.
 
-The private key arrives as text (an environment variable or stdin, never a command-line argument,
-which other processes and logs can see). It is a PKCS#8 PEM block as `openssl genpkey -algorithm
-ed25519` writes it, unencrypted, because CI cannot type a passphrase; the owner's offline copy is
-the one that is encrypted (docs/RELEASES.md). Errors here never quote the key text.
+Real releases are signed by `scripts/sign_release.py`, which is self-contained on purpose (it runs
+as `python -I -S` with nothing but `cryptography` importable, because it holds the release key)
+and writes the same format. The key is a PKCS#8 PEM block as `openssl genpkey -algorithm ed25519`
+writes it, unencrypted. Errors here never quote the key text.
 """
 
 from __future__ import annotations
