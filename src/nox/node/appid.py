@@ -23,8 +23,10 @@ REGISTRY_KEY = f"Software\\Classes\\AppUserModelId\\{NODE_APP_ID}"
 def toast_app_id() -> str:
     if sys.platform != "win32":
         return NODE_APP_ID
-    import winreg  # noqa: PLC0415 - Windows only
-
+    try:
+        import winreg  # noqa: PLC0415 - Windows only
+    except ImportError:  # pragma: no cover - only where "win32" is pretended (tests)
+        return POWERSHELL_APP_ID
     try:
         # The 64-bit view explicitly: a 32-bit process would otherwise look somewhere else.
         winreg.CloseKey(

@@ -311,8 +311,9 @@ begin
   else
   begin
     Log('Node pairing failed: ' + IntToStr(Code));
-    SuppressibleMsgBox(FmtMessage(CustomMessage('PairFailed'),
-      [IntToStr(Code), ExpandConstant('{app}\nox-node.cmd')]), mbInformation, MB_OK, IDOK);
+    { No line may start with "[" here: ISCC would read it as a section tag. }
+    SuppressibleMsgBox(FmtMessage(CustomMessage('PairFailed'), [IntToStr(Code),
+      ExpandConstant('{app}\nox-node.cmd')]), mbInformation, MB_OK, IDOK);
   end;
 end;
 
