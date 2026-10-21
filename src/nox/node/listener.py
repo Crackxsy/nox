@@ -447,8 +447,9 @@ class NodeListener:
         self, session: NodeSession, method: str, msg_id: Any, code: int, why: str
     ) -> None:
         session.violations += 1
-        self._append_audit("node.refused", session.device_id, "deny", f"{why}:{method[:48]}")
-        log.warning("node.method_refused", device_id=session.device_id, method=method[:48])
+        shown = p.safe_name(method, 48)
+        self._append_audit("node.refused", session.device_id, "deny", f"{why}:{shown}")
+        log.warning("node.method_refused", device_id=session.device_id, method=shown)
         if msg_id is not None:
             await session.answer(
                 {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": why}}

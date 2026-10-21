@@ -111,3 +111,25 @@ def test_parsing_anything_either_succeeds_or_refuses_cleanly(text: str) -> None:
     except PairLinkError:
         return
     assert PairLink.parse(link.to_url()) == link
+
+
+@pytest.mark.parametrize(
+    ("raw", "shown"),
+    [
+        ("tools/call", "tools/call"),
+        ("chat.send", "chat.send"),
+        ("x\x1b[2J\x1b[31mDENY", r"x\x1b[2J\x1b[31mDENY"),
+        ("ok\r\n     1  allow  core   system.info", r"ok\x0d\x0a     1  allow  core   system.info"),
+        ("safe\u202etxt.exe", r"safe\u202etxt.exe"),
+        ("c1\x9bcontrol", r"c1\x9bcontrol"),
+        ("del\x7f", r"del\x7f"),
+    ],
+)
+def test_names_from_the_other_side_are_recorded_escaped(raw: str, shown: str) -> None:
+    assert p.safe_name(raw) == shown
+    escaped = p.escape_controls(raw)
+    assert not any(ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F or c == "\u202e" for c in escaped)
+
+
+def test_a_non_string_name_is_its_escaped_repr() -> None:
+    assert p.safe_name(["a\nb"]) == r"['a\nb']"

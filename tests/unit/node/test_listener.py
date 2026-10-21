@@ -613,3 +613,33 @@ async def test_a_revocation_during_the_replacement_window_closes_the_new_session
     assert node.node_id not in listener.sessions
     await asyncio.sleep(0.2)
     assert node.node_id not in listener.sessions
+
+
+async def test_a_refused_method_is_audited_escaped(
+    pairing: NodePairing, nodes: NodeRepository, tls: TlsMaterial, tmp_path: Path
+) -> None:
+    """A node naming a method with terminal escapes cannot fake lines of the audit display."""
+    import sqlite3
+
+    from nox.security.audit import SqliteAuditLog
+
+    audit = SqliteAuditLog(sqlite3.connect(":memory:", check_same_thread=False))
+    server = NodeListener(
+        pairing=pairing, nodes=nodes, tls=lambda: tls, host="127.0.0.1", port=0, audit=audit
+    )
+    await server.start()
+    try:
+        node = await pair_node(pairing, tmp_path)
+        ws = await open_node(server, client_context(tls, node))
+        await greet(ws)
+        evil = "x\x1b[2K\r\n42  allow  core  shell.run\u202e"
+        await ws.send(json.dumps({"jsonrpc": "2.0", "id": 9, "method": evil, "params": {}}))
+        await recv_until(ws, lambda m: m.get("id") == 9)
+        refused = [e for e in audit.entries(limit=50) if e.action == "node.refused"]
+        assert refused, "the refusal was not audited"
+        result = refused[-1].result
+        assert "\x1b" not in result and "\r" not in result and "\n" not in result
+        assert "\u202e" not in result and r"\x1b" in result
+        await ws.close()
+    finally:
+        await server.stop()

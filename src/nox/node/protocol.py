@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import unicodedata
 from typing import Annotated, Literal
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -45,6 +46,8 @@ __all__ = [
     "PairLinkError",
     "Ping",
     "SecurityKill",
+    "escape_controls",
+    "safe_name",
 ]
 
 #: The protocol this release speaks, and the range of node protocols the core accepts. A node
@@ -96,6 +99,37 @@ NODE_TO_CORE: frozenset[str] = frozenset(
 CORE_TO_NODE: frozenset[str] = frozenset(
     {M_TOOLS_LIST, M_TOOLS_CALL, M_KILL, M_RESUME, M_REVOKED, M_POLICY, M_PING, M_PONG}
 )
+
+# ---- text from the other side ----------------------------------------------------------------
+
+#: A tool, method or group name as it may be recorded verbatim. Anything else is recorded escaped.
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9_.*:/-]{1,96}$")
+
+
+def escape_controls(text: str) -> str:
+    """`text` with every C0/C1 control character, DEL, line break and format character (bidi
+    overrides such as U+202E) written as an escape (`\\x1b`, `\\u202e`). What a node or a core
+    sends can then neither drive a terminal nor fake a line of an audit display."""
+    out: list[str] = []
+    for char in text:
+        code = ord(char)
+        if code < 0x20 or 0x7F <= code <= 0x9F:
+            out.append(f"\\x{code:02x}")
+        elif unicodedata.category(char) in ("Cf", "Zl", "Zp", "Co", "Cs", "Cn"):
+            out.append(f"\\u{code:04x}" if code <= 0xFFFF else f"\\U{code:08x}")
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+def safe_name(value: object, limit: int = 96) -> str:
+    """A name for an audit entry or a log line: itself when it is a plain name, otherwise its
+    escaped form - never raw control characters."""
+    text = value if isinstance(value, str) else repr(value)
+    if _SAFE_NAME.fullmatch(text):
+        return text
+    return escape_controls(text)[:limit]
+
 
 # ---- field types -----------------------------------------------------------------------------
 
