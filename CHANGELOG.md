@@ -207,6 +207,17 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   the Pi's architecture on every pull request.
 
 ### Fixed
+- **Nodes, external review of wave C part 1-3:** an `origin` default never lands on another
+  device when the asking PC's node is offline or not linked; the node port bounds TLS handshakes
+  (5 s), waiting connections per node and in total; a node's stop always takes effect while Nox
+  runs and repeats while stopped are answered `already_engaged` and audited once; the device of a
+  call is its own field in the permission request, scope and audit (a target that merely starts
+  like `device:<id>` is just text); node tools can never touch the node folder, `nox node allow`
+  needs an interactive terminal and a typed yes, the confirmed manifest is HMAC-signed in the
+  audit trail and an edit of `node.yaml` widens nothing; `nox node deny` applies to a running
+  node; the node folder is owner-only on Windows; nodes that stop answering pings are not
+  offered; notices always say "Nox"; PowerShell by absolute path; a node's grants are revoked on
+  unpair even with network access off; unfinished blobs expire.
 - **certifi 2026.10.19** (Dependabot alert #40, critical) in `uv.lock` and
   `installer/requirements.lock`. The lock is also re-synced with the minimum versions
   `pyproject.toml` already required (ruff, mypy, playwright, pytest-playwright, typer).

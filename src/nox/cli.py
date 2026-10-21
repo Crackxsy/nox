@@ -360,7 +360,7 @@ def node_run() -> None:
     """Connect to Nox and serve it until stopped (Ctrl+C). Reconnects on its own."""
     from nox.node.cli import build, run, secret_store  # noqa: PLC0415
 
-    typer.echo(run(build(_node_home(), secrets=secret_store())))
+    typer.echo(run(build(_node_home(), secrets=secret_store(), say=typer.echo)))
 
 
 @node_app.command("status")
@@ -386,10 +386,17 @@ def node_allow(
     group: str = typer.Argument(..., help="system, notify, media, files, shell, ..."),
 ) -> None:
     """Let Nox use a capability group on this device. Only possible here, never from the core."""
-    from nox.node.cli import NodeCliError, allow  # noqa: PLC0415
+    from nox.node.cli import NodeCliError, allow, secret_store  # noqa: PLC0415
 
     try:
-        allow(_node_home(), group, True, say=typer.echo)
+        allow(
+            _node_home(),
+            group,
+            True,
+            say=typer.echo,
+            confirm=lambda prompt: typer.confirm(prompt, default=False),
+            secrets=secret_store(),
+        )
     except NodeCliError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
@@ -398,10 +405,10 @@ def node_allow(
 @node_app.command("deny")
 def node_deny(group: str = typer.Argument(...)) -> None:
     """Take a capability group away from Nox on this device."""
-    from nox.node.cli import NodeCliError, allow  # noqa: PLC0415
+    from nox.node.cli import NodeCliError, allow, secret_store  # noqa: PLC0415
 
     try:
-        allow(_node_home(), group, False, say=typer.echo)
+        allow(_node_home(), group, False, say=typer.echo, secrets=secret_store())
     except NodeCliError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc

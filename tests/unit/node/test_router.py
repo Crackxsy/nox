@@ -13,7 +13,7 @@ from nox.node.registry import MAX_RESULT_CHARS, NodeEntry, NodeRegistry, clean_r
 from nox.node.router import CORE, resolve, routed_spec
 from nox.node.tools import NotifyArgs
 from nox.security.model import PermissionRequest, Risk, TemporaryGrant
-from nox.security.permissions import grant_matches, split_device_target
+from nox.security.permissions import grant_matches
 from nox.security.taint import CONVERSATION
 from nox.tools.registry import ToolSpec
 
@@ -113,6 +113,31 @@ def test_the_default_core_and_a_named_default() -> None:
     assert _resolve(entries=gone, default="Laptop").error["error"] == "device_offline"
 
 
+def test_an_offline_linked_device_is_reported_never_replaced() -> None:
+    """Review M1: the browser's own PC is offline and exactly one other device could do it - the
+    message must not silently land on that other device."""
+    entries = [
+        _entry(LAPTOP, "Laptop", online=False, linked="d" * 32),
+        _entry(PC, "Arbeits-PC"),
+    ]
+    refused = _resolve(entries=entries, default="origin", origin="d" * 32)
+    assert refused.device == "" and refused.error["error"] == "device_offline"
+
+
+def test_origin_without_a_link_never_guesses_a_side_effect() -> None:
+    entries = [_entry(PC, "Arbeits-PC")]  # the only candidate, but not where the user is
+    assert _resolve(entries=entries, default="origin", origin="d" * 32).error["error"] == (
+        "needs_device"
+    )
+    assert _resolve(entries=entries, default="origin", origin=None).error["error"] == (
+        "needs_device"
+    )
+    # A read may still use the only device.
+    assert (
+        _resolve("system.info", entries=entries, default="origin", side_effects=False).device == PC
+    )
+
+
 def test_origin_is_the_node_linked_to_the_asking_browser() -> None:
     entries = [_entry(LAPTOP, "Laptop", linked="d" * 32), _entry(PC, "Arbeits-PC")]
     assert _resolve(entries=entries, default="origin", origin="d" * 32).device == LAPTOP
@@ -179,7 +204,8 @@ async def test_the_permission_target_names_the_device_and_the_call_runs_there() 
     payload = spec.input_model.model_validate({"text": "hi", "device": "Laptop"}).model_dump()
     assert spec.scope is not None
     scope = spec.scope(payload)
-    assert scope.target == f"device:{LAPTOP} notify.show" and scope.risk is Risk.LOW
+    assert scope.device == LAPTOP and scope.risk is Risk.LOW
+    assert scope.target == "Laptop · aaaa: notify.show"
     assert await spec.handler(payload) == {"device": "Laptop", "result": {"shown": True}}
     assert registry.calls == [(LAPTOP, "notify.show", {"title": "Nox", "text": "hi"}, "low")]
 
@@ -279,7 +305,7 @@ def test_the_origin_comes_from_a_device_conversation() -> None:
 # ---- device-scoped grants ------------------------------------------------------------------------
 
 
-def _request(target: str) -> PermissionRequest:
+def _request(target: str = "", device: str = "") -> PermissionRequest:
     return PermissionRequest(
         agent="companion",
         tool="notify",
@@ -287,6 +313,7 @@ def _request(target: str) -> PermissionRequest:
         mode="companion",
         risk=Risk.LOW,
         target=target,
+        device=device,
     )
 
 
@@ -304,8 +331,8 @@ def _grant(scope: str) -> TemporaryGrant:
 def test_a_grant_for_the_laptop_covers_only_the_laptop() -> None:
     now = datetime.now(UTC)
     grant = _grant(f"device:{LAPTOP}|session:notify/show")
-    assert grant_matches(grant, _request(f"device:{LAPTOP} notify.show"), now)
-    assert not grant_matches(grant, _request(f"device:{PC} notify.show"), now)
+    assert grant_matches(grant, _request("notify.show", LAPTOP), now)
+    assert not grant_matches(grant, _request("notify.show", PC), now)
     assert not grant_matches(grant, _request("notify.show"), now)
 
 
@@ -313,20 +340,35 @@ def test_a_grant_on_the_core_never_covers_a_node() -> None:
     now = datetime.now(UTC)
     grant = _grant("session:notify/show")
     assert grant_matches(grant, _request(""), now)
-    assert not grant_matches(grant, _request(f"device:{LAPTOP} notify.show"), now)
+    assert not grant_matches(grant, _request("notify.show", LAPTOP), now)
 
 
 def test_a_remembered_answer_on_a_node_is_bound_to_it() -> None:
     from nox.security.permissions import DefaultPermissionEngine
 
     engine = object.__new__(DefaultPermissionEngine)  # the scope needs no engine state
-    scope = engine._remember_scope(_request(f"device:{LAPTOP} notify.show"))
+    scope = engine._remember_scope(_request("notify.show", LAPTOP))
     assert scope == f"device:{LAPTOP}|session:notify/show"
 
 
-def test_a_forged_device_prefix_is_no_device() -> None:
-    assert split_device_target("device:../../x notify")[0] is None
-    assert split_device_target(f"device:{LAPTOP}") == (None, f"device:{LAPTOP}")
+def test_free_text_in_a_core_target_never_makes_a_call_device_bound() -> None:
+    """Review M4: a window title (or a purpose, an intent) that starts like a device prefix is
+    just text. A grant remembered for that node never covers the core call, and the core call
+    never produces a device-bound grant."""
+    from nox.security.permissions import DefaultPermissionEngine
+
+    now = datetime.now(UTC)
+    title = f"device:{LAPTOP} session:notify/show - Editor"
+    core_call = _request(title)
+    assert core_call.device == ""
+    assert not grant_matches(_grant(f"device:{LAPTOP}|session:notify/show"), core_call, now)
+    engine = object.__new__(DefaultPermissionEngine)
+    assert engine._remember_scope(core_call) == "session:notify/show"
+
+
+def test_a_device_must_be_a_node_id() -> None:
+    with pytest.raises(ValueError):
+        _request("x", "../../etc")
 
 
 # ---- node results ----------------------------------------------------------------------------

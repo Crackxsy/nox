@@ -68,6 +68,8 @@ class NodeEntry:
     def offers(self, tool: str) -> bool:
         if not self.online or tool not in self.tools:
             return False
+        if self.session is not None and not self.session.alive:
+            return False  # no ping answered for a while: as good as gone
         return self.compatible or tool in OUTDATED_TOOLS
 
 

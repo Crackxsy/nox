@@ -404,16 +404,9 @@ def is_scoped_prefix(value: str, prefix: str) -> bool:
     return bool(prefix) and (value == prefix or value.startswith(prefix + "/"))
 
 
-#: A call routed to a node carries its device in front of the target (`nox.node.router`).
-_DEVICE_TARGET = re.compile(r"^device:(?P<id>[0-9a-f]{32}) (?P<rest>.*)$", re.DOTALL)
-#: ... and a grant remembered for such a call carries the same device in front of its scope.
+#: A grant remembered for a call on a node carries that node in front of its scope. Only
+#: `_remember_scope` writes one, from `PermissionRequest.device` - never from free text.
 _DEVICE_SCOPE = re.compile(r"^device:(?P<id>[0-9a-f]{32})\|(?P<rest>.+)$", re.DOTALL)
-
-
-def split_device_target(target: str) -> tuple[str | None, str]:
-    """(node device id, the target without it), or (None, target) for a call on the core."""
-    match = _DEVICE_TARGET.match(target)
-    return (match["id"], match["rest"]) if match else (None, target)
 
 
 def split_device_scope(scope: str) -> tuple[str | None, str]:
@@ -429,12 +422,10 @@ def grant_matches(grant: TemporaryGrant, request: PermissionRequest, now: dateti
     Device-scoped both ways: a grant remembered for a call on the laptop covers only the laptop,
     and a grant remembered on the core never covers a node (spec C §1.5)."""
     grant_device, inner_scope = split_device_scope(grant.scope)
-    request_device, inner_target = split_device_target(request.target)
-    if grant_device != request_device:
+    if (grant_device or "") != request.device:
         return False
     if grant_device is not None:
         grant = grant.model_copy(update={"scope": inner_scope})
-        request = request.model_copy(update={"target": inner_target})
     return _grant_matches(grant, request, now)
 
 
@@ -1152,10 +1143,9 @@ class DefaultPermissionEngine:
         """
         if not request.rememberable:
             return None
-        device, inner_target = split_device_target(request.target)
-        if device is not None:
-            inner = self._remember_scope(request.model_copy(update={"target": inner_target}))
-            return None if inner is None else f"device:{device}|{inner}"
+        if request.device:
+            inner = self._remember_scope(request.model_copy(update={"device": ""}))
+            return None if inner is None else f"device:{request.device}|{inner}"
         if request.tool == "shell":
             return shell_grant_scope(request.target)
         if request.tool == "browser":
@@ -1246,6 +1236,7 @@ class DefaultPermissionEngine:
                 "privacy": snapshot.mode.value,
                 "by": by,
                 "request_id": request_id,
+                **({"device": request.device} if request.device else {}),
             },
         )
         if by == "policy":

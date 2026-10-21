@@ -78,7 +78,9 @@ def test_narrowing_never_widens() -> None:
 def test_allow_and_deny_change_the_device_file_and_are_audited(tmp_path: Path) -> None:
     home = NodeHome(tmp_path / "h")
     said: list[str] = []
-    node_cli.allow(home, "shell", True, say=said.append)
+    node_cli.allow(
+        home, "shell", True, say=said.append, interactive=lambda: True, confirm=lambda _p: True
+    )
     assert load_manifest(home.manifest_file).groups["shell"] is True
     node_cli.allow(home, "shell", False, say=said.append)
     assert load_manifest(home.manifest_file).groups["shell"] is False

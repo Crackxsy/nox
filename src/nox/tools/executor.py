@@ -144,6 +144,7 @@ class ToolExecutor:
 
         payload = validated.model_dump(mode="json")
         risk = spec.risk
+        device = ""
         if spec.scope is not None:
             try:
                 scope = spec.scope(payload)
@@ -161,7 +162,7 @@ class ToolExecutor:
                     ok=False,
                     error=ERR_INVALID_INPUT,
                 )
-            action, risk = scope.action, scope.risk
+            action, risk, device = scope.action, scope.risk, scope.device
         target = spec.targets(payload) if spec.targets is not None else ""
         if spec.scope is not None and scope.target:
             target = scope.target
@@ -178,6 +179,7 @@ class ToolExecutor:
             network=spec.network(payload) if callable(spec.network) else spec.network,
             conversation=current_conversation(),
             lookup=spec.lookup(payload) if spec.lookup is not None else "",
+            device=device,
         )
 
         result = self._permission_engine.check(request)
@@ -193,6 +195,7 @@ class ToolExecutor:
                 tool=tool,
                 action=action,
                 target=target,
+                device=device,
                 task_id=task_id,
                 decision=decision,
                 started=started,
@@ -208,6 +211,7 @@ class ToolExecutor:
                 tool=tool,
                 action=action,
                 target=target,
+                device=device,
                 task_id=task_id,
                 decision=Decision.DENY,
                 started=started,
@@ -224,6 +228,7 @@ class ToolExecutor:
                 tool=tool,
                 action=action,
                 target=target,
+                device=device,
                 task_id=task_id,
                 decision=Decision.ALLOW,
                 started=started,
@@ -237,6 +242,7 @@ class ToolExecutor:
                 tool=tool,
                 action=action,
                 target=target,
+                device=device,
                 task_id=task_id,
                 decision=Decision.ALLOW,
                 started=started,
@@ -251,6 +257,7 @@ class ToolExecutor:
                 tool=tool,
                 action=action,
                 target=target,
+                device=device,
                 task_id=task_id,
                 decision=Decision.ALLOW,
                 started=started,
@@ -323,8 +330,12 @@ class ToolExecutor:
         ok: bool,
         error: str | None = None,
         data: dict[str, Any] | None = None,
+        device: str = "",
     ) -> ToolResult:
         duration_ms = (self._clock() - started) * 1000
+        details = {"duration_ms": f"{duration_ms:.1f}"}
+        if device:
+            details["device"] = device
         self._audit.append(
             actor=agent,
             tool=tool,
@@ -333,7 +344,7 @@ class ToolExecutor:
             decision=decision.value,
             result=result,
             task_id=task_id,
-            details={"duration_ms": f"{duration_ms:.1f}"},
+            details=details,
         )
         return ToolResult(
             ok=ok, data=data, error=error, decision=decision.value, duration_ms=duration_ms

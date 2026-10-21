@@ -19,6 +19,7 @@ Every decision - allowed or refused - goes into the node's own hash-chained audi
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -46,6 +47,59 @@ class GateDecision:
     args: BaseModel | None = None
 
 
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, list | tuple):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
+def _norm(text: str) -> str:
+    return text.replace("\\", "/").rstrip("/").casefold()
+
+
+def touches(arguments: Any, folder: Path) -> bool:
+    """Whether any string in the arguments names `folder` or something inside it - as a path,
+    a word of a command line, or anywhere in the text. Errs on refusing.
+
+    An early refusal (defence in depth), not the boundary: the boundary is where access happens.
+    Paths are compared after `resolve()` (symlinks, junctions, 8.3 names, case); file tools on a
+    node must check the resolved real path themselves, and shell/package tools run only in the
+    node's sandbox without access to its folder or the keyring.
+    TODO(C5): node file tools check `inside()` on the resolved path at open time; shell/package
+    tools on nodes only inside `make_sandbox()` with the node folder not mounted."""
+    try:
+        root = _norm(str(folder.resolve()))
+    except OSError:
+        root = _norm(str(folder))
+    plain = _norm(str(folder))
+    for text in _strings(arguments):
+        flat = _norm(text)
+        if root in flat or plain in flat:
+            return True
+        for word in text.replace('"', " ").replace("'", " ").split():
+            try:
+                resolved = _norm(str(Path(word).expanduser().resolve()))
+            except (OSError, ValueError, RuntimeError):
+                continue
+            if resolved == root or resolved.startswith(root + "/"):
+                return True
+    return False
+
+
+def inside(path: str | Path, folder: Path) -> bool:
+    """Whether `path`, resolved (symlinks, junctions, 8.3 names), lies in `folder` (resolved)."""
+    try:
+        resolved = _norm(str(Path(path).expanduser().resolve()))
+        root = _norm(str(folder.resolve()))
+    except (OSError, ValueError, RuntimeError):
+        return True  # cannot tell: refuse
+    return resolved == root or resolved.startswith(root + "/")
+
+
 def _rank(risk: str) -> int:
     return RISK_ORDER.index(risk) if risk in RISK_ORDER else len(RISK_ORDER)
 
@@ -56,16 +110,24 @@ class NodeGate:
         tools: dict[str, NodeTool],
         manifest: NodeManifest,
         audit: AuditLog | None,
+        *,
+        protected: Path | None = None,
     ) -> None:
         self._tools = tools
         self._manifest = manifest
         self._audit = audit
+        #: The node's own folder (key, certificate, `node.yaml`, audit): no tool may touch it.
+        self._protected = protected
         #: Groups the core narrowed for the current connection (`nox/policy`).
         self.narrowed: set[str] = set()
 
     @property
     def manifest(self) -> NodeManifest:
         return self._manifest
+
+    def set_manifest(self, manifest: NodeManifest) -> None:
+        """The device's manifest changed (`nox node deny` takes effect without a restart)."""
+        self._manifest = manifest
 
     def offered(self) -> list[NodeTool]:
         """The tools this node lists to the core right now."""
@@ -99,6 +161,8 @@ class NodeGate:
             return GateDecision(False, "invalid_arguments", tool)
         if not isinstance(arguments, dict):
             return GateDecision(False, "invalid_arguments", tool)
+        if self._protected is not None and touches(args.model_dump(), self._protected):
+            return GateDecision(False, "node_home_protected", tool)
         return GateDecision(True, "", tool, args)
 
     def _record(self, name: str, decision: GateDecision, *, call_id: str, by: str) -> None:

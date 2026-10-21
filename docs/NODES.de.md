@@ -56,13 +56,15 @@ Laptop.
 Das entscheidet die Datei `node.yaml` im Node-Ordner, und **nur dieses Gerät kann sie erweitern**:
 
 ```text
-nox node allow shell     # Nox darf hier Befehle ausführen (sobald es das Werkzeug gibt)
-nox node deny notify     # keine Hinweise mehr auf diesem Gerät
+nox node allow shell     # Nox darf hier Befehle ausführen (sobald es das Werkzeug gibt); fragt nach
+nox node deny notify     # keine Hinweise mehr auf diesem Gerät - sofort, auch im laufenden Betrieb
 ```
 
 Standard: `system` (Systemwerte lesen), `notify` (Hinweise zeigen) und `media` (Musik steuern)
 sind an; alles andere - Dateien, Befehle, Programme, Bildschirm, Kamera, Browser, Maus und
-Tastatur - ist aus. Der Core kann Gruppen zeitweise abschalten, nie anschalten. `max_risk` senkt,
+Tastatur - ist aus. Der Core kann Gruppen zeitweise abschalten, nie anschalten. `allow` geht nur in einem
+interaktiven Terminal mit Bestätigung; wer `node.yaml` von Hand ändert, kann nur etwas
+wegnehmen - was dazukommt, gilt erst nach `nox node allow`. `max_risk` senkt,
 was der Node annimmt; in dieser Version läuft auf einem Node nichts über „niedrig“, egal was der
 Core sagt.
 
