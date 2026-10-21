@@ -182,8 +182,12 @@ def check_node_installed() -> None:
     principal = task.find(f"{TASK_NS}Principals/{TASK_NS}Principal")
     check(trigger is not None and bool(trigger.findtext(f"{TASK_NS}UserId")), "at logon of a user")
     assert principal is not None
-    check(principal.findtext(f"{TASK_NS}RunLevel") == "LeastPrivilege", "least privilege")
-    check(principal.findtext(f"{TASK_NS}LogonType") == "InteractiveToken", "as the logged-in user")
+    print(xml, flush=True)  # noqa: T201 - the task as Windows stored it, for the log
+    # schtasks leaves out values at their default: no RunLevel element means LeastPrivilege.
+    level = principal.findtext(f"{TASK_NS}RunLevel")
+    check(level in (None, "LeastPrivilege"), f"least privilege ({level})")
+    logon = principal.findtext(f"{TASK_NS}LogonType")
+    check(logon == "InteractiveToken", f"as the logged-in user ({logon})")
     check("S-1-5-18" not in xml and "HighestAvailable" not in xml, "never SYSTEM, never elevated")
     check("<Arguments>-I " in xml, "the task starts its Python isolated (-I)")
     check(aumid_present(), "the node's notification ID (HKCU, 64-bit view)")
