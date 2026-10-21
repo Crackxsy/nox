@@ -18,8 +18,16 @@
 # snapshot, switches the link and starts. If the new version does not answer, it switches back and
 # restores the data from the snapshot by itself.
 #
+# Signed releases (docs/RELEASES.md): once TRUSTED_RELEASE_KEYS below holds a key, a tagged release
+# is installed only when its release-manifest.json carries a valid signature by one of those keys,
+# names the commit the tag points to and is not older than the newest release this machine already
+# accepted (NOX_ALLOW_DOWNGRADE=1 for a deliberate step back). The dashboard package must then match
+# the signed manifest, not just the checksum file next to it.
+#
 # Actions (normally through the `nox` command): NOX_ACTION=install (default) | rollback | restore
-# (NOX_SNAPSHOT=<file>) | verify-bundle (NOX_BUNDLE=<file>, for tests). NOX_REF picks a version;
+# (NOX_SNAPSHOT=<file>) | verify-bundle (NOX_BUNDLE=<file>, for tests) | verify-release
+# (NOX_RELEASE_DIR=<folder with the manifest and its .sig>, NOX_EXPECT_COMMIT=<commit>, for tests;
+# it changes nothing on the system). NOX_REF picks a version;
 # NOX_SOURCE=<checkout> installs from a local checkout (CI uses it); root runs git in it, so it
 # must be a checkout you trust.
 #
@@ -46,6 +54,13 @@ UV_VERSION="0.12.18"
 UV_SHA256_AARCH64="afb6291f3f0a6b4521fc67b947822506c41dde5b60d2189dd8f3695b2ac8c9e7"
 UV_SHA256_X86_64="89eadd7c76fc063887959510d5ba0ab1264dfd5f1143b925ddb73021a40acf16"
 CURL=(curl --proto '=https' --tlsv1.2 -fsSL)
+#: The release keys this installer trusts (docs/RELEASES.md): one "key_id|not_after|public_key"
+#: per entry - key id, last valid day (UTC), and the base64 line of `openssl pkey -pubout`. Kept
+#: identical to src/nox/release/trusted_keys.py (a test compares them). While the list is empty,
+#: release signing is not configured: tagged releases are checked by checksum only, and the
+#: installer says so. Once it holds a key, a release without a valid signed manifest is refused.
+TRUSTED_RELEASE_KEYS=(
+)
 SOURCE="${NOX_SOURCE:-$REPO_URL}"
 # Ownership checks stay on, except for the one checkout NOX_SOURCE names (CI's is not root's).
 GIT=(git)
@@ -164,8 +179,8 @@ define arch_unsupported \
   'nicht unterstützte Architektur: %s' \
   'unsupported architecture: %s'
 define step_packages \
-  'Pakete installieren (git, curl, bubblewrap)' \
-  'Installing packages (git, curl, bubblewrap)'
+  'Pakete installieren (git, curl, openssl, bubblewrap)' \
+  'Installing packages (git, curl, openssl, bubblewrap)'
 define untested_system \
   'Hinweis: getestet ist Nox auf Raspberry Pi OS, Debian und Ubuntu. Auf diesem System kann etwas fehlen.' \
   'Note: Nox is tested on Raspberry Pi OS, Debian and Ubuntu. Something may be missing on this system.'
@@ -201,6 +216,68 @@ define version_missing \
 define windows_only \
   'Nox %s läuft nur unter Windows. Linux-Server gibt es ab v%s.' \
   'Nox %s runs on Windows only. Linux servers are supported from v%s on.'
+
+# Signed releases
+define step_signature \
+  'Signatur von %s prüfen' \
+  'Checking the signature of %s'
+define sig_ok \
+  'Signiert mit dem Release-Schlüssel %s; Commit und Version stimmen.' \
+  'Signed with release key %s; commit and version match.'
+define sig_not_configured \
+  'Hinweis: Release-Signaturen sind in diesem Installer noch nicht eingerichtet - geprüft werden nur Prüfsummen (docs/RELEASES.md).' \
+  'Note: release signatures are not set up in this installer yet - only checksums are checked (docs/RELEASES.md).'
+define sig_dev_version \
+  'Hinweis: %s ist eine Entwicklungsversion ohne signiertes Manifest; sie wird nicht auf eine Signatur geprüft.' \
+  'Note: %s is a development version without a signed manifest; it is not checked against a signature.'
+define sig_missing \
+  'Release %s hat kein signiertes Manifest (release-manifest.json und .sig). Aus Sicherheitsgründen wird es nicht installiert; nichts wurde geändert.' \
+  'Release %s has no signed manifest (release-manifest.json and .sig). For safety it is not installed; nothing was changed.'
+define sig_tools_missing \
+  'openssl (ab Version 3) und python3 werden zum Prüfen der Signatur gebraucht. Bitte installieren; nichts wurde geändert.' \
+  'openssl (version 3 or later) and python3 are needed to check the signature. Please install them; nothing was changed.'
+define sig_refused \
+  'Release %s abgelehnt: %s. Nichts wurde geändert.' \
+  'Release %s refused: %s. Nothing was changed.'
+define sig_reason_unknown_key \
+  'signiert mit einem Schlüssel, dem diese Installation nicht vertraut' \
+  'signed by a key this installation does not trust'
+define sig_reason_expired_key \
+  'der Schlüssel, mit dem signiert wurde, ist abgelaufen' \
+  'the key it was signed with has expired'
+define sig_reason_bad_signature \
+  'die Signatur ist ungültig oder passt nicht zum Manifest' \
+  'the signature is invalid or does not match the manifest'
+define sig_reason_bad_manifest \
+  'das signierte Manifest ist fehlerhaft' \
+  'the signed manifest is malformed'
+define sig_reason_wrong_tag \
+  'das Manifest gehört zu einer anderen Version' \
+  'the manifest belongs to another version'
+define sig_reason_wrong_commit \
+  'die Version zeigt auf einen anderen Commit als im signierten Manifest' \
+  'the version points to another commit than the signed manifest names'
+define sig_reason_downgrade \
+  'älter als die neueste schon angenommene Version %s (Schutz vor Rückstufung; bewusst zurück: nox update <version> --allow-downgrade, oder nox rollback)' \
+  'older than %s, the newest version already accepted (rollback protection; to go back on purpose: nox update <version> --allow-downgrade, or nox rollback)'
+define sig_reason_openssl \
+  'openssl konnte die Signatur nicht prüfen (openssl ab Version 3 nötig)' \
+  'openssl could not check the signature (openssl 3 or later is needed)'
+define ui_signed_mismatch \
+  'das Oberflächen-Paket stimmt nicht mit dem signierten Manifest überein. Nichts wurde geändert.' \
+  'the interface package does not match the signed manifest. Nothing was changed.'
+define ui_signed_download \
+  'das im signierten Manifest genannte Oberflächen-Paket ließ sich nicht laden. Nichts wurde geändert.' \
+  'the interface package named in the signed manifest could not be downloaded. Nothing was changed.'
+define sig_reason_bad_key_list \
+  'die Schlüsselliste dieses Installers ist fehlerhaft' \
+  'this installer'"'"'s key list is broken'
+define sig_reason_bad_floor \
+  'die gespeicherte Mindestversion (/opt/nox/state/release-floor) ist fehlerhaft' \
+  'the stored minimum version (/opt/nox/state/release-floor) is malformed'
+define release_dir_missing \
+  'NOX_RELEASE_DIR fehlt' \
+  'NOX_RELEASE_DIR is missing'
 
 # Building the release
 define step_user \
@@ -451,6 +528,195 @@ verify_bundle() {
   return "$status"
 }
 
+#: The checks around the signature, in the system's python3 (standard library only, isolated
+#: mode). `signature DIR KEY...`: parses DIR/release-manifest.json.sig, picks the trusted key it
+#: names, refuses an expired one, and leaves the raw signature and the key as DIR/.sig.bin and
+#: DIR/.key.pem for openssl. `manifest DIR TAG COMMIT FLOOR ALLOW_DOWNGRADE UI_ASSET`: checks the
+#: fields of the - by then verified - manifest that this installer relies on and prints
+#: "version ui_sha256 ui_size new_floor" ("-" for no UI package). On refusal it prints a reason
+#: code (the sig_reason_* messages) and exits 1. src/nox/release does the same checks in Nox itself.
+release_check() {
+  python3 -I - "$@" <<'PY'
+import base64, binascii, datetime, hashlib, json, os, re, sys
+
+SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
+KEY_ID = re.compile(r"^[0-9a-f]{16}$")
+DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+VERSION = re.compile(
+    r"^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})(?:-([0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*))?$"
+)
+NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}$")
+
+
+def refuse(code, detail=""):
+    print((code + " " + detail).strip())
+    sys.exit(1)
+
+
+def read(path, limit):
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read(limit + 1)
+    except OSError:
+        refuse("bad_manifest")
+    if len(data) > limit:
+        refuse("bad_manifest")
+    return data
+
+
+def order(text):
+    match = VERSION.match(text)
+    if match is None:
+        return None
+    pre = match.group(4)
+    parts = tuple((0, int(p)) if p.isdigit() else (1, p) for p in pre.split(".")) if pre else ()
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)), 0 if pre else 1, parts)
+
+
+mode, folder = sys.argv[1], sys.argv[2]
+if mode == "signature":
+    try:
+        document = json.loads(read(os.path.join(folder, "release-manifest.json.sig"), 4096))
+    except ValueError:
+        refuse("bad_signature")
+    if not isinstance(document, dict) or document.get("schema") != "nox-release-signature/1":
+        refuse("bad_signature")
+    key_id, signature = document.get("key_id"), document.get("signature")
+    if document.get("algorithm") != "ed25519" or not isinstance(key_id, str) \
+            or not KEY_ID.match(key_id) or not isinstance(signature, str):
+        refuse("bad_signature")
+    try:
+        raw = base64.b64decode(signature, validate=True)
+    except (binascii.Error, ValueError):
+        refuse("bad_signature")
+    if len(raw) != 64:
+        refuse("bad_signature")
+    keys = {}
+    for entry in sys.argv[3:]:
+        parts = entry.split("|")
+        if len(parts) != 3 or not KEY_ID.match(parts[0]) or not DAY.match(parts[1]):
+            refuse("bad_key_list")
+        try:
+            der = base64.b64decode(parts[2], validate=True)
+        except (binascii.Error, ValueError):
+            refuse("bad_key_list")
+        if len(der) != 44 or not der.startswith(SPKI_PREFIX) \
+                or hashlib.sha256(der[12:]).hexdigest()[:16] != parts[0]:
+            refuse("bad_key_list")
+        keys[parts[0]] = (parts[1], parts[2])
+    if key_id not in keys:
+        refuse("unknown_key")
+    not_after, spki = keys[key_id]
+    if datetime.datetime.now(datetime.timezone.utc).date().isoformat() > not_after:
+        refuse("expired_key")
+    with open(os.path.join(folder, ".sig.bin"), "wb") as handle:
+        handle.write(raw)
+    with open(os.path.join(folder, ".key.pem"), "w") as handle:
+        handle.write("-----BEGIN PUBLIC KEY-----\n" + spki + "\n-----END PUBLIC KEY-----\n")
+    print(key_id)
+elif mode == "manifest":
+    tag, commit, floor, allow, ui_name = sys.argv[3:8]
+    try:
+        document = json.loads(read(os.path.join(folder, "release-manifest.json"), 262144))
+    except ValueError:
+        refuse("bad_manifest")
+    if not isinstance(document, dict) or document.get("schema") != "nox-release-manifest/1" \
+            or document.get("project") != "Crackxsy/nox":
+        refuse("bad_manifest")
+    version = document.get("version")
+    if not isinstance(version, str) or order(version) is None \
+            or document.get("tag") != "v" + version:
+        refuse("bad_manifest")
+    channel = "prerelease" if "-" in version else "stable"
+    if document.get("channel") != channel:
+        refuse("bad_manifest")
+    source = document.get("source_commit")
+    if not isinstance(source, str) or not re.match(r"^[0-9a-f]{40}$", source):
+        refuse("bad_manifest")
+    if document["tag"] != tag:
+        refuse("wrong_tag")
+    if source != commit:
+        refuse("wrong_commit")
+    assets = document.get("assets")
+    if not isinstance(assets, list):
+        refuse("bad_manifest")
+    seen, ui = set(), None
+    for asset in assets:
+        if not isinstance(asset, dict):
+            refuse("bad_manifest")
+        name, size, digest = asset.get("name"), asset.get("size"), asset.get("sha256")
+        if not isinstance(name, str) or not NAME.match(name) or ".." in name or name in seen \
+                or type(size) is not int or size < 0 \
+                or not isinstance(digest, str) or not re.match(r"^[0-9a-f]{64}$", digest):
+            refuse("bad_manifest")
+        seen.add(name)
+        if name == ui_name:
+            ui = (digest, str(size))
+    new_floor = version
+    if floor != "-":
+        if order(floor) is None:
+            refuse("bad_floor")
+        if order(version) < order(floor):
+            if allow != "1":
+                refuse("downgrade", floor)
+            new_floor = floor
+    print(version, ui[0] if ui else "-", ui[1] if ui else "-", new_floor)
+else:
+    refuse("bad_mode")
+PY
+}
+
+#: Set by verify_release: what the signed manifest says.
+MANIFEST_KEY_ID=""
+MANIFEST_UI_SHA256=""
+MANIFEST_UI_SIZE=""
+MANIFEST_FLOOR=""
+#: Why verify_release refused, already in the user's language.
+RELEASE_REFUSAL=""
+
+#: "Release TAG refused: <reason>" for a release_check result "<code> [detail]". Anything
+#: unexpected (python3 crashing, say) reads as a malformed manifest - never as a pass.
+refusal() {
+  local tag="$1" code detail
+  read -r code detail <<<"$2" || true
+  [ -n "${MSG_EN[sig_reason_${code:-x}]-}" ] || code="bad_manifest"
+  if [ -n "$detail" ]; then
+    msg sig_refused "$tag" "$(msg "sig_reason_$code" "$detail")"
+  else
+    msg sig_refused "$tag" "$(msg "sig_reason_$code")"
+  fi
+}
+
+#: Exit status 0 when DIR holds a release-manifest.json for TAG (pointing to COMMIT), signed by one
+#: of the KEYS that has not expired, not older than FLOOR ("-": none) unless ALLOW_DOWNGRADE is 1.
+#: Everything else - a missing tool included - is a refusal (RELEASE_REFUSAL says why).
+#: Usage: verify_release DIR TAG COMMIT FLOOR ALLOW_DOWNGRADE UI_ASSET KEY...
+verify_release() {
+  local dir="$1" tag="$2" commit="$3" floor="$4" allow="$5" ui_asset="$6" out major
+  shift 6
+  RELEASE_REFUSAL=""
+  major="$(openssl version 2>/dev/null | awk '{print $2}' | cut -d. -f1 || true)"
+  if ! command -v python3 >/dev/null 2>&1 || ! [[ "$major" =~ ^[0-9]+$ ]] || [ "$major" -lt 3 ]; then
+    RELEASE_REFUSAL="$(msg sig_tools_missing)"
+    return 1
+  fi
+  if ! out="$(release_check signature "$dir" "$@")"; then
+    RELEASE_REFUSAL="$(refusal "$tag" "$out")"
+    return 1
+  fi
+  MANIFEST_KEY_ID="$out"
+  if ! openssl pkeyutl -verify -pubin -inkey "$dir/.key.pem" -rawin \
+      -in "$dir/release-manifest.json" -sigfile "$dir/.sig.bin" >/dev/null 2>&1; then
+    RELEASE_REFUSAL="$(msg sig_refused "$tag" "$(msg sig_reason_bad_signature)")"
+    return 1
+  fi
+  if ! out="$(release_check manifest "$dir" "$tag" "$commit" "$floor" "$allow" "$ui_asset")"; then
+    RELEASE_REFUSAL="$(refusal "$tag" "$out")"
+    return 1
+  fi
+  read -r _ MANIFEST_UI_SHA256 MANIFEST_UI_SIZE MANIFEST_FLOOR <<<"$out"
+}
+
 # ---- preconditions --------------------------------------------------------------------------------
 
 [ "$(id -u)" -eq 0 ] || fail "$(msg need_root)"
@@ -466,6 +732,24 @@ if [ "$ACTION" = "verify-bundle" ]; then
   [ -n "${NOX_BUNDLE:-}" ] || fail "$(msg bundle_missing)"
   verify_bundle "$NOX_BUNDLE"
   exit $?
+fi
+
+if [ "$ACTION" = "verify-release" ]; then
+  # For tests: the check an install runs, on the folder given. Only here may NOX_TEST_TRUSTED_KEYS
+  # (space-separated entries) stand in for the built-in keys - an install never reads it. Changes
+  # nothing on the system. Exit status: 0 verified, 1 refused, 3 no key trusted.
+  trap - ERR
+  [ -n "${NOX_RELEASE_DIR:-}" ] || fail "$(msg release_dir_missing)"
+  keys=("${TRUSTED_RELEASE_KEYS[@]}")
+  if [ -n "${NOX_TEST_TRUSTED_KEYS:-}" ]; then read -r -a keys <<<"$NOX_TEST_TRUSTED_KEYS"; fi
+  if [ "${#keys[@]}" -eq 0 ]; then note "$(msg sig_not_configured)"; exit 3; fi
+  if verify_release "$NOX_RELEASE_DIR" "${NOX_REF:-}" "${NOX_EXPECT_COMMIT:-}" \
+      "${NOX_RELEASE_FLOOR:--}" "${NOX_ALLOW_DOWNGRADE:-0}" "nox-ui-${NOX_REF:-}.tar.gz" "${keys[@]}"; then
+    printf 'verified %s %s %s\n' "$MANIFEST_KEY_ID" "$MANIFEST_UI_SHA256" "$MANIFEST_FLOOR"
+    exit 0
+  fi
+  printf '%s\n' "$RELEASE_REFUSAL" >&2
+  exit 1
 fi
 
 if [ "$ACTION" = "rollback" ]; then
@@ -512,7 +796,7 @@ if command -v apt-get >/dev/null 2>&1; then
   # program its only way out - the egress proxy). Without them Nox refuses to run commands.
   say "$(msg step_packages)"
   apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates tar sudo bubblewrap python3 >/dev/null
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates openssl tar sudo bubblewrap python3 >/dev/null
 else
   note "$(msg untested_system)"
   for tool in git curl tar sha256sum sudo; do command -v "$tool" >/dev/null 2>&1 || fail "$(msg tool_missing "$tool")"; done
@@ -564,6 +848,32 @@ if [[ "$NOX_REF" =~ ^v[0-9] ]] && ! version_at_least "${NOX_REF#v}" "$MIN_VERSIO
 fi
 release="${commit:0:12}"
 label="$NOX_REF"; [[ "$NOX_REF" =~ ^[0-9a-f]{40}$ ]] && label="$release"
+
+work="$(mktemp -d)"
+trap 'rm -rf -- "$work"' EXIT
+
+# ---- the signature (docs/RELEASES.md) -------------------------------------------------------------
+# Before anything of the new version is built or run. A tagged release needs a manifest signed by a
+# trusted key that names exactly this commit; branches and commits have none and say so.
+release_verified=""
+ui_asset="nox-ui-${NOX_REF//\//-}.tar.gz"
+if [ "${#TRUSTED_RELEASE_KEYS[@]}" -eq 0 ]; then
+  if [[ "$NOX_REF" =~ ^v[0-9] ]]; then note "$(msg sig_not_configured)"; fi
+elif [[ "$NOX_REF" =~ ^v[0-9] ]] && [ -z "${NOX_SOURCE:-}" ]; then
+  say "$(msg step_signature "$NOX_REF")"
+  mkdir "$work/signed"
+  for file in release-manifest.json release-manifest.json.sig; do
+    "${CURL[@]}" -o "$work/signed/$file" "$REPO_URL/releases/download/$NOX_REF/$file" 2>/dev/null \
+      || fail "$(msg sig_missing "$NOX_REF")"
+  done
+  floor="$(cat "$STATE/release-floor" 2>/dev/null || true)"
+  verify_release "$work/signed" "$NOX_REF" "$commit" "${floor:--}" "${NOX_ALLOW_DOWNGRADE:-0}" \
+    "$ui_asset" "${TRUSTED_RELEASE_KEYS[@]}" || fail "$RELEASE_REFUSAL"
+  release_verified=1
+  note "$(msg sig_ok "$MANIFEST_KEY_ID")"
+else
+  note "$(msg sig_dev_version "$label")"
+fi
 
 # ---- service user ---------------------------------------------------------------------------------
 
@@ -658,9 +968,6 @@ fi
 
 # ---- build the release (the running version is untouched) ----------------------------------------
 
-work="$(mktemp -d)"
-trap 'rm -rf -- "$work"' EXIT
-
 if [ -f "$RELEASES/$release/.complete" ]; then
   say "$(msg release_ready "$label")"
 else
@@ -684,12 +991,25 @@ else
   "$UV_INSTALL_DIR/uv" cache prune --ci --quiet || true  # an SD card is small
 
   say "$(msg step_ui)"
-  asset="nox-ui-${NOX_REF//\//-}.tar.gz"
+  asset="$ui_asset"
   base="$REPO_URL/releases/download/$NOX_REF"
-  if [ -z "${NOX_SOURCE:-}" ] \
+  ui_ready=""
+  if [ -n "$release_verified" ]; then
+    # The signed manifest decides: a package it lists must arrive and match it exactly.
+    if [ "$MANIFEST_UI_SHA256" != "-" ]; then
+      "${CURL[@]}" -o "$work/$asset" "$base/$asset" 2>/dev/null || fail "$(msg ui_signed_download)"
+      [ "$(stat -c %s "$work/$asset")" = "$MANIFEST_UI_SIZE" ] \
+        && printf '%s  %s\n' "$MANIFEST_UI_SHA256" "$work/$asset" | sha256sum --quiet -c - \
+        || fail "$(msg ui_signed_mismatch)"
+      ui_ready=1
+    fi
+  elif [ -z "${NOX_SOURCE:-}" ] \
     && "${CURL[@]}" -o "$work/$asset" "$base/$asset" 2>/dev/null \
     && "${CURL[@]}" -o "$work/$asset.sha256" "$base/$asset.sha256" 2>/dev/null; then
     (cd "$work" && sha256sum --quiet -c "$asset.sha256") || fail "$(msg ui_checksum)"
+    ui_ready=1
+  fi
+  if [ -n "$ui_ready" ]; then
     verify_bundle "$work/$asset" || fail "$(msg ui_unexpected)"
     mkdir "$work/extract"
     tar -xzf "$work/$asset" -C "$work/extract" --no-same-owner --no-same-permissions
@@ -767,6 +1087,13 @@ if ! wait_healthy 90; then
 fi
 phase=""
 trap - ERR
+
+# Rollback protection: from now on no signed release older than the newest one accepted here is
+# taken as an update (a deliberate `nox rollback` uses the local copy and is not affected).
+if [ -n "$release_verified" ]; then
+  printf '%s\n' "$MANIFEST_FLOOR" > "$STATE/release-floor.next"
+  mv -f -- "$STATE/release-floor.next" "$STATE/release-floor"
+fi
 
 # Keep the running version, the one it replaced and the one `nox rollback` points to - after
 # running the same version again that is still the one from the last real update. Older ones go.

@@ -27,9 +27,12 @@ curl -fsSL https://github.com/Crackxsy/nox/releases/latest/download/install-linu
 ```
 
 Prefer to read it first? `curl -fsSLO <same address>`, `less install-linux.sh`, then
-`sudo bash install-linux.sh`. Each release also carries `install-linux.sh.sha256`. The checksum
-catches a damaged download; it sits next to the script, so it does not protect against a release
-that someone with write access to the project had altered.
+`sudo bash install-linux.sh`. Each release also carries `install-linux.sh.sha256`, which only
+catches a damaged download, and - once the project's release key is set up - a signed
+`release-manifest.json` that lists every file of the release. With it the installer and
+`nox update` refuse a release that was altered or not signed by the release key, and an older
+release offered as an update; [Signed releases](RELEASES.md) shows how to check the script itself
+by hand before running it. Until the key is set up the installer says so and checks checksums only.
 
 The script prints each step and ends with **"Nox is running"** once the service answers. From
 then on it starts by itself after every reboot. It installs the newest release that runs on Linux
@@ -125,8 +128,12 @@ back, so it can never put the same old data back twice. For the same reason ther
 
 `nox update` runs the installer of the version it installs - taken from that version's git tree,
 the very code about to be installed - so a fix to the installer itself applies to the very update
-that brings it. An installation from a branch (`nox update develop`) stays on that branch with a
-plain `nox update` instead of falling back to the older last release.
+that brings it. Once the release key is set up, the running version first checks the new
+release's signed manifest with its own `nox release verify` - the new installer runs only if that
+passes - and a release older than the newest one already installed needs
+`nox update <version> --allow-downgrade` ([Signed releases](RELEASES.md)). An installation from a
+branch (`nox update develop`) stays on that branch with a plain `nox update` instead of falling
+back to the older last release.
 
 **Time zone.** Reminders and the calendar follow the Pi's clock. Raspberry Pi OS Lite often starts
 in UTC; the installer warns about it. In Germany: `sudo timedatectl set-timezone Europe/Berlin`.
