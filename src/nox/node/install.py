@@ -123,6 +123,14 @@ def install(core: Any) -> NodeRuntime:
     registry = NodeRegistry(pairing, NodeRepository(core.db))
     runtime.registry = registry
 
+    async def forget_grants(device_id: str, reason: str) -> None:
+        # A removed node keeps no remembered "allow" that a re-paired one could inherit.
+        engine = getattr(core.security, "engine", None)
+        if engine is not None:
+            engine.revoke_device_grants(device_id, reason=f"node removed: {reason}"[:64])
+
+    pairing.on_revoked(forget_grants)
+
     def tls() -> TlsMaterial | None:
         material: TlsMaterial | None = lan.tls
         return material

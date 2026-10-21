@@ -696,7 +696,9 @@ filtered (only tools the core routes, never a hard-prohibited name, at most 64) 
 risk can only raise the core's risk, never lower it. The device is resolved once, in the call's
 permission scope; the permission target and the audit say `device:<id> ...`, and a remembered
 grant is bound to that device (`device:<id>|<scope>`; a grant on the core never covers a node and
-one for a node never covers another). Side effects are never guessed onto a device (`needs_device`);
+one for a node never covers another). Every revocation path - session end, a privacy change, the kill
+switch, taint, an MCP server or skill removed - covers device-bound grants like the core's, and
+removing a node revokes all of its grants. Side effects are never guessed onto a device (`needs_device`);
 an offline device fails fast and is never substituted; nothing is queued. Results from a node are
 untrusted: schema-checked, text only, bounded with a truncation marker, malformed answers become an
 error, and the conversation is tainted. Device names are typed on the device, so they are

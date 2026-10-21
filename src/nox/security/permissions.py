@@ -174,6 +174,14 @@ class GrantStore(Protocol):
     def get(self, grant_id: str) -> TemporaryGrant | None: ...
     def active(self, now: datetime) -> list[TemporaryGrant]: ...
     def remove_scope_prefix(self, prefix: str) -> int: ...
+    def remove_device(self, device_id: str) -> int: ...
+
+
+def _inner_scope(scope: str) -> str:
+    """A grant's scope without a node binding: every revocation by scope (session end, `cmd:`
+    after a privacy change, the kill switch or taint, an MCP server or skill removed) covers the
+    grants remembered on a node exactly like those on the core."""
+    return split_device_scope(scope)[1]
 
 
 class GrantRepository(Protocol):
@@ -204,7 +212,18 @@ class InMemoryGrantStore:
         return list(self._grants.values())
 
     def remove_scope_prefix(self, prefix: str) -> int:
-        doomed = [gid for gid, g in self._grants.items() if g.scope.startswith(prefix)]
+        doomed = [
+            gid for gid, g in self._grants.items() if _inner_scope(g.scope).startswith(prefix)
+        ]
+        for gid in doomed:
+            del self._grants[gid]
+        return len(doomed)
+
+    def remove_device(self, device_id: str) -> int:
+        """Every grant bound to one node (`device:<id>|...`)."""
+        doomed = [
+            gid for gid, g in self._grants.items() if split_device_scope(g.scope)[0] == device_id
+        ]
         for gid in doomed:
             del self._grants[gid]
         return len(doomed)
@@ -235,7 +254,17 @@ class RepositoryGrantStore(InMemoryGrantStore):
         return alive
 
     def remove_scope_prefix(self, prefix: str) -> int:
-        doomed = [gid for gid, g in self._grants.items() if g.scope.startswith(prefix)]
+        doomed = [
+            gid for gid, g in self._grants.items() if _inner_scope(g.scope).startswith(prefix)
+        ]
+        for gid in doomed:
+            self.remove(gid)
+        return len(doomed)
+
+    def remove_device(self, device_id: str) -> int:
+        doomed = [
+            gid for gid, g in self._grants.items() if split_device_scope(g.scope)[0] == device_id
+        ]
         for gid in doomed:
             self.remove(gid)
         return len(doomed)
@@ -913,6 +942,21 @@ class DefaultPermissionEngine:
                 decision=Decision.ALLOW.value,
                 result="ok",
                 details={"removed": str(removed)},
+            )
+        return removed
+
+    def revoke_device_grants(self, device_id: str, *, reason: str, by: str = "system") -> int:
+        """Revoke every grant remembered for one node - it was removed (`node.unpair`)."""
+        removed = self._grants.remove_device(device_id)
+        if removed:
+            self._audit.append(
+                actor=by,
+                tool="security",
+                action="grant.revoke_device",
+                target=f"device:{device_id}",
+                decision=Decision.ALLOW.value,
+                result="ok",
+                details={"removed": str(removed), "reason": reason},
             )
         return removed
 

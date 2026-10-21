@@ -380,3 +380,29 @@ async def test_the_core_routes_tool_calls_to_the_right_device(
     assert nobody.data is not None and nobody.data["error"] == "no_device"
     assert shown == [("Nox", "Wäsche aufhängen")]  # nothing queued, nothing sent elsewhere
     assert core.node_probe("notify.show") is not None  # not offered while no node has it
+
+
+async def test_unpairing_a_node_revokes_its_remembered_grants(
+    core: NoxCore, tmp_path: Path
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from nox.security.model import Risk, TemporaryGrant
+
+    body, _context = await _pair(core, tmp_path)
+    node_id = body["node_id"]
+    engine = core.security.engine
+    expires = datetime.now(UTC) + timedelta(hours=1)
+    for gid, scope in [
+        ("g-node", f"device:{node_id}|session:notify/show"),
+        ("g-core", "session:x/y"),
+    ]:
+        engine.grant_temporary(
+            TemporaryGrant(
+                grant_id=gid, scope=scope, max_risk=Risk.LOW, expires_at=expires, granted_by="user"
+            )
+        )
+    await _local(core, "dashboard", "node.unpair", {"device_id": node_id})
+    left = {g.scope for g in engine._grants.active(datetime.now(UTC))}
+    assert f"device:{node_id}|session:notify/show" not in left
+    assert "session:x/y" in left
