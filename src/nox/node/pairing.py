@@ -176,6 +176,39 @@ class NodePairing:
         self._repo.mark_seen(device.id, when=self._clock())
         return device
 
+    async def renew(self, device_id: str, serial: str, csr: str) -> IssuedClientCert | None:
+        """A new certificate for a connected node, before its current one (`serial`) ends.
+
+        Only for the key that was paired: a request for another key is refused (a stolen
+        certificate alone never yields a fresh one; a new key means pairing again). The node's
+        pairing must still stand; the new serial is recorded like the first."""
+        device = self.get(device_id)
+        current = self._nodes.get_cert(serial)
+        if (
+            device is None
+            or device.revoked
+            or current is None
+            or current.revoked
+            or current.device_id != device_id
+        ):
+            return None
+        try:
+            if csr_spki_sha256(csr) != current.spki_sha256:
+                log.warning("node.renew_other_key", device_id=device_id)
+                return None
+        except CsrRefusedError as exc:
+            log.warning("node.renew_csr_refused", reason=str(exc))
+            return None
+        issued = await asyncio.to_thread(issue_client_certificate, self._tls_dir, csr, device_id)
+        self._nodes.record_cert(
+            serial=issued.serial,
+            device_id=device_id,
+            spki_sha256=issued.spki_sha256,
+            issued_at=self._clock(),
+            not_after=issued.not_after,
+        )
+        return issued
+
     async def revoke(self, device_id: str, *, reason: str = "dashboard") -> bool:
         """Revoke the pairing and every certificate of the node, then close its connection."""
         ok = await self.pairing.revoke(device_id, reason=reason)

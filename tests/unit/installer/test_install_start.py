@@ -122,4 +122,9 @@ def test_every_shortcut_starts_the_launcher(name: str) -> None:
         line for line in script.splitlines() if "pythonw.exe" in line and "Parameters" in line
     ]
     assert starts, "no shortcut found"
-    assert all("start_nox.pyw" in line and "-m nox.supervisor" not in line for line in starts)
+    # The core's launcher, or the node's (installer/start_node.pyw) - never `-m nox.supervisor`.
+    launchers = ("start_nox.pyw", "start_node.pyw")
+    assert all(
+        any(launcher in line for launcher in launchers) and "-m nox.supervisor" not in line
+        for line in starts
+    )

@@ -11,6 +11,19 @@ lässt Nox Dinge *auf diesem Gerät* tun - und nur die, die du dort erlaubt hast
 > lesen) und `notify.show` (einen Hinweis zeigen). Befehle, Dateien, Bildschirm und der Rest
 > folgen.
 
+## Einen Node installieren
+
+| Gerät | Wie | Startet mit |
+| --- | --- | --- |
+| Windows | Der Nox-Installer, Modus **„Mit einem Nox im Heimnetz verbinden (nur dieses Gerät)“** (still: `Nox-Setup-<Version>.exe /MODE=node [/PAIR=<Link>]`). Ohne Oberflächen; die Sandbox-Regeln werden wie beim Core angeboten. | Eine Anmelde-Aufgabe „Nox Node“ nur für dich: läuft als du, *geringste Rechte*, nie als Dienst, nie mit Administratorrechten. Startmenü „Nox Node“ startet sie sofort. |
+| Linux-Desktop | `curl -fsSL https://github.com/Crackxsy/nox/releases/latest/download/install-linux.sh \| bash -s -- --node` - als du selbst, **ohne** sudo. Braucht `git curl tar python3`. | Eine systemd-**Benutzer**-Unit `nox-node.service`. Befehl: `nox-node ...` (in `~/.local/bin`). |
+| Linux ohne Bildschirm (ein Pi) | dasselbe mit `sudo bash -s -- --node --headless` | Eine gehärtete System-Unit für den eigenen Systembenutzer `nox-node`; Daten in `/var/lib/nox-node`. Befehl: `sudo nox-node ...`. |
+| macOS (**Beta**) | `bash scripts/install-macos.sh --node` in einer Kopie dieses Repositorys | Ein LaunchAgent bei der Anmeldung, als du. Release-Signaturen prüft dieses Skript noch nicht selbst (es lehnt Release-Versionen ab, sobald Signaturen eingerichtet sind). |
+
+`--pair '<Link>'` koppelt gleich mit; den Installer erneut starten aktualisiert; `--uninstall`
+entfernt Programm und Autostart (Kennung und Protokoll des Nodes bleiben; das Gerät auch in Nox
+entfernen). Unter Windows ist `nox-node.cmd` im Installationsordner der Befehl `nox node`.
+
 ## Einen Node koppeln
 
 1. Am Core-Rechner im Terminal `nox pair --node` ausführen (die Geräte-Seite im Dashboard
@@ -80,7 +93,43 @@ abgebrochen. Am Gerät selbst: `nox node stop` stoppt es dort und Nox überall; 
 `nox node resume` an diesem Gerät. Hört ein Node 3 Sekunden lang nichts von Nox, während er etwas
 tut, bricht er das ab und wartet.
 
+Auf einem Desktop mit Infobereich-Symbol (Windows; Linux, wo PySide6 installiert ist) zeigt das
+Symbol den Zustand - verbunden, „Nicht verbunden mit Nox“, gestoppt - und sein Menü hat **Not-Aus
+hier** (auch `Strg+Alt+Umschalt+K` überall, wo ein globaler Tasten-Hook verfügbar ist), **Hier
+fortsetzen** und **Was Nox hier darf**. Das Symbol schreibt nur dieselbe Stopp-Datei wie
+`nox node stop`. Hinweise eines unter Windows im Node-Modus installierten Nodes tragen Nox' eigenen
+Namen (AppUserModelID `Nox.Node`), nicht „Windows PowerShell“.
+
 Harte Verbote (Anti-Cheat, Spieleingaben, Stream-Schlüssel, ...) prüft auch der Node selbst.
+
+## Updates
+
+Der Node aktualisiert sich **nur aus dem signierten GitHub-Release des Projekts** - der Core darf
+sagen, dass es ein Update gibt, schickt aber nie Code. Etwa einmal am Tag holt der Node
+`release-manifest.json` und seine Signatur und prüft, in dieser Reihenfolge (jedes „nein“ beendet
+es; nichts wird geändert):
+
+1. die installierte Version vertraut einem Release-Schlüssel - bis der Besitzer einen angelegt
+   hat, heißt es „Release-Signaturen sind nicht eingerichtet“, und es gibt gar kein Update;
+2. die Ed25519-Signatur ist gültig, von einem vertrauten, nicht abgelaufenen Schlüssel;
+3. das Manifest ist wohlgeformt und nennt dieses Projekt;
+4. keine Rückstufung: nicht unter der laufenden und nicht unter der höchsten hier gelaufenen
+   Version; eine Version, die hier schon einmal nicht startete, wird übersprungen;
+5. ein **Patch**, der das Protokoll dieses Nodes noch spricht, installiert sich selbst; ein Minor-
+   oder Major-Update wartet auf `nox node update` am Gerät (ein Hinweis sagt das);
+6. das Paket `nox-app-<Tag>.zip` steht im signierten Manifest und stimmt in Größe und SHA-256;
+7. es enthält nur Nox' Code und Konfiguration, gebaut für die hier installierten
+   Bibliotheksversionen (sonst: „Installer ausführen“);
+8. ein Probestart importiert den neuen Code mit diesem Python.
+
+Dann ein atomarer Dateiwechsel (`app/state.json`), und der Starter startet die neue Version. Sie
+gilt als funktionierend, sobald sie verbunden ist oder zwei Minuten lief; ein Start, der vorher
+scheitert, geht auf die vorige Version zurück, und diese Version wird nicht noch einmal versucht.
+`nox node update --check` schaut nur; Rückgabewert 3 heißt: Release-Signaturen noch nicht
+eingerichtet.
+
+Das Zertifikat (30 Tage) erneuert sich ab Tag 20 über die Verbindung, für denselben Schlüssel; ein
+Node, der länger als 30 Tage aus war, wird neu gekoppelt.
 
 ## Was der Node speichert, und wo
 
@@ -90,6 +139,8 @@ Harte Verbote (Anti-Cheat, Spieleingaben, Stream-Schlüssel, ...) prüft auch de
 | `node.crt`, `ca.crt`, `node.json` | Sein Zertifikat (30 Tage), die angepinnte Stelle, die Adresse des Cores |
 | `node.yaml` | Was Nox hier darf |
 | `audit.db` | Jeder Aufruf, erlaubt oder abgelehnt, als Hash-Kette: `nox node log` |
+| `app/` | Versionen, die der Node selbst installiert hat (`releases/<Version>`), und `state.json`, welche läuft |
+| `update.json` | Die letzte Update-Prüfung, gezeigt von `nox node status` und dem Symbol |
 
 Ordner: `%LOCALAPPDATA%\Nox\node` (Windows), `~/.local/share/nox/node` (Linux),
 `~/Library/Application Support/Nox/node` (macOS); `NOX_NODE_HOME` ändert ihn. Der Node läuft als
@@ -104,5 +155,7 @@ Entfernen aus war, wird beim nächsten Verbinden abgewiesen.
 ## Sicherheit
 
 Siehe [SECURITY.md](SECURITY.md#nodes-nox-node). Bekannte Grenzen dieser Version: Der Node findet
-den Core nur unter der Adresse aus dem Kopplungslink (Suche im Heimnetz kommt mit Welle D); das
-Zertifikat wird noch nicht erneuert, also nach 30 Tagen neu koppeln.
+den Core nur unter der Adresse aus dem Kopplungslink (Suche im Heimnetz kommt mit Welle D). Die
+Windows-Anmeldeaufgabe prüft die CI mit einem Administratorkonto; dass ein Standardkonto sie
+anlegen darf, ist das dokumentierte Verhalten der Aufgabenplanung für eine Aufgabe, die als dieses
+Konto läuft, aber noch nicht getestet. Der macOS-Installer ist eine Beta.

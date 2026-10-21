@@ -100,8 +100,8 @@ jobs:
       - name: Sync dependencies
         run: python -m uv sync --extra dev --extra rl
 
-      - name: shellcheck the installer
-        run: shellcheck --severity=warning scripts/install-linux.sh installer/linux/nox-command.sh
+      - name: shellcheck the installers
+        run: shellcheck --severity=warning scripts/install-linux.sh scripts/install-macos.sh installer/linux/nox-command.sh
 
       - name: Put the project venv on PATH
         run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
@@ -465,6 +465,78 @@ jobs:
       - name: Service log
         if: always()
         run: sudo journalctl -u nox -n 200 --no-pager || true
+
+  installer-linux-node:
+    name: Node installer on Linux (desktop and headless)
+    # `install-linux.sh --node`: a desktop node as the logged-in user with a systemd *user* unit,
+    # and a headless one with its own system user and a hardened system unit - installed twice
+    # (idempotent), checked, uninstalled. Nothing is paired: there is no core here.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: A user manager for the runner account, as a desktop session has one
+        run: |
+          sudo loginctl enable-linger "$USER"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          for _ in $(seq 1 30); do
+            XDG_RUNTIME_DIR="/run/user/$(id -u)" systemctl --user show-environment >/dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          echo "no user manager"; exit 1
+
+      - name: Desktop node - install twice (idempotent)
+        run: |
+          NOX_SOURCE="$PWD" bash scripts/install-linux.sh --node
+          NOX_SOURCE="$PWD" bash scripts/install-linux.sh --node
+
+      - name: Desktop node - a user unit, never root
+        run: |
+          unit="$HOME/.config/systemd/user/nox-node.service"
+          systemd-analyze --user verify "$unit"
+          test "$(systemctl --user is-enabled nox-node)" = enabled
+          if grep -q '^User=' "$unit"; then echo "a user unit names no user"; exit 1; fi
+          if sudo test -e /etc/systemd/system/nox-node.service; then echo "no system unit"; exit 1; fi
+          test "$(stat -c %U "$HOME/.local/share/nox-node-app/current/")" = "$USER"
+          "$HOME/.local/bin/nox-node" status | tee /dev/stderr | grep -q "Not paired."
+
+      - name: Desktop node - uninstall keeps the node's identity folder
+        run: |
+          mkdir -p "$HOME/.local/share/nox/node" && touch "$HOME/.local/share/nox/node/keep"
+          bash scripts/install-linux.sh --node --uninstall
+          for gone in "$HOME/.config/systemd/user/nox-node.service" "$HOME/.local/share/nox-node-app" "$HOME/.local/bin/nox-node"; do
+            if [ -e "$gone" ]; then echo "left behind: $gone"; exit 1; fi
+          done
+          test -e "$HOME/.local/share/nox/node/keep"
+
+      - name: Headless node - own system user, hardened unit
+        run: |
+          sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh --node --headless
+          systemd-analyze verify /etc/systemd/system/nox-node.service
+          test "$(systemctl is-enabled nox-node)" = enabled
+          grep -qx 'User=nox-node' /etc/systemd/system/nox-node.service
+          grep -qx 'NoNewPrivileges=yes' /etc/systemd/system/nox-node.service
+          test "$(sudo stat -c '%U %a' /var/lib/nox-node)" = "nox-node 700"
+          test "$(stat -c %U /opt/nox-node)" = root
+          sudo nox-node status | tee /dev/stderr | grep -q "Not paired."
+
+      - name: Headless node - uninstall
+        run: |
+          sudo bash scripts/install-linux.sh --node --headless --uninstall
+          if [ -e /etc/systemd/system/nox-node.service ] || [ -e /opt/nox-node ]; then exit 1; fi
+
+      - name: Refusals - a desktop node never as root, a headless one only as root
+        run: |
+          if sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh --node; then exit 1; fi
+          if NOX_SOURCE="$PWD" bash scripts/install-linux.sh --node --headless; then exit 1; fi
+          if bash scripts/install-linux.sh --headless; then exit 1; fi
+
+      - name: Node logs
+        if: always()
+        run: |
+          journalctl --user -u nox-node -n 100 --no-pager || true
+          sudo journalctl -u nox-node -n 100 --no-pager || true
 
   ui:
     name: UI (${{ matrix.app }})

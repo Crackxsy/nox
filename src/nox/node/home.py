@@ -90,6 +90,9 @@ class NodeHome:
     #: Present while the node was stopped on this device (`nox node stop`); only the device
     #: removes it (`nox node resume`).
     stop_file = property(lambda self: self.path / "stop.flag")
+    #: Versions this node installed itself from signed bundles, and `state.json` that names the
+    #: one to run (`nox.node.update`, `installer/start_node.pyw`).
+    app_dir = property(lambda self: self.path / "app")
 
     def ensure(self) -> None:
         created = not self.path.exists()

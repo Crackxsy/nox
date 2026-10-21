@@ -73,8 +73,8 @@ def rules_present() -> bool:
     return result.returncode == 0
 
 
-def run_setup(setup: Path, log: Path) -> None:
-    cmd = [str(setup), *QUIET, "/TASKS=sandboxrules", f"/LOG={log}"]
+def run_setup(setup: Path, log: Path, *extra: str) -> None:
+    cmd = [str(setup), *QUIET, *(extra or ("/TASKS=sandboxrules",)), f"/LOG={log}"]
     step(f"running {' '.join(cmd)}")
     result = subprocess.run(cmd, timeout=1800, check=False)
     check(result.returncode == 0, f"setup exited with {result.returncode}")
@@ -139,6 +139,71 @@ def check_removed() -> None:
     check(not rules_present(), "no filter of Nox's provider left")
 
 
+NODE_TASK = "Nox Node"
+SCHTASKS = Path(wfp_helper.system_dir()) / "schtasks.exe"
+AUMID_KEY = "Software\\Classes\\AppUserModelId\\Nox.Node"
+TASK_NS = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+
+
+def node_task_xml() -> str | None:
+    result = subprocess.run(
+        [str(SCHTASKS), "/Query", "/TN", NODE_TASK, "/XML"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
+def aumid_present() -> bool:
+    try:
+        winreg.CloseKey(
+            winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, AUMID_KEY, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY
+            )
+        )
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def check_node_installed() -> None:
+    from xml.etree import ElementTree  # noqa: PLC0415 - Task Scheduler's own XML
+
+    for rel in ("runtime/pythonw.exe", "app/nox/__init__.py", "app/start_node.pyw", "nox-node.cmd"):
+        check((APP / rel).is_file(), f"node mode installed {rel}")
+    check(not (APP / "app" / "ui").exists(), "node mode installs no dashboards")
+    xml = node_task_xml()
+    check(xml is not None, f"the logon task {NODE_TASK!r} exists")
+    assert xml is not None
+    task = ElementTree.fromstring(xml)  # noqa: S314 - written by schtasks on this runner
+    trigger = task.find(f"{TASK_NS}Triggers/{TASK_NS}LogonTrigger")
+    principal = task.find(f"{TASK_NS}Principals/{TASK_NS}Principal")
+    check(trigger is not None and bool(trigger.findtext(f"{TASK_NS}UserId")), "at logon of a user")
+    assert principal is not None
+    check(principal.findtext(f"{TASK_NS}RunLevel") == "LeastPrivilege", "least privilege")
+    check(principal.findtext(f"{TASK_NS}LogonType") == "InteractiveToken", "as the logged-in user")
+    check("S-1-5-18" not in xml and "HighestAvailable" not in xml, "never SYSTEM, never elevated")
+    check(aumid_present(), "the node's notification ID (HKCU, 64-bit view)")
+    selftest = subprocess.run(
+        [str(APP / "runtime" / "python.exe"), str(APP / "app" / "start_node.pyw"), "--selftest"],
+        cwd=APP / "app",
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    print(selftest.stdout, selftest.stderr, sep="\n", flush=True)  # noqa: T201
+    check(selftest.returncode == 0 and "Not paired." in selftest.stdout, "the node starts")
+
+
+def check_node_removed() -> None:
+    check(not (APP / "runtime").exists() and not (APP / "app").exists(), "node files removed")
+    check(node_task_xml() is None, "the logon task is gone")
+    check(not aumid_present(), "the notification ID is gone")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("setup", type=Path)
@@ -148,18 +213,27 @@ def main() -> int:
     check(wfp_helper.helper_sha256() is not None and BUILT_HELPER.is_file(), "built helper")
     check(not APP.exists() and status_key() is None, "a clean machine to start from")
 
-    step("1/3 fresh install")
+    step("1/5 fresh install")
     run_setup(args.setup, args.logs / "install.log")
     first = check_installed()
 
-    step("2/3 install over itself (upgrade path)")
+    step("2/5 install over itself (upgrade path)")
     run_setup(args.setup, args.logs / "upgrade.log")
     second = check_installed()
     check(second > first, f"the rule step ran again (sequence {first} -> {second})")
 
-    step("3/3 uninstall")
+    step("3/5 uninstall")
     uninstall(args.logs / "uninstall.log")
     check_removed()
+
+    step("4/5 node mode: logon task, no dashboards, no elevated step")
+    run_setup(args.setup, args.logs / "node.log", "/MODE=node", "/MERGETASKS=!sandboxrules")
+    check_node_installed()
+    check(status_key() is None, "node mode without the rules task asked for no elevation")
+
+    step("5/5 node uninstall")
+    uninstall(args.logs / "node-uninstall.log")
+    check_node_removed()
     step("all checks passed")
     return 0
 

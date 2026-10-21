@@ -356,11 +356,47 @@ def node_pair(
 
 
 @node_app.command("run")
-def node_run() -> None:
+def node_run(
+    tray: bool = typer.Option(
+        True, "--tray/--no-tray", help="Show the tray icon (where there is a desktop and PySide6)."
+    ),
+) -> None:
     """Connect to Nox and serve it until stopped (Ctrl+C). Reconnects on its own."""
-    from nox.node.cli import build, run, secret_store  # noqa: PLC0415
+    from nox.node.cli import RESTART, build, run, secret_store  # noqa: PLC0415
+    from nox.node.update import RESTART_EXIT_CODE  # noqa: PLC0415
 
-    typer.echo(run(build(_node_home(), secrets=secret_store(), say=typer.echo)))
+    outcome = run(build(_node_home(), secrets=secret_store(), say=typer.echo), tray=tray)
+    if outcome == RESTART:
+        typer.echo("A new version is in place; starting again.")
+        raise typer.Exit(RESTART_EXIT_CODE)
+    typer.echo(outcome)
+
+
+@node_app.command("update")
+def node_update(
+    check: bool = typer.Option(False, "--check", help="Only say whether an update exists."),
+    yes: bool = typer.Option(False, "--yes", help="Install a minor or major update unasked."),
+) -> None:
+    """Update this node from the signed release (never from the core). Exit status: 0 done or
+    up to date, 1 refused, 3 release signing is not configured yet."""
+    from nox.node.cli import update  # noqa: PLC0415
+
+    def ask(question: str) -> bool:
+        return sys.stdin.isatty() and typer.confirm(question, default=False)
+
+    raise typer.Exit(update(_node_home(), check_only=check, yes=yes, say=typer.echo, ask=ask))
+
+
+@node_app.command("tray")
+def node_tray() -> None:
+    """The tray icon on its own (normally started by `nox node run`)."""
+    from nox.node.tray import main as tray_main  # noqa: PLC0415
+    from nox.node.tray import tray_available  # noqa: PLC0415
+
+    if not tray_available():
+        typer.echo("No tray here: it needs a desktop and PySide6 (the `shell` extra).", err=True)
+        raise typer.Exit(1)
+    tray_main()
 
 
 @node_app.command("status")

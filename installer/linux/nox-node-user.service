@@ -1,0 +1,24 @@
+# Nox as a node on a Linux desktop: a systemd *user* unit - it runs as the person logged in, never
+# as root, and starts with their session. Written by `scripts/install-linux.sh --node` (@PREFIX@ is
+# replaced by the install folder, ~/.local/share/nox-node-app); see docs/NODES.md.
+#
+# The launcher (installer/start_node.pyw) chooses between the installed version and one the node
+# installed itself from a signed release, restarts the node after an update and rolls a new
+# version back when it does not start. An unpaired node ends at once; `nox-node pair` restarts it.
+
+[Unit]
+Description=Nox node - this PC as the hands of the Nox at home
+Documentation=https://github.com/Crackxsy/nox/blob/develop/docs/NODES.md
+After=network-online.target graphical-session.target
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+ExecStart="@PREFIX@/current/.venv/bin/python" "@PREFIX@/current/installer/start_node.pyw"
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

@@ -9,11 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import os
+import random
 import signal
 import sqlite3
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from nox.node.agent import NodeAgent
 from nox.node.confirmed import (
@@ -30,14 +35,31 @@ from nox.node.home import NodeHome
 from nox.node.keystore import NodeKeyStore
 from nox.node.manifest import GROUPS, NodeManifest, load_manifest, save_manifest
 from nox.node.protocol import PairLink, PairLinkError, escape_controls
-from nox.node.tools import default_tools
+from nox.node.tools import PlatformNotifier, default_tools
+from nox.node.update import HEALTHY_AFTER_S, NodeUpdater, UpdateCheck
 from nox.security.audit import SqliteAuditLog
 from nox.security.model import SecretStore
 from nox.security.secrets import KeyringSecretStore, keyring_usable
 
-__all__ = ["NodeCliError", "NodeRuntime", "allow", "build", "log_lines", "pair", "run", "status"]
+__all__ = [
+    "RESTART",
+    "NodeCliError",
+    "NodeRuntime",
+    "allow",
+    "build",
+    "log_lines",
+    "pair",
+    "run",
+    "status",
+]
 
 KEYRING_SERVICE = "nox-node"
+#: What `run` returns when the node should start again (a new version is in place).
+RESTART = "restart"
+#: The first update check some minutes after the start, then about once a day.
+FIRST_CHECK_S = 600.0
+DAY_S = 86400.0
+UPDATE_POLL_S = 30.0
 
 
 class NodeCliError(RuntimeError):
@@ -152,9 +174,74 @@ def confirm_defaults(home: NodeHome, secrets: SecretStore | None) -> NodeManifes
     return start
 
 
-def run(runtime: NodeRuntime, *, install_signals: bool = True) -> str:
+def under_launcher() -> bool:
+    """Started by `installer/start_node.pyw`, which starts the node again after an update."""
+    return os.environ.get("NOX_NODE_LAUNCHER") == "1"
+
+
+def _record_update(runtime: NodeRuntime, check: UpdateCheck) -> bool:
+    """`update.json` for `nox node status` and the tray; True the first time a version that needs
+    a person (minor/major) is announced - that one gets a notification."""
+    path = runtime.home.path / "update.json"
+    try:
+        before = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        before = {}
+    announced = before.get("announced") if isinstance(before, dict) else None
+    new = check.status == "needs_confirmation" and announced != check.version
+    record = {
+        "status": check.status,
+        "message": check.message,
+        "version": check.version,
+        "at": datetime.now(UTC).isoformat(),
+        "announced": check.version if new else announced,
+    }
+    with contextlib.suppress(OSError):
+        path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    return new
+
+
+async def keep_updated(
+    runtime: NodeRuntime,
+    agent: NodeAgent,
+    updater: NodeUpdater,
+    stop: asyncio.Event,
+    restart: asyncio.Event,
+    *,
+    poll_s: float = UPDATE_POLL_S,
+) -> None:
+    """Confirm a fresh version once it works; check the signed release about once a day; restart
+    into a new version when one is in place and nothing runs."""
+    started = time.monotonic()
+    confirmed = False
+    next_check = started + FIRST_CHECK_S
+    while not stop.is_set():
+        await asyncio.sleep(poll_s)
+        if not confirmed and (
+            agent.connected.is_set() or time.monotonic() - started >= HEALTHY_AFTER_S
+        ):
+            confirmed = True
+            await asyncio.to_thread(updater.confirm_running)
+        if confirmed and under_launcher() and updater.restart_needed() and not agent.busy:
+            restart.set()
+            stop.set()
+            return
+        if time.monotonic() < next_check:
+            continue
+        next_check = time.monotonic() + DAY_S * (0.9 + 0.2 * random.random())  # noqa: S311
+        check = await asyncio.to_thread(updater.check)
+        if _record_update(runtime, check):
+            with contextlib.suppress(Exception):
+                await PlatformNotifier().show("Nox: Update", check.message)
+        if check.status == "available" and under_launcher() and confirmed:
+            result = await asyncio.to_thread(updater.apply, check)
+            _record_update(runtime, result)
+
+
+def run(runtime: NodeRuntime, *, install_signals: bool = True, tray: bool = False) -> str:
     async def main() -> str:
         stop = asyncio.Event()
+        restart = asyncio.Event()
         if install_signals:
             loop = asyncio.get_running_loop()
             for sig in (signal.SIGINT, signal.SIGTERM):
@@ -167,7 +254,19 @@ def run(runtime: NodeRuntime, *, install_signals: bool = True) -> str:
             runtime.audit,
             manifest_source=manifest_source(runtime),
         )
-        return await agent.run(stop)
+        updater = NodeUpdater(runtime.home.app_dir)
+        updates = asyncio.create_task(keep_updated(runtime, agent, updater, stop, restart))
+        from nox.node.tray import spawn_tray  # noqa: PLC0415 - starts nothing when unavailable
+
+        tray_process = spawn_tray() if tray else None
+        try:
+            outcome = await agent.run(stop)
+        finally:
+            updates.cancel()
+            if tray_process is not None:
+                with contextlib.suppress(OSError):
+                    tray_process.terminate()
+        return RESTART if restart.is_set() else outcome
 
     outcome = asyncio.run(main())
     return {
@@ -175,7 +274,41 @@ def run(runtime: NodeRuntime, *, install_signals: bool = True) -> str:
         "revoked": "Removed from Nox (Von Nox entfernt). Key and certificate are deleted.",
         "pin_mismatch": "The stored certificate authority is not the pinned one; pair again.",
         "stopped": "Stopped.",
+        RESTART: RESTART,
     }.get(outcome, outcome)
+
+
+def update(
+    home: NodeHome,
+    *,
+    check_only: bool,
+    yes: bool,
+    say: Callable[[str], None],
+    ask: Callable[[str], bool],
+) -> int:
+    """`nox node update`: 0 done or up to date, 1 refused, 3 release signing not configured."""
+    updater = NodeUpdater(home.app_dir)
+    check = updater.check()
+    say(check.message)
+    if check.status == "not_configured":
+        return 3
+    if check.status == "refused":
+        return 1
+    if check_only or check.status not in ("available", "needs_confirmation"):
+        return 0
+    if not yes and not ask(f"Install Nox {check.version} on this device now?"):
+        say("Not installed.")
+        return 0
+    result = updater.apply(check, confirmed=True)
+    say(result.message)
+    if result.status != "installed":
+        return 1
+    say(
+        "The node starts the new version within a minute."
+        if (home.path / "status.json").exists()
+        else "Start the node: nox node run"
+    )
+    return 0
 
 
 def status(home: NodeHome) -> list[str]:
@@ -187,13 +320,19 @@ def status(home: NodeHome) -> list[str]:
     state = home.read_status()
     allowed = [GROUPS[g].label_en for g in GROUPS if manifest.groups.get(g)]
     x = escape_controls
-    return [
+    lines = [
         f"Name:      {x(identity.name)}",
         f"Core:      {x(identity.core_host)}:{identity.node_port}",
         f"State:     {x(str(state.get('state', 'not running')))} ({x(str(state.get('at', '-')))})",
         f"Nox may:   {', '.join(allowed) or 'nothing'}",
         f"Max risk:  {manifest.max_risk}",
     ]
+    try:
+        update_info = json.loads((home.path / "update.json").read_text(encoding="utf-8"))
+        lines.append(f"Update:    {x(str(update_info.get('message', '-')))[:160]}")
+    except (OSError, ValueError, AttributeError):
+        pass
+    return lines
 
 
 def log_lines(home: NodeHome, *, limit: int = 50) -> list[str]:

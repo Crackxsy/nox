@@ -1,0 +1,58 @@
+# Nox as a node without a screen (a Raspberry Pi in another room, say): a system unit for its own
+# system user nox-node. Written by `scripts/install-linux.sh --node --headless` (@PREFIX@ is
+# replaced by /opt/nox-node); see docs/NODES.md.
+#
+# Hardened like nox.service: the node owns /var/lib/nox-node and nothing else, the program is
+# read-only to it, and the command sandbox (bubblewrap) gets exactly the namespaces it needs. With
+# no screen there is nobody to ask, so high-risk calls are refused unless this device allowed
+# `trust_core_for_high` itself (spec C §1.6, a documented residual risk).
+
+[Unit]
+Description=Nox node (headless) - this device as the hands of the Nox at home
+Documentation=https://github.com/Crackxsy/nox/blob/develop/docs/NODES.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nox-node
+Group=nox-node
+Environment=NOX_NODE_HOME=/var/lib/nox-node/node
+Environment=HOME=/var/lib/nox-node
+Environment=PYTHONUNBUFFERED=1
+Environment=NOX_NODE_TRAY=0
+Environment=NOX_CGROUP_DELEGATED=1
+WorkingDirectory=@PREFIX@/current
+ExecStart=@PREFIX@/current/.venv/bin/python @PREFIX@/current/installer/start_node.pyw
+# The launcher restarts a crashed node itself; an unpaired or removed node ends with 0 and stays
+# off until `nox-node pair` starts it again.
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+
+Delegate=memory pids
+StateDirectory=nox-node
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/nox-node
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectClock=yes
+ProtectProc=invisible
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @mount
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=user mnt pid net ipc uts
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

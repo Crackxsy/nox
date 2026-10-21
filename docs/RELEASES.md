@@ -27,7 +27,8 @@ repository but not the key.
 | `nox update` on Linux / Raspberry Pi | Before it runs the new version's installer, the **running** version checks the new release with its own `nox release verify` - so trust always comes from what is already installed, never from what is being installed. Then the new installer checks again with its own key list. |
 | `nox release verify <manifest>` | The same check by hand, on any system Nox runs on, optionally with `--file <downloaded file>` (repeatable) to compare files against the manifest. Exit status: 0 verified, 1 refused, 3 not configured. |
 | `nox release keys` | Lists the keys this version trusts and whether each is still valid. |
-| Node self-update, Nox-OS images (later waves) | Use the same library (`nox.release`) and the same manifest; a node only installs a release whose manifest verifies against the keys of the node version already installed. |
+| Node self-update (`nox.node.update`, daily, and `nox node update`) | The same library and manifest: the signature against the keys of the node version already installed (none trusted: no update at all), no downgrade below the highest version that ran there, then `nox-app-<tag>.zip` must match the manifest's size and SHA-256 before it is unpacked, trial-started and switched to atomically; a version that does not start is rolled back. Order and details: [NODES.md](NODES.md#updates). |
+| Nox-OS images (later waves) | Use the same library (`nox.release`) and the same manifest. |
 | Windows installer | Not yet a release asset built by CI, so it is not in the manifest yet. Once it is, it is listed like the other files and can be checked with `nox release verify --file Nox-Setup-<version>.exe`. The Inno Setup installer cannot check an Ed25519 signature by itself; on Windows, Authenticode code signing is the matching control, and it is not configured yet either (`installer/README.md`). |
 
 Branches and single commits (`nox update develop`, a CI install from a checkout) have no manifest.
@@ -80,11 +81,12 @@ key signed. Or, on a machine that already runs Nox: `nox release verify release-
   "channel": "stable",
   "created": "2026-10-21T12:00:00Z",
   "source_commit": "<the 40-character commit the tag points to>",
-  "node_protocol": null,
+  "node_protocol": {"min": 1, "max": 1},
   "min_node_version": null,
   "next_keys": [{"key_id": "...", "public_key": "...", "not_after": "YYYY-MM-DD"}],
   "assets": [
     {"name": "install-linux.sh", "size": 51234, "sha256": "<64 hex>"},
+    {"name": "nox-app-v0.7.0.zip", "size": 1234567, "sha256": "<64 hex>"},
     {"name": "nox-ui-v0.7.0.tar.gz", "size": 812345, "sha256": "<64 hex>"}
   ]
 }
@@ -95,9 +97,13 @@ key signed. Or, on a machine that already runs Nox: `nox release verify release-
 - `next_keys` records the trust list this release ships, so a rotation is announced inside a
   signed document. Trust itself comes from the list built into the installed version, never from
   a downloaded manifest.
-- `node_protocol` and `min_node_version` stay `null` until the node protocol exists (Wave C);
-  the release workflow fills them then (`scripts/sign_release.py --node-protocol 1-1
-  --min-node-version 0.7.0`).
+- `node_protocol` is the node protocol range the release's core accepts; the release workflow
+  takes it from `NODE_PROTOCOL_RANGE` in `src/nox/node/protocol.py` (`--node-protocol 1-1`). A
+  node installs a patch release by itself only when the range still holds its own protocol.
+  `min_node_version` stays `null` until a core drops support for old nodes.
+- `nox-app-<tag>.zip` is what a node updates itself from: Nox's code and configuration only
+  (`scripts/build_app_bundle.py`, deterministic, standard library only), built in the manifest job
+  from the clean checkout of the tag, with `BUNDLE.json` naming the library versions it needs.
 - Fields a later version adds are ignored by older verifiers; the known fields are checked
   strictly.
 
@@ -159,7 +165,8 @@ openssl pkcs8 -topk8 -v2 aes-256-cbc -in nox-release-recovery.key -out nox-relea
    ```
 
    Each prints one line for `TRUSTED_KEYS` in `src/nox/release/trusted_keys.py` and one for
-   `TRUSTED_RELEASE_KEYS` in `scripts/install-linux.sh`. Paste both, open a pull request, merge it.
+   `TRUSTED_RELEASE_KEYS` in `scripts/install-linux.sh`. Paste both (the second line also into
+   `TRUSTED_RELEASE_KEYS` in `scripts/install-macos.sh`), open a pull request, merge it.
    (Without Nox: the key id is `openssl pkey -pubin -in nox-release-ci.pub -outform DER | tail -c 32
    | sha256sum | cut -c1-16`.)
 

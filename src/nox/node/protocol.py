@@ -45,6 +45,8 @@ __all__ = [
     "PairLink",
     "PairLinkError",
     "Ping",
+    "RENEW_WINDOW_DAYS",
+    "RenewRequest",
     "SecurityKill",
     "escape_controls",
     "safe_name",
@@ -61,6 +63,9 @@ MAX_FRAME_BYTES = 1024 * 1024
 #: One tool result, all its blob chunks together.
 MAX_RESULT_BYTES = 8 * 1024 * 1024
 BLOB_CHUNK_BYTES = 512 * 1024
+#: A node asks for a new certificate once its current one has this many days left (spec C §1.2:
+#: from day 20 of 30). The core refuses earlier requests (one more day of slack for clocks).
+RENEW_WINDOW_DAYS = 10
 
 # ---- methods ---------------------------------------------------------------------------------
 
@@ -79,6 +84,8 @@ M_PONG = "nox/pong"
 M_CONFIRM_RESULT = "nox/confirm_result"
 M_SECURITY_KILL = "security.kill"
 M_BLOB = "nox/blob"
+#: node -> core: a new certificate for the same key, over the already authenticated channel.
+M_RENEW = "nox/renew"
 
 #: Everything a node may send to the core - the role `node` allow-list. Anything else is answered
 #: with "method not found", counted, and after a few the connection is closed.
@@ -93,6 +100,7 @@ NODE_TO_CORE: frozenset[str] = frozenset(
         M_SECURITY_KILL,
         M_LIST_CHANGED,
         M_BLOB,
+        M_RENEW,
     }
 )
 #: Everything the core sends to a node. `nox/policy` may only narrow what the node offers.
@@ -212,6 +220,13 @@ class Blob(_Strict):
     seq: int = Field(ge=0, le=64)
     last: bool
     data: str = Field(max_length=(BLOB_CHUNK_BYTES * 4) // 3 + 8)
+
+
+class RenewRequest(_Strict):
+    """`nox/renew`: a certificate request for the key this node already holds. Only the key is
+    used (`nox.lan.tls.issue_client_certificate`); another key is refused."""
+
+    csr: str = Field(min_length=64, max_length=4096)
 
 
 class NodePairRequest(_Strict):

@@ -34,6 +34,20 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
 
 ### Added
+- **Nodes install, start and update themselves** (Spec C7, docs/NODES.md). The Windows installer
+  has a node mode ("Mit einem Nox im Heimnetz verbinden (nur dieses Gerät)", `/MODE=node`): no
+  dashboards, a per-user logon task "Nox Node" (least privilege, never a service, never elevated),
+  its own notification ID `Nox.Node`, optional pairing during setup. `install-linux.sh --node`
+  sets up a desktop node as the user with a systemd user unit, `--node --headless` a hardened
+  system unit for a system user `nox-node`; both idempotent with `--uninstall`.
+  `scripts/install-macos.sh --node` is a LaunchAgent beta. A node updates itself only from the
+  signed release (`nox-app-<tag>.zip`, new release asset): signature against the trusted keys
+  (none configured: no update), no downgrade, size and SHA-256 from the signed manifest, safe
+  unpacking, matching libraries, a trial start, an atomic switch and an automatic rollback of a
+  version that does not start (`installer/start_node.pyw`); patches by themselves, minor and major
+  only after `nox node update` on the device. The node certificate renews itself over the
+  connection from day 20 (`nox/renew`, same key only, once per connection). A tray icon with
+  "Not-Aus hier" and `Ctrl+Alt+Shift+K` where PySide6 and pynput are installed.
 - **Nodes, part 4 (the node's gate and stopping):** every call with a side effect carries the
   core's Ed25519 receipt (bound to call, tool, arguments, risk, deadline <= 60 s; replays and
   altered calls are refused); the node keeps its own risk ceiling and budget (60 actions, 5
