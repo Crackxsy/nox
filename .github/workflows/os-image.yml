@@ -109,7 +109,7 @@ jobs:
           code() { local status=0; "$@" >out.txt 2>&1 || status=$?; cat out.txt; echo "$status"; }
           # On a running system (this runner boots with systemd).
           test "$(code sudo bash scripts/install-linux.sh --image --version "$COMMIT" | tail -n1)" = 1
-          grep -q -- "--image is for building an image" out.txt
+          grep -q "Image mode (--image) is for building an image" out.txt
           test "$(code bash scripts/install-linux.sh --ui-bundle ui.tar.gz | tail -n1)" = 2
           test "$(code sudo env NOX_ACTION=rollback bash scripts/install-linux.sh --image | tail -n1)" = 2
           test "$(code bash scripts/install-linux.sh --no-such-option | tail -n1)" = 2

@@ -399,8 +399,8 @@ define step_settings \
 
 # Image mode
 define image_running_system \
-  '--image ist für den Bau eines Images (in dessen chroot), nicht für ein laufendes System. Hier: sudo bash install-linux.sh' \
-  '--image is for building an image (inside its chroot), not for a running system. Here: sudo bash install-linux.sh'
+  'Der Image-Modus (--image) baut ein Image (in dessen chroot), nicht ein laufendes System. Hier: sudo bash install-linux.sh' \
+  'Image mode (--image) is for building an image (inside its chroot), not for a running system. Here: sudo bash install-linux.sh'
 define image_bundle_missing \
   'Oberflächen-Paket %s gibt es nicht.' \
   'Interface package %s does not exist.'
