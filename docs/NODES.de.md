@@ -55,7 +55,9 @@ es gibt und ob sie erreichbar sind („Geräte: dieser Core (core), Arbeits-PC (
 (offline seit 14:02)“). Sagst du nichts:
 
 1. gilt der Standard aus `devices.defaults` (`core`, `origin` - der PC, an dessen Dashboard du
-   gerade bist, sobald ein Node mit `node.link` mit ihm verbunden ist - oder ein Gerätename),
+   gerade bist, sobald ein Node mit `node.link` mit ihm verbunden ist - ein Gerätename oder
+   `auto` für keinen); das Dashboard setzt ihn je Werkzeugfamilie unter Geräte › Computer und
+   Server,
 2. sonst das einzige Gerät, das es kann,
 3. sonst darf eine Frage, die nur liest, auf dem Core bleiben; etwas, das etwas verändert, wird
    **nie geraten**: Nox fragt, welches Gerät du meinst.
@@ -85,6 +87,24 @@ allen Angaben, 60 Sekunden lang - keine Antwort heißt nein, und ein „Ja“ in
 Sekunden zählt als nein. Ein Node ohne Bildschirm lehnt hohes Risiko ab, außer eine Person hat es
 an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trust_core_for_high`. Der Node hat außerdem ein eigenes Budget: 60 Aktionen und 5 mit hohem Risiko pro Stunde
 (`max_calls_per_hour`, `max_high_per_hour` in `node.yaml`).
+
+## Im Dashboard
+
+Geräte › Computer und Server zeigt jeden Node: ob er verbunden ist, was Nox dort darf, wofür er
+das Standardgerät ist. Sein Blatt hat einen Schalter je Gruppe:
+
+- **Aus** geht dort sofort (ohne PIN am Rechner, auf dem Nox läuft; vom Handy mit PIN). Der Core
+  schickt dann nichts mehr aus dieser Gruppe an das Gerät und sagt es dem Node (`nox/policy`),
+  auch nach jedem Neuverbinden.
+- **Wieder an** geht dort nur für eine Gruppe, die du dort ausgeschaltet hast, mit der PIN, wenn
+  eine gesetzt ist. Was das Gerät selbst nicht erlaubt, schaltest du nur am Gerät ein:
+  `nox node allow <Gruppe>` im Terminal dort (das Symbol im Infobereich zeigt nur, was erlaubt
+  ist; ein Pi ohne Bildschirm hat keins).
+
+Im selben Blatt stellst du das Standardgerät je Werkzeugfamilie ein und entfernst den Node
+(„Wirklich entfernen“); Standards, die einen entfernten Node nannten, stehen danach wieder auf
+`auto`. Die Anfragen heißen `node.narrow` und `node.defaults.set` (siehe
+[SECURITY.md](SECURITY.md#nodes-nox-node)).
 
 ## Stoppen
 

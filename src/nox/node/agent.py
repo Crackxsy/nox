@@ -322,6 +322,12 @@ class NodeAgent:
             # The connection is gone: nothing keeps running without the core.
             await self._cancel_calls()
 
+    def _groups(self) -> dict[str, list[str]]:
+        """What this device enabled, said outright (the core shows it; it widens nothing): the
+        core cannot infer it from the tool list, which leaves out a narrowed group and every tool
+        above `max_risk`."""
+        return {"groups": sorted(self._gate.manifest.enabled())}
+
     def reload_manifest(self) -> bool:
         """Re-read `node.yaml` when it changed; True when what the node offers changed."""
         if self._manifest_source is None:
@@ -423,7 +429,9 @@ class NodeAgent:
             if isinstance(groups, list):
                 self._gate.narrow([g for g in groups if isinstance(g, str)][:32])
             await self._reply(
-                ws, msg_id, result={"offered": [t.name for t in self._gate.offered()]}
+                ws,
+                msg_id,
+                result={"offered": [t.name for t in self._gate.offered()], "_nox": self._groups()},
             )
             return None
         if method == p.M_TOOLS_LIST:
@@ -432,7 +440,8 @@ class NodeAgent:
                 if self.compatible
                 else [t for t in self._gate.offered() if t.name == "system.info"]
             )
-            await self._reply(ws, msg_id, result={"tools": [t.describe() for t in offered]})
+            result = {"tools": [t.describe() for t in offered], "_nox": self._groups()}
+            await self._reply(ws, msg_id, result=result)
             return None
         if method == p.M_TOOLS_CALL:
             if len(self._calls) >= MAX_CONCURRENT_CALLS:

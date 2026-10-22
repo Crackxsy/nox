@@ -105,10 +105,21 @@ def resolve(
     def at(entry: NodeEntry) -> Resolution:
         if entry.offers(tool):
             return Resolution(entry.device_id)
-        if not entry.online:
+        if not entry.online or entry.connecting:
             return Resolution("", offline_error(entry))
         if not entry.compatible:
             return Resolution("", {"error": "update_needed", "device": entry.label})
+        if entry.narrowed_out(tool):
+            # Switched off in the dashboard, not on the device: it can be switched on there again.
+            return Resolution(
+                "",
+                {
+                    "error": "narrowed_on_core",
+                    "device": entry.label,
+                    "tool": tool,
+                    "hint": "im Dashboard ausgeschaltet – dort wieder einschaltbar",
+                },
+            )
         # Online, but this device does not offer the tool: only the device itself can change that.
         return Resolution(
             "",
@@ -149,7 +160,7 @@ def resolve(
             if side_effects and candidates:
                 # Not linked (or not asked from a browser): where the user is, is unknown.
                 return needs()
-        elif default not in (CORE, "origin"):
+        elif default not in (CORE, "origin", "auto"):  # `auto`: as if nothing was configured
             entry = _match(entries, default)
             if entry is not None:
                 # The configured device, or why not - never quietly another one.
@@ -301,6 +312,7 @@ def routed_spec(
         rememberable=rememberable and template.rememberable,
         targets=None,
         scope=scope,
+        prepare=lambda _payload: registry.settle(),
         local=False,
     )
 

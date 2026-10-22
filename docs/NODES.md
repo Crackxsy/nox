@@ -54,7 +54,8 @@ whether they are online ("Geräte: dieser Core (core), Arbeits-PC (online), Lapt
 14:02)"). When you do not say:
 
 1. the default in `devices.defaults` (`core`, `origin` - the PC whose dashboard you are using,
-   once a node is linked to it with `node.link` - or a device name),
+   once a node is linked to it with `node.link` - a device name, or `auto` for none); the
+   dashboard sets it per tool family under Geräte › Computer und Server,
 2. otherwise the only device that can do it,
 3. otherwise a question that only reads may stay on the core; one that changes something is
    **never guessed**: Nox asks which device you mean.
@@ -83,6 +84,23 @@ A node without a screen refuses high risk, unless a person confirmed it on Nox i
 allowed that on the device: `nox node allow trust_core_for_high`. The node also keeps
 its own budget: 60 actions and 5 high-risk ones per hour (`max_calls_per_hour`,
 `max_high_per_hour` in `node.yaml`).
+
+## In the dashboard
+
+Geräte › Computer und Server lists every node: whether it is connected, what Nox may do there,
+what it is the default device for. Its sheet has one switch per group:
+
+- **Off** works there at once (no PIN on the computer Nox runs on; from a phone, the PIN). The
+  core then routes nothing of that group to the device and tells the node (`nox/policy`), also
+  after every reconnect.
+- **On again** works there only for a group you switched off there, with the PIN when one is set.
+  A group the device itself does not allow is switched on only on the device:
+  `nox node allow <group>` in a terminal there (the tray icon only shows what is allowed; a Pi
+  without a screen has none).
+
+The same sheet sets the default device per tool family and removes the node ("Wirklich
+entfernen"); defaults that named a removed node go back to `auto`. The requests are
+`node.narrow` and `node.defaults.set` (see [SECURITY.md](SECURITY.md#nodes-nox-node)).
 
 ## Stopping
 

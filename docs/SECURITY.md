@@ -741,6 +741,17 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   widens nothing, narrowing applies at once (also to a running node). A missing key, a broken
   chain or a forged confirmation leave the node with system values only until it is confirmed
   again locally.
+- **The dashboard only narrows** (`node.narrow`, `nox.node.policy`): switching a group off needs
+  no PIN on the core machine (from a paired device the PIN); the core then routes nothing of that
+  group - by its own tool-to-group mapping, never the node's word, and a tool of no known group
+  is dropped - and sends `nox/policy` on every connection. Clearing that narrowing needs the PIN
+  when one is set (always from a paired device) and can never reach past what the device itself
+  enabled, which the node reports with every tool list; anything else is refused as
+  `enable_on_device`. `node.defaults.set` (where a tool family runs when nobody names a device)
+  is administration like `node.link`; removing a node resets the defaults that named it. Every
+  change is audited with its outcome, every refusal after authorization; a change once accepted
+  runs to its end even when the asking dashboard disconnects, so the database, the routing and
+  the node never disagree.
 - **Only the core's methods** (`CORE_TO_NODE`) are answered; a node never acts while disconnected
   and queues nothing.
 - **Its own audit trail**: every decision, hash-chained, on the device (`nox node log`); the core
