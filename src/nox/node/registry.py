@@ -12,6 +12,7 @@ and the tool loop marks the conversation tainted like any other untrusted result
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import itertools
 import json
 import time
@@ -55,6 +56,16 @@ RISKS = ("read", "low", "medium", "high", "critical")
 OUTDATED_TOOLS: frozenset[str] = frozenset({"system.info"})
 
 
+#: How long a call waits for a device that has just connected to finish announcing its tools.
+LISTING_WAIT_S = 3.0
+
+
+def _set_event() -> asyncio.Event:
+    event = asyncio.Event()
+    event.set()
+    return event
+
+
 @dataclass
 class NodeEntry:
     device_id: str
@@ -73,6 +84,9 @@ class NodeEntry:
     #: Narrowings asked for and not yet finished, counted per group: each request adds one and
     #: takes away only its own, so the group is off while any of them is still on its way.
     pending_narrow: Counter[str] = field(default_factory=Counter)
+    #: Cleared while a new connection's first tool list is being recorded: until then nothing is
+    #: offered from it, and a call waits for it (`settle`) instead of failing as offline.
+    listed: asyncio.Event = field(default_factory=_set_event)
 
     @property
     def label(self) -> str:
@@ -84,8 +98,13 @@ class NodeEntry:
         group = group_of(tool)
         return group in self.narrowed or (group is not None and self.pending_narrow[group] > 0)
 
+    @property
+    def connecting(self) -> bool:
+        """Connected, its first tool list not recorded yet."""
+        return self.online and not self.listed.is_set()
+
     def offers(self, tool: str) -> bool:
-        if not self.online or tool not in self.tools:
+        if not self.online or self.connecting or tool not in self.tools:
             return False
         # Whatever `tools` holds: never a tool of no known group or of a narrowed one.
         if group_of(tool) is None or self.narrowed_out(tool):
@@ -170,11 +189,27 @@ class NodeRegistry:
 
     async def on_connected(self, session: NodeSession) -> None:
         entry = self._entry(session.device_id, session.device.name)
+        # Online, but offering nothing until its own first list is recorded: never the old list
+        # of a previous connection. A call meanwhile waits for it (`settle`, `call`).
+        listed = asyncio.Event()
+        entry.listed = listed
         entry.session, entry.online, entry.compatible = session, True, session.compatible
         entry.confirmer = session.hello.confirmer
         entry.last_seen = self._clock()
-        # The node forgot the core's narrowing with the old connection: this listing is complete.
-        await self.refresh(session, complete=True)
+        try:
+            # The node forgot the core's narrowing with the old connection: a complete listing.
+            await self.refresh(session, complete=True)
+        finally:
+            listed.set()
+
+    async def settle(self, timeout_s: float = LISTING_WAIT_S) -> None:
+        """Wait (at most `timeout_s`) until every device that has just connected has its tool
+        list recorded - so a request right after a device comes online finds it."""
+        waiting = [e.listed.wait() for e in self._entries.values() if e.connecting]
+        if not waiting:
+            return
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(asyncio.gather(*waiting), timeout_s)
 
     async def on_disconnected(self, session: NodeSession) -> None:
         entry = self._entries.get(session.device_id)
@@ -316,6 +351,9 @@ class NodeRegistry:
         confirm_on_device: bool = False,
     ) -> dict[str, Any]:
         """One call on one node. Offline at this moment: fail fast, nothing is queued."""
+        if entry.connecting:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(entry.listed.wait(), LISTING_WAIT_S)
         session = entry.session
         if session is None or not entry.offers(tool):
             return offline_error(entry)

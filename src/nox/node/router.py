@@ -105,7 +105,7 @@ def resolve(
     def at(entry: NodeEntry) -> Resolution:
         if entry.offers(tool):
             return Resolution(entry.device_id)
-        if not entry.online:
+        if not entry.online or entry.connecting:
             return Resolution("", offline_error(entry))
         if not entry.compatible:
             return Resolution("", {"error": "update_needed", "device": entry.label})
@@ -312,6 +312,7 @@ def routed_spec(
         rememberable=rememberable and template.rememberable,
         targets=None,
         scope=scope,
+        prepare=lambda _payload: registry.settle(),
         local=False,
     )
 

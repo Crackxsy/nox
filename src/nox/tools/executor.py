@@ -159,6 +159,8 @@ class ToolExecutor:
             )
 
         payload = validated.model_dump(mode="json")
+        if spec.prepare is not None:
+            await spec.prepare(payload)
         risk = spec.risk
         device = ""
         delegated = False

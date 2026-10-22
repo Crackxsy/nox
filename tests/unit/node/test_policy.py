@@ -369,3 +369,63 @@ async def test_the_marker_is_removed_on_an_error_and_a_cancellation(
     lock.release()
     assert entry.pending_narrow == Counter()
     assert registry.any_online_with("notify.show")
+
+
+class _SlowListing(_Client):
+    """A node whose first `tools/list` answer takes a moment to arrive."""
+
+    def __init__(self, tools: list[dict[str, Any]]) -> None:
+        super().__init__(tools)
+        self.answer = asyncio.Event()
+
+    async def request(self, method: str, params: dict[str, Any], **kw: Any) -> dict[str, Any]:
+        if method == "tools/list":
+            await self.answer.wait()
+        return await super().request(method, params, **kw)
+
+
+async def test_a_call_right_after_connecting_waits_for_the_tool_list(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
+) -> None:
+    node = await pair_node(pairing, tmp_path)
+    registry = NodeRegistry(pairing, nodes)
+    client = _SlowListing([{"name": "notify.show", "_nox": {"group": "notify", "risk": "low"}}])
+    session = _Session(pairing.get(node.node_id), client)
+    connecting = asyncio.create_task(registry.on_connected(session))  # type: ignore[arg-type]
+    await asyncio.sleep(0)
+    entry = next(e for e in registry.entries() if e.device_id == node.node_id)
+    assert entry.connecting and not entry.offers("notify.show")
+    # The call comes in the moment the session is up - before the list is recorded.
+    call = asyncio.create_task(
+        registry.call(entry, "notify.show", {"text": "Essen ist fertig"}, risk="low", timeout_s=5)
+    )
+    settled = asyncio.create_task(registry.settle())
+    await asyncio.sleep(0.05)
+    assert not call.done() and not settled.done()
+    client.answer.set()
+    result = await call
+    await settled
+    await connecting
+    assert "error" not in result, result
+    assert ("tools/call", "notify.show") in [(m, p.get("name")) for m, p in client.sent]
+    assert registry.online_with("notify.show") == [entry]
+
+
+async def test_a_device_that_never_finishes_announcing_is_offline_after_the_wait(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nox.node import registry as registry_module
+
+    monkeypatch.setattr(registry_module, "LISTING_WAIT_S", 0.05)
+    node = await pair_node(pairing, tmp_path)
+    registry = NodeRegistry(pairing, nodes)
+    client = _SlowListing([{"name": "notify.show", "_nox": {"group": "notify", "risk": "low"}}])
+    session = _Session(pairing.get(node.node_id), client)
+    connecting = asyncio.create_task(registry.on_connected(session))  # type: ignore[arg-type]
+    await asyncio.sleep(0)
+    entry = next(e for e in registry.entries() if e.device_id == node.node_id)
+    result = await registry.call(entry, "notify.show", {"text": "x"}, risk="low", timeout_s=5)
+    assert result["error"] == "device_offline"
+    assert not any(m == "tools/call" for m, _ in client.sent)
+    client.answer.set()
+    await connecting
