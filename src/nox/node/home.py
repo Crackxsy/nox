@@ -74,6 +74,9 @@ class NodeIdentity(BaseModel):
     paired_at: datetime
     #: The core's receipt key, pinned at pairing (or on the first authenticated connection).
     receipt_key: str = Field(default="", max_length=64)
+    #: The node protocols the core accepted at the last connection (`initialize` answer): a new
+    #: version installs by itself only when the protocol it speaks is in this range.
+    core_node_protocol: tuple[int, int] | None = None
 
 
 class NodeHome:

@@ -3,10 +3,11 @@
     python scripts/build_app_bundle.py --tag v0.7.1 --out files/
 
 Standard library only (the release workflow runs it before anything is installed). The bundle holds
-Nox's own code and configuration - `nox/` (from `src/nox`) and `config/` - and `BUNDLE.json`: the
-version, and the exact versions of every package in `uv.lock`, so a node can tell whether the
-libraries it has fit this code (`packages`) and which ones it must have (`requires`, the base
-dependencies). No libraries, no compiled code: those come only with an installer.
+Nox's own code and configuration - `nox/` (from `src/nox`) and `config/` - and `BUNDLE.json`
+(`nox.node.bundle`): the version, the node protocol this code speaks, the SHA-256 of the
+`uv.lock` it belongs to (a node applies it only on exactly those libraries) and the SHA-256 of
+every file (checked when unpacking and again at every start). No libraries, no compiled code:
+those come only with an installer.
 
 Deterministic: sorted entries, fixed timestamps and modes, so two builds of one tag are identical
 and the SHA-256 in the signed release manifest describes exactly this file.
@@ -15,10 +16,10 @@ and the SHA-256 in the signed release manifest describes exactly this file.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
-import tomllib
 import zipfile
 from pathlib import Path
 
@@ -37,20 +38,28 @@ def version_of(repo: Path) -> str:
     return match[1]
 
 
-def bundle_info(repo: Path, version: str) -> dict[str, object]:
-    lock = tomllib.loads((repo / "uv.lock").read_text(encoding="utf-8"))
-    # A lock can hold one package in two versions (for different platforms): all are listed.
-    packages: dict[str, list[str]] = {}
-    for package in lock.get("package", []):
-        if package.get("name") != "nox" and "version" in package:
-            versions = packages.setdefault(str(package["name"]), [])
-            if str(package["version"]) not in versions:
-                versions.append(str(package["version"]))
-    project = tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    requires = sorted(
-        re.split(r"[\s<>=!~;\[]", dep, maxsplit=1)[0] for dep in project["dependencies"]
-    )
-    return {"schema": SCHEMA, "version": version, "packages": packages, "requires": requires}
+def node_protocol_of(repo: Path) -> int:
+    """`NODE_PROTOCOL` of this checkout: the protocol its `nox node` speaks."""
+    text = (repo / "src" / "nox" / "node" / "protocol.py").read_text(encoding="utf-8")
+    match = re.search(r"^NODE_PROTOCOL = (\d+)$", text, re.MULTILINE)
+    if match is None:
+        raise SystemExit("src/nox/node/protocol.py has no NODE_PROTOCOL")
+    return int(match[1])
+
+
+def lock_sha256(repo: Path) -> str:
+    """SHA-256 of `uv.lock`: a node applies the bundle only on exactly these libraries."""
+    return hashlib.sha256((repo / "uv.lock").read_bytes()).hexdigest()
+
+
+def bundle_info(repo: Path, version: str, files: list[tuple[str, Path]]) -> dict[str, object]:
+    return {
+        "schema": SCHEMA,
+        "version": version,
+        "node_protocol": node_protocol_of(repo),
+        "lock_sha256": lock_sha256(repo),
+        "files": {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in files},
+    }
 
 
 def _files(repo: Path) -> list[tuple[str, Path]]:
@@ -81,10 +90,11 @@ def build(repo: Path, tag: str, out: Path) -> Path:
         raise SystemExit(f"tag {tag} does not match src/nox/__init__.py ({version})")
     out.mkdir(parents=True, exist_ok=True)
     target = out / f"nox-app-{tag}.zip"
-    info = json.dumps(bundle_info(repo, version), indent=2, sort_keys=True) + "\n"
+    files = _files(repo)
+    info = json.dumps(bundle_info(repo, version, files), indent=2, sort_keys=True) + "\n"
     with zipfile.ZipFile(target, "w") as bundle:
         bundle.writestr(_entry("BUNDLE.json"), info)
-        for name, path in _files(repo):
+        for name, path in files:
             bundle.writestr(_entry(name), path.read_bytes())
     return target
 

@@ -63,52 +63,95 @@ class _Agent:
     def __init__(self) -> None:
         self.connected = asyncio.Event()
         self.busy = False
+        self.protocol_refused = False
 
 
 class _Updater:
-    def __init__(self, pending: bool) -> None:
+    def __init__(self, pending: bool, *, trial: bool = True, fail_once: bool = False) -> None:
         self.confirmed = 0
         self.pending = pending
+        self.trial = trial
+        self.fail_once = fail_once
+
+    def on_trial(self) -> bool:
+        return self.trial
 
     def confirm_running(self) -> bool:
+        if self.fail_once:
+            self.fail_once = False
+            raise OSError("state.json is locked")
         self.confirmed += 1
+        self.trial = False
         return True
 
     def restart_needed(self) -> bool:
         return self.pending
+
+    def stale_days(self) -> int | None:
+        return None
 
     def check(self) -> UpdateCheck:  # pragma: no cover - the first check is minutes away
         return UpdateCheck("up_to_date", "")
 
 
 async def _loop(
-    tmp_path: Path, updater: _Updater, agent: _Agent, *, rounds: float = 0.2
-) -> tuple[asyncio.Event, asyncio.Event]:
-    stop, restart = asyncio.Event(), asyncio.Event()
+    tmp_path: Path, updater: _Updater, agent: _Agent, *, rounds: float = 0.3
+) -> tuple[asyncio.Event, asyncio.Event, asyncio.Event]:
+    stop, restart, failed = asyncio.Event(), asyncio.Event(), asyncio.Event()
     runtime = NodeRuntime(NodeHome(tmp_path), None, None, None)  # type: ignore[arg-type]
     task = asyncio.create_task(
-        keep_updated(runtime, agent, updater, stop, restart, poll_s=0.01)  # type: ignore[arg-type]
+        keep_updated(
+            runtime,
+            agent,  # type: ignore[arg-type]
+            updater,  # type: ignore[arg-type]
+            stop,
+            restart,
+            poll_s=0.01,
+            trial_failed=failed,
+        )
     )
     await asyncio.sleep(rounds)
     stop.set()
     await asyncio.wait_for(task, 2)
-    return stop, restart
+    return stop, restart, failed
 
 
-async def test_a_fresh_version_confirms_itself_once_it_is_connected(tmp_path: Path) -> None:
+async def test_a_version_on_trial_is_confirmed_only_once_its_core_accepted_it(
+    tmp_path: Path,
+) -> None:
     agent, updater = _Agent(), _Updater(pending=False)
+    await _loop(tmp_path, updater, agent, rounds=0.15)
+    assert updater.confirmed == 0  # running is not enough
     agent.connected.set()
     await _loop(tmp_path, updater, agent)
     assert updater.confirmed == 1
+
+
+async def test_a_core_that_refuses_the_new_protocol_ends_the_trial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NOX_NODE_LAUNCHER", "1")
+    agent, updater = _Agent(), _Updater(pending=False)
+    agent.protocol_refused = True
+    stop, _restart, failed = await _loop(tmp_path, updater, agent)
+    assert failed.is_set() and stop.is_set() and updater.confirmed == 0
+
+
+async def test_an_error_in_one_round_does_not_end_the_loop_or_mark_anything_bad(
+    tmp_path: Path,
+) -> None:
+    agent, updater = _Agent(), _Updater(pending=False, fail_once=True)
+    agent.connected.set()
+    _stop, _restart, failed = await _loop(tmp_path, updater, agent, rounds=0.5)
+    assert updater.confirmed == 1 and not failed.is_set()
 
 
 async def test_under_the_launcher_a_pending_version_restarts_the_node(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("NOX_NODE_LAUNCHER", "1")
-    agent, updater = _Agent(), _Updater(pending=True)
-    agent.connected.set()
-    _stop, restart = await _loop(tmp_path, updater, agent)
+    agent, updater = _Agent(), _Updater(pending=True, trial=False)
+    _stop, restart, _failed = await _loop(tmp_path, updater, agent)
     assert restart.is_set()
 
 
@@ -116,8 +159,7 @@ async def test_no_restart_while_a_call_runs_or_without_the_launcher(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("NOX_NODE_LAUNCHER", "1")
-    agent, updater = _Agent(), _Updater(pending=True)
-    agent.connected.set()
+    agent, updater = _Agent(), _Updater(pending=True, trial=False)
     agent.busy = True
     assert not (await _loop(tmp_path, updater, agent))[1].is_set()
     monkeypatch.delenv("NOX_NODE_LAUNCHER")
@@ -170,3 +212,20 @@ def test_the_trial_start_runs_isolated_in_the_new_copy(
     assert seen["argv"][:2] == ["python-here", "-I"]  # type: ignore[index]
     assert seen["cwd"] == str(tmp_path)
     assert not any(k.upper().startswith("PYTHON") for k in seen["env"])  # type: ignore[attr-defined]
+
+
+def test_one_tray_per_node_and_it_ends_with_its_node(tmp_path: Path) -> None:
+    import os
+
+    from nox.node.tray import parent_alive, single_instance
+
+    home = NodeHome(tmp_path / "node")
+    first = single_instance(home)
+    assert first is not None
+    assert single_instance(home) is None  # a second tray for the same node does not start
+    first.close()
+    again = single_instance(home)
+    assert again is not None
+    again.close()
+    assert parent_alive(str(os.getpid())) and parent_alive(None)
+    assert not parent_alive("999999999")

@@ -362,13 +362,16 @@ def node_run(
     ),
 ) -> None:
     """Connect to Nox and serve it until stopped (Ctrl+C). Reconnects on its own."""
-    from nox.node.cli import RESTART, build, run, secret_store  # noqa: PLC0415
-    from nox.node.update import RESTART_EXIT_CODE  # noqa: PLC0415
+    from nox.node.cli import RESTART, TRIAL_FAILED, build, run, secret_store  # noqa: PLC0415
+    from nox.node.update import RESTART_EXIT_CODE, TRIAL_FAILED_EXIT_CODE  # noqa: PLC0415
 
     outcome = run(build(_node_home(), secrets=secret_store(), say=typer.echo), tray=tray)
     if outcome == RESTART:
         typer.echo("A new version is in place; starting again.")
         raise typer.Exit(RESTART_EXIT_CODE)
+    if outcome == TRIAL_FAILED:
+        typer.echo("Nox does not accept this version's protocol; back to the previous one.")
+        raise typer.Exit(TRIAL_FAILED_EXIT_CODE)
     typer.echo(outcome)
 
 

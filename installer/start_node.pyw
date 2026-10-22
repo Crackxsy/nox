@@ -1,26 +1,34 @@
-"""Start Nox as a node and keep it running: `pythonw.exe start_node.pyw` (Windows logon task),
-`python start_node.pyw` (systemd unit, launchd agent).
+"""Start Nox as a node and keep it running: `pythonw.exe -I start_node.pyw` (Windows logon task),
+`python -I start_node.pyw` (systemd unit, launchd agent).
 
-Standard library only, and never replaced by a self-update: this file decides which copy of Nox
-runs, so it must not be part of what it chooses between. The copies:
+Never replaced by a self-update: this file decides which copy of Nox runs, so it must not be part
+of what it chooses between. The copies:
 
 * the **base** - the folder this file is in (`nox/`, `config/` next to it), put there by the
   installer;
 * **releases** a node installed itself from a signed bundle (`nox.node.update`), in
-  `<node home>/app/releases/<version>`, described by `<node home>/app/state.json`.
+  `<node home>/app/releases/<version>`, named by `<node home>/app/state.json`.
 
-Choosing, at every start: a `pending` release is tried (at most `MAX_TRIALS` times); otherwise the
-`current` release; otherwise - or when the base is at least as new, after a new installer ran -
-the base. The node runs as a child process. It exits with `RESTART_EXIT_CODE` when a new version
-is in place, which starts it again at once. A pending release whose start fails before it
-confirmed itself (connected to the core, or ran long enough) is rolled back: the previous copy
-runs again, and that version is marked bad and never tried again. A copy that keeps crashing is
-restarted with a growing pause, and given up after `MAX_CRASHES_PER_HOUR`.
+The node's account can write the releases and `state.json`, so neither is trusted as it is. A
+release runs only after it passed `nox.node.bundle.verify_folder` - imported from the *base*, with
+the base's trusted release keys: the signed manifest, the bundle it lists, the SHA-256 of every
+file and nothing else in the folder. Anything else, or a release not newer than the base, runs the
+base and is dropped from `state.json` (a new installer always wins).
+
+At every start: a `pending` release is tried; otherwise the `current` one; otherwise the base. The
+node runs as a child process, isolated (`-I -B`, its own folder as the working folder, no
+PYTHON* variables). It exits with `RESTART_EXIT_CODE` when a new version is in place, which
+starts it again at once, and with `TRIAL_FAILED_EXIT_CODE` when the core refused the protocol of
+a version on trial. Only real crashes count against a pending version - a non-zero exit without
+the node's clean-exit marker, not a signal or a logoff. After `MAX_TRIALS` crashes, or a refused
+protocol, the previous copy runs again and the version is skipped for a week. A copy that keeps
+crashing is restarted with a growing pause and given up after `MAX_CRASHES_PER_HOUR`.
 
 Other uses:
   start_node.pyw --cli node pair <link>   run a `nox` command with the copy that would run
   start_node.pyw --autostart on|off       Windows: the per-user logon task (never elevated)
   start_node.pyw --start                  Windows: start that task now (the Start-menu entry)
+  start_node.pyw --reset-overlays         drop every self-installed version (the installers)
   start_node.pyw --selftest               print the version of the copy that would run
 
 Nothing here ever asks for elevation; the logon task runs as the user who registered it, with
@@ -29,16 +37,20 @@ Nothing here ever asks for elevation; the logon task runs as the user who regist
 
 from __future__ import annotations
 
+import contextlib
+import datetime as dt
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 from xml.sax.saxutils import escape
 
 _HERE = Path(__file__).resolve().parent
@@ -46,12 +58,21 @@ _HERE = Path(__file__).resolve().parent
 #: is part of (Linux and macOS installs, `installer/start_node.pyw` in a release folder).
 BASE = _HERE if (_HERE / "nox").is_dir() else _HERE.parent / "src"
 RESTART_EXIT_CODE = 75
+TRIAL_FAILED_EXIT_CODE = 76
 MAX_TRIALS = 2
 MAX_CRASHES_PER_HOUR = 10
 TASK_NAME = "Nox Node"
 HOME_ENV = "NOX_NODE_HOME"
 APP_ENV = "NOX_NODE_APP"
+#: Written by the node when it ends in order (`nox.node.cli.run`); removed before every start.
+CLEAN_EXIT = "clean-exit"
 _VERSION = re.compile(r'^__version__\s*=\s*"(\d+)\.(\d+)\.(\d+)[^"]*"', re.MULTILINE)
+#: The only names a release folder may have (the same rule as `nox.node.update`).
+_VERSION_DIR = re.compile(
+    r"^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20})*)?$"
+)
+#: Ended from outside, not crashed: Ctrl+C / console close, logoff and shutdown, `schtasks /End`.
+_TERMINATED = {130, 143, 0xC000013A, 0x40010004, 0x41306}
 _CREATE_NO_WINDOW = 0x08000000
 
 
@@ -77,7 +98,34 @@ def version_of(app: Path) -> tuple[int, int, int] | None:
     return (int(match[1]), int(match[2]), int(match[3])) if match else None
 
 
-def read_state(root: Path) -> dict:  # type: ignore[type-arg]
+# ---- state.json, under the lock nox.node.update takes too ---------------------------------------
+
+
+@contextlib.contextmanager
+def _locked(root: Path) -> Iterator[None]:
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / "state.lock").open("a+b") as handle:
+        if sys.platform == "win32":
+            import msvcrt  # noqa: PLC0415
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl  # noqa: PLC0415
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def read_state(root: Path) -> dict[str, Any]:
     try:
         state = json.loads((root / "state.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -85,7 +133,7 @@ def read_state(root: Path) -> dict:  # type: ignore[type-arg]
     return state if isinstance(state, dict) else {}
 
 
-def write_state(root: Path, state: dict) -> None:  # type: ignore[type-arg]
+def write_state(root: Path, state: dict[str, Any]) -> None:
     root.mkdir(parents=True, exist_ok=True)
     temporary = root / "state.json.new"
     with temporary.open("w", encoding="utf-8") as handle:
@@ -95,49 +143,111 @@ def write_state(root: Path, state: dict) -> None:  # type: ignore[type-arg]
     os.replace(temporary, root / "state.json")
 
 
-def _release(root: Path, name: object) -> Path | None:
-    if not isinstance(name, str) or not re.fullmatch(r"[0-9A-Za-z.-]{1,60}", name):
+@contextlib.contextmanager
+def editing(root: Path) -> Iterator[dict[str, Any]]:
+    with _locked(root):
+        state = read_state(root)
+        yield state
+        write_state(root, state)
+
+
+def _remove_release(root: Path, name: str) -> None:
+    """Only ever a direct child of `releases/` with a version name - never `.`, `..` or a link."""
+    if not _VERSION_DIR.match(name):
+        return
+    folder = root / "releases" / name
+    if folder.is_symlink():
+        folder.unlink()
+    elif folder.parent == root / "releases":
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def mark_bad(root: Path, version: str, why: str) -> None:
+    """The pending `version` failed: back to what ran before; not tried again for a week."""
+    with editing(root) as state:
+        if state.get("pending") != version:
+            return
+        bad = state.get("bad") if isinstance(state.get("bad"), dict) else {}
+        bad[version] = dt.datetime.now(dt.UTC).isoformat()
+        state.update(pending=None, failures=0, bad=bad)
+    _remove_release(root, version)
+    report(f"Nox {version} rolled back: {why}")
+
+
+# ---- choosing ------------------------------------------------------------------------------------
+
+
+def verified(folder: Path) -> bool:
+    """The release folder is exactly a signed release - checked with the base's code and keys."""
+    try:
+        if str(BASE) not in sys.path:
+            sys.path.insert(0, str(BASE))
+        from nox.node.bundle import verify_folder  # type: ignore[import-not-found]  # noqa: PLC0415
+        from nox.release import trusted_release_keys  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        verify_folder(folder, trusted_release_keys())
+    except Exception as exc:  # noqa: BLE001 - every doubt runs the base instead
+        report(f"{folder.name}: not started, it is not the signed release ({exc})")
+        return False
+    return True
+
+
+def _candidate(root: Path, name: object, floor: tuple[int, int, int]) -> Path | None:
+    if not isinstance(name, str) or not _VERSION_DIR.match(name):
         return None
     folder = root / "releases" / name
-    return folder if version_of(folder) is not None else None
-
-
-def rollback(root: Path, version: str) -> None:
-    """The pending `version` failed to start: back to what ran before, never this one again."""
-    state = read_state(root)
-    if state.get("pending") != version:
-        return
-    bad = state.get("bad") if isinstance(state.get("bad"), list) else []
-    state.update(pending=None, attempts=0, bad=[*bad, version][-50:])
-    write_state(root, state)
-    shutil.rmtree(root / "releases" / version, ignore_errors=True)
+    found = version_of(folder)
+    if found is None or found <= floor or not verified(folder):
+        return None
+    return folder
 
 
 def choose(base: Path, root: Path, *, trial: bool = True) -> tuple[Path, str | None]:
     """The copy to start, and the pending version it tries (None when it is not a trial).
-    `trial=False` (a one-off command) never starts or counts a trial."""
-    state = read_state(root)
+    `trial=False` (a one-off command) never starts a trial."""
     floor = version_of(base) or (0, 0, 0)
-    pending = state.get("pending")
-    folder = _release(root, pending) if trial else None
-    if trial and isinstance(pending, str) and folder is None:
-        rollback(root, pending)  # its folder is gone or broken: nothing to try
-    if folder is not None and isinstance(pending, str):
-        attempts = state.get("attempts") if isinstance(state.get("attempts"), int) else 0
-        if attempts >= MAX_TRIALS:
-            rollback(root, pending)
-        else:
-            state["attempts"] = attempts + 1
-            write_state(root, state)
-            return folder, pending
-    current = _release(root, state.get("current"))
-    if current is not None and (version_of(current) or floor) > floor:
-        return current, None
+    with editing(root) as state:
+        pending, current = state.get("pending"), state.get("current")
+        if pending is not None and _candidate(root, pending, floor) is None:
+            state.update(pending=None, failures=0)  # broken, unsigned, or not newer than the base
+            pending = None
+        current_folder = _candidate(root, current, floor) if current is not None else None
+        if current is not None and current_folder is None:
+            state["current"] = None
+    if trial and isinstance(pending, str):
+        return root / "releases" / pending, pending
+    if current_folder is not None:
+        return current_folder, None
     return base, None
+
+
+def reset_overlays(root: Path) -> None:
+    """A new base was installed: every self-installed version goes; the floor, the newest seen
+    manifest and the failure record stay."""
+    with editing(root) as state:
+        for key in ("current", "previous", "pending"):
+            state[key] = None
+        state["failures"] = 0
+        releases = root / "releases"
+        if releases.is_symlink():
+            releases.unlink()
+        elif releases.is_dir():
+            for folder in releases.iterdir():
+                if folder.is_symlink():
+                    folder.unlink()
+                elif _VERSION_DIR.match(folder.name.removesuffix(".staging")):
+                    shutil.rmtree(folder, ignore_errors=True)
+
+
+# ---- running -------------------------------------------------------------------------------------
 
 
 def run_in_process(app: Path, args: list[str]) -> int:
     """`nox <args>` with the code in `app`, in this process."""
+    if app != BASE:
+        # The check above imported the base's `nox`; the chosen copy must not mix with it.
+        for name in [m for m in sys.modules if m == "nox" or m.startswith("nox.")]:
+            del sys.modules[name]
     sys.path.insert(0, str(app))
     from nox.cli import main  # type: ignore[import-not-found]  # noqa: PLC0415
 
@@ -151,11 +261,12 @@ def run_in_process(app: Path, args: list[str]) -> int:
 
 def child_command(app: Path) -> tuple[list[str], dict[str, str], str]:
     """argv, environment and working folder of the node's process: this interpreter isolated
-    (`-I`: no current folder or user site on sys.path, PYTHON* variables ignored - and removed),
-    this file by absolute path, the copy's own folder as the working folder."""
+    (`-I`: no current folder or user site on sys.path, PYTHON* variables ignored - and removed;
+    `-B`: no bytecode written into a release folder), this file by absolute path, the copy's own
+    folder as the working folder."""
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("PYTHON")}
     env.update({APP_ENV: str(app), "NOX_NODE_LAUNCHER": "1"})
-    argv = [sys.executable, "-I", str(Path(__file__).resolve()), "--cli", "node", "run"]
+    argv = [sys.executable, "-I", "-B", str(Path(__file__).resolve()), "--cli", "node", "run"]
     return argv, env, str(app)
 
 
@@ -167,6 +278,13 @@ def _run_child(app: Path) -> int:
         cwd=cwd,
         creationflags=_CREATE_NO_WINDOW if sys.platform == "win32" else 0,
     )
+
+
+def crashed(code: int, root: Path) -> bool:
+    """A real crash: non-zero, not ended from outside, and the node did not end in order."""
+    if code in (0, RESTART_EXIT_CODE, TRIAL_FAILED_EXIT_CODE) or code < 0:
+        return False
+    return code not in _TERMINATED and not (root / CLEAN_EXIT).exists()
 
 
 def supervise(
@@ -181,15 +299,23 @@ def supervise(
     pause = 2.0
     while True:
         app, trial = choose(base, root)
+        (root / CLEAN_EXIT).unlink(missing_ok=True)
         code = run_child(app)
         if code == RESTART_EXIT_CODE:
             continue
-        confirmed = trial is None or read_state(root).get("pending") != trial
-        if not confirmed and code != 0:
-            rollback(root, trial)  # type: ignore[arg-type]  # trial is set when not confirmed
+        on_trial = trial is not None and read_state(root).get("pending") == trial
+        if on_trial and code == TRIAL_FAILED_EXIT_CODE:
+            mark_bad(root, trial, "the core does not accept its node protocol")  # type: ignore[arg-type]
             continue
-        if code == 0:
-            return 0
+        if not crashed(code, root):
+            return 0  # ended in order, or ended from outside
+        if on_trial:
+            with editing(root) as state:
+                failures = int(state.get("failures") or 0) + 1
+                state["failures"] = failures
+            if failures >= MAX_TRIALS:
+                mark_bad(root, trial, f"it crashed {failures} times (exit {code})")  # type: ignore[arg-type]
+                continue
         now = clock()
         crashes = [t for t in crashes if now - t < 3600] + [now]
         if len(crashes) >= MAX_CRASHES_PER_HOUR:
@@ -199,7 +325,7 @@ def supervise(
         pause = min(pause * 2, 60.0)
 
 
-# ---- the Windows logon task -------------------------------------------------------------------
+# ---- the Windows logon task ----------------------------------------------------------------------
 
 
 def task_xml(*, user: str, command: str, arguments: str, workdir: str) -> str:
@@ -253,13 +379,16 @@ def _schtasks() -> str:
 
 
 def autostart(enable: bool) -> int:
-    """Register (or remove) the logon task for the user running this - no elevation."""
+    """Register (or remove) the logon task for the user running this - no elevation. The task
+    definition goes through a folder created just for it, readable by this user only."""
     if sys.platform != "win32":
         print("Autostart on Linux and macOS is set up by the installer.", file=sys.stderr)  # noqa: T201
         return 2
-    flags = {"capture_output": True, "creationflags": _CREATE_NO_WINDOW, "check": False}
+    flags: dict[str, Any] = {"capture_output": True, "creationflags": _CREATE_NO_WINDOW}
     if not enable:
-        result = subprocess.run([_schtasks(), "/Delete", "/TN", TASK_NAME, "/F"], **flags)  # noqa: S603
+        result = subprocess.run(
+            [_schtasks(), "/Delete", "/TN", TASK_NAME, "/F"], check=False, **flags
+        )  # noqa: S603
         return 0 if result.returncode in (0, 1) else result.returncode
     user = os.environ.get("USERNAME", "")
     domain = os.environ.get("USERDOMAIN", "")
@@ -270,21 +399,21 @@ def autostart(enable: bool) -> int:
         arguments=f'-I "{Path(__file__).resolve()}"',
         workdir=str(_HERE),
     )
-    definition = node_home().parent / "nox-node-task.xml"
-    definition.parent.mkdir(parents=True, exist_ok=True)
-    definition.write_text(xml, encoding="utf-16")
-    try:
+    with tempfile.TemporaryDirectory(prefix="nox-node-task-") as folder:
+        definition = Path(folder) / "task.xml"
+        with definition.open("x", encoding="utf-16") as handle:  # never an existing file
+            handle.write(xml)
         result = subprocess.run(  # noqa: S603 - the system's schtasks, fixed arguments
-            [_schtasks(), "/Create", "/TN", TASK_NAME, "/XML", str(definition), "/F"], **flags
+            [_schtasks(), "/Create", "/TN", TASK_NAME, "/XML", str(definition), "/F"],
+            check=False,
+            **flags,
         )
-    finally:
-        definition.unlink(missing_ok=True)
     if result.returncode != 0:
         report(f"The logon task could not be registered: {result.stderr!r}")
     return int(result.returncode)
 
 
-# ---- reporting --------------------------------------------------------------------------------
+# ---- reporting -----------------------------------------------------------------------------------
 
 
 def report(text: str) -> None:
@@ -317,6 +446,9 @@ def main(argv: list[str]) -> int:
                 check=False,
             )
             return int(started.returncode)
+        if argv[:1] == ["--reset-overlays"]:
+            reset_overlays(root)
+            return 0
         if argv[:1] == ["--selftest"]:
             app = choose(BASE, root, trial=False)[0]
             print(f"{'.'.join(map(str, version_of(app) or ()))} {app}")  # noqa: T201

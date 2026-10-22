@@ -22,6 +22,7 @@ import sys
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
+from typing import IO
 
 from nox.node.home import NodeHome
 from nox.node.manifest import GROUPS, load_manifest
@@ -99,12 +100,41 @@ def spawn_tray() -> subprocess.Popen[bytes] | None:
     return subprocess.Popen(  # noqa: S603 - this interpreter, fixed code
         [sys.executable, "-I", "-c", code],
         cwd=str(app),
-        env=python_env(NOX_NODE_APP=str(app)),
+        env=python_env(NOX_NODE_APP=str(app), NOX_NODE_PARENT=str(os.getpid())),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=0x08000000 if sys.platform == "win32" else 0,
     )
+
+
+def single_instance(home: NodeHome) -> IO[bytes] | None:
+    """Hold `tray.lock` for as long as this tray runs; None when another tray already does."""
+    home.ensure()
+    handle = (home.path / "tray.lock").open("a+b")
+    try:
+        if sys.platform == "win32":
+            import msvcrt  # noqa: PLC0415
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl  # noqa: PLC0415
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def parent_alive(pid_text: str | None) -> bool:
+    """The node that started this tray still runs (no parent named: assume yes)."""
+    if not pid_text or not pid_text.isdigit():
+        return True
+    import psutil  # noqa: PLC0415
+
+    return bool(psutil.pid_exists(int(pid_text)))
 
 
 def main() -> None:  # pragma: no cover - Qt and a desktop; the logic above is tested
@@ -117,6 +147,10 @@ def main() -> None:  # pragma: no cover - Qt and a desktop; the logic above is t
     from nox.shell.tray import make_tray_icon
 
     home = NodeHome()
+    lock = single_instance(home)
+    if lock is None:
+        return  # one tray per node
+    parent = os.environ.get("NOX_NODE_PARENT")
     german = not os.environ.get("NOX_LANG", "de").startswith("en")
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
@@ -137,10 +171,16 @@ def main() -> None:  # pragma: no cover - Qt and a desktop; the logic above is t
     )
     close.triggered.connect(app.quit)
     for action in (state_line, None, stop, resume, allowed, None, close):
-        menu.addSeparator() if action is None else menu.addAction(action)
+        if action is None:
+            menu.addSeparator()
+        else:
+            menu.addAction(action)
     tray.setContextMenu(menu)
 
     def refresh() -> None:
+        if not parent_alive(parent):
+            app.quit()  # the node is gone: so is its tray
+            return
         shown = view(home, german=german)
         tray.setIcon(make_tray_icon(TrayTint(shown.tint)))
         tray.setToolTip(shown.tooltip)
@@ -163,3 +203,4 @@ def main() -> None:  # pragma: no cover - Qt and a desktop; the logic above is t
         app.exec()
     finally:
         keys.stop()
+        lock.close()

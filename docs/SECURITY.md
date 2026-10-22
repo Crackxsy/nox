@@ -747,6 +747,20 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   cannot read or erase it. `nox/revoked` deletes the key and the certificate. The chain shows
   tampering, it does not prevent it: whoever controls the user's account can rewrite the whole
   file. A notice always starts with "Nox"; Windows PowerShell is started by its absolute path.
+- **Self-update only from the signed release** (`nox.node.update`, docs/NODES.md#updates): the
+  signature against the keys of the installed version (none configured: no update at all), no
+  downgrade below the highest version that ran, **no replay** of a validly signed but older
+  manifest (`created` must not go back), bundle size and SHA-256 from the manifest, every file
+  against `BUNDLE.json`, the same `uv.lock`. It installs by itself only a stable, code-only patch
+  whose node protocol the paired core accepts. **Freeze:** an attacker on the network can still
+  withhold new manifests; after 30 days without a newer one the node says so (`nox node status`,
+  a notice). **A taken-over node account** can write its own `app/` folder, so the launcher runs
+  a self-installed version only after checking that folder at every start, with the installed
+  program's code and keys, and every installer run drops those versions; a headless node's
+  program (`/opt/nox-node`) is root's. The launcher, the tray and the trial start run Python
+  isolated (`-I`, a trusted working folder, no `PYTHON*` variables); nothing elevated runs code
+  from the user's folders (Windows Setup runs it as the original user and refuses node mode when
+  elevated on purpose).
 - **Residual risk, stated plainly:** "local" means the logged-in user. Malware running as that
   user with full user rights can read that user's keyring and files - the node key, the
   confirmation key - and act as the node towards the core within what the node may do. Nox's

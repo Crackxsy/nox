@@ -18,7 +18,7 @@ lässt Nox Dinge *auf diesem Gerät* tun - und nur die, die du dort erlaubt hast
 | Windows | Der Nox-Installer, Modus **„Mit einem Nox im Heimnetz verbinden (nur dieses Gerät)“** (still: `Nox-Setup-<Version>.exe /MODE=node [/PAIR=<Link>]`). Ohne Oberflächen; die Sandbox-Regeln werden wie beim Core angeboten. | Eine Anmelde-Aufgabe „Nox Node“ nur für dich: läuft als du, *geringste Rechte*, nie als Dienst, nie mit Administratorrechten. Startmenü „Nox Node“ startet sie sofort. |
 | Linux-Desktop | `curl -fsSL https://github.com/Crackxsy/nox/releases/latest/download/install-linux.sh \| bash -s -- --node` - als du selbst, **ohne** sudo. Braucht `git curl tar python3`. | Eine systemd-**Benutzer**-Unit `nox-node.service`. Befehl: `nox-node ...` (in `~/.local/bin`). |
 | Linux ohne Bildschirm (ein Pi) | dasselbe mit `sudo bash -s -- --node --headless` | Eine gehärtete System-Unit für den eigenen Systembenutzer `nox-node`; Daten in `/var/lib/nox-node`. Befehl: `sudo nox-node ...`. |
-| macOS (**Beta**) | `bash scripts/install-macos.sh --node` in einer Kopie dieses Repositorys | Ein LaunchAgent bei der Anmeldung, als du. Release-Signaturen prüft dieses Skript noch nicht selbst (es lehnt Release-Versionen ab, sobald Signaturen eingerichtet sind). |
+| macOS (**Beta**) | `bash scripts/install-macos.sh --node` in einer Kopie dieses Repositorys | Ein LaunchAgent bei der Anmeldung, als du. **Dieses Skript prüft Release-Signaturen noch nicht:** sobald Signaturen eingerichtet sind, installiert es nichts aus dem Netz (keinen Tag, Branch oder Commit), nur eine Kopie, die du selbst geprüft hast (`NOX_SOURCE=<Ordner>`). |
 
 `--pair '<Link>'` koppelt gleich mit; den Installer erneut starten aktualisiert; `--uninstall`
 entfernt Programm und Autostart (Kennung und Protokoll des Nodes bleiben; das Gerät auch in Nox
@@ -113,23 +113,37 @@ es; nichts wird geändert):
    hat, heißt es „Release-Signaturen sind nicht eingerichtet“, und es gibt gar kein Update;
 2. die Ed25519-Signatur ist gültig, von einem vertrauten, nicht abgelaufenen Schlüssel;
 3. das Manifest ist wohlgeformt und nennt dieses Projekt;
-4. keine Rückstufung: nicht unter der laufenden und nicht unter der höchsten hier gelaufenen
-   Version; eine Version, die hier schon einmal nicht startete, wird übersprungen;
-5. ein **Patch**, der das Protokoll dieses Nodes noch spricht, installiert sich selbst; ein Minor-
-   oder Major-Update wartet auf `nox node update` am Gerät (ein Hinweis sagt das);
-6. das Paket `nox-app-<Tag>.zip` steht im signierten Manifest und stimmt in Größe und SHA-256;
-7. es enthält nur Nox' Code und Konfiguration, gebaut für die hier installierten
-   Bibliotheksversionen (sonst: „Installer ausführen“);
-8. ein Probestart importiert den neuen Code mit diesem Python.
+4. keine Rückstufung, keine Wiedergabe: nicht unter der laufenden und nicht unter der höchsten
+   hier gelaufenen Version, und nicht älter als das neueste schon gesehene Manifest. Eine
+   Version, die hier scheiterte, wird 7 Tage übersprungen (oder mit `nox node update --yes`
+   erneut versucht);
+5. **von selbst** installiert sich nur ein stabiles Patch-Release ohne geänderte Bibliotheken
+   (`deps_changed: false` im Manifest), dessen neuer Node ein Protokoll spricht, das **der
+   gekoppelte Core annimmt** (`node_speaks`, gegen den Bereich, den der Core beim letzten
+   Verbinden nannte). Minor-, Major- und Vorab-Versionen sowie ein unbekanntes oder abgelehntes
+   Protokoll warten auf `nox node update` am Gerät; geänderte Bibliotheken brauchen den Installer
+   (ein Hinweis sagt, was gilt);
+6. das Paket `nox-app-<Tag>.zip` aus dem Release genau dieses Tags stimmt in Größe und SHA-256
+   (aus derselben geöffneten Datei geprüft und entpackt);
+7. es enthält nur Nox' Code und Konfiguration, jede Datei mit dem SHA-256 aus `BUNDLE.json`, und
+   es wurde aus derselben `uv.lock` gebaut wie der laufende Code;
+8. ein Probestart importiert den neuen Code mit diesem Python, isoliert.
 
-Dann ein atomarer Dateiwechsel (`app/state.json`), und der Starter startet die neue Version. Sie
-gilt als funktionierend, sobald sie verbunden ist oder zwei Minuten lief; ein Start, der vorher
-scheitert, geht auf die vorige Version zurück, und diese Version wird nicht noch einmal versucht.
-`nox node update --check` schaut nur; Rückgabewert 3 heißt: Release-Signaturen noch nicht
-eingerichtet.
+Dann ein atomarer Wechsel von `app/state.json` (unter einer Dateisperre), und der Starter startet
+die neue Version - nachdem er ihren Ordner bei jedem Start erneut gegen das signierte Manifest
+prüft, mit Code und Schlüsseln des *installierten* Programms: eine geänderte, zusätzliche oder
+fehlende Datei oder eine gefälschte Zustandsdatei startet das installierte Programm. Die neue
+Version gilt als funktionierend, sobald sie verbunden ist und der Core ihr Protokoll annahm. Zwei
+echte Abstürze vorher (keine Abmeldung, kein Herunterfahren, kein Stopp) oder ein Core, der ihr
+Protokoll ablehnt, gehen auf die vorige Version zurück. Ein erneutes Installieren des Programms
+(jeder Installer) verwirft die selbst installierten Versionen. `nox node update --check` schaut
+nur; Rückgabewert 3 heißt: Release-Signaturen noch nicht eingerichtet. Wurde länger als 30 Tage
+keine neuere signierte Release-Information gesehen, sagen das `nox node status` und ein Hinweis:
+Updates könnten zurückgehalten werden.
 
-Das Zertifikat (30 Tage) erneuert sich ab Tag 20 über die Verbindung, für denselben Schlüssel; ein
-Node, der länger als 30 Tage aus war, wird neu gekoppelt.
+Das Zertifikat (30 Tage) erneuert sich ab Tag 20 über die Verbindung, für denselben Schlüssel,
+höchstens alle 12 Stunden; das alte wird widerrufen. Ein Node, der länger als 30 Tage aus war,
+wird neu gekoppelt.
 
 ## Was der Node speichert, und wo
 

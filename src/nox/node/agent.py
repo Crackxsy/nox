@@ -154,6 +154,8 @@ class NodeAgent:
         self._ping_interval_s = ping_interval_s
         self.connected = asyncio.Event()
         self.compatible = True
+        #: The core answered that it does not accept this node's protocol (`compatible: false`).
+        self.protocol_refused = False
         self.attempts = 0
         #: Answers the node waits for (its own requests to the core), by JSON-RPC id.
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
@@ -267,12 +269,17 @@ class NodeAgent:
             log.error("node.receipt_key_changed")
             return "failed"
         self.compatible = bool(result.get("compatible", False))
+        self.protocol_refused = not self.compatible
+        self._remember_core_protocol(identity, result.get("node_protocol"))
         self.core_killed = bool(result.get("engaged", False))
         if not self.core_killed:
             self.dead_man = False  # the core is back and not stopped
         self._last_core = time.monotonic()
         self._gate.narrowed = set()
-        self.connected.set()
+        if self.compatible:
+            # Only a core that accepts this node counts as connected: a version on trial is
+            # confirmed by nothing less (`nox.node.cli.keep_updated`).
+            self.connected.set()
         self._status("connected" if self.compatible else "update_needed", identity)
         log.info("node.connected", compatible=self.compatible)
         pinger = asyncio.create_task(self._ping(ws))
@@ -542,6 +549,20 @@ class NodeAgent:
                 self._local_stopped = False
                 self._audit_event("node.local_resume", "local", "ok")
             await asyncio.sleep(LOCAL_STOP_POLL_S)
+
+    def _remember_core_protocol(self, identity: NodeIdentity, offered: Any) -> None:
+        """Keep the range of node protocols the core accepts, for deciding about updates."""
+        if not (
+            isinstance(offered, list)
+            and len(offered) == 2
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in offered)
+            and 0 < offered[0] <= offered[1] <= 1000
+        ):
+            return
+        span = (offered[0], offered[1])
+        if identity.core_node_protocol != span:
+            identity.core_node_protocol = span
+            self._home.save_identity(identity)
 
     async def _request(
         self, ws: ClientConnection, method: str, params: dict[str, Any]

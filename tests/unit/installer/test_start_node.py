@@ -1,11 +1,12 @@
-"""`installer/start_node.pyw`: which copy of Nox a node starts, the rollback of a new version that
-does not start, and the Windows logon task it registers (as the user, never elevated). Nothing
-here starts a node, registers a task or touches an installed copy: children are stubs, folders
-live in `tmp_path`."""
+"""`installer/start_node.pyw`: which copy of Nox a node starts, the check of a self-installed
+version against its signed release, the rollback of a new version that crashes or is refused by
+its core, and the Windows logon task (as the user, never elevated). Nothing here starts a node,
+registers a task or touches an installed copy: children are stubs, folders live in `tmp_path`."""
 
 from __future__ import annotations
 
 import importlib.util
+from collections.abc import Iterator
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import ModuleType
@@ -14,7 +15,7 @@ from xml.etree import ElementTree
 import pytest
 
 from nox.node.home import default_home
-from nox.node.update import RESTART_EXIT_CODE, UpdateState
+from nox.node.update import RESTART_EXIT_CODE, TRIAL_FAILED_EXIT_CODE, UpdateState
 
 REPO = Path(__file__).resolve().parents[3]
 TASK_NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
@@ -48,6 +49,24 @@ def root(tmp_path: Path) -> Path:
     return tmp_path / "node" / "app"
 
 
+@pytest.fixture
+def signed(monkeypatch: pytest.MonkeyPatch) -> Iterator[set[str]]:
+    """Release folders count as signed when their name is in the set (the real check has its
+    own tests in tests/unit/node/test_update.py and below)."""
+    names: set[str] = set()
+    monkeypatch.setattr(launcher, "verified", lambda folder: folder.name in names)
+    yield names
+
+
+def release(root: Path, version: str, signed: set[str]) -> Path:
+    signed.add(version)
+    return copy_of(root / "releases" / version, version)
+
+
+def state(root: Path) -> UpdateState:
+    return UpdateState.load(root / "state.json")
+
+
 def test_the_launcher_finds_the_same_node_folder_as_nox(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -61,60 +80,128 @@ def test_without_updates_the_installed_copy_runs(base: Path, root: Path) -> None
     assert launcher.choose(base, root) == (base, None)
 
 
-def test_a_pending_version_is_tried_and_counted(base: Path, root: Path) -> None:
-    release = copy_of(root / "releases" / "0.5.1", "0.5.1")
+def test_a_signed_pending_version_is_tried(base: Path, root: Path, signed: set[str]) -> None:
+    folder = release(root, "0.5.1", signed)
     UpdateState(pending="0.5.1").save(root / "state.json")
-    assert launcher.choose(base, root) == (release, "0.5.1")
-    assert UpdateState.load(root / "state.json").attempts == 1
+    assert launcher.choose(base, root) == (folder, "0.5.1")
+    assert launcher.choose(base, root, trial=False) == (base, None)  # a one-off command
 
 
-def test_a_pending_version_that_never_confirms_is_rolled_back(base: Path, root: Path) -> None:
-    copy_of(root / "releases" / "0.5.1", "0.5.1")
-    UpdateState(pending="0.5.1").save(root / "state.json")
-    for _ in range(launcher.MAX_TRIALS):
-        assert launcher.choose(base, root)[1] == "0.5.1"
+def test_an_unsigned_or_changed_release_never_runs(base: Path, root: Path) -> None:
+    copy_of(root / "releases" / "0.5.1", "0.5.1")  # with the real check: no signed manifest
+    UpdateState(pending="0.5.1", current="0.5.1").save(root / "state.json")
     assert launcher.choose(base, root) == (base, None)
-    state = UpdateState.load(root / "state.json")
-    assert state.pending is None and state.bad == ["0.5.1"]
-    assert not (root / "releases" / "0.5.1").exists()
+    assert (state(root).pending, state(root).current) == (None, None)
 
 
-def test_a_failed_start_of_a_new_version_rolls_back_to_the_previous_one(
-    tmp_path: Path, base: Path, root: Path
+@pytest.mark.parametrize("version", ["0.5.0", "0.4.9"])
+def test_a_release_not_newer_than_the_base_is_dropped(
+    base: Path, root: Path, signed: set[str], version: str
 ) -> None:
-    previous = copy_of(root / "releases" / "0.5.1", "0.5.1")
-    copy_of(root / "releases" / "0.5.2", "0.5.2")
-    UpdateState(current="0.5.1", pending="0.5.2").save(root / "state.json")
-    started: list[Path] = []
-    exits = iter([1, 0])  # the new version crashes; the previous one stops normally
+    release(root, version, signed)
+    UpdateState(pending=version, current=version).save(root / "state.json")
+    assert launcher.choose(base, root) == (base, None)
+    assert (state(root).pending, state(root).current) == (None, None)
+
+
+@pytest.mark.parametrize("name", ["..", ".", "../..", "0.5.1/../..", ""])
+def test_a_forged_pending_name_touches_nothing(
+    tmp_path: Path, base: Path, root: Path, name: str
+) -> None:
+    keep = tmp_path / "node" / "keep.txt"
+    keep.parent.mkdir(parents=True, exist_ok=True)
+    keep.write_text("x")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "state.json").write_text(f'{{"pending": "{name}", "current": "{name}"}}')
+    assert launcher.choose(base, root) == (base, None)
+    launcher.mark_bad(root, name, "test")
+    assert keep.exists() and base.exists()
+
+
+def _supervise(base: Path, root: Path, exits: list[int], started: list[Path]) -> int:
+    codes = iter(exits)
 
     def child(app: Path) -> int:
         started.append(app)
-        return next(exits)
+        return next(codes)
+
+    return int(launcher.supervise(base, root, run_child=child, sleep=lambda _s: None))
+
+
+def test_two_real_crashes_roll_a_new_version_back(base: Path, root: Path, signed: set[str]) -> None:
+    previous = release(root, "0.5.1", signed)
+    new = release(root, "0.5.2", signed)
+    UpdateState(current="0.5.1", pending="0.5.2").save(root / "state.json")
+    started: list[Path] = []
+    assert _supervise(base, root, [1, 1, 0], started) == 0
+    assert started == [new, new, previous]
+    after = state(root)
+    assert (after.current, after.pending) == ("0.5.1", None) and "0.5.2" in after.bad
+    assert not new.exists()
+
+
+def test_one_crash_is_not_enough(base: Path, root: Path, signed: set[str]) -> None:
+    new = release(root, "0.5.1", signed)
+    UpdateState(pending="0.5.1").save(root / "state.json")
+    started: list[Path] = []
+    assert _supervise(base, root, [1, 0], started) == 0
+    assert started == [new, new]
+    assert (state(root).pending, state(root).failures) == ("0.5.1", 1)
+
+
+@pytest.mark.parametrize("code", [-15, -9, 130, 143, 0xC000013A, 0x40010004])
+def test_an_end_from_outside_is_no_crash(
+    base: Path, root: Path, signed: set[str], code: int
+) -> None:
+    release(root, "0.5.1", signed)
+    UpdateState(pending="0.5.1").save(root / "state.json")
+    assert _supervise(base, root, [code], []) == 0
+    assert (state(root).pending, state(root).failures, state(root).bad) == ("0.5.1", 0, {})
+
+
+def test_an_orderly_end_marked_by_the_node_is_no_crash(
+    base: Path, root: Path, signed: set[str]
+) -> None:
+    release(root, "0.5.1", signed)
+    UpdateState(pending="0.5.1").save(root / "state.json")
+
+    def child(_app: Path) -> int:
+        (root / launcher.CLEAN_EXIT).write_text("stopped")
+        return 3
 
     assert launcher.supervise(base, root, run_child=child, sleep=lambda _s: None) == 0
-    assert started == [root / "releases" / "0.5.2", previous]
-    state = UpdateState.load(root / "state.json")
-    assert (state.current, state.pending, state.bad) == ("0.5.1", None, ["0.5.2"])
+    assert state(root).failures == 0
 
 
-def test_a_confirmed_new_version_is_kept_after_a_crash(base: Path, root: Path) -> None:
-    copy_of(root / "releases" / "0.5.1", "0.5.1")
+def test_a_core_refusing_the_new_protocol_rolls_back_at_once(
+    base: Path, root: Path, signed: set[str]
+) -> None:
+    release(root, "0.5.1", signed)
+    UpdateState(pending="0.5.1").save(root / "state.json")
+    started: list[Path] = []
+    assert _supervise(base, root, [TRIAL_FAILED_EXIT_CODE, 0], started) == 0
+    assert started[1] == base
+    assert state(root).pending is None and "0.5.1" in state(root).bad
+
+
+def test_a_confirmed_new_version_is_kept_after_a_crash(
+    base: Path, root: Path, signed: set[str]
+) -> None:
+    release(root, "0.5.1", signed)
     UpdateState(pending="0.5.1").save(root / "state.json")
     exits = iter([1, 0])
 
-    def child(app: Path) -> int:
-        state = UpdateState.load(root / "state.json")
-        if state.pending:  # the node confirmed itself, then crashed later
+    def child(_app: Path) -> int:
+        if state(root).pending:  # the node confirmed itself, then crashed later
             UpdateState(current="0.5.1").save(root / "state.json")
         return next(exits)
 
     assert launcher.supervise(base, root, run_child=child, sleep=lambda _s: None) == 0
-    assert UpdateState.load(root / "state.json").current == "0.5.1"
+    assert state(root).current == "0.5.1" and state(root).bad == {}
 
 
-def test_the_restart_code_starts_the_new_version(base: Path, root: Path) -> None:
-    copy_of(root / "releases" / "0.5.1", "0.5.1")
+def test_the_restart_code_starts_the_new_version(base: Path, root: Path, signed: set[str]) -> None:
+    new = release(root, "0.5.1", signed)
     started: list[Path] = []
 
     def child(app: Path) -> int:
@@ -125,14 +212,7 @@ def test_the_restart_code_starts_the_new_version(base: Path, root: Path) -> None
         return 0
 
     launcher.supervise(base, root, run_child=child, sleep=lambda _s: None)
-    assert started == [base, root / "releases" / "0.5.1"]
-
-
-def test_a_newer_installer_wins_over_an_older_self_update(tmp_path: Path, root: Path) -> None:
-    base = copy_of(tmp_path / "base", "0.6.0")
-    copy_of(root / "releases" / "0.5.1", "0.5.1")
-    UpdateState(current="0.5.1").save(root / "state.json")
-    assert launcher.choose(base, root) == (base, None)
+    assert started == [base, new]
 
 
 def test_a_copy_that_keeps_crashing_is_given_up(base: Path, root: Path) -> None:
@@ -145,18 +225,56 @@ def test_a_copy_that_keeps_crashing_is_given_up(base: Path, root: Path) -> None:
     assert max(pauses) == 60.0
 
 
-def test_a_one_off_command_never_counts_a_trial(base: Path, root: Path) -> None:
-    copy_of(root / "releases" / "0.5.1", "0.5.1")
-    UpdateState(pending="0.5.1").save(root / "state.json")
-    assert launcher.choose(base, root, trial=False) == (base, None)
-    assert UpdateState.load(root / "state.json").attempts == 0
+def test_a_new_base_drops_self_installed_versions_but_keeps_the_record(
+    tmp_path: Path, root: Path, signed: set[str]
+) -> None:
+    release(root, "0.5.1", signed)
+    (root / "releases" / "0.5.2.staging").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep").write_text("x")
+    try:
+        (root / "releases" / "0.5.9").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pass  # no symlinks for this account (Windows without developer mode)
+    UpdateState(current="0.5.1", floor="0.5.1", bad={"0.5.3": "2026-10-20T00:00:00+00:00"}).save(
+        root / "state.json"
+    )
+    launcher.reset_overlays(root)
+    after = state(root)
+    assert (after.current, after.pending, after.floor) == (None, None, "0.5.1")
+    assert "0.5.3" in after.bad
+    assert not any((root / "releases").iterdir())
+    assert (outside / "keep").exists()
+
+
+def test_the_real_check_runs_a_signed_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Installed by the updater, checked by the launcher with the (test) trusted key."""
+    from nox.release import trusted_keys
+    from tests.unit.node.test_update import Key, updater
+    from tests.unit.node.test_update import release as signed_release
+
+    key = Key()
+    monkeypatch.setattr(trusted_keys, "TRUSTED_KEYS", (key.trusted,))
+    up = updater(tmp_path, signed_release(key, "0.5.1"), [key])
+    assert up.apply(up.check()).status == "installed"
+    root = tmp_path / "app"
+    base = copy_of(tmp_path / "base", "0.5.0")
+    folder = root / "releases" / "0.5.1"
+    assert launcher.verified(folder)
+    assert launcher.choose(base, root) == (folder, "0.5.1")
+    (folder / "nox" / "__init__.py").write_text('__version__ = "0.5.1"\nimport os  # planted\n')
+    assert not launcher.verified(folder)
+    assert launcher.choose(base, root) == (base, None)
 
 
 def test_the_logon_task_runs_as_the_user_with_least_privilege() -> None:
     xml = launcher.task_xml(
         user="SPRINGFIELD\\alex",
         command="C:\\Users\\alex\\AppData\\Local\\Programs\\Nox\\runtime\\pythonw.exe",
-        arguments='"C:\\Users\\alex\\AppData\\Local\\Programs\\Nox\\app\\start_node.pyw"',
+        arguments='-I "C:\\Users\\alex\\AppData\\Local\\Programs\\Nox\\app\\start_node.pyw"',
         workdir="C:\\Users\\alex\\AppData\\Local\\Programs\\Nox\\app",
     )
     task = ElementTree.fromstring(xml.split("\n", 1)[1])
@@ -182,7 +300,7 @@ def test_the_node_process_starts_isolated_in_its_own_copy(
 ) -> None:
     monkeypatch.setenv("PYTHONPATH", "somewhere-else")
     argv, env, cwd = launcher.child_command(tmp_path)
-    assert argv[1] == "-I" and Path(argv[2]).is_absolute()
+    assert argv[1:3] == ["-I", "-B"] and Path(argv[3]).is_absolute()
     assert cwd == str(tmp_path)
     assert env["NOX_NODE_APP"] == str(tmp_path)
     assert not any(k.upper().startswith("PYTHON") for k in env)

@@ -17,7 +17,7 @@ only the things you allowed there.
 | Windows | The Nox installer, mode **"Connect to a Nox in the home network (only this device)"** (silent: `Nox-Setup-<version>.exe /MODE=node [/PAIR=<link>]`). No dashboards; the optional sandbox rules are offered as in the core install. | A per-user logon task "Nox Node": runs as you, *least privilege*, never a service, never elevated. Start menu "Nox Node" starts it now. |
 | Linux desktop | `curl -fsSL https://github.com/Crackxsy/nox/releases/latest/download/install-linux.sh \| bash -s -- --node` - as yourself, **without** sudo. Needs `git curl tar python3`. | A systemd **user** unit `nox-node.service`. Command: `nox-node ...` (in `~/.local/bin`). |
 | Linux without a screen (a Pi) | the same with `sudo bash -s -- --node --headless` | A hardened system unit for its own system user `nox-node`; data in `/var/lib/nox-node`. Command: `sudo nox-node ...`. |
-| macOS (**beta**) | `bash scripts/install-macos.sh --node` in a checkout of this repository | A LaunchAgent at login, as you. Release signatures are not checked by this script yet (it refuses tagged releases once signing is set up). |
+| macOS (**beta**) | `bash scripts/install-macos.sh --node` in a checkout of this repository | A LaunchAgent at login, as you. **This script does not check release signatures yet:** once signing is set up it installs nothing from the network (no tag, branch or commit), only a checkout you verified (`NOX_SOURCE=<folder>`). |
 
 `--pair '<link>'` pairs right away; running the installer again updates; `--uninstall` removes the
 program and the autostart (the node's identity and audit trail stay; remove the device in Nox
@@ -110,23 +110,33 @@ and its signature and checks, in this order (any "no" stops it; nothing is chang
    answer is "release signing is not configured" and there is no update at all;
 2. the Ed25519 signature is valid, by a trusted key that has not expired;
 3. the manifest is well-formed and names this project;
-4. no downgrade: not below the running version nor below the highest version that ran here;
-   a version that failed to start here before is skipped;
-5. a **patch** that still speaks this node's protocol installs by itself; a minor or major update
-   waits for `nox node update` on the device (a notice says so);
-6. the bundle `nox-app-<tag>.zip` is listed in the signed manifest and matches its size and
-   SHA-256;
-7. it holds only Nox's code and configuration, built for the library versions installed here
-   (otherwise: "run the installer");
-8. a trial start imports the new code with this Python.
+4. no downgrade and no replay: not below the running version nor below the highest version that
+   ran here, and not created before the newest manifest this node already saw. A version that
+   failed here is skipped for 7 days (or tried again with `nox node update --yes`);
+5. it installs **by itself** only when it is a stable patch release, it changed no library
+   (`deps_changed: false` in the manifest) and the **paired core accepts the protocol the new node
+   speaks** (`node_speaks`, against the range the core sent at the last connection). A minor or
+   major update, a pre-release or an unknown or refused protocol waits for `nox node update` on
+   the device; a release that changed libraries needs the installer (a notice says which);
+6. the bundle `nox-app-<tag>.zip`, from that tag's own release, matches the manifest's size and
+   SHA-256 (hashed and unpacked from one open file);
+7. it holds only Nox's code and configuration, every file with the SHA-256 its `BUNDLE.json`
+   lists, and it was built from the same `uv.lock` as the code that runs here;
+8. a trial start imports the new code with this Python, isolated.
 
-Then one atomic file switch (`app/state.json`), and the launcher starts the new version. It counts
-as working once it connected or ran two minutes; a start that fails before that rolls back to the
-previous version, and that version is not tried again. `nox node update --check` only looks;
-exit status 3 means release signing is not configured yet.
+Then one atomic switch of `app/state.json` (under a file lock), and the launcher starts the new
+version - after checking its folder again, at every start, against the signed manifest with the
+*installed* program's code and keys: a changed, added or missing file, or a forged state file,
+runs the installed program instead. The new version counts as working once it connected and the
+core accepted its protocol. Two real crashes before that (not a logoff, a shutdown or a stop), or
+a core that refuses its protocol, roll it back. Installing the program again (any installer)
+drops the versions the node installed itself. `nox node update --check` only looks; exit status 3
+means release signing is not configured yet. When no newer signed release information was seen
+for more than 30 days, `nox node status` and a notice say so: updates may be held back.
 
-The certificate (30 days) renews itself over the connection from day 20, for the same key; a node
-that was off for longer than 30 days pairs again.
+The certificate (30 days) renews itself over the connection from day 20, for the same key, at
+most once in 12 hours; the old certificate is revoked. A node that was off for longer than 30
+days pairs again.
 
 ## What the node keeps, and where
 
