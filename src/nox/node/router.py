@@ -95,6 +95,49 @@ def _match(entries: list[NodeEntry], wanted: str) -> NodeEntry | None:
     return found[0] if len(found) == 1 else None
 
 
+def waits_for(
+    requested: str | None,
+    *,
+    entries: list[NodeEntry],
+    core_has: bool,
+    default: str | None,
+    origin: str | None,
+) -> list[str]:
+    """The devices a call may have to wait for before it is resolved (`NodeRegistry.settle`):
+    those `resolve` could pick, when they have just connected. A call that stays on the core
+    waits for none; a call that names a device, or whose default names one, waits only for that
+    one; only a call that could land anywhere waits for every device still announcing its tools.
+    """
+    connecting = {e.device_id for e in entries if e.connecting}
+    if not connecting:
+        return []
+
+    def only(chosen: list[NodeEntry]) -> list[str]:
+        return [e.device_id for e in chosen if e.device_id in connecting]
+
+    wanted = requested.strip() if requested is not None and requested.strip() else None
+    if wanted is not None:  # (1) the user's choice decides alone
+        word = wanted.casefold()
+        if word in _HERE_WORDS and origin is not None:
+            linked = [e for e in entries if e.linked_device_id == origin]
+            if len(linked) == 1:
+                return only(linked)
+        if word in _CORE_WORDS:
+            return []
+        return only(_matches(entries, wanted))
+    if default == CORE and core_has:  # (2) the default, when it decides
+        return []
+    if default == "origin":
+        linked = [e for e in entries if origin is not None and e.linked_device_id == origin]
+        if len(linked) == 1:
+            return only(linked)
+    elif default and default not in (CORE, "auto"):
+        named = _matches(entries, default)
+        if len(named) == 1:
+            return only(named)
+    return sorted(connecting)  # (3)/(4) every device could be the one
+
+
 def resolve(
     tool: str,
     requested: str | None,
@@ -115,6 +158,17 @@ def resolve(
     def at(entry: NodeEntry) -> Resolution:
         if entry.offers(tool):
             return Resolution(entry.device_id)
+        if entry.online and entry.listing_failed:
+            # Connected, but its tool list did not arrive yet (it is retried): say so.
+            return Resolution(
+                "",
+                {
+                    "error": "device_listing",
+                    "device": entry.label,
+                    "tool": tool,
+                    "hint": "das Gerät meldet seine Werkzeuge noch – gleich noch einmal",
+                },
+            )
         if not entry.online or entry.connecting:
             return Resolution("", offline_error(entry))
         if not entry.compatible:
@@ -351,7 +405,15 @@ def routed_spec(
         rememberable=rememberable and template.rememberable,
         targets=None,
         scope=scope,
-        prepare=lambda _payload: registry.settle(),
+        prepare=lambda payload: registry.settle(
+            waits_for(
+                payload.get(DEVICE_KEY),
+                entries=registry.known(),  # from memory: no database read per call
+                core_has=core is not None,
+                default=defaults().get(name),
+                origin=origin_device(),
+            )
+        ),
         local=False,
         network=template.network if network is None else network,
     )

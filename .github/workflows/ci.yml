@@ -8,10 +8,21 @@
 # tests (deterministic, no model, no network) — no telemetry is sent anywhere.
 name: CI
 
+# Every pull request, and every state of develop and main after a merge (a merge of two green
+# branches can still be red together). `push` is limited to those two branches, so a PR branch
+# runs once (as a pull request), not twice. `merge_group` is there for a merge queue.
 on:
   push:
-    branches: [main]
+    branches: [develop, main]
   pull_request:
+  merge_group:
+
+# A newer push to the same pull request supersedes the run in progress. Every other run (a merge
+# into develop or main, a merge queue entry) gets a group of its own: GitHub keeps only one pending
+# run per group, so a shared group would silently drop a merge's run when the next one queues.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
