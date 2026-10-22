@@ -1012,3 +1012,233 @@ def test_the_write_is_rendered_alike_on_the_core_and_on_the_device() -> None:
         assert f"{key} {render(value)}" in target
         assert f"{key}: {render(value)}" in dialog
     assert "\u202e" not in dialog and "\u202e" not in target
+
+
+# ---- review round 3: tiers, content, working trees -----------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _restore_receipt_target() -> Any:
+    """`start` points the shared receipt target at this test's authority; put it back so the
+    C4 tests run the same after these (review round 3, NIEDRIG 1)."""
+    saved = dict(TARGET)
+    yield
+    TARGET.clear()
+    TARGET.update(saved)
+
+
+def test_structured_formats_are_always_high_and_passive_ones_medium_when_new() -> None:
+    from nox.node.hands import write_risk
+    from nox.node.install import _write_risk
+
+    for name in ("a.json", "a.YAML", "a.yml", "a.xml", "a.html", "a.htm", "a.pdf", "a.docx"):
+        assert write_risk(name, False, False) == "high", name
+        assert _write_risk({"path": f"notes/{name}"}) is Risk.HIGH
+    for name in ("a.txt", "a.md", "a.csv", "a.png", "a.ics"):
+        assert write_risk(name, False, False) == "medium", name
+        assert write_risk(name, True, False) == "high"
+
+
+async def test_a_new_structured_file_needs_a_high_receipt(tmp_path: Path) -> None:
+    from nox.node.receipts import ReceiptSigner, ReceiptVerifier
+
+    signer = ReceiptSigner(tmp_path / "r")
+    verifier = ReceiptVerifier(signer.public_key, device_id="d" * 32, core_id="c" * 64)
+    tools = hand_tools(NodeHands(folders=lambda: [], protected=(tmp_path,), sandbox=lambda: None))
+    gate = NodeGate(
+        tools, NodeManifest(groups={g: g == "files" for g in GROUPS}), None, receipts=verifier
+    )
+    args = {"path": "plan.json", "text": "{}", "append": False, "overwrite": False}
+    meta = signed(signer, "file.write", args, risk="medium", device_id="d" * 32, core_id="c" * 64)
+    assert gate.check("file.write", args, meta=NoxCallMeta(**meta)).reason == "risk_understated"
+
+
+@pytest.mark.parametrize(
+    ("target", "text"),
+    [
+        ("notes/seite.html", "<p>Hallo</p><script>alert(1)</script>"),
+        ("notes/seite.htm", '<img src="x.png" onerror = "x()">'),
+        ("notes/seite.html", '<a href="JavaScript:x()">a</a>'),
+        ("notes/brief.xml", '<?mso-application progid="Word.Document"?><w:document/>'),
+        ("notes/brief.xml", '<w:binData w:name="editdata.mso">AAAA</w:binData>'),
+        ("notes/daten.xml", '<!DOCTYPE d SYSTEM "file:///etc/passwd"><d/>'),
+        ("notes/daten.xml", '<!DOCTYPE d [<!ENTITY e "x">]><d>&e;</d>'),
+        ("notes/daten.json", '{"link": "javascript:void(0)"}'),
+        ("notes/doc.pdf", "%PDF-1.7 1 0 obj << /OpenAction 2 0 R >> endobj"),
+        ("notes/doc.pdf", "%PDF-1.7 << /S /JavaScript /JS (app.alert(1)) >>"),
+    ],
+)
+async def test_active_content_in_structured_files_is_refused_even_confirmed(
+    world: dict[str, Path], target: str, text: str
+) -> None:
+    with pytest.raises(NodeRefusal) as caught:
+        await _hands(world)["file.write"].handler(WriteArgs(path=target, text=text))
+    assert caught.value.reason == "content_refused"
+    assert not (world["root"] / target).exists()
+
+
+@pytest.mark.parametrize(
+    ("target", "text"),
+    [
+        ("notes/seite.html", "<p>Wäsche aufhängen um 18 Uhr</p>"),
+        ("notes/daten.json", '{"einkauf": ["Tomaten", "Kaffee"]}'),
+        ("notes/liste.yml", "- Haferflocken\n- Tomaten\n"),
+    ],
+)
+async def test_plain_structured_files_are_written(
+    world: dict[str, Path], target: str, text: str
+) -> None:
+    answer = await _hands(world)["file.write"].handler(WriteArgs(path=target, text=text))
+    assert answer["ok"] is True
+
+
+@pytest.mark.parametrize("marker", [".git", ".hg", ".svn"])
+async def test_nothing_in_a_working_tree_is_written(world: dict[str, Path], marker: str) -> None:
+    project = world["root"] / "projekt"
+    (project / "docs").mkdir(parents=True)
+    if marker == ".hg":
+        (project / marker).write_text("", encoding="utf-8")  # a file marks it too
+    else:
+        (project / marker).mkdir()
+    for target in ("projekt/notiz.txt", "projekt/docs/notiz.txt"):
+        with pytest.raises(NodeRefusal) as caught:
+            await _hands(world)["file.write"].handler(WriteArgs(path=target, text="x"))
+        assert caught.value.reason == "working_tree_refused"
+        assert not (world["root"] / target).exists()
+    ok = await _hands(world)["file.write"].handler(WriteArgs(path="notes/neben.txt", text="x"))
+    assert ok["ok"] is True  # outside the working tree
+
+
+async def test_a_link_into_a_working_tree_is_refused(world: dict[str, Path]) -> None:
+    project = world["root"].parent / "projekt"
+    (project / ".git").mkdir(parents=True)
+    link_folder(project, world["root"] / "door")
+    with pytest.raises(NodeRefusal) as caught:
+        await _hands(world)["file.write"].handler(WriteArgs(path="door/notiz.txt", text="x"))
+    assert caught.value.reason in ("working_tree_refused", "link_refused", "outside_folders")
+    assert not (project / "notiz.txt").exists()
+
+
+async def test_an_allowed_folder_that_is_a_working_tree_takes_no_writes(
+    world: dict[str, Path],
+) -> None:
+    (world["root"] / ".git").mkdir()
+    with pytest.raises(NodeRefusal) as caught:
+        await _hands(world)["file.write"].handler(WriteArgs(path="notiz.txt", text="x"))
+    assert caught.value.reason == "working_tree_refused"
+
+
+@pytest.mark.parametrize("text", ["notes/x.txt ", " notes/x.txt", "notes /x.txt", "notes/ x.txt"])
+def test_spaces_around_a_path_or_a_name_are_refused_not_cut(
+    world: dict[str, Path], text: str
+) -> None:
+    assert refused(folders(world), text) == "invalid_path"
+
+
+async def test_a_refused_name_is_never_created_even_for_a_moment(
+    world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nox.node import safe_fs
+
+    def never(*_a: Any, **_k: Any) -> int:
+        raise AssertionError("the file system was touched for a refused name")
+
+    monkeypatch.setattr(safe_fs, "_posix_open", never)
+    monkeypatch.setattr(safe_fs, "_win_open", never)
+    for target in ("notes/run.ps1", "notes/.hidden.txt", "notes/settings.json", "notes/tool"):
+        with pytest.raises(NodeRefusal):
+            await _hands(world)["file.write"].handler(WriteArgs(path=target, text="x"))
+
+
+def test_the_routes_never_remember_a_write_on_a_node() -> None:
+    from types import SimpleNamespace
+
+    from nox.node.install import _install_routes
+    from nox.tools.registry import ToolRegistry
+
+    laptop = _entry("a" * 32, "Laptop", tools={"file.write": "medium", "shell.run": "high"})
+    laptop.confirmer = True
+    registry = FakeRegistry([laptop])
+    registry.any_online_with = lambda _t: True  # type: ignore[attr-defined]
+    core = SimpleNamespace(
+        tool_registry=ToolRegistry(),
+        config=SimpleNamespace(devices=SimpleNamespace(defaults={})),
+    )
+    _install_routes(core, registry)  # type: ignore[arg-type]
+    write = core.tool_registry.get("file.write")
+    shell = core.tool_registry.get("shell.run")
+    assert write is not None and shell is not None and write.scope is not None
+    payload = write.input_model.model_validate(
+        {"path": "a.txt", "text": "x", "device": "Laptop"}
+    ).model_dump()
+    assert write.scope(payload).rememberable is False
+    assert shell.scope is not None
+    command = shell.input_model.model_validate({"argv": ["whoami"], "device": "Laptop"})
+    assert shell.scope(command.model_dump()).rememberable is True  # a cmd: grant stays possible
+
+
+@pytest.mark.skipif(not WINDOWS, reason="the Windows ACL")
+def test_the_owner_only_acl_is_put_back_on_every_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nox.node import cli as node_cli
+
+    calls: list[Path] = []
+    monkeypatch.setattr(node_cli, "restrict_dir_to_owner", lambda p: calls.append(p) or True)
+    home = NodeHome(tmp_path / "h")
+    home.ensure()
+    for _ in range(2):
+        node_cli.build(home, sandbox=lambda: None).audit._conn.close()  # type: ignore[attr-defined]
+    assert calls == [home.path, home.path]
+
+
+def test_the_protected_identities_are_reused_for_a_while(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nox.node import safe_fs
+
+    secret = tmp_path / "geheim"
+    secret.mkdir()
+    walked: list[Path] = []
+    real = safe_fs._identities
+    monkeypatch.setattr(safe_fs, "_identities", lambda f: walked.append(f) or real(f))
+    for _ in range(3):
+        Folders.build([], [secret])
+    assert walked == [secret]
+    monkeypatch.setattr(safe_fs, "PROTECTED_TTL_S", 0.0)
+    Folders.build([], [secret])
+    assert len(walked) == 2
+
+
+def test_known_secret_files_are_found_before_the_walk_runs_out(world: dict[str, Path]) -> None:
+    profile = world["root"].parent / "browser"
+    (profile / "Default").mkdir(parents=True)
+    for i in range(600):  # more than the walk looks at
+        (profile / f"cache{i:03}").write_text("", encoding="utf-8")
+    (profile / "Default" / "Login Data").write_text("PASSWORDS", encoding="utf-8")
+    os.link(profile / "Default" / "Login Data", world["root"] / "harmlos.txt")
+    f = Folders.build([str(world["root"])], [world["node"], profile])
+    assert refused(f, "harmlos.txt") == "node_home_protected"
+
+
+def test_noxs_own_folder_is_protected_on_a_node() -> None:
+    from nox.paths import nox_home
+
+    hands = NodeHands(folders=lambda: [], protected=(), sandbox=lambda: None)
+    assert os.path.realpath(nox_home()) in hands.resolved().protected
+
+
+def test_a_profile_rule_never_allows_a_node_call_unless_it_names_the_device() -> None:
+    from nox.security.model import Decision, PermissionRequest, ProfileRule
+    from nox.security.permissions import device_rule_applies
+
+    allow = ProfileRule(id="r", tool="file*", action="write", decision=Decision.ALLOW)
+    deny = ProfileRule(id="d", tool="file*", decision=Decision.DENY)
+    named = ProfileRule(id="n", tool="file*", decision=Decision.ALLOW, device="a" * 32)
+    here = PermissionRequest(agent="a", tool="file", action="write", mode="m", risk=Risk.MEDIUM)
+    there = here.model_copy(update={"device": "a" * 32})
+    other = here.model_copy(update={"device": "b" * 32})
+    assert device_rule_applies(allow, here) and not device_rule_applies(allow, there)
+    assert device_rule_applies(deny, there)  # narrowing still applies
+    assert device_rule_applies(named, there) and not device_rule_applies(named, other)
+    assert not device_rule_applies(named, here)
