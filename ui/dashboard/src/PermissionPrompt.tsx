@@ -41,8 +41,8 @@ export interface PermissionPromptProps {
   device: boolean;
   /** On a paired device: whether a security PIN is set; null while not known. */
   pinSet: boolean | null;
-  /** Nox controls mouse and keyboard on a paired PC: no paired device allows, and this
-   * computer only with the PIN (the core refuses otherwise; `nox.node.world_routes`). */
+  /** Nox controls mouse and keyboard on a paired PC: allowing needs the PIN everywhere, and the
+   * browser on that PC cannot allow at all (the core decides; `nox.node.world_routes`). */
   nodeControl?: boolean;
   /** Called once this dashboard answered (the core's event removes it too). */
   onAnswered: (id: string, decision: 'allow' | 'deny') => void;
@@ -145,10 +145,9 @@ function PromptBody({
   const announcedRef = useRef<number | null>(bucket(secondsLeft(prompt.deadline, clock())));
 
   const highRisk = needsDevicePin(prompt.risk);
-  const pinNeeded = (device && highRisk) || (!device && nodeControl);
-  /** A paired device with no PIN set cannot allow this at all, and no paired device while Nox
-   * controls a PC: it is not offered. */
-  const canAllow = !(device && nodeControl) && !(pinNeeded && pinSet === false);
+  const pinNeeded = (device && highRisk) || nodeControl;
+  /** A paired device with no PIN set cannot allow this at all: it is not offered. */
+  const canAllow = !(pinNeeded && pinSet === false);
   const remember = device ? null : rememberLabel(t, prompt.rememberTtlS);
   const offline = client === null;
 
@@ -279,14 +278,12 @@ function PromptBody({
             aria-describedby={`${idBase}-pin-hint`}
           />
           <p id={`${idBase}-pin-hint`} className="hint">
-            {t(!device && nodeControl ? 'perm_node_control_pin_hint' : 'perm_pin_hint')}
+            {t(nodeControl ? 'perm_node_control_pin_hint' : 'perm_pin_hint')}
           </p>
         </div>
       )}
-      {pinNeeded && !canAllow && !nodeControl && (
-        <p className="hint perm-only-here">{t('perm_only_at_computer')}</p>
-      )}
-      {device && nodeControl && <p className="hint perm-only-here">{t('perm_node_control_device')}</p>}
+      {pinNeeded && !canAllow && <p className="hint perm-only-here">{t('perm_only_at_computer')}</p>}
+      {device && nodeControl && canAllow && <p className="hint">{t('perm_node_control_device')}</p>}
 
       {offline && (
         <p role="status" className="alert">

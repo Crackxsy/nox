@@ -207,6 +207,7 @@ class NodeControl:
         end_on_node: EndOnNode | None = None,
         reports: Reports = tuple,
         labels: Callable[[str], str] = lambda device_id: device_id[:8],
+        linked: Callable[[str], str | None] = lambda _device_id: None,
         stop_hotkey: str = "ctrl+alt+shift+k",
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -215,6 +216,7 @@ class NodeControl:
         self._end_on_node = end_on_node
         self._reports = reports
         self._labels = labels
+        self._linked = linked
         self._stop = stop_hotkey
         self._clock = clock
         self.devices: dict[str, _Device] = {}
@@ -312,11 +314,15 @@ class NodeControl:
             self._sync(device_id, device)  # time may have passed
         return any(self._locked(device) for device in self.devices.values())
 
-    def blocks(self, client_device: str | None) -> bool:
-        """Whether a paired device's approval is refused right now: while the lock holds for
-        any node, every paired device - none is provably on another machine. Approvals then come
-        only from the core machine's own dashboard or a node's own dialog (spec C §1.5)."""
-        return bool(client_device) and self.active()
+    def controls_browser(self, client_device: str) -> bool:
+        """Whether this paired browser device is linked to a node the lock holds for: the
+        browser on the PC Nox controls, which never approves or changes anything then."""
+        if not client_device or not self.active():
+            return False
+        return any(
+            self._locked(device) and self._linked(device_id) == client_device
+            for device_id, device in self.devices.items()
+        )
 
     def _payload(self, device_id: str, device: _Device, reason: str) -> dict[str, Any]:
         return {
@@ -585,30 +591,41 @@ def world_specs(
 
 # ---- approvals while Nox controls a node ---------------------------------------------------------
 
-REFUSE_DEVICE = (
-    "Nox controls mouse and keyboard on a paired PC; approve on the computer Nox runs on "
-    "(with the PIN), or deny or stop"
+REFUSE_LINKED = (
+    "Nox controls mouse and keyboard on the PC this browser runs on; nothing can be approved or "
+    "changed from here until that ends - deny or stop"
 )
 REFUSE_REMOTE = (
     "Nox controls mouse and keyboard on a paired PC and this computer is used remotely (or that "
-    "cannot be told); approve at the computer itself, or deny or stop"
+    "cannot be told); approve at the computer itself with the PIN, or deny or stop"
 )
 REFUSE_NO_PIN = (
-    "Nox controls mouse and keyboard on a paired PC; approving now needs the security PIN, and "
-    "none is set - deny, stop, or set a PIN first"
+    "Nox controls mouse and keyboard on a paired PC; approving or changing anything now needs "
+    "the security PIN, and none is set - deny, stop, or set a PIN first"
 )
+REFUSE_ROLE = "Nox controls mouse and keyboard on a paired PC; this client cannot approve now"
+#: How long the remote-session check may take (it may start `loginctl`); slower is "unknown".
+REMOTE_CHECK_S = 3.0
 
 
-async def local_with_pin(
+async def remote_now(remote: Callable[[], bool | None]) -> bool | None:
+    """`console_is_remote`, off the event loop and with a time limit (unknown when too slow)."""
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(remote), REMOTE_CHECK_S)
+    except TimeoutError:
+        return None
+
+
+async def local_pin_refusal(
     ctx: Any, pin: str | None, *, gate: Any, remote: Callable[[], bool | None], action: str
 ) -> str | None:
-    """A local UI with the PIN at the machine itself - or why not."""
+    """The computer Nox runs on - a local UI, not used remotely - with the security PIN."""
     from nox.ipc.roles import LOCAL_UI_ROLES  # noqa: PLC0415
     from nox.security.gate import PinRequiredError  # noqa: PLC0415
 
     if getattr(ctx, "role", "") not in LOCAL_UI_ROLES:
-        return REFUSE_DEVICE
-    if remote() is not False:
+        return REFUSE_ROLE
+    if await remote_now(remote) is not False:
         return REFUSE_REMOTE
     if gate is None or not gate.is_required():
         return REFUSE_NO_PIN
@@ -619,22 +636,46 @@ async def local_with_pin(
     return None
 
 
-async def approval_refusal(
+async def session_refusal(
     control: NodeControl,
     ctx: Any,
     pin: str | None,
     *,
+    action: str,
     gate: Any,
+    device_guard: Any,
     remote: Callable[[], bool | None],
 ) -> str | None:
-    """Why an "allow" is refused while the lock holds for any node, or None (spec C §1.5).
+    """Why an "allow" or a request that changes something is refused while Nox controls a node,
+    or None (spec C §1.5). Nox does not know the PIN, so the PIN is the guard:
 
-    Paired devices never approve then (none is provably on another machine). The core
-    machine's own dashboard or shell may, but only with the security PIN and not from a remote
-    session - a remote desktop could be opened from the very PC Nox controls. "Deny" and Stopp
-    are never refused (the caller asks only for "allow")."""
+    1. the browser linked to a node Nox controls never approves or changes anything;
+    2. any other paired device, and this machine's dashboard or shell, only with the PIN (with
+       the PIN's usual lockout; a paired device is removed after repeated wrong PINs);
+    3. this machine's dashboard or shell not from a remote session - a remote desktop could be
+       opened from the very PC Nox controls; a core running as a service without a login
+       session counts as not remote (the PIN still applies);
+    4. no PIN set: refused. Reading, "deny" and Stopp are never asked here."""
+    from nox.ipc.errors import IpcError  # noqa: PLC0415
+    from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
+    from nox.ipc.tokens import DEVICE_CLIENT_PREFIX  # noqa: PLC0415
+
     if not control.active():
         return None
-    return await local_with_pin(
-        ctx, pin, gate=gate, remote=remote, action="security.permission.reply"
-    )
+    role = getattr(ctx, "role", "")
+    if role == DEVICE_ROLE:
+        device = str(getattr(ctx, "client_id", "")).removeprefix(DEVICE_CLIENT_PREFIX)
+        if control.controls_browser(device):
+            return REFUSE_LINKED
+        if gate is None or not gate.is_required():
+            return REFUSE_NO_PIN
+        if device_guard is None:
+            return REFUSE_ROLE
+        try:
+            await device_guard.require(ctx, pin, action)
+        except IpcError as exc:
+            return exc.message
+        return None
+    if role in LOCAL_UI_ROLES:
+        return await local_pin_refusal(ctx, pin, gate=gate, remote=remote, action=action)
+    return REFUSE_ROLE

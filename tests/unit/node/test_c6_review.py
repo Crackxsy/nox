@@ -22,11 +22,12 @@ from nox.node.router import ROUTED_TIMEOUT_S
 from nox.node.world import GameLock, world_tools
 from nox.node.world_routes import (
     MAX_SESSION_MINUTES,
-    REFUSE_DEVICE,
+    REFUSE_LINKED,
     REFUSE_NO_PIN,
     REFUSE_REMOTE,
+    REFUSE_ROLE,
     NodeControl,
-    approval_refusal,
+    session_refusal,
 )
 from nox.security.gate import PinRequiredError
 from tests.unit.node.test_c6 import (
@@ -218,12 +219,14 @@ def test_a_same_generation_pong_leaves_a_start_in_flight() -> None:
 
     device.attempt = _Attempt(control._clock(), device.gen)
     control.observe(LAPTOP, _report(5, False))  # a pong sent before the start was handled
-    assert device.attempt is not None and control.blocks(BROWSER)
+    assert device.attempt is not None and control.active()
     control.observe(LAPTOP, _report(6, True))  # a newer generation settles it
-    assert device.attempt is None and control.blocks(BROWSER)
+    assert device.attempt is None and control.active()
 
 
-# ---- H2/H3: approvals while the lock holds -------------------------------------------------------
+# ---- H2/H3/M-a/M-b: approvals and changes while the lock holds ----------------------------------
+
+OTHER_PHONE = "e" * 32
 
 
 class Gate:
@@ -238,8 +241,24 @@ class Gate:
             raise PinRequiredError(action, f"{action} requires the security PIN")
 
 
+class DeviceGuard:
+    """The paired-device PIN check (`DevicePinGuard`): the same PIN, its own lockout."""
+
+    def __init__(self, gate: Gate) -> None:
+        self.gate, self.wrong = gate, 0
+
+    async def require(self, ctx: Any, pin: str | None, action: str) -> None:
+        from nox.ipc.errors import IpcError
+
+        try:
+            await self.gate.require(pin, action=action, by=ctx.client_id)
+        except PinRequiredError as exc:
+            self.wrong += 1
+            raise IpcError("permission.denied", exc.reason) from exc
+
+
 def _locked_control() -> NodeControl:
-    control = NodeControl(None, lambda _n: None)
+    control = NodeControl(None, lambda _n: None, linked=lambda d: BROWSER if d == LAPTOP else None)
     control.observe(LAPTOP, _report(2, True))
     return control
 
@@ -249,91 +268,340 @@ def _ctx(role: str, client: str) -> Any:
 
 
 @pytest.mark.parametrize(
-    ("role", "pin", "remote", "gate", "expected"),
+    ("role", "client", "pin", "remote", "gate", "expected"),
     [
-        ("device", "4711", False, Gate(), REFUSE_DEVICE),  # a paired device: never
-        ("dashboard", "4711", False, Gate(), None),  # this computer, with the PIN
-        ("shell", "4711", False, Gate(), None),
-        ("dashboard", None, False, Gate(), "security.permission.reply requires the security PIN"),
-        ("dashboard", "4711", True, Gate(), REFUSE_REMOTE),  # a remote desktop
-        ("dashboard", "4711", None, Gate(), REFUSE_REMOTE),  # cannot be told: refused
-        ("dashboard", "4711", False, Gate(required=False), REFUSE_NO_PIN),
-        ("dashboard", "4711", False, None, REFUSE_NO_PIN),
-        ("plugin", "4711", False, Gate(), REFUSE_DEVICE),  # nothing else approves either
+        # 1. the browser on the PC Nox controls: never, not even with the PIN
+        ("device", "device:" + BROWSER, "4711", False, Gate(), REFUSE_LINKED),
+        # 2. any other paired device and this machine: with the PIN
+        ("device", "device:" + OTHER_PHONE, "4711", False, Gate(), None),
+        ("device", "device:" + OTHER_PHONE, None, False, Gate(), "x requires the security PIN"),
+        ("dashboard", "dashboard:1", "4711", False, Gate(), None),
+        ("shell", "shell:1", "4711", False, Gate(), None),
+        ("dashboard", "dashboard:1", None, False, Gate(), "x requires the security PIN"),
+        # 3. this machine from a remote session, or when that cannot be told: refused
+        ("dashboard", "dashboard:1", "4711", True, Gate(), REFUSE_REMOTE),
+        ("dashboard", "dashboard:1", "4711", None, Gate(), REFUSE_REMOTE),
+        # 4. no PIN set: refused for everyone
+        ("dashboard", "dashboard:1", "4711", False, Gate(required=False), REFUSE_NO_PIN),
+        ("device", "device:" + OTHER_PHONE, "4711", False, Gate(required=False), REFUSE_NO_PIN),
+        ("dashboard", "dashboard:1", "4711", False, None, REFUSE_NO_PIN),
+        ("plugin", "plugin:1", "4711", False, Gate(), REFUSE_ROLE),
     ],
 )
-async def test_who_may_approve_while_nox_controls_a_node(
-    role: str, pin: str | None, remote: bool | None, gate: Any, expected: str | None
+async def test_who_may_approve_or_change_while_nox_controls_a_node(
+    role: str, client: str, pin: str | None, remote: bool | None, gate: Any, expected: str | None
 ) -> None:
-    control = _locked_control()
-    refusal = await approval_refusal(
-        control, _ctx(role, f"{role}:1"), pin, gate=gate, remote=lambda: remote
+    refusal = await session_refusal(
+        _locked_control(),
+        _ctx(role, client),
+        pin,
+        action="x",
+        gate=gate,
+        device_guard=DeviceGuard(gate) if gate is not None else None,
+        remote=lambda: remote,
     )
     assert refusal == expected
 
 
-async def test_without_a_session_nothing_changes() -> None:
+async def test_without_a_session_nothing_is_asked() -> None:
     control = NodeControl(None, lambda _n: None)
-    assert (
-        await approval_refusal(
-            control, _ctx("device", "device:x"), None, gate=None, remote=lambda: True
-        )
-        is None
+    refusal = await session_refusal(
+        control,
+        _ctx("device", "device:" + BROWSER),
+        None,
+        action="x",
+        gate=None,
+        device_guard=None,
+        remote=lambda: True,
     )
+    assert refusal is None
 
 
-async def test_the_reply_handler_refuses_a_paired_allow_and_keeps_deny() -> None:
+async def test_a_slow_remote_check_never_blocks_and_counts_as_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time as time_module
+
+    from nox.node import world_routes
+
+    monkeypatch.setattr(world_routes, "REMOTE_CHECK_S", 0.05)
+
+    def slow() -> bool:
+        time_module.sleep(0.3)
+        return False
+
+    assert await world_routes.remote_now(slow) is None
+
+
+def _wired(gate: Gate) -> tuple[Any, NodeControl, DeviceGuard, list[str]]:
+    """A core wired exactly like `nox.node.install` (`wire_guards`), with fakes behind it."""
     from nox.ipc.dispatch import RequestRegistry
+    from nox.node.install import wire_guards
+
+    device_guard = DeviceGuard(gate)
+    audit: list[str] = []
+    core = SimpleNamespace(
+        registry=RequestRegistry(),
+        security=SimpleNamespace(
+            gate=gate,
+            engine=SimpleNamespace(
+                reply=lambda gid, decision, **_kw: audit.append(f"{gid}:{decision.value}") or True,
+                pending_request=lambda _gid: None,
+            ),
+            audit=SimpleNamespace(append=lambda **kw: audit.append(kw["decision"])),
+        ),
+        device_pin_guard=device_guard,
+    )
+    control = _locked_control()
+    wire_guards(core, control)
+    return core, control, device_guard, audit
+
+
+def _envelope(name: str, role: str, client: str, payload: dict[str, Any]) -> Any:
+    from nox.ipc.protocol import Envelope, Kind, Source
+
+    return Envelope(kind=Kind.REQUEST, name=name, src=Source(role=role, id=client), payload=payload)  # type: ignore[arg-type]
+
+
+async def test_changes_go_through_the_same_rule_on_the_real_dispatch_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M-a: not only "allow" - adding an MCP server, approving a plan, any change."""
+    from pydantic import BaseModel
+
+    import nox.node.install as install_module
+    from nox.ipc.dispatch import RequestContext
+    from nox.ipc.protocol import Kind
+
+    monkeypatch.setattr(install_module, "console_is_remote", lambda: False)
+    core, control, _guard, _audit = _wired(Gate())
+    ran: list[tuple[str, dict[str, Any]]] = []
+
+    class Add(BaseModel):
+        model_config = {"extra": "forbid"}
+        command: str = "x"
+
+    def handler(name: str) -> Any:
+        async def run(_ctx: Any, p: Any) -> dict[str, Any]:
+            ran.append((name, p.model_dump()))
+            return {}
+
+        return run
+
+    roles = ("dashboard", "shell", "device")
+    core.registry.register("mcp.servers.add", Add, handler("mcp.servers.add"), roles=roles)
+    core.registry.register("plans.approve", Add, handler("plans.approve"), roles=roles)
+    core.registry.register("state.get", Add, handler("state.get"), roles=roles)
+
+    async def send(name: str, role: str, client: str, payload: dict[str, Any]) -> Any:
+        envelope = _envelope(name, role, client, payload)
+        ctx = RequestContext(client_id=client, role=role, request=envelope)
+        return await core.registry.dispatch(ctx, envelope)
+
+    local, phone, linked = "dashboard:1", "device:" + OTHER_PHONE, "device:" + BROWSER
+    assert (await send("mcp.servers.add", "dashboard", local, {})).kind is Kind.ERROR
+    assert (await send("plans.approve", "device", phone, {})).kind is Kind.ERROR
+    assert (await send("plans.approve", "device", linked, {"pin": "4711"})).kind is Kind.ERROR
+    assert ran == []
+    # With the PIN: through, and the PIN is not passed on to a request that takes none.
+    assert (
+        await send("mcp.servers.add", "dashboard", local, {"pin": "4711"})
+    ).kind is Kind.RESPONSE
+    assert (await send("plans.approve", "device", phone, {"pin": "4711"})).kind is Kind.RESPONSE
+    assert ran == [("mcp.servers.add", {"command": "x"}), ("plans.approve", {"command": "x"})]
+    # Reading never asks.
+    assert (await send("state.get", "device", linked, {})).kind is Kind.RESPONSE
+    # Once the node says the session is over, nothing is asked any more.
+    control.observe(LAPTOP, _report(3, False))
+    assert (await send("plans.approve", "device", phone, {})).kind is Kind.RESPONSE
+
+
+async def test_the_reply_handler_follows_the_rule_and_deny_always_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import nox.node.install as install_module
     from nox.ipc.handlers.core import CoreHandlers, PermissionReply
     from nox.security.model import Decision
 
-    replies: list[tuple[str, Decision]] = []
-    engine = SimpleNamespace(
-        reply=lambda gid, decision, **_kw: replies.append((gid, decision)) or True,
-        pending_request=lambda _gid: None,
-    )
-    control = _locked_control()
     remote: dict[str, bool | None] = {"value": False}
-
-    async def guard(ctx: Any, pin: str | None) -> str | None:
-        return await approval_refusal(
-            control, ctx, pin, gate=Gate(), remote=lambda: remote["value"]
-        )
-
-    core = SimpleNamespace(
-        registry=RequestRegistry(),
-        security=SimpleNamespace(engine=engine),
-        node_approval_guard=guard,
-        device_pin_guard=None,
-    )
+    monkeypatch.setattr(install_module, "console_is_remote", lambda: remote["value"])
+    core, _control, guard, audit = _wired(Gate())
     handlers = CoreHandlers(core)  # type: ignore[arg-type]
-    device = _ctx("device", "device:" + "e" * 32)
+    linked = _ctx("device", "device:" + BROWSER)
+    phone = _ctx("device", "device:" + OTHER_PHONE)
     local = _ctx("dashboard", "dashboard:1")
     allow = PermissionReply(grant_id="g", decision=Decision.ALLOW, pin="4711")
-    deny = PermissionReply(grant_id="g", decision=Decision.DENY)
-    assert (await handlers.permission_reply(device, allow))["ok"] is False
-    assert replies == []  # the engine never saw the paired device's "allow"
-    assert (await handlers.permission_reply(device, deny))["ok"] is True
     no_pin = PermissionReply(grant_id="g", decision=Decision.ALLOW)
+    deny = PermissionReply(grant_id="g", decision=Decision.DENY)
+    assert (await handlers.permission_reply(linked, allow))["ok"] is False  # never
+    assert audit == []  # the engine never saw it
+    assert (await handlers.permission_reply(linked, deny))["ok"] is True  # deny always
+    assert (await handlers.permission_reply(phone, no_pin))["ok"] is False
+    assert guard.wrong == 1  # counted towards the device's lockout
+    assert (await handlers.permission_reply(phone, allow))["ok"] is True
     assert (await handlers.permission_reply(local, no_pin))["ok"] is False
     assert (await handlers.permission_reply(local, allow))["ok"] is True
     remote["value"] = True
     assert (await handlers.permission_reply(local, allow))["ok"] is False
-    assert replies == [("g", Decision.DENY), ("g", Decision.ALLOW)]
+    assert audit == ["g:deny", "g:allow", "g:allow"]
 
 
-def test_a_remote_session_is_recognised_on_linux() -> None:
+async def test_the_real_wiring_registers_status_release_and_the_hello_reset() -> None:
+    """N31: `wire_guards`, `_register_control_requests` and the connection hook are wired."""
+    from nox.node.install import connection_hook
+
+    core, control, _guard, _audit = _wired(Gate())
+    assert core.registry.get("node.computer.status") is not None
+    assert core.registry.get("node.computer.release") is not None
+    assert core.registry.node_guard is not None and core.node_approval_guard is not None
+    connected: list[str] = []
+
+    class Registry:
+        async def on_connected(self, session: Any) -> None:
+            connected.append(session.device_id)
+
+    class Client:
+        async def request(self, method: str, params: Any, timeout_s: float = 0) -> Any:
+            connected.append(method)
+            return {}
+
+    core.config = SimpleNamespace(
+        sensors=SimpleNamespace(game=SimpleNamespace(process_names=["RocketLeague.exe"]))
+    )
+    hook = connection_hook(core, Registry(), [control])  # type: ignore[arg-type]
+    session = SimpleNamespace(device_id=LAPTOP, computer=_report(1, False), client=Client())
+    await hook(session)
+    assert connected == [LAPTOP, "nox/games"]
+    assert not control.locked(LAPTOP)  # the new run's hello reset the old session
+
+
+def test_a_remote_session_is_recognised() -> None:
     from nox.node.console import console_is_remote
 
     def run(out: str) -> Any:
         return lambda _argv: out
 
-    assert console_is_remote(platform="linux", env={"SSH_CONNECTION": "x"}, run=run("")) is True
+    linux = "linux"
+    assert console_is_remote(platform=linux, env={"SSH_CONNECTION": "x"}, run=run("")) is True
     local = {"XDG_SESSION_ID": "2"}
-    assert console_is_remote(platform="linux", env=local, run=run("no\n")) is False
-    assert console_is_remote(platform="linux", env=local, run=run("yes\n")) is True
-    assert console_is_remote(platform="linux", env=local, run=run("")) is None
-    assert console_is_remote(platform="linux", env={}, run=run("no")) is None  # a service
+    assert console_is_remote(platform=linux, env=local, run=run("no\n")) is False
+    assert console_is_remote(platform=linux, env=local, run=run("yes\n")) is True
+    assert console_is_remote(platform=linux, env=local, run=run("")) is None
+    # A service without a login session (the Pi image): nothing remote about it; the PIN applies.
+    assert console_is_remote(platform=linux, env={}, run=run("no")) is False
+
+
+class _WinDll:
+    def __init__(self, *, remote: int = 0, session: int = 1, console: int = 1) -> None:
+        self.user32 = SimpleNamespace(GetSystemMetrics=lambda _m: remote)
+        self.kernel32 = SimpleNamespace(
+            ProcessIdToSessionId=self._session, WTSGetActiveConsoleSessionId=lambda: console
+        )
+        self._value = session
+
+    def _session(self, _pid: int, out: Any) -> int:
+        out._obj.value = self._value
+        return 1
+
+
+def test_a_remote_session_is_recognised_on_windows() -> None:
+    from nox.node.console import SM_REMOTESESSION, console_is_remote
+
+    assert SM_REMOTESESSION == 0x1000
+    assert console_is_remote(platform="win32", windll=_WinDll(remote=1)) is True  # N7
+    assert console_is_remote(platform="win32", windll=_WinDll()) is False  # at the console
+    assert console_is_remote(platform="win32", windll=_WinDll(session=2)) is True  # not it
+    # N8: no session attached to the console: unknown - never "local".
+    assert console_is_remote(platform="win32", windll=_WinDll(console=0xFFFFFFFF)) is None
+
+
+def test_a_service_query_that_fails_locks() -> None:
+    """N19: only "no such service" means not running; any other failure raises (locked)."""
+    from nox.desktop.anticheat import ERROR_SERVICE_DOES_NOT_EXIST, running_services
+
+    errors = {"missing": ERROR_SERVICE_DOES_NOT_EXIST, "denied": 5}
+    last: list[int] = [0]
+
+    def open_service(_manager: Any, name: str, _access: int) -> int:
+        if name in errors:
+            last[0] = errors[name]
+            return 0
+        return 7
+
+    def query(_service: Any, status: Any) -> int:
+        status._obj.dwCurrentState = 4  # running
+        return 1
+
+    advapi = SimpleNamespace(
+        OpenSCManagerW=lambda *_a: 1,
+        OpenServiceW=open_service,
+        QueryServiceStatus=query,
+        CloseServiceHandle=lambda _h: 1,
+    )
+    api = (advapi, lambda: last[0])
+    assert running_services(["missing"], api=api) == set()
+    assert running_services(["vgk"], api=api) == {"vgk"}
+    with pytest.raises(OSError):
+        running_services(["denied"], api=api)
+    assert _lock(services=lambda: running_services(["denied"], api=api)).reason() == "game_running"
+    no_manager = SimpleNamespace(**{**advapi.__dict__, "OpenSCManagerW": lambda *_a: 0})
+    with pytest.raises(OSError):
+        running_services(["vgk"], api=(no_manager, lambda: 5))
+
+
+def test_a_store_app_in_front_does_not_lock_but_exclusive_full_screen_does() -> None:
+    assert _lock(screen_state=lambda: 7).reason() is None  # QUNS_APP
+    assert _lock(screen_state=lambda: 3).reason() == "game_in_foreground"
+
+
+def test_more_anti_cheat_services_are_known() -> None:
+    from nox.desktop.anticheat import ANTI_CHEAT_SERVICES
+
+    for name in ("ESEADriver2", "denuvo-anticheat", "EQU8", "NeacSafe64"):
+        assert name in ANTI_CHEAT_SERVICES
+
+
+def test_removing_a_game_without_a_confirmation_writes_nothing(tmp_path: Path) -> None:
+    from nox.node.manifest import NodeManifest, save_manifest
+
+    home = NodeHome(tmp_path / "node")
+    home.ensure()
+    save_manifest(home.manifest_file, NodeManifest(games=["ExampleGame.exe"]))
+    before = home.manifest_file.read_text(encoding="utf-8")
+    with pytest.raises(node_cli.NodeCliError):
+        node_cli.games(
+            home,
+            "ExampleGame.exe",
+            False,
+            say=print,
+            interactive=lambda: True,
+            confirm=lambda _p: True,
+        )
+    assert home.manifest_file.read_text(encoding="utf-8") == before
+
+
+async def test_the_core_sends_its_games_again_when_they_change() -> None:
+    from nox.node.install import resend_games_if_changed
+
+    sent: list[Any] = []
+
+    class Client:
+        async def request(self, method: str, params: Any, timeout_s: float = 0) -> Any:
+            sent.append(params["add"])
+            return {}
+
+    names = ["RocketLeague.exe"]
+    core = SimpleNamespace(
+        config=SimpleNamespace(sensors=SimpleNamespace(game=SimpleNamespace(process_names=names)))
+    )
+    listener = SimpleNamespace(
+        sessions={LAPTOP: SimpleNamespace(client=Client(), device_id=LAPTOP)}
+    )
+    known: list[list[str]] = [["RocketLeague.exe"]]
+    assert await resend_games_if_changed(core, listener, known) is False
+    names.append("ExampleGame.exe")
+    assert await resend_games_if_changed(core, listener, known) is True
+    assert sent == [["RocketLeague.exe", "ExampleGame.exe"]]
 
 
 # ---- M3: a cancelled start -----------------------------------------------------------------------
@@ -348,10 +616,10 @@ async def test_a_cancelled_start_ends_the_session_in_the_background(tmp_path: Pa
     specs, _reg, control, (_granted, _notices, ends) = _specs(tmp_path, _privacy(), answer)
     with pytest.raises(asyncio.CancelledError):
         await _start(specs)
-    assert control.blocks(BROWSER)  # until the node says otherwise
+    assert control.active()  # until the node says otherwise
     for _ in range(10):
         await asyncio.sleep(0)
-    assert ends == [LAPTOP] and not control.blocks(BROWSER)
+    assert ends == [LAPTOP] and not control.active()
 
 
 # ---- M4: a call that waits for the device's dialog -----------------------------------------------
@@ -379,12 +647,16 @@ async def test_a_high_call_waits_for_the_dialog_on_the_device() -> None:
     assert LISTING_WAIT_S < ROUTED_TIMEOUT_S
 
 
-def test_the_executor_waits_as_long_as_a_routed_call(tmp_path: Path) -> None:
+def test_the_executor_waits_longer_only_for_a_call_on_a_node(tmp_path: Path) -> None:
     async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
         return {}
 
     specs, *_ = _specs(tmp_path, _privacy(), answer)
-    assert all(spec.timeout_s >= ROUTED_TIMEOUT_S for spec in specs.values())
+    for spec in specs.values():
+        assert spec.call_timeout_s is not None
+        assert spec.call_timeout_s({"device": LAPTOP}) >= ROUTED_TIMEOUT_S
+        assert spec.call_timeout_s({"device": "core"}) is None  # the core's own limit
+        assert spec.call_timeout_s({"device": ""}) is None
 
 
 # ---- M5 and the captures -------------------------------------------------------------------------
@@ -448,13 +720,13 @@ def test_a_new_hello_starts_a_new_epoch() -> None:
     control = NodeControl(None, lambda _n: None)
     control.observe(LAPTOP, _report(2**50, True))
     control.observe(LAPTOP, _report(7, False))  # a lower generation: ignored ...
-    assert control.blocks(BROWSER)
+    assert control.active()
     control.hello(LAPTOP, _report(7, False))  # ... unless it is a new run's hello
-    assert not control.blocks(BROWSER)
+    assert not control.active()
     control.hello(LAPTOP, None)  # a hello without a report changes nothing
     control.observe(LAPTOP, _report(8, True))
     control.hello(LAPTOP, "broken")
-    assert control.blocks(BROWSER)
+    assert control.active()
 
 
 def test_the_epoch_is_random_per_run() -> None:
@@ -486,7 +758,7 @@ def test_a_long_session_that_keeps_reporting_keeps_the_lock() -> None:
     for _ in range(3 * 60):  # three hours of reports, one a minute
         now["t"] += 60
         control.observe(LAPTOP, _report(2, True))
-        assert control.blocks(BROWSER)
+        assert control.active()
 
 
 def test_back_to_back_sessions_keep_the_lock_and_get_a_fresh_grant() -> None:
@@ -495,7 +767,7 @@ def test_back_to_back_sessions_keep_the_lock_and_get_a_fresh_grant() -> None:
     for gen in range(3, 30, 2):  # ended and started again, every few minutes, for hours
         now["t"] += MAX_SESSION_MINUTES * 6
         control.observe(LAPTOP, _report(gen, True, f"{gen:02x}" * 16))
-        assert control.blocks(BROWSER)
+        assert control.active()
     grants = [g for g in granted if not isinstance(g, str)]
     assert len({g.grant_id for g in grants}) == len(grants) > 1  # one per session
 
@@ -504,9 +776,9 @@ def test_a_silent_node_lifts_the_lock_after_the_longest_session() -> None:
     control, now, _ = _clocked()
     control.observe(LAPTOP, _report(2, True))
     now["t"] += MAX_SESSION_MINUTES * 60 - 1
-    assert control.blocks(BROWSER)
+    assert control.active()
     now["t"] += 2
-    assert not control.blocks(BROWSER)
+    assert not control.active()
 
 
 def test_the_owner_releases_a_stuck_lock_and_a_live_session_locks_again() -> None:
@@ -515,10 +787,10 @@ def test_the_owner_releases_a_stuck_lock_and_a_live_session_locks_again() -> Non
     control.observe(LAPTOP, _report(2, True))
     assert control.status() and control.status()[0]["device_id"] == LAPTOP
     assert control.release("released by the owner") == 1
-    assert not control.blocks(BROWSER) and notices[-1]["active"] is False
+    assert not control.active() and notices[-1]["active"] is False
     assert control.status() == []
     control.observe(LAPTOP, _report(2, True))  # the node still says it runs
-    assert control.blocks(BROWSER)
+    assert control.active()
 
 
 async def test_the_release_request_needs_the_pin_here(monkeypatch: pytest.MonkeyPatch) -> None:

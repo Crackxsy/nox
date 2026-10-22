@@ -487,11 +487,11 @@ async def test_a_node_session_grants_input_on_that_node_only_and_shows_who_is_co
     assert notices[-1]["active"] and notices[-1]["device"].startswith("Laptop")
     # No paired device may approve while Nox controls a node - none is provably elsewhere;
     # the core machine's own dashboard (no device id) still may.
-    assert control.blocks(BROWSER) and control.blocks("e" * 32) and not control.blocks("")
+    assert control.active()  # the lock holds (who may still approve: test_c6_review)
     # The node reports the session over: notice off, grant revoked, lock lifted.
     await _route(specs, "computer.pointer", {"action": "click"})
     assert notices[-1]["active"] is False and granted[-1] == grant.grant_id
-    assert not control.blocks(BROWSER)
+    assert not control.active()
 
 
 async def test_a_confirmation_after_a_stop_report_still_locks(tmp_path: Path) -> None:
@@ -503,7 +503,7 @@ async def test_a_confirmation_after_a_stop_report_still_locks(tmp_path: Path) ->
 
     specs, _reg, control, _ = _specs(tmp_path, _privacy(), answer)
     await _start(specs)
-    assert control.locked(LAPTOP) and control.blocks(BROWSER)
+    assert control.locked(LAPTOP) and control.active()
 
 
 async def test_a_stale_report_never_clears_a_newer_session(tmp_path: Path) -> None:
@@ -519,13 +519,13 @@ async def test_a_stale_report_never_clears_a_newer_session(tmp_path: Path) -> No
     await _start(specs)
     late.update(_answer_with(_report(3, False), was_open=True))
     await _route(specs, "computer.session_end", {})
-    assert control.blocks(BROWSER)  # gen 3 < 5: ignored
+    assert control.active()  # gen 3 < 5: ignored
     control.observe(LAPTOP, {"gen": 4, "active": False})
     control.observe(LAPTOP, "not a report")
     control.observe(LAPTOP, {"gen": 9, "active": "no"})
-    assert control.blocks(BROWSER)  # older or unreadable: nothing changes
+    assert control.active()  # older or unreadable: nothing changes
     control.observe(LAPTOP, _report(5, False))  # the same generation, now over (it ran out)
-    assert not control.blocks(BROWSER)
+    assert not control.active()
 
 
 async def test_a_start_without_a_readable_answer_blocks_until_the_node_says_so(
@@ -536,7 +536,7 @@ async def test_a_start_without_a_readable_answer_blocks_until_the_node_says_so(
 
     async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
         if tool == "computer.session_start":
-            blocked_while_asking.append(control.blocks(BROWSER))
+            blocked_while_asking.append(control.active())
             return {"error": "failed_on_device", "detail": "no answer", "device": entry.label}
         return _answer_with(end_report["value"], was_open=False)
 
@@ -544,12 +544,12 @@ async def test_a_start_without_a_readable_answer_blocks_until_the_node_says_so(
     await _start(specs)
     assert blocked_while_asking == [True]  # from the moment the start went out
     assert ends == [LAPTOP]  # ended on the node to be sure ...
-    assert control.blocks("e" * 32) and notices[-1]["active"]  # ... no report: still blocked
+    assert control.active() and notices[-1]["active"]  # ... no report: still blocked
     assert granted == []  # nothing granted while no session is known
     assert (await _start(specs))["error"] == "session_running"  # no second attempt over it
     end_report["value"] = _report(7, False)
     await _route(specs, "computer.session_end", {})
-    assert not control.blocks("e" * 32) and notices[-1]["active"] is False
+    assert not control.active() and notices[-1]["active"] is False
 
 
 async def test_a_refusal_with_the_nodes_report_settles_the_start(tmp_path: Path) -> None:
@@ -559,7 +559,7 @@ async def test_a_refusal_with_the_nodes_report_settles_the_start(tmp_path: Path)
 
     specs, _reg, control, (_granted, _notices, ends) = _specs(tmp_path, _privacy(), answer)
     await _start(specs)
-    assert not control.blocks(BROWSER) and ends == []
+    assert not control.active() and ends == []
 
 
 async def test_a_running_session_is_never_replaced_by_a_new_start(tmp_path: Path) -> None:
@@ -573,7 +573,7 @@ async def test_a_running_session_is_never_replaced_by_a_new_start(tmp_path: Path
     await _start(specs)
     assert (await _start(specs))["error"] == "session_running"
     assert calls == ["computer.session_start"]
-    assert control.blocks(BROWSER) and len(granted) == 1  # the grant is untouched
+    assert control.active() and len(granted) == 1  # the grant is untouched
 
 
 async def test_disconnected_or_silent_nodes_keep_the_lock_for_the_longest_session(
@@ -583,9 +583,9 @@ async def test_disconnected_or_silent_nodes_keep_the_lock_for_the_longest_sessio
     control = NodeControl(None, lambda _n: None, clock=lambda: now["t"])
     control.observe(LAPTOP, _report(2, True))
     now["t"] += 3600  # offline for an hour: no report, still locked
-    assert control.blocks(BROWSER)
+    assert control.active()
     now["t"] += 3 * 3600  # past the longest session since its last word
-    assert not control.blocks(BROWSER)
+    assert not control.active()
     # A start the node never answers holds for the longest session as well.
     entry = _entry("b" * 32, "Arbeits-PC", linked=BROWSER)
 
@@ -594,9 +594,9 @@ async def test_disconnected_or_silent_nodes_keep_the_lock_for_the_longest_sessio
 
     with pytest.raises(TimeoutError):
         await control.around("computer.session_start")(entry, {}, never)
-    assert control.blocks(BROWSER)
+    assert control.active()
     now["t"] += 2 * 3600 + 1
-    assert not control.blocks(BROWSER)
+    assert not control.active()
 
 
 async def test_a_stop_lifts_the_lock_only_through_the_nodes_report() -> None:
@@ -604,11 +604,11 @@ async def test_a_stop_lifts_the_lock_only_through_the_nodes_report() -> None:
     notices: list[dict[str, Any]] = []
     control = NodeControl(None, notices.append, reports=lambda: list(pongs))
     pongs.append((LAPTOP, _report(2, True)))
-    assert control.blocks(BROWSER) and notices[-1]["active"]
+    assert control.active() and notices[-1]["active"]
     pongs.clear()  # the kill switch went out; the node has not answered yet
-    assert control.blocks(BROWSER)
+    assert control.active()
     pongs.append((LAPTOP, _report(3, False)))  # its next pong: the session ended there
-    assert not control.blocks(BROWSER) and notices[-1]["active"] is False
+    assert not control.active() and notices[-1]["active"] is False
 
 
 async def test_a_node_without_a_linked_browser_gets_no_session(tmp_path: Path) -> None:
@@ -621,53 +621,7 @@ async def test_a_node_without_a_linked_browser_gets_no_session(tmp_path: Path) -
     specs, _reg, control, _ = _specs(tmp_path, _privacy(), answer, linked=None)
     refused = await _start(specs)
     assert refused["error"] == "link_required" and "node.link" in refused["hint"]
-    assert calls == [] and not control.blocks(BROWSER)
-
-
-@pytest.mark.parametrize(
-    ("client", "role", "refused"),
-    [
-        ("device:" + "e" * 32, "device", True),  # a phone, or a browser on any PC
-        ("device:" + BROWSER, "device", True),  # the browser linked to the controlled node
-        ("dashboard:1", "dashboard", False),  # the core machine's own dashboard
-    ],
-)
-async def test_paired_devices_cannot_approve_during_a_node_session(
-    client: str, role: str, refused: bool
-) -> None:
-    from pydantic import BaseModel
-
-    from nox.ipc.dispatch import RequestContext, RequestRegistry
-    from nox.ipc.protocol import Envelope, Kind, Source
-
-    control = NodeControl(None, lambda _n: None)
-
-    def blocks(ctx: Any) -> bool:
-        who = str(ctx.client_id)
-        return who.startswith("device:") and control.blocks(who.removeprefix("device:"))
-
-    registry = RequestRegistry()
-    registry.node_input_lock = blocks
-    ran: list[str] = []
-
-    class Empty(BaseModel):
-        pass
-
-    async def handler(_ctx: Any, _p: Any) -> dict[str, Any]:
-        ran.append(client)
-        return {}
-
-    registry.register("node.narrow", Empty, handler, roles=("dashboard", "device"))
-    envelope = Envelope(
-        kind=Kind.REQUEST, name="node.narrow", src=Source(role=role, id=client), payload={}
-    )  # type: ignore[arg-type]
-    ctx = RequestContext(client_id=client, role=role, request=envelope)
-    control.observe(LAPTOP, _report(2, True))
-    reply = await registry.dispatch(ctx, envelope)
-    assert (reply.kind is Kind.ERROR) is refused and bool(ran) is not refused
-    control.observe(LAPTOP, _report(3, False))
-    ran.clear()
-    assert (await registry.dispatch(ctx, envelope)).kind is Kind.RESPONSE and ran == [client]
+    assert calls == [] and not control.active()
 
 
 # ---- media ---------------------------------------------------------------------------------------

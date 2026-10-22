@@ -2,9 +2,11 @@
 through a remote desktop could come from the very PC Nox is controlling.
 
 True, False, or None when it cannot be told (the caller then treats it as remote: fail
-closed). Third-party remote tools that draw into the console session itself (Parsec, AnyDesk
-and the like) cannot be told apart from a person at the machine; the security PIN is the guard
-against those (SECURITY.md, residual risk).
+closed). A core that runs as a service without any login session (the Pi image, a Linux service)
+has no session that could be remote: False - the security PIN still applies. Third-party
+remote tools that draw into the console session itself (Parsec, AnyDesk and the like) cannot be
+told apart from a person at the machine; the security PIN is the guard against those
+(SECURITY.md, residual risk).
 """
 
 from __future__ import annotations
@@ -22,10 +24,11 @@ __all__ = ["console_is_remote"]
 SM_REMOTESESSION = 0x1000
 
 
-def _windows() -> bool | None:
-    if not hasattr(ctypes, "windll"):
-        return None
-    windll: Any = ctypes.windll  # type: ignore[attr-defined,unused-ignore]
+def _windows(windll: Any = None) -> bool | None:
+    if windll is None:
+        if not hasattr(ctypes, "windll"):
+            return None
+        windll = ctypes.windll  # type: ignore[attr-defined,unused-ignore]
     try:
         if windll.user32.GetSystemMetrics(SM_REMOTESESSION):
             return True
@@ -65,7 +68,7 @@ def _posix(env: Mapping[str, str], run: Callable[[list[str]], str]) -> bool | No
         return True
     session = env.get("XDG_SESSION_ID", "")
     if not session:
-        return None
+        return False  # a service without a login session: nothing to reach it remotely through
     return _loginctl_remote(session, run)
 
 
@@ -74,8 +77,9 @@ def console_is_remote(
     platform: str = sys.platform,
     env: Mapping[str, str] | None = None,
     run: Callable[[list[str]], str] = _run,
+    windll: Any = None,
 ) -> bool | None:
     """Whether this process runs in a remote session; None when that cannot be told."""
     if platform == "win32":
-        return _windows()
+        return _windows(windll)
     return _posix(os.environ if env is None else env, run)

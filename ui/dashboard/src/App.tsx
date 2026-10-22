@@ -338,6 +338,21 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
   // On a paired device, whether allowing at high risk can ask for a PIN: read on connect and
   // again whenever a new question comes up, so a PIN set meanwhile is noticed.
   const headPrompt = prompts[0]?.id;
+  // Whether Nox controls a paired PC decides whether a question needs the PIN: asked of the core
+  // for every new question, never taken from what this page last heard.
+  useEffect(() => {
+    if (!client || status !== 'online' || !headPrompt) return;
+    let cancelled = false;
+    void api
+      .nodeComputerStatus(client)
+      .then((payload) => {
+        if (!cancelled) setState((s) => ({ ...s, nodeComputerUse: parseNodeControl(payload) }));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [client, status, headPrompt]);
   useEffect(() => {
     if (!device || !client || status !== 'online') return;
     let cancelled = false;

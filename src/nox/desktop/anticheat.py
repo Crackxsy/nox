@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 __all__ = [
@@ -75,9 +75,16 @@ ANTI_CHEAT_SERVICES: tuple[str, ...] = (
     "mhyprot3",
     "atvi-randgrid_sr",
     "atvi-randgrid_msstore",
+    "ESEADriver2",
+    "denuvo-anticheat",
+    "Denuvo Anti-Cheat",
+    "EQU8",
+    "NeacSafe64",
 )
 #: `SHQueryUserNotificationState`: QUNS_BUSY (2), QUNS_RUNNING_D3D_FULL_SCREEN (3),
-#: QUNS_PRESENTATION_MODE (4) - something owns the screen, very likely a game.
+#: QUNS_PRESENTATION_MODE (4) - something owns the screen, very likely a game. QUNS_APP (7, a
+#: Store app in front) does not lock: it would refuse computer use for every Store app; a game
+#: among them is caught by its name on the games list or by exclusive full screen (3).
 LOCKING_NOTIFICATION_STATES = frozenset({2, 3, 4})
 SERVICE_RUNNING = 4
 SERVICE_QUERY_STATUS = 0x0004
@@ -114,26 +121,39 @@ class _ServiceStatus(ctypes.Structure):
     )
 
 
-def running_services(names: Iterable[str] = ANTI_CHEAT_SERVICES) -> set[str]:
-    """Which of these services or drivers run now (Windows). A service that does not exist is
-    not running; anything else that cannot be read raises (the caller locks)."""
-    if sys.platform != "win32" or not hasattr(ctypes, "windll"):
-        return set()
+def _advapi() -> tuple[Any, Callable[[], int]]:
     advapi: Any = ctypes.WinDLL("advapi32", use_last_error=True)  # type: ignore[attr-defined,unused-ignore]
     advapi.OpenSCManagerW.restype = ctypes.c_void_p
     advapi.OpenServiceW.restype = ctypes.c_void_p
     advapi.OpenServiceW.argtypes = (ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_ulong)
     advapi.QueryServiceStatus.argtypes = (ctypes.c_void_p, ctypes.c_void_p)
     advapi.CloseServiceHandle.argtypes = (ctypes.c_void_p,)
+    last_error: Callable[[], int] = ctypes.get_last_error  # type: ignore[attr-defined,unused-ignore]
+    return advapi, last_error
+
+
+def running_services(
+    names: Iterable[str] = ANTI_CHEAT_SERVICES,
+    *,
+    api: tuple[Any, Callable[[], int]] | None = None,
+) -> set[str]:
+    """Which of these services or drivers run now (Windows). A service that does not exist is
+    not running; anything else that cannot be read raises (the caller locks). `api`: the
+    service manager calls and the last-error reader (a test passes fakes)."""
+    if api is None:
+        if sys.platform != "win32" or not hasattr(ctypes, "windll"):
+            return set()
+        api = _advapi()
+    advapi, last_error = api
     manager = advapi.OpenSCManagerW(None, None, SC_MANAGER_CONNECT)
     if not manager:
-        raise OSError(f"OpenSCManager failed: {ctypes.get_last_error()}")  # type: ignore[attr-defined,unused-ignore]
+        raise OSError(f"OpenSCManager failed: {last_error()}")
     found: set[str] = set()
     try:
         for name in names:
             service = advapi.OpenServiceW(manager, name, SERVICE_QUERY_STATUS)
             if not service:
-                error = ctypes.get_last_error()  # type: ignore[attr-defined,unused-ignore]
+                error = last_error()
                 if error == ERROR_SERVICE_DOES_NOT_EXIST:
                     continue
                 raise OSError(f"OpenService({name}) failed: {error}")

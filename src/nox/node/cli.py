@@ -602,17 +602,19 @@ def games(
     key = manifest_key(home.path, secrets)
     found = load_manifest(home.manifest_file)
     confirmed = last_confirmed(audit, key)
+    if confirmed is None and not add:
+        # Checked before anything is written: a removal that cannot be recorded changes nothing.
+        raise NodeCliError("No confirmed manifest on this device; nothing was removed.")
 
     def changed(manifest: NodeManifest) -> NodeManifest:
         rest = [g for g in manifest.games if g.lower() != game.lower()]
         return manifest.model_copy(update={"games": [*rest, game] if add else rest})
 
+    if confirmed is not None and not record_confirmed(audit, changed(confirmed), key):
+        # Recorded first, so that an edit of the file can never drop a game again by itself.
+        if not add:
+            raise NodeCliError("The change could not be recorded on this device; nothing removed.")
     save_manifest(home.manifest_file, changed(found))
-    if confirmed is not None:
-        # Recorded, so that an edit of the file can never drop a game again by itself.
-        record_confirmed(audit, changed(confirmed), key)
-    elif not add:
-        raise NodeCliError("No confirmed manifest on this device; nothing was removed.")
     audit.append(
         actor="local",
         tool="node",

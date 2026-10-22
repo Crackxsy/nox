@@ -171,6 +171,10 @@ def calm_ui_request(name: str) -> bool:
     )
 
 
+#: (context, the request's `pin`, the request's name) -> why it is refused, or None.
+NodeGuard = Callable[[RequestContext, str | None, str], Awaitable[str | None]]
+
+
 class RequestRegistry:
     """name -> (payload model, async handler, allowed roles). Dispatches envelopes to handlers."""
 
@@ -180,10 +184,11 @@ class RequestRegistry:
         #: then keep only `calm_ui_request`s, so no click Nox sends can activate, approve or
         #: change anything. Set by the desktop extension.
         self.input_lock: Callable[[], bool] | None = None
-        #: The same for a client that may sit on a node whose mouse and keyboard Nox controls
-        #: (`nox.node.world_routes.NodeControl.blocks`): every paired device during such a
-        #: session. Set by the node extension.
-        self.node_input_lock: Callable[[RequestContext], bool] | None = None
+        #: While Nox controls mouse and keyboard on a paired PC: why a UI client's request that
+        #: changes something is refused (`nox.node.world_routes.session_refusal`: the PIN, never
+        #: the browser on that PC, not from a remote session), or None. Given the request's
+        #: `pin` and name. Set by the node extension.
+        self.node_guard: NodeGuard | None = None
 
     def register(
         self,
@@ -258,20 +263,23 @@ class RequestRegistry:
                 ERR_PERMISSION,
                 "Nox is controlling mouse and keyboard; end it with the stop hotkey and try again",
             )
-        node_lock = self.node_input_lock
+        payload = envelope.payload
+        node_guard = self.node_guard
         if (
             ctx.role in INPUT_ROLES
-            and node_lock is not None
+            and node_guard is not None
             and not calm_ui_request(envelope.name)
-            and node_lock(ctx)
         ):
-            raise IpcError(
-                ERR_PERMISSION,
-                "Nox is controlling mouse and keyboard on a paired PC; this device can only "
-                "look or stop until that ends",
-            )
+            raw_pin = payload.get("pin") if isinstance(payload, dict) else None
+            pin = raw_pin if isinstance(raw_pin, str) else None
+            refusal = await node_guard(ctx, pin, envelope.name)
+            if refusal is not None:
+                raise IpcError(ERR_PERMISSION, refusal, details={"reason": "node_session"})
+            if pin is not None and "pin" not in reg.payload_model.model_fields:
+                # The PIN was for this check only; the request itself takes none.
+                payload = {k: v for k, v in payload.items() if k != "pin"}
         try:
-            model = reg.payload_model.model_validate(envelope.payload)
+            model = reg.payload_model.model_validate(payload)
         except ValidationError as exc:
             raise IpcError(
                 ERR_VALIDATION,

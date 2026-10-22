@@ -474,8 +474,13 @@ def routed_spec(
         local=False,
         network=template.network if network is None else network,
         # A call on a node may wait for the person at the device (`CONFIRM_TIMEOUT_S`): the
-        # executor must not give up before the node call itself does.
-        timeout_s=max(template.timeout_s or 0.0, ROUTED_TIMEOUT_S),
+        # executor must not give up before the node call itself does. A call that stays on
+        # this core keeps its own limit.
+        call_timeout_s=lambda payload: (
+            max(template.timeout_s or 0.0, ROUTED_TIMEOUT_S)
+            if payload.get(DEVICE_KEY) not in (None, "", CORE)
+            else None
+        ),
     )
 
 

@@ -17,7 +17,7 @@ Requests, for the UI roles (`nox.ipc.roles`):
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -50,7 +50,7 @@ from nox.node.registry import NodeEntry, NodeRegistry
 from nox.node.repo import NodeRepository
 from nox.node.router import CannotShow, install_routes, routed_spec
 from nox.node.tools import NoArgs, NotifyArgs, system_info
-from nox.node.world_routes import NodeControl, approval_refusal, local_with_pin, world_specs
+from nox.node.world_routes import NodeControl, local_pin_refusal, session_refusal, world_specs
 from nox.remote.models import DeviceRow
 from nox.remote.repo import RemoteRepository
 from nox.security.model import Risk
@@ -169,13 +169,7 @@ def install(core: Any) -> NodeRuntime:
         )
 
     controls: list[NodeControl] = []
-
-    async def on_connected(session: Any) -> None:
-        # A new authenticated connection: its hello says how computer use stands on that node.
-        for control in controls:
-            control.hello(session.device_id, session.computer)
-        await registry.on_connected(session)
-        await send_games(core, session)
+    on_connected = connection_hook(core, registry, controls)
 
     listener = NodeListener(
         pairing=pairing,
@@ -207,7 +201,7 @@ def install(core: Any) -> NodeRuntime:
     killswitch.register_resume_hook("nodes", resume_nodes)
     control = _install_routes(core, registry, [listener])
     controls.append(control)
-    _keep(runtime, _watch_sessions(control), "nox-node-computer")
+    _keep(runtime, _watch_sessions(control, core, listener), "nox-node-computer")
 
     async def redeem(body: NodePairRequest) -> tuple[int, dict[str, Any]]:
         if not listener.running:
@@ -323,8 +317,7 @@ _Target = Callable[[dict[str, Any]], str]
 
 async def send_games(core: Any, session: Any) -> None:
     """The core's watched games, for the node's game lock - an addition there, never a removal."""
-    sensors = getattr(core.config, "sensors", None)
-    names = list(sensors.game.process_names) if sensors is not None else []
+    names = watched_games(core)
     if not names:
         return
     try:
@@ -333,13 +326,49 @@ async def send_games(core: Any, session: Any) -> None:
         log.warning("node.games_failed", device_id=session.device_id, error=str(exc))
 
 
-async def _watch_sessions(control: NodeControl) -> None:
+def connection_hook(
+    core: Any, registry: NodeRegistry, controls: list[NodeControl]
+) -> Callable[[Any], Awaitable[None]]:
+    """What happens on every new authenticated node connection: its hello resets how computer
+    use stands there (`NodeControl.hello`), the registry lists its tools, and it gets the core's
+    watched games."""
+
+    async def on_connected(session: Any) -> None:
+        for control in controls:
+            control.hello(session.device_id, session.computer)
+        await registry.on_connected(session)
+        await send_games(core, session)
+
+    return on_connected
+
+
+def watched_games(core: Any) -> list[str]:
+    sensors = getattr(core.config, "sensors", None)
+    return list(sensors.game.process_names)[:64] if sensors is not None else []
+
+
+async def resend_games_if_changed(core: Any, listener: Any, sent: list[list[str]]) -> bool:
+    """The core's watched games changed (settings): every connected node gets them again (the
+    node only ever adds). True when they were sent."""
+    games = watched_games(core)
+    if sent and sent[0] == games:
+        return False
+    sent[:] = [games]
+    for session in list(listener.sessions.values()):
+        await send_games(core, session)
+    return True
+
+
+async def _watch_sessions(control: NodeControl, core: Any, listener: Any) -> None:
     """Every second: the nodes' latest reports, so the lock, the grant and the dashboard follow
-    a session that ends on the node (time, stop hotkey, kill) without another call."""
+    a session that ends on the node (time, stop hotkey, kill) without another call; and the
+    core's watched games, sent again when they change."""
+    sent: list[list[str]] = [watched_games(core)]  # sent on every connection already
     while True:
         await asyncio.sleep(1.0)
         try:
             control.active()
+            await resend_games_if_changed(core, listener, sent)
         except Exception as exc:  # noqa: BLE001 - the watcher outlives one bad round
             log.error("node.computer_watch_failed", error=type(exc).__name__)
 
@@ -433,8 +462,6 @@ def _world_specs(
 ) -> tuple[list[ToolSpec], NodeControl]:
     """C6: captures, browser, desktop, computer use and media, routable to nodes; and the
     record of computer-use sessions on nodes (dashboard notice, grant, "allow" lock)."""
-    from nox.ipc.roles import DEVICE_ROLE  # noqa: PLC0415
-    from nox.ipc.tokens import DEVICE_CLIENT_PREFIX  # noqa: PLC0415
     from nox.security._events import publish_nowait  # noqa: PLC0415
 
     def publish(payload: dict[str, Any]) -> None:
@@ -455,6 +482,10 @@ def _world_specs(
             return []
         return [(d, s.computer) for d, s in listener.sessions.items() if s.computer is not None]
 
+    def linked(device_id: str) -> str | None:
+        entry = next((e for e in registry.known() if e.device_id == device_id), None)
+        return entry.linked_device_id if entry is not None else None
+
     def label_of(device_id: str) -> str:
         entry = next((e for e in registry.entries() if e.device_id == device_id), None)
         return entry.label if entry is not None else device_id[:8]
@@ -465,27 +496,10 @@ def _world_specs(
         end_on_node=end_on_node,
         reports=reports,
         labels=label_of,
+        linked=linked,
         stop_hotkey=desktop.computer_use.stop_hotkey if desktop is not None else "",
     )
-
-    def blocks(ctx: Any) -> bool:
-        if getattr(ctx, "role", "") != DEVICE_ROLE:
-            return False
-        client = str(getattr(ctx, "client_id", ""))
-        return control.blocks(client.removeprefix(DEVICE_CLIENT_PREFIX) or "device")
-
-    def gate() -> Any:
-        return getattr(security, "gate", None)
-
-    async def guard(ctx: Any, pin: str | None) -> str | None:
-        return await approval_refusal(control, ctx, pin, gate=gate(), remote=console_is_remote)
-
-    core.node_input_lock = blocks
-    core.node_approval_guard = guard
-    ipc = getattr(core, "registry", None)
-    if ipc is not None and hasattr(ipc, "register"):
-        ipc.node_input_lock = blocks  # privileged requests from paired devices, too
-        _register_control_requests(core, ipc, control, gate)
+    wire_guards(core, control)
     # A stop never lifts the lock by itself: the node ends its session on `nox/kill` and says
     # so in its next pong, which `pull` reads (also every second, `_watch_sessions`).
     paths = getattr(core.config, "paths", None)
@@ -499,6 +513,36 @@ def _world_specs(
         privacy=lambda: getattr(security, "privacy", None),
     )
     return specs, control
+
+
+def wire_guards(core: Any, control: NodeControl) -> None:
+    """While Nox controls a node: every "allow" (`security.permission.reply`) and every request
+    that changes something (`RequestRegistry.node_guard`) go through `session_refusal`; and the
+    `node.computer.*` requests. Separate so a test can wire a fake core exactly like this."""
+    security = getattr(core, "security", None)
+
+    def gate() -> Any:
+        return getattr(security, "gate", None)
+
+    async def guard(ctx: Any, pin: str | None, action: str) -> str | None:
+        return await session_refusal(
+            control,
+            ctx,
+            pin,
+            action=action,
+            gate=gate(),
+            device_guard=getattr(core, "device_pin_guard", None),
+            remote=console_is_remote,
+        )
+
+    async def approval(ctx: Any, pin: str | None) -> str | None:
+        return await guard(ctx, pin, "security.permission.reply")
+
+    core.node_approval_guard = approval
+    ipc = getattr(core, "registry", None)
+    if ipc is not None and hasattr(ipc, "register"):
+        ipc.node_guard = guard
+        _register_control_requests(core, ipc, control, gate)
 
 
 class ReleaseRequest(BaseModel):
@@ -515,7 +559,7 @@ def _register_control_requests(core: Any, ipc: Any, control: NodeControl, gate: 
         return {"sessions": control.status()}
 
     async def h_release(ctx: RequestContext, p: ReleaseRequest) -> dict[str, Any]:
-        refusal = await local_with_pin(
+        refusal = await local_pin_refusal(
             ctx, p.pin, gate=gate(), remote=console_is_remote, action="node.computer.release"
         )
         if refusal is not None:

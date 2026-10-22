@@ -779,7 +779,9 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   name), service or kernel driver runs (Vanguard, EasyAntiCheat, BattlEye, FACEIT, ACE,
   nProtect, PunkBuster, XIGNCODE, mhyprot, Ricochet and more, by `QueryServiceStatus`); a game or
   anti-cheat process is in front; something owns the screen (`SHQueryUserNotificationState`:
-  full-screen Direct3D, busy, presentation mode - games on no list are caught here); or any of
+  full-screen Direct3D, busy, presentation mode - games on no list are caught here; a Store app
+  in front, `QUNS_APP`, does not lock, a game among them is caught by name or exclusive full
+  screen); or any of
   these checks cannot answer, including an unreadable foreground. Without a lock installed the
   gate refuses as well. Listing windows and processes stays allowed. `game.input.send` stays a
   hard prohibition. Enabling `computer` on a device asks twice and is refused off Windows.
@@ -796,13 +798,20 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   background. The lock never lifts while the node keeps saying "open" - only its report that no
   session runs, or its silence for 120 minutes, lifts it; a session's own length is limited on
   the node (`ComputerUseConfig.session_minutes`), and a new session back to back gets a fresh
-  grant. While it holds: **no paired device** answers "allow" or sends a privileged request
-  (none is provably on another machine than the one Nox controls); **this machine's own
-  dashboard or shell** may answer "allow" only with the security PIN (none set: no "allow" at
-  all) and only when this machine is not used remotely - Windows: `SM_REMOTESESSION` or a
-  session that is not the console's; Linux: an SSH session or `loginctl` `Remote=yes`; when that
-  cannot be told, "allow" is refused. "Deny", Stopp and reading always work, and a node's own
-  dialog still asks there. A start needs a browser device linked to that node (`node.link`, else
+  grant. While it holds, **every "allow" and every request that changes something** (adding
+  an MCP server, approving a plan, any setting - everything but reading, "deny" and Stopp, which
+  always work) goes through one rule (`session_refusal`, in `security.permission.reply` and in
+  `RequestRegistry.dispatch`), because Nox does not know the PIN and the PIN is the guard: (1)
+  the browser device linked to a node Nox controls never approves or changes anything; (2) any
+  other paired device and this machine's own dashboard or shell only with the security PIN, sent
+  with the request (`pin`; the PIN's lockout applies, and a paired device is removed after
+  repeated wrong PINs); (3) this machine's dashboard or shell never from a remote session -
+  Windows: `SM_REMOTESESSION` or a session that is not the console's, or no console session at
+  all; Linux: an SSH session or `loginctl` `Remote=yes` - and refused when that cannot be told; a
+  core that runs as a service without any login session (the Pi image) counts as not remote, the
+  PIN applies; the check runs off the event loop with a time limit (too slow: unknown); (4) no PIN
+  set: refused. The desktop shell's dialog has a PIN field for this. A node's own dialog still
+  asks on that node. A start needs a browser device linked to that node (`node.link`, else
   `link_required`) and is refused while the lock holds for it (`session_running`); a start
   without a readable report is followed by `computer.session_end`. Stops, kills and disconnects
   never lift the lock themselves - the node ends its session on `nox/kill` and its next report

@@ -326,7 +326,8 @@ class ToolExecutor:
         waitables: list[asyncio.Task[Any]] = [handler_task]
         if kill_task is not None:
             waitables.append(kill_task)
-        timeout_s = spec.timeout_s or self._timeout_s
+        per_call = spec.call_timeout_s(payload) if spec.call_timeout_s is not None else None
+        timeout_s = per_call or spec.timeout_s or self._timeout_s
         try:
             done, _pending = await asyncio.wait(
                 waitables, timeout=timeout_s, return_when=asyncio.FIRST_COMPLETED

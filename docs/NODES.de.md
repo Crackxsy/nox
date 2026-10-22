@@ -187,11 +187,16 @@ Alles aus, außer Musik; jedes wird nur hier eingeschaltet, mit `nox node allow 
   Änderung an Fenstern und Programmen abgelehnt - vom Node selbst, vor allem anderen, egal was
   Nox schickt; kann der Node es nicht feststellen, lehnt er auch ab. `game.input.send` bleibt
   überall verboten.
-- **Erlauben, während Nox einen PC steuert:** Kein gekoppeltes Gerät (Handy, Browser auf
-  irgendeinem PC) kann dann etwas erlauben; am Rechner, auf dem Nox läuft, braucht Erlauben die
-  Sicherheits-PIN und geht nicht über eine Fernsteuerung (Remote Desktop). Ablehnen und Stopp
-  gehen immer. Bleibt die Zeile stehen, obwohl der PC nicht mehr antwortet, löst „Sperre lösen“
-  mit der PIN am Rechner, auf dem Nox läuft, die Sperre.
+- **Erlauben, während Nox einen PC steuert:** Der Browser auf diesem PC kann dann weder etwas
+  erlauben noch ändern; jedes andere Gerät und der Rechner, auf dem Nox läuft, können es mit der
+  Sicherheits-PIN (ohne PIN geht bis zum Ende der Sitzung kein Erlauben). Am Rechner, auf dem Nox
+  läuft, geht es nicht über eine Fernsteuerung (ein Pi, auf dem Nox als Dienst läuft, hat keine:
+  dort gilt die PIN). Ablehnen und Stopp gehen immer. Bleibt die Zeile stehen, obwohl der PC
+  nicht mehr antwortet, löst „Sperre lösen“ mit der PIN am Rechner, auf dem Nox läuft, die
+  Sperre.
+- **Vanguard und ähnliche Treiber:** Ein Anti-Cheat-Treiber, der mit Windows startet (Riot
+  Vanguards `vgk`), läuft immer - Maus und Tastatur bleiben auf diesem PC gesperrt, solange er
+  installiert ist. Das ist Absicht: Nox kann nicht wissen, ob das Spiel gleich startet.
 - **Musik** (`media`, standardmäßig an, niedriges Risiko; der Node sagt es einmal per Hinweis): abspielen, pausieren, weiter, zurück,
   Lautstärke, lauter, leiser, stumm - unter Windows über die System-Mediensteuerung, unter Linux
   über MPRIS (`playerctl` oder D-Bus) und PipeWire (`wpctl`) oder PulseAudio (`pactl`). Noch

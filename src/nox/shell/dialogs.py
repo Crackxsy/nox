@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtWidgets import QCheckBox, QMessageBox, QWidget
+from PySide6.QtWidgets import QCheckBox, QLabel, QLineEdit, QMessageBox, QWidget
 
 from nox.shell.logic import permission_reply, rememberable
 
@@ -20,6 +20,7 @@ _TEXT = {
         "remember": "Für diese Sitzung merken",
         "allow": "Erlauben",
         "deny": "Ablehnen",
+        "pin": "PIN (nur nötig, während Nox einen PC steuert)",
     },
     "en": {
         "title": "Nox – permission",
@@ -29,6 +30,7 @@ _TEXT = {
         "remember": "Remember for this session",
         "allow": "Allow",
         "deny": "Deny",
+        "pin": "PIN (only needed while Nox controls a PC)",
     },
 }
 
@@ -65,6 +67,17 @@ class PermissionDialog:
             # High risk is confirmed every time; offering the box would promise what the core
             # refuses to do.
             self.remember.setVisible(False)
+        # While Nox controls mouse and keyboard on a paired PC, "allow" needs the security PIN
+        # (`nox.node.world_routes.session_refusal`); otherwise the field may stay empty.
+        self.pin_label = QLabel(t["pin"])
+        self.pin = QLineEdit()
+        self.pin.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pin_label.setBuddy(self.pin)
+        layout: Any = self.box.layout()
+        if layout is not None:
+            row = layout.rowCount()
+            layout.addWidget(self.pin_label, row, 0, 1, layout.columnCount())
+            layout.addWidget(self.pin, row + 1, 0, 1, layout.columnCount())
         self.allow_button = self.box.addButton(t["allow"], QMessageBox.ButtonRole.AcceptRole)
         self.deny_button = self.box.addButton(t["deny"], QMessageBox.ButtonRole.RejectRole)
         self.box.setDefaultButton(self.deny_button)
@@ -72,7 +85,9 @@ class PermissionDialog:
 
     def decision(self, allowed: bool) -> dict[str, Any]:
         """Reply payload for the chosen button and the checkbox state."""
-        return permission_reply(self.request, allow=allowed, remember=self.remember.isChecked())
+        return permission_reply(
+            self.request, allow=allowed, remember=self.remember.isChecked(), pin=self.pin.text()
+        )
 
     def run(self) -> dict[str, Any]:
         """Modal; returns the `security.permission.reply` payload. Closing the box means deny."""

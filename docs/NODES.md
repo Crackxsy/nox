@@ -175,10 +175,15 @@ All off by default except music; each is switched on only here, with `nox node a
   mouse, key and typing call and every change to windows and programs is refused - by the node
   itself, before anything else, whatever Nox sends; when the node cannot tell, it refuses too.
   `game.input.send` stays forbidden everywhere.
-- **Approving while Nox controls a PC:** no paired device (phone, browser on any PC) can allow
-  anything; on the computer Nox runs on, allowing needs the security PIN and is refused through a
-  remote desktop. Deny and Stopp always work. If a PC went silent and its line stays, "Sperre
-  lösen" with the PIN on the computer Nox runs on lifts it.
+- **Approving while Nox controls a PC:** the browser on that PC can neither allow nor change
+  anything; every other device and the computer Nox runs on can, with the security PIN (no PIN
+  set: nothing can be allowed until the session ends). On the computer Nox runs on it is refused
+  through a remote desktop (a Pi running Nox as a service has no remote session: the PIN
+  applies). Deny and Stopp always work. If a PC went silent and its line stays, "Sperre lösen"
+  with the PIN on the computer Nox runs on lifts it.
+- **Vanguard and similar drivers:** an anti-cheat driver that starts with Windows (Riot Vanguard's
+  `vgk`) runs all the time - mouse and keyboard stay locked on that PC for as long as it is
+  installed. That is on purpose: Nox cannot tell whether the game is about to start.
 - **Music** (`media`, on by default, low risk; the node says so once in a notification): play, pause, next, previous, volume, louder,
   quieter, mute - on Windows through the system media controls, on Linux through MPRIS
   (`playerctl` or D-Bus) and PipeWire (`wpctl`) or PulseAudio (`pactl`). Not on macOS yet.
