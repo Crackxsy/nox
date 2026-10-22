@@ -180,6 +180,10 @@ class RequestRegistry:
         #: then keep only `calm_ui_request`s, so no click Nox sends can activate, approve or
         #: change anything. Set by the desktop extension.
         self.input_lock: Callable[[], bool] | None = None
+        #: The same for a client that may sit on a node whose mouse and keyboard Nox controls
+        #: (`nox.node.world_routes.NodeControl.blocks`): every paired device during such a
+        #: session. Set by the node extension.
+        self.node_input_lock: Callable[[RequestContext], bool] | None = None
 
     def register(
         self,
@@ -253,6 +257,18 @@ class RequestRegistry:
             raise IpcError(
                 ERR_PERMISSION,
                 "Nox is controlling mouse and keyboard; end it with the stop hotkey and try again",
+            )
+        node_lock = self.node_input_lock
+        if (
+            ctx.role in INPUT_ROLES
+            and node_lock is not None
+            and not calm_ui_request(envelope.name)
+            and node_lock(ctx)
+        ):
+            raise IpcError(
+                ERR_PERMISSION,
+                "Nox is controlling mouse and keyboard on a paired PC; this device can only "
+                "look or stop until that ends",
             )
         try:
             model = reg.payload_model.model_validate(envelope.payload)

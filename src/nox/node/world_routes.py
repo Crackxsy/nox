@@ -15,8 +15,12 @@ gate, budget and audit. What this module adds:
   `computer.keys` *on that node only* (`device:<id>|session:computer/*`, medium at most) for the
   session's minutes, and the dashboard shows "Nox steuert gerade Maus und Tastatur auf ..." with a
   stop. The session ends here when the node says so, on `computer.session_end`, the kill switch,
-  the node going offline, or its time. While it runs, an "allow" from the browser device linked to
-  that node is refused (`blocks`), as on the core machine itself.
+  the node going offline, or its time. It needs a browser device linked to that node. **Fail
+  closed:** from the moment the start is sent until the node confirms the end, every paired
+  device's approvals and privileged requests are refused (`blocks`) - approvals then come only
+  from the core machine's own dashboard or a node's own dialog. An unclear start (timeout, broken
+  answer) is ended on the node and keeps blocking until that end is confirmed or the longest
+  session time has passed.
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ import contextlib
 import hashlib
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -133,41 +137,70 @@ def _capture_around(kind: str, root: Callable[[], Path], privacy: Callable[[], A
 # ---- computer use on a node ----------------------------------------------------------------------
 
 
+#: The longest a computer-use session may last anywhere (`ComputerUseConfig.session_minutes`):
+#: an unclear start keeps every paired device from approving for at most this long.
+MAX_SESSION_MINUTES = 120
+LINK_HINT = (
+    "Erst im Dashboard unter Geräte festlegen, welcher Browser auf diesem PC läuft (node.link) - "
+    "sonst kann Nox nicht ausschließen, dass er sich selbst etwas erlaubt."
+)
+#: Ends the session on a node (`computer.session_end`); its answer as `NodeRegistry.call` gives it.
+EndOnNode = Callable[[NodeEntry], Awaitable[dict[str, Any]]]
+
+
 @dataclass
 class _Session:
     label: str
     until: float
-    grant_id: str
+    grant_id: str = ""
     timer: asyncio.TimerHandle | None = None
+    #: Not confirmed by the node (asked, or the answer was unclear): blocks, grants nothing.
+    provisional: bool = False
 
 
 class NodeControl:
-    """Computer-use sessions running on nodes, as this core knows them."""
+    """Computer-use sessions running on nodes, as this core knows them - fail closed: a session
+    counts from the moment it is asked for until the node confirms it is over."""
 
     def __init__(
         self,
         engine: Any,
         publish: Callable[[dict[str, Any]], None],
         *,
-        linked: Callable[[str], str | None] = lambda _id: None,
+        end_on_node: EndOnNode | None = None,
         stop_hotkey: str = "ctrl+alt+shift+k",
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._engine = engine
         self._publish = publish
-        self._linked = linked
+        self._end_on_node = end_on_node
         self._stop = stop_hotkey
         self._clock = clock
         self.sessions: dict[str, _Session] = {}
 
+    def _hold(self, entry: NodeEntry, minutes: float, *, provisional: bool) -> _Session:
+        self.end(entry.device_id, "replaced", quiet=True)
+        session = _Session(entry.label, self._clock() + minutes * 60.0, provisional=provisional)
+        with contextlib.suppress(RuntimeError):
+            session.timer = asyncio.get_running_loop().call_later(
+                minutes * 60.0, self.end, entry.device_id, "session over"
+            )
+        self.sessions[entry.device_id] = session
+        return session
+
+    def asking(self, entry: NodeEntry) -> None:
+        """`computer.session_start` is about to go out: block approvals from now on."""
+        self._hold(entry, MAX_SESSION_MINUTES, provisional=True)
+
     def start(self, entry: NodeEntry, minutes: int) -> None:
-        minutes = max(1, min(int(minutes), 120))
-        self.end(entry.device_id, "a new session replaces it", quiet=True)
-        grant_id = f"computer-{uuid.uuid4().hex[:12]}"
+        """The node confirmed a session of `minutes`: grant input on that node only."""
+        minutes = max(1, min(int(minutes), MAX_SESSION_MINUTES))
+        session = self._hold(entry, minutes, provisional=False)
         if self._engine is not None:
+            session.grant_id = f"computer-{uuid.uuid4().hex[:12]}"
             self._engine.grant_temporary(
                 TemporaryGrant(
-                    grant_id=grant_id,
+                    grant_id=session.grant_id,
                     scope=f"device:{entry.device_id}|session:computer/*",
                     max_risk=Risk.MEDIUM,
                     expires_at=datetime.now(UTC) + timedelta(minutes=minutes),
@@ -175,13 +208,13 @@ class NodeControl:
                     label=f"computer use on {entry.label}",
                 )
             )
-        session = _Session(entry.label, self._clock() + minutes * 60.0, grant_id)
-        with contextlib.suppress(RuntimeError):
-            session.timer = asyncio.get_running_loop().call_later(
-                minutes * 60.0, self.end, entry.device_id, "session over"
-            )
-        self.sessions[entry.device_id] = session
         self._notice(True, entry.device_id, session.label, f"for {minutes} minutes")
+
+    def unclear(self, entry: NodeEntry) -> None:
+        """No clear answer to a start: the session may be running. Keep blocking (longest
+        session) and say so, until the node confirms the end."""
+        session = self._hold(entry, MAX_SESSION_MINUTES, provisional=True)
+        self._notice(True, entry.device_id, session.label, "unclear whether it started")
 
     def end(self, device_id: str, reason: str, *, quiet: bool = False) -> bool:
         session = self.sessions.pop(device_id, None)
@@ -189,7 +222,7 @@ class NodeControl:
             return False
         if session.timer is not None:
             session.timer.cancel()
-        if self._engine is not None:
+        if self._engine is not None and session.grant_id:
             with contextlib.suppress(Exception):
                 self._engine.revoke(session.grant_id)
         if not quiet:
@@ -200,17 +233,16 @@ class NodeControl:
         for device_id in list(self.sessions):
             self.end(device_id, reason)
 
-    def blocks(self, client_device: str | None) -> bool:
-        """Whether an "allow" from this paired browser device is refused: it sits on a node whose
-        mouse and keyboard Nox controls right now (spec C §1.5)."""
-        if not client_device:
-            return False
+    def active(self) -> bool:
         now = self._clock()
-        return any(
-            self._linked(device_id) == client_device
-            for device_id, session in self.sessions.items()
-            if session.until > now
-        )
+        return any(session.until > now for session in self.sessions.values())
+
+    def blocks(self, client_device: str | None) -> bool:
+        """Whether a paired device's approval is refused right now: during any computer-use
+        session on any node - provisional ones included - every paired device, because none is
+        provably on another machine. Approvals then come only from the core machine's own
+        dashboard or a node's own dialog (spec C §1.5)."""
+        return bool(client_device) and self.active()
 
     def _notice(self, active: bool, device_id: str, label: str, reason: str) -> None:
         self._publish(
@@ -223,23 +255,54 @@ class NodeControl:
             }
         )
 
+    async def _start(self, entry: NodeEntry, call: NodeCall) -> dict[str, Any]:
+        if not entry.linked_device_id:
+            # Without knowing which browser sits on that PC, it could not be kept from approving.
+            return {"ok": False, "error": "link_required", "device": entry.label, "hint": LINK_HINT}
+        self.asking(entry)
+        try:
+            answer = await call()
+        except BaseException:
+            self.unclear(entry)
+            raise
+        result = answer.get("result")
+        refused = answer.get("error") == "refused_on_device"
+        if isinstance(result, dict) and result.get("ok") is True:
+            minutes = result.get("minutes")
+            self.start(entry, minutes if isinstance(minutes, int) else MAX_SESSION_MINUTES)
+        elif refused or (isinstance(result, dict) and result.get("ok") is False):
+            # The node said plainly that no session runs (refused, a game, switched off).
+            self.end(entry.device_id, "not started", quiet=True)
+        else:
+            # Timeout, a lost or broken answer: it may run. End it there to be sure.
+            self.unclear(entry)
+            await self._confirm_end(entry)
+        return answer
+
+    async def _confirm_end(self, entry: NodeEntry) -> None:
+        if self._end_on_node is None:
+            return
+        try:
+            ended = await self._end_on_node(entry)
+        except Exception as exc:  # noqa: BLE001 - unconfirmed: the block simply stays
+            log.warning("node.computer_end_failed", error=type(exc).__name__)
+            return
+        result = ended.get("result")
+        if isinstance(result, dict) and result.get("ok") is True:
+            self.end(entry.device_id, "ended after an unclear start")
+
     def around(self, tool: str) -> NodeAround:
         async def around(entry: NodeEntry, _args: dict[str, Any], call: NodeCall) -> dict[str, Any]:
+            if tool == "computer.session_start":
+                return await self._start(entry, call)
             answer = await call()
             result = answer.get("result")
             ok = isinstance(result, dict) and result.get("ok") is True
-            if tool == "computer.session_start":
+            if tool == "computer.session_end":
                 if ok:
-                    assert isinstance(result, dict)
-                    minutes = result.get("minutes")
-                    self.start(entry, minutes if isinstance(minutes, int) else 15)
-            elif tool == "computer.session_end":
-                if ok or answer.get("error") == "refused_on_device":
                     self.end(entry.device_id, "ended by Nox")
             elif isinstance(result, dict) and result.get("session_active") is False:
                 self.end(entry.device_id, "session over on the device")
-            elif answer.get("error") in ("device_offline", "refused_on_device"):
-                self.end(entry.device_id, "the device stopped it")
             return answer
 
         return around

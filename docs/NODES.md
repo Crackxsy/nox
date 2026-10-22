@@ -146,9 +146,10 @@ All off by default except music; each is switched on only here, with `nox node a
   asks twice. A session is asked for on this device every time (high), lasts at most 15 minutes
   and 200 actions, shows a notification, and ends on Ctrl+Alt+Shift+K, the kill switch, a lost
   connection or its time. Inside it Nox may move, click, scroll and press key combinations - never
-  into Nox's own windows, never while a question is open here. Nox's dashboard shows "Nox steuert
-  gerade Maus und Tastatur auf <device>" with a Stopp while it runs, and refuses an "allow" from
-  the browser on that device.
+  into Nox's own windows, never while a question is open here. It needs the browser on this PC
+  linked to the node in the dashboard. Nox's dashboard shows "Nox steuert gerade Maus und
+  Tastatur auf <device>" with a Stopp while it runs; meanwhile no paired device (phone, browser
+  on any PC) can allow anything - allow on the computer Nox runs on, or stop.
 - **Never in a game:** while a watched game (default Rocket League) or an anti-cheat service runs
   on this device, or a game is in front, every mouse, key and typing call is refused - by the
   node itself, before anything else, whatever Nox sends. `game.input.send` stays forbidden

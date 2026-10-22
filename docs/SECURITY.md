@@ -768,9 +768,17 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   runs on the node or a game is in front, and refuses them when no lock is installed (fails
   closed). `game.input.send` stays a hard prohibition. Enabling `computer` on a device asks
   twice and is refused off Windows. A confirmed session on a node grants pointer and keys for
-  that node only (`device:<id>|session:computer/*`, medium at most, for its minutes); while it
-  runs, an "allow" from the browser device linked to that node is refused, and the dashboard
-  names the device with a Stopp. **No new input-synthesis code:** the node calls
+  that node only (`device:<id>|session:computer/*`, medium at most, for its minutes), and the
+  dashboard names the device with a Stopp. **Self-approval lock on nodes (fail closed):** a
+  session can only be started on a node that has a browser device linked to it (`node.link`,
+  else `link_required`). From the moment `computer.session_start` is sent until the node confirms
+  the session is over, **no paired device** may answer "allow" or send a privileged request -
+  none is provably on another machine than the one Nox controls; approvals then come only from
+  the core machine's own dashboard or from a node's own dialog (and `deny`, Stopp and reading
+  always work). A start without a clear answer (timeout, lost or malformed answer) is ended on the
+  node with `computer.session_end` and keeps the lock until that end is confirmed, the kill switch
+  ends it, the node disconnects (which ends the session there too) or the longest session time
+  (120 minutes) has passed. **No new input-synthesis code:** the node calls
   `nox.desktop.computer_use` and `nox.desktop.keyboard`, the two files the Security Model §10 CI
   guard allows, so the guard needs no exception. Residual: node-local privacy zones are not
   applied to node screenshots yet (this core's privacy mode and capture switches are); a node

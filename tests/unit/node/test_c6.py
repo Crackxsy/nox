@@ -335,13 +335,17 @@ def test_this_cores_privacy_decides_before_a_node_is_asked() -> None:
 
 
 def _specs(
-    tmp_path: Path, privacy: Any, answer: Callable[..., Awaitable[dict[str, Any]]]
+    tmp_path: Path,
+    privacy: Any,
+    answer: Callable[..., Awaitable[dict[str, Any]]],
+    *,
+    linked: str | None = BROWSER,
 ) -> tuple[dict[str, Any], FakeRegistry, NodeControl, list[Any]]:
     laptop = _entry(
         LAPTOP,
         "Laptop",
         tools={n: "high" for n in ROUTABLE if n.startswith(("screen", "camera", "computer"))},
-        linked=BROWSER,
+        linked=linked,
     )
     laptop.confirmer = True
     registry = FakeRegistry([laptop])
@@ -349,7 +353,13 @@ def _specs(
     granted: list[Any] = []
     engine = SimpleNamespace(grant_temporary=granted.append, revoke=lambda gid: granted.append(gid))
     notices: list[dict[str, Any]] = []
-    control = NodeControl(engine, notices.append, linked=lambda _d: BROWSER)
+    ends: list[str] = []
+
+    async def end_on_node(entry: Any) -> dict[str, Any]:
+        ends.append(entry.device_id)
+        return await answer(entry, "computer.session_end", {})
+
+    control = NodeControl(engine, notices.append, end_on_node=end_on_node)
     specs = world_specs(
         registry=registry,  # type: ignore[arg-type]
         own=lambda _n: None,
@@ -358,7 +368,7 @@ def _specs(
         captures_root=lambda: tmp_path / "captures",
         privacy=lambda: privacy,
     )
-    return {s.name: s for s in specs}, registry, control, [granted, notices]
+    return {s.name: s for s in specs}, registry, control, [granted, notices, ends]
 
 
 async def test_a_node_capture_is_stored_on_this_core_and_the_model_gets_the_path(
@@ -417,7 +427,7 @@ async def test_a_node_session_grants_input_on_that_node_only_and_shows_who_is_co
             return {"device": entry.label, "result": {"ok": True, "minutes": 5}}
         return {"device": entry.label, "result": {"ok": True, "session_active": active["value"]}}
 
-    specs, _reg, control, (granted, notices) = _specs(tmp_path, _privacy(), answer)
+    specs, _reg, control, (granted, notices, _ends) = _specs(tmp_path, _privacy(), answer)
     start = specs["computer.session_start"]
     model = start.input_model.model_validate({"purpose": "Datei speichern", "device": "Laptop"})
     payload = model.model_dump()
@@ -438,8 +448,9 @@ async def test_a_node_session_grants_input_on_that_node_only_and_shows_who_is_co
     assert not grant_matches(grant, request("b" * 32), datetime.now(UTC))
     assert not grant_matches(grant, request(""), datetime.now(UTC))  # never this core
     assert notices[-1]["active"] and notices[-1]["device"].startswith("Laptop")
-    # The browser on that PC may not answer "allow" while Nox controls it; another one may.
-    assert control.blocks(BROWSER) and not control.blocks("e" * 32)
+    # No paired device may approve while Nox controls a node - none is provably elsewhere;
+    # the core machine's own dashboard (no device id) still may.
+    assert control.blocks(BROWSER) and control.blocks("e" * 32) and not control.blocks("")
     # The node says the session is over: notice off, grant revoked, lock lifted.
     active["value"] = False
     keys = specs["computer.keys"]
@@ -449,6 +460,106 @@ async def test_a_node_session_grants_input_on_that_node_only_and_shows_who_is_co
     await keys.handler(keys_args)
     assert notices[-1]["active"] is False and granted[-1] == grant.grant_id
     assert not control.blocks(BROWSER)
+
+
+async def _start(specs: dict[str, Any]) -> dict[str, Any]:
+    start = specs["computer.session_start"]
+    payload = start.input_model.model_validate(
+        {"purpose": "Datei speichern", "device": "Laptop"}
+    ).model_dump()
+    start.scope(payload)
+    result: dict[str, Any] = await start.handler(payload)
+    return result
+
+
+async def test_a_start_without_an_answer_blocks_until_the_end_is_confirmed(tmp_path: Path) -> None:
+    """Review C6: a start the node may have carried out never leaves approvals open."""
+    seen: dict[str, Any] = {"end": {"ok": False}}
+    blocked_while_asking: list[bool] = []
+
+    async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
+        if tool == "computer.session_start":
+            blocked_while_asking.append(control.blocks(BROWSER))
+            return {"error": "failed_on_device", "detail": "no answer", "device": entry.label}
+        return {"device": entry.label, "result": seen["end"]}
+
+    specs, _reg, control, (granted, notices, ends) = _specs(tmp_path, _privacy(), answer)
+    await _start(specs)
+    assert blocked_while_asking == [True]  # from the moment the start went out
+    assert ends == [LAPTOP]  # ended on the node to be sure ...
+    assert control.blocks("e" * 32) and notices[-1]["active"]  # ... not confirmed: still blocked
+    assert granted == []  # and nothing granted for an unconfirmed session
+    seen["end"] = {"ok": True, "was_open": True}
+    await _start(specs)
+    assert not control.blocks("e" * 32) and notices[-1]["active"] is False
+
+
+async def test_a_clear_refusal_lifts_the_block_at_once(tmp_path: Path) -> None:
+    async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
+        return {"error": "refused_on_device", "reason": "game_running", "device": entry.label}
+
+    specs, _reg, control, (_granted, _notices, ends) = _specs(tmp_path, _privacy(), answer)
+    await _start(specs)
+    assert not control.blocks(BROWSER) and ends == []
+
+
+async def test_a_node_without_a_linked_browser_gets_no_session(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
+        calls.append(tool)
+        return {"device": entry.label, "result": {"ok": True, "minutes": 5}}
+
+    specs, _reg, control, _ = _specs(tmp_path, _privacy(), answer, linked=None)
+    refused = await _start(specs)
+    assert refused["error"] == "link_required" and "node.link" in refused["hint"]
+    assert calls == [] and not control.blocks(BROWSER)
+
+
+@pytest.mark.parametrize(
+    ("client", "role", "refused"),
+    [
+        ("device:" + "e" * 32, "device", True),  # a phone, or a browser on any PC
+        ("device:" + BROWSER, "device", True),  # the browser linked to the controlled node
+        ("dashboard:1", "dashboard", False),  # the core machine's own dashboard
+    ],
+)
+async def test_paired_devices_cannot_approve_during_a_node_session(
+    client: str, role: str, refused: bool
+) -> None:
+    from pydantic import BaseModel
+
+    from nox.ipc.dispatch import RequestContext, RequestRegistry
+    from nox.ipc.protocol import Envelope, Kind, Source
+
+    control = NodeControl(None, lambda _n: None)
+
+    def blocks(ctx: Any) -> bool:
+        who = str(ctx.client_id)
+        return who.startswith("device:") and control.blocks(who.removeprefix("device:"))
+
+    registry = RequestRegistry()
+    registry.node_input_lock = blocks
+    ran: list[str] = []
+
+    class Empty(BaseModel):
+        pass
+
+    async def handler(_ctx: Any, _p: Any) -> dict[str, Any]:
+        ran.append(client)
+        return {}
+
+    registry.register("node.narrow", Empty, handler, roles=("dashboard", "device"))
+    envelope = Envelope(
+        kind=Kind.REQUEST, name="node.narrow", src=Source(role=role, id=client), payload={}
+    )  # type: ignore[arg-type]
+    ctx = RequestContext(client_id=client, role=role, request=envelope)
+    control.asking(_entry(LAPTOP, "Laptop", linked=BROWSER))  # provisional counts already
+    reply = await registry.dispatch(ctx, envelope)
+    assert (reply.kind is Kind.ERROR) is refused and bool(ran) is not refused
+    control.end_all("kill switch")
+    ran.clear()
+    assert (await registry.dispatch(ctx, envelope)).kind is Kind.RESPONSE and ran == [client]
 
 
 def test_the_kill_switch_ends_every_node_session() -> None:
@@ -531,3 +642,14 @@ async def test_music_runs_with_a_receipt_and_without_a_dialog(tmp_path: Path) ->
 def test_the_routes_keep_registry_entries_consistent() -> None:
     accepted = NodeRegistry._accept_tools([{"name": n, "_nox": {"risk": "low"}} for n in ROUTABLE])
     assert set(accepted) == ROUTABLE
+
+
+def test_building_the_tools_touches_no_window_api() -> None:
+    """Off Windows the probe cannot even be made: building the node's tools must not try."""
+    world, _ = _world(windows=False)
+
+    def no_windows() -> Any:
+        raise RuntimeError("RealWindowProbe requires Windows (ctypes.windll)")
+
+    world.probe = no_windows
+    assert "desktop.windows" in world_tools(world)

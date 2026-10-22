@@ -37,7 +37,7 @@ from nox.node.pairing import NodePairing
 from nox.node.policy import defaults_view, register_policy_requests
 from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink, render
 from nox.node.receipts import ReceiptSigner
-from nox.node.registry import NodeRegistry
+from nox.node.registry import NodeEntry, NodeRegistry
 from nox.node.repo import NodeRepository
 from nox.node.router import CannotShow, install_routes, routed_spec
 from nox.node.tools import NoArgs, NotifyArgs, system_info
@@ -390,16 +390,18 @@ def _world_specs(
     def publish(payload: dict[str, Any]) -> None:
         publish_nowait(getattr(core, "bus", None), "desktop.computer_use", payload, source="node")
 
-    def linked(device_id: str) -> str | None:
-        entry = next((e for e in registry.entries() if e.device_id == device_id), None)
-        return entry.linked_device_id if entry is not None else None
+    async def end_on_node(entry: NodeEntry) -> dict[str, Any]:
+        answer: dict[str, Any] = await registry.call(
+            entry, "computer.session_end", {}, risk="low", timeout_s=10
+        )
+        return answer
 
     security = getattr(core, "security", None)
     desktop = getattr(core.config, "desktop", None)
     control = NodeControl(
         getattr(security, "engine", None),
         publish,
-        linked=linked,
+        end_on_node=end_on_node,
         stop_hotkey=desktop.computer_use.stop_hotkey if desktop is not None else "",
     )
     controls.append(control)
@@ -411,6 +413,9 @@ def _world_specs(
         return control.blocks(client.removeprefix(DEVICE_CLIENT_PREFIX))
 
     core.node_input_lock = blocks
+    ipc = getattr(core, "registry", None)
+    if ipc is not None:
+        ipc.node_input_lock = blocks  # privileged requests from paired devices, too
     bus = getattr(core, "bus", None)
     if bus is not None:
 

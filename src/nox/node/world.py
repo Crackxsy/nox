@@ -387,9 +387,13 @@ class _LazyProbe:
         self._make, self._probe = make, None
 
     def __getattr__(self, name: str) -> Any:
-        if self._probe is None:
-            self._probe = self._make()
-        return getattr(self._probe, name)
+        # A bound method is taken at registration (`probe.focus`): forward it, make nothing yet.
+        def forward(*args: Any, **kwargs: Any) -> Any:
+            if self._probe is None:
+                self._probe = self._make()
+            return getattr(self._probe, name)(*args, **kwargs)
+
+        return forward
 
 
 def _real_probe() -> Any:

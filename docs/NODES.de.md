@@ -154,8 +154,10 @@ Alles aus, außer Musik; jedes wird nur hier eingeschaltet, mit `nox node allow 
   15 Minuten und 200 Aktionen, zeigt eine Benachrichtigung und endet mit Strg+Alt+Umschalt+K, dem
   Not-Aus, einer verlorenen Verbindung oder ihrer Zeit. Darin darf Nox bewegen, klicken, scrollen
   und Tastenkombinationen drücken - nie in Nox' eigene Fenster, nie während hier eine Frage offen
-  ist. Das Dashboard zeigt währenddessen „Nox steuert gerade Maus und Tastatur auf <Gerät>“ mit
-  „Stopp“ und lehnt ein „Erlauben“ aus dem Browser auf diesem Gerät ab.
+  ist. Dafür muss der Browser auf diesem PC im Dashboard mit dem Node verknüpft sein. Das
+  Dashboard zeigt währenddessen „Nox steuert gerade Maus und Tastatur auf <Gerät>“ mit „Stopp“;
+  solange kann kein gekoppeltes Gerät (Handy, Browser auf irgendeinem PC) etwas erlauben -
+  erlauben geht dann am Rechner, auf dem Nox läuft, stoppen überall.
 - **Nie im Spiel:** Solange ein beobachtetes Spiel (standardmäßig Rocket League) oder ein
   Anti-Cheat-Dienst auf diesem Gerät läuft oder ein Spiel vorne ist, wird jeder Maus-, Tasten-
   und Tipp-Aufruf abgelehnt - vom Node selbst, vor allem anderen, egal was Nox schickt.
