@@ -26,7 +26,13 @@ from typing import Any
 from pydantic import BaseModel, Field, create_model
 
 from nox.core.logging import get_logger
-from nox.node.registry import RISKS, NodeEntry, NodeRegistry, offline_error
+from nox.node.registry import (
+    RISKS,
+    SESSION_RESULT_KEY,
+    NodeEntry,
+    NodeRegistry,
+    offline_error,
+)
 from nox.security.model import Risk
 from nox.security.taint import current_conversation
 from nox.tools.registry import CallScope, ToolRegistry, ToolSpec
@@ -341,9 +347,9 @@ def routed_spec(
                 **extra,
             )
 
-        if around is not None:
-            return await around(entry, arguments, on_node)
-        return await on_node()
+        answer = await around(entry, arguments, on_node) if around is not None else await on_node()
+        answer.pop(SESSION_RESULT_KEY, None)  # the node's report is for the core, not the model
+        return answer
 
     template = core or ToolSpec(
         name=name,

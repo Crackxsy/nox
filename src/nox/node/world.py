@@ -40,6 +40,8 @@ import re
 import shutil
 import subprocess
 import sys
+import time
+import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -431,7 +433,22 @@ class World:
     browser: Any = None
     #: Ends a computer-use session (set by `world_tools`; called on every stop).
     end_session: Callable[[str], None] = lambda _reason: None
+    #: The session generation: starts at this run's start time in ms, so it keeps increasing
+    #: over restarts of the node, and goes up by one with every session start and end.
+    gen: int = field(default_factory=lambda: time.time_ns() // 1_000_000)
+    session_id: str = ""
+    computer: Any = None
     _background: set[asyncio.Task[None]] = field(default_factory=set)
+
+    def session_report(self) -> dict[str, Any]:
+        """This device's truth about computer use (`protocol.SessionReport`), read now."""
+        active = bool(self.computer is not None and self.computer.active)
+        return {"gen": self.gen, "active": active, "id": self.session_id if active else ""}
+
+    def session_changed(self, active: bool) -> None:
+        """A session started or ended here (`ComputerUse` says so through its notice)."""
+        self.gen += 1
+        self.session_id = uuid.uuid4().hex if active else ""
 
     def stop(self, reason: str) -> None:
         """`NodeAgent.on_stop`: end a computer-use session and close the browser."""
@@ -555,6 +572,7 @@ def _desktop_and_computer(world: World) -> list[NodeTool]:
     settings = ComputerUseConfig()
 
     def notice(active: bool, _reason: str) -> None:
+        world.session_changed(active)  # first: the report is right before anyone is told
         text = COMPUTER_NOTICE_ON.format(settings.stop_hotkey) if active else COMPUTER_NOTICE_OFF
         world._spawn(_quiet(world.notice(text)))
 
@@ -576,6 +594,7 @@ def _desktop_and_computer(world: World) -> list[NodeTool]:
         scratch, computer, lambda: settings, grant=lambda _minutes: "", revoke=lambda _g: None
     )
     world.end_session = end
+    world.computer = computer
     register_desktop_tools(scratch, _LazyProbe(world.probe), world.lock.pids, input_guard=computer)
     out: list[NodeTool] = []
     for name in scratch.names():
@@ -583,8 +602,6 @@ def _desktop_and_computer(world: World) -> list[NodeTool]:
         assert spec is not None
         group = spec.name.split(".", 1)[0]
         tool = _adapt(spec, group, windows_only=world)
-        if group == "computer":  # every answer says whether a session runs
-            tool = _with_session_state(tool, computer)
         out.append(tool)
     return out
 
@@ -594,20 +611,6 @@ async def _quiet(coro: Awaitable[None]) -> None:
         await coro
     except Exception as exc:  # noqa: BLE001 - a notice that fails never stops anything
         log.warning("node.notice_failed", error=type(exc).__name__)
-
-
-def _with_session_state(tool: NodeTool, computer: Any) -> NodeTool:
-    """Every answer says whether a session is open, so the core can end its lock and notice -
-    and keeps them while an answer does not say it plainly."""
-    inner = tool.handler
-
-    async def handler(args: BaseModel) -> dict[str, Any]:
-        result = await inner(args)
-        return {**result, "session_active": bool(computer.active)}
-
-    return NodeTool(
-        tool.name, tool.group, tool.risk, tool.description, tool.args, handler, path_safe=True
-    )
 
 
 def world_tools(world: World) -> dict[str, NodeTool]:

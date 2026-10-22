@@ -115,6 +115,8 @@ class NodeSession:
     node_state: str = ""
     #: A new certificate was issued over this connection (`nox/renew`, at most once).
     renewed: bool = False
+    #: The node's last word on computer use (`p.SessionReport`, from its hello and pongs).
+    computer: p.SessionReport | None = None
     blobs: dict[str, list[bytes]] = field(default_factory=dict)
     complete: set[str] = field(default_factory=set)
     blob_bytes: int = 0
@@ -359,6 +361,7 @@ class NodeListener:
             compatible=compatible,
             transport=transport,
             cert_not_after=cert.not_valid_after_utc,
+            computer=hello_msg.session,
         )
         # Replacing an older session and registering this one happen under the device's lock,
         # which a revocation takes too: a revocation either sees this session registered and
@@ -489,6 +492,8 @@ class NodeListener:
         elif method == p.M_PONG:
             assert isinstance(params, p.Ping)
             session.node_state = params.state
+            if params.session is not None:
+                session.computer = params.session
         elif method == p.M_SECURITY_KILL:
             assert isinstance(params, p.SecurityKill)
             status = self._kill(session.device_id, params.reason)

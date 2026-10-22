@@ -143,6 +143,9 @@ class NodeAgent:
         self._local_stopped = False
         #: Called whenever the node stops its calls (kill, local stop, connection lost, dead man).
         self.on_stop: Callable[[str], None] = lambda _reason: None
+        #: This device's computer-use truth (`p.SessionReport` as a dict), told to the core in the
+        #: hello, every pong and every tool answer; None where there is none.
+        self.session_report: Callable[[], dict[str, Any] | None] = lambda: None
         #: call id -> (the running call, its JSON-RPC id)
         self._calls: dict[str, tuple[asyncio.Task[None], Any, str]] = {}
         self._last_core = time.monotonic()
@@ -251,6 +254,7 @@ class NodeAgent:
                     self._gate.manifest.enabled(), [t.name for t in offered]
                 ),
                 "confirmer": bool(self._confirmer.available),
+                **self._session_field(),
             },
         }
 
@@ -388,6 +392,14 @@ class NodeAgent:
             message["error"] = {"code": error[0], "message": error[1]}
         else:
             message["result"] = result if result is not None else {}
+            report = self._session_field()
+            if isinstance(result, dict) and "content" in result and report:
+                # Every tool answer - result, error or refusal - carries the node's truth about
+                # computer use, read after the call (the core's lock follows it).
+                message["result"] = {
+                    **result,
+                    "_nox": {**(result.get("_nox") or {}), **report},
+                }
         with contextlib.suppress(ConnectionClosed):
             await ws.send(json.dumps(message, ensure_ascii=False))
 
@@ -419,6 +431,7 @@ class NodeAgent:
                                 "seq": ping.seq,
                                 "ts": time.time(),
                                 "state": self.stopped_reason() or "",
+                                **self._session_field(),
                             },
                         }
                     )
@@ -767,6 +780,14 @@ class NodeAgent:
             msg_id,
             result={"content": [{"type": "text", "text": text}], "structuredContent": result},
         )
+
+    def _session_field(self) -> dict[str, Any]:
+        try:
+            report = self.session_report()
+        except Exception as exc:  # noqa: BLE001 - no report rather than no answer
+            log.warning("node.session_report_failed", error=type(exc).__name__)
+            return {}
+        return {"session": report} if report is not None else {}
 
     async def _send_blob(self, ws: ClientConnection, call_id: str, data: bytes) -> bool:
         """`nox/blob` chunks of one result, before its answer; False when it is too large."""

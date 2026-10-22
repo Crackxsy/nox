@@ -769,20 +769,23 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   closed). `game.input.send` stays a hard prohibition. Enabling `computer` on a device asks
   twice and is refused off Windows. A confirmed session on a node grants pointer and keys for
   that node only (`device:<id>|session:computer/*`, medium at most, for its minutes), and the
-  dashboard names the device with a Stopp. **Self-approval lock on nodes (fail closed):** a
-  session can only be started on a node that has a browser device linked to it (`node.link`,
-  else `link_required`). From the moment `computer.session_start` is sent until the node confirms
-  the session is over, **no paired device** may answer "allow" or send a privileged request -
-  none is provably on another machine than the one Nox controls; approvals then come only from
-  the core machine's own dashboard or from a node's own dialog (and `deny`, Stopp and reading
-  always work). Every node answer about computer use says `session_active`; the lock is lifted
-  only when the node says plainly that no session runs. A start without that (a refusal before it
-  ran, a timeout, a lost or malformed answer) is ended on the node with `computer.session_end` and
-  keeps the lock until that end says so, the kill switch ends it, the node disconnects (which ends
-  the session there too) or the longest session time (120 minutes) has passed. Each start attempt
-  carries its own nonce: an answer only ever changes its own attempt's record, and a new start
-  while a session (or an unclear attempt) exists for that node is refused (`session_running`),
-  never laid over it. **No new input-synthesis code:** the node calls
+  dashboard names the device with a Stopp. **Self-approval lock on nodes (fail closed, the node is the authority):** the node reports
+  its truth about computer use - `session: {gen, active, id}`, a generation that only grows (it
+  starts at the run's start time in ms and goes up with every session start and end) - in its
+  hello, every pong (each second) and every tool answer, refusals included. The core keeps per
+  node the highest generation seen and derives the lock from it monotonically: a report of an
+  older generation is ignored, the same generation updates `active`, an unreadable report changes
+  nothing. The lock holds while the node says a session is open (unreachable: until it says
+  otherwise or 120 minutes, the longest session, have passed since it last said "open") or while
+  a start is on its way; a start is settled only by its own answer's report or a newer
+  generation. While the lock holds for any node, **no paired device** may answer "allow" or send
+  a privileged request - none is provably on another machine than the one Nox controls; approvals
+  then come only from the core machine's own dashboard or from a node's own dialog (`deny`, Stopp
+  and reading always work). A start needs a browser device linked to that node (`node.link`,
+  else `link_required`) and is refused while the lock holds for it (`session_running`); a start
+  without a readable report is followed by `computer.session_end`. Stops, kills and disconnects
+  never lift the lock themselves - the node ends its session on `nox/kill` and its next report
+  lifts it. Grant and dashboard line follow the derived state. **No new input-synthesis code:** the node calls
   `nox.desktop.computer_use` and `nox.desktop.keyboard`, the two files the Security Model §10 CI
   guard allows, so the guard needs no exception. Residual: node-local privacy zones are not
   applied to node screenshots yet (this core's privacy mode and capture switches are); a node

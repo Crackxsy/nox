@@ -383,6 +383,7 @@ def run(runtime: NodeRuntime, *, install_signals: bool = True, tray: bool = Fals
         )
         if runtime.world is not None:
             agent.on_stop = runtime.world.stop  # a stop ends a computer session, closes the browser
+            agent.session_report = runtime.world.session_report
         updates = asyncio.create_task(
             keep_updated(
                 runtime,

@@ -191,13 +191,13 @@ async def test_a_game_starting_inside_a_session_stops_it_before_the_next_event()
     started = await tools["computer.session_start"].handler(
         tools["computer.session_start"].args.model_validate({"purpose": "Datei speichern"})
     )
-    assert started["ok"] and started["session_active"]
+    assert started["ok"] and world.session_report()["active"]
     keys = tools["computer.keys"]
     assert (await keys.handler(keys.args.model_validate({"combo": "ctrl+s"})))["ok"]
     sent = len(seen["sender"].events)
     names.add("rocketleague.exe")  # the guard inside ComputerUse, before every single event
     refused = await keys.handler(keys.args.model_validate({"combo": "ctrl+s"}))
-    assert refused == {"ok": False, "error": refused["error"], "session_active": False}
+    assert refused["ok"] is False and world.session_report()["active"] is False
     assert len(seen["sender"].events) == sent
 
 
@@ -209,7 +209,7 @@ async def test_a_stop_ends_the_session_on_the_node() -> None:
     world.stop("stopped_by_core")  # what `NodeAgent.on_stop` calls on nox/kill
     pointer = tools["computer.pointer"]
     answer = await pointer.handler(pointer.args.model_validate({"action": "click"}))
-    assert answer["ok"] is False and answer["session_active"] is False
+    assert answer["ok"] is False and world.session_report()["active"] is False
     assert seen["sender"].events == []
     await asyncio.sleep(0)  # the notices are shown in the background
     assert any("Maus und Tastatur" in n for n in seen["notices"])
@@ -295,9 +295,11 @@ async def test_a_capture_travels_as_blob_chunks_and_needs_the_device_dialog(
     )
     try:
         session = await session_of(listener, node.node_id)
+        node.agent.session_report = world.session_report
         answer = await call(
             session, listener.signer, "screen.capture", {}, risk="high", call_id="cap1"
         )  # type: ignore[attr-defined]
+        assert answer["_nox"]["session"] == world.session_report()  # every answer says it
         assert confirmer.asked and "screen.capture" in confirmer.asked[0]  # asked on the device
         assert "_blob" not in answer["structuredContent"]
         assert answer["structuredContent"]["sha256"] == hashlib.sha256(big).hexdigest()
@@ -305,6 +307,7 @@ async def test_a_capture_travels_as_blob_chunks_and_needs_the_device_dialog(
         confirmer.answer = "deny"
         denied = await call(session, listener.signer, "screen.capture", {}, risk="high")  # type: ignore[attr-defined]
         assert denied["_nox"]["refused"] == "denied_on_device"
+        assert denied["_nox"]["session"]["active"] is False  # refusals too
         assert len(seen["notices"]) == 1  # no notice, no picture for the refused one
     finally:
         node.stop.set()
@@ -417,22 +420,40 @@ async def test_a_capture_that_does_not_match_its_hash_or_privacy_is_refused(tmp_
 # ---- computer use on the core's side -------------------------------------------------------------
 
 
+def _report(gen: int, active: bool, sid: str = "") -> dict[str, Any]:
+    return {"gen": gen, "active": active, "id": sid or ("ab" * 16 if active else "")}
+
+
+def _answer_with(report: dict[str, Any] | None, **result: Any) -> dict[str, Any]:
+    answer: dict[str, Any] = {"device": "Laptop", "result": {"ok": True, **result}}
+    if report is not None:
+        answer["_session"] = report
+    return answer
+
+
+async def _route(specs: dict[str, Any], name: str, args: dict[str, Any]) -> dict[str, Any]:
+    spec = specs[name]
+    payload = spec.input_model.model_validate({**args, "device": "Laptop"}).model_dump()
+    spec.scope(payload)
+    result: dict[str, Any] = await spec.handler(payload)
+    return result
+
+
+async def _start(specs: dict[str, Any]) -> dict[str, Any]:
+    return await _route(specs, "computer.session_start", {"purpose": "Datei speichern"})
+
+
 async def test_a_node_session_grants_input_on_that_node_only_and_shows_who_is_controlled(
     tmp_path: Path,
 ) -> None:
-    active = {"value": True}
-
     async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
         if tool == "computer.session_start":
-            return {"device": entry.label, "result": {"ok": True, "minutes": 5}}
-        return {"device": entry.label, "result": {"ok": True, "session_active": active["value"]}}
+            return _answer_with(_report(2, True), minutes=5)
+        return _answer_with(_report(3, False), done="click")
 
     specs, _reg, control, (granted, notices, _ends) = _specs(tmp_path, _privacy(), answer)
-    start = specs["computer.session_start"]
-    model = start.input_model.model_validate({"purpose": "Datei speichern", "device": "Laptop"})
-    payload = model.model_dump()
-    assert start.scope is not None and start.scope(payload).risk is Risk.HIGH
-    await start.handler(payload)
+    started = await _start(specs)
+    assert "_session" not in started  # the node's report is for the core, never the model
     grant = granted[0]
     assert grant.scope == f"device:{LAPTOP}|session:computer/*" and grant.max_risk is Risk.MEDIUM
 
@@ -451,74 +472,74 @@ async def test_a_node_session_grants_input_on_that_node_only_and_shows_who_is_co
     # No paired device may approve while Nox controls a node - none is provably elsewhere;
     # the core machine's own dashboard (no device id) still may.
     assert control.blocks(BROWSER) and control.blocks("e" * 32) and not control.blocks("")
-    # The node says the session is over: notice off, grant revoked, lock lifted.
-    active["value"] = False
-    keys = specs["computer.keys"]
-    keys_payload = keys.input_model.model_validate({"combo": "ctrl+s", "device": "Laptop"})
-    keys_args = keys_payload.model_dump()
-    keys.scope(keys_args)
-    await keys.handler(keys_args)
+    # The node reports the session over: notice off, grant revoked, lock lifted.
+    await _route(specs, "computer.pointer", {"action": "click"})
     assert notices[-1]["active"] is False and granted[-1] == grant.grant_id
     assert not control.blocks(BROWSER)
 
 
-async def _start(specs: dict[str, Any]) -> dict[str, Any]:
-    start = specs["computer.session_start"]
-    payload = start.input_model.model_validate(
-        {"purpose": "Datei speichern", "device": "Laptop"}
-    ).model_dump()
-    start.scope(payload)
-    result: dict[str, Any] = await start.handler(payload)
-    return result
+async def test_a_confirmation_after_a_stop_report_still_locks(tmp_path: Path) -> None:
+    """Race 1: a stop's report arrives before the start's answer, which confirms a session."""
+
+    async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
+        control.observe(LAPTOP, _report(1, False))  # a pong from before the start ran
+        return _answer_with(_report(2, True), minutes=5)
+
+    specs, _reg, control, _ = _specs(tmp_path, _privacy(), answer)
+    await _start(specs)
+    assert control.locked(LAPTOP) and control.blocks(BROWSER)
 
 
-async def test_a_start_without_an_answer_blocks_until_the_end_is_confirmed(tmp_path: Path) -> None:
-    """Review C6: a start the node may have carried out never leaves approvals open."""
-    seen: dict[str, Any] = {"end": {"ok": True, "was_open": True}}  # no `session_active`
+async def test_a_stale_report_never_clears_a_newer_session(tmp_path: Path) -> None:
+    """Race 2 and ordering: a late end answer of an older generation changes nothing."""
+    late: dict[str, Any] = {}
+
+    async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
+        if tool == "computer.session_start":
+            return _answer_with(_report(5, True), minutes=5)
+        return late
+
+    specs, _reg, control, _ = _specs(tmp_path, _privacy(), answer)
+    await _start(specs)
+    late.update(_answer_with(_report(3, False), was_open=True))
+    await _route(specs, "computer.session_end", {})
+    assert control.blocks(BROWSER)  # gen 3 < 5: ignored
+    control.observe(LAPTOP, {"gen": 4, "active": False})
+    control.observe(LAPTOP, "not a report")
+    control.observe(LAPTOP, {"gen": 9, "active": "no"})
+    assert control.blocks(BROWSER)  # older or unreadable: nothing changes
+    control.observe(LAPTOP, _report(5, False))  # the same generation, now over (it ran out)
+    assert not control.blocks(BROWSER)
+
+
+async def test_a_start_without_a_readable_answer_blocks_until_the_node_says_so(
+    tmp_path: Path,
+) -> None:
+    end_report: dict[str, Any] = {"value": None}
     blocked_while_asking: list[bool] = []
 
     async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
         if tool == "computer.session_start":
             blocked_while_asking.append(control.blocks(BROWSER))
             return {"error": "failed_on_device", "detail": "no answer", "device": entry.label}
-        return {"device": entry.label, "result": seen["end"]}
+        return _answer_with(end_report["value"], was_open=False)
 
     specs, _reg, control, (granted, notices, ends) = _specs(tmp_path, _privacy(), answer)
     await _start(specs)
     assert blocked_while_asking == [True]  # from the moment the start went out
     assert ends == [LAPTOP]  # ended on the node to be sure ...
-    assert control.blocks("e" * 32) and notices[-1]["active"]  # ... not said plainly: blocked
-    assert granted == []  # and nothing granted for an unconfirmed session
+    assert control.blocks("e" * 32) and notices[-1]["active"]  # ... no report: still blocked
+    assert granted == []  # nothing granted while no session is known
     assert (await _start(specs))["error"] == "session_running"  # no second attempt over it
-    seen["end"] = {"ok": True, "was_open": True, "session_active": False}
-    stop = specs["computer.session_end"]
-    payload = stop.input_model.model_validate({"device": "Laptop"}).model_dump()
-    stop.scope(payload)
-    await stop.handler(payload)
+    end_report["value"] = _report(7, False)
+    await _route(specs, "computer.session_end", {})
     assert not control.blocks("e" * 32) and notices[-1]["active"] is False
 
 
-async def test_a_refused_start_is_checked_with_an_end_on_the_node(tmp_path: Path) -> None:
-    end_answer: dict[str, Any] = {"ok": True, "session_active": True}
-
+async def test_a_refusal_with_the_nodes_report_settles_the_start(tmp_path: Path) -> None:
     async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
-        if tool == "computer.session_start":
-            return {"error": "refused_on_device", "reason": "budget", "device": entry.label}
-        return {"device": entry.label, "result": end_answer}
-
-    specs, _reg, control, (_granted, _notices, ends) = _specs(tmp_path, _privacy(), answer)
-    await _start(specs)
-    assert ends == [LAPTOP] and control.blocks(BROWSER)  # the node did not say "none runs"
-    control.end_all("kill switch")
-    end_answer["session_active"] = False
-    await _start(specs)
-    assert ends == [LAPTOP, LAPTOP] and not control.blocks(BROWSER)
-
-
-async def test_a_plain_no_from_the_node_lifts_the_block_at_once(tmp_path: Path) -> None:
-    async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
-        result = {"ok": False, "error": "a game is running", "session_active": False}
-        return {"device": entry.label, "result": result}
+        refused = {"error": "refused_on_device", "reason": "game_running", "device": "Laptop"}
+        return {**refused, "_session": _report(4, False)}
 
     specs, _reg, control, (_granted, _notices, ends) = _specs(tmp_path, _privacy(), answer)
     await _start(specs)
@@ -530,28 +551,48 @@ async def test_a_running_session_is_never_replaced_by_a_new_start(tmp_path: Path
 
     async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
         calls.append(tool)
-        return {"device": entry.label, "result": {"ok": True, "minutes": 5, "session_active": True}}
+        return _answer_with(_report(2, True), minutes=5)
 
     specs, _reg, control, (granted, _notices, _ends) = _specs(tmp_path, _privacy(), answer)
     await _start(specs)
-    first = control.sessions[LAPTOP]
-    second = await _start(specs)
-    assert second["error"] == "session_running" and calls == ["computer.session_start"]
-    assert control.sessions[LAPTOP] is first and not first.provisional
+    assert (await _start(specs))["error"] == "session_running"
+    assert calls == ["computer.session_start"]
     assert control.blocks(BROWSER) and len(granted) == 1  # the grant is untouched
 
 
-async def test_an_answer_only_ever_touches_its_own_attempt(tmp_path: Path) -> None:
-    async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
-        # While this attempt waits, a stop clears it and another attempt starts.
-        control.end_all("kill switch")
-        control.asking(entry)
-        result = {"ok": False, "error": "switched off", "session_active": False}
-        return {"device": entry.label, "result": result}
+async def test_disconnected_or_silent_nodes_keep_the_lock_for_the_longest_session(
+    tmp_path: Path,
+) -> None:
+    now = {"t": 1000.0}
+    control = NodeControl(None, lambda _n: None, clock=lambda: now["t"])
+    control.observe(LAPTOP, _report(2, True))
+    now["t"] += 3600  # offline for an hour: no report, still locked
+    assert control.blocks(BROWSER)
+    now["t"] += 3 * 3600  # past the longest session since its last word
+    assert not control.blocks(BROWSER)
+    # A start the node never answers holds for the longest session as well.
+    entry = _entry("b" * 32, "Arbeits-PC", linked=BROWSER)
 
-    specs, _reg, control, _ = _specs(tmp_path, _privacy(), answer)
-    await _start(specs)
-    assert control.running(LAPTOP) and control.blocks(BROWSER)  # the other attempt still holds
+    async def never(**_kw: Any) -> dict[str, Any]:
+        raise TimeoutError
+
+    with pytest.raises(TimeoutError):
+        await control.around("computer.session_start")(entry, {}, never)
+    assert control.blocks(BROWSER)
+    now["t"] += 2 * 3600 + 1
+    assert not control.blocks(BROWSER)
+
+
+async def test_a_stop_lifts_the_lock_only_through_the_nodes_report() -> None:
+    pongs: list[tuple[str, Any]] = []
+    notices: list[dict[str, Any]] = []
+    control = NodeControl(None, notices.append, reports=lambda: list(pongs))
+    pongs.append((LAPTOP, _report(2, True)))
+    assert control.blocks(BROWSER) and notices[-1]["active"]
+    pongs.clear()  # the kill switch went out; the node has not answered yet
+    assert control.blocks(BROWSER)
+    pongs.append((LAPTOP, _report(3, False)))  # its next pong: the session ended there
+    assert not control.blocks(BROWSER) and notices[-1]["active"] is False
 
 
 async def test_a_node_without_a_linked_browser_gets_no_session(tmp_path: Path) -> None:
@@ -559,7 +600,7 @@ async def test_a_node_without_a_linked_browser_gets_no_session(tmp_path: Path) -
 
     async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
         calls.append(tool)
-        return {"device": entry.label, "result": {"ok": True, "minutes": 5}}
+        return _answer_with(_report(2, True), minutes=5)
 
     specs, _reg, control, _ = _specs(tmp_path, _privacy(), answer, linked=None)
     refused = await _start(specs)
@@ -605,21 +646,12 @@ async def test_paired_devices_cannot_approve_during_a_node_session(
         kind=Kind.REQUEST, name="node.narrow", src=Source(role=role, id=client), payload={}
     )  # type: ignore[arg-type]
     ctx = RequestContext(client_id=client, role=role, request=envelope)
-    control.asking(_entry(LAPTOP, "Laptop", linked=BROWSER))  # provisional counts already
+    control.observe(LAPTOP, _report(2, True))
     reply = await registry.dispatch(ctx, envelope)
     assert (reply.kind is Kind.ERROR) is refused and bool(ran) is not refused
-    control.end_all("kill switch")
+    control.observe(LAPTOP, _report(3, False))
     ran.clear()
     assert (await registry.dispatch(ctx, envelope)).kind is Kind.RESPONSE and ran == [client]
-
-
-def test_the_kill_switch_ends_every_node_session() -> None:
-    notices: list[dict[str, Any]] = []
-    control = NodeControl(None, notices.append)
-    control.start(_entry(LAPTOP, "Laptop"), 10)
-    control.start(_entry("b" * 32, "Arbeits-PC"), 10)
-    control.end_all("kill switch")
-    assert control.sessions == {} and [n["active"] for n in notices[-2:]] == [False, False]
 
 
 # ---- media ---------------------------------------------------------------------------------------
@@ -706,11 +738,34 @@ def test_building_the_tools_touches_no_window_api() -> None:
     assert "desktop.windows" in world_tools(world)
 
 
-async def test_every_computer_answer_says_whether_a_session_runs() -> None:
+async def test_the_node_reports_its_sessions_with_a_growing_generation() -> None:
     world, _ = _world()
     tools = world_tools(world)
+    before = world.session_report()
+    assert before["active"] is False and before["id"] == ""
     start = tools["computer.session_start"]
-    started = await start.handler(start.args.model_validate({"purpose": "Fenster ordnen"}))
-    assert started["session_active"] is True
+    await start.handler(start.args.model_validate({"purpose": "Fenster ordnen"}))
+    running = world.session_report()
+    assert running["active"] and running["gen"] > before["gen"] and len(running["id"]) == 32
     end = tools["computer.session_end"]
-    assert (await end.handler(end.args.model_validate({})))["session_active"] is False
+    await end.handler(end.args.model_validate({}))
+    over = world.session_report()
+    assert over["active"] is False and over["gen"] > running["gen"]
+    later, _ = _world()
+    assert later.session_report()["gen"] >= before["gen"]  # a new run never goes back
+
+
+def test_session_reports_are_read_strictly() -> None:
+    from nox.node.protocol import NodeHello, Ping, SessionReport
+
+    assert Ping.model_validate({"seq": 1, "ts": 1.0, "session": _report(3, True)}).session
+    for bad in (
+        {"gen": 1, "active": "no"},
+        {"gen": "1", "active": True},
+        {"gen": -1, "active": False},
+        {"gen": 1, "active": True, "id": "../x"},
+        {"gen": 1, "active": True, "more": 1},
+    ):
+        with pytest.raises(ValueError):
+            SessionReport.model_validate(bad)
+    assert "session" in NodeHello.model_fields

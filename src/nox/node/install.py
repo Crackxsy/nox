@@ -157,14 +157,6 @@ def install(core: Any) -> NodeRuntime:
             origin="node", reason=f"node {device_id[:8]}: {reason}"[:200]
         )
 
-    controls: list[NodeControl] = []
-
-    async def on_disconnected(session: Any) -> None:
-        await registry.on_disconnected(session)
-        # The node ends a computer-use session with its connection; so does the core.
-        for control in controls:
-            control.end(session.device_id, "the device went offline")
-
     listener = NodeListener(
         pairing=pairing,
         nodes=NodeRepository(core.db),
@@ -177,7 +169,7 @@ def install(core: Any) -> NodeRuntime:
         kill_engaged=core.security.killswitch.is_engaged,
         receipt_key=signer.public_key,
         on_connected=registry.on_connected,
-        on_disconnected=on_disconnected,
+        on_disconnected=registry.on_disconnected,
         on_tools_changed=registry.on_tools_changed,
     )
     runtime.listener = listener
@@ -193,7 +185,9 @@ def install(core: Any) -> NodeRuntime:
     killswitch = core.security.killswitch
     killswitch.register_stop_hook("nodes", stop_nodes)
     killswitch.register_resume_hook("nodes", resume_nodes)
-    _install_routes(core, registry, controls)
+    control = _install_routes(core, registry, [listener])
+    if control is not None:
+        _keep(runtime, _watch_sessions(control), "nox-node-computer")
 
     async def redeem(body: NodePairRequest) -> tuple[int, dict[str, Any]]:
         if not listener.running:
@@ -297,9 +291,20 @@ def _field(name: str) -> Callable[[dict[str, Any]], str]:
 _Target = Callable[[dict[str, Any]], str]
 
 
+async def _watch_sessions(control: NodeControl) -> None:
+    """Every second: the nodes' latest reports, so the lock, the grant and the dashboard follow
+    a session that ends on the node (time, stop hotkey, kill) without another call."""
+    while True:
+        await asyncio.sleep(1.0)
+        try:
+            control.active()
+        except Exception as exc:  # noqa: BLE001 - the watcher outlives one bad round
+            log.error("node.computer_watch_failed", error=type(exc).__name__)
+
+
 def _install_routes(
-    core: Any, registry: NodeRegistry, controls: list[NodeControl] | None = None
-) -> None:
+    core: Any, registry: NodeRegistry, listeners: list[Any] | None = None
+) -> NodeControl:
     """`system.info` (the core has it too), `notify.show` (nodes only) and the hands - `file.*`
     and `shell.run`, each the core's own tool when the call stays here - become routable; the
     capability report hides a node-only tool while no node offers it, and every turn's context
@@ -353,7 +358,8 @@ def _install_routes(
                 remember_on_node=name != "file.write",
             )
         )
-    specs += _world_specs(core, registry, defaults, controls if controls is not None else [])
+    world, control = _world_specs(core, registry, defaults, listeners or [])
+    specs += world
     on_core = {spec.name for spec in specs if own(spec.name) is not None}
     install_routes(core.tool_registry, specs)
     node_only = {spec.name for spec in specs} - on_core
@@ -376,14 +382,14 @@ def _install_routes(
             return f"{text}\n{line}" if text and line else (text or line)
 
         orchestrator.facts = facts
+    return control
 
 
 def _world_specs(
-    core: Any, registry: NodeRegistry, defaults: Callable[[], Any], controls: list[NodeControl]
-) -> list[ToolSpec]:
+    core: Any, registry: NodeRegistry, defaults: Callable[[], Any], listeners: list[Any]
+) -> tuple[list[ToolSpec], NodeControl]:
     """C6: captures, browser, desktop, computer use and media, routable to nodes; and the
     record of computer-use sessions on nodes (dashboard notice, grant, "allow" lock)."""
-    from nox.core.events import E  # noqa: PLC0415
     from nox.ipc.tokens import DEVICE_CLIENT_PREFIX  # noqa: PLC0415
     from nox.security._events import publish_nowait  # noqa: PLC0415
 
@@ -398,13 +404,25 @@ def _world_specs(
 
     security = getattr(core, "security", None)
     desktop = getattr(core.config, "desktop", None)
+
+    def reports() -> list[tuple[str, Any]]:
+        listener = listeners[0] if listeners else None
+        if listener is None:
+            return []
+        return [(d, s.computer) for d, s in listener.sessions.items() if s.computer is not None]
+
+    def label_of(device_id: str) -> str:
+        entry = next((e for e in registry.entries() if e.device_id == device_id), None)
+        return entry.label if entry is not None else device_id[:8]
+
     control = NodeControl(
         getattr(security, "engine", None),
         publish,
         end_on_node=end_on_node,
+        reports=reports,
+        labels=label_of,
         stop_hotkey=desktop.computer_use.stop_hotkey if desktop is not None else "",
     )
-    controls.append(control)
 
     def blocks(ctx: Any) -> bool:
         client = str(getattr(ctx, "client_id", ""))
@@ -416,16 +434,11 @@ def _world_specs(
     ipc = getattr(core, "registry", None)
     if ipc is not None:
         ipc.node_input_lock = blocks  # privileged requests from paired devices, too
-    bus = getattr(core, "bus", None)
-    if bus is not None:
-
-        async def on_kill(_event: Any) -> None:
-            control.end_all("kill switch")
-
-        bus.subscribe(E.SECURITY_KILL_SWITCH, on_kill)
+    # A stop never lifts the lock by itself: the node ends its session on `nox/kill` and says
+    # so in its next pong, which `pull` reads (also every second, `_watch_sessions`).
     paths = getattr(core.config, "paths", None)
     captures = Path(paths.runtime_dir if paths is not None else ".") / "hands" / "captures"
-    return world_specs(
+    specs = world_specs(
         registry=registry,
         own=core.tool_registry.get,
         defaults=defaults,
@@ -433,6 +446,7 @@ def _world_specs(
         captures_root=lambda: captures,
         privacy=lambda: getattr(security, "privacy", None),
     )
+    return specs, control
 
 
 def core_system_info_spec() -> ToolSpec:

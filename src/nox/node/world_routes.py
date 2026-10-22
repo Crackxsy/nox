@@ -11,16 +11,20 @@ gate, budget and audit. What this module adds:
   node sends the picture as `nox/blob` chunks; it is checked (PNG, size, SHA-256) and stored under
   this core's captures folder like a capture of its own, so `vision.describe` and its rules
   (camera pictures never to the cloud) apply unchanged. The model gets the path, never the image.
-* **Computer use**: a confirmed `computer.session_start` on a node grants `computer.pointer` and
-  `computer.keys` *on that node only* (`device:<id>|session:computer/*`, medium at most) for the
-  session's minutes, and the dashboard shows "Nox steuert gerade Maus und Tastatur auf ..." with a
-  stop. The session ends here when the node says so, on `computer.session_end`, the kill switch,
-  the node going offline, or its time. It needs a browser device linked to that node. **Fail
-  closed:** from the moment the start is sent until the node confirms the end, every paired
-  device's approvals and privileged requests are refused (`blocks`) - approvals then come only
-  from the core machine's own dashboard or a node's own dialog. An unclear start (timeout, broken
-  answer) is ended on the node and keeps blocking until that end is confirmed or the longest
-  session time has passed.
+* **Computer use** - the node is the authority. It reports its truth about computer use
+  (`SessionReport`: a generation that only grows, whether a session is open, its id) in its hello,
+  every pong and every tool answer. The core keeps, per node, the highest generation it saw and
+  derives its approval lock from it, monotonically: a report older than what it knows is ignored,
+  one it cannot read changes nothing. The lock (`blocks`) holds while the node says a session is
+  open (and, unreachable, until it says otherwise or the longest session time has passed since it
+  last said so) or while a start is on its way. While it holds, **no paired device** may approve
+  or send a privileged request - approvals come only from the core machine's own dashboard or a
+  node's own dialog. A start needs a browser device linked to that node and is refused while the
+  lock holds for it; a start without a readable answer sends `computer.session_end`. Stops,
+  kills and disconnects never lift the lock themselves - only the node's report does. While a
+  session is open, `computer.pointer` and `computer.keys` are granted on that node only
+  (`device:<id>|session:computer/*`, medium at most), and the dashboard shows "Nox steuert gerade
+  Maus und Tastatur auf ..." with a stop.
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ import contextlib
 import hashlib
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -39,8 +43,8 @@ from typing import Any
 from pydantic import BaseModel
 
 from nox.core.logging import get_logger
-from nox.node.protocol import render
-from nox.node.registry import BLOB_RESULT_KEY, NodeEntry, NodeRegistry
+from nox.node.protocol import SessionReport, render
+from nox.node.registry import BLOB_RESULT_KEY, SESSION_RESULT_KEY, NodeEntry, NodeRegistry
 from nox.node.router import CannotShow, NodeAround, NodeCall, routed_spec
 from nox.security.model import Risk, TemporaryGrant
 from nox.tools.registry import ToolSpec
@@ -138,7 +142,7 @@ def _capture_around(kind: str, root: Callable[[], Path], privacy: Callable[[], A
 
 
 #: The longest a computer-use session may last anywhere (`ComputerUseConfig.session_minutes`):
-#: an unclear start keeps every paired device from approving for at most this long.
+#: a node that stops reporting keeps the lock for at most this long after its last word.
 MAX_SESSION_MINUTES = 120
 LINK_HINT = (
     "Erst im Dashboard unter Geräte festlegen, welcher Browser auf diesem PC läuft (node.link) - "
@@ -146,32 +150,46 @@ LINK_HINT = (
 )
 #: Ends the session on a node (`computer.session_end`); its answer as `NodeRegistry.call` gives it.
 EndOnNode = Callable[[NodeEntry], Awaitable[dict[str, Any]]]
+#: Where the latest hello/pong reports come from: (device id, report) pairs.
+Reports = Callable[[], Iterable[tuple[str, Any]]]
+
+
+def read_report(raw: Any) -> SessionReport | None:
+    """A node's report, or None when it cannot be read (then nothing changes: fail closed)."""
+    if isinstance(raw, SessionReport):
+        return raw
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return SessionReport.model_validate(raw)
+    except ValueError:
+        return None
 
 
 @dataclass
-class _Session:
+class _Attempt:
+    #: When the start went out, and the generation known then.
+    since: float
+    gen: int
+
+
+@dataclass
+class _Device:
     label: str
-    until: float
-    #: Which start attempt made this record: an answer only ever touches its own attempt's.
-    nonce: str = ""
+    #: The highest generation reported, and what that report said.
+    gen: int = -1
+    active: bool = False
+    session_id: str = ""
+    #: When a report last said "active" (monotonic): unreachable, the lock holds this long more.
+    active_seen: float = 0.0
+    attempt: _Attempt | None = None
     grant_id: str = ""
-    timer: asyncio.TimerHandle | None = None
-    #: Not confirmed by the node (asked, or the answer was unclear): blocks, grants nothing.
-    provisional: bool = False
-    #: The dashboard was told about it (so it is told about its end too).
-    announced: bool = False
-
-
-#: A node's refusal of `computer.session_end` that still proves no input can be sent there: the
-#: group is off, the node knows no such tool, or it is stopped (a stop ends a session there).
-_NO_INPUT_POSSIBLE = frozenset(
-    {"capability_disabled", "unknown_tool", "stopped_by_core", "stopped_on_device", "dead_man"}
-)
+    #: What the dashboard was last told (`desktop.computer_use` for this device).
+    shown: bool = False
 
 
 class NodeControl:
-    """Computer-use sessions running on nodes, as this core knows them - fail closed: a session
-    counts from the moment it is asked for until the node says plainly that none runs."""
+    """The approval lock for computer use on nodes, derived from the nodes' own reports."""
 
     def __init__(
         self,
@@ -179,176 +197,154 @@ class NodeControl:
         publish: Callable[[dict[str, Any]], None],
         *,
         end_on_node: EndOnNode | None = None,
+        reports: Reports = tuple,
+        labels: Callable[[str], str] = lambda device_id: device_id[:8],
         stop_hotkey: str = "ctrl+alt+shift+k",
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._engine = engine
         self._publish = publish
         self._end_on_node = end_on_node
+        self._reports = reports
+        self._labels = labels
         self._stop = stop_hotkey
         self._clock = clock
-        self.sessions: dict[str, _Session] = {}
+        self.devices: dict[str, _Device] = {}
 
-    def _timer(self, device_id: str, session: _Session, minutes: float) -> None:
-        if session.timer is not None:
-            session.timer.cancel()
-        session.until = self._clock() + minutes * 60.0
-        with contextlib.suppress(RuntimeError):
-            session.timer = asyncio.get_running_loop().call_later(
-                minutes * 60.0, self._expire, device_id, session.nonce
-            )
+    # -- the reports -----------------------------------------------------------------------------
 
-    def _expire(self, device_id: str, nonce: str) -> None:
-        self._clear(device_id, nonce, "session over")
+    def _device(self, device_id: str, label: str = "") -> _Device:
+        device = self.devices.get(device_id)
+        if device is None:
+            device = self.devices[device_id] = _Device(label or self._labels(device_id))
+        elif label:
+            device.label = label
+        return device
 
-    def _own(self, device_id: str, nonce: str | None) -> _Session | None:
-        """The record of this attempt (`nonce`), or any record when `nonce` is None."""
-        session = self.sessions.get(device_id)
-        if session is None or (nonce is not None and session.nonce != nonce):
-            return None
-        return session
+    def observe(self, device_id: str, raw: Any, *, outcome_of_attempt: bool = False) -> None:
+        """One report from a node. An older generation than known is ignored; the same one
+        updates whether a session is open (it may have run out); a newer one replaces it. A
+        start in flight is settled only by a report that shows its outcome: a newer generation,
+        or the answer to that very start (`outcome_of_attempt`)."""
+        report = read_report(raw)
+        if report is None:
+            return
+        device = self._device(device_id)
+        if report.gen < device.gen:
+            return
+        device.gen, device.active, device.session_id = report.gen, report.active, report.id
+        if report.active:
+            device.active_seen = self._clock()
+        attempt = device.attempt
+        if attempt is not None and (outcome_of_attempt or report.gen > attempt.gen):
+            device.attempt = None
+        self._sync(device_id, device)
 
-    def running(self, device_id: str) -> bool:
-        session = self.sessions.get(device_id)
-        return session is not None and session.until > self._clock()
+    def pull(self) -> None:
+        """Read the latest hello/pong reports of connected nodes."""
+        for device_id, raw in self._reports():
+            self.observe(device_id, raw)
 
-    def asking(self, entry: NodeEntry) -> str:
-        """`computer.session_start` is about to go out: block approvals from now on. Returns
-        the attempt's nonce. Never replaces a record (the caller refuses while one exists)."""
-        nonce = uuid.uuid4().hex
-        session = _Session(entry.label, 0.0, nonce=nonce, provisional=True)
-        self.sessions[entry.device_id] = session
-        self._timer(entry.device_id, session, MAX_SESSION_MINUTES)
-        return nonce
+    # -- the lock --------------------------------------------------------------------------------
 
-    def start(self, entry: NodeEntry, minutes: int, *, nonce: str | None = None) -> None:
-        """The node confirmed a session of `minutes`: grant input on that node only. With a
-        `nonce`, only that attempt's record becomes the session; without, a record is made."""
-        minutes = max(1, min(int(minutes), MAX_SESSION_MINUTES))
-        session = self._own(entry.device_id, nonce)
-        if session is None:
-            if nonce is not None:
-                return  # that attempt's record is gone (a stop): nothing to confirm
-            session = _Session(entry.label, 0.0, nonce=uuid.uuid4().hex)
-            self.sessions[entry.device_id] = session
-        session.provisional = False
-        self._timer(entry.device_id, session, minutes)
-        if self._engine is not None:
-            session.grant_id = f"computer-{uuid.uuid4().hex[:12]}"
-            self._engine.grant_temporary(
-                TemporaryGrant(
-                    grant_id=session.grant_id,
-                    scope=f"device:{entry.device_id}|session:computer/*",
-                    max_risk=Risk.MEDIUM,
-                    expires_at=datetime.now(UTC) + timedelta(minutes=minutes),
-                    granted_by="user",
-                    label=f"computer use on {entry.label}",
-                )
-            )
-        session.announced = True
-        self._notice(True, entry.device_id, session.label, f"for {minutes} minutes")
+    def _open(self, device: _Device) -> bool:
+        """The node says a session is open (and said so recently enough)."""
+        limit = MAX_SESSION_MINUTES * 60.0
+        return device.active and self._clock() - device.active_seen < limit
 
-    def _unclear(self, entry: NodeEntry, nonce: str) -> None:
-        """No clear answer to this attempt: the session may be running. Its record keeps
-        blocking (the longest session) and the dashboard says so."""
-        session = self._own(entry.device_id, nonce)
-        if session is not None and not session.announced:
-            session.announced = True
-            self._notice(True, entry.device_id, session.label, "unclear whether it started")
+    def _locked(self, device: _Device) -> bool:
+        attempt = device.attempt
+        in_flight = attempt is not None and self._clock() - attempt.since < MAX_SESSION_MINUTES * 60
+        return self._open(device) or in_flight
 
-    def _clear(self, device_id: str, nonce: str | None, reason: str) -> bool:
-        if self._own(device_id, nonce) is None:
-            return False
-        return self.end(device_id, reason)
-
-    def end(self, device_id: str, reason: str, *, quiet: bool = False) -> bool:
-        """The session on this device is over (the node said so, a stop, a disconnect)."""
-        session = self.sessions.pop(device_id, None)
-        if session is None:
-            return False
-        if session.timer is not None:
-            session.timer.cancel()
-        if self._engine is not None and session.grant_id:
-            with contextlib.suppress(Exception):
-                self._engine.revoke(session.grant_id)
-        if session.announced and not quiet:
-            self._notice(False, device_id, session.label, reason)
-        return True
-
-    def end_all(self, reason: str) -> None:
-        for device_id in list(self.sessions):
-            self.end(device_id, reason)
+    def locked(self, device_id: str) -> bool:
+        self.pull()
+        device = self.devices.get(device_id)
+        return device is not None and self._locked(device)
 
     def active(self) -> bool:
-        now = self._clock()
-        return any(session.until > now for session in self.sessions.values())
+        self.pull()
+        for device_id, device in self.devices.items():
+            self._sync(device_id, device)  # time may have passed
+        return any(self._locked(device) for device in self.devices.values())
 
     def blocks(self, client_device: str | None) -> bool:
-        """Whether a paired device's approval is refused right now: during any computer-use
-        session on any node - provisional ones included - every paired device, because none is
-        provably on another machine. Approvals then come only from the core machine's own
-        dashboard or a node's own dialog (spec C §1.5)."""
+        """Whether a paired device's approval is refused right now: while the lock holds for
+        any node, every paired device - none is provably on another machine. Approvals then come
+        only from the core machine's own dashboard or a node's own dialog (spec C §1.5)."""
         return bool(client_device) and self.active()
 
-    def _notice(self, active: bool, device_id: str, label: str, reason: str) -> None:
-        self._publish(
-            {
-                "active": active,
-                "reason": reason,
-                "stop": self._stop,
-                "device": label,
-                "device_id": device_id,
-            }
-        )
+    def _sync(self, device_id: str, device: _Device) -> None:
+        """Grant and notice follow the derived state, never an event."""
+        is_open = self._open(device)
+        if is_open and not device.grant_id and self._engine is not None:
+            device.grant_id = f"computer-{uuid.uuid4().hex[:12]}"
+            remaining = MAX_SESSION_MINUTES * 60.0 - (self._clock() - device.active_seen)
+            self._engine.grant_temporary(
+                TemporaryGrant(
+                    grant_id=device.grant_id,
+                    scope=f"device:{device_id}|session:computer/*",
+                    max_risk=Risk.MEDIUM,
+                    expires_at=datetime.now(UTC) + timedelta(seconds=max(remaining, 1.0)),
+                    granted_by="user",
+                    label=f"computer use on {device.label}",
+                )
+            )
+        elif not is_open and device.grant_id:
+            if self._engine is not None:
+                with contextlib.suppress(Exception):
+                    self._engine.revoke(device.grant_id)
+            device.grant_id = ""
+        locked = self._locked(device)
+        if locked != device.shown:
+            device.shown = locked
+            reason = "running" if is_open else "starting or unclear" if locked else "over"
+            self._publish(
+                {
+                    "active": locked,
+                    "reason": reason,
+                    "stop": self._stop,
+                    "device": device.label,
+                    "device_id": device_id,
+                }
+            )
+
+    # -- the routes ------------------------------------------------------------------------------
 
     async def _start(self, entry: NodeEntry, call: NodeCall) -> dict[str, Any]:
         if not entry.linked_device_id:
             # Without knowing which browser sits on that PC, it could not be kept from approving.
             return {"ok": False, "error": "link_required", "device": entry.label, "hint": LINK_HINT}
-        if self.running(entry.device_id):
-            # Never a second attempt over a running (or unclear) one: its lock stays as it is.
+        device = self._device(entry.device_id, entry.label)
+        if self.locked(entry.device_id):
+            # Never a second attempt over a running or unclear one.
             return {
                 "ok": False,
                 "error": "session_running",
                 "device": entry.label,
                 "hint": "end it first (computer.session_end) or stop",
             }
-        nonce = self.asking(entry)
-        try:
-            answer = await call()
-        except BaseException:
-            self._unclear(entry, nonce)
-            raise
-        result = answer.get("result")
-        if isinstance(result, dict) and result.get("ok") is True:
-            minutes = result.get("minutes")
-            self.start(
-                entry, minutes if isinstance(minutes, int) else MAX_SESSION_MINUTES, nonce=nonce
-            )
-        elif isinstance(result, dict) and result.get("session_active") is False:
-            # The node said plainly that no session runs there (a game, switched off).
-            self._clear(entry.device_id, nonce, "not started")
-        else:
-            # Refused before it ran, a timeout, a lost or broken answer: whether a session runs
-            # is not said. End it there, and keep blocking until the node says none runs.
-            self._unclear(entry, nonce)
-            await self._confirm_end(entry, nonce)
+        device.attempt = _Attempt(self._clock(), device.gen)
+        self._sync(entry.device_id, device)
+        answer = await call()  # cancelled or failed: the attempt stays (fail closed)
+        self.observe(entry.device_id, answer.get(SESSION_RESULT_KEY), outcome_of_attempt=True)
+        if device.attempt is not None:
+            # No readable report in the answer: end it there to be sure.
+            await self._confirm_end(entry)
         return answer
 
-    async def _confirm_end(self, entry: NodeEntry, nonce: str) -> None:
+    async def _confirm_end(self, entry: NodeEntry) -> None:
         if self._end_on_node is None:
             return
         try:
             ended = await self._end_on_node(entry)
-        except Exception as exc:  # noqa: BLE001 - unconfirmed: the block simply stays
+        except Exception as exc:  # noqa: BLE001 - no answer: the lock simply stays
             log.warning("node.computer_end_failed", error=type(exc).__name__)
             return
         result = ended.get("result")
-        refused = ended.get("reason") if ended.get("error") == "refused_on_device" else None
-        if (isinstance(result, dict) and result.get("session_active") is False) or (
-            refused in _NO_INPUT_POSSIBLE
-        ):
-            self._clear(entry.device_id, nonce, "ended after an unclear start")
+        # Only an end that ran on the node (after the start) shows the start's outcome.
+        ran = isinstance(result, dict) and result.get("ok") is True
+        self.observe(entry.device_id, ended.get(SESSION_RESULT_KEY), outcome_of_attempt=ran)
 
     def around(self, tool: str) -> NodeAround:
         async def around(entry: NodeEntry, _args: dict[str, Any], call: NodeCall) -> dict[str, Any]:
@@ -356,12 +352,12 @@ class NodeControl:
                 return await self._start(entry, call)
             answer = await call()
             result = answer.get("result")
-            ok = isinstance(result, dict) and result.get("ok") is True
-            if tool == "computer.session_end":
-                if ok and isinstance(result, dict) and result.get("session_active") is False:
-                    self.end(entry.device_id, "ended by Nox")
-            elif isinstance(result, dict) and result.get("session_active") is False:
-                self.end(entry.device_id, "session over on the device")
+            ran = (
+                tool == "computer.session_end"
+                and isinstance(result, dict)
+                and result.get("ok") is True
+            )
+            self.observe(entry.device_id, answer.get(SESSION_RESULT_KEY), outcome_of_attempt=ran)
             return answer
 
         return around

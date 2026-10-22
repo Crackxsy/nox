@@ -81,6 +81,9 @@ ROUTABLE: frozenset[str] = frozenset(
 #: Where a node's bytes (a capture's `nox/blob` chunks) travel inside a call's result on the
 #: core - only between `NodeRegistry.call` and the route that stores them, never to the model.
 BLOB_RESULT_KEY = "_blob"
+#: The node's computer-use report (`_nox.session` of its answer), for the route to read; the
+#: router strips it before anything reaches the model.
+SESSION_RESULT_KEY = "_session"
 MAX_TOOLS = 64
 #: What a node's result may put in front of the model, at most.
 MAX_RESULT_CHARS = 16_000
@@ -476,6 +479,9 @@ class NodeRegistry:
                 return offline_error(entry)
             return {"error": "failed_on_device", "detail": "no answer", "device": entry.label}
         cleaned = clean_result(raw, device=entry.label)
+        nox = raw.get("_nox") if isinstance(raw, dict) else None
+        if isinstance(nox, dict) and "session" in nox:
+            cleaned[SESSION_RESULT_KEY] = nox["session"]
         if blob:
             data = session.take_blob(call_id)  # taken whatever the answer: nothing stays behind
             if data is not None and "error" not in cleaned:
