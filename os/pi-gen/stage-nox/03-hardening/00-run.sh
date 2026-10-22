@@ -22,6 +22,13 @@ chmod 0644 /etc/nftables.conf
 EOF2
 
 # ---- remote maintenance: off; the root helper is the only way on --------------------------------
+# The helper's socket belongs to the group nox-os-helper, which has no members: only nox.service
+# carries it (SupplementaryGroups=, a drop-in - the unit itself stays as the installer ships it).
+on_chroot <<'EOF2'
+getent group nox-os-helper >/dev/null || groupadd --system nox-os-helper
+EOF2
+install -d -m 0755 "$units/nox.service.d"
+install -m 0644 files/nox-service-helper.conf "$units/nox.service.d/50-nox-os-helper.conf"
 install -m 0644 files/sshd_config "${ROOTFS_DIR}/etc/nox-os/ssh/sshd_config"
 install -m 0644 files/tmpfiles-nox-os.conf "${ROOTFS_DIR}/etc/tmpfiles.d/nox-os.conf"
 install -m 0440 files/sudoers-nox-os "${ROOTFS_DIR}/etc/sudoers.d/50-nox-os"

@@ -244,12 +244,15 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 - **Nox-OS hardening (O2)** (`os/pi-gen/stage-nox/03-hardening`, os/README.md): nftables with
   inbound default deny (IPv4/IPv6), Nox's dashboard and node ports generated from its own settings
   at boot and on every settings change, only while network access is on, from private networks
-  only and rate-limited per address; fails closed. SSH stays off and masked; **Einstellungen ›
-  System › Fernwartung (SSH)** switches remote maintenance on with the security PIN (always, from
-  every client; audited), a pasted ed25519/ECDSA key and a time (15 min-4 h): sshd with its own
-  key-only configuration for `nox-admin` from private networks, sudo for that session, then
-  everything - open sessions included - ends by itself (`noxos.ssh.*`, through a socket-activated
-  root helper that answers only `nox.service`'s main process and knows three requests). SD-card
+  only and rate-limited per address; fails closed; SSH from the device itself always dropped. SSH
+  stays off and masked; **Einstellungen › System › Fernwartung (SSH)** stores public keys
+  (ed25519/ECDSA) with the root helper - root-owned, shown by fingerprint - and switches remote
+  maintenance on for the fingerprints the owner confirmed and a time (15 min-4 h), both with the
+  security PIN (always, from every client; audited): sshd with its own key-only configuration for
+  `nox-admin` from private networks, sudo for that session, then everything - open sessions
+  included - ends by itself (`noxos.ssh.*`, through a socket-activated
+  root helper reachable only by a group `nox.service` alone carries, answering only its main
+  process - checked by pidfd, cgroup and start time - with a fixed set of requests). SD-card
   wear profile: journal in RAM, `/` with `noatime,commit=60`, `/tmp` and `/var/tmp` as tmpfs,
   zram instead of a swap file, SQLite `wal_autocheckpoint` raised and `PRAGMA optimize` on close.
   Kernel/network sysctl hardening, Bluetooth/triggerhappy/ModemManager masked, a console status

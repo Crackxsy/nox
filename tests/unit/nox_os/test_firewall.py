@@ -23,8 +23,25 @@ def rules(**settings: object) -> str:
     return str(fw.render(fw.Settings(**settings)))
 
 
+LOCAL_SSH_DROP = 'iif "lo" tcp dport 22 drop'
+
+
 def input_chain(script: str) -> str:
-    return script.split("chain input {", 1)[1].split("}\n  chain forward", 1)[0]
+    """The input chain, without the rule that drops SSH from the device itself (its own test):
+    what is left mentions a port only to let it in."""
+    chain = script.split("chain input {", 1)[1].split("}\n  chain forward", 1)[0]
+    assert f"\n    {LOCAL_SSH_DROP}\n" in chain
+    return chain.replace(f"    {LOCAL_SSH_DROP}\n", "")
+
+
+@pytest.mark.parametrize("settings", [{}, {"ssh": True}, {"ssh": True, "lan_enabled": True}])
+def test_ssh_from_the_device_itself_is_dropped_before_anything_else(
+    settings: dict[str, bool],
+) -> None:
+    lines = rules(**settings).split("chain input {", 1)[1].splitlines()
+    # Before `iif "lo" accept`: a local process must not reach SSH, even while it is on.
+    assert lines[2].strip() == LOCAL_SSH_DROP
+    assert lines[3].strip() == 'iif "lo" accept'
 
 
 def test_the_baseline_opens_nothing_of_noxs() -> None:
@@ -32,7 +49,7 @@ def test_the_baseline_opens_nothing_of_noxs() -> None:
     assert "policy drop;" in input_chain(script)
     assert "flush ruleset" in script
     for port in (22, 47843, 47844, 80, 47800, 47801):
-        assert f"dport {port} " not in script, port
+        assert f"dport {port} " not in input_chain(script), port
     assert "udp dport 5353 accept" in script  # mDNS, from private networks
     assert "udp sport 67 udp dport 68 accept" in script  # the DHCP client
     # A reload never flushes other tables (NetworkManager's hotspot keeps its own).

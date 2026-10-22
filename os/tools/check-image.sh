@@ -55,7 +55,9 @@ firewall_closed_at_boot() {
   [ -f "$rules" ] || return 1
   grep -qE 'type filter hook input priority filter; policy drop;' "$rules" || return 1
   grep -qE 'type filter hook forward priority filter; policy drop;' "$rules" || return 1
-  ! grep -qE 'dport (22|80|47843|47844)( |$)' "$rules"
+  ! grep -qE 'dport (22|80|47843|47844) .*accept' "$rules" || return 1
+  # SSH never from the device itself, even while remote maintenance is on.
+  grep -qF 'iif "lo" tcp dport 22 drop' "$rules"
 }
 # Every line in file $1 (exactly), the rest of the arguments.
 has_lines() {
@@ -102,6 +104,19 @@ nox_service_sandboxed() {
     'ProtectSystem=strict' 'ProtectHome=yes' 'CapabilityBoundingSet=' 'PrivateDevices=yes' \
     'ReadWritePaths=/var/lib/nox'
 }
+# The root helper's socket: root and the group nox-os-helper, which has no members - only
+# nox.service carries it (a drop-in).
+helper_socket_for_nox_service_only() {
+  has_lines "$root/etc/systemd/system/nox-os-helper.socket" 'SocketUser=root' \
+    'SocketGroup=nox-os-helper' 'SocketMode=0660' || return 1
+  [ "$(awk -F: '$1 == "nox-os-helper" { print "group:" $4 }' "$root/etc/group")" = 'group:' ] || return 1
+  [ "$(grep -hE '^[[:space:]]*SupplementaryGroups=' "$root"/etc/systemd/system/nox.service.d/*.conf 2>/dev/null)" \
+    = 'SupplementaryGroups=nox-os-helper' ]
+}
+# No stored remote-maintenance keys ship: the folder is made at boot, root only.
+no_stored_keys() {
+  [ ! -e "$root/var/lib/nox-os" ] || none < <(find "$root/var/lib/nox-os" -mindepth 1 2>/dev/null)
+}
 cmdline_is_plain() {
   [ ! -f "$boot/cmdline.txt" ] || ! grep -qE '(^|[[:space:]])(systemd\.run|init)=' "$boot/cmdline.txt"
 }
@@ -128,8 +143,8 @@ run_checks() {
   check "no password in /etc/shadow" none < <(awk -F: '$2 != "*" && $2 != "!" && $2 != "!*" && $2 != "!!" {print $1}' "$root/etc/shadow")
   check "no password in /etc/passwd" none < <(awk -F: '$2 != "x" {print $1}' "$root/etc/passwd")
   check "no NOPASSWD sudo" none < <(grep -rls 'NOPASSWD' "$root/etc/sudoers" "$root/etc/sudoers.d" 2>/dev/null)
-  check "no authorized_keys" none < <(find "$root/root" "$root/home" "$root/etc" "$root/run" "$root/var" \
-    -name 'authorized_keys*' 2>/dev/null)
+  check "no authorized_keys anywhere" none < <(find "$root" -xdev -name 'authorized_keys*' 2>/dev/null)
+  check "no stored remote-maintenance keys" no_stored_keys
   check "no SSH host keys (made per device on first boot)" none < <(find "$root/etc/ssh" -name 'ssh_host_*' 2>/dev/null)
   check "ssh.service, ssh.socket, sshswitch.service masked" masked ssh.service ssh.socket sshswitch.service
   check "no private keys" none < <(grep -rlI -E -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY' \
@@ -142,6 +157,8 @@ run_checks() {
   check "nox-ssh's sshd: key only, nox-admin only, from private networks" sshd_key_only
   check "sudo only while remote maintenance is on (/run)" sudo_only_while_maintained
   check "root helper socket enabled" enabled sockets.target nox-os-helper.socket
+  check "root helper socket: root:nox-os-helper 0660, group without members, only nox.service" \
+    helper_socket_for_nox_service_only
   check "nox.service sandboxed (user nox, ProtectSystem=strict, no privileges)" nox_service_sandboxed
 
   # O2: firewall, default deny from the start.

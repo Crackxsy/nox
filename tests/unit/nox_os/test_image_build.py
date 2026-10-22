@@ -248,23 +248,31 @@ def test_remote_maintenance_can_never_be_enabled_at_boot() -> None:
     assert "unmask" not in run
 
 
-def test_the_root_helper_is_for_the_group_nox_only_and_has_no_privileges() -> None:
+def test_the_root_helper_is_for_nox_service_only_and_has_no_privileges() -> None:
     socket = _unit("nox-os-helper.socket")["Socket"]
     assert socket["ListenStream"] == ["/run/nox-os/helper/helper.sock"]
     assert (socket["SocketUser"], socket["SocketGroup"], socket["SocketMode"]) == (
         ["root"],
-        ["nox"],
+        ["nox-os-helper"],
         ["0660"],
     )
     assert socket["Accept"] == ["yes"]
     tmpfiles = (HARDENING_STAGE / "files" / "tmpfiles-nox-os.conf").read_text("utf-8")
-    assert re.search(r"^d /run/nox-os/helper\s+0750 root nox ", tmpfiles, re.M)
+    assert re.search(r"^d /run/nox-os/helper\s+0750 root nox-os-helper ", tmpfiles, re.M)
+    # The keys are the helper's: root only.
+    assert re.search(r"^d /var/lib/nox-os\s+0700 root root ", tmpfiles, re.M)
+    # Only nox.service carries the group - as a drop-in, and nobody is made a member of it.
+    dropin = _unit("nox-service-helper.conf")
+    assert dropin == {"Service": {"SupplementaryGroups": ["nox-os-helper"]}}
+    run = (HARDENING_STAGE / "00-run.sh").read_text("utf-8")
+    assert "groupadd --system nox-os-helper" in run
+    assert "usermod" not in run and "gpasswd" not in run and "adduser" not in run
     service = _unit("nox-os-helper@.service")["Service"]
     assert service["ExecStart"] == ["/usr/bin/python3 -I -S /usr/local/lib/nox-os/nox_os_helper.py"]
     for key, value in (
         ("CapabilityBoundingSet", ""),
         ("ProtectSystem", "strict"),
-        ("ReadWritePaths", "/run/nox-os"),
+        ("ReadWritePaths", "/run/nox-os -/var/lib/nox-os"),
         ("PrivateNetwork", "yes"),
         ("NoNewPrivileges", "yes"),
         ("RestrictAddressFamilies", "AF_UNIX"),

@@ -1,11 +1,18 @@
 /**
  * Einstellungen › System › Fernwartung (SSH) - only on Nox-OS, the Raspberry Pi image (Spec §2.2).
  *
- * SSH is off there. Switching it on takes the security PIN (always, also on a paired device), a
- * public key (ed25519 or ECDSA, pasted here; kept by the core for next time) and a time: after
- * it, the Pi switches SSH off by itself, open connections included. While it is on, this section
- * says so in a visible notice with the end time, and offers "Jetzt ausschalten", which needs
- * nothing. On any other system the core answers `available: false` and nothing is shown.
+ * SSH is off there. Two steps, each with the security PIN (always, also on a paired device):
+ *
+ *   1. **Keys.** Paste public keys (ed25519 or ECDSA). The Pi's root helper stores them - not Nox -
+ *      and answers with their fingerprints, which this section shows.
+ *   2. **On.** The owner confirms that those fingerprints are theirs, chooses a time and switches
+ *      on. The request names exactly the confirmed fingerprints; the Pi refuses if its stored
+ *      keys are any others.
+ *
+ * After the time, the Pi switches SSH off by itself, open connections included. While it is on,
+ * this section says so in a visible notice with the end time, and offers "Jetzt ausschalten",
+ * which needs nothing; forgetting the keys needs nothing either. On any other system the core
+ * answers `available: false` and nothing is shown.
  *
  * The PIN is only ever a request field, as everywhere in this UI: sent when typed, cleared after
  * every attempt, never stored.
@@ -68,6 +75,7 @@ export function parseSshStatus(payload: unknown): SshStatus | null {
 const REASONS: Record<string, Key> = {
   invalid_key: 'ssh_err_key',
   no_key: 'ssh_err_no_key',
+  invalid_fingerprint: 'ssh_err_helper',
   helper_refused: 'ssh_err_helper',
   helper_unreachable: 'ssh_err_helper',
 };
@@ -85,14 +93,19 @@ export interface RemoteMaintenanceProps {
   client: IpcClient | null;
 }
 
+type Busy = 'keys' | 'on' | 'off' | 'forget' | null;
+
 export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
   const id = useId();
   const [status, setStatus] = useState<SshStatus | null>(null);
   const [pinSet, setPinSet] = useState(false);
   const [keys, setKeys] = useState('');
+  const [keysPin, setKeysPin] = useState('');
   const [minutes, setMinutes] = useState(60);
   const [pin, setPin] = useState('');
-  const [busy, setBusy] = useState<'on' | 'off' | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
+  const [replacing, setReplacing] = useState(false);
+  const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState('');
 
   const load = useCallback(async (c: IpcClient, cancelled: () => boolean = () => false) => {
@@ -125,42 +138,64 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
     return own ? t(own) : refusalText(t, e, pinSent);
   };
 
-  const switchOn = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!client || busy) return;
-    const sentPin = pin.trim();
-    setBusy('on');
+  /** Runs one request; a new status replaces the shown one, a refusal is worded. */
+  const act = async (label: Exclude<Busy, null>, sentPin: string, fn: (c: IpcClient) => Promise<unknown>) => {
+    if (!client || busy) return false;
+    setBusy(label);
     setError('');
     try {
-      const reply = await api.sshEnable(client, minutes, sentPin, keys.trim());
-      const parsed = parseSshStatus(reply);
+      const parsed = parseSshStatus(await fn(client));
       if (parsed) setStatus(parsed);
-      setKeys('');
+      return true;
     } catch (err) {
       setError(describe(err, sentPin !== ''));
+      return false;
     } finally {
-      setPin('');
       setBusy(null);
     }
   };
 
-  const switchOff = async () => {
-    if (!client || busy) return;
-    setBusy('off');
-    setError('');
-    try {
-      const parsed = parseSshStatus(await api.sshDisable(client));
-      if (parsed) setStatus(parsed);
-    } catch (err) {
-      setError(describe(err, false));
-    } finally {
-      setBusy(null);
+  const saveKeys = async (e: FormEvent) => {
+    e.preventDefault();
+    const sentPin = keysPin.trim();
+    const ok = await act('keys', sentPin, (c) => api.sshKeysSet(c, keys.trim(), sentPin));
+    setKeysPin('');
+    if (ok) {
+      setKeys('');
+      setReplacing(false);
+      setConfirmed(false); // new keys: their fingerprints are to be checked anew
     }
+  };
+
+  const switchOn = async (e: FormEvent) => {
+    e.preventDefault();
+    const sentPin = pin.trim();
+    const fingerprints = status.keys.map((k) => k.fingerprint);
+    await act('on', sentPin, (c) => api.sshEnable(c, minutes, fingerprints, sentPin));
+    setPin('');
   };
 
   const durations = DURATIONS.filter((m) => m >= status.minMinutes && m <= status.maxMinutes);
-  const savedKeys = status.keys.length > 0;
-  const canSwitchOn = pinSet && pin.trim() !== '' && (savedKeys || keys.trim() !== '');
+  const hasKeys = status.keys.length > 0;
+  const showKeyForm = !status.on && (!hasKeys || replacing);
+
+  const pinField = (fieldId: string, value: string, onChange: (v: string) => void) => (
+    <div className="field">
+      <label htmlFor={fieldId} className="label">
+        {t('lan_pair_pin')}
+      </label>
+      <input
+        id={fieldId}
+        className="input input--pin"
+        type="password"
+        inputMode="numeric"
+        autoComplete="off"
+        value={value}
+        disabled={busy !== null}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
 
   return (
     <section className="sec" aria-labelledby={`${id}-h`}>
@@ -189,17 +224,28 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
               ))}
             </ul>
           )}
-          <button type="button" className="btn" disabled={!client || busy !== null} onClick={() => void switchOff()}>
+          <button
+            type="button"
+            className="btn"
+            disabled={!client || busy !== null}
+            onClick={() => void act('off', '', (c) => api.sshDisable(c))}
+          >
             {busy === 'off' ? t('ssh_turning_off') : t('ssh_off_now')}
           </button>
         </div>
       ) : (
+        <p role="status" className="hint">
+          {t('ssh_off_state')}
+        </p>
+      )}
+
+      {!pinSet && !status.on && <p className="hint">{t('ssh_needs_pin')}</p>}
+
+      {!status.on && hasKeys && !replacing && (
         <form noValidate onSubmit={(e) => void switchOn(e)}>
-          <p role="status" className="hint">
-            {t('ssh_off_state')}
-          </p>
-          {savedKeys && (
-            <ul className="fact-list" aria-label={t('ssh_keys_saved')}>
+          <fieldset className="fieldset-plain">
+            <legend className="label">{t('ssh_keys_saved')}</legend>
+            <ul className="fact-list">
               {status.keys.map((k) => (
                 <li key={k.fingerprint}>
                   <span className="mono break">{k.fingerprint}</span>
@@ -207,27 +253,20 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
                 </li>
               ))}
             </ul>
-          )}
-          <div className="field field--spaced">
-            <label htmlFor={`${id}-keys`} className="label">
-              {savedKeys ? t('ssh_keys_replace') : t('ssh_keys_label')}
+            <label className="caps-check field--spaced">
+              <input
+                type="checkbox"
+                checked={confirmed}
+                disabled={busy !== null}
+                aria-describedby={`${id}-confirm-hint`}
+                onChange={(e) => setConfirmed(e.target.checked)}
+              />
+              <span>{t('ssh_confirm_keys')}</span>
             </label>
-            <textarea
-              id={`${id}-keys`}
-              className="textarea mono"
-              rows={3}
-              spellCheck={false}
-              autoComplete="off"
-              aria-describedby={`${id}-keys-hint`}
-              placeholder="ssh-ed25519 AAAA… name@example.invalid"
-              value={keys}
-              disabled={busy !== null}
-              onChange={(e) => setKeys(e.target.value)}
-            />
-            <p id={`${id}-keys-hint`} className="hint">
-              {t('ssh_keys_hint')}
+            <p id={`${id}-confirm-hint`} className="hint">
+              {t('ssh_confirm_hint')}
             </p>
-          </div>
+          </fieldset>
           <div className="row-controls">
             <div className="field">
               <label htmlFor={`${id}-minutes`} className="label">
@@ -247,28 +286,73 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
                 ))}
               </select>
             </div>
-            {pinSet && (
-              <div className="field">
-                <label htmlFor={`${id}-pin`} className="label">
-                  {t('lan_pair_pin')}
-                </label>
-                <input
-                  id={`${id}-pin`}
-                  className="input input--pin"
-                  type="password"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  value={pin}
-                  disabled={busy !== null}
-                  onChange={(e) => setPin(e.target.value)}
-                />
-              </div>
-            )}
-            <button type="submit" className="btn" disabled={!client || busy !== null || !canSwitchOn}>
+            {pinSet && pinField(`${id}-pin`, pin, setPin)}
+            <button
+              type="submit"
+              className="btn"
+              disabled={!client || busy !== null || !pinSet || !confirmed || pin.trim() === ''}
+            >
               {busy === 'on' ? t('ssh_turning_on') : t('ssh_on')}
             </button>
           </div>
-          {!pinSet && <p className="hint">{t('ssh_needs_pin')}</p>}
+          <div className="row-controls">
+            <button
+              type="button"
+              className="btn btn--sm btn--plain"
+              disabled={busy !== null}
+              onClick={() => setReplacing(true)}
+            >
+              {t('ssh_keys_other')}
+            </button>
+            <button
+              type="button"
+              className="btn btn--sm btn--plain"
+              disabled={!client || busy !== null}
+              onClick={() => void act('forget', '', (c) => api.sshDisable(c, true))}
+            >
+              {t('ssh_keys_forget')}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {showKeyForm && (
+        <form noValidate onSubmit={(e) => void saveKeys(e)}>
+          <div className="field field--spaced">
+            <label htmlFor={`${id}-keys`} className="label">
+              {hasKeys ? t('ssh_keys_replace') : t('ssh_keys_label')}
+            </label>
+            <textarea
+              id={`${id}-keys`}
+              className="textarea mono"
+              rows={3}
+              spellCheck={false}
+              autoComplete="off"
+              aria-describedby={`${id}-keys-hint`}
+              placeholder="ssh-ed25519 AAAA… name@example.invalid"
+              value={keys}
+              disabled={busy !== null}
+              onChange={(e) => setKeys(e.target.value)}
+            />
+            <p id={`${id}-keys-hint`} className="hint">
+              {t('ssh_keys_hint')}
+            </p>
+          </div>
+          <div className="row-controls">
+            {pinSet && pinField(`${id}-keys-pin`, keysPin, setKeysPin)}
+            <button
+              type="submit"
+              className="btn"
+              disabled={!client || busy !== null || !pinSet || keys.trim() === '' || keysPin.trim() === ''}
+            >
+              {busy === 'keys' ? t('ssh_keys_saving') : t('ssh_keys_save')}
+            </button>
+            {hasKeys && (
+              <button type="button" className="btn btn--sm btn--plain" onClick={() => setReplacing(false)}>
+                {t('ssh_keys_cancel')}
+              </button>
+            )}
+          </div>
         </form>
       )}
     </section>

@@ -1,6 +1,8 @@
 """The Nox-OS root helper (os/pi-gen/stage-nox/03-hardening/files/nox_os_helper.py): three
-requests and nothing else, keys checked exactly as the core checks them, everything it switches on
-it switches off again, and only root or nox.service's main process may ask."""
+requests and nothing else (keys stored root-owned, switching on only with the
+confirmed fingerprints), keys checked exactly as the core checks them, everything it switches on
+it switches off again, and only root or nox.service's main process - that very process, not its
+number - may ask."""
 
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ from tests.unit.nox_os.conftest import HARDENING, load_tool
 from tests.unit.noxos.conftest import ECDSA, ED25519, ED25519_B, RSA, SK_ED25519
 
 helper = load_tool("nox_os_helper", HARDENING)
+FPB = parse_key(ED25519).fingerprint.encode()
 
 
 class FakeRun:
@@ -37,7 +40,7 @@ class FakeRun:
         elif args[:2] == ("systemctl", "stop"):
             self.active.discard(args[2])
         elif args[:2] == ("systemctl", "show"):
-            out = "4242\n"
+            out = "MainPID=4242\nControlGroup=/system.slice/nox.service\n"
         if self.fail and self.fail in " ".join(args):
             code = 1
         return subprocess.CompletedProcess(args, code, out, "")
@@ -50,13 +53,15 @@ def system(tmp_path: Path, run: FakeRun | None = None) -> Any:
 # ---- the requests ----------------------------------------------------------------------------
 
 
-def test_the_three_requests() -> None:
+def test_the_requests() -> None:
     assert helper.parse_request(b"status\n").command == "status"
     assert helper.parse_request(b"ssh off").command == "off"
-    request = helper.parse_request(
-        f"ssh on 60\n{ED25519}\n{ECDSA} admin@example.invalid\n".encode()
-    )
-    assert (request.command, request.minutes, len(request.keys)) == ("on", 60, 2)
+    assert helper.parse_request(b"keys clear").command == "keys_clear"
+    request = helper.parse_request(f"keys set\n{ED25519}\n{ECDSA} admin@example.invalid\n".encode())
+    assert (request.command, len(request.keys)) == ("keys_set", 2)
+    fp = FPB.decode()
+    request = helper.parse_request(f"ssh on 60 {fp},{fp}".encode())
+    assert (request.command, request.minutes, request.fingerprints) == ("on", 60, (fp, fp))
 
 
 @pytest.mark.parametrize(
@@ -67,17 +72,23 @@ def test_the_three_requests() -> None:
         b"status extra",
         b"status\nssh-ed25519 AAAA",
         b"ssh on",
-        b"ssh on 60",  # no key
-        b"ssh on 4\n" + ED25519.encode(),
-        b"ssh on 241\n" + ED25519.encode(),
-        b"ssh on -5\n" + ED25519.encode(),
-        b"ssh on 60 extra\n" + ED25519.encode(),
-        b"ssh  on 60\n" + ED25519.encode(),
+        b"ssh on 60",  # no confirmed fingerprints
+        b"ssh on 60\n" + ED25519.encode(),  # keys come with `keys set`, never with `on`
+        b"ssh on 4 " + FPB,
+        b"ssh on 241 " + FPB,
+        b"ssh on -5 " + FPB,
+        b"ssh on 60 " + FPB + b" extra",
+        b"ssh  on 60 " + FPB,
+        b"ssh on 60 SHA256:short",
+        b"ssh on 60 " + b",".join([FPB] * 9),
+        b"ssh on 60 " + FPB + b"\n" + ED25519.encode(),
         b"shell rm -rf /",
-        b"ssh on 60\n" + RSA.encode(),
-        b"ssh on 60\n" + b"\n".join([ED25519.encode()] * 9),
-        b"ssh on 60\n" + b'command="id" ' + ED25519.encode(),
-        "ssh on 60\nssh-ed25519 AAAAé".encode(),
+        b"keys set",
+        b"keys set\n" + RSA.encode(),
+        b"keys set\n" + b"\n".join([ED25519.encode()] * 9),
+        b"keys set\n" + b'command="id" ' + ED25519.encode(),
+        "keys set\nssh-ed25519 AAAAé".encode(),
+        b"keys clear\n" + ED25519.encode(),
         b"ssh off\n" + ED25519.encode(),
         b"x" * (17 * 1024),
     ],
@@ -130,21 +141,69 @@ def test_a_key_line_is_rewritten_canonically() -> None:
 
 #: The sudo rule is written 0440, which Windows turns into a read-only file nobody may delete.
 posix = pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+FP = parse_key(ED25519).fingerprint
+
+
+def stored(sys_: Any, *lines: str) -> None:
+    keys = helper.parse_request(("keys set\n" + "\n".join(lines)).encode()).keys
+    helper.set_keys(sys_, keys)
+
+
+def test_keys_are_stored_root_only_and_answered_with_their_fingerprints(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    request = helper.parse_request(f"keys set\n{ED25519} laptop\n{ECDSA}\n".encode())
+    answer = helper.handle(request, sys_)
+    assert [(k["fingerprint"], k["comment"]) for k in answer["keys"]] == [
+        (FP, "laptop"),
+        (parse_key(ECDSA).fingerprint, ""),
+    ]
+    path = tmp_path / "var/lib/nox-os/ssh_keys"
+    assert path.read_text("ascii") == f"{ED25519} laptop\n{ECDSA}\n"
+    if sys.platform != "win32":
+        assert path.stat().st_mode & 0o777 == 0o600
+    assert answer["ssh"] == "off"  # storing keys switches nothing on
+    helper.handle(helper.parse_request(b"keys clear"), sys_)
+    assert not path.exists() and helper.status(sys_)["keys"] == []
+
+
+def test_a_key_file_the_service_could_write_is_never_read(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    for planted in ("var/lib/nox/noxos/ssh_keys.json", "var/lib/nox/authorized_keys"):
+        (tmp_path / planted).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / planted).write_text(ED25519 + "\n", "ascii")
+    assert helper.stored_keys(sys_) == []
+    with pytest.raises(helper.Refused, match="no public key stored"):
+        helper.switch_on(sys_, 30, [FP])
+
+
+@posix
+def test_on_needs_exactly_the_confirmed_fingerprints(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    stored(sys_, ED25519, ECDSA)
+    other = parse_key(ED25519_B).fingerprint
+    for confirmed in ([FP], [FP, parse_key(ECDSA).fingerprint, other], [other]):
+        with pytest.raises(helper.Refused, match="not the ones confirmed"):
+            helper.switch_on(sys_, 30, confirmed)
+    assert not (tmp_path / "run/nox-os/ssh/authorized_keys").exists()
+    answer = helper.switch_on(sys_, 30, [parse_key(ECDSA).fingerprint, FP])
+    assert answer["ssh"] == "on"
 
 
 @posix
 def test_on_writes_keys_sudo_and_state_then_starts_sshd_firewall_and_timer(tmp_path: Path) -> None:
     run = FakeRun()
     sys_ = system(tmp_path, run)
-    keys = helper.parse_request(f"ssh on 30\n{ED25519}\n".encode()).keys
-    answer = helper.switch_on(sys_, 30, keys)
+    stored(sys_, ED25519)
+    request = helper.parse_request(f"ssh on 30 {FP}".encode())
+    answer = helper.handle(request, sys_)
     assert answer["ssh"] == "on" and answer["until"] == 1_000_000 + 30 * 60
+    assert answer["active"] == [FP]
     assert (tmp_path / "run/nox-os/ssh/authorized_keys").read_text("ascii") == ED25519 + "\n"
     assert (tmp_path / "run/nox-os/sudoers.d/nox-admin").read_text("ascii") == (
         "nox-admin ALL=(ALL:ALL) NOPASSWD: ALL\n"
     )
     state = json.loads((tmp_path / "run/nox-os/ssh.json").read_text("utf-8"))
-    assert state["on"] is True and state["keys"] == [keys[0].fingerprint]
+    assert state["on"] is True and state["keys"] == [FP]
     verbs = [c[:3] for c in run.calls if c[0] == "systemctl" and c[1] != "is-active"]
     assert verbs == [
         ("systemctl", "start", "nox-ssh.service"),
@@ -162,9 +221,9 @@ def test_on_writes_keys_sudo_and_state_then_starts_sshd_firewall_and_timer(tmp_p
 def test_a_failed_step_switches_everything_off_again(tmp_path: Path, failing: str) -> None:
     run = FakeRun(fail=failing)
     sys_ = system(tmp_path, run)
-    keys = helper.parse_request(f"ssh on 30\n{ED25519}\n".encode()).keys
+    stored(sys_, ED25519)
     with pytest.raises(helper.Refused):
-        helper.switch_on(sys_, 30, keys)
+        helper.switch_on(sys_, 30, [FP])
     assert not (tmp_path / "run/nox-os/ssh/authorized_keys").exists()
     assert not (tmp_path / "run/nox-os/sudoers.d/nox-admin").exists()
     assert json.loads((tmp_path / "run/nox-os/ssh.json").read_text("utf-8"))["on"] is False
@@ -172,15 +231,18 @@ def test_a_failed_step_switches_everything_off_again(tmp_path: Path, failing: st
 
 
 @posix
-def test_off_removes_everything_and_ends_the_timers(tmp_path: Path) -> None:
+def test_off_removes_everything_ends_sessions_and_timers(tmp_path: Path) -> None:
     run = FakeRun()
     sys_ = system(tmp_path, run)
-    helper.switch_on(sys_, 30, helper.parse_request(f"ssh on 30\n{ED25519}".encode()).keys)
+    stored(sys_, ED25519)
+    helper.switch_on(sys_, 30, [FP])
     answer = helper.switch_off(sys_, "dashboard")
-    assert answer["ssh"] == "off" and answer["keys"] == []
+    assert answer["ssh"] == "off" and answer["active"] == []
+    assert [k["fingerprint"] for k in answer["keys"]] == [FP]  # stored for next time
     assert not (tmp_path / "run/nox-os/ssh/authorized_keys").exists()
     assert not (tmp_path / "run/nox-os/sudoers.d/nox-admin").exists()
     assert ("systemctl", "stop", "nox-ssh-off-*.timer") in run.calls
+    assert ("loginctl", "terminate-user", "nox-admin") in run.calls
     stop = run.calls.index(("systemctl", "stop", "nox-ssh.service"))
     assert ("systemctl", "restart", "nox-firewall.service") in run.calls[stop:]
 
@@ -189,7 +251,8 @@ def test_off_removes_everything_and_ends_the_timers(tmp_path: Path) -> None:
 def test_the_timer_switches_off_unless_a_later_switch_on_moved_the_end(tmp_path: Path) -> None:
     run = FakeRun()
     sys_ = system(tmp_path, run)
-    helper.switch_on(sys_, 60, helper.parse_request(f"ssh on 60\n{ED25519}".encode()).keys)
+    stored(sys_, ED25519)
+    helper.switch_on(sys_, 60, [FP])
     helper.expire(sys_)  # an older timer, firing at 1_000_000: the end is an hour away
     assert (tmp_path / "run/nox-os/ssh/authorized_keys").exists()
     late = helper.System(run=run, clock=lambda: 1_000_000.0 + 3600, root=tmp_path)
@@ -201,30 +264,98 @@ def test_the_timer_switches_off_unless_a_later_switch_on_moved_the_end(tmp_path:
 def test_status_is_off_unless_sshd_runs(tmp_path: Path) -> None:
     run = FakeRun()
     sys_ = system(tmp_path, run)
-    helper.switch_on(sys_, 30, helper.parse_request(f"ssh on 30\n{ED25519}".encode()).keys)
+    stored(sys_, ED25519)
+    helper.switch_on(sys_, 30, [FP])
     assert helper.status(sys_)["ssh"] == "on"
     run.active.clear()  # sshd died
-    assert helper.status(sys_) == helper.status(sys_) | {"ssh": "off", "until": None, "keys": []}
+    assert helper.status(sys_) | {} == helper.status(sys_) | {"ssh": "off", "until": None}
 
 
 # ---- who may ask -------------------------------------------------------------------------
 
+NOX_UID = 999
+MAIN = 4242
+UNIT_CGROUP = "/system.slice/nox.service"
+
+
+def _stat(start: int) -> str:
+    # pid (comm) state, then fields 4..; the 22nd field overall is the start time.
+    after = ["S"] + ["0"] * 18 + [str(start)] + ["0"] * 10
+    return f"{MAIN} (nox core) " + " ".join(after) + "\n"
+
+
+class Proc(helper.System):  # type: ignore[misc,name-defined]
+    """A fake /proc and systemd: the core's process, and what an attacker could change."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        super().__init__(run=FakeRun(), clock=lambda: 1_000_000.0, root=tmp_path, uid_of=self._uid)
+        self.cgroup = f"0::{UNIT_CGROUP}/nox-core\n"
+        self.starts = [5000, 5000]
+        self.fdinfo_pid = MAIN
+        self.living = True
+
+    @staticmethod
+    def _uid(name: str) -> int | None:
+        return NOX_UID if name == "nox" else None
+
+    def read(self, path: Path) -> str:
+        text = str(path).replace("\\", "/")
+        if text == f"/proc/{MAIN}/cgroup":
+            return self.cgroup
+        if text == f"/proc/{MAIN}/stat":
+            if not self.starts:
+                raise FileNotFoundError(text)
+            return _stat(self.starts.pop(0))
+        if text.startswith("/proc/self/fdinfo/"):
+            return f"pos:\t0\nflags:\t02000002\nPid:\t{self.fdinfo_pid}\n"
+        raise FileNotFoundError(text)
+
+    def alive(self, pidfd: int) -> bool:
+        return self.living
+
+
+def proc(tmp_path: Path) -> Proc:
+    return Proc(tmp_path)
+
 
 def test_root_may_ask(tmp_path: Path) -> None:
-    assert helper.peer_allowed(1234, 0, system(tmp_path)) is True
+    assert helper.peer_allowed(helper.Peer(1234, 0), system(tmp_path)) is True
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="the user database (pwd)")
-def test_only_the_main_process_of_nox_service_may_ask(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import pwd
+@pytest.mark.parametrize("pidfd", [None, 7])
+def test_the_main_process_of_nox_service_may_ask(tmp_path: Path, pidfd: int | None) -> None:
+    assert helper.peer_allowed(helper.Peer(MAIN, NOX_UID, pidfd), proc(tmp_path)) is True
+    p = proc(tmp_path)
+    p.cgroup = f"0::{UNIT_CGROUP}\n"  # without the sandbox's leaf
+    assert helper.peer_allowed(helper.Peer(MAIN, NOX_UID, pidfd), p) is True
 
-    class Entry:
-        pw_uid = 999
 
-    monkeypatch.setattr(pwd, "getpwnam", lambda name: Entry() if name == "nox" else None)
-    sys_ = system(tmp_path)
-    assert helper.peer_allowed(4242, 999, sys_) is True  # nox.service's MainPID (FakeRun)
-    assert helper.peer_allowed(4243, 999, sys_) is False  # another process of the user nox
-    assert helper.peer_allowed(4242, 1000, sys_) is False  # another user
+def test_another_process_or_user_may_not(tmp_path: Path) -> None:
+    assert helper.peer_allowed(helper.Peer(MAIN + 1, NOX_UID), proc(tmp_path)) is False
+    assert helper.peer_allowed(helper.Peer(MAIN, NOX_UID + 1), proc(tmp_path)) is False
+
+
+@pytest.mark.parametrize(
+    "spoil",
+    [
+        # A command the core ran: same user, but its own cgroup (the sandbox's) or another unit.
+        lambda p: setattr(p, "cgroup", f"0::{UNIT_CGROUP}/run-1\n"),
+        lambda p: setattr(p, "cgroup", "0::/user.slice/user-999.slice/session-1.scope\n"),
+        # The process that connected is gone and its number belongs to another one now.
+        lambda p: setattr(p, "starts", [5000, 6000]),
+        lambda p: setattr(p, "starts", []),
+        lambda p: setattr(p, "living", False),
+        lambda p: setattr(p, "fdinfo_pid", -1),
+        lambda p: setattr(p, "fdinfo_pid", MAIN + 1),
+    ],
+)
+def test_a_number_that_is_not_the_same_process_is_refused(tmp_path: Path, spoil: Any) -> None:
+    p = proc(tmp_path)
+    spoil(p)
+    assert helper.peer_allowed(helper.Peer(MAIN, NOX_UID, 7), p) is False
+
+
+def test_no_main_process_no_answer(tmp_path: Path) -> None:
+    p = proc(tmp_path)
+    p.run = lambda *a: subprocess.CompletedProcess(a, 0, "MainPID=0\nControlGroup=\n", "")
+    assert helper.peer_allowed(helper.Peer(0, NOX_UID), p) is False

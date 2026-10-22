@@ -204,6 +204,9 @@ def render(settings: Settings, *, boot: bool = False) -> str:
             f"  set rate6_{port} {{ type ipv6_addr; size 4096; flags dynamic,timeout; timeout 5m; }}"
         )
     rules = [
+        # SSH never from this device itself (a connection to its own address runs over "lo"): a
+        # local process must not reach nox-admin's root through remote maintenance.
+        f'iif "lo" tcp dport {SSH_PORT} drop',
         'iif "lo" accept',
         "ct state invalid drop",
         "ct state established,related accept",
@@ -237,7 +240,10 @@ def render(settings: Settings, *, boot: bool = False) -> str:
     ]
 
     def chain(name: str, hook: str, policy: str, body: list[str]) -> list[str]:
-        lines = [f"  chain {name} {{", f"    type filter hook {hook} priority filter; policy {policy};"]
+        lines = [
+            f"  chain {name} {{",
+            f"    type filter hook {hook} priority filter; policy {policy};",
+        ]
         lines += [f"    {line}" for line in body]
         lines.append("  }")
         return lines
@@ -263,7 +269,9 @@ def summary(settings: Settings) -> dict[str, Any]:
     """What the console status screen shows: which switch opened which port. No secrets."""
     return {
         "lan_enabled": settings.lan_enabled,
-        "dashboard_port": settings.port if settings.lan_enabled and openable(settings.port) else None,
+        "dashboard_port": settings.port
+        if settings.lan_enabled and openable(settings.port)
+        else None,
         "node_port": (
             settings.node_port if settings.lan_enabled and openable(settings.node_port) else None
         ),

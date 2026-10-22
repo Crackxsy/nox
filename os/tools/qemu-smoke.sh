@@ -79,7 +79,8 @@ o2_checks() {
   # The image's settings switch network access on: the generator must have opened the dashboard.
   echo "$rules" | grep -q 'tcp dport 47843 ct state new accept' \
     || finish "NOX-SMOKE-FAIL: the firewall did not open the dashboard port from Nox's settings"
-  if echo "$rules" | grep -q 'dport 22 '; then finish "NOX-SMOKE-FAIL: port 22 open with SSH off"; fi
+  if echo "$rules" | grep -q 'dport 22 .*accept'; then finish "NOX-SMOKE-FAIL: port 22 open with SSH off"; fi
+  echo "$rules" | grep -qF 'iif "lo" tcp dport 22 drop' || finish "NOX-SMOKE-FAIL: SSH from the device itself not dropped"
   if systemctl is-active --quiet nox-ssh.service || listening22; then finish "NOX-SMOKE-FAIL: SSH is listening"; fi
   say "NOX-SMOKE: firewall default deny, dashboard open, SSH off"
   [ ! -d /var/log/journal ] || finish "NOX-SMOKE-FAIL: the journal is on the card"
@@ -94,25 +95,43 @@ o2_checks() {
   echo "$screen" | grep -q '^Nox-OS ' && echo "$screen" | grep -q 'Remote access:  SSH off' \
     || finish "NOX-SMOKE-FAIL: console status: $(echo "$screen" | head -n 3)"
   echo "$screen" | sed 's/^/NOX-SMOKE: console | /' >> "$out"
-  # The switch, end to end through the root helper: not for another process of the user nox ...
-  answer="$(runuser -u nox -- python3 -I -S -c 'import socket
+  # The switch, end to end through the root helper. The user nox cannot reach the socket at all
+  # (group nox-os-helper: only nox.service carries it) ...
+  probe='import socket
 s = socket.socket(socket.AF_UNIX); s.connect("/run/nox-os/helper/helper.sock")
-s.sendall(b"status"); s.shutdown(socket.SHUT_WR); print(s.makefile().readline().strip())' 2>&1)"
-  echo "$answer" | grep -q '"not allowed"' || finish "NOX-SMOKE-FAIL: the helper answered the user nox: $answer"
-  # ... and the core is out of that user's reach (not dumpable: its /proc entry belongs to root).
+s.sendall(b"status"); s.shutdown(socket.SHUT_WR); print(s.makefile().readline().strip())'
+  answer="$(runuser -u nox -- python3 -I -S -c "$probe" 2>&1)"
+  echo "$answer" | grep -q 'PermissionError' || finish "NOX-SMOKE-FAIL: the user nox reached the helper: $answer"
+  # ... and a process that inherited the group (a command the core ran) is not its main process.
+  answer="$(setpriv --reuid=nox --regid=nox --groups=nox-os-helper python3 -I -S -c "$probe" 2>&1)"
+  echo "$answer" | grep -q '"not allowed"' || finish "NOX-SMOKE-FAIL: the helper answered another process: $answer"
+  [ -z "$(getent group nox-os-helper | cut -d: -f4)" ] || finish "NOX-SMOKE-FAIL: the group nox-os-helper has members"
+  systemctl show --property=SupplementaryGroups --value nox.service | grep -qw nox-os-helper \
+    || finish "NOX-SMOKE-FAIL: nox.service does not carry the helper's group"
+  # ... and the core is out of that user's reach: not dumpable, so its /proc files belong to root
+  # and another process of the user nox cannot read them (or its memory).
   tries=0
   while :; do
     main="$(systemctl show --property=MainPID --value nox.service)"
-    [ "$(stat -c %U "/proc/$main" 2>/dev/null)" != root ] || break
+    if [ "$(stat -c %U "/proc/$main/environ" 2>/dev/null)" = root ] \
+      && ! setpriv --reuid=nox --regid=nox --clear-groups cat "/proc/$main/environ" >/dev/null 2>&1; then
+      break
+    fi
     [ "$tries" -lt 30 ] || finish "NOX-SMOKE-FAIL: the core is dumpable (pid $main)"
     sleep 5
     tries=$((tries + 1))
   done
-  # ... on with a throwaway key, then off again.
+  # ... keys stored root-owned, answered with their fingerprints; on only with exactly those.
   rm -f /run/nox-smoke-key /run/nox-smoke-key.pub
   ssh-keygen -q -t ed25519 -N '' -C smoke -f /run/nox-smoke-key
-  answer="$(ask "ssh on 5
+  fp="$(ssh-keygen -lf /run/nox-smoke-key.pub | cut -d' ' -f2)"
+  answer="$(ask "keys set
 $(cat /run/nox-smoke-key.pub)")"
+  echo "$answer" | grep -qF "\"$fp\"" || finish "NOX-SMOKE-FAIL: keys set: $answer"
+  [ "$(stat -c '%a %U' /var/lib/nox-os/ssh_keys)" = '600 root' ] || finish "NOX-SMOKE-FAIL: stored keys not root's 0600"
+  answer="$(ask "ssh on 5 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")"
+  echo "$answer" | grep -q 'not the ones confirmed' || finish "NOX-SMOKE-FAIL: on with unconfirmed keys: $answer"
+  answer="$(ask "ssh on 5 $fp")"
   echo "$answer" | grep -q '"ssh": "on"' || finish "NOX-SMOKE-FAIL: ssh on: $answer"
   tries=0
   until listening22 || [ "$tries" -ge 30 ]; do sleep 2; tries=$((tries + 1)); done
@@ -125,10 +144,10 @@ $(cat /run/nox-smoke-key.pub)")"
   for want in 'passwordauthentication no' 'permitrootlogin no' 'kbdinteractiveauthentication no' 'authenticationmethods publickey'; do
     echo "$effective" | grep -qx "$want" || finish "NOX-SMOKE-FAIL: sshd: $want missing"
   done
-  # Loopback is no private network: even the right key is refused there.
-  if timeout 60 ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  # Never from the device itself (the firewall drops it), even with the right key.
+  if timeout 60 ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -i /run/nox-smoke-key nox-admin@127.0.0.1 true 2>/dev/null; then
-    finish "NOX-SMOKE-FAIL: SSH login from outside the home network"
+    finish "NOX-SMOKE-FAIL: SSH login from the device itself"
   fi
   say "NOX-SMOKE: SSH on through the helper: sshd up, port 22 for private networks, off timer set"
   answer="$(ask "ssh off")"
@@ -137,7 +156,8 @@ $(cat /run/nox-smoke-key.pub)")"
   if systemctl is-active --quiet nox-ssh.service || listening22; then finish "NOX-SMOKE-FAIL: sshd still running"; fi
   [ ! -e /run/nox-os/ssh/authorized_keys ] && [ ! -e /run/nox-os/sudoers.d/nox-admin ] \
     || finish "NOX-SMOKE-FAIL: keys or sudo rule left behind"
-  if nft list table inet nox_os | grep -q 'dport 22 '; then finish "NOX-SMOKE-FAIL: port 22 left open"; fi
+  if nft list table inet nox_os | grep -q 'dport 22 .*accept'; then finish "NOX-SMOKE-FAIL: port 22 left open"; fi
+  ask "keys clear" >/dev/null
   rm -f /run/nox-smoke-key /run/nox-smoke-key.pub
   say "NOX-SMOKE: SSH off again: sshd stopped, keys and sudo rule gone, port 22 closed"
 }

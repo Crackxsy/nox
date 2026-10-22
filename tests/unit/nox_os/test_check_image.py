@@ -100,6 +100,15 @@ def _o2(root: Path) -> None:
         "ModemManager.service",
     ):
         _link(system / unit, "/dev/null")
+    for unit in ("nox-os-helper.socket", "nox-os-helper@.service", "nox-ssh.service"):
+        shutil.copy(HARDENING / unit, system / unit)
+    (system / "nox.service.d").mkdir()
+    shutil.copy(
+        HARDENING / "nox-service-helper.conf", system / "nox.service.d" / "50-nox-os-helper.conf"
+    )
+    _write(
+        root / "etc" / "group", "root:x:0:\nsudo:x:27:nox-admin\nnox:x:999:\nnox-os-helper:x:998:\n"
+    )
     firewall = load_tool("nox_firewall", HARDENING)
     _write(root / "etc" / "nftables.conf", firewall.render(firewall.Settings(), boot=True))
     _write(
@@ -256,6 +265,25 @@ SPOILERS: dict[str, Spoil] = {
     "no kernel hardening": lambda r, b: (r / "etc/sysctl.d/90-nox-os.conf").unlink(),
     "Bluetooth not masked": lambda r, b: (r / "etc/systemd/system/bluetooth.service").unlink(),
     "a login prompt on tty1": lambda r, b: (r / "etc/systemd/system/getty@tty1.service").unlink(),
+    "authorized_keys anywhere else": lambda r, b: _write(r / "opt/nox/authorized_keys2", "x"),
+    "shipped remote-maintenance keys": lambda r, b: _write(r / "var/lib/nox-os/ssh_keys", "x"),
+    "the helper socket for the group nox": lambda r, b: _replace(
+        r / "etc/systemd/system/nox-os-helper.socket",
+        "SocketGroup=nox-os-helper",
+        "SocketGroup=nox",
+    ),
+    "the helper socket for everyone": lambda r, b: _replace(
+        r / "etc/systemd/system/nox-os-helper.socket", "SocketMode=0660", "SocketMode=0666"
+    ),
+    "a member in the helper's group": lambda r, b: _replace(
+        r / "etc/group", "nox-os-helper:x:998:", "nox-os-helper:x:998:nox"
+    ),
+    "nox.service without the helper's group": lambda r, b: (
+        r / "etc/systemd/system/nox.service.d/50-nox-os-helper.conf"
+    ).unlink(),
+    "a boot firewall letting SSH in from the device itself": lambda r, b: _replace(
+        r / "etc/nftables.conf", 'iif "lo" tcp dport 22 drop\n', ""
+    ),
 }
 
 

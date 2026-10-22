@@ -67,6 +67,7 @@ DEVICE_SURFACE = frozenset(
         # Pi is administered from a paired device.
         "noxos.ssh.disable",
         "noxos.ssh.enable",
+        "noxos.ssh.keys.set",
         "noxos.ssh.status",
         "personality.get",
         "plans.approve",

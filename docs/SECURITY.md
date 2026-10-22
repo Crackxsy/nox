@@ -924,15 +924,20 @@ breaks it and the QEMU boot test checks it on the running system. In short:
   is on, from private networks only, rate-limited per address; generated from Nox's settings but
   never SSH or a port below 1024, whatever the settings file says - it belongs to the service user.
   If generating fails, the boot rules (nothing of Nox's open) stay.
-- **Remote maintenance (SSH) is off** and needs, to go on, an administrator's request with the
-  security PIN (refused while no PIN is set; from a paired device the PIN always, with removal
-  after repeated wrong ones), audited. Key only (ed25519/ECDSA), `nox-admin` only, private networks
-  only, at most four hours, then sshd, its sessions, the keys, the sudo rule and port 22 end
-  together. Keys and the sudo rule live under `/run` only.
-- **One root helper, three requests.** The service runs without privileges; the only way it changes
-  the system is the socket-activated helper, which answers root and `nox.service`'s main process
-  only (not other processes of the user `nox`, such as commands Nox runs) and knows `status`,
-  `ssh off` and `ssh on <minutes>` with public keys - no shell, no paths, no options.
+- **Remote maintenance (SSH) is off.** Choosing its keys and switching it on each need an
+  administrator's request with the security PIN (refused while no PIN is set; from a paired device
+  the PIN always, with removal after repeated wrong ones), audited. The keys are stored by the root
+  helper alone (root, 0600) and shown by fingerprint; switching on names the fingerprints the owner
+  confirmed and is refused for any other stored keys. Nothing the service user can write is read
+  as a key. Key only (ed25519/ECDSA), `nox-admin` only, private networks only - never from the
+  device itself (dropped in the firewall) - at most four hours, then sshd, its sessions, the sudo
+  rule and port 22 end together. The sudo rule lives under `/run` only.
+- **One root helper, a fixed set of requests.** The service runs without privileges; the only way
+  it changes the system is the socket-activated helper. Its socket belongs to a group only
+  `nox.service` carries; it answers root and `nox.service`'s main process only, checked against
+  the process itself (pidfd, cgroup, start time - not a reusable number), and the core is
+  non-dumpable so the processes it starts cannot take it over. Requests: `status`, `keys set`,
+  `keys clear`, `ssh on <minutes> <fingerprints>`, `ssh off` - no shell, no paths, no options.
 - **Console:** a status screen without secrets on tty1, no login there; no account has a password.
 
 Accepted limits: physical access to the card is full access (the boot partition is plain FAT); the

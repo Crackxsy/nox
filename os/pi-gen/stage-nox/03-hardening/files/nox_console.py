@@ -94,7 +94,10 @@ def render(
             if isinstance(comp, dict) and comp.get("status") not in ("available", "disabled")
         )
         lines.append(f"Nox:            {health.get('version', '?')}, {level}")
-        lines.append("Health:         " + ("all parts available" if not down else "limited: " + ", ".join(down[:6])))
+        lines.append(
+            "Health:         "
+            + ("all parts available" if not down else "limited: " + ", ".join(down[:6]))
+        )
         lan = components.get("lan") if isinstance(components, dict) else None
         if isinstance(lan, dict) and lan.get("status") == "available":
             lines.append(f"Pairing:        {lan.get('reason', '')}")

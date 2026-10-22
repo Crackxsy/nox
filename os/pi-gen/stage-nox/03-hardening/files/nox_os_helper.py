@@ -1,26 +1,35 @@
 """Nox-OS root helper: the only way the unprivileged Nox service changes the system (os/README.md).
 
 Socket-activated (`nox-os-helper.socket`, one `nox-os-helper@.service` per connection), it reads
-one request and answers with one JSON line. It knows exactly three requests and nothing else - no
+one request and answers with one JSON line. It knows exactly these requests and nothing else - no
 shell, no paths, no units, no options:
 
-    status
+    status                        on/off, until when, the stored keys' fingerprints
+    keys set                      followed by 1-8 public keys, one per line (ed25519 or ECDSA,
+                                  optionally security-key backed; no options, no other types):
+                                  stored root-owned, answered with their fingerprints
+    keys clear                    forget the stored keys
+    ssh on <minutes> <fp>[,<fp>]  on for 5-240 minutes with the stored keys - only if their
+                                  fingerprints are exactly the ones the owner confirmed
     ssh off
-    ssh on <minutes>          followed by 1-8 public keys, one per line (ed25519 or ECDSA,
-                              optionally security-key backed; no options, no other types)
 
-Who may ask: the socket is `root:nox 0660` in a folder only root and the group `nox` can enter,
-and the peer (SO_PEERCRED) must be root or the main process of `nox.service` - not any process
-of the user `nox`: a command Nox runs for someone runs as that user too, but never as the core's
-main process, which makes itself non-dumpable on Nox-OS so they cannot trace it either. The
-core asks only after the security PIN and an administrator's request
-(`nox.noxos`), and audits it.
+The keys are this helper's alone (/var/lib/nox-os/ssh_keys, root 0600). Nothing the service user
+can write is ever read as a key: a planted file in Nox's folder grants nothing.
+
+Who may ask: the socket is `root:nox-os-helper 0660` in a folder only root and that group may
+enter, and only nox.service carries the group (`SupplementaryGroups=`) - the user `nox` itself is
+not in it. The peer must then be root, or the main process of nox.service: the service user's
+uid, nox.service's MainPID, in nox.service's cgroup, and the same process from the first check to
+the last (its pidfd where the kernel gives one, SO_PEERPIDFD; else its start time). Commands Nox
+runs for someone run as that user and may inherit the group, but are never the main process; the
+core makes itself non-dumpable on Nox-OS, so they cannot trace it either. The core asks only after
+the security PIN and an administrator's request (`nox.noxos`), and audits it.
 
 `ssh on` writes the keys and a time-limited sudo rule for `nox-admin` under /run/nox-os (gone at
-the next boot, never on the card), starts `nox-ssh.service` (its own sshd configuration: key only,
-`nox-admin` only, from private networks only), opens port 22 for private networks in the firewall
-and starts a timer that switches all of it off again - open sessions included. `ssh off` does
-that at once. `ssh.service` itself stays masked throughout.
+the next boot), starts `nox-ssh.service` (its own sshd configuration: key only, `nox-admin` only,
+from private networks only - never from this device itself, the firewall drops that), opens port
+22 for private networks and starts a timer that switches all of it off again - open sessions
+included. `ssh off` does that at once. `ssh.service` itself stays masked throughout.
 
 Also run by systemd without a socket: `--expire` (the timer) and `--stopped` (`ExecStopPost=` of
 nox-ssh.service: whatever stopped sshd, the keys, the sudo rule and port 22 go with it).
@@ -36,6 +45,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import socket
 import struct
 import subprocess
@@ -47,15 +57,21 @@ from pathlib import Path
 
 SERVICE_USER = "nox"
 SERVICE_UNIT = "nox.service"
+#: The leaf the command sandbox moves the core into (`nox.sandbox._cgroup`).
+CORE_LEAF = "nox-core"
 ADMIN_USER = "nox-admin"
 RUN = Path("/run/nox-os")
 STATE = RUN / "ssh.json"
 KEYS = RUN / "ssh" / "authorized_keys"
 SUDOERS = RUN / "sudoers.d" / "nox-admin"
+#: The keys the owner pasted, kept for the next switch-on: root's, on the card, 0600.
+STORED_KEYS = Path("/var/lib/nox-os/ssh_keys")
 SSH_UNIT = "nox-ssh.service"
 FIREWALL_UNIT = "nox-firewall.service"
 OFF_TIMER_PREFIX = "nox-ssh-off-"
 HELPER = "/usr/local/lib/nox-os/nox_os_helper.py"
+#: getsockopt option for a pidfd of the peer (Linux 6.5+); Python may not name it yet.
+SO_PEERPIDFD = getattr(socket, "SO_PEERPIDFD", 77)
 
 MIN_MINUTES = 5
 MAX_MINUTES = 240
@@ -147,9 +163,14 @@ def parse_key(line: str) -> PublicKey:
 
 @dataclass(frozen=True)
 class Request:
-    command: str  # "status" | "off" | "on"
+    command: str  # "status" | "off" | "keys_set" | "keys_clear" | "on"
     minutes: int = 0
     keys: tuple[PublicKey, ...] = field(default_factory=tuple)
+    #: For "on": the fingerprints the owner confirmed - they must be exactly the stored keys.
+    fingerprints: tuple[str, ...] = field(default_factory=tuple)
+
+
+_FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
 
 
 def parse_request(data: bytes) -> Request:
@@ -167,19 +188,33 @@ def parse_request(data: bytes) -> Request:
         return Request("status")
     if words == ["ssh", "off"] and not rest:
         return Request("off")
-    if len(words) == 3 and words[:2] == ["ssh", "on"] and re.fullmatch(r"[0-9]{1,4}", words[2]):
-        minutes = int(words[2])
-        if not MIN_MINUTES <= minutes <= MAX_MINUTES:
-            raise Refused(f"between {MIN_MINUTES} and {MAX_MINUTES} minutes")
+    if words == ["keys", "clear"] and not rest:
+        return Request("keys_clear")
+    if words == ["keys", "set"]:
         if not rest:
-            raise Refused("remote maintenance needs at least one public key")
+            raise Refused("at least one public key")
         if len(rest) > MAX_KEYS:
             raise Refused(f"at most {MAX_KEYS} public keys")
         keys: dict[bytes, PublicKey] = {}
         for line in rest:
             key = parse_key(line)
             keys.setdefault(key.blob, key)
-        return Request("on", minutes, tuple(keys.values()))
+        return Request("keys_set", keys=tuple(keys.values()))
+    if (
+        len(words) == 4
+        and words[:2] == ["ssh", "on"]
+        and re.fullmatch(r"[0-9]{1,4}", words[2])
+        and not rest
+    ):
+        minutes = int(words[2])
+        if not MIN_MINUTES <= minutes <= MAX_MINUTES:
+            raise Refused(f"between {MIN_MINUTES} and {MAX_MINUTES} minutes")
+        confirmed = words[3].split(",")
+        if not 1 <= len(confirmed) <= MAX_KEYS or not all(
+            _FINGERPRINT.fullmatch(f) for f in confirmed
+        ):
+            raise Refused("the confirmed key fingerprints are missing or malformed")
+        return Request("on", minutes, fingerprints=tuple(confirmed))
     raise Refused("unknown request")
 
 
@@ -190,13 +225,23 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, capture_output=True, text=True, check=False, timeout=60)  # noqa: S603
 
 
+def _uid_of(name: str) -> int | None:
+    import pwd  # noqa: PLC0415 - Linux only; the rest of this file is checked on every system
+
+    try:
+        return pwd.getpwnam(name).pw_uid
+    except KeyError:
+        return None
+
+
 @dataclass
 class System:
-    """Everything the helper changes, in one place (tests replace it)."""
+    """Everything the helper reads and changes, in one place (tests replace it)."""
 
     run: Callable[..., subprocess.CompletedProcess[str]] = _run
     clock: Callable[[], float] = time.time
     root: Path = Path("/")
+    uid_of: Callable[[str], int | None] = _uid_of
 
     def path(self, path: Path) -> Path:
         return self.root / path.relative_to("/")
@@ -205,11 +250,16 @@ class System:
         target = self.path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_name(f".{target.name}.tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), mode)
+        fd = os.open(
+            tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), mode
+        )
         with os.fdopen(fd, "w", encoding="ascii") as handle:
             handle.write(text)
         os.chmod(tmp, mode)
         os.replace(tmp, target)
+
+    def read(self, path: Path) -> str:
+        return self.path(path).read_text("ascii", errors="replace")
 
     def remove(self, path: Path) -> None:
         try:
@@ -230,6 +280,40 @@ class System:
     def active(self, unit: str) -> bool:
         return self.run("systemctl", "is-active", "--quiet", unit).returncode == 0
 
+    def alive(self, pidfd: int) -> bool:
+        """Whether the process behind `pidfd` still runs (signal 0 tests, sends nothing)."""
+        try:
+            signal.pidfd_send_signal(pidfd, 0)  # type: ignore[attr-defined,unused-ignore]
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True  # it exists; this helper may just not signal it
+        return True
+
+
+# ---- the stored keys: root's, never the service's ------------------------------------------
+
+
+def stored_keys(system: System) -> list[PublicKey]:
+    """The keys the owner last pasted, as only this helper stores them (root, 0600). A key file
+    anywhere the service user can write is never read."""
+    try:
+        text = system.read(STORED_KEYS)
+    except OSError:
+        return []
+    keys = []
+    for line in text.splitlines():
+        if line.strip():
+            try:
+                keys.append(parse_key(line))
+            except Refused:
+                continue
+    return keys[:MAX_KEYS]
+
+
+def _key_views(keys: Sequence[PublicKey]) -> list[dict[str, str]]:
+    return [{"type": k.type, "fingerprint": k.fingerprint, "comment": k.comment} for k in keys]
+
 
 def status(system: System) -> dict[str, object]:
     state = system.read_state()
@@ -240,9 +324,21 @@ def status(system: System) -> dict[str, object]:
         "ok": True,
         "ssh": "on" if on else "off",
         "until": int(until) if on and isinstance(until, (int, float)) else None,
-        "keys": state.get("keys", []) if on else [],
+        "active": state.get("keys", []) if on else [],
+        "keys": _key_views(stored_keys(system)),
         "running": running,
     }
+
+
+def set_keys(system: System, keys: Sequence[PublicKey]) -> dict[str, object]:
+    """Replace the stored keys; the answer names their fingerprints for the owner to check."""
+    system.write(STORED_KEYS, "".join(f"{key.line}\n" for key in keys), 0o600)
+    return status(system)
+
+
+def clear_keys(system: System) -> dict[str, object]:
+    system.remove(STORED_KEYS)
+    return status(system)
 
 
 def switch_off(system: System, reason: str) -> dict[str, object]:
@@ -258,11 +354,20 @@ def clean_up(system: System, reason: str) -> None:
     system.remove(SUDOERS)
     # Sessions live in logind's scopes, not in sshd's unit: end them by name. No session, no harm.
     system.run("loginctl", "terminate-user", ADMIN_USER)
-    system.write(STATE, json.dumps({"on": False, "since": int(system.clock()), "reason": reason}) + "\n", 0o644)
+    system.write(
+        STATE,
+        json.dumps({"on": False, "since": int(system.clock()), "reason": reason}) + "\n",
+        0o644,
+    )
     system.systemctl("restart", FIREWALL_UNIT)
 
 
-def switch_on(system: System, minutes: int, keys: Sequence[PublicKey]) -> dict[str, object]:
+def switch_on(system: System, minutes: int, confirmed: Sequence[str]) -> dict[str, object]:
+    keys = stored_keys(system)
+    if not keys:
+        raise Refused("no public key stored; paste one first")
+    if sorted(k.fingerprint for k in keys) != sorted(set(confirmed)):
+        raise Refused("the stored keys are not the ones confirmed; check the fingerprints again")
     now = system.clock()
     until = int(now + minutes * 60)
     system.write(KEYS, "".join(f"{key.line}\n" for key in keys), 0o644)
@@ -315,26 +420,107 @@ def handle(request: Request, system: System) -> dict[str, object]:
         return status(system)
     if request.command == "off":
         return switch_off(system, "dashboard")
-    return switch_on(system, request.minutes, request.keys)
+    if request.command == "keys_set":
+        return set_keys(system, request.keys)
+    if request.command == "keys_clear":
+        return clear_keys(system)
+    return switch_on(system, request.minutes, request.fingerprints)
 
 
 # ---- who is asking -------------------------------------------------------------------------
 
 
-def peer_allowed(pid: int, uid: int, system: System) -> bool:
-    """Root, or the main process of nox.service running as the service user."""
-    if uid == 0:
-        return True
-    import pwd  # noqa: PLC0415 - Linux only; the rest of this file is checked on every system
+@dataclass(frozen=True)
+class Peer:
+    pid: int
+    uid: int
+    #: A pidfd of the connecting process (SO_PEERPIDFD, Linux 6.5+): it cannot be reused.
+    pidfd: int | None = None
 
+
+def read_peer(conn: socket.socket) -> Peer:
+    creds = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+    pid, uid, _gid = struct.unpack("3i", creds)
     try:
-        if uid != pwd.getpwnam(SERVICE_USER).pw_uid:
-            return False
-    except KeyError:
+        raw = conn.getsockopt(socket.SOL_SOCKET, SO_PEERPIDFD, 4)
+        pidfd: int | None = struct.unpack("i", raw)[0]
+    except OSError:
+        pidfd = None
+    return Peer(pid, uid, pidfd if pidfd is not None and pidfd >= 0 else None)
+
+
+def _show(system: System) -> dict[str, str]:
+    shown = system.run(
+        "systemctl", "show", "--property=MainPID", "--property=ControlGroup", SERVICE_UNIT
+    )
+    if shown.returncode != 0:
+        return {}
+    values = {}
+    for line in shown.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key] = value.strip()
+    return values
+
+
+def _cgroup(system: System, pid: int) -> str | None:
+    try:
+        text = system.read(Path(f"/proc/{pid}/cgroup"))
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith("0::"):
+            return line[3:]
+    return None
+
+
+def _start_time(system: System, pid: int) -> str | None:
+    """Field 22 of /proc/<pid>/stat: when the process started, in clock ticks since boot."""
+    try:
+        text = system.read(Path(f"/proc/{pid}/stat"))
+    except OSError:
+        return None
+    _, sep, after = text.rpartition(")")
+    fields = after.split()
+    return fields[19] if sep and len(fields) > 19 else None
+
+
+def _fdinfo_pid(system: System, pidfd: int) -> int | None:
+    try:
+        text = system.read(Path(f"/proc/self/fdinfo/{pidfd}"))
+    except OSError:
+        return None
+    for line in text.splitlines():
+        key, _, value = line.partition(":")
+        if key == "Pid" and value.strip().lstrip("-").isdigit():
+            return int(value.strip())
+    return None
+
+
+def peer_allowed(peer: Peer, system: System) -> bool:
+    """Root, or the main process of nox.service as the service user - bound to that process,
+    not to a number another process could reuse.
+
+    The socket's group is the first boundary (only nox.service carries it). Then: the uid is the
+    service user's, the pid is nox.service's MainPID, the process sits in nox.service's cgroup
+    (its own or the `nox-core` leaf the sandbox moves it to), and it is still the same process
+    after all of that - by its pidfd where the kernel gives one, else by its start time read
+    before and after."""
+    if peer.uid == 0:
+        return True
+    if peer.uid != system.uid_of(SERVICE_USER):
         return False
-    shown = system.run("systemctl", "show", "--property=MainPID", "--value", SERVICE_UNIT)
-    main = shown.stdout.strip()
-    return shown.returncode == 0 and main.isdigit() and int(main) > 1 and int(main) == pid
+    started = _start_time(system, peer.pid)
+    shown = _show(system)
+    main, unit_cgroup = shown.get("MainPID", ""), shown.get("ControlGroup", "")
+    if not main.isdigit() or int(main) <= 1 or int(main) != peer.pid or not unit_cgroup:
+        return False
+    if _cgroup(system, peer.pid) not in (unit_cgroup, f"{unit_cgroup}/{CORE_LEAF}"):
+        return False
+    if peer.pidfd is not None:
+        if _fdinfo_pid(system, peer.pidfd) != peer.pid or not system.alive(peer.pidfd):
+            return False
+    return started is not None and _start_time(system, peer.pid) == started
 
 
 def _read_request(conn: socket.socket) -> bytes:
@@ -349,14 +535,28 @@ def _read_request(conn: socket.socket) -> bytes:
     return b"".join(chunks)
 
 
+def _describe(request: Request) -> str:
+    if request.command == "on":
+        return f"ssh on for {request.minutes} min, keys {list(request.fingerprints)}"
+    if request.command == "keys_set":
+        return f"keys set {[k.fingerprint for k in request.keys]}"
+    return request.command
+
+
 def serve(conn: socket.socket, system: System) -> int:
     def answer(payload: dict[str, object]) -> None:
         conn.sendall((json.dumps(payload) + "\n").encode("utf-8"))
 
-    creds = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
-    pid, uid, _gid = struct.unpack("3i", creds)
-    if not peer_allowed(pid, uid, system):
-        print(f"nox-os-helper: refused a request from pid {pid} uid {uid}", file=sys.stderr)
+    peer = read_peer(conn)
+    try:
+        allowed = peer_allowed(peer, system)
+    finally:
+        if peer.pidfd is not None:
+            os.close(peer.pidfd)
+    if not allowed:
+        print(
+            f"nox-os-helper: refused a request from pid {peer.pid} uid {peer.uid}", file=sys.stderr
+        )
         answer({"ok": False, "error": "not allowed"})
         return 1
     try:
@@ -370,8 +570,7 @@ def serve(conn: socket.socket, system: System) -> int:
         print(f"nox-os-helper: failed: {type(exc).__name__}", file=sys.stderr)
         answer({"ok": False, "error": "the helper failed"})
         return 1
-    detail = f" for {request.minutes} min, keys {[k.fingerprint for k in request.keys]}" if request.command == "on" else ""
-    print(f"nox-os-helper: {request.command}{detail} (pid {pid})", file=sys.stderr)
+    print(f"nox-os-helper: {_describe(request)} (pid {peer.pid})", file=sys.stderr)
     answer(result)
     return 0
 

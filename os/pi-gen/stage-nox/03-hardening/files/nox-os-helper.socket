@@ -1,5 +1,6 @@
-# Nox-OS root helper (nox_os_helper.py): reachable by root and the group nox only, and it answers
-# only root and nox.service's main process (os/README.md, "Remote maintenance").
+# Nox-OS root helper (nox_os_helper.py): reachable by root and the group nox-os-helper only (which
+# only nox.service carries), and it answers only root and nox.service's main process
+# (os/README.md, "Remote maintenance").
 [Unit]
 Description=Nox-OS root helper socket
 After=systemd-tmpfiles-setup.service
@@ -7,7 +8,7 @@ After=systemd-tmpfiles-setup.service
 [Socket]
 ListenStream=/run/nox-os/helper/helper.sock
 SocketUser=root
-SocketGroup=nox
+SocketGroup=nox-os-helper
 SocketMode=0660
 Accept=yes
 MaxConnections=4

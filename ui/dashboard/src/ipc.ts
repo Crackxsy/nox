@@ -202,13 +202,12 @@ export const api = {
     c.request('lan.unpair', pin ? { device_id: deviceId, pin } : { device_id: deviceId }),
   // -- Nox-OS remote maintenance (`nox.noxos`) -----------------------------------------------------
   sshStatus: (c: IpcClient) => c.request('noxos.ssh.status', {}),
-  /** `keys`: pasted public keys, replacing the saved ones; empty uses the saved ones. */
-  sshEnable: (c: IpcClient, minutes: number, pin = '', keys = '') =>
-    c.request('noxos.ssh.enable', {
-      minutes,
-      ...(pin ? { pin } : {}),
-      ...(keys ? { keys } : {}),
-    }),
+  /** Pasted public keys replace the stored ones (kept by the Pi's root helper, not by Nox). */
+  sshKeysSet: (c: IpcClient, keys: string, pin = '') =>
+    c.request('noxos.ssh.keys.set', pin ? { keys, pin } : { keys }),
+  /** `fingerprints`: the stored keys exactly as the owner saw and confirmed them. */
+  sshEnable: (c: IpcClient, minutes: number, fingerprints: string[], pin = '') =>
+    c.request('noxos.ssh.enable', pin ? { minutes, fingerprints, pin } : { minutes, fingerprints }),
   sshDisable: (c: IpcClient, forgetKeys = false) =>
     c.request('noxos.ssh.disable', forgetKeys ? { forget_keys: true } : {}),
   // -- PCs, laptops and servers as nodes (`nox.node`) -------------------------------------------
