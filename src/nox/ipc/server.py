@@ -843,6 +843,7 @@ class IpcHub:
                     request=env,
                     services=frozenset(client.services),
                     stream=self._stream_fn(client, env),
+                    peer=client.peer if client.via_lan else "",
                 )
                 reply = await self._registry.dispatch(ctx, env)
         except asyncio.CancelledError:

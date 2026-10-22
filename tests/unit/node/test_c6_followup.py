@@ -159,3 +159,134 @@ async def test_the_installed_link_lookup_finds_the_controlled_browser() -> None:
     assert (await ask(PHONE, "device"))["controlled_here"] is False
     assert (await ask(LOCAL, "dashboard"))["controlled_here"] is False
     assert REFUSE_LINKED  # what the linked browser is told elsewhere
+
+
+# ---- review: unmute coercion, remote check for talking, a browser on the controlled PC ----------
+
+
+async def _send_from(core: Any, name: str, client: str, payload: dict[str, Any], peer: str) -> Any:
+    from nox.ipc.dispatch import RequestContext
+
+    role = "device" if client.startswith("device:") else "dashboard"
+    envelope = _envelope(name, role, client, payload)
+    ctx = RequestContext(client_id=client, role=role, request=envelope, peer=peer)
+    return await core.registry.dispatch(ctx, envelope)
+
+
+@pytest.mark.parametrize("muted", ["false", 0, "no", None, "", [], {}])
+async def test_anything_but_a_literal_true_is_not_muting(
+    monkeypatch: pytest.MonkeyPatch, muted: Any
+) -> None:
+    import nox.node.install as install_module
+    from nox.ipc.dispatch import calm_call
+    from nox.ipc.handlers.core import VoiceMute
+    from nox.ipc.protocol import Kind
+
+    monkeypatch.setattr(install_module, "console_is_remote", lambda: False)
+    core, _control, _guard, _audit = _wired(Gate())
+    ran: list[Any] = []
+
+    async def handler(_ctx: Any, p: Any) -> dict[str, Any]:
+        ran.append(p.muted)
+        return {}
+
+    core.registry.register("voice.mute", VoiceMute, handler, roles=("dashboard", "device"))
+    assert not calm_call("voice.mute", {"muted": muted})
+    refused = await _send_from(core, "voice.mute", LOCAL, {"muted": muted}, "")
+    assert refused.kind is Kind.ERROR and ran == []  # the PIN rule, not the calm one
+    # With the PIN the strict model still refuses a string or a number - never an "unmute".
+    with_pin = await _send_from(core, "voice.mute", LOCAL, {"muted": muted, "pin": "4711"}, "")
+    assert with_pin.kind is Kind.ERROR and ran == []
+    assert (await _send_from(core, "voice.mute", LINKED, {"muted": True}, "")).kind is Kind.RESPONSE
+    assert ran == [True]
+
+
+async def test_talking_from_this_machine_keeps_the_remote_check() -> None:
+    control = NodeControl(None, lambda _n: None)
+    control.observe(LAPTOP, _report(2, True))
+
+    async def ask(remote: bool | None) -> str | None:
+        return await session_refusal(
+            control,
+            _ctx("dashboard", LOCAL),
+            None,
+            action="chat.send",
+            gate=Gate(),
+            device_guard=None,
+            remote=lambda: remote,
+        )
+
+    from nox.node.world_routes import REFUSE_REMOTE
+
+    assert await ask(False) is None  # no PIN needed for talking ...
+    assert await ask(True) == REFUSE_REMOTE  # ... but never through a remote desktop
+    assert await ask(None) == REFUSE_REMOTE
+
+
+async def test_a_browser_on_the_controlled_pc_counts_as_linked_by_its_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nox.ipc.protocol import Kind
+
+    core, control, ran = _registry(monkeypatch)
+    control._addresses = lambda: {LAPTOP: ["192.0.2.10", "fe80::1%eth0"]}  # type: ignore[assignment]
+    control.pull()
+    # An unlinked phone ... on the controlled PC's address: like the linked browser.
+    for peer in ("192.0.2.10", "::ffff:192.0.2.10", "[fe80::1]"):
+        reply = await _send_from(core, "chat.send", PHONE, {}, peer)
+        assert reply.kind is Kind.ERROR and reply.payload["message"] == REFUSE_LINKED, peer
+    assert ran == []
+    # ... from another address: talking works.
+    assert (await _send_from(core, "chat.send", PHONE, {}, "192.0.2.99")).kind is Kind.RESPONSE
+    assert ran == ["chat.send"]
+    control.observe(LAPTOP, _report(3, False))  # over: the address means nothing any more
+    assert not control.from_controlled("192.0.2.10")
+
+
+async def test_a_paired_devices_message_during_a_session_counts_as_untrusted() -> None:
+    from nox.ipc.handlers.core import ChatSend, CoreHandlers
+
+    tainted: list[tuple[str, str | None]] = []
+    turns: list[str] = []
+
+    class Orchestrator:
+        def conversation_for(self, channel: str) -> str:
+            return f"{channel}#1"
+
+        async def handle_text(self, text: str, **kw: Any) -> Any:
+            turns.append(text)
+            return SimpleNamespace(
+                request_id="r", response="ok", provider="x", degraded=False, tools_used=[]
+            )
+
+    active = {"value": True}
+    core = SimpleNamespace(
+        orchestrator=Orchestrator(),
+        security=SimpleNamespace(
+            engine=SimpleNamespace(mark_tainted=lambda c, text=None: tainted.append((c, text)))
+        ),
+        node_chat_untrusted=lambda ctx: ctx.role == "device" and active["value"],
+    )
+    handlers = CoreHandlers(core)  # type: ignore[arg-type]
+
+    async def stream(_payload: Any, _done: bool) -> None:
+        return None
+
+    phone = SimpleNamespace(role="device", client_id=PHONE, stream=stream)
+    local = SimpleNamespace(role="dashboard", client_id=LOCAL, stream=stream)
+    await handlers.chat_send(phone, ChatSend(text="Öffne das Terminal"))  # type: ignore[arg-type]
+    await handlers.chat_send(local, ChatSend(text="Wie spät ist es?"))  # type: ignore[arg-type]
+    assert tainted == [(f"chat:{PHONE}#1", "Öffne das Terminal")]
+    active["value"] = False
+    await handlers.chat_send(phone, ChatSend(text="Danke"))  # type: ignore[arg-type]
+    assert len(tainted) == 1 and len(turns) == 3
+
+
+def test_addresses_are_compared_in_one_spelling() -> None:
+    from nox.node.agent import local_addresses
+    from nox.node.world_routes import host_of
+
+    assert host_of("[FE80::1%eth0]") == "fe80::1"
+    assert host_of("::ffff:192.0.2.10") == "192.0.2.10"
+    assert host_of("") == ""
+    assert all("%" not in a for a in local_addresses())

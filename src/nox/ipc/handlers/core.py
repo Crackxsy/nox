@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 from nox.core.events import E, Event
 from nox.core.logging import get_logger
@@ -121,7 +121,9 @@ class VoicePtt(BaseModel):
 
 
 class VoiceMute(BaseModel):
-    muted: bool
+    #: Strict: "false", 0 or "no" are not booleans - never quietly read as one (the calm rule of
+    #: `nox.ipc.dispatch.calm_call` depends on it).
+    muted: StrictBool
 
 
 class ChatSend(BaseModel):
@@ -402,6 +404,13 @@ class CoreHandlers:
             await ctx.stream({"delta": delta}, False)
 
         # Each dashboard client is a conversation of its own (history, model context, taint).
+        untrusted = getattr(self._core, "node_chat_untrusted", None)
+        if untrusted is not None and untrusted(ctx) and self._core.security is not None:
+            # While Nox controls a paired PC, a paired device's message may have been typed by
+            # Nox itself: it enters as untrusted content, so it widens nothing the taint rules
+            # hold back (`nox.node.install.wire_guards`).
+            conversation = self._core.orchestrator.conversation_for(f"chat:{ctx.client_id}")
+            self._core.security.engine.mark_tainted(conversation, p.text)
         with turn_origin("chat"):  # facts learned from it count as the user's own words
             turn = await self._core.orchestrator.handle_text(
                 p.text,

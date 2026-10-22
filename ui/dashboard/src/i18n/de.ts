@@ -354,6 +354,8 @@ export const de = {
   perm_pin_missing: 'Bitte zuerst die Sicherheits-PIN eingeben.',
   perm_node_control_device:
     'Vom Browser auf dem PC, den Nox gerade steuert, geht Erlauben nicht – von einem anderen Gerät mit der PIN. Ablehnen geht überall.',
+  chat_unchecked_node: 'Während Nox den PC steuert, gelten Nachrichten als ungeprüft.',
+  chat_controlled_here: 'Nox steuert gerade diesen PC – von hier kann man Nox nichts schreiben. Stopp geht immer.',
   perm_node_control_here:
     'Nox steuert gerade Maus und Tastatur auf diesem PC. Von hier geht Erlauben nicht – an einem anderen Gerät mit der PIN. Ablehnen geht auch hier.',
   perm_node_control_pin_hint: 'Nox steuert gerade Maus und Tastatur auf einem PC: Erlauben braucht jetzt die PIN.',

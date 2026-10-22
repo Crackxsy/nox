@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import ipaddress
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -160,6 +161,19 @@ EndOnNode = Callable[[NodeEntry], Awaitable[dict[str, Any]]]
 Reports = Callable[[], Iterable[tuple[str, Any]]]
 
 
+def host_of(address: str) -> str:
+    """An address as one spelling: no port, no brackets, no IPv6 zone, IPv4 out of `::ffff:`."""
+    text = str(address).strip().strip("[]").split("%", 1)[0].lower()
+    if not text:
+        return ""
+    try:
+        ip = ipaddress.ip_address(text)
+    except ValueError:
+        return text[:64]
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return str(mapped or ip)
+
+
 def read_report(raw: Any) -> SessionReport | None:
     """A node's report, or None when it cannot be read (then nothing changes: fail closed)."""
     if isinstance(raw, SessionReport):
@@ -208,6 +222,7 @@ class NodeControl:
         reports: Reports = tuple,
         labels: Callable[[str], str] = lambda device_id: device_id[:8],
         linked: Callable[[str], str | None] = lambda _device_id: None,
+        addresses: Callable[[], Mapping[str, Iterable[str]]] = dict,
         stop_hotkey: str = "ctrl+alt+shift+k",
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -217,6 +232,10 @@ class NodeControl:
         self._reports = reports
         self._labels = labels
         self._linked = linked
+        self._addresses = addresses
+        #: Where each node is on the network (its peer address here and what its hello said):
+        #: kept from the last connection, so a node that went silent is still recognised.
+        self.node_addresses: dict[str, set[str]] = {}
         self._stop = stop_hotkey
         self._clock = clock
         self.devices: dict[str, _Device] = {}
@@ -283,9 +302,25 @@ class NodeControl:
         ]
 
     def pull(self) -> None:
-        """Read the latest hello/pong reports of connected nodes."""
+        """Read the latest hello/pong reports and addresses of connected nodes."""
         for device_id, raw in self._reports():
             self.observe(device_id, raw)
+        for device_id, found in self._addresses().items():
+            hosts = {h for h in (host_of(a) for a in found) if h}
+            if hosts:
+                self.node_addresses[device_id] = hosts
+
+    def from_controlled(self, peer: str) -> bool:
+        """Whether a client connecting from `peer` sits on a PC the lock holds for: the same
+        address as that node. Such a browser counts as linked, whatever was set in the
+        dashboard."""
+        host = host_of(peer)
+        if not host or not self.active():
+            return False
+        return any(
+            self._locked(device) and host in self.node_addresses.get(device_id, set())
+            for device_id, device in self.devices.items()
+        )
 
     # -- the lock --------------------------------------------------------------------------------
 
@@ -649,7 +684,8 @@ async def session_refusal(
     """Why an "allow" or a request that changes something is refused while Nox controls a node,
     or None (spec C §1.5). Nox does not know the PIN, so the PIN is the guard:
 
-    1. the browser linked to a node Nox controls never approves or changes anything;
+    1. the browser on a node Nox controls never approves or changes anything - linked to it in
+       the dashboard, or connecting from that node's address;
     2. any other paired device, and this machine's dashboard or shell, only with the PIN (with
        the PIN's usual lockout; a paired device is removed after repeated wrong PINs);
     3. this machine's dashboard or shell not from a remote session - a remote desktop could be
@@ -658,7 +694,8 @@ async def session_refusal(
     4. no PIN set: refused. Reading, "deny" and Stopp are never asked here.
 
     Talking to Nox (`chat.send`, `voice.ptt`) needs no PIN - except from the browser on the PC
-    Nox controls, which could otherwise be the one typing."""
+    Nox controls, which could otherwise be the one typing; the remote-session check still holds
+    for this machine's own dashboard and shell."""
     from nox.ipc.dispatch import conversation_request  # noqa: PLC0415
     from nox.ipc.errors import IpcError  # noqa: PLC0415
     from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
@@ -669,7 +706,7 @@ async def session_refusal(
     role = getattr(ctx, "role", "")
     if role == DEVICE_ROLE:
         device = str(getattr(ctx, "client_id", "")).removeprefix(DEVICE_CLIENT_PREFIX)
-        if control.controls_browser(device):
+        if control.controls_browser(device) or control.from_controlled(getattr(ctx, "peer", "")):
             return REFUSE_LINKED
         if conversation_request(action):
             return None
@@ -684,6 +721,7 @@ async def session_refusal(
         return None
     if role in LOCAL_UI_ROLES:
         if conversation_request(action):
-            return None
+            # Only the PIN is waived for talking, never the remote check.
+            return REFUSE_REMOTE if (await remote_now(remote)) is not False else None
         return await local_pin_refusal(ctx, pin, gate=gate, remote=remote, action=action)
     return REFUSE_ROLE

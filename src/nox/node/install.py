@@ -482,6 +482,12 @@ def _world_specs(
             return []
         return [(d, s.computer) for d, s in listener.sessions.items() if s.computer is not None]
 
+    def addresses() -> dict[str, list[str]]:
+        listener = listeners[0] if listeners else None
+        if listener is None:
+            return {}
+        return {d: [s.peer_host, *s.hello.addresses] for d, s in listener.sessions.items()}
+
     def linked(device_id: str) -> str | None:
         entry = next((e for e in registry.known() if e.device_id == device_id), None)
         return entry.linked_device_id if entry is not None else None
@@ -497,6 +503,7 @@ def _world_specs(
         reports=reports,
         labels=label_of,
         linked=linked,
+        addresses=addresses,
         stop_hotkey=desktop.computer_use.stop_hotkey if desktop is not None else "",
     )
     wire_guards(core, control)
@@ -519,6 +526,8 @@ def wire_guards(core: Any, control: NodeControl) -> None:
     """While Nox controls a node: every "allow" (`security.permission.reply`) and every request
     that changes something (`RequestRegistry.node_guard`) go through `session_refusal`; and the
     `node.computer.*` requests. Separate so a test can wire a fake core exactly like this."""
+    from nox.ipc.roles import DEVICE_ROLE  # noqa: PLC0415
+
     security = getattr(core, "security", None)
 
     def gate() -> Any:
@@ -539,6 +548,13 @@ def wire_guards(core: Any, control: NodeControl) -> None:
         return await guard(ctx, pin, "security.permission.reply")
 
     core.node_approval_guard = approval
+
+    def chat_untrusted(ctx: Any) -> bool:
+        # A paired device's words while Nox controls a PC could have been typed by Nox there:
+        # they count as untrusted, like what Nox read from the screen in that session.
+        return getattr(ctx, "role", "") == DEVICE_ROLE and control.active()
+
+    core.node_chat_untrusted = chat_untrusted
     ipc = getattr(core, "registry", None)
     if ipc is not None and hasattr(ipc, "register"):
         ipc.node_guard = guard
@@ -559,8 +575,9 @@ def _register_control_requests(core: Any, ipc: Any, control: NodeControl, gate: 
     async def h_status(ctx: RequestContext, _p: EmptyRequest) -> dict[str, Any]:
         # Whether the asking browser is the one on a PC Nox controls: it cannot approve then,
         # so it shows no PIN field at all.
-        here = ctx.role == DEVICE_ROLE and control.controls_browser(
-            ctx.client_id.removeprefix(DEVICE_CLIENT_PREFIX)
+        here = ctx.role == DEVICE_ROLE and (
+            control.controls_browser(ctx.client_id.removeprefix(DEVICE_CLIENT_PREFIX))
+            or control.from_controlled(ctx.peer)
         )
         return {"sessions": control.status(), "controlled_here": here}
 

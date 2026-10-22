@@ -117,6 +117,8 @@ class NodeSession:
     renewed: bool = False
     #: The node's last word on computer use (`p.SessionReport`, from its hello and pongs).
     computer: p.SessionReport | None = None
+    #: The address the node connects from, as this core sees it.
+    peer_host: str = ""
     blobs: dict[str, list[bytes]] = field(default_factory=dict)
     complete: set[str] = field(default_factory=set)
     blob_bytes: int = 0
@@ -362,6 +364,7 @@ class NodeListener:
             transport=transport,
             cert_not_after=cert.not_valid_after_utc,
             computer=hello_msg.session,
+            peer_host=str(connection.remote_address[0]) if connection.remote_address else "",
         )
         # Replacing an older session and registering this one happen under the device's lock,
         # which a revocation takes too: a revocation either sees this session registered and

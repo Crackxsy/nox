@@ -139,6 +139,9 @@ class RequestContext:
     request: Envelope
     services: frozenset[str] = field(default_factory=frozenset)
     stream: StreamFn = _no_stream
+    #: The network address a paired device connects from (bridged in by the network listener);
+    #: "" for local clients.
+    peer: str = ""
 
 
 @dataclass(frozen=True)
@@ -182,10 +185,11 @@ def conversation_request(name: str) -> bool:
 
 
 def calm_call(name: str, payload: Any) -> bool:
-    """`calm_ui_request` for one call: switching the microphone back on (`voice.mute` with
-    `muted: false`) is not calm - it gives Nox an ear again."""
+    """`calm_ui_request` for one call. `voice.mute` is calm only when it mutes - `muted` literally
+    `true`; anything else (unmuting, "false", 0, a missing field) is not: it could give Nox an ear
+    again. The field is a strict boolean, so the model never reads it otherwise."""
     if name == "voice.mute":
-        return not (isinstance(payload, dict) and payload.get("muted") is False)
+        return isinstance(payload, dict) and payload.get("muted") is True
     return calm_ui_request(name)
 
 

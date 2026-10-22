@@ -91,6 +91,29 @@ RENEW_CHECK_S = 3600.0
 RENEW_TIMEOUT_S = 30.0
 
 
+def local_addresses() -> list[str]:
+    """This device's own IP addresses (no loopback), at most 16 - for the core to recognise a
+    browser on this PC (`NodeHello.addresses`)."""
+    import ipaddress  # noqa: PLC0415
+
+    import psutil  # noqa: PLC0415
+
+    found: list[str] = []
+    try:
+        interfaces = psutil.net_if_addrs()
+    except (OSError, RuntimeError):
+        return []
+    for entries in interfaces.values():
+        for entry in entries:
+            try:
+                ip = ipaddress.ip_address(str(entry.address).split("%", 1)[0])
+            except ValueError:
+                continue
+            if not ip.is_loopback and str(ip) not in found:
+                found.append(str(ip))
+    return found[:16]
+
+
 def confirmation_text(tool: str, arguments: dict[str, Any], *, tainted: bool = False) -> str | None:
     """The question for the person at the device: every argument in full, one per line, rendered
     exactly as the core's permission target renders it (`protocol.render`: quoted, look-alikes,
@@ -256,6 +279,7 @@ class NodeAgent:
                     self._gate.manifest.enabled(), [t.name for t in offered]
                 ),
                 "confirmer": bool(self._confirmer.available),
+                "addresses": local_addresses(),
                 **self._session_field(),
             },
         }

@@ -812,10 +812,16 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   PIN applies; the check runs off the event loop with a time limit (too slow: unknown); (4) no PIN
   set: refused. The desktop shell's dialog has a PIN field for this. A node's own dialog still
   asks on that node. **Talking to Nox stays possible** (`chat.send`, `voice.ptt`): no PIN from
-  this machine or from a paired device other than the controlled PC's browser, which is refused
-  (Nox could type its own instructions there); anything a conversation leads to is asked under
-  the rule above. Muting the microphone is always free; switching it back on (`voice.mute` with
-  `muted: false`) follows the PIN rule. Which requests count as calm is pinned by a snapshot test
+  this machine (but still not from a remote session) or from a paired device other than the
+  controlled PC's browser, which is refused (Nox could type its own instructions there). The
+  controlled PC's browser is every paired device linked to that node **and every paired device
+  connecting from that node's address** (its address as this core sees it, and the addresses the
+  node reports in its hello). A paired device's message during the session enters the
+  conversation as **untrusted content**, like what Nox read from the screen in that session, so
+  it widens nothing the taint rules hold back; the dashboard says "messages count as unchecked".
+  Anything a conversation leads to is asked under the rule above. Muting the microphone is always
+  free; anything else for `voice.mute` - unmuting, and any value that is not literally `true`
+  (the field is a strict boolean) - follows the PIN rule. Which requests count as calm is pinned by a snapshot test
   (`tests/integration/test_lan.py`), so a state-changing `*.status` cannot slip in. A start needs a browser device linked to that node (`node.link`, else
   `link_required`) and is refused while the lock holds for it (`session_running`); a start
   without a readable report is followed by `computer.session_end`. Stops, kills and disconnects
