@@ -82,6 +82,8 @@ key signed. Or, on a machine that already runs Nox: `nox release verify release-
   "created": "2026-10-21T12:00:00Z",
   "source_commit": "<the 40-character commit the tag points to>",
   "node_protocol": {"min": 1, "max": 1},
+  "node_speaks": 1,
+  "deps_changed": false,
   "min_node_version": null,
   "next_keys": [{"key_id": "...", "public_key": "...", "not_after": "YYYY-MM-DD"}],
   "assets": [
@@ -97,10 +99,17 @@ key signed. Or, on a machine that already runs Nox: `nox release verify release-
 - `next_keys` records the trust list this release ships, so a rotation is announced inside a
   signed document. Trust itself comes from the list built into the installed version, never from
   a downloaded manifest.
-- `node_protocol` is the node protocol range the release's core accepts; the release workflow
-  takes it from `NODE_PROTOCOL_RANGE` in `src/nox/node/protocol.py` (`--node-protocol 1-1`). A
-  node installs a patch release by itself only when the range still holds its own protocol.
-  `min_node_version` stays `null` until a core drops support for old nodes.
+- `node_protocol` is the node protocol range the release's core accepts (`NODE_PROTOCOL_RANGE`
+  in `src/nox/node/protocol.py`), `node_speaks` the protocol its node speaks (`NODE_PROTOCOL`),
+  and `deps_changed` whether `uv.lock` changed since the previous release tag - all three filled
+  by the release workflow. A node installs a release by itself only when its *paired core*
+  accepts `node_speaks` and `deps_changed` is `false` (a code-only patch); otherwise the device's
+  owner confirms (`nox node update`) or the installer is needed. `min_node_version` stays `null`
+  until a core drops support for old nodes.
+- **Freshness:** a node refuses a manifest whose `created` is older than the newest one it has
+  already seen (a replayed old release cannot hold it back silently) and warns after 30 days
+  without a newer one (a network that withholds releases - a freeze - cannot be told from a quiet
+  month, so it is said, not refused).
 - `nox-app-<tag>.zip` is what a node updates itself from: Nox's code and configuration only
   (`scripts/build_app_bundle.py`, deterministic, standard library only), built in the manifest job
   from the clean checkout of the tag, with `BUNDLE.json` naming the library versions it needs.

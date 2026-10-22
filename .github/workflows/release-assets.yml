@@ -79,6 +79,7 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
           path: source
+          fetch-depth: 0 # the previous tag, to tell whether uv.lock changed since
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -99,15 +100,31 @@ jobs:
           cp "bundle/nox-ui-$TAG.tar.gz" files/
           cp source/scripts/install-linux.sh files/install-linux.sh
 
-      # The node protocol range this release's core accepts goes into the signed manifest: a node
-      # installs a patch release by itself only when it still speaks its protocol (nox.node.update).
-      - name: The commit the tag points to, and its node protocol
+      # Into the signed manifest: the node protocols this release's core accepts, the protocol its
+      # node speaks, and whether uv.lock changed since the previous release tag. A node installs a
+      # release by itself only when its paired core accepts the new node's protocol and no library
+      # changed - a code-only patch (nox.node.update); otherwise the installer is needed.
+      - name: The commit the tag points to, its node protocols, changed libraries
         id: source
+        env:
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           echo "commit=$(git -C source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           range="$(sed -n 's/^NODE_PROTOCOL_RANGE: tuple\[int, int\] = (\([0-9]*\), \([0-9]*\))$/\1-\2/p' source/src/nox/node/protocol.py)"
-          test -n "$range"
-          echo "node_protocol=$range" >> "$GITHUB_OUTPUT"
+          speaks="$(sed -n 's/^NODE_PROTOCOL = \([0-9]*\)$/\1/p' source/src/nox/node/protocol.py)"
+          test -n "$range" && test -n "$speaks"
+          previous="$(git -C source describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^ 2>/dev/null || true)"
+          if [ -n "$previous" ] && git -C source diff --quiet "$previous" HEAD -- uv.lock; then
+            deps=no
+          else
+            deps=yes  # changed, or no earlier release to compare with
+          fi
+          echo "previous release: ${previous:-none}; libraries changed: $deps"
+          {
+            echo "node_protocol=$range"
+            echo "node_speaks=$speaks"
+            echo "deps_changed=$deps"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -139,11 +156,14 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
           COMMIT: ${{ steps.source.outputs.commit }}
           NODE_PROTOCOL: ${{ steps.source.outputs.node_protocol }}
+          NODE_SPEAKS: ${{ steps.source.outputs.node_speaks }}
+          DEPS_CHANGED: ${{ steps.source.outputs.deps_changed }}
         run: |
           printf '%s\n' "$NOX_RELEASE_SIGNING_KEY" | env -u NOX_RELEASE_SIGNING_KEY \
             python -I -S source/scripts/sign_release.py --key-stdin --allow-unsigned \
             --lib "$RUNNER_TEMP/signer-lib" --tag "$TAG" --commit "$COMMIT" --out signed \
-            --node-protocol "$NODE_PROTOCOL" \
+            --node-protocol "$NODE_PROTOCOL" --node-speaks "$NODE_SPEAKS" \
+            --deps-changed "$DEPS_CHANGED" \
             "files/nox-ui-$TAG.tar.gz" files/install-linux.sh "files/nox-app-$TAG.zip"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
