@@ -68,6 +68,19 @@ class NodeTool:
     #: sandbox, which cannot see the node's folder (`nox.node.hands`). A tool without this
     #: declaration is not offered at all (`NodeGate`).
     path_safe: bool = False
+    #: The risk of one call when it depends on its arguments (a write that replaces a file is
+    #: higher than one that creates it); never below `risk`. None: always `risk`.
+    risk_for: Callable[[BaseModel], str] | None = field(default=None, compare=False)
+    #: What the confirmation on the device shows instead of the raw arguments (a write: the
+    #: size and a preview, not a megabyte of text). None: every argument in full.
+    shown: Callable[[BaseModel], dict[str, Any]] | None = field(default=None, compare=False)
+
+    def call_risk(self, args: BaseModel) -> str:
+        risk = self.risk_for(args) if self.risk_for is not None else self.risk
+        order = ("read", "low", "medium", "high", "critical")
+        if risk not in order:
+            return "critical"
+        return risk if order.index(risk) >= order.index(self.risk) else self.risk
 
     def describe(self) -> dict[str, Any]:
         """The MCP `tools/list` entry, with the Nox extensions the core routes by."""

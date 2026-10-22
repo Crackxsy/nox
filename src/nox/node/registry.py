@@ -50,8 +50,6 @@ ROUTABLE: frozenset[str] = frozenset(
         "file.read",
         "file.write",
         "shell.run",
-        "package.install",
-        "package.remove",
     }
 )
 MAX_TOOLS = 64

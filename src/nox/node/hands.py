@@ -1,20 +1,27 @@
-"""The node's hands: `file.list/read/write`, `shell.run` and `package.install/remove` - the core's
-tool names, run on this device under this device's rules (spec C §1.4, C5).
+"""The node's hands: `file.list/read/write` and `shell.run` - the core's tool names, run on this
+device under this device's rules (spec C §1.4, C5).
 
 They run only after `NodeGate` allowed the call (prohibitions, stop state, capability group,
 risk ceiling, arguments, the core's receipt, budget, and the confirmation on this device for high
 risk). On top of that, each one holds its own boundary at the moment it acts:
 
 * **`file.*`** open every path through `nox.node.safe_fs`: only inside a folder this device
-  allowed (`nox node allow files --folder <path>`, none by default), decided on the real file at
-  open time, never inside the node's own folder or the keyring's folders. Writes never overwrite
-  unless asked, never create folders, and are size-capped; reads refuse what is not text.
-* **`shell.run` and `package.*`** run **only** in this device's own `make_sandbox()`: AppContainer
-  on Windows, bwrap on Linux - with strong guarantees, the weaker mode is never accepted on a
-  node. The node's folder is not mounted (Linux) or not granted (Windows: owner-only ACL, no
-  container grant) inside it. When there is no such sandbox (macOS, no bwrap, a weak backend),
-  the call is refused with `sandbox_unavailable` - there is no unsandboxed fallback. A stop of the
-  call (`nox/kill`, the dead-man rule) kills the sandboxed process tree.
+  allowed (`nox node allow files --folder <path>`, none by default, never a whole drive, the home
+  folder or a system folder), decided on the real file at open time, never inside the node's own
+  folder or this user's secret stores. A write never lands where it could make something run
+  outside the sandbox (`.git`, startup/autostart folders, shell start files, scripts and
+  programs), never on an executable file or one with a second hard link, never overwrites unless
+  asked and never creates folders. Replacing or appending is high risk (asked on the device);
+  a new file is medium. A write that has started completes - a stop ends everything after it.
+* **`shell.run`** runs **only** in this device's own `make_sandbox()`: AppContainer on Windows,
+  bwrap on Linux - with strong guarantees, the weaker mode is never accepted on a node. The
+  node's folder is not mounted (Linux; the run is refused when it would lie under a read-only
+  system bind) or not granted (Windows: owner-only ACL, no container grant) inside it. When there
+  is no such sandbox (macOS, no bwrap, a weak backend), the call is refused with
+  `sandbox_unavailable` - there is no unsandboxed fallback. A stop of the call (`nox/kill`, the
+  dead-man rule) kills the sandboxed process tree.
+* **`package.*`** is not offered on nodes yet: a package manager needs rights the sandbox does
+  not give, so it could not work there.
 
 A refusal is raised as `NodeRefusal(reason)`; the agent answers it like a gate refusal and writes
 it to the node's audit trail.
@@ -26,34 +33,40 @@ import asyncio
 import os
 import stat
 import sys
-from collections.abc import Awaitable, Callable
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from nox.hands.packages import _PACKAGE_ID, apt_argv, winget_argv
+from nox.core.logging import get_logger
 from nox.hands.shell import ProgramResolver, classify
 from nox.node.safe_fs import (
     Folders,
     OutsideFolders,
-    keyring_folders,
     list_folder,
     open_existing,
     open_new,
+    secret_locations,
 )
 from nox.node.tools import NodeRefusal, NodeTool
 from nox.sandbox import EgressDecl, Limits, Sandbox, SandboxUnavailable
 
-__all__ = ["NodeHands", "NodeRefusal", "hand_tools"]
+log = get_logger(__name__)
+
+__all__ = ["NodeHands", "NodeRefusal", "hand_tools", "write_risk", "write_summary"]
 
 #: Below the agent's 30 s ceiling for a call with a side effect, so the sandbox ends the run
 #: itself and reports `timed_out` instead of the call being cut off.
 RUN_TIMEOUT_S = 25.0
 MAX_READ_BYTES = 256 * 1024
 MAX_WRITE_BYTES = 1024 * 1024
+#: Entries a listing shows, and entries it looks at at most (then it says it stopped).
 MAX_LIST = 200
+MAX_SCAN = 5000
+PREVIEW_CHARS = 80
 _SNIFF = 8192
 
 
@@ -95,9 +108,23 @@ class ShellArgs(BaseModel):
         return self
 
 
-class PackageArgs(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    package_id: str = Field(pattern=_PACKAGE_ID.pattern)
+def write_risk(append: bool, overwrite: bool) -> str:
+    """A new file is medium; replacing or extending an existing one is high (asked on the
+    device, never remembered) - on the core's side and on the node's alike."""
+    return "high" if append or overwrite else "medium"
+
+
+def write_summary(path: str, text: str, *, append: bool, overwrite: bool) -> dict[str, Any]:
+    """What a person decides on for a write: where, how, how much, and how it starts - the same
+    fields in the core's permission target and in the device's dialog."""
+    mode = "append" if append else "overwrite" if overwrite else "new file"
+    preview = text[:PREVIEW_CHARS] + (" [...]" if len(text) > PREVIEW_CHARS else "")
+    return {
+        "path": path,
+        "mode": mode,
+        "bytes": len(text.encode("utf-8", errors="replace")),
+        "preview": preview,
+    }
 
 
 # ---- the hands -----------------------------------------------------------------------------------
@@ -125,7 +152,23 @@ class NodeHands:
     _cached: list[Sandbox | None] = field(default_factory=list)
 
     def resolved(self) -> Folders:
-        return Folders.build(self.folders(), [*self.protected, *keyring_folders()])
+        return Folders.build(self.folders(), [*self.protected, *secret_locations()])
+
+    def exposed(self) -> str | None:
+        """Why this device's sandbox would show something it must not: the node's folder, Nox's
+        folder or a secret store under one of the system folders bwrap binds read-only."""
+        if not sys.platform.startswith("linux"):
+            return None
+        from nox.paths import nox_home  # noqa: PLC0415
+        from nox.sandbox.linux import visible_system_paths  # noqa: PLC0415
+
+        private = [*self.protected, nox_home(), *secret_locations()]
+        for place in private:
+            real = os.path.realpath(place)
+            for shown in visible_system_paths():
+                if real == shown or real.startswith(shown.rstrip("/") + "/"):
+                    return f"{real} lies under {shown}, which the sandbox shows read-only"
+        return None
 
     async def confined(self) -> Sandbox:
         """This device's sandbox with strong guarantees, or `NodeRefusal("sandbox_unavailable")`."""
@@ -133,6 +176,10 @@ class NodeHands:
             self._cached.append(await asyncio.to_thread(self.sandbox))
         sandbox = self._cached[0]
         if sandbox is None:
+            raise NodeRefusal("sandbox_unavailable")
+        problem = self.exposed()
+        if problem is not None:
+            log.error("node.sandbox_exposes_private_folder", detail=problem)
             raise NodeRefusal("sandbox_unavailable")
         try:
             await asyncio.to_thread(sandbox.check_usable)
@@ -176,41 +223,54 @@ def default_sandbox() -> Sandbox | None:
 # ---- file.* --------------------------------------------------------------------------------------
 
 
-def _refused(exc: OutsideFolders) -> NodeRefusal:
-    return NodeRefusal(exc.reason)
+def _kind(entry: os.DirEntry[str]) -> str:
+    """A link - symlink, junction or any other reparse point - is reported as one, never as the
+    folder it leads to."""
+    info = entry.stat(follow_symlinks=False)
+    if entry.is_symlink() or getattr(entry, "is_junction", lambda: False)():
+        return "link"
+    if getattr(info, "st_file_attributes", 0) & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT
+        return "link"
+    return "folder" if entry.is_dir(follow_symlinks=False) else "file"
 
 
-def _list(folders: Folders, path: str) -> dict[str, Any]:
+def _list(folders: Folders, path: str, stop: threading.Event) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
     total = 0
+    capped = False
     with list_folder(folders, path) as found:
         for entry in found:
+            if stop.is_set():
+                raise NodeRefusal("stopped")
+            if total >= MAX_SCAN:
+                capped = True
+                break
             total += 1
             if len(entries) >= MAX_LIST:
                 continue
-            info = entry.stat(follow_symlinks=False)
-            kind = (
-                "link"
-                if entry.is_symlink()
-                else "folder"
-                if entry.is_dir(follow_symlinks=False)
-                else "file"
-            )
-            entries.append(
-                {
-                    "name": entry.name,
-                    "kind": kind,
-                    "bytes": None if kind != "file" else info.st_size,
-                }
-            )
+            kind = _kind(entry)
+            size = entry.stat(follow_symlinks=False).st_size if kind == "file" else None
+            entries.append({"name": entry.name, "kind": kind, "bytes": size})
     entries.sort(key=lambda e: (e["kind"] != "folder", str(e["name"]).lower()))
     return {
         "ok": True,
         "path": path,
         "entries": entries,
         "total": total,
-        "truncated": total > MAX_LIST,
+        "truncated": total > MAX_LIST or capped,
+        "stopped_counting": capped,
     }
+
+
+def _decode(head: bytes, truncated: bool) -> tuple[str, str]:
+    """UTF-8 when it is UTF-8 - a sequence cut by the size limit is dropped at the last complete
+    character, never re-read as another encoding; cp1252 only for text that is not UTF-8."""
+    try:
+        return head.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError as exc:
+        if truncated and exc.start >= len(head) - 3 and exc.reason == "unexpected end of data":
+            return head[: exc.start].decode("utf-8"), "utf-8"
+    return head.decode("cp1252", errors="replace"), "cp1252"
 
 
 def _read(folders: Folders, path: str) -> dict[str, Any]:
@@ -224,10 +284,7 @@ def _read(folders: Folders, path: str) -> dict[str, Any]:
         head = handle.read(MAX_READ_BYTES)
     if b"\x00" in head[:_SNIFF]:
         return {"ok": False, "error": "not a text file"}
-    try:
-        text, encoding = head.decode("utf-8"), "utf-8"
-    except UnicodeDecodeError:
-        text, encoding = head.decode("cp1252", errors="replace"), "cp1252"
+    text, encoding = _decode(head, size > MAX_READ_BYTES)
     return {
         "ok": True,
         "path": path,
@@ -263,34 +320,38 @@ def _write(folders: Folders, args: WriteArgs) -> dict[str, Any]:
 
 
 def hand_tools(hands: NodeHands) -> dict[str, NodeTool]:
-    def on_files(work: Callable[[Folders], dict[str, Any]]) -> Awaitable[dict[str, Any]]:
-        async def run() -> dict[str, Any]:
-            def guarded() -> dict[str, Any]:
-                try:
-                    return work(hands.resolved())
-                except OutsideFolders as exc:
-                    raise _refused(exc) from None
+    async def on_files(
+        work: Callable[[Folders, threading.Event], dict[str, Any]],
+    ) -> dict[str, Any]:
+        stop = threading.Event()
 
+        def guarded() -> dict[str, Any]:
             try:
-                return await asyncio.to_thread(guarded)
-            except NodeRefusal:
-                raise
-            except OSError as exc:
-                return {"ok": False, "error": exc.strerror or type(exc).__name__}
+                return work(hands.resolved(), stop)
+            except OutsideFolders as exc:
+                raise NodeRefusal(exc.reason) from None
 
-        return run()
+        try:
+            return await asyncio.to_thread(guarded)
+        except asyncio.CancelledError:
+            stop.set()  # a listing in progress ends at its next entry
+            raise
+        except NodeRefusal:
+            raise
+        except OSError as exc:
+            return {"ok": False, "error": exc.strerror or type(exc).__name__}
 
     async def file_list(args: BaseModel) -> dict[str, Any]:
         assert isinstance(args, PathArgs)
-        return await on_files(lambda f: _list(f, args.path))
+        return await on_files(lambda f, stop: _list(f, args.path, stop))
 
     async def file_read(args: BaseModel) -> dict[str, Any]:
         assert isinstance(args, PathArgs)
-        return await on_files(lambda f: _read(f, args.path))
+        return await on_files(lambda f, _stop: _read(f, args.path))
 
     async def file_write(args: BaseModel) -> dict[str, Any]:
         assert isinstance(args, WriteArgs)
-        return await on_files(lambda f: _write(f, args))
+        return await on_files(lambda f, _stop: _write(f, args))
 
     async def shell_run(args: BaseModel) -> dict[str, Any]:
         assert isinstance(args, ShellArgs)
@@ -304,14 +365,13 @@ def hand_tools(hands: NodeHands) -> dict[str, NodeTool]:
         argv = [*shell_program(), info.argv[0]] if info.needs_shell else list(info.argv)
         return await hands.run(argv, egress=tuple(args.egress), workload="shell")
 
-    def package(action: str) -> Any:
-        async def handler(args: BaseModel) -> dict[str, Any]:
-            assert isinstance(args, PackageArgs)
-            make = winget_argv if sys.platform == "win32" else apt_argv
-            # It downloads: any public host through the run's own proxy - never the LAN.
-            return await hands.run(make(action, args.package_id), egress=("*",), workload="package")
+    def risk_of_write(args: BaseModel) -> str:
+        assert isinstance(args, WriteArgs)
+        return write_risk(args.append, args.overwrite)
 
-        return handler
+    def shown_write(args: BaseModel) -> dict[str, Any]:
+        assert isinstance(args, WriteArgs)
+        return write_summary(args.path, args.text, append=args.append, overwrite=args.overwrite)
 
     tools = [
         NodeTool(
@@ -334,10 +394,12 @@ def hand_tools(hands: NodeHands) -> dict[str, NodeTool]:
             "file.write",
             "files",
             "medium",
-            "Write or append text to a file in an allowed folder (never overwrites unless asked).",
+            "Write a new text file in an allowed folder; replacing or appending asks first.",
             WriteArgs,
             file_write,
             path_safe=True,  # every open goes through nox.node.safe_fs
+            risk_for=risk_of_write,
+            shown=shown_write,
         ),
         NodeTool(
             "shell.run",
@@ -347,24 +409,6 @@ def hand_tools(hands: NodeHands) -> dict[str, NodeTool]:
             ShellArgs,
             shell_run,
             path_safe=True,  # runs only in the sandbox, which cannot see the node's folder
-        ),
-        NodeTool(
-            "package.install",
-            "packages",
-            "high",
-            "Install a program by its package id (winget / apt), in this device's sandbox.",
-            PackageArgs,
-            package("install"),
-            path_safe=True,
-        ),
-        NodeTool(
-            "package.remove",
-            "packages",
-            "high",
-            "Remove a program by its package id (winget / apt), in this device's sandbox.",
-            PackageArgs,
-            package("remove"),
-            path_safe=True,
         ),
     ]
     return {tool.name: tool for tool in tools}

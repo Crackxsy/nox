@@ -29,7 +29,7 @@ from nox.node.confirmed import (
 from nox.node.enroll import EnrollError, enroll
 from nox.node.gate import NodeGate
 from nox.node.hands import NodeHands, default_sandbox, hand_tools
-from nox.node.home import NodeHome
+from nox.node.home import NodeHome, restrict_dir_to_owner
 from nox.node.keystore import NodeKeyStore
 from nox.node.manifest import GROUPS, NodeManifest, load_manifest, save_manifest
 from nox.node.protocol import PairLink, PairLinkError, escape_controls
@@ -77,6 +77,9 @@ def build(
     sandbox: Callable[[], Sandbox | None] | None = None,
 ) -> NodeRuntime:
     home.ensure()
+    if sys.platform == "win32":
+        # On every start, not only when the folder was made: an ACL widened since is put back.
+        restrict_dir_to_owner(home.path)
     audit = open_audit(home)
     key = manifest_key(home.path, secrets)
     manifest = effective_manifest(load_manifest(home.manifest_file), audit, key, say=say)
@@ -235,6 +238,18 @@ def _local_folder(text: str, node_home: NodeHome, *, must_exist: bool = True) ->
     home = Path(os.path.realpath(node_home.path))
     if real == home or home in real.parents:
         raise NodeCliError("The node's own folder can never be opened by Nox.")
+    if must_exist:
+        from nox.node.safe_fs import broad_folder, secret_locations  # noqa: PLC0415
+
+        if broad_folder(str(real)):
+            raise NodeCliError(
+                "That folder is too broad (a drive, your home folder, a system or app-data "
+                "folder). Allow a folder inside it, for example one for Nox's files."
+            )
+        for place in secret_locations():
+            secret = Path(os.path.realpath(place))
+            if real == secret or secret in real.parents or real in secret.parents:
+                raise NodeCliError("That folder holds or lies in a store of keys or passwords.")
     return str(real)
 
 

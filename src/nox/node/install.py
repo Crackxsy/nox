@@ -16,8 +16,6 @@ Requests, for the UI roles (`nox.ipc.roles`):
 from __future__ import annotations
 
 import asyncio
-import json
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,11 +29,11 @@ from nox.ipc.errors import ERR_NOT_FOUND, ERR_UNAVAILABLE, IpcError
 from nox.ipc.roles import UI_ROLES
 from nox.lan.install import authorize_admin, qr_data_uri
 from nox.lan.tls import TlsMaterial
-from nox.node.hands import PackageArgs, PathArgs, ShellArgs, WriteArgs
+from nox.node.hands import PathArgs, ShellArgs, WriteArgs, write_risk, write_summary
 from nox.node.listener import NodeListener
 from nox.node.names import label
 from nox.node.pairing import NodePairing
-from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink
+from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink, render
 from nox.node.receipts import ReceiptSigner
 from nox.node.registry import NodeRegistry
 from nox.node.repo import NodeRepository
@@ -242,14 +240,6 @@ def _keep(runtime: NodeRuntime, coro: Any, name: str) -> None:
 #: Longest permission target a node call may have. Longer is refused, never cut: a target the
 #: person cannot read in full is a target that can hide its dangerous tail (padding).
 MAX_TARGET_CHARS = 1000
-_SPACE_RUN = re.compile(r" {3,}")
-
-
-def _shown(value: str) -> str:
-    """One value, unambiguous: JSON-quoted with every non-ASCII character escaped (no bidi or
-    invisible character survives as such), runs of spaces counted aloud instead of shown."""
-    quoted = json.dumps(value, ensure_ascii=True)
-    return _SPACE_RUN.sub(lambda m: f"[{len(m.group())} spaces]", quoted)
 
 
 def _complete(text: str) -> str:
@@ -260,51 +250,53 @@ def _complete(text: str) -> str:
 
 def _shell_target(payload: dict[str, Any]) -> str:
     """What a node's `shell.run` call runs, as the confirmation and the audit show it - in full or
-    not at all (`CannotShow`): every argv token quoted on its own, so a space or a quote inside a
-    token is visible, a command line quoted as one value, and the whole egress list. Never this
-    core's view of where the program lives, which says nothing about the other device."""
+    not at all (`CannotShow`), rendered like the device's own dialog (`protocol.render`): every
+    argv token quoted on its own, a command line quoted as one value, the whole egress list.
+    Never this core's view of where the program lives, which says nothing about the device."""
     argv = payload.get("argv")
     if isinstance(argv, list):
-        words = "argv [" + ", ".join(_shown(str(a)) for a in argv) + "]"
+        words = "argv " + render([str(a) for a in argv])
     else:
-        words = "command " + _shown(str(payload.get("command") or ""))
+        words = "command " + render(str(payload.get("command") or ""))
     egress = payload.get("egress") or []
-    hosts = ", ".join(_shown(str(h)) for h in egress) if egress else "none"
-    return _complete(f"{words} egress [{hosts}]")
+    hosts = render([str(h) for h in egress]) if egress else "[none]"
+    return _complete(f"{words} egress {hosts}")
+
+
+def _write_target(payload: dict[str, Any]) -> str:
+    """A node write: where, how (new file / overwrite / append), how much, how it starts."""
+    shown = write_summary(
+        str(payload.get("path") or ""),
+        str(payload.get("text") or ""),
+        append=bool(payload.get("append")),
+        overwrite=bool(payload.get("overwrite")),
+    )
+    return _complete(" ".join(f"{key} {render(value)}" for key, value in shown.items()))
+
+
+def _write_risk(payload: dict[str, Any]) -> Risk:
+    return Risk(write_risk(bool(payload.get("append")), bool(payload.get("overwrite"))))
 
 
 def _field(name: str) -> Callable[[dict[str, Any]], str]:
-    return lambda payload: _complete(_shown(str(payload.get(name) or "")))
+    return lambda payload: _complete(render(str(payload.get(name) or "")))
+
+
+_Target = Callable[[dict[str, Any]], str]
 
 
 def _install_routes(core: Any, registry: NodeRegistry) -> None:
-    """`system.info` (the core has it too), `notify.show` (nodes only) and the hands - `file.*`,
-    `shell.run`, `package.*`, each the core's own tool when the call stays here - become
-    routable; the capability report hides a node-only tool while no node offers it, and every
-    turn's context names the devices."""
+    """`system.info` (the core has it too), `notify.show` (nodes only) and the hands - `file.*`
+    and `shell.run`, each the core's own tool when the call stays here - become routable; the
+    capability report hides a node-only tool while no node offers it, and every turn's context
+    names the devices. `package.*` stays on the core: it cannot work in a node's sandbox yet."""
     defaults = lambda: core.config.devices.defaults  # noqa: E731 - read per call
     own = core.tool_registry.get
-    hands: list[tuple[str, str, Risk, bool, type[BaseModel], Callable[[dict[str, Any]], str]]] = [
+    hands: list[tuple[str, str, Risk, bool, type[BaseModel], _Target]] = [
         ("file.list", "What is in one folder", Risk.READ, False, PathArgs, _field("path")),
         ("file.read", "The text of one file", Risk.READ, False, PathArgs, _field("path")),
-        (
-            "file.write",
-            "Write or append text to a file",
-            Risk.MEDIUM,
-            True,
-            WriteArgs,
-            _field("path"),
-        ),
+        ("file.write", "Write text to a file", Risk.MEDIUM, True, WriteArgs, _write_target),
         ("shell.run", "Run a command sandboxed", Risk.HIGH, True, ShellArgs, _shell_target),
-        (
-            "package.install",
-            "Install a program",
-            Risk.HIGH,
-            True,
-            PackageArgs,
-            _field("package_id"),
-        ),
-        ("package.remove", "Remove a program", Risk.HIGH, True, PackageArgs, _field("package_id")),
     ]
     specs = [
         routed_spec(
@@ -340,9 +332,11 @@ def _install_routes(core: Any, registry: NodeRegistry) -> None:
                 core=mine,
                 input_model=model,
                 defaults=defaults,
-                rememberable=not name.startswith("package."),
                 node_target=target,
-                network=True if name.startswith("package.") else None,
+                # Replacing or extending a file on a device is high there, and a write on a
+                # device is asked every time (never remembered).
+                node_risk=_write_risk if name == "file.write" else None,
+                remember_on_node=name != "file.write",
             )
         )
     on_core = {spec.name for spec in specs if own(spec.name) is not None}

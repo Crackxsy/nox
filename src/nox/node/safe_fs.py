@@ -8,19 +8,24 @@ Order for every open (list, read, write):
    and names Windows would silently change (a trailing dot or space) are refused before anything
    touches the file system - an SMB path is never resolved, so the device never reaches out. A
    relative path is relative to the first allowed folder; an absolute one must spell one of them.
+   A write is also refused when the path is an **execution trigger** (`execution_trigger`): a
+   `.git` folder (hooks), a startup or autostart folder, a shell start file, a script or program.
 2. **The open, bound to a handle**:
    * POSIX - `openat`-style walk from the allowed folder (whose identity was recorded when the
-     folders were built): every step `O_NOFOLLOW` (+ `O_DIRECTORY`), so no symlink anywhere below
-     the folder is followed, and every directory passed is compared with the protected folders by
-     `(st_dev, st_ino)` - a bind mount or a renamed copy does not change that.
+     folders were built): each entry is looked at first without following it (`fstatat`
+     `AT_SYMLINK_NOFOLLOW` - a link, FIFO, socket or device is refused before it is opened), then
+     opened `O_NOFOLLOW | O_NOCTTY | O_NONBLOCK` relative to the directory before it, and every
+     directory passed is compared with the protected folders by `(st_dev, st_ino)`.
    * Windows - `CreateFileW` without `FILE_SHARE_DELETE` (the file cannot be renamed away while it
      is open), then `GetFinalPathNameByHandleW` on that handle: the path the open really reached
-     after junctions, symlinks and 8.3 names. A new file is created with `CREATE_NEW` and, when its
-     final path is not allowed, deleted again through the same handle; an existing one is
-     truncated only after the check (never `O_TRUNC` at open).
+     after junctions, symlinks and 8.3 names.
+   A new file is created exclusively (`O_EXCL` / `CREATE_NEW`, never executable) and removed again
+   when its final path is not allowed (Windows: through its own handle; POSIX: by name in the
+   directory that was checked); an existing file is truncated only after the check.
 3. **The verdict on the handle** (`_verify`): inside an allowed folder, not inside a protected
-   one (the node's own folder with its key, certificates and audit trail; the keyring's folders),
-   not a hard link to a protected file, a regular file or a directory (no FIFO, socket, device).
+   one (the node's own folder; the keyring, credential and browser-profile stores of this user -
+   `secret_locations`), not a hard link to a protected file, a regular file or a directory. For a
+   write also: no second hard link, no executable bit, no execution trigger on the final path.
 
 Everything read or written afterwards goes through that one handle, so swapping the path between
 the check and the use changes nothing (`test_c5.py` swaps it). What the OS cannot bind to a handle
@@ -31,6 +36,7 @@ handle is held open and compares the folder's identity before and after.
 from __future__ import annotations
 
 import contextlib
+import errno
 import functools
 import os
 import re
@@ -46,10 +52,12 @@ from nox.node.gate import is_remote_or_device_path, names_a_path_alias
 __all__ = [
     "Folders",
     "OutsideFolders",
-    "keyring_folders",
+    "broad_folder",
+    "execution_trigger",
     "list_folder",
     "open_existing",
     "open_new",
+    "secret_locations",
 ]
 
 _WINDOWS = sys.platform == "win32"
@@ -57,9 +65,89 @@ _WINDOWS = sys.platform == "win32"
 _DEVICE_NAME = re.compile(
     r"^(con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$", re.I
 )
+#: How many entries of one protected folder are looked at for hard links (bounded per call).
 _MAX_PROTECTED_ENTRIES = 512
-#: Opening a FIFO for reading would block; `O_NONBLOCK` makes it fail or return at once.
+#: A FIFO opened for reading would block; with `O_NONBLOCK` it fails or returns at once.
 _NONBLOCK: int = getattr(os, "O_NONBLOCK", 0)
+#: A terminal device never becomes the node's controlling terminal.
+_NOCTTY: int = getattr(os, "O_NOCTTY", 0)
+
+#: A write here would make something run outside the sandbox - by git, the desktop, a login shell
+#: or a double click. Compared case-insensitively on the path's parts.
+_TRIGGER_DIRS: tuple[tuple[str, ...], ...] = (
+    (".git",),
+    ("start menu", "programs", "startup"),
+    (".config", "autostart"),
+    (".config", "systemd"),
+    (".config", "fish"),
+    (".config", "environment.d"),
+    ("library", "launchagents"),
+    ("library", "launchdaemons"),
+    ("windowspowershell",),
+    ("powershell",),
+)
+_TRIGGER_FILES = frozenset(
+    {
+        ".bashrc",
+        ".bash_profile",
+        ".bash_login",
+        ".bash_logout",
+        ".profile",
+        ".zshrc",
+        ".zprofile",
+        ".zshenv",
+        ".zlogin",
+        ".login",
+        ".cshrc",
+        ".tcshrc",
+        ".xprofile",
+        ".xinitrc",
+        ".xsessionrc",
+        ".pam_environment",
+        "autorun.inf",
+        "desktop.ini",
+    }
+)
+_TRIGGER_EXTENSIONS = frozenset(
+    {
+        ".lnk",
+        ".url",
+        ".pif",
+        ".scf",
+        ".bat",
+        ".cmd",
+        ".ps1",
+        ".psm1",
+        ".psd1",
+        ".vbs",
+        ".vbe",
+        ".js",
+        ".jse",
+        ".wsf",
+        ".wsh",
+        ".hta",
+        ".scr",
+        ".exe",
+        ".dll",
+        ".com",
+        ".cpl",
+        ".msi",
+        ".msp",
+        ".reg",
+        ".inf",
+        ".appref-ms",
+        ".jar",
+        ".desktop",
+        ".service",
+        ".timer",
+        ".plist",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".command",
+        ".app",
+    }
+)
 
 
 class OutsideFolders(Exception):  # noqa: N818 - a refusal, named for what it says
@@ -70,15 +158,15 @@ class OutsideFolders(Exception):  # noqa: N818 - a refusal, named for what it sa
         self.reason = reason
 
 
-def _norm(path: str) -> str:
-    text = path.replace("/", "\\") if _WINDOWS else path
-    return os.path.normcase(text.rstrip("\\/")) or text
-
-
 def _plain(path: str) -> str:
     """A resolved Windows path without the long-path prefix, the way the answers of
     `GetFinalPathNameByHandleW` are compared (`\\\\?\\C:\\x` -> `C:\\x`)."""
     return path[4:] if _WINDOWS and path.startswith("\\\\?\\") and path[5:6] == ":" else path
+
+
+def _norm(path: str) -> str:
+    text = path.replace("/", "\\") if _WINDOWS else path
+    return os.path.normcase(text.rstrip("\\/")) or text
 
 
 def _within(path: str, folder: str) -> bool:
@@ -87,23 +175,112 @@ def _within(path: str, folder: str) -> bool:
     return inner == outer or inner.startswith(outer.rstrip(sep) + sep)
 
 
-def keyring_folders() -> list[Path]:
-    """Where this user's credential stores keep their files: never reachable by a file tool."""
+def execution_trigger(path: str) -> bool:
+    """Whether writing `path` could make something run outside the sandbox (see the module
+    docstring). Case-insensitive, on the path's parts - also for a path that does not exist."""
+    parts = [p.casefold() for p in re.split(r"[\\/]+", path) if p]
+    if not parts:
+        return False
+    for pattern in _TRIGGER_DIRS:
+        width = len(pattern)
+        if any(tuple(parts[i : i + width]) == pattern for i in range(len(parts) - width + 1)):
+            return True
+    name = parts[-1]
+    if name in _TRIGGER_FILES:
+        return True
+    return any(name.endswith(ext) for ext in _TRIGGER_EXTENSIONS)
+
+
+def secret_locations() -> list[Path]:
+    """Where this user's secrets live - credential stores, keys, tokens, browser profiles. No
+    file tool ever reads or writes there (a missing one still counts)."""
     home = Path.home()
+    found = [
+        home / ".ssh",
+        home / ".gnupg",
+        home / ".aws",
+        home / ".azure",
+        home / ".kube",
+        home / ".docker" / "config.json",
+        home / ".git-credentials",
+        home / ".netrc",
+        home / "_netrc",
+        home / ".pgpass",
+        home / ".config" / "gcloud",
+        home / ".config" / "gh",
+    ]
     if _WINDOWS:
-        found = []
-        for variable in ("APPDATA", "LOCALAPPDATA"):
-            base = os.environ.get(variable, "")
-            if base:
-                found += [
-                    Path(base) / "Microsoft" / "Credentials",
-                    Path(base) / "Microsoft" / "Protect",
-                ]
+        roaming = Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming")
+        local = Path(os.environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
+        for base in (roaming, local):
+            found += [base / "Microsoft" / name for name in ("Credentials", "Protect", "Vault")]
+        found += [
+            local / "Google" / "Chrome" / "User Data",
+            local / "Microsoft" / "Edge" / "User Data",
+            local / "BraveSoftware" / "Brave-Browser" / "User Data",
+            local / "Chromium" / "User Data",
+            roaming / "Mozilla" / "Firefox",
+            roaming / "Opera Software",
+        ]
         return found
     if sys.platform == "darwin":
-        return [home / "Library" / "Keychains"]
+        support = home / "Library" / "Application Support"
+        return [
+            *found,
+            home / "Library" / "Keychains",
+            home / "Library" / "Cookies",
+            support / "Google" / "Chrome",
+            support / "Microsoft Edge",
+            support / "BraveSoftware",
+            support / "Firefox",
+        ]
     data = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
-    return [data / "keyrings", data / "python_keyring", home / ".gnupg"]
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    return [
+        *found,
+        data / "keyrings",
+        data / "kwalletd",
+        data / "python_keyring",
+        home / ".local" / "share" / "keyrings",
+        home / ".local" / "share" / "kwalletd",
+        config / "google-chrome",
+        config / "chromium",
+        config / "microsoft-edge",
+        config / "BraveSoftware",
+        home / ".mozilla",
+        home / ".pki",
+    ]
+
+
+def broad_folder(path: str) -> bool:
+    """Whether `path` (resolved) is too broad to hand to Nox's file tools: a drive root or `/`,
+    the home folder or anything above it, a system folder (Windows, Program Files, `/etc`,
+    `/usr`, ...), or an application-data root (AppData, `~/Library`, `~/.config`)."""
+    real = _plain(os.path.realpath(path))
+    if Path(real).parent == Path(real):
+        return True
+    home = os.path.realpath(Path.home())
+    if _within(home, real):
+        return True  # the home folder itself, or a folder that contains it (`/home`, Users)
+    inside: list[str] = []
+    exactly: list[str] = []
+    if _WINDOWS:
+        for variable in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+            if os.environ.get(variable):
+                inside.append(os.environ[variable])
+        for variable in ("ProgramData", "APPDATA", "LOCALAPPDATA"):
+            if os.environ.get(variable):
+                exactly.append(os.environ[variable])
+        exactly.append(str(Path(home) / "AppData"))
+    else:
+        inside += ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/proc", "/sys"]
+        inside += ["/dev", "/run", "/System"]
+        exactly += ["/var", "/opt", "/srv", "/Library", "/Applications", "/private"]
+        exactly += [str(Path(home) / ".config"), str(Path(home) / ".local")]
+        exactly += [str(Path(home) / ".local" / "share"), str(Path(home) / "Library")]
+    if any(_within(real, os.path.realpath(p)) for p in inside):
+        return True
+    return any(_within(os.path.realpath(p), real) for p in exactly)
 
 
 @dataclass(frozen=True)
@@ -116,7 +293,7 @@ class _Root:
 @dataclass(frozen=True)
 class Folders:
     """The folders this device allows (`node.yaml: folders`, confirmed on the device) and the
-    folders no tool may ever reach. Built per call from the confirmed manifest."""
+    places no tool may ever reach. Built per call from the confirmed manifest."""
 
     roots: tuple[_Root, ...]
     protected: tuple[str, ...]
@@ -126,16 +303,17 @@ class Folders:
     def build(cls, roots: Iterable[str], protected: Iterable[Path]) -> Folders:
         guarded: list[str] = []
         ids: set[tuple[int, int]] = set()
-        for folder in protected:
+        for place in protected:
             try:
-                real = _plain(os.path.realpath(folder))
+                real = _plain(os.path.realpath(place))
                 info = os.stat(real)
             except (OSError, ValueError):
-                guarded.append(os.path.abspath(folder))  # not there yet: still never inside it
+                guarded.append(os.path.abspath(place))  # not there yet: still never inside it
                 continue
             guarded.append(real)
             ids.add((info.st_dev, info.st_ino))
-            ids |= _identities(Path(real))
+            if stat.S_ISDIR(info.st_mode):
+                ids |= _identities(Path(real))
         allowed: list[_Root] = []
         for entry in roots:
             text = str(entry).strip()
@@ -147,7 +325,9 @@ class Folders:
             except (OSError, ValueError):
                 continue  # an unplugged drive is not an allowed folder right now
             if not stat.S_ISDIR(info.st_mode) or any(_within(real, g) for g in guarded):
-                continue  # a folder inside the node's own (or the keyring's) never counts
+                continue  # a folder inside a protected place never counts
+            if broad_folder(real):
+                continue  # never a whole drive, the home folder or a system folder
             allowed.append(_Root(real, (info.st_dev, info.st_ino)))
         return cls(tuple(allowed), tuple(guarded), frozenset(ids))
 
@@ -176,17 +356,28 @@ class Folders:
 
     # -- 3. the verdict on a handle --------------------------------------------------------------
 
-    def _verify(self, root: _Root, info: os.stat_result, final: str | None) -> None:
+    def _verify(
+        self, root: _Root, info: os.stat_result, final: str | None, *, write: bool = False
+    ) -> None:
         if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
             raise OutsideFolders("not_a_file", "only regular files and folders are opened")
         if (info.st_dev, info.st_ino) in self.protected_ids:
             raise OutsideFolders("node_home_protected", "that file is protected on this device")
-        if final is None:
+        if final is not None:
+            if any(_within(final, g) for g in self.protected):
+                raise OutsideFolders("node_home_protected", "that file is protected on this device")
+            if not _within(final, root.path):
+                raise OutsideFolders(
+                    "outside_folders", "the path leads outside the allowed folders"
+                )
+        if not write or not stat.S_ISREG(info.st_mode):
             return
-        if any(_within(final, g) for g in self.protected):
-            raise OutsideFolders("node_home_protected", "that file is protected on this device")
-        if not _within(final, root.path):
-            raise OutsideFolders("outside_folders", "the path leads outside the allowed folders")
+        if info.st_nlink > 1:
+            raise OutsideFolders("hard_link_refused", "a file with a second name is not written")
+        if not _WINDOWS and info.st_mode & 0o111:
+            raise OutsideFolders("executable_refused", "an executable file is not written")
+        if final is not None and execution_trigger(final):
+            raise OutsideFolders("execution_trigger", "writing there could make something run")
 
 
 def _parts(rest: str) -> list[str]:
@@ -200,16 +391,21 @@ def _parts(rest: str) -> list[str]:
 
 
 def _identities(folder: Path) -> set[tuple[int, int]]:
-    """(st_dev, st_ino) of what lies in a protected folder: a hard link to one is refused."""
+    """(st_dev, st_ino) of what lies in a protected folder (two levels, bounded): a hard link to
+    one of those files is refused."""
     found: set[tuple[int, int]] = set()
+    budget = _MAX_PROTECTED_ENTRIES
     with contextlib.suppress(OSError):
-        for count, (base, dirs, files) in enumerate(os.walk(folder, followlinks=False)):
+        for base, dirs, files in os.walk(folder, followlinks=False):
+            if Path(base) != folder and Path(base).parent != folder:
+                dirs[:] = []  # two levels are enough for keys and tokens
             for name in [*dirs, *files]:
+                budget -= 1
+                if budget < 0:
+                    return found
                 with contextlib.suppress(OSError):
                     info = os.stat(os.path.join(base, name), follow_symlinks=False)
                     found.add((info.st_dev, info.st_ino))
-            if count > 8 or len(found) > _MAX_PROTECTED_ENTRIES:
-                break
     return found
 
 
@@ -219,10 +415,12 @@ def _identities(folder: Path) -> set[tuple[int, int]]:
 def open_existing(folders: Folders, text: str, *, write: bool = False) -> int:
     """An fd for an existing file (or folder, read-only), checked on the handle."""
     root, parts = folders.split(text)
+    if write:
+        _lexical_write_check(root, parts)
     if _WINDOWS:
         return _win_open(folders, root, parts, write=write, create=False)
-    flags = (os.O_WRONLY if write else os.O_RDONLY) | _NONBLOCK
-    return _posix_open(folders, root, parts, flags)
+    flags = (os.O_WRONLY if write else os.O_RDONLY) | _NONBLOCK | _NOCTTY
+    return _posix_open(folders, root, parts, flags, write=write, create=False)
 
 
 def open_new(folders: Folders, text: str) -> int:
@@ -230,10 +428,16 @@ def open_new(folders: Folders, text: str) -> int:
     root, parts = folders.split(text)
     if not parts:
         raise OutsideFolders("invalid_path", "a folder cannot be written as a file")
+    _lexical_write_check(root, parts)
     if _WINDOWS:
         return _win_open(folders, root, parts, write=True, create=True)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NONBLOCK
-    return _posix_open(folders, root, parts, flags)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NONBLOCK | _NOCTTY
+    return _posix_open(folders, root, parts, flags, write=True, create=True)
+
+
+def _lexical_write_check(root: _Root, parts: list[str]) -> None:
+    if execution_trigger(os.path.join(root.path, *parts)):
+        raise OutsideFolders("execution_trigger", "writing there could make something run")
 
 
 @contextlib.contextmanager
@@ -261,9 +465,20 @@ def list_folder(folders: Folders, text: str) -> Iterator[Iterator[os.DirEntry[st
         os.close(fd)
 
 
-def _posix_open(folders: Folders, root: _Root, parts: list[str], flags: int) -> int:
-    """Walk from the allowed folder without following any link; a new file is only its own
-    entry (`O_CREAT | O_EXCL`), in a directory that was itself checked on the way."""
+def _peek(name: str, dir_fd: int) -> os.stat_result | None:
+    """The entry as it is (`fstatat` without following), None when there is none."""
+    try:
+        return os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def _posix_open(
+    folders: Folders, root: _Root, parts: list[str], flags: int, *, write: bool, create: bool
+) -> int:
+    """Walk from the allowed folder; look at every entry before opening it and never follow a
+    link. A new file is only its own entry (`O_CREAT | O_EXCL`, mode 0600), in a directory that
+    was itself checked on the way - and is removed from it again if its check fails."""
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     cloexec = getattr(os, "O_CLOEXEC", 0)
     directory = getattr(os, "O_DIRECTORY", 0)
@@ -273,48 +488,71 @@ def _posix_open(folders: Folders, root: _Root, parts: list[str], flags: int) -> 
         if (info.st_dev, info.st_ino) != root.identity:
             raise OutsideFolders("changed", "the allowed folder was replaced")
         for part in parts[:-1]:
+            seen = _peek(part, fd)
+            if seen is None:
+                raise FileNotFoundError(errno.ENOENT, "no such folder", part)
+            if stat.S_ISLNK(seen.st_mode):
+                raise OutsideFolders("link_refused", "links are not followed on this device")
+            if not stat.S_ISDIR(seen.st_mode):
+                raise NotADirectoryError(errno.ENOTDIR, "not a folder", part)
             try:
                 step = os.open(part, os.O_RDONLY | directory | nofollow | cloexec, dir_fd=fd)
             except OSError as exc:
-                raise _link_or(exc, part, fd) from exc
+                raise _link_or(exc) from exc
             os.close(fd)
             fd = step
             folders._verify(root, os.fstat(fd), None)
         if not parts:
             final = os.dup(fd)
         else:
+            seen = _peek(parts[-1], fd)
+            if seen is not None:
+                if create:
+                    raise FileExistsError(errno.EEXIST, "the file exists", parts[-1])
+                if stat.S_ISLNK(seen.st_mode):
+                    raise OutsideFolders("link_refused", "links are not followed on this device")
+                if not (stat.S_ISREG(seen.st_mode) or stat.S_ISDIR(seen.st_mode)):
+                    raise OutsideFolders("not_a_file", "only regular files and folders are opened")
+            elif not create:
+                raise FileNotFoundError(errno.ENOENT, "no such file", parts[-1])
             try:
                 final = os.open(parts[-1], flags | nofollow | cloexec, 0o600, dir_fd=fd)
             except OSError as exc:
-                raise _link_or(exc, parts[-1], fd) from exc
+                raise _link_or(exc) from exc
+        try:
+            folders._verify(root, os.fstat(final), _final_path(final), write=write)
+        except BaseException:
+            os.close(final)
+            if create:
+                with contextlib.suppress(OSError):
+                    os.unlink(parts[-1], dir_fd=fd)
+            raise
     finally:
         os.close(fd)
-    try:
-        folders._verify(root, os.fstat(final), _proc_path(final))
-    except BaseException:
-        os.close(final)
-        raise
     if flags & _NONBLOCK:
         os.set_blocking(final, True)
     return final
 
 
-def _link_or(exc: OSError, name: str, dir_fd: int) -> Exception:
-    """`O_NOFOLLOW` on a link answers ELOOP - or ENOTDIR for a directory step: then the entry is
-    looked at (never followed) to say which it was."""
-    import errno
-
+def _link_or(exc: OSError) -> Exception:
+    """`O_NOFOLLOW` on a link that appeared after the look answers ELOOP."""
     if exc.errno in (errno.ELOOP, errno.EMLINK):
         return OutsideFolders("link_refused", "links are not followed on this device")
-    if exc.errno == errno.ENOTDIR:
-        with contextlib.suppress(OSError):
-            if stat.S_ISLNK(os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode):
-                return OutsideFolders("link_refused", "links are not followed on this device")
     return exc
 
 
-def _proc_path(fd: int) -> str | None:
-    """The kernel's own name for an fd (Linux), as an extra check next to the identities."""
+def _final_path(fd: int) -> str | None:
+    """The kernel's own name for an fd: `/proc/self/fd` on Linux, `F_GETPATH` on macOS."""
+    if sys.platform == "darwin":
+        import fcntl
+
+        getpath = getattr(fcntl, "F_GETPATH", None)
+        if getpath is None:
+            return None
+        with contextlib.suppress(OSError):
+            raw: bytes = fcntl.fcntl(fd, getpath, bytes(1024))
+            return os.fsdecode(raw.split(b"\x00", 1)[0])
+        return None
     with contextlib.suppress(OSError):
         return os.readlink(f"/proc/self/fd/{fd}")
     return None
@@ -424,6 +662,11 @@ def _win_open(folders: Folders, root: _Root, parts: list[str], *, write: bool, c
     )
     if handle in (None, ctypes.c_void_p(-1).value):
         raise winapi.WinError(winapi.get_last_error())
+
+    def take_back(raw: int) -> None:
+        flag = ctypes.c_ubyte(1)  # FILE_DISPOSITION_INFO.DeleteFile = TRUE
+        k32.SetFileInformationByHandle(raw, _FILE_DISPOSITION_INFO, ctypes.byref(flag), 1)
+
     try:
         if k32.GetFileType(handle) != _FILE_TYPE_DISK:
             raise OutsideFolders("not_a_file", "only files on a disk are opened")
@@ -433,18 +676,14 @@ def _win_open(folders: Folders, root: _Root, parts: list[str], *, write: bool, c
         fd: int = msvcrt.open_osfhandle(handle, os.O_RDWR if write else os.O_RDONLY)
     except BaseException:
         if create:
-            flag = ctypes.c_ubyte(1)  # FILE_DISPOSITION_INFO.DeleteFile = TRUE
-            k32.SetFileInformationByHandle(handle, _FILE_DISPOSITION_INFO, ctypes.byref(flag), 1)
+            take_back(handle)
         k32.CloseHandle(handle)
         raise
     try:
-        folders._verify(root, os.fstat(fd), final)
+        folders._verify(root, os.fstat(fd), final, write=write)
     except BaseException:
         if create:
-            flag = ctypes.c_ubyte(1)
-            k32.SetFileInformationByHandle(
-                msvcrt.get_osfhandle(fd), _FILE_DISPOSITION_INFO, ctypes.byref(flag), 1
-            )
+            take_back(msvcrt.get_osfhandle(fd))
         os.close(fd)
         raise
     return fd

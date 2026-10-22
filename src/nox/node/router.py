@@ -214,6 +214,8 @@ def routed_spec(
     rememberable: bool = True,
     node_target: Callable[[dict[str, Any]], str] | None = None,
     network: bool | Callable[[dict[str, Any]], bool] | None = None,
+    node_risk: Callable[[dict[str, Any]], Risk] | None = None,
+    remember_on_node: bool = True,
 ) -> ToolSpec:
     """One routable tool: the core's own spec (if the core has the tool) plus every node that
     offers it. `input_model` describes the arguments when the core has no spec of its own.
@@ -222,6 +224,8 @@ def routed_spec(
     core's own `targets` may describe this machine (`shell.run` resolves programs here), so it
     is used for a node only when no `node_target` is given. A `node_target` that cannot show the
     call in full raises `CannotShow`, and the call is refused (`cannot_show_in_full`).
+    `node_risk` raises a node call's risk from its arguments (a write that replaces a file);
+    `remember_on_node=False` never lets a "remember" answer cover a call on a node.
     `network` overrides the template's
     (a download is network whether or not the core has the tool itself)."""
     base = core.input_model if core is not None else input_model
@@ -255,7 +259,9 @@ def routed_spec(
             target = core.targets(inner(payload)) if core.targets is not None else ""
             return CallScope(action=action, risk=core.risk, target=target)
         entry = next(e for e in registry.entries() if e.device_id == resolution.device)
-        node_risk = _max_risk(risk, entry.tools.get(name, "high"))
+        node_risk_ = _max_risk(risk, entry.tools.get(name, "high"))
+        if node_risk is not None:
+            node_risk_ = _max_risk(node_risk_, node_risk(inner(payload)).value)
         if node_target is not None:
             try:
                 base_target = node_target(inner(payload))
@@ -272,17 +278,18 @@ def routed_spec(
             base_target = core.targets(inner(payload)) if core is not None and core.targets else ""
         # Left to the device only when it can ask; otherwise the core asks itself (and the
         # node still refuses high risk it cannot confirm, unless trusted there).
-        delegate = node_risk is Risk.HIGH and entry.confirmer
-        payload[ROUTE_RISK_KEY] = node_risk.value
+        delegate = node_risk_ is Risk.HIGH and entry.confirmer
+        payload[ROUTE_RISK_KEY] = node_risk_.value
         payload[ROUTE_DELEGATE_KEY] = delegate
         # The device travels in its own field: the permission request, the audit and a
         # remembered grant carry it; the target stays what the tool says (shown with the name).
         return CallScope(
             action=action,
-            risk=node_risk,
+            risk=node_risk_,
             target=f"{entry.label}: {base_target or name}",
             device=resolution.device,
             confirm_on_device=delegate,
+            rememberable=remember_on_node,
         )
 
     async def handler(payload: dict[str, Any]) -> dict[str, Any]:

@@ -81,6 +81,22 @@ def _strings(value: Any) -> list[str]:
     return []
 
 
+#: Argument fields that name a path: only these are refused for a path alias. Free text - a
+#: note to write, a shell line such as `git log HEAD~1` - is not a path (the shell runs in the
+#: sandbox; the node-folder check above still covers every string).
+PATH_FIELDS = frozenset({"path", "to", "cwd", "folder", "dir", "directory", "source", "file"})
+
+
+def _path_strings(value: Any, key: str = "") -> list[str]:
+    if isinstance(value, str):
+        return [value] if key in PATH_FIELDS else []
+    if isinstance(value, dict):
+        return [s for k, v in value.items() for s in _path_strings(v, str(k))]
+    if isinstance(value, list | tuple):
+        return [s for v in value for s in _path_strings(v, key)]
+    return []
+
+
 def _norm(text: str) -> str:
     return text.replace("\\", "/").rstrip("/").casefold()
 
@@ -261,21 +277,28 @@ class NodeGate:
             return GateDecision(False, "invalid_arguments", tool)
         if self._protected_forms and touches(args.model_dump(), self._protected_forms):
             return GateDecision(False, "node_home_protected", tool)
-        if any(names_a_path_alias(text) for text in _strings(args.model_dump())):
+        if any(names_a_path_alias(text) for text in _path_strings(args.model_dump())):
             return GateDecision(False, "path_alias_refused", tool)
+        # This call's own risk (a write that replaces a file is high): the core must have judged
+        # it at least as risky, and the ceiling applies to it as well.
+        risk = tool.call_risk(args)
+        if not self._within(risk):
+            return GateDecision(False, "risk_ceiling", tool)
+        if risk != "read" and (meta is None or _rank(meta.risk) < _rank(risk)):
+            return GateDecision(False, "risk_understated", tool)
         charged = ""
-        if tool.risk != "read":
+        if risk != "read":
             # By rank, never by spelling: the higher of the node's and the core's risk, an
             # unknown value as the highest, clamped to the ceiling's name for the books.
-            rank = max(_rank(tool.risk), _rank(meta.risk) if meta is not None else 0)
+            rank = max(_rank(risk), _rank(meta.risk) if meta is not None else 0)
             charged = RISK_ORDER[min(rank, _rank(CEILING))]
             if not self._spend(charged):
                 return GateDecision(False, "budget", tool)
         high = _rank("high")
-        local = _rank(tool.risk) >= high or (
+        local = _rank(risk) >= high or (
             meta is not None and (_rank(meta.risk) >= high or meta.confirm_on_device)
         )
-        charged_risk = "" if tool.risk == "read" else charged
+        charged_risk = "" if risk == "read" else charged
         return GateDecision(
             True, "", tool, args, needs_local_confirmation=local, charged=charged_risk
         )

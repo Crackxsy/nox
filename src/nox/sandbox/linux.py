@@ -88,9 +88,18 @@ __all__ = [
     "forwarder_python",
     "nox_python_binds",
     "runtime_bind_paths",
+    "visible_system_paths",
 ]
 
 _RO_SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc")
+
+
+def visible_system_paths() -> tuple[str, ...]:
+    """The system folders every run sees read-only: whatever lies under them (a node folder
+    put under `/etc`, say) is readable inside the sandbox."""
+    return _RO_SYSTEM
+
+
 #: Where the launcher and the proxy socket appear inside the sandbox (bwrap creates the folder).
 _IN_SANDBOX_DIR = "/run/nox-sandbox"
 _FORWARDER_IN = f"{_IN_SANDBOX_DIR}/egress_forwarder.py"

@@ -18,9 +18,10 @@ home network that answers in the core's place is refused instead of trusted on f
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 import unicodedata
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -120,6 +121,39 @@ def escape_controls(text: str) -> str:
         else:
             out.append(char)
     return "".join(out)
+
+
+#: Runs of spaces are counted, not shown: a wide gap can push the part that matters out of view.
+_SPACE_RUN = re.compile(r" {3,}")
+
+
+def _visible(char: str) -> bool:
+    """Shown as itself: printable ASCII and the Latin-1 letters (umlauts, accents). Everything
+    else - other scripts (look-alikes), bidi and zero-width characters, C1 controls - is escaped."""
+    code = ord(char)
+    return 0x20 <= code <= 0x7E or (0xC0 <= code <= 0xFF and code not in (0xD7, 0xF7))
+
+
+def render(value: Any) -> str:
+    """One value the way a person decides on it - the same text in the core's permission target
+    and in the device's dialog: a string JSON-quoted (so a space or a quote inside it is visible
+    and two arguments never read as one), every character outside `_visible` escaped
+    (`\\u202e`), runs of spaces counted (`[40 spaces]`); a list token by token."""
+    if isinstance(value, str):
+        quoted = json.dumps(value, ensure_ascii=False)
+        out = []
+        for char in quoted:
+            code = ord(char)
+            if _visible(char):
+                out.append(char)
+            else:
+                out.append(f"\\u{code:04x}" if code <= 0xFFFF else f"\\U{code:08x}")
+        return _SPACE_RUN.sub(lambda m: f"[{len(m.group())} spaces]", "".join(out))
+    if isinstance(value, list | tuple):
+        return "[" + ", ".join(render(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{render(str(k))}: {render(v)}" for k, v in value.items()) + "}"
+    return json.dumps(value, ensure_ascii=True, default=str)
 
 
 def safe_name(value: object, limit: int = 96) -> str:

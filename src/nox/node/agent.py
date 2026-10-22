@@ -85,17 +85,17 @@ DEAD_MAN_RESET_PINGS = 3
 
 
 def confirmation_text(tool: str, arguments: dict[str, Any], *, tainted: bool = False) -> str | None:
-    """The question for the person at the device: every argument in full, control characters
-    escaped, one per line. None when it would be too long to read - then nothing is asked and the
-    call is refused (no silent truncation)."""
+    """The question for the person at the device: every argument in full, one per line, rendered
+    exactly as the core's permission target renders it (`protocol.render`: quoted, look-alikes,
+    bidi and invisible characters escaped, runs of spaces counted). None when it would be too long
+    to read - then nothing is asked and the call is refused (no silent truncation)."""
     try:
         json.dumps(arguments, ensure_ascii=False).encode("utf-8")
     except (UnicodeEncodeError, TypeError, ValueError):
         return None  # not valid Unicode (a lone surrogate): refused, not shown escaped
     lines = [f"Nox möchte auf diesem Gerät „{p.escape_controls(tool)}“ ausführen:"]
     for key, value in arguments.items():
-        shown = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-        lines.append(f"  {p.escape_controls(str(key))}: {p.escape_controls(str(shown))}")
+        lines.append(f"  {p.escape_controls(str(key))}: {p.render(value)}")
     if tainted:
         lines.append(
             "Achtung: Die Anfrage kam aus einem Gespräch mit fremden Inhalten (Web, Dateien, "
@@ -666,7 +666,8 @@ class NodeAgent:
                 self._audit_event("node.confirm", "core", "trusted (no screen)")
                 return None
             return "high_needs_local_confirmation"
-        text = confirmation_text(tool.name, args.model_dump(), tainted=meta.tainted)
+        shown = tool.shown(args) if tool.shown is not None else args.model_dump()
+        text = confirmation_text(tool.name, shown, tainted=meta.tainted)
         if text is None:
             # Never ask about something the person cannot see in full.
             self._audit_event("node.confirm", "local", f"{p.safe_name(tool.name)}:cannot_show")
