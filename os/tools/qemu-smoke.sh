@@ -84,12 +84,17 @@ while [ "$sd" -lt "$size" ]; do sd=$((sd * 2)); done
 qemu-img resize -q -f raw "$copy" "$sd"
 
 log="$work/serial.log"
+qemu_log="$work/qemu.log"
+qemu-system-aarch64 --version | head -n1
+file "$bootfiles/kernel8.img" 2>/dev/null || true
 # The image's own kernel; the command line replaces cmdline.txt (no first-boot resize in a test).
+# earlycon: the kernel's first lines reach the serial log before its console driver is up.
 qemu-system-aarch64 -machine raspi3b -m 1G -smp 4 \
   -kernel "$bootfiles/kernel8.img" -dtb "$bootfiles/bcm2710-rpi-3-b-plus.dtb" \
   -drive "file=$copy,if=sd,format=raw" \
-  -append "console=ttyAMA0,115200 root=/dev/mmcblk0p2 rootfstype=ext4 rootwait rw dwc_otg.lpm_enable=0 systemd.mask=rpi-resize.service systemd.show_status=1" \
-  -display none -serial "file:$log" -monitor none -no-reboot &
+  -append "earlycon=pl011,0x3f201000 console=ttyAMA0,115200 root=/dev/mmcblk0p2 rootfstype=ext4 rootwait rw dwc_otg.lpm_enable=0 systemd.mask=rpi-resize.service systemd.show_status=1" \
+  -display none -serial "file:$log" -monitor none -d guest_errors -D "$qemu_log" \
+  >"$work/qemu.out" 2>&1 &
 qemu_pid=$!
 
 result=1
@@ -101,9 +106,13 @@ while [ "$SECONDS" -lt "$deadline" ]; do
   sleep 10
 done
 kill "$qemu_pid" 2>/dev/null || true
-wait "$qemu_pid" 2>/dev/null || true
+qemu_status=0
+wait "$qemu_pid" 2>/dev/null || qemu_status=$?
 qemu_pid=""
 
+echo "---- QEMU (exit status $qemu_status) ----"
+cat "$work/qemu.out" 2>/dev/null || true
+tail -n 30 "$qemu_log" 2>/dev/null || true
 echo "---- serial console (last 200 lines) ----"
 tail -n 200 "$log" | tr -d '\r' || true
 echo "---- markers ----"
