@@ -942,7 +942,7 @@ async def test_a_node_folder_under_a_system_bind_fails_closed(
         ("notes/.hidden/a.txt", "hidden_refused"),
         ("notes/Makefile", "extension_refused"),
         ("notes/README", "extension_refused"),
-        ("notes/page.svg", "extension_refused"),
+        ("notes/page.svg", "format_not_writable"),
         ("notes/archive.zip", "extension_refused"),
         ("notes/config.ini", "extension_refused"),
         ("notes/pip.conf", "extension_refused"),
@@ -1031,10 +1031,10 @@ def test_structured_formats_are_always_high_and_passive_ones_medium_when_new() -
     from nox.node.hands import write_risk
     from nox.node.install import _write_risk
 
-    for name in ("a.json", "a.YAML", "a.yml", "a.xml", "a.html", "a.htm", "a.pdf", "a.docx"):
+    for name in ("a.json", "a.YAML", "a.yml"):
         assert write_risk(name, False, False) == "high", name
         assert _write_risk({"path": f"notes/{name}"}) is Risk.HIGH
-    for name in ("a.txt", "a.md", "a.csv", "a.png", "a.ics"):
+    for name in ("a.txt", "a.md", "a.csv", "a.tsv", "a.log", "a.ics", "a.vcf", "a.srt"):
         assert write_risk(name, False, False) == "medium", name
         assert write_risk(name, True, False) == "high"
 
@@ -1054,35 +1054,66 @@ async def test_a_new_structured_file_needs_a_high_receipt(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize(
-    ("target", "text"),
+    "target",
     [
-        ("notes/seite.html", "<p>Hallo</p><script>alert(1)</script>"),
-        ("notes/seite.htm", '<img src="x.png" onerror = "x()">'),
-        ("notes/seite.html", '<a href="JavaScript:x()">a</a>'),
-        ("notes/brief.xml", '<?mso-application progid="Word.Document"?><w:document/>'),
-        ("notes/brief.xml", '<w:binData w:name="editdata.mso">AAAA</w:binData>'),
-        ("notes/daten.xml", '<!DOCTYPE d SYSTEM "file:///etc/passwd"><d/>'),
-        ("notes/daten.xml", '<!DOCTYPE d [<!ENTITY e "x">]><d>&e;</d>'),
-        ("notes/daten.json", '{"link": "javascript:void(0)"}'),
-        ("notes/doc.pdf", "%PDF-1.7 1 0 obj << /OpenAction 2 0 R >> endobj"),
-        ("notes/doc.pdf", "%PDF-1.7 << /S /JavaScript /JS (app.alert(1)) >>"),
+        "notes/seite.html",
+        "notes/seite.HTM",
+        "notes/brief.xml",
+        "notes/bild.svg",
+        "notes/doc.pdf",
+        "notes/brief.docx",
+        "notes/brief.docm",
+        "notes/tabelle.xlsx",
+        "notes/folien.pptx",
+        "notes/brief.odt",
+        "notes/foto.png",
+        "notes/lied.mp3",
+        "notes/film.mp4",
     ],
 )
-async def test_active_content_in_structured_files_is_refused_even_confirmed(
-    world: dict[str, Path], target: str, text: str
+async def test_documents_pages_and_media_are_not_written_on_a_device(
+    world: dict[str, Path], target: str
+) -> None:
+    with pytest.raises(NodeRefusal) as caught:
+        await _hands(world)["file.write"].handler(WriteArgs(path=target, text="<p>x</p>"))
+    assert caught.value.reason == "format_not_writable"
+    assert not (world["root"] / target).exists()
+
+
+@pytest.mark.parametrize(
+    ("target", "text", "reason"),
+    [
+        ("notes/daten.json", "{kaputt", "invalid_content"),
+        ("notes/daten.yml", "a: [unclosed", "invalid_content"),
+        ("notes/daten.yml", "!!python/object/apply:os.system ['id']", "content_refused"),
+        ("notes/daten.yaml", "a: !eigen x", "content_refused"),
+        ("notes/daten.yml", "a: &x [1, 2]\nb: *x\n", "content_refused"),
+        ("notes/daten.yaml", "a: &anker 1\n", "content_refused"),
+    ],
+)
+async def test_structured_text_must_parse_plainly(
+    world: dict[str, Path], target: str, text: str, reason: str
 ) -> None:
     with pytest.raises(NodeRefusal) as caught:
         await _hands(world)["file.write"].handler(WriteArgs(path=target, text=text))
-    assert caught.value.reason == "content_refused"
+    assert caught.value.reason == reason
     assert not (world["root"] / target).exists()
+
+
+async def test_structured_files_are_written_whole_never_appended(world: dict[str, Path]) -> None:
+    tools = _hands(world)
+    for target in ("notes/d.json", "notes/d.yml", "notes/d.yaml"):
+        with pytest.raises(NodeRefusal) as caught:
+            await tools["file.write"].handler(WriteArgs(path=target, text="x", append=True))
+        assert caught.value.reason == "append_refused"
 
 
 @pytest.mark.parametrize(
     ("target", "text"),
     [
-        ("notes/seite.html", "<p>Wäsche aufhängen um 18 Uhr</p>"),
         ("notes/daten.json", '{"einkauf": ["Tomaten", "Kaffee"]}'),
         ("notes/liste.yml", "- Haferflocken\n- Tomaten\n"),
+        ("notes/plan.yaml", "montag: Mathe Seite 42\n"),
     ],
 )
 async def test_plain_structured_files_are_written(

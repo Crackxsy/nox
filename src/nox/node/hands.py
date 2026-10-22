@@ -53,6 +53,7 @@ from nox.node.safe_fs import (
     open_new,
     secret_locations,
     structured,
+    write_refusal,
 )
 from nox.node.tools import NodeRefusal, NodeTool
 from nox.sandbox import EgressDecl, Limits, Sandbox, SandboxUnavailable
@@ -115,7 +116,7 @@ class ShellArgs(BaseModel):
 
 def write_risk(path: str, append: bool, overwrite: bool) -> str:
     """A new plain-data file is medium; replacing or extending a file, or any write of a
-    STRUCTURED format (a document, a page, JSON/YAML/XML) is high (asked on the device, never
+    STRUCTURED format (JSON, YAML) is high (asked on the device, never
     remembered) - on the core's side and on the node's alike."""
     return "high" if append or overwrite or structured(path) else "medium"
 
@@ -315,10 +316,17 @@ def _read(folders: Folders, path: str) -> dict[str, Any]:
 
 
 def _write(folders: Folders, args: WriteArgs) -> dict[str, Any]:
+    _root, parts = folders.split(args.path)
+    named = write_refusal(parts)  # the name first: a refused name is refused as such
+    if named is not None:
+        raise OutsideFolders(named, "only data files are written (allowlist)")
+    if args.append and structured(args.path):
+        # JSON/YAML is written whole, so the whole text is what is checked - never in pieces.
+        raise NodeRefusal("append_refused")
     refusal = content_refusal(args.path, args.text)
     if refusal is not None:
-        # A macro container, a script, an event handler, an external entity, a PDF action:
-        # refused even when someone would confirm it.
+        # JSON that does not parse, YAML with a tag, an anchor or an alias: refused even when
+        # someone would confirm it.
         raise NodeRefusal(refusal)
     payload = args.text.encode("utf-8")
     if len(payload) > MAX_WRITE_BYTES:

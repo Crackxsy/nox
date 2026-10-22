@@ -790,29 +790,29 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   secret stores (`secret_locations`: OS keyrings and credential vaults, DPAPI, `~/.ssh`,
   `~/.gnupg`, cloud CLIs, `.netrc`, `.pgpass`, `.git-credentials`, browser profiles), never a hard
   link to a file in them, never a FIFO, socket or device.
-- **Writes are an allowlist in two tiers** (`safe_fs.write_refusal`), checked on the text and
-  again on the final path relative to the allowed folder. PASSIVE (`.txt .md .csv .tsv .log`,
-  images, audio/video, `.ics .vcf .srt`): a new file is medium. STRUCTURED (`.json .yaml .yml
-  .xml .html .htm .pdf .odt .ods .docx .xlsx .pptx`): every write is high (device dialog,
-  headless rules, never remembered), and `content_refusal` refuses the text even when confirmed
-  if it carries `mso-application`, `editdata.mso`, `w:binData`, `<script`, `javascript:`, an
-  `on...=` handler or `<!ENTITY`/`<!DOCTYPE ... SYSTEM` in markup, or `/JavaScript`, `/JS`,
-  `/OpenAction`, `/Launch`, `/AA`, `/EmbeddedFile` in a PDF (case-insensitive, after NFKC).
-  Everywhere: no path component starting with `.`, no write at or below a folder holding `.git`,
-  `.hg` or `.svn` up to the allowed folder (checked on each walked directory handle on POSIX and
-  on the final path), no file without an allowed extension, and a config-name layer
-  (`settings/tasks/launch/launchSettings/keybindings/package/project/tsconfig/jsconfig/composer/
-  deno/flows.json`, `appsettings*.json`, `pom.xml`, `build.xml`, `*compose*`, `lefthook*`,
-  `*pipelines*` YAML, `Taskfile`, `configuration.yaml`, `automations.yaml`, `workflows/`). The
-  execution-trigger denylist stays as a further layer. No write to a file with the executable bit
-  or a second hard link; new files are `0600`; a path with leading or trailing spaces is refused,
-  never trimmed. A new file is `CREATE_NEW`/`O_EXCL` and is removed again (through its handle, or
-  by name in the checked directory) if it landed wrong; an existing one is truncated only after
-  the check. The core's target and the device's dialog show path, mode, bytes, lines, a short
-  SHA-256 and the content - in full up to 400 characters, otherwise the first and last 200 with
-  "content shortened - N characters not shown". A started write completes; a stop ends
-  everything after it. Accepted residual risk for PASSIVE formats: a `.csv` formula runs only
-  after the spreadsheet's own prompt and a user action; images and text run nothing.
+- **Writes are an allowlist of text formats in two tiers** (`safe_fs.write_refusal`), checked
+  on the text and again on the final path relative to the allowed folder - `file.write` writes
+  UTF-8 text, so nothing else is offered. PASSIVE (`.txt .md .csv .tsv .log .ics .vcf .srt`): a
+  new file is medium. STRUCTURED (`.json .yaml .yml`): every write is high (device dialog,
+  headless rules, never remembered), the file is written whole (append refused, so the check
+  covers all of it), and the text must parse plainly (`content_refusal`: `json.loads`; YAML
+  scanned for tags, anchors and aliases - refused - then `safe_load`). Documents, pages, PDFs,
+  SVG and media (`NOT_WRITABLE_EXTENSIONS`) are refused (`format_not_writable`); there is no
+  content scanner for them to bypass. Everywhere: no path component starting with `.`, no write
+  at or below a folder holding `.git`, `.hg` or `.svn` up to the allowed folder (checked on each
+  walked directory handle on POSIX and on the final path), no file without an allowed
+  extension, and a config-name layer (`settings/tasks/launch/launchSettings/keybindings/package/
+  project/tsconfig/jsconfig/composer/deno/flows.json`, `appsettings*.json`, `*compose*`,
+  `lefthook*`, `*pipelines*` YAML, `Taskfile`, `configuration.yaml`, `automations.yaml`,
+  `workflows/`). The execution-trigger denylist stays as a further layer. No write to a file with
+  the executable bit or a second hard link; new files are `0600`; a path with leading or trailing
+  spaces is refused, never trimmed. A new file is `CREATE_NEW`/`O_EXCL` and is removed again
+  (through its handle, or by name in the checked directory) if it landed wrong; an existing one
+  is truncated only after the check. The core's target and the device's dialog show path, mode,
+  bytes, lines, a short SHA-256 and the content - in full up to 400 characters, otherwise the
+  first and last 200 with "content shortened - N characters not shown". A started write
+  completes; a stop ends everything after it. Accepted residual risk for PASSIVE formats: a
+  `.csv` formula runs only after the spreadsheet's own prompt and a user action.
 - **Profile rules and nodes**: a profile rule that ALLOWS applies to a call on a node only when it
   names the device (`device:` glob on `ProfileRule`); rules that confirm or deny apply everywhere.
   A broad `tool: file*, decision: allow` therefore never lets Nox write on another PC unasked.

@@ -83,24 +83,24 @@ its own budget: 60 actions and 5 high-risk ones per hour (`max_calls_per_hour`,
   or junction that leads elsewhere, `..`, `~`, a short name like `PROGRA~1`, a network path
   (`\\server\share`) or a device path is refused, and so is anything in the node's own folder,
   the keyring, `~/.ssh` and similar key stores, and browser profiles.
-- **Writing** creates only data files, in two tiers. *Plain data* - `.txt .md .csv .tsv .log`,
-  images (`.png .jpg .jpeg .gif .webp`), audio and video (`.mp3 .wav .ogg .flac .mp4 .webm .mkv`)
-  and `.ics .vcf .srt`: a new file is medium risk (asked on Nox). *Structured formats* - `.json
-  .yaml .yml .xml .html .htm .pdf .odt .ods .docx .xlsx .pptx`, which an application interprets:
-  every write is high risk, asked on this device, and the text is refused outright when it carries
-  active content (an Office macro container, a script, an event handler or external entity in
-  markup, an action in a PDF). Replacing or appending is always high risk. Never a hidden file or
-  anything in a hidden folder (`.git`, `.vscode`, `.bashrc`, ...), never anything inside a
-  repository (a folder with `.git`, `.hg` or `.svn`, up to the allowed folder), never a file
-  without an extension, a script, a program or a configuration file tools act on
-  (`settings.json`, `package.json`, compose and pipeline files, `configuration.yaml`, anything in
-  `workflows`, ...), never an executable file or one with a second name (hard link). The question
-  shows the file, the mode, size, line count and a SHA-256, and the content - in full when it is
-  short, otherwise its first and last 200 characters with "content shortened - N characters not
+- **Writing** creates only text files, in two tiers. *Plain text* - `.txt .md .csv .tsv .log
+  .ics .vcf .srt`: a new file is medium risk (asked on Nox). *Structured text* - `.json .yaml
+  .yml`, which a program may read: every write is high risk and asked on this device, the whole
+  file is written at once (no appending), and the text must parse plainly - YAML with a tag, an
+  anchor or an alias is refused. Documents, pages, PDFs and media (`.html .xml .svg .pdf .docx
+  .xlsx .pptx .odt .png .mp3 ...`) are not written on a device at all - Nox writes `.md` or
+  `.txt` instead. Replacing or appending is always high risk. Never a hidden file or anything in
+  a hidden folder (`.git`, `.vscode`, `.bashrc`, ...), never anything inside a repository (a
+  folder with `.git`, `.hg` or `.svn`, up to the allowed folder), never a file without an
+  extension, a script, a program or a configuration file tools act on (`settings.json`,
+  `package.json`, compose and pipeline files, `configuration.yaml`, anything in `workflows`,
+  ...), never an executable file or one with a second name (hard link). The question shows the
+  file, the mode, size, line count and a SHA-256, and the content - in full when it is short,
+  otherwise its first and last 200 characters with "content shortened - N characters not
   shown". A write is never remembered, and a profile rule that allows writing on Nox does not
   allow it on a node unless it names the device (`device:`).
-- **Accepted for plain data:** a `.csv` can hold a spreadsheet formula, which Excel runs only
-  after its own warning and your click; an image or a text file runs nothing.
+- **Accepted for plain text:** a `.csv` can hold a spreadsheet formula, which Excel runs only
+  after its own warning and your click; the other plain formats run nothing.
 - **Commands** (`shell`) run only in this device's own sandbox (AppContainer on Windows,
   bubblewrap on Linux), which cannot see the node's folder - on Linux the node refuses commands
   when its folder lies under a system folder the sandbox shows. Without such a sandbox - macOS

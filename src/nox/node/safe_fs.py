@@ -39,12 +39,12 @@ import contextlib
 import errno
 import fnmatch
 import functools
+import json
 import os
 import re
 import stat
 import sys
 import time
-import unicodedata
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -156,19 +156,38 @@ _TRIGGER_EXTENSIONS = frozenset(
 )
 
 
-#: What a node may write at all, in two tiers (case-insensitive). PASSIVE: data nothing acts on
-#: when it is opened - a new file is medium risk. STRUCTURED: formats an application interprets
-#: (a document can carry a macro, a page a script) - every write is high risk, asked on the
-#: device and never remembered, and its text must pass `content_refusal`. Anything else - no
-#: extension, a script, a config format - is refused. An allowlist, because a list of dangerous
-#: names can never be complete.
-PASSIVE_EXTENSIONS = frozenset(
+#: What a node may write at all (case-insensitive) - `file.write` writes UTF-8 text, so only
+#: text formats. PASSIVE: text nothing acts on when it is opened - a new file is medium risk.
+#: STRUCTURED: JSON and YAML, which a program may read - every write is high risk, asked on the
+#: device and never remembered, and the text must parse plainly (`content_refusal`). Anything
+#: else is refused - documents, pages, PDFs and media (`format_not_writable`: write .md or .txt
+#: instead), scripts, programs, configuration formats, no extension. An allowlist, because a
+#: list of dangerous names or contents can never be complete.
+PASSIVE_EXTENSIONS = frozenset({".txt", ".md", ".csv", ".tsv", ".log", ".ics", ".vcf", ".srt"})
+STRUCTURED_EXTENSIONS = frozenset({".json", ".yaml", ".yml"})
+#: Formats an application interprets (a macro, a script, an action) or binary formats a text
+#: write cannot produce: never written on a device, with a reason that says what to use.
+NOT_WRITABLE_EXTENSIONS = frozenset(
     {
-        ".txt",
-        ".md",
-        ".csv",
-        ".tsv",
-        ".log",
+        ".html",
+        ".htm",
+        ".xhtml",
+        ".svg",
+        ".xml",
+        ".pdf",
+        ".odt",
+        ".ods",
+        ".odp",
+        ".doc",
+        ".docx",
+        ".docm",
+        ".xls",
+        ".xlsx",
+        ".xlsm",
+        ".ppt",
+        ".pptx",
+        ".pptm",
+        ".rtf",
         ".png",
         ".jpg",
         ".jpeg",
@@ -181,25 +200,6 @@ PASSIVE_EXTENSIONS = frozenset(
         ".mp4",
         ".webm",
         ".mkv",
-        ".ics",
-        ".vcf",
-        ".srt",
-    }
-)
-STRUCTURED_EXTENSIONS = frozenset(
-    {
-        ".json",
-        ".yaml",
-        ".yml",
-        ".xml",
-        ".html",
-        ".htm",
-        ".pdf",
-        ".odt",
-        ".ods",
-        ".docx",
-        ".xlsx",
-        ".pptx",
     }
 )
 WRITABLE_EXTENSIONS = PASSIVE_EXTENSIONS | STRUCTURED_EXTENSIONS
@@ -253,6 +253,8 @@ def write_refusal(parts: list[str]) -> str | None:
         return "hidden_refused"
     folded = [p.casefold() for p in names]
     name = folded[-1]
+    if extension_of(name) in NOT_WRITABLE_EXTENSIONS:
+        return "format_not_writable"
     if extension_of(name) not in WRITABLE_EXTENSIONS:
         return "extension_refused"
     if any(fnmatch.fnmatchcase(name, pattern) for pattern in _CONFIG_PATTERNS):
@@ -267,29 +269,33 @@ def structured(path: str) -> bool:
     return extension_of(re.split(r"[\\/]", path)[-1]) in STRUCTURED_EXTENSIONS
 
 
-_ACTIVE_ALWAYS = ("mso-application", "editdata.mso", "w:bindata", "<script", "javascript:")
-_MARKUP = frozenset({".xml", ".html", ".htm"})
-_EVENT_HANDLER = re.compile(r"\bon[a-z]+\s*=")
-_EXTERNAL_ENTITY = re.compile(r"<!(entity|doctype)[^>]*\bsystem\b", re.S)
-_PDF_ACTIONS = ("/javascript", "/js", "/openaction", "/launch", "/embeddedfile", "/aa")
+#: YAML that a loader could turn into more than data: tags (`!!python/...`, any `!tag`), and
+#: anchors/aliases (the "billion laughs" expansion) - refused outright.
+_YAML_ACTIVE = ("TagToken", "AnchorToken", "AliasToken")
 
 
 def content_refusal(path: str, text: str) -> str | None:
-    """Why the text of a STRUCTURED write is refused even with a confirmation: an Office macro
-    container, a script, an event handler or an external entity in markup, an action in a PDF.
-    Compared case-insensitively on the text as it will be written."""
+    """Why the text of a STRUCTURED write is refused even when confirmed: JSON that does not
+    parse; YAML that does not parse plainly (`safe_load`) or carries a tag, an anchor or an
+    alias. Plain text formats are not looked at."""
     ext = extension_of(re.split(r"[\\/]", path)[-1])
-    if ext not in STRUCTURED_EXTENSIONS:
+    if ext == ".json":
+        try:
+            json.loads(text)
+        except ValueError:
+            return "invalid_content"
         return None
-    body = unicodedata.normalize("NFKC", text).casefold()
-    if any(marker in body for marker in _ACTIVE_ALWAYS):
-        return "content_refused"
-    if ext in _MARKUP and (_EVENT_HANDLER.search(body) or "<!entity" in body):
-        return "content_refused"
-    if ext in _MARKUP and _EXTERNAL_ENTITY.search(body):
-        return "content_refused"
-    if ext == ".pdf" and any(action in body for action in _PDF_ACTIONS):
-        return "content_refused"
+    if ext in (".yaml", ".yml"):
+        import yaml  # noqa: PLC0415
+
+        try:
+            for token in yaml.scan(text, Loader=yaml.SafeLoader):
+                if type(token).__name__ in _YAML_ACTIVE:
+                    return "content_refused"
+            yaml.safe_load(text)
+        except yaml.YAMLError:
+            return "invalid_content"
+        return None
     return None
 
 
