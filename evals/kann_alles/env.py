@@ -244,6 +244,7 @@ class World:
         core.orchestrator.speaker = RecordingSpeaker(self.probe)
         self._wrap_executor(core)
         await self.simulate(core)
+        self._install_nodes(core)
         skills = self._skills()
         if skills is not None:
             # Learning in this world writes a known plugin; see `kann_alles.skill_builder`.
@@ -417,17 +418,19 @@ class World:
         )
         self._activate_skills = env.activate_skills
 
+    def _install_nodes(self, core: Any) -> None:
+        """The core's routes for nodes, installed once at start - so every task sees the same
+        tool schemas, whatever order the tasks run in (an older checkout without nodes: none)."""
+        try:
+            from kann_alles.nodes import WorldNodes  # noqa: PLC0415 - newer checkouts only
+            from nox.node.install import _install_routes  # noqa: PLC0415
+        except ImportError:
+            return
+        self.nodes = WorldNodes(self.root / "node-receipts")
+        _install_routes(core, self.nodes)
+
     def _prepare_nodes(self, env: Environment) -> None:
-        """Exactly the simulated nodes the task names are online. The core's routes for nodes are
-        installed the first time a task needs one (an older checkout without nodes: none)."""
-        if env.nodes and self.nodes is None:
-            try:
-                from kann_alles.nodes import WorldNodes  # noqa: PLC0415 - newer checkouts only
-                from nox.node.install import _install_routes  # noqa: PLC0415
-            except ImportError:
-                return
-            self.nodes = WorldNodes(self.root / "node-receipts")
-            _install_routes(self.core, self.nodes)
+        """Exactly the simulated nodes the task names are online, no others."""
         if self.nodes is not None:
             self.nodes.show(list(env.nodes))
             self.simulated_devices = self.nodes.devices

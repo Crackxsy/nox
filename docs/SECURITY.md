@@ -779,24 +779,43 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
 
 - `file.list/read/write` open only inside folders confirmed on the device
   (`nox node allow files --folder`, none by default; an unconfirmed folder in `node.yaml` counts
-  for nothing). The text is checked first, unresolved (UNC and device paths, `..`, `~`, 8.3
+  for nothing; never a drive root, the home folder or above, a system folder, an app-data root or
+  a secret store). The text is checked first, unresolved (UNC and device paths, `..`, `~`, 8.3
   names, NUL, alternate data streams, Windows device names, trailing dots/spaces), then the
-  **handle** decides: POSIX walks from the folder with `O_NOFOLLOW` on every step and compares each
-  directory with the protected ones by `(st_dev, st_ino)`; Windows opens with `CreateFileW`
-  without `FILE_SHARE_DELETE` and checks `GetFinalPathNameByHandleW` of that handle. Never inside
-  the node's own folder or the keyring's folders, never a hard link to a file in them, never a
-  FIFO, socket or device. A new file is `CREATE_NEW`/`O_EXCL` and is deleted through its own
-  handle if it landed wrong; an existing one is truncated only after the check. Residual: a
+  **handle** decides: POSIX looks at every entry with `fstatat(AT_SYMLINK_NOFOLLOW)` before
+  opening it `O_NOFOLLOW | O_NOCTTY | O_NONBLOCK` relative to the checked directory, and compares
+  each directory with the protected ones by `(st_dev, st_ino)` (final path: `/proc/self/fd`,
+  macOS `F_GETPATH`); Windows opens with `CreateFileW` without `FILE_SHARE_DELETE` and checks
+  `GetFinalPathNameByHandleW` of that handle. Never inside the node's own folder or this user's
+  secret stores (`secret_locations`: OS keyrings and credential vaults, DPAPI, `~/.ssh`,
+  `~/.gnupg`, cloud CLIs, `.netrc`, `.pgpass`, `.git-credentials`, browser profiles), never a hard
+  link to a file in them, never a FIFO, socket or device.
+- **Writes** never create an execution trigger, checked on the text and again on the final path:
+  any `.git` component, startup/autostart folders (Start Menu `Startup`, `~/.config/autostart`,
+  `~/.config/systemd`, LaunchAgents/Daemons, PowerShell profile folders), shell start files and
+  script/program extensions. No write to a file with the executable bit or a second hard link; new
+  files are `0600`. A new file is `CREATE_NEW`/`O_EXCL` and is removed again (through its handle,
+  or by name in the checked directory) if it landed wrong; an existing one is truncated only after
+  the check. Replacing or appending is **high** risk on both sides (the node refuses a receipt
+  that says less), shown on the device with path, mode, size and an escaped preview; a write on a
+  node is never remembered (`CallScope.rememberable`). A started write completes; a stop ends
+  everything after it.
+- **One renderer** (`protocol.render`) for the core's permission target and the device's dialog:
+  JSON-quoted per value and per argv token, every character outside printable ASCII and Latin-1
+  letters escaped (look-alikes, bidi, zero-width), runs of spaces counted. A target over 1000
+  characters is refused, never shortened. A path alias is refused only in path fields; free text
+  (a note, a shell line such as `git log HEAD~1`) is not a path.
+- `shell.run` runs only in the device's own `make_sandbox()` with strong guarantees
+  (`accept_weak` is never set on a node); the node's folder is not bound (bwrap) or granted
+  (AppContainer; its owner-only ACL is re-applied on every start), and is refused as a runtime
+  bind on both. On Linux the node fails closed when its folder, Nox's folder or a secret store
+  lies under one of bwrap's read-only system binds. No sandbox (macOS, no bwrap, weak backend)
+  means `sandbox_unavailable`, never an unconfined run. A stopped call (`nox/kill`, dead man)
+  kills the sandboxed tree (bwrap: the cancelled run kills its cgroup and process; Windows: the
+  job object). `package.*` is not offered on nodes: it could not work in the sandbox.
+- A refusal by a hand is answered like the gate's and audited (`node.refused`). Residual: a
   Windows listing enumerates by the verified path while the folder's handle is held, with the
   folder's identity compared before and after.
-- `shell.run` and `package.*` run only in the device's own `make_sandbox()` with strong
-  guarantees (`accept_weak` is never set on a node); the node's folder is not bound (bwrap) or
-  granted (AppContainer; the folder is owner-only), and is refused as a runtime bind on both.
-  No sandbox (macOS, no bwrap, weak backend) means `sandbox_unavailable`, never an unconfined
-  run. A stopped call (`nox/kill`, dead man) kills the sandboxed tree (bwrap: the cancelled run
-  kills its cgroup and process; Windows: the job object). Residual: package managers need rights
-  the sandbox does not give, so installs on a node fail today instead of running unconfined.
-- A refusal by a hand is answered like the gate's and audited (`node.refused`).
 
 Still to come in wave C: certificate renewal (C7) and a real presence check for
 `nox node allow`. Negative tests: `tests/unit/node/` (a deliberately permissive core in `test_agent.py`),

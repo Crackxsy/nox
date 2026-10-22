@@ -8,9 +8,9 @@ lässt Nox Dinge *auf diesem Gerät* tun - und nur die, die du dort erlaubt hast
 
 > Stand: Welle C entsteht gerade. Diese Version hat das Koppeln, die Verbindung, die eigene
 > Erlaubnisliste und das Protokoll des Geräts, `system.info` (Systemwerte lesen), `notify.show`
-> (einen Hinweis zeigen) und die Hände: `file.list/read/write` in Ordnern, die du erlaubst,
-> `shell.run` und `package.install/remove` in der eigenen Sandbox des Geräts. Bildschirm und der
-> Rest folgen.
+> (einen Hinweis zeigen) und die Hände: `file.list/read/write` in Ordnern, die du erlaubst, und
+> `shell.run` in der eigenen Sandbox des Geräts. Programme installieren (`package.*`) gibt es auf
+> Nodes noch nicht. Bildschirm und der Rest folgen.
 
 ## Einen Node koppeln
 
@@ -76,21 +76,28 @@ Sekunden zählt als nein. Ein Node ohne Bildschirm lehnt hohes Risiko ab, außer
 an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trust_core_for_high`. Der Node hat außerdem ein eigenes Budget: 60 Aktionen und 5 mit hohem Risiko pro Stunde
 (`max_calls_per_hour`, `max_high_per_hour` in `node.yaml`).
 
-## Dateien, Befehle und Programme auf einem Node
+## Dateien und Befehle auf einem Node
 
 - **Dateien** (`files`): Nox öffnet nur Pfade in den Ordnern, die du mit `--folder` erlaubt hast
-  (standardmäßig keine), und entscheidet das an der echten Datei in dem Moment, in dem sie
-  geöffnet wird - ein Link oder eine Verknüpfung (Junction) woandershin, `..`, `~`, ein Kurzname
-  wie `PROGRA~1`, ein Netzwerkpfad (`\\server\freigabe`) oder ein Gerätepfad wird abgelehnt,
-  ebenso alles im Node-Ordner selbst oder im Schlüsselbund. Schreiben ersetzt eine Datei nur,
-  wenn du es sagst, und legt nie Ordner an.
-- **Befehle** (`shell`) und **Programme** (`packages`) laufen nur in der eigenen Sandbox des
-  Geräts (AppContainer unter Windows, bubblewrap unter Linux), die den Node-Ordner nicht sieht.
-  Ohne eine solche Sandbox - vorerst macOS, Linux ohne `bwrap` - werden sie abgelehnt, nie ohne
-  ausgeführt. Beides ist hohes Risiko: gefragt an diesem Gerät, bei einem Node ohne Bildschirm an
-  Nox. Programme in der Sandbox zu installieren scheitert heute auf den meisten Systemen (ein
-  Paketmanager braucht Rechte, die die Sandbox nicht gibt); die Anfrage wird trotzdem geprüft und
-  ehrlich abgelehnt.
+  (standardmäßig keine; nie ein ganzes Laufwerk, dein Benutzerordner, ein System- oder
+  App-Daten-Ordner oder ein Ordner mit Schlüsseln oder Passwörtern), und entscheidet das an der
+  echten Datei in dem Moment, in dem sie geöffnet wird - ein Link oder eine Verknüpfung
+  (Junction) woandershin, `..`, `~`, ein Kurzname wie `PROGRA~1`, ein Netzwerkpfad
+  (`\\server\freigabe`) oder ein Gerätepfad wird abgelehnt, ebenso alles im Node-Ordner, im
+  Schlüsselbund, in `~/.ssh` und ähnlichen Schlüsselablagen und in Browser-Profilen.
+- **Schreiben** legt nie etwas an, das außerhalb der Sandbox ein Programm starten könnte: nichts
+  in einem `.git`-Ordner, einem Autostart-Ordner, keine Shell-Startdatei (`.bashrc`, `.profile`,
+  ...), kein Skript und kein Programm (`.ps1`, `.cmd`, `.sh`, `.exe`, `.lnk`, `.desktop`, ...),
+  nie eine ausführbare Datei oder eine mit zweitem Namen (Hardlink). Eine neue Datei ist mittleres
+  Risiko (Frage an Nox); **Ersetzen oder Anhängen ist hohes Risiko** und wird jedes Mal an diesem
+  Gerät gefragt - mit Datei, Art, Größe und Textanfang. Schreiben wird nie gemerkt.
+- **Befehle** (`shell`) laufen nur in der eigenen Sandbox des Geräts (AppContainer unter Windows,
+  bubblewrap unter Linux), die den Node-Ordner nicht sieht - unter Linux lehnt der Node Befehle
+  ab, wenn sein Ordner unter einem Systemordner liegt, den die Sandbox zeigt. Ohne eine solche
+  Sandbox - vorerst macOS, Linux ohne `bwrap` - werden Befehle abgelehnt, nie ohne ausgeführt.
+  Hohes Risiko: gefragt an diesem Gerät, bei einem Node ohne Bildschirm an Nox.
+- **Programme** (`packages`): auf Nodes noch nicht verfügbar - ein Paketmanager braucht Rechte,
+  die die Sandbox nicht gibt.
 
 ## Stoppen
 

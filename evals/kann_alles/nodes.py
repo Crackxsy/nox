@@ -126,7 +126,7 @@ class SimulatedNode:
         tools["system.info"] = NodeTool(
             "system.info", "system", "read", "System values of the Pi.", NoArgs, _pi_info
         )
-        groups = {g: g in ("system", "shell", "packages") for g in GROUPS}
+        groups = {g: g in ("system", "shell") for g in GROUPS}
         manifest = NodeManifest(groups=groups, trust_core_for_high=True)
         self.gate = NodeGate(tools, manifest, None, receipts=self.verifier)
 

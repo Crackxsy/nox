@@ -1,8 +1,8 @@
-"""C5: the node's hands - `file.*`, `shell.run`, `package.*` - each with its own boundary.
+"""C5: the node's hands - `file.*` and `shell.run` - each with its own boundary.
 
 File tools decide on the real file at open time (`nox.node.safe_fs`): every escape below is
 tried for real on this OS (junctions on Windows, symlinks elsewhere), and a swap between the text
-check and the open is staged. Shell and package tools run only in the node's sandbox; without one
+check and the open is staged. Shell commands run only in the node's sandbox; without one
 they are refused, never run unconfined. All of it reaches the hands only through `NodeGate`, the
 confirmation on the device and the core's receipts (driven over the real listener)."""
 
@@ -29,9 +29,17 @@ from nox.node.keystore import NodeKeyStore
 from nox.node.listener import NodeListener
 from nox.node.manifest import GROUPS, NodeManifest
 from nox.node.pairing import NodePairing
+from nox.node.protocol import NoxCallMeta
 from nox.node.registry import ROUTABLE, NodeRegistry
 from nox.node.router import routed_spec
-from nox.node.safe_fs import Folders, OutsideFolders, list_folder, open_existing, open_new
+from nox.node.safe_fs import (
+    Folders,
+    OutsideFolders,
+    list_folder,
+    open_existing,
+    open_new,
+    secret_locations,
+)
 from nox.node.tools import NodeRefusal
 from nox.sandbox import Result, SandboxMode, SandboxUnavailable
 from nox.security.audit import SqliteAuditLog
@@ -186,15 +194,23 @@ def test_the_node_folder_inside_an_allowed_folder_stays_closed(world: dict[str, 
 def test_keyring_folders_are_protected(
     world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    data = world["root"]
+    data = world["root"].parent / "appdata"
     monkeypatch.setenv("APPDATA", str(data))
     monkeypatch.setenv("XDG_DATA_HOME", str(data))
     store = data / ("Microsoft/Credentials" if WINDOWS else "keyrings")
     store.mkdir(parents=True)
     (store / "login.keyring").write_text("x", encoding="utf-8")
-    hands = NodeHands(folders=lambda: [str(data)], protected=(world["node"],), sandbox=lambda: None)
-    relative = store.relative_to(data).as_posix() + "/login.keyring"
-    assert refused(hands.resolved(), relative) == "node_home_protected"
+    # A link into the store from an allowed folder is refused on the handle.
+    link_folder(store, world["root"] / "door")
+    hands = NodeHands(
+        folders=lambda: [str(world["root"])], protected=(world["node"],), sandbox=lambda: None
+    )
+    reason = refused(hands.resolved(), "door/login.keyring")
+    assert reason in ("node_home_protected", "link_refused")
+    if WINDOWS:  # a folder that contains the app-data root is too broad to allow at all
+        assert Folders.build([str(data.parent)], [world["node"]]).roots == ()
+    for place in (".ssh", ".aws", ".kube", ".git-credentials", ".netrc", ".pgpass"):
+        assert Path.home() / place in secret_locations()
 
 
 def test_a_swap_between_the_text_check_and_the_open_is_caught(
@@ -236,6 +252,13 @@ def test_a_listing_never_follows_links(world: dict[str, Path]) -> None:
     with list_folder(folders(world), ".") as entries:
         names = {e.name: e.is_symlink() or e.is_junction() for e in entries}
     assert set(names) == {"notes", "out"}
+
+
+async def test_a_listing_reports_junctions_and_links_as_links(world: dict[str, Path]) -> None:
+    link_folder(world["outside"], world["root"] / "out")
+    listing = await _hands(world)["file.list"].handler(PathArgs(path="."))
+    kinds = {e["name"]: e["kind"] for e in listing["entries"]}
+    assert kinds == {"notes": "folder", "out": "link"}
 
 
 # ---- the file tools ----------------------------------------------------------------------------
@@ -311,38 +334,48 @@ class FakeSandbox:
         return Result(exit_code=0, stdout="ok\n", stderr="")
 
 
-async def test_shell_and_packages_are_refused_without_a_sandbox(world: dict[str, Path]) -> None:
-    from nox.node.hands import PackageArgs, ShellArgs
+async def test_shell_is_refused_without_a_strong_sandbox(world: dict[str, Path]) -> None:
+    from nox.node.hands import ShellArgs
 
     for sandbox in (None, FakeSandbox(weak=True)):
         tools = _hands(world, sandbox)
         with pytest.raises(NodeRefusal) as caught:
             await tools["shell.run"].handler(ShellArgs(argv=["whoami"]))
         assert caught.value.reason == "sandbox_unavailable"
-        with pytest.raises(NodeRefusal):
-            await tools["package.install"].handler(PackageArgs(package_id="VideoLAN.VLC"))
-    if sandbox is not None:
-        assert sandbox.runs == []  # nothing ran, also not "less confined"
+        if sandbox is not None:
+            assert sandbox.runs == []  # nothing ran, also not "less confined"
 
 
-async def test_shell_and_packages_run_in_the_sandbox(world: dict[str, Path]) -> None:
-    from nox.node.hands import PackageArgs, ShellArgs
+async def test_shell_runs_in_the_sandbox(world: dict[str, Path]) -> None:
+    from nox.node.hands import ShellArgs
 
     sandbox = FakeSandbox()
     tools = _hands(world, sandbox)
     out = await tools["shell.run"].handler(ShellArgs(command="df -h /"))
     assert out["ok"] and out["stdout"] == "ok\n"
-    await tools["package.install"].handler(PackageArgs(package_id="vlc"))
-    (shell_argv, shell_egress, shell_work), (pkg_argv, pkg_egress, pkg_work) = sandbox.runs
+    ((shell_argv, shell_egress, shell_work),) = sandbox.runs
     assert shell_argv[-1] == "df -h /" and shell_egress == () and shell_work == "shell"
-    assert "vlc" in pkg_argv and pkg_egress == ("*",) and pkg_work == "package"
+
+
+def test_packages_are_not_offered_on_nodes_yet(world: dict[str, Path]) -> None:
+    assert not {"package.install", "package.remove"} & (set(_hands(world)) | ROUTABLE)
+
+
+def test_the_default_sandbox_never_accepts_the_weak_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    import nox.sandbox
+    from nox.node.hands import default_sandbox
+
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(nox.sandbox, "make_sandbox", lambda **kw: seen.append(kw) or "made")
+    assert default_sandbox() == "made"
+    assert seen == [{"accept_weak": False}]
 
 
 def test_every_hand_is_offered_only_with_its_group(world: dict[str, Path]) -> None:
     tools = _hands(world)
     assert set(tools) <= ROUTABLE
     gate = NodeGate(tools, NodeManifest(), None, protected=world["node"])
-    assert gate.offered() == []  # files, shell and packages are off by default
+    assert gate.offered() == []  # files and shell are off by default
     on = {g: g in ("files", "shell") for g in GROUPS}
     gate.set_manifest(NodeManifest(groups=on))
     assert {t.name for t in gate.offered()} == {"file.list", "file.read", "file.write", "shell.run"}
@@ -478,8 +511,8 @@ async def test_no_sandbox_on_the_device_means_refused_over_the_wire(
         answer = await call(
             session,
             listener.signer,  # type: ignore[attr-defined]
-            "package.install",
-            {"package_id": "vlc"},
+            "shell.run",
+            {"argv": ["whoami"], "egress": []},
             risk="high",
             confirm_on_device=True,
         )
@@ -628,3 +661,268 @@ def test_a_folder_is_allowed_only_in_a_terminal_here_and_never_the_node_folder(
         node_cli.allow(home, "shell", True, say=said.append, folder=str(docs), **yes)  # type: ignore[arg-type]
     node_cli.allow(home, "files", False, say=said.append, folder=str(docs))
     assert load_manifest(home.manifest_file).folders == []
+
+
+# ---- review round 1: what a write may never do ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        ".git/hooks/pre-commit",
+        "repo/.GIT/config",
+        "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/hello.txt",
+        ".bashrc",
+        ".zprofile",
+        ".config/autostart/nox.desktop",
+        ".config/systemd/user/nox.service",
+        "Library/LaunchAgents/example.invalid.plist",
+        "Documents/WindowsPowerShell/profile.txt",
+        "notes/run.ps1",
+        "notes/RUN.CMD",
+        "notes/start.sh",
+        "notes/link.lnk",
+        "notes/tool.exe",
+    ],
+)
+async def test_a_write_never_plants_an_execution_trigger(
+    world: dict[str, Path], target: str
+) -> None:
+    folder = (world["root"] / target).parent
+    folder.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(NodeRefusal) as caught:
+        await _hands(world)["file.write"].handler(WriteArgs(path=target, text="echo hi"))
+    assert caught.value.reason == "execution_trigger"
+    assert not (world["root"] / target).exists()
+
+
+async def test_a_link_into_a_git_folder_is_no_way_around(world: dict[str, Path]) -> None:
+    hooks = world["root"] / "repo" / ".git" / "hooks"
+    hooks.mkdir(parents=True)
+    link_folder(hooks, world["root"] / "innocent")
+    with pytest.raises(NodeRefusal) as caught:
+        await _hands(world)["file.write"].handler(WriteArgs(path="innocent/pre-commit", text="x"))
+    assert caught.value.reason in ("execution_trigger", "link_refused")
+    assert not (hooks / "pre-commit").exists()
+
+
+@pytest.mark.skipif(WINDOWS, reason="the executable bit")
+async def test_an_executable_is_never_written_and_a_new_file_never_executable(
+    world: dict[str, Path],
+) -> None:
+    script = world["root"] / "notes" / "tool"
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    script.chmod(0o755)
+    with pytest.raises(NodeRefusal) as caught:
+        await _hands(world)["file.write"].handler(
+            WriteArgs(path="notes/tool", text="x", overwrite=True)
+        )
+    assert caught.value.reason == "executable_refused"
+    await _hands(world)["file.write"].handler(WriteArgs(path="notes/neu", text="x"))
+    assert (world["root"] / "notes" / "neu").stat().st_mode & 0o111 == 0
+
+
+async def test_a_file_with_a_second_name_is_not_written(world: dict[str, Path]) -> None:
+    os.link(world["root"] / "notes" / "einkauf.txt", world["root"] / "zweit.txt")
+    with pytest.raises(NodeRefusal) as caught:
+        await _hands(world)["file.write"].handler(
+            WriteArgs(path="zweit.txt", text="", overwrite=True)
+        )
+    assert caught.value.reason == "hard_link_refused"
+    assert (world["root"] / "notes" / "einkauf.txt").read_bytes() == b"Haferflocken\n"
+
+
+def test_broad_folders_are_never_allowed(world: dict[str, Path], tmp_path: Path) -> None:
+    from nox.node import cli as node_cli
+    from nox.node.safe_fs import broad_folder
+
+    system = [os.environ["SystemRoot"], os.environ["ProgramFiles"]] if WINDOWS else ["/etc", "/usr"]
+    for place in [Path.home().anchor, str(Path.home()), str(Path.home().parent), *system]:
+        assert broad_folder(place), place
+        assert Folders.build([place], [world["node"]]).roots == ()
+    assert not broad_folder(str(world["root"]))
+    yes = {"interactive": lambda: True, "confirm": lambda _p: True}
+    with pytest.raises(node_cli.NodeCliError):
+        node_cli.allow(  # type: ignore[arg-type]
+            NodeHome(tmp_path / "h"),
+            "files",
+            True,
+            say=lambda _t: None,
+            folder=str(Path.home()),
+            **yes,
+        )
+
+
+def test_a_link_into_a_secret_store_is_refused(
+    world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = world["root"].parent / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "id_ed25519").write_text("PRIVATE", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    link_folder(home / ".ssh", world["root"] / "keys")
+    hands = NodeHands(
+        folders=lambda: [str(world["root"])], protected=(world["node"],), sandbox=lambda: None
+    )
+    assert refused(hands.resolved(), "keys/id_ed25519") in ("node_home_protected", "link_refused")
+
+
+async def test_replacing_or_extending_a_file_is_high_and_shown_with_size_and_preview(
+    tmp_path: Path,
+) -> None:
+    from nox.node.agent import confirmation_text
+    from nox.node.receipts import ReceiptSigner, ReceiptVerifier
+
+    signer = ReceiptSigner(tmp_path / "r")
+    verifier = ReceiptVerifier(signer.public_key, device_id="d" * 32, core_id="c" * 64)
+    groups = {g: g == "files" for g in GROUPS}
+    world_tools = hand_tools(
+        NodeHands(folders=lambda: [], protected=(tmp_path / "n",), sandbox=lambda: None)
+    )
+    gate = NodeGate(world_tools, NodeManifest(groups=groups), None, receipts=verifier)
+    args = {"path": "a.txt", "text": "x" * 500, "append": False, "overwrite": True}
+    low = signed(signer, "file.write", args, risk="medium", device_id="d" * 32, core_id="c" * 64)
+    assert gate.check("file.write", args, meta=NoxCallMeta(**low)).reason == "risk_understated"
+    high = signed(signer, "file.write", args, risk="high", device_id="d" * 32, core_id="c" * 64)
+    decision = gate.check("file.write", args, meta=NoxCallMeta(**high))
+    assert decision.allowed and decision.needs_local_confirmation
+    tool = world_tools["file.write"]
+    assert tool.shown is not None and decision.args is not None
+    text = confirmation_text("file.write", tool.shown(decision.args))
+    assert text is not None and '"overwrite"' in text and "500" in text and "[...]" in text
+
+
+async def test_a_node_write_is_high_when_it_replaces_and_never_remembered() -> None:
+    from nox.node.install import _write_risk, _write_target
+    from nox.security.model import Decision, PermissionResult
+    from nox.tools.executor import ToolExecutor
+    from nox.tools.registry import ToolRegistry
+
+    laptop = _entry("a" * 32, "Laptop", tools={"file.write": "medium"})
+    laptop.confirmer = True
+    registry = FakeRegistry([laptop])
+    spec = routed_spec(
+        name="file.write",
+        description="t",
+        risk=Risk.MEDIUM,
+        side_effects=True,
+        registry=registry,  # type: ignore[arg-type]
+        input_model=WriteArgs,
+        node_target=_write_target,
+        node_risk=_write_risk,
+        remember_on_node=False,
+    )
+    payload = {"path": "a.txt", "text": "neu", "device": "Laptop"}
+    new = spec.scope(spec.input_model.model_validate(payload).model_dump())  # type: ignore[misc]
+    assert new.risk is Risk.MEDIUM and not new.rememberable
+    assert '"new file"' in new.target and "bytes 3" in new.target
+    over = {**payload, "overwrite": True}
+    replaced = spec.scope(spec.input_model.model_validate(over).model_dump())  # type: ignore[misc]
+    assert replaced.risk is Risk.HIGH and replaced.confirm_on_device and not replaced.rememberable
+
+    seen: list[Any] = []
+
+    class Engine:
+        def check(self, request: Any) -> PermissionResult:
+            seen.append(request)
+            return PermissionResult(decision=Decision.DENY, rule_id="test")
+
+        def is_tainted(self, conversation: str) -> bool:
+            return False
+
+    class Audit:
+        def append(self, **_k: Any) -> int:
+            return 0
+
+    class Kill:
+        def is_engaged(self) -> bool:
+            return False
+
+    tools = ToolRegistry()
+    tools.register(spec)
+    executor = ToolExecutor(tools, Engine(), Audit(), None, Kill())  # type: ignore[arg-type]
+    await executor.call("companion", "file.write", payload, mode="companion")
+    assert seen and seen[0].rememberable is False  # a "remember" answer creates no grant
+
+
+def test_the_device_dialog_and_the_core_target_render_alike() -> None:
+    from nox.node.agent import confirmation_text
+    from nox.node.install import _write_target
+    from nox.node.protocol import render
+
+    argv = ["echo", "safe‮", "a" + " " * 9 + "b", "Ж"]
+    dialog = confirmation_text("shell.run", {"argv": argv})
+    assert dialog is not None and render(argv) in dialog
+    assert render(argv) in _shell_target({"argv": argv})
+    assert "‮" not in dialog and "Ж" not in dialog and "[9 spaces]" in dialog
+    shown = {"path": "a.txt", "text": "Grüße", "overwrite": True}
+    assert render("Grüße") in _write_target(shown) and render("Grüße") == '"Grüße"'
+
+
+def test_free_text_is_not_a_path_but_a_path_still_is(tmp_path: Path) -> None:
+    from nox.node.hands import ShellArgs as _Shell  # noqa: F401 - the model the gate validates
+
+    gate = NodeGate(
+        hand_tools(NodeHands(folders=lambda: [], protected=(tmp_path,), sandbox=lambda: None)),
+        NodeManifest(groups={g: g in ("files", "shell") for g in GROUPS}),
+        None,
+    )
+    for args in ({"argv": ["git", "log", "HEAD~1"], "egress": []}, {"command": "cd ~/x && ls"}):
+        assert gate.check("shell.run", args).reason != "path_alias_refused"
+    assert gate.check("file.read", {"path": "../x"}).reason == "path_alias_refused"
+    assert gate.check("file.read", {"path": "~/x"}).reason == "path_alias_refused"
+
+
+@pytest.mark.skipif(WINDOWS, reason="FIFOs")
+def test_a_fifo_is_refused_without_blocking(world: dict[str, Path]) -> None:
+    os.mkfifo(world["root"] / "pipe")
+    assert refused(folders(world), "pipe") == "not_a_file"
+
+
+@pytest.mark.skipif(not WINDOWS, reason="the Windows listing")
+def test_a_windows_listing_whose_folder_changed_is_refused(
+    world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nox.node import safe_fs
+
+    monkeypatch.setattr(safe_fs, "_win_final", lambda _fd: str(world["outside"]))
+    with pytest.raises(OutsideFolders) as caught:
+        with list_folder(folders(world), "notes"):
+            pass
+    assert caught.value.reason == "changed"
+
+
+async def test_a_huge_listing_stops_counting(
+    world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nox.node import hands as hands_module
+
+    monkeypatch.setattr(hands_module, "MAX_SCAN", 3)
+    for i in range(6):
+        (world["root"] / "notes" / f"f{i}.txt").write_text("x", encoding="utf-8")
+    listing = await _hands(world)["file.list"].handler(PathArgs(path="notes"))
+    assert listing["total"] == 3 and listing["stopped_counting"] and listing["truncated"]
+
+
+def test_utf8_cut_by_the_limit_stays_utf8() -> None:
+    from nox.node.hands import _decode
+
+    cut = ("aaa" + "é").encode("utf-8")[:-1]
+    assert _decode(cut, True) == ("aaa", "utf-8")
+    assert _decode(b"caf\xe9 au lait", False)[1] == "cp1252"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="bwrap's read-only binds")
+async def test_a_node_folder_under_a_system_bind_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nox.sandbox import linux
+
+    monkeypatch.setattr(linux, "visible_system_paths", lambda: (str(tmp_path),))
+    hands = NodeHands(
+        folders=lambda: [], protected=(tmp_path / "node",), sandbox=lambda: FakeSandbox()
+    )
+    assert hands.exposed() is not None
+    with pytest.raises(NodeRefusal) as caught:
+        await hands.confined()
+    assert caught.value.reason == "sandbox_unavailable"

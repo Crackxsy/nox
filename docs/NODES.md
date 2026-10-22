@@ -8,8 +8,9 @@ only the things you allowed there.
 
 > Status: wave C is being built. This release has pairing, the connection, the device's own
 > allow-list and audit trail, `system.info` (read system values), `notify.show` (show a notice)
-> and the hands: `file.list/read/write` in folders you allow, `shell.run` and
-> `package.install/remove` in the device's own sandbox. The screen and the rest follow.
+> and the hands: `file.list/read/write` in folders you allow and `shell.run` in the device's own
+> sandbox. Installing programs (`package.*`) is not yet available on nodes. The screen and the
+> rest follow.
 
 ## Pairing a node
 
@@ -74,19 +75,27 @@ allowed that on the device: `nox node allow trust_core_for_high`. The node also 
 its own budget: 60 actions and 5 high-risk ones per hour (`max_calls_per_hour`,
 `max_high_per_hour` in `node.yaml`).
 
-## Files, commands and programs on a node
+## Files and commands on a node
 
 - **Files** (`files`): Nox opens only paths inside the folders you allowed with `--folder` (none
-  by default), and decides that on the real file at the moment it opens it - a link or junction
-  that leads elsewhere, `..`, `~`, a short name like `PROGRA~1`, a network path
-  (`\\server\share`) or a device path is refused, and so is anything in the node's own folder
-  or the keyring. A write never replaces a file unless asked and never creates folders.
-- **Commands** (`shell`) and **programs** (`packages`) run only in this device's own sandbox
-  (AppContainer on Windows, bubblewrap on Linux), which cannot see the node's folder. Without
-  such a sandbox - macOS for now, Linux without `bwrap` - they are refused, never run without
-  one. Both are high risk: asked on this device, or on Nox for a node without a screen.
-  Installing programs inside the sandbox fails on most systems today (a package manager needs
-  rights the sandbox does not give); the request is still checked and refused honestly.
+  by default; never a whole drive, your home folder, a system or app-data folder, or a folder
+  with keys or passwords), and decides that on the real file at the moment it opens it - a link
+  or junction that leads elsewhere, `..`, `~`, a short name like `PROGRA~1`, a network path
+  (`\\server\share`) or a device path is refused, and so is anything in the node's own folder,
+  the keyring, `~/.ssh` and similar key stores, and browser profiles.
+- **Writing** never creates something that could start a program outside the sandbox: nothing
+  in a `.git` folder, a startup or autostart folder, no shell start file (`.bashrc`, `.profile`,
+  ...), no script or program (`.ps1`, `.cmd`, `.sh`, `.exe`, `.lnk`, `.desktop`, ...), never an
+  executable file or one with a second name (hard link). A new file is medium risk (asked on
+  Nox); **replacing or appending is high risk** and is asked on this device every time, showing
+  the file, the mode, the size and how the text starts. A write is never remembered.
+- **Commands** (`shell`) run only in this device's own sandbox (AppContainer on Windows,
+  bubblewrap on Linux), which cannot see the node's folder - on Linux the node refuses commands
+  when its folder lies under a system folder the sandbox shows. Without such a sandbox - macOS
+  for now, Linux without `bwrap` - commands are refused, never run without one. High risk: asked
+  on this device, or on Nox for a node without a screen.
+- **Programs** (`packages`): not yet available on nodes - a package manager needs rights the
+  sandbox does not give.
 
 ## Stopping
 
