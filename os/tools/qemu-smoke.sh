@@ -121,6 +121,18 @@ s.sendall(b"status"); s.shutdown(socket.SHUT_WR); print(s.makefile().readline().
     sleep 5
     tries=$((tries + 1))
   done
+  # The helper's own peer check against the real core: its pidfd, cgroup and start time pass;
+  # another process of the same user does not.
+  verdict="$(python3 -I -S -c 'import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("nox_os_helper", "/usr/local/lib/nox-os/nox_os_helper.py")
+h = importlib.util.module_from_spec(spec); sys.modules[spec.name] = h; spec.loader.exec_module(h)
+s = h.System(); main = int(sys.argv[1]); uid = s.uid_of("nox")
+core = h.peer_allowed(h.Peer(main, uid, os.pidfd_open(main)), s)
+fallback = h.peer_allowed(h.Peer(main, uid, None), s)
+other = h.peer_allowed(h.Peer(os.getpid(), uid, os.pidfd_open(os.getpid())), s)
+print(f"core={core} fallback={fallback} other={other}")' "$main" 2>&1)"
+  [ "$verdict" = "core=True fallback=True other=False" ] || finish "NOX-SMOKE-FAIL: peer check: $verdict"
+  say "NOX-SMOKE: helper peer check on the real core: $verdict"
   # ... keys stored root-owned, answered with their fingerprints; on only with exactly those.
   rm -f /run/nox-smoke-key /run/nox-smoke-key.pub
   ssh-keygen -q -t ed25519 -N '' -C smoke -f /run/nox-smoke-key
