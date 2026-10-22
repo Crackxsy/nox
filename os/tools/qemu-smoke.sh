@@ -36,25 +36,33 @@ mkdir "$work/root"
 mount "${loop}p2" "$work/root"
 cat > "$work/root/usr/local/sbin/nox-smoke" <<'SMOKE'
 #!/bin/sh
-# CI only (os/tools/qemu-smoke.sh) - never part of a published image.
+# CI only (os/tools/qemu-smoke.sh) - never part of a published image. Every line also goes to the
+# kernel log, which reaches the serial port whatever the console setup.
+say() { echo "$*"; echo "$*" > /dev/kmsg 2>/dev/null || true; }
+dump() { "$@" 2>&1 | while IFS= read -r line; do say "nox-smoke: $line"; done; }
+say "NOX-SMOKE: started, waiting for nox.service"
 waited=0
 while [ "$waited" -lt 2100 ]; do
   if systemctl is-active --quiet nox.service && curl -fsS -o /dev/null http://127.0.0.1:47801/health; then
-    echo "NOX-SMOKE: nox.service active and /health answers after ${waited}s"
-    if systemctl is-active --quiet ssh.service; then echo "NOX-SMOKE-FAIL: ssh.service is running"; exit 1; fi
-    echo "NOX-SMOKE: ssh.service $(systemctl is-enabled ssh.service 2>/dev/null || true)"
-    if ! ls /etc/ssh/ssh_host_ed25519_key >/dev/null 2>&1; then echo "NOX-SMOKE-FAIL: no SSH host keys made"; exit 1; fi
-    echo "NOX-SMOKE: host key $(ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub | cut -d' ' -f2)"
-    if grep -qx uninitialized /etc/machine-id; then echo "NOX-SMOKE-FAIL: machine-id not made"; exit 1; fi
-    echo "NOX-SMOKE-OK $(. /etc/nox-os-release && echo "$NOX_OS_VERSION")"
+    say "NOX-SMOKE: nox.service active and /health answers after ${waited}s"
+    if systemctl is-active --quiet ssh.service; then say "NOX-SMOKE-FAIL: ssh.service is running"; exit 1; fi
+    say "NOX-SMOKE: ssh.service $(systemctl is-enabled ssh.service 2>/dev/null || true)"
+    if ! ls /etc/ssh/ssh_host_ed25519_key >/dev/null 2>&1; then say "NOX-SMOKE-FAIL: no SSH host keys made"; exit 1; fi
+    say "NOX-SMOKE: host key $(ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub | cut -d' ' -f2)"
+    if grep -qx uninitialized /etc/machine-id; then say "NOX-SMOKE-FAIL: machine-id not made"; exit 1; fi
+    say "NOX-SMOKE-OK $(. /etc/nox-os-release && echo "$NOX_OS_VERSION")"
     exit 0
+  fi
+  if [ $((waited % 120)) -eq 0 ]; then
+    say "NOX-SMOKE: ${waited}s, nox.service $(systemctl is-active nox.service 2>/dev/null)"
   fi
   sleep 10
   waited=$((waited + 10))
 done
-echo "NOX-SMOKE-FAIL: nox did not answer in ${waited}s"
-systemctl status nox.service --no-pager -l || true
-journalctl -u nox.service -n 80 --no-pager || true
+say "NOX-SMOKE-FAIL: nox did not answer in ${waited}s"
+dump systemctl status nox.service --no-pager -l
+dump journalctl -u nox.service -n 80 --no-pager
+dump systemctl --failed --no-pager
 exit 1
 SMOKE
 chmod 0755 "$work/root/usr/local/sbin/nox-smoke"
@@ -94,6 +102,8 @@ cmdline="earlycon=pl011,0x3f201000 console=ttyAMA0,115200 root=/dev/mmcblk0p2 ro
 cmdline="$cmdline rootwait rw dwc_otg.lpm_enable=0 systemd.show_status=1"
 cmdline="$cmdline systemd.mask=rpi-resize.service systemd.watchdog_sec=off"
 cmdline="$cmdline modprobe.blacklist=bcm2835_wdt initcall_blacklist=bcm2835_wdt_driver_init"
+# The boot's own log on the serial port too, so a failure can be read from the CI log.
+cmdline="$cmdline printk.devkmsg=on audit=0 systemd.journald.forward_to_kmsg=1"
 qemu-system-aarch64 -machine raspi3b -m 1G -smp 4 \
   -kernel "$bootfiles/kernel8.img" -dtb "$bootfiles/bcm2710-rpi-3-b-plus.dtb" \
   -drive "file=$copy,if=sd,format=raw" -append "$cmdline" \
@@ -116,9 +126,13 @@ qemu_pid=""
 
 echo "---- QEMU (exit status $qemu_status) ----"
 cat "$work/qemu.out" 2>/dev/null || true
-tail -n 30 "$qemu_log" 2>/dev/null || true
-echo "---- serial console (last 200 lines) ----"
-tail -n 200 "$log" | tr -d '\r' || true
+grep -v '^SD: Unknown CMD' "$qemu_log" 2>/dev/null | tail -n 10 || true
+# NOX_SMOKE_LOG=<file>: keep the whole serial log (CI uploads it when the boot fails).
+[ -z "${NOX_SMOKE_LOG:-}" ] || cp "$log" "$NOX_SMOKE_LOG"
+echo "---- serial console: nox, failures (first 150) ----"
+grep -aiE 'nox|fail|panic|oom|timed out' "$log" | grep -av 'NOX-SMOKE' | tr -d '\r' | head -n 150 || true
+echo "---- serial console (last 150 lines) ----"
+tail -n 150 "$log" | tr -d '\r' || true
 echo "---- markers ----"
 grep -a 'NOX-SMOKE' "$log" | tr -d '\r' || true
 if [ "$result" -ne 0 ]; then
