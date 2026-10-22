@@ -305,12 +305,16 @@ var
   Refusal: String;
 begin
   Result := True;
+  { Silent installs never see a page: a refusal there ends Setup in PrepareToInstall (exit code
+    7, written to the log), never as a dialog nobody can answer. }
+  if WizardSilent() then
+    Exit;
   if (ModePage <> nil) and (CurPageID = ModePage.ID) and IsNodeMode() then
   begin
     Refusal := NodeModeRefusal();
     if Refusal <> '' then
     begin
-      MsgBox(Refusal, mbError, MB_OK);
+      SuppressibleMsgBox(Refusal, mbError, MB_OK, IDOK);
       Result := False;
       Exit;
     end;
@@ -318,7 +322,7 @@ begin
   if (PairPage <> nil) and (CurPageID = PairPage.ID) and (Trim(PairPage.Values[0]) <> '') and
       not ValidPairLink(Trim(PairPage.Values[0])) then
   begin
-    MsgBox(CustomMessage('PairInvalid'), mbError, MB_OK);
+    SuppressibleMsgBox(CustomMessage('PairInvalid'), mbError, MB_OK, IDOK);
     Result := False;
   end;
 end;
@@ -333,7 +337,10 @@ begin
   begin
     Result := NodeModeRefusal();
     if Result <> '' then
+    begin
+      Log('Node mode refused: ' + Result);
       Exit;
+    end;
   end;
   ExecAsOriginalUser(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "Nox Node"', '', SW_HIDE,
     ewWaitUntilTerminated, ErrorCode);
