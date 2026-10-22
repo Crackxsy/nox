@@ -174,6 +174,30 @@ def host_of(address: str) -> str:
     return str(mapped or ip)
 
 
+#: Addresses a node may report about itself, at most (`NodeHello.addresses`).
+MAX_REPORTED_ADDRESSES = 16
+_PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",
+        "fe80::/10",
+        "fc00::/7",
+    )
+)
+
+
+def private_address(host: str) -> bool:
+    """RFC 1918, link-local or a unique-local IPv6 address - where a home's PCs are."""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(ip.version == net.version and ip in net for net in _PRIVATE_NETWORKS)
+
+
 def read_report(raw: Any) -> SessionReport | None:
     """A node's report, or None when it cannot be read (then nothing changes: fail closed)."""
     if isinstance(raw, SessionReport):
@@ -222,7 +246,8 @@ class NodeControl:
         reports: Reports = tuple,
         labels: Callable[[str], str] = lambda device_id: device_id[:8],
         linked: Callable[[str], str | None] = lambda _device_id: None,
-        addresses: Callable[[], Mapping[str, Iterable[str]]] = dict,
+        addresses: Callable[[], Mapping[str, tuple[str, Iterable[str]]]] = dict,
+        device_peers: Callable[[], Iterable[str]] = tuple,
         stop_hotkey: str = "ctrl+alt+shift+k",
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -233,8 +258,9 @@ class NodeControl:
         self._labels = labels
         self._linked = linked
         self._addresses = addresses
-        #: Where each node is on the network (its peer address here and what its hello said):
-        #: kept from the last connection, so a node that went silent is still recognised.
+        self._device_peers = device_peers
+        #: Where each connected node is on the network: its connection's address as this core
+        #: sees it, and - only as a second signal - private addresses its hello reported.
         self.node_addresses: dict[str, set[str]] = {}
         self._stop = stop_hotkey
         self._clock = clock
@@ -305,10 +331,22 @@ class NodeControl:
         """Read the latest hello/pong reports and addresses of connected nodes."""
         for device_id, raw in self._reports():
             self.observe(device_id, raw)
-        for device_id, found in self._addresses().items():
-            hosts = {h for h in (host_of(a) for a in found) if h}
+        nodes = {d: (host_of(peer), list(said)) for d, (peer, said) in self._addresses().items()}
+        devices = {h for h in (host_of(p) for p in self._device_peers()) if h}
+        found: dict[str, set[str]] = {}
+        for device_id, (observed, reported) in nodes.items():
+            hosts = {observed} if observed else set()
+            # What a node says about itself counts only as a private address that no other
+            # device or node is seen connecting from: a node cannot lock the owner's phone out.
+            others = devices | {o for d, (o, _r) in nodes.items() if d != device_id and o}
+            for raw in reported[:MAX_REPORTED_ADDRESSES]:
+                host = host_of(raw)
+                if host and private_address(host) and host not in others:
+                    hosts.add(host)
             if hosts:
-                self.node_addresses[device_id] = hosts
+                found[device_id] = hosts
+        # Only connected nodes: a node's addresses end with its connection.
+        self.node_addresses = found
 
     def from_controlled(self, peer: str) -> bool:
         """Whether a client connecting from `peer` sits on a PC the lock holds for: the same

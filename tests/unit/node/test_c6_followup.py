@@ -229,7 +229,7 @@ async def test_a_browser_on_the_controlled_pc_counts_as_linked_by_its_address(
     from nox.ipc.protocol import Kind
 
     core, control, ran = _registry(monkeypatch)
-    control._addresses = lambda: {LAPTOP: ["192.0.2.10", "fe80::1%eth0"]}  # type: ignore[assignment]
+    control._addresses = lambda: {LAPTOP: ("192.0.2.10", ["fe80::1%eth0"])}  # type: ignore[assignment]
     control.pull()
     # An unlinked phone ... on the controlled PC's address: like the linked browser.
     for peer in ("192.0.2.10", "::ffff:192.0.2.10", "[fe80::1]"):
@@ -290,3 +290,55 @@ def test_addresses_are_compared_in_one_spelling() -> None:
     assert host_of("::ffff:192.0.2.10") == "192.0.2.10"
     assert host_of("") == ""
     assert all("%" not in a for a in local_addresses())
+
+
+def _addressed(reported: list[str], *, devices: tuple[str, ...] = ()) -> NodeControl:
+    control = NodeControl(
+        None,
+        lambda _n: None,
+        addresses=lambda: {LAPTOP: ("192.168.1.20", reported)},
+        device_peers=lambda: devices,
+    )
+    control.observe(LAPTOP, _report(2, True))
+    control.pull()
+    return control
+
+
+def test_the_nodes_own_connection_address_is_the_primary_signal() -> None:
+    control = _addressed([])
+    assert control.from_controlled("192.168.1.20")
+
+
+def test_a_node_cannot_claim_a_public_address() -> None:
+    control = _addressed(["198.51.100.7", "2001:db8::7", "192.168.1.21", "fd00::21"])
+    assert not control.from_controlled("198.51.100.7")  # public: ignored
+    assert not control.from_controlled("2001:db8::7")
+    assert control.from_controlled("192.168.1.21") and control.from_controlled("fd00::21")
+
+
+def test_a_node_cannot_claim_where_another_device_is_seen() -> None:
+    """A compromised node reporting the owner's phone address locks nothing out."""
+    control = _addressed(["192.168.1.50"], devices=("192.168.1.50",))
+    assert not control.from_controlled("192.168.1.50")
+    assert control.from_controlled("192.168.1.20")
+
+
+def test_the_addresses_end_with_the_nodes_connection() -> None:
+    connected = {"value": True}
+    control = NodeControl(
+        None,
+        lambda _n: None,
+        addresses=lambda: {LAPTOP: ("192.168.1.20", [])} if connected["value"] else {},
+    )
+    control.observe(LAPTOP, _report(2, True))
+    control.pull()
+    assert control.from_controlled("192.168.1.20")
+    connected["value"] = False
+    control.pull()
+    assert control.node_addresses == {} and not control.from_controlled("192.168.1.20")
+
+
+def test_at_most_sixteen_reported_addresses_count() -> None:
+    reported = [f"10.0.0.{i}" for i in range(1, 30)]
+    control = _addressed(reported)
+    assert control.from_controlled("10.0.0.16") and not control.from_controlled("10.0.0.17")

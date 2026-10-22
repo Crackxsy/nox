@@ -522,6 +522,10 @@ class IpcHub:
     def clients(self) -> list[ClientInfo]:
         return [c.info() for c in self._clients.values()]
 
+    def lan_peers(self) -> set[str]:
+        """The addresses paired devices connect from right now (through the network listener)."""
+        return {c.peer for c in self._clients.values() if c.via_lan and c.peer and not c.closing}
+
     def find_client(self, client_id: str) -> ClientInfo | None:
         c = self._find(client_id)
         return c.info() if c else None
