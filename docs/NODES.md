@@ -118,9 +118,9 @@ its own budget: 60 actions and 5 high-risk ones per hour (`max_calls_per_hour`,
   `.md` file is refused when it contains anything a note app could run - the words
   `dataviewjs`, `js-engine`, `templater` or `meta-bind-js`, Templater `<%`, inline `` `$= ``,
   `<script`, `javascript:` - wherever it stands. So Nox cannot write a note that merely mentions
-  these plugin keywords. Nox writes only notes whose code blocks use common languages (Python,
-  JavaScript, shell, JSON, Mermaid, ...) or none - a block for a plugin (`dataview`, `jsx`,
-  ...) is refused. An append is judged together with what the file already holds.
+  these plugin keywords. Nox writes only notes whose code blocks use common programming languages
+  (Python, JavaScript, shell, JSON, ...) or none - a block for a plugin (`dataview`, `jsx`, ...)
+  or one the app draws (`mermaid`, `math`, `html`) is refused. An append is judged together with what the file already holds.
 - **Your notes vault:** `nox node allow files --folder` refuses a folder that is (or lies in) a
   repository or an app workspace. Allow a plain folder outside it - for example `Nox` next to
   the vault - and move what Nox wrote into the vault yourself.

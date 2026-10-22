@@ -322,9 +322,10 @@ _HANDLER = re.compile(r"<[a-z][^>]*\bon\w+\s*=", re.S)
 #: Every run of three or more backticks or tildes and the info word after it (spaces, an
 #: optional `{` and `.` skipped) - wherever it stands, no Markdown parsing.
 _FENCE_INFO = re.compile(r"(`{3,}|~{3,})[ \t]*\{?[ \t]*\.?([^\s`~}]*)")
-#: Code-block languages no note app runs: a fence may name only these (or nothing). Any other
-#: name could be a plugin's runnable block (Dataview JS, JS Engine, Templater, Datacore, ...),
-#: and the list of those can never be complete.
+#: Code-block languages a note app only shows as highlighted code: a fence may name only these
+#: (or nothing). Any other name could be a plugin's runnable block (Dataview JS, JS Engine,
+#: Templater, Datacore, ...) or a language the app renders (Mermaid with click directives and
+#: HTML labels, math, HTML, XML, CSS) - and the list of those can never be complete.
 INERT_FENCE_LANGUAGES = frozenset(
     {
         "text",
@@ -345,9 +346,6 @@ INERT_FENCE_LANGUAGES = frozenset(
         "yml",
         "toml",
         "ini",
-        "xml",
-        "html",
-        "css",
         "js",
         "javascript",
         "ts",
@@ -366,10 +364,6 @@ INERT_FENCE_LANGUAGES = frozenset(
         "ruby",
         "diff",
         "csv",
-        "mermaid",
-        "math",
-        "latex",
-        "tex",
     }
 )
 

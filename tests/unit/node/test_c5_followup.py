@@ -263,7 +263,6 @@ async def test_every_markdown_spelling_of_runnable_code_is_refused(
     [
         "```python\nprint('hallo')\n```\n",
         "~~~js\nconst x = 1\n~~~\n",
-        "```mermaid\ngraph TD; A-->B\n```\n",
         "```\nkein Name\n```\n",
         "Ein `inline code` und ein Preis von 5 $.",
     ],
@@ -324,6 +323,12 @@ def test_the_markdown_check_is_position_independent() -> None:
         "- ~~~eigenesplugin\n  x\n  ~~~\n",
         "Text ````  {.irgendwas} mehr",
         "```python:titel\nx\n```\n",
+        '```mermaid\ngraph TD; A-->B\nclick A call alert("x")\n```\n',
+        "```html\n<b>x</b>\n```\n",
+        "```math\nx^2\n```\n",
+        "```latex\nx\n```\n",
+        "```xml\n<a/>\n```\n",
+        "```css\nbody{}\n```\n",
     ],
 )
 async def test_a_code_block_in_an_unknown_language_is_refused(
@@ -337,7 +342,6 @@ async def test_a_code_block_in_an_unknown_language_is_refused(
     [
         "```python\nx = 1\n```\n",
         "~~~js\nlet a = 1\n~~~\n",
-        "```mermaid\ngraph TD; A-->B\n```\n",
         "```\nohne Sprache\n```\n",
         "> ```bash\n> ls\n> ```\n",
         "```{.python}\nx\n```\n",
