@@ -790,23 +790,36 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   secret stores (`secret_locations`: OS keyrings and credential vaults, DPAPI, `~/.ssh`,
   `~/.gnupg`, cloud CLIs, `.netrc`, `.pgpass`, `.git-credentials`, browser profiles), never a hard
   link to a file in them, never a FIFO, socket or device.
-- **Writes are an allowlist** (`safe_fs.write_refusal`), checked on the text and again on the
-  final path relative to the allowed folder: no path component starting with `.` (no hidden file
-  or folder - `.git`, `.vscode`, `.gitconfig`, shell rc files), only data extensions
-  (`WRITABLE_EXTENSIONS`: text, tables, JSON/YAML/XML, HTML, PDF, images, audio/video, office,
-  calendar/contact/subtitle files; no SVG, archives, INI or files without an extension), no
-  configuration file tools act on (`settings/tasks/launch/package/tsconfig/composer.json`,
-  `appsettings*.json`, compose files, anything in a `workflows` folder). The execution-trigger
-  denylist (startup/autostart folders, systemd user units, LaunchAgents, PowerShell profiles,
-  script/program extensions) stays as a second layer. No write to a file with the executable bit
-  or a second hard link; new files are `0600`. A new file is `CREATE_NEW`/`O_EXCL` and is removed
-  again (through its handle, or by name in the checked directory) if it landed wrong; an existing
-  one is truncated only after the check. Replacing or appending is **high** risk on both sides
-  (the node refuses a receipt that says less); a write on a node is never remembered
-  (`CallScope.rememberable`). The core's target and the device's dialog show path, mode, bytes,
-  lines, a short SHA-256 and the content - in full up to 400 characters, otherwise the first and
-  last 200 with "content shortened - N characters not shown"; a cut is never presented as the
-  whole. A started write completes; a stop ends everything after it.
+- **Writes are an allowlist in two tiers** (`safe_fs.write_refusal`), checked on the text and
+  again on the final path relative to the allowed folder. PASSIVE (`.txt .md .csv .tsv .log`,
+  images, audio/video, `.ics .vcf .srt`): a new file is medium. STRUCTURED (`.json .yaml .yml
+  .xml .html .htm .pdf .odt .ods .docx .xlsx .pptx`): every write is high (device dialog,
+  headless rules, never remembered), and `content_refusal` refuses the text even when confirmed
+  if it carries `mso-application`, `editdata.mso`, `w:binData`, `<script`, `javascript:`, an
+  `on...=` handler or `<!ENTITY`/`<!DOCTYPE ... SYSTEM` in markup, or `/JavaScript`, `/JS`,
+  `/OpenAction`, `/Launch`, `/AA`, `/EmbeddedFile` in a PDF (case-insensitive, after NFKC).
+  Everywhere: no path component starting with `.`, no write at or below a folder holding `.git`,
+  `.hg` or `.svn` up to the allowed folder (checked on each walked directory handle on POSIX and
+  on the final path), no file without an allowed extension, and a config-name layer
+  (`settings/tasks/launch/launchSettings/keybindings/package/project/tsconfig/jsconfig/composer/
+  deno/flows.json`, `appsettings*.json`, `pom.xml`, `build.xml`, `*compose*`, `lefthook*`,
+  `*pipelines*` YAML, `Taskfile`, `configuration.yaml`, `automations.yaml`, `workflows/`). The
+  execution-trigger denylist stays as a further layer. No write to a file with the executable bit
+  or a second hard link; new files are `0600`; a path with leading or trailing spaces is refused,
+  never trimmed. A new file is `CREATE_NEW`/`O_EXCL` and is removed again (through its handle, or
+  by name in the checked directory) if it landed wrong; an existing one is truncated only after
+  the check. The core's target and the device's dialog show path, mode, bytes, lines, a short
+  SHA-256 and the content - in full up to 400 characters, otherwise the first and last 200 with
+  "content shortened - N characters not shown". A started write completes; a stop ends
+  everything after it. Accepted residual risk for PASSIVE formats: a `.csv` formula runs only
+  after the spreadsheet's own prompt and a user action; images and text run nothing.
+- **Profile rules and nodes**: a profile rule that ALLOWS applies to a call on a node only when it
+  names the device (`device:` glob on `ProfileRule`); rules that confirm or deny apply everywhere.
+  A broad `tool: file*, decision: allow` therefore never lets Nox write on another PC unasked.
+- Node file tools also never open Nox's own folder (`nox_home()`), in case a core runs on the same
+  device. The protected places' identities (for the hard-link check) are cached for 30 s, and the
+  known secret files of big stores (browser `Login Data`, `Cookies`, `Local State`, `key4.db`,
+  `logins.json`, keys) are looked at before the bounded walk.
 - **One renderer** (`protocol.render`) for the core's permission target and the device's dialog:
   JSON-quoted per value and per argv token, every character outside printable ASCII and Latin-1
   letters escaped (look-alikes, bidi, zero-width), runs of spaces counted. A target over 1000

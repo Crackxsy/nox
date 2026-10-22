@@ -85,17 +85,25 @@ an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trus
   (Junction) woandershin, `..`, `~`, ein Kurzname wie `PROGRA~1`, ein Netzwerkpfad
   (`\\server\freigabe`) oder ein Gerätepfad wird abgelehnt, ebenso alles im Node-Ordner, im
   Schlüsselbund, in `~/.ssh` und ähnlichen Schlüsselablagen und in Browser-Profilen.
-- **Schreiben** legt nur einfache Datendateien an: `.txt .md .csv .tsv .log .json .yaml .yml .xml
-  .html .htm .pdf`, Bilder (`.png .jpg .jpeg .gif .webp`), Audio und Video (`.mp3 .wav .ogg .flac
-  .mp4 .webm .mkv`), Office-Dateien (`.odt .ods .docx .xlsx .pptx`) und `.ics .vcf .srt`. Nie eine
-  versteckte Datei oder etwas in einem versteckten Ordner (`.git`, `.vscode`, `.bashrc`, ...), nie
-  eine Datei ohne Endung, ein Skript, ein Programm oder eine Konfigurationsdatei, nach der Werkzeuge
-  handeln (`settings.json`, `tasks.json`, `package.json`, `docker-compose.yml`, alles in
-  `workflows`), nie eine ausführbare Datei oder eine mit zweitem Namen (Hardlink). Eine neue Datei
-  ist mittleres Risiko (Frage an Nox); **Ersetzen oder Anhängen ist hohes Risiko** und wird jedes
-  Mal an diesem Gerät gefragt. Die Frage zeigt Datei, Art, Größe, Zeilenzahl und einen SHA-256 und
-  den Inhalt - ganz, wenn er kurz ist, sonst die ersten und letzten 200 Zeichen mit „content
-  shortened - N characters not shown“. Schreiben wird nie gemerkt.
+- **Schreiben** legt nur Datendateien an, in zwei Stufen. *Einfache Daten* - `.txt .md .csv
+  .tsv .log`, Bilder (`.png .jpg .jpeg .gif .webp`), Audio und Video (`.mp3 .wav .ogg .flac .mp4
+  .webm .mkv`) und `.ics .vcf .srt`: eine neue Datei ist mittleres Risiko (Frage an Nox).
+  *Strukturierte Formate* - `.json .yaml .yml .xml .html .htm .pdf .odt .ods .docx .xlsx .pptx`,
+  die ein Programm auswertet: jedes Schreiben ist hohes Risiko, gefragt an diesem Gerät, und der
+  Text wird ganz abgelehnt, wenn er aktiven Inhalt trägt (einen Office-Makro-Container, ein
+  Skript, einen Event-Handler oder eine externe Entity in Markup, eine Aktion in einem PDF).
+  Ersetzen oder Anhängen ist immer hohes Risiko. Nie eine versteckte Datei oder etwas in einem
+  versteckten Ordner (`.git`, `.vscode`, `.bashrc`, ...), nie etwas in einem Repository (ein
+  Ordner mit `.git`, `.hg` oder `.svn`, bis hinauf zum erlaubten Ordner), nie eine Datei ohne
+  Endung, ein Skript, ein Programm oder eine Konfigurationsdatei, nach der Werkzeuge handeln
+  (`settings.json`, `package.json`, Compose- und Pipeline-Dateien, `configuration.yaml`, alles in
+  `workflows`, ...), nie eine ausführbare Datei oder eine mit zweitem Namen (Hardlink). Die Frage
+  zeigt Datei, Art, Größe, Zeilenzahl und einen SHA-256 und den Inhalt - ganz, wenn er kurz ist,
+  sonst die ersten und letzten 200 Zeichen mit „content shortened - N characters not shown“.
+  Schreiben wird nie gemerkt, und eine Profilregel, die Schreiben an Nox erlaubt, erlaubt es auf
+  einem Node nur, wenn sie das Gerät nennt (`device:`).
+- **Hingenommen bei einfachen Daten:** Eine `.csv` kann eine Tabellenformel enthalten, die Excel
+  erst nach eigener Warnung und deinem Klick ausführt; ein Bild oder eine Textdatei führt nichts aus.
 - **Befehle** (`shell`) laufen nur in der eigenen Sandbox des Geräts (AppContainer unter Windows,
   bubblewrap unter Linux), die den Node-Ordner nicht sieht - unter Linux lehnt der Node Befehle
   ab, wenn sein Ordner unter einem Systemordner liegt, den die Sandbox zeigt. Ohne eine solche

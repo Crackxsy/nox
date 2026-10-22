@@ -275,7 +275,8 @@ def _write_target(payload: dict[str, Any]) -> str:
 
 
 def _write_risk(payload: dict[str, Any]) -> Risk:
-    return Risk(write_risk(bool(payload.get("append")), bool(payload.get("overwrite"))))
+    path = str(payload.get("path") or "")
+    return Risk(write_risk(path, bool(payload.get("append")), bool(payload.get("overwrite"))))
 
 
 def _field(name: str) -> Callable[[dict[str, Any]], str]:

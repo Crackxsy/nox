@@ -37,11 +37,14 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import fnmatch
 import functools
 import os
 import re
 import stat
 import sys
+import time
+import unicodedata
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,7 +60,9 @@ __all__ = [
     "list_folder",
     "open_existing",
     "open_new",
+    "content_refusal",
     "secret_locations",
+    "structured",
     "write_refusal",
 ]
 
@@ -151,23 +156,19 @@ _TRIGGER_EXTENSIONS = frozenset(
 )
 
 
-#: What a node may write at all: plain data, by extension (case-insensitive). Anything else -
-#: no extension, a script, a config format a tool reads and acts on - is refused. An allowlist,
-#: because a list of dangerous names can never be complete (`~/.gitconfig` hooks, editor tasks).
-WRITABLE_EXTENSIONS = frozenset(
+#: What a node may write at all, in two tiers (case-insensitive). PASSIVE: data nothing acts on
+#: when it is opened - a new file is medium risk. STRUCTURED: formats an application interprets
+#: (a document can carry a macro, a page a script) - every write is high risk, asked on the
+#: device and never remembered, and its text must pass `content_refusal`. Anything else - no
+#: extension, a script, a config format - is refused. An allowlist, because a list of dangerous
+#: names can never be complete.
+PASSIVE_EXTENSIONS = frozenset(
     {
         ".txt",
         ".md",
         ".csv",
         ".tsv",
         ".log",
-        ".json",
-        ".yaml",
-        ".yml",
-        ".xml",
-        ".html",
-        ".htm",
-        ".pdf",
         ".png",
         ".jpg",
         ".jpeg",
@@ -180,34 +181,65 @@ WRITABLE_EXTENSIONS = frozenset(
         ".mp4",
         ".webm",
         ".mkv",
-        ".odt",
-        ".ods",
-        ".docx",
-        ".xlsx",
-        ".pptx",
         ".ics",
         ".vcf",
         ".srt",
     }
 )
-#: Data formats that tools read as their configuration (editor tasks, package scripts, compose
-#: files): refused by name even with an allowed extension, and anything in a `workflows` folder.
-_CONFIG_NAMES = frozenset(
+STRUCTURED_EXTENSIONS = frozenset(
     {
-        "settings.json",
-        "tasks.json",
-        "launch.json",
-        "package.json",
-        "package-lock.json",
-        "tsconfig.json",
-        "jsconfig.json",
-        "composer.json",
-        "docker-compose.yml",
-        "docker-compose.yaml",
-        "compose.yml",
-        "compose.yaml",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".xml",
+        ".html",
+        ".htm",
+        ".pdf",
+        ".odt",
+        ".ods",
+        ".docx",
+        ".xlsx",
+        ".pptx",
     }
 )
+WRITABLE_EXTENSIONS = PASSIVE_EXTENSIONS | STRUCTURED_EXTENSIONS
+#: Files tools read as their configuration: refused by name or pattern even with an allowed
+#: extension (an extra layer - the tiers and the working-tree rule are the boundary).
+_CONFIG_PATTERNS = (
+    "settings.json",
+    "tasks.json",
+    "launch.json",
+    "launchsettings.json",
+    "keybindings.json",
+    "package.json",
+    "package-lock.json",
+    "project.json",
+    "tsconfig.json",
+    "jsconfig.json",
+    "composer.json",
+    "deno.json",
+    "flows.json",
+    "appsettings*.json",
+    "pom.xml",
+    "build.xml",
+    "*compose*.yml",
+    "*compose*.yaml",
+    "lefthook*.yml",
+    "lefthook*.yaml",
+    "*pipelines*.yml",
+    "*pipelines*.yaml",
+    "taskfile.yml",
+    "taskfile.yaml",
+    "configuration.yaml",
+    "automations.yaml",
+)
+#: A folder holding one of these is a working tree: nothing at or below it is written.
+WORKING_TREE_MARKERS = (".git", ".hg", ".svn")
+
+
+def extension_of(name: str) -> str:
+    folded = name.casefold()
+    return folded[folded.rindex(".") :] if "." in folded else ""
 
 
 def write_refusal(parts: list[str]) -> str | None:
@@ -221,12 +253,43 @@ def write_refusal(parts: list[str]) -> str | None:
         return "hidden_refused"
     folded = [p.casefold() for p in names]
     name = folded[-1]
-    if "." not in name or name[name.rindex(".") :] not in WRITABLE_EXTENSIONS:
+    if extension_of(name) not in WRITABLE_EXTENSIONS:
         return "extension_refused"
-    if name in _CONFIG_NAMES or (name.startswith("appsettings") and name.endswith(".json")):
+    if any(fnmatch.fnmatchcase(name, pattern) for pattern in _CONFIG_PATTERNS):
         return "config_refused"
     if "workflows" in folded[:-1]:
         return "config_refused"
+    return None
+
+
+def structured(path: str) -> bool:
+    """Whether a write to `path` is in the STRUCTURED tier (always high risk)."""
+    return extension_of(re.split(r"[\\/]", path)[-1]) in STRUCTURED_EXTENSIONS
+
+
+_ACTIVE_ALWAYS = ("mso-application", "editdata.mso", "w:bindata", "<script", "javascript:")
+_MARKUP = frozenset({".xml", ".html", ".htm"})
+_EVENT_HANDLER = re.compile(r"\bon[a-z]+\s*=")
+_EXTERNAL_ENTITY = re.compile(r"<!(entity|doctype)[^>]*\bsystem\b", re.S)
+_PDF_ACTIONS = ("/javascript", "/js", "/openaction", "/launch", "/embeddedfile", "/aa")
+
+
+def content_refusal(path: str, text: str) -> str | None:
+    """Why the text of a STRUCTURED write is refused even with a confirmation: an Office macro
+    container, a script, an event handler or an external entity in markup, an action in a PDF.
+    Compared case-insensitively on the text as it will be written."""
+    ext = extension_of(re.split(r"[\\/]", path)[-1])
+    if ext not in STRUCTURED_EXTENSIONS:
+        return None
+    body = unicodedata.normalize("NFKC", text).casefold()
+    if any(marker in body for marker in _ACTIVE_ALWAYS):
+        return "content_refused"
+    if ext in _MARKUP and (_EVENT_HANDLER.search(body) or "<!entity" in body):
+        return "content_refused"
+    if ext in _MARKUP and _EXTERNAL_ENTITY.search(body):
+        return "content_refused"
+    if ext == ".pdf" and any(action in body for action in _PDF_ACTIONS):
+        return "content_refused"
     return None
 
 
@@ -381,19 +444,7 @@ class Folders:
 
     @classmethod
     def build(cls, roots: Iterable[str], protected: Iterable[Path]) -> Folders:
-        guarded: list[str] = []
-        ids: set[tuple[int, int]] = set()
-        for place in protected:
-            try:
-                real = _plain(os.path.realpath(place))
-                info = os.stat(real)
-            except (OSError, ValueError):
-                guarded.append(os.path.abspath(place))  # not there yet: still never inside it
-                continue
-            guarded.append(real)
-            ids.add((info.st_dev, info.st_ino))
-            if stat.S_ISDIR(info.st_mode):
-                ids |= _identities(Path(real))
+        guarded, ids = _protected(tuple(str(place) for place in protected))
         allowed: list[_Root] = []
         for entry in roots:
             text = str(entry).strip()
@@ -409,7 +460,7 @@ class Folders:
             if broad_folder(real):
                 continue  # never a whole drive, the home folder or a system folder
             allowed.append(_Root(real, (info.st_dev, info.st_ino)))
-        return cls(tuple(allowed), tuple(guarded), frozenset(ids))
+        return cls(tuple(allowed), guarded, ids)
 
     # -- 1. the text ---------------------------------------------------------------------------
 
@@ -417,9 +468,14 @@ class Folders:
         """The allowed folder a path lies in and its parts below it, from the text alone."""
         if not self.roots:
             raise OutsideFolders("no_folders", "no folder is allowed for Nox on this device")
-        raw = text.strip()
-        if not raw or "\x00" in raw:
+        raw = text
+        if not raw.strip() or "\x00" in raw:
             raise OutsideFolders("invalid_path", "no usable path was given")
+        if raw != raw.strip():
+            # Never cut silently: the person saw the path with its spaces.
+            raise OutsideFolders(
+                "invalid_path", "a path with leading or trailing spaces is refused"
+            )
         if is_remote_or_device_path(raw) or names_a_path_alias(raw):
             raise OutsideFolders(
                 "path_alias_refused", "network, device and alias paths are refused"
@@ -462,6 +518,40 @@ class Folders:
                 raise OutsideFolders(refusal, "only data files are written (allowlist)")
             if execution_trigger(final):
                 raise OutsideFolders("execution_trigger", "writing there could make something run")
+            if _working_tree_up(final, root.path):
+                raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
+
+
+#: How long the protected places' identities are reused: walking browser profiles on every call
+#: costs a third of a second; a hard link made in this window is still refused by path.
+PROTECTED_TTL_S = 30.0
+_protected_cache: dict[
+    tuple[str, ...], tuple[float, tuple[str, ...], frozenset[tuple[int, int]]]
+] = {}
+
+
+def _protected(places: tuple[str, ...]) -> tuple[tuple[str, ...], frozenset[tuple[int, int]]]:
+    """The protected places, resolved, and the identities of what lies in them (cached)."""
+    now = time.monotonic()
+    cached = _protected_cache.get(places)
+    if cached is not None and now - cached[0] < PROTECTED_TTL_S:
+        return cached[1], cached[2]
+    guarded: list[str] = []
+    ids: set[tuple[int, int]] = set()
+    for place in places:
+        try:
+            real = _plain(os.path.realpath(place))
+            info = os.stat(real)
+        except (OSError, ValueError):
+            guarded.append(os.path.abspath(place))  # not there yet: still never inside it
+            continue
+        guarded.append(real)
+        ids.add((info.st_dev, info.st_ino))
+        if stat.S_ISDIR(info.st_mode):
+            ids |= _identities(Path(real))
+    result = (tuple(guarded), frozenset(ids))
+    _protected_cache[places] = (now, *result)
+    return result
 
 
 def _parts(rest: str) -> list[str]:
@@ -469,15 +559,47 @@ def _parts(rest: str) -> list[str]:
     for part in parts:
         if part == "..":
             raise OutsideFolders("path_alias_refused", "`..` is refused")
+        if part != part.strip():
+            raise OutsideFolders(
+                "invalid_path", "a name with leading or trailing spaces is refused"
+            )
         if _WINDOWS and (":" in part or part[-1] in ". " or _DEVICE_NAME.match(part)):
             raise OutsideFolders("invalid_path", "a stream, device or ambiguous name is refused")
     return parts
+
+
+#: Secrets in big stores (browser profiles, key folders) - looked at before the bounded walk.
+_HIGH_VALUE = (
+    "Local State",
+    "*/Login Data",
+    "*/Cookies",
+    "*/Network/Cookies",
+    "*/Web Data",
+    "*/key4.db",
+    "*/logins.json",
+    "*/cookies.sqlite",
+    "Profiles/*/key4.db",
+    "Profiles/*/logins.json",
+    "Profiles/*/cookies.sqlite",
+    "id_*",
+    "*.pem",
+    "*.key",
+    "credentials",
+    "config.json",
+)
 
 
 def _identities(folder: Path) -> set[tuple[int, int]]:
     """(st_dev, st_ino) of what lies in a protected folder (two levels, bounded): a hard link to
     one of those files is refused."""
     found: set[tuple[int, int]] = set()
+    # The files that matter most first, wherever the generic walk would run out of budget.
+    for pattern in _HIGH_VALUE:
+        with contextlib.suppress(OSError, ValueError):
+            for match in list(folder.glob(pattern))[:64]:
+                with contextlib.suppress(OSError):
+                    info = os.stat(match, follow_symlinks=False)
+                    found.add((info.st_dev, info.st_ino))
     budget = _MAX_PROTECTED_ENTRIES
     with contextlib.suppress(OSError):
         for base, dirs, files in os.walk(folder, followlinks=False):
@@ -523,6 +645,9 @@ def _lexical_write_check(root: _Root, parts: list[str]) -> None:
     refusal = write_refusal(parts)
     if refusal is not None:
         raise OutsideFolders(refusal, "only data files are written (allowlist)")
+    for depth in range(len(parts)):
+        if _working_tree(os.path.join(root.path, *parts[:depth])):
+            raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
     if execution_trigger(os.path.join(root.path, *parts)):
         raise OutsideFolders("execution_trigger", "writing there could make something run")
 
@@ -552,6 +677,25 @@ def list_folder(folders: Folders, text: str) -> Iterator[Iterator[os.DirEntry[st
         os.close(fd)
 
 
+def _working_tree(folder: str) -> bool:
+    """Whether `folder` is the top of a working tree (holds `.git`, `.hg` or `.svn`)."""
+    return any(os.path.lexists(os.path.join(folder, marker)) for marker in WORKING_TREE_MARKERS)
+
+
+def _working_tree_up(final: str, root: str) -> bool:
+    """Whether any folder from the one holding `final` up to the allowed folder is a working
+    tree - decided on the verified final path."""
+    folder = os.path.dirname(final)
+    while _within(folder, root):
+        if _working_tree(folder):
+            return True
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            break
+        folder = parent
+    return False
+
+
 def _peek(name: str, dir_fd: int) -> os.stat_result | None:
     """The entry as it is (`fstatat` without following), None when there is none."""
     try:
@@ -574,6 +718,8 @@ def _posix_open(
         info = os.fstat(fd)
         if (info.st_dev, info.st_ino) != root.identity:
             raise OutsideFolders("changed", "the allowed folder was replaced")
+        if write and any(_peek(marker, fd) is not None for marker in WORKING_TREE_MARKERS):
+            raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
         for part in parts[:-1]:
             seen = _peek(part, fd)
             if seen is None:
@@ -589,6 +735,8 @@ def _posix_open(
             os.close(fd)
             fd = step
             folders._verify(root, os.fstat(fd), None)
+            if write and any(_peek(m, fd) is not None for m in WORKING_TREE_MARKERS):
+                raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
         if not parts:
             final = os.dup(fd)
         else:

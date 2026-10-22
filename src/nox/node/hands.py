@@ -47,10 +47,12 @@ from nox.hands.shell import ProgramResolver, classify
 from nox.node.safe_fs import (
     Folders,
     OutsideFolders,
+    content_refusal,
     list_folder,
     open_existing,
     open_new,
     secret_locations,
+    structured,
 )
 from nox.node.tools import NodeRefusal, NodeTool
 from nox.sandbox import EgressDecl, Limits, Sandbox, SandboxUnavailable
@@ -111,10 +113,11 @@ class ShellArgs(BaseModel):
         return self
 
 
-def write_risk(append: bool, overwrite: bool) -> str:
-    """A new file is medium; replacing or extending an existing one is high (asked on the
-    device, never remembered) - on the core's side and on the node's alike."""
-    return "high" if append or overwrite else "medium"
+def write_risk(path: str, append: bool, overwrite: bool) -> str:
+    """A new plain-data file is medium; replacing or extending a file, or any write of a
+    STRUCTURED format (a document, a page, JSON/YAML/XML) is high (asked on the device, never
+    remembered) - on the core's side and on the node's alike."""
+    return "high" if append or overwrite or structured(path) else "medium"
 
 
 def write_summary(path: str, text: str, *, append: bool, overwrite: bool) -> dict[str, Any]:
@@ -165,7 +168,10 @@ class NodeHands:
     _cached: list[Sandbox | None] = field(default_factory=list)
 
     def resolved(self) -> Folders:
-        return Folders.build(self.folders(), [*self.protected, *secret_locations()])
+        from nox.paths import nox_home  # noqa: PLC0415
+
+        # Nox's own folder too: a core on the same device keeps its database and config there.
+        return Folders.build(self.folders(), [*self.protected, nox_home(), *secret_locations()])
 
     def exposed(self) -> str | None:
         """Why this device's sandbox would show something it must not: the node's folder, Nox's
@@ -309,6 +315,11 @@ def _read(folders: Folders, path: str) -> dict[str, Any]:
 
 
 def _write(folders: Folders, args: WriteArgs) -> dict[str, Any]:
+    refusal = content_refusal(args.path, args.text)
+    if refusal is not None:
+        # A macro container, a script, an event handler, an external entity, a PDF action:
+        # refused even when someone would confirm it.
+        raise NodeRefusal(refusal)
     payload = args.text.encode("utf-8")
     if len(payload) > MAX_WRITE_BYTES:
         return {"ok": False, "error": f"{len(payload)} bytes; the limit is {MAX_WRITE_BYTES}"}
@@ -380,7 +391,7 @@ def hand_tools(hands: NodeHands) -> dict[str, NodeTool]:
 
     def risk_of_write(args: BaseModel) -> str:
         assert isinstance(args, WriteArgs)
-        return write_risk(args.append, args.overwrite)
+        return write_risk(args.path, args.append, args.overwrite)
 
     def shown_write(args: BaseModel) -> dict[str, Any]:
         assert isinstance(args, WriteArgs)
