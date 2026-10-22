@@ -10,6 +10,8 @@
  * appearance, which lives in this browser, stays changeable there.
  */
 
+import { Suspense, lazy } from 'react';
+
 import { type Key, type Lang, type T, fill, modeHeadline, privacyLabel} from '../i18n';
 import type { IpcClient } from '../ipc';
 import type { DashboardState } from '../model';
@@ -33,8 +35,12 @@ import { troublesOf } from '../shell/presence';
 import type { Route, SettingsPageId } from '../shell/routes';
 import { type ThemePref, THEME_PREFS } from '../theme';
 import { SETTINGS_LAYOUT, layoutOf, unplacedPaths } from './settings/layout';
-import { RemoteMaintenance } from './settings/RemoteMaintenance';
 import { HealthTable, ProvidersList, VoiceFacts } from './settings/SystemParts';
+
+// Nox-OS only, and the area's budget is tight: its own chunk, fetched when the System page opens.
+const RemoteMaintenance = lazy(() =>
+  import('./settings/RemoteMaintenance').then((m) => ({ default: m.RemoteMaintenance })),
+);
 
 const THEME_LABEL: Record<ThemePref, Key> = {
   system: 'theme_system',
@@ -288,7 +294,9 @@ export default function SettingsArea(props: SettingsAreaProps) {
       body = (
         <>
           <HealthTable t={t} lang={lang} state={state} />
-          <RemoteMaintenance t={t} lang={lang} client={client} />
+          <Suspense fallback={null}>
+            <RemoteMaintenance t={t} lang={lang} client={client} />
+          </Suspense>
           {forms}
           {config && leftovers.length > 0 && (
             <ConfigForm

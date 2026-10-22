@@ -21,7 +21,14 @@ check() {  # check "what" command...
   local what="$1"; shift
   if "$@"; then printf 'ok    %s\n' "$what"; else printf 'FAIL  %s\n' "$what"; failures=$((failures + 1)); fi
 }
-none() { [ -z "$(cat)" ]; }  # stdin is empty
+# stdin is empty; otherwise its first lines (file names, user names - never contents) are shown.
+none() {
+  local found
+  found="$(cat)"
+  [ -n "$found" ] || return 0
+  printf '%s\n' "$found" | head -n 5 | sed 's/^/      found: /'
+  return 1
+}
 files() { local f; for f in "$@"; do [ -f "$f" ] || return 1; done; }
 absent() { local f; for f in "$@"; do { [ ! -e "$f" ] && [ ! -L "$f" ]; } || return 1; done; }
 masked() {
@@ -143,7 +150,9 @@ run_checks() {
   check "no password in /etc/shadow" none < <(awk -F: '$2 != "*" && $2 != "!" && $2 != "!*" && $2 != "!!" {print $1}' "$root/etc/shadow")
   check "no password in /etc/passwd" none < <(awk -F: '$2 != "x" {print $1}' "$root/etc/passwd")
   check "no NOPASSWD sudo" none < <(grep -rls 'NOPASSWD' "$root/etc/sudoers" "$root/etc/sudoers.d" 2>/dev/null)
-  check "no authorized_keys anywhere" none < <(find "$root" -xdev -name 'authorized_keys*' 2>/dev/null)
+  # Anywhere a key could be read from - everything but the packages' own files under /usr.
+  check "no authorized_keys anywhere outside /usr" none < <(find "$root" -xdev -path "$root/usr" -prune \
+    -o -name 'authorized_keys*' -print 2>/dev/null)
   check "no stored remote-maintenance keys" no_stored_keys
   check "no SSH host keys (made per device on first boot)" none < <(find "$root/etc/ssh" -name 'ssh_host_*' 2>/dev/null)
   check "ssh.service, ssh.socket, sshswitch.service masked" masked ssh.service ssh.socket sshswitch.service
