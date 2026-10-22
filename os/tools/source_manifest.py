@@ -97,9 +97,24 @@ def debian_packages(root: Path) -> list[dict[str, object]]:
     return sorted(packages, key=lambda item: str(item["package"]))
 
 
+def _in_root(root: Path, path: Path) -> Path:
+    """`path` of the image, following its links inside `root` - an absolute link such as
+    /opt/nox/current -> /opt/nox/releases/<commit> means the image's file, not this machine's."""
+    current = root / path.relative_to(path.anchor)
+    for _ in range(8):
+        if not current.is_symlink():
+            return current
+        target = Path(current.readlink())
+        if target.is_absolute() or target.anchor:
+            current = root / target.relative_to(target.anchor)
+        else:
+            current = current.parent / target
+    return current
+
+
 def python_packages(root: Path) -> list[dict[str, object]]:
     """The packages in Nox's environment (/opt/nox/current/.venv), from their metadata."""
-    venv = root / "opt" / "nox" / "current" / ".venv"
+    venv = _in_root(root, Path("/opt/nox/current")) / ".venv"
     found: dict[str, dict[str, object]] = {}
     for metadata in sorted(venv.glob("lib/python3*/site-packages/*.dist-info/METADATA")):
         try:

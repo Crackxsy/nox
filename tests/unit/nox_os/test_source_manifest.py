@@ -119,3 +119,18 @@ def test_a_linked_copyright_file_is_not_followed(tmp_path: Path) -> None:
         return
     packages = {p["package"]: p for p in manifest.debian_packages(root)}
     assert packages["libc6"]["licenses"] == []
+
+
+def test_the_absolute_current_link_means_the_images_release(tmp_path: Path) -> None:
+    # /opt/nox/current -> /opt/nox/releases/<commit> is absolute: inside the mounted image, not on
+    # the machine that mounted it.
+    root = _root(tmp_path)
+    nox = root / "opt/nox"
+    (nox / "releases").mkdir()
+    (nox / "current").rename(nox / "releases/0123456789ab")
+    try:
+        (nox / "current").symlink_to("/opt/nox/releases/0123456789ab")
+    except OSError:  # Windows without the symlink privilege
+        return
+    names = {p["name"] for p in manifest.python_packages(root)}
+    assert names == {"httpx", "legacy", "plain"}

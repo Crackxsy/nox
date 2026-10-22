@@ -93,10 +93,12 @@ jobs:
           set -x
           test -L "$ROOT/etc/systemd/system/multi-user.target.wants/nox.service"
           test "$(readlink "$ROOT/opt/nox/current")" = "/opt/nox/releases/${COMMIT:0:12}"
-          test -f "$ROOT/opt/nox/current/.complete"
-          test -x "$ROOT/opt/nox/current/.venv/bin/nox"
+          # An absolute link: inside the chroot's tree, not this runner's /opt.
+          release="$ROOT/opt/nox/releases/${COMMIT:0:12}"
+          test -f "$release/.complete"
+          test -x "$release/.venv/bin/nox"
           test -x "$ROOT/usr/local/bin/nox"
-          test -f "$ROOT/opt/nox/current/ui/dashboard/dist/index.html"
+          test -f "$release/ui/dashboard/dist/index.html"
           test ! -e "$ROOT/opt/nox/.cache"
           test "$(sudo find "$ROOT/var/lib/nox" -mindepth 1 -printf '%P\n')" = user.yaml
           test "$(sudo git -C "$ROOT/opt/nox/src" remote get-url origin)" = https://github.com/Crackxsy/nox

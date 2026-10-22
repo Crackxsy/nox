@@ -40,11 +40,13 @@ none() { [ -z "$(cat)" ]; }  # stdin is empty
 files() { local f; for f in "$@"; do [ -f "$f" ] || return 1; done; }
 
 # Nox is there, laid out as an install lays it out, enabled but never started.
+# /opt/nox/current is an absolute link: it means the image's /opt, not this machine's.
 current="$(readlink "$root/opt/nox/current" || true)"
-check "Nox installed (/opt/nox/current -> $current)" files "$root/opt/nox/current/.complete" "$root/opt/nox/current/.venv/bin/nox"
+release="$root${current:-/nonexistent}"
+check "Nox installed (/opt/nox/current -> $current)" files "$release/.complete" "$release/.venv/bin/nox"
 check "nox command and unit installed" files "$root/usr/local/bin/nox" "$root/etc/systemd/system/nox.service"
 check "nox.service enabled" test -L "$root/etc/systemd/system/multi-user.target.wants/nox.service"
-check "dashboard bundled" test -f "$root/opt/nox/current/ui/dashboard/dist/index.html"
+check "dashboard bundled" test -f "$release/ui/dashboard/dist/index.html"
 check "no download caches" test ! -e "$root/opt/nox/.cache"
 check "/etc/nox-os-release" grep -q '^NOX_OS_VERSION=' "$root/etc/nox-os-release"
 check "hostname is nox" grep -qx 'nox' "$root/etc/hostname"
