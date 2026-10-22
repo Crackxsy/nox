@@ -845,8 +845,9 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   refuses such a folder up front. Not detectable, and documented: an allowed folder linked
   (symlink, junction) *into* a vault from the vault's side. `.md` text is checked without
   parsing Markdown (a parser that differs from the note app's is a bypass) and with linear
-  patterns only (every quantifier bounded or non-overlapping; a 1 MB adversarial text takes
-  milliseconds): after `html.unescape`, NFKC and case folding, every run of three or more
+  patterns only (no quantifier can overlap the next one, and no cap turns into a skip - an
+  over-long code-block language or a fence followed by an unreadable character is refused; a
+  1 MB adversarial text takes milliseconds): after `html.unescape`, NFKC and case folding, every run of three or more
   backticks or tildes - wherever it stands - must name no language or one of
   `INERT_FENCE_LANGUAGES` (text and data formats only: text, plaintext, txt, md, markdown, json,
   yaml, yml, toml, ini, csv, diff, log); a programming language (Execute Code and similar plugins

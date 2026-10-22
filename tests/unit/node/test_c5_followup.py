@@ -369,6 +369,13 @@ ADVERSARIAL = {
     "space_before_inline": "`" + " " * 1_000_000 + "$=",
     "long_info_words": ("```" + "x" * 70 + "\n") * 14_000,
     "entities": "&lt;a" * 200_000,
+    "tag_without_end": "<a " + "x" * 1_000_000,
+    "handler_word_without_equals": "<a on" + "x" * 1_000_000,
+    "handler_then_spaces": "<a onx" + " " * 1_000_000,
+    "many_handler_words": "<a " + "onx " * 250_000,
+    "backtick_then_spaces": "`" + " " * 1_000_000 + "x",
+    "fence_then_spaces": "```" + " " * 1_000_000 + "x",
+    "fence_then_word": "```" + "x" * 1_000_000,
 }
 
 
@@ -523,3 +530,33 @@ async def test_an_append_refusal_says_what_in_the_file_blocks_it(world: dict[str
     assert caught.value.reason == "content_refused"
     assert "'dataview' code block" in caught.value.detail
     assert "already in the file" in caught.value.detail
+
+
+# ---- review: a cap is never a skip - padding past it is refused --------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "```" + " " * 40 + "datacore\nx\n```\n",
+        "```" + " " * 100_000 + "datacore\nx\n```\n",
+        "```" + "\t" * 30 + "{" + " " * 30 + ".datacore}\nx\n```\n",
+        "```text" + "x" * 100 + "\nx\n```\n",
+        "```" + "t" * 65 + "\nx\n```\n",
+        "```\x0bdatacore\nx\n```\n",
+        "<img " + "a" * 300 + " onerror=x>",
+        "<img " + "a" * 100_000 + " onload =x>",
+        "`" + " " * 100 + "$= dv.x",
+        "`" + "\n" * 70 + "=this.file",
+    ],
+    ids=lambda text: f"{len(text)}-{text.strip()[:6]!r}",
+)
+async def test_padding_past_an_old_cap_is_refused(world: dict[str, Path], text: str) -> None:
+    assert await _refused(world, "notes/plan.md", text) == "content_refused"
+
+
+async def test_a_fence_with_trailing_blanks_and_no_language_is_written(
+    world: dict[str, Path],
+) -> None:
+    text = "```   \nhallo\n```\t\n"
+    assert (await _write(world, "notes/leer.md", text))["ok"] is True

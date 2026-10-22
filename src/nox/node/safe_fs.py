@@ -340,15 +340,19 @@ INERT_FENCE_LANGUAGES = frozenset(
 #: The largest text a node writes (and the most of an existing file an append reads): every
 #: check stays a few milliseconds, whatever the text.
 MAX_TEXT_BYTES = 256 * 1024
-#: The scan's patterns are linear: every quantifier is bounded or cannot overlap the next one,
-#: so no input makes them backtrack over the text (a 1 MB adversarial text is milliseconds).
-#: A fence run takes the whole run of backticks/tildes greedily and its info word may be empty,
-#: so a match never has to give characters back.
-_FENCE_INFO = re.compile(r"(?:`{3,}|~{3,})[ \t]{0,16}\{?[ \t]{0,16}\.?([^\s`~}]{0,64})")
-#: Inline JS: a backtick or tilde, a little whitespace, `$=` or `=this.`.
-_INLINE_JS = re.compile(r"[`~][ \t\r\n]{0,64}(?:\$=|=this\.)")
-#: An event handler inside a raw HTML tag; the tag's text cannot run past the next `<` or `>`.
-_HANDLER = re.compile(r"<[a-z][^<>]{0,256}?\bon[a-z0-9_]{1,40}[ \t\r\n]{0,16}=")
+#: The scan's patterns are linear without any cap that could turn into a skip: no quantifier
+#: can overlap the next one, and nothing has to be given back. A fence run takes the whole run
+#: of backticks/tildes greedily, the blanks after it and the whole info word (each may be empty),
+#: so a match never fails or backtracks; `next` is the character right after the info word.
+_FENCE_INFO = re.compile(r"(?:`{3,}|~{3,})[ \t]*\{?[ \t]*\.?([^\s`~}]*)(.?)", re.S)
+#: Inline JS: a backtick or tilde, any whitespace, `$=` or `=this.` (whitespace cannot overlap
+#: either side).
+_INLINE_JS = re.compile(r"[`~]\s*(?:\$=|=this\.)")
+#: An event handler inside a raw HTML tag; the tag's text cannot run past the next `<` or `>`,
+#: so each tag is read once.
+_HANDLER = re.compile(r"<[a-z][^<>]*?\bon[a-z0-9_]+\s*=")
+#: The longest code-block language Nox accepts; anything longer is refused, never cut.
+MAX_FENCE_LANGUAGE = 64
 _FILE_LINK = re.compile(r"(?<![a-z0-9])file:")
 _TEMPLATER_API = re.compile(r"\btp\.")
 
@@ -374,9 +378,15 @@ def markdown_finding(text: str) -> str | None:
     if _INLINE_JS.search(body):
         return "inline Dataview JS"
     for fence in _FENCE_INFO.finditer(body):
-        language = fence.group(1)
+        language, after = fence.group(1), fence.group(2)
+        if len(language) > MAX_FENCE_LANGUAGE:
+            return "an overlong code block language"
         if language and language not in INERT_FENCE_LANGUAGES:
-            return f"a {language!r} code block"
+            return f"a {language[:MAX_FENCE_LANGUAGE]!r} code block"
+        if not language and after not in ("", "\n", "\r", "`", "~", "}"):
+            # Something other than the end of the line follows the fence without a word
+            # (a vertical tab, a form feed, ...): refused rather than guessed.
+            return "an unreadable code block language"
     if _HANDLER.search(body):
         return "an HTML event handler"
     return None
