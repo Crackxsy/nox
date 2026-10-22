@@ -353,6 +353,12 @@ def _write(folders: Folders, args: WriteArgs) -> dict[str, Any]:
             os.close(fd)
             return {"ok": False, "error": "that is a folder"}
         if args.append:
+            # The whole file decides, read through this same handle: an append cannot assemble
+            # in pieces what one write would be refused for.
+            refusal = _whole_file_refusal(fd, args)
+            if refusal is not None:
+                os.close(fd)
+                raise NodeRefusal(refusal) from None
             os.lseek(fd, 0, os.SEEK_END)
         else:
             os.ftruncate(fd, 0)  # only now: the handle was checked first
@@ -361,6 +367,25 @@ def _write(folders: Folders, args: WriteArgs) -> dict[str, Any]:
     with os.fdopen(fd, "wb") as handle:
         handle.write(payload)
     return {"ok": True, "path": args.path, "bytes": len(payload), "appended": args.append}
+
+
+def _whole_file_refusal(fd: int, args: WriteArgs) -> str | None:
+    """For an append: the content check on what the file holds plus the new text, read through
+    the already verified handle. A file too large to read whole is not appended to."""
+    size = os.fstat(fd).st_size
+    if size > MAX_WRITE_BYTES:
+        return "too_large"
+    os.lseek(fd, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining > 0:
+        chunk = os.read(fd, min(remaining, 64 * 1024))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    existing = b"".join(chunks).decode("utf-8", errors="replace")
+    return content_refusal(args.path, existing + args.text)
 
 
 def hand_tools(hands: NodeHands) -> dict[str, NodeTool]:

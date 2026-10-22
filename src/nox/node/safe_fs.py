@@ -39,12 +39,14 @@ import contextlib
 import errno
 import fnmatch
 import functools
+import html
 import json
 import os
 import re
 import stat
 import sys
 import time
+import unicodedata
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,6 +64,7 @@ __all__ = [
     "open_new",
     "content_refusal",
     "marked_above",
+    "markdown_runs_code",
     "secret_locations",
     "structured",
     "write_refusal",
@@ -293,8 +296,50 @@ _YAML_ACTIVE = ("TagToken", "AnchorToken", "AliasToken")
 
 #: Markdown that a note app runs as code: Dataview JS (blocks and inline `$=`), Templater
 #: tags, scripts and `javascript:` links - refused in any `.md`, workspace or not.
-_MD_ACTIVE = ("```dataviewjs", "`$=", "<%", "<script", "javascript:")
-_DATAVIEW_JS = re.compile(r"```dataview\b.*?(\$=|\bdv\.)", re.S)
+_MD_ANYWHERE = ("<%", "<script", "javascript:", "vbscript:", "<iframe", "<object", "<embed")
+#: A code fence opener: any indentation, three or more backticks or tildes, the info string.
+_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})[ \t]*([^\s`]*)")
+#: Fences a note app runs whatever they hold.
+_RUN_FENCES = ("dataviewjs", "js-engine", "templater", "tp-", "meta-bind-js", "jsx")
+#: Inline Dataview JS: any backtick run, optional space, `$=`.
+_INLINE_JS = re.compile(r"`+[ \t]*\$=")
+#: An event handler in raw HTML (`<img onerror=...>`).
+_HANDLER = re.compile(r"<[a-z][^>]*\bon\w+[ \t]*=", re.S)
+
+
+def markdown_runs_code(text: str) -> bool:
+    """Whether Markdown carries code a note app would run - scanned line by line, after HTML
+    entities are decoded and the text NFKC-normalised: a fence (backticks or tildes, any length,
+    any indentation) whose info string starts with `dataviewjs`, `js-engine`, `templater`, ...; a
+    `dataview` fence that holds `$=` or `dv.`; inline `$=` after any backtick run; Templater
+    `<%`; `<script`, `javascript:`, `<iframe`, `<object`, `<embed` or an `on...=` handler."""
+    body = unicodedata.normalize("NFKC", html.unescape(text)).casefold()
+    if any(marker in body for marker in _MD_ANYWHERE) or _INLINE_JS.search(body):
+        return True
+    if _HANDLER.search(body):
+        return True
+    fence: tuple[str, int, str] | None = None  # (character, length, info)
+    for line in body.splitlines():
+        opened = _FENCE.match(line)
+        if fence is None:
+            if opened is None:
+                continue
+            marks, info = opened.group(1), opened.group(2).lstrip("{.")
+            if info.startswith(_RUN_FENCES):
+                return True
+            fence = (marks[0], len(marks), info)
+            continue
+        if (
+            opened is not None
+            and opened.group(1)[0] == fence[0]
+            and len(opened.group(1)) >= fence[1]
+        ):
+            if not opened.group(2):
+                fence = None  # the block closed
+                continue
+        if fence[2].startswith("dataview") and ("$=" in line or "dv." in line):
+            return True
+    return False
 
 
 def content_refusal(path: str, text: str) -> str | None:
@@ -304,10 +349,7 @@ def content_refusal(path: str, text: str) -> str | None:
     runs before anyone is asked, on the core and on the node."""
     ext = extension_of(re.split(r"[\\/]", path)[-1])
     if ext == ".md":
-        body = text.casefold()
-        if any(marker in body for marker in _MD_ACTIVE) or _DATAVIEW_JS.search(body):
-            return "content_refused"
-        return None
+        return "content_refused" if markdown_runs_code(text) else None
     if ext in STRUCTURED_EXTENSIONS and len(text.encode("utf-8", "replace")) > MAX_STRUCTURED_BYTES:
         return "too_large"
     if ext == ".json":
@@ -663,7 +705,8 @@ def open_existing(folders: Folders, text: str, *, write: bool = False) -> int:
         _lexical_write_check(root, parts)
     if _WINDOWS:
         return _win_open(folders, root, parts, write=write, create=False)
-    flags = (os.O_WRONLY if write else os.O_RDONLY) | _NONBLOCK | _NOCTTY
+    # Read and write: an append reads what is there through the same handle (`hands._write`).
+    flags = (os.O_RDWR if write else os.O_RDONLY) | _NONBLOCK | _NOCTTY
     return _posix_open(folders, root, parts, flags, write=write, create=False)
 
 

@@ -217,3 +217,73 @@ def test_an_allow_for_a_node_needs_an_exact_device_id() -> None:
     assert device_rule_applies(exact, request) and device_rule_applies(narrowing, request)
     globbed = ProfileRule(id="g", tool="file*", decision=Decision.ALLOW, device="a*")
     assert not device_rule_applies(globbed, request)  # even if it slipped past validation
+
+
+# ---- review: the Markdown scan is line based, and an append is judged on the whole file ---------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "~~~dataviewjs\ndv.paragraph(1)\n~~~\n",
+        "````dataviewjs\ndv.paragraph(1)\n````\n",
+        "   ```dataviewjs\ndv.paragraph(1)\n```\n",
+        "\t```dataviewjs\ndv.paragraph(1)\n```\n",
+        "``` dataviewjs\ndv.paragraph(1)\n```\n",
+        "```{dataviewjs}\nx\n```\n",
+        "```js-engine\nreturn 1\n```\n",
+        "~~~ DataView\nLIST WHERE dv.current()\n~~~\n",
+        "Heute ist `` $= dv.date('today') ``.",
+        "Heute ist `  $=1`.",
+        "&lt;% tp.date.now() %&gt;",
+        '<img src="x.png" onerror="x()">',
+        "<iframe src=x></iframe>",
+    ],
+)
+async def test_every_markdown_spelling_of_runnable_code_is_refused(
+    world: dict[str, Path], text: str
+) -> None:
+    assert await _refused(world, "notes/plan.md", text) == "content_refused"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "```python\nprint('hallo')\n```\n",
+        "~~~js\nconst x = 1\n~~~\n",
+        "```dataview\nTABLE file.name FROM #mathe\n```\n",
+        "Ein `inline code` und ein Preis von 5 $.",
+        "````\n```dataviewjs\n````\n",  # shown as text inside a longer fence: inert
+    ],
+)
+async def test_ordinary_fences_and_code_are_written(world: dict[str, Path], text: str) -> None:
+    assert (await _write(world, "notes/code.md", text))["ok"] is True
+
+
+async def test_a_block_assembled_from_appends_is_refused(world: dict[str, Path]) -> None:
+    assert (await _write(world, "notes/plan.md", "Start\n"))["ok"] is True
+    pieces = ["```", "dataviewjs\n", "dv.paragraph(require('fs'))\n```\n"]
+    refusals = []
+    for piece in pieces:
+        try:
+            await _write(world, "notes/plan.md", piece, append=True)
+        except NodeRefusal as exc:
+            refusals.append(exc.reason)
+    assert refusals and set(refusals) == {"content_refused"}
+    assert "dataviewjs" not in (world["root"] / "notes" / "plan.md").read_text(encoding="utf-8")
+
+
+async def test_appending_to_a_huge_markdown_file_is_refused(
+    world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nox.node import hands as hands_module
+
+    monkeypatch.setattr(hands_module, "MAX_WRITE_BYTES", 10)
+    (world["root"] / "notes" / "lang.md").write_text("x" * 20, encoding="utf-8")
+    assert await _refused_existing(world, "notes/lang.md") == "too_large"
+
+
+async def _refused_existing(world: dict[str, Path], path: str) -> str:
+    with pytest.raises(NodeRefusal) as caught:
+        await _write(world, path, "y", append=True)
+    return caught.value.reason

@@ -839,8 +839,13 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   Templater from its notes), checked on each walked directory handle on POSIX and by name on the
   final path's parents **up to the drive root**, so a repository or vault around the allowed
   folder counts too; `nox node allow files --folder` refuses such a folder up front. `.md` text is
-  refused with `dataviewjs`, inline `$=`, `dv.` in a Dataview block, `<%`, `<script` or
-  `javascript:`. JSON/YAML is capped at 256 KB, a nesting deep enough to exhaust the parser is
+  scanned line by line after HTML entities are decoded and NFKC applied (`markdown_runs_code`):
+  a fence of backticks or tildes of any length and indentation whose info string starts with
+  `dataviewjs`, `js-engine`, `templater`, ..., a `dataview` fence holding `$=` or `dv.`, inline
+  `$=` after any backtick run, Templater `<%`, `<script`, `javascript:`, `<iframe`, `<object`,
+  `<embed` or an `on...=` handler are refused (a fence shown inside a longer fence is inert, as in
+  CommonMark). An append to a `.md` file is judged on the whole file - read through the verified
+  handle, refused when the file is over the write limit - so it cannot be assembled in pieces. JSON/YAML is capped at 256 KB, a nesting deep enough to exhaust the parser is
   `invalid_content`, and all text checks run before anyone is asked - in the node's gate
   (`NodeTool.precheck`, before the budget and the dialog) and on the core (`_write_target`), so a
   write the node would refuse is never put before a person; no file without an allowed
