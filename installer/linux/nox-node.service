@@ -2,10 +2,13 @@
 # system user nox-node. Written by `scripts/install-linux.sh --node --headless` (@PREFIX@ is
 # replaced by /opt/nox-node); see docs/NODES.md.
 #
-# Hardened like nox.service: the node owns /var/lib/nox-node and nothing else, the program is
-# read-only to it, and the command sandbox (bubblewrap) gets exactly the namespaces it needs. With
-# no screen there is nobody to ask, so high-risk calls are refused unless this device allowed
-# `trust_core_for_high` itself (spec C §1.6, a documented residual risk).
+# Hardened like nox.service: the node can write /var/lib/nox-node and nothing else, the installed
+# program in /opt/nox-node is read-only to it, and the command sandbox (bubblewrap) gets exactly
+# the namespaces it needs. The versions the node installs itself live in its own folder
+# (/var/lib/nox-node/node/app), so it can write them: the launcher runs one only after checking it
+# against the signed release with the installed program's code and keys, and every install of the
+# program drops them. With no screen there is nobody to ask, so high-risk calls are refused unless
+# this device allowed `trust_core_for_high` itself (spec C §1.6, a documented residual risk).
 
 [Unit]
 Description=Nox node (headless) - this device as the hands of the Nox at home
@@ -54,6 +57,10 @@ RestrictNamespaces=user mnt pid net ipc uts
 LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 UMask=0077
+# IPC objects of the node user go when it stops. ProtectKernelTunables=, ProtectKernelLogs=,
+# ProtectHostname= and ProtectControlGroups= stay off for the reasons nox.service gives: they
+# over-mount /proc or need a namespace bubblewrap itself creates for the sandbox.
+RemoveIPC=yes
 
 [Install]
 WantedBy=multi-user.target

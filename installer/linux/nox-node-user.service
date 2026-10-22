@@ -14,6 +14,8 @@ After=network-online.target graphical-session.target
 [Service]
 Type=simple
 Environment=PYTHONUNBUFFERED=1
+# A trusted working folder: the installed program, never wherever the session started.
+WorkingDirectory=@PREFIX@/current
 # -I: isolated - no current folder, user site or PYTHON* variable decides what is imported.
 ExecStart="@PREFIX@/current/.venv/bin/python" -I "@PREFIX@/current/installer/start_node.pyw"
 Restart=on-failure

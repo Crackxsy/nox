@@ -115,23 +115,34 @@ Name: "{group}\Nox Node"; Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I
 ; The node's notification sender, per user (no administrator). The 64-bit view explicitly: the
 ; WFP status key once landed in WOW6432Node because a 32-bit view was used by accident.
 Root: HKCU64; Subkey: "Software\Classes\AppUserModelId\Nox.Node"; ValueType: string; ValueName: "DisplayName"; ValueData: "Nox"; Flags: uninsdeletekey; Check: IsNodeMode
+; A core installed over a node: the node's notification ID goes with it.
+Root: HKCU64; Subkey: "Software\Classes\AppUserModelId\Nox.Node"; Flags: deletekey dontcreatekey; Check: IsCoreMode
 
 [Run]
+; Everything here that runs code from {app} (which the user's account can change) runs as the
+; original, non-elevated user (runasoriginaluser) - also when Setup itself was started elevated.
+; installer/test: tests/unit/installer/test_install_start.py checks that rule.
 ; Optional immediate first start after install finishes (unchecked by default - never surprise-run).
-Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; Description: "{cm:LaunchProgram,Nox}"; Flags: nowait postinstall skipifsilent unchecked; Check: IsCoreMode
-; Node: the per-user logon task ("Nox Node", least privilege, as this user - registered by this
-; user's own Python, not elevated; the elevated step above never runs anything from {app}).
-Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --autostart on"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated; StatusMsg: "{cm:NodeTaskStatus}"; Check: IsNodeMode
-Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --start"; WorkingDir: "{app}\app"; Description: "{cm:NodeStartNow}"; Flags: nowait postinstall skipifsilent runhidden; Check: IsNodeMode
+Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; Description: "{cm:LaunchProgram,Nox}"; Flags: nowait postinstall skipifsilent unchecked runasoriginaluser; Check: IsCoreMode
+; A core installed over a node: the node's logon task goes (the uninstall log of the node install
+; is overwritten by this one, UninstallLogMode=overwrite, so uninstalling could not remove it).
+Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""Nox Node"""; Flags: runhidden waituntilterminated runasoriginaluser; Check: IsCoreMode
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""Nox Node"" /F"; Flags: runhidden waituntilterminated runasoriginaluser; Check: IsCoreMode
+; Node: a new base drops the versions the node installed itself (floor and failure record stay),
+; then the per-user logon task ("Nox Node", least privilege, as this user).
+Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --reset-overlays"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated runasoriginaluser; Check: IsNodeMode
+Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --autostart on"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated runasoriginaluser; StatusMsg: "{cm:NodeTaskStatus}"; Check: IsNodeMode
+Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --start"; WorkingDir: "{app}\app"; Description: "{cm:NodeStartNow}"; Flags: nowait postinstall skipifsilent runhidden runasoriginaluser; Check: IsNodeMode
 
 [UninstallRun]
 ; The sandbox network rules are removed in [Code] (CurUninstallStepChanged), before this runs.
 ; Node: stop it and remove its logon task first - the system's schtasks, as this user.
-Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""Nox Node"""; Flags: runhidden waituntilterminated; RunOnceId: "NoxNodeEnd"; Check: IsNodeMode
-Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""Nox Node"" /F"; Flags: runhidden waituntilterminated; RunOnceId: "NoxNodeTask"; Check: IsNodeMode
+; In both modes: a task left by an earlier node install goes too (nothing happens without one).
+Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""Nox Node"""; Flags: runhidden waituntilterminated; RunOnceId: "NoxNodeEnd"
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""Nox Node"" /F"; Flags: runhidden waituntilterminated; RunOnceId: "NoxNodeTask"
 ; Remove the read rights Nox granted its AppContainer sandbox on the runtime folders (recorded in a
 ; manifest; exactly those ACEs, nothing else). Runs before the runtime itself is deleted.
-Filename: "{app}\runtime\python.exe"; Parameters: "-m nox.cli sandbox reset"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated; RunOnceId: "NoxSandboxReset"
+Filename: "{app}\runtime\python.exe"; Parameters: "-I -m nox.cli sandbox reset"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated; RunOnceId: "NoxSandboxReset"
 
 [UninstallDelete]
 ; Belt-and-braces: only ever delete program files. The user's vault, database, data folder and any
@@ -177,6 +188,10 @@ german.PairFailed=Die Verbindung mit Nox hat nicht geklappt (Code %1).%n%nSpaete
 english.NodeTaskStatus=Starting Nox with Windows (for this user only)...
 german.NodeTaskStatus=Nox mit Windows starten (nur fuer diesen Benutzer)...
 english.NodeStartNow=Start the Nox node now
+english.NodeNoAdminInstall=Node mode is installed for one user only, never for all users. Run Setup again without administrator mode.
+german.NodeNoAdminInstall=Der Node-Modus wird nur fuer einen Benutzer installiert, nie fuer alle. Setup bitte ohne Administratormodus erneut starten.
+english.NodeNotElevated=Node mode never runs with administrator rights. Start Setup normally, not with "Run as administrator".
+german.NodeNotElevated=Der Node-Modus laeuft nie mit Administratorrechten. Setup bitte normal starten, nicht mit "Als Administrator ausfuehren".
 german.NodeStartNow=Nox-Knoten jetzt starten
 
 [Code]
@@ -270,8 +285,20 @@ begin
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Refusal: String;
 begin
   Result := True;
+  if (ModePage <> nil) and (CurPageID = ModePage.ID) and IsNodeMode() then
+  begin
+    Refusal := NodeModeRefusal();
+    if Refusal <> '' then
+    begin
+      MsgBox(Refusal, mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+  end;
   if (PairPage <> nil) and (CurPageID = PairPage.ID) and (Trim(PairPage.Values[0]) <> '') and
       not ValidPairLink(Trim(PairPage.Values[0])) then
   begin
@@ -280,14 +307,36 @@ begin
   end;
 end;
 
-{ A running node keeps its files open: end it first (the user's own task, not elevated). }
+{ Node mode never runs elevated: user code (the node, its pairing, its logon task) must not run
+  with administrator rights from the user-writable {app}. Refused for an all-users install, and
+  when Setup was elevated on purpose while UAC is on (without UAC there is no boundary to cross). }
+function NodeModeRefusal(): String;
+var
+  Lua: Cardinal;
+begin
+  Result := '';
+  if IsAdminInstallMode() then
+    Result := CustomMessage('NodeNoAdminInstall')
+  else if IsAdmin() and RegQueryDWordValue(HKLM64,
+      'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System', 'EnableLUA', Lua) and
+      (Lua <> 0) then
+    Result := CustomMessage('NodeNotElevated');
+end;
+
+{ A running node keeps its files open: end it first (the user's own task, as that user). }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ErrorCode: Integer;
 begin
-  Exec(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "Nox Node"', '', SW_HIDE,
-    ewWaitUntilTerminated, ErrorCode);
   Result := '';
+  if IsNodeMode() then
+  begin
+    Result := NodeModeRefusal();
+    if Result <> '' then
+      Exit;
+  end;
+  ExecAsOriginalUser(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "Nox Node"', '', SW_HIDE,
+    ewWaitUntilTerminated, ErrorCode);
 end;
 
 { Pair right away when a link was given: the node's own `nox node pair`, as this user. }
@@ -304,7 +353,8 @@ begin
     Log('Pairing link refused: unexpected characters');
     Exit;
   end;
-  if Exec(ExpandConstant('{app}\runtime\python.exe'),
+  { As the original user: never elevated, whoever started Setup. }
+  if ExecAsOriginalUser(ExpandConstant('{app}\runtime\python.exe'),
       '-I "' + ExpandConstant('{app}\app\start_node.pyw') + '" --cli node pair "' + Link + '"',
       ExpandConstant('{app}\app'), SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
     Log('Node paired')

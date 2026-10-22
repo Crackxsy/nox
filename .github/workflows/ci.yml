@@ -521,6 +521,20 @@ jobs:
           test "$(stat -c %U /opt/nox-node)" = root
           sudo nox-node status | tee /dev/stderr | grep -q "Not paired."
 
+      # Code the node account planted as a "self-installed version" never survives an install of
+      # the program, and is never run: the launcher checks it against a signed release first.
+      - name: Headless node - a reinstall drops versions the node account left behind
+        run: |
+          app=/var/lib/nox-node/node/app
+          sudo -u nox-node mkdir -p "$app/releases/9.9.9/nox"
+          echo '__version__ = "9.9.9"' | sudo -u nox-node tee "$app/releases/9.9.9/nox/__init__.py" >/dev/null
+          echo '{"pending": "9.9.9", "floor": "0.0.1"}' | sudo -u nox-node tee "$app/state.json" >/dev/null
+          sudo nox-node status >/dev/null  # the launcher refuses the unsigned folder: the base runs
+          sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh --node --headless
+          if sudo test -e "$app/releases/9.9.9"; then echo "planted version survived"; exit 1; fi
+          sudo grep -q '"pending": null' "$app/state.json"
+          sudo grep -q '"floor": "0.0.1"' "$app/state.json"
+
       # The node's folders belong to nox-node; root's uninstall must never follow a link planted
       # there (to the node folder itself, or to its app/ folder).
       - name: Headless node - uninstall refuses links planted by the node user

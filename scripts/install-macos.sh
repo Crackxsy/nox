@@ -12,10 +12,11 @@
 # after the new version started once, and registers a per-user LaunchAgent that runs
 # installer/start_node.pyw at login. The node then updates itself from signed releases.
 #
-# Signed releases: this beta does not check release signatures itself. While no release key is
+# Signed releases: this beta does NOT check release signatures itself. While no release key is
 # trusted (TRUSTED_RELEASE_KEYS, kept equal to install-linux.sh and src/nox/release/trusted_keys.py)
-# it says so; once one is, it refuses tagged releases instead of installing them unchecked - use a
-# checkout you verified (NOX_SOURCE) until this script verifies on its own.
+# it says so. Once one is, it installs NOTHING from the network - no tag, no branch, no commit -
+# because it could not tell a real release from a forged one; only a checkout you verified
+# yourself (NOX_SOURCE=<folder>) is installed then, until this script verifies on its own.
 set -euo pipefail
 umask 022
 
@@ -91,11 +92,11 @@ commit="$(git -C "$SRC" rev-parse --verify --quiet "refs/tags/$NOX_REF^{commit}"
   || git -C "$SRC" rev-parse --verify --quiet "$NOX_REF^{commit}" || true)"
 [ -n "$commit" ] || fail "version $NOX_REF does not exist"
 git -C "$SRC" cat-file -e "$commit:installer/start_node.pyw" 2>/dev/null || fail "$NOX_REF cannot run as a node yet"
-if [[ "$NOX_REF" =~ ^v[0-9] ]] && [ -z "${NOX_SOURCE:-}" ]; then
+if [ -z "${NOX_SOURCE:-}" ]; then
   if [ "${#TRUSTED_RELEASE_KEYS[@]}" -eq 0 ]; then
     note "Note: release signatures are not set up yet (docs/RELEASES.md); this version is not checked against one."
   else
-    fail "this beta cannot check release signatures yet, so it installs no tagged release. Use a checkout you verified: NOX_SOURCE=<folder> bash install-macos.sh --node"
+    fail "this beta cannot check release signatures yet, so it installs nothing from the network (no tag, branch or commit). Use a checkout you verified: NOX_SOURCE=<folder> bash install-macos.sh --node"
   fi
 fi
 release="${commit:0:12}"
@@ -132,7 +133,9 @@ launcher="$CURRENT/installer/start_node.pyw"
 previous="$(basename "$(readlink "$CURRENT" 2>/dev/null || true)")"
 ln -sfn "$RELEASES/$release" "$CURRENT.next"
 mv -fh "$CURRENT.next" "$CURRENT"
-if ! "$python" -I "$launcher" --selftest >/dev/null; then
+# A new base: the versions the node installed itself go (floor and failure record stay).
+(cd "$CURRENT" && "$python" -I "$launcher" --reset-overlays)
+if ! (cd "$CURRENT" && "$python" -I "$launcher" --selftest >/dev/null); then
   if [ -n "$previous" ] && [ "$previous" != "." ] && [ -d "$RELEASES/$previous" ]; then
     ln -sfn "$RELEASES/$previous" "$CURRENT.next"
     mv -fh "$CURRENT.next" "$CURRENT"
@@ -151,6 +154,7 @@ cat > "$PLIST.next" <<PLIST
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
   <array><string>$(xml "$python")</string><string>-I</string><string>$(xml "$launcher")</string></array>
+  <key>WorkingDirectory</key><string>$(xml "$CURRENT")</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ProcessType</key><string>Background</string>
@@ -162,7 +166,7 @@ PLIST
 mv -f "$PLIST.next" "$PLIST"
 {
   printf '#!/usr/bin/env bash\n# nox node ... for this Mac (written by install-macos.sh --node).\n'
-  printf 'run() { %q -I %q --cli node "$@"; }\n' "$python" "$launcher"
+  printf 'run() { (cd %q && %q -I %q --cli node "$@"); }\n' "$CURRENT" "$python" "$launcher"
   # shellcheck disable=SC2016  # written literally into the wrapper
   printf 'run "$@" || exit $?\n[ "${1:-}" = pair ] && launchctl kickstart -k "gui/$(id -u)/%s"\nexit 0\n' "$LABEL"
 } > "$NODE_BIN.next"

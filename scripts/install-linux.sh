@@ -828,9 +828,9 @@ node_systemctl() {
 node_cli() {
   local python="$CURRENT/.venv/bin/python" launcher="$CURRENT/installer/start_node.pyw"
   if [ -n "$NODE_HEADLESS" ]; then
-    (cd / && sudo -u "$NODE_USER" env NOX_NODE_HOME="$NODE_DIR" HOME="$NODE_HOME_DIR" "$python" -I "$launcher" "$@")
+    (cd "$CURRENT" && sudo -u "$NODE_USER" env NOX_NODE_HOME="$NODE_DIR" HOME="$NODE_HOME_DIR" "$python" -I "$launcher" "$@")
   else
-    "$python" -I "$launcher" "$@"
+    (cd "$CURRENT" && "$python" -I "$launcher" "$@")
   fi
 }
 
@@ -880,11 +880,11 @@ node_write_unit() {
     # bash, not sh: the paths below are quoted with printf %q.
     printf '#!/usr/bin/env bash\n# nox node ... for this device (written by install-linux.sh --node).\n'
     if [ -n "$NODE_HEADLESS" ]; then
-      printf 'run() { sudo -u %q env NOX_NODE_HOME=%q HOME=%q %q -I %q --cli node "$@"; }\n' \
-        "$NODE_USER" "$NODE_DIR" "$NODE_HOME_DIR" "$CURRENT/.venv/bin/python" "$CURRENT/installer/start_node.pyw"
+      printf 'run() { (cd %q && sudo -u %q env NOX_NODE_HOME=%q HOME=%q %q -I %q --cli node "$@"); }\n' \
+        "$CURRENT" "$NODE_USER" "$NODE_DIR" "$NODE_HOME_DIR" "$CURRENT/.venv/bin/python" "$CURRENT/installer/start_node.pyw"
       printf 'run "$@" || exit $?\n[ "${1:-}" = pair ] && sudo systemctl restart nox-node\nexit 0\n'
     else
-      printf 'run() { %q -I %q --cli node "$@"; }\n' "$CURRENT/.venv/bin/python" "$CURRENT/installer/start_node.pyw"
+      printf 'run() { (cd %q && %q -I %q --cli node "$@"); }\n' "$CURRENT" "$CURRENT/.venv/bin/python" "$CURRENT/installer/start_node.pyw"
       printf 'run "$@" || exit $?\n[ "${1:-}" = pair ] && systemctl --user restart nox-node\nexit 0\n'
     fi
   } > "$NODE_BIN.next"
@@ -930,6 +930,10 @@ node_install() {
   previous="$(basename "$(readlink "$CURRENT" 2>/dev/null || true)")"
   [ "$previous" = "." ] && previous=""
   switch_to "$release"
+  # A new base: the versions the node installed itself go (as the node's user, never through a
+  # link it planted); the floor and the failure record stay.
+  if [ -n "$NODE_HEADLESS" ] && ! node_paths_untampered; then fail "$(msg node_link_refused "$NODE_DIR")"; fi
+  node_cli --reset-overlays
   if ! node_cli --selftest >/dev/null; then
     if [ -n "$previous" ] && [ -d "$RELEASES/$previous" ]; then switch_to "$previous"; fi
     fail "$(msg node_selftest_failed)"
