@@ -7,13 +7,16 @@
 # run.
 #
 # It downloads the whole dependency set and takes a while, so it runs on release branches, on
-# pull requests that touch the installer or the sandbox rules, and on demand - not on every PR.
+# every merge into develop and main (the merged state is what a release is cut from - a change
+# elsewhere can break the installed copy too), on pull requests that touch the installer or the
+# sandbox rules, and on demand - not on every PR.
 name: Installer (Windows)
 
 on:
   workflow_dispatch:
   push:
-    branches: ["release/**"]
+    branches: ["release/**", develop, main]
+  merge_group:
   pull_request:
     paths:
       - "installer/**"
