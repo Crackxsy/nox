@@ -33,7 +33,7 @@ import time
 import weakref
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cryptography import x509
@@ -113,6 +113,8 @@ class NodeSession:
     cert_not_after: datetime | None = None
     #: What the node reported in its last `nox/pong`: why it refuses everything, or "".
     node_state: str = ""
+    #: A new certificate was issued over this connection (`nox/renew`, at most once).
+    renewed: bool = False
     blobs: dict[str, list[bytes]] = field(default_factory=dict)
     complete: set[str] = field(default_factory=set)
     blob_bytes: int = 0
@@ -461,6 +463,7 @@ class NodeListener:
         p.M_CONFIRM_RESULT: p.ConfirmResult,
         p.M_SECURITY_KILL: p.SecurityKill,
         p.M_BLOB: p.Blob,
+        p.M_RENEW: p.RenewRequest,
         p.M_INITIALIZED: None,
         p.M_LIST_CHANGED: None,
     }
@@ -510,8 +513,45 @@ class NodeListener:
             if not self._take_chunk(session, params):
                 await self._violation(session, method, msg_id, ERR_INVALID_PARAMS, "blob")
                 return
+        elif method == p.M_RENEW:
+            assert isinstance(params, p.RenewRequest)
+            await self._renew(session, msg_id, params)
+            return
         if msg_id is not None:
             await session.answer({"jsonrpc": "2.0", "id": msg_id, "result": {}})
+
+    async def _renew(self, session: NodeSession, msg_id: Any, request: p.RenewRequest) -> None:
+        """`nox/renew`: once per connection, only inside the renewal window, only for the paired
+        key. The connection goes on; its end moves to the new certificate's."""
+
+        async def refuse(reason: str) -> None:
+            self._append_audit("node.cert_renewed", session.device_id, "deny", reason)
+            if msg_id is not None:
+                await session.answer(
+                    {"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32000, "message": reason}}
+                )
+
+        ends = session.cert_not_after
+        if session.renewed:
+            await refuse("already_renewed")
+            return
+        if ends is None or ends - datetime.now(UTC) > timedelta(days=p.RENEW_WINDOW_DAYS + 1):
+            await refuse("too_early")
+            return
+        session.renewed = True
+        try:
+            issued = await self._pairing.renew(session.device_id, session.serial, request.csr)
+        except Exception as exc:  # noqa: BLE001 - a failed issuance is a refusal, not a crash
+            log.error("node.renew_failed", error=type(exc).__name__)
+            issued = None
+        if issued is None:
+            await refuse("refused")
+            return
+        session.cert_not_after = issued.not_after
+        self._append_audit("node.cert_renewed", session.device_id, "allow", issued.serial)
+        if msg_id is not None:
+            result = {"cert": issued.cert_pem, "not_after": issued.not_after.isoformat()}
+            await session.answer({"jsonrpc": "2.0", "id": msg_id, "result": result})
 
     def _kill(self, device_id: str, reason: str) -> str:
         """A stop from the node. Never suppressed while Nox runs: every one engages the switch

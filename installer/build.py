@@ -83,6 +83,8 @@ REQUIREMENTS_LOCK = INSTALLER_DIR / "requirements.lock"
 APP_PTH_ENTRY = "..\\app"
 #: The launcher the shortcuts start (puts `app/` on `sys.path` itself and reports a failed start).
 LAUNCHER = INSTALLER_DIR / "start_nox.pyw"
+#: The node's launcher: chooses between this copy and the versions a node installed itself.
+NODE_LAUNCHER = INSTALLER_DIR / "start_node.pyw"
 #: The sandbox-rules helper and its Inno include (`nox.sandbox.wfp_helper`).
 SANDBOX_RULES_DIR = BUILD_DIR / "sandbox-rules"
 #: License texts and the written source offer, installed into `{app}` (GPL-3.0 section 6).
@@ -297,6 +299,11 @@ def step_assemble_app() -> None:
     copy_tree(REPO_ROOT / "ui" / "pet" / "dist", APP_DIR / "ui" / "pet")
     copy_tree(REPO_ROOT / "ui" / "dashboard" / "dist", APP_DIR / "ui" / "dashboard")
     shutil.copy2(LAUNCHER, APP_DIR / LAUNCHER.name)
+    shutil.copy2(NODE_LAUNCHER, APP_DIR / NODE_LAUNCHER.name)
+    # The libraries this payload ships, by their lock: a node applies a code-only update
+    # (nox.node.update) only when the update was built from the same uv.lock.
+    lock = hashlib.sha256((REPO_ROOT / "uv.lock").read_bytes()).hexdigest()
+    (APP_DIR / "uv.lock.sha256").write_text(lock + "\n", encoding="ascii")
     log(f"assembled app payload -> {APP_DIR}")
 
 

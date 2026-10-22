@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from cryptography import x509
@@ -46,6 +46,10 @@ log = get_logger(__name__)
 __all__ = ["CHANNEL", "NODE_ROLE", "NodePairing", "NodeRedeemed"]
 
 CHANNEL = "node"
+#: A node gets a new certificate at most this often (`renew`) ...
+RENEW_MIN_INTERVAL = timedelta(hours=12)
+#: ... unless it never used the last one (still presents the older): then again after this.
+RENEW_RETRY_INTERVAL = timedelta(minutes=10)
 NODE_ROLE = "node"
 
 #: Called with (device_id, reason) after a revocation, so open connections close at once.
@@ -76,6 +80,7 @@ class NodePairing:
         self._tls_dir = tls_dir
         self._clock = clock or (lambda: datetime.now(UTC))
         self._on_revoked: list[OnRevoked] = []
+        self._renewing: dict[str, asyncio.Lock] = {}
         self.pairing = PairingService(
             repo,
             bus=bus,
@@ -173,8 +178,69 @@ class NodePairing:
         device = self._repo.find_device_for_sender(CHANNEL, spki)
         if device is None or device.id != node_id or device.revoked or device.role != NODE_ROLE:
             return None
+        # Connected with a renewed certificate: the ones before it are done.
+        self._nodes.retire_older(device.id, f"{cert.serial_number:x}", when=self._clock())
         self._repo.mark_seen(device.id, when=self._clock())
         return device
+
+    async def renew(self, device_id: str, serial: str, csr: str) -> IssuedClientCert | None:
+        """A new certificate for a connected node, before its current one (`serial`) ends.
+
+        Only for the key that was paired: a request for another key is refused (a stolen
+        certificate alone never yields a fresh one; a new key means pairing again). The node's
+        pairing must still stand; the new serial is recorded like the first. The old one stays
+        valid until the node first connects with the new one (then it is revoked, `identify`)
+        or ends by itself: an answer lost on the way, or a certificate the node cannot use yet,
+        never locks it out - it asks again with the old one (at most every
+        `RENEW_RETRY_INTERVAL`, and the unused one is replaced). Otherwise at most one renewal
+        per `RENEW_MIN_INTERVAL` per node, whatever the number of connections: a per-node lock
+        serialises renewals in this process, and the database records them in one transaction
+        (`NodeRepository.add_renewed_cert`). A certificate that was signed but not recorded is
+        worthless: `identify` knows no serial for it."""
+        async with self._renew_lock(device_id):
+            return await self._renew(device_id, serial, csr)
+
+    def _renew_lock(self, device_id: str) -> asyncio.Lock:
+        lock = self._renewing.get(device_id)
+        if lock is None:
+            lock = self._renewing[device_id] = asyncio.Lock()
+        return lock
+
+    async def _renew(self, device_id: str, serial: str, csr: str) -> IssuedClientCert | None:
+        device = self.get(device_id)
+        current = self._nodes.get_cert(serial)
+        if (
+            device is None
+            or device.revoked
+            or current is None
+            or current.revoked
+            or current.device_id != device_id
+        ):
+            return None
+        try:
+            if csr_spki_sha256(csr) != current.spki_sha256:
+                log.warning("node.renew_other_key", device_id=device_id)
+                return None
+        except CsrRefusedError as exc:
+            log.warning("node.renew_csr_refused", reason=str(exc))
+            return None
+        issued = await asyncio.to_thread(issue_client_certificate, self._tls_dir, csr, device_id)
+        now = self._clock()
+        recorded = await asyncio.to_thread(
+            self._nodes.add_renewed_cert,
+            presented_serial=serial,
+            new_serial=issued.serial,
+            device_id=device_id,
+            spki_sha256=issued.spki_sha256,
+            not_after=issued.not_after,
+            when=now,
+            not_since=now - RENEW_MIN_INTERVAL,
+            retry_since=now - RENEW_RETRY_INTERVAL,
+        )
+        if not recorded:
+            log.warning("node.renew_refused", device_id=device_id)
+            return None
+        return issued
 
     async def revoke(self, device_id: str, *, reason: str = "dashboard") -> bool:
         """Revoke the pairing and every certificate of the node, then close its connection."""

@@ -747,6 +747,29 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   cannot read or erase it. `nox/revoked` deletes the key and the certificate. The chain shows
   tampering, it does not prevent it: whoever controls the user's account can rewrite the whole
   file. A notice always starts with "Nox"; Windows PowerShell is started by its absolute path.
+- **Self-update only from the signed release** (`nox.node.update`, docs/NODES.md#updates): the
+  signature against the keys of the installed version (none configured: no update at all), no
+  downgrade below the highest version that ran, **no replay** of a validly signed but older
+  manifest (`created` must not go back), bundle size and SHA-256 from the manifest, every file
+  against `BUNDLE.json`, the same `uv.lock`. It installs by itself only a stable, code-only patch
+  whose node protocol the paired core accepts. **Freeze:** an attacker on the network can still
+  withhold new manifests; after 30 days without a newer one the node says so (`nox node status`,
+  a notice). **A taken-over node account** can write its own `app/` folder, so the launcher runs
+  a self-installed version only after checking that folder at every start, with the installed
+  program's code and keys, and every installer run drops those versions; a headless node's
+  program (`/opt/nox-node`) is root's. The launcher, the tray and the trial start run Python
+  isolated (`-I`, a trusted working folder, no `PYTHON*` variables); nothing elevated runs code
+  from the user's folders (Windows Setup runs it as the original user and refuses node mode when
+  elevated on purpose). **Accepted residual risks:** (a) a process a taken-over node account
+  leaves running in the node's service cgroup (headless Linux) can change a release folder
+  between the launcher's check and a later lazy import - surviving the launcher's own restarts,
+  not `systemctl stop`, a reboot or a reinstall; (b) a taken-over node account can pin an older
+  signed release that is still newer than the installed program via `state.json` until the next
+  install.
+- **Certificate renewal never strands a node:** the old certificate stays valid until the node
+  first connects with the new one (then it is revoked) or ends by itself; a lost answer or a
+  clock behind by more than an hour is retried after 10 minutes. Renewals are recorded in one
+  database transaction under a per-node lock: concurrent requests get at most one certificate.
 - **Residual risk, stated plainly:** "local" means the logged-in user. Malware running as that
   user with full user rights can read that user's keyring and files - the node key, the
   confirmation key - and act as the node towards the core within what the node may do. Nox's

@@ -174,6 +174,30 @@ def test_the_layout_is_exactly_what_nox_release_writes(
     )
     assert from_script == from_nox
     parse_manifest(from_script)
+    # The node fields (C7) the same way, and strictly typed when read back.
+    with_node = {"node_speaks": 2, "deps_changed": False}
+    script_node = script.build_manifest(
+        tag="v0.7.0",
+        commit=COMMIT,
+        files=assets,
+        next_keys=trusted,
+        node_protocol=(1, 2),
+        min_node_version=None,
+        created=stamp,
+        **with_node,
+    )
+    nox_node = build_manifest(
+        tag="v0.7.0",
+        source_commit=COMMIT,
+        assets=[asset_for_file(p) for p in assets],
+        created=stamp,
+        next_keys=[release_key.trusted],
+        node_protocol=(1, 2),
+        **with_node,
+    )
+    assert script_node == nox_node
+    parsed = parse_manifest(script_node)
+    assert (parsed.node_speaks, parsed.deps_changed) == (2, False)
     assert script.MANIFEST_SCHEMA == manifest_module.MANIFEST_SCHEMA
     assert script.SIGNATURE_SCHEMA == verify_module.SIGNATURE_SCHEMA
     assert script.PROJECT == manifest_module.PROJECT

@@ -127,6 +127,12 @@ class ReleaseManifest:
     next_keys: tuple[TrustedKey, ...] = ()
     node_protocol: tuple[int, int] | None = None
     min_node_version: Version | None = None
+    #: The node protocol the `nox node` of this release speaks (C7): a node installs it by itself
+    #: only when its paired core accepts that protocol.
+    node_speaks: int | None = None
+    #: Whether `uv.lock` changed since the previous release: then a node's code-only update
+    #: cannot apply and the installer is needed.
+    deps_changed: bool | None = None
     project: str = PROJECT
     extra: Mapping[str, Any] = field(default_factory=dict)
 
@@ -162,6 +168,8 @@ def build_manifest(
     next_keys: Iterable[TrustedKey] = (),
     node_protocol: tuple[int, int] | None = None,
     min_node_version: str | None = None,
+    node_speaks: int | None = None,
+    deps_changed: bool | None = None,
 ) -> bytes:
     """The manifest file's bytes. Validated by parsing them back, so nothing is signed that a
     verifier would refuse."""
@@ -190,6 +198,11 @@ def build_manifest(
             for asset in sorted(assets, key=lambda item: item.name)
         ],
     }
+    # Written only when known, so a manifest without them keeps its earlier layout.
+    if node_speaks is not None:
+        document["node_speaks"] = node_speaks
+    if deps_changed is not None:
+        document["deps_changed"] = deps_changed
     data = (json.dumps(document, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode()
     parse_manifest(data)
     return data
@@ -283,6 +296,15 @@ def parse_manifest(data: bytes) -> ReleaseManifest:
         None if raw_min_node is None else Version.parse(_require(document, "min_node_version", str))
     )
 
+    speaks: int | None = None
+    if document.get("node_speaks") is not None:
+        speaks = _require(document, "node_speaks", int)
+        if not 0 < speaks <= 1000:
+            raise ManifestError("field 'node_speaks' is not a protocol number")
+    deps_changed: bool | None = None
+    if document.get("deps_changed") is not None:
+        deps_changed = _require(document, "deps_changed", bool)
+
     known = {
         "schema",
         "project",
@@ -295,6 +317,8 @@ def parse_manifest(data: bytes) -> ReleaseManifest:
         "next_keys",
         "node_protocol",
         "min_node_version",
+        "node_speaks",
+        "deps_changed",
     }
     return ReleaseManifest(
         version=version,
@@ -306,6 +330,8 @@ def parse_manifest(data: bytes) -> ReleaseManifest:
         next_keys=tuple(next_keys),
         node_protocol=protocol,
         min_node_version=min_node,
+        node_speaks=speaks,
+        deps_changed=deps_changed,
         project=project,
         extra={key: value for key, value in document.items() if key not in known},
     )

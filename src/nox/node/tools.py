@@ -124,8 +124,7 @@ _WINDOWS_TOAST = (
     "$n=$t.GetElementsByTagName('text');"
     "$n.Item(0).AppendChild($t.CreateTextNode($env:NOX_NOTIFY_TITLE))|Out-Null;"
     "$n.Item(1).AppendChild($t.CreateTextNode($env:NOX_NOTIFY_TEXT))|Out-Null;"
-    "$a='{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe';"
-    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($a)"
+    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:NOX_NOTIFY_APPID)"
     ".Show([Windows.UI.Notifications.ToastNotification]::new($t))"
 )
 
@@ -146,7 +145,14 @@ class PlatformNotifier:
     """Windows toast, freedesktop `notify-send`, macOS Notification Center."""
 
     async def show(self, title: str, text: str) -> None:
-        env = {**os.environ, "NOX_NOTIFY_TITLE": title, "NOX_NOTIFY_TEXT": text}
+        from nox.node.appid import toast_app_id  # noqa: PLC0415
+
+        env = {
+            **os.environ,
+            "NOX_NOTIFY_TITLE": title,
+            "NOX_NOTIFY_TEXT": text,
+            "NOX_NOTIFY_APPID": toast_app_id(),  # the node's own ID once the installer set it
+        }
         kwargs: dict[str, Any] = {"env": env, "stdout": subprocess.DEVNULL}
         if sys.platform == "win32":
             argv = [str(_powershell()), "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_TOAST]

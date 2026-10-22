@@ -148,6 +148,8 @@ def build_manifest(
     node_protocol: tuple[int, int] | None,
     min_node_version: str | None,
     created: dt.datetime | None = None,
+    node_speaks: int | None = None,
+    deps_changed: bool | None = None,
 ) -> bytes:
     """The manifest's bytes, in exactly the layout nox.release.manifest.build_manifest writes."""
     if not tag.startswith("v") or not _VERSION.match(tag[1:]):
@@ -181,6 +183,12 @@ def build_manifest(
         ],
         "assets": assets,
     }
+    if node_speaks is not None:
+        if not 0 < node_speaks <= 1000:
+            raise RefusedError("--node-speaks must be a protocol number")
+        document["node_speaks"] = node_speaks
+    if deps_changed is not None:
+        document["deps_changed"] = deps_changed
     return (json.dumps(document, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode()
 
 
@@ -249,6 +257,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--trust-list", type=Path, default=DEFAULT_TRUST_LIST)
     parser.add_argument("--node-protocol", help="supported node protocol range, e.g. 1-2")
     parser.add_argument("--min-node-version", help="oldest node version this core works with")
+    parser.add_argument(
+        "--node-speaks", type=int, help="the node protocol this release's node speaks"
+    )
+    parser.add_argument(
+        "--deps-changed",
+        choices=("yes", "no"),
+        help="whether uv.lock changed since the previous release (no: nodes may update code-only)",
+    )
     parser.add_argument("files", nargs="+", type=Path, help="the files the release publishes")
     return parser.parse_args(argv)
 
@@ -273,6 +289,8 @@ def main(argv: list[str] | None = None) -> int:
             next_keys=trusted,
             node_protocol=protocol,
             min_node_version=args.min_node_version,
+            node_speaks=args.node_speaks,
+            deps_changed=None if args.deps_changed is None else args.deps_changed == "yes",
         )
         args.out.mkdir(parents=True, exist_ok=True)
         (args.out / SIGNATURE_NAME).unlink(missing_ok=True)

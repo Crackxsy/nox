@@ -25,6 +25,7 @@ def test_a_node_may_send_exactly_these_methods() -> None:
         "security.kill",
         "notifications/tools/list_changed",
         "nox/blob",
+        "nox/renew",  # a new certificate for the key it already holds (C7)
     }
 
 
