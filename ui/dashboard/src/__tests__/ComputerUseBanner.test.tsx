@@ -10,7 +10,14 @@ import type { Auth } from '../auth';
 import type { DashboardIpcHandlers, IpcClient } from '../ipc';
 import { DASHBOARD_PATTERNS } from '../ipc';
 import { translator } from '../i18n';
-import { INITIAL_STATE, parseComputerUse, parseNodeControl, reduceEvent, setConnected } from '../model';
+import {
+  INITIAL_STATE,
+  parseComputerUse,
+  parseControlledHere,
+  parseNodeControl,
+  reduceEvent,
+  setConnected,
+} from '../model';
 
 const captured: { handlers: DashboardIpcHandlers | null } = { handlers: null };
 
@@ -137,6 +144,9 @@ describe('the computer-use strip in the app', () => {
     ];
     expect(parseNodeControl({ sessions }).map((n) => n.device)).toEqual(['Laptop']);
     expect(parseNodeControl(null)).toEqual([]);
+    expect(parseControlledHere({ sessions, controlled_here: true })).toBe(true);
+    expect(parseControlledHere({ sessions, controlled_here: 'yes' })).toBe(false);
+    expect(parseControlledHere(null)).toBe(false);
   });
 
   it('keeps one line per PC and forgets them on disconnect', () => {

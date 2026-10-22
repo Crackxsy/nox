@@ -553,10 +553,16 @@ def _register_control_requests(core: Any, ipc: Any, control: NodeControl, gate: 
     """`node.computer.status` (what the header shows, for a dashboard that (re)connects) and
     `node.computer.release` (lift a stuck lock by hand: only at the computer Nox runs on, with
     the PIN, not remotely; a node that still reports a session locks again at once)."""
-    from nox.ipc.roles import LOCAL_UI_ROLES  # noqa: PLC0415
+    from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
+    from nox.ipc.tokens import DEVICE_CLIENT_PREFIX  # noqa: PLC0415
 
-    async def h_status(_ctx: RequestContext, _p: EmptyRequest) -> dict[str, Any]:
-        return {"sessions": control.status()}
+    async def h_status(ctx: RequestContext, _p: EmptyRequest) -> dict[str, Any]:
+        # Whether the asking browser is the one on a PC Nox controls: it cannot approve then,
+        # so it shows no PIN field at all.
+        here = ctx.role == DEVICE_ROLE and control.controls_browser(
+            ctx.client_id.removeprefix(DEVICE_CLIENT_PREFIX)
+        )
+        return {"sessions": control.status(), "controlled_here": here}
 
     async def h_release(ctx: RequestContext, p: ReleaseRequest) -> dict[str, Any]:
         refusal = await local_pin_refusal(

@@ -655,7 +655,11 @@ async def session_refusal(
     3. this machine's dashboard or shell not from a remote session - a remote desktop could be
        opened from the very PC Nox controls; a core running as a service without a login
        session counts as not remote (the PIN still applies);
-    4. no PIN set: refused. Reading, "deny" and Stopp are never asked here."""
+    4. no PIN set: refused. Reading, "deny" and Stopp are never asked here.
+
+    Talking to Nox (`chat.send`, `voice.ptt`) needs no PIN - except from the browser on the PC
+    Nox controls, which could otherwise be the one typing."""
+    from nox.ipc.dispatch import conversation_request  # noqa: PLC0415
     from nox.ipc.errors import IpcError  # noqa: PLC0415
     from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
     from nox.ipc.tokens import DEVICE_CLIENT_PREFIX  # noqa: PLC0415
@@ -667,6 +671,8 @@ async def session_refusal(
         device = str(getattr(ctx, "client_id", "")).removeprefix(DEVICE_CLIENT_PREFIX)
         if control.controls_browser(device):
             return REFUSE_LINKED
+        if conversation_request(action):
+            return None
         if gate is None or not gate.is_required():
             return REFUSE_NO_PIN
         if device_guard is None:
@@ -677,5 +683,7 @@ async def session_refusal(
             return exc.message
         return None
     if role in LOCAL_UI_ROLES:
+        if conversation_request(action):
+            return None
         return await local_pin_refusal(ctx, pin, gate=gate, remote=remote, action=action)
     return REFUSE_ROLE

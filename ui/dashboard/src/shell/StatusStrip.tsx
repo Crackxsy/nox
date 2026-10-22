@@ -134,7 +134,7 @@ export function StatusStrip({
                   className="input input--pin input--sm"
                   type="password"
                   inputMode="numeric"
-                  autoComplete="off"
+                  autoComplete="one-time-code"
                   placeholder={t('perm_pin')}
                   value={pin}
                   onChange={(e) => setPin(e.target.value)}
@@ -196,7 +196,7 @@ export function StatusStrip({
               id={`release-pin-${node.deviceId}`}
               type="password"
               inputMode="numeric"
-              autoComplete="off"
+              autoComplete="one-time-code"
               className="input input--pin"
               placeholder={t('perm_pin')}
               value={releasePin}

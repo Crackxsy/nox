@@ -338,6 +338,8 @@ export const en: Record<CoreKey, string> = {
   perm_pin_missing: 'Enter the security PIN first.',
   perm_node_control_device:
     'Allowing does not work from the browser on the PC Nox is controlling - from another device it works with the PIN. Denying works everywhere.',
+  perm_node_control_here:
+    'Nox is controlling mouse and keyboard on this PC. Allowing does not work from here - use another device with the PIN. Denying works here too.',
   perm_node_control_pin_hint: 'Nox is controlling mouse and keyboard on a PC: allowing now needs the PIN.',
   perm_only_at_computer: 'This can only be allowed on the computer Nox runs on. Denying works here too.',
   perm_countdown: '{0} seconds left. Without an answer, Nox will not do it.',

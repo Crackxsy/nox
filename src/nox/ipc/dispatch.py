@@ -160,8 +160,13 @@ INPUT_ROLES: frozenset[str] = frozenset(UI_ROLES)
 CALM_UI_REQUESTS: frozenset[str] = frozenset(
     {"state.get", "health.get", "health.history", "config.effective", "config.get",
      "security.kill", "security.panic", "security.pin.status", "voice.mute", "plugin.status",
-     "secrets.status", "security.permission.reply"}
+     "secrets.status", "security.permission.reply", "security.permission.pending",
+     "personality.get", "day.today"}
 )  # fmt: skip
+#: Talking to Nox: while Nox controls mouse and keyboard on a paired PC these need no PIN - from
+#: anywhere but the browser on that very PC, so Nox cannot type instructions to itself
+#: (`nox.node.world_routes.session_refusal`). Anything they lead to is asked as usual.
+CONVERSATION_UI_REQUESTS: frozenset[str] = frozenset({"chat.send", "voice.ptt"})
 
 
 def calm_ui_request(name: str) -> bool:
@@ -169,6 +174,19 @@ def calm_ui_request(name: str) -> bool:
     return (
         name in CALM_UI_REQUESTS or name.startswith("ipc.") or name.endswith((".list", ".status"))
     )
+
+
+def conversation_request(name: str) -> bool:
+    """Talking to Nox (`CONVERSATION_UI_REQUESTS`)."""
+    return name in CONVERSATION_UI_REQUESTS
+
+
+def calm_call(name: str, payload: Any) -> bool:
+    """`calm_ui_request` for one call: switching the microphone back on (`voice.mute` with
+    `muted: false`) is not calm - it gives Nox an ear again."""
+    if name == "voice.mute":
+        return not (isinstance(payload, dict) and payload.get("muted") is False)
+    return calm_ui_request(name)
 
 
 #: (context, the request's `pin`, the request's name) -> why it is refused, or None.
@@ -268,7 +286,7 @@ class RequestRegistry:
         if (
             ctx.role in INPUT_ROLES
             and node_guard is not None
-            and not calm_ui_request(envelope.name)
+            and not calm_call(envelope.name, payload)
         ):
             raw_pin = payload.get("pin") if isinstance(payload, dict) else None
             pin = raw_pin if isinstance(raw_pin, str) else None

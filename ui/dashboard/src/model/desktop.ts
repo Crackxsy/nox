@@ -42,6 +42,11 @@ export function parseNodeControl(payload: unknown): ComputerUseNotice[] {
     .filter((n): n is ComputerUseNotice => n !== null && n.active && n.deviceId !== '');
 }
 
+/** `node.computer.status {controlled_here}`: this browser runs on a PC Nox controls right now. */
+export function parseControlledHere(payload: unknown): boolean {
+  return isRecord(payload) && payload.controlled_here === true;
+}
+
 /** The sessions on paired PCs after one notice: a start replaces that PC's entry, an end removes it. */
 export function applyNodeControl(list: ComputerUseNotice[], notice: ComputerUseNotice): ComputerUseNotice[] {
   const rest = list.filter((n) => n.deviceId !== notice.deviceId);

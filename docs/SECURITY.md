@@ -811,7 +811,12 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   core that runs as a service without any login session (the Pi image) counts as not remote, the
   PIN applies; the check runs off the event loop with a time limit (too slow: unknown); (4) no PIN
   set: refused. The desktop shell's dialog has a PIN field for this. A node's own dialog still
-  asks on that node. A start needs a browser device linked to that node (`node.link`, else
+  asks on that node. **Talking to Nox stays possible** (`chat.send`, `voice.ptt`): no PIN from
+  this machine or from a paired device other than the controlled PC's browser, which is refused
+  (Nox could type its own instructions there); anything a conversation leads to is asked under
+  the rule above. Muting the microphone is always free; switching it back on (`voice.mute` with
+  `muted: false`) follows the PIN rule. Which requests count as calm is pinned by a snapshot test
+  (`tests/integration/test_lan.py`), so a state-changing `*.status` cannot slip in. A start needs a browser device linked to that node (`node.link`, else
   `link_required`) and is refused while the lock holds for it (`session_running`); a start
   without a readable report is followed by `computer.session_end`. Stops, kills and disconnects
   never lift the lock themselves - the node ends its session on `nox/kill` and its next report

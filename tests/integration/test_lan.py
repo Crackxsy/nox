@@ -674,3 +674,58 @@ async def test_a_device_sees_whether_a_pin_is_set_but_no_local_detail(core: NoxC
         assert status.payload["error"] == "unavailable"
     local = await _local(core, "dashboard", "lan.status", {})
     assert local["error"].startswith("certificates:")
+
+
+#: Every registered request the calm rule lets through while Nox controls mouse and keyboard
+#: (`nox.ipc.dispatch.calm_ui_request`: the explicit list, `ipc.*`, `*.list`, `*.status`). A new
+#: name here must only read or stop: a state-changing `x.status` turns this red on purpose.
+CALM_SNAPSHOT = frozenset(
+    {
+        "ai.setup.status",
+        "clip.list",
+        "config.effective",
+        "config.get",
+        "consent.list",
+        "day.today",
+        "extend.list",
+        "health.get",
+        "health.history",
+        "home.list",
+        "home.status",
+        "lan.devices.list",
+        "lan.status",
+        "mcp.servers.list",
+        "mcp.tools.list",
+        "memory.profile.list",
+        "node.computer.status",
+        "node.list",
+        "personality.get",
+        "plans.list",
+        "plugin.status",
+        "presets.list",
+        "remote.devices.list",
+        "secrets.status",
+        "security.kill",
+        "security.panic",
+        "security.permission.pending",
+        "security.permission.reply",
+        "security.pin.status",
+        "skills.list",
+        "state.get",
+        "stream.overlay.status",
+        "stream.session.status",
+        "twitch.auth.status",
+        "views.list",
+        "voice.model.status",
+        "voice.mute",
+        "watch.list",
+    }
+)
+
+
+async def test_the_calm_requests_are_exactly_the_snapshot(core: NoxCore) -> None:
+    from nox.ipc.dispatch import calm_ui_request
+
+    assert core.registry is not None
+    calm = {n for n in core.registry.names() if calm_ui_request(n)}
+    assert calm == CALM_SNAPSHOT
