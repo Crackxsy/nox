@@ -105,14 +105,32 @@ its own budget: 60 actions and 5 high-risk ones per hour (`max_calls_per_hour`,
   .xlsx .pptx .odt .png .mp3 ...`) are not written on a device at all - Nox writes `.md` or
   `.txt` instead. Replacing or appending is always high risk. Never a hidden file or anything in
   a hidden folder (`.git`, `.vscode`, `.bashrc`, ...), never anything inside a repository (a
-  folder with `.git`, `.hg` or `.svn`, up to the allowed folder), never a file without an
+  folder with `.git`, `.hg`, `.svn`, `.jj`, `.bzr`, `_darcs` or `.sl`) or an app workspace whose
+  notes can run code (an Obsidian vault with `.obsidian`, a Logseq graph, Foam, Dendron, a
+  `.vscode`/`.idea` project) - inside the allowed folder or around it - never a file without an
   extension, a script, a program or a configuration file tools act on (`settings.json`,
   `package.json`, compose and pipeline files, `configuration.yaml`, anything in `workflows`,
   ...), never an executable file or one with a second name (hard link). The question shows the
   file, the mode, size, line count and a SHA-256, and the content - in full when it is short,
   otherwise its first and last 200 characters with "content shortened - N characters not
   shown". A write is never remembered, and a profile rule that allows writing on Nox does not
-  allow it on a node unless it names the device (`device:`).
+  allow it on a node unless it names exactly that device (`device:` with its full id). A
+  `.md` file is refused when it contains anything a note app could run - the words
+  `dataviewjs`, `js-engine`, `templater` or `meta-bind-js`, Templater `<%`, inline `` `$= ``,
+  `<script`, `javascript:` - wherever it stands. So Nox cannot write a note that merely mentions
+  these plugin keywords (or a link starting with `obsidian://` or `file:`). Code blocks in
+  notes Nox writes on devices may only contain text or data formats (`text`, `md`, `json`,
+  `yaml`, `toml`, `ini`, `csv`, `diff`, `log`) or name no language - a block in a programming
+  language (a plugin can run it on a click), for a plugin (`dataview`, `jsx`, ...) or one the app
+  draws (`mermaid`, `math`, `html`) is refused. An append is judged together with what the file
+  already holds, and a refusal says what blocks it. Notes are at most 256 KB, JSON/YAML files 64 KB.
+- **Your notes vault:** `nox node allow files --folder` refuses a folder that is (or lies in) a
+  repository or an app workspace - also a vault whose config folder was renamed (found by what
+  it holds). Allow a plain folder outside it - for example `Nox` next to the vault - and move
+  what Nox wrote into the vault yourself. **Don't link (symlink, junction) Nox's allowed folder
+  into a vault:** from the folder's side that cannot be detected. The settings folders of apps
+  in your home folder (`~/.vscode`, `~/.idea`) do not count as a workspace - a vault there
+  (`~/.obsidian`) does.
 - **Accepted for plain text:** a `.csv` can hold a spreadsheet formula, which Excel runs only
   after its own warning and your click; the other plain formats run nothing.
 - **Commands** (`shell`) run only in this device's own sandbox (AppContainer on Windows,

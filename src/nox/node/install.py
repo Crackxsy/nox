@@ -30,7 +30,14 @@ from nox.ipc.errors import ERR_NOT_FOUND, ERR_UNAVAILABLE, IpcError
 from nox.ipc.roles import UI_ROLES
 from nox.lan.install import authorize_admin, qr_data_uri
 from nox.lan.tls import TlsMaterial
-from nox.node.hands import PathArgs, ShellArgs, WriteArgs, write_risk, write_summary
+from nox.node.hands import (
+    PathArgs,
+    ShellArgs,
+    WriteArgs,
+    write_risk,
+    write_summary,
+    write_text_refusal,
+)
 from nox.node.listener import NodeListener
 from nox.node.names import label
 from nox.node.pairing import NodePairing
@@ -268,7 +275,9 @@ def _shell_target(payload: dict[str, Any]) -> str:
 
 
 def _write_target(payload: dict[str, Any]) -> str:
-    """A node write: where, how (new file / overwrite / append), how much, how it starts."""
+    """A node write: where, how (new file / overwrite / append), how much, how it starts. A
+    write whose text the node would refuse anyway is refused before this - in the route's
+    `prepare`, off the event loop (`_write_precheck`)."""
     shown = write_summary(
         str(payload.get("path") or ""),
         str(payload.get("text") or ""),
@@ -276,6 +285,14 @@ def _write_target(payload: dict[str, Any]) -> str:
         overwrite=bool(payload.get("overwrite")),
     )
     return _complete(" ".join(f"{key} {render(value)}" for key, value in shown.items()))
+
+
+def _write_precheck(payload: dict[str, Any]) -> str | None:
+    return write_text_refusal(
+        str(payload.get("path") or ""),
+        str(payload.get("text") or ""),
+        append=bool(payload.get("append")),
+    )
 
 
 def _write_risk(payload: dict[str, Any]) -> Risk:
@@ -342,6 +359,7 @@ def _install_routes(core: Any, registry: NodeRegistry) -> None:
                 # device is asked every time (never remembered).
                 node_risk=_write_risk if name == "file.write" else None,
                 remember_on_node=name != "file.write",
+                precheck=_write_precheck if name == "file.write" else None,
             )
         )
     on_core = {spec.name for spec in specs if own(spec.name) is not None}
