@@ -18,7 +18,7 @@ import json
 import time
 import uuid
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -67,6 +67,8 @@ OUTDATED_TOOLS: frozenset[str] = frozenset({"system.info"})
 
 #: How long a call waits for a device that has just connected to finish announcing its tools.
 LISTING_WAIT_S = 3.0
+#: When a first tool list failed: try again after these pauses, then on the next `list_changed`.
+LISTING_RETRY_S: tuple[float, ...] = (2.0, 5.0, 15.0)
 
 
 def _set_event() -> asyncio.Event:
@@ -190,8 +192,10 @@ class NodeRegistry:
         #: Narrowings being applied (kept referenced until done; see `set_narrowed`).
         self._applying: set[asyncio.Future[None]] = set()
         #: Nodes with a listing running for `list_changed`, and those that changed again meanwhile.
-        self._refreshing: set[str] = set()
-        self._dirty: set[str] = set()
+        self._refreshing: set[tuple[str, int]] = set()
+        self._dirty: set[tuple[str, int]] = set()
+        #: Retries of a first listing that failed (`on_connected`).
+        self._retries: set[asyncio.Future[None]] = set()
 
     def _lock(self, device_id: str) -> asyncio.Lock:
         lock = self._locks.get(device_id)
@@ -210,16 +214,40 @@ class NodeRegistry:
         entry.session, entry.online, entry.compatible = session, True, session.compatible
         entry.confirmer = session.hello.confirmer
         entry.last_seen = self._clock()
+        ok = False
         try:
             # The node forgot the core's narrowing with the old connection: a complete listing.
-            await self.refresh(session, complete=True)
+            ok = await self.refresh(session, complete=True)
         finally:
             listed.set()
+        if not ok:
+            # Never stuck online with nothing offered: try again a few times, then on the next
+            # `list_changed` (which the node sends whenever what it offers changes).
+            task = asyncio.ensure_future(self._retry_listing(session))
+            self._retries.add(task)
+            task.add_done_callback(self._retries.discard)
 
-    async def settle(self, timeout_s: float = LISTING_WAIT_S) -> None:
-        """Wait (at most `timeout_s`) until every device that has just connected has its tool
-        list recorded - so a request right after a device comes online finds it."""
-        waiting = [e.listed.wait() for e in self._entries.values() if e.connecting]
+    async def _retry_listing(self, session: NodeSession) -> None:
+        for delay in LISTING_RETRY_S:
+            await asyncio.sleep(delay)
+            entry = self._entries.get(session.device_id)
+            if entry is None or entry.session is not session or not entry.online:
+                return  # gone or replaced by a new connection, which lists for itself
+            if await self.refresh(session, complete=True):
+                return
+
+    async def settle(
+        self, device_ids: Iterable[str] | None = None, timeout_s: float = LISTING_WAIT_S
+    ) -> None:
+        """Wait (at most `timeout_s`) until the given devices - every device when None - have
+        their first tool list recorded, if they have just connected. A call that can only land on
+        the core or on another device never waits for an unrelated slow node."""
+        wanted = None if device_ids is None else set(device_ids)
+        waiting = [
+            e.listed.wait()
+            for e in self._entries.values()
+            if e.connecting and (wanted is None or e.device_id in wanted)
+        ]
         if not waiting:
             return
         with contextlib.suppress(TimeoutError):
@@ -232,39 +260,41 @@ class NodeRegistry:
             entry.last_seen = self._clock()
 
     async def on_tools_changed(self, session: NodeSession) -> None:
-        """Coalesced: while a listing for this node runs, any number of changes queue exactly
-        one more listing - a flood of `list_changed` cannot pile up requests."""
-        device_id = session.device_id
-        if device_id in self._refreshing:
-            self._dirty.add(device_id)
+        """Coalesced per connection: while a listing for this session runs, any number of
+        changes queue exactly one more listing - a flood of `list_changed` cannot pile up
+        requests, and a change from a new connection is never swallowed by the old one's loop."""
+        key = (session.device_id, id(session))
+        if key in self._refreshing:
+            self._dirty.add(key)
             return
-        self._refreshing.add(device_id)
+        self._refreshing.add(key)
         try:
             while True:
-                self._dirty.discard(device_id)
+                self._dirty.discard(key)
                 await self.refresh(session)
-                if device_id not in self._dirty:
+                if key not in self._dirty:
                     return
         finally:
-            self._refreshing.discard(device_id)
-            self._dirty.discard(device_id)
+            self._refreshing.discard(key)
+            self._dirty.discard(key)
 
-    async def refresh(self, session: NodeSession, *, complete: bool = False) -> None:
+    async def refresh(self, session: NodeSession, *, complete: bool = False) -> bool:
+        """List the node's tools again; False when it did not answer."""
         async with self._lock(session.device_id):
-            await self._refresh(session, complete=complete)
+            return await self._refresh(session, complete=complete)
 
-    async def _refresh(self, session: NodeSession, *, complete: bool) -> None:
+    async def _refresh(self, session: NodeSession, *, complete: bool) -> bool:
         """Under the node's lock. Threads only read and write the database and return values;
         every assignment to the entry happens here, on the loop."""
         entry = self._entries.get(session.device_id)
         if entry is None or entry.session is not session:
-            return
+            return True  # not this connection's business any more
         try:
             listed = await session.client.request("tools/list", {}, timeout_s=5)
-        except McpClientError as exc:
+        except (McpClientError, TimeoutError) as exc:
             log.warning("node.tools_list_failed", device_id=session.device_id, error=str(exc))
             entry.tools = {}
-            return
+            return False
         accepted = self._accept_tools(listed.get("tools"))
         policy, device_id, reported = self.policy, session.device_id, reported_groups(listed)
 
@@ -282,6 +312,7 @@ class NodeRegistry:
         if narrowed:
             await send_policy(session, narrowed)
         log.info("node.tools", device_id=session.device_id, tools=sorted(entry.tools))
+        return True
 
     async def set_narrowed(self, device_id: str, group: str, narrowed: bool) -> None:
         """Narrow (or clear) one group of one node. Narrowing takes effect on the core at once,

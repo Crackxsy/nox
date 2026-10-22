@@ -178,7 +178,7 @@ class FakeRegistry:
     def entries(self) -> list[NodeEntry]:
         return self._entries
 
-    async def settle(self, timeout_s: float = 3.0) -> None:
+    async def settle(self, device_ids: Any = None, timeout_s: float = 3.0) -> None:
         """No device is still connecting here (the router waits for that before a call)."""
         return None
 
