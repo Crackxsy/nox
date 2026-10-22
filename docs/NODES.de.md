@@ -129,14 +129,15 @@ an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trus
   keine Sprache nennen - ein Block in einer Programmiersprache (ein Plugin kann ihn per Klick
   ausführen), für ein Plugin (`dataview`, `jsx`, ...) oder einer, den die App zeichnet
   (`mermaid`, `math`, `html`), wird abgelehnt. Beim Anhängen zählt die ganze Datei, und die
-  Ablehnung sagt, was stört. Notizen sind höchstens 256 KB groß.
+  Ablehnung sagt, was stört. Notizen sind höchstens 256 KB groß, JSON-/YAML-Dateien 64 KB.
 - **Dein Notizen-Tresor:** `nox node allow files --folder` lehnt einen Ordner ab, der ein
   Repository oder ein App-Arbeitsbereich ist oder darin liegt - auch einen Tresor, dessen
   Einstellungsordner umbenannt wurde (erkannt an seinem Inhalt). Erlaube einen einfachen Ordner
   daneben - etwa `Nox` neben dem Tresor - und verschiebe, was Nox geschrieben hat, selbst hinein.
   **Verlinke den erlaubten Ordner nicht (Symlink, Junction) in einen Tresor:** Von der Seite des
   Ordners aus lässt sich das nicht erkennen. Die Einstellungsordner von Apps in deinem
-  Benutzerordner (`~/.vscode`, `~/.idea`) zählen nicht als Arbeitsbereich.
+  Benutzerordner (`~/.vscode`, `~/.idea`) zählen nicht als Arbeitsbereich - ein Tresor dort
+  (`~/.obsidian`) schon.
 - **Hingenommen bei einfachem Text:** Eine `.csv` kann eine Tabellenformel enthalten, die Excel
   erst nach eigener Warnung und deinem Klick ausführt; die anderen einfachen Formate führen nichts
   aus.

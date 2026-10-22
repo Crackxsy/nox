@@ -840,7 +840,11 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   `community-plugins.json`, `core-plugins.json`, `workspace.json`, `plugins/` or `config.edn`
   marks a vault whose config folder was renamed), checked on each walked directory handle on
   POSIX and by name on the final path's parents **up to the drive root** - at the home folder and
-  above only version control counts, since `~/.vscode` and `~/.idea` are the apps' own settings -
+  above generic markers do not count (`~/.vscode`, `~/.idea` and a bare `plugins/` are the apps'
+  own settings), but version control and an unmistakable vault do (`.obsidian`, `.logseq`,
+  `logseq/config.edn`, or a dot-folder with `app.json` and `workspace.json` or
+  `core-plugins.json`); every entry of a folder is looked at, only dot-folders are opened, and a
+  folder too full to read whole is refused rather than half-read -
   so a repository or vault around the allowed folder counts too; `nox node allow files --folder`
   refuses such a folder up front. Not detectable, and documented: an allowed folder linked
   (symlink, junction) *into* a vault from the vault's side. `.md` text is checked without
@@ -857,13 +861,16 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   `vbscript:`, `obsidian://`, `file:`, `<iframe`, `<object`, `<embed`, inline Dataview JS (`$=`
   or `=this.` after a backtick or tilde), `%>` with Templater's `tp.`, or an `on...=` handler in
   a raw HTML tag - wherever it stands. Accepted false positive: Nox cannot write a note that
-  merely mentions these plugin keywords. Every text write is capped at 256 KB. An append to a
+  merely mentions these plugin keywords. Every text write is capped at 256 KB, JSON/YAML at 64 KB (YAML is parsed
+  with libyaml's `CSafeLoader` where available). An append to a
   `.md` file is judged on the whole file - read through the verified handle, refused when the
   file is over the cap - so it cannot be assembled in pieces, and the refusal says what blocks
   it. A nesting deep enough to exhaust a parser is `invalid_content`. All text checks run before
-  anyone is asked and **off the event loop** with a 2 s limit (`tools.off_loop`): on the node the
-  whole gate runs in a worker thread under a lock (`NodeTool.precheck`, before the budget and the
-  dialog), on the core the route's `prepare` runs the check before the permission scope; a
+  anyone is asked and **off the event loop** with a 2 s limit (`tools.off_loop`). The text check is stateless
+  (`NodeGate.precheck`: no lock, budget, receipt or audit), so a check that runs out of time is
+  simply abandoned - it can never spend budget, consume a receipt or record an "allow" after its
+  `check_timeout` refusal; the gate's stateful part then runs fast, under a lock. On the core the
+  route's `prepare` runs the check before the permission scope; a
   write the node would refuse is never put before a person; no file without an allowed
   extension, and a config-name layer (`settings/tasks/launch/launchSettings/keybindings/package/
   project/tsconfig/jsconfig/composer/deno/flows.json`, `appsettings*.json`, `*compose*`,

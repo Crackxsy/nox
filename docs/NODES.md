@@ -123,13 +123,14 @@ its own budget: 60 actions and 5 high-risk ones per hour (`max_calls_per_hour`,
   `yaml`, `toml`, `ini`, `csv`, `diff`, `log`) or name no language - a block in a programming
   language (a plugin can run it on a click), for a plugin (`dataview`, `jsx`, ...) or one the app
   draws (`mermaid`, `math`, `html`) is refused. An append is judged together with what the file
-  already holds, and a refusal says what blocks it. Notes are at most 256 KB.
+  already holds, and a refusal says what blocks it. Notes are at most 256 KB, JSON/YAML files 64 KB.
 - **Your notes vault:** `nox node allow files --folder` refuses a folder that is (or lies in) a
   repository or an app workspace - also a vault whose config folder was renamed (found by what
   it holds). Allow a plain folder outside it - for example `Nox` next to the vault - and move
   what Nox wrote into the vault yourself. **Don't link (symlink, junction) Nox's allowed folder
   into a vault:** from the folder's side that cannot be detected. The settings folders of apps
-  in your home folder (`~/.vscode`, `~/.idea`) do not count as a workspace.
+  in your home folder (`~/.vscode`, `~/.idea`) do not count as a workspace - a vault there
+  (`~/.obsidian`) does.
 - **Accepted for plain text:** a `.csv` can hold a spreadsheet formula, which Excel runs only
   after its own warning and your click; the other plain formats run nothing.
 - **Commands** (`shell`) run only in this device's own sandbox (AppContainer on Windows,

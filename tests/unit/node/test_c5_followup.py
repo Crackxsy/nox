@@ -141,7 +141,7 @@ async def test_ordinary_markdown_is_written(world: dict[str, Path]) -> None:
 
 
 async def test_deeply_nested_or_huge_structured_text_is_refused(world: dict[str, Path]) -> None:
-    assert await _refused(world, "notes/tief.json", "[" * 200_000) == "invalid_content"
+    assert await _refused(world, "notes/tief.json", "[" * 60_000) == "invalid_content"
     big = '{"a": "' + "x" * (300 * 1024) + '"}'
     assert await _refused(world, "notes/gross.json", big) == "too_large"
 
@@ -560,3 +560,181 @@ async def test_a_fence_with_trailing_blanks_and_no_language_is_written(
 ) -> None:
     text = "```   \nhallo\n```\t\n"
     assert (await _write(world, "notes/leer.md", text))["ok"] is True
+
+
+# ---- final review: an abandoned check changes nothing; no skip in the vault scan ----------------
+
+
+async def test_a_slow_text_check_never_holds_up_the_stop(
+    listener: Any,
+    pairing: Any,
+    tls: Any,
+    tmp_path: Path,
+    world: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    import time
+
+    from nox.node import hands as hands_module
+    from tests.unit.node.test_c4 import Confirmer, call, session_of
+    from tests.unit.node.test_c5 import FakeSandbox, start
+
+    def slow(path: str, text: str, *, append: bool) -> str | None:
+        time.sleep(1.0)  # a worker thread: the event loop goes on
+        return None
+
+    monkeypatch.setattr(hands_module, "write_text_refusal", slow)
+    agent, task, stop, _audit = await start(
+        listener, pairing, tls, tmp_path, world, FakeSandbox(), Confirmer("allow")
+    )
+    try:
+        session = await session_of(listener, agent._home.load_identity().node_id)  # type: ignore[union-attr]
+        running = asyncio.create_task(
+            call(
+                session,
+                listener.signer,
+                "file.write",
+                {"path": "a.txt", "text": "x"},
+                risk="medium",
+            )
+        )
+        await asyncio.sleep(0.2)
+        started = time.perf_counter()
+        await listener.broadcast_kill("test")
+        answer = await asyncio.wait_for(running, 5)
+        assert time.perf_counter() - started < 0.6  # handled while the check still sleeps
+        assert answer["_nox"]["refused"] == "stopped"
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, 10)
+
+
+async def test_a_check_that_runs_out_of_time_spends_nothing_and_allows_nothing(
+    listener: Any,
+    pairing: Any,
+    tls: Any,
+    tmp_path: Path,
+    world: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    import time
+
+    from nox.node import hands as hands_module
+    from nox.node import tools as tools_module
+    from tests.unit.node.test_c4 import Confirmer, call, session_of
+    from tests.unit.node.test_c5 import FakeSandbox, start
+
+    def slow(path: str, text: str, *, append: bool) -> str | None:
+        time.sleep(0.4)
+        return None
+
+    monkeypatch.setattr(hands_module, "write_text_refusal", slow)
+    monkeypatch.setattr(tools_module, "CHECK_TIMEOUT_S", 0.1)
+    agent, task, stop, audit = await start(
+        listener, pairing, tls, tmp_path, world, FakeSandbox(), Confirmer("allow")
+    )
+    try:
+        session = await session_of(listener, agent._home.load_identity().node_id)  # type: ignore[union-attr]
+        answer = await call(
+            session,
+            listener.signer,
+            "file.write",
+            {"path": "a.txt", "text": "x"},
+            risk="medium",
+            call_id="late1",
+        )
+        assert answer["_nox"]["refused"] == "check_timeout"
+        await asyncio.sleep(0.6)  # the abandoned check has finished by now
+        gate = agent._gate
+        assert len(gate._side_effects) == 0  # no budget spent
+        assert gate.receipts is not None and "late1" not in gate.receipts._used  # receipt unused
+        rows = [e for e in audit.entries(since_seq=0, limit=500) if e.target == "late1"]
+        assert [(e.action, e.decision) for e in rows] == [("node.refused", "deny")]
+        assert not (world["root"] / "a.txt").exists()
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, 10)
+
+
+def test_one_receipt_is_used_once_even_from_many_threads(tmp_path: Path) -> None:
+    import threading
+
+    from nox.node.receipts import ReceiptSigner, ReceiptVerifier
+
+    signer = ReceiptSigner(tmp_path / "r")
+    verifier = ReceiptVerifier(signer.public_key, device_id="d" * 32, core_id="c" * 64)
+    tools = hand_tools(NodeHands(folders=lambda: [], protected=(tmp_path,), sandbox=lambda: None))
+    gate = NodeGate(
+        tools, NodeManifest(groups={g: g == "files" for g in GROUPS}), None, receipts=verifier
+    )
+    args = {"path": "a.txt", "text": "x", "append": False, "overwrite": False}
+    meta = NoxCallMeta(
+        **signed(signer, "file.write", args, risk="medium", device_id="d" * 32, core_id="c" * 64)
+    )
+    results: list[bool] = []
+    threads = [
+        threading.Thread(
+            target=lambda: results.append(gate.check("file.write", args, meta=meta).allowed)
+        )
+        for _ in range(16)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert results.count(True) == 1  # replay protection holds under concurrency
+
+
+async def test_a_renamed_vault_behind_a_thousand_notes_is_still_found(
+    world: dict[str, Path],
+) -> None:
+    vault = world["root"] / "Tresor"
+    vault.mkdir()
+    for i in range(1000):  # many entries, some sorting before and after the dot-folder
+        (vault / f"{i:04}-notiz.md").write_text("x", encoding="utf-8")
+        if i == 500:
+            (vault / ".zz-einstellungen").mkdir()
+            (vault / ".zz-einstellungen" / "app.json").write_text("{}", encoding="utf-8")
+    (vault / "~ende.md").write_text("x", encoding="utf-8")
+    assert await _refused(world, "Tresor/neu.md") == "app_workspace_refused"
+
+
+@pytest.mark.parametrize(
+    "config",
+    [(".obsidian", ["app.json"]), (".tresor-config", ["app.json", "workspace.json"])],
+)
+async def test_a_vault_at_the_home_folder_is_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: tuple[str, list[str]]
+) -> None:
+    home = tmp_path / "home"
+    folder, files = config
+    (home / folder).mkdir(parents=True)
+    for name in files:
+        (home / folder / name).write_text("{}", encoding="utf-8")
+    root = home / "Notizen"
+    root.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    world = {"root": root, "node": tmp_path / "node-home"}
+    assert await _refused(world, "liste.txt") == "app_workspace_refused"
+
+
+async def test_an_app_folder_with_plugins_at_home_is_no_vault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    (home / ".irgendeine-app" / "plugins").mkdir(parents=True)  # an app's own plugins
+    root = home / "Notizen"
+    root.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    world = {"root": root, "node": tmp_path / "node-home"}
+    assert (await _write(world, "liste.txt"))["ok"] is True
+
+
+async def test_structured_text_is_capped_lower_than_plain_text(world: dict[str, Path]) -> None:
+    from nox.node.safe_fs import MAX_STRUCTURED_BYTES
+
+    big = '{"a": "' + "x" * MAX_STRUCTURED_BYTES + '"}'
+    assert await _refused(world, "notes/gross.json", big) == "too_large"
+    assert (await _write(world, "notes/gross.md", "x" * (MAX_STRUCTURED_BYTES + 10)))["ok"]

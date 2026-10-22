@@ -47,7 +47,7 @@ import stat
 import sys
 import time
 import unicodedata
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -256,8 +256,9 @@ APP_WORKSPACE_MARKERS = (
     ".vscode",
     ".idea",
 )
-#: The largest JSON/YAML a node writes (all text: `MAX_TEXT_BYTES`).
-MAX_STRUCTURED_BYTES = 256 * 1024
+#: The largest JSON/YAML a node writes (plain text: `MAX_TEXT_BYTES`): parsing stays well
+#: under the check's time limit, also with pure-Python YAML on a Raspberry Pi.
+MAX_STRUCTURED_BYTES = 64 * 1024
 
 
 def extension_of(name: str) -> str:
@@ -405,6 +406,8 @@ def content_refusal(path: str, text: str) -> str | None:
     if len(text) > MAX_TEXT_BYTES or len(text.encode("utf-8", "replace")) > MAX_TEXT_BYTES:
         return "too_large"
     ext = extension_of(re.split(r"[\\/]", path)[-1])
+    if ext in STRUCTURED_EXTENSIONS and len(text.encode("utf-8", "replace")) > MAX_STRUCTURED_BYTES:
+        return "too_large"
     if ext == ".md":
         return "content_refused" if markdown_runs_code(text) else None
     if ext == ".json":
@@ -416,11 +419,13 @@ def content_refusal(path: str, text: str) -> str | None:
     if ext in (".yaml", ".yml"):
         import yaml  # noqa: PLC0415
 
+        # The C loader where libyaml is there: the same rules, many times faster.
+        loader: Any = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
         try:
-            for token in yaml.scan(text, Loader=yaml.SafeLoader):
+            for token in yaml.scan(text, Loader=loader):
                 if type(token).__name__ in _YAML_ACTIVE:
                     return "content_refused"
-            yaml.safe_load(text)
+            yaml.load(text, Loader=loader)  # noqa: S506 - a safe loader, plain or C
         except (yaml.YAMLError, RecursionError):
             return "invalid_content"
         return None
@@ -824,36 +829,57 @@ VAULT_SIGNATURE = (
     "plugins",
     "config.edn",
 )
-#: How many entries of one folder are looked at for a renamed config folder (bounded per call).
-_MAX_SIGNATURE_ENTRIES = 256
+#: Markers that mean a note vault even in the home folder (where `.vscode`, `.idea` or a bare
+#: `plugins` folder are an app's own settings, not a workspace).
+SPECIFIC_WORKSPACE_MARKERS = (".obsidian", ".logseq", "logseq/config.edn")
+#: More entries than any real folder holds: a folder this full is refused, never half-read.
+_MAX_FOLDER_ENTRIES = 200_000
 
 
-def _signed(folder: str) -> bool:
-    """Whether a dot-folder directly inside `folder` carries a vault's signature."""
-    with contextlib.suppress(OSError):
+def _signature(has: Callable[[str], bool], *, strict: bool) -> bool:
+    """Whether a config folder (`has(name)`: it holds `name`) is a vault's. `strict`: only the
+    unmistakable combination - `app.json` with `workspace.json` or `core-plugins.json`."""
+    if strict:
+        return has("app.json") and (has("workspace.json") or has("core-plugins.json"))
+    return any(has(name) for name in VAULT_SIGNATURE)
+
+
+def _holds(folder: str, name: str) -> bool:
+    return os.path.lexists(os.path.join(folder, name))
+
+
+def _holds_at(fd: int, folder: str, name: str) -> bool:
+    return _peek(f"{folder}/{name}", fd) is not None
+
+
+def _signed(folder: str, *, strict: bool = False) -> bool:
+    """Whether a dot-folder directly inside `folder` carries a vault's signature. Every entry is
+    looked at (listing is cheap; only dot-folders are opened) - a cap would be a skip."""
+    try:
         with os.scandir(folder) as entries:
             for count, entry in enumerate(entries):
-                if count >= _MAX_SIGNATURE_ENTRIES:
-                    break
+                if count >= _MAX_FOLDER_ENTRIES:
+                    return True  # too full to be sure: refuse
                 if not entry.name.startswith(".") or not entry.is_dir(follow_symlinks=False):
                     continue
-                if any(os.path.lexists(os.path.join(entry.path, n)) for n in VAULT_SIGNATURE):
+                if _signature(functools.partial(_holds, entry.path), strict=strict):
                     return True
+    except OSError:
+        return False
     return False
 
 
-def marking(folder: str, *, workspaces: bool = True) -> str | None:
+def marking(folder: str, *, generic: bool = True) -> str | None:
     """`working_tree_refused` when `folder` is the top of a working tree, `app_workspace_refused`
-    when it is an app workspace (a known marker, or a dot-folder with a vault's signature), else
-    None - by name, not following anything. `workspaces=False` looks for working trees only (the
-    home folder, where `.vscode` and `.idea` hold the apps' own settings, not a workspace)."""
+    when it is an app workspace (a marker, or a dot-folder with a vault's signature), else None -
+    by name, not following anything. `generic=False` (the home folder and above) looks only for
+    unmistakable vaults: `.vscode`, `.idea` or a bare `plugins` folder there are apps' settings."""
     if any(os.path.lexists(os.path.join(folder, m)) for m in WORKING_TREE_MARKERS):
         return "working_tree_refused"
-    if not workspaces:
-        return None
-    if any(os.path.lexists(os.path.join(folder, m)) for m in APP_WORKSPACE_MARKERS):
+    markers = APP_WORKSPACE_MARKERS if generic else SPECIFIC_WORKSPACE_MARKERS
+    if any(os.path.lexists(os.path.join(folder, m)) for m in markers):
         return "app_workspace_refused"
-    if _signed(folder):
+    if _signed(folder, strict=not generic):
         return "app_workspace_refused"
     return None
 
@@ -861,12 +887,12 @@ def marking(folder: str, *, workspaces: bool = True) -> str | None:
 def marked_above(folder: str) -> str | None:
     """The first marking of `folder` or any folder above it, up to the root of its drive - so a
     repository or a vault around the allowed folder counts as well as one inside it. At the home
-    folder and above only working trees count: the apps keep their own settings there."""
+    folder and above, generic markers (`.vscode`, `.idea`) do not count, a vault still does."""
     home = _plain(os.path.realpath(Path.home()))
     current = folder
     for _ in range(64):
         at_or_above_home = _within(home, current)
-        found = marking(current, workspaces=not at_or_above_home)
+        found = marking(current, generic=not at_or_above_home)
         if found is not None:
             return found
         parent = os.path.dirname(current)
@@ -877,23 +903,27 @@ def marked_above(folder: str) -> str | None:
 
 
 def _marked_fd(fd: int) -> None:
-    """The working-tree and workspace rule on a walked directory handle (POSIX)."""
+    """The working-tree and workspace rule on a walked directory handle (POSIX) - every entry is
+    looked at, only dot-folders are inspected."""
     if any(_peek(m, fd) is not None for m in WORKING_TREE_MARKERS):
         raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
     if any(_peek(m, fd) is not None for m in APP_WORKSPACE_MARKERS):
         raise OutsideFolders("app_workspace_refused", "nothing in an app workspace is written")
     listing: Any = os.listdir  # by fd: POSIX only
-    with contextlib.suppress(OSError):
-        for name in listing(fd)[:_MAX_SIGNATURE_ENTRIES]:
-            if not name.startswith("."):
-                continue
-            seen = _peek(name, fd)
-            if seen is None or not stat.S_ISDIR(seen.st_mode):
-                continue
-            if any(_peek(f"{name}/{n}", fd) is not None for n in VAULT_SIGNATURE):
-                raise OutsideFolders(
-                    "app_workspace_refused", "nothing in an app workspace is written"
-                )
+    try:
+        names = listing(fd)
+    except OSError:
+        return
+    if len(names) > _MAX_FOLDER_ENTRIES:
+        raise OutsideFolders("app_workspace_refused", "a folder too full to check is not written")
+    for name in names:
+        if not name.startswith("."):
+            continue
+        seen = _peek(name, fd)
+        if seen is None or not stat.S_ISDIR(seen.st_mode):
+            continue
+        if _signature(functools.partial(_holds_at, fd, name), strict=False):
+            raise OutsideFolders("app_workspace_refused", "nothing in an app workspace is written")
 
 
 def _peek(name: str, dir_fd: int) -> os.stat_result | None:

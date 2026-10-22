@@ -686,15 +686,20 @@ class NodeAgent:
         # One text for everything: the receipt's hash, the dialog and the handler all see the
         # same NFC form of the arguments (review: never sign one and run another).
         arguments = normalize_arguments(params.get("arguments"))
+        # The slow text check first, off the event loop and stateless: pings, the stop and the
+        # dead man keep running, and a check that runs out of time is simply abandoned - it
+        # never spends budget, consumes a receipt or records an "allow".
         try:
-            # Off the event loop: a text check never stalls pings, the stop or the dead man.
-            decision = await off_loop(
-                self._gate.check, name, arguments, call_id=meta.call_id, meta=meta
-            )
+            early = await off_loop(self._gate.precheck, name, arguments)
         except TimeoutError:
-            self._audit_refusal(name, meta.call_id, "check_timeout")
-            await self._refused(ws, msg_id, name, "check_timeout")
+            early = "check_timeout"
+        if early is not None:
+            self._audit_refusal(name, meta.call_id, p.safe_name(early, 64))
+            await self._refused(ws, msg_id, name, early)
             return
+        decision = self._gate.check(
+            name, arguments, call_id=meta.call_id, meta=meta, prechecked=True
+        )
         if not decision.allowed or decision.tool is None or decision.args is None:
             await self._refused(ws, msg_id, name, decision.reason)
             return
