@@ -234,8 +234,12 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   enabled, not started, refused on a running system). The image is checked read-only (no password,
   key, SSH, Wi-Fi or Nox data baked in; SSH masked; host keys and machine id made at first boot)
   and boot-tested headless in QEMU until Nox answers; xz, SHA-256, a Raspberry Pi Imager entry and
-  a licence/source manifest; for a release a second signed manifest, `nox-os-manifest.json`. The
-  first-boot setup without a screen follows (O3/O4), so the image is for testing until then.
+  a licence/source manifest. For a release a second signed manifest, `nox-os-manifest.json`
+  (`"kind": "os-image"`; every verifier now names the manifest kind it expects, `nox release verify
+  --kind`), and without the release key nothing is attached at all. While `install-linux.sh` trusts
+  no release key, the Nox inside the image is pinned by tag/commit and its dashboard by SHA-256, not
+  by a signature. The first-boot setup without a screen follows (O3/O4), so the image is for testing
+  until then.
 
 ### Fixed
 - **Nodes, external review of part 4:** the node's gate never resolves or opens anything the

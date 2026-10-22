@@ -43,6 +43,9 @@ def test_no_credentials_and_no_remote_access_in_the_build_settings() -> None:
         "WPA_PASSWORD",
         "WPA_ESSID",
         "APT_PROXY",
+        "PASSWORDLESS_SUDO",
+        "TEMP_REPO",
+        "WPA_COUNTRY",
     ):
         assert key not in config, key
     assert config["ENABLE_SSH"] == "0"
@@ -85,6 +88,7 @@ def test_stage_scripts_are_executable_in_git() -> None:
         "os/pi-gen/stage-nox/prerun.sh",
         "os/pi-gen/stage-nox/01-nox/00-run.sh",
         "os/pi-gen/stage-nox/02-system/00-run.sh",
+        "os/pi-gen/export-nox/00-run.sh",
         "os/tools/check-image.sh",
         "os/tools/qemu-smoke.sh",
     ):
@@ -116,19 +120,44 @@ def test_the_key_is_used_in_one_step_of_the_protected_job_only() -> None:
     assert holders == [("sign", "Write the OS manifest and sign it")]
     assert jobs["sign"]["environment"] == "release-signing"
     step = next(s for s in jobs["sign"]["steps"] if s.get("name") == holders[0][1])
-    run = " ".join(step["run"].split())
-    assert run.startswith(
-        "printf '%s\\n' \"$NOX_RELEASE_SIGNING_KEY\" | env -u NOX_RELEASE_SIGNING_KEY"
+    run = " ".join(step["run"].replace("\\\n", " ").split())
+    # No key: stop before anything is signed or uploaded (no unsigned manifest, ever).
+    assert run.startswith('if [ -z "$NOX_RELEASE_SIGNING_KEY" ]; then')
+    assert (
+        "printf '%s\\n' \"$NOX_RELEASE_SIGNING_KEY\" | env -u NOX_RELEASE_SIGNING_KEY "
+        "python -I -S source/scripts/sign_release.py --key-stdin --kind os-image" in run
     )
-    assert "python -I -S source/scripts/sign_release.py --key-stdin --allow-unsigned" in run
+    assert "--allow-unsigned" not in WORKFLOW.read_text("utf-8")
 
 
-def test_only_a_release_signs_or_writes() -> None:
+def test_no_secret_and_no_privileged_trigger_outside_the_signing_job() -> None:
+    workflow = _workflow()
+    # PyYAML reads the key `on` as True.
+    triggers = workflow.get("on", workflow.get(True))
+    assert set(triggers) == {"pull_request", "workflow_dispatch", "release", "schedule"}
+    for name, job in workflow["jobs"].items():
+        if name != "sign":
+            assert "secrets." not in str(job), name
+
+
+def test_only_a_signed_release_writes() -> None:
     jobs = _workflow()["jobs"]
     for name in ("sign", "publish"):
         assert jobs[name]["if"] == "github.event_name == 'release'", name
-    upload = next(s for s in jobs["publish"]["steps"] if s.get("name") == "Upload")
-    assert 'if [ "$SIGNED" = true ]; then' in upload["run"]
+    assert jobs["publish"]["needs"] == ["image", "sign"]
+    publish = str(jobs["publish"])
+    assert "nox-os-manifest.json.sig" in publish
+    assert "SIGNED" not in publish  # no unsigned branch left to take
+    check = next(s for s in jobs["publish"]["steps"] if "lists exactly" in s.get("name", ""))
+    assert 'manifest.get("kind") != "os-image"' in check["run"]
+
+
+def test_the_smoke_boots_only_a_copy() -> None:
+    smoke = (REPO / "os" / "tools" / "qemu-smoke.sh").read_text("utf-8")
+    assert smoke.count('"$image"') == 1
+    assert 'cp --sparse=always "$image" "$copy"' in smoke
+    assert '-drive "file=$copy,if=sd,format=raw"' in smoke
+    assert "losetup --read-only --find --show --offset" in smoke
 
 
 def test_the_build_runs_on_arm64_and_boots_the_image() -> None:

@@ -17,7 +17,8 @@ FIRST_USER_NAME="nox-admin"
 DISABLE_FIRST_BOOT_USER_RENAME=1
 ENABLE_SSH=0
 PUBKEY_ONLY_SSH=0
-# Nox-OS provisions itself (O3); no second path that creates users or keys from the boot partition.
+# Nox-OS provisions itself (O3): no cloud-init, and the image ships no seeds for it. (Whoever holds
+# the card can still change it - the boot partition is plain FAT - so physical access is trust.)
 ENABLE_CLOUD_INIT=0
 # The workflow boots the raw image in QEMU before it compresses it itself (xz).
 DEPLOY_COMPRESSION="none"

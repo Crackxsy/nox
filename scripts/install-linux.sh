@@ -340,6 +340,9 @@ define sig_reason_wrong_tag \
 define sig_reason_wrong_commit \
   'die Version zeigt auf einen anderen Commit als im signierten Manifest' \
   'the version points to another commit than the signed manifest names'
+define sig_reason_wrong_kind \
+  'das ist nicht das Manifest des Releases (sondern z. B. das des Nox-OS-Images)' \
+  'this is not the manifest of the release (it lists other files, such as the Nox-OS image)'
 define sig_reason_downgrade \
   'älter als die neueste schon angenommene Version %s (Schutz vor Rückstufung; bewusst zurück: nox update <version> --allow-downgrade, oder nox rollback)' \
   'older than %s, the newest version already accepted (rollback protection; to go back on purpose: nox update <version> --allow-downgrade, or nox rollback)'
@@ -779,6 +782,9 @@ elif mode == "manifest":
     if not isinstance(document, dict) or document.get("schema") != "nox-release-manifest/1" \
             or document.get("project") != "Crackxsy/nox":
         refuse("bad_manifest")
+    # The Nox-OS image manifest is signed by the same key; it never stands in for this one.
+    if document.get("kind", "release") != "release":
+        refuse("wrong_kind")
     version = document.get("version")
     if not isinstance(version, str) or order(version) is None \
             or document.get("tag") != "v" + version:

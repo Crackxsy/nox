@@ -31,6 +31,7 @@ from cryptography.exceptions import InvalidSignature
 
 from nox.release.keys import KEY_ID_PATTERN, TrustedKey
 from nox.release.manifest import (
+    KIND_RELEASE,
     MAX_MANIFEST_BYTES,
     PROJECT,
     ManifestError,
@@ -112,9 +113,11 @@ def verify_release(
     expect_commit: str | None = None,
     min_version: str | None = None,
     allow_downgrade: bool = False,
+    expect_kind: str = KIND_RELEASE,
 ) -> VerifiedRelease:
     """The verified manifest, or ReleaseVerificationError (SigningNotConfiguredError when no
-    key is trusted)."""
+    key is trusted). `expect_kind`: which manifest this must be - the release's own (default) or
+    a Nox-OS image's (KIND_OS_IMAGE); the other one, though signed by the same key, is refused."""
     if not trusted_keys:
         raise SigningNotConfiguredError()
     if len(manifest_bytes) > MAX_MANIFEST_BYTES:
@@ -145,6 +148,10 @@ def verify_release(
     if manifest.project != PROJECT:
         raise ReleaseVerificationError(
             "wrong_project", f"the manifest is for {manifest.project[:60]!r}, not {PROJECT}"
+        )
+    if manifest.kind != expect_kind:
+        raise ReleaseVerificationError(
+            "wrong_kind", f"this is a {manifest.kind} manifest, not a {expect_kind} manifest"
         )
     if expect_tag is not None and manifest.tag != expect_tag:
         raise ReleaseVerificationError(

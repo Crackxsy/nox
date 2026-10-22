@@ -12,6 +12,10 @@
 # the first 12 characters of the commit. Needs Docker that may run --privileged containers (pi-gen
 # uses loop devices) and about 25 GB of disk; on an arm64 machine no emulation is involved (CI:
 # ubuntu-24.04-arm). Linux only.
+#
+# Supply chain: pi-gen is pinned by tag and commit below. Its build-docker.sh builds its container
+# FROM docker.io/debian:trixie by tag, not by digest - the build container (not shipped; the image's
+# packages come from the Debian and Raspberry Pi archives, signed by their apt keys) follows that tag.
 set -euo pipefail
 
 PI_GEN_REPO="https://github.com/RPi-Distro/pi-gen"
@@ -65,6 +69,9 @@ cloud_init="$stage2/04-cloud-init"
 touch "$stage2/SKIP_IMAGES" "$cloud_init/SKIP"
 cp -R "$here/stage-nox" "$pigen/stage-nox"
 chmod 0755 "$pigen"/stage-nox/prerun.sh "$pigen"/stage-nox/*/*-run.sh
+# One step in pi-gen's export, right after it installs userconf-pi: removes it again.
+mkdir "$pigen/export-image/01-user-rename-nox"
+install -m 0755 "$here/export-nox/00-run.sh" "$pigen/export-image/01-user-rename-nox/00-run.sh"
 
 # What stage-nox/01-nox puts into the image: the installer, the version, and for a build from a
 # checkout the source (a one-commit clone) and the dashboard.

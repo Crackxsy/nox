@@ -7,10 +7,12 @@
 # parts changed, and on a pull request labelled "os-image".
 #
 # For a release, the image's files are listed in a second signed manifest, nox-os-manifest.json
-# (same format and key as release-manifest.json, docs/RELEASES.md): the signing job is the only one
-# that sees the release key and runs in the protected environment "release-signing"; without the
-# key the files are attached checksummed only and the run fails with "Release not signed", as
-# release-assets.yml does. Every action is pinned to a commit.
+# (same format and key as release-manifest.json, with "kind": "os-image"; docs/RELEASES.md): the
+# signing job is the only one that sees the release key and runs in the environment
+# "release-signing". The gate comes before any upload: without the key the signing job fails with
+# "Release not signed" and NOTHING is attached - no image, no Imager entry. (GitHub creates a
+# referenced environment on first use, unprotected; the owner sets it up with a required reviewer
+# and v* tags only before storing the key - docs/RELEASES.md.) Every action is pinned to a commit.
 name: Nox-OS image
 
 on:
@@ -49,7 +51,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --severity=warning scripts/install-linux.sh os/pi-gen/build.sh \
-            os/pi-gen/stage-nox/prerun.sh os/pi-gen/stage-nox/*/*-run.sh os/tools/*.sh
+            os/pi-gen/stage-nox/prerun.sh os/pi-gen/stage-nox/*/*-run.sh os/pi-gen/export-nox/*.sh os/tools/*.sh
           shellcheck --severity=warning --shell=bash os/pi-gen/config \
             os/pi-gen/stage-nox/01-nox/01-run-chroot.sh os/pi-gen/stage-nox/EXPORT_IMAGE
 
@@ -140,16 +142,16 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'os-image') }}
+          # A pull request from a fork never gets the full build, label or not.
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           build=false
           case "$EVENT" in
             release|workflow_dispatch) build=true ;;
-            pull_request) [ "$LABELLED" != true ] || build=true ;;
+            pull_request) if [ "$LABELLED" = true ] && [ "$SAME_REPO" = true ]; then build=true; fi ;;
             schedule)
-              # Nightly only when the image's parts changed during the last day.
-              if git log --since='26 hours ago' --format=%H -- os scripts/install-linux.sh installer/linux | grep -q .; then
-                build=true
-              fi ;;
+              # Nightly whenever develop changed during the last day: any change can break the image.
+              if git log --since='26 hours ago' --format=%H | grep -q .; then build=true; fi ;;
           esac
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "Full image build: $build ($EVENT)"
@@ -190,7 +192,7 @@ jobs:
     name: Build, check and boot the image (arm64)
     needs: [check, plan, ui]
     if: >-
-      always() && needs.plan.outputs.build == 'true' && needs.check.result == 'success'
+      !cancelled() && needs.plan.outputs.build == 'true' && needs.check.result == 'success'
       && (needs.ui.result == 'success' || needs.ui.result == 'skipped')
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 240
@@ -255,6 +257,9 @@ jobs:
           img="$(find "$out" -maxdepth 1 -name 'nox-os-*-arm64.img' -print -quit)"
           test -n "$img"
           name="$(basename "$img" .img)"
+          # The image as built: checked again before it is compressed, so nothing the checks and
+          # the boot test did can have changed it.
+          (cd "$out" && sha256sum "$name.img" > "$RUNNER_TEMP/built.sha256")
           echo "name=$name" >> "$GITHUB_OUTPUT"
           printf 'IMG=%s\nNAME=%s\nOUT=%s\n' "$img" "$name" "$out" >> "$GITHUB_ENV"
           ls -l "$out"
@@ -291,6 +296,7 @@ jobs:
           else
             url="$NAME.img.xz"; version="${NAME#nox-os-}"; version="${version%-arm64}"
           fi
+          sha256sum --quiet -c "$RUNNER_TEMP/built.sha256"
           xz -T0 -9 --keep --memlimit-compress=60% "$NAME.img"
           python3 -I "$GITHUB_WORKSPACE/os/tools/imager_json.py" --raw "$NAME.img" --image "$NAME.img.xz" \
             --url "$url" --version "$version" --out nox-os.rpi-imager.json
@@ -323,7 +329,7 @@ jobs:
           retention-days: 7
 
   sign:
-    name: OS manifest (signed when the release key is configured)
+    name: OS manifest (signed, or the release gets no image)
     needs: image
     if: github.event_name == 'release'
     runs-on: ubuntu-24.04
@@ -332,8 +338,6 @@ jobs:
     environment: release-signing
     permissions:
       contents: read
-    outputs:
-      signed: ${{ steps.sign.outputs.signed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -366,23 +370,22 @@ jobs:
           --target "$RUNNER_TEMP/signer-lib" -r source/scripts/signing-requirements.txt
 
       # As in release-assets.yml: the key reaches the signer on stdin only, the signer runs
-      # isolated (python -I -S) and finds nothing but cryptography in --lib.
+      # isolated (python -I -S) and finds nothing but cryptography in --lib. No key, no image:
+      # the job stops here and the publish job never runs (no unsigned manifest, ever).
       - name: Write the OS manifest and sign it
-        id: sign
         env:
           NOX_RELEASE_SIGNING_KEY: ${{ secrets.NOX_RELEASE_SIGNING_KEY }}
           TAG: ${{ github.event.release.tag_name }}
           NAME: ${{ needs.image.outputs.name }}
         run: |
+          if [ -z "$NOX_RELEASE_SIGNING_KEY" ]; then
+            echo "::error title=Release not signed::The release key (secret NOX_RELEASE_SIGNING_KEY in the environment release-signing) is not configured, so no Nox-OS image is attached to $TAG. See docs/RELEASES.md."
+            exit 1
+          fi
           printf '%s\n' "$NOX_RELEASE_SIGNING_KEY" | env -u NOX_RELEASE_SIGNING_KEY \
-            python -I -S source/scripts/sign_release.py --key-stdin --allow-unsigned \
+            python -I -S source/scripts/sign_release.py --key-stdin --kind os-image \
             --lib "$RUNNER_TEMP/signer-lib" --tag "$TAG" --commit "$COMMIT" --out signed \
             "files/$NAME.img.xz" "files/$NAME.licenses.json" files/nox-os.rpi-imager.json
-
-      - name: Name it as the OS manifest
-        run: |
-          mv signed/release-manifest.json signed/nox-os-manifest.json
-          [ ! -f signed/release-manifest.json.sig ] || mv signed/release-manifest.json.sig signed/nox-os-manifest.json.sig
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -409,13 +412,11 @@ jobs:
           name: nox-os-manifest
           path: manifest
 
-      - name: The manifest lists exactly the files that are uploaded
+      - name: The signed manifest lists exactly the files that are uploaded
         env:
           NAME: ${{ needs.image.outputs.name }}
-          SIGNED: ${{ needs.sign.outputs.signed }}
         run: |
-          expected="nox-os-manifest.json"
-          [ "$SIGNED" != true ] || expected="$(printf '%s\n' nox-os-manifest.json nox-os-manifest.json.sig)"
+          expected="$(printf '%s\n' nox-os-manifest.json nox-os-manifest.json.sig)"
           actual="$(find manifest -mindepth 1 -printf '%P\n' | sort)"
           if [ "$actual" != "$expected" ]; then echo "unexpected manifest artifact contents:"; echo "$actual"; exit 1; fi
           find files manifest -mindepth 1 ! -type f -print -quit | grep -q . && { echo "non-regular file in artifact"; exit 1; }
@@ -424,6 +425,8 @@ jobs:
           import hashlib, json, os, sys
           with open(sys.argv[1], encoding="utf-8") as handle:
               manifest = json.load(handle)
+          if manifest.get("kind") != "os-image":
+              sys.exit("not an os-image manifest")
           listed = {a["name"]: (a["size"], a["sha256"]) for a in manifest["assets"]}
           actual = {}
           for path in sys.argv[2:]:
@@ -437,23 +440,15 @@ jobs:
               sys.exit(f"the manifest does not describe the uploaded files: {listed} != {actual}")
           PY
 
+      # Reached only with a manifest signed in this run for exactly these files (checked above),
+      # so --clobber can only replace an earlier run's files together with their manifest.
       - name: Upload
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
           REPO: ${{ github.repository }}
           NAME: ${{ needs.image.outputs.name }}
-          SIGNED: ${{ needs.sign.outputs.signed }}
         run: |
-          upload=("files/$NAME.img.xz" "files/$NAME.img.xz.sha256" "files/$NAME.licenses.json" files/nox-os.rpi-imager.json)
-          # An unsigned manifest is never published: it would only look like a signed one.
-          if [ "$SIGNED" = true ]; then
-            upload+=(manifest/nox-os-manifest.json manifest/nox-os-manifest.json.sig)
-          fi
-          gh release upload "$TAG" --repo "$REPO" --clobber "${upload[@]}"
-
-      - name: Refuse to publish an unsigned image
-        if: needs.sign.outputs.signed != 'true'
-        run: |
-          echo "::error title=Release not signed::The release key (secret NOX_RELEASE_SIGNING_KEY in the environment release-signing) is not configured, so the Nox-OS image has no signed manifest. See docs/RELEASES.md."
-          exit 1
+          gh release upload "$TAG" --repo "$REPO" --clobber \
+            "files/$NAME.img.xz" "files/$NAME.img.xz.sha256" "files/$NAME.licenses.json" \
+            files/nox-os.rpi-imager.json manifest/nox-os-manifest.json manifest/nox-os-manifest.json.sig
