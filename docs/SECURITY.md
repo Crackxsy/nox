@@ -833,8 +833,17 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   scanned for tags, anchors and aliases - refused - then `safe_load`). Documents, pages, PDFs,
   SVG and media (`NOT_WRITABLE_EXTENSIONS`) are refused (`format_not_writable`); there is no
   content scanner for them to bypass. Everywhere: no path component starting with `.`, no write
-  at or below a folder holding `.git`, `.hg` or `.svn` up to the allowed folder (checked on each
-  walked directory handle on POSIX and on the final path), no file without an allowed
+  at or below a folder holding a version-control marker (`.git .hg .svn .jj .bzr _darcs .sl` -
+  `working_tree_refused`) or an app-workspace marker (`.obsidian .logseq logseq/config.edn .foam
+  .dendron dendron.yml .vscode .idea` - `app_workspace_refused`: a vault runs `dataviewjs` and
+  Templater from its notes), checked on each walked directory handle on POSIX and by name on the
+  final path's parents **up to the drive root**, so a repository or vault around the allowed
+  folder counts too; `nox node allow files --folder` refuses such a folder up front. `.md` text is
+  refused with `dataviewjs`, inline `$=`, `dv.` in a Dataview block, `<%`, `<script` or
+  `javascript:`. JSON/YAML is capped at 256 KB, a nesting deep enough to exhaust the parser is
+  `invalid_content`, and all text checks run before anyone is asked - in the node's gate
+  (`NodeTool.precheck`, before the budget and the dialog) and on the core (`_write_target`), so a
+  write the node would refuse is never put before a person; no file without an allowed
   extension, and a config-name layer (`settings/tasks/launch/launchSettings/keybindings/package/
   project/tsconfig/jsconfig/composer/deno/flows.json`, `appsettings*.json`, `*compose*`,
   `lefthook*`, `*pipelines*` YAML, `Taskfile`, `configuration.yaml`, `automations.yaml`,
@@ -848,7 +857,8 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   completes; a stop ends everything after it. Accepted residual risk for PASSIVE formats: a
   `.csv` formula runs only after the spreadsheet's own prompt and a user action.
 - **Profile rules and nodes**: a profile rule that ALLOWS applies to a call on a node only when it
-  names the device (`device:` glob on `ProfileRule`); rules that confirm or deny apply everywhere.
+  names that device exactly (`device:` with the full 32-hex id - `validate_profile` refuses a
+  pattern for an ALLOW); rules that confirm or deny apply everywhere and may use a glob.
   A broad `tool: file*, decision: allow` therefore never lets Nox write on another PC unasked.
 - Node file tools also never open Nox's own folder (`nox_home()`), in case a core runs on the same
   device. The protected places' identities (for the hard-link check) are cached for 30 s, and the

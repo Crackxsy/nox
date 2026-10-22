@@ -279,6 +279,10 @@ class NodeGate:
             return GateDecision(False, "node_home_protected", tool)
         if any(names_a_path_alias(text) for text in _path_strings(args.model_dump())):
             return GateDecision(False, "path_alias_refused", tool)
+        if tool.precheck is not None:
+            early = tool.precheck(args)
+            if early is not None:
+                return GateDecision(False, early, tool)
         # This call's own risk (a write that replaces a file is high): the core must have judged
         # it at least as risky, and the ceiling applies to it as well.
         risk = tool.call_risk(args)

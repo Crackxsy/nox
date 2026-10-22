@@ -61,6 +61,7 @@ __all__ = [
     "open_existing",
     "open_new",
     "content_refusal",
+    "marked_above",
     "secret_locations",
     "structured",
     "write_refusal",
@@ -233,8 +234,24 @@ _CONFIG_PATTERNS = (
     "configuration.yaml",
     "automations.yaml",
 )
-#: A folder holding one of these is a working tree: nothing at or below it is written.
-WORKING_TREE_MARKERS = (".git", ".hg", ".svn")
+#: A folder holding one of these is a working tree: nothing at or below it is written - also
+#: when the working tree lies above the allowed folder.
+WORKING_TREE_MARKERS = (".git", ".hg", ".svn", ".jj", ".bzr", "_darcs", ".sl")
+#: A folder holding one of these is an app workspace that runs what its notes say (an Obsidian
+#: vault runs `dataviewjs` blocks and Templater tags, a Logseq graph its config, an editor its
+#: tasks): treated like a working tree. Allow a plain folder outside the workspace instead.
+APP_WORKSPACE_MARKERS = (
+    ".obsidian",
+    ".logseq",
+    "logseq/config.edn",
+    ".foam",
+    ".dendron",
+    "dendron.yml",
+    ".vscode",
+    ".idea",
+)
+#: The largest JSON/YAML a node writes: parsing and confirming stay cheap.
+MAX_STRUCTURED_BYTES = 256 * 1024
 
 
 def extension_of(name: str) -> str:
@@ -274,15 +291,29 @@ def structured(path: str) -> bool:
 _YAML_ACTIVE = ("TagToken", "AnchorToken", "AliasToken")
 
 
+#: Markdown that a note app runs as code: Dataview JS (blocks and inline `$=`), Templater
+#: tags, scripts and `javascript:` links - refused in any `.md`, workspace or not.
+_MD_ACTIVE = ("```dataviewjs", "`$=", "<%", "<script", "javascript:")
+_DATAVIEW_JS = re.compile(r"```dataview\b.*?(\$=|\bdv\.)", re.S)
+
+
 def content_refusal(path: str, text: str) -> str | None:
-    """Why the text of a STRUCTURED write is refused even when confirmed: JSON that does not
-    parse; YAML that does not parse plainly (`safe_load`) or carries a tag, an anchor or an
-    alias. Plain text formats are not looked at."""
+    """Why the text of a write is refused even when confirmed: JSON that does not parse; YAML
+    that does not parse plainly (`safe_load`) or carries a tag, an anchor or an alias; JSON or
+    YAML over `MAX_STRUCTURED_BYTES`; Markdown with code a note app would run. Text only - it
+    runs before anyone is asked, on the core and on the node."""
     ext = extension_of(re.split(r"[\\/]", path)[-1])
+    if ext == ".md":
+        body = text.casefold()
+        if any(marker in body for marker in _MD_ACTIVE) or _DATAVIEW_JS.search(body):
+            return "content_refused"
+        return None
+    if ext in STRUCTURED_EXTENSIONS and len(text.encode("utf-8", "replace")) > MAX_STRUCTURED_BYTES:
+        return "too_large"
     if ext == ".json":
         try:
             json.loads(text)
-        except ValueError:
+        except (ValueError, RecursionError):
             return "invalid_content"
         return None
     if ext in (".yaml", ".yml"):
@@ -293,7 +324,7 @@ def content_refusal(path: str, text: str) -> str | None:
                 if type(token).__name__ in _YAML_ACTIVE:
                     return "content_refused"
             yaml.safe_load(text)
-        except yaml.YAMLError:
+        except (yaml.YAMLError, RecursionError):
             return "invalid_content"
         return None
     return None
@@ -524,8 +555,9 @@ class Folders:
                 raise OutsideFolders(refusal, "only data files are written (allowlist)")
             if execution_trigger(final):
                 raise OutsideFolders("execution_trigger", "writing there could make something run")
-            if _working_tree_up(final, root.path):
-                raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
+            marked = marked_above(os.path.dirname(final))
+            if marked is not None:
+                raise OutsideFolders(marked, "nothing in a repository or app workspace is written")
 
 
 #: How long the protected places' identities are reused: walking browser profiles on every call
@@ -651,9 +683,9 @@ def _lexical_write_check(root: _Root, parts: list[str]) -> None:
     refusal = write_refusal(parts)
     if refusal is not None:
         raise OutsideFolders(refusal, "only data files are written (allowlist)")
-    for depth in range(len(parts)):
-        if _working_tree(os.path.join(root.path, *parts[:depth])):
-            raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
+    marked = marked_above(os.path.join(root.path, *parts[:-1]))
+    if marked is not None:
+        raise OutsideFolders(marked, "nothing in a repository or app workspace is written")
     if execution_trigger(os.path.join(root.path, *parts)):
         raise OutsideFolders("execution_trigger", "writing there could make something run")
 
@@ -683,30 +715,44 @@ def list_folder(folders: Folders, text: str) -> Iterator[Iterator[os.DirEntry[st
         os.close(fd)
 
 
-def _working_tree(folder: str) -> bool:
-    """Whether `folder` is the top of a working tree (holds `.git`, `.hg` or `.svn`)."""
-    return any(os.path.lexists(os.path.join(folder, marker)) for marker in WORKING_TREE_MARKERS)
+def marking(folder: str) -> str | None:
+    """`working_tree_refused` when `folder` is the top of a working tree, `app_workspace_refused`
+    when it is an app workspace, else None (by name, not following anything)."""
+    if any(os.path.lexists(os.path.join(folder, m)) for m in WORKING_TREE_MARKERS):
+        return "working_tree_refused"
+    if any(os.path.lexists(os.path.join(folder, m)) for m in APP_WORKSPACE_MARKERS):
+        return "app_workspace_refused"
+    return None
 
 
-def _working_tree_up(final: str, root: str) -> bool:
-    """Whether any folder from the one holding `final` up to the allowed folder is a working
-    tree - decided on the verified final path."""
-    folder = os.path.dirname(final)
-    while _within(folder, root):
-        if _working_tree(folder):
-            return True
-        parent = os.path.dirname(folder)
-        if parent == folder:
-            break
-        folder = parent
-    return False
+def marked_above(folder: str) -> str | None:
+    """The first marking of `folder` or any folder above it, up to the root of its drive - so a
+    repository or a vault around the allowed folder counts as well as one inside it."""
+    current = folder
+    for _ in range(64):
+        found = marking(current)
+        if found is not None:
+            return found
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+    return "working_tree_refused"  # deeper than any real path: refuse rather than guess
+
+
+def _marked_fd(fd: int) -> None:
+    """The working-tree and workspace rule on a walked directory handle (POSIX)."""
+    if any(_peek(m, fd) is not None for m in WORKING_TREE_MARKERS):
+        raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
+    if any(_peek(m, fd) is not None for m in APP_WORKSPACE_MARKERS):
+        raise OutsideFolders("app_workspace_refused", "nothing in an app workspace is written")
 
 
 def _peek(name: str, dir_fd: int) -> os.stat_result | None:
     """The entry as it is (`fstatat` without following), None when there is none."""
     try:
         return os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
-    except FileNotFoundError:
+    except (FileNotFoundError, NotADirectoryError):
         return None
 
 
@@ -724,8 +770,8 @@ def _posix_open(
         info = os.fstat(fd)
         if (info.st_dev, info.st_ino) != root.identity:
             raise OutsideFolders("changed", "the allowed folder was replaced")
-        if write and any(_peek(marker, fd) is not None for marker in WORKING_TREE_MARKERS):
-            raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
+        if write:
+            _marked_fd(fd)
         for part in parts[:-1]:
             seen = _peek(part, fd)
             if seen is None:
@@ -741,8 +787,8 @@ def _posix_open(
             os.close(fd)
             fd = step
             folders._verify(root, os.fstat(fd), None)
-            if write and any(_peek(m, fd) is not None for m in WORKING_TREE_MARKERS):
-                raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
+            if write:
+                _marked_fd(fd)
         if not parts:
             final = os.dup(fd)
         else:

@@ -60,7 +60,14 @@ from nox.sandbox import EgressDecl, Limits, Sandbox, SandboxUnavailable
 
 log = get_logger(__name__)
 
-__all__ = ["NodeHands", "NodeRefusal", "hand_tools", "write_risk", "write_summary"]
+__all__ = [
+    "NodeHands",
+    "NodeRefusal",
+    "hand_tools",
+    "write_risk",
+    "write_summary",
+    "write_text_refusal",
+]
 
 #: Below the agent's 30 s ceiling for a call with a side effect, so the sandbox ends the run
 #: itself and reports `timed_out` instead of the call being cut off.
@@ -119,6 +126,16 @@ def write_risk(path: str, append: bool, overwrite: bool) -> str:
     STRUCTURED format (JSON, YAML) is high (asked on the device, never
     remembered) - on the core's side and on the node's alike."""
     return "high" if append or overwrite or structured(path) else "medium"
+
+
+def write_text_refusal(path: str, text: str, *, append: bool) -> str | None:
+    """The checks a write's text gets before anyone is asked - in the node's gate and on the
+    core - and again when it runs: JSON/YAML is written whole (an append would check only a
+    piece), must parse plainly and stay under `MAX_STRUCTURED_BYTES`; Markdown carries no code a
+    note app would run."""
+    if append and structured(path):
+        return "append_refused"
+    return content_refusal(path, text)
 
 
 def write_summary(path: str, text: str, *, append: bool, overwrite: bool) -> dict[str, Any]:
@@ -320,13 +337,8 @@ def _write(folders: Folders, args: WriteArgs) -> dict[str, Any]:
     named = write_refusal(parts)  # the name first: a refused name is refused as such
     if named is not None:
         raise OutsideFolders(named, "only data files are written (allowlist)")
-    if args.append and structured(args.path):
-        # JSON/YAML is written whole, so the whole text is what is checked - never in pieces.
-        raise NodeRefusal("append_refused")
-    refusal = content_refusal(args.path, args.text)
+    refusal = write_text_refusal(args.path, args.text, append=args.append)
     if refusal is not None:
-        # JSON that does not parse, YAML with a tag, an anchor or an alias: refused even when
-        # someone would confirm it.
         raise NodeRefusal(refusal)
     payload = args.text.encode("utf-8")
     if len(payload) > MAX_WRITE_BYTES:
@@ -401,6 +413,10 @@ def hand_tools(hands: NodeHands) -> dict[str, NodeTool]:
         assert isinstance(args, WriteArgs)
         return write_risk(args.path, args.append, args.overwrite)
 
+    def precheck_write(args: BaseModel) -> str | None:
+        assert isinstance(args, WriteArgs)
+        return write_text_refusal(args.path, args.text, append=args.append)
+
     def shown_write(args: BaseModel) -> dict[str, Any]:
         assert isinstance(args, WriteArgs)
         return write_summary(args.path, args.text, append=args.append, overwrite=args.overwrite)
@@ -432,6 +448,7 @@ def hand_tools(hands: NodeHands) -> dict[str, NodeTool]:
             path_safe=True,  # every open goes through nox.node.safe_fs
             risk_for=risk_of_write,
             shown=shown_write,
+            precheck=precheck_write,
         ),
         NodeTool(
             "shell.run",

@@ -59,7 +59,12 @@ _HERE_WORDS = frozenset({"hier", "here"})
 
 
 class CannotShow(ValueError):  # noqa: N818 - a refusal, named for what it says
-    """A node call's target would not fit a confirmation in full; the call is refused."""
+    """A node call cannot be put before anyone: its target would not fit a confirmation in
+    full, or the node would refuse it anyway (`error` says which). The call is refused."""
+
+    def __init__(self, message: str, *, error: str = "cannot_show_in_full") -> None:
+        super().__init__(message)
+        self.error = error
 
 
 @dataclass(frozen=True)
@@ -280,7 +285,7 @@ def routed_spec(
                 # Never a shortened target: nothing runs, nobody is asked about half a call.
                 payload[DEVICE_KEY] = ""
                 payload[ROUTE_ERROR_KEY] = {
-                    "error": "cannot_show_in_full",
+                    "error": exc.error,
                     "tool": name,
                     "detail": str(exc)[:200],
                 }

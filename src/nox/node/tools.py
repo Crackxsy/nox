@@ -74,6 +74,9 @@ class NodeTool:
     #: What the confirmation on the device shows instead of the raw arguments (a write: the
     #: size and a preview, not a megabyte of text). None: every argument in full.
     shown: Callable[[BaseModel], dict[str, Any]] | None = field(default=None, compare=False)
+    #: A check on the arguments' text alone, before the budget and before anyone is asked (a
+    #: JSON file that does not parse is refused, not confirmed first). A reason, or None.
+    precheck: Callable[[BaseModel], str | None] | None = field(default=None, compare=False)
 
     def call_risk(self, args: BaseModel) -> str:
         risk = self.risk_for(args) if self.risk_for is not None else self.risk

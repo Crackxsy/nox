@@ -489,6 +489,13 @@ def _local_folder(text: str, node_home: NodeHome, *, must_exist: bool = True) ->
             secret = Path(os.path.realpath(place))
             if real == secret or secret in real.parents or real in secret.parents:
                 raise NodeCliError("That folder holds or lies in a store of keys or passwords.")
+        from nox.node.safe_fs import marked_above  # noqa: PLC0415
+
+        if marked_above(str(real)) is not None:
+            raise NodeCliError(
+                "That folder is (or lies in) a repository or an app workspace such as an "
+                "Obsidian vault, whose files can run code. Allow a plain folder outside it."
+            )
     return str(real)
 
 

@@ -109,14 +109,23 @@ an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trus
   ...`) schreibt Nox auf einem Gerät gar nicht - stattdessen `.md` oder `.txt`. Ersetzen oder
   Anhängen ist immer hohes Risiko. Nie eine versteckte Datei oder etwas in einem versteckten
   Ordner (`.git`, `.vscode`, `.bashrc`, ...), nie etwas in einem Repository (ein Ordner mit
-  `.git`, `.hg` oder `.svn`, bis hinauf zum erlaubten Ordner), nie eine Datei ohne Endung, ein
+  `.git`, `.hg`, `.svn`, `.jj`, `.bzr`, `_darcs` oder `.sl`) oder einem App-Arbeitsbereich, dessen
+  Notizen Code ausführen können (ein Obsidian-Tresor mit `.obsidian`, ein Logseq-Graph, Foam,
+  Dendron, ein `.vscode`-/`.idea`-Projekt) - im erlaubten Ordner oder um ihn herum -, nie eine
+  Datei ohne Endung, ein
   Skript, ein Programm oder eine Konfigurationsdatei, nach der Werkzeuge handeln
   (`settings.json`, `package.json`, Compose- und Pipeline-Dateien, `configuration.yaml`, alles in
   `workflows`, ...), nie eine ausführbare Datei oder eine mit zweitem Namen (Hardlink). Die Frage
   zeigt Datei, Art, Größe, Zeilenzahl und einen SHA-256 und den Inhalt - ganz, wenn er kurz ist,
   sonst die ersten und letzten 200 Zeichen mit „content shortened - N characters not shown“.
   Schreiben wird nie gemerkt, und eine Profilregel, die Schreiben an Nox erlaubt, erlaubt es auf
-  einem Node nur, wenn sie das Gerät nennt (`device:`).
+  einem Node nur, wenn sie genau dieses Gerät nennt (`device:` mit seiner vollen Kennung). Eine
+  `.md`-Datei wird abgelehnt, wenn sie Code enthält, den eine Notiz-App ausführen würde
+  (` ```dataviewjs `, `` `$= `` oder `dv.` in einem Dataview-Block, Templater `<% %>`,
+  `<script`, `javascript:`).
+- **Dein Notizen-Tresor:** `nox node allow files --folder` lehnt einen Ordner ab, der ein
+  Repository oder ein App-Arbeitsbereich ist oder darin liegt. Erlaube einen einfachen Ordner
+  daneben - etwa `Nox` neben dem Tresor - und verschiebe, was Nox geschrieben hat, selbst hinein.
 - **Hingenommen bei einfachem Text:** Eine `.csv` kann eine Tabellenformel enthalten, die Excel
   erst nach eigener Warnung und deinem Klick ausführt; die anderen einfachen Formate führen nichts
   aus.

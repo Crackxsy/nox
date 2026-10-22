@@ -30,7 +30,14 @@ from nox.ipc.errors import ERR_NOT_FOUND, ERR_UNAVAILABLE, IpcError
 from nox.ipc.roles import UI_ROLES
 from nox.lan.install import authorize_admin, qr_data_uri
 from nox.lan.tls import TlsMaterial
-from nox.node.hands import PathArgs, ShellArgs, WriteArgs, write_risk, write_summary
+from nox.node.hands import (
+    PathArgs,
+    ShellArgs,
+    WriteArgs,
+    write_risk,
+    write_summary,
+    write_text_refusal,
+)
 from nox.node.listener import NodeListener
 from nox.node.names import label
 from nox.node.pairing import NodePairing
@@ -266,7 +273,15 @@ def _shell_target(payload: dict[str, Any]) -> str:
 
 
 def _write_target(payload: dict[str, Any]) -> str:
-    """A node write: where, how (new file / overwrite / append), how much, how it starts."""
+    """A node write: where, how (new file / overwrite / append), how much, how it starts. A
+    write whose text the node would refuse anyway is refused here, before anyone is asked."""
+    early = write_text_refusal(
+        str(payload.get("path") or ""),
+        str(payload.get("text") or ""),
+        append=bool(payload.get("append")),
+    )
+    if early is not None:
+        raise CannotShow(early, error=early)
     shown = write_summary(
         str(payload.get("path") or ""),
         str(payload.get("text") or ""),
