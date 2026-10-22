@@ -120,10 +120,10 @@ an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trus
   sonst die ersten und letzten 200 Zeichen mit „content shortened - N characters not shown“.
   Schreiben wird nie gemerkt, und eine Profilregel, die Schreiben an Nox erlaubt, erlaubt es auf
   einem Node nur, wenn sie genau dieses Gerät nennt (`device:` mit seiner vollen Kennung). Eine
-  `.md`-Datei wird abgelehnt, wenn sie Code enthält, den eine Notiz-App ausführen würde
-  (` ```dataviewjs `, `` `$= `` oder `dv.` in einem Dataview-Block, Templater `<% %>`,
-  `<script`, `javascript:`), in welcher Schreibweise auch immer; beim Anhängen zählt die ganze
-  Datei.
+  `.md`-Datei wird abgelehnt, wenn sie irgendetwas enthält, das eine Notiz-App ausführen könnte -
+  die Wörter `dataviewjs`, `js-engine`, `templater` oder `meta-bind-js`, Templater `<%`, inline
+  `` `$= ``, `<script`, `javascript:` -, egal wo es steht. Eine Notiz, die diese Plugin-Wörter
+  nur erwähnt, kann Nox deshalb nicht schreiben. Beim Anhängen zählt die ganze Datei.
 - **Dein Notizen-Tresor:** `nox node allow files --folder` lehnt einen Ordner ab, der ein
   Repository oder ein App-Arbeitsbereich ist oder darin liegt. Erlaube einen einfachen Ordner
   daneben - etwa `Nox` neben dem Tresor - und verschiebe, was Nox geschrieben hat, selbst hinein.

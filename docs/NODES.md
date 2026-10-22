@@ -115,9 +115,10 @@ its own budget: 60 actions and 5 high-risk ones per hour (`max_calls_per_hour`,
   otherwise its first and last 200 characters with "content shortened - N characters not
   shown". A write is never remembered, and a profile rule that allows writing on Nox does not
   allow it on a node unless it names exactly that device (`device:` with its full id). A
-  `.md` file is refused when it carries code a note app would run (` ```dataviewjs `, inline
-  `` `$= `` or `dv.` in a Dataview block, Templater `<% %>`, `<script`, `javascript:`), in whatever fence or spelling; an
-  append is judged together with what the file already holds.
+  `.md` file is refused when it contains anything a note app could run - the words
+  `dataviewjs`, `js-engine`, `templater` or `meta-bind-js`, Templater `<%`, inline `` `$= ``,
+  `<script`, `javascript:` - wherever it stands. So Nox cannot write a note that merely mentions
+  these plugin keywords. An append is judged together with what the file already holds.
 - **Your notes vault:** `nox node allow files --folder` refuses a folder that is (or lies in) a
   repository or an app workspace. Allow a plain folder outside it - for example `Nox` next to
   the vault - and move what Nox wrote into the vault yourself.

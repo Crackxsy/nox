@@ -120,7 +120,7 @@ def test_allowing_a_folder_inside_a_repository_or_vault_is_refused(tmp_path: Pat
         "# Plan\n```dataviewjs\ndv.paragraph(require('fs'))\n```\n",
         "Heute: `$= dv.current().file.name`",
         "```dataview\nTABLE x\n```\n`$=1`",
-        "```DataView\nTABLE file.name WHERE dv.pages()\n```",
+        "```DataViewJS\nTABLE file.name\n```",
         "Titel: <% tp.file.title %>",
         "<SCRIPT>alert(1)</SCRIPT>",
         "[klick](JavaScript:alert(1))",
@@ -232,7 +232,19 @@ def test_an_allow_for_a_node_needs_an_exact_device_id() -> None:
         "``` dataviewjs\ndv.paragraph(1)\n```\n",
         "```{dataviewjs}\nx\n```\n",
         "```js-engine\nreturn 1\n```\n",
-        "~~~ DataView\nLIST WHERE dv.current()\n~~~\n",
+        "~~~ DataView-JS\nLIST\n~~~\n",
+        "> ```dataviewjs\n> dv.paragraph(1)\n> ```\n",
+        "- ```dataviewjs\n  dv.paragraph(1)\n  ```\n",
+        "1. ~~~dataviewjs\n   dv.paragraph(1)\n   ~~~\n",
+        "        ```dataviewjs\n        x\n",
+        "``````\nnot closed\n```dataviewjs\nx\n```\n",
+        "```py`x\n```dataviewjs\nx\n```\n",
+        "````\n```dataviewjs\n````\n",
+        "Ich nutze das Plugin Templater.",
+        "Wert: `=this.file.name`",
+        "~~ $= 1",
+        "Titel %> tp.date.now()",
+        "```meta-bind-js\nx\n```\n",
         "Heute ist `` $= dv.date('today') ``.",
         "Heute ist `  $=1`.",
         "&lt;% tp.date.now() %&gt;",
@@ -253,7 +265,6 @@ async def test_every_markdown_spelling_of_runnable_code_is_refused(
         "~~~js\nconst x = 1\n~~~\n",
         "```dataview\nTABLE file.name FROM #mathe\n```\n",
         "Ein `inline code` und ein Preis von 5 $.",
-        "````\n```dataviewjs\n````\n",  # shown as text inside a longer fence: inert
     ],
 )
 async def test_ordinary_fences_and_code_are_written(world: dict[str, Path], text: str) -> None:
@@ -287,3 +298,12 @@ async def _refused_existing(world: dict[str, Path], path: str) -> str:
     with pytest.raises(NodeRefusal) as caught:
         await _write(world, path, "y", append=True)
     return caught.value.reason
+
+
+def test_the_markdown_check_is_position_independent() -> None:
+    from nox.node.safe_fs import markdown_runs_code
+
+    # Wherever the token stands - quoted, listed, indented, after a broken fence - it counts.
+    for prefix in ("", "> ", "- ", "1. ", "        ", "> - ", "\t"):
+        assert markdown_runs_code(f"Text\n{prefix}```dataviewjs\n{prefix}x\n{prefix}```\n")
+    assert not markdown_runs_code("```python\nprint(1)\n```\n~~~js\nlet a = 1\n~~~\n")

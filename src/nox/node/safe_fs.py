@@ -294,52 +294,43 @@ def structured(path: str) -> bool:
 _YAML_ACTIVE = ("TagToken", "AnchorToken", "AliasToken")
 
 
-#: Markdown that a note app runs as code: Dataview JS (blocks and inline `$=`), Templater
-#: tags, scripts and `javascript:` links - refused in any `.md`, workspace or not.
-_MD_ANYWHERE = ("<%", "<script", "javascript:", "vbscript:", "<iframe", "<object", "<embed")
-#: A code fence opener: any indentation, three or more backticks or tildes, the info string.
-_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})[ \t]*([^\s`]*)")
-#: Fences a note app runs whatever they hold.
-_RUN_FENCES = ("dataviewjs", "js-engine", "templater", "tp-", "meta-bind-js", "jsx")
-#: Inline Dataview JS: any backtick run, optional space, `$=`.
-_INLINE_JS = re.compile(r"`+[ \t]*\$=")
+#: Markdown a note app could run as code - refused in any `.md`, workspace or not. These are
+#: position-independent tokens, not a Markdown parser: a fence inside a blockquote, a list item
+#: or an unbalanced fence is still found. A note that merely mentions one of them is refused too
+#: (accepted: Nox cannot write notes that mention these plugin keywords).
+_MD_TOKENS = (
+    "dataviewjs",
+    "dataview-js",
+    "js-engine",
+    "templater",
+    "meta-bind-js",
+    "<%",
+    "<script",
+    "javascript:",
+    "vbscript:",
+    "<iframe",
+    "<object",
+    "<embed",
+)
+#: Inline Dataview JS: a backtick (or tilde) run, optional whitespace, `$=` or `=this.`.
+_INLINE_JS = re.compile(r"[`~]+\s*(\$=|=this\.)")
+#: Templater's closing tag next to its API.
+_TEMPLATER_API = re.compile(r"\btp\.")
 #: An event handler in raw HTML (`<img onerror=...>`).
-_HANDLER = re.compile(r"<[a-z][^>]*\bon\w+[ \t]*=", re.S)
+_HANDLER = re.compile(r"<[a-z][^>]*\bon\w+\s*=", re.S)
 
 
 def markdown_runs_code(text: str) -> bool:
-    """Whether Markdown carries code a note app would run - scanned line by line, after HTML
-    entities are decoded and the text NFKC-normalised: a fence (backticks or tildes, any length,
-    any indentation) whose info string starts with `dataviewjs`, `js-engine`, `templater`, ...; a
-    `dataview` fence that holds `$=` or `dv.`; inline `$=` after any backtick run; Templater
-    `<%`; `<script`, `javascript:`, `<iframe`, `<object`, `<embed` or an `on...=` handler."""
+    """Whether Markdown carries anything a note app might run - after HTML entities are decoded,
+    NFKC applied and case folded: any of `_MD_TOKENS` anywhere, inline Dataview JS (`$=` or
+    `=this.` after a backtick or tilde run), `%>` together with Templater's `tp.`, or an
+    `on...=` handler in raw HTML. Fail closed, wherever it stands."""
     body = unicodedata.normalize("NFKC", html.unescape(text)).casefold()
-    if any(marker in body for marker in _MD_ANYWHERE) or _INLINE_JS.search(body):
+    if any(token in body for token in _MD_TOKENS):
         return True
-    if _HANDLER.search(body):
+    if _INLINE_JS.search(body) or _HANDLER.search(body):
         return True
-    fence: tuple[str, int, str] | None = None  # (character, length, info)
-    for line in body.splitlines():
-        opened = _FENCE.match(line)
-        if fence is None:
-            if opened is None:
-                continue
-            marks, info = opened.group(1), opened.group(2).lstrip("{.")
-            if info.startswith(_RUN_FENCES):
-                return True
-            fence = (marks[0], len(marks), info)
-            continue
-        if (
-            opened is not None
-            and opened.group(1)[0] == fence[0]
-            and len(opened.group(1)) >= fence[1]
-        ):
-            if not opened.group(2):
-                fence = None  # the block closed
-                continue
-        if fence[2].startswith("dataview") and ("$=" in line or "dv." in line):
-            return True
-    return False
+    return "%>" in body and _TEMPLATER_API.search(body) is not None
 
 
 def content_refusal(path: str, text: str) -> str | None:
