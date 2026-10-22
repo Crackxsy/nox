@@ -90,6 +90,7 @@ jobs:
 
       - name: The image has Nox enabled, not started, and nothing of its own
         run: |
+          set -x
           test -L "$ROOT/etc/systemd/system/multi-user.target.wants/nox.service"
           test "$(readlink "$ROOT/opt/nox/current")" = "/opt/nox/releases/${COMMIT:0:12}"
           test -f "$ROOT/opt/nox/current/.complete"
