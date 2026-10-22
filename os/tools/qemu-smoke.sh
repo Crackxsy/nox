@@ -106,8 +106,11 @@ cmdline="$cmdline systemd.mask=rpi-resize.service systemd.watchdog_sec=off"
 cmdline="$cmdline modprobe.blacklist=bcm2835_wdt,hci_uart,btbcm initcall_blacklist=bcm2835_wdt_driver_init"
 # The boot's own log on the serial port too, so a failure can be read from the CI log.
 cmdline="$cmdline printk.devkmsg=on audit=0 systemd.journald.forward_to_kmsg=1"
-# On a Pi 3 the PL011 UART (QEMU's serial port) belongs to Bluetooth; once its driver takes the
-# UART, the console goes silent. A copy of the device tree without that Bluetooth node keeps it.
+# On a Pi 3 the PL011 UART (QEMU's only serial port) belongs to Bluetooth: once the kernel driver
+# or the Bluetooth helpers (hciuart, which re-clocks the UART) take it, the console goes silent and
+# the boot stalls on it. The test boots without them: a copy of the device tree without the
+# Bluetooth node, and the helpers masked.
+cmdline="$cmdline systemd.mask=hciuart.service systemd.mask=bluetooth.service"
 dtb="$work/console.dtb"
 cp "$bootfiles/bcm2710-rpi-3-b-plus.dtb" "$dtb"
 uart0="$(fdtget -t s "$dtb" /aliases uart0)"
@@ -125,6 +128,13 @@ while [ "$SECONDS" -lt "$deadline" ]; do
   if grep -aq 'NOX-SMOKE-OK' "$log" 2>/dev/null; then result=0; break; fi
   if grep -aq 'NOX-SMOKE-FAIL' "$log" 2>/dev/null; then sleep 20; break; fi
   if ! kill -0 "$qemu_pid" 2>/dev/null; then echo "QEMU stopped before the smoke finished" >&2; break; fi
+  # The smoke unit reports every two minutes: a console silent for ten is a stalled boot.
+  size="$(stat -c %s "$log" 2>/dev/null || echo 0)"
+  if [ "$size" != "${last_size:-}" ]; then last_size="$size"; last_change="$SECONDS"; fi
+  if [ $((SECONDS - ${last_change:-$SECONDS})) -ge 600 ]; then
+    echo "the serial console has been silent for 10 minutes: the boot stalled" >&2
+    break
+  fi
   sleep 10
 done
 kill "$qemu_pid" 2>/dev/null || true
