@@ -3,6 +3,8 @@ narrowed group stays out of what the core routes - whatever the node says."""
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -185,3 +187,105 @@ async def test_the_defaults_view_resolves_names_to_ids(
     assert view["system"]["device"] == "auto"
     unknown = {d["group"]: d for d in defaults_view({"notify.show": "Kitchen PC"}, listed)}
     assert unknown["notify"]["device"] == "Kitchen PC"
+
+
+async def _until_set(flag: threading.Event) -> None:
+    for _ in range(500):
+        if flag.is_set():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("the worker thread never got there")
+
+
+async def _never_offered_while(registry: NodeRegistry, *tasks: asyncio.Task[None]) -> None:
+    while not all(t.done() for t in tasks):
+        assert not registry.any_online_with("notify.show")
+        await asyncio.sleep(0.001)
+    for task in tasks:
+        task.result()
+
+
+async def _connected(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
+) -> tuple[NodeRegistry, _Session, str]:
+    node = await pair_node(pairing, tmp_path)
+    registry = NodeRegistry(pairing, nodes)
+    client = _Client(
+        [
+            {"name": "system.info", "_nox": {"group": "system", "risk": "read"}},
+            {"name": "notify.show", "_nox": {"group": "notify", "risk": "low"}},
+        ]
+    )
+    session = _Session(pairing.get(node.node_id), client)
+    await registry.on_connected(session)  # type: ignore[arg-type]
+    assert registry.any_online_with("notify.show")
+    return registry, session, node.node_id
+
+
+async def test_a_listing_racing_a_narrowing_never_routes_the_group(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
+) -> None:
+    registry, session, node_id = await _connected(pairing, nodes, tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    original = registry.policy.record_listing
+
+    def slow(*args: Any, **kwargs: Any) -> dict[str, str]:
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    registry.policy.record_listing = slow  # type: ignore[method-assign]
+    # A listing (still with "notify") is in the middle of being recorded ...
+    listing = asyncio.create_task(registry.refresh(session))  # type: ignore[arg-type]
+    await _until_set(entered)
+    # ... when the owner switches "notify" off: off at once, and never back on.
+    narrowing = asyncio.create_task(registry.set_narrowed(node_id, "notify", True))
+    await asyncio.sleep(0)
+    assert not registry.any_online_with("notify.show")
+    release.set()
+    await _never_offered_while(registry, listing, narrowing)
+    assert registry.policy.narrowed(node_id) == {"notify"}
+    entry = next(e for e in registry.entries() if e.device_id == node_id)
+    assert entry.narrowed == {"notify"} and "notify.show" not in entry.tools
+    assert session.client.sent[-1] == ("nox/policy", {"narrow": ["notify"]})
+
+
+async def test_a_narrowing_racing_a_listing_never_routes_the_group(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
+) -> None:
+    registry, session, node_id = await _connected(pairing, nodes, tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    original = registry.policy.set_narrowed
+
+    def slow(*args: Any, **kwargs: Any) -> None:
+        entered.set()
+        assert release.wait(5)
+        original(*args, **kwargs)
+
+    registry.policy.set_narrowed = slow  # type: ignore[method-assign]
+    # The narrowing is being written ...
+    narrowing = asyncio.create_task(registry.set_narrowed(node_id, "notify", True))
+    await _until_set(entered)
+    assert not registry.any_online_with("notify.show")
+    # ... while the node reports a fresh list that still has "notify".
+    listing = asyncio.create_task(registry.refresh(session))  # type: ignore[arg-type]
+    await asyncio.sleep(0.01)
+    release.set()
+    await _never_offered_while(registry, listing, narrowing)
+    assert registry.policy.narrowed(node_id) == {"notify"}
+    assert not registry.any_online_with("notify.show")
+
+
+def test_a_stale_tool_list_never_routes_a_narrowed_or_unknown_group() -> None:
+    entry = NodeEntry(
+        device_id="a" * 32,
+        name="Arbeits-PC",
+        online=True,
+        tools={"notify.show": "low", "mystery.tool": "low", "system.info": "read"},
+        narrowed=frozenset({"notify"}),
+    )
+    assert not entry.offers("notify.show")
+    assert not entry.offers("mystery.tool")
+    assert entry.offers("system.info")
+    entry.pending_narrow.add("system")
+    assert not entry.offers("system.info")
