@@ -8,7 +8,7 @@ from typing import Any
 
 from nox.node.manifest import GROUPS
 from nox.node.pairing import NodePairing
-from nox.node.policy import NodePolicy, defaults_view, family_tools, group_of
+from nox.node.policy import NodePolicy, defaults_view, family_tools, group_of, reported_groups
 from nox.node.registry import ROUTABLE, NodeEntry, NodeRegistry
 from nox.node.repo import NodeRepository
 from nox.node.router import resolve
@@ -48,7 +48,38 @@ async def test_a_listing_records_groups_and_filters_narrowed_ones(
     # A group the device never reported is shown only when Nox can route it.
     assert "shell" not in view
     assert "shell" in {g["group"] for g in policy.view(node.node_id, ["shell"])}
-    assert not policy.enabled_on_device(node.node_id, "shell")
+    assert policy.state(node.node_id, "shell") == (False, False)
+    # Right after connecting the listing is complete: a narrowed group it lacks is off there.
+    policy.record_listing(node.node_id, {"system.info": "read"}, complete=True)
+    assert policy.state(node.node_id, "notify") == (False, True)
+
+
+async def test_what_the_node_reports_is_authoritative(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
+) -> None:
+    node = await pair_node(pairing, tmp_path)
+    policy = NodePolicy(nodes)
+    policy.set_narrowed(node.node_id, "notify", True)
+    # Shell is enabled on the device but above its max_risk, so no shell tool is listed.
+    policy.record_listing(
+        node.node_id, {"system.info": "read"}, reported={"system", "notify", "shell"}
+    )
+    assert policy.state(node.node_id, "shell") == (True, False)
+    assert policy.state(node.node_id, "notify") == (True, True)
+    policy.record_listing(node.node_id, {"system.info": "read"}, reported={"system"})
+    assert policy.state(node.node_id, "notify") == (False, True)
+    assert reported_groups({"_nox": {"groups": ["system", "rocket", 3]}}) == {"system"}
+    assert reported_groups({"tools": []}) is None
+
+
+async def test_a_tool_of_no_known_group_is_never_routed(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
+) -> None:
+    node = await pair_node(pairing, tmp_path)
+    accepted = NodePolicy(nodes).record_listing(
+        node.node_id, {"system.info": "read", "mystery.tool": "low"}
+    )
+    assert accepted == {"system.info": "read"}
 
 
 class _Client:
@@ -109,6 +140,21 @@ async def test_the_core_never_routes_a_narrowed_group_even_if_the_node_lists_it(
     # Narrowing takes effect on the core before the node answers anything.
     await registry.set_narrowed(node.node_id, "notify", True)
     assert not registry.any_online_with("notify.show")
+
+
+def test_a_group_switched_off_in_the_dashboard_says_so() -> None:
+    pc = NodeEntry(
+        device_id="a" * 32,
+        name="Arbeits-PC",
+        online=True,
+        tools={"system.info": "read"},
+        narrowed=frozenset({"notify"}),
+    )
+    common: dict[str, Any] = {"entries": [pc], "core_has": False, "default": None, "origin": None}
+    narrowed = resolve("notify.show", "Arbeits-PC", side_effects=True, **common)
+    assert narrowed.error is not None and narrowed.error["error"] == "narrowed_on_core"
+    off = resolve("shell.run", "Arbeits-PC", side_effects=True, **common)
+    assert off.error is not None and off.error["error"] == "not_enabled_on_device"
 
 
 def test_auto_means_no_default() -> None:

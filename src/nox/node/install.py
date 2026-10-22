@@ -376,9 +376,11 @@ def _register_requests(core: Any, runtime: NodeRuntime, lan: Any) -> None:
 
     async def h_list(_ctx: RequestContext, _p: EmptyRequest) -> dict[str, Any]:
         listed = await asyncio.to_thread(pairing.nodes)
+        online = set(runtime.listener.sessions) if runtime.listener is not None else set()
+        extra = await asyncio.to_thread(details, listed, online)
         return {
             "enabled": runtime.enabled,
-            "nodes": [_node_json(d, runtime) | details(d) for d in listed],
+            "nodes": [_node_json(d, runtime) | extra[d.id] for d in listed],
             "defaults": defaults_view(core.config.devices.defaults, listed),
         }
 

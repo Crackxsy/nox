@@ -135,8 +135,18 @@ export function ComputersSection({
   const onDefaults = (defaults: FamilyDefault[]) => patch((list) => ({ ...list, defaults }));
   const onRemoved = (node: NodeInfo) => {
     setOpenId(null);
-    setBanner(fill(t('node_removed'), node.name));
-    patch((list) => ({ ...list, nodes: list.nodes.filter((n) => n.id !== node.id) }));
+    // The core resets every default that named the removed computer; the line says which.
+    const reset = view.kind === 'ready' ? defaultFamilies(node, view.list.defaults) : [];
+    setBanner(
+      reset.length
+        ? fill(t('node_removed_defaults'), node.name, reset.map((g) => groupLabel(t, g)).join(', '))
+        : fill(t('node_removed'), node.name),
+    );
+    patch((list) => ({
+      ...list,
+      nodes: list.nodes.filter((n) => n.id !== node.id),
+      defaults: list.defaults.map((d) => (d.device === node.id ? { ...d, device: 'auto', raw: 'auto' } : d)),
+    }));
     if (client) void load(client, () => false, true);
   };
 

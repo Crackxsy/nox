@@ -195,6 +195,30 @@ describe('the detail sheet', () => {
     expect(calls.some((c) => c.name === 'node.narrow')).toBe(false);
     expect(within(sheet).getByText(t('node_enable_title'))).toBeTruthy();
     expect(within(sheet).getByText('nox node allow shell')).toBeTruthy();
+    expect(within(sheet).getByText(t('node_enable_tray'))).toBeTruthy();
+  });
+
+  it('puts the device first: narrowed here but off there is "off on the device"', async () => {
+    const both = node(PC, {
+      groups: [{ group: 'notify', enabled_on_device: false, narrowed: true, active: false }],
+    });
+    const { calls } = await show({ answers: { 'node.list': listing([both]) } });
+    const sheet = await openSheet();
+    expect(within(sheet).getByText(t('node_group_device_off'))).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(within(sheet).getByRole('switch', { name: 'Hinweise zeigen' }));
+    });
+    expect(calls.some((c) => c.name === 'node.narrow')).toBe(false);
+    expect(within(sheet).getByText('nox node allow notify')).toBeTruthy();
+  });
+
+  it('shows a long name without spaces', async () => {
+    const long = 'Wohnzimmerrechnerimkellerdesnachbarhauses';
+    expect(long.length).toBeGreaterThanOrEqual(40);
+    await show({ answers: { 'node.list': listing([node(PC, { name: long })]) } });
+    expect(screen.getByText(long).className).toContain('device-name');
+    const sheet = await openSheet(long);
+    expect(within(sheet).getByRole('heading', { name: long })).toBeTruthy();
   });
 
   it('asks for the PIN to give a narrowed group back when one is set', async () => {
@@ -245,8 +269,15 @@ describe('the detail sheet', () => {
     const sheet = await openSheet();
     const select = within(sheet).getByLabelText('Systemwerte lesen: Standardgerät') as HTMLSelectElement;
     expect(select.value).toBe('auto');
+    const apply = within(sheet).getByRole('button', { name: 'Übernehmen: Systemwerte lesen' }) as HTMLButtonElement;
+    expect(apply.disabled).toBe(true);
     await act(async () => {
       fireEvent.change(select, { target: { value: PC } });
+    });
+    // Choosing alone changes nothing; "Übernehmen" does.
+    expect(calls.some((c) => c.name === 'node.defaults.set')).toBe(false);
+    await act(async () => {
+      fireEvent.click(apply);
     });
     expect(calls.find((c) => c.name === 'node.defaults.set')?.payload).toEqual({ group: 'system', device: PC });
     expect(within(sheet).getByText(t('node_default_saved'))).toBeTruthy();
@@ -293,7 +324,8 @@ describe('the detail sheet', () => {
       fireEvent.click(within(sheet).getByRole('button', { name: t('lan_remove_armed') }));
     });
     expect(calls.find((c) => c.name === 'node.unpair')?.payload).toEqual({ device_id: PC });
-    expect(screen.getByText('Arbeits-PC ist entfernt.')).toBeTruthy();
+    // It was the default for "Hinweise zeigen": the line says that one is automatic again.
+    expect(screen.getByText('Arbeits-PC ist entfernt. Für Hinweise zeigen entscheidet Nox jetzt wieder selbst.')).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

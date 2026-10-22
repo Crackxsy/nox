@@ -14,7 +14,8 @@ After the main steps the page is checked with axe-core (WCAG 2.2 AA rules, zero 
 sideways scrolling; every step is a screenshot.
 
 Artifacts go where the other click tests put theirs (`NOX_E2E_ARTIFACTS` in CI, uploaded as
-`e2e-clicktests`): `videos/devices_<size>_<scheme>.webm` and `screens/devices_<size>_...png`.
+`e2e-clicktests`): `videos/devices_<size>_<scheme>.webm` and
+`screens/<size>_<scheme>_devices_<step>.png`.
 All names and addresses are made up.
 """
 
@@ -48,6 +49,9 @@ pytestmark = pytest.mark.e2e
 PC = "a" * 32
 PI = "b" * 32
 LAPTOP = "c" * 32
+LONG = "d" * 32
+#: Forty characters, no space: must wrap, never widen the page.
+LONG_NAME = "Wohnzimmerrechnerimkellerdesnachbarhauses"
 
 
 def _node(node_id: str, name: str, **over: Any) -> dict[str, Any]:
@@ -81,6 +85,7 @@ class NodeStub(StubCore):
         default_factory=lambda: [
             _node(PC, "Arbeits-PC"),
             _node(PI, "Wohnzimmer-Pi", os="linux", arch="aarch64", online=False, compatible=None),
+            _node(LONG, LONG_NAME, online=False, compatible=None),
         ]
     )
     defaults: dict[str, str] = field(default_factory=lambda: {"system": "auto", "notify": "origin"})
@@ -188,7 +193,8 @@ def test_computers_and_what_nox_may_do_there(journey: Journey) -> None:  # noqa:
         section.get_by_text("Nox darf hier: Systemwerte lesen, Hinweise zeigen.").first
     ).to_be_visible()
     expect(section.get_by_text("Verbunden", exact=True)).to_be_visible()
-    expect(section.get_by_text(re.compile(r"^Offline seit "))).to_be_visible()
+    expect(section.get_by_text(re.compile(r"^Offline seit ")).first).to_be_visible()
+    expect(section.get_by_text(LONG_NAME, exact=True)).to_be_visible()
     journey.shot("01-computer")
     journey.axe("computer")
     journey.no_sideways_scroll()
@@ -214,6 +220,8 @@ def test_computers_and_what_nox_may_do_there(journey: Journey) -> None:  # noqa:
 
     # 4. Where "Systemwerte lesen" runs when nobody names a device.
     sheet.get_by_label("Systemwerte lesen: Standardgerät").select_option(PC)
+    assert _sent(stub, "node.defaults.set") == []  # choosing alone changes nothing
+    sheet.get_by_role("button", name="Übernehmen: Systemwerte lesen").click()
     expect(sheet.get_by_text("Gespeichert.")).to_be_visible()
     assert _sent(stub, "node.defaults.set") == [{"group": "system", "device": PC}]
     journey.shot("03-standard")
@@ -241,7 +249,15 @@ def test_computers_and_what_nox_may_do_there(journey: Journey) -> None:  # noqa:
     journey.shot("05-verbunden")
     add.get_by_role("button", name="Schließen", exact=True).click()
 
-    # 6. Remove the Pi: the first press only arms it.
+    # 6. A long name wraps in the list and in its sheet.
+    section.get_by_role("button", name=f"{LONG_NAME} öffnen").click()
+    long_sheet = page.get_by_role("dialog", name=LONG_NAME)
+    expect(long_sheet).to_be_visible()
+    journey.shot("06-langer-name")
+    journey.no_sideways_scroll()
+    long_sheet.get_by_role("button", name="Schließen", exact=True).click()
+
+    # 7. Remove the Pi: the first press only arms it.
     section.get_by_role("button", name="Wohnzimmer-Pi öffnen").click()
     pi = page.get_by_role("dialog", name="Wohnzimmer-Pi")
     pi.get_by_role("button", name="Entfernen", exact=True).click()
@@ -249,11 +265,11 @@ def test_computers_and_what_nox_may_do_there(journey: Journey) -> None:  # noqa:
         pi.get_by_text(re.compile("Nox kann auf Wohnzimmer-Pi dann nichts mehr tun"))
     ).to_be_visible()
     assert _sent(stub, "node.unpair") == []
-    journey.shot("06-entfernen")
+    journey.shot("07-entfernen")
     pi.get_by_role("button", name="Wirklich entfernen").click()
     expect(page.get_by_text("Wohnzimmer-Pi ist entfernt.")).to_be_visible()
     assert _sent(stub, "node.unpair") == [{"device_id": PI}]
     expect(section.get_by_role("button", name="Wohnzimmer-Pi öffnen")).to_have_count(0)
-    journey.shot("07-entfernt")
+    journey.shot("08-entfernt")
     journey.axe("entfernt")
     journey.no_sideways_scroll()

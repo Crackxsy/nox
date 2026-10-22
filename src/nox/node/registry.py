@@ -11,6 +11,7 @@ and the tool loop marks the conversation tainted like any other untrusted result
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -25,7 +26,7 @@ from nox.node.confirm import CONFIRM_TIMEOUT_S
 from nox.node.listener import NodeSession
 from nox.node.names import display_name, label
 from nox.node.pairing import NodePairing
-from nox.node.policy import NodePolicy, group_of, send_policy
+from nox.node.policy import NodePolicy, group_of, reported_groups, send_policy
 from nox.node.receipts import MAX_LIFETIME_S, ReceiptSigner
 from nox.node.repo import NodeRepository
 from nox.security.prohibitions import matching_hard_prohibition
@@ -65,11 +66,17 @@ class NodeEntry:
     session: NodeSession | None = None
     #: The node can ask the person at the device (it said so at `initialize`).
     confirmer: bool = False
+    #: Groups the owner switched off for this node in the dashboard (`nox.node.policy`).
+    narrowed: frozenset[str] = frozenset()
 
     @property
     def label(self) -> str:
         """What the model sees: the plain name and a short id the device cannot choose."""
         return label(self.name, self.device_id)
+
+    def narrowed_out(self, tool: str) -> bool:
+        """Whether the tool's group is switched off here (not on the device)."""
+        return group_of(tool) in self.narrowed
 
     def offers(self, tool: str) -> bool:
         if not self.online or tool not in self.tools:
@@ -145,7 +152,8 @@ class NodeRegistry:
         entry.session, entry.online, entry.compatible = session, True, session.compatible
         entry.confirmer = session.hello.confirmer
         entry.last_seen = self._clock()
-        await self.refresh(session)
+        # The node forgot the core's narrowing with the old connection: this listing is complete.
+        await self.refresh(session, complete=True)
 
     async def on_disconnected(self, session: NodeSession) -> None:
         entry = self._entries.get(session.device_id)
@@ -156,7 +164,7 @@ class NodeRegistry:
     async def on_tools_changed(self, session: NodeSession) -> None:
         await self.refresh(session)
 
-    async def refresh(self, session: NodeSession) -> None:
+    async def refresh(self, session: NodeSession, *, complete: bool = False) -> None:
         entry = self._entries.get(session.device_id)
         if entry is None or entry.session is not session:
             return
@@ -169,8 +177,15 @@ class NodeRegistry:
         accepted = self._accept_tools(listed.get("tools"))
         # A narrowed group is filtered here as well as on the node: nothing is routed to it even
         # in the moment between a new connection and the node applying `nox/policy`.
-        entry.tools = self.policy.record_listing(session.device_id, accepted)
-        narrowed = self.policy.narrowed(session.device_id)
+        entry.tools = await asyncio.to_thread(
+            self.policy.record_listing,
+            session.device_id,
+            accepted,
+            reported=reported_groups(listed),
+            complete=complete,
+        )
+        narrowed = await asyncio.to_thread(self.policy.narrowed, session.device_id)
+        entry.narrowed = frozenset(narrowed)
         if narrowed:
             await send_policy(session, narrowed)
         log.info("node.tools", device_id=session.device_id, tools=sorted(entry.tools))
@@ -178,16 +193,19 @@ class NodeRegistry:
     async def set_narrowed(self, device_id: str, group: str, narrowed: bool) -> None:
         """Narrow (or give back) one group of one node: at once on the core, and on the node as
         soon as it is connected."""
-        self.policy.set_narrowed(device_id, group, narrowed)
         entry = self._entries.get(device_id)
+        if entry is not None and narrowed:
+            # Off on the core before anything is written or sent: nothing is routed there now.
+            entry.tools = {t: r for t, r in entry.tools.items() if group_of(t) != group}
+        await asyncio.to_thread(self.policy.set_narrowed, device_id, group, narrowed)
+        now = await asyncio.to_thread(self.policy.narrowed, device_id)
         if entry is None:
             return
-        if narrowed:
-            entry.tools = {t: r for t, r in entry.tools.items() if group_of(t) != group}
+        entry.narrowed = frozenset(now)
         session = entry.session
         if session is None or not entry.online:
             return
-        await send_policy(session, self.policy.narrowed(device_id))
+        await send_policy(session, now)
         if not narrowed:
             await self.refresh(session)  # the node lists the group's tools again
 

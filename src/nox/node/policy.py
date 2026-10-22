@@ -3,20 +3,29 @@ tool family runs on by default (spec C §1.10).
 
 The device decides what Nox may do on it (`node.yaml`, `nox node allow`). From the core the owner
 can only *take away* - a narrowed group is filtered out of what the core routes and sent to the
-node as `nox/policy`, so both sides refuse it - and give back what they took away earlier. A group
-the device has not enabled can never be switched on from here: the answer is `enable_on_device`,
-and the page says how to do it on the device itself.
+node as `nox/policy`, so both sides refuse it - and clear that narrowing again. Clearing can never
+widen beyond the device: the node's own gate only ever offers what it enabled itself. A group that
+is neither narrowed here nor enabled on the device cannot be switched on from here at all: the
+answer is `enable_on_device`, and the page says how to do it on the device itself.
+
+What a device enabled comes from the device: a node says it outright with every tool list
+(`_nox.groups`, `nox.node.agent`). An older node does not, and then it is inferred from the tools
+it lists - complete right after connecting (a node forgets the core's narrowing with the
+connection), partial later (a narrowed group is no longer listed, so its absence says nothing).
 
 Which group a tool belongs to is decided here, by the tool's name, never by the node's word: a node
-claiming that `shell.run` is a `system` tool cannot escape a narrowed `shell` group that way.
+claiming that `shell.run` is a `system` tool cannot escape a narrowed `shell` group that way, and
+a tool of no known group is dropped (fail closed).
 
 Requests, for the UI roles (`nox.ipc.roles`):
   * `node.narrow {node_id, group, narrowed, pin?}` - narrowing needs no PIN on this machine (it
-    only takes away; from a paired device the PIN, as for removing a node); giving a group back
-    widens what Nox may do again, so it needs the PIN when one is set, and from a paired device
-    always.
+    only takes away; from a paired device the PIN, as for removing a node); clearing it widens
+    what Nox may do again, so it needs the PIN when one is set, and from a paired device always.
   * `node.defaults.set {group, device, pin?}` - `device` is `auto`, `core`, `origin` or a paired
     node's id. It decides where a request lands, so it is administration like `node.link`.
+
+Both are audited with their outcome, refusals included. Removing a node resets every default that
+pointed at it to `auto`.
 """
 
 from __future__ import annotations
@@ -27,7 +36,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from nox.core.config.core import DevicesConfig
 from nox.core.logging import get_logger
@@ -49,6 +58,7 @@ __all__ = [
     "family_tools",
     "group_of",
     "register_policy_requests",
+    "reported_groups",
 ]
 
 #: Tool name prefix -> capability group (spec C §1.4). The core's own mapping, see the docstring.
@@ -82,8 +92,19 @@ def family_tools(group: str, routable: Iterable[str], configured: Iterable[str])
     return sorted({t for t in (*routable, *configured) if group_of(t) == group})
 
 
+def reported_groups(listed: Any) -> set[str] | None:
+    """The groups a node says it enabled (`_nox.groups` of its tool list), or None when it does
+    not say (an older node). Unknown names are ignored."""
+    nox = listed.get("_nox") if isinstance(listed, dict) else None
+    groups = nox.get("groups") if isinstance(nox, dict) else None
+    if not isinstance(groups, list):
+        return None
+    return {g for g in groups[:64] if isinstance(g, str) and g in GROUPS}
+
+
 class NodePolicy:
-    """The core's narrowing of each node, kept in `node_capabilities` (migration 0017)."""
+    """The core's narrowing of each node, kept in `node_capabilities` (migration 0017). Every
+    method touches the database: call them off the event loop."""
 
     def __init__(
         self, nodes: NodeRepository, *, clock: Callable[[], datetime] | None = None
@@ -94,34 +115,48 @@ class NodePolicy:
     def narrowed(self, device_id: str) -> set[str]:
         return self._nodes.narrowed_groups(device_id)
 
-    def record_listing(self, device_id: str, tools: Mapping[str, str]) -> dict[str, str]:
-        """A node's accepted tool list: remember which groups it has enabled, and return the tools
-        without those of a narrowed group.
+    def record_listing(
+        self,
+        device_id: str,
+        tools: Mapping[str, str],
+        *,
+        reported: set[str] | None = None,
+        complete: bool = False,
+    ) -> dict[str, str]:
+        """A node's accepted tool list: remember which groups the device enabled, and return the
+        tools Nox may route - none of a narrowed group, none of an unknown group.
 
-        While a group is narrowed the node no longer lists it, so its absence says nothing; what
-        the device said about it before is kept. The node resets its narrowing on every new
-        connection, so the first listing after connecting is always complete.
+        `reported`: what the node said it enabled (authoritative). Without it, the listed groups;
+        a narrowed group missing from the list keeps what was known about it, unless the listing
+        is `complete` (the first one after connecting).
         """
         narrowed = self.narrowed(device_id)
-        before = self._nodes.capabilities(device_id)
         listed = {g for g in (group_of(t) for t in tools) if g is not None}
-        reported = {g: True for g in listed}
-        for group in narrowed - listed:
-            reported[group] = before.get(group, (False, True))[0]
-        self._nodes.set_reported_groups(device_id, reported, when=self._clock())
-        return {t: r for t, r in tools.items() if group_of(t) not in narrowed}
+        if reported is not None:
+            enabled = {g: g in reported for g in GROUPS}
+        else:
+            before = self._nodes.capabilities(device_id)
+            enabled = {g: True for g in listed}
+            if not complete:
+                for group in narrowed - listed:
+                    enabled[group] = before.get(group, (False, True))[0]
+        self._nodes.set_reported_groups(device_id, enabled, when=self._clock())
+        return {
+            t: r for t, r in tools.items() if (g := group_of(t)) is not None and g not in narrowed
+        }
 
     def set_narrowed(self, device_id: str, group: str, narrowed: bool) -> None:
         self._nodes.narrow(device_id, group, narrowed, when=self._clock())
 
-    def enabled_on_device(self, device_id: str, group: str) -> bool:
-        return self._nodes.capabilities(device_id).get(group, (False, False))[0]
+    def state(self, device_id: str, group: str) -> tuple[bool, bool]:
+        """(enabled on the device, narrowed here)."""
+        return self._nodes.capabilities(device_id).get(group, (False, False))
 
     def view(self, device_id: str, relevant: Iterable[str]) -> list[dict[str, Any]]:
         """Every group worth showing for one node, in the order of `GROUPS`: those Nox can route
-        a tool of, and any the device reported or the core narrowed."""
+        a tool of, and any the core narrowed (so it can be cleared again)."""
         caps = self._nodes.capabilities(device_id)
-        shown = set(relevant) | {g for g, (on, narrow) in caps.items() if on or narrow}
+        shown = set(relevant) | {g for g, (_on, narrow) in caps.items() if narrow}
         out = []
         for group in GROUPS:
             if group not in shown:
@@ -142,6 +177,8 @@ class NodePolicy:
 
 
 class NarrowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     node_id: str = Field(min_length=1, max_length=64)
     group: str = Field(min_length=1, max_length=32)
     narrowed: bool
@@ -149,6 +186,8 @@ class NarrowRequest(BaseModel):
 
 
 class DefaultsSetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     group: str = Field(min_length=1, max_length=32)
     device: str = Field(min_length=1, max_length=64)
     pin: str | None = Field(default=None, max_length=128)
@@ -172,6 +211,10 @@ def _family_default(values: list[str]) -> str:
     return first if all(v == first for v in values) else "mixed"
 
 
+def _points_at(value: str, device: DeviceRow) -> bool:
+    return value == device.id or value.casefold() == device.name.casefold()
+
+
 def defaults_view(defaults: Mapping[str, str], nodes: list[DeviceRow]) -> list[dict[str, Any]]:
     """One entry per family Nox routes: the device its tools run on when nobody says, with a
     node's name resolved to its id (`device`) when exactly one paired node has it."""
@@ -184,97 +227,151 @@ def defaults_view(defaults: Mapping[str, str], nodes: list[DeviceRow]) -> list[d
         raw = _family_default([defaults[t] for t in tools if t in defaults])
         device = raw
         if raw not in DEFAULT_WORDS and raw != "mixed":
-            key = raw.casefold()
-            found = [d for d in active if key in (d.id, d.name.casefold())]
+            found = [d for d in active if _points_at(raw, d)]
             device = found[0].id if len(found) == 1 else raw
         out.append({"group": group, "tools": tools, "device": device, "raw": raw})
     return out
 
 
-def register_policy_requests(core: Any, runtime: Any) -> Callable[[DeviceRow], dict[str, Any]]:
-    """Register `node.narrow` and `node.defaults.set`; returns what `node.list` adds per node."""
+def register_policy_requests(
+    core: Any, runtime: Any
+) -> Callable[[list[DeviceRow], set[str]], dict[str, dict[str, Any]]]:
+    """Register `node.narrow` and `node.defaults.set`; returns what `node.list` adds per node
+    (blocking: call it in a thread)."""
     pairing = runtime.pairing
     nodes = NodeRepository(core.db)
     standalone = NodePolicy(nodes)
+    #: One writer of `devices.defaults` at a time (the dashboard, a removal).
+    defaults_lock = asyncio.Lock()
 
     def policy() -> NodePolicy:
         registry = runtime.registry
         return registry.policy if registry is not None else standalone
 
-    def details(device: DeviceRow) -> dict[str, Any]:
-        row = nodes.get_node(device.id)
-        extra: dict[str, Any] = {
-            "groups": policy().view(device.id, relevant_groups()),
-            "arch": row.arch if row is not None else None,
-        }
-        # Offline, the last values the node reported at pairing / its last hello.
-        session = runtime.listener.sessions.get(device.id) if runtime.listener else None
-        if session is None and row is not None:
-            extra["os"] = row.os or None
-            extra["version"] = row.version or None
-        return extra
+    def details(listed: list[DeviceRow], online: set[str]) -> dict[str, dict[str, Any]]:
+        relevant = relevant_groups()
+        out: dict[str, dict[str, Any]] = {}
+        for device in listed:
+            row = nodes.get_node(device.id)
+            extra: dict[str, Any] = {
+                "groups": policy().view(device.id, relevant),
+                "arch": row.arch if row is not None else None,
+            }
+            # Offline: the last values the node reported (at pairing, at its last hello).
+            if device.id not in online and row is not None:
+                extra["os"] = row.os or None
+                extra["version"] = row.version or None
+            out[device.id] = extra
+        return out
 
-    async def h_narrow(ctx: RequestContext, p: NarrowRequest) -> dict[str, Any]:
-        device = pairing.get(p.node_id)
-        if device is None or device.revoked:
-            raise IpcError(ERR_NOT_FOUND, "no such node", details={"reason": "no_node"})
-        if p.group not in GROUPS:
-            raise IpcError(ERR_VALIDATION, "unknown capability group", details={"reason": "group"})
-        current = policy()
-        if not p.narrowed and not current.enabled_on_device(p.node_id, p.group):
-            # Widening beyond the device is impossible from here, by design.
-            raise IpcError(
-                ERR_VALIDATION,
-                "only the device itself can enable this group",
-                details={"reason": "enable_on_device"},
-            )
-        # Taking away is always allowed on this machine; giving back is administration.
-        await authorize_admin(core, ctx, p.pin, "node.narrow", local_needs_pin=not p.narrowed)
-        registry = runtime.registry
-        if registry is not None:
-            await registry.set_narrowed(p.node_id, p.group, p.narrowed)
-        else:
-            await asyncio.to_thread(current.set_narrowed, p.node_id, p.group, p.narrowed)
+    def audit(ctx: RequestContext, action: str, target: str, decision: str, result: str) -> None:
         core.security.audit.append(
             actor=ctx.client_id or ctx.role,
             tool="node",
-            action="node.narrow",
-            target=f"device:{p.node_id} {p.group}",
-            decision="allow",
-            result="narrowed" if p.narrowed else "restored",
+            action=action,
+            target=target,
+            decision=decision,
+            result=result,
         )
-        return {
-            "ok": True,
-            "node_id": p.node_id,
-            "groups": current.view(p.node_id, relevant_groups()),
-        }
+
+    def refuse(
+        ctx: RequestContext, action: str, target: str, code: str, message: str, reason: str
+    ) -> IpcError:
+        audit(ctx, action, target, "deny", reason)
+        return IpcError(code, message, details={"reason": reason})
+
+    async def h_narrow(ctx: RequestContext, p: NarrowRequest) -> dict[str, Any]:
+        target = f"device:{p.node_id} {p.group}"
+        device = pairing.get(p.node_id)
+        if device is None or device.revoked:
+            raise refuse(ctx, "node.narrow", target, ERR_NOT_FOUND, "no such node", "no_node")
+        if p.group not in GROUPS:
+            raise refuse(
+                ctx, "node.narrow", target, ERR_VALIDATION, "unknown capability group", "group"
+            )
+        current = policy()
+        on_device, narrowed_here = await asyncio.to_thread(current.state, p.node_id, p.group)
+        if not p.narrowed and not narrowed_here and not on_device:
+            # Nothing to clear here, and widening beyond the device is impossible from here.
+            raise refuse(
+                ctx,
+                "node.narrow",
+                target,
+                ERR_VALIDATION,
+                "only the device itself can enable this group",
+                "enable_on_device",
+            )
+        # Taking away is always allowed on this machine; clearing it is administration.
+        await authorize_admin(core, ctx, p.pin, "node.narrow", local_needs_pin=not p.narrowed)
+        result = "narrowed" if p.narrowed else "cleared"
+        try:
+            registry = runtime.registry
+            if registry is not None:
+                await registry.set_narrowed(p.node_id, p.group, p.narrowed)
+            else:
+                await asyncio.to_thread(current.set_narrowed, p.node_id, p.group, p.narrowed)
+        except Exception:
+            audit(ctx, "node.narrow", target, "allow", "failed")
+            raise
+        audit(ctx, "node.narrow", target, "allow", result)
+        groups = await asyncio.to_thread(current.view, p.node_id, relevant_groups())
+        return {"ok": True, "node_id": p.node_id, "groups": groups}
+
+    async def write_defaults(values: dict[str, str]) -> dict[str, str]:
+        """Persist and apply under the lock; returns the defaults now in force."""
+        async with defaults_lock:
+            live = core.config.devices.defaults
+            updated = {**live, **values}
+            DevicesConfig(defaults=updated)  # validated before anything is written
+            await asyncio.to_thread(_persist, _user_config_path(core), values)
+            # The router reads this mapping on every call: changed in place, the change is live.
+            live.update(values)
+            return dict(live)
 
     async def h_defaults_set(ctx: RequestContext, p: DefaultsSetRequest) -> dict[str, Any]:
+        target = f"{p.group} -> {p.device}"
         if p.group not in relevant_groups():
-            raise IpcError(ERR_VALIDATION, "no such tool family", details={"reason": "group"})
+            raise refuse(
+                ctx, "node.defaults", target, ERR_VALIDATION, "no such tool family", "group"
+            )
         if p.device not in DEFAULT_WORDS:
             device = pairing.get(p.device)
             if device is None or device.revoked:
-                raise IpcError(ERR_NOT_FOUND, "no such node", details={"reason": "no_node"})
+                raise refuse(ctx, "node.defaults", target, ERR_NOT_FOUND, "no such node", "no_node")
         await authorize_admin(core, ctx, p.pin, "node.defaults", local_needs_pin=True)
-        current = dict(core.config.devices.defaults)
-        tools = family_tools(p.group, _routable(), current)
-        updated = {**current, **{tool: p.device for tool in tools}}
-        section = DevicesConfig(defaults=updated)  # validated before anything is written
-        await asyncio.to_thread(_persist, _user_config_path(core), {t: p.device for t in tools})
-        # The router reads `core.config.devices.defaults` on every call: the change is live.
-        core.config = core.config.model_copy(update={"devices": section})
+        tools = family_tools(p.group, _routable(), core.config.devices.defaults)
+        try:
+            now = await write_defaults({tool: p.device for tool in tools})
+        except Exception:
+            audit(ctx, "node.defaults", target, "allow", "failed")
+            raise
+        audit(ctx, "node.defaults", target, "allow", "ok")
+        listed = await asyncio.to_thread(pairing.nodes)
+        return {"ok": True, "defaults": defaults_view(now, listed)}
+
+    async def forget_defaults(device_id: str, _reason: str) -> None:
+        # A removed node is no default any more: those tools are back to `auto`.
+        device = pairing.get(device_id)
+        if device is None:
+            return
+        stale = {t: AUTO for t, v in core.config.devices.defaults.items() if _points_at(v, device)}
+        if not stale:
+            return
+        try:
+            await write_defaults(stale)
+        except Exception as exc:  # noqa: BLE001 - the removal itself stands either way
+            log.error("node.defaults_reset_failed", device_id=device_id, error=type(exc).__name__)
+            return
         core.security.audit.append(
-            actor=ctx.client_id or ctx.role,
+            actor="core",
             tool="node",
             action="node.defaults",
-            target=f"{p.group} -> {p.device}",
+            target=f"device:{device_id} removed",
             decision="allow",
-            result="ok",
+            result="reset:" + ",".join(sorted(stale)),
         )
-        listed = await asyncio.to_thread(pairing.nodes)
-        return {"ok": True, "defaults": defaults_view(section.defaults, listed)}
 
+    pairing.on_revoked(forget_defaults)
     reg = core.registry.register
     reg("node.narrow", NarrowRequest, h_narrow, roles=UI_ROLES)
     reg("node.defaults.set", DefaultsSetRequest, h_defaults_set, roles=UI_ROLES)

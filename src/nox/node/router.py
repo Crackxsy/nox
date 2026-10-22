@@ -109,6 +109,17 @@ def resolve(
             return Resolution("", offline_error(entry))
         if not entry.compatible:
             return Resolution("", {"error": "update_needed", "device": entry.label})
+        if entry.narrowed_out(tool):
+            # Switched off in the dashboard, not on the device: it can be switched on there again.
+            return Resolution(
+                "",
+                {
+                    "error": "narrowed_on_core",
+                    "device": entry.label,
+                    "tool": tool,
+                    "hint": "im Dashboard ausgeschaltet – dort wieder einschaltbar",
+                },
+            )
         # Online, but this device does not offer the tool: only the device itself can change that.
         return Resolution(
             "",

@@ -3771,3 +3771,10 @@ details > summary:hover {
     justify-self: start;
   }
 }
+
+/* A name typed on a device may be one long word: it wraps instead of widening the page. */
+.device-name,
+.dlg-h h2 {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}

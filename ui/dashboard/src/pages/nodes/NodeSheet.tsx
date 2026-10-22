@@ -86,6 +86,8 @@ function NodeDetail({
   const [explain, setExplain] = useState<string | null>(null);
   const [saved, setSaved] = useState('');
   const [armed, setArmed] = useState(false);
+  /** Chosen in a select, not yet applied: group -> device. */
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const pinSentRef = useRef(false);
   const pinRef = useRef<HTMLInputElement | null>(null);
   const describe = useCallback(
@@ -106,7 +108,10 @@ function NodeDetail({
     return () => window.clearTimeout(timer);
   }, [armed]);
   const state = nodeState(node);
-  const rows = audit.filter((r) => isNodeTarget(r.target, node.id)).slice(-DONE_ROWS).reverse();
+  const rows = audit
+    .filter((r) => isNodeTarget(r.target, node.id))
+    .slice(-DONE_ROWS)
+    .reverse();
 
   const usedPin = (required: boolean): string => {
     const value = required ? pin.trim() : '';
@@ -115,7 +120,9 @@ function NodeDetail({
   };
 
   const toggle = (group: NodeGroup) => {
+    if (busy !== null) return;
     setSaved('');
+    // The device's word first: what it does not allow is never switched on here.
     if (!group.enabledOnDevice) {
       setExplain(explain === group.group ? null : group.group);
       return;
@@ -139,6 +146,7 @@ function NodeDetail({
   };
 
   const setDefault = (entry: FamilyDefault, value: string) => {
+    if (busy !== null) return;
     setSaved('');
     if (needsPin && !pin.trim()) {
       setError(t('reason_pin_required'));
@@ -151,6 +159,11 @@ function NodeDetail({
       };
       const next = parseFamilyDefaults(answer.defaults);
       if (next) onDefaults(next);
+      setDrafts((d) => {
+        const next = { ...d };
+        delete next[entry.group];
+        return next;
+      });
       setSaved(t('node_default_saved'));
     });
   };
@@ -226,11 +239,11 @@ function NodeDetail({
           <ul className="node-groups">
             {node.groups.map((g) => {
               const label = `${id}-g-${g.group}`;
-              const note = g.active
-                ? t('node_group_on')
+              const note = !g.enabledOnDevice
+                ? t('node_group_device_off')
                 : g.narrowed
                   ? t('node_group_narrowed')
-                  : t('node_group_device_off');
+                  : t('node_group_on');
               return (
                 <li key={g.group}>
                   <div className="set-row set-row--flat">
@@ -249,7 +262,9 @@ function NodeDetail({
                       aria-checked={g.active}
                       aria-labelledby={`${label}-l`}
                       aria-describedby={`${label}-d`}
-                      disabled={!client || busy !== null}
+                      disabled={!client}
+                      // Not `disabled` while a request runs: focus stays where it is.
+                      aria-disabled={busy !== null || undefined}
                       onClick={() => toggle(g)}
                     />
                   </div>
@@ -261,6 +276,7 @@ function NodeDetail({
                           <p className="set-t">{t('node_enable_title')}</p>
                           <p className="hint">{t('node_enable_how')}</p>
                           <p className="mono break">{allowCommand(t, g.group)}</p>
+                          <p className="hint">{t('node_enable_tray')}</p>
                         </>
                       )}
                     </div>
@@ -280,33 +296,52 @@ function NodeDetail({
           <p className="hint">{t('node_defaults_lede')}</p>
           {defaults.map((entry) => {
             const field = `${id}-d-${entry.group}`;
-            const known = ['auto', 'core', 'origin'].includes(entry.device) || others.some((n) => n.id === entry.device);
+            const known =
+              ['auto', 'core', 'origin'].includes(entry.device) || others.some((n) => n.id === entry.device);
+            const current = known ? entry.device : '';
+            const draft = drafts[entry.group] ?? current;
             return (
-              <div key={entry.group} className="field">
+              <div key={entry.group} className="field node-default">
                 <label htmlFor={field} className="label">
                   {fill(t('node_default_select'), groupLabel(t, entry.group))}
                 </label>
-                <select
-                  id={field}
-                  className="select"
-                  value={known ? entry.device : ''}
-                  disabled={!client || busy !== null}
-                  onChange={(e) => setDefault(entry, e.target.value)}
-                >
-                  {!known && (
-                    <option value="" disabled>
-                      {defaultWords(t, entry, nodes)}
-                    </option>
-                  )}
-                  <option value="auto">{t('node_default_auto')}</option>
-                  <option value="origin">{t('node_default_origin')}</option>
-                  <option value="core">{t('node_default_core')}</option>
-                  {others.map((n) => (
-                    <option key={n.id} value={n.id}>
-                      {n.name}
-                    </option>
-                  ))}
-                </select>
+                <div className="row-controls">
+                  <select
+                    id={field}
+                    className="select"
+                    value={draft}
+                    disabled={!client}
+                    aria-disabled={busy !== null || undefined}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (busy === null) setDrafts((d) => ({ ...d, [entry.group]: value }));
+                    }}
+                  >
+                    {!known && (
+                      <option value="" disabled>
+                        {defaultWords(t, entry, nodes)}
+                      </option>
+                    )}
+                    <option value="auto">{t('node_default_auto')}</option>
+                    <option value="origin">{t('node_default_origin')}</option>
+                    <option value="core">{t('node_default_core')}</option>
+                    {others.map((n) => (
+                      <option key={n.id} value={n.id}>
+                        {n.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="btn btn--sm"
+                    disabled={!client || draft === current || draft === ''}
+                    aria-disabled={busy !== null || undefined}
+                    aria-label={`${t('node_default_apply')}: ${groupLabel(t, entry.group)}`}
+                    onClick={() => setDefault(entry, draft)}
+                  >
+                    {t('node_default_apply')}
+                  </button>
+                </div>
               </div>
             );
           })}
