@@ -84,6 +84,9 @@ class ToolSpec:
     #: How long one call may take, when the executor's default is too short by design - a coding
     #: session takes minutes. None means the executor's default.
     timeout_s: float | None = None
+    #: The limit for one call, decided from its payload after `scope` (a call routed to another
+    #: device waits for the person there); None from it means `timeout_s`.
+    call_timeout_s: Callable[[dict[str, Any]], float | None] | None = None
     #: Derives the permission action and risk from the validated input, for a tool whose risk
     #: depends on what it is asked to do (see `CallScope`). None means the tool's own action
     #: (the part of its name after the first dot) and `risk`. Only core code supplies one: a

@@ -338,6 +338,14 @@ class CoreHandlers:
                 "ok": False,
                 "reason": "Nox controls mouse and keyboard; press the stop hotkey, then allow",
             }
+        node_guard = getattr(self._core, "node_approval_guard", None)
+        if p.decision is Decision.ALLOW and node_guard is not None:
+            # The same while Nox controls a paired PC (spec C §1.5): no paired device approves,
+            # and this machine only with the PIN and not remotely
+            # (`nox.node.world_routes.approval_refusal`). A "deny" always counts.
+            refusal = await node_guard(ctx, p.pin)
+            if refusal is not None:
+                return {"ok": False, "reason": refusal}
         engine = self._core.security.engine
         if ctx.role == DEVICE_ROLE and p.decision is Decision.ALLOW:
             request = engine.pending_request(p.grant_id)

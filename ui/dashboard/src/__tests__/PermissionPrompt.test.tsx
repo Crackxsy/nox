@@ -249,6 +249,34 @@ describe('on a paired device', () => {
   });
 });
 
+describe('while Nox controls mouse and keyboard on a paired PC', () => {
+  it('asks a paired device for the PIN at any risk, and says the controlled PC cannot allow', async () => {
+    const { calls } = show({ device: true, pinSet: true, nodeControl: true, queue: [{ ...PROMPT, risk: 'low' }] });
+    expect(screen.getByText(t('perm_node_control_device'))).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(t('perm_pin')), { target: { value: '4711' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: t('perm_allow') }));
+    });
+    expect(calls[0]?.payload).toEqual({ grant_id: 'g1', decision: 'allow', remember: false, pin: '4711' });
+  });
+
+  it('without a PIN set, offers only Deny', () => {
+    show({ device: true, pinSet: false, nodeControl: true, queue: [{ ...PROMPT, risk: 'low' }] });
+    expect(screen.queryByRole('button', { name: t('perm_allow') })).toBeNull();
+    expect(screen.getByRole('button', { name: t('perm_deny') })).toBeTruthy();
+  });
+
+  it('asks for the PIN on the computer Nox runs on, at any risk', async () => {
+    const { calls } = show({ nodeControl: true, queue: [{ ...PROMPT, risk: 'low' }] });
+    expect(screen.getByText(t('perm_node_control_pin_hint'))).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(t('perm_pin')), { target: { value: '4711' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: t('perm_allow') }));
+    });
+    expect(calls[0]?.payload).toMatchObject({ grant_id: 'g1', decision: 'allow', pin: '4711' });
+  });
+});
+
 describe('the countdown', () => {
   it('shows the seconds left and announces only 30 and 10', () => {
     vi.useFakeTimers();

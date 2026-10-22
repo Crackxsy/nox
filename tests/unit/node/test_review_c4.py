@@ -271,6 +271,7 @@ async def test_the_executor_says_who_decided() -> None:
 def test_nothing_with_a_side_effect_runs_while_a_dialog_is_open(tmp_path: Path) -> None:
     gate, signer = _gate(tmp_path)
     gate.dialog_open = lambda: True
+    gate.input_lock = lambda: None  # no game here (the game lock is tested in test_c6)
     args = {"text": "y"}
     for name in ("desktop.type_text", "system.low", "notify.show"):
         meta = _meta(signer, name, args)
@@ -489,6 +490,7 @@ async def test_running_input_calls_stop_before_a_question_appears(
         "desktop.type_text", "desktop", "low", "t", _Args, typing, path_safe=True
     )
     node.agent._gate._manifest.groups["desktop"] = True
+    node.agent._gate.input_lock = lambda: None  # no game here (the game lock: test_c6)
     try:
         session = await session_of(listener, node.node_id)
         typing_call = asyncio.create_task(

@@ -141,6 +141,53 @@ its own budget: 60 actions and 5 high-risk ones per hour (`max_calls_per_hour`,
 - **Programs** (`packages`): not yet available on nodes - a package manager needs rights the
   sandbox does not give.
 
+## Screen, camera, browser, windows, mouse and keyboard, music
+
+All off by default except music; each is switched on only here, with `nox node allow <group>`.
+
+- **Screen and camera** (`screen`, `camera`): every picture is high risk - the dialog on this
+  device asks each time, and it is never remembered. Before the picture is taken a notification
+  here says "Nox nimmt gerade ein Bildschirmfoto auf" (or "ein Kamerabild"); if no notification
+  can be shown, there is no picture (`no_visible_indicator`) - so a node without a desktop takes
+  none. The picture stays in memory for that one call and goes only to the Nox that asked; the
+  node writes nothing. Nox itself must allow captures too: privacy mode FULL or BALANCED and the
+  capture switch for that kind on (the camera's is off by default). Nox keeps the picture in its
+  own captures folder; camera pictures are never sent to a cloud model.
+- **Browser** (`browser`): Nox's own headless browser with a profile in the node folder, never
+  yours; it reaches public pages only (no home network, no loopback), as on Nox itself. Reading
+  is low risk, clicking, typing and submitting is medium (asked on Nox, never remembered for a
+  node). No screenshots of pages on a node.
+- **Windows and programs** (`desktop`, Windows only): list windows and programs, bring a window
+  to the front, minimise, restore or close it (low/medium), end a program or type text into a
+  window (high: asked here). Windows itself, Nox and a running game are never touched.
+- **Mouse and keyboard** (`computer`, Windows only; elsewhere refused): `nox node allow computer`
+  asks twice. A session is asked for on this device every time (high), lasts at most 15 minutes
+  and 200 actions, shows a notification, and ends on Ctrl+Alt+Shift+K, the kill switch, a lost
+  connection or its time. Inside it Nox may move, click, scroll and press key combinations - never
+  into Nox's own windows, never while a question is open here. It needs the browser on this PC
+  linked to the node in the dashboard. Nox's dashboard shows "Nox steuert gerade Maus und
+  Tastatur auf <device>" with a Stopp while it runs; meanwhile no paired device (phone, browser
+  on any PC) can allow anything - allow on the computer Nox runs on, or stop.
+- **Never in a game:** while a game runs on this device or is in front - the core's list
+  (default Rocket League), this device's own list (`nox node games add Game.exe`; removing asks
+  first: `nox node games remove Game.exe`) or any anti-cheat software (process, service or
+  driver) - or while something owns the screen (a full-screen game, presentation mode), every
+  mouse, key and typing call and every change to windows and programs is refused - by the node
+  itself, before anything else, whatever Nox sends; when the node cannot tell, it refuses too.
+  `game.input.send` stays forbidden everywhere.
+- **Approving while Nox controls a PC:** the browser on that PC can neither allow nor change
+  anything; every other device and the computer Nox runs on can, with the security PIN (no PIN
+  set: nothing can be allowed until the session ends). On the computer Nox runs on it is refused
+  through a remote desktop (a Pi running Nox as a service has no remote session: the PIN
+  applies). Deny and Stopp always work. If a PC went silent and its line stays, "Sperre lösen"
+  with the PIN on the computer Nox runs on lifts it.
+- **Vanguard and similar drivers:** an anti-cheat driver that starts with Windows (Riot Vanguard's
+  `vgk`) runs all the time - mouse and keyboard stay locked on that PC for as long as it is
+  installed. That is on purpose: Nox cannot tell whether the game is about to start.
+- **Music** (`media`, on by default, low risk; the node says so once in a notification): play, pause, next, previous, volume, louder,
+  quieter, mute - on Windows through the system media controls, on Linux through MPRIS
+  (`playerctl` or D-Bus) and PipeWire (`wpctl`) or PulseAudio (`pactl`). Not on macOS yet.
+
 ## In the dashboard
 
 Geräte › Computer und Server lists every node: whether it is connected, what Nox may do there,

@@ -149,6 +149,59 @@ an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trus
 - **Programme** (`packages`): auf Nodes noch nicht verfügbar - ein Paketmanager braucht Rechte,
   die die Sandbox nicht gibt.
 
+## Bildschirm, Kamera, Browser, Fenster, Maus und Tastatur, Musik
+
+Alles aus, außer Musik; jedes wird nur hier eingeschaltet, mit `nox node allow <Gruppe>`.
+
+- **Bildschirm und Kamera** (`screen`, `camera`): jedes Bild ist hohes Risiko - der Dialog an
+  diesem Gerät fragt jedes Mal, und es wird nie gemerkt. Bevor das Bild entsteht, sagt eine
+  Benachrichtigung hier „Nox nimmt gerade ein Bildschirmfoto auf“ (oder „ein Kamerabild“); kann
+  keine Benachrichtigung erscheinen, gibt es kein Bild (`no_visible_indicator`) - ein Node ohne
+  Desktop macht also keins. Das Bild bleibt nur für diesen einen Aufruf im Speicher und geht nur
+  an das Nox, das gefragt hat; der Node schreibt nichts. Auch Nox selbst muss Aufnahmen erlauben:
+  Privatsphäre-Modus FULL oder BALANCED und der Aufnahme-Schalter für diese Art an (der der
+  Kamera ist standardmäßig aus). Nox legt das Bild in seinen eigenen Aufnahmen-Ordner;
+  Kamerabilder gehen nie an ein Cloud-Modell.
+- **Browser** (`browser`): Nox' eigener unsichtbarer Browser mit einem Profil im Node-Ordner, nie
+  deiner; er erreicht nur öffentliche Seiten (kein Heimnetz, kein Loopback), wie an Nox selbst.
+  Lesen ist niedriges Risiko, Klicken, Tippen und Absenden mittleres (Frage an Nox, für einen
+  Node nie gemerkt). Keine Seiten-Screenshots auf einem Node.
+- **Fenster und Programme** (`desktop`, nur Windows): Fenster und Programme auflisten, ein
+  Fenster nach vorn holen, minimieren, wiederherstellen oder schließen (niedrig/mittel), ein
+  Programm beenden oder Text in ein Fenster tippen (hoch: Frage hier). Windows selbst, Nox und
+  ein laufendes Spiel werden nie angefasst.
+- **Maus und Tastatur** (`computer`, nur Windows; sonst abgelehnt): `nox node allow computer`
+  fragt zweimal. Eine Sitzung wird jedes Mal an diesem Gerät erfragt (hoch), dauert höchstens
+  15 Minuten und 200 Aktionen, zeigt eine Benachrichtigung und endet mit Strg+Alt+Umschalt+K, dem
+  Not-Aus, einer verlorenen Verbindung oder ihrer Zeit. Darin darf Nox bewegen, klicken, scrollen
+  und Tastenkombinationen drücken - nie in Nox' eigene Fenster, nie während hier eine Frage offen
+  ist. Dafür muss der Browser auf diesem PC im Dashboard mit dem Node verknüpft sein. Das
+  Dashboard zeigt währenddessen „Nox steuert gerade Maus und Tastatur auf <Gerät>“ mit „Stopp“;
+  solange kann kein gekoppeltes Gerät (Handy, Browser auf irgendeinem PC) etwas erlauben -
+  erlauben geht dann am Rechner, auf dem Nox läuft, stoppen überall.
+- **Nie im Spiel:** Solange ein Spiel auf diesem Gerät läuft oder vorne ist - die Liste des
+  Cores (standardmäßig Rocket League), die eigene Liste dieses Geräts (`nox node games add
+  Spiel.exe`; Entfernen fragt nach: `nox node games remove Spiel.exe`) oder irgendeine
+  Anti-Cheat-Software (Prozess, Dienst oder Treiber) - oder etwas den Bildschirm belegt (ein
+  Spiel im Vollbild, Präsentationsmodus), wird jeder Maus-, Tasten- und Tipp-Aufruf und jede
+  Änderung an Fenstern und Programmen abgelehnt - vom Node selbst, vor allem anderen, egal was
+  Nox schickt; kann der Node es nicht feststellen, lehnt er auch ab. `game.input.send` bleibt
+  überall verboten.
+- **Erlauben, während Nox einen PC steuert:** Der Browser auf diesem PC kann dann weder etwas
+  erlauben noch ändern; jedes andere Gerät und der Rechner, auf dem Nox läuft, können es mit der
+  Sicherheits-PIN (ohne PIN geht bis zum Ende der Sitzung kein Erlauben). Am Rechner, auf dem Nox
+  läuft, geht es nicht über eine Fernsteuerung (ein Pi, auf dem Nox als Dienst läuft, hat keine:
+  dort gilt die PIN). Ablehnen und Stopp gehen immer. Bleibt die Zeile stehen, obwohl der PC
+  nicht mehr antwortet, löst „Sperre lösen“ mit der PIN am Rechner, auf dem Nox läuft, die
+  Sperre.
+- **Vanguard und ähnliche Treiber:** Ein Anti-Cheat-Treiber, der mit Windows startet (Riot
+  Vanguards `vgk`), läuft immer - Maus und Tastatur bleiben auf diesem PC gesperrt, solange er
+  installiert ist. Das ist Absicht: Nox kann nicht wissen, ob das Spiel gleich startet.
+- **Musik** (`media`, standardmäßig an, niedriges Risiko; der Node sagt es einmal per Hinweis): abspielen, pausieren, weiter, zurück,
+  Lautstärke, lauter, leiser, stumm - unter Windows über die System-Mediensteuerung, unter Linux
+  über MPRIS (`playerctl` oder D-Bus) und PipeWire (`wpctl`) oder PulseAudio (`pactl`). Noch
+  nicht unter macOS.
+
 ## Im Dashboard
 
 Geräte › Computer und Server zeigt jeden Node: ob er verbunden ist, was Nox dort darf, wofür er

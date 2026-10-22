@@ -209,6 +209,8 @@ def effective_manifest(
         max_high_per_hour=min(current.max_high_per_hour, confirmed.max_high_per_hour),
         # A folder counts only when it was confirmed here, spelled the same.
         folders=[f for f in current.folders if f in confirmed.folders],
+        # Games only narrow: every one the file or the confirmation names counts.
+        games=[*confirmed.games, *(g for g in current.games if g not in confirmed.games)],
     )
     widened = sorted(g for g in GROUPS if current.groups.get(g) and not groups[g])
     widened += [f"folder:{f}" for f in current.folders if f not in effective.folders]
