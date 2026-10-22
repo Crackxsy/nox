@@ -815,11 +815,14 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   this machine (but still not from a remote session) or from a paired device other than the
   controlled PC's browser, which is refused (Nox could type its own instructions there). The
   controlled PC's browser is every paired device linked to that node **and every paired device
-  connecting from that node's address**: first its connection's address as this core sees it;
-  then - only as a second signal - up to 16 addresses the node reports in its hello, and only
-  private ones (RFC 1918, link-local, unique-local IPv6) that no other paired device or node is
-  seen connecting from, so a compromised node cannot lock the owner's phone out. The addresses end
-  with the node's connection. A paired device's message during the session enters the
+  connecting from that node's address**: its connection's address as this core sees it, plus up
+  to 16 private addresses (RFC 1918, link-local, unique-local IPv6) the node reports in its hello.
+  They are kept while the lock holds for that node, also while it is disconnected, and dropped
+  when the lock lifts. Fail closed (owner decision): a device that shares such an address is
+  treated as the controlled PC. **Accepted:** a compromised node could report the owner's phone
+  address and lock that phone out of approving during its session - it can only come from the
+  controlled machine itself; the owner ends it on the computer Nox runs on with the PIN (ending
+  the session, `node.computer.release`, or removing the node), and deny and Stopp always work. A paired device's message during the session enters the
   conversation as **untrusted content**, like what Nox read from the screen in that session, so
   it widens nothing the taint rules hold back; the dashboard says "messages count as unchecked".
   Anything a conversation leads to is asked under the rule above. Muting the microphone is always

@@ -292,12 +292,9 @@ def test_addresses_are_compared_in_one_spelling() -> None:
     assert all("%" not in a for a in local_addresses())
 
 
-def _addressed(reported: list[str], *, devices: tuple[str, ...] = ()) -> NodeControl:
+def _addressed(reported: list[str]) -> NodeControl:
     control = NodeControl(
-        None,
-        lambda _n: None,
-        addresses=lambda: {LAPTOP: ("192.168.1.20", reported)},
-        device_peers=lambda: devices,
+        None, lambda _n: None, addresses=lambda: {LAPTOP: ("192.168.1.20", reported)}
     )
     control.observe(LAPTOP, _report(2, True))
     control.pull()
@@ -316,14 +313,14 @@ def test_a_node_cannot_claim_a_public_address() -> None:
     assert control.from_controlled("192.168.1.21") and control.from_controlled("fd00::21")
 
 
-def test_a_node_cannot_claim_where_another_device_is_seen() -> None:
-    """A compromised node reporting the owner's phone address locks nothing out."""
-    control = _addressed(["192.168.1.50"], devices=("192.168.1.50",))
-    assert not control.from_controlled("192.168.1.50")
-    assert control.from_controlled("192.168.1.20")
+def test_a_matching_address_is_refused_even_if_another_device_uses_it() -> None:
+    """Fail closed (owner decision): a device sharing the controlled PC's address is treated as
+    that PC. The possible lock-out of another device is accepted and documented."""
+    control = _addressed(["192.168.1.50"])
+    assert control.from_controlled("192.168.1.50")
 
 
-def test_the_addresses_end_with_the_nodes_connection() -> None:
+def test_a_disconnected_but_locked_node_keeps_its_addresses_until_the_lock_lifts() -> None:
     connected = {"value": True}
     control = NodeControl(
         None,
@@ -332,8 +329,10 @@ def test_the_addresses_end_with_the_nodes_connection() -> None:
     )
     control.observe(LAPTOP, _report(2, True))
     control.pull()
+    connected["value"] = False  # gone, but the lock holds (it never said the session ended)
+    control.pull()
     assert control.from_controlled("192.168.1.20")
-    connected["value"] = False
+    control.observe(LAPTOP, _report(3, False))  # the lock lifts
     control.pull()
     assert control.node_addresses == {} and not control.from_controlled("192.168.1.20")
 

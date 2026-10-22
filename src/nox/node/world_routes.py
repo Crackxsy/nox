@@ -247,7 +247,6 @@ class NodeControl:
         labels: Callable[[str], str] = lambda device_id: device_id[:8],
         linked: Callable[[str], str | None] = lambda _device_id: None,
         addresses: Callable[[], Mapping[str, tuple[str, Iterable[str]]]] = dict,
-        device_peers: Callable[[], Iterable[str]] = tuple,
         stop_hotkey: str = "ctrl+alt+shift+k",
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -258,9 +257,9 @@ class NodeControl:
         self._labels = labels
         self._linked = linked
         self._addresses = addresses
-        self._device_peers = device_peers
-        #: Where each connected node is on the network: its connection's address as this core
-        #: sees it, and - only as a second signal - private addresses its hello reported.
+        #: Where each node the lock holds for is on the network: its connection's address as
+        #: this core sees it and the private addresses its hello reported - kept while the lock
+        #: holds, also while the node is disconnected.
         self.node_addresses: dict[str, set[str]] = {}
         self._stop = stop_hotkey
         self._clock = clock
@@ -331,22 +330,22 @@ class NodeControl:
         """Read the latest hello/pong reports and addresses of connected nodes."""
         for device_id, raw in self._reports():
             self.observe(device_id, raw)
-        nodes = {d: (host_of(peer), list(said)) for d, (peer, said) in self._addresses().items()}
-        devices = {h for h in (host_of(p) for p in self._device_peers()) if h}
-        found: dict[str, set[str]] = {}
-        for device_id, (observed, reported) in nodes.items():
+        for device_id, (peer, reported) in self._addresses().items():
+            observed = host_of(peer)
             hosts = {observed} if observed else set()
-            # What a node says about itself counts only as a private address that no other
-            # device or node is seen connecting from: a node cannot lock the owner's phone out.
-            others = devices | {o for d, (o, _r) in nodes.items() if d != device_id and o}
-            for raw in reported[:MAX_REPORTED_ADDRESSES]:
+            # What a node says about itself counts as a second signal: private addresses only.
+            for raw in list(reported)[:MAX_REPORTED_ADDRESSES]:
                 host = host_of(raw)
-                if host and private_address(host) and host not in others:
+                if host and private_address(host):
                     hosts.add(host)
             if hosts:
-                found[device_id] = hosts
-        # Only connected nodes: a node's addresses end with its connection.
-        self.node_addresses = found
+                self.node_addresses[device_id] = hosts
+        # Kept while the lock holds for a node - also while it is disconnected -, gone once it
+        # lifts: fail closed (spec C §1.5, SECURITY.md).
+        for device_id in list(self.node_addresses):
+            device = self.devices.get(device_id)
+            if device is None or not self._locked(device):
+                del self.node_addresses[device_id]
 
     def from_controlled(self, peer: str) -> bool:
         """Whether a client connecting from `peer` sits on a PC the lock holds for: the same

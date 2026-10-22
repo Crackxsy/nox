@@ -488,11 +488,6 @@ def _world_specs(
             return {}
         return {d: (s.peer_host, list(s.hello.addresses)) for d, s in listener.sessions.items()}
 
-    def device_peers() -> list[str]:
-        hub = getattr(core, "hub", None)
-        peers = getattr(hub, "lan_peers", None)
-        return list(peers()) if callable(peers) else []
-
     def linked(device_id: str) -> str | None:
         entry = next((e for e in registry.known() if e.device_id == device_id), None)
         return entry.linked_device_id if entry is not None else None
@@ -509,7 +504,6 @@ def _world_specs(
         labels=label_of,
         linked=linked,
         addresses=addresses,
-        device_peers=device_peers,
         stop_hotkey=desktop.computer_use.stop_hotkey if desktop is not None else "",
     )
     wire_guards(core, control)
