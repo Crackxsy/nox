@@ -45,10 +45,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from nox.core.logging import get_logger
 from nox.hands.shell import ProgramResolver, classify
 from nox.node.safe_fs import (
+    MAX_TEXT_BYTES,
     Folders,
     OutsideFolders,
     content_refusal,
+    extension_of,
     list_folder,
+    markdown_finding,
     open_existing,
     open_new,
     secret_locations,
@@ -355,10 +358,10 @@ def _write(folders: Folders, args: WriteArgs) -> dict[str, Any]:
         if args.append:
             # The whole file decides, read through this same handle: an append cannot assemble
             # in pieces what one write would be refused for.
-            refusal = _whole_file_refusal(fd, args)
-            if refusal is not None:
+            refused = _whole_file_refusal(fd, args)
+            if refused is not None:
                 os.close(fd)
-                raise NodeRefusal(refusal) from None
+                raise refused from None
             os.lseek(fd, 0, os.SEEK_END)
         else:
             os.ftruncate(fd, 0)  # only now: the handle was checked first
@@ -369,12 +372,13 @@ def _write(folders: Folders, args: WriteArgs) -> dict[str, Any]:
     return {"ok": True, "path": args.path, "bytes": len(payload), "appended": args.append}
 
 
-def _whole_file_refusal(fd: int, args: WriteArgs) -> str | None:
+def _whole_file_refusal(fd: int, args: WriteArgs) -> NodeRefusal | None:
     """For an append: the content check on what the file holds plus the new text, read through
-    the already verified handle. A file too large to read whole is not appended to."""
+    the already verified handle. A file too large to read whole is not appended to. When the
+    file already holds what blocks it, the refusal says what that is."""
     size = os.fstat(fd).st_size
-    if size > MAX_WRITE_BYTES:
-        return "too_large"
+    if size > min(MAX_WRITE_BYTES, MAX_TEXT_BYTES):
+        return NodeRefusal("too_large", "the file is already larger than a node writes")
     os.lseek(fd, 0, os.SEEK_SET)
     chunks: list[bytes] = []
     remaining = size
@@ -385,7 +389,15 @@ def _whole_file_refusal(fd: int, args: WriteArgs) -> str | None:
         chunks.append(chunk)
         remaining -= len(chunk)
     existing = b"".join(chunks).decode("utf-8", errors="replace")
-    return content_refusal(args.path, existing + args.text)
+    refusal = content_refusal(args.path, existing + args.text)
+    if refusal is None:
+        return None
+    if extension_of(args.path) == ".md":
+        found = markdown_finding(existing) or markdown_finding(args.text)
+        where = "already in the file" if markdown_finding(existing) else "in the new text"
+        if found is not None:
+            return NodeRefusal(refusal, f"{found} {where}")
+    return NodeRefusal(refusal)
 
 
 def hand_tools(hands: NodeHands) -> dict[str, NodeTool]:

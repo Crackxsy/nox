@@ -65,6 +65,8 @@ __all__ = [
     "INERT_FENCE_LANGUAGES",
     "content_refusal",
     "marked_above",
+    "marking",
+    "markdown_finding",
     "markdown_runs_code",
     "secret_locations",
     "structured",
@@ -254,7 +256,7 @@ APP_WORKSPACE_MARKERS = (
     ".vscode",
     ".idea",
 )
-#: The largest JSON/YAML a node writes: parsing and confirming stay cheap.
+#: The largest JSON/YAML a node writes (all text: `MAX_TEXT_BYTES`).
 MAX_STRUCTURED_BYTES = 256 * 1024
 
 
@@ -309,23 +311,15 @@ _MD_TOKENS = (
     "<script",
     "javascript:",
     "vbscript:",
+    "obsidian://",
     "<iframe",
     "<object",
     "<embed",
 )
-#: Inline Dataview JS: a backtick (or tilde) run, optional whitespace, `$=` or `=this.`.
-_INLINE_JS = re.compile(r"[`~]+\s*(\$=|=this\.)")
-#: Templater's closing tag next to its API.
-_TEMPLATER_API = re.compile(r"\btp\.")
-#: An event handler in raw HTML (`<img onerror=...>`).
-_HANDLER = re.compile(r"<[a-z][^>]*\bon\w+\s*=", re.S)
-#: Every run of three or more backticks or tildes and the info word after it (spaces, an
-#: optional `{` and `.` skipped) - wherever it stands, no Markdown parsing.
-_FENCE_INFO = re.compile(r"(`{3,}|~{3,})[ \t]*\{?[ \t]*\.?([^\s`~}]*)")
-#: Code-block languages a note app only shows as highlighted code: a fence may name only these
-#: (or nothing). Any other name could be a plugin's runnable block (Dataview JS, JS Engine,
-#: Templater, Datacore, ...) or a language the app renders (Mermaid with click directives and
-#: HTML labels, math, HTML, XML, CSS) - and the list of those can never be complete.
+#: Code-block languages that are data or plain text: a fence may name only these (or nothing).
+#: Any other name could be a plugin's runnable block (Dataview JS, JS Engine, Templater,
+#: Datacore, ...), a language the app renders (Mermaid, math, HTML, XML, CSS) or one a plugin
+#: runs on a click (Execute Code runs Python, shells, JS, ...) - and no list of those is complete.
 INERT_FENCE_LANGUAGES = frozenset(
     {
         "text",
@@ -333,69 +327,76 @@ INERT_FENCE_LANGUAGES = frozenset(
         "txt",
         "md",
         "markdown",
-        "python",
-        "py",
-        "bash",
-        "sh",
-        "shell",
-        "powershell",
-        "ps1",
-        "bat",
         "json",
         "yaml",
         "yml",
         "toml",
         "ini",
-        "js",
-        "javascript",
-        "ts",
-        "typescript",
-        "sql",
-        "java",
-        "c",
-        "cpp",
-        "csharp",
-        "cs",
-        "go",
-        "rust",
-        "kotlin",
-        "swift",
-        "php",
-        "ruby",
-        "diff",
         "csv",
+        "diff",
+        "log",
     }
 )
+#: The largest text a node writes (and the most of an existing file an append reads): every
+#: check stays a few milliseconds, whatever the text.
+MAX_TEXT_BYTES = 256 * 1024
+#: The scan's patterns are linear: every quantifier is bounded or cannot overlap the next one,
+#: so no input makes them backtrack over the text (a 1 MB adversarial text is milliseconds).
+#: A fence run takes the whole run of backticks/tildes greedily and its info word may be empty,
+#: so a match never has to give characters back.
+_FENCE_INFO = re.compile(r"(?:`{3,}|~{3,})[ \t]{0,16}\{?[ \t]{0,16}\.?([^\s`~}]{0,64})")
+#: Inline JS: a backtick or tilde, a little whitespace, `$=` or `=this.`.
+_INLINE_JS = re.compile(r"[`~][ \t\r\n]{0,64}(?:\$=|=this\.)")
+#: An event handler inside a raw HTML tag; the tag's text cannot run past the next `<` or `>`.
+_HANDLER = re.compile(r"<[a-z][^<>]{0,256}?\bon[a-z0-9_]{1,40}[ \t\r\n]{0,16}=")
+_FILE_LINK = re.compile(r"(?<![a-z0-9])file:")
+_TEMPLATER_API = re.compile(r"\btp\.")
+
+
+def markdown_finding(text: str) -> str | None:
+    """What in Markdown a note app might run, in a few words - or None. After HTML entities are
+    decoded, NFKC applied and case folded, with linear patterns only:
+
+    * every run of three or more backticks or tildes, wherever it stands, names no language or
+      one of `INERT_FENCE_LANGUAGES`; a backtick or tilde followed by `$=` or `=this.` is
+      inline JS;
+    * none of `_MD_TOKENS`, no `file:` link, no `%>` together with Templater's `tp.`;
+    * no `on...=` handler inside a raw HTML tag.
+    """
+    body = unicodedata.normalize("NFKC", html.unescape(text)).casefold()
+    for token in _MD_TOKENS:
+        if token in body:
+            return f"{token!r}"
+    if _FILE_LINK.search(body):
+        return "a file: link"
+    if "%>" in body and _TEMPLATER_API.search(body):
+        return "a Templater tag"
+    if _INLINE_JS.search(body):
+        return "inline Dataview JS"
+    for fence in _FENCE_INFO.finditer(body):
+        language = fence.group(1)
+        if language and language not in INERT_FENCE_LANGUAGES:
+            return f"a {language!r} code block"
+    if _HANDLER.search(body):
+        return "an HTML event handler"
+    return None
 
 
 def markdown_runs_code(text: str) -> bool:
-    """Whether Markdown carries anything a note app might run - after HTML entities are decoded,
-    NFKC applied and case folded: a run of three or more backticks or tildes followed by a
-    language outside `INERT_FENCE_LANGUAGES` (an allowlist), any of `_MD_TOKENS` anywhere,
-    inline Dataview JS (`$=` or `=this.` after a backtick or tilde run), `%>` together with
-    Templater's `tp.`, or an `on...=` handler in raw HTML. Fail closed, wherever it stands."""
-    body = unicodedata.normalize("NFKC", html.unescape(text)).casefold()
-    for fence in _FENCE_INFO.finditer(body):
-        language = fence.group(2)
-        if language and language not in INERT_FENCE_LANGUAGES:
-            return True  # a code block in a language that is not known to be inert
-    if any(token in body for token in _MD_TOKENS):
-        return True
-    if _INLINE_JS.search(body) or _HANDLER.search(body):
-        return True
-    return "%>" in body and _TEMPLATER_API.search(body) is not None
+    """Whether Markdown carries anything a note app might run (`markdown_finding`)."""
+    return markdown_finding(text) is not None
 
 
 def content_refusal(path: str, text: str) -> str | None:
-    """Why the text of a write is refused even when confirmed: JSON that does not parse; YAML
-    that does not parse plainly (`safe_load`) or carries a tag, an anchor or an alias; JSON or
-    YAML over `MAX_STRUCTURED_BYTES`; Markdown with code a note app would run. Text only - it
-    runs before anyone is asked, on the core and on the node."""
+    """Why the text of a write is refused even when confirmed: over `MAX_TEXT_BYTES`; JSON that
+    does not parse; YAML that does not parse plainly (`safe_load`) or carries a tag, an anchor or
+    an alias; Markdown with anything a note app might run. Text only, bounded and linear - it
+    runs before anyone is asked (off the event loop), on the core and on the node."""
+    if len(text) > MAX_TEXT_BYTES or len(text.encode("utf-8", "replace")) > MAX_TEXT_BYTES:
+        return "too_large"
     ext = extension_of(re.split(r"[\\/]", path)[-1])
     if ext == ".md":
         return "content_refused" if markdown_runs_code(text) else None
-    if ext in STRUCTURED_EXTENSIONS and len(text.encode("utf-8", "replace")) > MAX_STRUCTURED_BYTES:
-        return "too_large"
     if ext == ".json":
         try:
             json.loads(text)
@@ -802,22 +803,60 @@ def list_folder(folders: Folders, text: str) -> Iterator[Iterator[os.DirEntry[st
         os.close(fd)
 
 
-def marking(folder: str) -> str | None:
+#: What a vault's config folder holds, whatever it is called (Obsidian lets a vault rename its
+#: `.obsidian`): a dot-folder with one of these directly inside marks an app workspace.
+VAULT_SIGNATURE = (
+    "app.json",
+    "appearance.json",
+    "community-plugins.json",
+    "core-plugins.json",
+    "workspace.json",
+    "plugins",
+    "config.edn",
+)
+#: How many entries of one folder are looked at for a renamed config folder (bounded per call).
+_MAX_SIGNATURE_ENTRIES = 256
+
+
+def _signed(folder: str) -> bool:
+    """Whether a dot-folder directly inside `folder` carries a vault's signature."""
+    with contextlib.suppress(OSError):
+        with os.scandir(folder) as entries:
+            for count, entry in enumerate(entries):
+                if count >= _MAX_SIGNATURE_ENTRIES:
+                    break
+                if not entry.name.startswith(".") or not entry.is_dir(follow_symlinks=False):
+                    continue
+                if any(os.path.lexists(os.path.join(entry.path, n)) for n in VAULT_SIGNATURE):
+                    return True
+    return False
+
+
+def marking(folder: str, *, workspaces: bool = True) -> str | None:
     """`working_tree_refused` when `folder` is the top of a working tree, `app_workspace_refused`
-    when it is an app workspace, else None (by name, not following anything)."""
+    when it is an app workspace (a known marker, or a dot-folder with a vault's signature), else
+    None - by name, not following anything. `workspaces=False` looks for working trees only (the
+    home folder, where `.vscode` and `.idea` hold the apps' own settings, not a workspace)."""
     if any(os.path.lexists(os.path.join(folder, m)) for m in WORKING_TREE_MARKERS):
         return "working_tree_refused"
+    if not workspaces:
+        return None
     if any(os.path.lexists(os.path.join(folder, m)) for m in APP_WORKSPACE_MARKERS):
+        return "app_workspace_refused"
+    if _signed(folder):
         return "app_workspace_refused"
     return None
 
 
 def marked_above(folder: str) -> str | None:
     """The first marking of `folder` or any folder above it, up to the root of its drive - so a
-    repository or a vault around the allowed folder counts as well as one inside it."""
+    repository or a vault around the allowed folder counts as well as one inside it. At the home
+    folder and above only working trees count: the apps keep their own settings there."""
+    home = _plain(os.path.realpath(Path.home()))
     current = folder
     for _ in range(64):
-        found = marking(current)
+        at_or_above_home = _within(home, current)
+        found = marking(current, workspaces=not at_or_above_home)
         if found is not None:
             return found
         parent = os.path.dirname(current)
@@ -833,6 +872,18 @@ def _marked_fd(fd: int) -> None:
         raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
     if any(_peek(m, fd) is not None for m in APP_WORKSPACE_MARKERS):
         raise OutsideFolders("app_workspace_refused", "nothing in an app workspace is written")
+    listing: Any = os.listdir  # by fd: POSIX only
+    with contextlib.suppress(OSError):
+        for name in listing(fd)[:_MAX_SIGNATURE_ENTRIES]:
+            if not name.startswith("."):
+                continue
+            seen = _peek(name, fd)
+            if seen is None or not stat.S_ISDIR(seen.st_mode):
+                continue
+            if any(_peek(f"{name}/{n}", fd) is not None for n in VAULT_SIGNATURE):
+                raise OutsideFolders(
+                    "app_workspace_refused", "nothing in an app workspace is written"
+                )
 
 
 def _peek(name: str, dir_fd: int) -> os.stat_result | None:

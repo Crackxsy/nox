@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field, create_model
 
 from nox.core.logging import get_logger
 from nox.node.registry import RISKS, NodeEntry, NodeRegistry, offline_error
+from nox.node.tools import off_loop
 from nox.security.model import Risk
 from nox.security.taint import current_conversation
 from nox.tools.registry import CallScope, ToolRegistry, ToolSpec
@@ -48,6 +49,8 @@ CORE = "core"
 DEVICE_KEY = "device"
 #: Where a refused resolution travels from the scope to the handler, inside the call's payload.
 ROUTE_ERROR_KEY = "_route_error"
+#: A node call's text check, run in `prepare` off the event loop ("" when it passed).
+ROUTE_PRECHECK_KEY = "_route_precheck"
 #: Risk and delegation as decided in the permission scope - computed once, so the handler and the
 #: node act on exactly what the executor decided on (no second look at changing registry state).
 ROUTE_RISK_KEY = "_route_risk"
@@ -286,6 +289,7 @@ def routed_spec(
     network: bool | Callable[[dict[str, Any]], bool] | None = None,
     node_risk: Callable[[dict[str, Any]], Risk] | None = None,
     remember_on_node: bool = True,
+    precheck: Callable[[dict[str, Any]], str | None] | None = None,
 ) -> ToolSpec:
     """One routable tool: the core's own spec (if the core has the tool) plus every node that
     offers it. `input_model` describes the arguments when the core has no spec of its own.
@@ -302,7 +306,13 @@ def routed_spec(
     model = _routed_model(base, name)
 
     def inner(payload: dict[str, Any]) -> dict[str, Any]:
-        hidden = (DEVICE_KEY, ROUTE_ERROR_KEY, ROUTE_RISK_KEY, ROUTE_DELEGATE_KEY)
+        hidden = (
+            DEVICE_KEY,
+            ROUTE_ERROR_KEY,
+            ROUTE_RISK_KEY,
+            ROUTE_DELEGATE_KEY,
+            ROUTE_PRECHECK_KEY,
+        )
         return {k: v for k, v in payload.items() if k not in hidden}
 
     def scope(payload: dict[str, Any]) -> CallScope:
@@ -332,6 +342,14 @@ def routed_spec(
         node_risk_ = _max_risk(risk, entry.tools.get(name, "high"))
         if node_risk is not None:
             node_risk_ = _max_risk(node_risk_, node_risk(inner(payload)).value)
+        early = payload.get(ROUTE_PRECHECK_KEY)
+        if early is None and precheck is not None:
+            early = precheck(inner(payload)) or ""  # without `prepare` (a direct call): here
+        if early:
+            # The node would refuse this text anyway: nobody is asked, nothing is sent.
+            payload[DEVICE_KEY] = ""
+            payload[ROUTE_ERROR_KEY] = {"error": early, "tool": name}
+            return CallScope(action=action, risk=Risk.READ, target="device:none")
         if node_target is not None:
             try:
                 base_target = node_target(inner(payload))
@@ -395,6 +413,25 @@ def routed_spec(
         handler=handler,
         side_effects=side_effects,
     )
+
+    async def prepare(payload: dict[str, Any]) -> None:
+        await registry.settle(
+            waits_for(
+                payload.get(DEVICE_KEY),
+                entries=registry.known(),  # from memory: no database read per call
+                core_has=core is not None,
+                default=defaults().get(name),
+                origin=origin_device(),
+            )
+        )
+        if precheck is not None:
+            # The text check of a call for a node, before the scope and before anyone is
+            # asked - in a worker thread with a time limit, never on the core's event loop.
+            try:
+                payload[ROUTE_PRECHECK_KEY] = await off_loop(precheck, inner(payload)) or ""
+            except TimeoutError:
+                payload[ROUTE_PRECHECK_KEY] = "check_timeout"
+
     return dataclasses.replace(
         template,
         description=description,
@@ -405,15 +442,7 @@ def routed_spec(
         rememberable=rememberable and template.rememberable,
         targets=None,
         scope=scope,
-        prepare=lambda payload: registry.settle(
-            waits_for(
-                payload.get(DEVICE_KEY),
-                entries=registry.known(),  # from memory: no database read per call
-                core_has=core is not None,
-                default=defaults().get(name),
-                origin=origin_device(),
-            )
-        ),
+        prepare=prepare,
         local=False,
         network=template.network if network is None else network,
     )

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -199,6 +200,7 @@ class NodeGate:
         self._protected_forms = protected_forms(protected) if protected is not None else ()
         self.receipts = receipts
         self._clock = clock
+        self._lock = threading.Lock()
         self._side_effects: deque[float] = deque()
         self._high: deque[float] = deque()
         # Registration rule: a tool with a side effect that has not declared how it treats
@@ -242,8 +244,11 @@ class NodeGate:
         by: str = "core",
         meta: NoxCallMeta | None = None,
     ) -> GateDecision:
-        decision = self._decide(name, arguments, meta)
-        self._record(name, decision, call_id=call_id, by=by)
+        # The agent runs this in a worker thread (`tools.off_loop`): one call at a time, so the
+        # budget, the receipts' replay memory and the audit see a consistent state.
+        with self._lock:
+            decision = self._decide(name, arguments, meta)
+            self._record(name, decision, call_id=call_id, by=by)
         return decision
 
     def _decide(self, name: str, arguments: Any, meta: NoxCallMeta | None) -> GateDecision:

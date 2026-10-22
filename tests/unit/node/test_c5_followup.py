@@ -133,7 +133,7 @@ async def test_markdown_with_code_for_a_note_app_is_refused(
 
 
 async def test_ordinary_markdown_is_written(world: dict[str, Path]) -> None:
-    text = "# Einkauf\n- Tomaten\n- Kaffee\n\n```python\nsumme = 3\n```\n"
+    text = "# Einkauf\n- Tomaten\n- Kaffee\n\n```text\nsumme = 3\n```\n"
     assert (await _write(world, "notes/einkauf.md", text))["ok"] is True
 
 
@@ -171,7 +171,7 @@ def test_the_node_refuses_bad_structured_text_before_the_dialog_and_the_budget(
 
 
 async def test_the_core_refuses_bad_structured_text_before_asking_anyone() -> None:
-    from nox.node.install import _write_target
+    from nox.node.install import _write_precheck, _write_target
     from nox.node.router import routed_spec
 
     laptop = _entry("a" * 32, "Laptop", tools={"file.write": "medium"})
@@ -184,11 +184,13 @@ async def test_the_core_refuses_bad_structured_text_before_asking_anyone() -> No
         registry=registry,  # type: ignore[arg-type]
         input_model=WriteArgs,
         node_target=_write_target,
+        precheck=_write_precheck,
     )
     payload = spec.input_model.model_validate(
         {"path": "plan.yml", "text": "a: !!python/name:os.system", "device": "Laptop"}
     ).model_dump()
-    assert spec.scope is not None
+    assert spec.scope is not None and spec.prepare is not None
+    await spec.prepare(payload)  # the check runs here, off the event loop
     scope = spec.scope(payload)
     assert scope.risk is Risk.READ and scope.target == "device:none"  # nobody is asked
     answer = await spec.handler(payload)
@@ -261,8 +263,8 @@ async def test_every_markdown_spelling_of_runnable_code_is_refused(
 @pytest.mark.parametrize(
     "text",
     [
-        "```python\nprint('hallo')\n```\n",
-        "~~~js\nconst x = 1\n~~~\n",
+        "```text\nhallo\n```\n",
+        '~~~json\n{"a": 1}\n~~~\n',
         "```\nkein Name\n```\n",
         "Ein `inline code` und ein Preis von 5 $.",
     ],
@@ -306,7 +308,7 @@ def test_the_markdown_check_is_position_independent() -> None:
     # Wherever the token stands - quoted, listed, indented, after a broken fence - it counts.
     for prefix in ("", "> ", "- ", "1. ", "        ", "> - ", "\t"):
         assert markdown_runs_code(f"Text\n{prefix}```dataviewjs\n{prefix}x\n{prefix}```\n")
-    assert not markdown_runs_code("```python\nprint(1)\n```\n~~~js\nlet a = 1\n~~~\n")
+    assert not markdown_runs_code("```text\nhallo\n```\n~~~yaml\na: 1\n~~~\n")
 
 
 @pytest.mark.parametrize(
@@ -340,14 +342,184 @@ async def test_a_code_block_in_an_unknown_language_is_refused(
 @pytest.mark.parametrize(
     "text",
     [
-        "```python\nx = 1\n```\n",
-        "~~~js\nlet a = 1\n~~~\n",
+        "```json\n{}\n```\n",
+        "~~~yaml\na: 1\n~~~\n",
         "```\nohne Sprache\n```\n",
-        "> ```bash\n> ls\n> ```\n",
-        "```{.python}\nx\n```\n",
+        "> ```csv\n> a,b\n> ```\n",
+        "```{.text}\nx\n```\n",
     ],
 )
 async def test_code_blocks_in_common_languages_are_written(
     world: dict[str, Path], text: str
 ) -> None:
     assert (await _write(world, "notes/code.md", text))["ok"] is True
+
+
+# ---- review: linear, bounded, off the event loop ------------------------------------------------
+
+
+ADVERSARIAL = {
+    "tags": "<a" * 500_000,
+    "tag_then_text": "<a " + "o" * 1_000_000,
+    "handlers_without_equals": "<a on" * 200_000,
+    "backticks": "`" * 1_000_000,
+    "tildes": "~" * 1_000_000,
+    "fence_runs": "``` " * 250_000,
+    "mixed_runs": "`~" * 500_000,
+    "space_before_inline": "`" + " " * 1_000_000 + "$=",
+    "long_info_words": ("```" + "x" * 70 + "\n") * 14_000,
+    "entities": "&lt;a" * 200_000,
+}
+
+
+@pytest.mark.parametrize("name", sorted(ADVERSARIAL))
+def test_the_markdown_scan_is_linear(name: str) -> None:
+    import time
+
+    from nox.node.safe_fs import markdown_runs_code
+
+    started = time.perf_counter()
+    markdown_runs_code(ADVERSARIAL[name])
+    assert time.perf_counter() - started < 0.5, name
+
+
+@pytest.mark.parametrize("path", ["notes/lang.md", "notes/lang.txt", "notes/lang.csv"])
+async def test_text_over_the_cap_is_refused(world: dict[str, Path], path: str) -> None:
+    from nox.node.safe_fs import MAX_TEXT_BYTES
+
+    assert await _refused(world, path, "a" * (MAX_TEXT_BYTES + 1)) == "too_large"
+    assert (await _write(world, path, "a" * 1000))["ok"] is True
+
+
+async def test_the_core_runs_the_text_check_in_a_thread_with_a_time_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    import time
+
+    from nox.node import tools as tools_module
+    from nox.node.install import _write_target
+    from nox.node.router import routed_spec
+
+    seen: list[str] = []
+
+    def slow(_payload: dict[str, Any]) -> str | None:
+        seen.append(threading.current_thread().name)
+        time.sleep(0.3)
+        return None
+
+    monkeypatch.setattr(tools_module, "CHECK_TIMEOUT_S", 0.05)
+    laptop = _entry("a" * 32, "Laptop", tools={"file.write": "medium"})
+    spec = routed_spec(
+        name="file.write",
+        description="t",
+        risk=Risk.MEDIUM,
+        side_effects=True,
+        registry=FakeRegistry([laptop]),  # type: ignore[arg-type]
+        input_model=WriteArgs,
+        node_target=_write_target,
+        precheck=slow,
+    )
+    payload = spec.input_model.model_validate(
+        {"path": "a.txt", "text": "x", "device": "Laptop"}
+    ).model_dump()
+    assert spec.prepare is not None and spec.scope is not None
+    await spec.prepare(payload)
+    assert seen and seen[0] != threading.main_thread().name  # never on the event loop
+    assert spec.scope(payload).target == "device:none"
+    assert (await spec.handler(payload))["error"] == "check_timeout"
+
+
+def test_the_node_gate_is_safe_to_run_in_a_thread(tmp_path: Path) -> None:
+    import threading
+
+    from nox.node.receipts import ReceiptSigner, ReceiptVerifier
+
+    signer = ReceiptSigner(tmp_path / "r")
+    verifier = ReceiptVerifier(signer.public_key, device_id="d" * 32, core_id="c" * 64)
+    tools = hand_tools(NodeHands(folders=lambda: [], protected=(tmp_path,), sandbox=lambda: None))
+    manifest = NodeManifest(groups={g: g == "files" for g in GROUPS}, max_calls_per_hour=5)
+    gate = NodeGate(tools, manifest, None, receipts=verifier)
+    allowed: list[bool] = []
+
+    def one(i: int) -> None:
+        args = {"path": f"a{i}.txt", "text": "x", "append": False, "overwrite": False}
+        meta = signed(
+            signer, "file.write", args, risk="medium", device_id="d" * 32, core_id="c" * 64
+        )
+        allowed.append(gate.check("file.write", args, meta=NoxCallMeta(**meta)).allowed)
+
+    threads = [threading.Thread(target=one, args=(i,)) for i in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert allowed.count(True) == 5  # the budget holds under concurrency
+
+
+# ---- review: renamed vault config folders, the home folder, more link schemes -------------------
+
+
+@pytest.mark.parametrize(
+    "signature", ["app.json", "community-plugins.json", "plugins", "config.edn"]
+)
+async def test_a_vault_with_a_renamed_config_folder_is_found_by_its_signature(
+    world: dict[str, Path], signature: str
+) -> None:
+    vault = world["root"] / "Tresor"
+    config = vault / ".meine-einstellungen"
+    config.mkdir(parents=True)
+    if signature == "plugins":
+        (config / signature).mkdir()
+    else:
+        (config / signature).write_text("{}", encoding="utf-8")
+    assert await _refused(world, "Tresor/notiz.md") == "app_workspace_refused"
+
+
+async def test_a_renamed_vault_around_the_allowed_folder_is_found(tmp_path: Path) -> None:
+    vault = tmp_path / "Tresor"
+    (vault / ".config-x").mkdir(parents=True)
+    (vault / ".config-x" / "workspace.json").write_text("{}", encoding="utf-8")
+    root = vault / "Nox"
+    root.mkdir()
+    world = {"root": root, "node": tmp_path / "node-home"}
+    assert await _refused(world, "liste.txt") == "app_workspace_refused"
+
+
+async def test_app_settings_in_the_home_folder_do_not_count_as_a_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    (home / ".vscode").mkdir(parents=True)  # VS Code's own settings, not a workspace
+    (home / ".idea").mkdir()
+    root = home / "Dokumente" / "Nox"
+    root.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    world = {"root": root, "node": tmp_path / "node-home"}
+    assert (await _write(world, "liste.txt"))["ok"] is True
+    (home / ".git").mkdir()  # a home folder that is a repository still counts
+    assert await _refused(world, "zweite.txt") == "working_tree_refused"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["[Tresor](obsidian://open?vault=x)", "[datei](file:///C:/Windows/x)", "<a href=FILE:x>a</a>"],
+)
+async def test_note_app_and_file_links_are_refused(world: dict[str, Path], text: str) -> None:
+    assert await _refused(world, "notes/links.md", text) == "content_refused"
+
+
+async def test_ordinary_words_with_file_are_written(world: dict[str, Path]) -> None:
+    text = "Profile: Alex\nDas Wort Profil und profile: stehen hier."
+    assert (await _write(world, "notes/profil.md", text))["ok"] is True
+
+
+async def test_an_append_refusal_says_what_in_the_file_blocks_it(world: dict[str, Path]) -> None:
+    (world["root"] / "notes" / "alt.md").write_text(
+        "# Alt\n```dataview\nLIST\n```\n", encoding="utf-8"
+    )
+    with pytest.raises(NodeRefusal) as caught:
+        await _write(world, "notes/alt.md", "neu\n", append=True)
+    assert caught.value.reason == "content_refused"
+    assert "'dataview' code block" in caught.value.detail
+    assert "already in the file" in caught.value.detail

@@ -123,13 +123,20 @@ an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trus
   `.md`-Datei wird abgelehnt, wenn sie irgendetwas enthält, das eine Notiz-App ausführen könnte -
   die Wörter `dataviewjs`, `js-engine`, `templater` oder `meta-bind-js`, Templater `<%`, inline
   `` `$= ``, `<script`, `javascript:` -, egal wo es steht. Eine Notiz, die diese Plugin-Wörter
-  nur erwähnt, kann Nox deshalb nicht schreiben. Nox schreibt nur Notizen, deren Codeblöcke
-  gängige Programmiersprachen nutzen (Python, JavaScript, Shell, JSON, ...) oder keine - ein Block
-  für ein Plugin (`dataview`, `jsx`, ...) oder einer, den die App zeichnet (`mermaid`, `math`,
-  `html`), wird abgelehnt. Beim Anhängen zählt die ganze Datei.
+  nur erwähnt (oder einen Link mit `obsidian://` oder `file:`), kann Nox deshalb nicht
+  schreiben. Codeblöcke in Notizen, die Nox auf Geräten schreibt, dürfen nur Text- oder
+  Datenformate enthalten (`text`, `md`, `json`, `yaml`, `toml`, `ini`, `csv`, `diff`, `log`) oder
+  keine Sprache nennen - ein Block in einer Programmiersprache (ein Plugin kann ihn per Klick
+  ausführen), für ein Plugin (`dataview`, `jsx`, ...) oder einer, den die App zeichnet
+  (`mermaid`, `math`, `html`), wird abgelehnt. Beim Anhängen zählt die ganze Datei, und die
+  Ablehnung sagt, was stört. Notizen sind höchstens 256 KB groß.
 - **Dein Notizen-Tresor:** `nox node allow files --folder` lehnt einen Ordner ab, der ein
-  Repository oder ein App-Arbeitsbereich ist oder darin liegt. Erlaube einen einfachen Ordner
+  Repository oder ein App-Arbeitsbereich ist oder darin liegt - auch einen Tresor, dessen
+  Einstellungsordner umbenannt wurde (erkannt an seinem Inhalt). Erlaube einen einfachen Ordner
   daneben - etwa `Nox` neben dem Tresor - und verschiebe, was Nox geschrieben hat, selbst hinein.
+  **Verlinke den erlaubten Ordner nicht (Symlink, Junction) in einen Tresor:** Von der Seite des
+  Ordners aus lässt sich das nicht erkennen. Die Einstellungsordner von Apps in deinem
+  Benutzerordner (`~/.vscode`, `~/.idea`) zählen nicht als Arbeitsbereich.
 - **Hingenommen bei einfachem Text:** Eine `.csv` kann eine Tabellenformel enthalten, die Excel
   erst nach eigener Warnung und deinem Klick ausführt; die anderen einfachen Formate führen nichts
   aus.

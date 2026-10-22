@@ -27,7 +27,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nox import __version__
 
-__all__ = ["NodeRefusal", "NodeTool", "Notifier", "PlatformNotifier", "default_tools"]
+__all__ = [
+    "CHECK_TIMEOUT_S",
+    "off_loop",
+    "NodeRefusal",
+    "NodeTool",
+    "Notifier",
+    "PlatformNotifier",
+    "default_tools",
+]
 
 _CREATE_NO_WINDOW = 0x08000000
 
@@ -46,13 +54,27 @@ class NotifyArgs(BaseModel):
 Handler = Callable[[BaseModel], Awaitable[dict[str, Any]]]
 
 
+#: The most time a text check (the gate, a write's content) may take before the call is refused.
+#: The checks are linear and capped, so this is never reached by honest input.
+CHECK_TIMEOUT_S = 2.0
+
+
+async def off_loop(func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+    """`func(*args, **kwargs)` in a worker thread with `CHECK_TIMEOUT_S`: the event loop - and
+    with it the stop button and the dead-man rule - keeps running whatever the text is.
+    Raises `TimeoutError` when the time is up."""
+    return await asyncio.wait_for(asyncio.to_thread(func, *args, **kwargs), CHECK_TIMEOUT_S)
+
+
 class NodeRefusal(Exception):  # noqa: N818 - a refusal, named for what it is
     """A tool refused on this device's own authority (outside the allowed folders, no sandbox):
     answered and audited like a refusal of `NodeGate`. `reason` is a short machine token."""
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, detail: str = "") -> None:
         super().__init__(reason)
         self.reason = reason
+        #: In a few words, what caused it (shown to the person, never a secret).
+        self.detail = detail
 
 
 @dataclass(frozen=True)

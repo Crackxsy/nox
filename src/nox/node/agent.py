@@ -49,7 +49,7 @@ from nox.node.keystore import NodeKeyStore
 from nox.node.manifest import GROUPS, NodeManifest, manifest_hash
 from nox.node.receipts import ReceiptVerifier, normalize_arguments
 from nox.node.renewal import RenewalRefusedError, accept_renewed, due, store_certificate
-from nox.node.tools import NodeRefusal, NodeTool
+from nox.node.tools import NodeRefusal, NodeTool, off_loop
 from nox.security.model import AuditLog
 
 log = get_logger(__name__)
@@ -686,7 +686,15 @@ class NodeAgent:
         # One text for everything: the receipt's hash, the dialog and the handler all see the
         # same NFC form of the arguments (review: never sign one and run another).
         arguments = normalize_arguments(params.get("arguments"))
-        decision = self._gate.check(name, arguments, call_id=meta.call_id, meta=meta)
+        try:
+            # Off the event loop: a text check never stalls pings, the stop or the dead man.
+            decision = await off_loop(
+                self._gate.check, name, arguments, call_id=meta.call_id, meta=meta
+            )
+        except TimeoutError:
+            self._audit_refusal(name, meta.call_id, "check_timeout")
+            await self._refused(ws, msg_id, name, "check_timeout")
+            return
         if not decision.allowed or decision.tool is None or decision.args is None:
             await self._refused(ws, msg_id, name, decision.reason)
             return
@@ -711,7 +719,7 @@ class NodeAgent:
             # this device, audited like the gate's.
             reason = p.safe_name(exc.reason, 64)
             self._audit_refusal(name, meta.call_id, reason)
-            await self._refused(ws, msg_id, name, reason)
+            await self._refused(ws, msg_id, name, reason, detail=exc.detail)
             return
         except Exception as exc:  # noqa: BLE001 - a failing tool is an error result, not a crash
             log.warning("node.tool_failed", tool=p.safe_name(name), error=type(exc).__name__)
@@ -806,15 +814,20 @@ class NodeAgent:
             return self.stopped_reason()  # stopped while the dialog was open
         return None
 
-    async def _refused(self, ws: ClientConnection, msg_id: Any, name: str, reason: str) -> None:
+    async def _refused(
+        self, ws: ClientConnection, msg_id: Any, name: str, reason: str, *, detail: str = ""
+    ) -> None:
         log.warning("node.call_refused", tool=p.safe_name(name, 64), reason=reason)
+        text = f"refused on the device: {reason}"
+        if detail:
+            text += f" ({p.escape_controls(detail)[:200]})"
         await self._reply(
             ws,
             msg_id,
             result={
                 "isError": True,
                 "_nox": {"refused": reason},
-                "content": [{"type": "text", "text": f"refused on the device: {reason}"}],
+                "content": [{"type": "text", "text": text}],
             },
         )
 
