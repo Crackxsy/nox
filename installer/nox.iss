@@ -285,7 +285,7 @@ begin
 end;
 
 { Node mode never runs elevated: user code (the node, its pairing, its logon task) must not run
-  with administrator rights from the user-writable {app}. Refused for an all-users install, and
+  with administrator rights from the user-writable install folder. Refused for an all-users install, and
   when Setup was elevated on purpose while UAC is on (without UAC there is no boundary to cross). }
 function NodeModeRefusal(): String;
 var
