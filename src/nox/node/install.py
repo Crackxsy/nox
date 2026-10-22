@@ -104,6 +104,8 @@ class NodeRuntime:
         for task in list(self.tasks):
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        if self.registry is not None:
+            await self.registry.close()
         if self.listener is not None:
             await self.listener.stop()
 
