@@ -352,6 +352,9 @@ export const de = {
   perm_pin: 'Sicherheits-PIN',
   perm_pin_hint: 'Bei hohem Risiko braucht das Erlauben von diesem Gerät aus die PIN. Nach drei falschen Versuchen wird das Gerät entfernt.',
   perm_pin_missing: 'Bitte zuerst die Sicherheits-PIN eingeben.',
+  perm_node_control_device:
+    'Nox steuert gerade Maus und Tastatur auf einem PC. Erlauben geht solange nur am Rechner, auf dem Nox läuft (mit PIN). Ablehnen geht auch hier.',
+  perm_node_control_pin_hint: 'Nox steuert gerade Maus und Tastatur auf einem PC: Erlauben braucht jetzt die PIN.',
   perm_only_at_computer: 'Erlauben geht dafür nur am Rechner, auf dem Nox läuft. Ablehnen geht auch hier.',
   perm_countdown: 'Noch {0} Sekunden. Ohne Antwort tut Nox es nicht.',
   perm_countdown_over: 'Die Zeit ist um – ohne Antwort tut Nox es nicht.',
@@ -415,6 +418,9 @@ export const de = {
   computer_use_banner: 'Nox steuert gerade Maus und Tastatur – {0} beendet sofort.',
   computer_use_banner_node: 'Nox steuert gerade Maus und Tastatur auf {0}.',
   computer_use_banner_node_hotkey: '{0} an diesem Gerät beendet sofort, „Stopp“ beendet überall.',
+  computer_use_release: 'Sperre lösen',
+  computer_use_release_pin: 'PIN zum Lösen der Sperre',
+  computer_use_release_failed: 'Die Sperre wurde nicht gelöst.',
   computer_use_banner_no_hotkey: 'Nox steuert gerade Maus und Tastatur – der Not-Aus beendet sofort.',
 
   // -- UX redesign (Spec UX-Neubau): shell, Heute, palette, permission, Stopp, settings pages --

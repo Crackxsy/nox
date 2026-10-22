@@ -18,7 +18,7 @@ import pytest
 from nox.desktop.computer_use import DryRunSender
 from nox.desktop.win32 import WindowInfo
 from nox.lan.tls import TlsMaterial
-from nox.node.gate import INPUT_TOOLS, NodeGate
+from nox.node.gate import NodeGate
 from nox.node.listener import NodeListener
 from nox.node.manifest import GROUPS, NodeManifest
 from nox.node.pairing import NodePairing
@@ -75,10 +75,13 @@ def _world(
         return PNG
 
     lock = GameLock(
-        watched=["RocketLeague.exe"],
+        watched=lambda: ["RocketLeague.exe"],
         running_names=lambda: {game.lower()} if game else set(),
-        foreground_name=lambda: front,
+        foreground_name=lambda: front or "explorer.exe",
         process_pids=lambda _names: {999} if game else set(),
+        services=set,
+        screen_state=lambda: 5,  # QUNS_ACCEPTS_NOTIFICATIONS: nothing owns the screen
+        windows=windows,
     )
     world = World(
         notice=notice,
@@ -148,7 +151,20 @@ def test_narrowing_on_the_core_hides_them(tmp_path: Path) -> None:
 # ---- the game lock -------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", sorted(INPUT_TOOLS))
+@pytest.mark.parametrize(
+    "name",
+    [
+        "computer.session_start",
+        "computer.pointer",
+        "computer.keys",
+        "desktop.type_text",
+        "desktop.window_focus",
+        "desktop.window_minimize",
+        "desktop.window_restore",
+        "desktop.window_close",
+        "desktop.process_stop",
+    ],
+)
 @pytest.mark.parametrize(("game", "front", "reason"), [
     ("RocketLeague.exe", "", "game_running"),
     ("EasyAntiCheat.exe", "", "game_running"),
@@ -751,8 +767,6 @@ async def test_the_node_reports_its_sessions_with_a_growing_generation() -> None
     await end.handler(end.args.model_validate({}))
     over = world.session_report()
     assert over["active"] is False and over["gen"] > running["gen"]
-    later, _ = _world()
-    assert later.session_report()["gen"] >= before["gen"]  # a new run never goes back
 
 
 def test_session_reports_are_read_strictly() -> None:

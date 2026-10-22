@@ -52,6 +52,8 @@ export function StatusStrip({
   onResumed,
 }: StatusStripProps) {
   const [pinAsked, setPinAsked] = useState(false);
+  const [releasePin, setReleasePin] = useState('');
+  const [releaseError, setReleaseError] = useState('');
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -173,6 +175,43 @@ export function StatusStrip({
           {node.stop ? fill(t('computer_use_banner_node_hotkey'), showCombo(node.stop, lang)) : ''}
         </p>
         <StopButton placement="inline" />
+        {!device && (
+          // A lock that outlived its PC (it went silent): lifted only here, with the PIN.
+          <form
+            className="strip-act"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!client) return;
+              setReleaseError('');
+              api
+                .nodeComputerRelease(client, releasePin.trim())
+                .then(() => setReleasePin(''))
+                .catch((err: unknown) => setReleaseError(refusalText(t, err, true, t('computer_use_release_failed'))));
+            }}
+          >
+            <label className="sr-only" htmlFor={`release-pin-${node.deviceId}`}>
+              {t('computer_use_release_pin')}
+            </label>
+            <input
+              id={`release-pin-${node.deviceId}`}
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              className="input input--pin"
+              placeholder={t('perm_pin')}
+              value={releasePin}
+              onChange={(e) => setReleasePin(e.target.value)}
+            />
+            <button type="submit" className="btn btn--sm" disabled={!client || !releasePin.trim()}>
+              {t('computer_use_release')}
+            </button>
+          </form>
+        )}
+        {releaseError && (
+          <p role="alert" className="strip-err">
+            {releaseError}
+          </p>
+        )}
       </div>,
     );
   }

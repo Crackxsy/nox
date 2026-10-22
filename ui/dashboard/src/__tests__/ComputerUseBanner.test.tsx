@@ -3,14 +3,14 @@
  * and is gone again when the session ends or the core disconnects.
  */
 
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Auth } from '../auth';
 import type { DashboardIpcHandlers, IpcClient } from '../ipc';
 import { DASHBOARD_PATTERNS } from '../ipc';
 import { translator } from '../i18n';
-import { INITIAL_STATE, parseComputerUse, reduceEvent, setConnected } from '../model';
+import { INITIAL_STATE, parseComputerUse, parseNodeControl, reduceEvent, setConnected } from '../model';
 
 const captured: { handlers: DashboardIpcHandlers | null } = { handlers: null };
 
@@ -118,12 +118,25 @@ describe('the computer-use strip in the app', () => {
     expect(line.textContent).toContain('Strg + Alt + Umschalt + K');
     // The stop in the line is the same `security.kill` as the header's Stopp.
     expect(strip.querySelector('button.stop')?.textContent).toContain(t('ux_stop'));
+    // On the computer Nox runs on, a stuck lock can be lifted - with the PIN.
+    expect(within(strip as HTMLElement).getByRole('button', { name: t('computer_use_release') })).toBeTruthy();
     // This machine's own session is a line of its own; ending it leaves the PC's line.
     emit({ active: true, reason: '', stop: 'f12' });
     emit({ active: false, reason: 'done', stop: 'f12' });
     expect(screen.getByText(/auf Arbeits-PC/)).not.toBeNull();
     emit({ active: false, ...node, reason: 'kill switch' });
     expect(screen.queryByText(/auf Arbeits-PC/)).toBeNull();
+  });
+
+  it('reads the sessions the core reports on (re)connect', () => {
+    const sessions = [
+      { active: true, reason: 'running', stop: 'f12', device: 'Laptop', device_id: 'b1' },
+      { active: false, device: 'Alt', device_id: 'x' },
+      { active: true, device: 'kein Gerät', device_id: '' },
+      'kaputt',
+    ];
+    expect(parseNodeControl({ sessions }).map((n) => n.device)).toEqual(['Laptop']);
+    expect(parseNodeControl(null)).toEqual([]);
   });
 
   it('keeps one line per PC and forgets them on disconnect', () => {

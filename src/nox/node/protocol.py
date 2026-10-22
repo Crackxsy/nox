@@ -80,6 +80,8 @@ M_KILLED = "nox/killed"
 M_RESUME = "nox/resume"
 M_REVOKED = "nox/revoked"
 M_POLICY = "nox/policy"
+#: core -> node: games to watch on top of the node's own list (an addition, never a removal).
+M_GAMES = "nox/games"
 M_PING = "nox/ping"
 M_PONG = "nox/pong"
 M_CONFIRM_RESULT = "nox/confirm_result"
@@ -106,7 +108,7 @@ NODE_TO_CORE: frozenset[str] = frozenset(
 )
 #: Everything the core sends to a node. `nox/policy` may only narrow what the node offers.
 CORE_TO_NODE: frozenset[str] = frozenset(
-    {M_TOOLS_LIST, M_TOOLS_CALL, M_KILL, M_RESUME, M_REVOKED, M_POLICY, M_PING, M_PONG}
+    {M_TOOLS_LIST, M_TOOLS_CALL, M_KILL, M_RESUME, M_REVOKED, M_POLICY, M_GAMES, M_PING, M_PONG}
 )
 
 # ---- text from the other side ----------------------------------------------------------------
@@ -243,6 +245,14 @@ class Ping(_Strict):
     state: str = Field(default="", max_length=32)
     #: In a node's `nox/pong`: computer use on it right now (`SessionReport`).
     session: SessionReport | None = None
+
+
+class GamesAdd(_Strict):
+    """`nox/games`: the core's watched games, added to the node's own list."""
+
+    add: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 _.+()\-]{0,63}$")]] = Field(
+        default_factory=list, max_length=64
+    )
 
 
 class Killed(_Strict):

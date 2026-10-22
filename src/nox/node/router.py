@@ -26,6 +26,7 @@ from typing import Any
 from pydantic import BaseModel, Field, create_model
 
 from nox.core.logging import get_logger
+from nox.node.confirm import CONFIRM_TIMEOUT_S
 from nox.node.registry import (
     RISKS,
     SESSION_RESULT_KEY,
@@ -60,6 +61,8 @@ ROUTE_RISK_KEY = "_route_risk"
 ROUTE_DELEGATE_KEY = "_route_delegate"
 #: How long a node call may take before the core gives up on it.
 NODE_CALL_TIMEOUT_S = 30.0
+#: The executor's limit for a routed tool: the node call, the device's dialog, and some slack.
+ROUTED_TIMEOUT_S = NODE_CALL_TIMEOUT_S + CONFIRM_TIMEOUT_S + 10.0
 _CORE_WORDS = frozenset({"core", "dieser core", "this core", "hier", "here"})
 _HERE_WORDS = frozenset({"hier", "here"})
 
@@ -434,6 +437,9 @@ def routed_spec(
         ),
         local=False,
         network=template.network if network is None else network,
+        # A call on a node may wait for the person at the device (`CONFIRM_TIMEOUT_S`): the
+        # executor must not give up before the node call itself does.
+        timeout_s=max(template.timeout_s or 0.0, ROUTED_TIMEOUT_S),
     )
 
 

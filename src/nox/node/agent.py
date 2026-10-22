@@ -146,6 +146,8 @@ class NodeAgent:
         #: This device's computer-use truth (`p.SessionReport` as a dict), told to the core in the
         #: hello, every pong and every tool answer; None where there is none.
         self.session_report: Callable[[], dict[str, Any] | None] = lambda: None
+        #: The core's watched games (`nox/games`): added to this device's list, never removed.
+        self.on_games: Callable[[list[str]], None] = lambda _games: None
         #: call id -> (the running call, its JSON-RPC id)
         self._calls: dict[str, tuple[asyncio.Task[None], Any, str]] = {}
         self._last_core = time.monotonic()
@@ -451,6 +453,16 @@ class NodeAgent:
                 msg_id,
                 result={"offered": [t.name for t in self._gate.offered()], "_nox": self._groups()},
             )
+            return None
+        if method == p.M_GAMES:
+            try:
+                games = p.GamesAdd.model_validate(params)
+            except ValidationError:
+                await self._reply(ws, msg_id, error=(ERR_INVALID_PARAMS, "invalid games"))
+                return None
+            self.on_games(list(games.add))
+            self._audit_event("node.games", "core", f"added {len(games.add)}")
+            await self._reply(ws, msg_id, result={"ok": True})
             return None
         if method == p.M_TOOLS_LIST:
             offered = (

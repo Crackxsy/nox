@@ -158,11 +158,20 @@ Alles aus, außer Musik; jedes wird nur hier eingeschaltet, mit `nox node allow 
   Dashboard zeigt währenddessen „Nox steuert gerade Maus und Tastatur auf <Gerät>“ mit „Stopp“;
   solange kann kein gekoppeltes Gerät (Handy, Browser auf irgendeinem PC) etwas erlauben -
   erlauben geht dann am Rechner, auf dem Nox läuft, stoppen überall.
-- **Nie im Spiel:** Solange ein beobachtetes Spiel (standardmäßig Rocket League) oder ein
-  Anti-Cheat-Dienst auf diesem Gerät läuft oder ein Spiel vorne ist, wird jeder Maus-, Tasten-
-  und Tipp-Aufruf abgelehnt - vom Node selbst, vor allem anderen, egal was Nox schickt.
-  `game.input.send` bleibt überall verboten.
-- **Musik** (`media`, standardmäßig an, niedriges Risiko): abspielen, pausieren, weiter, zurück,
+- **Nie im Spiel:** Solange ein Spiel auf diesem Gerät läuft oder vorne ist - die Liste des
+  Cores (standardmäßig Rocket League), die eigene Liste dieses Geräts (`nox node games add
+  Spiel.exe`; Entfernen fragt nach: `nox node games remove Spiel.exe`) oder irgendeine
+  Anti-Cheat-Software (Prozess, Dienst oder Treiber) - oder etwas den Bildschirm belegt (ein
+  Spiel im Vollbild, Präsentationsmodus), wird jeder Maus-, Tasten- und Tipp-Aufruf und jede
+  Änderung an Fenstern und Programmen abgelehnt - vom Node selbst, vor allem anderen, egal was
+  Nox schickt; kann der Node es nicht feststellen, lehnt er auch ab. `game.input.send` bleibt
+  überall verboten.
+- **Erlauben, während Nox einen PC steuert:** Kein gekoppeltes Gerät (Handy, Browser auf
+  irgendeinem PC) kann dann etwas erlauben; am Rechner, auf dem Nox läuft, braucht Erlauben die
+  Sicherheits-PIN und geht nicht über eine Fernsteuerung (Remote Desktop). Ablehnen und Stopp
+  gehen immer. Bleibt die Zeile stehen, obwohl der PC nicht mehr antwortet, löst „Sperre lösen“
+  mit der PIN am Rechner, auf dem Nox läuft, die Sperre.
+- **Musik** (`media`, standardmäßig an, niedriges Risiko; der Node sagt es einmal per Hinweis): abspielen, pausieren, weiter, zurück,
   Lautstärke, lauter, leiser, stumm - unter Windows über die System-Mediensteuerung, unter Linux
   über MPRIS (`playerctl` oder D-Bus) und PipeWire (`wpctl`) oder PulseAudio (`pactl`). Noch
   nicht unter macOS.

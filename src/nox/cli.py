@@ -480,6 +480,32 @@ def node_deny(
         raise typer.Exit(1) from exc
 
 
+@node_app.command("games")
+def node_games(
+    action: str = typer.Argument(..., help="add or remove"),
+    name: str = typer.Argument(..., help="The game's program name, e.g. Game.exe"),
+) -> None:
+    """Games of this device: while one runs or is in front, Nox never uses mouse and keyboard
+    here. Adding works at once; removing asks first."""
+    from nox.node.cli import NodeCliError, games, secret_store  # noqa: PLC0415
+
+    if action not in ("add", "remove"):
+        typer.echo("Use: nox node games add|remove <program>", err=True)
+        raise typer.Exit(2)
+    try:
+        games(
+            _node_home(),
+            name,
+            action == "add",
+            say=typer.echo,
+            confirm=lambda prompt: typer.confirm(prompt, default=False),
+            secrets=secret_store(),
+        )
+    except NodeCliError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
 sandbox_app = typer.Typer(help="The command sandbox (Windows: AppContainer access rights).")
 app.add_typer(sandbox_app, name="sandbox")
 

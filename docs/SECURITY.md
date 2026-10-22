@@ -753,43 +753,70 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   runs to its end even when the asking dashboard disconnects, so the database, the routing and
   the node never disagree.
 - **Captures, browser, desktop, computer use and media on nodes (C6).** All off by default
-  except `media`. `screen.capture` and `camera.snapshot` are high risk on a node (the device's
-  dialog every time, never remembered), need this core's privacy to allow that kind of capture,
+  except `media` (a node announces it once on the device). `screen.capture` and `camera.snapshot`
+  are high risk on a node (the device's dialog every time, never remembered), need this core's
+  privacy to allow that kind of capture - checked before the node is asked **and again after the
+  device's answer** (panic, safe mode or a stricter mode meanwhile discards the picture unseen) -
   and are refused on the node unless a visible notification could be shown first
-  (`no_visible_indicator`); the PNG is held in memory for the call only, sent as `nox/blob`
-  chunks (at most 8 MiB), checked by SHA-256 and PNG signature on the core and stored in the
-  core's captures folder, so `vision.describe` keeps its rules (camera pictures never to the
-  cloud). `browser.*` runs Nox's own headless Chromium behind `NetGuard` on the node (no LAN, no
+  (`no_visible_indicator`). The PNG is held in memory for the call only, made smaller on the node
+  when it is over 8 MiB (longest side 2560 px, still PNG; refused if that is not possible), sent
+  as `nox/blob` chunks, checked by SHA-256 and PNG signature on the core and stored in the core's
+  captures folder, so `vision.describe` keeps its rules (camera pictures never to the cloud).
+  `browser.*` runs Nox's own headless Chromium behind `NetGuard` on the node (no LAN, no
   loopback); `browser.screenshot` is not offered there. `desktop.*` and `computer.*` are Windows
   only and reuse the core's modules unchanged (boundary, self-approval lock, stop hotkey,
-  per-event game guard). **Game lock:** `NodeGate` refuses `computer.session_start`,
-  `computer.pointer`, `computer.keys` and `desktop.type_text` - before the stop state, the
-  capability or the receipt are even looked at - while a watched game or an anti-cheat service
-  runs on the node or a game is in front, and refuses them when no lock is installed (fails
-  closed). `game.input.send` stays a hard prohibition. Enabling `computer` on a device asks
-  twice and is refused off Windows. A confirmed session on a node grants pointer and keys for
-  that node only (`device:<id>|session:computer/*`, medium at most, for its minutes), and the
-  dashboard names the device with a Stopp. **Self-approval lock on nodes (fail closed, the node is the authority):** the node reports
-  its truth about computer use - `session: {gen, active, id}`, a generation that only grows (it
-  starts at the run's start time in ms and goes up with every session start and end) - in its
-  hello, every pong (each second) and every tool answer, refusals included. The core keeps per
-  node the highest generation seen and derives the lock from it monotonically: a report of an
-  older generation is ignored, the same generation updates `active`, an unreadable report changes
-  nothing. The lock holds while the node says a session is open (unreachable: until it says
-  otherwise or 120 minutes, the longest session, have passed since it last said "open") or while
-  a start is on its way; a start is settled only by its own answer's report or a newer
-  generation. While the lock holds for any node, **no paired device** may answer "allow" or send
-  a privileged request - none is provably on another machine than the one Nox controls; approvals
-  then come only from the core machine's own dashboard or from a node's own dialog (`deny`, Stopp
-  and reading always work). A start needs a browser device linked to that node (`node.link`,
-  else `link_required`) and is refused while the lock holds for it (`session_running`); a start
+  per-event game guard); window titles from a node are hidden while this core is in panic or
+  safe mode. A routed call may wait for the device's dialog: the node call's timeout grows by the
+  dialog's minute for high risk, and the executor waits for it.
+- **Game lock on nodes (fail closed).** `NodeGate` refuses mouse, keys and typing
+  (`computer.session_start/pointer/keys`, `desktop.type_text`) and every change to windows and
+  programs (`desktop.window_*`, `desktop.process_stop`) - before the stop state, the capability
+  or the receipt are even looked at - while any of these holds, each read fresh on every call
+  (`nox.node.world.GameLock`, `nox.desktop.anticheat`): a watched game runs (the core's default
+  list, the device's own `node.yaml` `games` - `nox node games add` adds at once, removing is
+  asked in a terminal and recorded like a widening, an edit of the file can only add - and the
+  core's list, pushed as `nox/games`, an addition only); an anti-cheat process (also by family
+  name), service or kernel driver runs (Vanguard, EasyAntiCheat, BattlEye, FACEIT, ACE,
+  nProtect, PunkBuster, XIGNCODE, mhyprot, Ricochet and more, by `QueryServiceStatus`); a game or
+  anti-cheat process is in front; something owns the screen (`SHQueryUserNotificationState`:
+  full-screen Direct3D, busy, presentation mode - games on no list are caught here); or any of
+  these checks cannot answer, including an unreadable foreground. Without a lock installed the
+  gate refuses as well. Listing windows and processes stays allowed. `game.input.send` stays a
+  hard prohibition. Enabling `computer` on a device asks twice and is refused off Windows.
+- **Self-approval lock on nodes (fail closed, the node is the authority).** The node reports its
+  truth about computer use - `session: {gen, active, id}`, where `gen` is a random epoch per run
+  plus a counter that grows with every session start and end - in its hello, every pong (each
+  second) and every tool answer, refusals included. The core keeps per node the highest
+  generation seen and derives the lock from it monotonically: an older generation is ignored,
+  the same one updates `active`, an unreadable report changes nothing; only an authenticated new
+  hello (a new run, a new connection) starts over from its report. The lock holds while the node
+  says a session is open (unreachable: until it says otherwise or 120 minutes have passed since
+  it last said "open") or while a start is on its way - a start is settled only by its own
+  answer's report or a newer generation; a cancelled start ends the session on the node in the
+  background. However long a node keeps saying "open", the lock holds at most 120 minutes at a
+  time. While it holds: **no paired device** answers "allow" or sends a privileged request
+  (none is provably on another machine than the one Nox controls); **this machine's own
+  dashboard or shell** may answer "allow" only with the security PIN (none set: no "allow" at
+  all) and only when this machine is not used remotely - Windows: `SM_REMOTESESSION` or a
+  session that is not the console's; Linux: an SSH session or `loginctl` `Remote=yes`; when that
+  cannot be told, "allow" is refused. "Deny", Stopp and reading always work, and a node's own
+  dialog still asks there. A start needs a browser device linked to that node (`node.link`, else
+  `link_required`) and is refused while the lock holds for it (`session_running`); a start
   without a readable report is followed by `computer.session_end`. Stops, kills and disconnects
   never lift the lock themselves - the node ends its session on `nox/kill` and its next report
-  lifts it. Grant and dashboard line follow the derived state. **No new input-synthesis code:** the node calls
-  `nox.desktop.computer_use` and `nox.desktop.keyboard`, the two files the Security Model §10 CI
-  guard allows, so the guard needs no exception. Residual: node-local privacy zones are not
+  lifts it; for a node that went silent, the owner can lift the lock by hand on this machine with
+  the PIN (`node.computer.release`, audited; a node still reporting a session locks again at
+  once). While a session is open, `computer.pointer` and `computer.keys` are granted on that
+  node only (`device:<id>|session:computer/*`, medium at most, `granted_by: node-session`); the
+  grant and the header line ("Nox steuert gerade Maus und Tastatur auf ...", sent again to a
+  dashboard that reconnects) follow the derived state. **No new input-synthesis code:** the node
+  calls `nox.desktop.computer_use` and `nox.desktop.keyboard`, the two files the Security Model
+  §10 CI guard allows, so the guard needs no exception. **Residual risks:** a remote-control tool
+  that draws into the console session itself (Parsec, AnyDesk and the like) cannot be told apart
+  from a person at the machine - the PIN is the guard there; node-local privacy zones are not
   applied to node screenshots yet (this core's privacy mode and capture switches are); a node
-  without a desktop takes no camera picture at all (no visible indicator).
+  without a desktop takes no camera picture at all (no visible indicator); a full-screen video
+  also counts as "owns the screen" (refused, never the other way round).
 - **Only the core's methods** (`CORE_TO_NODE`) are answered; a node never acts while disconnected
   and queues nothing.
 - **Its own audit trail**: every decision, hash-chained, on the device (`nox node log`); the core

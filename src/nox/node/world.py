@@ -37,10 +37,10 @@ import asyncio
 import hashlib
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
-import time
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from dataclasses import dataclass, field
@@ -99,47 +99,85 @@ def _strict(model: type[BaseModel]) -> type[BaseModel]:
 # ---- the game lock -------------------------------------------------------------------------------
 
 
-def _default_games() -> tuple[str, ...]:
+def default_games() -> tuple[str, ...]:
     from nox.core.config.assistant import SensorGameConfig  # noqa: PLC0415
 
     return tuple(SensorGameConfig().process_names)
 
 
+def _foreground_name() -> str:
+    from nox.desktop.computer_use import foreground_pid  # noqa: PLC0415
+    from nox.desktop.install import _process_name  # noqa: PLC0415
+
+    return _process_name(foreground_pid())
+
+
+def _running_services() -> set[str]:
+    from nox.desktop.anticheat import running_services  # noqa: PLC0415
+
+    return running_services()
+
+
+def _screen_state() -> int:
+    from nox.desktop.anticheat import fullscreen_state  # noqa: PLC0415
+
+    return fullscreen_state()
+
+
 @dataclass
 class GameLock:
-    """Whether a game or an anti-cheat service keeps Nox's hands off this device right now.
+    """Whether a game keeps Nox's hands off this device right now - fail closed.
 
-    The watched games are the core's default list; anti-cheat services count whether or not a
-    game is listed (`nox.desktop.install.ANTI_CHEAT_PROCESSES`). Read fresh on every call."""
+    Locked while any of these holds, each read fresh on every call:
 
-    watched: Iterable[str] = field(default_factory=_default_games)
+    * a watched game runs: the core's default list, this device's own list (`node.yaml`
+      `games`, `nox node games add`) and what the core added (`nox/games`, never a removal);
+    * an anti-cheat process, service or kernel driver runs (`nox.desktop.anticheat`);
+    * a watched game or an anti-cheat process is in front, or the foreground cannot be read;
+    * something owns the screen: a full-screen Direct3D app, "busy" or presentation mode
+      (`SHQueryUserNotificationState`) - games that are on no list are caught here;
+    * any check fails. Off Windows there is no input on a node at all (`windows_only`)."""
+
+    watched: Callable[[], Iterable[str]] = default_games
     running_names: Callable[[], set[str]] | None = None
-    foreground_name: Callable[[], str] | None = None
+    foreground_name: Callable[[], str] = _foreground_name
     process_pids: Callable[[set[str]], set[int]] | None = None
+    services: Callable[[], set[str]] = _running_services
+    screen_state: Callable[[], int] = _screen_state
+    windows: bool = sys.platform == "win32"
 
     def _names(self) -> set[str]:
-        from nox.desktop.install import ANTI_CHEAT_PROCESSES  # noqa: PLC0415
-
-        return {n.lower() for n in self.watched} | set(ANTI_CHEAT_PROCESSES)
+        return {n.strip().lower() for n in self.watched() if n.strip()}
 
     def running(self) -> bool:
+        """A watched game or anti-cheat software runs (True when that cannot be told)."""
+        from nox.desktop.anticheat import is_anti_cheat  # noqa: PLC0415
         from nox.desktop.install import _running_names  # noqa: PLC0415
 
-        names = (self.running_names or _running_names)()
-        return bool(names & self._names())
+        try:
+            names = (self.running_names or _running_names)()
+            if names & self._names() or any(is_anti_cheat(n) for n in names):
+                return True
+            return bool(self.services())
+        except Exception:  # noqa: BLE001 - cannot tell: locked
+            return True
 
     def in_front(self) -> bool:
-        if self.foreground_name is not None:
-            name = self.foreground_name()
-        else:
-            from nox.desktop.computer_use import foreground_pid  # noqa: PLC0415
-            from nox.desktop.install import _process_name  # noqa: PLC0415
+        """A game is in front or owns the screen (True when that cannot be told)."""
+        from nox.desktop.anticheat import LOCKING_NOTIFICATION_STATES, is_anti_cheat  # noqa: PLC0415
 
-            name = _process_name(foreground_pid())
-        return name.lower() in self._names()
+        try:
+            name = self.foreground_name().strip().lower()
+            if not name or name in self._names() or is_anti_cheat(name):
+                return True  # an unreadable foreground counts as a game
+            return self.screen_state() in LOCKING_NOTIFICATION_STATES
+        except Exception:  # noqa: BLE001 - cannot tell: locked
+            return True
 
     def reason(self) -> str | None:
-        """`NodeGate.input_lock`: why no input may be sent now, or None."""
+        """`NodeGate.input_lock`: why no input (and no window change) may happen now, or None."""
+        if not self.windows:
+            return "windows_only"
         if self.running():
             return "game_running"
         if self.in_front():
@@ -147,8 +185,10 @@ class GameLock:
         return None
 
     def pids(self) -> set[int]:
-        """Process ids of the watched games and anti-cheat services (for `desktop.*`)."""
-        names = self._names()
+        """Process ids of the watched games and anti-cheat processes (for `desktop.*`)."""
+        from nox.desktop.anticheat import ANTI_CHEAT_PROCESSES  # noqa: PLC0415
+
+        names = self._names() | set(ANTI_CHEAT_PROCESSES)
         if self.process_pids is not None:
             return self.process_pids(names)
         import psutil  # noqa: PLC0415
@@ -382,6 +422,31 @@ Grabber = Callable[[], Awaitable[bytes]]
 Notice = Callable[[str], Awaitable[None]]
 
 
+#: The most a capture may be on the wire (`nox/blob`, `protocol.MAX_RESULT_BYTES`).
+MAX_CAPTURE_BYTES = 8 * 1024 * 1024
+MAX_SIDE_PX = 2560
+
+
+def downscale_png(png: bytes, longest: int = MAX_SIDE_PX) -> bytes | None:
+    """The picture with its longest side at most `longest` px, as PNG again (OpenCV, the
+    `senses` extra); None without OpenCV or for a picture it cannot read."""
+    try:
+        import cv2  # noqa: PLC0415
+        import numpy  # noqa: PLC0415
+    except ImportError:
+        return None
+    image = cv2.imdecode(numpy.frombuffer(png, numpy.uint8), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        return None
+    height, width = image.shape[:2]
+    scale = min(1.0, longest / max(height, width, 1))
+    if scale < 1.0:
+        size = (max(1, int(width * scale)), max(1, int(height * scale)))
+        image = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
+    ok, encoded = cv2.imencode(".png", image, [cv2.IMWRITE_PNG_COMPRESSION, 9])
+    return bytes(encoded.tobytes()) if ok else None
+
+
 class _LazyProbe:
     """The window probe, made on first use (constructing it off Windows raises)."""
 
@@ -427,23 +492,34 @@ class World:
     screen: Grabber | None = None
     camera: Grabber | None = None
     media: MediaBackend = field(default_factory=PlatformMedia)
+    #: Makes a too-large capture smaller (None: it cannot).
+    fit: Callable[[bytes], bytes | None] = field(default=lambda png: downscale_png(png))
     windows: bool = sys.platform == "win32"
     probe: Callable[[], Any] = _real_probe
     sender: Callable[[], Any] = _real_sender
     browser: Any = None
     #: Ends a computer-use session (set by `world_tools`; called on every stop).
     end_session: Callable[[str], None] = lambda _reason: None
-    #: The session generation: starts at this run's start time in ms, so it keeps increasing
-    #: over restarts of the node, and goes up by one with every session start and end.
-    gen: int = field(default_factory=lambda: time.time_ns() // 1_000_000)
+    #: The session generation: a random epoch per run (40 random high bits) plus a counter that
+    #: goes up by one with every session start and end. A new run is told apart by its hello,
+    #: which resets the core's view of this device (`NodeControl.hello`).
+    gen: int = field(default_factory=lambda: secrets.randbits(40) << 20)
     session_id: str = ""
     computer: Any = None
+    #: Games the core asked this device to watch as well (`nox/games`); only ever grows.
+    extra_games: set[str] = field(default_factory=set)
     _background: set[asyncio.Task[None]] = field(default_factory=set)
 
     def session_report(self) -> dict[str, Any]:
         """This device's truth about computer use (`protocol.SessionReport`), read now."""
         active = bool(self.computer is not None and self.computer.active)
         return {"gen": self.gen, "active": active, "id": self.session_id if active else ""}
+
+    def add_games(self, names: Iterable[str]) -> None:
+        """`nox/games`: more games to watch. Never a removal - that is the device's own word."""
+        for name in list(names)[:64]:
+            if len(self.extra_games) < 256:
+                self.extra_games.add(name.strip())
 
     def session_changed(self, active: bool) -> None:
         """A session started or ended here (`ComputerUse` says so through its notice)."""
@@ -504,6 +580,12 @@ def _captures(world: World) -> list[NodeTool]:
             return {"ok": False, "error": "capture.unavailable", "detail": str(exc)[:200]}
         if not png.startswith(PNG_MAGIC):
             return {"ok": False, "error": "capture.failed"}
+        if len(png) > MAX_CAPTURE_BYTES:
+            # A large screen: smaller first (PNG, longest side 2560 px), refused only if still big.
+            smaller = await asyncio.to_thread(world.fit, png)
+            if smaller is None or len(smaller) > MAX_CAPTURE_BYTES:
+                return {"ok": False, "error": "capture.too_large", "bytes": len(png)}
+            png = smaller
         return {
             "ok": True,
             "kind": kind,

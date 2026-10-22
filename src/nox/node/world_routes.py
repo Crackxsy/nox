@@ -123,6 +123,12 @@ def _capture_around(kind: str, root: Callable[[], Path], privacy: Callable[[], A
             or hashlib.sha256(data).hexdigest() != meta.get("sha256")
         ):
             return {"ok": False, "error": "malformed_result", "device": entry.label}
+        # Asked again after the device's answer: panic, safe mode or a stricter privacy mode
+        # switched on meanwhile discards the picture unseen.
+        late = capture_refusal(kind, privacy())
+        if late is not None:
+            del data
+            return {"ok": False, "error": "capture.refused", "detail": late, "device": entry.label}
         path = await asyncio.to_thread(store_capture, root(), kind, data)
         from nox.hands.senses import cloud_refusal  # noqa: PLC0415
 
@@ -186,6 +192,9 @@ class _Device:
     grant_id: str = ""
     #: What the dashboard was last told (`desktop.computer_use` for this device).
     shown: bool = False
+    #: Since when the lock holds for this device without a break: it never holds longer than the
+    #: longest session (`MAX_SESSION_MINUTES`), whatever a node keeps saying.
+    locked_since: float | None = None
 
 
 class NodeControl:
@@ -210,6 +219,7 @@ class NodeControl:
         self._stop = stop_hotkey
         self._clock = clock
         self.devices: dict[str, _Device] = {}
+        self._ending: set[asyncio.Task[None]] = set()
 
     # -- the reports -----------------------------------------------------------------------------
 
@@ -240,6 +250,37 @@ class NodeControl:
             device.attempt = None
         self._sync(device_id, device)
 
+    def hello(self, device_id: str, raw: Any) -> None:
+        """A new authenticated connection of this node: a new run starts a new generation epoch,
+        so its hello report replaces what was known (a node ends its sessions with a
+        connection). A hello without a readable report changes nothing (fail closed)."""
+        if read_report(raw) is None:
+            return
+        device = self._device(device_id)
+        device.gen, device.active, device.attempt = -1, False, None
+        self.observe(device_id, raw)
+
+    def release(self, reason: str) -> int:
+        """The owner lifts the lock by hand (`node.computer.release`, with the PIN): for a node
+        that went silent. A node that still reports a running session locks again with its next
+        report. Returns how many devices were released."""
+        released = 0
+        for device_id, device in self.devices.items():
+            if self._locked(device):
+                released += 1
+            device.active, device.attempt, device.locked_since = False, None, None
+            self._sync(device_id, device, reason=reason)
+        return released
+
+    def status(self) -> list[dict[str, Any]]:
+        """What the dashboard shows right now (on connect): one entry per locked device."""
+        self.active()
+        return [
+            self._payload(device_id, device, "running")
+            for device_id, device in self.devices.items()
+            if device.shown
+        ]
+
     def pull(self) -> None:
         """Read the latest hello/pong reports of connected nodes."""
         for device_id, raw in self._reports():
@@ -252,10 +293,16 @@ class NodeControl:
         limit = MAX_SESSION_MINUTES * 60.0
         return device.active and self._clock() - device.active_seen < limit
 
-    def _locked(self, device: _Device) -> bool:
+    def _held(self, device: _Device) -> bool:
         attempt = device.attempt
         in_flight = attempt is not None and self._clock() - attempt.since < MAX_SESSION_MINUTES * 60
         return self._open(device) or in_flight
+
+    def _locked(self, device: _Device) -> bool:
+        if not self._held(device):
+            return False
+        since = device.locked_since
+        return since is None or self._clock() - since < MAX_SESSION_MINUTES * 60
 
     def locked(self, device_id: str) -> bool:
         self.pull()
@@ -274,9 +321,23 @@ class NodeControl:
         only from the core machine's own dashboard or a node's own dialog (spec C §1.5)."""
         return bool(client_device) and self.active()
 
-    def _sync(self, device_id: str, device: _Device) -> None:
+    def _payload(self, device_id: str, device: _Device, reason: str) -> dict[str, Any]:
+        return {
+            "active": device.shown,
+            "reason": reason,
+            "stop": self._stop,
+            "device": device.label,
+            "device_id": device_id,
+        }
+
+    def _sync(self, device_id: str, device: _Device, *, reason: str = "") -> None:
         """Grant and notice follow the derived state, never an event."""
-        is_open = self._open(device)
+        held = self._held(device)
+        if held and device.locked_since is None:
+            device.locked_since = self._clock()
+        elif not held:
+            device.locked_since = None
+        is_open = self._open(device) and self._locked(device)
         if is_open and not device.grant_id and self._engine is not None:
             device.grant_id = f"computer-{uuid.uuid4().hex[:12]}"
             remaining = MAX_SESSION_MINUTES * 60.0 - (self._clock() - device.active_seen)
@@ -286,7 +347,7 @@ class NodeControl:
                     scope=f"device:{device_id}|session:computer/*",
                     max_risk=Risk.MEDIUM,
                     expires_at=datetime.now(UTC) + timedelta(seconds=max(remaining, 1.0)),
-                    granted_by="user",
+                    granted_by="node-session",
                     label=f"computer use on {device.label}",
                 )
             )
@@ -298,16 +359,8 @@ class NodeControl:
         locked = self._locked(device)
         if locked != device.shown:
             device.shown = locked
-            reason = "running" if is_open else "starting or unclear" if locked else "over"
-            self._publish(
-                {
-                    "active": locked,
-                    "reason": reason,
-                    "stop": self._stop,
-                    "device": device.label,
-                    "device_id": device_id,
-                }
-            )
+            default = "running" if is_open else "starting or unclear" if locked else "over"
+            self._publish(self._payload(device_id, device, reason or default))
 
     # -- the routes ------------------------------------------------------------------------------
 
@@ -326,12 +379,25 @@ class NodeControl:
             }
         device.attempt = _Attempt(self._clock(), device.gen)
         self._sync(entry.device_id, device)
-        answer = await call()  # cancelled or failed: the attempt stays (fail closed)
+        try:
+            answer = await call()
+        except BaseException:
+            # Cancelled or failed: the attempt stays (fail closed), and the session is ended on
+            # the node in the background - shielded, so the lock is not held for the longest
+            # session only because the caller went away.
+            self._background_end(entry)
+            raise
         self.observe(entry.device_id, answer.get(SESSION_RESULT_KEY), outcome_of_attempt=True)
         if device.attempt is not None:
             # No readable report in the answer: end it there to be sure.
             await self._confirm_end(entry)
         return answer
+
+    def _background_end(self, entry: NodeEntry) -> None:
+        with contextlib.suppress(RuntimeError):
+            task = asyncio.get_running_loop().create_task(self._confirm_end(entry))
+            self._ending.add(task)
+            task.add_done_callback(self._ending.discard)
 
     async def _confirm_end(self, entry: NodeEntry) -> None:
         if self._end_on_node is None:
@@ -403,7 +469,38 @@ def _models() -> dict[str, type[BaseModel]]:
     }
 
 
-def _routes(control: NodeControl, captures: Callable[[str], NodeAround]) -> list[_Route]:
+def private_now(privacy: Any) -> bool:
+    """Panic or safe mode on this core (or no privacy settings to tell): titles are hidden."""
+    if privacy is None:
+        return True
+    try:
+        return bool(getattr(privacy, "panic", False)) or bool(privacy.snapshot().safe_mode)
+    except Exception:  # noqa: BLE001 - cannot tell: hide
+        return True
+
+
+def _redact_around(privacy: Callable[[], Any]) -> NodeAround:
+    """`desktop.windows` from a node: window titles hidden in panic and safe mode, like
+    everything else that could show what is on a screen."""
+
+    async def around(entry: NodeEntry, _args: dict[str, Any], call: NodeCall) -> dict[str, Any]:
+        answer = await call()
+        result = answer.get("result")
+        if isinstance(result, dict) and private_now(privacy()):
+            windows = result.get("windows")
+            if isinstance(windows, list):
+                result["windows"] = [
+                    {**w, "title": "[hidden: privacy]"} if isinstance(w, dict) else w
+                    for w in windows
+                ]
+        return answer
+
+    return around
+
+
+def _routes(
+    control: NodeControl, captures: Callable[[str], NodeAround], privacy: Callable[[], Any]
+) -> list[_Route]:
     m = _models()
     high, med, low, read = Risk.HIGH, Risk.MEDIUM, Risk.LOW, Risk.READ
     window = (
@@ -425,7 +522,8 @@ def _routes(control: NodeControl, captures: Callable[[str], NodeAround]) -> list
                    remember=False)
             for verb, model in (("click", m["click"]), ("type", m["btype"]), ("submit", m["click"]))
         ),
-        _Route("desktop.windows", read, False, m["empty"], "The open windows."),
+        _Route("desktop.windows", read, False, m["empty"], "The open windows.",
+               around=_redact_around(privacy)),
         _Route("desktop.processes", read, False, m["empty"], "Programs using the most memory."),
         *(_Route(name, risk, True, m["window"], what + ".") for name, risk, what in window),
         _Route("desktop.process_stop", high, True, m["process"],
@@ -469,7 +567,7 @@ def world_specs(
         return _capture_around(kind, captures_root, privacy)
 
     specs: list[ToolSpec] = []
-    for route in _routes(control, captures):
+    for route in _routes(control, captures, privacy):
         mine = own(route.name)
         node_risk = route.node_risk
         specs.append(
@@ -489,3 +587,60 @@ def world_specs(
             )
         )
     return specs
+
+
+# ---- approvals while Nox controls a node ---------------------------------------------------------
+
+REFUSE_DEVICE = (
+    "Nox controls mouse and keyboard on a paired PC; approve on the computer Nox runs on "
+    "(with the PIN), or deny or stop"
+)
+REFUSE_REMOTE = (
+    "Nox controls mouse and keyboard on a paired PC and this computer is used remotely (or that "
+    "cannot be told); approve at the computer itself, or deny or stop"
+)
+REFUSE_NO_PIN = (
+    "Nox controls mouse and keyboard on a paired PC; approving now needs the security PIN, and "
+    "none is set - deny, stop, or set a PIN first"
+)
+
+
+async def local_with_pin(
+    ctx: Any, pin: str | None, *, gate: Any, remote: Callable[[], bool | None], action: str
+) -> str | None:
+    """A local UI with the PIN at the machine itself - or why not."""
+    from nox.ipc.roles import LOCAL_UI_ROLES  # noqa: PLC0415
+    from nox.security.gate import PinRequiredError  # noqa: PLC0415
+
+    if getattr(ctx, "role", "") not in LOCAL_UI_ROLES:
+        return REFUSE_DEVICE
+    if remote() is not False:
+        return REFUSE_REMOTE
+    if gate is None or not gate.is_required():
+        return REFUSE_NO_PIN
+    try:
+        await gate.require(pin, action=action, by=getattr(ctx, "client_id", "") or ctx.role)
+    except PinRequiredError as exc:
+        return exc.reason
+    return None
+
+
+async def approval_refusal(
+    control: NodeControl,
+    ctx: Any,
+    pin: str | None,
+    *,
+    gate: Any,
+    remote: Callable[[], bool | None],
+) -> str | None:
+    """Why an "allow" is refused while the lock holds for any node, or None (spec C §1.5).
+
+    Paired devices never approve then (none is provably on another machine). The core
+    machine's own dashboard or shell may, but only with the security PIN and not from a remote
+    session - a remote desktop could be opened from the very PC Nox controls. "Deny" and Stopp
+    are never refused (the caller asks only for "allow")."""
+    if not control.active():
+        return None
+    return await local_with_pin(
+        ctx, pin, gate=gate, remote=remote, action="security.permission.reply"
+    )

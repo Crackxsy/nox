@@ -26,6 +26,7 @@ from nox.core.config import NoxConfig
 from nox.core.events import E, Event
 from nox.core.extension import ExtensionRuntime
 from nox.core.logging import get_logger
+from nox.desktop.anticheat import ANTI_CHEAT_PROCESSES, is_anti_cheat
 from nox.desktop.computer_tools import register_computer_tools
 from nox.desktop.computer_use import (
     ComputerUse,
@@ -42,7 +43,7 @@ from nox.tools.registry import ToolRegistry
 
 log = get_logger(__name__)
 
-__all__ = ["install"]
+__all__ = ["ANTI_CHEAT_PROCESSES", "install"]
 
 
 class CoreLike(Protocol):
@@ -72,20 +73,7 @@ def _game_pids(core: CoreLike) -> set[int]:
 #: Set by the benchmark world: computer use runs every guard but sends nothing.
 DRY_RUN_ENV = "NOX_COMPUTER_USE_DRY_RUN"
 
-#: Anti-cheat services: while one runs, a game that guards against input is running, whether or
-#: not the user put it on the watched list.
-ANTI_CHEAT_PROCESSES = frozenset(
-    {
-        "easyanticheat.exe",
-        "easyanticheat_eos.exe",
-        "beservice.exe",
-        "beservice_x64.exe",
-        "vgc.exe",
-        "faceitclient.exe",
-        "faceitservice.exe",
-        "eaanticheat.gameservice.exe",
-    }
-)
+#: Anti-cheat processes, services and drivers live in `nox.desktop.anticheat`.
 
 
 def _running_names() -> set[str]:
@@ -141,11 +129,11 @@ def _install_computer_use(core: CoreLike) -> ComputerUse:
     engine = core.security.engine
 
     def game_running() -> bool:
-        return bool(_game_pids(core)) or bool(_running_names() & ANTI_CHEAT_PROCESSES)
+        return bool(_game_pids(core)) or any(is_anti_cheat(n) for n in _running_names())
 
     def game_in_foreground() -> bool:
         name = _process_name(foreground_pid())
-        return name in watched or name in ANTI_CHEAT_PROCESSES
+        return name in watched or is_anti_cheat(name)
 
     def audit(action: str, target: str, result: str) -> None:
         core.security.audit.append(

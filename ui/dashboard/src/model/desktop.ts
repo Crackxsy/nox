@@ -34,6 +34,14 @@ export function parseComputerUse(payload: unknown): ComputerUseNotice | null {
   };
 }
 
+/** `node.computer.status {sessions}`: the PCs Nox controls now (malformed entries are dropped). */
+export function parseNodeControl(payload: unknown): ComputerUseNotice[] {
+  if (!isRecord(payload) || !Array.isArray(payload.sessions)) return [];
+  return payload.sessions
+    .map(parseComputerUse)
+    .filter((n): n is ComputerUseNotice => n !== null && n.active && n.deviceId !== '');
+}
+
 /** The sessions on paired PCs after one notice: a start replaces that PC's entry, an end removes it. */
 export function applyNodeControl(list: ComputerUseNotice[], notice: ComputerUseNotice): ComputerUseNotice[] {
   const rest = list.filter((n) => n.deviceId !== notice.deviceId);

@@ -40,7 +40,7 @@ from nox.node.manifest import GROUPS, NodeManifest, load_manifest, save_manifest
 from nox.node.protocol import PairLink, PairLinkError, escape_controls
 from nox.node.tools import PlatformNotifier, default_tools
 from nox.node.update import NodeUpdater, UpdateCheck
-from nox.node.world import World, world_tools
+from nox.node.world import GameLock, World, default_games, world_tools
 from nox.sandbox import Sandbox
 from nox.security.audit import SqliteAuditLog
 from nox.security.model import SecretStore
@@ -148,12 +148,21 @@ def build(
             result=result,
         )
 
+    extra_games: set[str] = set()
+
+    def watched() -> list[str]:
+        # The core's defaults, this device's own list and what the core added - read per call.
+        own = list(holder[0].manifest.games) if holder else []
+        return [*default_games(), *own, *sorted(extra_games)]
+
     world = World(
         notice=notice,
         computer_enabled=computer_enabled,
         dialog_open=lambda: bool(holder) and holder[0].dialog_open(),
         browser_dir=home.path / "browser",
         audit=audit_computer,
+        lock=GameLock(watched=watched),
+        extra_games=extra_games,
     )
     tools = {
         **default_tools(notifier),  # type: ignore[arg-type]
@@ -166,6 +175,29 @@ def build(
     keystore = NodeKeyStore(home.key_file, secrets)
     gate.restore_budget(audit)  # a restart does not refill the hour's budget
     return NodeRuntime(home, keystore, gate, audit, key, world)
+
+
+MEDIA_NOTICE = (
+    "Nox darf auf diesem Gerät jetzt Musik steuern (abspielen, pausieren, Lautstärke). "
+    "Ausschalten: nox node deny media"
+)
+MEDIA_NOTICE_MARKER = "media-notice-shown"
+
+
+async def media_notice_once(runtime: NodeRuntime) -> bool:
+    """Music control is on by default (spec C §1.4): the first time a node runs with it on - a
+    new pairing or an update that brought it -, this device says so once. True when shown."""
+    marker = runtime.home.path / MEDIA_NOTICE_MARKER
+    world = runtime.world
+    if world is None or marker.exists() or "media" not in runtime.gate.manifest.enabled():
+        return False
+    try:
+        await world.notice(MEDIA_NOTICE)
+    except Exception as exc:  # noqa: BLE001 - shown next time instead
+        log.warning("node.media_notice_failed", error=type(exc).__name__)
+        return False
+    marker.write_text("shown", encoding="utf-8")
+    return True
 
 
 def manifest_source(runtime: NodeRuntime) -> Callable[[], NodeManifest]:
@@ -225,6 +257,7 @@ def confirm_defaults(home: NodeHome, secrets: SecretStore | None) -> NodeManifes
             found.max_risk, defaults.max_risk, key=("read", "low", "medium", "high").index
         ),
         trust_core_for_high=False,
+        games=found.games,  # watching more games only narrows
     )
     save_manifest(home.manifest_file, start)
     if not record_confirmed(
@@ -384,6 +417,8 @@ def run(runtime: NodeRuntime, *, install_signals: bool = True, tray: bool = Fals
         if runtime.world is not None:
             agent.on_stop = runtime.world.stop  # a stop ends a computer session, closes the browser
             agent.session_report = runtime.world.session_report
+            agent.on_games = runtime.world.add_games
+            await media_notice_once(runtime)
         updates = asyncio.create_task(
             keep_updated(
                 runtime,
@@ -531,6 +566,55 @@ def _local_folder(text: str, node_home: NodeHome, *, must_exist: bool = True) ->
             if real == secret or secret in real.parents or real in secret.parents:
                 raise NodeCliError("That folder holds or lies in a store of keys or passwords.")
     return str(real)
+
+
+def games(
+    home: NodeHome,
+    name: str,
+    add: bool,
+    *,
+    say: Callable[[str], None],
+    interactive: Callable[[], bool] = lambda: sys.stdin.isatty() and sys.stdout.isatty(),
+    confirm: Callable[[str], bool] = lambda _prompt: False,
+    secrets: SecretStore | None = None,
+) -> None:
+    """This device's own watched games (`node.yaml` `games`), on top of the core's list. Adding
+    one only narrows what Nox may do and needs no question; removing one widens it, so it is
+    asked in an interactive terminal like `allow`, and recorded as confirmed."""
+    from nox.node.manifest import GAME_NAME  # noqa: PLC0415
+
+    game = name.strip()
+    if not GAME_NAME.match(game):
+        raise NodeCliError("Give the program's file name, for example Game.exe (no path).")
+    if not add:
+        if not interactive():
+            raise NodeCliError("Removing a game needs an interactive terminal on this device.")
+        if not confirm(f"Let Nox use mouse and keyboard here while {game} runs?"):
+            raise NodeCliError("Not removed.")
+    audit = open_audit(home)
+    key = manifest_key(home.path, secrets)
+    found = load_manifest(home.manifest_file)
+    confirmed = last_confirmed(audit, key)
+
+    def changed(manifest: NodeManifest) -> NodeManifest:
+        rest = [g for g in manifest.games if g.lower() != game.lower()]
+        return manifest.model_copy(update={"games": [*rest, game] if add else rest})
+
+    save_manifest(home.manifest_file, changed(found))
+    if confirmed is not None:
+        # Recorded, so that an edit of the file can never drop a game again by itself.
+        record_confirmed(audit, changed(confirmed), key)
+    elif not add:
+        raise NodeCliError("No confirmed manifest on this device; nothing was removed.")
+    audit.append(
+        actor="local",
+        tool="node",
+        action="node.games_add" if add else "node.games_remove",
+        target=escape_controls(game)[:64],
+        decision="allow",
+        result="ok",
+    )
+    say(f"{'Watching' if add else 'No longer watching'}: {game}.")
 
 
 #: Not a group, but confirmed the same way: on a device without a screen, let high risk run when

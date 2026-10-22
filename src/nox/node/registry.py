@@ -515,8 +515,10 @@ class NodeRegistry:
                 )
             except ValueError:
                 return {"error": "invalid_arguments", "device": entry.label}
-        if confirm_on_device:
-            timeout_s += CONFIRM_TIMEOUT_S  # the person at the device has a minute to answer
+        if confirm_on_device or risk in ("high", "critical"):
+            # High risk is asked on the device (the node asks whenever a call is high, delegated
+            # or not): the person there has a minute to answer.
+            timeout_s += CONFIRM_TIMEOUT_S
         try:
             raw = await session.client.request(
                 "tools/call",

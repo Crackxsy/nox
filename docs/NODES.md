@@ -150,11 +150,18 @@ All off by default except music; each is switched on only here, with `nox node a
   linked to the node in the dashboard. Nox's dashboard shows "Nox steuert gerade Maus und
   Tastatur auf <device>" with a Stopp while it runs; meanwhile no paired device (phone, browser
   on any PC) can allow anything - allow on the computer Nox runs on, or stop.
-- **Never in a game:** while a watched game (default Rocket League) or an anti-cheat service runs
-  on this device, or a game is in front, every mouse, key and typing call is refused - by the
-  node itself, before anything else, whatever Nox sends. `game.input.send` stays forbidden
-  everywhere.
-- **Music** (`media`, on by default, low risk): play, pause, next, previous, volume, louder,
+- **Never in a game:** while a game runs on this device or is in front - the core's list
+  (default Rocket League), this device's own list (`nox node games add Game.exe`; removing asks
+  first: `nox node games remove Game.exe`) or any anti-cheat software (process, service or
+  driver) - or while something owns the screen (a full-screen game, presentation mode), every
+  mouse, key and typing call and every change to windows and programs is refused - by the node
+  itself, before anything else, whatever Nox sends; when the node cannot tell, it refuses too.
+  `game.input.send` stays forbidden everywhere.
+- **Approving while Nox controls a PC:** no paired device (phone, browser on any PC) can allow
+  anything; on the computer Nox runs on, allowing needs the security PIN and is refused through a
+  remote desktop. Deny and Stopp always work. If a PC went silent and its line stays, "Sperre
+  lösen" with the PIN on the computer Nox runs on lifts it.
+- **Music** (`media`, on by default, low risk; the node says so once in a notification): play, pause, next, previous, volume, louder,
   quieter, mute - on Windows through the system media controls, on Linux through MPRIS
   (`playerctl` or D-Bus) and PipeWire (`wpctl`) or PulseAudio (`pactl`). Not on macOS yet.
 
