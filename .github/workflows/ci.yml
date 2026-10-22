@@ -540,6 +540,8 @@ jobs:
       - name: Headless node - uninstall refuses links planted by the node user
         run: |
           sudo mkdir -p /srv/nox-canary/app && sudo touch /srv/nox-canary/app/keep
+          # The unit started after the reinstall above; it would create its folder again.
+          sudo systemctl stop nox-node
           for plant in node node/app; do
             sudo rm -rf /var/lib/nox-node/node
             if [ "$plant" = node/app ]; then sudo -u nox-node mkdir -p /var/lib/nox-node/node; fi

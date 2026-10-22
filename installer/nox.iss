@@ -284,6 +284,22 @@ begin
   Result := (PairPage <> nil) and (PageID = PairPage.ID) and not IsNodeMode();
 end;
 
+{ Node mode never runs elevated: user code (the node, its pairing, its logon task) must not run
+  with administrator rights from the user-writable {app}. Refused for an all-users install, and
+  when Setup was elevated on purpose while UAC is on (without UAC there is no boundary to cross). }
+function NodeModeRefusal(): String;
+var
+  Lua: Cardinal;
+begin
+  Result := '';
+  if IsAdminInstallMode() then
+    Result := CustomMessage('NodeNoAdminInstall')
+  else if IsAdmin() and RegQueryDWordValue(HKLM64,
+      'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System', 'EnableLUA', Lua) and
+      (Lua <> 0) then
+    Result := CustomMessage('NodeNotElevated');
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   Refusal: String;
@@ -305,22 +321,6 @@ begin
     MsgBox(CustomMessage('PairInvalid'), mbError, MB_OK);
     Result := False;
   end;
-end;
-
-{ Node mode never runs elevated: user code (the node, its pairing, its logon task) must not run
-  with administrator rights from the user-writable {app}. Refused for an all-users install, and
-  when Setup was elevated on purpose while UAC is on (without UAC there is no boundary to cross). }
-function NodeModeRefusal(): String;
-var
-  Lua: Cardinal;
-begin
-  Result := '';
-  if IsAdminInstallMode() then
-    Result := CustomMessage('NodeNoAdminInstall')
-  else if IsAdmin() and RegQueryDWordValue(HKLM64,
-      'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System', 'EnableLUA', Lua) and
-      (Lua <> 0) then
-    Result := CustomMessage('NodeNotElevated');
 end;
 
 { A running node keeps its files open: end it first (the user's own task, as that user). }

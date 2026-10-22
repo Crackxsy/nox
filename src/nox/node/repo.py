@@ -126,12 +126,37 @@ class NodeRepository:
         )
         return int(cursor.rowcount)
 
-    def revoke_serial(self, serial: str, *, reason: str, when: datetime) -> None:
-        self._db.execute(
-            "UPDATE node_certs SET revoked_at = ?, revoked_reason = ?"
-            " WHERE serial = ? AND revoked_at IS NULL",
-            (_iso(when), reason, serial),
-        )
+    def replace_cert(  # noqa: PLR0913 - one row out, one row in
+        self,
+        *,
+        old_serial: str,
+        new_serial: str,
+        device_id: str,
+        spki_sha256: str,
+        not_after: datetime,
+        when: datetime,
+        not_since: datetime,
+    ) -> bool:
+        """Renewal, atomically: the old serial is revoked and the new one recorded - only if the
+        old one is still valid and the node got no certificate after `not_since`. One
+        transaction (`BEGIN IMMEDIATE`), so two renewals at once - two connections, two
+        processes - cannot both pass: the second finds the old serial revoked. False: nothing
+        changed."""
+        with self._db.transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE node_certs SET revoked_at = ?, revoked_reason = 'renewed'"
+                " WHERE serial = ? AND device_id = ? AND revoked_at IS NULL"
+                " AND NOT EXISTS (SELECT 1 FROM node_certs WHERE device_id = ? AND issued_at > ?)",
+                (_iso(when), old_serial, device_id, device_id, _iso(not_since)),
+            )
+            if cursor.rowcount != 1:
+                return False
+            connection.execute(
+                "INSERT INTO node_certs (serial, device_id, spki_sha256, issued_at, not_after)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (new_serial, device_id, spki_sha256, _iso(when), _iso(not_after)),
+            )
+        return True
 
     def last_issued_at(self, device_id: str) -> datetime | None:
         row = self._db.fetch_one(

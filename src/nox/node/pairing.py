@@ -78,6 +78,7 @@ class NodePairing:
         self._tls_dir = tls_dir
         self._clock = clock or (lambda: datetime.now(UTC))
         self._on_revoked: list[OnRevoked] = []
+        self._renewing: dict[str, asyncio.Lock] = {}
         self.pairing = PairingService(
             repo,
             bus=bus,
@@ -185,7 +186,21 @@ class NodePairing:
         certificate alone never yields a fresh one; a new key means pairing again). The node's
         pairing must still stand; the new serial is recorded like the first and the old one
         goes on the denylist. At most one renewal per `RENEW_MIN_INTERVAL` per node - whatever
-        the number of connections."""
+        the number of connections: a per-node lock serialises renewals in this process, and the
+        database swaps the serials in one transaction that refuses when the old serial is no
+        longer valid or a newer certificate exists (`NodeRepository.replace_cert`). A
+        certificate that was signed but not recorded is worthless: `identify` knows no serial
+        for it."""
+        async with self._renew_lock(device_id):
+            return await self._renew(device_id, serial, csr)
+
+    def _renew_lock(self, device_id: str) -> asyncio.Lock:
+        lock = self._renewing.get(device_id)
+        if lock is None:
+            lock = self._renewing[device_id] = asyncio.Lock()
+        return lock
+
+    async def _renew(self, device_id: str, serial: str, csr: str) -> IssuedClientCert | None:
         device = self.get(device_id)
         current = self._nodes.get_cert(serial)
         if (
@@ -209,14 +224,19 @@ class NodePairing:
             return None
         issued = await asyncio.to_thread(issue_client_certificate, self._tls_dir, csr, device_id)
         now = self._clock()
-        self._nodes.record_cert(
-            serial=issued.serial,
+        swapped = await asyncio.to_thread(
+            self._nodes.replace_cert,
+            old_serial=serial,
+            new_serial=issued.serial,
             device_id=device_id,
             spki_sha256=issued.spki_sha256,
-            issued_at=now,
             not_after=issued.not_after,
+            when=now,
+            not_since=now - RENEW_MIN_INTERVAL,
         )
-        self._nodes.revoke_serial(serial, reason="renewed", when=now)
+        if not swapped:
+            log.warning("node.renew_lost_race", device_id=device_id)
+            return None
         return issued
 
     async def revoke(self, device_id: str, *, reason: str = "dashboard") -> bool:

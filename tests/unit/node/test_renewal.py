@@ -267,3 +267,32 @@ async def test_a_certificate_not_valid_yet_or_without_a_current_one_is_refused(
     monkeypatch.setattr(renewal, "datetime", Earlier)
     with pytest.raises(RenewalRefusedError, match="not valid yet"):
         check(node.cert_file)
+
+
+async def test_concurrent_renewals_issue_exactly_one_certificate(
+    pairing: NodePairing,
+    repo: object,
+    nodes: NodeRepository,
+    tmp_path: Path,
+) -> None:
+    """Several connections - and a second process with its own lock - ask at the same moment:
+    one certificate, the old serial revoked once, every other request refused."""
+    second_process = NodePairing(repo, nodes, tls_dir=tmp_path / "tls")  # type: ignore[arg-type]
+    node = await pair_node(pairing, tmp_path)
+    csr = make_csr(node.key)
+    results = await asyncio.gather(
+        *(
+            (pairing if i % 2 else second_process).renew(node.node_id, node.serial, csr)
+            for i in range(6)
+        )
+    )
+    issued = [r for r in results if r is not None]
+    assert len(issued) == 1
+    certs = nodes._db.fetch_all(  # noqa: SLF001
+        "SELECT serial, revoked_at FROM node_certs WHERE device_id = ?", (node.node_id,)
+    )
+    assert len(certs) == 2  # the paired one, now revoked, and exactly one new one
+    old = nodes.get_cert(node.serial)
+    assert old is not None and old.revoked
+    new = nodes.get_cert(issued[0].serial)
+    assert new is not None and not new.revoked
