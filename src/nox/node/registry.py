@@ -178,6 +178,11 @@ class NodeRegistry:
         #: Narrow / clear requests in arrival order; per (node, group) the last one applied.
         self._seq = itertools.count(1)
         self._applied: dict[tuple[str, str], int] = {}
+        #: Narrowings being applied (kept referenced until done; see `set_narrowed`).
+        self._applying: set[asyncio.Future[None]] = set()
+        #: Nodes with a listing running for `list_changed`, and those that changed again meanwhile.
+        self._refreshing: set[str] = set()
+        self._dirty: set[str] = set()
 
     def _lock(self, device_id: str) -> asyncio.Lock:
         lock = self._locks.get(device_id)
@@ -218,7 +223,22 @@ class NodeRegistry:
             entry.last_seen = self._clock()
 
     async def on_tools_changed(self, session: NodeSession) -> None:
-        await self.refresh(session)
+        """Coalesced: while a listing for this node runs, any number of changes queue exactly
+        one more listing - a flood of `list_changed` cannot pile up requests."""
+        device_id = session.device_id
+        if device_id in self._refreshing:
+            self._dirty.add(device_id)
+            return
+        self._refreshing.add(device_id)
+        try:
+            while True:
+                self._dirty.discard(device_id)
+                await self.refresh(session)
+                if device_id not in self._dirty:
+                    return
+        finally:
+            self._refreshing.discard(device_id)
+            self._dirty.discard(device_id)
 
     async def refresh(self, session: NodeSession, *, complete: bool = False) -> None:
         async with self._lock(session.device_id):
@@ -261,11 +281,28 @@ class NodeRegistry:
         Requests for the same group are applied in arrival order, and the last to arrive wins: a
         request older than the last one applied for that group changes nothing. While any
         narrowing of the group is still on its way, the group is off, whatever else finished.
+
+        Once asked, it is applied to the end: the apply runs as a task of its own, shielded from
+        the caller - a dashboard that disconnects (and so cancels its request) can never leave
+        the database saying "off" while the core still routes the group.
         """
         seq = next(self._seq)  # stamped before the first await: arrival order
         marked = self._entries.get(device_id) if narrowed else None
         if marked is not None:
             marked.pending_narrow[group] += 1
+        task = asyncio.ensure_future(self._apply(device_id, group, narrowed, seq, marked))
+        self._applying.add(task)
+        task.add_done_callback(self._applied_done)
+        await asyncio.shield(task)
+
+    def _applied_done(self, task: asyncio.Future[None]) -> None:
+        self._applying.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log.error("node.narrow_failed", error=type(task.exception()).__name__)
+
+    async def _apply(
+        self, device_id: str, group: str, narrowed: bool, seq: int, marked: NodeEntry | None
+    ) -> None:
         try:
             async with self._lock(device_id):
                 key = (device_id, group)
@@ -286,7 +323,7 @@ class NodeRegistry:
                 if not narrowed:
                     await self._refresh(session, complete=False)  # it lists the tools again
         finally:
-            # Only this request's own marker, also on an error or a cancellation.
+            # Only this request's own marker, when the apply itself is over (also on an error).
             if marked is not None:
                 marked.pending_narrow[group] -= 1
                 if marked.pending_narrow[group] <= 0:

@@ -122,12 +122,14 @@ function NodeDetail({
   const toggle = (group: NodeGroup) => {
     if (busy !== null) return;
     setSaved('');
-    // The device's word first: what it does not allow is never switched on here.
+    // The device's word first: what it does not allow is never switched on here. A switch-off
+    // made here is still cleared, so it does not linger once the device allows the group again.
     if (!group.enabledOnDevice) {
       setExplain(explain === group.group ? null : group.group);
-      return;
+      if (!group.narrowed) return;
+    } else {
+      setExplain(null);
     }
-    setExplain(null);
     const narrowed = !group.narrowed;
     // Switching off narrows: no PIN here (from a paired device, always one).
     const required = device || (!narrowed && pinSet);

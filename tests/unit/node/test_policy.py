@@ -341,7 +341,7 @@ async def test_an_older_request_never_undoes_a_newer_one(
     assert entry.pending_narrow == Counter()
 
 
-async def test_the_marker_is_removed_on_an_error_and_a_cancellation(
+async def test_the_marker_is_removed_on_an_error_and_after_a_cancelled_caller(
     pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
 ) -> None:
     registry, _session, node_id = await _connected(pairing, nodes, tmp_path)
@@ -366,9 +366,14 @@ async def test_the_marker_is_removed_on_an_error_and_a_cancellation(
     waiting.cancel()
     with pytest.raises(asyncio.CancelledError):
         await waiting
+    # The caller is gone, the narrowing is not: it stays off and is applied once it may.
+    assert entry.pending_narrow["notify"] == 1
+    assert not registry.any_online_with("notify.show")
     lock.release()
+    await _all_applied(registry)
     assert entry.pending_narrow == Counter()
-    assert registry.any_online_with("notify.show")
+    assert registry.policy.narrowed(node_id) == {"notify"}
+    assert not registry.any_online_with("notify.show")
 
 
 class _SlowListing(_Client):
@@ -429,3 +434,123 @@ async def test_a_device_that_never_finishes_announcing_is_offline_after_the_wait
     assert not any(m == "tools/call" for m, _ in client.sent)
     client.answer.set()
     await connecting
+
+
+def _slow_db_write(registry: NodeRegistry) -> tuple[threading.Event, threading.Event]:
+    entered, release = threading.Event(), threading.Event()
+    original = registry.policy.set_narrowed
+
+    def slow(*args: Any, **kwargs: Any) -> None:
+        entered.set()
+        assert release.wait(5)
+        original(*args, **kwargs)
+
+    registry.policy.set_narrowed = slow  # type: ignore[method-assign]
+    return entered, release
+
+
+async def _all_applied(registry: NodeRegistry) -> None:
+    for _ in range(500):
+        if not registry._applying:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("the narrowing never finished")
+
+
+@pytest.mark.parametrize("narrowed", [True, False], ids=["narrow", "clear"])
+async def test_a_cancelled_request_still_applies_to_the_end(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path, narrowed: bool
+) -> None:
+    """The dashboard disconnects while the database write runs (the IPC server cancels the
+    request): the database, the routing and the node must still end up agreeing."""
+    registry, session, node_id = await _connected(pairing, nodes, tmp_path)
+    if not narrowed:
+        await registry.set_narrowed(node_id, "notify", True)
+    entered, release = _slow_db_write(registry)
+    caller = asyncio.create_task(registry.set_narrowed(node_id, "notify", narrowed))
+    await _until_set(entered)
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    if narrowed:
+        assert not registry.any_online_with("notify.show")  # the marker outlives the caller
+    release.set()
+    await _all_applied(registry)
+    assert ("notify" in registry.policy.narrowed(node_id)) is narrowed
+    assert registry.any_online_with("notify.show") is not narrowed
+    expected = ["notify"] if narrowed else []
+    assert session.client.sent[-1 if narrowed else -2] == ("nox/policy", {"narrow": expected})
+    entry = next(e for e in registry.entries() if e.device_id == node_id)
+    assert entry.pending_narrow == Counter()
+
+
+async def test_a_listing_never_assigns_what_it_read_before_a_narrowing(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
+) -> None:
+    """Pins the per-node lock: a listing that read "nothing narrowed" must not assign that after
+    a narrowing finished in between."""
+    registry, session, node_id = await _connected(pairing, nodes, tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    original = registry.policy.narrowed
+    calls = {"n": 0}
+
+    def stale_once(device_id: str) -> set[str]:
+        value = original(device_id)
+        calls["n"] += 1
+        if calls["n"] == 2:  # the listing's own read (after record_listing's): hold it
+            entered.set()
+            assert release.wait(5)
+        return value
+
+    registry.policy.narrowed = stale_once  # type: ignore[method-assign]
+    listing = asyncio.create_task(registry.refresh(session))  # type: ignore[arg-type]
+    await _until_set(entered)
+    narrowing = asyncio.create_task(registry.set_narrowed(node_id, "notify", True))
+    await asyncio.sleep(0.05)
+    release.set()
+    await asyncio.gather(listing, narrowing)
+    entry = next(e for e in registry.entries() if e.device_id == node_id)
+    assert entry.narrowed == {"notify"}
+    assert not registry.any_online_with("notify.show")
+
+
+async def test_a_flood_of_list_changes_queues_one_more_listing(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
+) -> None:
+    node = await pair_node(pairing, tmp_path)
+    registry = NodeRegistry(pairing, nodes)
+    client = _SlowListing([{"name": "notify.show", "_nox": {"group": "notify", "risk": "low"}}])
+    client.answer.set()
+    session = _Session(pairing.get(node.node_id), client)
+    await registry.on_connected(session)  # type: ignore[arg-type]
+    client.answer.clear()
+    before = sum(1 for m, _ in client.sent if m == "tools/list")
+    flood = [
+        asyncio.create_task(registry.on_tools_changed(session))  # type: ignore[arg-type]
+        for _ in range(50)
+    ]
+    await asyncio.sleep(0.05)
+    client.answer.set()
+    await asyncio.gather(*flood)
+    listings = sum(1 for m, _ in client.sent if m == "tools/list") - before
+    assert listings == 2  # the running one and exactly one follow-up
+
+
+async def test_what_the_node_says_it_enabled_reaches_the_record(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
+) -> None:
+    node = await pair_node(pairing, tmp_path)
+    registry = NodeRegistry(pairing, nodes)
+
+    class Reporting(_Client):
+        async def request(self, method: str, params: dict[str, Any], **kw: Any) -> dict[str, Any]:
+            answer = await super().request(method, params, **kw)
+            if method == "tools/list":
+                answer["_nox"] = {"groups": ["system", "shell"]}
+            return answer
+
+    client = Reporting([{"name": "system.info", "_nox": {"group": "system", "risk": "read"}}])
+    await registry.on_connected(_Session(pairing.get(node.node_id), client))  # type: ignore[arg-type]
+    # Shell lists no tool (above max_risk, say), yet the device enabled it.
+    assert registry.policy.state(node.node_id, "shell") == (True, False)
+    assert registry.policy.state(node.node_id, "notify") == (False, False)

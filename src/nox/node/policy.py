@@ -280,7 +280,26 @@ def register_policy_requests(
         audit(ctx, action, target, "deny", reason)
         return IpcError(code, message, details={"reason": reason})
 
+    background: set[asyncio.Future[Any]] = set()
+
+    def finished(task: asyncio.Future[Any]) -> None:
+        background.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log.error("node.policy_apply_failed", error=type(task.exception()).__name__)
+
+    async def shielded(coro: Any) -> Any:
+        """Run `coro` to its end even when the caller is cancelled (a dashboard that disconnects
+        cancels its request): a change half applied would leave the database and the routing
+        disagreeing. The task audits its own outcome."""
+        task = asyncio.ensure_future(coro)
+        background.add(task)
+        task.add_done_callback(finished)
+        return await asyncio.shield(task)
+
     async def h_narrow(ctx: RequestContext, p: NarrowRequest) -> dict[str, Any]:
+        # Authorization first: a refusal is audited only for someone allowed to ask at all, so a
+        # paired device without the PIN cannot fill the audit trail.
+        await authorize_admin(core, ctx, p.pin, "node.narrow", local_needs_pin=not p.narrowed)
         target = f"device:{p.node_id} {p.group}"
         device = pairing.get(p.node_id)
         if device is None or device.revoked:
@@ -301,24 +320,30 @@ def register_policy_requests(
                 "only the device itself can enable this group",
                 "enable_on_device",
             )
-        # Taking away is always allowed on this machine; clearing it is administration.
-        await authorize_admin(core, ctx, p.pin, "node.narrow", local_needs_pin=not p.narrowed)
         result = "narrowed" if p.narrowed else "cleared"
+
+        async def apply() -> None:
+            try:
+                registry = runtime.registry
+                if registry is not None:
+                    await registry.set_narrowed(p.node_id, p.group, p.narrowed)
+                else:
+                    await asyncio.to_thread(current.set_narrowed, p.node_id, p.group, p.narrowed)
+            except BaseException:
+                audit(ctx, "node.narrow", target, "allow", "failed")
+                raise
+            audit(ctx, "node.narrow", target, "allow", result)
+
         try:
-            registry = runtime.registry
-            if registry is not None:
-                await registry.set_narrowed(p.node_id, p.group, p.narrowed)
-            else:
-                await asyncio.to_thread(current.set_narrowed, p.node_id, p.group, p.narrowed)
-        except Exception:
-            audit(ctx, "node.narrow", target, "allow", "failed")
+            await shielded(apply())
+        except asyncio.CancelledError:
+            # The caller is gone; the change itself still completes and audits its outcome.
+            audit(ctx, "node.narrow", target, "allow", "cancelled")
             raise
-        audit(ctx, "node.narrow", target, "allow", result)
         groups = await asyncio.to_thread(current.view, p.node_id, relevant_groups())
         return {"ok": True, "node_id": p.node_id, "groups": groups}
 
-    async def write_defaults(values: dict[str, str]) -> dict[str, str]:
-        """Persist and apply under the lock; returns the defaults now in force."""
+    async def write(values: dict[str, str]) -> dict[str, str]:
         async with defaults_lock:
             live = core.config.devices.defaults
             updated = {**live, **values}
@@ -328,7 +353,13 @@ def register_policy_requests(
             live.update(values)
             return dict(live)
 
+    async def write_defaults(values: dict[str, str]) -> dict[str, str]:
+        """Persist and apply, to the end: the file and the live mapping never disagree."""
+        written: dict[str, str] = await shielded(write(values))
+        return written
+
     async def h_defaults_set(ctx: RequestContext, p: DefaultsSetRequest) -> dict[str, Any]:
+        await authorize_admin(core, ctx, p.pin, "node.defaults", local_needs_pin=True)
         target = f"{p.group} -> {p.device}"
         if p.group not in relevant_groups():
             raise refuse(
@@ -338,14 +369,22 @@ def register_policy_requests(
             device = pairing.get(p.device)
             if device is None or device.revoked:
                 raise refuse(ctx, "node.defaults", target, ERR_NOT_FOUND, "no such node", "no_node")
-        await authorize_admin(core, ctx, p.pin, "node.defaults", local_needs_pin=True)
         tools = family_tools(p.group, _routable(), core.config.devices.defaults)
+
+        async def apply() -> dict[str, str]:
+            try:
+                now = await write({tool: p.device for tool in tools})
+            except BaseException:
+                audit(ctx, "node.defaults", target, "allow", "failed")
+                raise
+            audit(ctx, "node.defaults", target, "allow", "ok")
+            return now
+
         try:
-            now = await write_defaults({tool: p.device for tool in tools})
-        except Exception:
-            audit(ctx, "node.defaults", target, "allow", "failed")
+            now: dict[str, str] = await shielded(apply())
+        except asyncio.CancelledError:
+            audit(ctx, "node.defaults", target, "allow", "cancelled")
             raise
-        audit(ctx, "node.defaults", target, "allow", "ok")
         listed = await asyncio.to_thread(pairing.nodes)
         return {"ok": True, "defaults": defaults_view(now, listed)}
 

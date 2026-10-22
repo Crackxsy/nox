@@ -202,14 +202,21 @@ describe('the detail sheet', () => {
     const both = node(PC, {
       groups: [{ group: 'notify', enabled_on_device: false, narrowed: true, active: false }],
     });
-    const { calls } = await show({ answers: { 'node.list': listing([both]) } });
+    const cleared = { ok: true, groups: [{ group: 'notify', enabled_on_device: false, narrowed: false, active: false }] };
+    const { calls } = await show({ answers: { 'node.list': listing([both]), 'node.narrow': cleared } });
     const sheet = await openSheet();
     expect(within(sheet).getByText(t('node_group_device_off'))).toBeTruthy();
     await act(async () => {
       fireEvent.click(within(sheet).getByRole('switch', { name: 'Hinweise zeigen' }));
     });
-    expect(calls.some((c) => c.name === 'node.narrow')).toBe(false);
+    // It explains where to switch it on, and clears the switch-off made here (never widening:
+    // the device still has it off).
     expect(within(sheet).getByText('nox node allow notify')).toBeTruthy();
+    expect(calls.find((c) => c.name === 'node.narrow')?.payload).toEqual({
+      node_id: PC,
+      group: 'notify',
+      narrowed: false,
+    });
   });
 
   it('shows a long name without spaces', async () => {

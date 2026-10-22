@@ -749,7 +749,9 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   enabled, which the node reports with every tool list; anything else is refused as
   `enable_on_device`. `node.defaults.set` (where a tool family runs when nobody names a device)
   is administration like `node.link`; removing a node resets the defaults that named it. Every
-  change and every refusal is audited.
+  change is audited with its outcome, every refusal after authorization; a change once accepted
+  runs to its end even when the asking dashboard disconnects, so the database, the routing and
+  the node never disagree.
 - **Only the core's methods** (`CORE_TO_NODE`) are answered; a node never acts while disconnected
   and queues nothing.
 - **Its own audit trail**: every decision, hash-chained, on the device (`nox node log`); the core

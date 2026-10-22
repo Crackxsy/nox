@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import json
 import ssl
+import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -373,3 +374,54 @@ async def test_removing_a_node_resets_the_defaults_that_named_it(
     assert core.config.devices.defaults["notify.show"] == "auto"
     written = yaml.safe_load((tmp_path / "user.yaml").read_text(encoding="utf-8"))
     assert written["devices"]["defaults"]["notify.show"] == "auto"
+
+
+async def test_a_dashboard_that_disconnects_mid_change_still_gets_it_applied(
+    core: NoxCore, tmp_path: Path
+) -> None:
+    """The IPC server cancels a request whose client went away. The narrowing must still reach
+    the database, the routing and the node - and the audit says both what happened to the
+    request and what happened to the change."""
+    body, context = await _pair(core, tmp_path)
+    node, task = await _connect(body, context)
+    try:
+        await _listed(core)
+        registry = _nodes(core).registry
+        assert registry is not None
+        entered, release = threading.Event(), threading.Event()
+        original = registry.policy.set_narrowed
+
+        def slow(*args: Any, **kwargs: Any) -> None:
+            entered.set()
+            assert release.wait(5)
+            original(*args, **kwargs)
+
+        registry.policy.set_narrowed = slow  # type: ignore[method-assign]
+        caller = asyncio.create_task(
+            _local(core, "dashboard", "node.narrow", _narrow(body["node_id"], "notify", True))
+        )
+
+        async def writing() -> bool:
+            return entered.is_set()
+
+        await _until(writing)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        assert not registry.any_online_with("notify.show")
+        release.set()
+
+        async def applied() -> bool:
+            return not registry._applying and node.policies[-1:] == [["notify"]]
+
+        await _until(applied)
+        assert registry.policy.narrowed(body["node_id"]) == {"notify"}
+        assert not registry.any_online_with("notify.show")
+
+        async def audited() -> bool:
+            return ("allow", "narrowed") in _audited(core, "node.narrow")
+
+        await _until(audited)
+        assert ("allow", "cancelled") in _audited(core, "node.narrow")
+    finally:
+        await _stop(node, task)
