@@ -57,6 +57,7 @@ DEVICE_SURFACE = frozenset(
         "lan.status",
         "lan.unpair",
         "memory.profile.list",
+        "node.computer.status",  # the header line about a PC Nox controls (read only)
         "node.defaults.set",  # with the PIN, always (`nox.node.policy`)
         "node.link",
         "node.list",
@@ -88,6 +89,7 @@ DEVICE_SURFACE = frozenset(
 #: Administration that must stay on the machine Nox runs on. Each one is its own negative test.
 ADMINISTRATION = (
     "config.set",
+    "node.computer.release",  # only on the computer Nox runs on, with the PIN
     "secrets.set",
     "secrets.delete",
     "privacy.set",
