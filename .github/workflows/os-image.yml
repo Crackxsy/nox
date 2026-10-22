@@ -1,0 +1,447 @@
+# Nox-OS: the flashable Raspberry Pi image (os/README.md).
+#
+# A pull request that touches the image's parts gets the cheap checks only (shell scripts, the
+# installer's image mode in a Debian chroot). The full build - pi-gen on a native arm64 runner, the
+# image checks, a headless QEMU boot until Nox answers, xz, checksums, the Raspberry Pi Imager entry
+# - runs for a published release, by hand (workflow_dispatch), nightly on develop when the image's
+# parts changed, and on a pull request labelled "os-image".
+#
+# For a release, the image's files are listed in a second signed manifest, nox-os-manifest.json
+# (same format and key as release-manifest.json, docs/RELEASES.md): the signing job is the only one
+# that sees the release key and runs in the protected environment "release-signing"; without the
+# key the files are attached checksummed only and the run fails with "Release not signed", as
+# release-assets.yml does. Every action is pinned to a commit.
+name: Nox-OS image
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - "os/**"
+      - "scripts/install-linux.sh"
+      - "installer/linux/**"
+      - "tests/unit/nox_os/**"
+      - ".github/workflows/os-image.yml"
+  workflow_dispatch:
+  release:
+    types: [published]
+  schedule:
+    - cron: "40 2 * * *"
+
+permissions: {}
+
+concurrency:
+  group: os-image-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Image parts (shellcheck, installer image mode in a chroot)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: shellcheck
+        run: |
+          shellcheck --severity=warning scripts/install-linux.sh os/pi-gen/build.sh \
+            os/pi-gen/stage-nox/prerun.sh os/pi-gen/stage-nox/*/*-run.sh os/tools/*.sh
+          shellcheck --severity=warning --shell=bash os/pi-gen/config \
+            os/pi-gen/stage-nox/01-nox/01-run-chroot.sh os/pi-gen/stage-nox/EXPORT_IMAGE
+
+      - name: Python tools compile
+        run: python3 -I -m py_compile os/tools/imager_json.py os/tools/source_manifest.py
+
+      # What stage-nox does on the Pi image, on a small Debian system: install-linux.sh --image in
+      # a chroot builds Nox and enables the service - and starts nothing, creates no data.
+      - name: Installer image mode in a Debian chroot
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq debootstrap >/dev/null
+          root="$RUNNER_TEMP/root"
+          suite=trixie
+          [ -e "/usr/share/debootstrap/scripts/$suite" ] || suite=bookworm
+          sudo debootstrap --variant=minbase \
+            --include=systemd,systemd-sysv,passwd,mawk,git,curl,ca-certificates,openssl,sudo,bubblewrap,python3 \
+            "$suite" "$root" http://deb.debian.org/debian >/dev/null
+          sudo mount -t proc proc "$root/proc"
+          sudo mount --bind /dev "$root/dev"
+          sudo mount -t tmpfs tmpfs "$root/run"
+          sudo mount -t tmpfs tmpfs "$root/tmp"
+          sudo cp /etc/resolv.conf "$root/etc/resolv.conf"
+          # A stand-in dashboard package: the real one's checks are proven in ci.yml (verify-bundle).
+          mkdir -p b/ui/dashboard/dist b/ui/pet/dist
+          echo ok > b/ui/dashboard/dist/index.html
+          echo ok > b/ui/pet/dist/index.html
+          tar -czf ui.tar.gz -C b ui
+          sudo install -d -m 0700 "$root/var/tmp/nox-image"
+          sudo cp scripts/install-linux.sh ui.tar.gz "$root/var/tmp/nox-image/"
+          sudo git clone --quiet --no-local --depth 1 "file://$PWD" "$root/var/tmp/nox-image/src"
+          commit="$(git rev-parse HEAD)"
+          sudo chroot "$root" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root NOX_LANG=en \
+            NOX_SOURCE=/var/tmp/nox-image/src bash /var/tmp/nox-image/install-linux.sh \
+            --image --version "$commit" --ui-bundle /var/tmp/nox-image/ui.tar.gz </dev/null
+          echo "ROOT=$root" >> "$GITHUB_ENV"
+          echo "COMMIT=$commit" >> "$GITHUB_ENV"
+
+      - name: The image has Nox enabled, not started, and nothing of its own
+        run: |
+          test -L "$ROOT/etc/systemd/system/multi-user.target.wants/nox.service"
+          test "$(readlink "$ROOT/opt/nox/current")" = "/opt/nox/releases/${COMMIT:0:12}"
+          test -f "$ROOT/opt/nox/current/.complete"
+          test -x "$ROOT/opt/nox/current/.venv/bin/nox"
+          test -x "$ROOT/usr/local/bin/nox"
+          test -f "$ROOT/opt/nox/current/ui/dashboard/dist/index.html"
+          test ! -e "$ROOT/opt/nox/.cache"
+          test "$(sudo find "$ROOT/var/lib/nox" -mindepth 1 -printf '%P\n')" = user.yaml
+          test "$(sudo git -C "$ROOT/opt/nox/src" remote get-url origin)" = https://github.com/Crackxsy/nox
+          if pgrep -f "/opt/nox/current/.venv/bin/nox"; then echo "image mode started Nox"; exit 1; fi
+
+      - name: Image mode is refused where it does not belong
+        run: |
+          code() { local status=0; "$@" >out.txt 2>&1 || status=$?; cat out.txt; echo "$status"; }
+          # On a running system (this runner boots with systemd).
+          test "$(code sudo bash scripts/install-linux.sh --image --version "$COMMIT" | tail -n1)" = 1
+          grep -q -- "--image is for building an image" out.txt
+          test "$(code bash scripts/install-linux.sh --ui-bundle ui.tar.gz | tail -n1)" = 2
+          test "$(code sudo env NOX_ACTION=rollback bash scripts/install-linux.sh --image | tail -n1)" = 2
+          test "$(code bash scripts/install-linux.sh --no-such-option | tail -n1)" = 2
+
+      - name: Unmount the chroot
+        if: always()
+        run: |
+          [ -n "${ROOT:-}" ] || exit 0
+          for m in tmp run dev proc; do sudo umount "$ROOT/$m" 2>/dev/null || true; done
+
+  plan:
+    name: Full build?
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 50
+
+      - name: Decide
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'os-image') }}
+        run: |
+          build=false
+          case "$EVENT" in
+            release|workflow_dispatch) build=true ;;
+            pull_request) [ "$LABELLED" != true ] || build=true ;;
+            schedule)
+              # Nightly only when the image's parts changed during the last day.
+              if git log --since='26 hours ago' --format=%H -- os scripts/install-linux.sh installer/linux | grep -q .; then
+                build=true
+              fi ;;
+          esac
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Full image build: $build ($EVENT)"
+
+  ui:
+    name: Dashboard bundle (builds without a release)
+    needs: plan
+    if: needs.plan.outputs.build == 'true' && github.event_name != 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      # Exactly what release-assets.yml builds for a release.
+      - name: Build dashboard and pet
+        run: |
+          for app in dashboard pet; do
+            (cd "ui/$app" && npm ci --ignore-scripts && npm run build)
+          done
+          tar --owner=0 --group=0 --numeric-owner -czf nox-ui.tar.gz ui/dashboard/dist ui/pet/dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nox-os-ui
+          path: nox-ui.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
+  image:
+    name: Build, check and boot the image (arm64)
+    needs: [check, plan, ui]
+    if: >-
+      always() && needs.plan.outputs.build == 'true' && needs.check.result == 'success'
+      && (needs.ui.result == 'success' || needs.ui.result == 'skipped')
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    outputs:
+      name: ${{ steps.build.outputs.name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name || github.sha }}
+          persist-credentials: false
+
+      - name: Disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup 2>/dev/null || true
+          df -h /
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: github.event_name != 'release'
+        with:
+          name: nox-os-ui
+          path: ${{ runner.temp }}/ui
+
+      # The image installs the release the way a Pi does - from GitHub, signature checked - so
+      # release-assets.yml must have attached its files first (after the owner approved signing).
+      - name: Wait for the release's own files
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          need=("nox-ui-$TAG.tar.gz" "nox-ui-$TAG.tar.gz.sha256")
+          if awk '/^TRUSTED_RELEASE_KEYS=\(/{f=1;next} f&&/^\)/{exit} f&&$1!~/^#/&&NF{found=1} END{exit !found}' scripts/install-linux.sh; then
+            need+=(release-manifest.json release-manifest.json.sig)
+          fi
+          for _ in $(seq 1 120); do
+            have="$(gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name')"
+            missing=""
+            for file in "${need[@]}"; do grep -qxF "$file" <<<"$have" || missing="$missing $file"; done
+            [ -n "$missing" ] || exit 0
+            echo "waiting for:$missing"
+            sleep 30
+          done
+          echo "::error title=Release files missing::$TAG still lacks:$missing (release-assets.yml). Re-run this workflow once they are attached."
+          exit 1
+
+      - name: Build with pi-gen
+        id: build
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          out="$RUNNER_TEMP/out"
+          if [ "$EVENT" = release ]; then
+            os/pi-gen/build.sh --ref "$TAG" --out "$out"
+          else
+            os/pi-gen/build.sh --ref "$(git rev-parse HEAD)" --source "$PWD" \
+              --ui-bundle "$RUNNER_TEMP/ui/nox-ui.tar.gz" --out "$out"
+          fi
+          img="$(find "$out" -maxdepth 1 -name 'nox-os-*-arm64.img' -print -quit)"
+          test -n "$img"
+          name="$(basename "$img" .img)"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          printf 'IMG=%s\nNAME=%s\nOUT=%s\n' "$img" "$name" "$out" >> "$GITHUB_ENV"
+          ls -l "$out"
+
+      - name: Image checks (nothing per-device or secret baked in)
+        run: |
+          sudo os/tools/check-image.sh "$IMG" "$RUNNER_TEMP/boot"
+          sudo mv "$RUNNER_TEMP/boot/$NAME.licenses.json" "$OUT/"
+          sudo chown "$(id -u):$(id -g)" "$OUT/$NAME.licenses.json"
+
+      - name: Boot it in QEMU until Nox answers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-arm qemu-utils >/dev/null
+          sudo os/tools/qemu-smoke.sh "$IMG" "$RUNNER_TEMP/boot" 2700
+
+      - name: Compress, checksum, Imager entry
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd "$OUT"
+          if [ "$EVENT" = release ]; then
+            url="https://github.com/$REPO/releases/download/$TAG/$NAME.img.xz"; version="$TAG"
+          else
+            url="$NAME.img.xz"; version="${NAME#nox-os-}"; version="${version%-arm64}"
+          fi
+          xz -T0 -9 --keep --memlimit-compress=60% "$NAME.img"
+          python3 -I "$GITHUB_WORKSPACE/os/tools/imager_json.py" --raw "$NAME.img" --image "$NAME.img.xz" \
+            --url "$url" --version "$version" --out nox-os.rpi-imager.json
+          sha256sum "$NAME.img.xz" > "$NAME.img.xz.sha256"
+          raw="$(stat -c %s "$NAME.img")"
+          size="$(stat -c %s "$NAME.img.xz")"
+          rm -f "$NAME.img"
+          ls -l
+          {
+            echo "### $NAME"
+            echo "- download: $((size / 1048576)) MiB (xz), unpacked: $((raw / 1048576)) MiB"
+            echo "- sha256: $(cut -d' ' -f1 "$NAME.img.xz.sha256")"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Spec 2.1: at most 1.2 GB compressed.
+          if [ "$size" -gt 1288490188 ]; then
+            echo "::warning title=Image over budget::$NAME.img.xz is $size bytes (budget 1.2 GB)"
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nox-os-image
+          path: |
+            ${{ runner.temp }}/out/*.img.xz
+            ${{ runner.temp }}/out/*.img.xz.sha256
+            ${{ runner.temp }}/out/*.licenses.json
+            ${{ runner.temp }}/out/*.info
+            ${{ runner.temp }}/out/nox-os.rpi-imager.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  sign:
+    name: OS manifest (signed when the release key is configured)
+    needs: image
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # The release key lives in this environment only (docs/RELEASES.md).
+    environment: release-signing
+    permissions:
+      contents: read
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+          path: source
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nox-os-image
+          path: files
+
+      - name: The files the release publishes
+        env:
+          NAME: ${{ needs.image.outputs.name }}
+        run: |
+          expected="$(printf '%s\n' "$NAME.img.xz" "$NAME.img.xz.sha256" "$NAME.info" "$NAME.licenses.json" nox-os.rpi-imager.json | sort)"
+          actual="$(find files -mindepth 1 -printf '%P\n' | sort)"
+          if [ "$actual" != "$expected" ]; then echo "unexpected artifact contents:"; echo "$actual"; exit 1; fi
+          (cd files && sha256sum --quiet -c "$NAME.img.xz.sha256")
+          echo "COMMIT=$(git -C source rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Signer dependencies (hash-pinned, nothing else)
+        run: >-
+          python -m pip install --require-hashes --no-deps --only-binary :all:
+          --target "$RUNNER_TEMP/signer-lib" -r source/scripts/signing-requirements.txt
+
+      # As in release-assets.yml: the key reaches the signer on stdin only, the signer runs
+      # isolated (python -I -S) and finds nothing but cryptography in --lib.
+      - name: Write the OS manifest and sign it
+        id: sign
+        env:
+          NOX_RELEASE_SIGNING_KEY: ${{ secrets.NOX_RELEASE_SIGNING_KEY }}
+          TAG: ${{ github.event.release.tag_name }}
+          NAME: ${{ needs.image.outputs.name }}
+        run: |
+          printf '%s\n' "$NOX_RELEASE_SIGNING_KEY" | env -u NOX_RELEASE_SIGNING_KEY \
+            python -I -S source/scripts/sign_release.py --key-stdin --allow-unsigned \
+            --lib "$RUNNER_TEMP/signer-lib" --tag "$TAG" --commit "$COMMIT" --out signed \
+            "files/$NAME.img.xz" "files/$NAME.licenses.json" files/nox-os.rpi-imager.json
+
+      - name: Name it as the OS manifest
+        run: |
+          mv signed/release-manifest.json signed/nox-os-manifest.json
+          [ ! -f signed/release-manifest.json.sig ] || mv signed/release-manifest.json.sig signed/nox-os-manifest.json.sig
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nox-os-manifest
+          path: signed/
+          if-no-files-found: error
+
+  publish:
+    name: Attach to the release
+    needs: [image, sign]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nox-os-image
+          path: files
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nox-os-manifest
+          path: manifest
+
+      - name: The manifest lists exactly the files that are uploaded
+        env:
+          NAME: ${{ needs.image.outputs.name }}
+          SIGNED: ${{ needs.sign.outputs.signed }}
+        run: |
+          expected="nox-os-manifest.json"
+          [ "$SIGNED" != true ] || expected="$(printf '%s\n' nox-os-manifest.json nox-os-manifest.json.sig)"
+          actual="$(find manifest -mindepth 1 -printf '%P\n' | sort)"
+          if [ "$actual" != "$expected" ]; then echo "unexpected manifest artifact contents:"; echo "$actual"; exit 1; fi
+          find files manifest -mindepth 1 ! -type f -print -quit | grep -q . && { echo "non-regular file in artifact"; exit 1; }
+          (cd files && sha256sum --quiet -c "$NAME.img.xz.sha256")
+          python3 -I - manifest/nox-os-manifest.json "files/$NAME.img.xz" "files/$NAME.licenses.json" files/nox-os.rpi-imager.json <<'PY'
+          import hashlib, json, os, sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              manifest = json.load(handle)
+          listed = {a["name"]: (a["size"], a["sha256"]) for a in manifest["assets"]}
+          actual = {}
+          for path in sys.argv[2:]:
+              sha, size = hashlib.sha256(), 0
+              with open(path, "rb") as handle:
+                  while chunk := handle.read(1 << 20):
+                      sha.update(chunk)
+                      size += len(chunk)
+              actual[os.path.basename(path)] = (size, sha.hexdigest())
+          if listed != actual:
+              sys.exit(f"the manifest does not describe the uploaded files: {listed} != {actual}")
+          PY
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+          NAME: ${{ needs.image.outputs.name }}
+          SIGNED: ${{ needs.sign.outputs.signed }}
+        run: |
+          upload=("files/$NAME.img.xz" "files/$NAME.img.xz.sha256" "files/$NAME.licenses.json" files/nox-os.rpi-imager.json)
+          # An unsigned manifest is never published: it would only look like a signed one.
+          if [ "$SIGNED" = true ]; then
+            upload+=(manifest/nox-os-manifest.json manifest/nox-os-manifest.json.sig)
+          fi
+          gh release upload "$TAG" --repo "$REPO" --clobber "${upload[@]}"
+
+      - name: Refuse to publish an unsigned image
+        if: needs.sign.outputs.signed != 'true'
+        run: |
+          echo "::error title=Release not signed::The release key (secret NOX_RELEASE_SIGNING_KEY in the environment release-signing) is not configured, so the Nox-OS image has no signed manifest. See docs/RELEASES.md."
+          exit 1

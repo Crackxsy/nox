@@ -228,6 +228,14 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   never fall back to the file on their own. `security.secret_store` forces either.
 - **CI on Linux, x86-64 and ARM64**, next to Windows: the core's unit and integration tests run on
   the Pi's architecture on every pull request.
+- **Nox-OS image build (O1)** (`os/`, `.github/workflows/os-image.yml`): a flashable Raspberry Pi
+  OS Lite (64-bit) image with Nox preinstalled, built with a pinned pi-gen on a native arm64 runner.
+  Nox comes from `install-linux.sh --image` (same layout and signed-release check as a Pi install;
+  enabled, not started, refused on a running system). The image is checked read-only (no password,
+  key, SSH, Wi-Fi or Nox data baked in; SSH masked; host keys and machine id made at first boot)
+  and boot-tested headless in QEMU until Nox answers; xz, SHA-256, a Raspberry Pi Imager entry and
+  a licence/source manifest; for a release a second signed manifest, `nox-os-manifest.json`. The
+  first-boot setup without a screen follows (O3/O4), so the image is for testing until then.
 
 ### Fixed
 - **Nodes, external review of part 4:** the node's gate never resolves or opens anything the

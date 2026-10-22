@@ -1,0 +1,13 @@
+# Nox-OS: this device's own SSH host keys, made on the first boot (none ship in the image). SSH
+# itself stays off until it is switched on deliberately.
+[Unit]
+Description=Nox-OS: generate this device's SSH host keys
+ConditionPathExistsGlob=!/etc/ssh/ssh_host_*_key
+Before=ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+WantedBy=multi-user.target
