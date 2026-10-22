@@ -15,7 +15,7 @@ from nox.node import registry as registry_module
 from nox.node.pairing import NodePairing
 from nox.node.registry import NodeEntry, NodeRegistry
 from nox.node.repo import NodeRepository
-from nox.node.router import routed_spec, waits_for
+from nox.node.router import resolve, routed_spec, waits_for
 from nox.node.tools import NotifyArgs
 from nox.security.model import Risk
 from nox.tools.registry import ToolSpec
@@ -110,6 +110,11 @@ async def test_a_core_call_is_never_delayed_by_a_slow_node(
         core=core,
     )
     assert spec.prepare is not None
+
+    def no_database(*_a: Any) -> list[NodeEntry]:
+        raise AssertionError("prepare must not read the database")
+
+    registry.entries = no_database  # type: ignore[method-assign]
     started = time.monotonic()
     await spec.prepare({"device": "core", "text": "x"})
     await registry.settle(["f" * 32])  # an unrelated device: no wait either
@@ -190,3 +195,85 @@ async def test_no_retry_for_a_connection_that_is_gone(
     await registry.on_disconnected(old)  # type: ignore[arg-type]
     await asyncio.sleep(0.1)
     assert _listings(client) == 1
+
+
+async def test_a_retry_after_a_policy_was_sent_is_not_a_complete_listing(
+    pairing: NodePairing,
+    nodes: NodeRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An older node (no `_nox.groups`): once the core told this connection to narrow "notify",
+    the node stops listing it - that says nothing about the device, which still has it on."""
+    monkeypatch.setattr(registry_module, "LISTING_RETRY_S", (0.05,))
+    node = await pair_node(pairing, tmp_path)
+    registry = NodeRegistry(pairing, nodes)
+    both = [*NOTIFY, {"name": "system.info", "_nox": {"group": "system", "risk": "read"}}]
+    first = _Client(both)
+    await registry.on_connected(_Session(pairing.get(node.node_id), first))  # type: ignore[arg-type]
+    assert registry.policy.state(node.node_id, "notify") == (True, False)
+
+    class Narrowing(_FailsFirst):
+        """Fails its first list; afterwards lists what is not narrowed, like the agent."""
+
+        narrow: list[str] = []
+
+        async def request(self, method: str, params: dict[str, Any], **kw: Any) -> dict[str, Any]:
+            if method == "nox/policy":
+                self.narrow = list(params["narrow"])
+                self.tools = [t for t in both if t["_nox"]["group"] not in self.narrow]
+            return await super().request(method, params, **kw)
+
+    client = Narrowing(both, failures=1)
+    session = _Session(pairing.get(node.node_id), client)
+    await registry.on_connected(session)  # type: ignore[arg-type]
+    await registry.set_narrowed(node.node_id, "notify", True)  # sent on this connection
+    await _until(lambda: _listings(client) >= 2 and not registry._retries)
+    assert registry.policy.state(node.node_id, "notify") == (True, True)
+
+
+async def test_retries_are_cancelled_when_the_registry_closes(
+    pairing: NodePairing,
+    nodes: NodeRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(registry_module, "LISTING_RETRY_S", (0.2, 0.2))
+    node = await pair_node(pairing, tmp_path)
+    registry = NodeRegistry(pairing, nodes)
+    client = _FailsFirst(NOTIFY, failures=5)
+    await registry.on_connected(_Session(pairing.get(node.node_id), client))  # type: ignore[arg-type]
+    assert registry._retries
+    await registry.close()
+    assert not registry._retries
+    await asyncio.sleep(0.3)
+    assert _listings(client) == 1
+
+
+async def test_a_call_naming_a_node_still_announcing_is_told_so(
+    pairing: NodePairing,
+    nodes: NodeRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(registry_module, "LISTING_RETRY_S", (0.05,))
+    node = await pair_node(pairing, tmp_path, name="Laptop")
+    registry = NodeRegistry(pairing, nodes)
+    client = _FailsFirst(NOTIFY, failures=1)
+    await registry.on_connected(_Session(pairing.get(node.node_id), client))  # type: ignore[arg-type]
+
+    def ask() -> Any:
+        return resolve(
+            "notify.show",
+            "Laptop",
+            entries=registry.entries(),
+            core_has=False,
+            side_effects=True,
+            default=None,
+            origin=None,
+        )
+
+    waiting = ask()
+    assert waiting.error is not None and waiting.error["error"] == "device_listing"
+    await _until(lambda: registry.any_online_with("notify.show"))
+    assert ask().device == node.node_id

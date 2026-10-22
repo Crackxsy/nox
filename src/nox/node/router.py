@@ -153,6 +153,17 @@ def resolve(
     def at(entry: NodeEntry) -> Resolution:
         if entry.offers(tool):
             return Resolution(entry.device_id)
+        if entry.online and entry.listing_failed:
+            # Connected, but its tool list did not arrive yet (it is retried): say so.
+            return Resolution(
+                "",
+                {
+                    "error": "device_listing",
+                    "device": entry.label,
+                    "tool": tool,
+                    "hint": "das Gerät meldet seine Werkzeuge noch – gleich noch einmal",
+                },
+            )
         if not entry.online or entry.connecting:
             return Resolution("", offline_error(entry))
         if not entry.compatible:
@@ -392,7 +403,7 @@ def routed_spec(
         prepare=lambda payload: registry.settle(
             waits_for(
                 payload.get(DEVICE_KEY),
-                entries=registry.entries(),
+                entries=registry.known(),  # from memory: no database read per call
                 core_has=core is not None,
                 default=defaults().get(name),
                 origin=origin_device(),

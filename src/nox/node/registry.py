@@ -90,6 +90,12 @@ class NodeEntry:
     session: NodeSession | None = None
     #: The node can ask the person at the device (it said so at `initialize`).
     confirmer: bool = False
+    #: Its last tool list did not arrive (retried, `on_connected`): it offers nothing meanwhile,
+    #: and a call naming it is told so instead of "not enabled on the device".
+    listing_failed: bool = False
+    #: The connection the core last sent `nox/policy` on: a later listing on it is no longer
+    #: complete (a narrowed group is missing because the core narrowed it, not the device).
+    told: object | None = None
     #: Groups the owner switched off for this node in the dashboard (`nox.node.policy`).
     narrowed: frozenset[str] = frozenset()
     #: Narrowings asked for and not yet finished, counted per group: each request adds one and
@@ -233,8 +239,19 @@ class NodeRegistry:
             entry = self._entries.get(session.device_id)
             if entry is None or entry.session is not session or not entry.online:
                 return  # gone or replaced by a new connection, which lists for itself
-            if await self.refresh(session, complete=True):
+            # Complete only while the core has told this connection nothing.
+            if await self.refresh(session, complete=entry.told is not session):
                 return
+
+    async def close(self) -> None:
+        """When the core stops: no retry outlives it."""
+        for task in list(self._retries):
+            task.cancel()
+        await asyncio.gather(*self._retries, return_exceptions=True)
+
+    def known(self) -> list[NodeEntry]:
+        """The entries as last seen, from memory - no database read (`entries()` refreshes)."""
+        return list(self._entries.values())
 
     async def settle(
         self, device_ids: Iterable[str] | None = None, timeout_s: float = LISTING_WAIT_S
@@ -293,7 +310,7 @@ class NodeRegistry:
             listed = await session.client.request("tools/list", {}, timeout_s=5)
         except (McpClientError, TimeoutError) as exc:
             log.warning("node.tools_list_failed", device_id=session.device_id, error=str(exc))
-            entry.tools = {}
+            entry.tools, entry.listing_failed = {}, True
             return False
         accepted = self._accept_tools(listed.get("tools"))
         policy, device_id, reported = self.policy, session.device_id, reported_groups(listed)
@@ -308,9 +325,10 @@ class NodeRegistry:
         entry.narrowed = frozenset(narrowed)
         # A group with a narrowing still on its way stays listed here but is not offered
         # (`NodeEntry.offers`); once that request is done, the list is right either way.
-        entry.tools = tools
+        entry.tools, entry.listing_failed = tools, False
         if narrowed:
             await send_policy(session, narrowed)
+            entry.told = session
         log.info("node.tools", device_id=session.device_id, tools=sorted(entry.tools))
         return True
 
@@ -360,6 +378,7 @@ class NodeRegistry:
                 if session is None or not entry.online:
                     return
                 await send_policy(session, now)
+                entry.told = session
                 if not narrowed:
                     await self._refresh(session, complete=False)  # it lists the tools again
         finally:

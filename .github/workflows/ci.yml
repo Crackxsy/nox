@@ -17,10 +17,11 @@ on:
   pull_request:
   merge_group:
 
-# A newer push to the same pull request supersedes the run in progress; runs on develop and main
-# are never cancelled, so each merge keeps its own result.
+# A newer push to the same pull request supersedes the run in progress. Every other run (a merge
+# into develop or main, a merge queue entry) gets a group of its own: GitHub keeps only one pending
+# run per group, so a shared group would silently drop a merge's run when the next one queues.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
