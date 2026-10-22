@@ -58,6 +58,7 @@ __all__ = [
     "open_existing",
     "open_new",
     "secret_locations",
+    "write_refusal",
 ]
 
 _WINDOWS = sys.platform == "win32"
@@ -148,6 +149,85 @@ _TRIGGER_EXTENSIONS = frozenset(
         ".app",
     }
 )
+
+
+#: What a node may write at all: plain data, by extension (case-insensitive). Anything else -
+#: no extension, a script, a config format a tool reads and acts on - is refused. An allowlist,
+#: because a list of dangerous names can never be complete (`~/.gitconfig` hooks, editor tasks).
+WRITABLE_EXTENSIONS = frozenset(
+    {
+        ".txt",
+        ".md",
+        ".csv",
+        ".tsv",
+        ".log",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".xml",
+        ".html",
+        ".htm",
+        ".pdf",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".flac",
+        ".mp4",
+        ".webm",
+        ".mkv",
+        ".odt",
+        ".ods",
+        ".docx",
+        ".xlsx",
+        ".pptx",
+        ".ics",
+        ".vcf",
+        ".srt",
+    }
+)
+#: Data formats that tools read as their configuration (editor tasks, package scripts, compose
+#: files): refused by name even with an allowed extension, and anything in a `workflows` folder.
+_CONFIG_NAMES = frozenset(
+    {
+        "settings.json",
+        "tasks.json",
+        "launch.json",
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "jsconfig.json",
+        "composer.json",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml",
+    }
+)
+
+
+def write_refusal(parts: list[str]) -> str | None:
+    """Why a write to the path `parts` (below the allowed folder) is refused, or None: no hidden
+    file or folder anywhere (`.git`, `.vscode`, `.bashrc`, ...), only `WRITABLE_EXTENSIONS`, no
+    well-known configuration file, nothing in a `workflows` folder."""
+    names = [p for p in parts if p]
+    if not names:
+        return "extension_refused"
+    if any(p.startswith(".") for p in names):
+        return "hidden_refused"
+    folded = [p.casefold() for p in names]
+    name = folded[-1]
+    if "." not in name or name[name.rindex(".") :] not in WRITABLE_EXTENSIONS:
+        return "extension_refused"
+    if name in _CONFIG_NAMES or (name.startswith("appsettings") and name.endswith(".json")):
+        return "config_refused"
+    if "workflows" in folded[:-1]:
+        return "config_refused"
+    return None
 
 
 class OutsideFolders(Exception):  # noqa: N818 - a refusal, named for what it says
@@ -376,8 +456,12 @@ class Folders:
             raise OutsideFolders("hard_link_refused", "a file with a second name is not written")
         if not _WINDOWS and info.st_mode & 0o111:
             raise OutsideFolders("executable_refused", "an executable file is not written")
-        if final is not None and execution_trigger(final):
-            raise OutsideFolders("execution_trigger", "writing there could make something run")
+        if final is not None:
+            refusal = write_refusal(re.split(r"[\\/]+", final[len(root.path.rstrip("\\/")) :]))
+            if refusal is not None:
+                raise OutsideFolders(refusal, "only data files are written (allowlist)")
+            if execution_trigger(final):
+                raise OutsideFolders("execution_trigger", "writing there could make something run")
 
 
 def _parts(rest: str) -> list[str]:
@@ -436,6 +520,9 @@ def open_new(folders: Folders, text: str) -> int:
 
 
 def _lexical_write_check(root: _Root, parts: list[str]) -> None:
+    refusal = write_refusal(parts)
+    if refusal is not None:
+        raise OutsideFolders(refusal, "only data files are written (allowlist)")
     if execution_trigger(os.path.join(root.path, *parts)):
         raise OutsideFolders("execution_trigger", "writing there could make something run")
 

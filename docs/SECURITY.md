@@ -790,16 +790,23 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   secret stores (`secret_locations`: OS keyrings and credential vaults, DPAPI, `~/.ssh`,
   `~/.gnupg`, cloud CLIs, `.netrc`, `.pgpass`, `.git-credentials`, browser profiles), never a hard
   link to a file in them, never a FIFO, socket or device.
-- **Writes** never create an execution trigger, checked on the text and again on the final path:
-  any `.git` component, startup/autostart folders (Start Menu `Startup`, `~/.config/autostart`,
-  `~/.config/systemd`, LaunchAgents/Daemons, PowerShell profile folders), shell start files and
-  script/program extensions. No write to a file with the executable bit or a second hard link; new
-  files are `0600`. A new file is `CREATE_NEW`/`O_EXCL` and is removed again (through its handle,
-  or by name in the checked directory) if it landed wrong; an existing one is truncated only after
-  the check. Replacing or appending is **high** risk on both sides (the node refuses a receipt
-  that says less), shown on the device with path, mode, size and an escaped preview; a write on a
-  node is never remembered (`CallScope.rememberable`). A started write completes; a stop ends
-  everything after it.
+- **Writes are an allowlist** (`safe_fs.write_refusal`), checked on the text and again on the
+  final path relative to the allowed folder: no path component starting with `.` (no hidden file
+  or folder - `.git`, `.vscode`, `.gitconfig`, shell rc files), only data extensions
+  (`WRITABLE_EXTENSIONS`: text, tables, JSON/YAML/XML, HTML, PDF, images, audio/video, office,
+  calendar/contact/subtitle files; no SVG, archives, INI or files without an extension), no
+  configuration file tools act on (`settings/tasks/launch/package/tsconfig/composer.json`,
+  `appsettings*.json`, compose files, anything in a `workflows` folder). The execution-trigger
+  denylist (startup/autostart folders, systemd user units, LaunchAgents, PowerShell profiles,
+  script/program extensions) stays as a second layer. No write to a file with the executable bit
+  or a second hard link; new files are `0600`. A new file is `CREATE_NEW`/`O_EXCL` and is removed
+  again (through its handle, or by name in the checked directory) if it landed wrong; an existing
+  one is truncated only after the check. Replacing or appending is **high** risk on both sides
+  (the node refuses a receipt that says less); a write on a node is never remembered
+  (`CallScope.rememberable`). The core's target and the device's dialog show path, mode, bytes,
+  lines, a short SHA-256 and the content - in full up to 400 characters, otherwise the first and
+  last 200 with "content shortened - N characters not shown"; a cut is never presented as the
+  whole. A started write completes; a stop ends everything after it.
 - **One renderer** (`protocol.render`) for the core's permission target and the device's dialog:
   JSON-quoted per value and per argv token, every character outside printable ASCII and Latin-1
   letters escaped (look-alikes, bidi, zero-width), runs of spaces counted. A target over 1000

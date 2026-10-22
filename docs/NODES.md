@@ -83,12 +83,17 @@ its own budget: 60 actions and 5 high-risk ones per hour (`max_calls_per_hour`,
   or junction that leads elsewhere, `..`, `~`, a short name like `PROGRA~1`, a network path
   (`\\server\share`) or a device path is refused, and so is anything in the node's own folder,
   the keyring, `~/.ssh` and similar key stores, and browser profiles.
-- **Writing** never creates something that could start a program outside the sandbox: nothing
-  in a `.git` folder, a startup or autostart folder, no shell start file (`.bashrc`, `.profile`,
-  ...), no script or program (`.ps1`, `.cmd`, `.sh`, `.exe`, `.lnk`, `.desktop`, ...), never an
-  executable file or one with a second name (hard link). A new file is medium risk (asked on
-  Nox); **replacing or appending is high risk** and is asked on this device every time, showing
-  the file, the mode, the size and how the text starts. A write is never remembered.
+- **Writing** creates only plain data files: `.txt .md .csv .tsv .log .json .yaml .yml .xml
+  .html .htm .pdf`, images (`.png .jpg .jpeg .gif .webp`), audio and video (`.mp3 .wav .ogg .flac
+  .mp4 .webm .mkv`), office files (`.odt .ods .docx .xlsx .pptx`) and `.ics .vcf .srt`. Never a
+  hidden file or anything in a hidden folder (`.git`, `.vscode`, `.bashrc`, ...), never a file
+  without an extension, a script, a program or a configuration file tools act on
+  (`settings.json`, `tasks.json`, `package.json`, `docker-compose.yml`, anything in `workflows`),
+  never an executable file or one with a second name (hard link). A new file is medium risk (asked
+  on Nox); **replacing or appending is high risk** and is asked on this device every time. The
+  question shows the file, the mode, size, line count and a SHA-256, and the content - in full
+  when it is short, otherwise its first and last 200 characters with "content shortened - N
+  characters not shown". A write is never remembered.
 - **Commands** (`shell`) run only in this device's own sandbox (AppContainer on Windows,
   bubblewrap on Linux), which cannot see the node's folder - on Linux the node refuses commands
   when its folder lies under a system folder the sandbox shows. Without such a sandbox - macOS

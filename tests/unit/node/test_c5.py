@@ -665,6 +665,8 @@ def test_a_folder_is_allowed_only_in_a_terminal_here_and_never_the_node_folder(
 
 # ---- review round 1: what a write may never do ---------------------------------------------------
 
+REFUSED_WRITES = ("execution_trigger", "hidden_refused", "extension_refused", "config_refused")
+
 
 @pytest.mark.parametrize(
     "target",
@@ -692,7 +694,7 @@ async def test_a_write_never_plants_an_execution_trigger(
     folder.mkdir(parents=True, exist_ok=True)
     with pytest.raises(NodeRefusal) as caught:
         await _hands(world)["file.write"].handler(WriteArgs(path=target, text="echo hi"))
-    assert caught.value.reason == "execution_trigger"
+    assert caught.value.reason in REFUSED_WRITES
     assert not (world["root"] / target).exists()
 
 
@@ -702,7 +704,7 @@ async def test_a_link_into_a_git_folder_is_no_way_around(world: dict[str, Path])
     link_folder(hooks, world["root"] / "innocent")
     with pytest.raises(NodeRefusal) as caught:
         await _hands(world)["file.write"].handler(WriteArgs(path="innocent/pre-commit", text="x"))
-    assert caught.value.reason in ("execution_trigger", "link_refused")
+    assert caught.value.reason in (*REFUSED_WRITES, "link_refused")
     assert not (hooks / "pre-commit").exists()
 
 
@@ -710,16 +712,16 @@ async def test_a_link_into_a_git_folder_is_no_way_around(world: dict[str, Path])
 async def test_an_executable_is_never_written_and_a_new_file_never_executable(
     world: dict[str, Path],
 ) -> None:
-    script = world["root"] / "notes" / "tool"
+    script = world["root"] / "notes" / "tool.txt"
     script.write_text("#!/bin/sh\n", encoding="utf-8")
     script.chmod(0o755)
     with pytest.raises(NodeRefusal) as caught:
         await _hands(world)["file.write"].handler(
-            WriteArgs(path="notes/tool", text="x", overwrite=True)
+            WriteArgs(path="notes/tool.txt", text="x", overwrite=True)
         )
     assert caught.value.reason == "executable_refused"
-    await _hands(world)["file.write"].handler(WriteArgs(path="notes/neu", text="x"))
-    assert (world["root"] / "notes" / "neu").stat().st_mode & 0o111 == 0
+    await _hands(world)["file.write"].handler(WriteArgs(path="notes/neu.txt", text="x"))
+    assert (world["root"] / "notes" / "neu.txt").stat().st_mode & 0o111 == 0
 
 
 async def test_a_file_with_a_second_name_is_not_written(world: dict[str, Path]) -> None:
@@ -789,7 +791,8 @@ async def test_replacing_or_extending_a_file_is_high_and_shown_with_size_and_pre
     tool = world_tools["file.write"]
     assert tool.shown is not None and decision.args is not None
     text = confirmation_text("file.write", tool.shown(decision.args))
-    assert text is not None and '"overwrite"' in text and "500" in text and "[...]" in text
+    assert text is not None and '"overwrite"' in text and "500" in text
+    assert "content shortened - 100 characters not shown" in text
 
 
 async def test_a_node_write_is_high_when_it_replaces_and_never_remembered() -> None:
@@ -926,3 +929,86 @@ async def test_a_node_folder_under_a_system_bind_fails_closed(
     with pytest.raises(NodeRefusal) as caught:
         await hands.confined()
     assert caught.value.reason == "sandbox_unavailable"
+
+
+# ---- review round 2: writes are an allowlist of data files ------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("target", "reason"),
+    [
+        (".gitconfig.txt", "hidden_refused"),
+        ("notes/.vscode/notes.md", "hidden_refused"),
+        ("notes/.hidden/a.txt", "hidden_refused"),
+        ("notes/Makefile", "extension_refused"),
+        ("notes/README", "extension_refused"),
+        ("notes/page.svg", "extension_refused"),
+        ("notes/archive.zip", "extension_refused"),
+        ("notes/config.ini", "extension_refused"),
+        ("notes/pip.conf", "extension_refused"),
+        ("notes/settings.json", "config_refused"),
+        ("notes/TASKS.JSON", "config_refused"),
+        ("notes/package.json", "config_refused"),
+        ("notes/docker-compose.yml", "config_refused"),
+        ("notes/appsettings.Development.json", "config_refused"),
+        ("notes/workflows/build.yml", "config_refused"),
+    ],
+)
+async def test_only_plain_data_files_are_written(
+    world: dict[str, Path], target: str, reason: str
+) -> None:
+    (world["root"] / target).parent.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(NodeRefusal) as caught:
+        await _hands(world)["file.write"].handler(WriteArgs(path=target, text="x"))
+    assert caught.value.reason == reason
+    assert not (world["root"] / target).exists()
+
+
+@pytest.mark.parametrize("target", ["notes/liste.TXT", "notes/plan.md", "notes/daten.csv"])
+async def test_data_files_are_written(world: dict[str, Path], target: str) -> None:
+    answer = await _hands(world)["file.write"].handler(WriteArgs(path=target, text="x"))
+    assert answer["ok"] is True
+
+
+async def test_a_link_cannot_turn_a_data_name_into_a_hidden_folder(world: dict[str, Path]) -> None:
+    hidden = world["root"] / "notes" / ".config"
+    hidden.mkdir()
+    link_folder(hidden, world["root"] / "visible")
+    with pytest.raises(NodeRefusal) as caught:
+        await _hands(world)["file.write"].handler(WriteArgs(path="visible/a.txt", text="x"))
+    assert caught.value.reason in ("hidden_refused", "link_refused")
+    assert not (hidden / "a.txt").exists()
+
+
+def test_a_long_write_shows_head_tail_hash_and_what_is_not_shown() -> None:
+    import hashlib
+
+    from nox.node.hands import PREVIEW_CHARS, write_summary
+
+    text = "A" * PREVIEW_CHARS + "M" * 50 + "\n" + "Z" * PREVIEW_CHARS
+    shown = write_summary("a.txt", text, append=False, overwrite=True)
+    assert shown["content_start"] == "A" * PREVIEW_CHARS
+    assert shown["content_end"] == "Z" * PREVIEW_CHARS
+    assert shown["not_shown"] == "content shortened - 51 characters not shown"
+    assert shown["sha256"] == hashlib.sha256(text.encode()).hexdigest()[:16]
+    assert shown["lines"] == 2 and "content" not in shown
+    short = write_summary("a.txt", "kurz\n", append=False, overwrite=False)
+    assert short["content"] == "kurz\n" and "not_shown" not in short
+
+
+def test_the_write_is_rendered_alike_on_the_core_and_on_the_device() -> None:
+    from nox.node.agent import confirmation_text
+    from nox.node.hands import PREVIEW_CHARS, write_summary
+    from nox.node.install import _write_target
+    from nox.node.protocol import render
+
+    text = "Anfang " + "x" * (2 * PREVIEW_CHARS) + " Ende \u202e"
+    payload = {"path": "notes/a.txt", "text": text, "append": True, "overwrite": False}
+    shown = write_summary(payload["path"], text, append=True, overwrite=False)
+    target = _write_target(payload)
+    dialog = confirmation_text("file.write", shown)
+    assert dialog is not None
+    for key, value in shown.items():
+        assert f"{key} {render(value)}" in target
+        assert f"{key}: {render(value)}" in dialog
+    assert "\u202e" not in dialog and "\u202e" not in target

@@ -30,6 +30,7 @@ it to the node's audit trail.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import stat
 import sys
@@ -66,7 +67,9 @@ MAX_WRITE_BYTES = 1024 * 1024
 #: Entries a listing shows, and entries it looks at at most (then it says it stopped).
 MAX_LIST = 200
 MAX_SCAN = 5000
-PREVIEW_CHARS = 80
+#: A write's content is shown in full up to twice this; beyond, its head and its tail are
+#: shown with a marker saying how much is not shown (never a cut text that looks complete).
+PREVIEW_CHARS = 200
 _SNIFF = 8192
 
 
@@ -115,16 +118,26 @@ def write_risk(append: bool, overwrite: bool) -> str:
 
 
 def write_summary(path: str, text: str, *, append: bool, overwrite: bool) -> dict[str, Any]:
-    """What a person decides on for a write: where, how, how much, and how it starts - the same
-    fields in the core's permission target and in the device's dialog."""
-    mode = "append" if append else "overwrite" if overwrite else "new file"
-    preview = text[:PREVIEW_CHARS] + (" [...]" if len(text) > PREVIEW_CHARS else "")
-    return {
+    """What a person decides on for a write - the same fields in the core's permission target
+    and in the device's dialog: where, how, how much (bytes, lines, a SHA-256 to compare), and
+    the content - in full when it is short, otherwise its first and last `PREVIEW_CHARS`
+    characters with an explicit "content shortened - N characters not shown"."""
+    data = text.encode("utf-8", errors="replace")
+    shown: dict[str, Any] = {
         "path": path,
-        "mode": mode,
-        "bytes": len(text.encode("utf-8", errors="replace")),
-        "preview": preview,
+        "mode": "append" if append else "overwrite" if overwrite else "new file",
+        "bytes": len(data),
+        "lines": text.count("\n") + (1 if text and not text.endswith("\n") else 0),
+        "sha256": hashlib.sha256(data).hexdigest()[:16],
     }
+    if len(text) <= 2 * PREVIEW_CHARS:
+        shown["content"] = text
+    else:
+        hidden = len(text) - 2 * PREVIEW_CHARS
+        shown["content_start"] = text[:PREVIEW_CHARS]
+        shown["content_end"] = text[-PREVIEW_CHARS:]
+        shown["not_shown"] = f"content shortened - {hidden} characters not shown"
+    return shown
 
 
 # ---- the hands -----------------------------------------------------------------------------------

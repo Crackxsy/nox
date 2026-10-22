@@ -85,12 +85,17 @@ an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trus
   (Junction) woandershin, `..`, `~`, ein Kurzname wie `PROGRA~1`, ein Netzwerkpfad
   (`\\server\freigabe`) oder ein Gerätepfad wird abgelehnt, ebenso alles im Node-Ordner, im
   Schlüsselbund, in `~/.ssh` und ähnlichen Schlüsselablagen und in Browser-Profilen.
-- **Schreiben** legt nie etwas an, das außerhalb der Sandbox ein Programm starten könnte: nichts
-  in einem `.git`-Ordner, einem Autostart-Ordner, keine Shell-Startdatei (`.bashrc`, `.profile`,
-  ...), kein Skript und kein Programm (`.ps1`, `.cmd`, `.sh`, `.exe`, `.lnk`, `.desktop`, ...),
-  nie eine ausführbare Datei oder eine mit zweitem Namen (Hardlink). Eine neue Datei ist mittleres
-  Risiko (Frage an Nox); **Ersetzen oder Anhängen ist hohes Risiko** und wird jedes Mal an diesem
-  Gerät gefragt - mit Datei, Art, Größe und Textanfang. Schreiben wird nie gemerkt.
+- **Schreiben** legt nur einfache Datendateien an: `.txt .md .csv .tsv .log .json .yaml .yml .xml
+  .html .htm .pdf`, Bilder (`.png .jpg .jpeg .gif .webp`), Audio und Video (`.mp3 .wav .ogg .flac
+  .mp4 .webm .mkv`), Office-Dateien (`.odt .ods .docx .xlsx .pptx`) und `.ics .vcf .srt`. Nie eine
+  versteckte Datei oder etwas in einem versteckten Ordner (`.git`, `.vscode`, `.bashrc`, ...), nie
+  eine Datei ohne Endung, ein Skript, ein Programm oder eine Konfigurationsdatei, nach der Werkzeuge
+  handeln (`settings.json`, `tasks.json`, `package.json`, `docker-compose.yml`, alles in
+  `workflows`), nie eine ausführbare Datei oder eine mit zweitem Namen (Hardlink). Eine neue Datei
+  ist mittleres Risiko (Frage an Nox); **Ersetzen oder Anhängen ist hohes Risiko** und wird jedes
+  Mal an diesem Gerät gefragt. Die Frage zeigt Datei, Art, Größe, Zeilenzahl und einen SHA-256 und
+  den Inhalt - ganz, wenn er kurz ist, sonst die ersten und letzten 200 Zeichen mit „content
+  shortened - N characters not shown“. Schreiben wird nie gemerkt.
 - **Befehle** (`shell`) laufen nur in der eigenen Sandbox des Geräts (AppContainer unter Windows,
   bubblewrap unter Linux), die den Node-Ordner nicht sieht - unter Linux lehnt der Node Befehle
   ab, wenn sein Ordner unter einem Systemordner liegt, den die Sandbox zeigt. Ohne eine solche
