@@ -151,11 +151,15 @@ linux_bash = pytest.mark.skipif(
 
 
 @linux_bash
-def test_the_installer_knows_image_mode() -> None:
+@pytest.mark.parametrize(
+    "args",
+    [("--image", "--version", "v0.7.0"), ("--node", "--headless", "--version", "v0.7.0")],
+)
+def test_the_installer_knows_image_and_node_mode(args: tuple[str, ...]) -> None:
     # Past the option parser, a normal user stops at "needs root" - never at "unknown option".
     if os.geteuid() == 0:
         pytest.skip("runs as root")
-    result = _installer("--image", "--version", "v0.7.0")
+    result = _installer(*args)
     assert result.returncode == 1, result.stderr
     assert "Unknown option" not in result.stderr
 
@@ -167,6 +171,8 @@ def test_the_installer_knows_image_mode() -> None:
         (("--ui-bundle", "nox-ui.tar.gz"), "install"),
         (("--image",), "rollback"),
         (("--no-such-option",), "install"),
+        (("--image", "--node"), "install"),
+        (("--node", "--headless", "--ui-bundle", "nox-ui.tar.gz"), "install"),
     ],
 )
 def test_the_installer_refuses_options_that_do_not_belong(

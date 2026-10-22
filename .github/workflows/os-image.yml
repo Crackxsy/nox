@@ -113,6 +113,7 @@ jobs:
           test "$(code bash scripts/install-linux.sh --ui-bundle ui.tar.gz | tail -n1)" = 2
           test "$(code sudo env NOX_ACTION=rollback bash scripts/install-linux.sh --image | tail -n1)" = 2
           test "$(code bash scripts/install-linux.sh --no-such-option | tail -n1)" = 2
+          test "$(code bash scripts/install-linux.sh --image --node | tail -n1)" = 2
 
       - name: Unmount the chroot
         if: always()
