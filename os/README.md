@@ -5,7 +5,8 @@ preinstalled**, as a headless home server. It is built in CI with
 [pi-gen](https://github.com/RPi-Distro/pi-gen), the tool Raspberry Pi OS itself is built with, and
 works on every 64-bit Pi the base supports (3B/3B+/Zero 2 W, 4B/400/CM4, 5/CM5).
 
-> **Status: step O1 of the Nox-OS plan** - the image is built, checked and boot-tested. The
+> **Status: steps O1 and O2 of the Nox-OS plan** - the image is built, hardened (firewall, SSH off
+> with a switch in the dashboard, SD-card care, console status), checked and boot-tested. The
 > first-boot setup without a screen (Wi-Fi from a provisioning file, setup hotspot, claiming the
 > device from a phone) comes with O3/O4. Until then a flashed card runs Nox, but there is no way to
 > sign in to it yet: use it for testing, and [`docs/RASPBERRY_PI.md`](../docs/RASPBERRY_PI.md)
@@ -30,6 +31,8 @@ Nox is installed by the same installer a Pi uses, `scripts/install-linux.sh`, in
 | `nox.service` (hardened, `installer/linux/nox.service`), enabled | Nox's CA and server certificate, its database, every pairing - when `nox.service` first starts |
 | `/var/lib/nox/user.yaml` (server defaults, no secrets) | |
 | `/etc/nox-os-release` (version, base, build date) | |
+| The firewall's boot rules (`/etc/nftables.conf`: default deny, no port of Nox's open) | The firewall rules from Nox's settings (`nox-firewall.service`, at every boot and every change) |
+| Hardening, SD-card wear profile, the root helper, the console status ([Hardening](#hardening-o2)) | |
 
 Never in the image: a password (the first user `nox-admin` is locked, root is locked), passwordless
 sudo, an SSH key or `authorized_keys`, SSH switched on (`ssh.service`, `ssh.socket` and
@@ -52,6 +55,114 @@ change anything else. Physical access to the card is full access, as on every Pi
 47843), so an unclaimed Nox-OS listens in the home network from its first start. Pairing still
 needs a code nobody can create on a headless O1 image; O3 defines what an unclaimed core exposes
 (claim page only) before the image is meant for real use.
+
+## Hardening (O2)
+
+Sub-stage `stage-nox/03-hardening`. `os/tools/check-image.sh` checks every point below on the
+finished image, `os/tools/qemu-smoke.sh` on the booted one.
+
+### Firewall
+
+nftables, inbound **default deny**, IPv4 and IPv6, in a table of its own (`inet nox_os`).
+`nftables.service` loads the boot rules (`/etc/nftables.conf`) before the network comes up:
+nothing of Nox's open. `nox-firewall.service` then generates the rules from Nox's own settings
+(`config/defaults.yaml` of the installed release and `/var/lib/nox/user.yaml`; `nox-firewall.path`
+regenerates them whenever the settings file changes) and replaces the table atomically. If that
+fails, the boot rules stay in force: the firewall fails closed.
+
+| Open inbound | When | From |
+| --- | --- | --- |
+| Loopback; answers to connections the Pi made | always | - |
+| The ICMP IPv4 and IPv6 need (errors, neighbour discovery, router adverts, multicast queries); ping at most 10/s | always | ICMP: anywhere; IGMP: private networks |
+| DHCP client (udp 67 -> 68), DHCPv6 client | always | the network; DHCPv6 from `fe80::/10` |
+| mDNS (udp 5353, `nox.local`) | always | private networks |
+| Nox's dashboard (`ipc.lan.port`, 47843) and node listener (`ipc.lan.node_port`, 47844) | only while `ipc.lan.enabled` | private networks - the ones Nox's listener answers: `10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `fc00::/7`, `fe80::/10`; anywhere only with `ipc.lan.allow_public_clients`. Over 60 new connections a minute (burst 40) per address are dropped |
+| SSH (tcp 22) | only while remote maintenance is on | private networks; over 10 a minute (burst 5) per address dropped |
+| HTTP 80, DNS 53, DHCP server 67 | only in setup mode (`/run/nox-os/setup-mode`, step O3) | - |
+
+Forwarding is dropped. Outbound is open - Nox needs the internet - except the cloud metadata
+addresses (`169.254.169.254`, `fd00:ec2::254`). A port from the settings is opened only when it is
+1024-65535 and none of the system's own (22, 53, 67, 68, 80, 546, 547, 5353, and the core's
+loopback ports 47800/47801): the settings file belongs to the service user, which must not be able
+to open SSH or a privileged port through it.
+
+**No fail2ban:** there is no password login to guess (key only), SSH is off unless switched on for
+a limited time, reachable from private networks only and rate-limited per address. A ban list
+would have nothing left to do, and one more daemon writing logs is what the SD card does not need.
+
+### Remote maintenance (SSH)
+
+Off. `ssh.service`, `ssh.socket` and `sshswitch.service` stay masked (O1), and no account has a
+password. Dashboard -> Einstellungen -> System -> **Fernwartung (SSH)** switches it on: a public
+key (ed25519 or ECDSA, optionally on a security key; pasted there and kept by Nox for next time),
+a time (15 minutes to 4 hours, 1 hour by default) and the **security PIN** - always, also on a
+paired phone, and refused while no PIN is set. The request (`noxos.ssh.enable`) and its outcome
+are in Nox's audit chain; switching off (`noxos.ssh.disable`) needs nothing. While SSH is on, the
+dashboard and the console status say so, with the end time.
+
+The unprivileged `nox.service` (`NoNewPrivileges`, no capabilities) cannot change the system
+itself. It asks the **root helper**, `/usr/local/lib/nox-os/nox_os_helper.py`:
+
+- socket-activated (`nox-os-helper.socket`: `/run/nox-os/helper/helper.sock`, `root:nox 0660`, in
+  a folder only root and the group `nox` may enter), one sandboxed instance per request
+  (`ProtectSystem=strict`, writes only under `/run/nox-os`, no network, no capabilities);
+- answers **root and the main process of `nox.service` only** (`SO_PEERCRED` compared with
+  `nox.service`'s `MainPID`) - not just any process of the user `nox`: commands Nox runs for
+  someone run as that user too. They cannot take over the core either: on Nox-OS it makes itself
+  non-dumpable at start (`PR_SET_DUMPABLE`), so no other process of the user may trace it or touch
+  its memory - Raspberry Pi OS's kernel has no Yama that would;
+- knows exactly three requests, without options: `status`, `ssh off`, and `ssh on <minutes>`
+  (5-240) followed by 1-8 public keys, which it checks again itself (type, base64, the blob's own
+  type and curve, no `authorized_keys` options, a printable comment). Anything else is refused.
+
+`ssh on` writes the keys to `/run/nox-os/ssh/authorized_keys` and a sudo rule for `nox-admin`
+(`NOPASSWD` - the account has no password) to `/run/nox-os/sudoers.d/`, which
+`/etc/sudoers.d/50-nox-os` includes: both in memory, gone at the next boot, never on the card. It
+starts `nox-ssh.service` - sshd with a complete configuration of its own
+(`/etc/nox-os/ssh/sshd_config`: `AuthenticationMethods publickey`, no passwords, no root,
+`AllowUsers nox-admin@<private networks>`, no forwarding or tunnels, three tries) - opens port 22
+for private networks and starts a timer. When the time is up, on `ssh off`, or whenever sshd
+stops for any other reason (`ExecStopPost=`), sshd **and its open sessions** end (`loginctl
+terminate-user nox-admin`), and the keys,
+the sudo rule and port 22 go with it. `nox-ssh.service` has no `[Install]` section and a
+`RuntimeMaxSec=4h15min` of its own as the last stop. Keys are never baked in: they come only from
+the dashboard.
+
+### SD-card wear
+
+| Measure | Setting | What a power cut (or reboot) costs |
+| --- | --- | --- |
+| System journal | `Storage=volatile`, `RuntimeMaxUse=32M` (in RAM) | the system log of that boot. Nox's own audit chain is in its database, on the card |
+| Root file system | `noatime`, `commit=60` | file changes of up to the last 60 s (ext4 stays consistent; Nox's database syncs on its own) |
+| `/tmp`, `/var/tmp` | tmpfs (at most 50 % / 25 % of RAM, used only as filled) | their contents, which nothing may rely on |
+| Swap | zram only (`/etc/rpi/swap.conf.d/50-nox-os.conf`: `Mechanism=zram`), no swap file; `dphys-swapfile` and `rsyslog` removed where present | nothing |
+| Nox's database | WAL, `synchronous=NORMAL`, `wal_autocheckpoint=4000` pages, `PRAGMA optimize` on close | the last transactions before the cut; the database itself stays consistent |
+| man-db | no index rebuild on package changes | nothing |
+
+Nothing has been measured on a device yet: the write counter (`/sys/block/mmcblk0/stat`) over
+24 hours is on the release hardware checklist. A USB SSD remains the better home for a server.
+
+### Kernel, services, console
+
+- `sysctl` (`/etc/sysctl.d/90-nox-os.conf`): kernel pointers and log for root only, no
+  unprivileged eBPF, hardened BPF JIT, no kexec, no SysRq, `ptrace` of own children only (where
+  the kernel has Yama),
+  protected links, FIFOs and files in sticky folders, no core dumps of set-uid programs;
+  reverse-path filter (loose - Ethernet and Wi-Fi may be in the same network), no ICMP redirects
+  sent or accepted, no source routing, SYN cookies. Unprivileged user namespaces stay on: Nox's
+  command sandbox (bubblewrap) needs them.
+- Masked: Bluetooth (`bluetooth`, `hciuart`), `triggerhappy`, `ModemManager`. avahi stays: it
+  answers for `nox.local`. `nox.service` is unchanged and as hardened as `installer/linux/`
+  ships it (user `nox`, `ProtectSystem=strict`, no capabilities - checked by `check-image.sh`).
+- Updates: `unattended-upgrades` is step O6 (sub-stage `05-updates`), not here.
+- **Console status** on the first screen (tty1) instead of a login prompt: Nox-OS and Nox
+  version, addresses, the dashboard's address, network access and paired devices, health, SSH on
+  or off. No secrets, no login, refreshed every 10 s, run as a throwaway user without rights
+  (`nox-console.service`, `DynamicUser=`). The other consoles keep a login prompt at which nobody
+  can log in (no account has a password).
+
+Known, for O3: `systemd-firstboot.service` reports a failure on the first boot (on a headless
+device it has nobody to ask); O3's own first-boot unit takes over what it would set.
 
 ## Getting it
 
@@ -96,7 +207,11 @@ hand, on a machine that runs Nox:
   2. `os/tools/check-image.sh`: the image is mounted read-only and checked (list above).
   3. `os/tools/qemu-smoke.sh`: a copy of the image boots headless in QEMU (an emulated Raspberry
      Pi 3, the image's own kernel) with one CI-only unit added, until `nox.service` is active and
-     `/health` answers, SSH is not running and the host keys and machine id were made. Test-only
+     `/health` answers, SSH is not running and the host keys and machine id were made; then O2:
+     the firewall is loaded and default deny with the dashboard port opened from Nox's settings,
+     journal, `/`, `/tmp` and swap as above, sysctl applied, the console status renders, the root
+     helper refuses another process of the user `nox`, and SSH goes on (sshd up, port 22 for
+     private networks, off timer, loopback login refused) and off again (all of it gone). Test-only
      boot settings, because of the emulator: no hardware watchdog (QEMU resets on it), Bluetooth
      off the serial port, no first-boot resize. The verdict is read from the copy's disk.
   4. The SHA-256 taken right after the build is checked again, then xz, SHA-256, the Imager entry,
@@ -138,7 +253,8 @@ asking: Claude Code, Ollama and models, Playwright's Chromium, voice models and 
 | --- | --- |
 | `pi-gen/config` | pi-gen settings: Lite stages + `stage-nox`, hostname, locked first user, SSH and cloud-init off |
 | `pi-gen/build.sh` | Fetches the pinned pi-gen, adds `stage-nox` and the Nox inputs, runs pi-gen in Docker |
-| `pi-gen/stage-nox/` | Nox's stage; later steps add numbered sub-stages there (O2 hardening, O3 first boot, O6 updates) |
+| `pi-gen/stage-nox/` | Nox's stage; numbered sub-stages per step (`03-hardening` O2, then O3 first boot, O6 updates) |
+| `pi-gen/stage-nox/03-hardening/files/` | Firewall generator, root helper, console status, their units, sshd and system settings |
 | `pi-gen/export-nox/` | One step in pi-gen's export (removes `userconf-pi` again, which the export installs) |
 | `tools/check-image.sh` | Read-only checks of a built image (or of a tree: `--root`/`--boot`); takes out the boot files and the licence manifest |
 | `tools/qemu-smoke.sh` | Headless QEMU boot until Nox answers |

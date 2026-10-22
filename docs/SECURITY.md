@@ -913,6 +913,32 @@ Still to come in wave C: certificate renewal (C7) and a real presence check for
 `nox node allow`. Negative tests: `tests/unit/node/` (a deliberately permissive core in `test_agent.py`),
 `tests/integration/test_nodes.py`.
 
+## Nox-OS (the Raspberry Pi image)
+
+What the image guarantees, and how each part is enforced, is in
+[`os/README.md`](../os/README.md#hardening-o2); `os/tools/check-image.sh` refuses an image that
+breaks it and the QEMU boot test checks it on the running system. In short:
+
+- **Nothing to log in with is shipped.** No password, no key, no `authorized_keys`, SSH masked.
+- **Inbound default deny** (nftables, IPv4 and IPv6). Nox's ports open only while network access
+  is on, from private networks only, rate-limited per address; generated from Nox's settings but
+  never SSH or a port below 1024, whatever the settings file says - it belongs to the service user.
+  If generating fails, the boot rules (nothing of Nox's open) stay.
+- **Remote maintenance (SSH) is off** and needs, to go on, an administrator's request with the
+  security PIN (refused while no PIN is set; from a paired device the PIN always, with removal
+  after repeated wrong ones), audited. Key only (ed25519/ECDSA), `nox-admin` only, private networks
+  only, at most four hours, then sshd, its sessions, the keys, the sudo rule and port 22 end
+  together. Keys and the sudo rule live under `/run` only.
+- **One root helper, three requests.** The service runs without privileges; the only way it changes
+  the system is the socket-activated helper, which answers root and `nox.service`'s main process
+  only (not other processes of the user `nox`, such as commands Nox runs) and knows `status`,
+  `ssh off` and `ssh on <minutes>` with public keys - no shell, no paths, no options.
+- **Console:** a status screen without secrets on tty1, no login there; no account has a password.
+
+Accepted limits: physical access to the card is full access (the boot partition is plain FAT); the
+service user can choose which unprivileged ports its own listener uses, and the firewall follows;
+while remote maintenance is on, whoever holds one of its keys in the home network is root.
+
 ## Known limits of network access
 
 Paired devices in the home network (`nox.lan`, see [`NETWORK_ACCESS.md`](NETWORK_ACCESS.md)) are

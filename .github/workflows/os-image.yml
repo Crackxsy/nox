@@ -56,7 +56,27 @@ jobs:
             os/pi-gen/stage-nox/01-nox/01-run-chroot.sh os/pi-gen/stage-nox/EXPORT_IMAGE
 
       - name: Python tools compile
-        run: python3 -I -m py_compile os/tools/imager_json.py os/tools/source_manifest.py
+        run: |
+          python3 -I -m py_compile os/tools/imager_json.py os/tools/source_manifest.py \
+            os/pi-gen/stage-nox/03-hardening/files/*.py
+
+      # O2's configuration files as the real programs read them: the firewall rules (every switch
+      # off, every switch on, public clients), remote maintenance's sshd and the sudo include.
+      - name: Firewall rules, sshd and sudo configuration are valid
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nftables openssh-server >/dev/null
+          files=os/pi-gen/stage-nox/03-hardening/files
+          for variant in baseline sample "sample public"; do
+            # shellcheck disable=SC2086 # the variant is two words on purpose
+            python3 -I "$files/nox_firewall.py" $variant > rules.nft
+            sudo nft -c -f rules.nft
+          done
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/hostkey"
+          sudo install -d -m 0755 /run/sshd
+          sudo /usr/sbin/sshd -t -f "$files/sshd_config" -h "$RUNNER_TEMP/hostkey"
+          sudo install -d -m 0750 /run/nox-os/sudoers.d
+          sudo visudo -cf "$files/sudoers-nox-os"
 
       # What stage-nox does on the Pi image, on a small Debian system: install-linux.sh --image in
       # a chroot builds Nox and enables the service - and starts nothing, creates no data.

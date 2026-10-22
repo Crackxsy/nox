@@ -1,0 +1,25 @@
+# Nox-OS: the firewall rules from Nox's configuration (nox_firewall.py, os/README.md). The rules
+# nftables.service loads at boot (no Nox port open) stay in force when this fails.
+[Unit]
+Description=Nox-OS firewall (from Nox's configuration)
+Documentation=https://github.com/Crackxsy/nox/blob/develop/os/README.md
+After=nftables.service local-fs.target systemd-tmpfiles-setup.service
+Requires=nftables.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/nox/current/.venv/bin/python -I /usr/local/lib/nox-os/nox_firewall.py apply
+ProtectSystem=strict
+ReadWritePaths=/run/nox-os
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+# Reads the settings in /var/lib/nox (the service user's 0700 folder) and loads the rules.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_DAC_READ_SEARCH
+RestrictAddressFamilies=AF_NETLINK AF_UNIX
+IPAddressDeny=any
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

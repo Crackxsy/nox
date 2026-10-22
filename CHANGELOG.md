@@ -241,6 +241,21 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   by a signature. The first-boot setup without a screen follows (O3/O4), so the image is for testing
   until then.
 
+- **Nox-OS hardening (O2)** (`os/pi-gen/stage-nox/03-hardening`, os/README.md): nftables with
+  inbound default deny (IPv4/IPv6), Nox's dashboard and node ports generated from its own settings
+  at boot and on every settings change, only while network access is on, from private networks
+  only and rate-limited per address; fails closed. SSH stays off and masked; **Einstellungen ›
+  System › Fernwartung (SSH)** switches remote maintenance on with the security PIN (always, from
+  every client; audited), a pasted ed25519/ECDSA key and a time (15 min-4 h): sshd with its own
+  key-only configuration for `nox-admin` from private networks, sudo for that session, then
+  everything - open sessions included - ends by itself (`noxos.ssh.*`, through a socket-activated
+  root helper that answers only `nox.service`'s main process and knows three requests). SD-card
+  wear profile: journal in RAM, `/` with `noatime,commit=60`, `/tmp` and `/var/tmp` as tmpfs,
+  zram instead of a swap file, SQLite `wal_autocheckpoint` raised and `PRAGMA optimize` on close.
+  Kernel/network sysctl hardening, Bluetooth/triggerhappy/ModemManager masked, a console status
+  screen on tty1 (versions, addresses, dashboard URL, pairing, health, SSH; no secrets, no login).
+  `check-image.sh` and the QEMU boot test check all of it, including an SSH on/off round trip.
+
 ### Fixed
 - **Nodes, external review of part 4:** the node's gate never resolves or opens anything the
   core sent (a UNC path in a notice could make Windows reach out over SMB) and checks the receipt

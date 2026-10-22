@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit.nox_os.conftest import TOOLS
+from tests.unit.nox_os.conftest import HARDENING, REPO, TOOLS, load_tool
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux" or shutil.which("bash") is None, reason="GNU tools, symlinks: Linux"
@@ -74,7 +74,61 @@ def _clean_tree(base: Path) -> tuple[Path, Path]:
     _write(root / "var" / "lib" / "nox" / "user.yaml", "ipc:\n  lan:\n    enabled: true\n")
     _write(boot / "cmdline.txt", "console=serial0,115200 root=PARTUUID=0000-02 rootwait resize\n")
     _write(boot / "config.txt", "arm_64bit=1\n")
+    _o2(root)
     return root, boot
+
+
+def _o2(root: Path) -> None:
+    """What O2's sub-stage (os/pi-gen/stage-nox/03-hardening/00-run.sh) leaves in the image, from
+    the very files it installs."""
+    system = root / "etc" / "systemd" / "system"
+    shutil.copy(REPO / "installer" / "linux" / "nox.service", system / "nox.service")
+    for target, unit in (
+        ("sysinit.target", "nftables.service"),
+        ("multi-user.target", "nox-firewall.service"),
+        ("multi-user.target", "nox-firewall.path"),
+        ("multi-user.target", "nox-console.service"),
+        ("sockets.target", "nox-os-helper.socket"),
+    ):
+        _link(system / f"{target}.wants" / unit, f"/etc/systemd/system/{unit}")
+    for unit in (
+        "getty@tty1.service",
+        "autovt@tty1.service",
+        "bluetooth.service",
+        "hciuart.service",
+        "triggerhappy.service",
+        "ModemManager.service",
+    ):
+        _link(system / unit, "/dev/null")
+    firewall = load_tool("nox_firewall", HARDENING)
+    _write(root / "etc" / "nftables.conf", firewall.render(firewall.Settings(), boot=True))
+    _write(
+        root / "etc" / "nox-os" / "ssh" / "sshd_config",
+        (HARDENING / "sshd_config").read_text("utf-8"),
+    )
+    _write(
+        root / "etc" / "sudoers.d" / "50-nox-os", (HARDENING / "sudoers-nox-os").read_text("utf-8")
+    )
+    _write(
+        root / "etc" / "systemd" / "journald.conf.d" / "50-nox-os.conf",
+        (HARDENING / "journald-nox-os.conf").read_text("utf-8"),
+    )
+    _write(
+        root / "etc" / "rpi" / "swap.conf.d" / "50-nox-os.conf",
+        (HARDENING / "swap-nox-os.conf").read_text("utf-8"),
+    )
+    _write(
+        root / "etc" / "sysctl.d" / "90-nox-os.conf",
+        (HARDENING / "90-nox-os.conf").read_text("utf-8"),
+    )
+    _write(
+        root / "etc" / "fstab",
+        "proc /proc proc defaults 0 0\n"
+        "PARTUUID=0000-01 /boot/firmware vfat defaults 0 2\n"
+        "PARTUUID=0000-02 / ext4 defaults,noatime,commit=60 0 1\n"
+        "tmpfs /tmp tmpfs defaults,noatime,nosuid,nodev,mode=1777,size=50% 0 0\n"
+        "tmpfs /var/tmp tmpfs defaults,noatime,nosuid,nodev,mode=1777,size=25% 0 0\n",
+    )
 
 
 def _check(root: Path, boot: Path) -> subprocess.CompletedProcess[str]:
@@ -153,7 +207,66 @@ SPOILERS: dict[str, Spoil] = {
     "nox.service not enabled": lambda r, b: (
         r / "etc/systemd/system/multi-user.target.wants/nox.service"
     ).unlink(),
+    # O2
+    "nox-ssh.service enabled": lambda r, b: _link(
+        r / "etc/systemd/system/multi-user.target.wants/nox-ssh.service", "/x"
+    ),
+    "authorized_keys under /etc": lambda r, b: _write(r / "etc/nox-os/ssh/authorized_keys", "x"),
+    "sshd with passwords": lambda r, b: _replace(
+        r / "etc/nox-os/ssh/sshd_config", "PasswordAuthentication no", "PasswordAuthentication yes"
+    ),
+    "sshd for everyone": lambda r, b: _replace(
+        r / "etc/nox-os/ssh/sshd_config", "AllowUsers nox-admin@10.0.0.0/8", "AllowUsers *"
+    ),
+    "sshd including other files": lambda r, b: _append(
+        r / "etc/nox-os/ssh/sshd_config", "Include /etc/ssh/sshd_config.d/*.conf\n"
+    ),
+    "sudo outside /run": lambda r, b: _write(r / "etc/sudoers.d/50-nox-os", "@includedir /etc/x\n"),
+    "no root helper": lambda r, b: (
+        r / "etc/systemd/system/sockets.target.wants/nox-os-helper.socket"
+    ).unlink(),
+    "nox.service without its sandbox": lambda r, b: _replace(
+        r / "etc/systemd/system/nox.service", "ProtectSystem=strict", "ProtectSystem=full"
+    ),
+    "nftables not enabled": lambda r, b: (
+        r / "etc/systemd/system/sysinit.target.wants/nftables.service"
+    ).unlink(),
+    "no firewall path unit": lambda r, b: (
+        r / "etc/systemd/system/multi-user.target.wants/nox-firewall.path"
+    ).unlink(),
+    "a boot firewall that accepts": lambda r, b: _replace(
+        r / "etc/nftables.conf",
+        "hook input priority filter; policy drop;",
+        "hook input priority filter; policy accept;",
+    ),
+    "a boot firewall with SSH open": lambda r, b: _replace(
+        r / "etc/nftables.conf", 'iif "lo" accept', 'iif "lo" accept\n    tcp dport 22 accept'
+    ),
+    "a persistent journal": lambda r, b: (r / "var/log/journal").mkdir(parents=True),
+    "no journald limit": lambda r, b: (r / "etc/systemd/journald.conf.d/50-nox-os.conf").unlink(),
+    "/ with access times": lambda r, b: _replace(
+        r / "etc/fstab", "defaults,noatime,commit=60", "defaults"
+    ),
+    "/tmp on the card": lambda r, b: _replace(r / "etc/fstab", "tmpfs /tmp ", "#tmpfs /tmp "),
+    "a swap file": lambda r, b: _write(r / "var/swap", "x"),
+    "a swap file in fstab": lambda r, b: _append(r / "etc/fstab", "/var/swap none swap sw 0 0\n"),
+    "swap on the card": lambda r, b: _write(
+        r / "etc/rpi/swap.conf.d/50-nox-os.conf", "[Main]\nMechanism=auto\n"
+    ),
+    "no kernel hardening": lambda r, b: (r / "etc/sysctl.d/90-nox-os.conf").unlink(),
+    "Bluetooth not masked": lambda r, b: (r / "etc/systemd/system/bluetooth.service").unlink(),
+    "a login prompt on tty1": lambda r, b: (r / "etc/systemd/system/getty@tty1.service").unlink(),
 }
+
+
+def _replace(path: Path, old: str, new: str) -> None:
+    text = path.read_text("utf-8")
+    assert old in text, (path, old)
+    path.write_text(text.replace(old, new), "utf-8")
+
+
+def _append(path: Path, line: str) -> None:
+    path.write_text(path.read_text("utf-8") + line, "utf-8")
 
 
 @pytest.mark.parametrize("spoiler", sorted(SPOILERS))

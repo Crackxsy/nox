@@ -63,6 +63,11 @@ DEVICE_SURFACE = frozenset(
         "node.narrow",  # with the PIN from a device, like node.unpair
         "node.pair.start",
         "node.unpair",
+        # Nox-OS remote maintenance: switching on needs the PIN, always (`nox.noxos`); a headless
+        # Pi is administered from a paired device.
+        "noxos.ssh.disable",
+        "noxos.ssh.enable",
+        "noxos.ssh.status",
         "personality.get",
         "plans.approve",
         "plans.discard",

@@ -88,6 +88,7 @@ def test_stage_scripts_are_executable_in_git() -> None:
         "os/pi-gen/stage-nox/prerun.sh",
         "os/pi-gen/stage-nox/01-nox/00-run.sh",
         "os/pi-gen/stage-nox/02-system/00-run.sh",
+        "os/pi-gen/stage-nox/03-hardening/00-run.sh",
         "os/pi-gen/export-nox/00-run.sh",
         "os/tools/check-image.sh",
         "os/tools/qemu-smoke.sh",
@@ -209,3 +210,102 @@ def test_the_installer_refuses_options_that_do_not_belong(
 ) -> None:
     result = _installer(*args, env={**os.environ, "NOX_ACTION": action})
     assert result.returncode == 2, result.stderr
+
+
+# ---- O2: hardening ----------------------------------------------------------------------------
+
+HARDENING_STAGE = PIGEN / "stage-nox" / "03-hardening"
+
+
+def _unit(name: str) -> dict[str, dict[str, list[str]]]:
+    """A systemd unit file as {section: {key: [values]}} (repeated keys kept)."""
+    sections: dict[str, dict[str, list[str]]] = {}
+    current: dict[str, list[str]] = {}
+    for raw in (HARDENING_STAGE / "files" / name).read_text("utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            current = sections.setdefault(line.strip("[]"), {})
+            continue
+        key, _, value = line.partition("=")
+        current.setdefault(key, []).append(value)
+    return sections
+
+
+def test_remote_maintenance_can_never_be_enabled_at_boot() -> None:
+    ssh = _unit("nox-ssh.service")
+    assert "Install" not in ssh  # nothing to enable: only the helper starts it
+    service = ssh["Service"]
+    assert service["ExecStart"] == ["/usr/sbin/sshd -D -e -f /etc/nox-os/ssh/sshd_config"]
+    assert service["KillMode"] == ["control-group"]  # open sessions end with it
+    assert "--stopped" in service["ExecStopPost"][0]
+    run = (HARDENING_STAGE / "00-run.sh").read_text("utf-8")
+    assert "nox-ssh.service" not in run.split("systemctl enable", 1)[1].split("\n", 2)[0]
+    # O1's masks stay untouched.
+    system = (PIGEN / "stage-nox" / "02-system" / "00-run.sh").read_text("utf-8")
+    assert "systemctl mask ssh.service ssh.socket sshswitch.service" in system
+    assert "unmask" not in run
+
+
+def test_the_root_helper_is_for_the_group_nox_only_and_has_no_privileges() -> None:
+    socket = _unit("nox-os-helper.socket")["Socket"]
+    assert socket["ListenStream"] == ["/run/nox-os/helper/helper.sock"]
+    assert (socket["SocketUser"], socket["SocketGroup"], socket["SocketMode"]) == (
+        ["root"],
+        ["nox"],
+        ["0660"],
+    )
+    assert socket["Accept"] == ["yes"]
+    tmpfiles = (HARDENING_STAGE / "files" / "tmpfiles-nox-os.conf").read_text("utf-8")
+    assert re.search(r"^d /run/nox-os/helper\s+0750 root nox ", tmpfiles, re.M)
+    service = _unit("nox-os-helper@.service")["Service"]
+    assert service["ExecStart"] == ["/usr/bin/python3 -I -S /usr/local/lib/nox-os/nox_os_helper.py"]
+    for key, value in (
+        ("CapabilityBoundingSet", ""),
+        ("ProtectSystem", "strict"),
+        ("ReadWritePaths", "/run/nox-os"),
+        ("PrivateNetwork", "yes"),
+        ("NoNewPrivileges", "yes"),
+        ("RestrictAddressFamilies", "AF_UNIX"),
+    ):
+        assert service[key] == [value], key
+    helper = (HARDENING_STAGE / "files" / "nox_os_helper.py").read_text("utf-8")
+    assert "shell=True" not in helper and "os.system" not in helper
+
+
+def test_sshd_allows_keys_from_private_networks_only() -> None:
+    config = (HARDENING_STAGE / "files" / "sshd_config").read_text("utf-8").splitlines()
+    assert not [line for line in config if line.lower().startswith("include")]
+    allow = next(line for line in config if line.startswith("AllowUsers "))
+    networks = [entry.removeprefix("nox-admin@") for entry in allow.split()[1:]]
+    assert all(entry.startswith("nox-admin@") for entry in allow.split()[1:])
+    from tests.unit.nox_os.conftest import HARDENING, load_tool
+
+    firewall = load_tool("nox_firewall", HARDENING)
+    assert set(networks) == set(firewall.PRIVATE_V4) | set(firewall.PRIVATE_V6)
+    algorithms = next(line for line in config if line.startswith("PubkeyAcceptedAlgorithms "))
+    assert "rsa" not in algorithms and "dss" not in algorithms
+
+
+def test_the_console_status_runs_without_rights() -> None:
+    console = _unit("nox-console.service")
+    assert console["Service"]["DynamicUser"] == ["yes"]
+    assert console["Service"]["TTYPath"] == ["/dev/tty1"]
+    assert console["Service"]["CapabilityBoundingSet"] == [""]
+    assert "getty@tty1.service" in console["Unit"]["Conflicts"][0]
+
+
+def test_the_firewall_fails_closed() -> None:
+    service = _unit("nox-firewall.service")
+    assert service["Unit"]["Requires"] == ["nftables.service"]
+    run = (HARDENING_STAGE / "00-run.sh").read_text("utf-8")
+    assert "nox_firewall.py baseline > /etc/nftables.conf" in run
+    assert "nftables.service nox-firewall.service nox-firewall.path nox-os-helper.socket" in run
+
+
+def test_o2_is_checked_by_the_workflow() -> None:
+    steps = {s.get("name"): s for s in _workflow()["jobs"]["check"]["steps"]}
+    run = steps["Firewall rules, sshd and sudo configuration are valid"]["run"]
+    assert "sudo nft -c -f rules.nft" in run and "sshd -t -f" in run and "visudo -cf" in run
+    assert "03-hardening/files/*.py" in steps["Python tools compile"]["run"]

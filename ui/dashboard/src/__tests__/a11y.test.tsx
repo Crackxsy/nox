@@ -161,6 +161,23 @@ describe('axe-core: zero findings', () => {
     expect(await violations()).toEqual([]);
   });
 
+  it.each([false, true])('on System on Nox-OS, remote maintenance on: %s', async (on) => {
+    harness.answers['security.pin.status'] = { configured: true };
+    harness.answers['noxos.ssh.status'] = {
+      available: true,
+      on,
+      until: on ? new Date(Date.now() + 3_600_000).toISOString() : null,
+      active_keys: on ? ['SHA256:fictitious'] : [],
+      keys: [{ type: 'ssh-ed25519', fingerprint: 'SHA256:fictitious', comment: 'laptop' }],
+      default_minutes: 60,
+      min_minutes: 5,
+      max_minutes: 240,
+    };
+    await start('#/settings/system');
+    expect(screen.getByText(t('ssh_title'))).toBeTruthy();
+    expect(await violations()).toEqual([]);
+  });
+
   it('while stopped, and with a question as a sheet', async () => {
     await start('#/settings');
     await emit('security.kill_switch', { origin: 'ui' });

@@ -40,6 +40,68 @@ source_is_clean() {
   if grep -E '^[[:space:]]*url = ' "$config" | grep -qvE "url = $REPO_URL(\.git)?\$"; then return 1; fi
   ! grep -qiE '://[^/[:space:]]*@|extraheader|password|token|credential' "$config"
 }
+# A unit is enabled for a target (a link in <target>.wants), or not enabled anywhere at all.
+enabled() { [ -L "$root/etc/systemd/system/$1.wants/$2" ]; }
+not_enabled() { none < <(find "$root/etc/systemd/system" -path '*.wants/*' -name "$1" 2>/dev/null); }
+firewall_units_enabled() {
+  enabled multi-user.target nox-firewall.service && enabled multi-user.target nox-firewall.path
+}
+console_on_tty1() {
+  enabled multi-user.target nox-console.service && masked getty@tty1.service autovt@tty1.service
+}
+# The rules nftables.service loads at boot: default deny inbound, and no port of Nox's or SSH open.
+firewall_closed_at_boot() {
+  local rules="$root/etc/nftables.conf"
+  [ -f "$rules" ] || return 1
+  grep -qE 'type filter hook input priority filter; policy drop;' "$rules" || return 1
+  grep -qE 'type filter hook forward priority filter; policy drop;' "$rules" || return 1
+  ! grep -qE 'dport (22|80|47843|47844)( |$)' "$rules"
+}
+# Every line in file $1 (exactly), the rest of the arguments.
+has_lines() {
+  local file="$1" want; shift
+  [ -f "$file" ] || return 1
+  for want in "$@"; do grep -qxF "$want" "$file" || return 1; done
+}
+# Remote maintenance's own sshd configuration: key only, nox-admin only, keys from /run only.
+sshd_key_only() {
+  local cfg="$root/etc/nox-os/ssh/sshd_config"
+  has_lines "$cfg" 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' \
+    'PermitRootLogin no' 'AuthenticationMethods publickey' 'PermitEmptyPasswords no' \
+    'AuthorizedKeysFile /run/nox-os/ssh/authorized_keys' 'AllowTcpForwarding no' || return 1
+  grep -qE '^AllowUsers( nox-admin@[0-9a-f.:]+/[0-9]+)+$' "$cfg" || return 1
+  ! grep -qiE '^[[:space:]]*Include' "$cfg"
+}
+journal_in_memory() {
+  grep -qsx 'Storage=volatile' "$root"/etc/systemd/journald.conf.d/*.conf && [ ! -e "$root/var/log/journal" ]
+}
+root_mount_spares_the_card() {
+  awk '$2 == "/" && $3 == "ext4" && $4 ~ /(^|,)noatime(,|$)/ && $4 ~ /(^|,)commit=[0-9]+(,|$)/ { ok = 1 }
+       END { exit !ok }' "$root/etc/fstab"
+}
+tmp_in_memory() {
+  awk '$1 == "tmpfs" && $2 == "/tmp" { t = 1 } $1 == "tmpfs" && $2 == "/var/tmp" { v = 1 }
+       END { exit !(t && v) }' "$root/etc/fstab"
+}
+swap_in_memory_only() {
+  grep -qsx 'Mechanism=zram' "$root"/etc/rpi/swap.conf.d/*.conf || return 1
+  absent "$root/var/swap" "$root/sbin/dphys-swapfile" "$root/usr/sbin/dphys-swapfile" || return 1
+  none < <(awk '$3 == "swap"' "$root/etc/fstab")
+}
+kernel_hardened() {
+  has_lines "$root/etc/sysctl.d/90-nox-os.conf" 'kernel.kptr_restrict = 2' 'kernel.dmesg_restrict = 1' \
+    'kernel.unprivileged_bpf_disabled = 1' 'net.ipv4.conf.all.rp_filter = 2' \
+    'net.ipv4.conf.all.accept_redirects = 0' 'net.ipv6.conf.all.accept_redirects = 0'
+}
+# sudo for nox-admin only from /run (written while remote maintenance is on, gone at reboot).
+sudo_only_while_maintained() {
+  [ "$(grep -vE '^[[:space:]]*(#|$)' "$root/etc/sudoers.d/50-nox-os" 2>/dev/null)" = '@includedir /run/nox-os/sudoers.d' ]
+}
+nox_service_sandboxed() {
+  has_lines "$root/etc/systemd/system/nox.service" 'User=nox' 'NoNewPrivileges=yes' \
+    'ProtectSystem=strict' 'ProtectHome=yes' 'CapabilityBoundingSet=' 'PrivateDevices=yes' \
+    'ReadWritePaths=/var/lib/nox'
+}
 cmdline_is_plain() {
   [ ! -f "$boot/cmdline.txt" ] || ! grep -qE '(^|[[:space:]])(systemd\.run|init)=' "$boot/cmdline.txt"
 }
@@ -66,13 +128,36 @@ run_checks() {
   check "no password in /etc/shadow" none < <(awk -F: '$2 != "*" && $2 != "!" && $2 != "!*" && $2 != "!!" {print $1}' "$root/etc/shadow")
   check "no password in /etc/passwd" none < <(awk -F: '$2 != "x" {print $1}' "$root/etc/passwd")
   check "no NOPASSWD sudo" none < <(grep -rls 'NOPASSWD' "$root/etc/sudoers" "$root/etc/sudoers.d" 2>/dev/null)
-  check "no authorized_keys" none < <(find "$root/root" "$root/home" -name 'authorized_keys*' 2>/dev/null)
+  check "no authorized_keys" none < <(find "$root/root" "$root/home" "$root/etc" "$root/run" "$root/var" \
+    -name 'authorized_keys*' 2>/dev/null)
   check "no SSH host keys (made per device on first boot)" none < <(find "$root/etc/ssh" -name 'ssh_host_*' 2>/dev/null)
   check "ssh.service, ssh.socket, sshswitch.service masked" masked ssh.service ssh.socket sshswitch.service
   check "no private keys" none < <(grep -rlI -E -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY' \
     "$root/etc" "$root/root" "$root/home" "$root/var/lib" "$root/opt/nox/state" "$boot" 2>/dev/null)
   check "no GitHub tokens anywhere" none < <(grep -rlI -E \
     -e '(ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36}' -e 'github_pat_[A-Za-z0-9_]{40,}' "$root" "$boot" 2>/dev/null)
+
+  # O2: remote maintenance is off, and only the root helper switches it on (key only, LAN only).
+  check "nox-ssh.service not enabled" not_enabled nox-ssh.service
+  check "nox-ssh's sshd: key only, nox-admin only, from private networks" sshd_key_only
+  check "sudo only while remote maintenance is on (/run)" sudo_only_while_maintained
+  check "root helper socket enabled" enabled sockets.target nox-os-helper.socket
+  check "nox.service sandboxed (user nox, ProtectSystem=strict, no privileges)" nox_service_sandboxed
+
+  # O2: firewall, default deny from the start.
+  check "nftables.service enabled" enabled sysinit.target nftables.service
+  check "nox-firewall.service and .path enabled" firewall_units_enabled
+  check "boot firewall: default deny, no port of Nox's or SSH open" firewall_closed_at_boot
+
+  # O2: SD-card wear, kernel settings, unused services, the console.
+  check "journal in memory only (Storage=volatile, no /var/log/journal)" journal_in_memory
+  check "/ mounted noatime with a commit interval" root_mount_spares_the_card
+  check "/tmp and /var/tmp in memory (tmpfs)" tmp_in_memory
+  check "swap only as zram, no swap file" swap_in_memory_only
+  check "kernel and network hardening (sysctl)" kernel_hardened
+  check "Bluetooth, triggerhappy, ModemManager masked" masked bluetooth.service hciuart.service \
+    triggerhappy.service ModemManager.service
+  check "console status on tty1, no login prompt there" console_on_tty1
 
   # Seeds and secrets of the system are made per device.
   check "machine-id made on first boot" none < <(grep -vx 'uninitialized' "$root/etc/machine-id")

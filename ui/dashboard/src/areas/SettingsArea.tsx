@@ -33,6 +33,7 @@ import { troublesOf } from '../shell/presence';
 import type { Route, SettingsPageId } from '../shell/routes';
 import { type ThemePref, THEME_PREFS } from '../theme';
 import { SETTINGS_LAYOUT, layoutOf, unplacedPaths } from './settings/layout';
+import { RemoteMaintenance } from './settings/RemoteMaintenance';
 import { HealthTable, ProvidersList, VoiceFacts } from './settings/SystemParts';
 
 const THEME_LABEL: Record<ThemePref, Key> = {
@@ -287,6 +288,7 @@ export default function SettingsArea(props: SettingsAreaProps) {
       body = (
         <>
           <HealthTable t={t} lang={lang} state={state} />
+          <RemoteMaintenance t={t} lang={lang} client={client} />
           {forms}
           {config && leftovers.length > 0 && (
             <ConfigForm
