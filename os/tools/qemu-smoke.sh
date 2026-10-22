@@ -87,13 +87,17 @@ log="$work/serial.log"
 qemu_log="$work/qemu.log"
 qemu-system-aarch64 --version | head -n1
 file "$bootfiles/kernel8.img" 2>/dev/null || true
-# The image's own kernel; the command line replaces cmdline.txt (no first-boot resize in a test).
+# The image's own kernel; the command line replaces cmdline.txt: no first-boot resize in a test,
+# and no hardware watchdog - QEMU's raspi model resets the machine the moment one is started.
 # earlycon: the kernel's first lines reach the serial log before its console driver is up.
+cmdline="earlycon=pl011,0x3f201000 console=ttyAMA0,115200 root=/dev/mmcblk0p2 rootfstype=ext4"
+cmdline="$cmdline rootwait rw dwc_otg.lpm_enable=0 systemd.show_status=1"
+cmdline="$cmdline systemd.mask=rpi-resize.service systemd.watchdog_sec=off"
+cmdline="$cmdline modprobe.blacklist=bcm2835_wdt initcall_blacklist=bcm2835_wdt_driver_init"
 qemu-system-aarch64 -machine raspi3b -m 1G -smp 4 \
   -kernel "$bootfiles/kernel8.img" -dtb "$bootfiles/bcm2710-rpi-3-b-plus.dtb" \
-  -drive "file=$copy,if=sd,format=raw" \
-  -append "earlycon=pl011,0x3f201000 console=ttyAMA0,115200 root=/dev/mmcblk0p2 rootfstype=ext4 rootwait rw dwc_otg.lpm_enable=0 systemd.mask=rpi-resize.service systemd.show_status=1" \
-  -display none -serial "file:$log" -monitor none -d guest_errors -D "$qemu_log" \
+  -drive "file=$copy,if=sd,format=raw" -append "$cmdline" \
+  -display none -serial "file:$log" -monitor none -d guest_errors -D "$qemu_log" -no-reboot \
   >"$work/qemu.out" 2>&1 &
 qemu_pid=$!
 
