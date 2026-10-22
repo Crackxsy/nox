@@ -404,7 +404,7 @@ jobs:
             "$nox_py" -c 'import pathlib, sys
           from nox.release.manifest import asset_for_file, build_manifest
           d = pathlib.Path(sys.argv[1])
-          d.joinpath("release-manifest.json").write_bytes(build_manifest(tag=sys.argv[2], source_commit=sys.argv[3], assets=[asset_for_file(d / f"nox-ui-{sys.argv[2]}.tar.gz")]))' "$dir" "$1" "$commit"
+          d.joinpath("release-manifest.json").write_bytes(build_manifest(tag=sys.argv[2], source_commit=sys.argv[3], assets=[asset_for_file(d / f"nox-ui-{sys.argv[2]}.tar.gz")], kind=sys.argv[4]))' "$dir" "$1" "$commit" "${2:-release}"
             openssl pkeyutl -sign -inkey "$d/test.key" -rawin -in "$dir/release-manifest.json" -out "$d/sig.bin"
             printf '{"schema": "nox-release-signature/1", "algorithm": "ed25519", "key_id": "%s", "signature": "%s"}\n' \
               "${key%%|*}" "$(base64 -w0 "$d/sig.bin")" > "$dir/release-manifest.json.sig"
@@ -431,6 +431,9 @@ jobs:
           refused "$d/rel-v0.7.0" v0.7.0 NOX_TEST_TRUSTED_KEYS="$other"
           refused "$d/rel-v0.7.0" v0.7.0 NOX_TEST_TRUSTED_KEYS="$expired"
           refused "$d/rel-v0.6.0" v0.6.0 NOX_RELEASE_FLOOR=0.7.0
+          # The Nox-OS image manifest, validly signed, is not the release manifest.
+          mk v0.7.5 os-image
+          refused "$d/rel-v0.7.5" v0.7.5
           check "$d/rel-v0.6.0" v0.6.0 NOX_RELEASE_FLOOR=0.7.0 NOX_ALLOW_DOWNGRADE=1 | grep -q ' 0.7.0$'
           # One changed byte; a missing signature.
           sed -i 's/"size": 6/"size": 7/' "$d/rel-v0.7.0/release-manifest.json"

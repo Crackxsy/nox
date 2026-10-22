@@ -179,7 +179,11 @@ def clean_result(raw: Any, *, device: str) -> dict[str, Any]:
         nox = raw.get("_nox")
         refused = nox.get("refused") if isinstance(nox, dict) else None
         if isinstance(refused, str):
-            return {"error": "refused_on_device", "reason": refused[:64], "device": device}
+            answer = {"error": "refused_on_device", "reason": refused[:64], "device": device}
+            said = " ".join(texts)
+            if "(" in said and said.endswith(")"):
+                answer["detail"] = said[said.index("(") + 1 : -1][:200]
+            return answer
         return {"error": "failed_on_device", "detail": " ".join(texts)[:500], "device": device}
     out: dict[str, Any] = {"device": device}
     structured = raw.get("structuredContent")

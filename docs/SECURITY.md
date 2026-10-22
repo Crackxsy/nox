@@ -898,8 +898,45 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   scanned for tags, anchors and aliases - refused - then `safe_load`). Documents, pages, PDFs,
   SVG and media (`NOT_WRITABLE_EXTENSIONS`) are refused (`format_not_writable`); there is no
   content scanner for them to bypass. Everywhere: no path component starting with `.`, no write
-  at or below a folder holding `.git`, `.hg` or `.svn` up to the allowed folder (checked on each
-  walked directory handle on POSIX and on the final path), no file without an allowed
+  at or below a folder holding a version-control marker (`.git .hg .svn .jj .bzr _darcs .sl` -
+  `working_tree_refused`) or an app-workspace marker (`.obsidian .logseq logseq/config.edn .foam
+  .dendron dendron.yml .vscode .idea` - `app_workspace_refused`: a vault runs `dataviewjs` and
+  Templater from its notes; a dot-folder holding `app.json`, `appearance.json`,
+  `community-plugins.json`, `core-plugins.json`, `workspace.json`, `plugins/` or `config.edn`
+  marks a vault whose config folder was renamed), checked on each walked directory handle on
+  POSIX and by name on the final path's parents **up to the drive root** - at the home folder and
+  above generic markers do not count (`~/.vscode`, `~/.idea` and a bare `plugins/` are the apps'
+  own settings), but version control and an unmistakable vault do (`.obsidian`, `.logseq`,
+  `logseq/config.edn`, or a dot-folder with `app.json` and `workspace.json` or
+  `core-plugins.json`); every entry of a folder is looked at, only dot-folders are opened, and a
+  folder too full to read whole is refused rather than half-read -
+  so a repository or vault around the allowed folder counts too; `nox node allow files --folder`
+  refuses such a folder up front. Not detectable, and documented: an allowed folder linked
+  (symlink, junction) *into* a vault from the vault's side. `.md` text is checked without
+  parsing Markdown (a parser that differs from the note app's is a bypass) and with linear
+  patterns only (no quantifier can overlap the next one, and no cap turns into a skip - an
+  over-long code-block language or a fence followed by an unreadable character is refused; a
+  1 MB adversarial text takes milliseconds): after `html.unescape`, NFKC and case folding, every run of three or more
+  backticks or tildes - wherever it stands - must name no language or one of
+  `INERT_FENCE_LANGUAGES` (text and data formats only: text, plaintext, txt, md, markdown, json,
+  yaml, yml, toml, ini, csv, diff, log); a programming language (Execute Code and similar plugins
+  run it on a click), a plugin's block or a rendered language (Mermaid, math/LaTeX, HTML, XML,
+  CSS) is refused. As a further layer it is refused when it contains any of `dataviewjs`,
+  `dataview-js`, `js-engine`, `templater`, `meta-bind-js`, `<%`, `<script`, `javascript:`,
+  `vbscript:`, `obsidian://`, `file:`, `<iframe`, `<object`, `<embed`, inline Dataview JS (`$=`
+  or `=this.` after a backtick or tilde), `%>` with Templater's `tp.`, or an `on...=` handler in
+  a raw HTML tag - wherever it stands. Accepted false positive: Nox cannot write a note that
+  merely mentions these plugin keywords. Every text write is capped at 256 KB, JSON/YAML at 64 KB (YAML is parsed
+  with libyaml's `CSafeLoader` where available). An append to a
+  `.md` file is judged on the whole file - read through the verified handle, refused when the
+  file is over the cap - so it cannot be assembled in pieces, and the refusal says what blocks
+  it. A nesting deep enough to exhaust a parser is `invalid_content`. All text checks run before
+  anyone is asked and **off the event loop** with a 2 s limit (`tools.off_loop`). The text check is stateless
+  (`NodeGate.precheck`: no lock, budget, receipt or audit), so a check that runs out of time is
+  simply abandoned - it can never spend budget, consume a receipt or record an "allow" after its
+  `check_timeout` refusal; the gate's stateful part then runs fast, under a lock. On the core the
+  route's `prepare` runs the check before the permission scope; a
+  write the node would refuse is never put before a person; no file without an allowed
   extension, and a config-name layer (`settings/tasks/launch/launchSettings/keybindings/package/
   project/tsconfig/jsconfig/composer/deno/flows.json`, `appsettings*.json`, `*compose*`,
   `lefthook*`, `*pipelines*` YAML, `Taskfile`, `configuration.yaml`, `automations.yaml`,
@@ -913,7 +950,8 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   completes; a stop ends everything after it. Accepted residual risk for PASSIVE formats: a
   `.csv` formula runs only after the spreadsheet's own prompt and a user action.
 - **Profile rules and nodes**: a profile rule that ALLOWS applies to a call on a node only when it
-  names the device (`device:` glob on `ProfileRule`); rules that confirm or deny apply everywhere.
+  names that device exactly (`device:` with the full 32-hex id - `validate_profile` refuses a
+  pattern for an ALLOW); rules that confirm or deny apply everywhere and may use a glob.
   A broad `tool: file*, decision: allow` therefore never lets Nox write on another PC unasked.
 - Node file tools also never open Nox's own folder (`nox_home()`), in case a core runs on the same
   device. The protected places' identities (for the hard-link check) are cached for 30 s, and the

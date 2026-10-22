@@ -39,13 +39,15 @@ import contextlib
 import errno
 import fnmatch
 import functools
+import html
 import json
 import os
 import re
 import stat
 import sys
 import time
-from collections.abc import Iterable, Iterator
+import unicodedata
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -60,7 +62,12 @@ __all__ = [
     "list_folder",
     "open_existing",
     "open_new",
+    "INERT_FENCE_LANGUAGES",
     "content_refusal",
+    "marked_above",
+    "marking",
+    "markdown_finding",
+    "markdown_runs_code",
     "secret_locations",
     "structured",
     "write_refusal",
@@ -233,8 +240,25 @@ _CONFIG_PATTERNS = (
     "configuration.yaml",
     "automations.yaml",
 )
-#: A folder holding one of these is a working tree: nothing at or below it is written.
-WORKING_TREE_MARKERS = (".git", ".hg", ".svn")
+#: A folder holding one of these is a working tree: nothing at or below it is written - also
+#: when the working tree lies above the allowed folder.
+WORKING_TREE_MARKERS = (".git", ".hg", ".svn", ".jj", ".bzr", "_darcs", ".sl")
+#: A folder holding one of these is an app workspace that runs what its notes say (an Obsidian
+#: vault runs `dataviewjs` blocks and Templater tags, a Logseq graph its config, an editor its
+#: tasks): treated like a working tree. Allow a plain folder outside the workspace instead.
+APP_WORKSPACE_MARKERS = (
+    ".obsidian",
+    ".logseq",
+    "logseq/config.edn",
+    ".foam",
+    ".dendron",
+    "dendron.yml",
+    ".vscode",
+    ".idea",
+)
+#: The largest JSON/YAML a node writes (plain text: `MAX_TEXT_BYTES`): parsing stays well
+#: under the check's time limit, also with pure-Python YAML on a Raspberry Pi.
+MAX_STRUCTURED_BYTES = 64 * 1024
 
 
 def extension_of(name: str) -> str:
@@ -274,26 +298,135 @@ def structured(path: str) -> bool:
 _YAML_ACTIVE = ("TagToken", "AnchorToken", "AliasToken")
 
 
+#: Markdown a note app could run as code - refused in any `.md`, workspace or not. These are
+#: position-independent tokens, not a Markdown parser: a fence inside a blockquote, a list item
+#: or an unbalanced fence is still found. A note that merely mentions one of them is refused too
+#: (accepted: Nox cannot write notes that mention these plugin keywords).
+_MD_TOKENS = (
+    "dataviewjs",
+    "dataview-js",
+    "js-engine",
+    "templater",
+    "meta-bind-js",
+    "<%",
+    "<script",
+    "javascript:",
+    "vbscript:",
+    "obsidian://",
+    "<iframe",
+    "<object",
+    "<embed",
+)
+#: Code-block languages that are data or plain text: a fence may name only these (or nothing).
+#: Any other name could be a plugin's runnable block (Dataview JS, JS Engine, Templater,
+#: Datacore, ...), a language the app renders (Mermaid, math, HTML, XML, CSS) or one a plugin
+#: runs on a click (Execute Code runs Python, shells, JS, ...) - and no list of those is complete.
+INERT_FENCE_LANGUAGES = frozenset(
+    {
+        "text",
+        "plaintext",
+        "txt",
+        "md",
+        "markdown",
+        "json",
+        "yaml",
+        "yml",
+        "toml",
+        "ini",
+        "csv",
+        "diff",
+        "log",
+    }
+)
+#: The largest text a node writes (and the most of an existing file an append reads): every
+#: check stays a few milliseconds, whatever the text.
+MAX_TEXT_BYTES = 256 * 1024
+#: The scan's patterns are linear without any cap that could turn into a skip: no quantifier
+#: can overlap the next one, and nothing has to be given back. A fence run takes the whole run
+#: of backticks/tildes greedily, the blanks after it and the whole info word (each may be empty),
+#: so a match never fails or backtracks; `next` is the character right after the info word.
+_FENCE_INFO = re.compile(r"(?:`{3,}|~{3,})[ \t]*\{?[ \t]*\.?([^\s`~}]*)(.?)", re.S)
+#: Inline JS: a backtick or tilde, any whitespace, `$=` or `=this.` (whitespace cannot overlap
+#: either side).
+_INLINE_JS = re.compile(r"[`~]\s*(?:\$=|=this\.)")
+#: An event handler inside a raw HTML tag; the tag's text cannot run past the next `<` or `>`,
+#: so each tag is read once.
+_HANDLER = re.compile(r"<[a-z][^<>]*?\bon[a-z0-9_]+\s*=")
+#: The longest code-block language Nox accepts; anything longer is refused, never cut.
+MAX_FENCE_LANGUAGE = 64
+_FILE_LINK = re.compile(r"(?<![a-z0-9])file:")
+_TEMPLATER_API = re.compile(r"\btp\.")
+
+
+def markdown_finding(text: str) -> str | None:
+    """What in Markdown a note app might run, in a few words - or None. After HTML entities are
+    decoded, NFKC applied and case folded, with linear patterns only:
+
+    * every run of three or more backticks or tildes, wherever it stands, names no language or
+      one of `INERT_FENCE_LANGUAGES`; a backtick or tilde followed by `$=` or `=this.` is
+      inline JS;
+    * none of `_MD_TOKENS`, no `file:` link, no `%>` together with Templater's `tp.`;
+    * no `on...=` handler inside a raw HTML tag.
+    """
+    body = unicodedata.normalize("NFKC", html.unescape(text)).casefold()
+    for token in _MD_TOKENS:
+        if token in body:
+            return f"{token!r}"
+    if _FILE_LINK.search(body):
+        return "a file: link"
+    if "%>" in body and _TEMPLATER_API.search(body):
+        return "a Templater tag"
+    if _INLINE_JS.search(body):
+        return "inline Dataview JS"
+    for fence in _FENCE_INFO.finditer(body):
+        language, after = fence.group(1), fence.group(2)
+        if len(language) > MAX_FENCE_LANGUAGE:
+            return "an overlong code block language"
+        if language and language not in INERT_FENCE_LANGUAGES:
+            return f"a {language[:MAX_FENCE_LANGUAGE]!r} code block"
+        if not language and after not in ("", "\n", "\r", "`", "~", "}"):
+            # Something other than the end of the line follows the fence without a word
+            # (a vertical tab, a form feed, ...): refused rather than guessed.
+            return "an unreadable code block language"
+    if _HANDLER.search(body):
+        return "an HTML event handler"
+    return None
+
+
+def markdown_runs_code(text: str) -> bool:
+    """Whether Markdown carries anything a note app might run (`markdown_finding`)."""
+    return markdown_finding(text) is not None
+
+
 def content_refusal(path: str, text: str) -> str | None:
-    """Why the text of a STRUCTURED write is refused even when confirmed: JSON that does not
-    parse; YAML that does not parse plainly (`safe_load`) or carries a tag, an anchor or an
-    alias. Plain text formats are not looked at."""
+    """Why the text of a write is refused even when confirmed: over `MAX_TEXT_BYTES`; JSON that
+    does not parse; YAML that does not parse plainly (`safe_load`) or carries a tag, an anchor or
+    an alias; Markdown with anything a note app might run. Text only, bounded and linear - it
+    runs before anyone is asked (off the event loop), on the core and on the node."""
+    if len(text) > MAX_TEXT_BYTES or len(text.encode("utf-8", "replace")) > MAX_TEXT_BYTES:
+        return "too_large"
     ext = extension_of(re.split(r"[\\/]", path)[-1])
+    if ext in STRUCTURED_EXTENSIONS and len(text.encode("utf-8", "replace")) > MAX_STRUCTURED_BYTES:
+        return "too_large"
+    if ext == ".md":
+        return "content_refused" if markdown_runs_code(text) else None
     if ext == ".json":
         try:
             json.loads(text)
-        except ValueError:
+        except (ValueError, RecursionError):
             return "invalid_content"
         return None
     if ext in (".yaml", ".yml"):
         import yaml  # noqa: PLC0415
 
+        # The C loader where libyaml is there: the same rules, many times faster.
+        loader: Any = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
         try:
-            for token in yaml.scan(text, Loader=yaml.SafeLoader):
+            for token in yaml.scan(text, Loader=loader):
                 if type(token).__name__ in _YAML_ACTIVE:
                     return "content_refused"
-            yaml.safe_load(text)
-        except yaml.YAMLError:
+            yaml.load(text, Loader=loader)  # noqa: S506 - a safe loader, plain or C
+        except (yaml.YAMLError, RecursionError):
             return "invalid_content"
         return None
     return None
@@ -524,8 +657,9 @@ class Folders:
                 raise OutsideFolders(refusal, "only data files are written (allowlist)")
             if execution_trigger(final):
                 raise OutsideFolders("execution_trigger", "writing there could make something run")
-            if _working_tree_up(final, root.path):
-                raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
+            marked = marked_above(os.path.dirname(final))
+            if marked is not None:
+                raise OutsideFolders(marked, "nothing in a repository or app workspace is written")
 
 
 #: How long the protected places' identities are reused: walking browser profiles on every call
@@ -631,7 +765,8 @@ def open_existing(folders: Folders, text: str, *, write: bool = False) -> int:
         _lexical_write_check(root, parts)
     if _WINDOWS:
         return _win_open(folders, root, parts, write=write, create=False)
-    flags = (os.O_WRONLY if write else os.O_RDONLY) | _NONBLOCK | _NOCTTY
+    # Read and write: an append reads what is there through the same handle (`hands._write`).
+    flags = (os.O_RDWR if write else os.O_RDONLY) | _NONBLOCK | _NOCTTY
     return _posix_open(folders, root, parts, flags, write=write, create=False)
 
 
@@ -651,9 +786,9 @@ def _lexical_write_check(root: _Root, parts: list[str]) -> None:
     refusal = write_refusal(parts)
     if refusal is not None:
         raise OutsideFolders(refusal, "only data files are written (allowlist)")
-    for depth in range(len(parts)):
-        if _working_tree(os.path.join(root.path, *parts[:depth])):
-            raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
+    marked = marked_above(os.path.join(root.path, *parts[:-1]))
+    if marked is not None:
+        raise OutsideFolders(marked, "nothing in a repository or app workspace is written")
     if execution_trigger(os.path.join(root.path, *parts)):
         raise OutsideFolders("execution_trigger", "writing there could make something run")
 
@@ -683,30 +818,119 @@ def list_folder(folders: Folders, text: str) -> Iterator[Iterator[os.DirEntry[st
         os.close(fd)
 
 
-def _working_tree(folder: str) -> bool:
-    """Whether `folder` is the top of a working tree (holds `.git`, `.hg` or `.svn`)."""
-    return any(os.path.lexists(os.path.join(folder, marker)) for marker in WORKING_TREE_MARKERS)
+#: What a vault's config folder holds, whatever it is called (Obsidian lets a vault rename its
+#: `.obsidian`): a dot-folder with one of these directly inside marks an app workspace.
+VAULT_SIGNATURE = (
+    "app.json",
+    "appearance.json",
+    "community-plugins.json",
+    "core-plugins.json",
+    "workspace.json",
+    "plugins",
+    "config.edn",
+)
+#: Markers that mean a note vault even in the home folder (where `.vscode`, `.idea` or a bare
+#: `plugins` folder are an app's own settings, not a workspace).
+SPECIFIC_WORKSPACE_MARKERS = (".obsidian", ".logseq", "logseq/config.edn")
+#: More entries than any real folder holds: a folder this full is refused, never half-read.
+_MAX_FOLDER_ENTRIES = 200_000
 
 
-def _working_tree_up(final: str, root: str) -> bool:
-    """Whether any folder from the one holding `final` up to the allowed folder is a working
-    tree - decided on the verified final path."""
-    folder = os.path.dirname(final)
-    while _within(folder, root):
-        if _working_tree(folder):
-            return True
-        parent = os.path.dirname(folder)
-        if parent == folder:
-            break
-        folder = parent
+def _signature(has: Callable[[str], bool], *, strict: bool) -> bool:
+    """Whether a config folder (`has(name)`: it holds `name`) is a vault's. `strict`: only the
+    unmistakable combination - `app.json` with `workspace.json` or `core-plugins.json`."""
+    if strict:
+        return has("app.json") and (has("workspace.json") or has("core-plugins.json"))
+    return any(has(name) for name in VAULT_SIGNATURE)
+
+
+def _holds(folder: str, name: str) -> bool:
+    return os.path.lexists(os.path.join(folder, name))
+
+
+def _holds_at(fd: int, folder: str, name: str) -> bool:
+    return _peek(f"{folder}/{name}", fd) is not None
+
+
+def _signed(folder: str, *, strict: bool = False) -> bool:
+    """Whether a dot-folder directly inside `folder` carries a vault's signature. Every entry is
+    looked at (listing is cheap; only dot-folders are opened) - a cap would be a skip."""
+    try:
+        with os.scandir(folder) as entries:
+            for count, entry in enumerate(entries):
+                if count >= _MAX_FOLDER_ENTRIES:
+                    return True  # too full to be sure: refuse
+                if not entry.name.startswith(".") or not entry.is_dir(follow_symlinks=False):
+                    continue
+                if _signature(functools.partial(_holds, entry.path), strict=strict):
+                    return True
+    except OSError:
+        return False
     return False
+
+
+def marking(folder: str, *, generic: bool = True) -> str | None:
+    """`working_tree_refused` when `folder` is the top of a working tree, `app_workspace_refused`
+    when it is an app workspace (a marker, or a dot-folder with a vault's signature), else None -
+    by name, not following anything. `generic=False` (the home folder and above) looks only for
+    unmistakable vaults: `.vscode`, `.idea` or a bare `plugins` folder there are apps' settings."""
+    if any(os.path.lexists(os.path.join(folder, m)) for m in WORKING_TREE_MARKERS):
+        return "working_tree_refused"
+    markers = APP_WORKSPACE_MARKERS if generic else SPECIFIC_WORKSPACE_MARKERS
+    if any(os.path.lexists(os.path.join(folder, m)) for m in markers):
+        return "app_workspace_refused"
+    if _signed(folder, strict=not generic):
+        return "app_workspace_refused"
+    return None
+
+
+def marked_above(folder: str) -> str | None:
+    """The first marking of `folder` or any folder above it, up to the root of its drive - so a
+    repository or a vault around the allowed folder counts as well as one inside it. At the home
+    folder and above, generic markers (`.vscode`, `.idea`) do not count, a vault still does."""
+    home = _plain(os.path.realpath(Path.home()))
+    current = folder
+    for _ in range(64):
+        at_or_above_home = _within(home, current)
+        found = marking(current, generic=not at_or_above_home)
+        if found is not None:
+            return found
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+    return "working_tree_refused"  # deeper than any real path: refuse rather than guess
+
+
+def _marked_fd(fd: int) -> None:
+    """The working-tree and workspace rule on a walked directory handle (POSIX) - every entry is
+    looked at, only dot-folders are inspected."""
+    if any(_peek(m, fd) is not None for m in WORKING_TREE_MARKERS):
+        raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
+    if any(_peek(m, fd) is not None for m in APP_WORKSPACE_MARKERS):
+        raise OutsideFolders("app_workspace_refused", "nothing in an app workspace is written")
+    listing: Any = os.listdir  # by fd: POSIX only
+    try:
+        names = listing(fd)
+    except OSError:
+        return
+    if len(names) > _MAX_FOLDER_ENTRIES:
+        raise OutsideFolders("app_workspace_refused", "a folder too full to check is not written")
+    for name in names:
+        if not name.startswith("."):
+            continue
+        seen = _peek(name, fd)
+        if seen is None or not stat.S_ISDIR(seen.st_mode):
+            continue
+        if _signature(functools.partial(_holds_at, fd, name), strict=False):
+            raise OutsideFolders("app_workspace_refused", "nothing in an app workspace is written")
 
 
 def _peek(name: str, dir_fd: int) -> os.stat_result | None:
     """The entry as it is (`fstatat` without following), None when there is none."""
     try:
         return os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
-    except FileNotFoundError:
+    except (FileNotFoundError, NotADirectoryError):
         return None
 
 
@@ -724,8 +948,8 @@ def _posix_open(
         info = os.fstat(fd)
         if (info.st_dev, info.st_ino) != root.identity:
             raise OutsideFolders("changed", "the allowed folder was replaced")
-        if write and any(_peek(marker, fd) is not None for marker in WORKING_TREE_MARKERS):
-            raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
+        if write:
+            _marked_fd(fd)
         for part in parts[:-1]:
             seen = _peek(part, fd)
             if seen is None:
@@ -741,8 +965,8 @@ def _posix_open(
             os.close(fd)
             fd = step
             folders._verify(root, os.fstat(fd), None)
-            if write and any(_peek(m, fd) is not None for m in WORKING_TREE_MARKERS):
-                raise OutsideFolders("working_tree_refused", "nothing in a repository is written")
+            if write:
+                _marked_fd(fd)
         if not parts:
             final = os.dup(fd)
         else:

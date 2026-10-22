@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -221,6 +222,7 @@ class NodeGate:
         self._protected_forms = protected_forms(protected) if protected is not None else ()
         self.receipts = receipts
         self._clock = clock
+        self._lock = threading.Lock()
         self._side_effects: deque[float] = deque()
         self._high: deque[float] = deque()
         # Registration rule: a tool with a side effect that has not declared how it treats
@@ -263,12 +265,34 @@ class NodeGate:
         call_id: str = "",
         by: str = "core",
         meta: NoxCallMeta | None = None,
+        prechecked: bool = False,
     ) -> GateDecision:
-        decision = self._decide(name, arguments, meta)
-        self._record(name, decision, call_id=call_id, by=by)
+        """The gate's decision, recorded. Fast and stateful: the slow, stateless text check runs
+        before it (`precheck`, off the event loop) - `prechecked=True` says that happened.
+        One call at a time (a lock), so the budget, the receipts' replay memory and the audit
+        always see a consistent state, also from more than one thread."""
+        with self._lock:
+            decision = self._decide(name, arguments, meta, prechecked=prechecked)
+            self._record(name, decision, call_id=call_id, by=by)
         return decision
 
-    def _decide(self, name: str, arguments: Any, meta: NoxCallMeta | None) -> GateDecision:
+    def precheck(self, name: str, arguments: Any) -> str | None:
+        """A tool's text check (`NodeTool.precheck`) on its validated arguments: stateless - no
+        lock, no budget, no receipt, no audit - so it may run in a worker thread with a time
+        limit and simply be abandoned when the limit is hit. None when there is nothing to say
+        (`check` decides everything else)."""
+        tool = self._tools.get(name)
+        if tool is None or tool.precheck is None or not isinstance(arguments, dict):
+            return None
+        try:
+            args = tool.args.model_validate(arguments)
+        except ValidationError:
+            return None
+        return tool.precheck(args)
+
+    def _decide(
+        self, name: str, arguments: Any, meta: NoxCallMeta | None, *, prechecked: bool = False
+    ) -> GateDecision:
         if matching_hard_prohibition(name) is not None:
             return GateDecision(False, "hard_prohibition")
         if name in LOCKED_TOOLS:
@@ -308,6 +332,10 @@ class NodeGate:
             return GateDecision(False, "node_home_protected", tool)
         if any(names_a_path_alias(text) for text in _path_strings(args.model_dump())):
             return GateDecision(False, "path_alias_refused", tool)
+        if tool.precheck is not None and not prechecked:
+            early = tool.precheck(args)
+            if early is not None:
+                return GateDecision(False, early, tool)
         # This call's own risk (a write that replaces a file is high): the core must have judged
         # it at least as risky, and the ceiling applies to it as well.
         risk = tool.call_risk(args)

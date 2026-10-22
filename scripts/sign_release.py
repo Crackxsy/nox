@@ -44,6 +44,9 @@ REPO = Path(__file__).resolve().parents[1]
 DEFAULT_TRUST_LIST = REPO / "src" / "nox" / "release" / "trusted_keys.py"
 MANIFEST_NAME = "release-manifest.json"
 SIGNATURE_NAME = "release-manifest.json.sig"
+#: --kind os-image: the Nox-OS image files of a release, in a manifest of their own (os/README.md).
+OS_IMAGE_MANIFEST_NAME = "nox-os-manifest.json"
+_KINDS = ("release", "os-image")
 # The formats of nox.release (manifest.py, verify.py); a test compares them.
 MANIFEST_SCHEMA = "nox-release-manifest/1"
 SIGNATURE_SCHEMA = "nox-release-signature/1"
@@ -150,8 +153,11 @@ def build_manifest(
     created: dt.datetime | None = None,
     node_speaks: int | None = None,
     deps_changed: bool | None = None,
+    kind: str = "release",
 ) -> bytes:
     """The manifest's bytes, in exactly the layout nox.release.manifest.build_manifest writes."""
+    if kind not in _KINDS:
+        raise RefusedError(f"unknown --kind {kind[:20]!r}")
     if not tag.startswith("v") or not _VERSION.match(tag[1:]):
         raise RefusedError(f"not a release tag: {tag[:40]!r}")
     if not _COMMIT.match(commit):
@@ -189,6 +195,8 @@ def build_manifest(
         document["node_speaks"] = node_speaks
     if deps_changed is not None:
         document["deps_changed"] = deps_changed
+    if kind != "release":
+        document["kind"] = kind
     return (json.dumps(document, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode()
 
 
@@ -265,6 +273,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         choices=("yes", "no"),
         help="whether uv.lock changed since the previous release (no: nodes may update code-only)",
     )
+    parser.add_argument(
+        "--kind",
+        choices=_KINDS,
+        default="release",
+        help="release (release-manifest.json) or os-image (nox-os-manifest.json)",
+    )
     parser.add_argument("files", nargs="+", type=Path, help="the files the release publishes")
     return parser.parse_args(argv)
 
@@ -291,13 +305,16 @@ def main(argv: list[str] | None = None) -> int:
             min_node_version=args.min_node_version,
             node_speaks=args.node_speaks,
             deps_changed=None if args.deps_changed is None else args.deps_changed == "yes",
+            kind=args.kind,
         )
         args.out.mkdir(parents=True, exist_ok=True)
-        (args.out / SIGNATURE_NAME).unlink(missing_ok=True)
+        manifest_name = OS_IMAGE_MANIFEST_NAME if args.kind == "os-image" else MANIFEST_NAME
+        signature_name = manifest_name + ".sig"
+        (args.out / signature_name).unlink(missing_ok=True)
         if not key_text.strip():
             if not args.allow_unsigned:
                 raise RefusedError("no signing key on stdin (--key-stdin)")
-            (args.out / MANIFEST_NAME).write_bytes(manifest)
+            (args.out / manifest_name).write_bytes(manifest)
             _annotate(
                 "warning",
                 "Release not signed",
@@ -316,8 +333,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         key_text = ""
-    (args.out / MANIFEST_NAME).write_bytes(manifest)
-    (args.out / SIGNATURE_NAME).write_bytes(signature)
+    (args.out / manifest_name).write_bytes(manifest)
+    (args.out / signature_name).write_bytes(signature)
     key_id = json.loads(signature)["key_id"]
     print(f"Signed {args.tag} with release key {key_id}: {len(args.files)} files.")
     _github_output("signed", "true")

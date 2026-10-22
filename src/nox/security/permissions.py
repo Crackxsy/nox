@@ -709,6 +709,8 @@ def device_rule_applies(rule: ProfileRule, request: PermissionRequest) -> bool:
     (confirm, deny) - but never allows a call on a node (`tool: file*, decision: allow` must not
     let Nox write on another PC without asking)."""
     if rule.device:
+        if rule.decision is Decision.ALLOW:
+            return bool(request.device) and request.device == rule.device  # exact, no glob
         return bool(request.device) and value_matches(request.device, rule.device)
     return not request.device or rule.decision is not Decision.ALLOW
 

@@ -109,14 +109,35 @@ an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trus
   ...`) schreibt Nox auf einem Gerät gar nicht - stattdessen `.md` oder `.txt`. Ersetzen oder
   Anhängen ist immer hohes Risiko. Nie eine versteckte Datei oder etwas in einem versteckten
   Ordner (`.git`, `.vscode`, `.bashrc`, ...), nie etwas in einem Repository (ein Ordner mit
-  `.git`, `.hg` oder `.svn`, bis hinauf zum erlaubten Ordner), nie eine Datei ohne Endung, ein
+  `.git`, `.hg`, `.svn`, `.jj`, `.bzr`, `_darcs` oder `.sl`) oder einem App-Arbeitsbereich, dessen
+  Notizen Code ausführen können (ein Obsidian-Tresor mit `.obsidian`, ein Logseq-Graph, Foam,
+  Dendron, ein `.vscode`-/`.idea`-Projekt) - im erlaubten Ordner oder um ihn herum -, nie eine
+  Datei ohne Endung, ein
   Skript, ein Programm oder eine Konfigurationsdatei, nach der Werkzeuge handeln
   (`settings.json`, `package.json`, Compose- und Pipeline-Dateien, `configuration.yaml`, alles in
   `workflows`, ...), nie eine ausführbare Datei oder eine mit zweitem Namen (Hardlink). Die Frage
   zeigt Datei, Art, Größe, Zeilenzahl und einen SHA-256 und den Inhalt - ganz, wenn er kurz ist,
   sonst die ersten und letzten 200 Zeichen mit „content shortened - N characters not shown“.
   Schreiben wird nie gemerkt, und eine Profilregel, die Schreiben an Nox erlaubt, erlaubt es auf
-  einem Node nur, wenn sie das Gerät nennt (`device:`).
+  einem Node nur, wenn sie genau dieses Gerät nennt (`device:` mit seiner vollen Kennung). Eine
+  `.md`-Datei wird abgelehnt, wenn sie irgendetwas enthält, das eine Notiz-App ausführen könnte -
+  die Wörter `dataviewjs`, `js-engine`, `templater` oder `meta-bind-js`, Templater `<%`, inline
+  `` `$= ``, `<script`, `javascript:` -, egal wo es steht. Eine Notiz, die diese Plugin-Wörter
+  nur erwähnt (oder einen Link mit `obsidian://` oder `file:`), kann Nox deshalb nicht
+  schreiben. Codeblöcke in Notizen, die Nox auf Geräten schreibt, dürfen nur Text- oder
+  Datenformate enthalten (`text`, `md`, `json`, `yaml`, `toml`, `ini`, `csv`, `diff`, `log`) oder
+  keine Sprache nennen - ein Block in einer Programmiersprache (ein Plugin kann ihn per Klick
+  ausführen), für ein Plugin (`dataview`, `jsx`, ...) oder einer, den die App zeichnet
+  (`mermaid`, `math`, `html`), wird abgelehnt. Beim Anhängen zählt die ganze Datei, und die
+  Ablehnung sagt, was stört. Notizen sind höchstens 256 KB groß, JSON-/YAML-Dateien 64 KB.
+- **Dein Notizen-Tresor:** `nox node allow files --folder` lehnt einen Ordner ab, der ein
+  Repository oder ein App-Arbeitsbereich ist oder darin liegt - auch einen Tresor, dessen
+  Einstellungsordner umbenannt wurde (erkannt an seinem Inhalt). Erlaube einen einfachen Ordner
+  daneben - etwa `Nox` neben dem Tresor - und verschiebe, was Nox geschrieben hat, selbst hinein.
+  **Verlinke den erlaubten Ordner nicht (Symlink, Junction) in einen Tresor:** Von der Seite des
+  Ordners aus lässt sich das nicht erkennen. Die Einstellungsordner von Apps in deinem
+  Benutzerordner (`~/.vscode`, `~/.idea`) zählen nicht als Arbeitsbereich - ein Tresor dort
+  (`~/.obsidian`) schon.
 - **Hingenommen bei einfachem Text:** Eine `.csv` kann eine Tabellenformel enthalten, die Excel
   erst nach eigener Warnung und deinem Klick ausführt; die anderen einfachen Formate führen nichts
   aus.

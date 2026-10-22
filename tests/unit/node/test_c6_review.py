@@ -532,3 +532,40 @@ async def test_music_is_announced_once_on_the_device(tmp_path: Path) -> None:
     assert await node_cli.media_notice_once(runtime) is True
     assert await node_cli.media_notice_once(runtime) is False
     assert shown == [node_cli.MEDIA_NOTICE]
+
+
+async def test_precheck_runs_before_around_and_stops_it() -> None:
+    from nox.node.router import routed_spec
+    from nox.node.tools import NotifyArgs
+    from nox.security.model import Risk
+    from tests.unit.node.test_router import FakeRegistry
+
+    order: list[str] = []
+    laptop = _entry(LAPTOP, "Laptop", tools={"notify.show": "low"})
+
+    def precheck(payload: dict[str, Any]) -> str | None:
+        order.append("precheck")
+        return "refused_text" if payload.get("text") == "bad" else None
+
+    async def around(entry: Any, args: dict[str, Any], call: Any) -> dict[str, Any]:
+        order.append("around")
+        return dict(await call())
+
+    spec = routed_spec(
+        name="notify.show",
+        description="t",
+        risk=Risk.LOW,
+        side_effects=True,
+        registry=FakeRegistry([laptop]),  # type: ignore[arg-type]
+        input_model=NotifyArgs,
+        precheck=precheck,
+        around=around,
+    )
+    assert spec.scope is not None
+    for text in ("bad", "gut"):
+        payload = spec.input_model.model_validate({"text": text, "device": "Laptop"}).model_dump()
+        if spec.prepare is not None:
+            await spec.prepare(payload)
+        spec.scope(payload)
+        await spec.handler(payload)
+    assert order == ["precheck", "precheck", "around"]
