@@ -192,9 +192,8 @@ class _Device:
     grant_id: str = ""
     #: What the dashboard was last told (`desktop.computer_use` for this device).
     shown: bool = False
-    #: Since when the lock holds for this device without a break: it never holds longer than the
-    #: longest session (`MAX_SESSION_MINUTES`), whatever a node keeps saying.
-    locked_since: float | None = None
+    #: The session the grant was made for: a new session (back to back) gets a fresh grant.
+    grant_session: str = ""
 
 
 class NodeControl:
@@ -268,7 +267,7 @@ class NodeControl:
         for device_id, device in self.devices.items():
             if self._locked(device):
                 released += 1
-            device.active, device.attempt, device.locked_since = False, None, None
+            device.active, device.attempt = False, None
             self._sync(device_id, device, reason=reason)
         return released
 
@@ -293,16 +292,14 @@ class NodeControl:
         limit = MAX_SESSION_MINUTES * 60.0
         return device.active and self._clock() - device.active_seen < limit
 
-    def _held(self, device: _Device) -> bool:
+    def _locked(self, device: _Device) -> bool:
+        """Held while the node says a session is open, or a start is on its way. It lifts only
+        when the node says no session runs (at a generation not older than known), or when the
+        node has been silent for the longest session - never while it keeps saying "open". A
+        session's length is limited on the node itself (`ComputerUseConfig.session_minutes`)."""
         attempt = device.attempt
         in_flight = attempt is not None and self._clock() - attempt.since < MAX_SESSION_MINUTES * 60
         return self._open(device) or in_flight
-
-    def _locked(self, device: _Device) -> bool:
-        if not self._held(device):
-            return False
-        since = device.locked_since
-        return since is None or self._clock() - since < MAX_SESSION_MINUTES * 60
 
     def locked(self, device_id: str) -> bool:
         self.pull()
@@ -332,13 +329,15 @@ class NodeControl:
 
     def _sync(self, device_id: str, device: _Device, *, reason: str = "") -> None:
         """Grant and notice follow the derived state, never an event."""
-        held = self._held(device)
-        if held and device.locked_since is None:
-            device.locked_since = self._clock()
-        elif not held:
-            device.locked_since = None
-        is_open = self._open(device) and self._locked(device)
+        is_open = self._open(device)
+        if device.grant_id and (not is_open or device.grant_session != device.session_id):
+            # Over, or a new session back to back: the old grant goes (a new one follows).
+            if self._engine is not None:
+                with contextlib.suppress(Exception):
+                    self._engine.revoke(device.grant_id)
+            device.grant_id = ""
         if is_open and not device.grant_id and self._engine is not None:
+            device.grant_session = device.session_id
             device.grant_id = f"computer-{uuid.uuid4().hex[:12]}"
             remaining = MAX_SESSION_MINUTES * 60.0 - (self._clock() - device.active_seen)
             self._engine.grant_temporary(
@@ -351,11 +350,6 @@ class NodeControl:
                     label=f"computer use on {device.label}",
                 )
             )
-        elif not is_open and device.grant_id:
-            if self._engine is not None:
-                with contextlib.suppress(Exception):
-                    self._engine.revoke(device.grant_id)
-            device.grant_id = ""
         locked = self._locked(device)
         if locked != device.shown:
             device.shown = locked

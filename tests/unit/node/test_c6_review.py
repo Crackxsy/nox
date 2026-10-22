@@ -472,13 +472,40 @@ async def test_grants_say_where_they_come_from(tmp_path: Path) -> None:
     assert granted[0].granted_by == "node-session"
 
 
-def test_the_lock_never_holds_longer_than_the_longest_session() -> None:
+def _clocked() -> tuple[NodeControl, dict[str, float], list[Any]]:
     now = {"t": 0.0}
-    control = NodeControl(None, lambda _n: None, clock=lambda: now["t"])
+    granted: list[Any] = []
+    engine = SimpleNamespace(grant_temporary=granted.append, revoke=granted.append)
+    control = NodeControl(engine, lambda _n: None, clock=lambda: now["t"])
+    return control, now, granted
+
+
+def test_a_long_session_that_keeps_reporting_keeps_the_lock() -> None:
+    control, now, _ = _clocked()
     control.observe(LAPTOP, _report(2, True))
-    for _ in range(3):  # a node that keeps saying "open" for hours
-        now["t"] += MAX_SESSION_MINUTES * 30
+    for _ in range(3 * 60):  # three hours of reports, one a minute
+        now["t"] += 60
         control.observe(LAPTOP, _report(2, True))
+        assert control.blocks(BROWSER)
+
+
+def test_back_to_back_sessions_keep_the_lock_and_get_a_fresh_grant() -> None:
+    control, now, granted = _clocked()
+    control.observe(LAPTOP, _report(2, True, "aa" * 16))
+    for gen in range(3, 30, 2):  # ended and started again, every few minutes, for hours
+        now["t"] += MAX_SESSION_MINUTES * 6
+        control.observe(LAPTOP, _report(gen, True, f"{gen:02x}" * 16))
+        assert control.blocks(BROWSER)
+    grants = [g for g in granted if not isinstance(g, str)]
+    assert len({g.grant_id for g in grants}) == len(grants) > 1  # one per session
+
+
+def test_a_silent_node_lifts_the_lock_after_the_longest_session() -> None:
+    control, now, _ = _clocked()
+    control.observe(LAPTOP, _report(2, True))
+    now["t"] += MAX_SESSION_MINUTES * 60 - 1
+    assert control.blocks(BROWSER)
+    now["t"] += 2
     assert not control.blocks(BROWSER)
 
 
@@ -538,7 +565,7 @@ async def test_precheck_runs_before_around_and_stops_it() -> None:
     from nox.node.router import routed_spec
     from nox.node.tools import NotifyArgs
     from nox.security.model import Risk
-    from tests.unit.node.test_router import FakeRegistry
+    from tests.unit.node.test_router import FakeRegistry, _entry
 
     order: list[str] = []
     laptop = _entry(LAPTOP, "Laptop", tools={"notify.show": "low"})

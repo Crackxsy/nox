@@ -793,8 +793,10 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   says a session is open (unreachable: until it says otherwise or 120 minutes have passed since
   it last said "open") or while a start is on its way - a start is settled only by its own
   answer's report or a newer generation; a cancelled start ends the session on the node in the
-  background. However long a node keeps saying "open", the lock holds at most 120 minutes at a
-  time. While it holds: **no paired device** answers "allow" or sends a privileged request
+  background. The lock never lifts while the node keeps saying "open" - only its report that no
+  session runs, or its silence for 120 minutes, lifts it; a session's own length is limited on
+  the node (`ComputerUseConfig.session_minutes`), and a new session back to back gets a fresh
+  grant. While it holds: **no paired device** answers "allow" or sends a privileged request
   (none is provably on another machine than the one Nox controls); **this machine's own
   dashboard or shell** may answer "allow" only with the security PIN (none set: no "allow" at
   all) and only when this machine is not used remotely - Windows: `SM_REMOTESESSION` or a
