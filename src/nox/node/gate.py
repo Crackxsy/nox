@@ -3,7 +3,10 @@
 A compromised core can send well-formed calls with valid receipts; the node refuses on its own
 authority (spec C §1.6). In order:
 
-1. **Hard prohibitions** - the core's immutable list, by name and as a glob.
+1. **Hard prohibitions** - the core's immutable list, by name and as a glob; and the **game
+   lock**: mouse, keys and typing (`INPUT_TOOLS`) are refused while a watched game or an
+   anti-cheat service runs on this device or a game is in front (`input_lock`, installed by
+   `nox.node.world`; without one, input is refused) - whatever the core sent.
 2. **Stopped** - stopped on this device (only this device resumes), stopped by the core (until
    `nox/resume`), or after the dead-man rule fired (until the core is back and not stopped).
 3. **Known tool, capability** - the tool's group enabled in this device's confirmed manifest and
@@ -48,13 +51,18 @@ from nox.node.tools import NodeTool
 from nox.security.model import AuditLog
 from nox.security.prohibitions import matching_hard_prohibition
 
-__all__ = ["CEILING", "GateDecision", "NodeGate", "RISK_ORDER"]
+__all__ = ["CEILING", "GateDecision", "INPUT_TOOLS", "NodeGate", "RISK_ORDER"]
 
 RISK_ORDER = ("read", "low", "medium", "high", "critical")
 #: What never runs on a node, whatever any manifest says.
 CEILING = "high"
 #: The budget's window.
 BUDGET_WINDOW_S = 3600.0
+#: Tools that send input on this device: refused while a game runs or is in front (spec C §1.6
+#: step 1). Ending a session sends nothing, so `computer.session_end` always runs.
+INPUT_TOOLS: frozenset[str] = frozenset(
+    {"computer.session_start", "computer.pointer", "computer.keys", "desktop.type_text"}
+)
 
 
 @dataclass(frozen=True)
@@ -196,6 +204,9 @@ class NodeGate:
         self.stop_state = stopped
         #: Whether a confirmation dialog is open on this device right now (set by the agent).
         self.dialog_open: Callable[[], bool] = lambda: False
+        #: Why no input may be sent on this device right now (a game), or None (`INPUT_TOOLS`).
+        #: Until a check is installed, input is refused: the lock fails closed.
+        self.input_lock: Callable[[], str | None] = lambda: "game_lock_unavailable"
         self._protected_forms = protected_forms(protected) if protected is not None else ()
         self.receipts = receipts
         self._clock = clock
@@ -249,6 +260,13 @@ class NodeGate:
     def _decide(self, name: str, arguments: Any, meta: NoxCallMeta | None) -> GateDecision:
         if matching_hard_prohibition(name) is not None:
             return GateDecision(False, "hard_prohibition")
+        if name in INPUT_TOOLS:
+            try:
+                locked = self.input_lock()
+            except Exception:  # noqa: BLE001 - a check that fails is a lock, never a pass
+                locked = "game_lock_unavailable"
+            if locked is not None:
+                return GateDecision(False, locked)
         stopped = self.stop_state()
         if stopped is not None:
             return GateDecision(False, stopped)

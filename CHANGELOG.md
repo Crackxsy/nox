@@ -34,6 +34,17 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
 
 ### Added
+- **Screen, camera, browser, windows, mouse and keyboard, and music on nodes** (Spec C6,
+  docs/NODES.md). `screen.capture`, `camera.snapshot`, `browser.*`, `desktop.*`, `computer.*`
+  and the new `media.control` run on a paired PC through the same gate, receipts, budget and
+  audit as every node tool; all off on the device by default except music, and narrowable in the
+  dashboard. A picture is asked for on the device every time, announced there by a notification
+  first (no notification, no picture), held in memory for the call only and stored on Nox, where
+  this core's privacy decides. Mouse and keyboard are Windows only, asked for per session on the
+  device, and refused by the node itself while a game or an anti-cheat service runs or a game is
+  in front; the dashboard shows "Nox steuert gerade Maus und Tastatur auf <Gerät>" with a Stopp.
+  `media.control` plays, pauses, skips and sets the volume (SMTC/Core Audio on Windows, MPRIS and
+  PipeWire/PulseAudio on Linux).
 - **Nodes install, start and update themselves** (Spec C7, docs/NODES.md). The Windows installer
   has a node mode ("Mit einem Nox im Heimnetz verbinden (nur dieses Gerät)", `/MODE=node`): no
   dashboards, a per-user logon task "Nox Node" (least privilege, never a service, never elevated),

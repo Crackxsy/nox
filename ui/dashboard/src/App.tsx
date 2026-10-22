@@ -586,6 +586,7 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
           stopped={stopped}
           stoppedAt={state.stoppedAt}
           computerUse={state.computerUse}
+          nodeComputerUse={state.nodeComputerUse}
           offline={offline}
           lanOff={lanOff}
           onReconnect={() => setAttempt((n) => n + 1)}

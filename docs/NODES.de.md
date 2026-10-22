@@ -128,6 +128,43 @@ an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trus
 - **Programme** (`packages`): auf Nodes noch nicht verfügbar - ein Paketmanager braucht Rechte,
   die die Sandbox nicht gibt.
 
+## Bildschirm, Kamera, Browser, Fenster, Maus und Tastatur, Musik
+
+Alles aus, außer Musik; jedes wird nur hier eingeschaltet, mit `nox node allow <Gruppe>`.
+
+- **Bildschirm und Kamera** (`screen`, `camera`): jedes Bild ist hohes Risiko - der Dialog an
+  diesem Gerät fragt jedes Mal, und es wird nie gemerkt. Bevor das Bild entsteht, sagt eine
+  Benachrichtigung hier „Nox nimmt gerade ein Bildschirmfoto auf“ (oder „ein Kamerabild“); kann
+  keine Benachrichtigung erscheinen, gibt es kein Bild (`no_visible_indicator`) - ein Node ohne
+  Desktop macht also keins. Das Bild bleibt nur für diesen einen Aufruf im Speicher und geht nur
+  an das Nox, das gefragt hat; der Node schreibt nichts. Auch Nox selbst muss Aufnahmen erlauben:
+  Privatsphäre-Modus FULL oder BALANCED und der Aufnahme-Schalter für diese Art an (der der
+  Kamera ist standardmäßig aus). Nox legt das Bild in seinen eigenen Aufnahmen-Ordner;
+  Kamerabilder gehen nie an ein Cloud-Modell.
+- **Browser** (`browser`): Nox' eigener unsichtbarer Browser mit einem Profil im Node-Ordner, nie
+  deiner; er erreicht nur öffentliche Seiten (kein Heimnetz, kein Loopback), wie an Nox selbst.
+  Lesen ist niedriges Risiko, Klicken, Tippen und Absenden mittleres (Frage an Nox, für einen
+  Node nie gemerkt). Keine Seiten-Screenshots auf einem Node.
+- **Fenster und Programme** (`desktop`, nur Windows): Fenster und Programme auflisten, ein
+  Fenster nach vorn holen, minimieren, wiederherstellen oder schließen (niedrig/mittel), ein
+  Programm beenden oder Text in ein Fenster tippen (hoch: Frage hier). Windows selbst, Nox und
+  ein laufendes Spiel werden nie angefasst.
+- **Maus und Tastatur** (`computer`, nur Windows; sonst abgelehnt): `nox node allow computer`
+  fragt zweimal. Eine Sitzung wird jedes Mal an diesem Gerät erfragt (hoch), dauert höchstens
+  15 Minuten und 200 Aktionen, zeigt eine Benachrichtigung und endet mit Strg+Alt+Umschalt+K, dem
+  Not-Aus, einer verlorenen Verbindung oder ihrer Zeit. Darin darf Nox bewegen, klicken, scrollen
+  und Tastenkombinationen drücken - nie in Nox' eigene Fenster, nie während hier eine Frage offen
+  ist. Das Dashboard zeigt währenddessen „Nox steuert gerade Maus und Tastatur auf <Gerät>“ mit
+  „Stopp“ und lehnt ein „Erlauben“ aus dem Browser auf diesem Gerät ab.
+- **Nie im Spiel:** Solange ein beobachtetes Spiel (standardmäßig Rocket League) oder ein
+  Anti-Cheat-Dienst auf diesem Gerät läuft oder ein Spiel vorne ist, wird jeder Maus-, Tasten-
+  und Tipp-Aufruf abgelehnt - vom Node selbst, vor allem anderen, egal was Nox schickt.
+  `game.input.send` bleibt überall verboten.
+- **Musik** (`media`, standardmäßig an, niedriges Risiko): abspielen, pausieren, weiter, zurück,
+  Lautstärke, lauter, leiser, stumm - unter Windows über die System-Mediensteuerung, unter Linux
+  über MPRIS (`playerctl` oder D-Bus) und PipeWire (`wpctl`) oder PulseAudio (`pactl`). Noch
+  nicht unter macOS.
+
 ## Im Dashboard
 
 Geräte › Computer und Server zeigt jeden Node: ob er verbunden ist, was Nox dort darf, wofür er

@@ -23,6 +23,7 @@ Stopping (spec C §1.7):
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import platform
@@ -66,6 +67,8 @@ MAX_RESULT_CHARS = 512 * 1024
 DEAD_MAN_S = 3.0
 DEAD_MAN_TICK_S = 0.25
 LOCAL_STOP_POLL_S = 0.2
+#: A tool result's field holding bytes for the core (a capture), sent as `nox/blob` chunks.
+BLOB_KEY = "_blob"
 #: Calls running on this node at the same time, at most.
 MAX_CONCURRENT_CALLS = 8
 ERR_METHOD_NOT_FOUND = -32601
@@ -138,6 +141,8 @@ class NodeAgent:
         self._good_pings = 0
         self._dialogs = 0
         self._local_stopped = False
+        #: Called whenever the node stops its calls (kill, local stop, connection lost, dead man).
+        self.on_stop: Callable[[str], None] = lambda _reason: None
         #: call id -> (the running call, its JSON-RPC id)
         self._calls: dict[str, tuple[asyncio.Task[None], Any, str]] = {}
         self._last_core = time.monotonic()
@@ -524,7 +529,13 @@ class NodeAgent:
             await self._refused(ws, msg_id, name, "dialog_open")
 
     async def _cancel_calls(self, ws: ClientConnection | None = None) -> list[str]:
-        """Cancel every running call; with `ws`, each is answered "stopped". Their ids."""
+        """Cancel every running call; with `ws`, each is answered "stopped". Their ids. A stop,
+        a lost connection and the dead-man rule also end what outlives a call (a computer-use
+        session, `on_stop`)."""
+        try:
+            self.on_stop("stopped")
+        except Exception as exc:  # noqa: BLE001 - stopping goes on whatever a hook does
+            log.error("node.on_stop_failed", error=type(exc).__name__)
         running = dict(self._calls)
         for task, _msg_id, _name in running.values():
             task.cancel()
@@ -703,6 +714,8 @@ class NodeAgent:
                 result = await asyncio.wait_for(work, 30)
         except DeadManError:
             self.dead_man = True
+            with contextlib.suppress(Exception):
+                self.on_stop("dead_man")
             self._audit_event("node.dead_man", "local", p.safe_name(name))
             await self._refused(ws, msg_id, name, "dead_man")
             return
@@ -724,6 +737,22 @@ class NodeAgent:
                 },
             )
             return
+        blob = result.pop(BLOB_KEY, None) if isinstance(result, dict) else None
+        if isinstance(blob, bytes):
+            # A capture: its bytes go to the core that asked, in chunks, and are dropped here
+            # with this call - the node keeps no copy (spec C §1.4, C6).
+            sent = await self._send_blob(ws, meta.call_id, blob)
+            del blob
+            if not sent:
+                await self._reply(
+                    ws,
+                    msg_id,
+                    result={
+                        "isError": True,
+                        "content": [{"type": "text", "text": "capture too large"}],
+                    },
+                )
+                return
         text = json.dumps(result, ensure_ascii=False)
         if len(text) > MAX_RESULT_CHARS:
             # Too large for one frame: an honest error rather than a cut result or a broken link.
@@ -738,6 +767,23 @@ class NodeAgent:
             msg_id,
             result={"content": [{"type": "text", "text": text}], "structuredContent": result},
         )
+
+    async def _send_blob(self, ws: ClientConnection, call_id: str, data: bytes) -> bool:
+        """`nox/blob` chunks of one result, before its answer; False when it is too large."""
+        if not data or len(data) > p.MAX_RESULT_BYTES:
+            return False
+        size = p.BLOB_CHUNK_BYTES
+        pieces = [data[i : i + size] for i in range(0, len(data), size)]
+        for seq, piece in enumerate(pieces):
+            params = {
+                "call_id": call_id,
+                "seq": seq,
+                "last": seq == len(pieces) - 1,
+                "data": base64.b64encode(piece).decode("ascii"),
+            }
+            with contextlib.suppress(ConnectionClosed):
+                await ws.send(json.dumps({"jsonrpc": "2.0", "method": p.M_BLOB, "params": params}))
+        return True
 
     async def _under_dead_man(self, work: Awaitable[dict[str, Any]]) -> dict[str, Any]:
         """Run a call with a side effect; abort it when the core went silent for `DEAD_MAN_S`."""

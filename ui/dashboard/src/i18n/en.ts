@@ -397,6 +397,8 @@ export const en: Record<CoreKey, string> = {
   perm_risk_high: 'high',
   perm_risk_critical: 'critical',
   computer_use_banner: 'Nox is controlling mouse and keyboard – {0} stops it at once.',
+  computer_use_banner_node: 'Nox is controlling mouse and keyboard on {0}.',
+  computer_use_banner_node_hotkey: '{0} on that device stops it at once, “Stop” stops everything.',
   computer_use_banner_no_hotkey: 'Nox is controlling mouse and keyboard – the kill switch stops it at once.',
 
   // -- UX redesign (Spec UX-Neubau): shell, Today, palette, permission, Stop, settings pages --

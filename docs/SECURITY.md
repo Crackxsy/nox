@@ -752,6 +752,29 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   change is audited with its outcome, every refusal after authorization; a change once accepted
   runs to its end even when the asking dashboard disconnects, so the database, the routing and
   the node never disagree.
+- **Captures, browser, desktop, computer use and media on nodes (C6).** All off by default
+  except `media`. `screen.capture` and `camera.snapshot` are high risk on a node (the device's
+  dialog every time, never remembered), need this core's privacy to allow that kind of capture,
+  and are refused on the node unless a visible notification could be shown first
+  (`no_visible_indicator`); the PNG is held in memory for the call only, sent as `nox/blob`
+  chunks (at most 8 MiB), checked by SHA-256 and PNG signature on the core and stored in the
+  core's captures folder, so `vision.describe` keeps its rules (camera pictures never to the
+  cloud). `browser.*` runs Nox's own headless Chromium behind `NetGuard` on the node (no LAN, no
+  loopback); `browser.screenshot` is not offered there. `desktop.*` and `computer.*` are Windows
+  only and reuse the core's modules unchanged (boundary, self-approval lock, stop hotkey,
+  per-event game guard). **Game lock:** `NodeGate` refuses `computer.session_start`,
+  `computer.pointer`, `computer.keys` and `desktop.type_text` - before the stop state, the
+  capability or the receipt are even looked at - while a watched game or an anti-cheat service
+  runs on the node or a game is in front, and refuses them when no lock is installed (fails
+  closed). `game.input.send` stays a hard prohibition. Enabling `computer` on a device asks
+  twice and is refused off Windows. A confirmed session on a node grants pointer and keys for
+  that node only (`device:<id>|session:computer/*`, medium at most, for its minutes); while it
+  runs, an "allow" from the browser device linked to that node is refused, and the dashboard
+  names the device with a Stopp. **No new input-synthesis code:** the node calls
+  `nox.desktop.computer_use` and `nox.desktop.keyboard`, the two files the Security Model §10 CI
+  guard allows, so the guard needs no exception. Residual: node-local privacy zones are not
+  applied to node screenshots yet (this core's privacy mode and capture switches are); a node
+  without a desktop takes no camera picture at all (no visible indicator).
 - **Only the core's methods** (`CORE_TO_NODE`) are answered; a node never acts while disconnected
   and queues nothing.
 - **Its own audit trail**: every decision, hash-chained, on the device (`nox node log`); the core

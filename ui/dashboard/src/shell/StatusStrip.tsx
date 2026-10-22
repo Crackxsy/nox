@@ -1,6 +1,7 @@
 /**
  * The strip under the header for states that must never scroll out of sight (Spec UX-Neubau §3):
- * Nox is stopped, Nox steers mouse and keyboard, there is no connection to Nox. It has no close
+ * Nox is stopped, Nox steers mouse and keyboard (here, or on a paired PC - one line each, with the
+ * same Stopp as the header), there is no connection to Nox. It has no close
  * button - each line goes away when the core says the state ended.
  *
  * "Fortsetzen" follows the core's resume rules unchanged: only the machine Nox runs on may resume
@@ -15,6 +16,7 @@ import { type Lang, type T, fill } from '../i18n';
 import { type IpcClient, api } from '../ipc';
 import { type ComputerUseNotice, clockTime } from '../model';
 import { showCombo } from '../combo';
+import { StopButton } from './stop';
 
 export interface StatusStripProps {
   t: T;
@@ -25,6 +27,8 @@ export interface StatusStripProps {
   /** When the stop happened, if this page saw it; null when only the level is known. */
   stoppedAt: string | null;
   computerUse: ComputerUseNotice | null;
+  /** Computer-use sessions on paired PCs (spec C §1.10). */
+  nodeComputerUse?: ComputerUseNotice[];
   /** The core is unreachable (not "still connecting"). */
   offline: boolean;
   /** A paired device the core did not let in because network access is off. */
@@ -41,6 +45,7 @@ export function StatusStrip({
   stopped,
   stoppedAt,
   computerUse,
+  nodeComputerUse = [],
   offline,
   lanOff,
   onReconnect,
@@ -156,6 +161,18 @@ export function StatusStrip({
             ? fill(t('computer_use_banner'), showCombo(computerUse.stop, lang))
             : t('computer_use_banner_no_hotkey')}
         </p>
+      </div>,
+    );
+  }
+
+  for (const node of nodeComputerUse) {
+    lines.push(
+      <div key={`cu-${node.deviceId}`} role="alert" className="strip strip--attn">
+        <p>
+          {fill(t('computer_use_banner_node'), node.device)}{' '}
+          {node.stop ? fill(t('computer_use_banner_node_hotkey'), showCombo(node.stop, lang)) : ''}
+        </p>
+        <StopButton placement="inline" />
       </div>,
     );
   }

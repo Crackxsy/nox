@@ -54,6 +54,8 @@ describe('parseComputerUse', () => {
       active: true,
       reason: 'chat',
       stop: 'ctrl+alt+shift+k',
+      device: '',
+      deviceId: '',
     });
     expect(parseComputerUse({ active: 'yes' })).toBeNull();
     expect(parseComputerUse(null)).toBeNull();
@@ -103,6 +105,35 @@ describe('the computer-use strip in the app', () => {
     await act(async () => nav.click());
     expect(nav.getAttribute('aria-current')).toBe('page');
     expect(screen.getByText(t('computer_use_banner_no_hotkey')).closest('[role="alert"]')).not.toBeNull();
+  });
+
+  it('names the paired PC being controlled, with a Stopp, apart from this machine', async () => {
+    render(<App auth={LOCAL} lang="de" theme="system" />);
+    await vi.waitFor(() => expect(captured.handlers).not.toBeNull());
+    const node = { reason: 'for 15 minutes', stop: 'ctrl+alt+shift+k', device: 'Arbeits-PC', device_id: 'a'.repeat(32) };
+    emit({ active: true, ...node });
+    const line = screen.getByText(/steuert gerade Maus und Tastatur auf Arbeits-PC/);
+    const strip = line.closest('[role="alert"]')!;
+    expect(strip).not.toBeNull();
+    expect(line.textContent).toContain('Strg + Alt + Umschalt + K');
+    // The stop in the line is the same `security.kill` as the header's Stopp.
+    expect(strip.querySelector('button.stop')?.textContent).toContain(t('ux_stop'));
+    // This machine's own session is a line of its own; ending it leaves the PC's line.
+    emit({ active: true, reason: '', stop: 'f12' });
+    emit({ active: false, reason: 'done', stop: 'f12' });
+    expect(screen.getByText(/auf Arbeits-PC/)).not.toBeNull();
+    emit({ active: false, ...node, reason: 'kill switch' });
+    expect(screen.queryByText(/auf Arbeits-PC/)).toBeNull();
+  });
+
+  it('keeps one line per PC and forgets them on disconnect', () => {
+    let s = setConnected(INITIAL_STATE, true);
+    s = reduceEvent(s, 'desktop.computer_use', { active: true, device: 'Laptop', device_id: 'b1', stop: '' });
+    s = reduceEvent(s, 'desktop.computer_use', { active: true, device: 'Laptop', device_id: 'b1', stop: '' });
+    s = reduceEvent(s, 'desktop.computer_use', { active: true, device: 'Arbeits-PC', device_id: 'c2', stop: '' });
+    expect(s.nodeComputerUse.map((n) => n.device)).toEqual(['Laptop', 'Arbeits-PC']);
+    expect(s.computerUse).toBeNull();
+    expect(setConnected(s, false).nodeComputerUse).toEqual([]);
   });
 
   it('ignores a malformed event', async () => {

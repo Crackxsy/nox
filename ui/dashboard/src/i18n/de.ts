@@ -413,6 +413,8 @@ export const de = {
   perm_risk_high: 'hoch',
   perm_risk_critical: 'kritisch',
   computer_use_banner: 'Nox steuert gerade Maus und Tastatur – {0} beendet sofort.',
+  computer_use_banner_node: 'Nox steuert gerade Maus und Tastatur auf {0}.',
+  computer_use_banner_node_hotkey: '{0} an diesem Gerät beendet sofort, „Stopp“ beendet überall.',
   computer_use_banner_no_hotkey: 'Nox steuert gerade Maus und Tastatur – der Not-Aus beendet sofort.',
 
   // -- UX redesign (Spec UX-Neubau): shell, Heute, palette, permission, Stopp, settings pages --

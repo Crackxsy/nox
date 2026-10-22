@@ -19,7 +19,7 @@ call fails fast with `device_offline`; nothing is queued and no other device is 
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -56,6 +56,11 @@ ROUTE_DELEGATE_KEY = "_route_delegate"
 NODE_CALL_TIMEOUT_S = 30.0
 _CORE_WORDS = frozenset({"core", "dieser core", "this core", "hier", "here"})
 _HERE_WORDS = frozenset({"hier", "here"})
+
+
+#: `around(entry, arguments, call)`: `call(blob=...)` runs the call on the node.
+NodeCall = Callable[..., Awaitable[dict[str, Any]]]
+NodeAround = Callable[[NodeEntry, dict[str, Any], NodeCall], Awaitable[dict[str, Any]]]
 
 
 class CannotShow(ValueError):  # noqa: N818 - a refusal, named for what it says
@@ -227,6 +232,7 @@ def routed_spec(
     network: bool | Callable[[dict[str, Any]], bool] | None = None,
     node_risk: Callable[[dict[str, Any]], Risk] | None = None,
     remember_on_node: bool = True,
+    around: NodeAround | None = None,
 ) -> ToolSpec:
     """One routable tool: the core's own spec (if the core has the tool) plus every node that
     offers it. `input_model` describes the arguments when the core has no spec of its own.
@@ -237,6 +243,8 @@ def routed_spec(
     call in full raises `CannotShow`, and the call is refused (`cannot_show_in_full`).
     `node_risk` raises a node call's risk from its arguments (a write that replaces a file);
     `remember_on_node=False` never lets a "remember" answer cover a call on a node.
+    `around` wraps the call on a node: it may refuse before the call (a privacy rule of this
+    core), and it turns the node's answer into what the model sees (a capture stored here).
     `network` overrides the template's
     (a download is network whether or not the core has the tool itself)."""
     base = core.input_model if core is not None else input_model
@@ -319,14 +327,23 @@ def routed_spec(
         decided_risk = payload.get(ROUTE_RISK_KEY)
         if decided_risk not in ("read", "low", "medium", "high"):
             return {"error": "not_routed", "tool": name}
-        return await registry.call(
-            entry,
-            name,
-            inner(payload),
-            risk=str(decided_risk),
-            timeout_s=NODE_CALL_TIMEOUT_S,
-            confirm_on_device=bool(payload.get(ROUTE_DELEGATE_KEY)),
-        )
+        arguments = inner(payload)
+
+        async def on_node(*, blob: bool = False) -> dict[str, Any]:
+            extra: dict[str, Any] = {"blob": True} if blob else {}
+            return await registry.call(
+                entry,
+                name,
+                arguments,
+                risk=str(decided_risk),
+                timeout_s=NODE_CALL_TIMEOUT_S,
+                confirm_on_device=bool(payload.get(ROUTE_DELEGATE_KEY)),
+                **extra,
+            )
+
+        if around is not None:
+            return await around(entry, arguments, on_node)
+        return await on_node()
 
     template = core or ToolSpec(
         name=name,

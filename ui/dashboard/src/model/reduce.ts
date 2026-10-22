@@ -12,7 +12,7 @@ import {
   applyClipSaved,
   parseClipRecord,
 } from './clips';
-import { parseComputerUse } from './desktop';
+import { applyNodeControl, parseComputerUse } from './desktop';
 import { applyHealthChanged, parseHealthReport } from './health';
 import { applyHomeConnected, applyHomeDisconnected, applyHomeStateChanged } from './home';
 import { NOTIFICATION_LIMIT, dismiss, notificationRow } from './notifications';
@@ -192,7 +192,12 @@ export function reduceEvent(
     }
     case 'desktop.computer_use': {
       const computerUse = parseComputerUse(payload);
-      return computerUse ? { ...state, computerUse } : state;
+      if (!computerUse) return state;
+      // A paired PC's session never replaces (or ends) the notice of the machine Nox runs on.
+      if (computerUse.deviceId) {
+        return { ...state, nodeComputerUse: applyNodeControl(state.nodeComputerUse, computerUse) };
+      }
+      return { ...state, computerUse };
     }
     case 'security.kill_switch':
       return { ...state, systemLevel: 'safe_mode', stoppedAt: ts || state.stoppedAt };

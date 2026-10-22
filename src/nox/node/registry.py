@@ -55,8 +55,32 @@ ROUTABLE: frozenset[str] = frozenset(
         "file.read",
         "file.write",
         "shell.run",
+        # C6: the eyes, the browser, the desktop, mouse and keyboard, and music.
+        "screen.capture",
+        "camera.snapshot",
+        "browser.open",
+        "browser.read",
+        "browser.click",
+        "browser.type",
+        "browser.submit",
+        "desktop.windows",
+        "desktop.processes",
+        "desktop.window_focus",
+        "desktop.window_minimize",
+        "desktop.window_restore",
+        "desktop.window_close",
+        "desktop.process_stop",
+        "desktop.type_text",
+        "computer.session_start",
+        "computer.pointer",
+        "computer.keys",
+        "computer.session_end",
+        "media.control",
     }
 )
+#: Where a node's bytes (a capture's `nox/blob` chunks) travel inside a call's result on the
+#: core - only between `NodeRegistry.call` and the route that stores them, never to the model.
+BLOB_RESULT_KEY = "_blob"
 MAX_TOOLS = 64
 #: What a node's result may put in front of the model, at most.
 MAX_RESULT_CHARS = 16_000
@@ -395,8 +419,11 @@ class NodeRegistry:
         risk: str,
         timeout_s: float,
         confirm_on_device: bool = False,
+        blob: bool = False,
     ) -> dict[str, Any]:
-        """One call on one node. Offline at this moment: fail fast, nothing is queued."""
+        """One call on one node. Offline at this moment: fail fast, nothing is queued. With
+        `blob`, bytes the node sent for this call (`nox/blob`) come back under
+        `BLOB_RESULT_KEY`."""
         if entry.connecting:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(entry.listed.wait(), LISTING_WAIT_S)
@@ -448,7 +475,12 @@ class NodeRegistry:
             if not entry.online or session.client.closed:
                 return offline_error(entry)
             return {"error": "failed_on_device", "detail": "no answer", "device": entry.label}
-        return clean_result(raw, device=entry.label)
+        cleaned = clean_result(raw, device=entry.label)
+        if blob:
+            data = session.take_blob(call_id)  # taken whatever the answer: nothing stays behind
+            if data is not None and "error" not in cleaned:
+                cleaned[BLOB_RESULT_KEY] = data
+        return cleaned
 
     def prompt_line(self) -> str:
         """One line for the turn context: which devices exist and whether they are reachable."""

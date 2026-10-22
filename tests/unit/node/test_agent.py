@@ -211,7 +211,9 @@ async def test_allowed_calls_run(rig: Rig, listener: NodeListener) -> None:
         ("game.memory.read", "hard_prohibition"),
         ("shell.run", "capability_disabled"),
         ("system.reboot", "risk_understated"),
-        ("desktop.type_text", "unknown_tool"),
+        # Input is refused by the game lock before anything else, and fails closed without one.
+        ("desktop.type_text", "game_lock_unavailable"),
+        ("desktop.windows", "unknown_tool"),
     ],
 )
 async def test_a_permissive_core_is_refused_on_the_node(

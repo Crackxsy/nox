@@ -40,6 +40,7 @@ from nox.node.manifest import GROUPS, NodeManifest, load_manifest, save_manifest
 from nox.node.protocol import PairLink, PairLinkError, escape_controls
 from nox.node.tools import PlatformNotifier, default_tools
 from nox.node.update import NodeUpdater, UpdateCheck
+from nox.node.world import World, world_tools
 from nox.sandbox import Sandbox
 from nox.security.audit import SqliteAuditLog
 from nox.security.model import SecretStore
@@ -87,6 +88,8 @@ class NodeRuntime:
     gate: NodeGate
     audit: SqliteAuditLog
     manifest_key: ConfirmationKey | None = None
+    #: The C6 tools' device side (captures, browser, desktop, computer use, media).
+    world: World | None = None
 
 
 def secret_store() -> SecretStore | None:
@@ -122,12 +125,47 @@ def build(
         protected=(home.path,),
         sandbox=sandbox or default_sandbox,
     )
-    tools = {**default_tools(notifier), **hand_tools(hands)}  # type: ignore[arg-type]
+    shown = notifier if notifier is not None else PlatformNotifier()
+
+    async def notice(text: str) -> None:
+        await shown.show("Nox", text)  # type: ignore[attr-defined]
+
+    def computer_enabled() -> bool:
+        gate = holder[0] if holder else None
+        return (
+            gate is not None
+            and gate.stop_state() is None
+            and "computer" in gate.manifest.effective(gate.narrowed)
+        )
+
+    def audit_computer(action: str, target: str, result: str) -> None:
+        audit.append(
+            actor="core",
+            tool="computer",
+            action=action,
+            target=target[:200],
+            decision="allow" if result == "ok" else "deny",
+            result=result,
+        )
+
+    world = World(
+        notice=notice,
+        computer_enabled=computer_enabled,
+        dialog_open=lambda: bool(holder) and holder[0].dialog_open(),
+        browser_dir=home.path / "browser",
+        audit=audit_computer,
+    )
+    tools = {
+        **default_tools(notifier),  # type: ignore[arg-type]
+        **hand_tools(hands),
+        **world_tools(world),
+    }
     gate = NodeGate(tools, manifest, audit, protected=home.path)
+    gate.input_lock = world.lock.reason  # the game lock, before anything else (spec C §1.6)
     holder.append(gate)
     keystore = NodeKeyStore(home.key_file, secrets)
     gate.restore_budget(audit)  # a restart does not refill the hour's budget
-    return NodeRuntime(home, keystore, gate, audit, key)
+    return NodeRuntime(home, keystore, gate, audit, key, world)
 
 
 def manifest_source(runtime: NodeRuntime) -> Callable[[], NodeManifest]:
@@ -343,6 +381,8 @@ def run(runtime: NodeRuntime, *, install_signals: bool = True, tray: bool = Fals
             runtime.audit,
             manifest_source=manifest_source(runtime),
         )
+        if runtime.world is not None:
+            agent.on_stop = runtime.world.stop  # a stop ends a computer session, closes the browser
         updates = asyncio.create_task(
             keep_updated(
                 runtime,
@@ -496,6 +536,17 @@ def _local_folder(text: str, node_home: NodeHome, *, must_exist: bool = True) ->
 #: a person confirmed it on the core (spec C §1.6 step 5, a documented residual risk).
 TRUST_SETTING = "trust_core_for_high"
 TRUST_LABEL = "run high-risk actions a person confirmed on the core (no screen here)"
+#: The second question before `computer` is enabled on a device.
+COMPUTER_WARNING = (
+    "Nox will be able to move the mouse and press keys on this device, in sessions you allow "
+    "here one by one (never while a game or an anti-cheat service runs; Ctrl+Alt+Shift+K stops "
+    "it at once). Really allow?"
+)
+
+
+def computer_supported() -> bool:
+    """Computer use on a node exists on Windows only (spec C §1.4)."""
+    return sys.platform == "win32"
 
 
 def allow(
@@ -532,8 +583,13 @@ def allow(
     if enabled:
         if not interactive():
             raise NodeCliError("Allowing needs an interactive terminal on this device.")
+        if group == "computer" and not computer_supported():
+            raise NodeCliError("Mouse and keyboard control on a node is available on Windows only.")
         prompt = f"Let Nox {label} on this device?"
         if not confirm(prompt):
+            raise NodeCliError("Not allowed.")
+        if group == "computer" and not confirm(COMPUTER_WARNING):
+            # Asked twice, the second time with what it means (owner decision 2026-10-18).
             raise NodeCliError("Not allowed.")
     key = manifest_key(home.path, secrets)
     manifest = last_confirmed(audit, key) or NodeManifest(groups=dict(MOST_RESTRICTIVE.groups))
