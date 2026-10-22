@@ -82,7 +82,7 @@ os/pi-gen/build.sh --ref v0.7.0 --out out/                         # a release, 
 os/pi-gen/build.sh --ref "$(git rev-parse HEAD)" --source . \
   --ui-bundle nox-ui.tar.gz --out out/                              # this checkout
 sudo os/tools/check-image.sh out/nox-os-*-arm64.img out/boot
-sudo os/tools/qemu-smoke.sh out/nox-os-*-arm64.img out/boot
+sudo os/tools/qemu-smoke.sh out/nox-os-*-arm64.img out/boot     # qemu-system-arm, qemu-utils, device-tree-compiler
 ```
 
 ## Licences

@@ -13,7 +13,9 @@ image="${1:?usage: qemu-smoke.sh <image.img> <boot files folder> [timeout second
 bootfiles="${2:?usage: qemu-smoke.sh <image.img> <boot files folder> [timeout seconds]}"
 timeout="${3:-2400}"
 [ "$(id -u)" -eq 0 ] || { echo "qemu-smoke.sh: needs root (loop devices)" >&2; exit 1; }
-command -v qemu-system-aarch64 >/dev/null || { echo "qemu-smoke.sh: qemu-system-aarch64 is missing" >&2; exit 1; }
+for tool in qemu-system-aarch64 qemu-img fdtget fdtput; do
+  command -v "$tool" >/dev/null || { echo "qemu-smoke.sh: $tool is missing (qemu-system-arm, qemu-utils, device-tree-compiler)" >&2; exit 1; }
+done
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/nox-smoke.XXXXXX")"
 qemu_pid=""
@@ -101,11 +103,17 @@ file "$bootfiles/kernel8.img" 2>/dev/null || true
 cmdline="earlycon=pl011,0x3f201000 console=ttyAMA0,115200 root=/dev/mmcblk0p2 rootfstype=ext4"
 cmdline="$cmdline rootwait rw dwc_otg.lpm_enable=0 systemd.show_status=1"
 cmdline="$cmdline systemd.mask=rpi-resize.service systemd.watchdog_sec=off"
-cmdline="$cmdline modprobe.blacklist=bcm2835_wdt initcall_blacklist=bcm2835_wdt_driver_init"
+cmdline="$cmdline modprobe.blacklist=bcm2835_wdt,hci_uart,btbcm initcall_blacklist=bcm2835_wdt_driver_init"
 # The boot's own log on the serial port too, so a failure can be read from the CI log.
 cmdline="$cmdline printk.devkmsg=on audit=0 systemd.journald.forward_to_kmsg=1"
+# On a Pi 3 the PL011 UART (QEMU's serial port) belongs to Bluetooth; once its driver takes the
+# UART, the console goes silent. A copy of the device tree without that Bluetooth node keeps it.
+dtb="$work/console.dtb"
+cp "$bootfiles/bcm2710-rpi-3-b-plus.dtb" "$dtb"
+uart0="$(fdtget -t s "$dtb" /aliases uart0)"
+fdtput -r "$dtb" "$uart0/bluetooth" 2>/dev/null || echo "no Bluetooth node under $uart0"
 qemu-system-aarch64 -machine raspi3b -m 1G -smp 4 \
-  -kernel "$bootfiles/kernel8.img" -dtb "$bootfiles/bcm2710-rpi-3-b-plus.dtb" \
+  -kernel "$bootfiles/kernel8.img" -dtb "$dtb" \
   -drive "file=$copy,if=sd,format=raw" -append "$cmdline" \
   -display none -serial "file:$log" -monitor none -d guest_errors -D "$qemu_log" -no-reboot \
   >"$work/qemu.out" 2>&1 &

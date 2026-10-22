@@ -268,7 +268,7 @@ jobs:
       - name: Boot it in QEMU until Nox answers
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-system-arm qemu-utils >/dev/null
+          sudo apt-get install -y -qq qemu-system-arm qemu-utils device-tree-compiler >/dev/null
           sudo NOX_SMOKE_LOG="$RUNNER_TEMP/serial.log" os/tools/qemu-smoke.sh "$IMG" "$RUNNER_TEMP/boot" 2700
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
