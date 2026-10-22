@@ -279,6 +279,11 @@ async def test_a_node_enrolls_runs_and_serves_the_core(core: NoxCore, tmp_path: 
         registry = _nodes(core).registry
         assert registry is not None
         entry = next(e for e in registry.entries() if e.device_id == identity.node_id)
+        # The registry records the node's list off the event loop: wait until it has it.
+        for _ in range(250):
+            if entry.offers("notify.show"):
+                break
+            await asyncio.sleep(0.02)
         # Through the core's own call path: the call carries the core's signed receipt.
         sent = await registry.call(
             entry, "notify.show", {"text": "Wäsche aufhängen"}, risk="low", timeout_s=10

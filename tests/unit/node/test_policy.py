@@ -4,9 +4,13 @@ narrowed group stays out of what the core routes - whatever the node says."""
 from __future__ import annotations
 
 import asyncio
+import itertools
 import threading
+from collections import Counter
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from nox.node.manifest import GROUPS
 from nox.node.pairing import NodePairing
@@ -287,5 +291,81 @@ def test_a_stale_tool_list_never_routes_a_narrowed_or_unknown_group() -> None:
     assert not entry.offers("notify.show")
     assert not entry.offers("mystery.tool")
     assert entry.offers("system.info")
-    entry.pending_narrow.add("system")
+    entry.pending_narrow["system"] += 1
     assert not entry.offers("system.info")
+
+
+ARRIVALS = sorted(set(itertools.permutations(["narrow", "narrow", "clear"])))
+
+
+@pytest.mark.parametrize("arrivals", ARRIVALS, ids=["-".join(a) for a in ARRIVALS])
+async def test_narrow_and_clear_requests_apply_in_arrival_order(
+    pairing: NodePairing,
+    nodes: NodeRepository,
+    tmp_path: Path,
+    arrivals: tuple[str, ...],
+) -> None:
+    registry, _session, node_id = await _connected(pairing, nodes, tmp_path)
+    entry = next(e for e in registry.entries() if e.device_id == node_id)
+    lock = registry._lock(node_id)
+    await lock.acquire()  # everything queues behind a listing in progress
+    tasks: list[tuple[str, asyncio.Task[None]]] = []
+    for kind in arrivals:
+        task = asyncio.create_task(registry.set_narrowed(node_id, "notify", kind == "narrow"))
+        tasks.append((kind, task))
+        await asyncio.sleep(0)  # it arrives (and is stamped) before the next one
+    lock.release()
+    while not all(t.done() for _, t in tasks):
+        if any(kind == "narrow" and not t.done() for kind, t in tasks):
+            # A narrowing on its way: off, whatever else already finished.
+            assert not registry.any_online_with("notify.show")
+        await asyncio.sleep(0.001)
+    for _, task in tasks:
+        task.result()
+    narrowed = arrivals[-1] == "narrow"  # the last to arrive wins
+    assert ("notify" in registry.policy.narrowed(node_id)) is narrowed
+    assert registry.any_online_with("notify.show") is not narrowed
+    assert entry.pending_narrow == Counter()
+
+
+async def test_an_older_request_never_undoes_a_newer_one(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
+) -> None:
+    registry, _session, node_id = await _connected(pairing, nodes, tmp_path)
+    entry = next(e for e in registry.entries() if e.device_id == node_id)
+    # As if a later "clear" had been applied before this narrowing got the lock.
+    registry._applied[(node_id, "notify")] = 10**9
+    await registry.set_narrowed(node_id, "notify", True)
+    assert registry.policy.narrowed(node_id) == set()
+    assert registry.any_online_with("notify.show")
+    assert entry.pending_narrow == Counter()
+
+
+async def test_the_marker_is_removed_on_an_error_and_a_cancellation(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
+) -> None:
+    registry, _session, node_id = await _connected(pairing, nodes, tmp_path)
+    entry = next(e for e in registry.entries() if e.device_id == node_id)
+
+    def broken(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("disk full")
+
+    original = registry.policy.set_narrowed
+    registry.policy.set_narrowed = broken  # type: ignore[method-assign]
+    with pytest.raises(OSError):
+        await registry.set_narrowed(node_id, "notify", True)
+    assert entry.pending_narrow == Counter()
+    registry.policy.set_narrowed = original  # type: ignore[method-assign]
+
+    lock = registry._lock(node_id)
+    await lock.acquire()
+    waiting = asyncio.create_task(registry.set_narrowed(node_id, "notify", True))
+    await asyncio.sleep(0)
+    assert entry.pending_narrow["notify"] == 1
+    assert not registry.any_online_with("notify.show")
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    lock.release()
+    assert entry.pending_narrow == Counter()
+    assert registry.any_online_with("notify.show")

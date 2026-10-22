@@ -12,9 +12,11 @@ and the tool loop marks the conversation tainted like any other untrusted result
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import time
 import uuid
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -68,8 +70,9 @@ class NodeEntry:
     confirmer: bool = False
     #: Groups the owner switched off for this node in the dashboard (`nox.node.policy`).
     narrowed: frozenset[str] = frozenset()
-    #: Switched off a moment ago, not yet written: off already, whatever a listing says.
-    pending_narrow: set[str] = field(default_factory=set)
+    #: Narrowings asked for and not yet finished, counted per group: each request adds one and
+    #: takes away only its own, so the group is off while any of them is still on its way.
+    pending_narrow: Counter[str] = field(default_factory=Counter)
 
     @property
     def label(self) -> str:
@@ -79,7 +82,7 @@ class NodeEntry:
     def narrowed_out(self, tool: str) -> bool:
         """Whether the tool's group is switched off here (not on the device)."""
         group = group_of(tool)
-        return group in self.narrowed or group in self.pending_narrow
+        return group in self.narrowed or (group is not None and self.pending_narrow[group] > 0)
 
     def offers(self, tool: str) -> bool:
         if not self.online or tool not in self.tools:
@@ -153,6 +156,9 @@ class NodeRegistry:
         #: One per node: a listing and a narrowing never interleave (read -> compute -> assign ->
         #: tell the node is one step).
         self._locks: dict[str, asyncio.Lock] = {}
+        #: Narrow / clear requests in arrival order; per (node, group) the last one applied.
+        self._seq = itertools.count(1)
+        self._applied: dict[tuple[str, str], int] = {}
 
     def _lock(self, device_id: str) -> asyncio.Lock:
         lock = self._locks.get(device_id)
@@ -206,32 +212,50 @@ class NodeRegistry:
         # in the moment between a new connection and the node applying `nox/policy`.
         tools, narrowed = await asyncio.to_thread(record)
         entry.narrowed = frozenset(narrowed)
-        entry.tools = {t: r for t, r in tools.items() if not entry.narrowed_out(t)}
+        # A group with a narrowing still on its way stays listed here but is not offered
+        # (`NodeEntry.offers`); once that request is done, the list is right either way.
+        entry.tools = tools
         if narrowed:
             await send_policy(session, narrowed)
         log.info("node.tools", device_id=session.device_id, tools=sorted(entry.tools))
 
     async def set_narrowed(self, device_id: str, group: str, narrowed: bool) -> None:
-        """Narrow (or clear) one group of one node: narrowing takes effect on the core at once,
-        before anything is written or sent; the node is told as soon as it is connected."""
-        entry = self._entries.get(device_id)
-        if entry is not None and narrowed:
-            entry.pending_narrow.add(group)
-            entry.tools = {t: r for t, r in entry.tools.items() if group_of(t) != group}
-        async with self._lock(device_id):
-            await asyncio.to_thread(self.policy.set_narrowed, device_id, group, narrowed)
-            now = await asyncio.to_thread(self.policy.narrowed, device_id)
-            entry = self._entries.get(device_id)  # it may have connected meanwhile
-            if entry is None:
-                return
-            entry.narrowed = frozenset(now)
-            entry.pending_narrow.discard(group)
-            session = entry.session
-            if session is None or not entry.online:
-                return
-            await send_policy(session, now)
-            if not narrowed:
-                await self._refresh(session, complete=False)  # it lists the group's tools again
+        """Narrow (or clear) one group of one node. Narrowing takes effect on the core at once,
+        before the request waits for anything; the node is told as soon as it is connected.
+
+        Requests for the same group are applied in arrival order, and the last to arrive wins: a
+        request older than the last one applied for that group changes nothing. While any
+        narrowing of the group is still on its way, the group is off, whatever else finished.
+        """
+        seq = next(self._seq)  # stamped before the first await: arrival order
+        marked = self._entries.get(device_id) if narrowed else None
+        if marked is not None:
+            marked.pending_narrow[group] += 1
+        try:
+            async with self._lock(device_id):
+                key = (device_id, group)
+                if self._applied.get(key, 0) > seq:
+                    return  # a later request for this group was applied already
+                self._applied[key] = seq
+                await asyncio.to_thread(self.policy.set_narrowed, device_id, group, narrowed)
+                now = await asyncio.to_thread(self.policy.narrowed, device_id)
+                entry = self._entries.get(device_id)  # it may have connected meanwhile
+                if entry is None:
+                    return
+                entry.narrowed = frozenset(now)
+                entry.tools = {t: r for t, r in entry.tools.items() if group_of(t) not in now}
+                session = entry.session
+                if session is None or not entry.online:
+                    return
+                await send_policy(session, now)
+                if not narrowed:
+                    await self._refresh(session, complete=False)  # it lists the tools again
+        finally:
+            # Only this request's own marker, also on an error or a cancellation.
+            if marked is not None:
+                marked.pending_narrow[group] -= 1
+                if marked.pending_narrow[group] <= 0:
+                    del marked.pending_narrow[group]
 
     @staticmethod
     def _accept_tools(raw: Any) -> dict[str, str]:
