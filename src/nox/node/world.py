@@ -583,7 +583,7 @@ def _desktop_and_computer(world: World) -> list[NodeTool]:
         assert spec is not None
         group = spec.name.split(".", 1)[0]
         tool = _adapt(spec, group, windows_only=world)
-        if spec.name in ("computer.pointer", "computer.keys", "computer.session_start"):
+        if group == "computer":  # every answer says whether a session runs
             tool = _with_session_state(tool, computer)
         out.append(tool)
     return out
@@ -597,7 +597,8 @@ async def _quiet(coro: Awaitable[None]) -> None:
 
 
 def _with_session_state(tool: NodeTool, computer: Any) -> NodeTool:
-    """Every answer says whether the session is still open, so the core can end its notice."""
+    """Every answer says whether a session is open, so the core can end its lock and notice -
+    and keeps them while an answer does not say it plainly."""
     inner = tool.handler
 
     async def handler(args: BaseModel) -> dict[str, Any]:

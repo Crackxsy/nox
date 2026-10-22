@@ -474,7 +474,7 @@ async def _start(specs: dict[str, Any]) -> dict[str, Any]:
 
 async def test_a_start_without_an_answer_blocks_until_the_end_is_confirmed(tmp_path: Path) -> None:
     """Review C6: a start the node may have carried out never leaves approvals open."""
-    seen: dict[str, Any] = {"end": {"ok": False}}
+    seen: dict[str, Any] = {"end": {"ok": True, "was_open": True}}  # no `session_active`
     blocked_while_asking: list[bool] = []
 
     async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
@@ -487,20 +487,71 @@ async def test_a_start_without_an_answer_blocks_until_the_end_is_confirmed(tmp_p
     await _start(specs)
     assert blocked_while_asking == [True]  # from the moment the start went out
     assert ends == [LAPTOP]  # ended on the node to be sure ...
-    assert control.blocks("e" * 32) and notices[-1]["active"]  # ... not confirmed: still blocked
+    assert control.blocks("e" * 32) and notices[-1]["active"]  # ... not said plainly: blocked
     assert granted == []  # and nothing granted for an unconfirmed session
-    seen["end"] = {"ok": True, "was_open": True}
-    await _start(specs)
+    assert (await _start(specs))["error"] == "session_running"  # no second attempt over it
+    seen["end"] = {"ok": True, "was_open": True, "session_active": False}
+    stop = specs["computer.session_end"]
+    payload = stop.input_model.model_validate({"device": "Laptop"}).model_dump()
+    stop.scope(payload)
+    await stop.handler(payload)
     assert not control.blocks("e" * 32) and notices[-1]["active"] is False
 
 
-async def test_a_clear_refusal_lifts_the_block_at_once(tmp_path: Path) -> None:
+async def test_a_refused_start_is_checked_with_an_end_on_the_node(tmp_path: Path) -> None:
+    end_answer: dict[str, Any] = {"ok": True, "session_active": True}
+
     async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
-        return {"error": "refused_on_device", "reason": "game_running", "device": entry.label}
+        if tool == "computer.session_start":
+            return {"error": "refused_on_device", "reason": "budget", "device": entry.label}
+        return {"device": entry.label, "result": end_answer}
+
+    specs, _reg, control, (_granted, _notices, ends) = _specs(tmp_path, _privacy(), answer)
+    await _start(specs)
+    assert ends == [LAPTOP] and control.blocks(BROWSER)  # the node did not say "none runs"
+    control.end_all("kill switch")
+    end_answer["session_active"] = False
+    await _start(specs)
+    assert ends == [LAPTOP, LAPTOP] and not control.blocks(BROWSER)
+
+
+async def test_a_plain_no_from_the_node_lifts_the_block_at_once(tmp_path: Path) -> None:
+    async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
+        result = {"ok": False, "error": "a game is running", "session_active": False}
+        return {"device": entry.label, "result": result}
 
     specs, _reg, control, (_granted, _notices, ends) = _specs(tmp_path, _privacy(), answer)
     await _start(specs)
     assert not control.blocks(BROWSER) and ends == []
+
+
+async def test_a_running_session_is_never_replaced_by_a_new_start(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
+        calls.append(tool)
+        return {"device": entry.label, "result": {"ok": True, "minutes": 5, "session_active": True}}
+
+    specs, _reg, control, (granted, _notices, _ends) = _specs(tmp_path, _privacy(), answer)
+    await _start(specs)
+    first = control.sessions[LAPTOP]
+    second = await _start(specs)
+    assert second["error"] == "session_running" and calls == ["computer.session_start"]
+    assert control.sessions[LAPTOP] is first and not first.provisional
+    assert control.blocks(BROWSER) and len(granted) == 1  # the grant is untouched
+
+
+async def test_an_answer_only_ever_touches_its_own_attempt(tmp_path: Path) -> None:
+    async def answer(entry: Any, tool: str, args: Any, **kw: Any) -> dict[str, Any]:
+        # While this attempt waits, a stop clears it and another attempt starts.
+        control.end_all("kill switch")
+        control.asking(entry)
+        result = {"ok": False, "error": "switched off", "session_active": False}
+        return {"device": entry.label, "result": result}
+
+    specs, _reg, control, _ = _specs(tmp_path, _privacy(), answer)
+    await _start(specs)
+    assert control.running(LAPTOP) and control.blocks(BROWSER)  # the other attempt still holds
 
 
 async def test_a_node_without_a_linked_browser_gets_no_session(tmp_path: Path) -> None:
@@ -653,3 +704,13 @@ def test_building_the_tools_touches_no_window_api() -> None:
 
     world.probe = no_windows
     assert "desktop.windows" in world_tools(world)
+
+
+async def test_every_computer_answer_says_whether_a_session_runs() -> None:
+    world, _ = _world()
+    tools = world_tools(world)
+    start = tools["computer.session_start"]
+    started = await start.handler(start.args.model_validate({"purpose": "Fenster ordnen"}))
+    assert started["session_active"] is True
+    end = tools["computer.session_end"]
+    assert (await end.handler(end.args.model_validate({})))["session_active"] is False

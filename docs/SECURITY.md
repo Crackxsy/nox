@@ -775,10 +775,14 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   the session is over, **no paired device** may answer "allow" or send a privileged request -
   none is provably on another machine than the one Nox controls; approvals then come only from
   the core machine's own dashboard or from a node's own dialog (and `deny`, Stopp and reading
-  always work). A start without a clear answer (timeout, lost or malformed answer) is ended on the
-  node with `computer.session_end` and keeps the lock until that end is confirmed, the kill switch
-  ends it, the node disconnects (which ends the session there too) or the longest session time
-  (120 minutes) has passed. **No new input-synthesis code:** the node calls
+  always work). Every node answer about computer use says `session_active`; the lock is lifted
+  only when the node says plainly that no session runs. A start without that (a refusal before it
+  ran, a timeout, a lost or malformed answer) is ended on the node with `computer.session_end` and
+  keeps the lock until that end says so, the kill switch ends it, the node disconnects (which ends
+  the session there too) or the longest session time (120 minutes) has passed. Each start attempt
+  carries its own nonce: an answer only ever changes its own attempt's record, and a new start
+  while a session (or an unclear attempt) exists for that node is refused (`session_running`),
+  never laid over it. **No new input-synthesis code:** the node calls
   `nox.desktop.computer_use` and `nox.desktop.keyboard`, the two files the Security Model §10 CI
   guard allows, so the guard needs no exception. Residual: node-local privacy zones are not
   applied to node screenshots yet (this core's privacy mode and capture switches are); a node
