@@ -177,6 +177,9 @@ class World:
         #: Tool families whose backends this world replaced by simulations (see the docstring).
         self.simulated: frozenset[str] = frozenset()
         self._games: list[str] = []
+        #: The simulated nodes (`kann_alles.nodes`), set up the first time a task asks for one.
+        self.nodes: Any = None
+        self.simulated_devices: frozenset[str] = frozenset()
         self._saved_env: dict[str, str | None] = {}
         self._unsub: Callable[[], None] | None = None
 
@@ -241,6 +244,7 @@ class World:
         core.orchestrator.speaker = RecordingSpeaker(self.probe)
         self._wrap_executor(core)
         await self.simulate(core)
+        self._install_nodes(core)
         skills = self._skills()
         if skills is not None:
             # Learning in this world writes a known plugin; see `kann_alles.skill_builder`.
@@ -297,6 +301,8 @@ class World:
             isolated=self._isolated,
             simulated=self.simulated,
             approve_high=self.approve_high,
+            device=str(payload.get("device") or ""),
+            simulated_devices=self.simulated_devices,
         )
         self.probe.confirmations += 1
         self.probe.decisions.append(verdict)
@@ -327,6 +333,7 @@ class World:
         self.forbidden_tools = list(forbidden_tools or [])
         self.approve_high = list(approve_high or [])
         await self._prepare_hands(env)
+        self._prepare_nodes(env)
         shutil.rmtree(self.sandbox, ignore_errors=True)
         self.sandbox.mkdir(parents=True)
         for relative, content in env.files.items():
@@ -410,6 +417,23 @@ class World:
             [psutil.Process().name()] if env.fake_game else self._games
         )
         self._activate_skills = env.activate_skills
+
+    def _install_nodes(self, core: Any) -> None:
+        """The core's routes for nodes, installed once at start - so every task sees the same
+        tool schemas, whatever order the tasks run in (an older checkout without nodes: none)."""
+        try:
+            from kann_alles.nodes import WorldNodes  # noqa: PLC0415 - newer checkouts only
+            from nox.node.install import _install_routes  # noqa: PLC0415
+        except ImportError:
+            return
+        self.nodes = WorldNodes(self.root / "node-receipts")
+        _install_routes(core, self.nodes)
+
+    def _prepare_nodes(self, env: Environment) -> None:
+        """Exactly the simulated nodes the task names are online, no others."""
+        if self.nodes is not None:
+            self.nodes.show(list(env.nodes))
+            self.simulated_devices = self.nodes.devices
 
     async def settle(self) -> None:
         """Before checks: let a skill build finish, then click "Aktivieren" if the task says so."""

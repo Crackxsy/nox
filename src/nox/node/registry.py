@@ -47,7 +47,16 @@ __all__ = [
 ]
 
 #: Tools the core routes to nodes in this release. A node offering anything else is ignored.
-ROUTABLE: frozenset[str] = frozenset({"system.info", "notify.show"})
+ROUTABLE: frozenset[str] = frozenset(
+    {
+        "system.info",
+        "notify.show",
+        "file.list",
+        "file.read",
+        "file.write",
+        "shell.run",
+    }
+)
 MAX_TOOLS = 64
 #: What a node's result may put in front of the model, at most.
 MAX_RESULT_CHARS = 16_000

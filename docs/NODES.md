@@ -7,8 +7,10 @@ run a small **`nox node`**: it connects to the core and lets Nox do things *on t
 only the things you allowed there.
 
 > Status: wave C is being built. This release has pairing, the connection, the device's own
-> allow-list and audit trail, and two tools: `system.info` (read system values) and
-> `notify.show` (show a notice). Commands, files, the screen and the rest follow.
+> allow-list and audit trail, `system.info` (read system values), `notify.show` (show a notice)
+> and the hands: `file.list/read/write` in folders you allow and `shell.run` in the device's own
+> sandbox. Installing programs (`package.*`) is not yet available on nodes. The screen and the
+> rest follow.
 
 ## Installing a node
 
@@ -68,7 +70,9 @@ and never queues the request. A remembered "allow" for the laptop covers only th
 The file `node.yaml` in the node folder decides, and **only this device can widen it**:
 
 ```text
-nox node allow shell     # let Nox run commands here (once that tool exists); asks "yes?"
+nox node allow shell     # let Nox run commands here, in this device's sandbox; asks "yes?"
+nox node allow files --folder "C:\Users\Alex\Documents\Nox"   # one folder Nox may open
+nox node deny files --folder "C:\Users\Alex\Documents\Nox"    # take that folder away again
 nox node deny notify     # no more notices on this device - at once, also while it runs
 ```
 
@@ -84,6 +88,40 @@ A node without a screen refuses high risk, unless a person confirmed it on Nox i
 allowed that on the device: `nox node allow trust_core_for_high`. The node also keeps
 its own budget: 60 actions and 5 high-risk ones per hour (`max_calls_per_hour`,
 `max_high_per_hour` in `node.yaml`).
+
+## Files and commands on a node
+
+- **Files** (`files`): Nox opens only paths inside the folders you allowed with `--folder` (none
+  by default; never a whole drive, your home folder, a system or app-data folder, or a folder
+  with keys or passwords), and decides that on the real file at the moment it opens it - a link
+  or junction that leads elsewhere, `..`, `~`, a short name like `PROGRA~1`, a network path
+  (`\\server\share`) or a device path is refused, and so is anything in the node's own folder,
+  the keyring, `~/.ssh` and similar key stores, and browser profiles.
+- **Writing** creates only text files, in two tiers. *Plain text* - `.txt .md .csv .tsv .log
+  .ics .vcf .srt`: a new file is medium risk (asked on Nox). *Structured text* - `.json .yaml
+  .yml`, which a program may read: every write is high risk and asked on this device, the whole
+  file is written at once (no appending), and the text must parse plainly - YAML with a tag, an
+  anchor or an alias is refused. Documents, pages, PDFs and media (`.html .xml .svg .pdf .docx
+  .xlsx .pptx .odt .png .mp3 ...`) are not written on a device at all - Nox writes `.md` or
+  `.txt` instead. Replacing or appending is always high risk. Never a hidden file or anything in
+  a hidden folder (`.git`, `.vscode`, `.bashrc`, ...), never anything inside a repository (a
+  folder with `.git`, `.hg` or `.svn`, up to the allowed folder), never a file without an
+  extension, a script, a program or a configuration file tools act on (`settings.json`,
+  `package.json`, compose and pipeline files, `configuration.yaml`, anything in `workflows`,
+  ...), never an executable file or one with a second name (hard link). The question shows the
+  file, the mode, size, line count and a SHA-256, and the content - in full when it is short,
+  otherwise its first and last 200 characters with "content shortened - N characters not
+  shown". A write is never remembered, and a profile rule that allows writing on Nox does not
+  allow it on a node unless it names the device (`device:`).
+- **Accepted for plain text:** a `.csv` can hold a spreadsheet formula, which Excel runs only
+  after its own warning and your click; the other plain formats run nothing.
+- **Commands** (`shell`) run only in this device's own sandbox (AppContainer on Windows,
+  bubblewrap on Linux), which cannot see the node's folder - on Linux the node refuses commands
+  when its folder lies under a system folder the sandbox shows. Without such a sandbox - macOS
+  for now, Linux without `bwrap` - commands are refused, never run without one. High risk: asked
+  on this device, or on Nox for a node without a screen.
+- **Programs** (`packages`): not yet available on nodes - a package manager needs rights the
+  sandbox does not give.
 
 ## In the dashboard
 

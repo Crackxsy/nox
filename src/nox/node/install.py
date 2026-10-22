@@ -17,6 +17,7 @@ Requests, for the UI roles (`nox.ipc.roles`):
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,15 +30,16 @@ from nox.ipc.errors import ERR_NOT_FOUND, ERR_UNAVAILABLE, IpcError
 from nox.ipc.roles import UI_ROLES
 from nox.lan.install import authorize_admin, qr_data_uri
 from nox.lan.tls import TlsMaterial
+from nox.node.hands import PathArgs, ShellArgs, WriteArgs, write_risk, write_summary
 from nox.node.listener import NodeListener
 from nox.node.names import label
 from nox.node.pairing import NodePairing
 from nox.node.policy import defaults_view, register_policy_requests
-from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink
+from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink, render
 from nox.node.receipts import ReceiptSigner
 from nox.node.registry import NodeRegistry
 from nox.node.repo import NodeRepository
-from nox.node.router import install_routes, routed_spec
+from nox.node.router import CannotShow, install_routes, routed_spec
 from nox.node.tools import NoArgs, NotifyArgs, system_info
 from nox.remote.models import DeviceRow
 from nox.remote.repo import RemoteRepository
@@ -237,11 +239,68 @@ def _keep(runtime: NodeRuntime, coro: Any, name: str) -> None:
     task.add_done_callback(runtime.tasks.discard)
 
 
+#: Longest permission target a node call may have. Longer is refused, never cut: a target the
+#: person cannot read in full is a target that can hide its dangerous tail (padding).
+MAX_TARGET_CHARS = 1000
+
+
+def _complete(text: str) -> str:
+    if len(text) > MAX_TARGET_CHARS:
+        raise CannotShow(f"the call is too long to be shown in full ({len(text)} characters)")
+    return text
+
+
+def _shell_target(payload: dict[str, Any]) -> str:
+    """What a node's `shell.run` call runs, as the confirmation and the audit show it - in full or
+    not at all (`CannotShow`), rendered like the device's own dialog (`protocol.render`): every
+    argv token quoted on its own, a command line quoted as one value, the whole egress list.
+    Never this core's view of where the program lives, which says nothing about the device."""
+    argv = payload.get("argv")
+    if isinstance(argv, list):
+        words = "argv " + render([str(a) for a in argv])
+    else:
+        words = "command " + render(str(payload.get("command") or ""))
+    egress = payload.get("egress") or []
+    hosts = render([str(h) for h in egress]) if egress else "[none]"
+    return _complete(f"{words} egress {hosts}")
+
+
+def _write_target(payload: dict[str, Any]) -> str:
+    """A node write: where, how (new file / overwrite / append), how much, how it starts."""
+    shown = write_summary(
+        str(payload.get("path") or ""),
+        str(payload.get("text") or ""),
+        append=bool(payload.get("append")),
+        overwrite=bool(payload.get("overwrite")),
+    )
+    return _complete(" ".join(f"{key} {render(value)}" for key, value in shown.items()))
+
+
+def _write_risk(payload: dict[str, Any]) -> Risk:
+    path = str(payload.get("path") or "")
+    return Risk(write_risk(path, bool(payload.get("append")), bool(payload.get("overwrite"))))
+
+
+def _field(name: str) -> Callable[[dict[str, Any]], str]:
+    return lambda payload: _complete(render(str(payload.get(name) or "")))
+
+
+_Target = Callable[[dict[str, Any]], str]
+
+
 def _install_routes(core: Any, registry: NodeRegistry) -> None:
-    """`system.info` (the core has it too) and `notify.show` (nodes only) become routable; the
+    """`system.info` (the core has it too), `notify.show` (nodes only) and the hands - `file.*`
+    and `shell.run`, each the core's own tool when the call stays here - become routable; the
     capability report hides a node-only tool while no node offers it, and every turn's context
-    names the devices."""
+    names the devices. `package.*` stays on the core: it cannot work in a node's sandbox yet."""
     defaults = lambda: core.config.devices.defaults  # noqa: E731 - read per call
+    own = core.tool_registry.get
+    hands: list[tuple[str, str, Risk, bool, type[BaseModel], _Target]] = [
+        ("file.list", "What is in one folder", Risk.READ, False, PathArgs, _field("path")),
+        ("file.read", "The text of one file", Risk.READ, False, PathArgs, _field("path")),
+        ("file.write", "Write text to a file", Risk.MEDIUM, True, WriteArgs, _write_target),
+        ("shell.run", "Run a command sandboxed", Risk.HIGH, True, ShellArgs, _shell_target),
+    ]
     specs = [
         routed_spec(
             name="system.info",
@@ -263,8 +322,29 @@ def _install_routes(core: Any, registry: NodeRegistry) -> None:
             defaults=defaults,
         ),
     ]
+    for name, what, risk, side_effects, model, target in hands:
+        mine = own(name)
+        specs.append(
+            routed_spec(
+                name=name,
+                description=(mine.description if mine is not None else what + ".")
+                + " On this core or on a paired PC (`device`).",
+                risk=risk,
+                side_effects=side_effects,
+                registry=registry,
+                core=mine,
+                input_model=model,
+                defaults=defaults,
+                node_target=target,
+                # Replacing or extending a file on a device is high there, and a write on a
+                # device is asked every time (never remembered).
+                node_risk=_write_risk if name == "file.write" else None,
+                remember_on_node=name != "file.write",
+            )
+        )
+    on_core = {spec.name for spec in specs if own(spec.name) is not None}
     install_routes(core.tool_registry, specs)
-    node_only = {spec.name for spec in specs} - {"system.info"}
+    node_only = {spec.name for spec in specs} - on_core
 
     def probe(tool_name: str) -> tuple[Any, str] | None:
         if tool_name in node_only and not registry.any_online_with(tool_name):

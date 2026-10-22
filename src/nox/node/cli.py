@@ -19,6 +19,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from nox.core.logging import get_logger
 from nox.node.agent import NodeAgent
@@ -32,12 +33,14 @@ from nox.node.confirmed import (
 )
 from nox.node.enroll import EnrollError, enroll
 from nox.node.gate import NodeGate
-from nox.node.home import NodeHome
+from nox.node.hands import NodeHands, default_sandbox, hand_tools
+from nox.node.home import NodeHome, restrict_dir_to_owner
 from nox.node.keystore import NodeKeyStore
 from nox.node.manifest import GROUPS, NodeManifest, load_manifest, save_manifest
 from nox.node.protocol import PairLink, PairLinkError, escape_controls
 from nox.node.tools import PlatformNotifier, default_tools
 from nox.node.update import NodeUpdater, UpdateCheck
+from nox.sandbox import Sandbox
 from nox.security.audit import SqliteAuditLog
 from nox.security.model import SecretStore
 from nox.security.secrets import KeyringSecretStore, keyring_usable
@@ -103,17 +106,25 @@ def build(
     secrets: SecretStore | None = None,
     notifier: object = None,
     say: Callable[[str], None] | None = None,
+    sandbox: Callable[[], Sandbox | None] | None = None,
 ) -> NodeRuntime:
     home.ensure()
+    if sys.platform == "win32":
+        # On every start, not only when the folder was made: an ACL widened since is put back.
+        restrict_dir_to_owner(home.path)
     audit = open_audit(home)
     key = manifest_key(home.path, secrets)
     manifest = effective_manifest(load_manifest(home.manifest_file), audit, key, say=say)
-    gate = NodeGate(
-        default_tools(notifier),  # type: ignore[arg-type]
-        manifest,
-        audit,
-        protected=home.path,
+    holder: list[NodeGate] = []
+    hands = NodeHands(
+        # Read per call: `nox node deny files --folder` applies to the running node at once.
+        folders=lambda: list(holder[0].manifest.folders) if holder else [],
+        protected=(home.path,),
+        sandbox=sandbox or default_sandbox,
     )
+    tools = {**default_tools(notifier), **hand_tools(hands)}  # type: ignore[arg-type]
+    gate = NodeGate(tools, manifest, audit, protected=home.path)
+    holder.append(gate)
     keystore = NodeKeyStore(home.key_file, secrets)
     gate.restore_budget(audit)  # a restart does not refill the hour's budget
     return NodeRuntime(home, keystore, gate, audit, key)
@@ -424,6 +435,7 @@ def status(home: NodeHome) -> list[str]:
         f"State:     {x(str(state.get('state', 'not running')))} ({x(str(state.get('at', '-')))})",
         f"Nox may:   {', '.join(allowed) or 'nothing'}",
         f"Max risk:  {manifest.max_risk}",
+        f"Folders:   {', '.join(x(f) for f in manifest.folders) or 'none'}",
     ]
     try:
         update_info = json.loads((home.path / "update.json").read_text(encoding="utf-8"))
@@ -451,6 +463,35 @@ def log_lines(home: NodeHome, *, limit: int = 50) -> list[str]:
     return lines
 
 
+def _local_folder(text: str, node_home: NodeHome, *, must_exist: bool = True) -> str:
+    """A folder typed in a terminal here: absolute, local, existing, resolved once, now - and
+    never the node's own folder or one inside it."""
+    from nox.node.gate import is_remote_or_device_path  # noqa: PLC0415
+
+    raw = text.strip()
+    if not raw or is_remote_or_device_path(raw) or not Path(raw).is_absolute():
+        raise NodeCliError("Give an absolute folder on this device (no network path).")
+    real = Path(os.path.realpath(raw))
+    if must_exist and not real.is_dir():
+        raise NodeCliError(f"{escape_controls(str(real))} is not a folder.")
+    home = Path(os.path.realpath(node_home.path))
+    if real == home or home in real.parents:
+        raise NodeCliError("The node's own folder can never be opened by Nox.")
+    if must_exist:
+        from nox.node.safe_fs import broad_folder, secret_locations  # noqa: PLC0415
+
+        if broad_folder(str(real)):
+            raise NodeCliError(
+                "That folder is too broad (a drive, your home folder, a system or app-data "
+                "folder). Allow a folder inside it, for example one for Nox's files."
+            )
+        for place in secret_locations():
+            secret = Path(os.path.realpath(place))
+            if real == secret or secret in real.parents or real in secret.parents:
+                raise NodeCliError("That folder holds or lies in a store of keys or passwords.")
+    return str(real)
+
+
 #: Not a group, but confirmed the same way: on a device without a screen, let high risk run when
 #: a person confirmed it on the core (spec C §1.6 step 5, a documented residual risk).
 TRUST_SETTING = "trust_core_for_high"
@@ -466,6 +507,7 @@ def allow(
     interactive: Callable[[], bool] = lambda: sys.stdin.isatty() and sys.stdout.isatty(),
     confirm: Callable[[str], bool] = lambda _prompt: False,
     secrets: SecretStore | None = None,
+    folder: str = "",
 ) -> None:
     """Change one group. Widening asks in an interactive terminal for a typed "yes", and the
     new manifest is the last confirmed one plus this change, so unconfirmed edits of `node.yaml`
@@ -479,7 +521,13 @@ def allow(
     if group not in GROUPS and not trust:
         known = ", ".join([*GROUPS, TRUST_SETTING])
         raise NodeCliError(f"Unknown group {group!r}. Known: {known}")
+    if folder and group != "files":
+        raise NodeCliError("--folder belongs to the group 'files'.")
+    if folder:
+        folder = _local_folder(folder, home, must_exist=enabled)
     label = TRUST_LABEL if trust else GROUPS[group].label_en
+    if folder:
+        label = f"open files in {escape_controls(folder)}"
     audit = open_audit(home)
     if enabled:
         if not interactive():
@@ -491,6 +539,10 @@ def allow(
     manifest = last_confirmed(audit, key) or NodeManifest(groups=dict(MOST_RESTRICTIVE.groups))
     if trust:
         manifest.trust_core_for_high = enabled
+    elif folder:
+        # A folder alone widens nothing while the group is off; denying one keeps the group.
+        rest = [f for f in manifest.folders if f != folder]
+        manifest.folders = [*rest, folder] if enabled else rest
     else:
         manifest.groups[group] = enabled
     save_manifest(home.manifest_file, manifest)
@@ -501,7 +553,7 @@ def allow(
         actor="local",
         tool="node",
         action="node.allow" if enabled else "node.deny",
-        target=group,
+        target=f"files:{folder}"[:200] if folder else group,
         decision="allow",
         result="ok",
     )

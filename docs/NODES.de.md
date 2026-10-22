@@ -7,9 +7,10 @@ oder Laptop kann einen kleinen **`nox node`** laufen lassen: Er verbindet sich m
 lässt Nox Dinge *auf diesem Gerät* tun - und nur die, die du dort erlaubt hast.
 
 > Stand: Welle C entsteht gerade. Diese Version hat das Koppeln, die Verbindung, die eigene
-> Erlaubnisliste und das Protokoll des Geräts und zwei Werkzeuge: `system.info` (Systemwerte
-> lesen) und `notify.show` (einen Hinweis zeigen). Befehle, Dateien, Bildschirm und der Rest
-> folgen.
+> Erlaubnisliste und das Protokoll des Geräts, `system.info` (Systemwerte lesen), `notify.show`
+> (einen Hinweis zeigen) und die Hände: `file.list/read/write` in Ordnern, die du erlaubst, und
+> `shell.run` in der eigenen Sandbox des Geräts. Programme installieren (`package.*`) gibt es auf
+> Nodes noch nicht. Bildschirm und der Rest folgen.
 
 ## Einen Node installieren
 
@@ -71,7 +72,9 @@ Laptop.
 Das entscheidet die Datei `node.yaml` im Node-Ordner, und **nur dieses Gerät kann sie erweitern**:
 
 ```text
-nox node allow shell     # Nox darf hier Befehle ausführen (sobald es das Werkzeug gibt); fragt nach
+nox node allow shell     # Nox darf hier Befehle ausführen, in der Sandbox des Geräts; fragt nach
+nox node allow files --folder "C:\Users\Alex\Documents\Nox"   # ein Ordner, den Nox öffnen darf
+nox node deny files --folder "C:\Users\Alex\Documents\Nox"    # diesen Ordner wieder wegnehmen
 nox node deny notify     # keine Hinweise mehr auf diesem Gerät - sofort, auch im laufenden Betrieb
 ```
 
@@ -87,6 +90,43 @@ allen Angaben, 60 Sekunden lang - keine Antwort heißt nein, und ein „Ja“ in
 Sekunden zählt als nein. Ein Node ohne Bildschirm lehnt hohes Risiko ab, außer eine Person hat es
 an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trust_core_for_high`. Der Node hat außerdem ein eigenes Budget: 60 Aktionen und 5 mit hohem Risiko pro Stunde
 (`max_calls_per_hour`, `max_high_per_hour` in `node.yaml`).
+
+## Dateien und Befehle auf einem Node
+
+- **Dateien** (`files`): Nox öffnet nur Pfade in den Ordnern, die du mit `--folder` erlaubt hast
+  (standardmäßig keine; nie ein ganzes Laufwerk, dein Benutzerordner, ein System- oder
+  App-Daten-Ordner oder ein Ordner mit Schlüsseln oder Passwörtern), und entscheidet das an der
+  echten Datei in dem Moment, in dem sie geöffnet wird - ein Link oder eine Verknüpfung
+  (Junction) woandershin, `..`, `~`, ein Kurzname wie `PROGRA~1`, ein Netzwerkpfad
+  (`\\server\freigabe`) oder ein Gerätepfad wird abgelehnt, ebenso alles im Node-Ordner, im
+  Schlüsselbund, in `~/.ssh` und ähnlichen Schlüsselablagen und in Browser-Profilen.
+- **Schreiben** legt nur Textdateien an, in zwei Stufen. *Einfacher Text* - `.txt .md .csv .tsv
+  .log .ics .vcf .srt`: eine neue Datei ist mittleres Risiko (Frage an Nox). *Strukturierter
+  Text* - `.json .yaml .yml`, den ein Programm lesen kann: jedes Schreiben ist hohes Risiko und
+  wird an diesem Gerät gefragt, die Datei wird immer ganz geschrieben (kein Anhängen), und der
+  Text muss sich schlicht einlesen lassen - YAML mit Tag, Anker oder Alias wird abgelehnt.
+  Dokumente, Webseiten, PDFs und Medien (`.html .xml .svg .pdf .docx .xlsx .pptx .odt .png .mp3
+  ...`) schreibt Nox auf einem Gerät gar nicht - stattdessen `.md` oder `.txt`. Ersetzen oder
+  Anhängen ist immer hohes Risiko. Nie eine versteckte Datei oder etwas in einem versteckten
+  Ordner (`.git`, `.vscode`, `.bashrc`, ...), nie etwas in einem Repository (ein Ordner mit
+  `.git`, `.hg` oder `.svn`, bis hinauf zum erlaubten Ordner), nie eine Datei ohne Endung, ein
+  Skript, ein Programm oder eine Konfigurationsdatei, nach der Werkzeuge handeln
+  (`settings.json`, `package.json`, Compose- und Pipeline-Dateien, `configuration.yaml`, alles in
+  `workflows`, ...), nie eine ausführbare Datei oder eine mit zweitem Namen (Hardlink). Die Frage
+  zeigt Datei, Art, Größe, Zeilenzahl und einen SHA-256 und den Inhalt - ganz, wenn er kurz ist,
+  sonst die ersten und letzten 200 Zeichen mit „content shortened - N characters not shown“.
+  Schreiben wird nie gemerkt, und eine Profilregel, die Schreiben an Nox erlaubt, erlaubt es auf
+  einem Node nur, wenn sie das Gerät nennt (`device:`).
+- **Hingenommen bei einfachem Text:** Eine `.csv` kann eine Tabellenformel enthalten, die Excel
+  erst nach eigener Warnung und deinem Klick ausführt; die anderen einfachen Formate führen nichts
+  aus.
+- **Befehle** (`shell`) laufen nur in der eigenen Sandbox des Geräts (AppContainer unter Windows,
+  bubblewrap unter Linux), die den Node-Ordner nicht sieht - unter Linux lehnt der Node Befehle
+  ab, wenn sein Ordner unter einem Systemordner liegt, den die Sandbox zeigt. Ohne eine solche
+  Sandbox - vorerst macOS, Linux ohne `bwrap` - werden Befehle abgelehnt, nie ohne ausgeführt.
+  Hohes Risiko: gefragt an diesem Gerät, bei einem Node ohne Bildschirm an Nox.
+- **Programme** (`packages`): auf Nodes noch nicht verfügbar - ein Paketmanager braucht Rechte,
+  die die Sandbox nicht gibt.
 
 ## Im Dashboard
 

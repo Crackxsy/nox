@@ -808,8 +808,70 @@ A typed name that breaks a rule is refused before the code is spent - and only c
 valid code, so nobody without one can probe which names exist. The model and the dashboard
 always see the name with a short id the device cannot choose ("Laptop · 3f2a").
 
-Still to come in wave C: the node's own sandbox for shell and package tools (C5) - until then a
-node has none of those tools - certificate renewal (C7), and a real presence check for
+**The hands on a node** (C5, `nox.node.hands`, `nox.node.safe_fs`) - each one holds its own
+boundary *after* `NodeGate`, the device's confirmation and the receipt:
+
+- `file.list/read/write` open only inside folders confirmed on the device
+  (`nox node allow files --folder`, none by default; an unconfirmed folder in `node.yaml` counts
+  for nothing; never a drive root, the home folder or above, a system folder, an app-data root or
+  a secret store). The text is checked first, unresolved (UNC and device paths, `..`, `~`, 8.3
+  names, NUL, alternate data streams, Windows device names, trailing dots/spaces), then the
+  **handle** decides: POSIX looks at every entry with `fstatat(AT_SYMLINK_NOFOLLOW)` before
+  opening it `O_NOFOLLOW | O_NOCTTY | O_NONBLOCK` relative to the checked directory, and compares
+  each directory with the protected ones by `(st_dev, st_ino)` (final path: `/proc/self/fd`,
+  macOS `F_GETPATH`); Windows opens with `CreateFileW` without `FILE_SHARE_DELETE` and checks
+  `GetFinalPathNameByHandleW` of that handle. Never inside the node's own folder or this user's
+  secret stores (`secret_locations`: OS keyrings and credential vaults, DPAPI, `~/.ssh`,
+  `~/.gnupg`, cloud CLIs, `.netrc`, `.pgpass`, `.git-credentials`, browser profiles), never a hard
+  link to a file in them, never a FIFO, socket or device.
+- **Writes are an allowlist of text formats in two tiers** (`safe_fs.write_refusal`), checked
+  on the text and again on the final path relative to the allowed folder - `file.write` writes
+  UTF-8 text, so nothing else is offered. PASSIVE (`.txt .md .csv .tsv .log .ics .vcf .srt`): a
+  new file is medium. STRUCTURED (`.json .yaml .yml`): every write is high (device dialog,
+  headless rules, never remembered), the file is written whole (append refused, so the check
+  covers all of it), and the text must parse plainly (`content_refusal`: `json.loads`; YAML
+  scanned for tags, anchors and aliases - refused - then `safe_load`). Documents, pages, PDFs,
+  SVG and media (`NOT_WRITABLE_EXTENSIONS`) are refused (`format_not_writable`); there is no
+  content scanner for them to bypass. Everywhere: no path component starting with `.`, no write
+  at or below a folder holding `.git`, `.hg` or `.svn` up to the allowed folder (checked on each
+  walked directory handle on POSIX and on the final path), no file without an allowed
+  extension, and a config-name layer (`settings/tasks/launch/launchSettings/keybindings/package/
+  project/tsconfig/jsconfig/composer/deno/flows.json`, `appsettings*.json`, `*compose*`,
+  `lefthook*`, `*pipelines*` YAML, `Taskfile`, `configuration.yaml`, `automations.yaml`,
+  `workflows/`). The execution-trigger denylist stays as a further layer. No write to a file with
+  the executable bit or a second hard link; new files are `0600`; a path with leading or trailing
+  spaces is refused, never trimmed. A new file is `CREATE_NEW`/`O_EXCL` and is removed again
+  (through its handle, or by name in the checked directory) if it landed wrong; an existing one
+  is truncated only after the check. The core's target and the device's dialog show path, mode,
+  bytes, lines, a short SHA-256 and the content - in full up to 400 characters, otherwise the
+  first and last 200 with "content shortened - N characters not shown". A started write
+  completes; a stop ends everything after it. Accepted residual risk for PASSIVE formats: a
+  `.csv` formula runs only after the spreadsheet's own prompt and a user action.
+- **Profile rules and nodes**: a profile rule that ALLOWS applies to a call on a node only when it
+  names the device (`device:` glob on `ProfileRule`); rules that confirm or deny apply everywhere.
+  A broad `tool: file*, decision: allow` therefore never lets Nox write on another PC unasked.
+- Node file tools also never open Nox's own folder (`nox_home()`), in case a core runs on the same
+  device. The protected places' identities (for the hard-link check) are cached for 30 s, and the
+  known secret files of big stores (browser `Login Data`, `Cookies`, `Local State`, `key4.db`,
+  `logins.json`, keys) are looked at before the bounded walk.
+- **One renderer** (`protocol.render`) for the core's permission target and the device's dialog:
+  JSON-quoted per value and per argv token, every character outside printable ASCII and Latin-1
+  letters escaped (look-alikes, bidi, zero-width), runs of spaces counted. A target over 1000
+  characters is refused, never shortened. A path alias is refused only in path fields; free text
+  (a note, a shell line such as `git log HEAD~1`) is not a path.
+- `shell.run` runs only in the device's own `make_sandbox()` with strong guarantees
+  (`accept_weak` is never set on a node); the node's folder is not bound (bwrap) or granted
+  (AppContainer; its owner-only ACL is re-applied on every start), and is refused as a runtime
+  bind on both. On Linux the node fails closed when its folder, Nox's folder or a secret store
+  lies under one of bwrap's read-only system binds. No sandbox (macOS, no bwrap, weak backend)
+  means `sandbox_unavailable`, never an unconfined run. A stopped call (`nox/kill`, dead man)
+  kills the sandboxed tree (bwrap: the cancelled run kills its cgroup and process; Windows: the
+  job object). `package.*` is not offered on nodes: it could not work in the sandbox.
+- A refusal by a hand is answered like the gate's and audited (`node.refused`). Residual: a
+  Windows listing enumerates by the verified path while the folder's handle is held, with the
+  folder's identity compared before and after.
+
+Still to come in wave C: certificate renewal (C7) and a real presence check for
 `nox node allow`. Negative tests: `tests/unit/node/` (a deliberately permissive core in `test_agent.py`),
 `tests/integration/test_nodes.py`.
 

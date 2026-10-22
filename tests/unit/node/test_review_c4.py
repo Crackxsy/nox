@@ -42,6 +42,7 @@ def _gate(
     class Args(BaseModel):
         model_config = ConfigDict(extra="forbid")
         text: str = "x"
+        path: str = ""
 
     async def run(_a: BaseModel) -> dict[str, Any]:
         return {}
@@ -99,9 +100,12 @@ def test_core_strings_never_reach_the_file_system(
     monkeypatch.setattr(
         os, "stat", lambda p, *a, **k: touched.append(str(p)) or (_ for _ in ()).throw(OSError())
     )
-    args = {"text": text}
-    decision = gate.check("notify.show", args, meta=_meta(signer, "notify.show", args))
+    args = {"path": text}
+    decision = gate.check("system.low", args, meta=_meta(signer, "system.low", args))
     assert decision.reason == "path_alias_refused", decision.reason  # refused on the text alone
+    # Free text (a notice, a note) is not a path (C5 review N4): allowed - and never touched.
+    words = {"text": text}
+    assert gate.check("notify.show", words, meta=_meta(signer, "notify.show", words)).allowed
     assert not any("attacker" in t or "geheim" in t for t in touched), touched
 
 
@@ -437,7 +441,7 @@ _ = json
 )
 def test_path_aliases_are_refused_on_the_text_alone(tmp_path: Path, text: str) -> None:
     gate, signer = _gate(tmp_path)
-    args = {"text": text}
+    args = {"path": text}
     assert gate.check("system.low", args, meta=_meta(signer, "system.low", args)).reason in (
         "path_alias_refused",
         "node_home_protected",

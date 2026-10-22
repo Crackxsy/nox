@@ -17,8 +17,14 @@ authority (spec C §1.6). In order:
 8. High risk then still needs the **confirmation on this device** (`nox.node.agent`, D1).
 
 Every decision - allowed or refused - goes into the node's own hash-chained audit trail
-(`nox node log`), which the core cannot read or erase. Shell and package tools on nodes run only
-in the node's own sandbox (C5).
+(`nox node log`), which the core cannot read or erase.
+
+After the gate, each hand holds its own boundary when it acts (`nox.node.hands`): `file.*` open
+every path through `nox.node.safe_fs` - inside a folder this device allowed, decided on the real
+file at open time (on the handle), never the node's folder or the keyring's; `shell.run` and
+`package.*` run only inside this device's `make_sandbox()`, which cannot see the node's folder,
+and are refused (`sandbox_unavailable`) where there is none. A refusal there is audited like one
+of the gate's.
 """
 
 from __future__ import annotations
@@ -75,6 +81,22 @@ def _strings(value: Any) -> list[str]:
     return []
 
 
+#: Argument fields that name a path: only these are refused for a path alias. Free text - a
+#: note to write, a shell line such as `git log HEAD~1` - is not a path (the shell runs in the
+#: sandbox; the node-folder check above still covers every string).
+PATH_FIELDS = frozenset({"path", "to", "cwd", "folder", "dir", "directory", "source", "file"})
+
+
+def _path_strings(value: Any, key: str = "") -> list[str]:
+    if isinstance(value, str):
+        return [value] if key in PATH_FIELDS else []
+    if isinstance(value, dict):
+        return [s for k, v in value.items() for s in _path_strings(v, str(k))]
+    if isinstance(value, list | tuple):
+        return [s for v in value for s in _path_strings(v, key)]
+    return []
+
+
 def _norm(text: str) -> str:
     return text.replace("\\", "/").rstrip("/").casefold()
 
@@ -97,10 +119,9 @@ def touches(arguments: Any, forms: tuple[str, ...]) -> bool:
     SMB lookup could leak the user's NetNTLM hash) and never blocks the event loop.
 
     An early refusal (defence in depth), not the boundary: file tools on a node check the real
-    path at the moment they open it (`inside()`), and shell/package tools run only in the node's
-    sandbox without access to its folder or the keyring.
-    TODO(C5): node file tools call `inside()` at open time; shell/package tools on nodes only
-    inside `make_sandbox()` with the node folder not mounted."""
+    file on its handle at the moment they open it (`nox.node.safe_fs`), and shell/package tools
+    run only inside the node's `make_sandbox()`, where neither its folder nor the keyring is
+    mounted or granted (`nox.node.hands`)."""
     for text in _strings(arguments):
         flat = _norm(text)
         if any(form in flat for form in forms):
@@ -139,9 +160,11 @@ def is_remote_or_device_path(path: str) -> bool:
 
 
 def inside(path: str | Path, folder: Path) -> bool:
-    """For a node FILE tool, at the moment it opens `path`: whether the real path (symlinks,
-    junctions, 8.3 names) lies in `folder`. Remote and device paths count as inside (refused)
-    without being touched."""
+    """Whether the real path of `path` (symlinks, junctions, 8.3 names) lies in `folder`, resolved
+    by name. Remote and device paths count as inside (refused) without being touched.
+
+    A by-name answer can be outdated a moment later (a link swapped in between), so node file
+    tools do not rely on it: they decide on the opened handle (`nox.node.safe_fs`)."""
     if is_remote_or_device_path(str(path)):
         return True
     try:
@@ -254,21 +277,28 @@ class NodeGate:
             return GateDecision(False, "invalid_arguments", tool)
         if self._protected_forms and touches(args.model_dump(), self._protected_forms):
             return GateDecision(False, "node_home_protected", tool)
-        if any(names_a_path_alias(text) for text in _strings(args.model_dump())):
+        if any(names_a_path_alias(text) for text in _path_strings(args.model_dump())):
             return GateDecision(False, "path_alias_refused", tool)
+        # This call's own risk (a write that replaces a file is high): the core must have judged
+        # it at least as risky, and the ceiling applies to it as well.
+        risk = tool.call_risk(args)
+        if not self._within(risk):
+            return GateDecision(False, "risk_ceiling", tool)
+        if risk != "read" and (meta is None or _rank(meta.risk) < _rank(risk)):
+            return GateDecision(False, "risk_understated", tool)
         charged = ""
-        if tool.risk != "read":
+        if risk != "read":
             # By rank, never by spelling: the higher of the node's and the core's risk, an
             # unknown value as the highest, clamped to the ceiling's name for the books.
-            rank = max(_rank(tool.risk), _rank(meta.risk) if meta is not None else 0)
+            rank = max(_rank(risk), _rank(meta.risk) if meta is not None else 0)
             charged = RISK_ORDER[min(rank, _rank(CEILING))]
             if not self._spend(charged):
                 return GateDecision(False, "budget", tool)
         high = _rank("high")
-        local = _rank(tool.risk) >= high or (
+        local = _rank(risk) >= high or (
             meta is not None and (_rank(meta.risk) >= high or meta.confirm_on_device)
         )
-        charged_risk = "" if tool.risk == "read" else charged
+        charged_risk = "" if risk == "read" else charged
         return GateDecision(
             True, "", tool, args, needs_local_confirmation=local, charged=charged_risk
         )

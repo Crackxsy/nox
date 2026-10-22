@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nox import __version__
 
-__all__ = ["NodeTool", "Notifier", "PlatformNotifier", "default_tools"]
+__all__ = ["NodeRefusal", "NodeTool", "Notifier", "PlatformNotifier", "default_tools"]
 
 _CREATE_NO_WINDOW = 0x08000000
 
@@ -46,6 +46,15 @@ class NotifyArgs(BaseModel):
 Handler = Callable[[BaseModel], Awaitable[dict[str, Any]]]
 
 
+class NodeRefusal(Exception):  # noqa: N818 - a refusal, named for what it is
+    """A tool refused on this device's own authority (outside the allowed folders, no sandbox):
+    answered and audited like a refusal of `NodeGate`. `reason` is a short machine token."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 @dataclass(frozen=True)
 class NodeTool:
     name: str
@@ -54,10 +63,24 @@ class NodeTool:
     description: str
     args: type[BaseModel]
     handler: Handler = field(compare=False)
-    #: Declared by every tool with a side effect: it opens no path, or it checks
-    #: `nox.node.gate.inside()` on the resolved real path at the moment it opens one. A tool
-    #: without this declaration is not offered at all (`NodeGate`).
+    #: Declared by every tool with a side effect: it opens no path, it opens every path through
+    #: `nox.node.safe_fs` (checked on the handle at open time), or it runs only inside the node's
+    #: sandbox, which cannot see the node's folder (`nox.node.hands`). A tool without this
+    #: declaration is not offered at all (`NodeGate`).
     path_safe: bool = False
+    #: The risk of one call when it depends on its arguments (a write that replaces a file is
+    #: higher than one that creates it); never below `risk`. None: always `risk`.
+    risk_for: Callable[[BaseModel], str] | None = field(default=None, compare=False)
+    #: What the confirmation on the device shows instead of the raw arguments (a write: the
+    #: size and a preview, not a megabyte of text). None: every argument in full.
+    shown: Callable[[BaseModel], dict[str, Any]] | None = field(default=None, compare=False)
+
+    def call_risk(self, args: BaseModel) -> str:
+        risk = self.risk_for(args) if self.risk_for is not None else self.risk
+        order = ("read", "low", "medium", "high", "critical")
+        if risk not in order:
+            return "critical"
+        return risk if order.index(risk) >= order.index(self.risk) else self.risk
 
     def describe(self) -> dict[str, Any]:
         """The MCP `tools/list` entry, with the Nox extensions the core routes by."""

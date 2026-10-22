@@ -95,7 +95,11 @@ def pair(
 ) -> None:
     """Pair a phone, tablet or PC in the home network: prints a QR code and a link to open."""
     from nox.core.config import load_config  # noqa: PLC0415
-    from nox.lan.terminal import PairingError, pair_in_terminal, pair_node_in_terminal  # noqa: PLC0415
+    from nox.lan.terminal import (  # noqa: PLC0415
+        PairingError,
+        pair_in_terminal,
+        pair_node_in_terminal,
+    )
     from nox.paths import resolve_config_paths  # noqa: PLC0415
 
     config = load_config(*resolve_config_paths())
@@ -441,6 +445,7 @@ def node_resume() -> None:
 @node_app.command("allow")
 def node_allow(
     group: str = typer.Argument(..., help="system, notify, media, files, shell, ..."),
+    folder: str = typer.Option("", help="With 'files': a folder Nox may open on this device."),
 ) -> None:
     """Let Nox use a capability group on this device. Only possible here, never from the core."""
     from nox.node.cli import NodeCliError, allow, secret_store  # noqa: PLC0415
@@ -453,6 +458,7 @@ def node_allow(
             say=typer.echo,
             confirm=lambda prompt: typer.confirm(prompt, default=False),
             secrets=secret_store(),
+            folder=folder,
         )
     except NodeCliError as exc:
         typer.echo(str(exc), err=True)
@@ -460,12 +466,15 @@ def node_allow(
 
 
 @node_app.command("deny")
-def node_deny(group: str = typer.Argument(...)) -> None:
-    """Take a capability group away from Nox on this device."""
+def node_deny(
+    group: str = typer.Argument(...),
+    folder: str = typer.Option("", help="With 'files': take only this folder away."),
+) -> None:
+    """Take a capability group (or one folder of 'files') away from Nox on this device."""
     from nox.node.cli import NodeCliError, allow, secret_store  # noqa: PLC0415
 
     try:
-        allow(_node_home(), group, False, say=typer.echo, secrets=secret_store())
+        allow(_node_home(), group, False, say=typer.echo, secrets=secret_store(), folder=folder)
     except NodeCliError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc

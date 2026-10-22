@@ -703,9 +703,19 @@ def _profile_filesystem_roots(ctx: EvaluationContext) -> PermissionResult | None
     )
 
 
+def device_rule_applies(rule: ProfileRule, request: PermissionRequest) -> bool:
+    """Profiles were written for this core. A rule that names a device (`device:`) applies only
+    to calls on matching nodes; one that does not still applies to a node when it narrows
+    (confirm, deny) - but never allows a call on a node (`tool: file*, decision: allow` must not
+    let Nox write on another PC without asking)."""
+    if rule.device:
+        return bool(request.device) and value_matches(request.device, rule.device)
+    return not request.device or rule.decision is not Decision.ALLOW
+
+
 def _profile_rules(ctx: EvaluationContext) -> PermissionResult | None:
     for rule in ctx.profile.rules:
-        if rule_matches(rule, ctx.request):
+        if rule_matches(rule, ctx.request) and device_rule_applies(rule, ctx.request):
             return PermissionResult(decision=rule.decision, rule_id=rule.id, reason=rule.reason)
     return None
 

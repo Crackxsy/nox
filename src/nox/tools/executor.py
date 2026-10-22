@@ -164,6 +164,7 @@ class ToolExecutor:
         risk = spec.risk
         device = ""
         delegated = False
+        rememberable = spec.rememberable
         if spec.scope is not None:
             try:
                 scope = spec.scope(payload)
@@ -183,6 +184,7 @@ class ToolExecutor:
                 )
             action, risk, device = scope.action, scope.risk, scope.device
             delegated = scope.confirm_on_device and bool(scope.device)
+            rememberable = rememberable and scope.rememberable
         target = spec.targets(payload) if spec.targets is not None else ""
         if spec.scope is not None and scope.target:
             target = scope.target
@@ -195,7 +197,7 @@ class ToolExecutor:
             target=target,
             task_id=task_id,
             origin=origin,
-            rememberable=spec.rememberable,
+            rememberable=rememberable,
             network=spec.network(payload) if callable(spec.network) else spec.network,
             conversation=current_conversation(),
             lookup=spec.lookup(payload) if spec.lookup is not None else "",
