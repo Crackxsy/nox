@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from cryptography import x509
@@ -46,6 +46,8 @@ log = get_logger(__name__)
 __all__ = ["CHANNEL", "NODE_ROLE", "NodePairing", "NodeRedeemed"]
 
 CHANNEL = "node"
+#: A node gets a new certificate at most this often (`renew`).
+RENEW_MIN_INTERVAL = timedelta(hours=12)
 NODE_ROLE = "node"
 
 #: Called with (device_id, reason) after a revocation, so open connections close at once.
@@ -181,7 +183,9 @@ class NodePairing:
 
         Only for the key that was paired: a request for another key is refused (a stolen
         certificate alone never yields a fresh one; a new key means pairing again). The node's
-        pairing must still stand; the new serial is recorded like the first."""
+        pairing must still stand; the new serial is recorded like the first and the old one
+        goes on the denylist. At most one renewal per `RENEW_MIN_INTERVAL` per node - whatever
+        the number of connections."""
         device = self.get(device_id)
         current = self._nodes.get_cert(serial)
         if (
@@ -199,14 +203,20 @@ class NodePairing:
         except CsrRefusedError as exc:
             log.warning("node.renew_csr_refused", reason=str(exc))
             return None
+        last = self._nodes.last_issued_at(device_id)
+        if last is not None and self._clock() - last < RENEW_MIN_INTERVAL:
+            log.warning("node.renew_too_soon", device_id=device_id)
+            return None
         issued = await asyncio.to_thread(issue_client_certificate, self._tls_dir, csr, device_id)
+        now = self._clock()
         self._nodes.record_cert(
             serial=issued.serial,
             device_id=device_id,
             spki_sha256=issued.spki_sha256,
-            issued_at=self._clock(),
+            issued_at=now,
             not_after=issued.not_after,
         )
+        self._nodes.revoke_serial(serial, reason="renewed", when=now)
         return issued
 
     async def revoke(self, device_id: str, *, reason: str = "dashboard") -> bool:

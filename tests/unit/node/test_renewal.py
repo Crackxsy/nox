@@ -47,6 +47,14 @@ async def _connected(listener: NodeListener, node_id: str) -> None:
     raise AssertionError("the node never showed up as a session")
 
 
+@pytest.fixture(autouse=True)
+def _renew_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pairing just issued a certificate; the 12 h limit between two has its own test."""
+    from nox.node import pairing as pairing_module
+
+    monkeypatch.setattr(pairing_module, "RENEW_MIN_INTERVAL", timedelta(0))
+
+
 async def _ask(ws: object, csr: str, msg_id: int = 9) -> dict[str, object]:
     await ws.send(  # type: ignore[attr-defined]
         json.dumps({"jsonrpc": "2.0", "id": msg_id, "method": "nox/renew", "params": {"csr": csr}})
@@ -80,6 +88,8 @@ async def test_a_node_in_its_last_days_gets_a_new_certificate_once(
     )
     assert nodes.get_cert(f"{cert.serial_number:x}") is not None  # recorded like the first
     assert session.cert_not_after == cert.not_valid_after_utc
+    old = nodes.get_cert(node.serial)
+    assert old is not None and old.revoked  # the old serial goes on the denylist
 
     again = await _ask(ws, make_csr(node.key), msg_id=10)
     assert again["error"]["message"] == "already_renewed"  # type: ignore[index]
@@ -132,6 +142,10 @@ async def test_the_node_accepts_only_its_own_certificate_from_its_authority(
         lambda: check(other.cert_pem),  # another node's certificate
         lambda: check(node.cert_pem, ca=foreign.ca_file),  # another authority
         lambda: check("not a certificate"),
+        # The same key, but a certificate naming another node.
+        lambda: check(
+            issue_client_certificate(tmp_path / "tls", make_csr(node.key), other.node_id).cert_pem
+        ),
     ):
         try:
             bad()
@@ -147,7 +161,7 @@ def test_due_from_day_twenty(tmp_path: Path, tls: TlsMaterial) -> None:
     end = cert.not_valid_after_utc
     assert not due(path, now=end - timedelta(days=RENEW_WINDOW_DAYS + 1))
     assert due(path, now=end - timedelta(days=RENEW_WINDOW_DAYS - 1))
-    assert due(tmp_path / "missing.crt")
+    assert not due(tmp_path / "missing.crt")  # nothing to compare a new one with
     assert not list(tmp_path.glob("*.new"))
 
 
@@ -201,3 +215,55 @@ async def test_a_running_node_renews_and_stores_its_certificate(
     finally:
         stop.set()
         await asyncio.wait_for(task, 5)
+
+
+async def test_one_renewal_per_twelve_hours_whatever_the_connections(
+    listener: NodeListener,
+    pairing: NodePairing,
+    tls: TlsMaterial,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nox.node import pairing as pairing_module
+
+    monkeypatch.setattr(pairing_module, "RENEW_MIN_INTERVAL", timedelta(hours=12))
+    node = await pair_node(pairing, tmp_path)  # pairing issued one a moment ago
+    ws = await open_node(listener, client_context(tls, node))
+    await greet(ws)
+    await _connected(listener, node.node_id)
+    listener.sessions[node.node_id].cert_not_after = datetime.now(UTC) + timedelta(days=2)
+    answer = await _ask(ws, make_csr(node.key))
+    assert answer["error"]["message"] == "refused"  # type: ignore[index]
+    await ws.close()
+
+
+async def test_a_certificate_not_valid_yet_or_without_a_current_one_is_refused(
+    pairing: NodePairing, tls: TlsMaterial, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nox.lan.tls import issue_client_certificate
+    from nox.node import renewal
+
+    node = await pair_node(pairing, tmp_path)
+    fresh = issue_client_certificate(tmp_path / "tls", make_csr(node.key), node.node_id)
+
+    def check(current: Path) -> None:
+        accept_renewed(
+            fresh.cert_pem,
+            ca_file=tls.ca_file,
+            current_file=current,
+            key=node.key,
+            node_id=node.node_id,
+        )
+
+    check(node.cert_file)  # as issued: fine
+    with pytest.raises(RenewalRefusedError, match="unreadable"):
+        check(tmp_path / "missing.crt")
+
+    class Earlier(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:  # type: ignore[override]
+            return datetime.now(UTC) - timedelta(hours=1)
+
+    monkeypatch.setattr(renewal, "datetime", Earlier)
+    with pytest.raises(RenewalRefusedError, match="not valid yet"):
+        check(node.cert_file)

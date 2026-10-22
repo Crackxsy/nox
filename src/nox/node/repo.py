@@ -126,6 +126,21 @@ class NodeRepository:
         )
         return int(cursor.rowcount)
 
+    def revoke_serial(self, serial: str, *, reason: str, when: datetime) -> None:
+        self._db.execute(
+            "UPDATE node_certs SET revoked_at = ?, revoked_reason = ?"
+            " WHERE serial = ? AND revoked_at IS NULL",
+            (_iso(when), reason, serial),
+        )
+
+    def last_issued_at(self, device_id: str) -> datetime | None:
+        row = self._db.fetch_one(
+            "SELECT MAX(issued_at) AS issued FROM node_certs WHERE device_id = ?", (device_id,)
+        )
+        if row is None or row["issued"] is None:
+            return None
+        return datetime.fromisoformat(str(row["issued"]))
+
     def revoked_serials(self) -> set[str]:
         rows = self._db.fetch_all("SELECT serial FROM node_certs WHERE revoked_at IS NOT NULL")
         return {str(r["serial"]) for r in rows}

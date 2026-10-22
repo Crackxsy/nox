@@ -35,12 +35,12 @@ def _spki(key: ec.EllipticCurvePublicKey) -> bytes:
 
 
 def due(cert_file: Path, *, now: datetime | None = None) -> bool:
-    """Whether the current certificate has `RENEW_WINDOW_DAYS` or fewer left (or is unreadable -
-    then renewing is the only thing that can help, and the core decides)."""
+    """Whether the current certificate has `RENEW_WINDOW_DAYS` or fewer left. An unreadable one
+    is never renewed (a new one would be accepted without anything to compare with)."""
     try:
         cert = x509.load_pem_x509_certificate(cert_file.read_bytes())
     except (OSError, ValueError):
-        return True
+        return False
     left = cert.not_valid_after_utc - (now or datetime.now(UTC))
     return left <= timedelta(days=RENEW_WINDOW_DAYS)
 
@@ -72,9 +72,9 @@ def accept_renewed(
         raise RenewalRefusedError("not for this node's key")
     try:
         current_end = x509.load_pem_x509_certificate(current_file.read_bytes()).not_valid_after_utc
-    except (OSError, ValueError):
-        current_end = None  # unreadable: any valid certificate from the pinned authority is better
-    if current_end is not None and cert.not_valid_after_utc < current_end:
+    except (OSError, ValueError) as exc:
+        raise RenewalRefusedError("the current certificate is unreadable") from exc
+    if cert.not_valid_after_utc < current_end:
         raise RenewalRefusedError("ends before the current one")
     if cert.not_valid_before_utc > datetime.now(UTC) + timedelta(minutes=10):
         raise RenewalRefusedError("not valid yet")
