@@ -126,30 +126,52 @@ class NodeRepository:
         )
         return int(cursor.rowcount)
 
-    def replace_cert(  # noqa: PLR0913 - one row out, one row in
+    def add_renewed_cert(  # noqa: PLR0913 - the request and its limits
         self,
         *,
-        old_serial: str,
+        presented_serial: str,
         new_serial: str,
         device_id: str,
         spki_sha256: str,
         not_after: datetime,
         when: datetime,
         not_since: datetime,
+        retry_since: datetime,
     ) -> bool:
-        """Renewal, atomically: the old serial is revoked and the new one recorded - only if the
-        old one is still valid and the node got no certificate after `not_since`. One
-        transaction (`BEGIN IMMEDIATE`), so two renewals at once - two connections, two
-        processes - cannot both pass: the second finds the old serial revoked. False: nothing
-        changed."""
+        """Record a renewed certificate - the one the node presented stays valid until the node
+        first connects with the new one (`retire_older`) or it ends by itself, so a lost answer or
+        a node that cannot use the new certificate yet never locks the node out.
+
+        One transaction (`BEGIN IMMEDIATE`): two renewals at once - two connections, two
+        processes - cannot both pass. Refused (False, nothing changed) when the presented serial
+        is not a valid certificate of this node, or when the node already got a certificate after
+        `not_since` - unless that one was never used (the node still presents the older one: the
+        answer was lost or refused). Then it is replaced, at most once per `retry_since`."""
         with self._db.transaction() as connection:
-            cursor = connection.execute(
-                "UPDATE node_certs SET revoked_at = ?, revoked_reason = 'renewed'"
-                " WHERE serial = ? AND device_id = ? AND revoked_at IS NULL"
-                " AND NOT EXISTS (SELECT 1 FROM node_certs WHERE device_id = ? AND issued_at > ?)",
-                (_iso(when), old_serial, device_id, device_id, _iso(not_since)),
-            )
-            if cursor.rowcount != 1:
+            current = connection.execute(
+                "SELECT issued_at FROM node_certs"
+                " WHERE serial = ? AND device_id = ? AND revoked_at IS NULL",
+                (presented_serial, device_id),
+            ).fetchone()
+            if current is None:
+                return False
+            unused = connection.execute(
+                "SELECT serial, issued_at FROM node_certs"
+                " WHERE device_id = ? AND revoked_at IS NULL AND issued_at > ?",
+                (device_id, current[0]),
+            ).fetchall()
+            if unused:
+                if any(str(row[1]) > _iso(retry_since) for row in unused):
+                    return False
+                connection.executemany(
+                    "UPDATE node_certs SET revoked_at = ?, revoked_reason = 'superseded'"
+                    " WHERE serial = ?",
+                    [(_iso(when), str(row[0])) for row in unused],
+                )
+            elif connection.execute(
+                "SELECT 1 FROM node_certs WHERE device_id = ? AND issued_at > ?",
+                (device_id, _iso(not_since)),
+            ).fetchone():
                 return False
             connection.execute(
                 "INSERT INTO node_certs (serial, device_id, spki_sha256, issued_at, not_after)"
@@ -158,13 +180,15 @@ class NodeRepository:
             )
         return True
 
-    def last_issued_at(self, device_id: str) -> datetime | None:
-        row = self._db.fetch_one(
-            "SELECT MAX(issued_at) AS issued FROM node_certs WHERE device_id = ?", (device_id,)
+    def retire_older(self, device_id: str, serial: str, *, when: datetime) -> int:
+        """The node connected with `serial`: its older certificates are revoked (`renewed`)."""
+        cursor = self._db.execute(
+            "UPDATE node_certs SET revoked_at = ?, revoked_reason = 'renewed'"
+            " WHERE device_id = ? AND serial != ? AND revoked_at IS NULL"
+            " AND issued_at < (SELECT issued_at FROM node_certs WHERE serial = ?)",
+            (_iso(when), device_id, serial, serial),
         )
-        if row is None or row["issued"] is None:
-            return None
-        return datetime.fromisoformat(str(row["issued"]))
+        return int(cursor.rowcount)
 
     def revoked_serials(self) -> set[str]:
         rows = self._db.fetch_all("SELECT serial FROM node_certs WHERE revoked_at IS NOT NULL")

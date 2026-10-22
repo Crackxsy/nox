@@ -21,7 +21,9 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from nox.lan.tls import node_id_of
 from nox.node.protocol import RENEW_WINDOW_DAYS
 
-__all__ = ["RenewalRefusedError", "accept_renewed", "due", "store_certificate"]
+__all__ = ["CLOCK_SKEW", "RenewalRefusedError", "accept_renewed", "due", "store_certificate"]
+
+CLOCK_SKEW = timedelta(hours=1)
 
 
 class RenewalRefusedError(ValueError):
@@ -76,8 +78,11 @@ def accept_renewed(
         raise RenewalRefusedError("the current certificate is unreadable") from exc
     if cert.not_valid_after_utc < current_end:
         raise RenewalRefusedError("ends before the current one")
-    if cert.not_valid_before_utc > datetime.now(UTC) + timedelta(minutes=10):
-        raise RenewalRefusedError("not valid yet")
+    # A clock behind by up to `CLOCK_SKEW` (a device without a real-time clock before its first
+    # time sync) still takes it. Further behind it waits: the current certificate stays valid
+    # until the node connects with a new one, so a refusal here never locks it out.
+    if cert.not_valid_before_utc > datetime.now(UTC) + CLOCK_SKEW:
+        raise RenewalRefusedError("not valid yet (is this device's clock behind?)")
     return cert
 
 

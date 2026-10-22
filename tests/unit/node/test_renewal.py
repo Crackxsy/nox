@@ -89,7 +89,7 @@ async def test_a_node_in_its_last_days_gets_a_new_certificate_once(
     assert nodes.get_cert(f"{cert.serial_number:x}") is not None  # recorded like the first
     assert session.cert_not_after == cert.not_valid_after_utc
     old = nodes.get_cert(node.serial)
-    assert old is not None and old.revoked  # the old serial goes on the denylist
+    assert old is not None and not old.revoked  # valid until the node uses the new one
 
     again = await _ask(ws, make_csr(node.key), msg_id=10)
     assert again["error"]["message"] == "already_renewed"  # type: ignore[index]
@@ -262,7 +262,7 @@ async def test_a_certificate_not_valid_yet_or_without_a_current_one_is_refused(
     class Earlier(datetime):
         @classmethod
         def now(cls, tz: object = None) -> datetime:  # type: ignore[override]
-            return datetime.now(UTC) - timedelta(hours=1)
+            return datetime.now(UTC) - timedelta(hours=3)
 
     monkeypatch.setattr(renewal, "datetime", Earlier)
     with pytest.raises(RenewalRefusedError, match="not valid yet"):
@@ -291,8 +291,95 @@ async def test_concurrent_renewals_issue_exactly_one_certificate(
     certs = nodes._db.fetch_all(  # noqa: SLF001
         "SELECT serial, revoked_at FROM node_certs WHERE device_id = ?", (node.node_id,)
     )
-    assert len(certs) == 2  # the paired one, now revoked, and exactly one new one
+    assert len(certs) == 2  # the paired one and exactly one new one
     old = nodes.get_cert(node.serial)
-    assert old is not None and old.revoked
+    assert old is not None and not old.revoked  # until the node connects with the new one
     new = nodes.get_cert(issued[0].serial)
     assert new is not None and not new.revoked
+
+
+def _cert(pem: str) -> x509.Certificate:
+    return x509.load_pem_x509_certificate(pem.encode())
+
+
+async def test_a_lost_answer_never_locks_the_node_out(
+    pairing: NodePairing, nodes: NodeRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The new certificate never reached the node (Wi-Fi gone, restart): it still connects with
+    the old one, asks again and gets one; the lost one is replaced. Once it connects with the new
+    certificate, the older ones are done."""
+    from nox.node import pairing as pairing_module
+
+    node = await pair_node(pairing, tmp_path)
+    csr = make_csr(node.key)
+    lost = await pairing.renew(node.node_id, node.serial, csr)
+    assert lost is not None
+    assert pairing.identify(_cert(node.cert_pem)) is not None  # the old one still works
+    # A retry right away is refused (at most every RENEW_RETRY_INTERVAL) ...
+    assert await pairing.renew(node.node_id, node.serial, csr) is None
+    # ... and allowed after it.
+    monkeypatch.setattr(pairing_module, "RENEW_RETRY_INTERVAL", timedelta(0))
+    later = pairing._clock() + timedelta(minutes=11)  # noqa: SLF001
+    monkeypatch.setattr(pairing, "_clock", lambda: later)
+    again = await pairing.renew(node.node_id, node.serial, csr)
+    assert again is not None and again.serial != lost.serial
+    superseded = nodes.get_cert(lost.serial)
+    assert superseded is not None and superseded.revoked
+    # The node connects with the new certificate: the old one is revoked now, not before.
+    assert pairing.identify(_cert(again.cert_pem)) is not None
+    old = nodes.get_cert(node.serial)
+    assert old is not None and old.revoked
+    assert pairing.identify(_cert(node.cert_pem)) is None
+
+
+async def test_twelve_hours_between_renewals_of_a_used_certificate(
+    pairing: NodePairing, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nox.node import pairing as pairing_module
+
+    monkeypatch.undo()  # the real limits, not the module fixture's
+    assert timedelta(hours=12) == pairing_module.RENEW_MIN_INTERVAL
+    assert timedelta(minutes=10) == pairing_module.RENEW_RETRY_INTERVAL
+    node = await pair_node(pairing, tmp_path)
+    csr = make_csr(node.key)
+    start = pairing._clock()  # noqa: SLF001
+    monkeypatch.setattr(pairing, "_clock", lambda: start + timedelta(hours=11))
+    assert await pairing.renew(node.node_id, node.serial, csr) is None  # too soon
+    monkeypatch.setattr(pairing, "_clock", lambda: start + timedelta(hours=13))
+    assert await pairing.renew(node.node_id, node.serial, csr) is not None
+
+
+async def test_a_node_whose_clock_is_a_little_behind_still_takes_it(
+    pairing: NodePairing, tls: TlsMaterial, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Pi without a real-time clock before its first time sync: up to an hour behind is
+    fine; further behind it keeps its current certificate (still valid) and asks again."""
+    from nox.lan.tls import issue_client_certificate
+    from nox.node import renewal
+
+    node = await pair_node(pairing, tmp_path)
+    fresh = issue_client_certificate(tmp_path / "tls", make_csr(node.key), node.node_id)
+
+    def behind(by: timedelta) -> None:
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz: object = None) -> datetime:  # type: ignore[override]
+                return datetime.now(UTC) - by
+
+        monkeypatch.setattr(renewal, "datetime", Clock)
+
+    def check() -> None:
+        accept_renewed(
+            fresh.cert_pem,
+            ca_file=tls.ca_file,
+            current_file=node.cert_file,
+            key=node.key,
+            node_id=node.node_id,
+        )
+
+    behind(timedelta(minutes=50))
+    check()
+    behind(timedelta(hours=3))
+    with pytest.raises(RenewalRefusedError, match="clock"):
+        check()
+    assert pairing.identify(_cert(node.cert_pem)) is not None  # not stranded

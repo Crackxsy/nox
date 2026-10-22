@@ -46,8 +46,10 @@ log = get_logger(__name__)
 __all__ = ["CHANNEL", "NODE_ROLE", "NodePairing", "NodeRedeemed"]
 
 CHANNEL = "node"
-#: A node gets a new certificate at most this often (`renew`).
+#: A node gets a new certificate at most this often (`renew`) ...
 RENEW_MIN_INTERVAL = timedelta(hours=12)
+#: ... unless it never used the last one (still presents the older): then again after this.
+RENEW_RETRY_INTERVAL = timedelta(minutes=10)
 NODE_ROLE = "node"
 
 #: Called with (device_id, reason) after a revocation, so open connections close at once.
@@ -176,6 +178,8 @@ class NodePairing:
         device = self._repo.find_device_for_sender(CHANNEL, spki)
         if device is None or device.id != node_id or device.revoked or device.role != NODE_ROLE:
             return None
+        # Connected with a renewed certificate: the ones before it are done.
+        self._nodes.retire_older(device.id, f"{cert.serial_number:x}", when=self._clock())
         self._repo.mark_seen(device.id, when=self._clock())
         return device
 
@@ -184,13 +188,15 @@ class NodePairing:
 
         Only for the key that was paired: a request for another key is refused (a stolen
         certificate alone never yields a fresh one; a new key means pairing again). The node's
-        pairing must still stand; the new serial is recorded like the first and the old one
-        goes on the denylist. At most one renewal per `RENEW_MIN_INTERVAL` per node - whatever
-        the number of connections: a per-node lock serialises renewals in this process, and the
-        database swaps the serials in one transaction that refuses when the old serial is no
-        longer valid or a newer certificate exists (`NodeRepository.replace_cert`). A
-        certificate that was signed but not recorded is worthless: `identify` knows no serial
-        for it."""
+        pairing must still stand; the new serial is recorded like the first. The old one stays
+        valid until the node first connects with the new one (then it is revoked, `identify`)
+        or ends by itself: an answer lost on the way, or a certificate the node cannot use yet,
+        never locks it out - it asks again with the old one (at most every
+        `RENEW_RETRY_INTERVAL`, and the unused one is replaced). Otherwise at most one renewal
+        per `RENEW_MIN_INTERVAL` per node, whatever the number of connections: a per-node lock
+        serialises renewals in this process, and the database records them in one transaction
+        (`NodeRepository.add_renewed_cert`). A certificate that was signed but not recorded is
+        worthless: `identify` knows no serial for it."""
         async with self._renew_lock(device_id):
             return await self._renew(device_id, serial, csr)
 
@@ -218,24 +224,21 @@ class NodePairing:
         except CsrRefusedError as exc:
             log.warning("node.renew_csr_refused", reason=str(exc))
             return None
-        last = self._nodes.last_issued_at(device_id)
-        if last is not None and self._clock() - last < RENEW_MIN_INTERVAL:
-            log.warning("node.renew_too_soon", device_id=device_id)
-            return None
         issued = await asyncio.to_thread(issue_client_certificate, self._tls_dir, csr, device_id)
         now = self._clock()
-        swapped = await asyncio.to_thread(
-            self._nodes.replace_cert,
-            old_serial=serial,
+        recorded = await asyncio.to_thread(
+            self._nodes.add_renewed_cert,
+            presented_serial=serial,
             new_serial=issued.serial,
             device_id=device_id,
             spki_sha256=issued.spki_sha256,
             not_after=issued.not_after,
             when=now,
             not_since=now - RENEW_MIN_INTERVAL,
+            retry_since=now - RENEW_RETRY_INTERVAL,
         )
-        if not swapped:
-            log.warning("node.renew_lost_race", device_id=device_id)
+        if not recorded:
+            log.warning("node.renew_refused", device_id=device_id)
             return None
         return issued
 
