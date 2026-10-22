@@ -70,7 +70,9 @@ the workflow says so and marks the run as failed ("Release not signed"), as for 
   2. `os/tools/check-image.sh`: the image is mounted read-only and checked (list above).
   3. `os/tools/qemu-smoke.sh`: a copy of the image boots headless in QEMU (an emulated Raspberry
      Pi 3, the image's own kernel) with one CI-only unit added, until `nox.service` is active and
-     `/health` answers, SSH is not running and the host keys and machine id were made.
+     `/health` answers, SSH is not running and the host keys and machine id were made. Test-only
+     boot settings, because of the emulator: no hardware watchdog (QEMU resets on it), Bluetooth
+     off the serial port, no first-boot resize. The verdict is read from the copy's disk.
   4. xz, SHA-256, the Imager entry, the licence manifest; for a release the OS manifest is signed
      in the protected `release-signing` environment and everything is attached.
 
