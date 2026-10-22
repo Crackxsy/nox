@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -73,11 +74,171 @@ def rules_present() -> bool:
     return result.returncode == 0
 
 
-def run_setup(setup: Path, log: Path) -> None:
-    cmd = [str(setup), *QUIET, "/TASKS=sandboxrules", f"/LOG={log}"]
-    step(f"running {' '.join(cmd)}")
-    result = subprocess.run(cmd, timeout=1800, check=False)
-    check(result.returncode == 0, f"setup exited with {result.returncode}")
+#: One setup or uninstall run, at most: a real one takes about 90 s on a hosted runner. A hang
+#: (a dialog nobody can answer) fails fast, with the tail of the setup log in the CI output.
+STEP_TIMEOUT_S = 300
+
+
+def kill_tree(pid: int) -> None:
+    taskkill = Path(wfp_helper.system_dir()) / "taskkill.exe"
+    subprocess.run([str(taskkill), "/T", "/F", "/PID", str(pid)], capture_output=True, check=False)
+
+
+def log_tail(log: Path, lines: int = 40) -> str:
+    try:
+        text = log.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+    except OSError:
+        return f"(no log at {log})"
+    return "\n".join(text[-lines:])
+
+
+def uac_on() -> bool:
+    """User Account Control is on: an administrator's processes are elevated only on purpose."""
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+            0,
+            winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+        )
+    except FileNotFoundError:
+        return True
+    with key:
+        try:
+            return int(winreg.QueryValueEx(key, "EnableLUA")[0]) != 0
+        except FileNotFoundError:
+            return True
+
+
+def start_limited(cmd: list[str]) -> tuple[int, int]:
+    """Start `cmd` as this account without administrator rights: the Safer "normal user" level
+    (the Administrators group deny-only, as a standard user's token) at medium integrity - what
+    a person gets who starts Setup normally while UAC is on. (process handle, pid)"""
+    import ctypes
+    from ctypes import wintypes
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    def ok(result: int, what: str) -> None:
+        if not result:
+            raise OSError(ctypes.get_last_error(), what)
+
+    level = wintypes.HANDLE()
+    ok(advapi32.SaferCreateLevel(2, 0x20000, 1, ctypes.byref(level), None), "SaferCreateLevel")
+    token = wintypes.HANDLE()
+    ok(
+        advapi32.SaferComputeTokenFromLevel(level, None, ctypes.byref(token), 0, None),
+        "SaferComputeTokenFromLevel",
+    )
+    advapi32.SaferCloseLevel(level)
+
+    class SidAndAttributes(ctypes.Structure):
+        _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", wintypes.DWORD)]
+
+    sid = ctypes.c_void_p()
+    ok(advapi32.ConvertStringSidToSidW("S-1-16-8192", ctypes.byref(sid)), "medium integrity SID")
+    label = SidAndAttributes(sid, 0x20)  # SE_GROUP_INTEGRITY
+    size = ctypes.sizeof(label) + advapi32.GetLengthSid(sid)
+    ok(
+        advapi32.SetTokenInformation(token, 25, ctypes.byref(label), size),  # TokenIntegrityLevel
+        "SetTokenInformation",
+    )
+
+    class StartupInfo(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("lpReserved", wintypes.LPWSTR),
+            ("lpDesktop", wintypes.LPWSTR),
+            ("lpTitle", wintypes.LPWSTR),
+            ("dwX", wintypes.DWORD),
+            ("dwY", wintypes.DWORD),
+            ("dwXSize", wintypes.DWORD),
+            ("dwYSize", wintypes.DWORD),
+            ("dwXCountChars", wintypes.DWORD),
+            ("dwYCountChars", wintypes.DWORD),
+            ("dwFillAttribute", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("wShowWindow", wintypes.WORD),
+            ("cbReserved2", wintypes.WORD),
+            ("lpReserved2", ctypes.c_void_p),
+            ("hStdInput", wintypes.HANDLE),
+            ("hStdOutput", wintypes.HANDLE),
+            ("hStdError", wintypes.HANDLE),
+        ]
+
+    class ProcessInformation(ctypes.Structure):
+        _fields_ = [
+            ("hProcess", wintypes.HANDLE),
+            ("hThread", wintypes.HANDLE),
+            ("dwProcessId", wintypes.DWORD),
+            ("dwThreadId", wintypes.DWORD),
+        ]
+
+    startup = StartupInfo()
+    startup.cb = ctypes.sizeof(startup)
+    info = ProcessInformation()
+    line = ctypes.create_unicode_buffer(subprocess.list2cmdline(cmd))
+    ok(
+        advapi32.CreateProcessAsUserW(
+            token,
+            None,
+            line,
+            None,
+            None,
+            False,
+            0x08000000,
+            None,
+            None,
+            ctypes.byref(startup),
+            ctypes.byref(info),
+        ),
+        "CreateProcessAsUserW",
+    )
+    kernel32.CloseHandle(info.hThread)
+    kernel32.CloseHandle(token)
+    return int(info.hProcess), int(info.dwProcessId)
+
+
+def wait_limited(process: int, pid: int, log: Path) -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    if kernel32.WaitForSingleObject(wintypes.HANDLE(process), STEP_TIMEOUT_S * 1000) != 0:
+        kill_tree(pid)
+        print(log_tail(log), flush=True)  # noqa: T201
+        raise SystemExit(f"[smoke] FAILED: hung for {STEP_TIMEOUT_S} s (log tail above)")
+    code = wintypes.DWORD()
+    kernel32.GetExitCodeProcess(wintypes.HANDLE(process), ctypes.byref(code))
+    kernel32.CloseHandle(wintypes.HANDLE(process))
+    return int(code.value)
+
+
+def run_setup(setup: Path, log: Path, *extra: str, limited: bool = False) -> int:
+    """Run setup silently; its exit code. `limited`: as this account without administrator
+    rights. A hang is killed (with its children) after `STEP_TIMEOUT_S`."""
+    cmd = [str(setup), *QUIET, *(extra or ("/TASKS=sandboxrules",)), f"/LOG={log}"]
+    step(f"running {'(limited) ' if limited else ''}{' '.join(cmd)}")
+    if limited:
+        process, pid = start_limited(cmd)
+        return wait_limited(process, pid, log)
+    with subprocess.Popen(cmd) as running:
+        try:
+            return running.wait(timeout=STEP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            kill_tree(running.pid)
+            print(log_tail(log), flush=True)  # noqa: T201
+            raise SystemExit(
+                f"[smoke] FAILED: hung for {STEP_TIMEOUT_S} s (log tail above)"
+            ) from None
+
+
+def install(setup: Path, log: Path, *extra: str, limited: bool = False) -> None:
+    code = run_setup(setup, log, *extra, limited=limited)
+    if code != 0:
+        print(log_tail(log), flush=True)  # noqa: T201
+    check(code == 0, f"setup exited with {code}")
 
 
 def check_installed() -> int:
@@ -123,11 +284,13 @@ def uninstall(log: Path) -> None:
     uninstaller = APP / "unins000.exe"
     cmd = [str(uninstaller), *QUIET, f"/LOG={log}"]
     step(f"running {' '.join(cmd)}")
-    subprocess.run(cmd, timeout=600, check=False)
+    subprocess.run(cmd, timeout=STEP_TIMEOUT_S, check=False)
     # The uninstaller restarts itself from a temporary copy and returns at once: wait for it.
-    deadline = time.monotonic() + 600
+    deadline = time.monotonic() + STEP_TIMEOUT_S
     while uninstaller.exists() and time.monotonic() < deadline:
         time.sleep(2)
+    if uninstaller.exists():
+        print(log_tail(log), flush=True)  # noqa: T201
     check(not uninstaller.exists(), "the uninstaller finished")
 
 
@@ -139,6 +302,81 @@ def check_removed() -> None:
     check(not rules_present(), "no filter of Nox's provider left")
 
 
+NODE_TASK = "Nox Node"
+SCHTASKS = Path(wfp_helper.system_dir()) / "schtasks.exe"
+AUMID_KEY = "Software\\Classes\\AppUserModelId\\Nox.Node"
+TASK_NS = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+
+
+def node_task_xml() -> str | None:
+    result = subprocess.run(
+        [str(SCHTASKS), "/Query", "/TN", NODE_TASK, "/XML"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
+def aumid_present() -> bool:
+    try:
+        winreg.CloseKey(
+            winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, AUMID_KEY, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY
+            )
+        )
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def check_node_installed() -> None:
+    from xml.etree import ElementTree  # noqa: PLC0415 - Task Scheduler's own XML
+
+    for rel in ("runtime/pythonw.exe", "app/nox/__init__.py", "app/start_node.pyw", "nox-node.cmd"):
+        check((APP / rel).is_file(), f"node mode installed {rel}")
+    check(not (APP / "app" / "ui").exists(), "node mode installs no dashboards")
+    xml = node_task_xml()
+    check(xml is not None, f"the logon task {NODE_TASK!r} exists")
+    assert xml is not None
+    task = ElementTree.fromstring(xml)  # noqa: S314 - written by schtasks on this runner
+    trigger = task.find(f"{TASK_NS}Triggers/{TASK_NS}LogonTrigger")
+    principal = task.find(f"{TASK_NS}Principals/{TASK_NS}Principal")
+    check(trigger is not None and bool(trigger.findtext(f"{TASK_NS}UserId")), "at logon of a user")
+    assert principal is not None
+    print(xml, flush=True)  # noqa: T201 - the task as Windows stored it, for the log
+    # schtasks leaves out values at their default: no RunLevel element means LeastPrivilege.
+    level = principal.findtext(f"{TASK_NS}RunLevel")
+    check(level in (None, "LeastPrivilege"), f"least privilege ({level})")
+    logon = principal.findtext(f"{TASK_NS}LogonType")
+    check(logon == "InteractiveToken", f"as the logged-in user ({logon})")
+    check("S-1-5-18" not in xml and "HighestAvailable" not in xml, "never SYSTEM, never elevated")
+    check("<Arguments>-I " in xml, "the task starts its Python isolated (-I)")
+    check(aumid_present(), "the node's notification ID (HKCU, 64-bit view)")
+    selftest = subprocess.run(
+        [
+            str(APP / "runtime" / "python.exe"),
+            "-I",
+            str(APP / "app" / "start_node.pyw"),
+            "--selftest",
+        ],
+        cwd=APP / "app",
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    print(selftest.stdout, selftest.stderr, sep="\n", flush=True)  # noqa: T201
+    check(selftest.returncode == 0 and "Not paired." in selftest.stdout, "the node starts")
+
+
+def check_node_removed() -> None:
+    check(not (APP / "runtime").exists() and not (APP / "app").exists(), "node files removed")
+    check(node_task_xml() is None, "the logon task is gone")
+    check(not aumid_present(), "the notification ID is gone")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("setup", type=Path)
@@ -148,18 +386,50 @@ def main() -> int:
     check(wfp_helper.helper_sha256() is not None and BUILT_HELPER.is_file(), "built helper")
     check(not APP.exists() and status_key() is None, "a clean machine to start from")
 
-    step("1/3 fresh install")
-    run_setup(args.setup, args.logs / "install.log")
+    step("1/6 fresh install")
+    install(args.setup, args.logs / "install.log")
     first = check_installed()
 
-    step("2/3 install over itself (upgrade path)")
-    run_setup(args.setup, args.logs / "upgrade.log")
+    step("2/6 install over itself (upgrade path)")
+    install(args.setup, args.logs / "upgrade.log")
     second = check_installed()
     check(second > first, f"the rule step ran again (sequence {first} -> {second})")
 
-    step("3/3 uninstall")
+    step("3/6 uninstall")
     uninstall(args.logs / "uninstall.log")
     check_removed()
+
+    node = ("/MODE=node", "/MERGETASKS=!sandboxrules")
+    step("4/6 node mode refused when Setup was elevated on purpose (UAC on)")
+    if uac_on():
+        log = args.logs / "node-elevated.log"
+        code = run_setup(args.setup, log, *node)
+        check(code != 0, f"elevated node-mode setup ended with an error ({code}), not a dialog")
+        check("Node mode refused" in log_tail(log, 400), "the refusal is in the setup log")
+        check(not (APP / "app").exists(), "nothing was installed")
+    else:
+        step("UAC is off on this machine: there is no boundary, nothing to refuse")
+
+    # A standard user's token: what a person gets who starts Setup normally while UAC is on.
+    # Setup, its log and its temp files live in this account's own folders, which that token may
+    # write (the runner's work folder may need the administrators' rights).
+    step("5/6 node mode as a standard user: logon task, no dashboards, no elevated step")
+    own = Path(os.environ["TEMP"]) / "nox-node-smoke"
+    own.mkdir(parents=True, exist_ok=True)
+    local_setup = own / args.setup.name
+    shutil.copy2(args.setup, local_setup)
+    local_log = own / "node.log"
+    try:
+        install(local_setup, local_log, *node, limited=True)
+    finally:
+        if local_log.exists():
+            shutil.copy2(local_log, args.logs / "node.log")
+    check_node_installed()
+    check(status_key() is None, "node mode without the rules task asked for no elevation")
+
+    step("6/6 node uninstall")
+    uninstall(args.logs / "node-uninstall.log")
+    check_node_removed()
     step("all checks passed")
     return 0
 

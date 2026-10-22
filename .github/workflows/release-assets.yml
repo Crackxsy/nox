@@ -1,5 +1,7 @@
 # Attaches to every GitHub release: the built dashboard and pet window as nox-ui-<tag>.tar.gz, and
-# the installer itself as install-linux.sh, each with its SHA-256, plus release-manifest.json - the
+# the installer itself as install-linux.sh, the code a `nox node` updates itself from as
+# nox-app-<tag>.zip (built in the manifest job from the clean tag checkout, standard library only),
+# each with its SHA-256, plus release-manifest.json - the
 # list of those files with sizes and SHA-256 and the commit the tag points to - and its Ed25519
 # signature release-manifest.json.sig (docs/RELEASES.md). Once a release key is trusted,
 # scripts/install-linux.sh and `nox update` refuse a release whose signed manifest is missing or
@@ -77,6 +79,7 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
           path: source
+          fetch-depth: 0 # the previous tag, to tell whether uv.lock changed since
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -97,13 +100,42 @@ jobs:
           cp "bundle/nox-ui-$TAG.tar.gz" files/
           cp source/scripts/install-linux.sh files/install-linux.sh
 
-      - name: The commit the tag points to
+      # Into the signed manifest: the node protocols this release's core accepts, the protocol its
+      # node speaks, and whether uv.lock changed since the previous release tag. A node installs a
+      # release by itself only when its paired core accepts the new node's protocol and no library
+      # changed - a code-only patch (nox.node.update); otherwise the installer is needed.
+      - name: The commit the tag points to, its node protocols, changed libraries
         id: source
-        run: echo "commit=$(git -C source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          echo "commit=$(git -C source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          range="$(sed -n 's/^NODE_PROTOCOL_RANGE: tuple\[int, int\] = (\([0-9]*\), \([0-9]*\))$/\1-\2/p' source/src/nox/node/protocol.py)"
+          speaks="$(sed -n 's/^NODE_PROTOCOL = \([0-9]*\)$/\1/p' source/src/nox/node/protocol.py)"
+          test -n "$range" && test -n "$speaks"
+          previous="$(git -C source describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^ 2>/dev/null || true)"
+          if [ -n "$previous" ] && git -C source diff --quiet "$previous" HEAD -- uv.lock; then
+            deps=no
+          else
+            deps=yes  # changed, or no earlier release to compare with
+          fi
+          echo "previous release: ${previous:-none}; libraries changed: $deps"
+          {
+            echo "node_protocol=$range"
+            echo "node_speaks=$speaks"
+            echo "deps_changed=$deps"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+
+      # What a node updates itself from: Nox's own code and configuration from the clean checkout of
+      # the tag (no npm code ran here), standard library only, byte-identical on every build.
+      - name: The node bundle
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: python -I source/scripts/build_app_bundle.py --repo source --tag "$TAG" --out files
 
       # The process that holds the key may import exactly cryptography and what it needs: pinned
       # by version and SHA-256 (copied from uv.lock), wheels only, into a folder of their own.
@@ -123,16 +155,27 @@ jobs:
           NOX_RELEASE_SIGNING_KEY: ${{ secrets.NOX_RELEASE_SIGNING_KEY }}
           TAG: ${{ github.event.release.tag_name }}
           COMMIT: ${{ steps.source.outputs.commit }}
+          NODE_PROTOCOL: ${{ steps.source.outputs.node_protocol }}
+          NODE_SPEAKS: ${{ steps.source.outputs.node_speaks }}
+          DEPS_CHANGED: ${{ steps.source.outputs.deps_changed }}
         run: |
           printf '%s\n' "$NOX_RELEASE_SIGNING_KEY" | env -u NOX_RELEASE_SIGNING_KEY \
             python -I -S source/scripts/sign_release.py --key-stdin --allow-unsigned \
             --lib "$RUNNER_TEMP/signer-lib" --tag "$TAG" --commit "$COMMIT" --out signed \
-            "files/nox-ui-$TAG.tar.gz" files/install-linux.sh
+            --node-protocol "$NODE_PROTOCOL" --node-speaks "$NODE_SPEAKS" \
+            --deps-changed "$DEPS_CHANGED" \
+            "files/nox-ui-$TAG.tar.gz" files/install-linux.sh "files/nox-app-$TAG.zip"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-manifest
           path: signed/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node-bundle
+          path: files/nox-app-*.zip
           if-no-files-found: error
 
   upload:
@@ -182,6 +225,11 @@ jobs:
           name: release-manifest
           path: manifest
 
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: node-bundle
+          path: node
+
       # Every installation checks the signature itself; here the manifest must describe exactly
       # the files about to be uploaded, so a mix-up never reaches a release.
       - name: The manifest lists exactly the files that are uploaded
@@ -189,6 +237,12 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
           SIGNED: ${{ needs.manifest.outputs.signed }}
         run: |
+          actual="$(find node -mindepth 1 -printf '%P\n')"
+          if [ "$actual" != "nox-app-$TAG.zip" ]; then
+            echo "unexpected node bundle artifact contents:"; echo "$actual"; exit 1
+          fi
+          find node -mindepth 1 ! -type f -print -quit | grep -q . && { echo "non-regular file in artifact"; exit 1; }
+          (cd node && sha256sum "nox-app-$TAG.zip" > "nox-app-$TAG.zip.sha256")
           expected="release-manifest.json"
           if [ "$SIGNED" = "true" ]; then
             expected="$(printf '%s\n' release-manifest.json release-manifest.json.sig)"
@@ -198,7 +252,7 @@ jobs:
             echo "unexpected manifest artifact contents:"; echo "$actual"; exit 1
           fi
           find manifest -mindepth 1 ! -type f -print -quit | grep -q . && { echo "non-regular file in artifact"; exit 1; }
-          python3 -I - manifest/release-manifest.json "bundle/nox-ui-$TAG.tar.gz" installer/install-linux.sh <<'PY'
+          python3 -I - manifest/release-manifest.json "bundle/nox-ui-$TAG.tar.gz" installer/install-linux.sh "node/nox-app-$TAG.zip" <<'PY'
           import hashlib, json, os, sys
           with open(sys.argv[1], encoding="utf-8") as handle:
               manifest = json.load(handle)
@@ -220,7 +274,8 @@ jobs:
           SIGNED: ${{ needs.manifest.outputs.signed }}
         run: |
           files=("bundle/nox-ui-$TAG.tar.gz" "bundle/nox-ui-$TAG.tar.gz.sha256"
-                 installer/install-linux.sh installer/install-linux.sh.sha256)
+                 installer/install-linux.sh installer/install-linux.sh.sha256
+                 "node/nox-app-$TAG.zip" "node/nox-app-$TAG.zip.sha256")
           # An unsigned manifest is never published: it would only look like a signed one.
           if [ "$SIGNED" = "true" ]; then
             files+=(manifest/release-manifest.json manifest/release-manifest.json.sig)

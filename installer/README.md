@@ -92,6 +92,30 @@ Output: `installer/out/Nox-Setup-<version>.exe` (git-ignored, like `installer/bu
 - No telemetry, no network access by the installer itself (everything it packages was already
   fetched by `build.py` beforehand).
 
+## Node mode
+
+A wizard page asks how the PC is used: **the Nox of this home** (everything above) or **connect to
+a Nox in the home network (only this device)** - a node (`docs/NODES.md`). Silent installs choose
+with `/MODE=node` and may pass `/PAIR=<nox-node://pair?... link>`.
+
+- The same runtime and code, without the two dashboards; the start-menu entry "Nox Node" (with the
+  AppUserModelID `Nox.Node`, which the node's notifications carry; its display name is registered
+  under `HKCU\Software\Classes\AppUserModelId\Nox.Node`, 64-bit view) and `nox-node.cmd` in the
+  install folder (`nox node ...` in a terminal).
+- **Autostart is a per-user logon task** "Nox Node", registered by the user's own runtime
+  (`app\start_node.pyw --autostart on`, not elevated): trigger "at logon of this user", principal
+  this user with an interactive token and *least privilege*, no time limit, restarted after a
+  failure. Never a service, never SYSTEM, never "highest privileges". Uninstall ends the task and
+  deletes it with the system's `schtasks.exe`, as the user.
+- The sandbox-rules task is offered as in a core install (a node runs shell commands in the same
+  sandbox); it stays the only elevated step and still never runs anything from `{app}`.
+- `app\start_node.pyw` - standard library only, never replaced by an update - chooses between this
+  copy and a version the node installed itself from a signed release (`nox.node.update`), restarts
+  the node after an update and rolls a version back that does not start.
+- Uninstall also removes those self-installed versions (`%LOCALAPPDATA%\Nox\node\app`) - program
+  code, the one path outside `{app}` it deletes. The node's key, certificate, settings and audit
+  trail next to them stay.
+
 ## Repairing an installation that does not start
 
 Installers built before this fix (0.2.0 - 0.5.0) produce a copy that never starts: no window, no

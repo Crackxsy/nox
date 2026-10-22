@@ -15,6 +15,11 @@
 ; any are there - also ones an older build or its command line added. Declining the prompt is fine:
 ; Nox then reports its sandbox as weaker and runs shell commands only if the user accepts that.
 ;
+; Two modes (a wizard page, or /MODE=node for silent installs): the Nox of this home ("core"), or
+; a node - this PC as the hands of a Nox elsewhere in the home. A node gets no dashboards, a
+; per-user logon task "Nox Node" (least privilege, registered by the user's own Python, never
+; elevated, never a service) and its own notification ID; uninstall ends and removes the task.
+;
 ; Licenses: this installer bundles the `voice` extra (Piper with espeak-ng, GPL-3.0-or-later), so
 ; it is distributed under GPL-3.0-or-later as a whole. The wizard shows the notice and written
 ; source offer (LicenseFile), and LICENSE, NOTICE, COPYING, THIRD_PARTY_LICENSES.md and SOURCE.txt
@@ -72,49 +77,82 @@ Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 [Tasks]
 ; Ticked by default: the first thing somebody does after installing is look for it, and a
 ; start menu entry alone means knowing it is called Nox before you can find out that it is.
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-Name: "autostart"; Description: "Nox beim Anmelden automatisch starten / Start Nox automatically at logon"; GroupDescription: "Autostart:"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Check: IsCoreMode
+Name: "autostart"; Description: "Nox beim Anmelden automatisch starten / Start Nox automatically at logon"; GroupDescription: "Autostart:"; Flags: unchecked; Check: IsCoreMode
 ; Ticked by default: without these rules, Nox's sandbox is weaker on Windows builds that do not
 ; enforce AppContainer loopback isolation, and shell commands stay off until the user accepts that.
+; A node runs shell commands in the same sandbox, so it is offered in both modes.
 Name: "sandboxrules"; Description: "{cm:SandboxRulesTask}"; GroupDescription: "{cm:SandboxRulesGroup}"
 
 [Files]
 ; The embedded Python runtime (interpreter + stdlib + installed deps from requirements.lock).
 Source: "{#BuildRuntimeDir}\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs createallsubdirs
-; nox's own source, config, plugins, and the two built web UIs (pet + dashboard).
-Source: "{#BuildAppDir}\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
+; nox's own source, config, plugins and both launchers. The two built web UIs (pet + dashboard)
+; only for the core: a node shows no dashboard of its own.
+Source: "{#BuildAppDir}\*"; Excludes: "\ui"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#BuildAppDir}\ui\*"; DestDir: "{app}\app\ui"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Check: IsCoreMode
+; `nox node ...` in a terminal, for the node (pair later, status, log, allow).
+Source: "nox-node.cmd"; DestDir: "{app}"; Flags: ignoreversion; Check: IsNodeMode
 ; The license texts and the written source offer.
 Source: "{#BuildLegalDir}\*"; DestDir: "{app}"; Flags: ignoreversion
 ; The sandbox-rules helper. Only ever run after its SHA-256 matched the pinned one ([Code]).
 Source: "{#BuildSandboxRulesDir}\nox-sandbox-rules.ps1"; DestDir: "{app}\sandbox"; Flags: ignoreversion
 
 [Icons]
-; Every shortcut starts the launcher, not `-m nox.supervisor`: the launcher puts `{app}\app` on
+; Every shortcut starts a launcher, not `-m nox.supervisor`: the launcher puts `{app}\app` on
 ; `sys.path` itself and reports a failed start (%LOCALAPPDATA%\Nox\startup-error.log and a
 ; message box) instead of `pythonw` failing silently. Installing over an older version replaces
 ; these shortcuts, the autostart entry included.
-Name: "{group}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"
+Name: "{group}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"; Check: IsCoreMode
 Name: "{group}\{cm:UninstallProgram,Nox}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"; Tasks: desktopicon
 Name: "{userstartup}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; Tasks: autostart
+; Node: "Nox Node" starts the logon task now (never a second copy). Its AppUserModelID is the one
+; the node's notifications carry (nox.node.appid), so a toast says "Nox", not "Windows PowerShell".
+Name: "{group}\Nox Node"; Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --start"; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"; AppUserModelID: "Nox.Node"; Check: IsNodeMode
+
+[Registry]
+; The node's notification sender, per user (no administrator). The 64-bit view explicitly: the
+; WFP status key once landed in WOW6432Node because a 32-bit view was used by accident.
+Root: HKCU64; Subkey: "Software\Classes\AppUserModelId\Nox.Node"; ValueType: string; ValueName: "DisplayName"; ValueData: "Nox"; Flags: uninsdeletekey; Check: IsNodeMode
+; A core installed over a node: the node's notification ID goes with it.
+Root: HKCU64; Subkey: "Software\Classes\AppUserModelId\Nox.Node"; Flags: deletekey dontcreatekey; Check: IsCoreMode
 
 [Run]
+; Everything here that runs code from {app} (which the user's account can change) runs as the
+; original, non-elevated user (runasoriginaluser) - also when Setup itself was started elevated.
+; installer/test: tests/unit/installer/test_install_start.py checks that rule.
 ; Optional immediate first start after install finishes (unchecked by default - never surprise-run).
-Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; Description: "{cm:LaunchProgram,Nox}"; Flags: nowait postinstall skipifsilent unchecked
+Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\app\start_nox.pyw"""; WorkingDir: "{app}\app"; Description: "{cm:LaunchProgram,Nox}"; Flags: nowait postinstall skipifsilent unchecked runasoriginaluser; Check: IsCoreMode
+; A core installed over a node: the node's logon task goes (the uninstall log of the node install
+; is overwritten by this one, UninstallLogMode=overwrite, so uninstalling could not remove it).
+Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""Nox Node"""; Flags: runhidden waituntilterminated runasoriginaluser; Check: IsCoreMode
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""Nox Node"" /F"; Flags: runhidden waituntilterminated runasoriginaluser; Check: IsCoreMode
+; Node: a new base drops the versions the node installed itself (floor and failure record stay),
+; then the per-user logon task ("Nox Node", least privilege, as this user).
+Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --reset-overlays"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated runasoriginaluser; Check: IsNodeMode
+Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --autostart on"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated runasoriginaluser; StatusMsg: "{cm:NodeTaskStatus}"; Check: IsNodeMode
+Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --start"; WorkingDir: "{app}\app"; Description: "{cm:NodeStartNow}"; Flags: nowait postinstall skipifsilent runhidden runasoriginaluser; Check: IsNodeMode
 
 [UninstallRun]
 ; The sandbox network rules are removed in [Code] (CurUninstallStepChanged), before this runs.
+; Node: stop it and remove its logon task first - the system's schtasks, as this user.
+; In both modes: a task left by an earlier node install goes too (nothing happens without one).
+Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""Nox Node"""; Flags: runhidden waituntilterminated; RunOnceId: "NoxNodeEnd"
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""Nox Node"" /F"; Flags: runhidden waituntilterminated; RunOnceId: "NoxNodeTask"
 ; Remove the read rights Nox granted its AppContainer sandbox on the runtime folders (recorded in a
 ; manifest; exactly those ACEs, nothing else). Runs before the runtime itself is deleted.
-Filename: "{app}\runtime\python.exe"; Parameters: "-m nox.cli sandbox reset"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated; RunOnceId: "NoxSandboxReset"
+Filename: "{app}\runtime\python.exe"; Parameters: "-I -m nox.cli sandbox reset"; WorkingDir: "{app}\app"; Flags: runhidden waituntilterminated; RunOnceId: "NoxSandboxReset"
 
 [UninstallDelete]
-; Belt-and-braces: only ever delete inside {app} (program files). The user's vault, database,
-; data folder and any config outside {app} are never named here and are never touched -
-; uninstall must leave the vault and all user data exactly as it was.
+; Belt-and-braces: only ever delete program files. The user's vault, database, data folder and any
+; config outside {app} are never named here and are never touched - uninstall must leave the vault
+; and all user data exactly as it was. The one exception is program code too: the versions a node
+; installed itself from signed bundles; its identity, key and audit trail next to them stay.
 Type: filesandordirs; Name: "{app}\runtime"
 Type: filesandordirs; Name: "{app}\app"
 Type: filesandordirs; Name: "{app}\sandbox"
+Type: filesandordirs; Name: "{localappdata}\Nox\node\app"
 
 [CustomMessages]
 english.SandboxRulesGroup=Security:
@@ -129,6 +167,32 @@ english.SandboxRulesUninstallFound=This setup did not add sandbox network rules 
 german.SandboxRulesUninstallFound=Dieses Setup hat selbst keine Netzwerkregeln angelegt, Windows hat aber noch Regeln von Nox (aus einer aelteren Version oder von Hand angelegt).
 english.SandboxRulesUninstallUnknown=This setup did not add sandbox network rules itself, and whether Windows still has rules from Nox could not be checked.
 german.SandboxRulesUninstallUnknown=Dieses Setup hat selbst keine Netzwerkregeln angelegt, und ob Windows noch Regeln von Nox hat, liess sich nicht pruefen.
+english.ModeCaption=How will this PC be used?
+german.ModeCaption=Wofuer ist dieser PC?
+english.ModeDescription=Nox runs once per home. Other PCs connect to it as nodes.
+german.ModeDescription=Nox laeuft einmal pro Zuhause. Weitere PCs verbinden sich als Knoten damit.
+english.ModeCore=Nox runs on this PC (the Nox of this home)
+german.ModeCore=Nox laeuft auf diesem PC (der Nox dieses Zuhauses)
+english.ModeNode=Connect to a Nox in the home network (only this device)
+german.ModeNode=Mit einem Nox im Heimnetz verbinden (nur dieses Geraet)
+english.PairCaption=Connect to Nox
+german.PairCaption=Mit Nox verbinden
+english.PairDescription=On the Nox at home: Devices, "Add a PC or laptop". Paste the link shown there, or leave this empty and pair later.
+german.PairDescription=Am Nox zu Hause: Geraete, "PC oder Laptop hinzufuegen". Den angezeigten Link hier einfuegen - oder leer lassen und spaeter koppeln.
+english.PairPrompt=Pairing link (nox-node://pair?...):
+german.PairPrompt=Kopplungs-Link (nox-node://pair?...):
+english.PairInvalid=That is not a Nox pairing link. It starts with nox-node://pair? and contains only letters, digits and : / ? = & . - _ %
+german.PairInvalid=Das ist kein Nox-Kopplungs-Link. Er beginnt mit nox-node://pair? und enthaelt nur Buchstaben, Ziffern und : / ? = & . - _ %
+english.PairFailed=Connecting to Nox did not work (code %1).%n%nPair later in a terminal:%n"%2" pair "<link>"
+german.PairFailed=Die Verbindung mit Nox hat nicht geklappt (Code %1).%n%nSpaeter in einem Terminal koppeln:%n"%2" pair "<Link>"
+english.NodeTaskStatus=Starting Nox with Windows (for this user only)...
+german.NodeTaskStatus=Nox mit Windows starten (nur fuer diesen Benutzer)...
+english.NodeStartNow=Start the Nox node now
+english.NodeNoAdminInstall=Node mode is installed for one user only, never for all users. Run Setup again without administrator mode.
+german.NodeNoAdminInstall=Der Node-Modus wird nur fuer einen Benutzer installiert, nie fuer alle. Setup bitte ohne Administratormodus erneut starten.
+english.NodeNotElevated=Node mode never runs with administrator rights. Start Setup normally, not with "Run as administrator".
+german.NodeNotElevated=Der Node-Modus laeuft nie mit Administratorrechten. Setup bitte normal starten, nicht mit "Als Administrator ausfuehren".
+german.NodeStartNow=Nox-Knoten jetzt starten
 
 [Code]
 { No vault path is ever written or read by the installer itself - first-start config (vault path,
@@ -139,6 +203,177 @@ german.SandboxRulesUninstallUnknown=Dieses Setup hat selbst keine Netzwerkregeln
 
 const
   SandboxStatusKey = 'SOFTWARE\Nox\SandboxRules';
+
+{ ---- core or node --------------------------------------------------------------------------
+  A node is this PC as the hands of a Nox elsewhere in the home (docs/NODES.md): the same program
+  files without the dashboards, started at logon by a per-user task "Nox Node" (least privilege,
+  never a service, never elevated), its notifications under its own AppUserModelID. Silent
+  installs choose with /MODE=node (default /MODE=core) and may pass /PAIR=<link>. }
+
+var
+  ModePage: TInputOptionWizardPage;
+  PairPage: TInputQueryWizardPage;
+
+function ModeParam(): String;
+begin
+  Result := Lowercase(ExpandConstant('{param:MODE|core}'));
+end;
+
+function IsNodeMode(): Boolean;
+begin
+  if ModePage <> nil then
+    Result := ModePage.SelectedValueIndex = 1
+  else
+    Result := ModeParam() = 'node';
+end;
+
+function IsCoreMode(): Boolean;
+begin
+  Result := not IsNodeMode();
+end;
+
+{ The link reaches the node as one quoted argument: only nox-node://pair? links made of characters
+  a link holds are passed on - no quotes, spaces or anything a command line treats specially.
+  The node checks the link itself again (nox.node.protocol.PairLink). }
+function ValidPairLink(const Link: String): Boolean;
+var
+  I: Integer;
+  C: String;
+begin
+  Result := (Pos('nox-node://pair?', Link) = 1) and (Length(Link) <= 400);
+  if not Result then
+    Exit;
+  for I := 1 to Length(Link) do
+  begin
+    C := Copy(Link, I, 1);
+    if not (((C >= 'a') and (C <= 'z')) or ((C >= 'A') and (C <= 'Z')) or
+        ((C >= '0') and (C <= '9')) or (Pos(C, ':/?=&.-_%') > 0)) then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+end;
+
+function PairLinkValue(): String;
+begin
+  Result := '';
+  if PairPage <> nil then
+    Result := Trim(PairPage.Values[0]);
+  if Result = '' then
+    Result := Trim(ExpandConstant('{param:PAIR|}'));
+end;
+
+procedure InitializeWizard();
+begin
+  ModePage := CreateInputOptionPage(wpLicense, CustomMessage('ModeCaption'),
+    CustomMessage('ModeDescription'), '', True, False);
+  ModePage.Add(CustomMessage('ModeCore'));
+  ModePage.Add(CustomMessage('ModeNode'));
+  if ModeParam() = 'node' then
+    ModePage.SelectedValueIndex := 1
+  else
+    ModePage.SelectedValueIndex := 0;
+  PairPage := CreateInputQueryPage(ModePage.ID, CustomMessage('PairCaption'),
+    CustomMessage('PairDescription'), '');
+  PairPage.Add(CustomMessage('PairPrompt'), False);
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PairPage <> nil) and (PageID = PairPage.ID) and not IsNodeMode();
+end;
+
+{ Node mode never runs elevated: user code (the node, its pairing, its logon task) must not run
+  with administrator rights from the user-writable install folder. Refused for an all-users install, and
+  when Setup was elevated on purpose while UAC is on (without UAC there is no boundary to cross). }
+function NodeModeRefusal(): String;
+var
+  Lua: Cardinal;
+begin
+  Result := '';
+  if IsAdminInstallMode() then
+    Result := CustomMessage('NodeNoAdminInstall')
+  else if IsAdmin() and ((not RegQueryDWordValue(HKLM64,
+      'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System', 'EnableLUA', Lua)) or
+      (Lua <> 0)) then
+    { No EnableLUA value counts as UAC on: that is Windows' own default. }
+    Result := CustomMessage('NodeNotElevated');
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Refusal: String;
+begin
+  Result := True;
+  { Silent installs never see a page: a refusal there ends Setup in PrepareToInstall (exit code
+    7, written to the log), never as a dialog nobody can answer. }
+  if WizardSilent() then
+    Exit;
+  if (ModePage <> nil) and (CurPageID = ModePage.ID) and IsNodeMode() then
+  begin
+    Refusal := NodeModeRefusal();
+    if Refusal <> '' then
+    begin
+      SuppressibleMsgBox(Refusal, mbError, MB_OK, IDOK);
+      Result := False;
+      Exit;
+    end;
+  end;
+  if (PairPage <> nil) and (CurPageID = PairPage.ID) and (Trim(PairPage.Values[0]) <> '') and
+      not ValidPairLink(Trim(PairPage.Values[0])) then
+  begin
+    SuppressibleMsgBox(CustomMessage('PairInvalid'), mbError, MB_OK, IDOK);
+    Result := False;
+  end;
+end;
+
+{ A running node keeps its files open: end it first (the user's own task, as that user). }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ErrorCode: Integer;
+begin
+  Result := '';
+  if IsNodeMode() then
+  begin
+    Result := NodeModeRefusal();
+    if Result <> '' then
+    begin
+      Log('Node mode refused: ' + Result);
+      Exit;
+    end;
+  end;
+  ExecAsOriginalUser(ExpandConstant('{sys}\schtasks.exe'), '/End /TN "Nox Node"', '', SW_HIDE,
+    ewWaitUntilTerminated, ErrorCode);
+end;
+
+{ Pair right away when a link was given: the node's own `nox node pair`, as this user. }
+procedure PairNode();
+var
+  Link: String;
+  Code: Integer;
+begin
+  Link := PairLinkValue();
+  if Link = '' then
+    Exit;
+  if not ValidPairLink(Link) then
+  begin
+    Log('Pairing link refused: unexpected characters');
+    Exit;
+  end;
+  { As the original user: never elevated, whoever started Setup. }
+  if ExecAsOriginalUser(ExpandConstant('{app}\runtime\python.exe'),
+      '-I "' + ExpandConstant('{app}\app\start_node.pyw') + '" --cli node pair "' + Link + '"',
+      ExpandConstant('{app}\app'), SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
+    Log('Node paired')
+  else
+  begin
+    Log('Node pairing failed: ' + IntToStr(Code));
+    { No line may start with "[" here: ISCC would read it as a section tag. }
+    SuppressibleMsgBox(FmtMessage(CustomMessage('PairFailed'), [IntToStr(Code),
+      ExpandConstant('{app}\nox-node.cmd')]), mbInformation, MB_OK, IDOK);
+  end;
+end;
 
 { The system's own 64-bit Windows PowerShell, by full path (never one found on PATH). }
 function SandboxPowerShell(): String;
@@ -268,6 +503,8 @@ begin
     else
       Log('Sandbox network rules added');
   end;
+  if (CurStep = ssPostInstall) and IsNodeMode() then
+    PairNode();
 end;
 
 { Uninstall removes the rules whenever they may be there - independent of the task, so rules an

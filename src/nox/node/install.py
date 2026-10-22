@@ -11,6 +11,7 @@ Requests, for the UI roles (`nox.ipc.roles`):
   * `node.list` - paired nodes, online or not,
   * `node.unpair` - revoke a node: its certificates go on the denylist and its connection closes
     at once. Narrowing only, so no PIN locally.
+  * `node.narrow`, `node.defaults.set` - see `nox.node.policy`.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from nox.node.hands import PathArgs, ShellArgs, WriteArgs, write_risk, write_sum
 from nox.node.listener import NodeListener
 from nox.node.names import label
 from nox.node.pairing import NodePairing
+from nox.node.policy import defaults_view, register_policy_requests
 from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink, render
 from nox.node.receipts import ReceiptSigner
 from nox.node.registry import NodeRegistry
@@ -450,9 +452,17 @@ def _register_requests(core: Any, runtime: NodeRuntime, lan: Any) -> None:
             "ca_fingerprint": material.fingerprint,
         }
 
+    details = register_policy_requests(core, runtime)
+
     async def h_list(_ctx: RequestContext, _p: EmptyRequest) -> dict[str, Any]:
         listed = await asyncio.to_thread(pairing.nodes)
-        return {"enabled": runtime.enabled, "nodes": [_node_json(d, runtime) for d in listed]}
+        online = set(runtime.listener.sessions) if runtime.listener is not None else set()
+        extra = await asyncio.to_thread(details, listed, online)
+        return {
+            "enabled": runtime.enabled,
+            "nodes": [_node_json(d, runtime) | extra[d.id] for d in listed],
+            "defaults": defaults_view(core.config.devices.defaults, listed),
+        }
 
     async def h_unpair(ctx: RequestContext, p: UnpairRequest) -> dict[str, Any]:
         if pairing.get(p.device_id) is None:

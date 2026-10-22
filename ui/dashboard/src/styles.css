@@ -3689,3 +3689,92 @@ details > summary:hover {
   margin-top: 2px;
   color: var(--ink-3);
 }
+
+/* ------------------------------------------- Geräte › Computer und Server - */
+
+.node {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.node-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-s);
+  background: var(--bg-2);
+  color: var(--ink-2);
+}
+
+.node-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-3);
+  margin: var(--s-1) 0 0;
+}
+
+.node-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.node-sec {
+  margin-top: var(--s-5);
+}
+
+.node-sec > * + * {
+  margin-top: var(--s-2);
+}
+
+.node-groups {
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.set-row--flat {
+  margin-top: 0;
+  border-top: 0;
+}
+
+.node-how {
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+}
+
+.node-remove {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3);
+  margin-top: var(--s-5);
+}
+
+.node-steps > li > * + * {
+  margin-top: var(--s-2);
+}
+
+@media (max-width: 719px) {
+  .node {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .node > .state,
+  .node .device-action {
+    grid-column: 2;
+    justify-items: start;
+    justify-self: start;
+  }
+}
+
+/* A name typed on a device may be one long word: it wraps instead of widening the page. */
+.device-name,
+.dlg-h h2 {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}

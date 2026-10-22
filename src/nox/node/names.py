@@ -35,7 +35,22 @@ MAX_NAME = 40
 ALLOWED: frozenset[str] = frozenset(string.ascii_letters + string.digits + "äöüÄÖÜß -_.")
 #: Words the router reads as "the core itself" or as "every device".
 RESERVED: frozenset[str] = frozenset(
-    {"core", "dieser core", "this core", "hier", "here", "all", "alle", "every", "none", "device"}
+    {
+        "core",
+        "dieser core",
+        "this core",
+        "hier",
+        "here",
+        "all",
+        "alle",
+        "every",
+        "none",
+        "device",
+        # The words `devices.defaults` gives a meaning of its own (`nox.node.policy`).
+        "auto",
+        "origin",
+        "mixed",
+    }
 )
 _NODE_ID = re.compile(r"^[0-9a-f]{32}$")
 _SPACES = re.compile(r"\s+")

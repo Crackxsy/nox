@@ -195,5 +195,6 @@ def describe_key(
     typer.echo("src/nox/release/trusted_keys.py, inside TRUSTED_KEYS = ( ... ):")
     typer.echo(f'    TrustedKey(key_id="{key_id}", public_key="{spki}", not_after="{not_after}"),')
     typer.echo("")
-    typer.echo("scripts/install-linux.sh, inside TRUSTED_RELEASE_KEYS=( ... ):")
+    typer.echo("scripts/install-linux.sh and scripts/install-macos.sh,")
+    typer.echo("inside TRUSTED_RELEASE_KEYS=( ... ):")
     typer.echo(f'  "{key_id}|{not_after}|{spki}"')

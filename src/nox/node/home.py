@@ -74,6 +74,9 @@ class NodeIdentity(BaseModel):
     paired_at: datetime
     #: The core's receipt key, pinned at pairing (or on the first authenticated connection).
     receipt_key: str = Field(default="", max_length=64)
+    #: The node protocols the core accepted at the last connection (`initialize` answer): a new
+    #: version installs by itself only when the protocol it speaks is in this range.
+    core_node_protocol: tuple[int, int] | None = None
 
 
 class NodeHome:
@@ -90,6 +93,9 @@ class NodeHome:
     #: Present while the node was stopped on this device (`nox node stop`); only the device
     #: removes it (`nox node resume`).
     stop_file = property(lambda self: self.path / "stop.flag")
+    #: Versions this node installed itself from signed bundles, and `state.json` that names the
+    #: one to run (`nox.node.update`, `installer/start_node.pyw`).
+    app_dir = property(lambda self: self.path / "app")
 
     def ensure(self) -> None:
         created = not self.path.exists()

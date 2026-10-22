@@ -48,6 +48,7 @@ from nox.node.home import NodeHome, NodeIdentity
 from nox.node.keystore import NodeKeyStore
 from nox.node.manifest import GROUPS, NodeManifest, manifest_hash
 from nox.node.receipts import ReceiptVerifier, normalize_arguments
+from nox.node.renewal import RenewalRefusedError, accept_renewed, due, store_certificate
 from nox.node.tools import NodeRefusal, NodeTool
 from nox.security.model import AuditLog
 
@@ -82,6 +83,9 @@ MAX_CONFIRM_CHARS = 1200
 MIN_DECISION_S = 1.5
 #: Consecutive pings from a core that is not stopped after which a dead-man stop lifts.
 DEAD_MAN_RESET_PINGS = 3
+#: How often a connected node looks at its certificate's end, and how long it waits for an answer.
+RENEW_CHECK_S = 3600.0
+RENEW_TIMEOUT_S = 30.0
 
 
 def confirmation_text(tool: str, arguments: dict[str, Any], *, tainted: bool = False) -> str | None:
@@ -150,7 +154,17 @@ class NodeAgent:
         self._ping_interval_s = ping_interval_s
         self.connected = asyncio.Event()
         self.compatible = True
+        #: The core answered that it does not accept this node's protocol (`compatible: false`).
+        self.protocol_refused = False
         self.attempts = 0
+        #: Answers the node waits for (its own requests to the core), by JSON-RPC id.
+        self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._request_seq = 0
+
+    @property
+    def busy(self) -> bool:
+        """A call runs or a question is open: no restart now."""
+        return bool(self._calls) or self._dialogs > 0
 
     # -- the loop --------------------------------------------------------------------------------
 
@@ -255,16 +269,22 @@ class NodeAgent:
             log.error("node.receipt_key_changed")
             return "failed"
         self.compatible = bool(result.get("compatible", False))
+        self.protocol_refused = not self.compatible
+        self._remember_core_protocol(identity, result.get("node_protocol"))
         self.core_killed = bool(result.get("engaged", False))
         if not self.core_killed:
             self.dead_man = False  # the core is back and not stopped
         self._last_core = time.monotonic()
         self._gate.narrowed = set()
-        self.connected.set()
+        if self.compatible:
+            # Only a core that accepts this node counts as connected: a version on trial is
+            # confirmed by nothing less (`nox.node.cli.keep_updated`).
+            self.connected.set()
         self._status("connected" if self.compatible else "update_needed", identity)
         log.info("node.connected", compatible=self.compatible)
         pinger = asyncio.create_task(self._ping(ws))
         watcher = asyncio.create_task(self._watch_local_stop(ws))
+        renewer = asyncio.create_task(self._renew_loop(ws, identity))
         stopper = asyncio.create_task(stop.wait())
         try:
             while True:
@@ -294,9 +314,19 @@ class NodeAgent:
         finally:
             pinger.cancel()
             watcher.cancel()
+            renewer.cancel()
             stopper.cancel()
+            for waiting in self._pending.values():
+                waiting.cancel()
+            self._pending.clear()
             # The connection is gone: nothing keeps running without the core.
             await self._cancel_calls()
+
+    def _groups(self) -> dict[str, list[str]]:
+        """What this device enabled, said outright (the core shows it; it widens nothing): the
+        core cannot infer it from the tool list, which leaves out a narrowed group and every tool
+        above `max_risk`."""
+        return {"groups": sorted(self._gate.manifest.enabled())}
 
     def reload_manifest(self) -> bool:
         """Re-read `node.yaml` when it changed; True when what the node offers changed."""
@@ -360,7 +390,10 @@ class NodeAgent:
         method = message.get("method")
         msg_id = message.get("id")
         if not isinstance(method, str):
-            return None  # an answer to one of our pings, or noise: nothing to do
+            waiting = self._pending.pop(str(msg_id), None) if msg_id is not None else None
+            if waiting is not None and not waiting.done():
+                waiting.set_result(message)
+            return None  # otherwise an answer to one of our pings, or noise: nothing to do
         if method not in p.CORE_TO_NODE:
             await self._reply(ws, msg_id, error=(ERR_METHOD_NOT_FOUND, "not supported"))
             return None
@@ -396,7 +429,9 @@ class NodeAgent:
             if isinstance(groups, list):
                 self._gate.narrow([g for g in groups if isinstance(g, str)][:32])
             await self._reply(
-                ws, msg_id, result={"offered": [t.name for t in self._gate.offered()]}
+                ws,
+                msg_id,
+                result={"offered": [t.name for t in self._gate.offered()], "_nox": self._groups()},
             )
             return None
         if method == p.M_TOOLS_LIST:
@@ -405,7 +440,8 @@ class NodeAgent:
                 if self.compatible
                 else [t for t in self._gate.offered() if t.name == "system.info"]
             )
-            await self._reply(ws, msg_id, result={"tools": [t.describe() for t in offered]})
+            result = {"tools": [t.describe() for t in offered], "_nox": self._groups()}
+            await self._reply(ws, msg_id, result=result)
             return None
         if method == p.M_TOOLS_CALL:
             if len(self._calls) >= MAX_CONCURRENT_CALLS:
@@ -522,6 +558,75 @@ class NodeAgent:
                 self._local_stopped = False
                 self._audit_event("node.local_resume", "local", "ok")
             await asyncio.sleep(LOCAL_STOP_POLL_S)
+
+    def _remember_core_protocol(self, identity: NodeIdentity, offered: Any) -> None:
+        """Keep the range of node protocols the core accepts, for deciding about updates."""
+        if not (
+            isinstance(offered, list)
+            and len(offered) == 2
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in offered)
+            and 0 < offered[0] <= offered[1] <= 1000
+        ):
+            return
+        span = (offered[0], offered[1])
+        if identity.core_node_protocol != span:
+            identity.core_node_protocol = span
+            self._home.save_identity(identity)
+
+    async def _request(
+        self, ws: ClientConnection, method: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Send one request to the core and wait for its answer (TimeoutError after a while)."""
+        self._request_seq += 1
+        msg_id = f"node-{self._request_seq}"
+        waiting: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self._pending[msg_id] = waiting
+        try:
+            await ws.send(
+                json.dumps({"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params})
+            )
+            return await asyncio.wait_for(waiting, RENEW_TIMEOUT_S)
+        finally:
+            self._pending.pop(msg_id, None)
+
+    async def _renew_loop(self, ws: ClientConnection, identity: NodeIdentity) -> None:
+        while True:
+            try:
+                await self.renew_certificate(ws, identity)
+            except (TimeoutError, ConnectionClosed):
+                pass  # tried again in an hour, or on the next connection
+            except Exception as exc:  # noqa: BLE001 - a failed renewal never ends the connection
+                log.warning("node.renew_failed", error=type(exc).__name__)
+            await asyncio.sleep(RENEW_CHECK_S)
+
+    async def renew_certificate(self, ws: ClientConnection, identity: NodeIdentity) -> bool:
+        """Ask for a new certificate once the current one is in its last days (spec C Â§1.2).
+        True when a new one is stored; it is used from the next connection on."""
+        if not due(self._home.cert_file):
+            return False
+        key = self._keystore.load()
+        answer = await self._request(ws, p.M_RENEW, {"csr": self._keystore.csr(key, identity.name)})
+        result = answer.get("result")
+        cert_pem = result.get("cert") if isinstance(result, dict) else None
+        if not isinstance(cert_pem, str):
+            log.warning("node.renew_refused", reason=str(answer.get("error"))[:100])
+            return False
+        try:
+            accept_renewed(
+                cert_pem,
+                ca_file=self._home.ca_file,
+                current_file=self._home.cert_file,
+                key=key,
+                node_id=identity.node_id,
+            )
+        except RenewalRefusedError as exc:
+            log.error("node.renew_bad_certificate", reason=str(exc))
+            self._audit_event("node.cert_renewed", "core", f"refused: {exc}")
+            return False
+        store_certificate(self._home.cert_file, cert_pem)
+        self._audit_event("node.cert_renewed", "core", "ok")
+        log.info("node.certificate_renewed")
+        return True
 
     def _pin_receipt_key(self, identity: NodeIdentity, offered: Any) -> bool:
         """The core's receipt key: pinned at pairing; adopted once over the pinned connection by

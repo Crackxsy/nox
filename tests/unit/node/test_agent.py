@@ -386,3 +386,18 @@ async def test_arguments_that_are_not_an_object_are_refused_even_without_fields(
     session = await _session(listener, rig.node_id)
     answer = await _call(session, "system.info", ["x"], risk="read")
     assert answer["_nox"]["refused"] == "invalid_arguments"
+
+
+async def test_the_node_says_what_it_enabled_even_where_it_lists_nothing(
+    rig: Rig, listener: NodeListener
+) -> None:
+    """The core shows this; it is not derived from the tool list, which leaves out a narrowed
+    group and every tool above `max_risk`."""
+    session = await _session(listener, rig.node_id)
+    listed = await session.client.request("tools/list", {})
+    enabled = set(listed["_nox"]["groups"])
+    assert "shell" not in enabled and {"system", "notify"} <= enabled
+    narrowed = await session.client.request("nox/policy", {"narrow": ["notify"]})
+    # Narrowing takes the tools away, not what the device enabled.
+    assert "notify" in narrowed["_nox"]["groups"]
+    assert "notify.show" not in narrowed["offered"]

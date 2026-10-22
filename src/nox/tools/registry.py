@@ -89,6 +89,9 @@ class ToolSpec:
     #: (the part of its name after the first dot) and `risk`. Only core code supplies one: a
     #: plugin cannot lower the risk of its own calls.
     scope: Scope | None = None
+    #: Awaited before `scope`, bounded by the tool itself: lets state the scope reads settle
+    #: first (a device that has just connected and is still announcing its tools).
+    prepare: Callable[[dict[str, Any]], Awaitable[None]] | None = None
 
 
 class ToolDescription(BaseModel):

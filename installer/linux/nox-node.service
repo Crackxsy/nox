@@ -1,0 +1,66 @@
+# Nox as a node without a screen (a Raspberry Pi in another room, say): a system unit for its own
+# system user nox-node. Written by `scripts/install-linux.sh --node --headless` (@PREFIX@ is
+# replaced by /opt/nox-node); see docs/NODES.md.
+#
+# Hardened like nox.service: the node can write /var/lib/nox-node and nothing else, the installed
+# program in /opt/nox-node is read-only to it, and the command sandbox (bubblewrap) gets exactly
+# the namespaces it needs. The versions the node installs itself live in its own folder
+# (/var/lib/nox-node/node/app), so it can write them: the launcher runs one only after checking it
+# against the signed release with the installed program's code and keys, and every install of the
+# program drops them. With no screen there is nobody to ask, so high-risk calls are refused unless
+# this device allowed `trust_core_for_high` itself (spec C §1.6, a documented residual risk).
+
+[Unit]
+Description=Nox node (headless) - this device as the hands of the Nox at home
+Documentation=https://github.com/Crackxsy/nox/blob/develop/docs/NODES.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nox-node
+Group=nox-node
+Environment=NOX_NODE_HOME=/var/lib/nox-node/node
+Environment=HOME=/var/lib/nox-node
+Environment=PYTHONUNBUFFERED=1
+Environment=NOX_NODE_TRAY=0
+Environment=NOX_CGROUP_DELEGATED=1
+WorkingDirectory=@PREFIX@/current
+# -I: isolated - no current folder, user site or PYTHON* variable decides what is imported.
+ExecStart=@PREFIX@/current/.venv/bin/python -I @PREFIX@/current/installer/start_node.pyw
+# The launcher restarts a crashed node itself; an unpaired or removed node ends with 0 and stays
+# off until `nox-node pair` starts it again.
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+
+Delegate=memory pids
+StateDirectory=nox-node
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/nox-node
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectClock=yes
+ProtectProc=invisible
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @mount
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=user mnt pid net ipc uts
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+UMask=0077
+# IPC objects of the node user go when it stops. ProtectKernelTunables=, ProtectKernelLogs=,
+# ProtectHostname= and ProtectControlGroups= stay off for the reasons nox.service gives: they
+# over-mount /proc or need a namespace bubblewrap itself creates for the sandbox.
+RemoveIPC=yes
+
+[Install]
+WantedBy=multi-user.target

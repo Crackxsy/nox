@@ -33,6 +33,7 @@ export * from './health';
 export * from './home';
 export * from './lan';
 export * from './localai';
+export * from './nodes';
 export * from './presets';
 export * from './views';
 export * from './voicemodel';

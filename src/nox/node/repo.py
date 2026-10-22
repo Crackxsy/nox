@@ -126,6 +126,70 @@ class NodeRepository:
         )
         return int(cursor.rowcount)
 
+    def add_renewed_cert(  # noqa: PLR0913 - the request and its limits
+        self,
+        *,
+        presented_serial: str,
+        new_serial: str,
+        device_id: str,
+        spki_sha256: str,
+        not_after: datetime,
+        when: datetime,
+        not_since: datetime,
+        retry_since: datetime,
+    ) -> bool:
+        """Record a renewed certificate - the one the node presented stays valid until the node
+        first connects with the new one (`retire_older`) or it ends by itself, so a lost answer or
+        a node that cannot use the new certificate yet never locks the node out.
+
+        One transaction (`BEGIN IMMEDIATE`): two renewals at once - two connections, two
+        processes - cannot both pass. Refused (False, nothing changed) when the presented serial
+        is not a valid certificate of this node, or when the node already got a certificate after
+        `not_since` - unless that one was never used (the node still presents the older one: the
+        answer was lost or refused). Then it is replaced, at most once per `retry_since`."""
+        with self._db.transaction() as connection:
+            current = connection.execute(
+                "SELECT issued_at FROM node_certs"
+                " WHERE serial = ? AND device_id = ? AND revoked_at IS NULL",
+                (presented_serial, device_id),
+            ).fetchone()
+            if current is None:
+                return False
+            unused = connection.execute(
+                "SELECT serial, issued_at FROM node_certs"
+                " WHERE device_id = ? AND revoked_at IS NULL AND issued_at > ?",
+                (device_id, current[0]),
+            ).fetchall()
+            if unused:
+                if any(str(row[1]) > _iso(retry_since) for row in unused):
+                    return False
+                connection.executemany(
+                    "UPDATE node_certs SET revoked_at = ?, revoked_reason = 'superseded'"
+                    " WHERE serial = ?",
+                    [(_iso(when), str(row[0])) for row in unused],
+                )
+            elif connection.execute(
+                "SELECT 1 FROM node_certs WHERE device_id = ? AND issued_at > ?",
+                (device_id, _iso(not_since)),
+            ).fetchone():
+                return False
+            connection.execute(
+                "INSERT INTO node_certs (serial, device_id, spki_sha256, issued_at, not_after)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (new_serial, device_id, spki_sha256, _iso(when), _iso(not_after)),
+            )
+        return True
+
+    def retire_older(self, device_id: str, serial: str, *, when: datetime) -> int:
+        """The node connected with `serial`: its older certificates are revoked (`renewed`)."""
+        cursor = self._db.execute(
+            "UPDATE node_certs SET revoked_at = ?, revoked_reason = 'renewed'"
+            " WHERE device_id = ? AND serial != ? AND revoked_at IS NULL"
+            " AND issued_at < (SELECT issued_at FROM node_certs WHERE serial = ?)",
+            (_iso(when), device_id, serial, serial),
+        )
+        return int(cursor.rowcount)
+
     def revoked_serials(self) -> set[str]:
         rows = self._db.fetch_all("SELECT serial FROM node_certs WHERE revoked_at IS NOT NULL")
         return {str(r["serial"]) for r in rows}
@@ -163,6 +227,21 @@ class NodeRepository:
         rows = self._db.fetch_all(
             "SELECT grp FROM node_capabilities"
             " WHERE device_id = ? AND enabled_on_node = 1 AND narrowed = 0",
+            (device_id,),
+        )
+        return {str(r["grp"]) for r in rows}
+
+    def capabilities(self, device_id: str) -> dict[str, tuple[bool, bool]]:
+        """Per group: (enabled on the node as it last said, narrowed on the core)."""
+        rows = self._db.fetch_all(
+            "SELECT grp, enabled_on_node, narrowed FROM node_capabilities WHERE device_id = ?",
+            (device_id,),
+        )
+        return {str(r["grp"]): (bool(r["enabled_on_node"]), bool(r["narrowed"])) for r in rows}
+
+    def narrowed_groups(self, device_id: str) -> set[str]:
+        rows = self._db.fetch_all(
+            "SELECT grp FROM node_capabilities WHERE device_id = ? AND narrowed = 1",
             (device_id,),
         )
         return {str(r["grp"]) for r in rows}

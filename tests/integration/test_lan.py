@@ -57,8 +57,10 @@ DEVICE_SURFACE = frozenset(
         "lan.status",
         "lan.unpair",
         "memory.profile.list",
+        "node.defaults.set",  # with the PIN, always (`nox.node.policy`)
         "node.link",
         "node.list",
+        "node.narrow",  # with the PIN from a device, like node.unpair
         "node.pair.start",
         "node.unpair",
         "personality.get",
