@@ -28,7 +28,7 @@ repository but not the key.
 | `nox release verify <manifest>` | The same check by hand, on any system Nox runs on, optionally with `--file <downloaded file>` (repeatable) to compare files against the manifest. Exit status: 0 verified, 1 refused, 3 not configured. |
 | `nox release keys` | Lists the keys this version trusts and whether each is still valid. |
 | Node self-update (`nox.node.update`, daily, and `nox node update`) | The same library and manifest: the signature against the keys of the node version already installed (none trusted: no update at all), no downgrade below the highest version that ran there, then `nox-app-<tag>.zip` must match the manifest's size and SHA-256 before it is unpacked, trial-started and switched to atomically; a version that does not start is rolled back. Order and details: [NODES.md](NODES.md#updates). |
-| Nox-OS images (later waves) | Use the same library (`nox.release`) and the same manifest. |
+| Nox-OS images (`os/README.md`) | Nox inside the image is installed by `install-linux.sh --image`, checked exactly like a Pi install. The image's own files are listed in a second manifest, `nox-os-manifest.json` (+ `.sig`): same format and key, with `"kind": "os-image"`, signed by `.github/workflows/os-image.yml` in the same environment. Check one with `nox release verify nox-os-manifest.json --kind os-image --file <image>`. A release without the key gets no image at all. |
 | Windows installer | Not yet a release asset built by CI, so it is not in the manifest yet. Once it is, it is listed like the other files and can be checked with `nox release verify --file Nox-Setup-<version>.exe`. The Inno Setup installer cannot check an Ed25519 signature by itself; on Windows, Authenticode code signing is the matching control, and it is not configured yet either (`installer/README.md`). |
 
 Branches and single commits (`nox update develop`, a CI install from a checkout) have no manifest.
@@ -113,6 +113,10 @@ key signed. Or, on a machine that already runs Nox: `nox release verify release-
 - `nox-app-<tag>.zip` is what a node updates itself from: Nox's code and configuration only
   (`scripts/build_app_bundle.py`, deterministic, standard library only), built in the manifest job
   from the clean checkout of the tag, with `BUNDLE.json` naming the library versions it needs.
+- `kind` is absent in a release manifest and `"os-image"` in the Nox-OS image manifest. Every
+  verifier names the kind it expects and refuses the other (`wrong_kind`), so the image manifest -
+  signed by the same key - never stands in for the release manifest, nor the other way round.
+  (Versions from before this field trust no release key, so they verify no manifest at all.)
 - Fields a later version adds are ignored by older verifiers; the known fields are checked
   strictly.
 
@@ -187,6 +191,12 @@ openssl pkcs8 -topk8 -v2 aes-256-cbc -in nox-release-recovery.key -out nox-relea
    gh api -X POST repos/Crackxsy/nox/environments/release-signing/deployment-branch-policies \
      -f name='v*' -f type=tag
    ```
+
+   **Check it before step 5:** `gh api repos/Crackxsy/nox/environments/release-signing` must show
+   your required reviewer and a deployment branch policy of `v*` tags only. GitHub creates an
+   environment the first time a workflow job names it - `release-assets.yml` and `os-image.yml`
+   both do - and such an environment has **no** protection: a secret stored in it would be open
+   to any run that reaches the job. Never store the key before the protection is in place.
 
 5. **The secret** - the CI key only, never the recovery key. Read from the file, so it never
    appears on a command line or in your shell history:

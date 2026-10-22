@@ -66,6 +66,13 @@ def verify(
             "--allow-downgrade", help="Accept a version below --min-version (deliberate)."
         ),
     ] = False,
+    kind: Annotated[
+        str,
+        typer.Option(
+            help="Which manifest this is: release (release-manifest.json) or os-image "
+            "(nox-os-manifest.json, the Nox-OS image files)."
+        ),
+    ] = "release",
     as_json: Annotated[bool, typer.Option("--json", help="Print the result as JSON.")] = False,
 ) -> None:
     """Verify a release manifest's signature and contents. Fails closed."""
@@ -104,6 +111,7 @@ def verify(
             expect_commit=expect_commit,
             min_version=min_version,
             allow_downgrade=allow_downgrade,
+            expect_kind=kind,
         )
         for path in files:
             if not path.is_file():

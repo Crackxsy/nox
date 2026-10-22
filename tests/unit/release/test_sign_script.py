@@ -140,6 +140,33 @@ def test_signs_under_python_isolated_without_site_and_the_result_verifies(
     assert [key.key_id for key in release.manifest.next_keys] == [release_key.trusted.key_id]
 
 
+def test_an_os_image_manifest_is_written_under_its_own_name(
+    release_key: ThrowawayKey, assets: list[Path], tmp_path: Path
+) -> None:
+    result = _run(
+        tmp_path,
+        assets,
+        "--key-stdin",
+        "--kind",
+        "os-image",
+        stdin=_pem(release_key),
+        trust=_trust_list(tmp_path, release_key.trusted),
+    )
+    assert result.returncode == 0, result.stderr
+    out = tmp_path / "signed"
+    assert sorted(p.name for p in out.iterdir()) == [
+        "nox-os-manifest.json",
+        "nox-os-manifest.json.sig",
+    ]
+    release = verify_release(
+        (out / "nox-os-manifest.json").read_bytes(),
+        (out / "nox-os-manifest.json.sig").read_bytes(),
+        trusted_keys=[release_key.trusted],
+        expect_kind="os-image",
+    )
+    assert release.manifest.kind == "os-image"
+
+
 def test_the_layout_is_exactly_what_nox_release_writes(
     release_key: ThrowawayKey, assets: list[Path], tmp_path: Path
 ) -> None:
@@ -198,6 +225,27 @@ def test_the_layout_is_exactly_what_nox_release_writes(
     assert script_node == nox_node
     parsed = parse_manifest(script_node)
     assert (parsed.node_speaks, parsed.deps_changed) == (2, False)
+    # The Nox-OS image manifest (os/README.md): the same layout plus its kind.
+    script_image = script.build_manifest(
+        tag="v0.7.0",
+        commit=COMMIT,
+        files=assets,
+        next_keys=trusted,
+        node_protocol=None,
+        min_node_version=None,
+        created=stamp,
+        kind="os-image",
+    )
+    nox_image = build_manifest(
+        tag="v0.7.0",
+        source_commit=COMMIT,
+        assets=[asset_for_file(p) for p in assets],
+        created=stamp,
+        next_keys=[release_key.trusted],
+        kind="os-image",
+    )
+    assert script_image == nox_image
+    assert parse_manifest(script_image).kind == "os-image"
     assert script.MANIFEST_SCHEMA == manifest_module.MANIFEST_SCHEMA
     assert script.SIGNATURE_SCHEMA == verify_module.SIGNATURE_SCHEMA
     assert script.PROJECT == manifest_module.PROJECT

@@ -44,6 +44,16 @@
 #   ... --node [--headless] --uninstall                         remove the program and the unit;
 #       the node's identity and audit trail stay (remove the device in Nox's Devices page too)
 # Run it again to update; the node also updates itself from signed releases (nox node update).
+#
+# Image mode (os/README.md) - Nox-OS, the flashable Raspberry Pi image, is built with this script
+# inside the image's chroot, so a flashed Pi has exactly the layout an install gives:
+#   install-linux.sh --image --version <tag or commit> [--ui-bundle <file>]
+# The same version choice and signature check, then the release is built and the service enabled -
+# but nothing is started, no health check, no snapshot, and no data, keys or accounts are created
+# (Nox makes its own on the Pi's first start). --ui-bundle: a dashboard package built next to the
+# image, for versions without a release (a signed release always takes the one its manifest names).
+# Refused on a running system. An image carries the core; a node image is not built (yet), so
+# --image does not combine with --node. --version <ref> is NOX_REF, in every mode.
 set -euo pipefail
 umask 022
 
@@ -51,18 +61,35 @@ NODE_MODE=""
 NODE_HEADLESS=""
 NODE_UNINSTALL=""
 NODE_PAIR=""
+IMAGE_MODE=""
+IMAGE_UI_BUNDLE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --node) NODE_MODE=1 ;;
     --headless) NODE_HEADLESS=1 ;;
     --uninstall) NODE_UNINSTALL=1 ;;
     --pair) shift; NODE_PAIR="${1:-}" ;;
-    *) printf 'Unknown option: %s (known: --node --headless --pair <link> --uninstall)\n' "$1" >&2; exit 2 ;;
+    --image) IMAGE_MODE=1 ;;
+    --version) shift; NOX_REF="${1:-}" ;;
+    --ui-bundle) shift; IMAGE_UI_BUNDLE="${1:-}" ;;
+    *) printf 'Unknown option: %s (known: --node --headless --pair <link> --uninstall --image --version <ref> --ui-bundle <file>)\n' "$1" >&2; exit 2 ;;
   esac
   shift
 done
 if [ -z "$NODE_MODE" ] && { [ -n "$NODE_HEADLESS$NODE_UNINSTALL" ] || [ -n "$NODE_PAIR" ]; }; then
   printf '%s\n' "--headless, --pair and --uninstall belong to --node." >&2
+  exit 2
+fi
+if [ -z "$IMAGE_MODE" ] && [ -n "$IMAGE_UI_BUNDLE" ]; then
+  printf '%s\n' "--ui-bundle belongs to --image." >&2
+  exit 2
+fi
+if [ -n "$IMAGE_MODE" ] && [ -n "$NODE_MODE" ]; then
+  printf '%s\n' "--image builds a core image; it does not combine with --node." >&2
+  exit 2
+fi
+if [ -n "$IMAGE_MODE" ] && [ "${NOX_ACTION:-install}" != install ]; then
+  printf '%s\n' "--image only installs; NOX_ACTION does not go with it." >&2
   exit 2
 fi
 
@@ -313,6 +340,9 @@ define sig_reason_wrong_tag \
 define sig_reason_wrong_commit \
   'die Version zeigt auf einen anderen Commit als im signierten Manifest' \
   'the version points to another commit than the signed manifest names'
+define sig_reason_wrong_kind \
+  'das ist nicht das Manifest des Releases (sondern z. B. das des Nox-OS-Images)' \
+  'this is not the manifest of the release (it lists other files, such as the Nox-OS image)'
 define sig_reason_downgrade \
   'älter als die neueste schon angenommene Version %s (Schutz vor Rückstufung; bewusst zurück: nox update <version> --allow-downgrade, oder nox rollback)' \
   'older than %s, the newest version already accepted (rollback protection; to go back on purpose: nox update <version> --allow-downgrade, or nox rollback)'
@@ -369,6 +399,17 @@ define settings_link \
 define step_settings \
   'Grundeinstellungen für einen Server schreiben' \
   'Writing the basic settings for a server'
+
+# Image mode
+define image_running_system \
+  'Der Image-Modus (--image) baut ein Image (in dessen chroot), nicht ein laufendes System. Hier: sudo bash install-linux.sh' \
+  'Image mode (--image) is for building an image (inside its chroot), not for a running system. Here: sudo bash install-linux.sh'
+define image_bundle_missing \
+  'Oberflächen-Paket %s gibt es nicht.' \
+  'Interface package %s does not exist.'
+define image_ready \
+  'Nox %s ist im Image eingerichtet; der Dienst startet beim ersten Einschalten.' \
+  'Nox %s is set up in the image; the service starts when it is first switched on.'
 
 # Switching over
 define step_backup \
@@ -544,6 +585,24 @@ install_service_files() {
   install -m 0644 "$CURRENT/installer/linux/nox.service" /etc/systemd/system/nox.service
   install -m 0755 "$CURRENT/installer/linux/nox-command.sh" /usr/local/bin/nox
   systemctl daemon-reload
+}
+
+#: Image mode's end: the release becomes the current one and the service is enabled for the first
+#: boot. Nothing is started and there is no daemon-reload - an image's chroot has no running
+#: systemd - and nothing of the service's own (keys, certificates, pairings) exists yet.
+image_finish() {
+  switch_to "$release"
+  install -m 0644 "$CURRENT/installer/linux/nox.service" /etc/systemd/system/nox.service
+  install -m 0755 "$CURRENT/installer/linux/nox-command.sh" /usr/local/bin/nox
+  systemctl enable --quiet nox
+  # `nox update` fetches from the project, never from the build machine's copy of the source.
+  "${GIT[@]}" -C "$SRC" remote set-url origin "$REPO_URL"
+  if [ -n "$release_verified" ]; then
+    printf '%s\n' "$MANIFEST_FLOOR" > "$STATE/release-floor"
+  fi
+  # Download caches are of no use on the card; uv and Python stay for `nox update`.
+  rm -rf -- "$PREFIX/.cache"
+  say "$(msg image_ready "$label")"
 }
 
 #: Data back from a snapshot - into a fresh folder, never over the current one: files a newer
@@ -723,6 +782,9 @@ elif mode == "manifest":
     if not isinstance(document, dict) or document.get("schema") != "nox-release-manifest/1" \
             or document.get("project") != "Crackxsy/nox":
         refuse("bad_manifest")
+    # The Nox-OS image manifest is signed by the same key; it never stands in for this one.
+    if document.get("kind", "release") != "release":
+        refuse("wrong_kind")
     version = document.get("version")
     if not isinstance(version, str) or order(version) is None \
             or document.get("tag") != "v" + version:
@@ -1049,6 +1111,11 @@ if [ "$ACTION" = "restore" ]; then
 fi
 
 [ "$ACTION" = "install" ] || fail "$(msg unknown_action "$ACTION")"
+if [ -n "$IMAGE_MODE" ]; then
+  # A booted system has /run/systemd/system; an image's chroot does not.
+  [ ! -d /run/systemd/system ] || fail "$(msg image_running_system)"
+  [ -z "$IMAGE_UI_BUNDLE" ] || [ -f "$IMAGE_UI_BUNDLE" ] || fail "$(msg image_bundle_missing "$IMAGE_UI_BUNDLE")"
+fi
 
 case "$(uname -m)" in
   aarch64|arm64|x86_64) ;;
@@ -1164,7 +1231,8 @@ install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$NOX_HOME_DIR"
 # What it starts runs stacked under a second profile that denies every capability and new user
 # namespaces (like Ubuntu's bwrap-userns-restrict) - on top of bwrap's own capability drop and
 # --disable-userns. Raspberry Pi OS and Debian have no such restriction: nothing is installed there, and
-# leftovers of an earlier install are removed.
+# leftovers of an earlier install are removed. Not in image mode: /proc there is the build machine's,
+# and the image (Raspberry Pi OS) needs no profile.
 nox_bwrap=/usr/lib/nox/bwrap
 nox_profile=/etc/apparmor.d/nox-bwrap
 nox_apt_hook=/etc/apt/apt.conf.d/99nox-bwrap
@@ -1176,7 +1244,7 @@ remove_nox_bwrap() {
   fi
   rm -f "$nox_profile" "$nox_bwrap" "$nox_apt_hook"
 }
-if [ -r "$restrict" ] && [ "$(cat "$restrict")" = "1" ] && [ -x /usr/bin/bwrap ] && command -v apparmor_parser >/dev/null 2>&1; then
+if [ -z "$IMAGE_MODE" ] && [ -r "$restrict" ] && [ "$(cat "$restrict")" = "1" ] && [ -x /usr/bin/bwrap ] && command -v apparmor_parser >/dev/null 2>&1; then
   say "$(msg step_apparmor)"
   remove_nox_bwrap  # also unloads a profile an earlier installer version attached elsewhere
   install -d -m 0755 /usr/lib/nox
@@ -1277,6 +1345,10 @@ else
         || fail "$(msg ui_signed_mismatch)"
       ui_ready=1
     fi
+  elif [ -n "$IMAGE_UI_BUNDLE" ]; then
+    # Built next to the image from the same commit; checked like a download below.
+    cp -- "$IMAGE_UI_BUNDLE" "$work/$asset"
+    ui_ready=1
   elif [ -z "${NOX_SOURCE:-}" ] \
     && "${CURL[@]}" -o "$work/$asset" "$base/$asset" 2>/dev/null \
     && "${CURL[@]}" -o "$work/$asset.sha256" "$base/$asset.sha256" 2>/dev/null; then
@@ -1317,6 +1389,12 @@ YAML
   # Written into a root-owned temp folder and installed with its final owner and mode, so root
   # never writes through a path inside the service user's folder.
   install -m 0600 -o "$SERVICE_USER" -g "$SERVICE_USER" "$work/user.yaml" "$NOX_HOME_DIR/user.yaml"
+fi
+
+if [ -n "$IMAGE_MODE" ]; then
+  image_finish
+  trap - ERR
+  exit 0
 fi
 
 # ---- switch ---------------------------------------------------------------------------------------

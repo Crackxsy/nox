@@ -1,0 +1,24 @@
+# shellcheck shell=bash disable=SC2034  # sourced by pi-gen, which reads these variables
+# Nox-OS: pi-gen settings (os/README.md). os/pi-gen/build.sh copies this file next to its pinned
+# pi-gen checkout and appends what changes per build (image file name, date, and the first user's
+# throwaway build password, which stage-nox replaces by a lock).
+#
+# Raspberry Pi OS Lite, 64-bit: stages 0-2, then Nox's own stage. Nothing here may hold a secret,
+# a key or a password - tests/unit/nox_os/test_image_build.py refuses one.
+IMG_NAME="nox-os"
+PI_GEN_RELEASE="Nox-OS (based on Raspberry Pi OS)"
+RELEASE="trixie"
+STAGE_LIST="/pi-gen/stage0 /pi-gen/stage1 /pi-gen/stage2 /pi-gen/stage-nox"
+TARGET_HOSTNAME="nox"
+# The first user exists so the system has an administrator account once remote maintenance is
+# switched on deliberately (O2: key only, from the dashboard). Its password is locked; no first-boot
+# rename dialog on a device that has no screen.
+FIRST_USER_NAME="nox-admin"
+DISABLE_FIRST_BOOT_USER_RENAME=1
+ENABLE_SSH=0
+PUBKEY_ONLY_SSH=0
+# Nox-OS provisions itself (O3): no cloud-init, and the image ships no seeds for it. (Whoever holds
+# the card can still change it - the boot partition is plain FAT - so physical access is trust.)
+ENABLE_CLOUD_INIT=0
+# The workflow boots the raw image in QEMU before it compresses it itself (xz).
+DEPLOY_COMPRESSION="none"
