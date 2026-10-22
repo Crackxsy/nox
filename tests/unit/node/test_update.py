@@ -237,11 +237,27 @@ def test_an_older_manifest_is_refused_as_a_replay(tmp_path: Path) -> None:
 def test_a_month_without_a_newer_manifest_is_reported(tmp_path: Path) -> None:
     key = Key()
     seen = dt.datetime(2026, 9, 1, tzinfo=dt.UTC)
-    assert updater(tmp_path, release(key, "0.5.0"), [key], now=seen).check().status == "up_to_date"
-    later = updater(tmp_path, release(key, "0.5.0"), [key], now=seen + dt.timedelta(days=45))
+    made = dt.datetime(2026, 8, 30, tzinfo=dt.UTC)
+    first = updater(tmp_path, release(key, "0.5.0", created=made), [key], now=seen)
+    assert first.check().status == "up_to_date"
+    later_clock = seen + dt.timedelta(days=45)
+    later = updater(tmp_path, release(key, "0.5.0", created=made), [key], now=later_clock)
     later.check()
     assert later.stale_days() == 45
-    assert updater(tmp_path, release(key, "0.5.0"), [key], now=seen).stale_days() is None
+    assert first.stale_days() is None
+
+
+def test_a_manifest_from_the_future_is_refused(tmp_path: Path) -> None:
+    """A `created` far ahead would block every real release after it: refused, not stored."""
+    key = Key()
+    now = dt.datetime(2026, 10, 22, tzinfo=dt.UTC)
+    ahead = release(key, "0.5.1", created=now + dt.timedelta(days=2))
+    up = updater(tmp_path, ahead, [key], now=now)
+    check = up.check()
+    assert check.status == "refused" and "bad_created" in check.message
+    assert up.state().newest_created is None
+    almost = release(key, "0.5.1", created=now + dt.timedelta(hours=20))  # a clock a bit behind
+    assert updater(tmp_path, almost, [key], now=now).check().status == "available"
 
 
 def test_the_same_version_is_up_to_date(tmp_path: Path) -> None:
@@ -652,3 +668,35 @@ def test_the_real_bundle_builds_deterministically_and_installs(tmp_path: Path) -
     result = up.apply(check, confirmed=True)
     assert result.status == "installed", result.message
     verify_folder(tmp_path / "app" / "releases" / version, [key.trusted])
+
+
+def test_a_release_folder_under_another_name_does_not_pass(
+    installed: tuple[Path, Key], tmp_path: Path
+) -> None:
+    folder, key = installed
+    renamed = folder.with_name("0.5.9")
+    folder.rename(renamed)
+    with pytest.raises(BundleError, match="named after"):
+        verify_folder(renamed, [key.trusted])
+
+
+def test_a_link_inside_a_release_folder_does_not_pass(installed: tuple[Path, Key]) -> None:
+    folder, key = installed
+    target = folder / "nox" / "__init__.py"
+    link = folder / "nox" / "linked.py"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("this account cannot create symbolic links (Windows without developer mode)")
+    with pytest.raises(BundleError, match="link"):
+        verify_folder(folder, [key.trusted])
+    link.unlink()
+    original = target.read_bytes()
+    target.unlink()
+    try:
+        target.symlink_to(folder / "config" / "defaults.yaml")
+    except OSError:  # pragma: no cover - creatable once, creatable twice
+        target.write_bytes(original)
+        return
+    with pytest.raises(BundleError, match="link"):
+        verify_folder(folder, [key.trusted])

@@ -209,7 +209,8 @@ def test_the_trial_start_runs_isolated_in_the_new_copy(
     monkeypatch.setattr(update.subprocess, "run", fake_run)
     monkeypatch.setenv("PYTHONHOME", "elsewhere")
     assert update._default_smoke(tmp_path, "python-here") == "0.5.1"  # noqa: SLF001
-    assert seen["argv"][:2] == ["python-here", "-I"]  # type: ignore[index]
+    # Isolated, and no bytecode written into the folder the launcher checks file by file.
+    assert seen["argv"][:3] == ["python-here", "-I", "-B"]  # type: ignore[index]
     assert seen["cwd"] == str(tmp_path)
     assert not any(k.upper().startswith("PYTHON") for k in seen["env"])  # type: ignore[attr-defined]
 
@@ -229,3 +230,72 @@ def test_one_tray_per_node_and_it_ends_with_its_node(tmp_path: Path) -> None:
     again.close()
     assert parent_alive(str(os.getpid())) and parent_alive(None)
     assert not parent_alive("999999999")
+
+
+class _Core:
+    """A core that answers the hello and then stays quiet."""
+
+    def __init__(self, result: dict[str, object]) -> None:
+        self._answer: dict[str, object] | None = {"jsonrpc": "2.0", "id": 1, "result": result}
+
+    async def send(self, _data: str) -> None:
+        return None
+
+    async def recv(self) -> str:
+        import json
+
+        if self._answer is None:
+            await asyncio.sleep(3600)
+        answer, self._answer = self._answer, None
+        return json.dumps(answer)
+
+
+@pytest.mark.parametrize("compatible", [True, False])
+async def test_only_a_core_that_accepts_this_node_counts_as_connected(
+    tmp_path: Path, compatible: bool
+) -> None:
+    """H1 on the node: the protocol range the core accepts is kept for update decisions, and a
+    core that refuses this node's protocol never confirms a version on trial."""
+    from datetime import UTC, datetime
+
+    from nox.node.agent import NodeAgent
+    from nox.node.gate import NodeGate
+    from nox.node.home import NodeIdentity
+    from nox.node.keystore import NodeKeyStore
+    from nox.node.manifest import NodeManifest
+    from nox.node.tools import default_tools
+
+    home = NodeHome(tmp_path / "h")
+    home.ensure()
+    identity = NodeIdentity(
+        node_id="a" * 32,
+        name="Laptop",
+        core_host="127.0.0.1",
+        core_port=1,
+        node_port=1,
+        ca_fingerprint="b" * 64,
+        paired_at=datetime.now(UTC),
+    )
+    home.save_identity(identity)
+    result = {
+        "node_id": identity.node_id,
+        "core_id": identity.ca_fingerprint,
+        "compatible": compatible,
+        "node_protocol": [2, 3],
+    }
+    agent = NodeAgent(
+        home,
+        NodeKeyStore(tmp_path / "k", None),
+        NodeGate(default_tools(), NodeManifest(), None),
+        None,
+        ping_interval_s=3600,
+    )
+    stop = asyncio.Event()
+    session = asyncio.create_task(agent._session(_Core(result), identity, stop))  # type: ignore[arg-type]  # noqa: SLF001
+    await asyncio.sleep(0.2)
+    assert agent.connected.is_set() is compatible
+    assert agent.protocol_refused is not compatible
+    saved = home.load_identity()
+    assert saved is not None and saved.core_node_protocol == (2, 3)
+    stop.set()
+    await asyncio.wait_for(session, 5)

@@ -71,9 +71,14 @@ _VERSION = re.compile(r'^__version__\s*=\s*"(\d+)\.(\d+)\.(\d+)[^"]*"', re.MULTI
 _VERSION_DIR = re.compile(
     r"^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20})*)?$"
 )
-#: Ended from outside, not crashed: Ctrl+C / console close, logoff and shutdown, `schtasks /End`.
-_TERMINATED = {130, 143, 0xC000013A, 0x40010004, 0x41306}
+#: Ended from outside, not crashed: SIGTERM, SIGINT, SIGHUP (a stop, Ctrl+C, a closed session -
+#: as a negative return code, or 128+n from a shell), and on Windows a closed console, logoff or
+#: shutdown and `schtasks /End`. Anything else - SIGKILL (the OOM killer), SIGABRT, SIGSEGV, any
+#: other non-zero code - is a crash.
+_TERMINATED = {-15, -2, -1, 143, 130, 129, 0xC000013A, 0x40010004, 0x41306}
 _CREATE_NO_WINDOW = 0x08000000
+#: How long a state.lock is waited for (another launcher, node or CLI holds it).
+LOCK_WAIT_S = 120.0
 
 
 def node_home() -> Path:
@@ -109,7 +114,17 @@ def _locked(root: Path) -> Iterator[None]:
             import msvcrt  # noqa: PLC0415
 
             handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            pause, waited = 0.05, 0.0
+            while True:  # LK_LOCK gives up after ~10 s: retry without a limit that short
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if waited >= LOCK_WAIT_S:
+                        raise
+                    time.sleep(pause)
+                    waited += pause
+                    pause = min(pause * 2, 1.0)
             try:
                 yield
             finally:
@@ -206,12 +221,18 @@ def choose(base: Path, root: Path, *, trial: bool = True) -> tuple[Path, str | N
     """The copy to start, and the pending version it tries (None when it is not a trial).
     `trial=False` (a one-off command) never starts a trial."""
     floor = version_of(base) or (0, 0, 0)
+    # Checking a folder takes a moment (every file is hashed): done without the lock, then the
+    # result is applied under it only if the state still names the same versions.
+    seen = read_state(root)
+    pending, current = seen.get("pending"), seen.get("current")
+    pending_ok = pending is None or _candidate(root, pending, floor) is not None
+    current_folder = _candidate(root, current, floor) if current is not None else None
     with editing(root) as state:
-        pending, current = state.get("pending"), state.get("current")
-        if pending is not None and _candidate(root, pending, floor) is None:
+        if (state.get("pending"), state.get("current")) != (pending, current):
+            return base, None  # changed meanwhile (an update was just installed): next start
+        if not pending_ok:
             state.update(pending=None, failures=0)  # broken, unsigned, or not newer than the base
             pending = None
-        current_folder = _candidate(root, current, floor) if current is not None else None
         if current is not None and current_folder is None:
             state["current"] = None
     if trial and isinstance(pending, str):
@@ -281,10 +302,11 @@ def _run_child(app: Path) -> int:
 
 
 def crashed(code: int, root: Path) -> bool:
-    """A real crash: non-zero, not ended from outside, and the node did not end in order."""
-    if code in (0, RESTART_EXIT_CODE, TRIAL_FAILED_EXIT_CODE) or code < 0:
+    """A real crash: not 0, not a restart, not ended from outside - and, for a positive code,
+    the node did not mark an orderly end. A process killed by any other signal crashed."""
+    if code in (0, RESTART_EXIT_CODE, TRIAL_FAILED_EXIT_CODE) or code in _TERMINATED:
         return False
-    return code not in _TERMINATED and not (root / CLEAN_EXIT).exists()
+    return code < 0 or not (root / CLEAN_EXIT).exists()
 
 
 def supervise(

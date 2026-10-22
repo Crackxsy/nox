@@ -294,9 +294,10 @@ begin
   Result := '';
   if IsAdminInstallMode() then
     Result := CustomMessage('NodeNoAdminInstall')
-  else if IsAdmin() and RegQueryDWordValue(HKLM64,
-      'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System', 'EnableLUA', Lua) and
-      (Lua <> 0) then
+  else if IsAdmin() and ((not RegQueryDWordValue(HKLM64,
+      'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System', 'EnableLUA', Lua)) or
+      (Lua <> 0)) then
+    { No EnableLUA value counts as UAC on: that is Windows' own default. }
     Result := CustomMessage('NodeNotElevated');
 end;
 

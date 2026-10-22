@@ -135,8 +135,19 @@ means release signing is not configured yet. When no newer signed release inform
 for more than 30 days, `nox node status` and a notice say so: updates may be held back.
 
 The certificate (30 days) renews itself over the connection from day 20, for the same key, at
-most once in 12 hours; the old certificate is revoked. A node that was off for longer than 30
-days pairs again.
+most once in 12 hours. The old certificate stays valid until the node first connects with the new
+one (or it ends by itself): an answer lost on the way, or a node whose clock is behind (up to an
+hour is accepted), keeps working and asks again 10 minutes later. A node that was off for longer
+than 30 days pairs again.
+
+Accepted residual risks of self-updates, stated plainly:
+
+- A process that a taken-over node account leaves running inside the node's service (headless
+  Linux) can change a release folder between the launcher's check and Python importing a module
+  later. It survives the launcher's own restarts of the node, not a `systemctl stop`, a reboot or
+  a reinstall.
+- A taken-over node account can make the node keep running an *older* signed release that is
+  still newer than the installed program (by editing `state.json`) until the next install.
 
 ## What the node keeps, and where
 

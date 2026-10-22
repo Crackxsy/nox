@@ -45,6 +45,7 @@ import shutil
 import ssl
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -90,9 +91,12 @@ MAX_BUNDLE_BYTES = 64 * 1024 * 1024
 BAD_FOR_DAYS = 7
 #: No newer signed manifest for this long: say so (a frozen mirror, or simply no releases).
 STALE_AFTER_DAYS = 30
+#: How long a state.lock is waited for (another launcher, node or CLI holds it).
+LOCK_WAIT_S = 120.0
 _VERSION_DIR = re.compile(
     r"^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20})*)?$"
 )
+_CREATED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _PATH = re.compile(r"^(?:latest/download|download/v[0-9A-Za-z.-]{1,60})/[A-Za-z0-9._+-]{1,200}$")
 
 Status = Literal[
@@ -186,7 +190,17 @@ def state_lock(root: Path) -> Iterator[None]:
             import msvcrt  # noqa: PLC0415
 
             handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            pause, waited = 0.05, 0.0
+            while True:  # LK_LOCK gives up after ~10 s: retry without a limit that short
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if waited >= LOCK_WAIT_S:
+                        raise
+                    time.sleep(pause)
+                    waited += pause
+                    pause = min(pause * 2, 1.0)
             try:
                 yield
             finally:
@@ -322,6 +336,16 @@ def _default_smoke(app: Path, python: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def _stamp(text: str) -> dt.datetime | None:
+    """A manifest's `created` (`YYYY-MM-DDTHH:MM:SSZ`, zero-padded, UTC) as a time; None else."""
+    if not _CREATED.match(text):
+        return None
+    try:
+        return dt.datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.UTC)
+    except ValueError:
+        return None
+
+
 def _refused(code: str, detail: object, version: str = "") -> UpdateCheck:
     return UpdateCheck("refused", f"update refused ({code}): {str(detail)[:300]}", version)
 
@@ -389,14 +413,20 @@ class NodeUpdater:
         except OSError as exc:
             return _refused("unreachable", type(exc).__name__)
         found = release.manifest
-        # Freshness: a validly signed but older manifest is a replay (or a frozen mirror).
-        if state.newest_created and found.created < state.newest_created:
+        # Freshness: a validly signed but older manifest is a replay (or a frozen mirror); one
+        # "created" more than a day ahead of this clock cannot be judged and would block every
+        # later one, so it is refused too.
+        created = _stamp(found.created)
+        if created is None or created > self._clock() + dt.timedelta(days=1):
+            return _refused("bad_created", f"the manifest's time {found.created[:40]!r} is wrong")
+        newest = _stamp(state.newest_created) if state.newest_created else None
+        if newest is not None and created < newest:
             return _refused(
                 "stale",
                 f"the release information ({found.created}) is older than what this node has "
                 f"already seen ({state.newest_created})",
             )
-        if found.created != state.newest_created:
+        if newest is None or created > newest:
             with self._editing() as editing:
                 editing.newest_created = found.created
                 editing.newest_seen_at = self._clock().isoformat()

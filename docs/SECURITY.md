@@ -760,7 +760,16 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   program (`/opt/nox-node`) is root's. The launcher, the tray and the trial start run Python
   isolated (`-I`, a trusted working folder, no `PYTHON*` variables); nothing elevated runs code
   from the user's folders (Windows Setup runs it as the original user and refuses node mode when
-  elevated on purpose).
+  elevated on purpose). **Accepted residual risks:** (a) a process a taken-over node account
+  leaves running in the node's service cgroup (headless Linux) can change a release folder
+  between the launcher's check and a later lazy import - surviving the launcher's own restarts,
+  not `systemctl stop`, a reboot or a reinstall; (b) a taken-over node account can pin an older
+  signed release that is still newer than the installed program via `state.json` until the next
+  install.
+- **Certificate renewal never strands a node:** the old certificate stays valid until the node
+  first connects with the new one (then it is revoked) or ends by itself; a lost answer or a
+  clock behind by more than an hour is retried after 10 minutes. Renewals are recorded in one
+  database transaction under a per-node lock: concurrent requests get at most one certificate.
 - **Residual risk, stated plainly:** "local" means the logged-in user. Malware running as that
   user with full user rights can read that user's keyring and files - the node key, the
   confirmation key - and act as the node towards the core within what the node may do. Nox's

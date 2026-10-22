@@ -142,8 +142,20 @@ keine neuere signierte Release-Information gesehen, sagen das `nox node status` 
 Updates könnten zurückgehalten werden.
 
 Das Zertifikat (30 Tage) erneuert sich ab Tag 20 über die Verbindung, für denselben Schlüssel,
-höchstens alle 12 Stunden; das alte wird widerrufen. Ein Node, der länger als 30 Tage aus war,
-wird neu gekoppelt.
+höchstens alle 12 Stunden. Das alte bleibt gültig, bis der Node sich zum ersten Mal mit dem neuen
+verbindet (oder es von selbst endet): Geht die Antwort unterwegs verloren oder geht die Uhr des
+Nodes nach (bis zu einer Stunde wird angenommen), arbeitet er weiter und fragt 10 Minuten später
+erneut. Ein Node, der länger als 30 Tage aus war, wird neu gekoppelt.
+
+Bewusst hingenommene Restrisiken der Selbst-Updates:
+
+- Ein Prozess, den ein übernommenes Node-Konto im Dienst des Nodes weiterlaufen lässt (Linux ohne
+  Bildschirm), kann einen Release-Ordner zwischen der Prüfung des Starters und einem späteren
+  Python-Import ändern. Das übersteht die Neustarts durch den Starter, nicht aber
+  `systemctl stop`, einen Neustart des Geräts oder eine Neuinstallation.
+- Ein übernommenes Node-Konto kann den Node bis zur nächsten Installation auf einem *älteren*
+  signierten Release halten, das noch neuer als das installierte Programm ist (über
+  `state.json`).
 
 ## Was der Node speichert, und wo
 

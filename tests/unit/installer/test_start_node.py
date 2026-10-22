@@ -149,7 +149,7 @@ def test_one_crash_is_not_enough(base: Path, root: Path, signed: set[str]) -> No
     assert (state(root).pending, state(root).failures) == ("0.5.1", 1)
 
 
-@pytest.mark.parametrize("code", [-15, -9, 130, 143, 0xC000013A, 0x40010004])
+@pytest.mark.parametrize("code", [-15, -2, -1, 130, 143, 0xC000013A, 0x40010004])
 def test_an_end_from_outside_is_no_crash(
     base: Path, root: Path, signed: set[str], code: int
 ) -> None:
@@ -304,3 +304,53 @@ def test_the_node_process_starts_isolated_in_its_own_copy(
     assert cwd == str(tmp_path)
     assert env["NOX_NODE_APP"] == str(tmp_path)
     assert not any(k.upper().startswith("PYTHON") for k in env)
+
+
+@pytest.mark.parametrize("code", [-9, -6, -11, 1])
+def test_a_kill_an_abort_a_segfault_or_an_error_is_a_crash(
+    base: Path, root: Path, signed: set[str], code: int
+) -> None:
+    """SIGKILL (the OOM killer), SIGABRT, SIGSEGV, exit 1: a pending version that ends that way
+    twice is rolled back; and the launcher never reports such an end as an orderly one."""
+    new = release(root, "0.5.1", signed)
+    UpdateState(pending="0.5.1").save(root / "state.json")
+    started: list[Path] = []
+    assert _supervise(base, root, [code, code, 0], started) == 0
+    assert started == [new, new, base]
+    assert state(root).pending is None and "0.5.1" in state(root).bad
+
+
+@pytest.mark.parametrize("code", [-9, -11])
+def test_a_base_that_keeps_getting_killed_ends_the_launcher_with_an_error(
+    base: Path, root: Path, code: int
+) -> None:
+    """Exit non-zero, so systemd's Restart=on-failure starts it again (with its own pause)."""
+    assert (
+        launcher.supervise(
+            base, root, run_child=lambda _app: code, sleep=lambda _s: None, clock=lambda: 1.0
+        )
+        == 1
+    )
+
+
+def test_sigterm_is_an_orderly_end_and_the_launcher_exits_zero(base: Path, root: Path) -> None:
+    assert launcher.supervise(base, root, run_child=lambda _app: -15, sleep=lambda _s: None) == 0
+
+
+def test_a_change_while_checking_is_applied_at_the_next_start(
+    base: Path, root: Path, signed: set[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Folders are checked without the lock; if the state changed meanwhile, the base runs now
+    and the new state is judged at the next start."""
+    release(root, "0.5.1", signed)
+    release(root, "0.5.2", signed)
+    UpdateState(pending="0.5.1").save(root / "state.json")
+    real = launcher.verified
+
+    def racing(folder: Path) -> bool:
+        UpdateState(pending="0.5.2").save(root / "state.json")  # an update was just installed
+        return bool(real(folder))
+
+    monkeypatch.setattr(launcher, "verified", racing)
+    assert launcher.choose(base, root) == (base, None)
+    assert state(root).pending == "0.5.2"
