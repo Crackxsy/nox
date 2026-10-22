@@ -123,7 +123,9 @@ an Nox selbst bestätigt und du hast das am Gerät erlaubt: `nox node allow trus
   `.md`-Datei wird abgelehnt, wenn sie irgendetwas enthält, das eine Notiz-App ausführen könnte -
   die Wörter `dataviewjs`, `js-engine`, `templater` oder `meta-bind-js`, Templater `<%`, inline
   `` `$= ``, `<script`, `javascript:` -, egal wo es steht. Eine Notiz, die diese Plugin-Wörter
-  nur erwähnt, kann Nox deshalb nicht schreiben. Beim Anhängen zählt die ganze Datei.
+  nur erwähnt, kann Nox deshalb nicht schreiben. Nox schreibt nur Notizen, deren Codeblöcke
+  gängige Sprachen nutzen (Python, JavaScript, Shell, JSON, Mermaid, ...) oder keine - ein Block
+  für ein Plugin (`dataview`, `jsx`, ...) wird abgelehnt. Beim Anhängen zählt die ganze Datei.
 - **Dein Notizen-Tresor:** `nox node allow files --folder` lehnt einen Ordner ab, der ein
   Repository oder ein App-Arbeitsbereich ist oder darin liegt. Erlaube einen einfachen Ordner
   daneben - etwa `Nox` neben dem Tresor - und verschiebe, was Nox geschrieben hat, selbst hinein.

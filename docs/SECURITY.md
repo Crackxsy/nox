@@ -840,7 +840,12 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   final path's parents **up to the drive root**, so a repository or vault around the allowed
   folder counts too; `nox node allow files --folder` refuses such a folder up front. `.md` text is
   checked without parsing Markdown (a parser that differs from the note app's is a bypass): after
-  `html.unescape`, NFKC and case folding it is refused when it contains any of `dataviewjs`,
+  `html.unescape`, NFKC and case folding, every run of three or more backticks or tildes - wherever
+  it stands - must name no language or one of `INERT_FENCE_LANGUAGES` (an allowlist of common
+  languages: text, Markdown, Python, shells, JSON/YAML/TOML/INI, XML/HTML/CSS, JS/TS, SQL, the C
+  family, Go, Rust, Kotlin, Swift, PHP, Ruby, diff, CSV, Mermaid, math/LaTeX); any other name
+  could be a plugin's runnable block and is refused. As a further layer it is refused when it
+  contains any of `dataviewjs`,
   `dataview-js`, `js-engine`, `templater`, `meta-bind-js`, `<%`, `<script`, `javascript:`,
   `vbscript:`, `<iframe`, `<object`, `<embed`, inline Dataview JS (`$=` or `=this.` after a
   backtick or tilde run), `%>` with Templater's `tp.`, or an `on...=` handler in raw HTML -

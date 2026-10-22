@@ -133,7 +133,7 @@ async def test_markdown_with_code_for_a_note_app_is_refused(
 
 
 async def test_ordinary_markdown_is_written(world: dict[str, Path]) -> None:
-    text = "# Einkauf\n- Tomaten\n- Kaffee\n\n```dataview\nLIST FROM #einkauf\n```\n"
+    text = "# Einkauf\n- Tomaten\n- Kaffee\n\n```python\nsumme = 3\n```\n"
     assert (await _write(world, "notes/einkauf.md", text))["ok"] is True
 
 
@@ -263,7 +263,8 @@ async def test_every_markdown_spelling_of_runnable_code_is_refused(
     [
         "```python\nprint('hallo')\n```\n",
         "~~~js\nconst x = 1\n~~~\n",
-        "```dataview\nTABLE file.name FROM #mathe\n```\n",
+        "```mermaid\ngraph TD; A-->B\n```\n",
+        "```\nkein Name\n```\n",
         "Ein `inline code` und ein Preis von 5 $.",
     ],
 )
@@ -307,3 +308,42 @@ def test_the_markdown_check_is_position_independent() -> None:
     for prefix in ("", "> ", "- ", "1. ", "        ", "> - ", "\t"):
         assert markdown_runs_code(f"Text\n{prefix}```dataviewjs\n{prefix}x\n{prefix}```\n")
     assert not markdown_runs_code("```python\nprint(1)\n```\n~~~js\nlet a = 1\n~~~\n")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "```jsx\nreturn <div/>\n```\n",
+        "```tp-run\nx\n```\n",
+        "```datacore\nreturn 1\n```\n",
+        "```dataview\nLIST FROM #einkauf\n```\n",
+        "```meta-bind-js\nx\n```\n",
+        "```{.dataviewjs}\nx\n```\n",
+        "```  DataviewJS\nx\n```\n",
+        "> ```eigenesplugin\n> x\n> ```\n",
+        "- ~~~eigenesplugin\n  x\n  ~~~\n",
+        "Text ````  {.irgendwas} mehr",
+        "```python:titel\nx\n```\n",
+    ],
+)
+async def test_a_code_block_in_an_unknown_language_is_refused(
+    world: dict[str, Path], text: str
+) -> None:
+    assert await _refused(world, "notes/plan.md", text) == "content_refused"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "```python\nx = 1\n```\n",
+        "~~~js\nlet a = 1\n~~~\n",
+        "```mermaid\ngraph TD; A-->B\n```\n",
+        "```\nohne Sprache\n```\n",
+        "> ```bash\n> ls\n> ```\n",
+        "```{.python}\nx\n```\n",
+    ],
+)
+async def test_code_blocks_in_common_languages_are_written(
+    world: dict[str, Path], text: str
+) -> None:
+    assert (await _write(world, "notes/code.md", text))["ok"] is True

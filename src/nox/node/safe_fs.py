@@ -62,6 +62,7 @@ __all__ = [
     "list_folder",
     "open_existing",
     "open_new",
+    "INERT_FENCE_LANGUAGES",
     "content_refusal",
     "marked_above",
     "markdown_runs_code",
@@ -318,14 +319,72 @@ _INLINE_JS = re.compile(r"[`~]+\s*(\$=|=this\.)")
 _TEMPLATER_API = re.compile(r"\btp\.")
 #: An event handler in raw HTML (`<img onerror=...>`).
 _HANDLER = re.compile(r"<[a-z][^>]*\bon\w+\s*=", re.S)
+#: Every run of three or more backticks or tildes and the info word after it (spaces, an
+#: optional `{` and `.` skipped) - wherever it stands, no Markdown parsing.
+_FENCE_INFO = re.compile(r"(`{3,}|~{3,})[ \t]*\{?[ \t]*\.?([^\s`~}]*)")
+#: Code-block languages no note app runs: a fence may name only these (or nothing). Any other
+#: name could be a plugin's runnable block (Dataview JS, JS Engine, Templater, Datacore, ...),
+#: and the list of those can never be complete.
+INERT_FENCE_LANGUAGES = frozenset(
+    {
+        "text",
+        "plaintext",
+        "txt",
+        "md",
+        "markdown",
+        "python",
+        "py",
+        "bash",
+        "sh",
+        "shell",
+        "powershell",
+        "ps1",
+        "bat",
+        "json",
+        "yaml",
+        "yml",
+        "toml",
+        "ini",
+        "xml",
+        "html",
+        "css",
+        "js",
+        "javascript",
+        "ts",
+        "typescript",
+        "sql",
+        "java",
+        "c",
+        "cpp",
+        "csharp",
+        "cs",
+        "go",
+        "rust",
+        "kotlin",
+        "swift",
+        "php",
+        "ruby",
+        "diff",
+        "csv",
+        "mermaid",
+        "math",
+        "latex",
+        "tex",
+    }
+)
 
 
 def markdown_runs_code(text: str) -> bool:
     """Whether Markdown carries anything a note app might run - after HTML entities are decoded,
-    NFKC applied and case folded: any of `_MD_TOKENS` anywhere, inline Dataview JS (`$=` or
-    `=this.` after a backtick or tilde run), `%>` together with Templater's `tp.`, or an
-    `on...=` handler in raw HTML. Fail closed, wherever it stands."""
+    NFKC applied and case folded: a run of three or more backticks or tildes followed by a
+    language outside `INERT_FENCE_LANGUAGES` (an allowlist), any of `_MD_TOKENS` anywhere,
+    inline Dataview JS (`$=` or `=this.` after a backtick or tilde run), `%>` together with
+    Templater's `tp.`, or an `on...=` handler in raw HTML. Fail closed, wherever it stands."""
     body = unicodedata.normalize("NFKC", html.unescape(text)).casefold()
+    for fence in _FENCE_INFO.finditer(body):
+        language = fence.group(2)
+        if language and language not in INERT_FENCE_LANGUAGES:
+            return True  # a code block in a language that is not known to be inert
     if any(token in body for token in _MD_TOKENS):
         return True
     if _INLINE_JS.search(body) or _HANDLER.search(body):
