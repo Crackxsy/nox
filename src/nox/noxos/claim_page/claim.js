@@ -33,9 +33,12 @@
     if (!data.window_open) { state(t('closed')); $('form').hidden = true; return; }
     state(t('minutes').replace('{minutes}', String(Math.max(1, Math.round((data.seconds_left || 60) / 60)))));
     $('code-hint').textContent = t(data.code_on_card ? 'code_hint_card' : 'code_hint_device');
-    $('pin-fields').hidden = !data.needs_pin;
-    $('passphrase-fields').hidden = !data.needs_passphrase;
-    $('security').hidden = !(data.needs_pin || data.needs_passphrase);
+    // Kept by the setup portal: shown as such, and the claimant may set others (optional then).
+    $('pin-fields').hidden = !(data.needs_pin || data.staged_pin);
+    $('passphrase-fields').hidden = !(data.needs_passphrase || data.staged_passphrase);
+    $('pin-staged').hidden = !data.staged_pin;
+    $('passphrase-staged').hidden = !data.staged_passphrase;
+    $('security').hidden = $('pin-fields').hidden && $('passphrase-fields').hidden;
     if (data.ca_fingerprint) { $('fp').textContent = data.ca_fingerprint; $('fp-box').hidden = false; }
     $('form').hidden = false;
   }
@@ -80,12 +83,12 @@
     var code = $('code').value.trim();
     if (code.replace(/[\s-]/g, '').length < 8) problems.push(['code', 'code']);
     var body = { code: code, name: $('name').value.trim(), default_name: guessName() };
-    if (info && info.needs_pin) {
+    if (info && (info.needs_pin || $('pin').value)) {
       if ($('pin').value.length < (info.min_pin || 6)) problems.push(['pin', 'pin_short']);
       else if ($('pin').value !== $('pin2').value) problems.push(['pin2', 'pin_mismatch']);
       body.pin = $('pin').value;
     }
-    if (info && info.needs_passphrase) {
+    if (info && (info.needs_passphrase || $('passphrase').value)) {
       if ($('passphrase').value.length < (info.min_passphrase || 12)) problems.push(['passphrase', 'passphrase_short']);
       else if ($('passphrase').value !== $('passphrase2').value) problems.push(['passphrase2', 'passphrase_mismatch']);
       body.passphrase = $('passphrase').value;

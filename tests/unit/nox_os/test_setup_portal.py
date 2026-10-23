@@ -106,6 +106,7 @@ def post(portal: Any, fields: dict[str, str], *, headers: dict[str, str] | None 
 
 
 GOOD = {
+    "claim_code": CODE,
     "network": SSID,
     "psk": PSK,
     "pin": PIN,
@@ -155,6 +156,8 @@ def test_a_good_form_writes_one_request_for_root_and_shows_the_next_step(
     assert request_file == {
         "v": 1,
         "wifi": {"ssid": SSID, "psk": PSK, "hidden": False},
+        "claim_code": CODE,
+        "peer": "127.0.0.1",
         "pin": PIN,
         "passphrase": PASSPHRASE,
     }
@@ -184,6 +187,8 @@ def test_the_cable_needs_no_wifi_and_an_open_network_no_password(portal: Any, st
         ({"pin2": "246802"}, "pin2"),
         ({"passphrase": "too short", "passphrase2": "too short"}, "passphrase"),
         ({"passphrase2": "another long passphrase"}, "passphrase2"),
+        ({"claim_code": ""}, "claim_code"),
+        ({"claim_code": "ABC"}, "claim_code"),
     ],
 )
 def test_a_bad_form_writes_nothing_and_names_the_field(
@@ -195,6 +200,25 @@ def test_a_bad_form_writes_nothing_and_names_the_field(
     assert f'href="#{field}"' in page and 'role="alert"' in page
     assert 'aria-invalid="true"' in page
     assert PSK not in page and PASSPHRASE not in page  # secrets are never sent back
+
+
+def test_the_claim_code_comes_first_filled_in_when_the_device_made_it(
+    portal: Any, state: Any
+) -> None:
+    _, _, page = request(portal, "GET", "/")
+    assert f'id="claim_code" name="claim_code" value="{CODE}"' in page
+    assert page.index('id="claim_code"') < page.index('name="network"')
+    state.claim_code.unlink()  # the card's code: never known to the portal
+    _, _, page = request(portal, "GET", "/")
+    assert 'id="claim_code" name="claim_code" aria-describedby' in page and CODE not in page
+    status, _, done = post(portal, GOOD)
+    assert status == 200 and CODE not in done  # not shown back either
+
+
+def test_a_wrong_code_reported_by_root_is_shown(portal: Any, state: Any) -> None:
+    state.status.write_text(json.dumps({"state": "idle", "error": "claim_wrong"}), "utf-8")
+    _, _, page = request(portal, "GET", "/")
+    assert "nothing was saved" in page
 
 
 def test_once_the_secrets_are_set_the_portal_asks_only_for_wifi(portal: Any, state: Any) -> None:
@@ -211,7 +235,7 @@ def test_once_the_secrets_are_set_the_portal_asks_only_for_wifi(portal: Any, sta
     )
     _, _, page = request(portal, "GET", "/")
     assert 'id="pin"' not in page and "password was not accepted" in page
-    status, _, _ = post(portal, {"network": SSID, "psk": PSK})
+    status, _, _ = post(portal, {"claim_code": CODE, "network": SSID, "psk": PSK})
     assert status == 200
     assert "pin" not in json.loads(state.request.read_text("utf-8"))
 

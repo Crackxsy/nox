@@ -127,8 +127,8 @@ step: at least 12 characters, checked only by the root helper (scrypt, `/var/lib
 root 0600), never written to a file the service user can read and never logged - the core only
 passes it through in the one request. Five wrong passphrases lock it for 15 minutes, every five
 more for twice as long, at most a day (counted root-side, `/var/lib/nox-os/maintenance-lockout`).
-It is set once during the first-boot setup - in the setup portal, or on the claim page (O3) - the
-helper accepts `maint set` only while the setup window is open (root's `/run/nox-os/setup-mode`,
+It is set once during the first-boot setup - by the claim (O3), from the setup portal or the claim
+page - or with `maint set`, which the helper accepts `maint set` only while the setup window is open (root's `/run/nox-os/setup-mode`,
 this boot's, its end not reached) and no passphrase is set yet - and changed later only with the
 old one. A forgotten passphrase is reset by root only:
 create `/var/lib/nox-os/reset-maintenance` (physical access to the card, or a maintenance session
@@ -329,10 +329,13 @@ of blinks; `/run/nox-os/setup/blink`, root 0600, is what `nox-led.service` will 
 card, a screen or the LED (before O5), the hotspot cannot be joined: use the setup card (O7) or a
 screen for now.
 
-**Firewall in setup mode:** the hotspot interface gets the portal (TCP 80), DHCP (UDP 67) and DNS
-(53) from `10.42.0.0/24` - and **nothing else**: an explicit drop before Nox's ports and SSH, so a
-phone on the hotspot never reaches the dashboard, the node port or remote maintenance. Forwarding
-stays dropped: the hotspot is no way into the home network or the internet.
+**Firewall:** while setup mode is on, the hotspot interface gets the portal (TCP 80), DHCP (UDP
+67) and DNS (53) from `10.42.0.0/24` - and **nothing else**: an explicit drop before Nox's ports
+and SSH, so a phone on the hotspot never reaches the dashboard, the node port or remote
+maintenance. That drop follows the hotspot itself (root's `hotspot.json`), not the window: in the
+moments after the window closed and before the hotspot is down, the interface is still isolated -
+only the portal ports are gone. Forwarding stays dropped: the hotspot is no way into the home
+network or the internet.
 
 ### The setup portal
 
@@ -346,9 +349,10 @@ loopback port (systemd's IP filter). It changes nothing itself: it writes one re
 - Any address that is not the portal's - every captive-portal probe (`generate_204`,
   `hotspot-detect.html`, `connecttest.txt` ...) - is redirected to `http://10.42.0.1/`.
 - **One form, no JavaScript at all**, German and English (from the phone's language, with a
-  switch): the home Wi-Fi from the scan or typed (or "Nox is on a cable"), its password, the
-  **security PIN** (at least 6 characters) and the **maintenance passphrase** (at least 12) - each
-  twice. Labels, legends, hints and errors are tied to their fields (`aria-describedby`,
+  switch): the **claim code** (filled in when the device made it - it is on the Pi's screen too;
+  typed from the setup card otherwise), the home Wi-Fi from the scan or typed (or "Nox is on a
+  cable"), its password, the **security PIN** (at least 6 characters) and the **maintenance
+  passphrase** (at least 12) - each twice. Labels, legends, hints and errors are tied to their fields (`aria-describedby`,
   `aria-invalid`), an error summary with links is announced (`role="alert"`), targets are at least
   44 px, light and dark follow the phone.
 - **Hardening:** Content-Security-Policy `default-src 'none'; style-src 'self'; img-src 'self';
@@ -359,11 +363,17 @@ loopback port (systemd's IP filter). It changes nothing itself: it writes one re
   `application/x-www-form-urlencoded`. **Rate limits:** 6 POSTs a minute per address and 30 in
   total, 120 page views per address; bodies at most 4 KB; at most 16 connections at once, 10 s
   each. Nothing a phone sends is logged, and a password is never sent back in a page.
-- **Root's side:** the maintenance passphrase goes to the root helper's `maint set` (setup mode
-  only, once); the PIN waits in `/run/nox-os/setup/pending-pin` (root 0600, RAM) until the claim
-  hands it to Nox; the home Wi-Fi becomes the NetworkManager keyfile (root 0600) - the hotspot
-  goes down and Nox joins within 60 s. **Wrong password or network not found:** the hotspot comes
-  back and the portal says why. Once PIN and passphrase are set, the portal asks only for the Wi-Fi.
+- **Root's side - nothing without the claim code, credentials only with the claim:** root passes
+  the claim code to the root helper's `stage` first. A wrong one applies **nothing** (no Wi-Fi
+  change, nothing kept) and slows that phone's address down. With the right one the helper
+  **keeps** PIN and passphrase (`/run/nox-os/setup/pending.json`, root 0600, RAM) - it does not
+  set them: they are applied by the claim, in the same step that marks the device claimed, and the
+  claimant sees that they are kept and may set others. Then the home Wi-Fi becomes the
+  NetworkManager keyfile (root 0600) - the hotspot goes down and Nox joins within 60 s. **Wrong
+  password or network not found:** the hotspot comes back and the portal says why. Once PIN and
+  passphrase are kept, the portal asks only for the claim code and the Wi-Fi. (First-come
+  credential setting is closed this way: whoever reaches the portal first sets nothing without
+  the code, and with it could claim the device anyway.)
 - **The next step,** on the portal's last page: back to the home Wi-Fi, open
   `https://nox.local:47843/claim/` (the link carries the claim code made on the device, in the
   fragment, so it never reaches a server log), with the claim code shown and the certificate
@@ -385,15 +395,26 @@ the core behind it serves nothing but the claim.
 **Claiming** needs the one-time **claim code** (setup card, or the screen/portal) **during the
 setup window**. `POST /api/claim` (same origin, at most 2 KB, 5 a minute per address, 20 in total)
 pairs the claiming browser as the first device, then asks the root helper's **`claim`**: the code
-against its hash, at most **10 wrong codes per window** (then only a power cycle helps), and on
-success the helper - only root - writes the claim mark `/var/lib/nox-os-claim/claimed` (root
-0644: Nox, the firewall and the console read it), sets the maintenance passphrase if the claim
-page sent one (no portal: Ethernet with a setup card), **ends setup mode** and hands over the PIN
-the portal took. Nox then sets the PIN (asked on the claim page if the portal did not take one),
+against its hash, and on success the helper - only root - writes the claim mark
+`/var/lib/nox-os-claim/claimed` (root 0644: Nox, the firewall and the console read it), sets the
+maintenance passphrase (the one the claim page sent, else the one kept from the portal), **ends
+setup mode** - hotspot and portal down, waited for, before the firewall is regenerated - and
+hands over the kept PIN. Nox then sets the PIN (the claim page's if it sent one, else the kept
+one),
 audits the claim (`noxos.claim`, never a code or secret), and the browser stores its device token
 like a paired device and opens `/dashboard/#onboarding` (O4's wizard). A refused claim removes the
 device it paired. After the claim: `nox-setup-close.service` stops the hotspot and the portal and
 removes the setup secrets, the firewall opens the node port.
+
+**Wrong claim codes** slow down the address that sent them, root-side: 1 s after the first,
+doubling to at most 5 minutes; and they count towards a budget of 200 per boot - **one budget for
+the LAN and one for the setup hotspot**, so a noisy peer in the home network cannot lock out the
+owner on the hotspot (or the other way round), and an owner who proved the code in the portal
+this boot can claim from the home network even after the LAN's budget is spent. The math: a claim
+code has at least 40 bits (8 characters of 32 letters; the device's own and the PC assistant's
+have 12 characters = 60 bits); 200 guesses find a 40-bit code with a chance of at most 2e-10, a
+60-bit one with 2e-16. A small hard lock would only hand a LAN peer a way to lock the owner out
+until the next power cycle.
 
 The core has one read-only request for O4, `noxos.claim.status` (owner or not, setup window, its
 time left).
@@ -453,9 +474,9 @@ hand, on a machine that runs Nox:
      code and hotspot password) is imported and deleted, its password in no log, the setup window
      is open at boot, the hotspot profile is written, the firewall opens the claim port only;
      then the portal as a phone in a network namespace on a virtual hotspot interface sees it
-     (captive redirect, CSP, Origin check, PIN staged root-only, passphrase set, Nox's port closed
-     to the hotspot); a wrong claim code is refused, the card's code claims the device (PIN set,
-     setup closed, secrets and hotspot gone, node port open) - and then the O2 checks below run on
+     (captive redirect, CSP, Origin check, a wrong claim code keeps nothing, the right one keeps
+     PIN and passphrase root-only without applying them, Nox's port closed to the hotspot); a wrong claim code is refused, the card's code claims the device (PIN set,
+     passphrase set by the claim, setup closed, secrets and hotspot gone, node port open) - and then the O2 checks below run on
      the claimed device; once *fresh* - no provisioning file and a test-only 600-second window:
      claim code and hotspot password made on the device, shown on the console as its throwaway
      user sees it, then the window closes by itself and takes them along, and a claim and `maint
@@ -465,7 +486,7 @@ hand, on a machine that runs Nox:
      journal, `/`, `/tmp` and swap as above, sysctl applied, the console status renders, the root
      helper is out of reach of the user `nox` and refuses another process with its group, the core
      is non-dumpable, `noxos.ssh.status` answers through the core and the sandboxed helper, the
-     maintenance passphrase (set in the portal) is refused again outside setup mode and stored only
+     maintenance passphrase (set by the claim) is refused again outside setup mode and stored only
      as root's scrypt hash,
      and SSH goes on (keys stored root-only and answered by fingerprint, refused for unconfirmed
      ones or a wrong passphrase; sshd up, port 22 for private networks, off timer, TCP to port 22

@@ -196,7 +196,10 @@ Spoil = Callable[[Path, Path], None]
 
 SPOILERS: dict[str, Spoil] = {
     "a password hash": lambda r, b: _write(r / "etc/shadow", "root:$y$j9T$abc$def:20000::::::\n"),
-    "a password in passwd": lambda r, b: _write(r / "etc/passwd", "root:abc:0:0::/root:/bin/sh\n"),
+    # Appended: the rest of the file (the setup portal's locked user too) stays as it ships.
+    "a password in passwd": lambda r, b: _append(
+        r / "etc/passwd", "admin2:abc:0:0::/root:/bin/sh\n"
+    ),
     "NOPASSWD sudo": lambda r, b: _write(
         r / "etc/sudoers.d/010_pi-nopasswd", "nox-admin ALL=(ALL) NOPASSWD: ALL\n"
     ),

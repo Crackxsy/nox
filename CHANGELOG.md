@@ -19,12 +19,14 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   there - a **setup hotspot** `Nox-Setup-XXXX` (WPA2, a per-device password: the card's or 12
   random digits per boot, shown on a screen and later blinked by the LED) with captive DNS and a
   **captive portal** (own unprivileged user, no JavaScript, strict CSP, CSRF token plus Origin,
-  rate limits, German and English, accessible): home Wi-Fi, security PIN, maintenance passphrase;
-  root carries it out and the hotspot comes back with the reason if joining fails. **Claim:**
+  rate limits, German and English, accessible): claim code, home Wi-Fi, security PIN,
+  maintenance passphrase; nothing applies without the right claim code, PIN and passphrase only
+  with the claim itself; the hotspot comes back with the reason if joining fails. **Claim:**
   while unclaimed the core serves only `/claim/` and `/api/claim` on the LAN and the firewall keeps
   the node port closed; the one-time claim code (card, or screen and portal) checked by the root
-  helper (10 wrong per window) makes the claiming browser the owner's first device, sets the PIN,
-  ends setup mode and opens the node port. New read-only request `noxos.claim.status` (O4).
+  helper (wrong codes slow their address down, a budget per boot for the LAN and the hotspot
+  each) makes the claiming browser the owner's first device, sets PIN and passphrase, ends setup
+  mode and opens the node port. New read-only request `noxos.claim.status` (O4).
   `systemd-firstboot.service` is masked (it failed on headless first boots). The QEMU smoke boots
   twice (provisioned with portal and claim; fresh with the window expiring).
 

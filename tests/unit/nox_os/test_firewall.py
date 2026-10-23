@@ -119,10 +119,27 @@ def test_setup_ports_only_on_the_hotspot_and_nothing_else_there() -> None:
     drop = lines.index('iifname "wlan0" drop')
     assert drop < lines.index("ip saddr @private4 tcp dport 47843 ct state new accept")
     assert all("dport 80" not in line for line in lines if not line.startswith("iifname"))
-    # The hotspot without setup mode opens nothing (settings_from drops it).
-    got = fw.settings_from({}, {}, ssh=False, setup=False, hotspot="wlan0")
-    assert got.hotspot is None and "dport 80" not in fw.render(got)
     assert fw.settings_from({}, {}, ssh=False, setup=True, hotspot='wlan0" accept').hotspot is None
+
+
+def test_the_hotspot_stays_isolated_after_the_window_closed() -> None:
+    """Window over, hotspot not yet down: no setup port, and still nothing else from it."""
+    got = fw.settings_from(
+        {},
+        {"ipc": {"lan": {"enabled": True}}},
+        ssh=True,
+        setup=False,
+        hotspot="wlan0",
+        claimed=True,
+    )
+    lines = [line.strip() for line in input_chain(fw.render(got)).splitlines()]
+    assert [line for line in lines if line.startswith('iifname "wlan0"')] == [
+        'iifname "wlan0" drop'
+    ]
+    drop = lines.index('iifname "wlan0" drop')
+    assert drop < lines.index("ip saddr @private4 tcp dport 47843 ct state new accept")
+    assert drop < lines.index("ip saddr @private4 tcp dport 22 ct state new accept")
+    assert "dport 80" not in fw.render(got)
 
 
 BOOT = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"

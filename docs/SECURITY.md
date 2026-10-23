@@ -1068,15 +1068,21 @@ breaks it and the QEMU boot test checks it on the running system. In short:
     keyfile.
   - **Setup hotspot:** WPA2 only, never open, a per-device password (the setup card's, or 12 random
     digits per boot shown on the screen / blinked by the LED from O5); the hotspot interface
-    reaches the portal, DHCP and DNS and nothing else, no forwarding.
+    reaches the portal, DHCP and DNS (only in setup mode) and nothing else for as long as the
+    hotspot exists, no forwarding.
   - **Portal:** its own user, no root, only port 80 as a capability, network only the hotspot and
     loopback; no JavaScript, strict CSP; CSRF token bound to the phone and the time plus a required
-    same-origin `Origin`; rate-limited; it only writes a request that root checks again.
+    same-origin `Origin`; rate-limited; it only writes a request that root checks again. Nothing
+    is applied without the right claim code; PIN and passphrase are only kept (root 0600, RAM) and
+    applied by the claim itself - no first-come credential setting.
   - **Claim:** while unclaimed the core serves only the claim on the LAN and the firewall keeps the
     node port closed (fail closed). Claiming needs the one-time claim code within the window; the
-    root helper checks it (10 wrong per window), and only it writes the root-owned claim mark the
-    firewall and the core go by. The claim ends setup mode, sets the PIN and passphrase taken
-    during setup, and is audited without any secret.
+    root helper checks it - wrong codes slow their address down (1 s doubling to 5 minutes) and
+    count towards a budget of 200 per boot, separate for the LAN and the hotspot, so one noisy
+    peer cannot lock the owner out (codes have 40-60 bits) - and only it writes the root-owned
+    claim mark the firewall and the core go by. The claim ends setup mode (hotspot down before the
+    firewall opens the node port), applies the PIN and passphrase, and is audited without any
+    secret.
 
 Accepted limits: physical access to the card is full access (the boot partition is plain FAT); the
 service user can choose which unprivileged ports its own listener uses, and the firewall follows.

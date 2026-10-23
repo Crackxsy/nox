@@ -348,7 +348,7 @@ def test_closing_takes_every_setup_secret_with_it(
     tmp_path: Path, system: Any, run: FakeRun, clock: dict[str, float]
 ) -> None:
     setup.boot(system)
-    (tmp_path / "run/nox-os/setup/pending-pin").write_text("135790\n", "ascii")
+    (tmp_path / "run/nox-os/setup/pending.json").write_text("{}", "ascii")
     clock["uptime"] = 1801.0
     setup.tick(system)
     for gone in (
@@ -356,7 +356,7 @@ def test_closing_takes_every_setup_secret_with_it(
         "run/nox-os/setup/claim-code",
         "run/nox-os/setup/console.json",
         "run/nox-os/setup/blink",
-        "run/nox-os/setup/pending-pin",
+        "run/nox-os/setup/pending.json",
         "var/lib/nox-os/claim.json",
         "run/NetworkManager/system-connections/nox-setup-hotspot.nmconnection",
     ):
@@ -459,20 +459,26 @@ def test_without_a_wifi_device_the_profile_is_prepared_and_the_reason_kept(
 def _request(tmp_path: Path, payload: dict[str, Any]) -> None:
     folder = tmp_path / "run/nox-os/setup/portal"
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "request.json").write_text(json.dumps(payload), "utf-8")
+    full = {"claim_code": "ABCD-EFGH-JKMN", "peer": "10.42.0.20", **payload}
+    (folder / "request.json").write_text(json.dumps(full), "utf-8")
 
 
 class AskHelper:
+    """The root helper's `stage`: refuses a wrong claim code, otherwise keeps PIN and passphrase."""
+
     def __init__(self, answer: dict[str, Any] | None = None) -> None:
         self.calls: list[list[str]] = []
-        self.answer = answer or {"ok": True, "passphrase": True}
+        self.answer = answer or {"ok": True, "pending_pin": True, "pending_passphrase": True}
 
     def __call__(self, _system: Any, lines: list[str]) -> dict[str, Any]:
         self.calls.append(lines)
         return self.answer
 
 
-def test_apply_joins_the_home_wifi_and_stages_the_secrets(
+WRONG_CODE = {"ok": False, "code": "claim_wrong"}
+
+
+def test_apply_stages_the_secrets_with_the_code_then_joins_the_home_wifi(
     tmp_path: Path, system: Any, run: FakeRun
 ) -> None:
     setup.boot(system)
@@ -482,8 +488,17 @@ def test_apply_joins_the_home_wifi_and_stages_the_secrets(
     )
     ask = AskHelper()
     setup.apply(system, helper=ask)
-    assert ask.calls == [["maint set", "new " + setup._b64("x" * 14)]]  # noqa: SLF001
-    assert read(tmp_path, "run/nox-os/setup/pending-pin") == "135790\n"
+    b64 = setup._b64  # noqa: SLF001
+    assert ask.calls == [
+        [
+            "stage 10.42.0.20",
+            "code " + b64("ABCDEFGHJKMN"),
+            "pin " + b64("135790"),
+            "new " + b64("x" * 14),
+        ]
+    ]
+    # Nothing applied by the portal itself: the helper keeps them for the claim.
+    assert not (tmp_path / "run/nox-os/setup/pending-pin").exists()
     assert not (tmp_path / "run/nox-os/setup/portal/request.json").exists()
     assert run.ran("nmcli", "--wait", "60", "connection", "up", "nox-wifi")
     status = json.loads(read(tmp_path, "run/nox-os/setup/status.json"))
@@ -491,6 +506,29 @@ def test_apply_joins_the_home_wifi_and_stages_the_secrets(
     assert PSK not in json.dumps(status) and "135790" not in json.dumps(status)
     keyfile = read(tmp_path, "etc/NetworkManager/system-connections/nox-wifi.nmconnection")
     assert f"psk={PSK}" in keyfile
+
+
+def test_a_wrong_claim_code_applies_nothing_at_all(
+    tmp_path: Path, system: Any, run: FakeRun
+) -> None:
+    setup.boot(system)
+    _request(
+        tmp_path,
+        {"v": 1, "wifi": {"ssid": SSID, "psk": PSK}, "pin": "135790", "passphrase": "x" * 14},
+    )
+    setup.apply(system, helper=AskHelper(WRONG_CODE))
+    assert json.loads(read(tmp_path, "run/nox-os/setup/status.json"))["error"] == "claim_wrong"
+    assert not run.ran("nmcli", "--wait", "60", "connection", "up", "nox-wifi")
+    assert not (tmp_path / "etc/NetworkManager/system-connections/nox-wifi.nmconnection").exists()
+
+
+def test_a_request_without_a_claim_code_is_refused_by_root(tmp_path: Path, system: Any) -> None:
+    setup.boot(system)
+    _request(tmp_path, {"v": 1, "pin": "135790", "claim_code": ""})
+    ask = AskHelper()
+    setup.apply(system, helper=ask)
+    assert ask.calls == []
+    assert json.loads(read(tmp_path, "run/nox-os/setup/status.json"))["error"] == "claim_wrong"
 
 
 def test_a_wrong_wifi_password_brings_the_hotspot_back_with_the_reason(
@@ -512,19 +550,22 @@ def test_a_wrong_wifi_password_brings_the_hotspot_back_with_the_reason(
 
 def test_root_checks_the_request_again(tmp_path: Path, system: Any, run: FakeRun) -> None:
     setup.boot(system)
+    ask = AskHelper()
     _request(tmp_path, {"v": 1, "wifi": {"ssid": SSID, "psk": "short"}})
-    setup.apply(system, helper=AskHelper())
+    setup.apply(system, helper=ask)
     assert json.loads(read(tmp_path, "run/nox-os/setup/status.json"))["error"] == "invalid_wifi_psk"
     _request(tmp_path, {"v": 1, "pin": "12"})
-    setup.apply(system, helper=AskHelper())
+    setup.apply(system, helper=ask)
     assert json.loads(read(tmp_path, "run/nox-os/setup/status.json"))["error"] == "invalid_pin"
-    assert not (tmp_path / "run/nox-os/setup/pending-pin").exists()
+    _request(tmp_path, {"v": 1, "pin": "135790", "peer": "not an address"})
+    setup.apply(system, helper=ask)
+    assert json.loads(read(tmp_path, "run/nox-os/setup/status.json"))["error"] == "invalid_peer"
     # A request someone else wrote counts for nothing.
     system.uid_of = lambda _n: OWN_UID + 1
     _request(tmp_path, {"v": 1, "pin": "135790"})
-    setup.apply(system, helper=AskHelper())
-    assert not (tmp_path / "run/nox-os/setup/pending-pin").exists()
+    setup.apply(system, helper=ask)
     assert not (tmp_path / "run/nox-os/setup/portal/request.json").exists()
+    assert ask.calls == []
 
 
 def test_no_request_counts_once_the_window_closed(
@@ -535,15 +576,7 @@ def test_no_request_counts_once_the_window_closed(
     _request(tmp_path, {"v": 1, "pin": "135790"})
     ask = AskHelper()
     setup.apply(system, helper=ask)
-    assert ask.calls == [] and not (tmp_path / "run/nox-os/setup/pending-pin").exists()
-
-
-def test_a_refused_passphrase_stops_the_request(tmp_path: Path, system: Any) -> None:
-    setup.boot(system)
-    _request(tmp_path, {"v": 1, "pin": "135790", "passphrase": "y" * 14})
-    setup.apply(system, helper=AskHelper({"ok": False, "code": "not_setup"}))
-    assert json.loads(read(tmp_path, "run/nox-os/setup/status.json"))["error"] == "not_setup"
-    assert not (tmp_path / "run/nox-os/setup/pending-pin").exists()
+    assert ask.calls == []
 
 
 # ---- small pieces --------------------------------------------------------------------------

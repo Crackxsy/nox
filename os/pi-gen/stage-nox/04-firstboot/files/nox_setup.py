@@ -10,8 +10,10 @@ Run by systemd as root, one short step at a time - never a daemon:
                                          close it when its time is up, start the setup hotspot
                                          when Nox has no network (or the claim code can only be
                                          learnt there), keep the portal running while it is up
-    python3 -I -S nox_setup.py apply    what the captive portal asked for (nox-setup-apply.path):
-                                         maintenance passphrase, security PIN, home Wi-Fi
+    python3 -I -S nox_setup.py apply    what the captive portal asked for (nox-setup-apply.path),
+                                         only with the right claim code: PIN and maintenance
+                                         passphrase kept for the claim (the root helper's
+                                         `stage`), then the home Wi-Fi
     python3 -I -S nox_setup.py close [reason]   end setup mode now (the root helper after a claim)
     python3 -I -S nox_setup.py status   what is going on, without any secret
 
@@ -29,7 +31,8 @@ so an expired window grants nothing even before `tick` removed it.
     its LED (`/run/nox-os/setup/blink`, root only);
   * the claim code: only its hash on the device when it came on the setup card; otherwise 12
     random characters made at every boot, shown on the screen and in the portal;
-  * the security PIN typed into the portal, until the claim hands it to Nox.
+  * the security PIN and maintenance passphrase typed into the portal - kept by the root helper
+    only after the right claim code, and applied only by the claim itself.
 
 The provisioning file is checked strictly (`validate`), imported, then overwritten and deleted.
 Its Wi-Fi password goes into a NetworkManager keyfile (root, 0600) and nowhere else; nothing of
@@ -76,7 +79,7 @@ NETWORKS = SETUP / "networks.json"  # root:nox-os-setup 0640 - the portal's Wi-F
 STATUS = SETUP / "status.json"  # root:nox-os-setup 0640 - no secrets
 HOTSPOT_STATE = SETUP / "hotspot.json"  # root 0644 - the firewall's setup ports
 BLINK = SETUP / "blink"  # root 0600 - for the LED (O5)
-PENDING_PIN = SETUP / "pending-pin"  # root 0600 - handed to Nox by the claim
+PENDING = SETUP / "pending.json"  # root 0600 - the root helper's, applied by the claim
 PORTAL_DIR = SETUP / "portal"  # nox-setup 0700 - the portal's requests
 REQUEST = PORTAL_DIR / "request.json"
 HELPER_SOCKET = RUN / "helper" / "helper.sock"
@@ -1058,6 +1061,10 @@ def tick(system: System) -> int:
 @dataclass(frozen=True)
 class PortalRequest:
     wifi: Wifi | None
+    #: The claim code typed into the portal: without the right one, nothing is applied.
+    claim_code: str = field(default="", repr=False)
+    #: The phone's address as the portal saw it (the root helper slows wrong codes per address).
+    peer: str = ""
     pin: str | None = field(default=None, repr=False)
     passphrase: str | None = field(default=None, repr=False)
 
@@ -1072,7 +1079,8 @@ def parse_portal_request(raw: bytes) -> PortalRequest:
         )
     except (ValueError, RecursionError, UnicodeDecodeError):
         raise ProvisionError("not_json") from None
-    if not isinstance(data, dict) or set(data) - {"v", "wifi", "pin", "passphrase"}:
+    allowed = {"v", "wifi", "pin", "passphrase", "claim_code", "peer"}
+    if not isinstance(data, dict) or set(data) - allowed:
         raise ProvisionError("unknown_field")
     if data.get("v") != 1 or isinstance(data.get("v"), bool):
         raise ProvisionError("unsupported_version")
@@ -1102,7 +1110,13 @@ def parse_portal_request(raw: bytes) -> PortalRequest:
         or any(c in passphrase for c in "\x00\r\n")
     ):
         raise ProvisionError("invalid_passphrase")
-    return PortalRequest(wifi=wifi, pin=pin, passphrase=passphrase)
+    code = normalize_claim_code(str(data.get("claim_code", "")))
+    if code is None:
+        raise ProvisionError("claim_wrong")
+    peer = data.get("peer")
+    if not isinstance(peer, str) or not re.fullmatch(r"[0-9a-fA-F:.]{2,45}", peer):
+        raise ProvisionError("invalid_peer")
+    return PortalRequest(wifi=wifi, claim_code=code, peer=peer, pin=pin, passphrase=passphrase)
 
 
 def take_request(system: System) -> PortalRequest | None:
@@ -1171,17 +1185,23 @@ def apply(
     if setup_mode(system) is None or claimed(system):
         write_status(system, error="window_closed")
         return 0
-    if request.passphrase:
-        try:
-            answer = helper(system, ["maint set", f"new {_b64(request.passphrase)}"])
-        except (OSError, ValueError):
-            answer = {"ok": False, "code": "helper_unreachable"}
-        if answer.get("ok") is not True and answer.get("code") != "passphrase_exists":
-            write_status(system, error=str(answer.get("code", "passphrase_failed"))[:40])
-            return 0
+    # The claim code first, checked by the root helper: with a wrong one nothing at all happens -
+    # no PIN or passphrase kept, no Wi-Fi changed. With the right one they are only kept: the
+    # claim applies them, in the same step that marks the device claimed.
+    lines = [f"stage {request.peer}", f"code {_b64(request.claim_code)}"]
     if request.pin:
-        system.write(PENDING_PIN, request.pin + "\n", 0o600)
-    write_status(system, security_done=True, error=None)
+        lines.append(f"pin {_b64(request.pin)}")
+    if request.passphrase:
+        lines.append(f"new {_b64(request.passphrase)}")
+    try:
+        answer = helper(system, lines)
+    except (OSError, ValueError):
+        answer = {"ok": False, "code": "helper_unreachable"}
+    if answer.get("ok") is not True:
+        write_status(system, error=str(answer.get("code", "stage_failed"))[:40])
+        return 0
+    staged = answer.get("pending_pin") is True and answer.get("pending_passphrase") is True
+    write_status(system, security_done=staged, error=None)
     if request.wifi is None:
         write_status(system, state="ready")
         return 0
@@ -1211,7 +1231,7 @@ def close(system: System, reason: str) -> int:
     hotspot and the portal, then every secret of the setup, then the firewall."""
     system.remove(SETUP_MODE)
     stop_hotspot(system)
-    for path in (CLAIM_CODE, CONSOLE, BLINK, PENDING_PIN, NETWORKS, REQUEST):
+    for path in (CLAIM_CODE, CONSOLE, BLINK, PENDING, NETWORKS, REQUEST):
         system.remove(path)
     if claimed(system) or not card_claim_code(system):
         system.remove(CLAIM)  # a claimed device keeps none; a device code is this boot's only

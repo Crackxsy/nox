@@ -15,7 +15,9 @@ the dashboard port is opened - Nox serves nothing there but its claim page then 
 port stays closed. SSH (port 22) only while remote maintenance is on (/run/nox-os/ssh.json,
 written by the root helper), from private networks only. The setup ports (HTTP, DNS, DHCP server)
 only in setup mode (/run/nox-os/setup-mode, its end not reached) and only on the setup hotspot's
-interface (/run/nox-os/setup/hotspot.json) - which gets nothing else: neither Nox's ports nor SSH.
+interface (/run/nox-os/setup/hotspot.json). That interface gets nothing else - neither Nox's
+ports nor SSH - for as long as the hotspot exists, window open or not: its isolation never waits
+for the hotspot to be taken down.
 Outbound is open - Nox needs the internet - except the cloud metadata addresses.
 
 The ports come from `config/defaults.yaml` of the installed release and `/var/lib/nox/user.yaml`,
@@ -96,7 +98,8 @@ class Settings:
     setup: bool = False
     #: The device has an owner: the node port may open. Before, only the dashboard (claim page).
     claimed: bool = False
-    #: The setup hotspot's interface, while setup mode is on and the hotspot is up.
+    #: The setup hotspot's interface while it exists - isolated always, its setup ports open only
+    #: while the setup window is.
     hotspot: str | None = None
 
 
@@ -162,7 +165,7 @@ def settings_from(
         ssh=ssh,
         setup=setup,
         claimed=claimed,
-        hotspot=hotspot if setup and hotspot and _IFACE.fullmatch(hotspot) else None,
+        hotspot=hotspot if hotspot and _IFACE.fullmatch(hotspot) else None,
     )
 
 
@@ -300,15 +303,16 @@ def render(settings: Settings, *, boot: bool = False) -> str:
         "udp sport 67 udp dport 68 accept",
         "ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept",
     ]
-    if settings.setup and settings.hotspot:
+    if settings.hotspot:
         iface = f'iifname "{settings.hotspot}"'
-        rules += [
-            "# Setup mode (O3): the setup hotspot gets the portal, DHCP and DNS - nothing else",
-            f"{iface} ip saddr {HOTSPOT_NET} tcp dport 80 accept",
-            f"{iface} udp sport 68 udp dport 67 accept",
-            f"{iface} ip saddr {HOTSPOT_NET} meta l4proto {{ tcp, udp }} th dport 53 accept",
-            f"{iface} drop",
-        ]
+        rules.append("# Setup hotspot (O3): the portal, DHCP and DNS in setup mode - nothing else")
+        if settings.setup:
+            rules += [
+                f"{iface} ip saddr {HOTSPOT_NET} tcp dport 80 accept",
+                f"{iface} udp sport 68 udp dport 67 accept",
+                f"{iface} ip saddr {HOTSPOT_NET} meta l4proto {{ tcp, udp }} th dport 53 accept",
+            ]
+        rules.append(f"{iface} drop")
     # mDNS: `nox.local` and finding devices in the home network.
     rules += _private("udp dport 5353 accept")
     for port in opened:
@@ -375,7 +379,7 @@ def current_settings() -> Settings:
         ssh=ssh_on(),
         setup=setup,
         claimed=_root_file(CLAIMED),
-        hotspot=hotspot_iface() if setup else None,
+        hotspot=hotspot_iface(),
     )
 
 

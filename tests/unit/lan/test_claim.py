@@ -53,6 +53,9 @@ class Helper:
         self.claimed = False
         self.passphrase = False
         self.pending_pin: str | None = None
+        self.pending_passphrase: str | None = None
+        self.set_passphrase: str | None = None
+        self.wait = False
         self.code = normalize_claim_code(CODE)
         self.down = False
 
@@ -64,6 +67,7 @@ class Helper:
             "claimed": self.claimed,
             "claim_code": "device",
             "pending_pin": self.pending_pin is not None,
+            "pending_passphrase": self.pending_passphrase is not None,
             "passphrase": self.passphrase,
         }
 
@@ -73,8 +77,10 @@ class Helper:
             raise HelperError("the Nox-OS helper is not reachable")
         if lines == ["status"]:
             return self._status()
-        verb, device = lines[0].split(" ")
-        assert verb == "claim" and device
+        verb, device, address = lines[0].split(" ")
+        assert verb == "claim" and device and address == HOME_PEER[0]
+        if self.wait:
+            raise HelperError("wait 4 s", refused=True, code="claim_wait")
         if self.claimed:
             raise HelperError("owned", refused=True, code="claimed")
         if not self.setup_mode:
@@ -83,7 +89,11 @@ class Helper:
         if code != self.code:
             raise HelperError("wrong claim code", refused=True, code="claim_wrong")
         if len(lines) == 3:
-            self.passphrase = True
+            self.set_passphrase = base64.b64decode(lines[2].removeprefix("new ")).decode()
+        elif self.pending_passphrase is not None:
+            self.set_passphrase = self.pending_passphrase
+        self.passphrase = self.set_passphrase is not None
+        self.pending_passphrase = None
         self.claimed, self.setup_mode = True, False
         pin, self.pending_pin = self.pending_pin, None
         answer = self._status()
@@ -231,7 +241,7 @@ def test_the_claim_pairs_the_owner_sets_pin_and_passphrase_and_opens_everything(
     assert devices.verify(body["token"]) is not None
     assert pin.is_set() and pin.verify_pin("135790").ok
     sent = helper.calls[-1]
-    assert sent[0] == f"claim {body['device_id']}"
+    assert sent[0] == f"claim {body['device_id']} {HOME_PEER[0]}"
     assert base64.b64decode(sent[2].removeprefix("new ")).decode() == PASS
     assert [r["result"] for r in audit.rows if r["action"] == "noxos.claim"] == ["ok"]
     assert PASS not in json.dumps(audit.rows) and "135790" not in json.dumps(audit.rows)
@@ -243,14 +253,37 @@ def test_the_claim_pairs_the_owner_sets_pin_and_passphrase_and_opens_everything(
     assert again.headers["location"] == "/dashboard/"
 
 
-def test_the_pin_from_the_setup_portal_wins_and_nothing_is_asked_twice(
+def test_what_the_setup_portal_kept_is_used_unless_the_claimant_sets_others(
     client: TestClient, helper: Helper, pin: PinManager
 ) -> None:
-    helper.pending_pin, helper.passphrase = "246802", True
+    helper.pending_pin, helper.pending_passphrase = "246802", "the portal's passphrase"
+    status = client.get("/api/claim").json()
+    assert status["needs_pin"] is False and status["needs_passphrase"] is False
+    assert status["staged_pin"] is True and status["staged_passphrase"] is True
     answer = client.post("/api/claim", json={"code": CODE, "name": "Phone"}, headers=ORIGIN)
     assert answer.status_code == 201, answer.text
-    assert len(helper.calls[-1]) == 2  # no passphrase sent: one is set already
+    assert len(helper.calls[-1]) == 2  # nothing sent: the kept ones apply
     assert pin.verify_pin("246802").ok
+    assert helper.set_passphrase == "the portal's passphrase"
+
+
+def test_the_claimant_overrides_what_the_setup_portal_kept(
+    client: TestClient, helper: Helper, pin: PinManager
+) -> None:
+    helper.pending_pin, helper.pending_passphrase = "246802", "the portal's passphrase"
+    answer = claim(client)  # with its own PIN and passphrase
+    assert answer.status_code == 201, answer.text
+    assert pin.verify_pin("135790").ok and not pin.verify_pin("246802").ok
+    assert helper.set_passphrase == PASS
+
+
+def test_a_slowed_down_address_is_told_to_wait(
+    client: TestClient, helper: Helper, devices: LanDevices
+) -> None:
+    helper.wait = True
+    answer = claim(client)
+    assert (answer.status_code, answer.json()) == (429, {"error": "wait"})
+    assert [d for d in devices.devices() if not d.revoked] == []
 
 
 @pytest.mark.parametrize(

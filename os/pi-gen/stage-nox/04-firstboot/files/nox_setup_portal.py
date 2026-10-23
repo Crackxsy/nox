@@ -12,9 +12,11 @@ What the phone gets:
   * any address that is not the portal's - the operating systems' captive-portal probes
     (`generate_204`, `hotspot-detect.html`, `connecttest.txt` ...) included - is redirected to
     the portal, so the phone opens it by itself;
-  * one form, no JavaScript at all: the home Wi-Fi (from a scan made before the hotspot started,
-    or typed), its password, the security PIN and the maintenance passphrase; or "Nox has a
-    cable" to skip the Wi-Fi;
+  * one form, no JavaScript at all: the claim code (filled in when the device made it - it is shown
+    on the Pi's screen too; from the setup card otherwise), the home Wi-Fi (from a scan made
+    before the hotspot started, or typed), its password, the security PIN and the maintenance
+    passphrase; or "Nox has a cable" to skip the Wi-Fi. Root applies nothing without the right
+    claim code, and PIN and passphrase only with the claim itself;
   * then the next step: back to the home Wi-Fi, open `https://nox.local:47843/claim/` with the
     claim code.
 
@@ -120,7 +122,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "passphrase_hint": "At least 12 characters. Only needed if you ever switch on remote "
         "maintenance (SSH); write it down somewhere safe.",
         "passphrase2": "Maintenance passphrase again",
-        "security_done": "The security PIN and the maintenance passphrase are already set.",
+        "security_done": "A security PIN and a maintenance passphrase are kept for the claim; "
+        "you can set others when you claim Nox.",
+        "claim_legend": "Claim code",
+        "claim_code": "Claim code",
+        "claim_hint_device": "Nox made it for this setup; it is also on a screen plugged into "
+        "the Pi. Write it down - you need it once more to claim Nox.",
+        "claim_hint_card": "It is on your setup card.",
         "submit": "Connect",
         "errors_title": "Please check:",
         "err_network_missing": "Choose your home Wi-Fi, or that Nox has a cable.",
@@ -131,6 +139,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "err_pin_mismatch": "The two PINs are not the same.",
         "err_passphrase_short": "The passphrase needs at least 12 characters.",
         "err_passphrase_mismatch": "The two passphrases are not the same.",
+        "err_claim_code": "Type the claim code.",
+        "err_claim_wrong": "That claim code is not right - nothing was saved.",
+        "err_claim_wait": "Wrong claim codes slow Nox down. Wait a moment, then try again.",
+        "err_claim_locked": "Too many wrong claim codes. Unplug the Pi's power and plug it in "
+        "again.",
         "err_wrong_password": "Nox could not join {ssid}: the password was not accepted. "
         "Try again.",
         "err_not_found": "Nox could not find {ssid}. Is it in range?",
@@ -180,7 +193,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "passphrase_hint": "Mindestens 12 Zeichen. Nur nötig, wenn du je die Fernwartung (SSH) "
         "einschaltest; schreib sie an einen sicheren Ort.",
         "passphrase2": "Wartungs-Passphrase wiederholen",
-        "security_done": "Sicherheits-PIN und Wartungs-Passphrase sind schon gesetzt.",
+        "security_done": "Eine Sicherheits-PIN und eine Wartungs-Passphrase sind für die Übernahme "
+        "vorgemerkt; beim Übernehmen kannst du andere festlegen.",
+        "claim_legend": "Besitzer-Code",
+        "claim_code": "Besitzer-Code",
+        "claim_hint_device": "Nox hat ihn für diese Einrichtung gemacht; er steht auch auf einem "
+        "Bildschirm am Pi. Schreib ihn auf - du brauchst ihn noch einmal zum Übernehmen.",
+        "claim_hint_card": "Er steht auf deiner Einrichtungskarte.",
         "submit": "Verbinden",
         "errors_title": "Bitte prüfen:",
         "err_network_missing": "Wähle dein Heim-WLAN - oder dass Nox am Kabel hängt.",
@@ -191,6 +210,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "err_pin_mismatch": "Die beiden PINs sind nicht gleich.",
         "err_passphrase_short": "Die Passphrase braucht mindestens 12 Zeichen.",
         "err_passphrase_mismatch": "Die beiden Passphrasen sind nicht gleich.",
+        "err_claim_code": "Gib den Besitzer-Code ein.",
+        "err_claim_wrong": "Dieser Besitzer-Code stimmt nicht - es wurde nichts gespeichert.",
+        "err_claim_wait": "Falsche Besitzer-Codes bremsen Nox. Warte kurz und versuch es dann "
+        "noch einmal.",
+        "err_claim_locked": "Zu viele falsche Besitzer-Codes. Zieh kurz den Strom vom Pi und "
+        "steck ihn wieder ein.",
         "err_wrong_password": "Nox konnte {ssid} nicht beitreten: Das Passwort wurde nicht "
         "angenommen. Versuch es noch einmal.",
         "err_not_found": "Nox hat {ssid} nicht gefunden. Ist es in Reichweite?",
@@ -434,6 +459,7 @@ class Tokens:
 
 @dataclass
 class Form:
+    claim_code: str = field(default="", repr=False)
     network: str = ""
     other_ssid: str = ""
     psk: str = field(default="", repr=False)
@@ -457,6 +483,7 @@ def parse_form(body: bytes) -> tuple[Form, str, str]:
         return values[0][:limit]
 
     form = Form(
+        claim_code=one("claim_code", 40),
         network=one("network", 64),
         other_ssid=one("other_ssid", 64),
         psk=one("psk", 80),
@@ -485,6 +512,9 @@ def check_form(
 ) -> tuple[dict[str, str], dict[str, Any] | None]:
     """({field: error code}, the request for root) - the request only when there is no error."""
     errors: dict[str, str] = {}
+    code = re.sub(r"[\s-]", "", form.claim_code).upper()
+    if not 8 <= len(code) <= 32 or not code.isalnum() or not code.isascii():
+        errors["claim_code"] = "claim_code"
     known = {n["ssid"]: n for n in networks}
     wifi: dict[str, Any] | None = None
     if form.network == CABLE:
@@ -502,7 +532,7 @@ def check_form(
         errors["network"] = "network_missing"
     if wifi is not None and form.psk and not _psk_ok(form.psk):
         errors["psk"] = "psk_invalid"
-    request: dict[str, Any] = {"v": 1, "wifi": wifi}
+    request: dict[str, Any] = {"v": 1, "wifi": wifi, "claim_code": form.claim_code.strip()}
     if not security_done:
         if len(form.pin) < MIN_PIN or len(form.pin) > MAX_PIN or not form.pin.isprintable():
             errors["pin"] = "pin_short"
@@ -571,6 +601,7 @@ def form_page(
     seconds_left: int,
     errors: dict[str, str] | None = None,
     form: Form | None = None,
+    device_code: str | None = None,
 ) -> str:
     t = STRINGS[lang]
     errors = errors or {}
@@ -595,7 +626,9 @@ def form_page(
     if isinstance(provision, dict) and provision.get("imported") is False:
         notices.append(t["err_provision"].format(code=str(provision.get("error", ""))[:40]))
     error = status.get("error")
-    if isinstance(error, str) and error and status.get("state") != "failed":
+    if error in ("claim_wrong", "claim_wait", "claim_locked"):
+        notices.append(t["err_" + str(error)])
+    elif isinstance(error, str) and error and status.get("state") != "failed":
         notices.append(t["err_saved"].format(code=error[:40]))
     if errors:
         items = "".join(
@@ -611,6 +644,21 @@ def form_page(
     body.append('<form method="post" action="/setup" novalidate>')
     body.append(f'<input type="hidden" name="token" value="{_e(token)}">')
     body.append(f'<input type="hidden" name="lang" value="{lang}">')
+    body.append(f"<fieldset><legend>{_e(t['claim_legend'])}</legend>")
+    body.append(
+        _field(
+            "claim_code",
+            t["claim_code"],
+            "text",
+            errors,
+            t,
+            hint=t["claim_hint_device" if device_code else "claim_hint_card"],
+            value=form.claim_code or (device_code or ""),
+            extra=' autocomplete="off" autocapitalize="characters" spellcheck="false" '
+            'maxlength="40" required',
+        )
+    )
+    body.append("</fieldset>")
     hint = t["wifi_hint"] if networks else t["wifi_none_found"]
     invalid = ' aria-invalid="true"' if "network" in errors else ""
     body.append(
@@ -847,6 +895,7 @@ def make_handler(portal: Portal) -> type[BaseHTTPRequestHandler]:
                 seconds_left=left,
                 errors=errors,
                 form=form,
+                device_code=_read_text(portal.state.claim_code) or None,
             )
             self._html(code, text, lang)
 
@@ -889,9 +938,14 @@ def make_handler(portal: Portal) -> type[BaseHTTPRequestHandler]:
                     lang,
                     code=400,
                     errors=errors,
-                    form=Form(network=form.network, other_ssid=form.other_ssid),
+                    form=Form(
+                        claim_code=form.claim_code,
+                        network=form.network,
+                        other_ssid=form.other_ssid,
+                    ),
                 )
                 return
+            request["peer"] = peer
             try:
                 portal.state.write_request(request)
             except OSError:
@@ -899,6 +953,11 @@ def make_handler(portal: Portal) -> type[BaseHTTPRequestHandler]:
                 return
             wifi = request.get("wifi")
             code = _read_text(portal.state.claim_code) or None
+            if (
+                code is None
+                or code.replace("-", "") != form.claim_code.strip().replace("-", "").upper()
+            ):
+                code = None  # the card's code: never shown back
             self._html(
                 200,
                 done_page(

@@ -379,16 +379,28 @@ o3_portal() {
   grep -qi "^content-security-policy: default-src 'none'" /run/nox-smoke-headers.txt || finish "NOX-SMOKE-FAIL: portal CSP"
   token="$(printf '%s' "$page" | sed -n 's/.*name="token" value="\([^"]*\)".*/\1/p' | head -n1)"
   [ -n "$token" ] || finish "NOX-SMOKE-FAIL: no form token: $(printf '%s' "$page" | head -c 300)"
-  form="token=$token&lang=en&network=__cable__&pin=$SMOKE_PIN&pin2=$SMOKE_PIN&passphrase=$(printf '%s' "$pass" | sed 's/ /+/g')&passphrase2=$(printf '%s' "$pass" | sed 's/ /+/g')"
+  secrets="network=__cable__&pin=$SMOKE_PIN&pin2=$SMOKE_PIN&passphrase=$(printf '%s' "$pass" | sed 's/ /+/g')&passphrase2=$(printf '%s' "$pass" | sed 's/ /+/g')"
+  form="token=$token&lang=en&claim_code=$SMOKE_CLAIM_CODE&$secrets"
   code="$(phone -o /dev/null -w '%{http_code}' --data "$form" http://10.42.0.1/setup)"
   [ "$code" = 403 ] || finish "NOX-SMOKE-FAIL: a post without Origin: $code"
+  # A wrong claim code: the portal passes it on, root keeps and applies nothing.
+  code="$(phone -o /dev/null -w '%{http_code}' -H 'Origin: http://10.42.0.1' \
+    --data "token=$token&lang=en&claim_code=ZZZZ-ZZZZ-ZZZZ&$secrets" http://10.42.0.1/setup)"
+  [ "$code" = 200 ] || finish "NOX-SMOKE-FAIL: portal form (wrong code): $code"
+  tries=0
+  until [ "$(field /run/nox-os/setup/status.json error)" = claim_wrong ] || [ "$tries" -ge 30 ]; do sleep 1; tries=$((tries + 1)); done
+  [ "$(field /run/nox-os/setup/status.json error)" = claim_wrong ] || finish "NOX-SMOKE-FAIL: a wrong code in the portal: $(cat /run/nox-os/setup/status.json)"
+  [ ! -e /run/nox-os/setup/pending.json ] && [ ! -e /var/lib/nox-os/maintenance ] \
+    || finish "NOX-SMOKE-FAIL: a wrong claim code in the portal kept or set something"
+  sleep 3  # that phone's address now waits a moment before its next code
   code="$(phone -o /run/nox-smoke-done.html -w '%{http_code}' -H 'Origin: http://10.42.0.1' --data "$form" http://10.42.0.1/setup)"
   [ "$code" = 200 ] && grep -q 'nox.local:47843/claim/' /run/nox-smoke-done.html || finish "NOX-SMOKE-FAIL: portal form: $code"
   tries=0
-  until [ -e /run/nox-os/setup/pending-pin ] || [ "$tries" -ge 30 ]; do sleep 1; tries=$((tries + 1)); done
-  [ "$(mode_of /run/nox-os/setup/pending-pin)" = '600 root root' ] || finish "NOX-SMOKE-FAIL: the portal's PIN not staged root-only"
+  until [ -e /run/nox-os/setup/pending.json ] || [ "$tries" -ge 30 ]; do sleep 1; tries=$((tries + 1)); done
+  [ "$(mode_of /run/nox-os/setup/pending.json)" = '600 root root' ] || finish "NOX-SMOKE-FAIL: the portal's secrets not kept root-only"
   [ ! -e /run/nox-os/setup/portal/request.json ] || finish "NOX-SMOKE-FAIL: the portal's request left behind"
-  [ "$(mode_of /var/lib/nox-os/maintenance)" = '600 root root' ] || finish "NOX-SMOKE-FAIL: portal passphrase not set"
+  # Kept, not applied: the passphrase is set only by the claim.
+  [ ! -e /var/lib/nox-os/maintenance ] || finish "NOX-SMOKE-FAIL: the portal set the passphrase before the claim"
   verdict="$(ip netns exec nox-phone python3 -I -S -c 'import socket
 try:
     socket.create_connection(("10.42.0.1", 47843), timeout=6).close()
@@ -396,11 +408,13 @@ try:
 except OSError as exc:
     print(type(exc).__name__)')"
   [ "$verdict" = TimeoutError ] || finish "NOX-SMOKE-FAIL: Nox's port from the hotspot: $verdict"
-  say "NOX-SMOKE: portal: captive redirect, CSP, Origin checked, PIN staged root-only, passphrase set, Nox's port closed to the hotspot"
+  say "NOX-SMOKE: portal: captive redirect, CSP, Origin checked, wrong claim code keeps nothing, right one keeps PIN and passphrase root-only (unapplied), Nox's port closed to the hotspot"
 }
 o3_claim() {
   code="$(claim '{"code": "ZZZZ-ZZZZ-ZZZZ", "name": "Smoke phone"}')"
   [ "$code" = 401 ] || finish "NOX-SMOKE-FAIL: a wrong claim code: $code $(cat /run/nox-smoke-claim.json)"
+  [ ! -e /var/lib/nox-os/maintenance ] || finish "NOX-SMOKE-FAIL: a wrong claim applied the passphrase"
+  sleep 3  # the slow-down of this address after a wrong code
   status="$(curl -sk https://127.0.0.1:47843/api/claim)"
   echo "$status" | grep -q '"needs_pin": *false' && echo "$status" | grep -q '"needs_passphrase": *false' \
     || finish "NOX-SMOKE-FAIL: claim status after the portal: $status"
@@ -409,7 +423,8 @@ o3_claim() {
     || finish "NOX-SMOKE-FAIL: the claim: $code $(cat /run/nox-smoke-claim.json)"
   [ "$(mode_of /var/lib/nox-os-claim/claimed)" = '644 root root' ] || finish "NOX-SMOKE-FAIL: no root claim mark"
   [ ! -e /run/nox-os/setup-mode ] || finish "NOX-SMOKE-FAIL: setup mode outlived the claim"
-  [ ! -e /run/nox-os/setup/pending-pin ] || finish "NOX-SMOKE-FAIL: the PIN stayed staged"
+  [ ! -e /run/nox-os/setup/pending.json ] || finish "NOX-SMOKE-FAIL: the portal's secrets stayed kept"
+  [ "$(mode_of /var/lib/nox-os/maintenance)" = '600 root root' ] || finish "NOX-SMOKE-FAIL: the claim did not set the portal's passphrase"
   tries=0
   while systemctl is-active --quiet nox-setup-portal.service && [ "$tries" -lt 30 ]; do sleep 1; tries=$((tries + 1)); done
   if systemctl is-active --quiet nox-setup-portal.service; then finish "NOX-SMOKE-FAIL: the portal outlived the claim"; fi

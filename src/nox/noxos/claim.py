@@ -9,15 +9,18 @@ minutes after the Pi was powered on (a power cycle opens a new one - the physica
 someone is at the device). The code is on the setup card the PC assistant printed (only its hash
 is on the device), or - without a card - made at every boot and shown on a screen plugged into
 the Pi and in the setup hotspot's portal (`os/pi-gen/stage-nox/04-firstboot/files/`). The root
-helper checks it (`claim`), counts wrong ones (ten per window), and alone marks the device claimed
+helper checks it (`claim`), slows down the address of wrong ones, and alone marks the device claimed
 (`/var/lib/nox-os-claim/claimed`, root's): neither this process nor its user can mark it.
 
 **What a claim does**, in one request (`POST /api/claim`): pairs the claiming browser as the first
 device (its token goes to that browser only, exactly as `POST /api/pair` would), asks the helper
-to verify the code - which also sets the maintenance passphrase if the setup portal did not, ends
-setup mode and hands over the security PIN the portal took - sets that PIN, and audits it. A
-refused claim removes the device it had paired. After it, the guard lets everything through,
-setup mode is over and the firewall opens the node port.
+to verify the code - which also sets the maintenance passphrase, ends setup mode and hands over
+the security PIN - sets that PIN, and audits it. PIN and passphrase are the ones the claim page
+sent, else the ones the setup portal kept with the right claim code (the portal itself applies
+nothing): the claimant sees that some are kept and may set others. A refused claim removes the
+device it had paired. Wrong codes slow the sender's address down, root-side (`claim_wait`).
+After a claim the guard lets everything through, setup mode is over and the firewall opens the
+node port.
 
 **State.** `ClaimGate.required()` is checked on every request: on Nox-OS and without root's mark,
 the device is unclaimed - also when the mark cannot be read (fail closed). Once seen, "claimed"
@@ -33,6 +36,7 @@ import asyncio
 import base64
 import binascii
 import functools
+import ipaddress
 import json
 import re
 import stat
@@ -78,6 +82,7 @@ CLAIMS_TOTAL = 20
 REFUSALS: dict[str, tuple[int, str]] = {
     "claim_wrong": (401, "wrong_code"),
     "claim_locked": (429, "locked"),
+    "claim_wait": (429, "wait"),
     "not_setup": (403, "window_closed"),
     "claimed": (409, "claimed"),
     "no_claim_code": (503, "no_code"),
@@ -207,7 +212,11 @@ class ClaimService:
             "seconds_left": left if isinstance(left, int) else None,
             "code_on_card": answer.get("claim_code") == "card",
             "needs_pin": answer.get("pending_pin") is not True and not self._pin.is_set(),
-            "needs_passphrase": answer.get("passphrase") is not True,
+            "needs_passphrase": answer.get("passphrase") is not True
+            and answer.get("pending_passphrase") is not True,
+            # Kept by the setup portal for this claim: shown, and the claimant may set others.
+            "staged_pin": answer.get("pending_pin") is True,
+            "staged_passphrase": answer.get("pending_passphrase") is True,
             "min_pin": MIN_PIN,
             "min_passphrase": MIN_PASSPHRASE,
             **self._fingerprints(),
@@ -254,11 +263,19 @@ class ClaimService:
         if state.get("setup_mode") is not True:
             return 403, {"error": "window_closed"}
         needs_pin = state.get("pending_pin") is not True and not self._pin.is_set()
+        if body.pin == "":
+            body.pin = None
+        if body.passphrase == "":
+            body.passphrase = None
         pin_ok = body.pin is not None and MIN_PIN <= len(body.pin) <= MAX_PIN
-        if needs_pin and not (pin_ok and body.pin is not None and body.pin.isprintable()):
+        if (needs_pin or body.pin is not None) and not (
+            pin_ok and body.pin is not None and body.pin.isprintable()
+        ):
             return 400, {"error": "pin_required"}
-        needs_passphrase = state.get("passphrase") is not True
-        if needs_passphrase and (
+        needs_passphrase = (
+            state.get("passphrase") is not True and state.get("pending_passphrase") is not True
+        )
+        if (needs_passphrase or body.passphrase is not None) and (
             body.passphrase is None
             or len(body.passphrase) < MIN_PASSPHRASE
             or any(c in body.passphrase for c in "\x00\r\n")
@@ -274,8 +291,8 @@ class ClaimService:
             log.error("noxos.claim_pairing_failed", reason=result.reason)
             return 503, {"error": "unavailable"}
         actor = f"{CLIENT_PREFIX}{result.device_id}"
-        lines = [f"claim {result.device_id}", f"code {_b64(code)}"]
-        if needs_passphrase and body.passphrase is not None:
+        lines = [f"claim {result.device_id} {_address(peer)}", f"code {_b64(code)}"]
+        if body.passphrase is not None:
             lines.append(f"new {_b64(body.passphrase)}")
         try:
             answer = await self._helper(lines)
@@ -289,7 +306,8 @@ class ClaimService:
             log.warning("noxos.claim_refused", reason=error, peer=peer)
             return status, {"error": error}
         self.gate.mark_claimed()
-        pin = _decoded(answer.get("pin")) or (body.pin if needs_pin else None)
+        # The claimant's own PIN wins over the one the setup portal kept.
+        pin = body.pin or _decoded(answer.get("pin"))
         pin_set = False
         if pin and not self._pin.is_set():
             try:
@@ -306,6 +324,14 @@ class ClaimService:
             "token": redeemed.token,
             "next": ONBOARDING_URL,
         }
+
+
+def _address(peer: str) -> str:
+    """The peer's address for the helper's slow-down; an unknown one shares one key."""
+    try:
+        return str(ipaddress.ip_address(peer))
+    except ValueError:
+        return "0.0.0.0"  # noqa: S104 - a key, not a bind address
 
 
 def _decoded(value: object) -> str | None:
@@ -344,6 +370,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "passphrase": "Maintenance passphrase",
         "passphrase_hint": "At least 12 characters, for remote maintenance (SSH). Keep it safe.",
         "passphrase2": "Maintenance passphrase again",
+        "pin_staged": "A PIN was set in the setup Wi-Fi. Leave these empty to keep it.",
+        "passphrase_staged": "A passphrase was set in the setup Wi-Fi. Leave these empty to keep "
+        "it.",
+        "err_wait": "Wrong claim codes slow Nox down. Wait a moment, then try again.",
         "fingerprint": "Your browser warned because Nox made its own certificate. It is Nox if "
         "this fingerprint is the one shown on the Pi's screen or in the setup Wi-Fi:",
         "submit": "Claim Nox",
@@ -391,6 +421,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "passphrase_hint": "Mindestens 12 Zeichen, für die Fernwartung (SSH). Bewahr sie sicher "
         "auf.",
         "passphrase2": "Wartungs-Passphrase wiederholen",
+        "pin_staged": "Im Einrichtungs-WLAN wurde eine PIN festgelegt. Lass die Felder leer, um "
+        "sie zu behalten.",
+        "passphrase_staged": "Im Einrichtungs-WLAN wurde eine Passphrase festgelegt. Lass die "
+        "Felder leer, um sie zu behalten.",
+        "err_wait": "Falsche Besitzer-Codes bremsen Nox. Warte kurz und versuch es dann noch "
+        "einmal.",
         "fingerprint": "Dein Browser hat gewarnt, weil Nox sein eigenes Zertifikat gemacht hat. "
         "Es ist Nox, wenn dieser Fingerabdruck der vom Bildschirm am Pi oder aus dem "
         "Einrichtungs-WLAN ist:",
