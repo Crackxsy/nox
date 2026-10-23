@@ -62,7 +62,7 @@ def test_the_table_is_replaced_atomically() -> None:
 
 
 def test_network_access_opens_the_dashboard_and_node_ports_rate_limited() -> None:
-    chain = input_chain(rules(lan_enabled=True))
+    chain = input_chain(rules(lan_enabled=True, claimed=True))
     for port in (47843, 47844):
         for family, private in (("ip", "@private4"), ("ip6", "@private6")):
             assert f"{family} saddr {private} tcp dport {port} ct state new accept" in chain
@@ -93,10 +93,86 @@ def test_ssh_only_while_remote_maintenance_is_on_and_only_from_private_networks(
             assert line.strip().startswith(("ip saddr @private4 ", "ip6 saddr @private6 ")), line
 
 
-def test_setup_mode_opens_the_portal_ports() -> None:
-    chain = input_chain(rules(setup=True))
-    assert "tcp dport 80 accept" in chain and "udp dport { 53, 67 } accept" in chain
+def test_an_unclaimed_device_opens_the_dashboard_port_only() -> None:
+    """O3: before the claim Nox serves only its claim page on the dashboard port; the node port
+    stays closed whatever the configuration says."""
+    chain = input_chain(rules(lan_enabled=True))
+    assert "ip saddr @private4 tcp dport 47843 ct state new accept" in chain
+    assert "dport 47844" not in chain
+    assert fw.summary(fw.Settings(lan_enabled=True))["claimed"] is False
+
+
+def test_setup_ports_only_on_the_hotspot_and_nothing_else_there() -> None:
+    # Setup mode without the hotspot up opens no setup port at all.
+    assert "dport 80" not in rules(setup=True)
     assert "dport 80" not in rules()
+    chain = input_chain(rules(setup=True, hotspot="wlan0", lan_enabled=True, claimed=True))
+    lines = [line.strip() for line in chain.splitlines()]
+    hotspot = [line for line in lines if line.startswith('iifname "wlan0"')]
+    assert hotspot == [
+        'iifname "wlan0" ip saddr 10.42.0.0/24 tcp dport 80 accept',
+        'iifname "wlan0" udp sport 68 udp dport 67 accept',
+        'iifname "wlan0" ip saddr 10.42.0.0/24 meta l4proto { tcp, udp } th dport 53 accept',
+        'iifname "wlan0" drop',
+    ]
+    # The drop comes before Nox's ports and SSH: the hotspot reaches only the portal.
+    drop = lines.index('iifname "wlan0" drop')
+    assert drop < lines.index("ip saddr @private4 tcp dport 47843 ct state new accept")
+    assert all("dport 80" not in line for line in lines if not line.startswith("iifname"))
+    assert fw.settings_from({}, {}, ssh=False, setup=True, hotspot='wlan0" accept').hotspot is None
+
+
+def test_the_hotspot_stays_isolated_after_the_window_closed() -> None:
+    """Window over, hotspot not yet down: no setup port, and still nothing else from it."""
+    got = fw.settings_from(
+        {},
+        {"ipc": {"lan": {"enabled": True}}},
+        ssh=True,
+        setup=False,
+        hotspot="wlan0",
+        claimed=True,
+    )
+    lines = [line.strip() for line in input_chain(fw.render(got)).splitlines()]
+    assert [line for line in lines if line.startswith('iifname "wlan0"')] == [
+        'iifname "wlan0" drop'
+    ]
+    drop = lines.index('iifname "wlan0" drop')
+    assert drop < lines.index("ip saddr @private4 tcp dport 47843 ct state new accept")
+    assert drop < lines.index("ip saddr @private4 tcp dport 22 ct state new accept")
+    assert "dport 80" not in fw.render(got)
+
+
+BOOT = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
+
+
+def _window(tmp_path: Path, record: object) -> tuple[Path, Path]:
+    mode, ident = tmp_path / "setup-mode", tmp_path / "boot_id"
+    mode.write_text(json.dumps(record), "utf-8")
+    ident.write_text(BOOT + "\n", "ascii")
+    return mode, ident
+
+
+def test_the_setup_window_counts_only_while_open(tmp_path: Path) -> None:
+    me = os.stat(tmp_path).st_uid
+    mode, ident = _window(tmp_path, {"v": 1, "boot_id": BOOT, "until": 1800})
+    assert fw.setup_window_open(mode, ident, uptime=100, owner=me) is True
+    assert fw.setup_window_open(mode, ident, uptime=1800, owner=me) is False  # its end
+    assert fw.setup_window_open(mode, ident, uptime=100, owner=me + 1) is False  # not root's
+    _window(tmp_path, {"v": 1, "boot_id": "another boot", "until": 1800})
+    assert fw.setup_window_open(mode, ident, uptime=100, owner=me) is False
+    mode.write_text("", "utf-8")  # O2's empty flag is no window any more
+    assert fw.setup_window_open(mode, ident, uptime=100, owner=me) is False
+    assert fw.setup_window_open(tmp_path / "missing", ident, uptime=100, owner=me) is False
+
+
+def test_the_hotspot_interface_is_a_plain_name(tmp_path: Path) -> None:
+    me = os.stat(tmp_path).st_uid
+    state = tmp_path / "hotspot.json"
+    state.write_text(json.dumps({"iface": "wlan0"}), "utf-8")
+    assert fw.hotspot_iface(state, owner=me) == "wlan0"
+    state.write_text(json.dumps({"iface": 'wlan0" accept #'}), "utf-8")
+    assert fw.hotspot_iface(state, owner=me) is None
+    assert fw.hotspot_iface(tmp_path / "missing.json", owner=me) is None
 
 
 def test_outbound_is_open_except_cloud_metadata() -> None:

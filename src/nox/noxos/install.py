@@ -41,12 +41,9 @@ Requests, for the UI roles:
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import json
 import re
-import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -58,6 +55,7 @@ from nox.ipc.dispatch import RequestContext
 from nox.ipc.errors import ERR_PERMISSION, ERR_UNAVAILABLE, ERR_VALIDATION, IpcError
 from nox.ipc.roles import UI_ROLES
 from nox.lan.install import authorize_admin
+from nox.noxos.helper import HELPER_SOCKET, OS_RELEASE, HelperCall, HelperError, unix_helper
 from nox.noxos.keys import MAX_KEYS, InvalidKeyError, parse_keys
 from nox.noxos.protect import protected
 
@@ -71,14 +69,9 @@ __all__ = [
     "unix_helper",
 ]
 
-HELPER_SOCKET = Path("/run/nox-os/helper/helper.sock")
-OS_RELEASE = Path("/etc/nox-os-release")
 DEFAULT_MINUTES = 60
 MIN_MINUTES = 5
 MAX_MINUTES = 240
-#: The helper starts sshd and a timer and reloads the firewall: give it time on a Pi Zero.
-HELPER_TIMEOUT_S = 90.0
-MAX_ANSWER_BYTES = 64 * 1024
 FINGERPRINT_PATTERN = r"^SHA256:[A-Za-z0-9+/]{43}$"
 MIN_PASSPHRASE = 12
 MAX_PASSPHRASE = 256
@@ -93,54 +86,6 @@ HELPER_CODES = frozenset(
         "not_setup",
     }
 )
-
-#: One call to the root helper: request lines in, its JSON answer out.
-HelperCall = Callable[[list[str]], Awaitable[dict[str, Any]]]
-
-
-class HelperError(Exception):
-    """The helper could not be reached, or refused (`refused`: its message is safe to show)."""
-
-    def __init__(self, message: str, *, refused: bool = False, code: str = "") -> None:
-        super().__init__(message)
-        self.refused = refused
-        self.code = code
-
-
-def unix_helper(path: Path = HELPER_SOCKET, timeout_s: float = HELPER_TIMEOUT_S) -> HelperCall:
-    async def call(lines: list[str]) -> dict[str, Any]:
-        if sys.platform == "win32":
-            raise HelperError("the Nox-OS helper exists on Nox-OS only")
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_unix_connection(str(path), limit=MAX_ANSWER_BYTES), 5.0
-            )
-        except (OSError, TimeoutError) as exc:
-            raise HelperError(f"the Nox-OS helper is not reachable ({type(exc).__name__})") from exc
-        try:
-            writer.write(("\n".join(lines) + "\n").encode("ascii"))
-            await writer.drain()
-            writer.write_eof()
-            raw = await asyncio.wait_for(reader.readline(), timeout_s)
-        except (OSError, TimeoutError, ValueError) as exc:
-            raise HelperError(f"the Nox-OS helper did not answer ({type(exc).__name__})") from exc
-        finally:
-            writer.close()
-        try:
-            answer = json.loads(raw)
-        except ValueError as exc:
-            raise HelperError("the Nox-OS helper gave an answer that cannot be read") from exc
-        if not isinstance(answer, dict):
-            raise HelperError("the Nox-OS helper gave an answer that cannot be read")
-        if answer.get("ok") is not True:
-            raise HelperError(
-                str(answer.get("error", "refused"))[:200],
-                refused=True,
-                code=str(answer.get("code", ""))[:40],
-            )
-        return answer
-
-    return call
 
 
 class StatusRequest(BaseModel):
@@ -434,3 +379,28 @@ def install(
         h_passphrase_change,
         roles=UI_ROLES,
     )
+
+    async def h_claim_status(_ctx: RequestContext, _p: StatusRequest) -> dict[str, Any]:
+        """Read-only: whether this Nox-OS has its owner, and the setup window's time left - where
+        O4's onboarding starts. Elsewhere: not available."""
+        claim = getattr(core, "noxos_claim", None)
+        if claim is None:
+            return {"available": False, "claimed": False, "setup_mode": False, "seconds_left": None}
+        try:
+            answer = await call(["status"])
+        except HelperError:
+            return {
+                "available": True,
+                "claimed": not claim.gate.required(),
+                "setup_mode": False,
+                "seconds_left": None,
+            }
+        left = answer.get("setup_seconds_left")
+        return {
+            "available": True,
+            "claimed": not claim.gate.required() or answer.get("claimed") is True,
+            "setup_mode": answer.get("setup_mode") is True,
+            "seconds_left": left if isinstance(left, int) else None,
+        }
+
+    reg("noxos.claim.status", StatusRequest, h_claim_status, roles=UI_ROLES)

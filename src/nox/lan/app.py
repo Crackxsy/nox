@@ -12,6 +12,13 @@ What it serves, and nothing else:
   * `/pet/` - the built pet page (static files, no credential in them), for a paired node's
     overlay relay (`nox.node.overlay`, C9).
 
+**Unclaimed Nox-OS** (`ClaimSurface`, `nox.noxos.claim`): a Raspberry Pi image that has no owner
+yet serves nothing but its claim - `/claim/` (a small page of its own), `GET`/`POST /api/claim`,
+`/api/lan/info` and `/nox-ca.crt`. The dashboard, the pet page, pairing, nodes and the WebSocket
+are refused (`403 unclaimed`; a page under `/dashboard/` is redirected to the claim page) until the
+claim succeeded - checked on every request, so the claim takes effect without a restart, and
+"unclaimed" is what an unreadable claim state counts as.
+
 What it never serves: the per-start session token, `/api/state` or `/api/providers`. A device
 authenticates on the hub with its own token, as role `device`; the only other role the hub
 accepts on a bridged connection is the read-only `overlay`, with a credential the core issued to a
@@ -44,6 +51,7 @@ import re
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +79,7 @@ log = get_logger(__name__)
 NodePairHandler = Callable[[NodePairRequest], Awaitable[tuple[int, dict[str, Any]]]]
 
 __all__ = [
+    "ClaimSurface",
     "LanSettings",
     "NodePairHandler",
     "PairLimiter",
@@ -85,6 +94,8 @@ CLOSE_TRY_AGAIN_LATER = 1013
 CLOSE_INTERNAL_ERROR = 1011
 MAX_FRAME_BYTES = 1024 * 1024
 MAX_PAIR_BODY_BYTES = 1024
+#: A claim carries the claim code, a name, and possibly the PIN and the maintenance passphrase.
+MAX_CLAIM_BODY_BYTES = 2048
 #: A node's pairing body carries a certificate request (about 500 bytes of PEM).
 MAX_NODE_PAIR_BODY_BYTES = 8192
 #: WebSockets that have not authenticated yet, in total and per source address.
@@ -233,6 +244,61 @@ class PairLimiter:
         return True
 
 
+@dataclass(frozen=True)
+class ClaimSurface:
+    """What the listener needs from an unclaimed Nox-OS (`nox.noxos.claim.ClaimService`)."""
+
+    #: True while the device has no owner: then only the claim is served.
+    required: Callable[[], bool]
+    #: `GET /api/claim`.
+    status: Callable[[], Awaitable[dict[str, Any]]]
+    #: `POST /api/claim`: the raw body (at most MAX_CLAIM_BODY_BYTES) and the peer's address.
+    claim: Callable[[bytes, str], Awaitable[tuple[int, dict[str, Any]]]]
+    #: The claim page's files: `/claim/<name>` -> (content, media type), or None.
+    asset: Callable[[str], tuple[bytes, str] | None]
+    #: The claim page's own Content-Security-Policy ("" keeps the listener's).
+    policy: str = ""
+
+
+#: What an unclaimed device answers at all (besides `/claim/...`).
+_CLAIM_PATHS = frozenset({"/", "/api/claim", "/api/lan/info", "/nox-ca.crt"})
+
+
+class _ClaimGuard:
+    """Pure-ASGI middleware: while the device is unclaimed, everything but the claim is refused -
+    fail closed: whatever `required()` cannot vouch for counts as unclaimed."""
+
+    def __init__(self, app: ASGIApp, *, claim: ClaimSurface) -> None:
+        self._app = app
+        self._claim = claim
+
+    def _required(self) -> bool:
+        try:
+            return bool(self._claim.required())
+        except Exception:  # noqa: BLE001 - an unknown state is no owner
+            log.warning("lan.claim_state_unknown")
+            return True
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] not in ("http", "websocket") or not self._required():
+            await self._app(scope, receive, send)
+            return
+        path = str(scope.get("path", ""))
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": CLOSE_POLICY_VIOLATION})
+            return
+        if path == "/":
+            response: Response = RedirectResponse("/claim/", status_code=302)
+        elif path in _CLAIM_PATHS or path.startswith("/claim/"):
+            await self._app(scope, receive, send)
+            return
+        elif scope.get("method") in ("GET", "HEAD") and path.startswith("/dashboard"):
+            response = RedirectResponse("/claim/", status_code=302)
+        else:
+            response = JSONResponse({"error": "unclaimed"}, status_code=403)
+        await response(scope, receive, send)
+
+
 class PairBody(BaseModel):
     code: str = Field(min_length=4, max_length=16)
     #: Typed on the new device; empty means "use the name chosen on the PC, or my guess".
@@ -321,8 +387,10 @@ class _Guard:
                 out = MutableHeaders(scope=message)
                 for key, value in _BASE_HEADERS.items():
                     out[key] = value
-                # Built from the validated host and a numeric port, never from the raw header.
-                out["Content-Security-Policy"] = policy
+                # Built from the validated host and a numeric port, never from the raw header -
+                # unless a route set a narrower policy of its own (the claim page).
+                if "content-security-policy" not in out:
+                    out["Content-Security-Policy"] = policy
             await send(message)
 
         await self._app(scope, receive, send_with_headers)
@@ -360,6 +428,7 @@ def create_lan_app(
     allow_public_clients: bool = False,
     max_frame_bytes: int = MAX_FRAME_BYTES,
     node_pair: Callable[[], NodePairHandler | None] = lambda: None,
+    claim: ClaimSurface | None = None,
 ) -> Starlette:
     """Build the listener's app. Everything is injected, so tests run it without a core."""
     preauth: dict[str, int] = {}
@@ -562,6 +631,35 @@ def create_lan_app(
                 # knows it was removed rather than merely disconnected.
                 await websocket.close(code=close_code)
 
+    async def claim_page(request: Request) -> Response:
+        assert claim is not None
+        if not claim.required():
+            return RedirectResponse("/dashboard/", status_code=302)
+        found = claim.asset(str(request.path_params.get("rest", "")))
+        if found is None:
+            return Response("not found\n", status_code=404)
+        content, media_type = found
+        # Its own, narrower policy (the listener keeps it instead of its general one).
+        headers = {"Content-Security-Policy": claim.policy} if claim.policy else None
+        return Response(content, media_type=media_type, headers=headers)
+
+    async def claim_api(request: Request) -> Response:
+        assert claim is not None
+        if request.method == "GET":
+            return JSONResponse(await claim.status())
+        address = _client_address(request.client)
+        if not _same_origin(request.headers):
+            log.warning("lan.claim_origin_refused", peer=address)
+            return JSONResponse({"error": "origin"}, status_code=403)
+        declared = request.headers.get("content-length", "")
+        if declared and (not declared.isdigit() or int(declared) > MAX_CLAIM_BODY_BYTES):
+            return JSONResponse({"error": "invalid"}, status_code=413)
+        raw = await request.body()
+        if len(raw) > MAX_CLAIM_BODY_BYTES:
+            return JSONResponse({"error": "invalid"}, status_code=413)
+        status, answer = await claim.claim(raw, address)
+        return JSONResponse(answer, status_code=status)
+
     routes: list[Route | Mount | WebSocketRoute] = [
         Route("/", root, methods=["GET"]),
         Route("/api/lan/info", info, methods=["GET"]),
@@ -572,6 +670,11 @@ def create_lan_app(
     ]
     if pet_dist is not None and (pet_dist / "index.html").is_file():
         routes.append(Mount("/pet", app=StaticFiles(directory=str(pet_dist), html=True)))
+    if claim is not None:
+        routes += [
+            Route("/claim/{rest:path}", claim_page, methods=["GET"]),
+            Route("/api/claim", claim_api, methods=["GET", "POST"]),
+        ]
     if dashboard_dist is not None and (dashboard_dist / "index.html").is_file():
         routes.append(
             Mount("/dashboard", app=StaticFiles(directory=str(dashboard_dist), html=True))
@@ -587,6 +690,10 @@ def create_lan_app(
         return Response("not found\n", status_code=404)
 
     app = Starlette(routes=routes)
+    # Inside the host and peer checks (added last, so outermost): the claim guard decides only
+    # about requests that are already this listener's own.
+    if claim is not None:
+        app.add_middleware(_ClaimGuard, claim=claim)
     app.add_middleware(
         _Guard, allowed_hosts=allowed_hosts, allow_public_clients=allow_public_clients
     )

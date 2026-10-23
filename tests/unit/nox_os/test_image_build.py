@@ -89,6 +89,7 @@ def test_stage_scripts_are_executable_in_git() -> None:
         "os/pi-gen/stage-nox/01-nox/00-run.sh",
         "os/pi-gen/stage-nox/02-system/00-run.sh",
         "os/pi-gen/stage-nox/03-hardening/00-run.sh",
+        "os/pi-gen/stage-nox/04-firstboot/00-run.sh",
         "os/pi-gen/export-nox/00-run.sh",
         "os/tools/check-image.sh",
         "os/tools/qemu-smoke.sh",
@@ -315,6 +316,11 @@ def test_the_console_status_runs_without_rights() -> None:
 def test_the_firewall_fails_closed() -> None:
     service = _unit("nox-firewall.service")
     assert service["Unit"]["Requires"] == ["nftables.service"]
+    # Root runs the system interpreter with the distribution's PyYAML, never Nox's environment.
+    assert service["Service"]["ExecStart"] == [
+        "/usr/bin/python3 -I /usr/local/lib/nox-os/nox_firewall.py apply"
+    ]
+    assert "python3-yaml" in (HARDENING_STAGE / "00-packages").read_text("utf-8").split()
     run = (HARDENING_STAGE / "00-run.sh").read_text("utf-8")
     assert "nox_firewall.py baseline > /etc/nftables.conf" in run
     assert "nftables.service nox-firewall.service nox-firewall.path nox-os-helper.socket" in run
@@ -325,3 +331,98 @@ def test_o2_is_checked_by_the_workflow() -> None:
     run = steps["Firewall rules, sshd and sudo configuration are valid"]["run"]
     assert "sudo nft -c -f rules.nft" in run and "sshd -t -f" in run and "visudo -cf" in run
     assert "03-hardening/files/*.py" in steps["Python tools compile"]["run"]
+
+
+# ---- O3: first boot without a screen --------------------------------------------------------
+
+FIRSTBOOT_STAGE = PIGEN / "stage-nox" / "04-firstboot"
+
+
+def _o3_unit(name: str) -> dict[str, dict[str, list[str]]]:
+    sections: dict[str, dict[str, list[str]]] = {}
+    current: dict[str, list[str]] = {}
+    for raw in (FIRSTBOOT_STAGE / "files" / name).read_text("utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            current = sections.setdefault(line.strip("[]"), {})
+            continue
+        key, _, value = line.partition("=")
+        current.setdefault(key, []).append(value)
+    return sections
+
+
+def test_the_first_boot_runs_before_the_network_and_nox() -> None:
+    unit = _o3_unit("nox-firstboot.service")
+    before = " ".join(unit["Unit"]["Before"])
+    for name in (
+        "network-pre.target",
+        "NetworkManager.service",
+        "nox.service",
+        "nox-firewall.service",
+    ):
+        assert name in before, name
+    assert unit["Unit"]["RequiresMountsFor"] == ["/boot/firmware /var/lib"]
+    assert unit["Install"]["WantedBy"] == ["sysinit.target"]
+    run = (FIRSTBOOT_STAGE / "00-run.sh").read_text("utf-8")
+    assert "systemctl mask systemd-firstboot.service" in run
+    assert "systemctl enable nox-firstboot.service nox-setup.timer nox-setup-apply.path" in run
+
+
+def test_the_setup_portal_is_unprivileged_and_never_enabled() -> None:
+    unit = _o3_unit("nox-setup-portal.service")
+    assert "Install" not in unit
+    service = unit["Service"]
+    for key, value in (
+        ("User", "nox-setup"),
+        ("CapabilityBoundingSet", "CAP_NET_BIND_SERVICE"),
+        ("AmbientCapabilities", "CAP_NET_BIND_SERVICE"),
+        ("NoNewPrivileges", "yes"),
+        ("ProtectSystem", "strict"),
+        ("ReadWritePaths", "/run/nox-os/setup/portal"),
+        ("IPAddressDeny", "any"),
+        ("IPAddressAllow", "10.42.0.0/24"),
+        ("RestrictAddressFamilies", "AF_INET AF_UNIX"),
+    ):
+        assert service[key] == [value], key
+    run = (FIRSTBOOT_STAGE / "00-run.sh").read_text("utf-8")
+    assert "--shell /usr/sbin/nologin nox-setup" in run
+    assert "groupadd --system nox-os-setup" in run and "usermod" not in run
+
+
+def test_the_setup_window_has_one_clock_and_closes_itself() -> None:
+    timer = _o3_unit("nox-setup.timer")["Timer"]
+    assert timer["OnUnitActiveSec"] == ["15s"]
+    setup = (FIRSTBOOT_STAGE / "files" / "nox_setup.py").read_text("utf-8")
+    assert "WINDOW_S = 30 * 60" in setup and "CLOCK_BOOTTIME" in setup
+    assert "shell=True" not in setup and "os.system" not in setup
+    close = _o3_unit("nox-setup-close.service")["Service"]
+    assert close["ExecStart"] == [
+        "/usr/bin/python3 -I -S /usr/local/lib/nox-os/nox_setup.py close claimed"
+    ]
+    # The root helper may write the claim mark, nothing more.
+    dropin = _o3_unit("nox-os-helper-claim.conf")
+    assert dropin == {"Service": {"ReadWritePaths": ["/var/lib/nox-os-claim"]}}
+
+
+def test_no_root_unit_or_setup_program_runs_noxs_python() -> None:
+    for folder in (HARDENING_STAGE / "files", FIRSTBOOT_STAGE / "files"):
+        for path in folder.iterdir():
+            if path.name in ("nox-service-nox-os.conf",) or path.suffix not in (
+                ".service",
+                ".conf",
+                ".py",
+                ".timer",
+                ".path",
+            ):
+                continue
+            text = path.read_text("utf-8")
+            assert ".venv/bin" not in text and "/opt/nox/current/.venv" not in text, path.name
+    run = (FIRSTBOOT_STAGE / "00-run.sh").read_text("utf-8")
+    assert 'install -m 0644 files/nox_qr.py "$lib/"' in run
+
+
+def test_o3_is_checked_by_the_workflow() -> None:
+    steps = {s.get("name"): s for s in _workflow()["jobs"]["check"]["steps"]}
+    assert "04-firstboot/files/*.py" in steps["Python tools compile"]["run"]

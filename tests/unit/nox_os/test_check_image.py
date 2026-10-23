@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit.nox_os.conftest import HARDENING, REPO, TOOLS, load_tool
+from tests.unit.nox_os.conftest import FIRSTBOOT, HARDENING, REPO, TOOLS, load_tool
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux" or shutil.which("bash") is None, reason="GNU tools, symlinks: Linux"
@@ -75,6 +75,7 @@ def _clean_tree(base: Path) -> tuple[Path, Path]:
     _write(boot / "cmdline.txt", "console=serial0,115200 root=PARTUUID=0000-02 rootwait resize\n")
     _write(boot / "config.txt", "arm_64bit=1\n")
     _o2(root)
+    _o3(root)
     return root, boot
 
 
@@ -147,6 +148,34 @@ def _o2(root: Path) -> None:
     )
 
 
+def _o3(root: Path) -> None:
+    """What O3's sub-stage (os/pi-gen/stage-nox/04-firstboot/00-run.sh) leaves in the image."""
+    system = root / "etc" / "systemd" / "system"
+    for unit in (
+        "nox-firstboot.service",
+        "nox-setup.timer",
+        "nox-setup.service",
+        "nox-setup-close.service",
+        "nox-setup-apply.path",
+        "nox-setup-apply.service",
+        "nox-setup-portal.service",
+    ):
+        shutil.copy(FIRSTBOOT / unit, system / unit)
+    for target, unit in (
+        ("sysinit.target", "nox-firstboot.service"),
+        ("timers.target", "nox-setup.timer"),
+        ("multi-user.target", "nox-setup-apply.path"),
+    ):
+        _link(system / f"{target}.wants" / unit, f"/etc/systemd/system/{unit}")
+    _link(system / "systemd-firstboot.service", "/dev/null")
+    _append(root / "etc" / "group", "nox-os-setup:x:997:\nnox-setup:x:996:\n")
+    _append(root / "etc" / "passwd", "nox-setup:x:996:996::/nonexistent:/usr/sbin/nologin\n")
+    _write(
+        root / "etc" / "NetworkManager" / "dnsmasq-shared.d" / "50-nox-setup.conf",
+        (FIRSTBOOT / "dnsmasq-nox-setup.conf").read_text("utf-8"),
+    )
+
+
 def _check(root: Path, boot: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(SCRIPT), "--root", str(root), "--boot", str(boot)],
@@ -167,7 +196,10 @@ Spoil = Callable[[Path, Path], None]
 
 SPOILERS: dict[str, Spoil] = {
     "a password hash": lambda r, b: _write(r / "etc/shadow", "root:$y$j9T$abc$def:20000::::::\n"),
-    "a password in passwd": lambda r, b: _write(r / "etc/passwd", "root:abc:0:0::/root:/bin/sh\n"),
+    # Appended: the rest of the file (the setup portal's locked user too) stays as it ships.
+    "a password in passwd": lambda r, b: _append(
+        r / "etc/passwd", "admin2:abc:0:0::/root:/bin/sh\n"
+    ),
     "NOPASSWD sudo": lambda r, b: _write(
         r / "etc/sudoers.d/010_pi-nopasswd", "nox-admin ALL=(ALL) NOPASSWD: ALL\n"
     ),
@@ -301,6 +333,44 @@ SPOILERS: dict[str, Spoil] = {
     "a boot firewall letting SSH in from the device itself": lambda r, b: _replace(
         r / "etc/nftables.conf", 'iif "lo" tcp dport 22 drop\n', ""
     ),
+    # O3
+    "systemd-firstboot not masked": lambda r, b: (
+        r / "etc/systemd/system/systemd-firstboot.service"
+    ).unlink(),
+    "no first-boot unit": lambda r, b: (
+        r / "etc/systemd/system/sysinit.target.wants/nox-firstboot.service"
+    ).unlink(),
+    "the setup portal enabled": lambda r, b: _link(
+        r / "etc/systemd/system/multi-user.target.wants/nox-setup-portal.service", "/x"
+    ),
+    "the setup portal as root": lambda r, b: _replace(
+        r / "etc/systemd/system/nox-setup-portal.service", "User=nox-setup\n", ""
+    ),
+    "the setup portal on every network": lambda r, b: _replace(
+        r / "etc/systemd/system/nox-setup-portal.service", "IPAddressDeny=any\n", ""
+    ),
+    "a login for the portal's user": lambda r, b: _replace(
+        r / "etc/passwd", ":/usr/sbin/nologin", ":/bin/bash"
+    ),
+    "a member in the setup-secrets group": lambda r, b: _replace(
+        r / "etc/group", "nox-os-setup:x:997:", "nox-os-setup:x:997:nox"
+    ),
+    "no captive DNS": lambda r, b: (
+        r / "etc/NetworkManager/dnsmasq-shared.d/50-nox-setup.conf"
+    ).unlink(),
+    "a provisioning file on the boot partition": lambda r, b: _write(
+        b / "nox-provision.json", '{"v": 1}'
+    ),
+    "a shipped claim mark": lambda r, b: _write(r / "var/lib/nox-os-claim/claimed", "{}"),
+    "a reclaim marker on the boot partition": lambda r, b: _write(b / "nox-reclaim", "reclaim"),
+    "a root unit running Nox's Python": lambda r, b: _write(
+        r / "etc/systemd/system/nox-firewall.service",
+        "[Service]\nExecStart=/opt/nox/current/.venv/bin/python -I /usr/local/lib/nox-os/x.py\n",
+    ),
+    "a root setup program calling Nox's Python": lambda r, b: _write(
+        r / "usr/local/lib/nox-os/nox_x.py", 'PY = "/opt/nox/current/.venv/bin/python"\n'
+    ),
+    "a shipped test window": lambda r, b: _write(r / "etc/nox-os/testing/setup-window-s", "60"),
 }
 
 

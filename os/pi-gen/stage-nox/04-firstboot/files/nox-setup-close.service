@@ -1,0 +1,15 @@
+# Nox-OS: end setup mode now (nox_setup.py close) - started by the root helper after a claim.
+[Unit]
+Description=Nox-OS: end setup mode
+After=nox-firstboot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I -S /usr/local/lib/nox-os/nox_setup.py close claimed
+UMask=0077
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+TimeoutStartSec=120
