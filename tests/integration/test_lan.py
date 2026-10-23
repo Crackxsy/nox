@@ -707,6 +707,7 @@ CALM_SNAPSHOT = frozenset(
         "memory.profile.list",
         "node.computer.status",
         "node.list",
+        "noxos.ssh.status",
         "personality.get",
         "plans.list",
         "plugin.status",
