@@ -286,8 +286,10 @@ class SatelliteHub:
                 # Never its own name or a kill phrase out of a speaker a microphone hears - not
                 # even when an untrusted conversation made the model write it (review R3).
                 text = speakable(text) or ""
-                if not text and not last:
-                    return
+            if not text and not last:
+                # A dropped sentence (or an empty one) is skipped, never sent as an empty say:
+                # only the last one goes out empty, so the node knows the answer is over.
+                return
             say = p.VoiceSay(
                 turn_id=heard.turn_id,
                 seq=seq,
