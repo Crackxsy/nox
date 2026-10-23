@@ -493,7 +493,9 @@ o3_reclaim() {
   [ "$(field /run/nox-os/setup-mode reason)" = unclaimed ] || finish "NOX-SMOKE-FAIL: no fresh setup window"
   tries=0
   while :; do
-    health="$(curl -s -m 10 -o /dev/null -w '%{http_code}' http://127.0.0.1:47801/health)"
+    # The HTTP port may move at a restart (the next free one): Nox writes it to runtime/ipc.json.
+    port="$(field /var/lib/nox/runtime/ipc.json http_port)"
+    health="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port:-47801}/health")"
     lan="$(curl -sk -m 10 -o /dev/null -w '%{http_code}' https://127.0.0.1:47843/api/lan/info)"
     [ "$health" = 200 ] && [ "$lan" = 200 ] && break
     [ "$tries" -lt 60 ] || finish "NOX-SMOKE-FAIL: Nox did not come back after the reclaim (health $health, listener $lan; $(ss -Htln 2>&1 | tr -s ' ' | cut -d' ' -f4 | tr '\n' ' '))"
