@@ -1061,7 +1061,8 @@ What leaves a node, and what a node may send the core (`nox.node.voice`, `nox.no
 - **No shortcuts on room words.** Preset phrases and the mode shortcut run before the tool
   loop - outside any conversation's taint - so for a satellite turn they are skipped: the text
   goes to the model like any other untrusted turn. Only a preset the owner marked
-  `from_satellites` (off by default; switching it on needs the PIN) runs there, with the node's
+  `from_satellites` (off by default; every write to `presets.*` - items, actions, the switch,
+  removals included - needs the PIN when one is set, since presets start programs) runs there, with the node's
   conversation set and as agent `presets.satellite`, not `presets` (which the shipped profiles
   allow) - so the normal rules and the taint apply to every step; a mode step refuses. Voice
   from a satellite never switches the mode, and "neues Gespräch" said there neither discards the

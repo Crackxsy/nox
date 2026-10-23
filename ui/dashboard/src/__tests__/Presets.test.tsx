@@ -171,15 +171,14 @@ describe('Presets page', () => {
     expect(Object.keys(values)).toContain('presets.items');
   });
 
-  it('marks a preset for voice satellites only with the PIN, sent along', async () => {
+  it('asks for the PIN for every change and sends it along (also marking for satellites)', async () => {
     const { client, sent } = fakeClient({ 'config.set': { ok: true, errors: {} } });
     await renderPage(client);
 
     const [editPreset] = await screen.findAllByRole('button', { name: t('presets_edit') });
     await userEvent.click(editPreset!);
-    expect(screen.queryByLabelText(t('presets_satellite_pin'))).toBeNull();
     await userEvent.click(screen.getByRole('checkbox', { name: t('presets_from_satellites') }));
-    await userEvent.type(screen.getByLabelText(t('presets_satellite_pin')), '2468');
+    await userEvent.type(screen.getByLabelText(t('presets_pin')), '2468');
     await userEvent.click(screen.getByRole('button', { name: t('presets_save') }));
 
     await waitFor(() => {
