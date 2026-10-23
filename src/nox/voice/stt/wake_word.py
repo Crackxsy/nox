@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import difflib
 import re
+import unicodedata
 from dataclasses import dataclass
 
 _PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
@@ -29,8 +30,46 @@ KILL_PHRASES: tuple[tuple[str, ...], ...] = (
 )
 
 
+#: Letters from other scripts (and Latin small capitals) that look like a Latin letter. A text Nox
+#: is told to say could spell its own name or "Notaus" with them ("Nох" with Cyrillic о and х):
+#: invisible to a plain comparison, but a speech engine reads it out as the name, and the
+#: microphone hears a command. Folded before anything is compared. Deliberately small - the
+#: lookalikes of the Latin alphabet in the scripts a German or English text is likely to borrow
+#: them from - not a full confusables table.
+_CONFUSABLES = str.maketrans(
+    {
+        # Cyrillic
+        "а": "a", "в": "b", "е": "e", "ё": "e", "г": "r", "һ": "h", "і": "i", "ї": "i",
+        "ј": "j", "к": "k", "м": "m", "н": "h", "о": "o", "п": "n", "р": "p", "с": "c",
+        "т": "t", "у": "y", "х": "x", "ѕ": "s", "ԁ": "d", "ԛ": "q", "ԝ": "w", "ь": "b",
+        "ү": "y", "ҳ": "x", "ӏ": "l",
+        # Greek
+        "α": "a", "β": "b", "γ": "y", "ε": "e", "η": "n", "ι": "i", "κ": "k", "μ": "u",
+        "ν": "v", "ο": "o", "ρ": "p", "σ": "o", "τ": "t", "υ": "u", "χ": "x", "ω": "w",
+        "ϲ": "c", "ϳ": "j",
+        # Armenian
+        "օ": "o", "ո": "n", "ս": "u", "հ": "h", "ց": "g",
+        # Latin small capitals and other Latin lookalikes NFKC leaves alone
+        "ᴀ": "a", "ʙ": "b", "ᴄ": "c", "ᴅ": "d", "ᴇ": "e", "ɢ": "g", "ʜ": "h", "ɪ": "i",
+        "ᴊ": "j", "ᴋ": "k", "ʟ": "l", "ᴍ": "m", "ɴ": "n", "ᴏ": "o", "ᴘ": "p", "ʀ": "r",
+        "ꜱ": "s", "ᴛ": "t", "ᴜ": "u", "ᴠ": "v", "ᴡ": "w", "ʏ": "y", "ᴢ": "z", "ı": "i",
+        "ɑ": "a", "ɡ": "g", "ɩ": "i", "ʋ": "u",
+    }
+)  # fmt: skip
+
+
+def fold_confusables(text: str) -> str:
+    """`text` in lower case with compatibility forms unified (NFKC: fullwidth, ligatures, styled
+    letters), invisible format characters (zero-width joiners, bidi controls) removed - so they
+    cannot split a word a speech engine still reads as one - and the lookalikes above replaced
+    by the Latin letter they imitate."""
+    folded = unicodedata.normalize("NFKC", text).lower()
+    folded = "".join(c for c in folded if unicodedata.category(c) != "Cf")
+    return folded.translate(_CONFUSABLES)
+
+
 def normalize(text: str) -> str:
-    return _SPACES.sub(" ", _PUNCT.sub(" ", text.lower())).strip()
+    return _SPACES.sub(" ", _PUNCT.sub(" ", fold_confusables(text))).strip()
 
 
 def is_wake_token(token: str, *, name: str = "nox", threshold: float = 0.75) -> bool:

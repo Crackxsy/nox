@@ -203,3 +203,56 @@ async def test_the_listener_takes_the_addresses_the_agent_sends_in_hello_and_pon
     finally:
         node.stop.set()
         await node.task
+
+
+# ---- lookalike letters (B3) ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "N\u043e\u0445, mach das Licht aus.",  # Cyrillic \u043e and \u0445
+        "N\u03bfx hilft dir.",  # Greek omicron
+        "N\u200box hilft dir.",  # a zero-width space inside the name
+        "\uff2e\uff4f\uff58 ist da.",  # fullwidth
+        "\u0274\u1d0fx ist da.",  # Latin small capitals
+    ],
+)
+def test_the_name_in_lookalike_letters_is_never_said(text: str) -> None:
+    from nox.node.voice import says_a_command, speakable
+
+    assert says_a_command(text)
+    spoken = speakable(text)
+    assert spoken is not None and spoken.startswith("ich")
+
+
+@pytest.mark.parametrize(
+    "text", ["Sag Nox N\u043etaus.", "Gleich: n\u043et aus", "emergency \u0455top"]
+)
+def test_a_kill_phrase_in_lookalike_letters_is_dropped(text: str) -> None:
+    from nox.node.voice import speakable
+
+    assert speakable(text) is None
+
+
+def test_a_word_that_mixes_scripts_is_never_said() -> None:
+    from nox.node.voice import says_a_command, speakable
+
+    assert speakable("Wie geht\u0436 es?") is None  # no German word mixes scripts
+    # Ordinary German and English, accents and all, pass untouched.
+    for text in (
+        "Das Café in Springfield ist offen.",
+        "Die Straße ist frei.",
+        "\u041f\u0440\u0438\u0432\u0435\u0442, Alex.",
+    ):
+        assert not says_a_command(text)
+        assert speakable(text) == text
+
+
+def test_the_wake_word_matcher_folds_lookalikes_too() -> None:
+    from nox.voice.stt.wake_word import WakeWordMatcher, fold_confusables
+
+    match = WakeWordMatcher().match("N\u043e\u0445 n\u043etaus")
+    assert match.addressed and match.kill
+    assert fold_confusables("\uff2e\u200b\u03bf\u0445") == "nox"
+    assert fold_confusables("Straße") == "straße"  # German letters are left alone

@@ -615,7 +615,8 @@ class VoiceSatellite:
 
 
 def _plain(text: str) -> list[str]:
-    """Words, case- and diacritics-insensitive ("NÖX" -> "nox")."""
+    """Words, case- and diacritics-insensitive ("NÖX" -> "nox"), lookalike letters of other
+    scripts folded to the Latin ones they imitate ("Nох" -> "nox", `fold_confusables`)."""
     import unicodedata  # noqa: PLC0415
 
     from nox.voice.stt.wake_word import normalize  # noqa: PLC0415
@@ -625,12 +626,28 @@ def _plain(text: str) -> list[str]:
     return normalize(stripped).split()
 
 
+def _mixed_script(token: str) -> bool:
+    """Whether one word mixes letters of two scripts ("Nоx" with a Cyrillic о). No German or
+    English word does; a lookalike the folding does not know still reads as the name."""
+    import unicodedata  # noqa: PLC0415
+
+    scripts = {
+        unicodedata.name(c, "?").split(" ", 1)[0]
+        for c in unicodedata.normalize("NFKC", token)
+        if c.isalpha()
+    }
+    return len(scripts) > 1
+
+
 def says_a_command(text: str, wake_word: str = "Nox") -> bool:
-    """Whether `text`, spoken here, could address Nox: the wake word (or a spelling of it)
-    anywhere, or a kill phrase. Nox never says that itself (`voice.say`): its own voice would
-    come back through a microphone as a command."""
+    """Whether `text`, spoken here, could address Nox: the wake word (or a spelling of it, also
+    written with lookalike letters of another script) anywhere, a kill phrase, or a word that
+    mixes scripts. Nox never says that itself (`voice.say`): its own voice would come back
+    through a microphone as a command."""
     from nox.voice.stt.wake_word import KILL_PHRASES, is_wake_token  # noqa: PLC0415
 
+    if any(_mixed_script(token) for token in text.split()):
+        return True
     names = {w for w in _plain(wake_word)} or {"nox"}
     words = _plain(text)
     if any(is_wake_token(word, name=name) for word in words for name in names):
