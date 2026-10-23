@@ -79,7 +79,7 @@ PTT_STALE_S = 30.0
 TURN_TTL_S = 180.0
 MAX_TURNS = 8
 MAX_SENTENCES = 40
-#: How long the microphone stays closed after this device stopped speaking (its echo).
+#: How long after this device stopped speaking what it hears still counts as its own echo.
 ECHO_TAIL_S = 0.3
 #: Levels sent to the core per second at most (the pet needs no more).
 LEVEL_HZ = 15
@@ -226,8 +226,10 @@ class VoiceSatellite:
     _last_level_at: float = 0.0
     _was_open: bool = False
     _ptt_held: bool = False
-    #: Until when the microphone stays closed after this device last spoke.
+    #: Until when what the microphone hears counts as this device's own voice.
     _quiet_from: float = 0.0
+    #: The segment being heard began while this device spoke.
+    _segment_in_echo: bool = False
     _loading: asyncio.Lock = field(default_factory=asyncio.Lock)
     _background: set[asyncio.Task[Any]] = field(default_factory=set)
 
@@ -257,11 +259,11 @@ class VoiceSatellite:
 
     def capture_allowed(self) -> bool:
         """Every condition at once, read fresh (the pipeline asks before every frame). While
-        this device speaks - and `ECHO_TAIL_S` after - the microphone hears its own voice:
-        nothing is captured then, unless push-to-talk is held (a person's deliberate act)."""
-        if not (self.connected and self.core_capture and self.allowed()):
-            return False
-        return self._ptt_held or not self.echo()
+        this device speaks the microphone stays open for the kill phrase alone: what it hears
+        then is mostly its own voice, so nothing of it becomes a question (`echo`, `_heard`) -
+        and Nox never says a kill phrase itself (`speakable`, `says_a_command`), so "Nox,
+        Notaus" works during a long answer without its own voice stopping it."""
+        return self.connected and self.core_capture and self.allowed()
 
     def echo(self) -> bool:
         """This device is speaking, or stopped a moment ago."""
@@ -401,6 +403,10 @@ class VoiceSatellite:
             # Never text for the core: this device stops, which stops Nox everywhere.
             self.audit("node.voice_kill_phrase", "stopped")
             self.stop_here("Nox, Notaus (voice satellite)")
+        elif name == E.VOICE_INPUT_STARTED:
+            # Said while this device spoke (or just after): its own voice, not a question - unless
+            # push-to-talk is held (a person's deliberate act).
+            self._segment_in_echo = self.echo() and not self._ptt_held
         elif name == E.VOICE_PTT_PRESSED:
             await self._beep(880.0)
         elif name == E.TTS_LEVEL:
@@ -413,6 +419,10 @@ class VoiceSatellite:
 
     async def _heard(self, payload: dict[str, Any]) -> None:
         text = str(payload.get("text", "")).strip()
+        in_echo, self._segment_in_echo = self._segment_in_echo, False
+        if in_echo or (self.echo() and not self._ptt_held):
+            log.debug("node.voice_echo_dropped")
+            return
         if not payload.get("addressed_to_nox") or not text or not self.capture_allowed():
             return
         language = str(payload.get("language") or "de")
@@ -630,6 +640,32 @@ def says_a_command(text: str, wake_word: str = "Nox") -> bool:
         for phrase in KILL_PHRASES
         for i in range(len(words))
     )
+
+
+def speakable(text: str, wake_word: str = "Nox") -> str | None:
+    """`text` as it may be spoken on a speaker a microphone can hear (C9 review R3): the wake word
+    (any spelling of it) becomes "ich", and a sentence with a kill phrase is not spoken at all
+    (None). Applied to every sentence the core sends a node."""
+    from nox.voice.stt.wake_word import KILL_PHRASES, is_wake_token  # noqa: PLC0415
+
+    words = _plain(text)
+    if any(
+        tuple(words[i : i + len(phrase)]) == phrase
+        for phrase in KILL_PHRASES
+        for i in range(len(words))
+    ):
+        return None
+    names = set(_plain(wake_word)) or {"nox"}
+    out: list[str] = []
+    for token in text.split():
+        plain = _plain(token)
+        if plain and all(any(is_wake_token(w, name=n) for n in names) for w in plain):
+            tail = token[len(token.rstrip(".,;:!?…")) :]
+            out.append("ich" + tail)
+        else:
+            out.append(token)
+    rewritten = " ".join(out)
+    return None if says_a_command(rewritten, wake_word) else rewritten
 
 
 class SayArgs(BaseModel):

@@ -129,3 +129,19 @@ def test_the_cores_own_speech_is_unchanged() -> None:
     private = {**_level(channel="private"), "device": ""}
     assert pet_view.view("overlay", "tts.level", private) is None
     assert pet_view.view("pet", "tts.level", private) == {"level": 0.42}
+
+
+def test_even_with_a_tool_result_and_the_users_words_nothing_is_user_directed(
+    engine: DefaultPermissionEngine,
+) -> None:
+    engine.mark_tainted(VOICE, "a page about the weather")  # readable, not opaque
+    engine.note_user_message(VOICE, "wetter in springfield")
+    search = req(
+        "web",
+        "search",
+        risk=Risk.LOW,
+        network=True,
+        conversation=VOICE,
+        lookup="wetter springfield",
+    )
+    assert engine.check(search).decision is Decision.CONFIRM

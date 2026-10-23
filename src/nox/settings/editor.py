@@ -185,12 +185,30 @@ class ConfigEditor:
         """
         if self._gate is None or not self._gate.is_required():
             return
-        if not security_paths(values):
+        if not security_paths(values) and not self._satellite_widening(values):
             return
         try:
             await self._gate.require(pin, action="config.set", by=by)
         except PinRequiredError as exc:
             raise PermissionError(exc.reason) from exc
+
+    def _satellite_widening(self, values: Mapping[str, Any]) -> bool:
+        """Whether `presets.items` switches `from_satellites` on for a preset that did not have
+        it (C9): a phrase anyone near a satellite can say, so it needs the PIN."""
+        items = values.get("presets.items")
+        if not isinstance(items, list):
+            return False
+        before = {
+            preset.id
+            for preset in getattr(getattr(self._config, "presets", None), "items", [])
+            if getattr(preset, "from_satellites", False)
+        }
+        return any(
+            isinstance(item, Mapping)
+            and item.get("from_satellites") is True
+            and item.get("id") not in before
+            for item in items
+        )
 
     def _coerce(self, path: str, value: Any) -> Any:
         """Reject a non-editable path early; the value itself is validated by `NoxConfig`."""

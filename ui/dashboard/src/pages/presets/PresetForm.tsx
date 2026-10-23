@@ -85,6 +85,16 @@ export function PresetForm({ t, preset, actions, onChange }: PresetFormProps) {
       <p className="hint">{t('presets_phrases_hint')}</p>
 
       <label className="setting">
+        <input
+          type="checkbox"
+          checked={preset.from_satellites === true}
+          onChange={(e) => onChange({ ...preset, from_satellites: e.target.checked })}
+        />{' '}
+        <span className="setting-name">{t('presets_from_satellites')}</span>
+      </label>
+      <p className="hint">{t('presets_from_satellites_hint')}</p>
+
+      <label className="setting">
         <span className="setting-name">{t('presets_at')}</span>
         <input
           className="input"

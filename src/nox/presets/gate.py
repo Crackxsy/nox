@@ -12,14 +12,22 @@ feel broken.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from nox.core.logging import get_logger
 from nox.presets.engine import PresetRun, PresetRunner
+from nox.security.taint import CONVERSATION
 
 log = get_logger(__name__)
 
-__all__ = ["VoicePresetGate", "compose_answer"]
+__all__ = ["FROM_SATELLITE", "SATELLITE_AGENT", "VoicePresetGate", "compose_answer"]
+
+#: Set while a preset runs because a node's voice satellite said its phrase (C9): its steps are
+#: called as this agent - not `presets`, which the shipped profiles allow - in the node's
+#: conversation, so the normal rules and that conversation's taint apply; mode steps refuse.
+FROM_SATELLITE: ContextVar[bool] = ContextVar("nox_preset_from_satellite", default=False)
+SATELLITE_AGENT = "presets.satellite"
 
 _GERMAN = "de"
 
@@ -85,4 +93,27 @@ class VoicePresetGate:
 
         run = await self.runner.activate(preset.id, trigger="phrase", say=collect)
         log.info("presets.spoken", preset=preset.id, ok=run.ok)
+        return compose_answer(run, spoken, language)
+
+    async def handle_from_satellite(
+        self, text: str, language: str, *, conversation: str
+    ) -> str | None:
+        """A phrase said at a node's voice satellite: only a preset the owner marked
+        `from_satellites` runs - as an untrusted turn's, in that turn's conversation."""
+        preset = self.runner.match(text)
+        if preset is None or not getattr(preset, "from_satellites", False):
+            return None
+        spoken: list[str] = []
+
+        async def collect(line: str) -> None:
+            spoken.append(line)
+
+        mark = FROM_SATELLITE.set(True)
+        where = CONVERSATION.set(conversation)
+        try:
+            run = await self.runner.activate(preset.id, trigger="satellite", say=collect)
+        finally:
+            CONVERSATION.reset(where)
+            FROM_SATELLITE.reset(mark)
+        log.info("presets.spoken", preset=preset.id, ok=run.ok, from_satellite=True)
         return compose_answer(run, spoken, language)

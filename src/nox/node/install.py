@@ -499,8 +499,10 @@ def install_satellites(
         )
 
     def label_of(device_id: str) -> str:
+        from nox.node.satellites import clean_label  # noqa: PLC0415
+
         entry = entry_of(device_id)
-        return entry.label if entry is not None else device_id[:8]
+        return clean_label(entry.label if entry is not None else "") or device_id[:8]
 
     def publish(name: str, payload: dict[str, Any]) -> None:
         publish_nowait(getattr(core, "bus", None), name, payload, source="node")

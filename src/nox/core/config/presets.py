@@ -214,6 +214,11 @@ class PresetConfig(StrictSection):
     enabled: bool = True
     triggers: PresetTriggerConfig = Field(default_factory=PresetTriggerConfig)
     steps: list[PresetStep] = Field(min_length=1, max_length=40)
+    #: Its phrases also work at a node's voice satellite (C9). Off by default; switching it on
+    #: needs the PIN when one is set (`nox.settings.editor`). Such a run is an untrusted turn's:
+    #: its steps go through the normal permission rules in the node's conversation, and it never
+    #: switches the mode.
+    from_satellites: bool = False
 
 
 class PresetsConfig(StrictSection):

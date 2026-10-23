@@ -348,6 +348,10 @@ export const de = {
   perm_remember_minutes: 'Für {0} Minuten erlauben',
   perm_remember_minute: 'Für 1 Minute erlauben',
   perm_deny: 'Ablehnen',
+  presets_from_satellites: 'Auch über Sprach-Satelliten',
+  presets_from_satellites_hint:
+    'Dann startet der Satz auch an einem Gerät mit Sprach-Satellit - wer dort im Raum ist, muss nicht du sein. Jeder Schritt fragt dann wie bei fremden Inhalten, und die Betriebsart wechselt nie.',
+  presets_satellite_pin: 'Sicherheits-PIN (nötig, um das einzuschalten)',
   perm_device_note: 'Von diesem Gerät aus gilt eine Erlaubnis nur dieses eine Mal.',
   perm_voice_satellite:
     'Von Sprach-Satellit {0}: in einen Raum gesprochen - nicht unbedingt von dir. Nur erlauben, wenn du das selbst wolltest.',

@@ -224,9 +224,12 @@ speakerphone, say.
   data out asks first, a "remember for this session" you gave elsewhere does not count for it,
   and the question says "von Sprach-Satellit <name>". Approvals are never given by voice. It
   waits for whatever Nox is doing on the dashboard instead of interrupting it.
-- While Nox speaks here the microphone is closed (and for a moment after), so Nox does not hear
-  itself; push-to-talk still works and stops Nox speaking. One question per "Nox": the next one
-  needs the name again. While Nox controls mouse and keyboard on this PC, it does not listen to
+- While Nox speaks here (and for a moment after) it does not take what it hears as a question,
+  so it does not answer itself; "Nox, Notaus" still works, and so does push-to-talk, which stops
+  Nox speaking. Nox never says its own name or "Notaus" out of this speaker. One question per
+  "Nox": the next one needs the name again. Presets and mode changes do not start from here -
+  only a preset you marked "Auch über Sprach-Satelliten" (with the PIN), and then every step
+  follows the normal rules; the mode never changes by voice from a satellite. While Nox controls mouse and keyboard on this PC, it does not listen to
   it.
 - Nox can also say something here on purpose (`voice.say`, low risk; asked when the
   conversation holds outside content): "Sag im Wohnzimmer, dass das Essen fertig ist". It never

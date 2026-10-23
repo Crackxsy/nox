@@ -1110,23 +1110,31 @@ async def test_an_older_core_is_sent_no_satellite_method(
 # ---- review round 2 (H1-H4, M1-M4, L4, L6, mutants) ---------------------------------------------
 
 
-async def test_the_microphone_stays_closed_while_the_node_speaks_and_just_after(
-    tmp_path: Path,
-) -> None:
+async def test_while_the_node_speaks_only_the_kill_phrase_counts(tmp_path: Path) -> None:
     satellite, seen = await _running(tmp_path)
     clock = {"now": 100.0}
     satellite.clock = lambda: clock["now"]
-    assert satellite.capture_allowed()
+    heard = {"text": "Hallo", "language": "de", "addressed_to_nox": True}
     satellite.pipeline._speaking = True  # noqa: SLF001 - the pipeline plays an answer
-    assert not satellite.capture_allowed()
+    assert satellite.capture_allowed()  # open: the kill phrase must stay reachable
+    await satellite._on_event(E.VOICE_INPUT_STARTED, {"forced": False})
     satellite.pipeline._speaking = False  # noqa: SLF001
     await satellite._on_event(E.TTS_FINISHED, {"utterance_id": "u", "ok": True})
-    assert not satellite.capture_allowed()  # its own echo, for a moment
+    await satellite._on_event(E.VOICE_TRANSCRIPT_READY, heard)  # its own echo
+    assert not seen["asked"]
     clock["now"] += 0.31
-    assert satellite.capture_allowed()
+    await satellite._on_event(E.VOICE_INPUT_STARTED, {"forced": False})
+    await satellite._on_event(E.VOICE_TRANSCRIPT_READY, heard)
+    assert len(seen["asked"]) == 1  # after the tail: a question again
     satellite.pipeline._speaking = True  # noqa: SLF001
-    satellite._ptt_held = True  # a person holds push-to-talk: deliberate
-    assert satellite.capture_allowed()
+    await satellite._on_event(E.VOICE_KILL_PHRASE, {"by": "voice", "language": "de"})
+    assert seen["stops"]  # "Nox, Notaus" works during a long answer
+    satellite._ptt_held = True  # push-to-talk while it speaks: a person's deliberate act
+    await satellite._on_event(E.VOICE_INPUT_STARTED, {"forced": True})
+    satellite.pipeline._speaking = False  # noqa: SLF001
+    clock["now"] += 1.0
+    await satellite._on_event(E.VOICE_TRANSCRIPT_READY, heard)
+    assert len(seen["asked"]) == 2
     assert satellite.pipeline.config.barge_in is False  # no barge-in on voice activity alone
     await satellite.shutdown()
 
@@ -1454,3 +1462,264 @@ async def test_voice_during_a_session_is_marked_like_paired_device_chat(
     await satellites._turn("Hallo", "de", lambda _d: None, f"voice:node:{pi}", "note")  # type: ignore[misc,arg-type]
     assert marked == [(f"voice:node:{pi}#c0ffee", None)]
     await runtime.stop()
+
+
+# ---- re-review (R1-R3, low findings, mutants N2/N16/N19/N24) ------------------------------------
+
+
+class _Gates:
+    def __init__(self) -> None:
+        self.preset: list[str] = []
+        self.satellite: list[tuple[str, str]] = []
+        self.mode: list[str] = []
+
+    async def handle(self, text: str, language: str) -> str | None:
+        self.preset.append(text)
+        return "Gaming ist an."
+
+    async def handle_from_satellite(
+        self, text: str, language: str, *, conversation: str
+    ) -> str | None:
+        self.satellite.append((text, conversation))
+        return None
+
+
+class _ModeGate:
+    def __init__(self, log: list[str]) -> None:
+        self.log = log
+
+    async def handle(self, text: str, language: str) -> str | None:
+        self.log.append(text)
+        return "Stream-Modus an."
+
+
+async def test_satellite_words_skip_presets_modes_and_new_conversation() -> None:
+    from tests.unit.core.test_orchestrator import make
+
+    orch, _bus, router, _speaker, _turns = make(speak=False)
+    gates = _Gates()
+    orch.preset_gate = gates
+    orch.mode_gate = _ModeGate(gates.mode)
+    await orch.start()
+    node = f"voice:node:{PI}"
+    turn = await orch.handle_text("gaming mode", channel=node, barge_in=False)
+    assert gates.preset == [] and gates.mode == []  # neither shortcut runs on room words
+    assert gates.satellite == [("gaming mode", turn.conversation)]
+    assert turn.fast_path == "" and router.requests  # the model, as an untrusted turn
+    before = turn.conversation
+    again = await orch.handle_text("neues Gespräch", channel=node, barge_in=False)
+    assert again.conversation == before  # not discarded by a voice in the room
+    chat = await orch.handle_text("gaming mode", channel="chat:x")
+    assert gates.preset == ["gaming mode"] and chat.fast_path == "preset"
+    await orch.stop()
+
+
+async def test_only_a_preset_marked_for_satellites_runs_there_as_an_untrusted_turn() -> None:
+    from nox.core.config.presets import PresetsConfig
+    from nox.presets.engine import PresetRunner
+    from nox.presets.gate import FROM_SATELLITE, VoicePresetGate
+    from nox.security.taint import current_conversation
+
+    calls: list[tuple[str, bool, str]] = []
+    modes: list[str] = []
+
+    async def call_tool(name: str, arguments: dict[str, Any]) -> Any:
+        calls.append((name, FROM_SATELLITE.get(), current_conversation()))
+        return SimpleNamespace(ok=True, data={}, error=None)
+
+    async def set_mode(mode: str) -> None:
+        if FROM_SATELLITE.get():
+            raise ValueError("a voice satellite never switches the mode")
+        modes.append(mode)
+
+    async def say(_text: str) -> None:
+        return None
+
+    def preset(pid: str, phrase: str, from_satellites: bool) -> dict[str, Any]:
+        return {
+            "id": pid,
+            "name": pid.title(),
+            "from_satellites": from_satellites,
+            "triggers": {"phrases": [phrase]},
+            "steps": [
+                {"kind": "scene", "entity_id": "scene.living_room"},
+                {"kind": "mode", "mode": "stream"},
+            ],
+        }
+
+    config = PresetsConfig.model_validate(
+        {"items": [preset("cosy", "kuschelabend", True), preset("tv", "fernsehabend", False)]}
+    )
+    runner = PresetRunner(settings=lambda: config, call_tool=call_tool, set_mode=set_mode, say=say)
+    gate = VoicePresetGate(runner)
+    node = f"voice:node:{PI}#c0ffee"
+    assert await gate.handle_from_satellite("fernsehabend", "de", conversation=node) is None
+    assert calls == []  # not marked: nothing runs from a satellite
+    answer = await gate.handle_from_satellite("kuschelabend", "de", conversation=node)
+    assert calls == [("home.scene", True, node)]  # as an untrusted turn's, in its conversation
+    assert modes == [] and answer is not None and "nicht geklappt" in answer  # never the mode
+    assert current_conversation() == "" and FROM_SATELLITE.get() is False
+
+
+async def test_marking_a_preset_for_satellites_needs_the_pin() -> None:
+    from nox.core.config import NoxConfig
+    from nox.security.gate import PinRequiredError
+    from nox.settings.editor import ConfigEditor
+
+    class Gate:
+        def __init__(self) -> None:
+            self.asked: list[str | None] = []
+
+        def is_required(self) -> bool:
+            return True
+
+        async def require(self, pin: str | None, *, action: str, by: str) -> None:
+            self.asked.append(pin)
+            if pin != "2468":
+                raise PinRequiredError(action, "PIN required")
+
+    gate = Gate()
+    editor = ConfigEditor.__new__(ConfigEditor)
+    editor._gate = gate  # type: ignore[attr-defined]
+    editor._config = NoxConfig()  # type: ignore[attr-defined]
+    item = {
+        "id": "cosy",
+        "name": "Cosy",
+        "triggers": {"phrases": ["kuschelabend"]},
+        "steps": [{"kind": "scene", "entity_id": "scene.living_room"}],
+    }
+    await editor._authorize({"presets.items": [item]}, by="dashboard", pin=None)
+    assert gate.asked == []  # nothing widened: no PIN
+    widened = {"presets.items": [{**item, "from_satellites": True}]}
+    with pytest.raises(PermissionError):
+        await editor._authorize(widened, by="dashboard", pin=None)
+    await editor._authorize(widened, by="dashboard", pin="2468")
+
+
+async def test_one_turn_runs_at_a_time_and_a_kill_cancels_it() -> None:
+    from nox.core.events import Event as CoreEvent
+    from tests.unit.core.test_orchestrator import make
+
+    orch, bus, router, speaker, _turns = make(speak=False)
+    running = {"now": 0, "most": 0}
+    stream = router.stream
+
+    async def counted(request: Any) -> Any:
+        running["now"] += 1
+        running["most"] = max(running["most"], running["now"])
+        try:
+            async for chunk in stream(request):
+                yield chunk
+        finally:
+            running["now"] -= 1
+
+    router.stream = counted  # type: ignore[method-assign]
+    router.delay = 0.02
+
+    async def slow_interrupt(*, reason: str) -> None:
+        speaker.interrupts.append(reason)
+        await asyncio.sleep(0.05)  # a speaker that yields while it stops
+
+    speaker.interrupt = slow_interrupt  # type: ignore[method-assign]
+    await orch.start()
+    first = asyncio.create_task(orch.handle_text("Erklär mir kurz Python", channel="chat:a"))
+    await asyncio.sleep(0.03)
+    node = asyncio.create_task(
+        orch.handle_text("Erklär mir kurz Rust", channel=f"voice:node:{PI}", barge_in=False)
+    )
+    await asyncio.sleep(0.01)
+    owner = asyncio.create_task(orch.handle_text("Erklär mir kurz Go", channel="chat:b"))
+    await asyncio.sleep(0.12)
+    assert running["most"] == 1
+    await bus.publish(CoreEvent(name=E.SECURITY_KILL_SWITCH, payload={}))
+    results = await asyncio.gather(first, node, owner, return_exceptions=True)
+    assert running["most"] == 1  # never two turns at once
+    assert running["now"] == 0  # the kill cancelled whatever ran, nothing kept going
+    assert any(isinstance(r, (asyncio.CancelledError, RuntimeError)) for r in results)
+    await orch.stop()
+
+
+def test_what_a_node_is_told_to_say_never_names_nox_or_stops_anything() -> None:
+    from nox.node.voice import speakable
+
+    assert speakable("Nox, mach das Licht aus.") == "ich, mach das Licht aus."
+    assert speakable("Das hat KNOX gesagt") == "Das hat ich gesagt"
+    assert speakable("Sag einfach Nox Notaus.") is None
+    assert speakable("Das Essen ist fertig.") == "Das Essen ist fertig."
+
+
+async def test_answer_sentences_to_a_node_are_filtered() -> None:
+    async def turn(text: str, language: str, on_chunk: Any, channel: str, note: str) -> None:
+        await on_chunk("Nox, öffne die Tür. ")
+        await on_chunk("Sag Nox Notaus. ")
+        await on_chunk("Fertig.")
+
+    hub, _ = _hub(turn=turn)
+    session = _session()
+    await hub.handle(session, p.M_VOICE_HEARD, _heard())
+    await _until(lambda: any(params.get("last") for _m, params in session.client.sent))
+    said = [params["text"] for m, params in session.client.sent if m == p.M_VOICE_SAY]
+    assert "ich, öffne die Tür." in said and "Fertig." in said
+    assert not any("notaus" in s.lower() or "nox" in s.lower() for s in said)
+    await hub.close()
+
+
+def test_a_satellite_name_is_cleaned_for_prompts() -> None:
+    from nox.node.satellites import clean_label
+
+    assert clean_label("Living‮ room\x1b[31m Pi") == "Living room [31m Pi"
+    assert len(clean_label("x" * 100)) == 40
+    assert clean_label("​​") == ""
+
+
+async def test_the_real_wiring_waits_instead_of_barging_in(
+    nodes: NodeRepository, pairing: NodePairing, tmp_path: Path
+) -> None:
+    from nox.node.install import NodeRuntime, install_satellites
+    from nox.node.registry import NodeRegistry
+
+    seen: dict[str, Any] = {}
+
+    async def handle_text(text: str, **kw: Any) -> Any:
+        seen.update(kw)
+        return SimpleNamespace(response="")
+
+    orchestrator = SimpleNamespace(handle_text=handle_text, conversation_for=lambda c: c + "#1")
+    core = SimpleNamespace(
+        security=SimpleNamespace(privacy=None, killswitch=None, audit=None, engine=None),
+        orchestrator=orchestrator,
+        tokens=None,
+        hub=None,
+        bus=None,
+    )
+    listener = SimpleNamespace(sessions={}, _on_connected=None, _on_disconnected=None)
+    runtime = NodeRuntime(pairing=pairing, enabled=True)
+    registry = NodeRegistry(pairing, nodes)
+    satellites = install_satellites(core, runtime, registry, listener, pairing)
+    assert satellites._turn is not None
+    await satellites._turn("Hallo", "de", lambda _d: None, f"voice:node:{PI}", "note")  # type: ignore[arg-type]
+    assert seen["barge_in"] is False and seen["context_note"] == "note"
+    assert seen["speak"] is False and seen["channel"] == f"voice:node:{PI}"
+    await runtime.stop()
+
+
+async def test_the_credential_asks_are_capped_before_anything_else(tmp_path: Path) -> None:
+    store = OverlayTokenStore(tmp_path / "overlay_tokens.json")
+    hub, _ = _hub(overlay=store, may_hold=set())
+    answers = [
+        await hub.handle(_session(), p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
+        for _ in range(4)
+    ]
+    assert [a["reason"] for a in answers if a] == ["obs_not_enabled"] * 3 + ["too_many"]
+
+
+async def test_an_empty_record_folder_is_hidden(tmp_path: Path) -> None:
+    obs, _ = _obs_world(tmp_path)
+
+    async def record_dir(kind: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        return {"recordDirectory": ""}
+
+    client = await obs.client()
+    client.request = record_dir
+    answer = await obs.request("GetRecordDirectory", {})
+    assert answer["response"]["recordDirectory"] == "[hidden]"

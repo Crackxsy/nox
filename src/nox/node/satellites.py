@@ -59,11 +59,18 @@ from pydantic import BaseModel
 from nox.core.logging import get_logger
 from nox.node import protocol as p
 from nox.node.router import VOICE_NODE_CHANNEL
+from nox.node.voice import speakable
 from nox.security.model import AuditLog
 
 log = get_logger(__name__)
 
-__all__ = ["MAX_UTTERANCES", "SatelliteHub", "node_overlay_label", "voice_context_note"]
+__all__ = [
+    "MAX_UTTERANCES",
+    "SatelliteHub",
+    "clean_label",
+    "node_overlay_label",
+    "voice_context_note",
+]
 
 #: Utterances a node may send per minute.
 MAX_UTTERANCES = 12
@@ -82,6 +89,18 @@ AUDIT_EVERY_S = 10.0
 #: Said when the turn failed (the node hears it instead of silence).
 FAILED = {"de": "Das hat nicht funktioniert.", "en": "That did not work."}
 BUSY = {"de": "Ich bin gerade beschäftigt.", "en": "I am busy right now."}
+
+
+def clean_label(name: str, limit: int = 40) -> str:
+    """A node's name for a question or the model's context: printable characters only - no
+    control, bidi or invisible ones - single spaces, at most `limit` characters."""
+    import unicodedata  # noqa: PLC0415
+
+    kept = "".join(
+        c if c.isprintable() and unicodedata.category(c) not in ("Cf", "Co", "Cs", "Cn") else " "
+        for c in name
+    )
+    return " ".join(kept.split())[:limit].strip()
 
 
 def node_overlay_label(device_id: str) -> str:
@@ -263,6 +282,12 @@ class SatelliteHub:
             nonlocal seq
             if seq >= 200:
                 return
+            if text:
+                # Never its own name or a kill phrase out of a speaker a microphone hears - not
+                # even when an untrusted conversation made the model write it (review R3).
+                text = speakable(text) or ""
+                if not text and not last:
+                    return
             say = p.VoiceSay(
                 turn_id=heard.turn_id,
                 seq=seq,
@@ -314,7 +339,7 @@ class SatelliteHub:
 
     def _safe_label(self, device_id: str) -> str:
         try:
-            return str(self._label(device_id))[:64] or device_id[:8]
+            return clean_label(str(self._label(device_id))) or device_id[:8]
         except Exception:  # noqa: BLE001 - a name is a courtesy
             return device_id[:8]
 

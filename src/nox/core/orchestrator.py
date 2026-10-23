@@ -26,6 +26,7 @@ from nox.core.events import E, Event, EventBus
 from nox.core.logging import get_logger
 from nox.core.state import StateManager
 from nox.core.toolloop import ActiveTurn, ToolEvent, ToolLoop
+from nox.security.taint import UNTRUSTED_CONVERSATIONS
 from nox.voice.base import Channel, TtsRequest
 
 log = get_logger(__name__)
@@ -271,8 +272,9 @@ class Orchestrator:
     _safe_mode: bool = False
     #: The live conversation of each channel (`conversation_for`).
     _conversations: dict[str, _Conversation] = field(default_factory=dict)
-    #: Turns that wait for their turn instead of cancelling one (`handle_text(barge_in=False)`).
-    _waiting: asyncio.Lock = field(default_factory=asyncio.Lock)
+    #: The one turn that may run (`handle_text`), and how many barge-ins wait to take it.
+    _slot: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _barge_pending: int = 0
 
     async def start(self) -> None:
         self._unsubs = [
@@ -321,27 +323,42 @@ class Orchestrator:
         if self._safe_mode:
             raise RuntimeError("safe mode: AI requests are disabled until resume")
         language = language or self.config.default_language
+        # One turn at a time (the slot). A barge-in says so before its first await, cancels what
+        # runs and takes the slot next; a waiting turn that gets the slot while a barge-in is
+        # pending gives it back at once - so two turns never run together, and a kill or the next
+        # input always cancels the one that does.
         if barge_in:
-            await self.cancel(reason="new_input")
+            self._barge_pending += 1
+            try:
+                await self.cancel(reason="new_input")
+                await self._slot.acquire()
+            finally:
+                self._barge_pending -= 1
+        else:
+            await self._wait_for_slot()
+        try:
+            if self._safe_mode:
+                raise RuntimeError("safe mode: AI requests are disabled until resume")
             task = asyncio.create_task(
                 self._run(text, language, speak, on_chunk, channel, note=context_note)
             )
             self._active = task
-        else:
-            async with self._waiting:
-                while (running := self._active) is not None and not running.done():
-                    await asyncio.wait({running})
-                if self._safe_mode:
-                    raise RuntimeError("safe mode: AI requests are disabled until resume")
-                task = asyncio.create_task(
-                    self._run(text, language, speak, on_chunk, channel, note=context_note)
-                )
-                self._active = task
-        try:
-            return await task
+            try:
+                return await task
+            finally:
+                if self._active is task:
+                    self._active = None
         finally:
-            if self._active is task:
-                self._active = None
+            self._slot.release()
+
+    async def _wait_for_slot(self) -> None:
+        """The slot for a turn that waits its turn: never ahead of a pending barge-in."""
+        while True:
+            await self._slot.acquire()
+            if self._barge_pending == 0:
+                return
+            self._slot.release()
+            await asyncio.sleep(0.01)
 
     async def cancel(self, *, reason: str) -> None:
         task = self._active
@@ -441,7 +458,12 @@ class Orchestrator:
         started = time.perf_counter()
         request_id = uuid.uuid4().hex
         speak_enabled = self.config.speak if speak is None else speak
-        if is_new_conversation_request(text):
+        # A node's voice satellite (C9): words from a room, not necessarily the owner's. Neither
+        # the preset nor the mode shortcut runs on them (only presets the owner marked
+        # `from_satellites`, as an untrusted turn's), and "neues Gespräch" does not discard the
+        # conversation or end its grants: the text goes on like any other untrusted turn.
+        satellite = channel.startswith(UNTRUSTED_CONVERSATIONS)
+        if is_new_conversation_request(text) and not satellite:
             self.new_conversation(channel)
             turn = Turn(request_id=request_id, text=text, fast_path="new_conversation")
             turn.conversation = self.conversation_for(channel)
@@ -452,7 +474,15 @@ class Orchestrator:
         turn = Turn(request_id=request_id, text=text, conversation=self.conversation_for(channel))
 
         if self.preset_gate is not None:
-            spoken = await self.preset_gate.handle(text, language)
+            if satellite:
+                from_satellite = getattr(self.preset_gate, "handle_from_satellite", None)
+                spoken = (
+                    await from_satellite(text, language, conversation=turn.conversation)
+                    if from_satellite is not None
+                    else None
+                )
+            else:
+                spoken = await self.preset_gate.handle(text, language)
             if spoken is not None:
                 turn.fast_path = "preset"
                 return await self._deliver_fast_path(
@@ -464,7 +494,7 @@ class Orchestrator:
                     started=started,
                 )
 
-        if self.mode_gate is not None:
+        if self.mode_gate is not None and not satellite:
             spoken = await self.mode_gate.handle(text, language)
             if spoken is not None:
                 turn.fast_path = "mode"

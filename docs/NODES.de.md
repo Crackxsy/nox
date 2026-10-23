@@ -240,9 +240,12 @@ USB-Lautsprechermikrofon.
   "für diese Sitzung merken" gilt dafür nicht, und die Frage zeigt "von Sprach-Satellit <Name>".
   Erlaubnisse gibt es nie per Stimme. Es wartet, bis Nox im Dashboard fertig ist, statt es zu
   unterbrechen.
-- Während Nox hier spricht, ist das Mikrofon zu (und einen Moment danach), damit Nox sich nicht
-  selbst hört; Push-to-Talk geht trotzdem und unterbricht Nox. Eine Frage pro "Nox": Die nächste
-  braucht den Namen wieder. Während Nox Maus und Tastatur auf diesem PC steuert, hört es ihm nicht
+- Während Nox hier spricht (und einen Moment danach), nimmt es Gehörtes nicht als Frage, damit
+  es sich nicht selbst antwortet; "Nox, Notaus" geht trotzdem, ebenso Push-to-Talk, das Nox
+  unterbricht. Seinen eigenen Namen oder "Notaus" sagt Nox nie über diesen Lautsprecher. Eine Frage
+  pro "Nox": Die nächste braucht den Namen wieder. Presets und Moduswechsel starten von hier nicht -
+  nur ein Preset, das du "Auch über Sprach-Satelliten" markiert hast (mit der PIN), und dann folgt
+  jeder Schritt den normalen Regeln; der Modus wechselt per Stimme von einem Satelliten nie. Während Nox Maus und Tastatur auf diesem PC steuert, hört es ihm nicht
   zu.
 - Nox kann hier auch gezielt etwas sagen (`voice.say`, geringes Risiko; gefragt, wenn das
   Gespräch fremde Inhalte enthält): "Sag im Wohnzimmer, dass das Essen fertig ist". Seinen eigenen

@@ -1051,19 +1051,35 @@ What leaves a node, and what a node may send the core (`nox.node.voice`, `nox.no
   every call that sends data off the machine asks, and no remembered or session grant above LOW
   applies - permission grants are not per conversation, so this is what keeps a grant made at the
   dashboard from serving a voice in the living room. A question it leads to says "von
-  Sprach-Satellit <name>" in the dashboard and the native dialog, and the model is told in the
-  turn's context that the text came from a far-field microphone and may not be the owner. It
+  Sprach-Satellit <name>" in the dashboard and the native dialog (the name cleaned of control,
+  bidi and invisible characters, at most 40), and the model is told in the turn's context that
+  the text came from a far-field microphone and may not be the owner. It
   cannot approve anything. "hier" and the family default `origin` mean that node. It is recorded
   - or not - by the core's privacy mode; facts learned from it are unconfirmed
   (`turn_origin("node")`). It cancels no turn of another channel and interrupts no speech: it
   waits until the turn in flight - and a question that turn waits on - is over (at most 90 s).
+- **No shortcuts on room words.** Preset phrases and the mode shortcut run before the tool
+  loop - outside any conversation's taint - so for a satellite turn they are skipped: the text
+  goes to the model like any other untrusted turn. Only a preset the owner marked
+  `from_satellites` (off by default; switching it on needs the PIN) runs there, with the node's
+  conversation set and as agent `presets.satellite`, not `presets` (which the shipped profiles
+  allow) - so the normal rules and the taint apply to every step; a mode step refuses. Voice
+  from a satellite never switches the mode, and "neues Gespräch" said there neither discards the
+  conversation nor ends its grants.
+- **One turn at a time.** A satellite turn waits for the turn slot; a barge-in claims the slot
+  before its first await, so the two never run together and a kill or the next input always
+  cancels the one that runs.
 - **Limits before checks.** At most 12 utterances and 3 credential requests per minute per node,
   counted before anything else is looked at; refusals are audited at most once per 10 s per node
   and reason, with a count of the rest; 30 utterances or 10 credential requests in a minute count
   as flooding - violations that end the connection like any refused message.
-- **Echo and self-instruction.** The node closes its microphone while it speaks and for 0.3 s
-  after (push-to-talk overrides it - a person's deliberate act), never barges in on voice
-  activity alone, and takes one utterance per wake word (no follow-up window). The core drops an
+- **Echo and self-instruction.** While the node speaks - and 0.3 s after - nothing it hears
+  becomes a question (push-to-talk overrides that - a person's deliberate act); its microphone
+  stays open for the kill phrase alone, so "Nox, Notaus" works during a long answer. It never
+  barges in on voice activity alone and takes one utterance per wake word (no follow-up
+  window). Every answer sentence sent to a node has the wake word replaced ("ich") and a
+  sentence with a kill phrase is not sent at all (`speakable`), so Nox never says either out of
+  a speaker - not for a node's microphone, not for the core's own. The core drops an
   utterance from a node that is speaking or spoke within the last second (its levels, the answer
   sentences it was sent). `voice.say` never says the wake word, a spelling of it or a kill phrase
   (case- and diacritics-insensitive, refused on the core and on the node) and is medium - asked -
