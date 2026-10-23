@@ -260,7 +260,7 @@ class NodeControl:
         self._addresses = addresses
         self._own_addresses = own_addresses
         #: Each node's connection address as this core sees it (kept like `node_addresses`).
-        self.node_observed: dict[str, str] = {}
+        self.node_observed: dict[str, set[str]] = {}
         #: Where each node the lock holds for is on the network: its connection's address as
         #: this core sees it and the private addresses its hello reported - kept while the lock
         #: holds, also while the node is disconnected.
@@ -337,7 +337,7 @@ class NodeControl:
         for device_id, (peer, reported) in self._addresses().items():
             observed = host_of(peer)
             if observed:
-                self.node_observed[device_id] = observed
+                self.node_observed.setdefault(device_id, set()).add(observed)
             hosts = {observed} if observed else set()
             # What a node says about itself counts as a second signal: private addresses only.
             for raw in list(reported)[:MAX_REPORTED_ADDRESSES]:
@@ -345,7 +345,8 @@ class NodeControl:
                 if host and private_address(host):
                     hosts.add(host)
             if hosts:
-                self.node_addresses[device_id] = hosts
+                # Only ever more while the lock holds: a later report cannot shrink the binding.
+                self.node_addresses.setdefault(device_id, set()).update(hosts)
         # Kept while the lock holds for a node - also while it is disconnected -, gone once it
         # lifts: fail closed (spec C §1.5, SECURITY.md).
         for known in (self.node_addresses, self.node_observed):
@@ -362,15 +363,15 @@ class NodeControl:
             return False
         own = {h for h in (host_of(a) for a in self._own_addresses()) if h}
         for device_id, device in self.devices.items():
-            observed = self.node_observed.get(device_id, "")
-            if not observed or not self._locked(device):
+            if not self._locked(device):
                 continue
-            try:
-                loopback = ipaddress.ip_address(observed).is_loopback
-            except ValueError:
-                loopback = observed == "localhost"
-            if loopback or observed in own:
-                return True
+            for observed in self.node_observed.get(device_id, set()):
+                try:
+                    loopback = ipaddress.ip_address(observed).is_loopback
+                except ValueError:
+                    return True  # not an address that can be told apart: this machine
+                if loopback or observed in own:
+                    return True
         return False
 
     def from_controlled(self, peer: str) -> bool:

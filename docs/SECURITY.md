@@ -821,8 +821,10 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   controlled node runs on this machine itself (loopback or one of this machine's own addresses),
   this machine's dashboard and shell are the controlled PC too: no approvals or changes from
   them, and their messages count as untrusted.
-  They are kept while the lock holds for that node, also while it is disconnected, and dropped
-  when the lock lifts. Fail closed (owner decision): a device that shares such an address is
+  They only ever grow while the lock holds for that node (a later report or a reconnection from
+  another address adds, never removes), also while it is disconnected, and are dropped when the
+  lock lifts. "This machine" is matched against every address of every local interface,
+  uncapped; an address that cannot be classified counts as this machine. Fail closed (owner decision): a device that shares such an address is
   treated as the controlled PC. **Accepted:** a compromised node could report the owner's phone
   address and lock that phone out of approving during its session - it can only come from the
   controlled machine itself; the owner ends it on the computer Nox runs on with the PIN (ending

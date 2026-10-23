@@ -466,3 +466,58 @@ def test_real_interfaces_come_before_virtual_ones(monkeypatch: pytest.MonkeyPatc
     assert found[:2] == ["192.168.1.20", "fe80::20"]
     assert found.index("172.20.0.1") > 1 and "127.0.0.1" not in found
     assert found.index("192.168.9.9") > found.index("172.20.0.1")
+
+
+# ---- commit review: the same-machine list is complete, the binding never shrinks ---------------
+
+
+def test_this_machine_is_recognised_whatever_its_number_of_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import psutil
+
+    from nox.node.agent import all_local_addresses
+
+    adapters = {f"vEthernet ({i})": [SimpleNamespace(address=f"172.20.{i}.1")] for i in range(30)}
+    adapters["Ethernet"] = [
+        SimpleNamespace(address="192.168.1.5"),
+        SimpleNamespace(address="00-11-22-33-44-55"),
+    ]
+    monkeypatch.setattr(psutil, "net_if_addrs", lambda: adapters)
+    everything = all_local_addresses()
+    assert len(everything) == 32 and "192.168.1.5" in everything  # uncapped, unfiltered
+    control = NodeControl(
+        None,
+        lambda _n: None,
+        addresses=lambda: {LAPTOP: ("192.168.1.5", [])},
+        own_addresses=all_local_addresses,
+    )
+    control.observe(LAPTOP, _report(2, True))
+    control.pull()
+    assert control.controls_local()
+
+
+def test_an_address_that_cannot_be_classified_counts_as_this_machine() -> None:
+    control = NodeControl(
+        None, lambda _n: None, addresses=lambda: {LAPTOP: ("pc.example.invalid", [])}
+    )
+    control.observe(LAPTOP, _report(2, True))
+    control.pull()
+    assert control.controls_local()
+
+
+def test_the_binding_only_grows_while_the_lock_holds() -> None:
+    now: dict[str, Any] = {"peer": "192.168.1.20", "reported": ["192.168.1.21", "fd00::21"]}
+    control = NodeControl(
+        None, lambda _n: None, addresses=lambda: {LAPTOP: (now["peer"], now["reported"])}
+    )
+    control.observe(LAPTOP, _report(2, True))
+    control.pull()
+    now.update(peer="192.168.1.30", reported=[])  # a later pong says less, and it reconnected
+    control.pull()
+    for host in ("192.168.1.20", "192.168.1.21", "fd00::21", "192.168.1.30"):
+        assert control.from_controlled(host), host
+    assert control.node_observed[LAPTOP] == {"192.168.1.20", "192.168.1.30"}
+    control.observe(LAPTOP, _report(3, False))  # the lock lifts: everything goes
+    control.pull()
+    assert control.node_addresses == {} and control.node_observed == {}

@@ -31,7 +31,7 @@ from nox.ipc.roles import UI_ROLES
 from nox.lan.install import authorize_admin, qr_data_uri
 from nox.lan.tls import TlsMaterial
 from nox.mcp.client import McpClientError
-from nox.node.agent import local_addresses
+from nox.node.agent import all_local_addresses
 from nox.node.console import console_is_remote
 from nox.node.hands import (
     PathArgs,
@@ -505,7 +505,7 @@ def _world_specs(
         labels=label_of,
         linked=linked,
         addresses=addresses,
-        own_addresses=local_addresses,
+        own_addresses=all_local_addresses,
         stop_hotkey=desktop.computer_use.stop_hotkey if desktop is not None else "",
     )
     wire_guards(core, control)

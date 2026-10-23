@@ -132,6 +132,25 @@ def local_addresses() -> list[str]:
     return found[:16]
 
 
+def all_local_addresses() -> list[str]:
+    """Every address of every interface of this machine - uncapped and unfiltered, loopback,
+    virtual adapters and interfaces that are down included: for telling whether a peer is this
+    machine (`NodeControl.controls_local`), where a missing address would fail open."""
+    import psutil  # noqa: PLC0415
+
+    try:
+        interfaces = psutil.net_if_addrs()
+    except (OSError, RuntimeError):
+        return []
+    found: list[str] = []
+    for entries in interfaces.values():
+        for entry in entries:
+            address = str(entry.address).split("%", 1)[0]
+            if address and address not in found:
+                found.append(address)
+    return found
+
+
 #: How long the addresses are reused between pongs (they rarely change; a rotating IPv6
 #: temporary address is picked up within this).
 ADDRESSES_TTL_S = 30.0
