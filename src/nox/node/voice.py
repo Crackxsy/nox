@@ -508,8 +508,11 @@ class VoiceSatellite:
         turn.seq = say.seq
         if say.last:
             turn.done = True
-        if say.text.strip() and self._queue is not None:
-            self._queue.put_nowait(_Speech(say.turn_id, say.text.strip(), say.language))
+        # Filtered here too, whatever the core sent: only Latin letters, never the name or a
+        # kill phrase out of this speaker.
+        text = speakable(say.text, self.settings().wake_word) if say.text.strip() else None
+        if text and self._queue is not None:
+            self._queue.put_nowait(_Speech(say.turn_id, text, say.language))
 
     async def on_cancel(self, params: dict[str, Any]) -> None:
         try:
@@ -614,9 +617,35 @@ class VoiceSatellite:
             (self.home / STATE_FILE).write_text(json.dumps(self.state()), encoding="utf-8")
 
 
+#: The last code point of the Latin blocks a German or English voice reads: Basic Latin, Latin-1
+#: Supplement (ä ö ü ß é ...), Latin Extended-A and -B.
+_LAST_LATIN = 0x024F
+#: Dropped from anything said: control and format characters, combining marks left after NFKC
+#: (variation selectors, the combining grapheme joiner), private-use, surrogate and unassigned.
+_UNSPEAKABLE = frozenset({"Cc", "Cf", "Mn", "Me", "Co", "Cs", "Cn"})
+
+
+def latin_only(text: str) -> str:
+    """`text` as a German or English voice may read it out: NFKC (fullwidth and styled letters
+    become plain ones), then every letter or digit outside the Latin blocks and every invisible
+    character removed, whitespace collapsed. A speech engine reads letters by their sound, not
+    their look - Cyrillic "ноx" is read "nox" - so no letter of another script is ever spoken;
+    the wake-word and kill-phrase checks then run on exactly what remains (C10)."""
+    import unicodedata  # noqa: PLC0415
+
+    kept: list[str] = []
+    for c in unicodedata.normalize("NFKC", text):
+        category = unicodedata.category(c)
+        if category in _UNSPEAKABLE:
+            continue
+        if category[0] in "LN" and ord(c) > _LAST_LATIN:
+            continue
+        kept.append(c)
+    return " ".join("".join(kept).split())
+
+
 def _plain(text: str) -> list[str]:
-    """Words, case- and diacritics-insensitive ("NÖX" -> "nox"), lookalike letters of other
-    scripts folded to the Latin ones they imitate ("Nох" -> "nox", `fold_confusables`)."""
+    """Words, case- and diacritics-insensitive ("NÖX" -> "nox")."""
     import unicodedata  # noqa: PLC0415
 
     from nox.voice.stt.wake_word import normalize  # noqa: PLC0415
@@ -626,30 +655,15 @@ def _plain(text: str) -> list[str]:
     return normalize(stripped).split()
 
 
-def _mixed_script(token: str) -> bool:
-    """Whether one word mixes letters of two scripts ("Nоx" with a Cyrillic о). No German or
-    English word does; a lookalike the folding does not know still reads as the name."""
-    import unicodedata  # noqa: PLC0415
-
-    scripts = {
-        unicodedata.name(c, "?").split(" ", 1)[0]
-        for c in unicodedata.normalize("NFKC", token)
-        if c.isalpha()
-    }
-    return len(scripts) > 1
-
-
 def says_a_command(text: str, wake_word: str = "Nox") -> bool:
-    """Whether `text`, spoken here, could address Nox: the wake word (or a spelling of it, also
-    written with lookalike letters of another script) anywhere, a kill phrase, or a word that
-    mixes scripts. Nox never says that itself (`voice.say`): its own voice would come back
-    through a microphone as a command."""
+    """Whether `text`, spoken here, could address Nox: the wake word (or a spelling of it)
+    anywhere, or a kill phrase - checked on what would really be said (`latin_only`). Nox never
+    says that itself (`voice.say`): its own voice would come back through a microphone as a
+    command."""
     from nox.voice.stt.wake_word import KILL_PHRASES, is_wake_token  # noqa: PLC0415
 
-    if any(_mixed_script(token) for token in text.split()):
-        return True
     names = {w for w in _plain(wake_word)} or {"nox"}
-    words = _plain(text)
+    words = _plain(latin_only(text))
     if any(is_wake_token(word, name=name) for word in words for name in names):
         return True
     return any(
@@ -660,11 +674,15 @@ def says_a_command(text: str, wake_word: str = "Nox") -> bool:
 
 
 def speakable(text: str, wake_word: str = "Nox") -> str | None:
-    """`text` as it may be spoken on a speaker a microphone can hear (C9 review R3): the wake word
-    (any spelling of it) becomes "ich", and a sentence with a kill phrase is not spoken at all
-    (None). Applied to every sentence the core sends a node."""
+    """`text` as it may be spoken on a speaker a microphone can hear (C9 review R3): only its
+    Latin letters (`latin_only`), the wake word (any spelling of it) as "ich", and None - not
+    spoken at all - for a sentence with a kill phrase or with nothing left to say. Applied to
+    every sentence the core sends a node, and again on the node."""
     from nox.voice.stt.wake_word import KILL_PHRASES, is_wake_token  # noqa: PLC0415
 
+    text = latin_only(text)
+    if not any(c.isalnum() for c in text):
+        return None
     words = _plain(text)
     if any(
         tuple(words[i : i + len(phrase)]) == phrase
@@ -685,6 +703,16 @@ def speakable(text: str, wake_word: str = "Nox") -> str | None:
     return None if says_a_command(rewritten, wake_word) else rewritten
 
 
+def say_refusal(text: str, wake_word: str = "Nox") -> str | None:
+    """Why `voice.say` may not say `text`, or None: never the wake word or a kill phrase (its own
+    voice would come back through a microphone as a command), never nothing."""
+    if says_a_command(text, wake_word):
+        return "voice_say_command_words"
+    if not any(c.isalnum() for c in latin_only(text)):
+        return "voice_say_nothing_to_say"
+    return None
+
+
 class SayArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -699,13 +727,15 @@ def voice_tools(satellite: VoiceSatellite) -> dict[str, NodeTool]:
 
     async def say(args: BaseModel) -> dict[str, Any]:
         assert isinstance(args, SayArgs)
-        spoken = await satellite.say(args.text, args.language)
+        text = speakable(args.text, satellite.settings().wake_word)
+        if text is None:  # the precheck refused it already; never spoken either way
+            raise NodeRefusal("voice_say_command_words", "that cannot be said here")
+        spoken = await satellite.say(text, args.language)
         return {"spoken": spoken}
 
     def precheck(args: BaseModel) -> str | None:
         assert isinstance(args, SayArgs)
-        wake = satellite.settings().wake_word
-        return "voice_say_command_words" if says_a_command(args.text, wake) else None
+        return say_refusal(args.text, satellite.settings().wake_word)
 
     tool = NodeTool(
         "voice.say",

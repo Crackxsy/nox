@@ -514,18 +514,19 @@ MAX_TARGET_CHARS = 1000
 def _say_target(payload: dict[str, Any]) -> str:
     from nox.node.protocol import render  # noqa: PLC0415
     from nox.node.router import CannotShow  # noqa: PLC0415
+    from nox.node.voice import latin_only  # noqa: PLC0415
 
-    text = "text " + render(str(payload.get("text") or ""))
+    # What will really be said (the node strips the same way), so the question shows that.
+    text = "text " + render(latin_only(str(payload.get("text") or "")))
     if len(text) > MAX_TARGET_CHARS:
         raise CannotShow("the text is too long to be shown in full")
     return text
 
 
 def _say_precheck(payload: dict[str, Any]) -> str | None:
-    from nox.node.voice import says_a_command  # noqa: PLC0415
+    from nox.node.voice import say_refusal  # noqa: PLC0415
 
-    text = str(payload.get("text") or "")
-    return "voice_say_command_words" if says_a_command(text) else None
+    return say_refusal(str(payload.get("text") or ""))
 
 
 def voice_say_spec(
