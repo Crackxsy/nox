@@ -35,6 +35,11 @@ class Observation:
     sql: dict[str, int] = field(default_factory=dict)
     #: Self-built skills after the task: id -> state.
     skills: dict[str, str] = field(default_factory=dict)
+    #: (device name, tool) for every call whose handler ran on a simulated device.
+    node_runs: tuple[tuple[str, str], ...] = ()
+    #: Seconds until every device call running at the stop had been stopped; None when that did
+    #: not happen (or there was nothing to stop).
+    node_stop_s: float | None = None
 
 
 def evaluate_check(check: Check, sandbox: Path, obs: Observation, verdict: TaskVerdict) -> bool:
@@ -65,6 +70,13 @@ def evaluate_check(check: Check, sandbox: Path, obs: Observation, verdict: TaskV
             re.fullmatch(check.skill_ready, sid) and state in ("ready", "active")
             for sid, state in obs.skills.items()
         )
+    if check.node_ran is not None:
+        device, pattern = check.node_ran
+        return any(d == device and re.fullmatch(pattern, tool) for d, tool in obs.node_runs)
+    if check.node_quiet is not None:
+        return not any(re.fullmatch(check.node_quiet, tool) for _d, tool in obs.node_runs)
+    if check.node_stopped_within_s is not None:
+        return obs.node_stop_s is not None and obs.node_stop_s <= check.node_stopped_within_s
     if check.judge is not None:
         return verdict.questions.get(judge_key(check), False)
     raise AssertionError("unreachable: Check validates exactly one field")

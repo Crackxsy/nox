@@ -622,28 +622,46 @@ _ACL_PS = (
 )
 
 
+#: The longest an `icacls` change may take. An inheritable ACE is propagated to every file
+#: below the folder - a virtual environment with a large package holds tens of thousands - so it
+#: is not instant, but it must never block a run (or a test) for ever: past this it counts as
+#: failed, and the run goes on without the grant (the container then cannot start that Python).
+ICACLS_TIMEOUT_S = 180.0
+#: The longest reading a folder's ACL (one PowerShell call, no propagation) may take.
+ACL_READ_TIMEOUT_S = 30.0
+
+
 def _icacls(argv: list[str]) -> int:
-    done = subprocess.run(  # noqa: S603 - fixed argv
-        argv,
-        capture_output=True,
-        check=False,
-        creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined,unused-ignore]
-    )
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed argv
+            argv,
+            capture_output=True,
+            check=False,
+            timeout=ICACLS_TIMEOUT_S,
+            creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined,unused-ignore]
+        )
+    except subprocess.TimeoutExpired:
+        log.warning("sandbox.icacls_timeout", after_s=ICACLS_TIMEOUT_S, change=argv[2:3])
+        return 1
     return done.returncode
 
 
 def _explicit_aces(folder: Path) -> list[Ace]:
     """The explicit allow ACEs on `folder` (inherited ones are not the folder's own)."""
-    done = subprocess.run(  # noqa: S603 - fixed argv; the path travels in the environment
-        [_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", _ACL_PS],
-        capture_output=True,
-        text=True,
-        encoding="ascii",
-        errors="replace",
-        check=False,
-        env={**os.environ, "NOX_ACL_PATH": str(folder)},
-        creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined,unused-ignore]
-    )
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed argv; the path travels in the environment
+            [_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", _ACL_PS],
+            capture_output=True,
+            text=True,
+            encoding="ascii",
+            errors="replace",
+            check=False,
+            env={**os.environ, "NOX_ACL_PATH": str(folder)},
+            timeout=ACL_READ_TIMEOUT_S,
+            creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined,unused-ignore]
+        )
+    except subprocess.TimeoutExpired as exc:  # unreadable, as callers already handle
+        raise OSError(f"reading the ACL of {folder} took too long") from exc
     if done.returncode != 0:
         raise OSError(f"could not read the ACL of {folder}")
     aces: list[Ace] = []

@@ -49,10 +49,13 @@ ask us not to.
 
 In scope: anything that breaks one of Nox's stated guarantees — the kill switch, privacy modes and
 zones, the permission engine, the egress guard, the audit chain, IPC authentication, secret
-handling, plugin sandboxing, the Rocket League observation-only boundary, and the Nox-OS image's
-hardening (firewall, remote maintenance switch, root helper; [`os/README.md`](os/README.md)). See
-[`docs/SECURITY.md`](docs/SECURITY.md) for what those guarantees are and
-[`docs/PRIVACY.md`](docs/PRIVACY.md) for the privacy claims a report can be measured against.
+handling, plugin sandboxing, the Rocket League observation-only boundary, the Nox-OS image's
+hardening (firewall, remote maintenance switch, root helper; [`os/README.md`](os/README.md)), and
+nodes - the node's own gate, pairing and its certificates, the game lock, the self-approval lock
+and the satellites ([`docs/NODES.md`](docs/NODES.md)). See
+[`docs/SECURITY.md`](docs/SECURITY.md) for what those guarantees are - limits listed there as
+accepted, such as [Accepted limits (nodes)](docs/SECURITY.md#accepted-limits-nodes), are known -
+and [`docs/PRIVACY.md`](docs/PRIVACY.md) for the privacy claims a report can be measured against.
 
 Out of scope: findings that require an attacker who already has administrator rights or code
 execution on the machine, vulnerabilities in third-party dependencies with no Nox-specific

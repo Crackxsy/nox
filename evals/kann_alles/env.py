@@ -42,6 +42,8 @@ from nox.core.config import load_config
 from nox.core.events import E, Event
 
 START_TIMEOUT_S = 180.0
+#: How long a spoken stop may take to reach every simulated device before it counts as failed.
+KILL_WAIT_S = 3.0
 #: Environment the world replaces while it runs, and restores afterwards.
 ISOLATED_ENV = ("NOX_HOME", "NOX_USER_CONFIG", "NOX_COMPUTER_USE_DRY_RUN")
 MCP_SERVER = Path(__file__).resolve().parent / "envs" / "mcp_server.py"
@@ -133,6 +135,21 @@ class Probe:
         self.said.clear()
 
 
+def _outcome(result: Any) -> tuple[bool, str]:
+    """Whether a tool call succeeded, and why not. A handler that answers with an error (a
+    routed call the device refused, a device that is offline, a call that needs a device named)
+    ran without raising, so the executor reports it as ok - but nothing was done."""
+    error = str(getattr(result, "error", "") or "")
+    if not getattr(result, "ok", False):
+        return False, error
+    data = getattr(result, "data", None)
+    refused = data.get("error") if isinstance(data, dict) else None
+    if refused:
+        reason = data.get("reason") if isinstance(data, dict) else None
+        return False, f"{refused} ({reason})" if reason else str(refused)
+    return True, error
+
+
 class RecordingSpeaker:
     """Stands in for the voice worker: notes when the first sentence was handed over to speech."""
 
@@ -180,6 +197,8 @@ class World:
         #: The simulated nodes (`kann_alles.nodes`), set up the first time a task asks for one.
         self.nodes: Any = None
         self.simulated_devices: frozenset[str] = frozenset()
+        #: Seconds until the device calls running at a spoken stop had ended (`hear_kill_phrase`).
+        self.node_stop_s: float | None = None
         self._saved_env: dict[str, str | None] = {}
         self._unsub: Callable[[], None] | None = None
 
@@ -271,11 +290,12 @@ class World:
             name = str(kwargs.get("name", args[1] if len(args) > 1 else ""))
             started = time.perf_counter()
             result = await original(*args, **kwargs)
+            ok, error = _outcome(result)
             probe.calls.append(
                 ToolCallRecord(
                     name=name,
-                    ok=bool(getattr(result, "ok", False)),
-                    error=str(getattr(result, "error", "") or ""),
+                    ok=ok,
+                    error=error,
                     started_s=started,
                     duration_ms=(time.perf_counter() - started) * 1000,
                 )
@@ -333,7 +353,7 @@ class World:
         self.forbidden_tools = list(forbidden_tools or [])
         self.approve_high = list(approve_high or [])
         await self._prepare_hands(env)
-        self._prepare_nodes(env)
+        await self._prepare_nodes(env)
         shutil.rmtree(self.sandbox, ignore_errors=True)
         self.sandbox.mkdir(parents=True)
         for relative, content in env.files.items():
@@ -428,12 +448,71 @@ class World:
             return
         self.nodes = WorldNodes(self.root / "node-receipts")
         _install_routes(core, self.nodes)
+        self.connect_kill_switch(core.security.killswitch)
 
-    def _prepare_nodes(self, env: Environment) -> None:
-        """Exactly the simulated nodes the task names are online, no others."""
-        if self.nodes is not None:
-            self.nodes.show(list(env.nodes))
-            self.simulated_devices = self.nodes.devices
+    def connect_kill_switch(self, killswitch: Any) -> None:
+        """The kill switch reaches the simulated devices as it reaches real ones: `nox/kill`
+        from the core's stop hook, `nox/resume` from its resume hook."""
+        assert self.nodes is not None
+        killswitch.register_stop_hook("kann-alles-nodes", self.nodes.stop_all)
+        killswitch.register_resume_hook("kann-alles-nodes", self.nodes.resume_all)
+
+    async def _prepare_nodes(self, env: Environment) -> None:
+        """Exactly the simulated nodes the task names exist - online or offline - no others,
+        and the busy ones already run a long call."""
+        self.node_stop_s = None
+        if self.nodes is None:
+            return
+        await self.nodes.clear()
+        self.nodes.show(list(env.nodes), list(env.offline_nodes))
+        await self.nodes.start_busy(env.node_busy)
+        self.simulated_devices = self.nodes.devices
+
+    def node_runs(self) -> tuple[tuple[str, str], ...]:
+        """(device, tool) for every call that ran on a simulated device in this task."""
+        return tuple(self.nodes.runs()) if self.nodes is not None else ()
+
+    async def hear_kill_phrase(self, text: str) -> float:
+        """The voice pipeline hears `text`: when it holds the kill phrase, it publishes
+        `voice.kill_phrase` exactly as `nox.voice.pipeline` does (the words never reach the
+        model), and the core stops. Measures how long the device calls running then took to end,
+        then resumes like the dashboard's "Fortsetzen", so the next task finds a running core.
+        Returns the seconds the stop took (or the wait, when nothing stopped)."""
+        assert self.core is not None and self.core.bus is not None
+        assert self.core.security is not None
+        from nox.voice.stt.wake_word import WakeWordMatcher  # noqa: PLC0415
+
+        started = time.perf_counter()
+        if not WakeWordMatcher().match(text).kill:
+            return 0.0  # not a kill phrase: the detector stays silent, nothing happens
+        killswitch = self.core.security.killswitch
+        await self.core.bus.publish(
+            Event(
+                name=E.VOICE_KILL_PHRASE,
+                payload={"by": "voice", "reason": "kill phrase", "language": "de"},
+            )
+        )
+        deadline = started + KILL_WAIT_S
+        while time.perf_counter() < deadline:
+            if killswitch.is_engaged() and (self.nodes is None or self.nodes.idle()):
+                break
+            await asyncio.sleep(0.01)
+        self.node_stop_s = self.nodes.stop_seconds(started) if self.nodes is not None else None
+        elapsed = time.perf_counter() - started
+        await self._resume()
+        return elapsed
+
+    async def _resume(self) -> None:
+        """Leave safe mode after a stop, as `security.resume` from the dashboard does."""
+        assert self.core is not None and self.core.security is not None
+        if not await self.core.security.killswitch.resume(pin_ok=True, by="eval"):
+            return
+        from nox.core.state import SystemLevel  # noqa: PLC0415
+
+        if self.core.state is not None:
+            await self.core.state.update("system.level", SystemLevel.RUNNING.value, reason="resume")
+        if self.core.bus is not None:
+            await self.core.bus.publish(Event(name=E.SYSTEM_STARTED, payload={"resumed": True}))
 
     async def settle(self) -> None:
         """Before checks: let a skill build finish, then click "Aktivieren" if the task says so."""

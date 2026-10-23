@@ -8,8 +8,9 @@
  * open-close bumps at a speaking rate, grouped into words with short pauses, their height scaled by
  * the level. It is seeded, so a preview render is the same every time.
  *
- * If the core ever sends a real amplitude (RMS per frame), `sample()` takes it as `measured` and
- * follows it instead; the synthetic syllables are only the stand-in for a signal we do not have.
+ * Where the core sends a real amplitude (`tts.level`, the RMS of what is playing), `sample()` takes
+ * it as `measured` and follows it instead; `VoiceTracker` below decides when that signal is
+ * trusted. The synthetic syllables are only the stand-in for a signal we do not have.
  */
 
 import { approach, clamp, mulberry32 } from './math';
@@ -90,23 +91,81 @@ export class SpeechEnvelope {
   }
 }
 
-/** How long a measured level counts as live; after that the envelope is synthetic again. */
-export const VOICE_FRESH_MS = 250;
+/**
+ * No `tts.level` for this long and the voice counts as paused: the jaw eases shut. The core sends
+ * a level only when it changes (about 30 a second while a voice is heard, one `0` for silence), so
+ * real speech is never this quiet on the wire; a pause between words or sentences is.
+ */
+export const VOICE_HOLD_MS = 160;
 
 /**
- * Turns the reducer's `voiceLevel` + `voiceSeq` (pure state, no clock) into "the measured level,
- * if one arrived recently": a level is only trusted while new ones keep coming, so a dropped
- * `tts.finished` or a stalled connection cannot freeze the mouth open.
+ * A shut jaw opens only for a level at least this loud (RMS). In a pause the output keeps
+ * reporting its noise floor now and then; those keepalives sit below this and leave it shut.
+ */
+export const VOICE_OPEN_RMS = 0.02;
+
+/** An open jaw follows the voice down to this level (RMS); below it the voice has gone quiet. */
+export const VOICE_SILENT_RMS = 0.008;
+
+/**
+ * Turns the reducer's `voiceLevel` + `voiceSeq` (pure state, no clock) into the level the jaw
+ * should follow, or `null` while no level has arrived during this utterance (then the envelope
+ * synthesises syllables).
+ *
+ * Once a level has arrived the measured voice owns the jaw until the utterance ends: a pause is a
+ * shut mouth, never the synthetic syllables flapping in. Within it the jaw is gated:
+ * - no level for `VOICE_HOLD_MS` (a pause, a stalled connection, a dropped `tts.finished`): 0;
+ * - a shut jaw stays shut until a level of at least `VOICE_OPEN_RMS` arrives, so a sparse
+ *   low keepalive cannot blip it open;
+ * - an open jaw follows the level until it drops below `VOICE_SILENT_RMS` (hysteresis, so a
+ *   voice hovering around one threshold does not chatter).
+ *
+ * The result is a target, not a position: `SpeechEnvelope` eases the jaw towards it (fast attack,
+ * softer release), so closing in a pause is a movement, not a snap. Time comes in as `nowMs`
+ * with every call, which keeps this deterministic under test.
  */
 export class VoiceTracker {
   private seq: number | undefined;
   private at = Number.NEGATIVE_INFINITY;
+  private level = 0;
+  private measured = false;
+  private open = false;
 
-  sample(nowMs: number, seq: number | undefined, level: number | undefined): number | null {
+  /**
+   * @param nowMs the frame time in milliseconds (any monotonic clock).
+   * @param seq `voiceSeq`: changes with every `tts.level` that arrived.
+   * @param level `voiceLevel`: the last level that arrived, RMS 0..1.
+   * @param speaking whether an utterance is being voiced at all; when it ends, the next one starts
+   *   unmeasured again (a core or node that sends no levels gets the synthetic syllables).
+   */
+  sample(
+    nowMs: number,
+    seq: number | undefined,
+    level: number | undefined,
+    speaking: boolean,
+  ): number | null {
     if (seq !== undefined && seq !== this.seq) {
-      if (this.seq !== undefined) this.at = nowMs; // the first value seen is old news
+      // The first value seen is old news: it arrived before this view started watching.
+      if (this.seq !== undefined) {
+        this.at = nowMs;
+        this.level = clamp(level ?? 0);
+        this.measured = true;
+      }
       this.seq = seq;
     }
-    return nowMs - this.at < VOICE_FRESH_MS && level !== undefined ? clamp(level) : null;
+    if (!speaking) {
+      this.measured = false;
+      this.open = false;
+      return null;
+    }
+    if (!this.measured) return null;
+    if (nowMs - this.at >= VOICE_HOLD_MS) {
+      this.open = false;
+    } else if (this.open) {
+      this.open = this.level >= VOICE_SILENT_RMS;
+    } else {
+      this.open = this.level >= VOICE_OPEN_RMS;
+    }
+    return this.open ? this.level : 0;
   }
 }

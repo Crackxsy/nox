@@ -57,6 +57,22 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
 
 ### Added
+- **Nodes: Nox's hands on your other computers** (Spec wave C, C1-C10; guide docs/NODES.md and
+  docs/NODES.de.md, threat model and accepted limits in docs/SECURITY.md). Another PC, laptop or
+  Pi in the home pairs as a `nox node` and lets Nox act there - only within what that device
+  allows, enforced on the device even against a core patched to allow everything. The parts,
+  each detailed below: pairing with a one-time code and a link or QR code that pins the
+  installation's authority, mutual TLS on the node port 47844 (C1); `nox node` with its own gate,
+  allow-list and audit trail (C2); routing with an optional `device` and device-bound grants
+  (C3); signed core receipts, high risk confirmed in a dialog on the device, the kill switch on
+  every node in under a second (C4); files in confirmed folders and commands in the device's own
+  sandbox (C5); screen, camera, browser, windows, mouse and keyboard and music, with the game
+  lock and the self-approval lock (C6); installers, logon task and signed self-update (C7); the
+  Devices page for computers (C8); voice, OBS and pet-overlay satellites (C9). Installing programs
+  on nodes (`package.*`) is not available yet: it waits for the owner's decision between a
+  privileged helper service and a sandbox profile.
+- **Quality wave for nodes** (Spec C10): docs, threat model, benchmark tasks for nodes, fixes (see
+  PR).
 - **Satellites on nodes: voice, OBS and the pet overlay** (Spec C9, docs/NODES.md). A node with
   `voice` allowed (and switched on for it in the Devices page - two keys, stored per node,
   migration 0018) listens and speaks there: push-to-talk (`Ctrl+Alt+Space`, `nox node voice
@@ -82,6 +98,26 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   in front; the dashboard shows "Nox steuert gerade Maus und Tastatur auf <Gerät>" with a Stopp.
   `media.control` plays, pauses, skips and sets the volume (SMTC/Core Audio on Windows, MPRIS and
   PipeWire/PulseAudio on Linux).
+- **Hands on nodes: files and commands** (Spec C5, docs/NODES.md). `file.list`, `file.read`,
+  `file.write` and `shell.run` run on a paired PC after the node's gate, the device's
+  confirmation and the core's receipt. Files open only inside folders confirmed on the device
+  (`nox node allow files --folder`, none by default), decided on the opened handle: no links
+  elsewhere, `..`, `~`, short names, UNC or device paths, never the node's folder, key stores or
+  browser profiles. Writes are text only, in two tiers (plain text medium; JSON and YAML high,
+  whole file, plain parse), never into a repository, a note app's workspace, a hidden or
+  configuration file, and never a note with content a note app could run. `shell.run` runs only
+  in the device's AppContainer or bubblewrap sandbox with strong guarantees - no sandbox, no
+  command. One renderer shows the core's permission target and the device's dialog in full (over
+  1000 characters is refused, never cut). `package.*` stays on the core. The five Pi benchmark
+  tasks run against a simulated headless Pi node.
+- **Devices page for computers** (Spec C8). Devices & skills › Devices › Computers and servers
+  lists every node with its state (connected, offline since, update needed), what Nox may do
+  there and what it is the default device for. A sheet per node: one switch per group that only
+  narrows (`node.narrow`; switching a group back on needs the PIN when one is set and never goes
+  past what the device allows, `enable_on_device`), the default device per tool family
+  (`node.defaults.set`), "Recently done here" and removal. "Add a PC or laptop": system picker, a
+  one-time code as link, command and QR code with the authority's fingerprint, and a live status
+  until the node connects. German and English copy with parity, axe-checked.
 - **Nodes install, start and update themselves** (Spec C7, docs/NODES.md). The Windows installer
   has a node mode ("Mit einem Nox im Heimnetz verbinden (nur dieses Gerät)", `/MODE=node`): no
   dashboards, a per-user logon task "Nox Node" (least privilege, never a service, never elevated),
@@ -119,7 +155,8 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   `nox node status`, `nox node log` (the device's own hash-chained audit trail), `nox node allow`
   / `deny` (the only way to widen what Nox may do there; the core can only narrow). Tools
   `system.info` and `notify.show`. The node's own gate refuses hard prohibitions, disabled groups,
-  unknown tools, invalid arguments and anything above low risk, whatever the core sent. On the
+  unknown tools, invalid arguments and - until part 4 brought the device's own dialog - anything
+  above low risk, whatever the core sent. On the
   core: `nox pair --node`, `nox unpair --node`. Guide: `docs/NODES.md`.
 - **Nodes, part 1 (core side):** another PC in the home can be paired as a `nox node`. A trusted
   session creates a code and a `nox-node://pair?...` link that pins the installation's authority;

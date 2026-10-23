@@ -5,10 +5,10 @@ an import, a read from a busy disk, a query - silences the supervisor heartbeat,
 every timer at once. From the outside that looks like a hang, and the log shows nothing but a gap.
 
 `LoopWatch` is a daemon thread that pings the loop. When a ping stays unanswered for
-`threshold_s`, it logs `core.loop_stalled` with the loop thread's current stack, repeats that
-every `report_every_s` while the stall lasts, and logs `core.loop_resumed` with the stall's length
-once the loop answers again. The stack names modules and functions, never file paths, so the log
-does not carry the installation's folder layout.
+`threshold_s`, it logs `core.loop_stalled` with the loop thread's current stack (as `frames`),
+repeats that every `report_every_s` while the stall lasts, and logs `core.loop_resumed` with the
+stall's length once the loop answers again. The stack names modules and functions, never file
+paths, so the log does not carry the installation's folder layout.
 
 It only observes: the loop sees one tiny callback per `interval_s` and nothing else.
 """
@@ -103,4 +103,6 @@ class LoopWatch:
     def _report(self, silent_s: float) -> None:
         # sys._current_frames is the documented way to read another thread's stack.
         frame = sys._current_frames().get(self._loop_thread_id)  # noqa: SLF001
-        log.warning("core.loop_stalled", for_s=round(silent_s, 1), stack=describe_stack(frame))
+        # `frames`, not `stack`: structlog's console renderer treats `stack` as the text of
+        # `stack_info` and fails on a list ("Logging error").
+        log.warning("core.loop_stalled", for_s=round(silent_s, 1), frames=describe_stack(frame))

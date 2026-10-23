@@ -792,6 +792,11 @@ class _Pending:
     request: PermissionRequest
     future: asyncio.Future[tuple[Decision, bool, str]]
     created_at: datetime
+    #: Whether "remember" could create a grant when the question was asked (taint included).
+    #: A "remember" answer counts only if this AND the same check at answer time say yes: a
+    #: conversation whose taint was cleared meanwhile ("new conversation", idle timeout) cannot
+    #: turn a question untrusted content prompted into a remembered grant.
+    can_remember: bool = False
 
 
 class DefaultPermissionEngine:
@@ -841,6 +846,15 @@ class DefaultPermissionEngine:
         with `None` (not readable: nothing in the conversation is user-directed any more). It
         stays set until `clear_taint` - when the orchestrator discards that conversation's
         context - never merely because a new turn began.
+
+        Every arrival of untrusted content revokes every remembered shell command (`cmd:`
+        grant), not only the first one in a conversation. Grants are not per conversation (see
+        `end_session`): a command remembered meanwhile in another, untainted conversation would
+        otherwise stay usable while untrusted content keeps arriving - by work the tainted
+        conversation set up to run later outside it, for one. The cost is accepted (owner
+        decision, C10): during a node session every message from a paired device takes the
+        remembered commands with it, and they are approved again. A tainted conversation also
+        never creates a remembered grant (`_can_remember`).
         """
         if self._taint.mark(conversation, content):
             log.info("security.taint_changed", tainted=True)
@@ -1058,7 +1072,10 @@ class DefaultPermissionEngine:
         loop = asyncio.get_running_loop()
         grant_id = uuid.uuid4().hex
         self._pending[grant_id] = _Pending(
-            request=request, future=loop.create_future(), created_at=self._clock()
+            request=request,
+            future=loop.create_future(),
+            created_at=self._clock(),
+            can_remember=self._can_remember(request),
         )
         publish_nowait(
             self._bus,
@@ -1082,7 +1099,7 @@ class DefaultPermissionEngine:
             expires_at=expires.isoformat(),
             # 0 when "remember" would create no grant, so no prompt offers it.
             remember_ttl_s=(
-                self._session_grant_ttl.total_seconds() if self._can_remember(request) else 0.0
+                self._session_grant_ttl.total_seconds() if self._may_remember(pending) else 0.0
             ),
             voice_satellite=self._satellite_of(request.conversation),
         )
@@ -1151,7 +1168,7 @@ class DefaultPermissionEngine:
             final is Decision.ALLOW
             and remember
             and scope is not None
-            and self._can_remember(request)
+            and self._may_remember(pending)
         ):
             grant = TemporaryGrant(
                 grant_id=grant_id,
@@ -1203,6 +1220,10 @@ class DefaultPermissionEngine:
             return f"site:{request.action}@{origin}"
         return f"session:{request.tool}/{request.action or '*'}"
 
+    def _may_remember(self, pending: _Pending) -> bool:
+        """A "remember" for this question: allowed when it was asked and still now (fail closed)."""
+        return pending.can_remember and self._can_remember(pending.request)
+
     def _can_remember(self, request: PermissionRequest) -> bool:
         """Whether a "remember" answer would create a grant at all: a rememberable scope, and not
         a risk that is asked every time. A prompt offers "remember" only then.
@@ -1215,6 +1236,10 @@ class DefaultPermissionEngine:
         """
         scope = self._remember_scope(request)
         if scope is None:
+            return False
+        if self.is_tainted(request.conversation):
+            # Grants are not per conversation: one remembered here would act in every other,
+            # untainted one - on a question untrusted content may have prompted.
             return False
         if is_simple_shell_target(request):
             return True
