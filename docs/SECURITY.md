@@ -812,7 +812,37 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   core that runs as a service without any login session (the Pi image) counts as not remote, the
   PIN applies; the check runs off the event loop with a time limit (too slow: unknown); (4) no PIN
   set: refused. The desktop shell's dialog has a PIN field for this. A node's own dialog still
-  asks on that node. A start needs a browser device linked to that node (`node.link`, else
+  asks on that node. **Talking to Nox stays possible** (`chat.send`, `voice.ptt`): no PIN from
+  this machine (but still not from a remote session) or from a paired device other than the
+  controlled PC's browser, which is refused (Nox could type its own instructions there). The
+  controlled PC's browser is every paired device linked to that node **and every paired device
+  connecting from that node's address**: its connection's address as this core sees it, plus up
+  to 16 private addresses (RFC 1918, link-local, unique-local IPv6) the node reports in its hello
+  and again in every pong (real, active interfaces first, virtual adapters last). When the
+  controlled node runs on this machine itself (loopback or one of this machine's own addresses),
+  this machine's dashboard and shell are the controlled PC too: no approvals or changes from
+  them, and their messages count as untrusted.
+  They only ever grow while the lock holds for that node (a later report or a reconnection from
+  another address adds, never removes), also while it is disconnected, and are dropped when the
+  lock lifts - nothing is ever dropped while the lock holds. Memory is bounded (64 reported and
+  16 connection addresses per node); a node that fills either is **saturated** for the rest of
+  its lock: then nobody is told apart from the controlled PC any more - every paired device and
+  this machine's own dashboard and shell are refused approvals, changes and messages (only deny,
+  Stopp and reading work), audited once, and the dashboard says "Nox steuert ein Gerät mit sehr
+  vielen Adressen - Freigaben nur nach Ende der Sitzung". "This machine" is matched against every address of every local interface,
+  uncapped; an address that cannot be classified counts as this machine. Fail closed (owner decision): a device that shares such an address is
+  treated as the controlled PC. **Accepted:** a compromised node could report the owner's phone
+  address and lock that phone out of approving during its session - it can only come from the
+  controlled machine itself; the owner ends it on the computer Nox runs on with the PIN (ending
+  the session, `node.computer.release`, or removing the node), and deny and Stopp always work.
+  A paired device's message during the session marks its conversation as holding **unreadable
+  untrusted content**: nothing in it counts as the user's own words any more
+  (`TaintLedger.user_directed`), so every off-machine call - a URL or a search taken from that
+  very message included - asks first; the dashboard says "messages count as unchecked".
+  Anything a conversation leads to is asked under the rule above. Muting the microphone is always
+  free; anything else for `voice.mute` - unmuting, and any value that is not literally `true`
+  (the field is a strict boolean) - follows the PIN rule. Which requests count as calm is pinned by a snapshot test
+  (`tests/integration/test_lan.py`), so a state-changing `*.status` cannot slip in. A start needs a browser device linked to that node (`node.link`, else
   `link_required`) and is refused while the lock holds for it (`session_running`); a start
   without a readable report is followed by `computer.session_end`. Stops, kills and disconnects
   never lift the lock themselves - the node ends its session on `nox/kill` and its next report

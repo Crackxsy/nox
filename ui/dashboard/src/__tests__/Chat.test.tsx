@@ -221,3 +221,27 @@ describe('the transcript', () => {
     await waitFor(() => expect(screen.getByText(/Provider: ollama/)).toBeDefined());
   });
 });
+
+describe('while Nox controls a paired PC', () => {
+  const t = translator('de');
+  const props = {
+    t,
+    lang: 'de' as const,
+    client: null,
+    providers: [],
+    messages: [],
+    onMessages: () => undefined,
+    draft: '',
+    onDraft: () => undefined,
+  };
+
+  it('says on a paired device that messages count as unchecked', () => {
+    render(<ChatPage {...props} untrusted />);
+    expect(screen.getByText(t('chat_unchecked_node'))).toBeTruthy();
+  });
+
+  it('says on the controlled PC that nothing can be sent from here', () => {
+    render(<ChatPage {...props} untrusted controlledHere />);
+    expect(screen.getByText(t('chat_controlled_here'))).toBeTruthy();
+  });
+});

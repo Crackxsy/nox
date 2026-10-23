@@ -270,6 +270,19 @@ describe('while Nox controls mouse and keyboard on a paired PC', () => {
     expect(calls[0]?.payload).toEqual({ grant_id: 'g1', decision: 'allow', remember: false, pin: '4711' });
   });
 
+  it('on the PC Nox controls: no PIN field and no Allow, only Deny and why', () => {
+    show({ device: true, pinSet: true, nodeControl: true, controlledHere: true });
+    expect(screen.queryByLabelText(t('perm_pin'))).toBeNull();
+    expect(screen.queryByRole('button', { name: t('perm_allow') })).toBeNull();
+    expect(screen.getByText(t('perm_node_control_here'))).toBeTruthy();
+    expect(screen.getByRole('button', { name: t('perm_deny') })).toBeTruthy();
+  });
+
+  it('asks for the PIN as a one-time code', () => {
+    show({ nodeControl: true, queue: [{ ...PROMPT, risk: 'low' }] });
+    expect(screen.getByLabelText(t('perm_pin')).getAttribute('autocomplete')).toBe('one-time-code');
+  });
+
   it('without a PIN set, offers only Deny', () => {
     show({ device: true, pinSet: false, nodeControl: true, queue: [{ ...PROMPT, risk: 'low' }] });
     expect(screen.queryByRole('button', { name: t('perm_allow') })).toBeNull();

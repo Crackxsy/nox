@@ -263,6 +263,11 @@ class NodeHello(_Strict):
     clientInfo: dict[_Short, _Short] = Field(default_factory=dict, max_length=4)  # noqa: N815
     #: Computer use on this device right now (`SessionReport`); None from a node without it.
     session: SessionReport | None = None
+    #: This device's own network addresses: a paired browser connecting from one of them sits on
+    #: this PC (`nox.node.world_routes.NodeControl.from_controlled`).
+    addresses: list[Annotated[str, StringConstraints(max_length=64)]] = Field(
+        default_factory=list, max_length=16
+    )
 
 
 class NoxCallMeta(_Strict):
@@ -292,6 +297,10 @@ class Ping(_Strict):
     state: str = Field(default="", max_length=32)
     #: In a node's `nox/pong`: computer use on it right now (`SessionReport`).
     session: SessionReport | None = None
+    #: In a node's `nox/pong`: its own addresses now (like `NodeHello.addresses`).
+    addresses: list[Annotated[str, StringConstraints(max_length=64)]] | None = Field(
+        default=None, max_length=16
+    )
 
 
 class GamesAdd(_Strict):

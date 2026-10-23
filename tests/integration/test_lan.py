@@ -674,3 +674,97 @@ async def test_a_device_sees_whether_a_pin_is_set_but_no_local_detail(core: NoxC
         assert status.payload["error"] == "unavailable"
     local = await _local(core, "dashboard", "lan.status", {})
     assert local["error"].startswith("certificates:")
+
+
+#: Every registered request the calm rule lets through while Nox controls mouse and keyboard
+#: (`nox.ipc.dispatch.calm_ui_request`: the explicit list, `ipc.*`, `*.list`, `*.status`). A new
+#: name here must only read or stop: a state-changing `x.status` turns this red on purpose.
+CALM_SNAPSHOT = frozenset(
+    {
+        "ai.setup.status",
+        "clip.list",
+        "config.effective",
+        "config.get",
+        "consent.list",
+        "day.today",
+        "extend.list",
+        "health.get",
+        "health.history",
+        "home.list",
+        "home.status",
+        "lan.devices.list",
+        "lan.status",
+        "mcp.servers.list",
+        "mcp.tools.list",
+        "memory.profile.list",
+        "node.computer.status",
+        "node.list",
+        "personality.get",
+        "plans.list",
+        "plugin.status",
+        "presets.list",
+        "remote.devices.list",
+        "secrets.status",
+        "security.kill",
+        "security.panic",
+        "security.permission.pending",
+        "security.permission.reply",
+        "security.pin.status",
+        "skills.list",
+        "state.get",
+        "stream.overlay.status",
+        "stream.session.status",
+        "twitch.auth.status",
+        "views.list",
+        "voice.model.status",
+        "voice.mute",
+        "watch.list",
+    }
+)
+
+
+async def test_the_calm_requests_are_exactly_the_snapshot(core: NoxCore) -> None:
+    from nox.ipc.dispatch import calm_ui_request
+
+    assert core.registry is not None
+    calm = {n for n in core.registry.names() if calm_ui_request(n)}
+    assert calm == CALM_SNAPSHOT
+
+
+async def test_a_paired_devices_request_carries_its_network_address(core: NoxCore) -> None:
+    """P1: a request bridged in by the network listener knows the device's address
+    (`RequestContext.peer`); a client on this machine has none."""
+    from pydantic import BaseModel
+
+    assert core.registry is not None and core.hub is not None and core.tokens is not None
+    seen: list[tuple[str, str]] = []
+
+    class Empty(BaseModel):
+        pass
+
+    async def handler(ctx: Any, _p: Empty) -> dict[str, Any]:
+        seen.append((ctx.role, ctx.peer))
+        return {}
+
+    core.registry.register("zz.peer", Empty, handler, roles=("dashboard", "device"))
+    paired = await _pair(core)
+    async with await _connect(core) as ws:
+        await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
+        assert (await _request(ws, paired["client_id"], "zz.peer", {})).kind is Kind.RESPONSE
+    async with connect(f"ws://127.0.0.1:{core.hub.port}/ws", open_timeout=5) as local:
+        await _auth(
+            local, token=core.tokens.session_token, role="dashboard", client_id="dashboard:p"
+        )
+        env = Envelope(
+            kind=Kind.REQUEST,
+            name="zz.peer",
+            src=Source(role="dashboard", id="dashboard:p"),
+            payload={},
+        )
+        await local.send(env.model_dump_json())
+        while True:
+            reply = Envelope.model_validate(json.loads(await asyncio.wait_for(local.recv(), 5)))
+            if reply.corr == env.id:
+                break
+        assert reply.kind is Kind.RESPONSE, reply.payload
+    assert seen == [("device", "127.0.0.1"), ("dashboard", "")]

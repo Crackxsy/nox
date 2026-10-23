@@ -37,6 +37,11 @@ export interface ChatPageProps {
   outbox?: { text: string; seq: number } | null;
   /** Nox is stopped: the field is locked and says why. */
   stopped?: boolean;
+  /** Nox controls mouse and keyboard on a paired PC and this is a paired device: what is sent
+   * from here counts as unchecked (the core treats it as untrusted content). */
+  untrusted?: boolean;
+  /** This browser runs on the PC Nox controls: the core refuses messages from here. */
+  controlledHere?: boolean;
   /** The open permission question, at the place of the action (under the newest message). */
   inline?: ReactNode;
 }
@@ -54,6 +59,8 @@ export function ChatPage({
   onDraft,
   outbox = null,
   stopped = false,
+  untrusted = false,
+  controlledHere = false,
   inline = null,
 }: ChatPageProps) {
   const [pending, setPending] = useState(false);
@@ -241,7 +248,13 @@ export function ChatPage({
             />
             <div className="composer-row">
               <span id="chat-hint" className="hint">
-                {stopped ? t('ux_input_stopped') : t('chat_hint')}
+                {stopped
+                  ? t('ux_input_stopped')
+                  : controlledHere
+                    ? t('chat_controlled_here')
+                    : untrusted
+                      ? t('chat_unchecked_node')
+                      : t('chat_hint')}
               </span>
               <button
                 type="submit"

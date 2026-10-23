@@ -129,6 +129,10 @@ class NodeSession:
     levels: tuple[int, int] = (0, 0)
     #: Satellite requests in the current minute, per method: (minute, count).
     satellite_asks: dict[str, tuple[int, int]] = field(default_factory=dict)
+    #: The address the node connects from, as this core sees it.
+    peer_host: str = ""
+    #: The addresses the node last reported about itself (hello, then every pong).
+    reported_addresses: list[str] = field(default_factory=list)
     blobs: dict[str, list[bytes]] = field(default_factory=dict)
     complete: set[str] = field(default_factory=set)
     blob_bytes: int = 0
@@ -378,6 +382,8 @@ class NodeListener:
             transport=transport,
             cert_not_after=cert.not_valid_after_utc,
             computer=hello_msg.session,
+            peer_host=str(connection.remote_address[0]) if connection.remote_address else "",
+            reported_addresses=list(hello_msg.addresses),
         )
         # Replacing an older session and registering this one happen under the device's lock,
         # which a revocation takes too: a revocation either sees this session registered and
@@ -522,6 +528,8 @@ class NodeListener:
             session.node_state = params.state
             if params.session is not None:
                 session.computer = params.session
+            if params.addresses is not None:
+                session.reported_addresses = list(params.addresses)
         elif method == p.M_SECURITY_KILL:
             assert isinstance(params, p.SecurityKill)
             status = self._kill(session.device_id, params.reason)

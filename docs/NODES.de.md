@@ -191,7 +191,9 @@ Alles aus, außer Musik; jedes wird nur hier eingeschaltet, mit `nox node allow 
   erlauben noch ändern; jedes andere Gerät und der Rechner, auf dem Nox läuft, können es mit der
   Sicherheits-PIN (ohne PIN geht bis zum Ende der Sitzung kein Erlauben). Am Rechner, auf dem Nox
   läuft, geht es nicht über eine Fernsteuerung (ein Pi, auf dem Nox als Dienst läuft, hat keine:
-  dort gilt die PIN). Ablehnen und Stopp gehen immer. Bleibt die Zeile stehen, obwohl der PC
+  dort gilt die PIN). Ablehnen und Stopp gehen immer, und mit Nox reden (Chat, Sprechtaste)
+  geht ohne PIN - außer vom Browser auf dem gesteuerten PC, der statt eines PIN-Felds „von hier
+  geht Erlauben nicht“ zeigt. Bleibt die Zeile stehen, obwohl der PC
   nicht mehr antwortet, löst „Sperre lösen“ mit der PIN am Rechner, auf dem Nox läuft, die
   Sperre.
 - **Vanguard und ähnliche Treiber:** Ein Anti-Cheat-Treiber, der mit Windows startet (Riot

@@ -32,6 +32,7 @@ from nox.ipc.roles import UI_ROLES
 from nox.lan.install import authorize_admin, qr_data_uri
 from nox.lan.tls import TlsMaterial
 from nox.mcp.client import McpClientError
+from nox.node.agent import all_local_addresses
 from nox.node.console import console_is_remote
 from nox.node.hands import (
     PathArgs,
@@ -705,6 +706,23 @@ def _world_specs(
             return []
         return [(d, s.computer) for d, s in listener.sessions.items() if s.computer is not None]
 
+    def addresses() -> dict[str, tuple[str, list[str]]]:
+        listener = listeners[0] if listeners else None
+        if listener is None:
+            return {}
+        return {d: (s.peer_host, list(s.reported_addresses)) for d, s in listener.sessions.items()}
+
+    def audit_control(what: str) -> None:
+        if security is not None and getattr(security, "audit", None) is not None:
+            security.audit.append(
+                actor="core",
+                tool="node",
+                action="node.computer.binding",
+                target="",
+                decision="deny",
+                result=what[:64],
+            )
+
     def linked(device_id: str) -> str | None:
         entry = next((e for e in registry.known() if e.device_id == device_id), None)
         return entry.linked_device_id if entry is not None else None
@@ -720,6 +738,9 @@ def _world_specs(
         reports=reports,
         labels=label_of,
         linked=linked,
+        addresses=addresses,
+        own_addresses=all_local_addresses,
+        audit=audit_control,
         stop_hotkey=desktop.computer_use.stop_hotkey if desktop is not None else "",
     )
     wire_guards(core, control)
@@ -742,6 +763,8 @@ def wire_guards(core: Any, control: NodeControl) -> None:
     """While Nox controls a node: every "allow" (`security.permission.reply`) and every request
     that changes something (`RequestRegistry.node_guard`) go through `session_refusal`; and the
     `node.computer.*` requests. Separate so a test can wire a fake core exactly like this."""
+    from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
+
     security = getattr(core, "security", None)
 
     def gate() -> Any:
@@ -762,6 +785,17 @@ def wire_guards(core: Any, control: NodeControl) -> None:
         return await guard(ctx, pin, "security.permission.reply")
 
     core.node_approval_guard = approval
+
+    def chat_untrusted(ctx: Any) -> bool:
+        # Words that could have been typed by Nox on the PC it controls count as unreadable
+        # untrusted content: a paired device's, and this machine's own when the controlled PC
+        # is this machine.
+        role = getattr(ctx, "role", "")
+        if role == DEVICE_ROLE:
+            return control.active()
+        return role in LOCAL_UI_ROLES and control.controls_local()
+
+    core.node_chat_untrusted = chat_untrusted
     ipc = getattr(core, "registry", None)
     if ipc is not None and hasattr(ipc, "register"):
         ipc.node_guard = guard
@@ -776,10 +810,17 @@ def _register_control_requests(core: Any, ipc: Any, control: NodeControl, gate: 
     """`node.computer.status` (what the header shows, for a dashboard that (re)connects) and
     `node.computer.release` (lift a stuck lock by hand: only at the computer Nox runs on, with
     the PIN, not remotely; a node that still reports a session locks again at once)."""
-    from nox.ipc.roles import LOCAL_UI_ROLES  # noqa: PLC0415
+    from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
+    from nox.ipc.tokens import DEVICE_CLIENT_PREFIX  # noqa: PLC0415
 
-    async def h_status(_ctx: RequestContext, _p: EmptyRequest) -> dict[str, Any]:
-        return {"sessions": control.status()}
+    async def h_status(ctx: RequestContext, _p: EmptyRequest) -> dict[str, Any]:
+        # Whether the asking browser is the one on a PC Nox controls: it cannot approve then,
+        # so it shows no PIN field at all.
+        here = ctx.role == DEVICE_ROLE and (
+            control.controls_browser(ctx.client_id.removeprefix(DEVICE_CLIENT_PREFIX))
+            or control.from_controlled(ctx.peer)
+        )
+        return {"sessions": control.status(), "controlled_here": here}
 
     async def h_release(ctx: RequestContext, p: ReleaseRequest) -> dict[str, Any]:
         refusal = await local_pin_refusal(
