@@ -20,7 +20,7 @@ from nox.core.logging import get_logger
 from nox.core.modes import switch_mode
 from nox.core.state import Mode
 from nox.presets.engine import PresetRunner
-from nox.presets.gate import VoicePresetGate
+from nox.presets.gate import FROM_SATELLITE, SATELLITE_AGENT, VoicePresetGate
 from nox.presets.ipc import register_preset_ipc
 from nox.presets.tools import register_preset_tools
 from nox.presets.triggers import PresetTriggers
@@ -82,11 +82,16 @@ def install(core: CoreLike) -> PresetsRuntime:
 
     async def call_tool(name: str, arguments: dict[str, Any]) -> Any:
         """Every step that touches the outside world goes through the permission check."""
+        # From a voice satellite (C9): another agent, so a profile's allowance for `presets`
+        # does not carry over, and the call sits in the node's (tainted) conversation.
+        agent = SATELLITE_AGENT if FROM_SATELLITE.get() else _AGENT
         return await core.tool_executor.call(
-            agent=_AGENT, name=name, arguments=arguments, mode=_mode(core)
+            agent=agent, name=name, arguments=arguments, mode=_mode(core)
         )
 
     async def set_mode(mode: str) -> None:
+        if FROM_SATELLITE.get():
+            raise ValueError("a voice satellite never switches the mode")
         if mode not in {member.value for member in Mode}:
             known = ", ".join(sorted(member.value for member in Mode))
             raise ValueError(f"unknown mode {mode!r}; known modes: {known}")

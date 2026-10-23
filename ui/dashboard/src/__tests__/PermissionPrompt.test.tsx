@@ -3,7 +3,7 @@
  * behaves at the edges - no connection, a reply in flight, a wrong PIN, the clock running out.
  */
 
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup as cleanupView, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { translator } from '../i18n';
@@ -89,6 +89,16 @@ describe('what the prompt says', () => {
   it('never says "always"', () => {
     show();
     expect(document.body.textContent).not.toMatch(/immer|always/i);
+  });
+
+  it('says when the words came from a voice satellite, and only then', () => {
+    show({ queue: [{ ...PROMPT, voiceSatellite: 'Wohnzimmer-Pi' }] });
+    expect(screen.getByTestId('perm-voice-satellite').textContent).toContain(
+      'Von Sprach-Satellit Wohnzimmer-Pi',
+    );
+    cleanupView();
+    show();
+    expect(screen.queryByTestId('perm-voice-satellite')).toBeNull();
   });
 
   it('says how many more are waiting', () => {

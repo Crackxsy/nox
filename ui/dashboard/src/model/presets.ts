@@ -49,6 +49,8 @@ export interface Preset {
   enabled: boolean;
   triggers: PresetTriggers;
   steps: PresetStep[];
+  /** Its phrases also work at a node's voice satellite (off unless the owner says so, PIN). */
+  from_satellites?: boolean;
 }
 
 export interface PresetAction {
@@ -144,6 +146,7 @@ export function parsePresets(payload: unknown): PresetsPayload {
         enabled: item.enabled !== false,
         triggers: item.triggers ? parseTriggers(item.triggers) : { ...EMPTY_TRIGGERS },
         steps: parseSteps(item.steps),
+        from_satellites: item.from_satellites === true,
       };
     }),
     actions: actions.map((entry) => {

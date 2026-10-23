@@ -54,6 +54,22 @@ export function variantFromStateReply(reply: unknown): string | null {
   return null;
 }
 
+/** A paired node's id as `?device=` names it (32 hex digits); anything else is no device. */
+export function deviceFromQuery(value: string | null): string | null {
+  return value !== null && /^[0-9a-f]{32}$/.test(value) ? value : null;
+}
+
+/**
+ * Whether an event is for this pet. Speech has a place: a pet for one paired node (`?device=<id>`,
+ * the overlay a node serves, C9) moves its mouth with that node's speech only, and the core's own
+ * pet with the core's. Only `tts.*` events carry a `device`; every other event is for every pet.
+ */
+export function forThisPet(env: Envelope, device: string | null): boolean {
+  if (!env.name.startsWith('tts.')) return true;
+  const from = typeof env.payload?.device === 'string' ? env.payload.device : '';
+  return from === (device ?? '');
+}
+
 export interface PetIpcHandlers {
   onEvent: (env: Envelope) => void;
   onStatus: (status: ConnStatus, detail?: string) => void;

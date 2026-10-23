@@ -66,6 +66,8 @@ class TtsLevel(BaseModel):
     utterance_id: str
     channel: str  # private | stream | both
     level: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    #: The paired node that played it (its voice satellite, C9); empty: this core.
+    device: str = ""
 
 
 class AiRequestStarted(BaseModel):
@@ -130,6 +132,9 @@ class PermissionRequested(BaseModel):
     expires_at: str = ""
     #: How long a remembered "allow" lasts, so the button can say so instead of "always".
     remember_ttl_s: float = 0.0
+    #: The words that led here were spoken at a node's voice satellite (C9): its name, shown as
+    #: "von Sprach-Satellit <name>". Empty for everything else.
+    voice_satellite: str = ""
 
 
 class PermissionDecided(BaseModel):

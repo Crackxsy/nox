@@ -17,6 +17,7 @@ Requests, for the UI roles (`nox.ipc.roles`):
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,12 +45,13 @@ from nox.node.hands import (
 from nox.node.listener import NodeListener
 from nox.node.names import label
 from nox.node.pairing import NodePairing
-from nox.node.policy import defaults_view, register_policy_requests
+from nox.node.policy import defaults_view, group_of, register_policy_requests
 from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink, render
 from nox.node.receipts import ReceiptSigner
 from nox.node.registry import NodeEntry, NodeRegistry
 from nox.node.repo import NodeRepository
 from nox.node.router import CannotShow, install_routes, routed_spec
+from nox.node.satellites import SatelliteHub, obs_route, voice_say_spec
 from nox.node.tools import NoArgs, NotifyArgs, system_info
 from nox.node.world_routes import NodeControl, local_pin_refusal, session_refusal, world_specs
 from nox.remote.models import DeviceRow
@@ -103,6 +105,8 @@ class NodeRuntime:
     enabled: bool
     listener: NodeListener | None = None
     registry: NodeRegistry | None = None
+    #: The satellites' side (C9): voice turns, overlay credentials, the microphone gate.
+    satellites: SatelliteHub | None = None
     error: str = ""
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
 
@@ -114,6 +118,8 @@ class NodeRuntime:
         for task in list(self.tasks):
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        if self.satellites is not None:
+            await self.satellites.close()
         if self.registry is not None:
             await self.registry.close()
         if self.listener is not None:
@@ -189,6 +195,7 @@ def install(core: Any) -> NodeRuntime:
     )
     runtime.listener = listener
     holder.append(listener)
+    satellites = install_satellites(core, runtime, registry, listener, pairing)
 
     async def stop_nodes() -> None:
         # The stop reaches every node over the sockets that are already open (spec C §1.7).
@@ -202,7 +209,9 @@ def install(core: Any) -> NodeRuntime:
     killswitch.register_resume_hook("nodes", resume_nodes)
     control = _install_routes(core, registry, [listener])
     controls.append(control)
-    _keep(runtime, _watch_sessions(control, core, listener), "nox-node-computer")
+    # The PC Nox controls cannot talk to it (`controlled_here`).
+    attach_control(satellites, control)
+    _keep(runtime, _watch_sessions(control, core, listener, satellites), "nox-node-computer")
 
     async def redeem(body: NodePairRequest) -> tuple[int, dict[str, Any]]:
         if not listener.running:
@@ -360,18 +369,235 @@ async def resend_games_if_changed(core: Any, listener: Any, sent: list[list[str]
     return True
 
 
-async def _watch_sessions(control: NodeControl, core: Any, listener: Any) -> None:
+async def _watch_sessions(
+    control: NodeControl, core: Any, listener: Any, satellites: SatelliteHub | None = None
+) -> None:
     """Every second: the nodes' latest reports, so the lock, the grant and the dashboard follow
-    a session that ends on the node (time, stop hotkey, kill) without another call; and the
-    core's watched games, sent again when they change."""
+    a session that ends on the node (time, stop hotkey, kill) without another call; the core's
+    watched games, sent again when they change; and the satellites' microphone gate and overlay
+    credentials, which follow the privacy settings and the Devices page."""
     sent: list[list[str]] = [watched_games(core)]  # sent on every connection already
     while True:
         await asyncio.sleep(1.0)
         try:
             control.active()
             await resend_games_if_changed(core, listener, sent)
+            if satellites is not None:
+                await satellites.push_gates()
+                await satellites.sweep()
         except Exception as exc:  # noqa: BLE001 - the watcher outlives one bad round
             log.error("node.computer_watch_failed", error=type(exc).__name__)
+
+
+def attach_control(satellites: SatelliteHub, control: NodeControl) -> None:
+    """Computer use and the satellites (C9 review H4, with #167's lock): the node Nox controls
+    is refused (`controlled_here`) - and every node while a binding is saturated, when nobody
+    can be told apart from the controlled PC any more; while any session runs, voice turns from
+    other nodes are marked as holding unreadable untrusted content, like paired-device chat."""
+
+    def controlled(device_id: str) -> bool:
+        return bool(control.locked(device_id) or control.is_saturated())
+
+    satellites.controlled = controlled
+    satellites.session_active = control.active
+
+
+#: How long the hub may reuse its answer to "may this node hold an overlay credential?".
+OVERLAY_CHECK_TTL_S = 2.0
+
+
+class TtlCache:
+    """`read(key)` remembered for `ttl_s`; `forget(key)` drops one answer at once."""
+
+    def __init__(
+        self,
+        read: Callable[[str], bool],
+        *,
+        ttl_s: float,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._read, self._ttl, self._clock = read, ttl_s, clock
+        self._answers: dict[str, tuple[float, bool]] = {}
+
+    def __call__(self, key: str) -> bool:
+        now = self._clock()
+        cached = self._answers.get(key)
+        if cached is not None and now - cached[0] < self._ttl:
+            return cached[1]
+        value = bool(self._read(key))
+        self._answers[key] = (now, value)
+        return value
+
+    def forget(self, key: str) -> None:
+        self._answers.pop(key, None)
+
+
+def install_satellites(
+    core: Any, runtime: NodeRuntime, registry: NodeRegistry, listener: Any, pairing: NodePairing
+) -> SatelliteHub:
+    """The core's side of the satellites (C9, `nox.node.satellites`): voice turns from nodes,
+    their speech levels for a pet, overlay credentials for their overlay relays, the microphone
+    gate (pushed on connection, every second, and at once on a privacy change), and the panic
+    button for OBS on nodes."""
+    from nox.core.events import E, Event  # noqa: PLC0415
+    from nox.security._events import publish_nowait  # noqa: PLC0415
+
+    security = getattr(core, "security", None)
+
+    def entry_of(device_id: str) -> NodeEntry | None:
+        return next((e for e in registry.known() if e.device_id == device_id), None)
+
+    def offers(device_id: str, tool: str) -> bool:
+        entry = entry_of(device_id)
+        return entry is not None and entry.offers(tool)
+
+    def enabled_on_device(device_id: str, group: str) -> bool:
+        entry = entry_of(device_id)
+        if entry is None or not entry.online:
+            return False
+        if any(group_of(tool) == group for tool in entry.tools):
+            return True
+        return group in entry.narrowed and registry.policy.state(device_id, group)[0]
+
+    def capture_refusal() -> str | None:
+        killswitch = getattr(security, "killswitch", None)
+        if killswitch is not None and killswitch.is_engaged():
+            return "stopped"
+        privacy = getattr(security, "privacy", None)
+        if privacy is None:
+            return "no privacy settings"
+        try:
+            allowed = bool(privacy.allows_capture("microphone"))
+        except Exception:  # noqa: BLE001 - cannot tell: closed
+            return "unknown"
+        return None if allowed else "microphone off (privacy settings, panic or safe mode)"
+
+    orchestrator = getattr(core, "orchestrator", None)
+
+    async def turn(text: str, language: str, on_chunk: Any, channel: str, note: str) -> Any:
+        assert orchestrator is not None
+        engine = getattr(security, "engine", None)
+        try:
+            during_session = bool(satellites.session_active())
+        except Exception:  # noqa: BLE001 - cannot tell: as if one ran
+            during_session = True
+        if during_session and engine is not None:
+            # While Nox controls a paired PC, the same rule as for paired-device chat (#167):
+            # the conversation holds unreadable untrusted content.
+            engine.mark_tainted(orchestrator.conversation_for(channel), None)
+        # Waits for the turn in flight instead of cancelling it (and a question it may wait on),
+        # and interrupts no speech here; the conversation counts as tainted from its first turn
+        # (`nox.security.taint.UNTRUSTED_CONVERSATIONS`).
+        return await orchestrator.handle_text(
+            text,
+            language=language,
+            speak=False,
+            on_chunk=on_chunk,
+            channel=channel,
+            barge_in=False,
+            context_note=note,
+        )
+
+    def label_of(device_id: str) -> str:
+        from nox.node.satellites import clean_label  # noqa: PLC0415
+
+        entry = entry_of(device_id)
+        return clean_label(entry.label if entry is not None else "") or device_id[:8]
+
+    def publish(name: str, payload: dict[str, Any]) -> None:
+        publish_nowait(getattr(core, "bus", None), name, payload, source="node")
+
+    def read_overlay_allowed(device_id: str) -> bool:
+        """May this node hold an overlay credential (blocking: the database)? Paired, not
+        removed, `obs` enabled on the device as it last said and not narrowed here."""
+        device = pairing.get(device_id)
+        if device is None or device.revoked:
+            return False
+        on_device, narrowed = registry.policy.state(device_id, "obs")
+        return on_device and not narrowed
+
+    # The hub asks at every use of a node's overlay credential, on its own loop: a short cache,
+    # emptied for a node the moment it is narrowed or removed.
+    overlay_allowed = TtlCache(read_overlay_allowed, ttl_s=OVERLAY_CHECK_TTL_S)
+
+    tokens = getattr(core, "tokens", None)
+    if tokens is not None and hasattr(tokens, "node_overlay_allowed"):
+        # The hub asks again whenever a node's overlay credential is used over the network.
+        tokens.node_overlay_allowed = overlay_allowed
+    hub = getattr(core, "hub", None)
+    satellites = SatelliteHub(
+        offers=offers,
+        enabled_on_device=enabled_on_device,
+        sessions=lambda: list(listener.sessions.values()),
+        turn=turn if orchestrator is not None else None,
+        capture_refusal=capture_refusal,
+        publish=publish,
+        audit=getattr(security, "audit", None),
+        overlay=getattr(tokens, "overlay", None),
+        disconnect_credential=getattr(hub, "disconnect_credential", None),
+        overlay_allowed=overlay_allowed,
+        opted_in=registry.policy.opted_in,
+        label=label_of,
+    )
+    listener.on_satellite = satellites.handle
+    engine = getattr(security, "engine", None)
+    if engine is not None and hasattr(engine, "satellite_label"):
+        engine.satellite_label = label_of  # "von Sprach-Satellit <name>" in its questions
+    connected, disconnected = listener._on_connected, listener._on_disconnected  # noqa: SLF001
+
+    def panicking() -> bool:
+        privacy = getattr(security, "privacy", None)
+        try:
+            return bool(getattr(privacy, "panic", False))
+        except Exception:  # noqa: BLE001 - cannot tell: protective
+            return True
+
+    async def on_connected(session: Any) -> None:
+        if connected is not None:
+            await connected(session)
+        await satellites.push_gates()
+        if panicking():
+            # Offline when the panic button was pressed: its OBS goes to the privacy scene now.
+            await satellites.panic("panic", sessions=[session])
+
+    async def on_disconnected(session: Any) -> None:
+        satellites.disconnected(session.device_id)
+        if disconnected is not None:
+            await disconnected(session)
+
+    listener._on_connected = on_connected  # noqa: SLF001
+    listener._on_disconnected = on_disconnected  # noqa: SLF001
+
+    async def forget(device_id: str, reason: str) -> None:
+        overlay_allowed.forget(device_id)
+        await satellites.revoke_overlay(device_id, f"node removed: {reason}")
+
+    pairing.on_revoked(forget)
+
+    async def narrowed(device_id: str, group: str, on: bool) -> None:
+        if group == "obs":
+            overlay_allowed.forget(device_id)
+        if group == "obs" and on:
+            # Switched off in the Devices page: its overlay goes dark now, online or not.
+            await satellites.revoke_overlay(device_id, "obs narrowed")
+
+    registry.on_narrowed.append(narrowed)
+    _keep(runtime, satellites.sweep(), "nox-node-overlay-sweep")  # stale ones from earlier runs
+    bus = getattr(core, "bus", None)
+    if bus is not None:
+
+        async def gates(_event: Event) -> None:
+            await satellites.push_gates()
+
+        async def panic(_event: Event) -> None:
+            await satellites.push_gates()
+            await satellites.panic("panic")
+
+        for name in (E.PRIVACY_CAPTURE_CHANGED, E.SECURITY_KILL_SWITCH, E.SYSTEM_STARTED):
+            bus.subscribe(name, gates)
+        bus.subscribe(E.SECURITY_PANIC, panic)
+    runtime.satellites = satellites
+    return satellites
 
 
 def _install_routes(
@@ -433,12 +659,33 @@ def _install_routes(
         )
     world, control = _world_specs(core, registry, defaults, listeners or [])
     specs += world
+    engine = getattr(getattr(core, "security", None), "engine", None)
+
+    def tainted_now() -> bool:
+        from nox.security.taint import current_conversation  # noqa: PLC0415
+
+        try:
+            return engine is None or bool(engine.is_tainted(current_conversation()))
+        except Exception:  # noqa: BLE001 - cannot tell: tainted
+            return True
+
+    specs.append(voice_say_spec(registry, defaults, tainted=tainted_now))  # C9: speak on a node
     on_core = {spec.name for spec in specs if own(spec.name) is not None}
     install_routes(core.tool_registry, specs)
     node_only = {spec.name for spec in specs} - on_core
+    tools = core.tool_registry
+    wrapped: set[str] = set()
+    if hasattr(tools, "wrap"):
+        # C9: `obs.request` - the plugin's tool while OBS runs here, routed to the node where OBS
+        # runs otherwise. The plugin comes and goes; the route stays (`ToolRegistry.wrap`).
+        tools.wrap("obs.request", obs_route(registry, defaults))
+        wrapped.add("obs.request")
 
     def probe(tool_name: str) -> tuple[Any, str] | None:
-        if tool_name in node_only and not registry.any_online_with(tool_name):
+        node_only_now = tool_name in node_only or (
+            tool_name in wrapped and tools.own(tool_name) is None
+        )
+        if node_only_now and not registry.any_online_with(tool_name):
             from nox.capabilities.model import CapabilityState  # noqa: PLC0415
 
             return CapabilityState.UNAVAILABLE, "no paired device with this is online"

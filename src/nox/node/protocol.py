@@ -90,6 +90,32 @@ M_BLOB = "nox/blob"
 #: node -> core: a new certificate for the same key, over the already authenticated channel.
 M_RENEW = "nox/renew"
 
+# ---- satellites (C9): only between a core and a node that agreed on them (`features`) ----------
+
+#: node -> core: what the voice satellite heard, as text (never audio). Answered at once with
+#: `{accepted, reason}`; the answer to the question follows as `nox/voice/say`.
+M_VOICE_HEARD = "nox/voice/heard"
+#: node -> core: how loud the node's own speech is right now, for a pet (`tts.level`). A number.
+M_VOICE_LEVEL = "nox/voice/level"
+#: node -> core: a read-only overlay credential for this node's overlay relay (`nox.node.overlay`).
+M_OVERLAY_CREDENTIAL = "nox/overlay/credential"
+#: core -> node: one sentence of the answer to an utterance this node sent (`turn_id`).
+M_VOICE_SAY = "nox/voice/say"
+#: core -> node: stop speaking the answer to `turn_id` (a new question, a stop).
+M_VOICE_CANCEL = "nox/voice/cancel"
+#: core -> node: whether this core's privacy lets the node's microphone listen right now.
+M_VOICE_GATE = "nox/voice/gate"
+#: core -> node: the panic button - OBS on that node goes to its privacy scene and stays as it is.
+M_OBS_PANIC = "nox/obs/panic"
+
+#: What a core of this release understands (`features` in its `initialize` answer). A node sends
+#: a satellite method only to a core that named its feature: an older core would count it as a
+#: violation and close the connection.
+FEATURE_VOICE = "voice"
+FEATURE_OVERLAY = "overlay"
+FEATURE_OBS_PANIC = "obs_panic"
+FEATURES: frozenset[str] = frozenset({FEATURE_VOICE, FEATURE_OVERLAY, FEATURE_OBS_PANIC})
+
 #: Everything a node may send to the core - the role `node` allow-list. Anything else is answered
 #: with "method not found", counted, and after a few the connection is closed.
 NODE_TO_CORE: frozenset[str] = frozenset(
@@ -104,11 +130,32 @@ NODE_TO_CORE: frozenset[str] = frozenset(
         M_LIST_CHANGED,
         M_BLOB,
         M_RENEW,
+        M_VOICE_HEARD,
+        M_VOICE_LEVEL,
+        M_OVERLAY_CREDENTIAL,
     }
 )
 #: Everything the core sends to a node. `nox/policy` may only narrow what the node offers.
 CORE_TO_NODE: frozenset[str] = frozenset(
-    {M_TOOLS_LIST, M_TOOLS_CALL, M_KILL, M_RESUME, M_REVOKED, M_POLICY, M_GAMES, M_PING, M_PONG}
+    {
+        M_TOOLS_LIST,
+        M_TOOLS_CALL,
+        M_KILL,
+        M_RESUME,
+        M_REVOKED,
+        M_POLICY,
+        M_GAMES,
+        M_PING,
+        M_PONG,
+        M_VOICE_SAY,
+        M_VOICE_CANCEL,
+        M_VOICE_GATE,
+        M_OBS_PANIC,
+    }
+)
+#: The satellite methods among them: the agent hands these to the satellite that registered.
+SATELLITE_TO_NODE: frozenset[str] = frozenset(
+    {M_VOICE_SAY, M_VOICE_CANCEL, M_VOICE_GATE, M_OBS_PANIC}
 )
 
 # ---- text from the other side ----------------------------------------------------------------
@@ -297,6 +344,62 @@ class RenewRequest(_Strict):
     used (`nox.lan.tls.issue_client_certificate`); another key is refused."""
 
     csr: str = Field(min_length=64, max_length=4096)
+
+
+# ---- satellites (C9) ---------------------------------------------------------------------------
+
+#: A turn the node started: 32 hex digits it chose itself.
+_TurnId = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{32}$")]
+_OptionalTurn = Annotated[str, StringConstraints(pattern=r"^(?:[0-9a-f]{32})?$")]
+#: Longest utterance a node may send, and longest sentence of an answer.
+MAX_HEARD_CHARS = 500
+MAX_SAY_CHARS = 600
+Language = Literal["de", "en"]
+
+
+class VoiceHeard(_Strict):
+    """`nox/voice/heard`: one utterance the node's voice satellite recognised, as text."""
+
+    turn_id: _TurnId
+    text: str = Field(min_length=1, max_length=MAX_HEARD_CHARS)
+    language: Language = "de"
+
+
+class VoiceLevel(_Strict):
+    """`nox/voice/level`: the loudness of the node's own speech (RMS 0..1), never the words."""
+
+    level: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    turn_id: _OptionalTurn = ""
+
+
+class OverlayCredentialRequest(_Strict):
+    """`nox/overlay/credential`: nothing to say - the node is who the credential is for."""
+
+
+class VoiceSay(_Strict):
+    """`nox/voice/say`: one sentence of the answer to the node's own utterance `turn_id`."""
+
+    turn_id: _TurnId
+    seq: int = Field(ge=0, le=200)
+    text: str = Field(default="", max_length=MAX_SAY_CHARS)
+    language: Language = "de"
+    #: The last sentence of this answer (it may be empty: the answer simply ends).
+    last: bool = False
+
+
+class VoiceCancel(_Strict):
+    turn_id: _OptionalTurn = ""
+
+
+class VoiceGate(_Strict):
+    """`nox/voice/gate`: whether the core's privacy lets the microphone listen (default: no)."""
+
+    capture: bool
+    reason: str = Field(default="", max_length=64)
+
+
+class ObsPanic(_Strict):
+    reason: str = Field(default="", max_length=64)
 
 
 class NodePairRequest(_Strict):

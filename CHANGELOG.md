@@ -34,6 +34,20 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
 
 ### Added
+- **Satellites on nodes: voice, OBS and the pet overlay** (Spec C9, docs/NODES.md). A node with
+  `voice` allowed (and switched on for it in the Devices page - two keys, stored per node,
+  migration 0018) listens and speaks there: push-to-talk (`Ctrl+Alt+Space`, `nox node voice
+  talk`) or the wake word, speech recognition on the device (`tiny` on a Pi), only text to the
+  core (`nox/voice/heard`), the answer back as text and spoken there (Supertonic 3, Piper as
+  fallback); the core's privacy gates the microphone (`nox/voice/gate`), a local mute switch
+  only the device lifts, the tray shows "Nox hört zu", "Nox, Notaus" stops the node; `voice.say`
+  speaks on a device on purpose. `obs.request` is routed to the PC where OBS runs (`obs`), with the
+  password in that device's keyring, the core-local request rules decided again there, and the
+  panic button reaching it (`nox/obs/panic`, latched until `nox node obs resume`). The pet
+  overlay works on that PC through the node's loopback relay (`nox node overlay`): no credential
+  in the URL, a read-only one per node rotated on every connection, an offline label, a pet that
+  follows that node's speech (`?device=`). The OBS WebSocket client moved to
+  `nox.stream.obs_ws` (the plugin re-exports it).
 - **Screen, camera, browser, windows, mouse and keyboard, and music on nodes** (Spec C6,
   docs/NODES.md). `screen.capture`, `camera.snapshot`, `browser.*`, `desktop.*`, `computer.*`
   and the new `media.control` run on a paired PC through the same gate, receipts, budget and

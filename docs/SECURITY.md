@@ -29,7 +29,8 @@ requests.
 | Tampering with audit or security config | Hash-chain verified at boot; changes to the security core require a PIN; config changes are themselves audited. |
 | Data loss | Checkpoints; the vault is the source of truth; Nox-written notes can be rolled back. |
 | A device in the home network reaches the node port (47844) | Mutual TLS 1.3: only a client certificate of this installation's authority completes the handshake; serial denylist, revoked pairings and the paired key are checked before the upgrade; no browser `Origin`. See "Nodes" below. |
-| A compromised node (malware on a laptop, a stolen laptop) | Role `node`: a fixed JSON-RPC allow-list - no chat, memory, audit, config, prompts or other nodes; refused messages are audited and cut the connection; revocation closes it at once; certificates live 30 days. |
+| A compromised node (malware on a laptop, a stolen laptop) | Role `node`: a fixed JSON-RPC allow-list - no memory, audit, config, prompts or other nodes; refused messages are audited and cut the connection; revocation closes it at once; certificates live 30 days. The one way to talk to Nox is a voice satellite's text (C9), and only with two keys: `voice` enabled on the device *and* switched on for it on the core by the owner with the PIN (a persisted fact, checked for every utterance); its turns run in a conversation of their own, approve nothing, and what Nox learns from them waits for confirmation. Residual risk: with both keys, a taken-over node can ask Nox what a person in that room could ask - narrow `voice` or remove the node. See "Satellites" below. |
+| A copied overlay URL, or a web page on the streaming PC | The overlay a node relays carries no credential (`#overlay=relay`); the node swaps in a read-only one it holds in memory only, rotated on every connection; the relay answers loopback Host headers and its own Origin only, and carries nothing but the overlay role. |
 
 **Out of scope**: an attacker with local admin on the machine, physical access, or a compromised
 OS. Nox defends against a malicious/hallucinating AI layer and a malicious remote party — not
@@ -1018,6 +1019,117 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
 Still to come in wave C: certificate renewal (C7) and a real presence check for
 `nox node allow`. Negative tests: `tests/unit/node/` (a deliberately permissive core in `test_agent.py`),
 `tests/integration/test_nodes.py`.
+
+## Satellites (C9): voice, OBS and the pet overlay on a node
+
+What leaves a node, and what a node may send the core (`nox.node.voice`, `nox.node.obs`,
+`nox.node.overlay`, core side `nox.node.satellites`):
+
+- **Only between a core and a node that agreed.** The core names the satellite methods it
+  understands in its `initialize` answer (`features`); a node sends `nox/voice/heard`,
+  `nox/voice/level` and `nox/overlay/credential` only to such a core (an older one would count
+  them as violations). They are on the role `node` allow-list with strict models: an utterance is
+  at most 500 characters of text, a level one number, a credential request empty.
+- **Voice: text, never audio.** Wake word, voice activity and speech recognition run on the node;
+  audio exists in memory for one utterance and is never written or sent. The node's audit records
+  that something was heard and its length - never the words; nor does the core's. The
+  microphone is open only while the group `voice` is enabled on the device and not narrowed, the
+  node is not stopped and connected, the local mute switch is off (only the device unmutes) and
+  the core's privacy allows a microphone (`nox/voice/gate`: closed by default, closed again by the
+  capture switch, panic, safe mode, a privacy zone or the kill switch - pushed at once and every
+  second). "Nox, Notaus" is never sent as text: it stops the node, which stops Nox everywhere.
+- **Two keys for `voice`.** `CORE_OPT_IN`: a group enabled on the device stays narrowed on the
+  core until the owner clears it in the Devices page (`node.narrow`, PIN when set, from a paired
+  device always). That is stored per node (`node_capabilities.core_opted_in`, migration 0018),
+  re-applied on every tool listing - the first one included, whatever the device reports -
+  cleared by narrowing the group again and by removing the node, and checked again (fail closed)
+  for every utterance (`SatelliteHub`).
+- **Voice turns are lower-trust input.** A far-field microphone in a room hears whoever is
+  there, not necessarily the owner. An utterance is a turn of the conversation `voice:node:<id>`
+  (own history and model context), and that conversation counts as tainted from its first turn
+  and for good (`nox.security.taint.UNTRUSTED_CONVERSATIONS`): nothing in it is user-directed,
+  every call that sends data off the machine asks, and no remembered or session grant above LOW
+  applies - permission grants are not per conversation, so this is what keeps a grant made at the
+  dashboard from serving a voice in the living room. A question it leads to says "von
+  Sprach-Satellit <name>" in the dashboard and the native dialog (the name cleaned of control,
+  bidi and invisible characters, at most 40), and the model is told in the turn's context that
+  the text came from a far-field microphone and may not be the owner. It
+  cannot approve anything. "hier" and the family default `origin` mean that node. It is recorded
+  - or not - by the core's privacy mode; facts learned from it are unconfirmed
+  (`turn_origin("node")`). It cancels no turn of another channel and interrupts no speech: it
+  waits until the turn in flight - and a question that turn waits on - is over (at most 90 s).
+- **No shortcuts on room words.** Preset phrases and the mode shortcut run before the tool
+  loop - outside any conversation's taint - so for a satellite turn they are skipped: the text
+  goes to the model like any other untrusted turn. Only a preset the owner marked
+  `from_satellites` (off by default; every write to `presets.*` - items, actions, the switch,
+  removals included - needs the PIN when one is set, since presets start programs) runs there, with the node's
+  conversation set and as agent `presets.satellite`, not `presets` (which the shipped profiles
+  allow) - so the normal rules and the taint apply to every step; a mode step refuses. Voice
+  from a satellite never switches the mode, and "neues Gespräch" said there neither discards the
+  conversation nor ends its grants.
+- **One turn at a time.** A satellite turn waits for the turn slot; a barge-in claims the slot
+  before its first await, so the two never run together and a kill or the next input always
+  cancels the one that runs.
+- **Limits before checks.** At most 12 utterances and 3 credential requests per minute per node,
+  counted before anything else is looked at; refusals are audited at most once per 10 s per node
+  and reason, with a count of the rest; 30 utterances or 10 credential requests in a minute count
+  as flooding - violations that end the connection like any refused message.
+- **Echo and self-instruction.** While the node speaks - and 0.3 s after - nothing it hears
+  becomes a question (push-to-talk overrides that - a person's deliberate act); its microphone
+  stays open for the kill phrase alone, so "Nox, Notaus" works during a long answer. It never
+  barges in on voice activity alone and takes one utterance per wake word (no follow-up
+  window). Every answer sentence sent to a node has the wake word replaced ("ich") and a
+  sentence with a kill phrase is not sent at all (`speakable`), so Nox never says either out of
+  a speaker - not for a node's microphone, not for the core's own. The core drops an
+  utterance from a node that is speaking or spoke within the last second (its levels, the answer
+  sentences it was sent). `voice.say` never says the wake word, a spelling of it or a kill phrase
+  (case- and diacritics-insensitive, refused on the core and on the node) and is medium - asked -
+  in a conversation that holds untrusted content.
+- **Not from the PC Nox controls.** While a computer-use session runs on a node, the core refuses
+  that node's utterances (`controlled_here`) and tells its microphone to stay closed; while a
+  node's address binding is saturated (nobody can be told apart from the controlled PC), every
+  node's. Voice from other nodes during a session is marked like paired-device chat
+  (`mark_tainted(conversation, None)`), on top of being lower-trust anyway.
+- **Answers.** The answer goes back as text, sentence by sentence; the node speaks only answers
+  to a question it asked in the last three minutes, in order, at most 40 sentences, on its own
+  speaker. `voice.say` is otherwise a node tool like any other: receipt, budget, audit.
+- **OBS on a node.** `obs.request` is routed to the node where OBS runs; the node connects only
+  to `127.0.0.1` and keeps the obs-websocket password in its keyring - it never reaches the core.
+  The node classifies every request again with the core-local rules ("OBS control" above) and its
+  own privacy scene and scene set: never-possible types are refused before anything else, reads
+  are low (so they carry a receipt too), the core may not claim a lower risk than the node's,
+  high requests are confirmed in the dialog on that device, the privacy scene and its contents
+  cannot be changed (asked from OBS before every change, refused when OBS cannot say), answers
+  are redacted before they leave. The core keeps one permission action per request type and,
+  not knowing the device's scene set, treats every scene switch on a node as high. The panic
+  button sends `nox/obs/panic`: OBS on every node that enabled `obs` goes to its privacy scene
+  - also a node that connects while the panic is on - and takes nothing but reads until that
+  device lifts the latch (`nox node obs resume`, which works on the running node at once; a
+  restart does not lift it). A node's record folder is shown by its name only.
+- **The overlay relay.** A node with `obs` enabled serves the pet page on `127.0.0.1:47845` and
+  relays its one WebSocket to the core's network listener over TLS against the pinned authority.
+  The URL carries no credential; the relay asks the core for a read-only overlay credential
+  (role `overlay`, label `node:<id>`, once per connection and at most once a minute on it, each
+  one revoking the previous and
+  disconnecting its pages; revoked at once when the node is removed or `obs` narrowed for it,
+  online or not) and keeps it in memory. A sweep over the persisted credentials - at every start
+  and every second - revokes every `node:` credential whose node is unknown, removed, has `obs`
+  off on the device (as it last said) or narrowed here; it fails closed. Through the network
+  listener the hub accepts an overlay credential only with a `node:` label and only while that
+  node may hold one, asked again at every use (fail closed: no check, no access) - the OBS
+  overlay credential of the core itself stays loopback-only. The relay
+  answers loopback Host headers only (no DNS rebinding), accepts a WebSocket without an Origin
+  (OBS) or with its own, and forwards only an `ipc.auth` for role `overlay`. Residual: any
+  local process or user of that PC can open the relay and watch what an overlay sees - the
+  pet's state, speech levels and the public state snapshot, never transcripts, chat or memory.
+  The network listener now also serves the static pet page (`/pet/`, no credential in it). It
+  shares the dashboard's origin there, so a flaw in the pet's own code could read what the
+  dashboard keeps in that origin (a paired device's token): both bundles come from the same
+  signed release, so this adds no new author, but it is one origin, not two.
+- **Speech levels.** `nox/voice/level` becomes `tts.level` with the node's id on the channel
+  `node`; only an overlay that authenticated with that node's own credential receives it (with
+  the id, so its `?device=<id>` pet follows), never another overlay and never the core's desktop
+  pet (`nox.ipc.pet_view`).
 
 ## Nox-OS (the Raspberry Pi image)
 

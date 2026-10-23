@@ -332,7 +332,14 @@ export const en: Record<CoreKey, string> = {
   perm_remember_minutes: 'Allow for {0} minutes',
   perm_remember_minute: 'Allow for 1 minute',
   perm_deny: 'Deny',
+  presets_from_satellites: 'Also from voice satellites',
+  presets_from_satellites_hint:
+    'Then the phrase also starts it at a device with a voice satellite - whoever is in that room need not be you. Every step then asks as with outside content, and the mode never changes.',
+  presets_pin: 'Security PIN',
+  presets_pin_hint: 'Presets start programs: every change needs the PIN when one is set.',
   perm_device_note: 'From this device a permission counts for this one time only.',
+  perm_voice_satellite:
+    'From voice satellite {0}: spoken into a room - not necessarily by you. Allow only if you wanted this yourself.',
   perm_pin: 'Security PIN',
   perm_pin_hint: 'At high risk, allowing from this device needs the PIN. After three wrong tries the device is removed.',
   perm_pin_missing: 'Enter the security PIN first.',

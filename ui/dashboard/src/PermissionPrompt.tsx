@@ -257,6 +257,11 @@ function PromptBody({
         {announcement}
       </p>
 
+      {prompt.voiceSatellite && (
+        <p className="hint" data-testid="perm-voice-satellite">
+          {fill(t('perm_voice_satellite'), prompt.voiceSatellite)}
+        </p>
+      )}
       {device && <p className="hint">{t('perm_device_note')}</p>}
       {pinNeeded && canAllow && (
         <div className="field">
