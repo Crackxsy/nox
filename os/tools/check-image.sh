@@ -120,6 +120,14 @@ helper_socket_for_nox_service_only() {
   [ "$(grep -hE '^[[:space:]]*SupplementaryGroups=' "$root"/etc/systemd/system/nox.service.d/*.conf 2>/dev/null)" \
     = 'SupplementaryGroups=nox-os-helper' ]
 }
+# A manual page: a plain file, or (as Debian ships this one) a relative link to another manual page.
+manual_page() {
+  if [ -L "$1" ]; then
+    [[ "$(readlink "$1")" =~ ^(/usr/share/man/man[0-9]/|\.\./man[0-9]/)?[A-Za-z0-9_.-]+\.[0-9]\.gz$ ]]
+  else
+    [ -f "$1" ]
+  fi
+}
 # Every file or folder named authorized_keys*, but the manual page openssh-server ships
 # (/usr/share/man/[<lang>/]man5/authorized_keys.5.gz) - that one is named on stderr as skipped.
 authorized_keys_files() {
@@ -127,7 +135,10 @@ authorized_keys_files() {
   while IFS= read -r path; do
     case "${path#"$root"}" in
       /usr/share/man/man5/authorized_keys.5.gz | /usr/share/man/*/man5/authorized_keys.5.gz)
-        [ -f "$path" ] && [ ! -L "$path" ] && { printf '      skipped (manual page): %s\n' "${path#"$root"}" >&2; continue; } ;;
+        if manual_page "$path"; then
+          printf '      skipped (manual page): %s\n' "${path#"$root"}" >&2
+          continue
+        fi ;;
     esac
     printf '%s\n' "${path#"$root"}"
   done < <(find "$root" -xdev -name 'authorized_keys*' 2>/dev/null)

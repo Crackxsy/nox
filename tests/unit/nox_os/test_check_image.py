@@ -113,7 +113,9 @@ def _o2(root: Path) -> None:
         root / "etc" / "group", "root:x:0:\nsudo:x:27:nox-admin\nnox:x:999:\nnox-os-helper:x:998:\n"
     )
     # The one file by that name a package ships: sshd's manual page.
-    _write(root / "usr" / "share" / "man" / "man5" / "authorized_keys.5.gz", "x")
+    # Debian ships it as a link to sshd's own page.
+    _write(root / "usr" / "share" / "man" / "man8" / "sshd.8.gz", "x")
+    _link(root / "usr" / "share" / "man" / "man5" / "authorized_keys.5.gz", "../man8/sshd.8.gz")
     firewall = load_tool("nox_firewall", HARDENING)
     _write(root / "etc" / "nftables.conf", firewall.render(firewall.Settings(), boot=True))
     _write(
