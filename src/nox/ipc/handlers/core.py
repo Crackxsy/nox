@@ -406,11 +406,12 @@ class CoreHandlers:
         # Each dashboard client is a conversation of its own (history, model context, taint).
         untrusted = getattr(self._core, "node_chat_untrusted", None)
         if untrusted is not None and untrusted(ctx) and self._core.security is not None:
-            # While Nox controls a paired PC, a paired device's message may have been typed by
-            # Nox itself: it enters as untrusted content, so it widens nothing the taint rules
-            # hold back (`nox.node.install.wire_guards`).
+            # While Nox controls a paired PC, a message from there may have been typed by Nox
+            # itself: the conversation counts as holding unreadable untrusted content, so no
+            # lookup in it counts as the user's own (`TaintLedger.user_directed`) and every
+            # off-machine call asks (`nox.node.install.wire_guards`).
             conversation = self._core.orchestrator.conversation_for(f"chat:{ctx.client_id}")
-            self._core.security.engine.mark_tainted(conversation, p.text)
+            self._core.security.engine.mark_tainted(conversation, None)
         with turn_origin("chat"):  # facts learned from it count as the user's own words
             turn = await self._core.orchestrator.handle_text(
                 p.text,

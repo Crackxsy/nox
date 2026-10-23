@@ -729,3 +729,42 @@ async def test_the_calm_requests_are_exactly_the_snapshot(core: NoxCore) -> None
     assert core.registry is not None
     calm = {n for n in core.registry.names() if calm_ui_request(n)}
     assert calm == CALM_SNAPSHOT
+
+
+async def test_a_paired_devices_request_carries_its_network_address(core: NoxCore) -> None:
+    """P1: a request bridged in by the network listener knows the device's address
+    (`RequestContext.peer`); a client on this machine has none."""
+    from pydantic import BaseModel
+
+    assert core.registry is not None and core.hub is not None and core.tokens is not None
+    seen: list[tuple[str, str]] = []
+
+    class Empty(BaseModel):
+        pass
+
+    async def handler(ctx: Any, _p: Empty) -> dict[str, Any]:
+        seen.append((ctx.role, ctx.peer))
+        return {}
+
+    core.registry.register("zz.peer", Empty, handler, roles=("dashboard", "device"))
+    paired = await _pair(core)
+    async with await _connect(core) as ws:
+        await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
+        assert (await _request(ws, paired["client_id"], "zz.peer", {})).kind is Kind.RESPONSE
+    async with connect(f"ws://127.0.0.1:{core.hub.port}/ws", open_timeout=5) as local:
+        await _auth(
+            local, token=core.tokens.session_token, role="dashboard", client_id="dashboard:p"
+        )
+        env = Envelope(
+            kind=Kind.REQUEST,
+            name="zz.peer",
+            src=Source(role="dashboard", id="dashboard:p"),
+            payload={},
+        )
+        await local.send(env.model_dump_json())
+        while True:
+            reply = Envelope.model_validate(json.loads(await asyncio.wait_for(local.recv(), 5)))
+            if reply.corr == env.id:
+                break
+        assert reply.kind is Kind.RESPONSE, reply.payload
+    assert seen == [("device", "127.0.0.1"), ("dashboard", "")]

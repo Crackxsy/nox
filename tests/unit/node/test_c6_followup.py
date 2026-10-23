@@ -276,7 +276,7 @@ async def test_a_paired_devices_message_during_a_session_counts_as_untrusted() -
     local = SimpleNamespace(role="dashboard", client_id=LOCAL, stream=stream)
     await handlers.chat_send(phone, ChatSend(text="Öffne das Terminal"))  # type: ignore[arg-type]
     await handlers.chat_send(local, ChatSend(text="Wie spät ist es?"))  # type: ignore[arg-type]
-    assert tainted == [(f"chat:{PHONE}#1", "Öffne das Terminal")]
+    assert tainted == [(f"chat:{PHONE}#1", None)]  # unreadable: nothing in it is user-directed
     active["value"] = False
     await handlers.chat_send(phone, ChatSend(text="Danke"))  # type: ignore[arg-type]
     assert len(tainted) == 1 and len(turns) == 3
@@ -341,3 +341,128 @@ def test_at_most_sixteen_reported_addresses_count() -> None:
     reported = [f"10.0.0.{i}" for i in range(1, 30)]
     control = _addressed(reported)
     assert control.from_controlled("10.0.0.16") and not control.from_controlled("10.0.0.17")
+
+
+# ---- external review of #167: wiring, the same machine, addresses in every pong -----------------
+
+
+def test_the_conversation_requests_are_exactly_these() -> None:
+    """C3: adding anything here (say `config.set`) must be a deliberate, reviewed change."""
+    from nox.ipc.dispatch import CONVERSATION_UI_REQUESTS
+
+    assert frozenset({"chat.send", "voice.ptt"}) == CONVERSATION_UI_REQUESTS
+
+
+def test_the_installed_chat_rule_marks_paired_devices_and_the_controlled_machine() -> None:
+    """T2/T3: `wire_guards` installs `node_chat_untrusted` with these answers."""
+    from nox.ipc.dispatch import RequestRegistry
+    from nox.node.install import wire_guards
+
+    observed = {"host": "192.168.1.20"}
+    control = NodeControl(
+        None,
+        lambda _n: None,
+        addresses=lambda: {LAPTOP: (observed["host"], [])},
+        own_addresses=lambda: ["192.168.1.5"],
+    )
+    core = SimpleNamespace(registry=RequestRegistry(), security=SimpleNamespace(gate=Gate()))
+    wire_guards(core, control)
+    untrusted = core.node_chat_untrusted
+    phone, local = _ctx("device", PHONE), _ctx("dashboard", LOCAL)
+    assert not untrusted(phone) and not untrusted(local)  # no session
+    control.observe(LAPTOP, _report(2, True))
+    assert untrusted(phone) and not untrusted(local)  # the node is another PC
+    observed["host"] = "127.0.0.1"  # the node runs on this machine
+    control.pull()
+    assert untrusted(phone) and untrusted(local)
+    observed["host"] = "192.168.1.5"  # ... connecting from one of this machine's addresses
+    control.pull()
+    assert control.controls_local() and untrusted(local)
+
+
+async def test_on_the_controlled_machine_its_own_dashboard_cannot_approve() -> None:
+    control = NodeControl(None, lambda _n: None, addresses=lambda: {LAPTOP: ("::1", [])})
+    control.observe(LAPTOP, _report(2, True))
+    control.pull()
+
+    async def ask(action: str) -> str | None:
+        return await session_refusal(
+            control,
+            _ctx("dashboard", LOCAL),
+            "4711",
+            action=action,
+            gate=Gate(),
+            device_guard=None,
+            remote=lambda: False,
+        )
+
+    assert await ask("security.permission.reply") == REFUSE_LINKED  # not even with the PIN
+    assert await ask("plans.approve") == REFUSE_LINKED
+    assert await ask("chat.send") is None  # talking works - and counts as untrusted
+
+
+async def test_the_node_says_where_it_is_in_its_hello_and_every_pong(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P2: `NodeHello.addresses` and `nox/pong` `addresses`, reused for a while."""
+    from nox.node import agent as agent_module
+    from nox.node.protocol import NodeHello, Ping
+
+    calls: list[int] = []
+
+    def addresses() -> list[str]:
+        calls.append(1)
+        return ["192.168.1.20", "fd00::20"]
+
+    monkeypatch.setattr(agent_module, "local_addresses", addresses)
+    agent = object.__new__(agent_module.NodeAgent)
+    first = agent._addresses_now()
+    again = agent._addresses_now()
+    assert first == again == ["192.168.1.20", "fd00::20"] and len(calls) == 1  # cached
+    hello = {
+        "protocolVersion": "1",
+        "node_protocol": 1,
+        "node_version": "1",
+        "os": "windows",
+        "arch": "AMD64",
+        "manifest_hash": "0" * 64,
+        "addresses": first,
+    }
+    assert NodeHello.model_validate(hello).addresses == first
+    pong = Ping.model_validate({"seq": 1, "ts": 1.0, "addresses": first})
+    assert pong.addresses == first
+
+
+def test_real_interfaces_come_before_virtual_ones(monkeypatch: pytest.MonkeyPatch) -> None:
+    import psutil
+
+    from nox.node.agent import local_addresses
+
+    def entry(address: str) -> Any:
+        return SimpleNamespace(address=address)
+
+    monkeypatch.setattr(
+        psutil,
+        "net_if_addrs",
+        lambda: {
+            "vEthernet (WSL)": [entry("172.20.0.1")],
+            "Ethernet": [entry("192.168.1.20"), entry("fe80::20%12")],
+            "Loopback": [entry("127.0.0.1")],
+            "Down": [entry("192.168.9.9")],
+            "Public": [entry("198.51.100.7")],
+        },
+    )
+    monkeypatch.setattr(
+        psutil,
+        "net_if_stats",
+        lambda: {
+            "vEthernet (WSL)": SimpleNamespace(isup=True),
+            "Ethernet": SimpleNamespace(isup=True),
+            "Down": SimpleNamespace(isup=False),
+            "Public": SimpleNamespace(isup=True),
+        },
+    )
+    found = local_addresses()
+    assert found[:2] == ["192.168.1.20", "fe80::20"]
+    assert found.index("172.20.0.1") > 1 and "127.0.0.1" not in found
+    assert found.index("192.168.9.9") > found.index("172.20.0.1")

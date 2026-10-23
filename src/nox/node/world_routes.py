@@ -247,6 +247,7 @@ class NodeControl:
         labels: Callable[[str], str] = lambda device_id: device_id[:8],
         linked: Callable[[str], str | None] = lambda _device_id: None,
         addresses: Callable[[], Mapping[str, tuple[str, Iterable[str]]]] = dict,
+        own_addresses: Callable[[], Iterable[str]] = tuple,
         stop_hotkey: str = "ctrl+alt+shift+k",
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -257,6 +258,9 @@ class NodeControl:
         self._labels = labels
         self._linked = linked
         self._addresses = addresses
+        self._own_addresses = own_addresses
+        #: Each node's connection address as this core sees it (kept like `node_addresses`).
+        self.node_observed: dict[str, str] = {}
         #: Where each node the lock holds for is on the network: its connection's address as
         #: this core sees it and the private addresses its hello reported - kept while the lock
         #: holds, also while the node is disconnected.
@@ -332,6 +336,8 @@ class NodeControl:
             self.observe(device_id, raw)
         for device_id, (peer, reported) in self._addresses().items():
             observed = host_of(peer)
+            if observed:
+                self.node_observed[device_id] = observed
             hosts = {observed} if observed else set()
             # What a node says about itself counts as a second signal: private addresses only.
             for raw in list(reported)[:MAX_REPORTED_ADDRESSES]:
@@ -342,10 +348,30 @@ class NodeControl:
                 self.node_addresses[device_id] = hosts
         # Kept while the lock holds for a node - also while it is disconnected -, gone once it
         # lifts: fail closed (spec C §1.5, SECURITY.md).
-        for device_id in list(self.node_addresses):
-            device = self.devices.get(device_id)
-            if device is None or not self._locked(device):
-                del self.node_addresses[device_id]
+        for known in (self.node_addresses, self.node_observed):
+            for device_id in list(known):
+                device = self.devices.get(device_id)
+                if device is None or not self._locked(device):
+                    del known[device_id]
+
+    def controls_local(self) -> bool:
+        """Whether a node the lock holds for runs on this machine: it connects over loopback or
+        from one of this machine's own addresses. This machine's dashboard and shell are then
+        the controlled PC."""
+        if not self.active():
+            return False
+        own = {h for h in (host_of(a) for a in self._own_addresses()) if h}
+        for device_id, device in self.devices.items():
+            observed = self.node_observed.get(device_id, "")
+            if not observed or not self._locked(device):
+                continue
+            try:
+                loopback = ipaddress.ip_address(observed).is_loopback
+            except ValueError:
+                loopback = observed == "localhost"
+            if loopback or observed in own:
+                return True
+        return False
 
     def from_controlled(self, peer: str) -> bool:
         """Whether a client connecting from `peer` sits on a PC the lock holds for: the same
@@ -758,7 +784,11 @@ async def session_refusal(
         return None
     if role in LOCAL_UI_ROLES:
         if conversation_request(action):
-            # Only the PIN is waived for talking, never the remote check.
+            # Only the PIN is waived for talking, never the remote check (and talking on the
+            # controlled machine itself counts as untrusted, `wire_guards`).
             return REFUSE_REMOTE if (await remote_now(remote)) is not False else None
+        if control.controls_local():
+            # The controlled PC is this machine: its own dashboard and shell are that PC.
+            return REFUSE_LINKED
         return await local_pin_refusal(ctx, pin, gate=gate, remote=remote, action=action)
     return REFUSE_ROLE

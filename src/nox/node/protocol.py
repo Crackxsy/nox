@@ -250,6 +250,10 @@ class Ping(_Strict):
     state: str = Field(default="", max_length=32)
     #: In a node's `nox/pong`: computer use on it right now (`SessionReport`).
     session: SessionReport | None = None
+    #: In a node's `nox/pong`: its own addresses now (like `NodeHello.addresses`).
+    addresses: list[Annotated[str, StringConstraints(max_length=64)]] | None = Field(
+        default=None, max_length=16
+    )
 
 
 class GamesAdd(_Strict):

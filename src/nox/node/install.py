@@ -31,6 +31,7 @@ from nox.ipc.roles import UI_ROLES
 from nox.lan.install import authorize_admin, qr_data_uri
 from nox.lan.tls import TlsMaterial
 from nox.mcp.client import McpClientError
+from nox.node.agent import local_addresses
 from nox.node.console import console_is_remote
 from nox.node.hands import (
     PathArgs,
@@ -486,7 +487,7 @@ def _world_specs(
         listener = listeners[0] if listeners else None
         if listener is None:
             return {}
-        return {d: (s.peer_host, list(s.hello.addresses)) for d, s in listener.sessions.items()}
+        return {d: (s.peer_host, list(s.reported_addresses)) for d, s in listener.sessions.items()}
 
     def linked(device_id: str) -> str | None:
         entry = next((e for e in registry.known() if e.device_id == device_id), None)
@@ -504,6 +505,7 @@ def _world_specs(
         labels=label_of,
         linked=linked,
         addresses=addresses,
+        own_addresses=local_addresses,
         stop_hotkey=desktop.computer_use.stop_hotkey if desktop is not None else "",
     )
     wire_guards(core, control)
@@ -526,7 +528,7 @@ def wire_guards(core: Any, control: NodeControl) -> None:
     """While Nox controls a node: every "allow" (`security.permission.reply`) and every request
     that changes something (`RequestRegistry.node_guard`) go through `session_refusal`; and the
     `node.computer.*` requests. Separate so a test can wire a fake core exactly like this."""
-    from nox.ipc.roles import DEVICE_ROLE  # noqa: PLC0415
+    from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
 
     security = getattr(core, "security", None)
 
@@ -550,9 +552,13 @@ def wire_guards(core: Any, control: NodeControl) -> None:
     core.node_approval_guard = approval
 
     def chat_untrusted(ctx: Any) -> bool:
-        # A paired device's words while Nox controls a PC could have been typed by Nox there:
-        # they count as untrusted, like what Nox read from the screen in that session.
-        return getattr(ctx, "role", "") == DEVICE_ROLE and control.active()
+        # Words that could have been typed by Nox on the PC it controls count as unreadable
+        # untrusted content: a paired device's, and this machine's own when the controlled PC
+        # is this machine.
+        role = getattr(ctx, "role", "")
+        if role == DEVICE_ROLE:
+            return control.active()
+        return role in LOCAL_UI_ROLES and control.controls_local()
 
     core.node_chat_untrusted = chat_untrusted
     ipc = getattr(core, "registry", None)
