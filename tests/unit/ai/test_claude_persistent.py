@@ -376,3 +376,25 @@ async def test_a_kill_while_the_process_is_being_spawned_discards_the_session(
     assert provider.pid is None
     pids = [e["pid"] for e in await asyncio.to_thread(_log_lines_if_any, log) if "pid" in e]
     assert all(_gone(pid) for pid in pids)
+
+
+async def test_a_start_thrown_away_after_a_kill_returns_only_once_the_process_is_gone(
+    tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C10: the kill switch kills a starting process without waiting (SIGKILL is delivered
+    asynchronously). The start that then throws its session away waits until the process has
+    really ended, so whoever sees the failure sees the process gone - no polling needed."""
+    provider, _ = _provider(tmp_path, log, monkeypatch, FAKE_INIT_DELAY="0.5")
+    turn = asyncio.create_task(_collect(provider.stream(_request("Hallo"))))
+    for _ in range(500):
+        starting = provider._starting  # noqa: SLF001 - the moment between spawn and init
+        if starting is not None and starting[0].pid is not None:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise AssertionError("the session never started")
+    pid = starting[0].pid
+    await provider.kill()  # the process exists: killed, not waited for
+    with pytest.raises(ProviderUnavailableError):
+        await turn
+    assert pid is not None and _gone(pid)  # at once, not eventually

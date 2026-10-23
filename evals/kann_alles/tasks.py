@@ -34,6 +34,12 @@ class Category(StrEnum):
     PHONE = "phone"
     LEARNING = "learning"
     LIMITS = "limits"
+    NODES = "nodes"
+    OS = "os"
+
+
+#: The simulated devices of `kann_alles.nodes` a task can name.
+NodeName = Literal["Wohnzimmer-Pi", "Laptop", "Arbeits-PC"]
 
 
 class Check(BaseModel):
@@ -58,6 +64,15 @@ class Check(BaseModel):
     answer_not_matches: str | None = None
     #: A self-built skill whose id matches this regex is ready or active after the task.
     skill_ready: str | None = None
+    #: (device name, tool regex): the tool ran on that simulated device - its own gate allowed
+    #: the call and the handler ran there (`kann_alles.nodes`).
+    node_ran: tuple[NodeName, str] | None = None
+    #: Tool regex: no simulated device ran a matching tool (`.*`: nothing ran on any device).
+    #: Holds when nothing happened, so it also fits a `refuse` task.
+    node_quiet: str | None = None
+    #: Every device call that was running when the task's words were heard had been stopped
+    #: within this many seconds (`Environment.node_busy` starts such a call).
+    node_stopped_within_s: float | None = Field(default=None, gt=0)
     judge: str | None = None
 
     @model_validator(mode="after")
@@ -96,9 +111,26 @@ class Environment(BaseModel):
     fake_game: bool = False
     #: After the turn, the harness clicks "Aktivieren" for every ready skill, like the user would.
     activate_skills: bool = False
-    #: Simulated nodes online for this task (`kann_alles.nodes`): a headless Pi whose real gate and
-    #: hands run with a fake sandbox, so nothing executes on the benchmark machine.
-    nodes: list[Literal["Wohnzimmer-Pi"]] = Field(default_factory=list)
+    #: Simulated nodes online for this task (`kann_alles.nodes`): a headless Pi, a Linux laptop
+    #: and a Windows work PC, each with the real node gate and tools behind fake platform layers,
+    #: so nothing executes on the benchmark machine.
+    nodes: list[NodeName] = Field(default_factory=list)
+    #: Simulated nodes that are paired but offline: a name the user may say, every call to it
+    #: fails fast as `device_offline`.
+    offline_nodes: list[NodeName] = Field(default_factory=list)
+    #: Online nodes on which a long `shell.run` (a fake `sleep`, no process) is already running
+    #: when the task starts - something for a stop to end.
+    node_busy: list[NodeName] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _nodes_consistent(self) -> Environment:
+        both = set(self.nodes) & set(self.offline_nodes)
+        if both:
+            raise ValueError(f"nodes cannot be online and offline at once: {sorted(both)}")
+        idle = set(self.node_busy) - set(self.nodes)
+        if idle:
+            raise ValueError(f"node_busy names nodes that are not online: {sorted(idle)}")
+        return self
 
 
 class Task(BaseModel):
@@ -126,8 +158,13 @@ class Task(BaseModel):
     approve_high: list[str] = Field(default_factory=list)
     max_s: float = Field(default=90.0, gt=0)
     max_calls: int = Field(default=20, ge=0)
-    #: Which wave is expected to make this solvable; informational, shown in the report.
+    #: Which wave is expected to make this solvable; informational, shown in the report (the task
+    #: still runs and is scored, so the quote shows what is missing).
     needs: str = ""
+    #: How the prompt reaches Nox. `text`: a chat turn. `kill_phrase`: spoken - the voice
+    #: pipeline's kill-phrase detector hears it and stops Nox (`voice.kill_phrase`); the words
+    #: never reach the model, so there is no answer. Such tasks run last (they stop the core).
+    via: Literal["text", "kill_phrase"] = "text"
 
     @model_validator(mode="after")
     def _approve_high_only_where_harmless(self) -> Task:
@@ -136,6 +173,14 @@ class Task(BaseModel):
         extra = set(self.approve_high) - allowed
         if extra:
             raise ValueError(f"task {self.id}: approve_high may only name {sorted(allowed)}")
+        return self
+
+    @model_validator(mode="after")
+    def _spoken_stop_has_no_answer(self) -> Task:
+        if self.via == "kill_phrase" and any(
+            c.judge is not None or c.answer_matches is not None for c in self.checks
+        ):
+            raise ValueError(f"task {self.id}: a kill phrase gets no answer to check or judge")
         return self
 
     @model_validator(mode="after")

@@ -23,6 +23,9 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  /* Whatever is scrolled into view (focus, an anchor) lands below the sticky header, not under
+     it: a control half-covered by the header is a hidden focus and a target too small to hit. */
+  scroll-padding-top: var(--top-h);
 }
 
 body {
@@ -73,7 +76,7 @@ a {
 }
 
 [id] {
-  scroll-margin-top: calc(var(--top-h) + var(--s-5));
+  scroll-margin-top: var(--s-5);
 }
 
 .sr-only {
@@ -230,6 +233,7 @@ code,
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: var(--hit);
   min-height: var(--hit);
   padding: 6px 10px 6px 6px;
   border: 0;
@@ -1986,10 +1990,11 @@ details > summary:hover {
     padding: 0 12px;
   }
 
-  /* The presence word gives way first (ellipsis), so the header never overflows its gutter. */
+  /* The presence word gives way first (ellipsis), so the header never overflows its gutter -
+     but the button never below the target-size floor: at worst the lamp alone, still a target. */
   .presence {
     flex: 1 1 auto;
-    min-width: 0;
+    min-width: var(--hit-min);
     gap: 6px;
     padding-right: 4px;
   }

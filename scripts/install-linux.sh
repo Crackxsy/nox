@@ -264,6 +264,9 @@ define arch_unsupported \
 define step_packages \
   'Pakete installieren (git, curl, openssl, bubblewrap)' \
   'Installing packages (git, curl, openssl, bubblewrap)'
+define apt_failed \
+  'apt-get %s ist fehlgeschlagen oder hing zu lange. Läuft gerade ein anderes Update oder ist das Netz weg? Später erneut versuchen; Details zeigt: sudo apt-get %s' \
+  'apt-get %s failed or took too long. Is another update running, or is the network down? Try again later; for details run: sudo apt-get %s'
 define untested_system \
   'Hinweis: getestet ist Nox auf Raspberry Pi OS, Debian und Ubuntu. Auf diesem System kann etwas fehlen.' \
   'Note: Nox is tested on Raspberry Pi OS, Debian and Ubuntu. Something may be missing on this system.'
@@ -1131,8 +1134,13 @@ elif command -v apt-get >/dev/null 2>&1; then
   # bubblewrap + python3: the command sandbox (bwrap, and the tiny relay that gives a sandboxed
   # program its only way out - the egress proxy). Without them Nox refuses to run commands.
   say "$(msg step_packages)"
-  apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates openssl tar sudo bubblewrap python3 >/dev/null
+  # Never wait forever: for the dpkg lock (another update running), for a mirror that stopped
+  # answering, or at all - a stuck apt once held a CI job for 30 minutes.
+  APT_OPTS=(-o DPkg::Lock::Timeout=300 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3)
+  APT_PACKAGES=(git curl ca-certificates openssl tar sudo bubblewrap python3)
+  timeout 900 apt-get "${APT_OPTS[@]}" update -qq || fail "$(msg apt_failed update update)"
+  DEBIAN_FRONTEND=noninteractive timeout 1800 apt-get "${APT_OPTS[@]}" install -y -qq "${APT_PACKAGES[@]}" >/dev/null \
+    || fail "$(msg apt_failed install "install ${APT_PACKAGES[*]}")"
 else
   note "$(msg untested_system)"
   for tool in git curl tar sha256sum sudo; do command -v "$tool" >/dev/null 2>&1 || fail "$(msg tool_missing "$tool")"; done

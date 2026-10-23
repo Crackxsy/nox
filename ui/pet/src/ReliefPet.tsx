@@ -189,7 +189,7 @@ export function ReliefPet({
       const sw = poses.update(nowMs, wanted, reduced);
 
       const targets = reliefTargets(current, paramsRef.current, reduced);
-      targets.voice = voice.sample(nowMs, current.voiceSeq, current.voiceLevel);
+      targets.voice = voice.sample(nowMs, current.voiceSeq, current.voiceLevel, targets.talk > 0);
       if (poses.involves('curl')) {
         // still asleep while curled up or uncurling; the brain wakes (yawn) once it is the creature
         targets.asleep = 1;

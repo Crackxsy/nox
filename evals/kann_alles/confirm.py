@@ -11,9 +11,9 @@ the machine the benchmark runs on. So the default is DENY, and an approval needs
   - or to a family the world has replaced by a simulation (`simulated`): the browser wired to the
   fake web, the screen and camera to fake images. Only the world can name those, and only after it
   actually swapped the backends.
-* on a device, only a node the world simulates (`kann_alles.nodes`): there - and only there - a
-  task may let the harness approve `shell.run` (its sandbox answers from fixed text). A dialog for
-  any other device is denied.
+* on a device, only a node the world simulates (`kann_alles.nodes`): every tool there acts on
+  fakes, and there - and only there - a task may let the harness approve `shell.run` (its sandbox
+  answers from fixed text). A dialog for any other device is denied.
 
 Every decision is recorded with its reason and ends up in the report.
 """
@@ -102,8 +102,10 @@ def decide(
     if tool == "file" and not target:
         return result(Decision.DENY, "file tool without a target path")
     in_world = PATH_FAMILIES | DATA_DIR_FAMILIES | WORLD_FAKE_FAMILIES | simulated
-    if on_fake_node and tool == "shell":
-        in_world = in_world | {"shell"}  # the simulated node's sandbox answers from fixed text
+    if on_fake_node:
+        # Everything behind a simulated node is a fake: its sandbox answers from fixed text, its
+        # notices, music, screen and input reach nothing (`kann_alles.nodes`).
+        in_world = in_world | {tool}
     if tool not in in_world and not isolated:
         return result(Decision.DENY, f"{tool} acts outside the temporary world")
     return result(Decision.ALLOW, "listed, low enough risk, effect stays in the temporary world")

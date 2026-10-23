@@ -48,3 +48,43 @@ def _sandbox_grants_outlive_no_test(
             yield
         finally:
             windows.RuntimeGrants(manifest).reset()
+
+
+#: How long before pytest-timeout fires the test that is still running is named on stderr.
+_NAME_BEFORE_TIMEOUT_S = 2.0
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> Iterator[None]:
+    """Name a test that is about to hit its timeout.
+
+    With `-q` and `timeout_method = "thread"`, pytest-timeout dumps every thread's stack and ends
+    the process - the progress dots never say which test it was (a Windows run once stopped at
+    71 % with nothing but stacks). Shortly before the timeout this prints the test's id, so the
+    log names it. A test that finishes in time prints nothing.
+    """
+    import threading
+
+    marker = item.get_closest_marker("timeout")
+    raw = marker.args[0] if marker is not None and marker.args else item.config.getini("timeout")
+    try:
+        limit = float(raw or 0)
+    except (TypeError, ValueError):
+        limit = 0.0
+    timer: threading.Timer | None = None
+    if limit > _NAME_BEFORE_TIMEOUT_S:
+
+        def name_it() -> None:
+            sys.stderr.write(
+                f"\n+++ still running after {limit - _NAME_BEFORE_TIMEOUT_S:g} s: {item.nodeid}\n"
+            )
+            sys.stderr.flush()
+
+        timer = threading.Timer(limit - _NAME_BEFORE_TIMEOUT_S, name_it)
+        timer.daemon = True
+        timer.start()
+    try:
+        yield
+    finally:
+        if timer is not None:
+            timer.cancel()
