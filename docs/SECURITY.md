@@ -115,8 +115,9 @@ conversation is discarded - the user asked for a new one, or it sat idle past
 `conversation_idle_s` (one hour by default) - and when the core shuts down. Grants are not per
 conversation, so ending any conversation ends them all. Remembered shell commands end even sooner
 (`revoke_command_grants`, audited as `grant.revoke_cmd`): when the privacy mode changes, when the
-kill switch fires, and when a conversation becomes tainted (see below). While a conversation is
-tainted, any other remembered grant above LOW asks again, and nothing is remembered in it.
+kill switch fires, and whenever untrusted content enters a conversation (taint, see below). While
+a conversation is tainted, any other remembered grant above LOW asks again, and nothing is
+remembered in it.
 
 Every decision — allowed or denied — is audited with the request fields (redacted per privacy
 class where appropriate). The engine is pure and deterministic given (request, profile, privacy
@@ -228,15 +229,18 @@ the real Windows Credential Manager or a real credential.
 Every tool result Nox did not compose itself (a web page, a file, a window title, an MCP result,
 the AI provider's own web search) taints the conversation it entered (`nox.security.taint`). Voice,
 each dashboard client and each paired phone are conversations of their own, with their own history,
-model context and taint. Every remembered shell command (`cmd:` grant) is revoked when a
-conversation becomes tainted, and whenever untrusted content arrives outside any conversation;
-grants are not per conversation, so that revocation takes all of them - whatever the content sets
-up to run later must not find one waiting. Further content in a conversation that is tainted
-already revokes nothing more: in a tainted conversation no remembered grant above LOW applies
-(it asks again), "remember" is not offered, and no remember answer creates a grant - so a command
-remembered since was remembered by the user in another, untainted conversation. Any call that
-sends data off the machine from a tainted conversation asks - so injected text cannot exfiltrate
-silently.
+model context and taint. Every remembered shell command (`cmd:` grant) is revoked whenever
+untrusted content enters any conversation - every time, not only when a conversation first
+becomes tainted. Grants are not per conversation: a command the user remembered meanwhile in
+another, clean conversation would otherwise stay usable while untrusted content keeps arriving,
+for instance by work the tainted conversation set up to run later outside it. The cost is
+accepted: during a computer-use session on a node, every message from a paired device takes the
+remembered commands with it, and they have to be approved again. In a tainted conversation no
+remembered grant above LOW applies (it asks again), and "remember" is neither offered nor
+honoured: checked when the question is asked and again when it is answered, so a conversation whose taint
+was cleared in between ("new conversation", idle timeout) cannot turn a question untrusted content
+prompted into a remembered grant. Any call that sends data off the machine from a tainted
+conversation asks - so injected text cannot exfiltrate silently.
 To keep this from turning into confirmation fatigue, a read-only lookup whose free text is
 demonstrably taken from what the user said runs without asking. Two conditions, both required.
 Positive: a `web.search` query (to the user's own search backend) is plain words forming an

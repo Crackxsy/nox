@@ -792,6 +792,11 @@ class _Pending:
     request: PermissionRequest
     future: asyncio.Future[tuple[Decision, bool, str]]
     created_at: datetime
+    #: Whether "remember" could create a grant when the question was asked (taint included).
+    #: A "remember" answer counts only if this AND the same check at answer time say yes: a
+    #: conversation whose taint was cleared meanwhile ("new conversation", idle timeout) cannot
+    #: turn a question untrusted content prompted into a remembered grant.
+    can_remember: bool = False
 
 
 class DefaultPermissionEngine:
@@ -842,24 +847,19 @@ class DefaultPermissionEngine:
         stays set until `clear_taint` - when the orchestrator discards that conversation's
         context - never merely because a new turn began.
 
-        Remembered shell commands (`cmd:`) are revoked when a conversation *becomes* tainted, and
-        whenever untrusted content arrives outside any conversation (nothing to tie it to). Not
-        again for every further piece of content in a conversation that is tainted already -
-        a paired device's every message during a session, every web page in a long research
-        turn - because nothing more can widen there: a tainted conversation never uses a grant
-        above LOW (`_temporary_grant`) and never creates one ("remember" is not offered in it,
-        `_can_remember`), so a command remembered since was remembered in another, untainted
-        conversation, by the user, and stays. Grants are not per conversation (see
-        `end_session`), so the first revocation still takes every remembered command: what the
-        untrusted content could set up to run later outside its own conversation must not find
-        one waiting.
+        Every arrival of untrusted content revokes every remembered shell command (`cmd:`
+        grant), not only the first one in a conversation. Grants are not per conversation (see
+        `end_session`): a command remembered meanwhile in another, untainted conversation would
+        otherwise stay usable while untrusted content keeps arriving - by work the tainted
+        conversation set up to run later outside it, for one. The cost is accepted (owner
+        decision, C10): during a node session every message from a paired device takes the
+        remembered commands with it, and they are approved again. A tainted conversation also
+        never creates a remembered grant (`_can_remember`).
         """
-        fresh = self._taint.mark(conversation, content)
-        if fresh:
+        if self._taint.mark(conversation, content):
             log.info("security.taint_changed", tainted=True)
-        if fresh or not conversation:
-            # Untrusted content may now steer a tool call: no remembered shell command stays.
-            self.revoke_command_grants(reason="taint")
+        # Untrusted content may now steer the next tool call: no remembered shell command stays.
+        self.revoke_command_grants(reason="taint")
 
     def clear_taint(self, conversation: str) -> None:
         """The conversation's context was discarded: nothing untrusted is in it any more."""
@@ -1054,7 +1054,10 @@ class DefaultPermissionEngine:
         loop = asyncio.get_running_loop()
         grant_id = uuid.uuid4().hex
         self._pending[grant_id] = _Pending(
-            request=request, future=loop.create_future(), created_at=self._clock()
+            request=request,
+            future=loop.create_future(),
+            created_at=self._clock(),
+            can_remember=self._can_remember(request),
         )
         publish_nowait(
             self._bus,
@@ -1078,7 +1081,7 @@ class DefaultPermissionEngine:
             expires_at=expires.isoformat(),
             # 0 when "remember" would create no grant, so no prompt offers it.
             remember_ttl_s=(
-                self._session_grant_ttl.total_seconds() if self._can_remember(request) else 0.0
+                self._session_grant_ttl.total_seconds() if self._may_remember(pending) else 0.0
             ),
             voice_satellite=self._satellite_of(request.conversation),
         )
@@ -1147,7 +1150,7 @@ class DefaultPermissionEngine:
             final is Decision.ALLOW
             and remember
             and scope is not None
-            and self._can_remember(request)
+            and self._may_remember(pending)
         ):
             grant = TemporaryGrant(
                 grant_id=grant_id,
@@ -1198,6 +1201,10 @@ class DefaultPermissionEngine:
                 return None
             return f"site:{request.action}@{origin}"
         return f"session:{request.tool}/{request.action or '*'}"
+
+    def _may_remember(self, pending: _Pending) -> bool:
+        """A "remember" for this question: allowed when it was asked and still now (fail closed)."""
+        return pending.can_remember and self._can_remember(pending.request)
 
     def _can_remember(self, request: PermissionRequest) -> bool:
         """Whether a "remember" answer would create a grant at all: a rememberable scope, and not

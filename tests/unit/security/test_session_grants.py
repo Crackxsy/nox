@@ -67,18 +67,18 @@ def test_taint_revokes_cmd_grants(
     assert _scopes(grants) == {"session:obs/scene.switch", "task:t1"}
 
 
-def test_more_content_in_a_tainted_conversation_keeps_other_conversations_grants(
+def test_taint_also_revokes_a_cmd_grant_made_while_already_tainted(
     engine: DefaultPermissionEngine, grants: InMemoryGrantStore
 ) -> None:
-    """C10: a remembered command made since in another, untainted conversation stays when
-    `c1` - already tainted - gets more untrusted content (a paired device's every message during
-    a session used to revoke them all). `c1` itself can neither use nor create one."""
+    """Every arrival of untrusted content revokes them, not only the first (owner decision, C10):
+    a command remembered since, in another conversation, must not stay usable while untrusted
+    content keeps arriving."""
     engine.mark_tainted("c1", "first page")
     _grant(engine, "cmd", CMD_SCOPE)  # remembered by the user in conversation c2
     engine.mark_tainted("c1", "second page")
-    engine.mark_tainted("c1", None)
-    assert CMD_SCOPE in _scopes(grants)
-    engine.mark_tainted("c3", "a page in another conversation")  # c3 becomes tainted: revoked
+    assert CMD_SCOPE not in _scopes(grants)
+    _grant(engine, "cmd", CMD_SCOPE)
+    engine.mark_tainted("c1", None)  # a paired device's next message during a session
     assert CMD_SCOPE not in _scopes(grants)
 
 
@@ -174,3 +174,48 @@ async def test_the_kill_switch_revokes_cmd_grants(
     report = await ctx.killswitch.engage("user", "test")
     assert report.hooks.get("permissions.cmd_grants") == "ok"
     assert _scopes(grants) == {"session:obs/scene.switch", "task:t1"}
+
+
+def _simple_shell(conversation: str) -> object:
+    from nox.hands.shell import argv_digest
+    from nox.security.model import PermissionRequest
+
+    target = f"{CMD_SCOPE.split(' argv=')[0]} argv={argv_digest('whoami', ())} whoami"
+    return PermissionRequest.model_validate(
+        {
+            "agent": "companion",
+            "tool": "shell",
+            "action": "run",
+            "mode": "companion",
+            "risk": Risk.HIGH,
+            "target": target,
+            "conversation": conversation,
+        }
+    )
+
+
+@pytest.mark.parametrize("tainted_when", ["asked", "answered"])
+def test_remember_needs_a_clean_conversation_when_asked_and_when_answered(
+    engine: DefaultPermissionEngine, tainted_when: str
+) -> None:
+    """Tainted when asked, cleared before the answer ("new conversation"): no grant. Clean when
+    asked, tainted before the answer: no grant either (fail closed both ways)."""
+    import asyncio
+
+    from nox.security.model import Decision
+
+    async def scenario() -> None:
+        if tainted_when == "asked":
+            engine.mark_tainted("c1", "page text")
+        grant_id = engine.request_confirmation(_simple_shell("c1"))  # type: ignore[arg-type]
+        if tainted_when == "asked":
+            engine.clear_taint("c1")
+        else:
+            engine.mark_tainted("c1", "page text")
+        (pending,) = [p for p in engine.pending_requests() if p.request_id == grant_id]
+        assert pending.remember_ttl_s == 0
+        engine.reply(grant_id, Decision.ALLOW, remember=True)
+        result = await engine.await_confirmation(grant_id)
+        assert result.decision is Decision.ALLOW and result.grant_id is None
+
+    asyncio.run(scenario())
