@@ -757,7 +757,7 @@ def test_a_claim_never_replaces_a_passphrase(tmp_path: Path) -> None:
     helper.verify_passphrase(sys_, PASS)
 
 
-def test_wrong_codes_slow_their_address_down_not_everyone(tmp_path: Path) -> None:
+def _clocked(tmp_path: Path) -> tuple[Any, dict[str, float]]:
     uptime = {"now": 100.0}
     sys_ = helper.System(
         run=FakeRun(),
@@ -767,106 +767,152 @@ def test_wrong_codes_slow_their_address_down_not_everyone(tmp_path: Path) -> Non
         uptime=lambda: uptime["now"],
     )
     _claimable(tmp_path)
-    open_setup(tmp_path, until=10_000)
-    codes = []
-    for _ in range(4):
-        try:
-            helper.handle(_claim_req("ZZZZ-ZZZZ-ZZZZ", peer=NOISY_PEER), sys_)
-        except helper.Refused as exc:
-            codes.append(exc.code)
-        uptime["now"] += 1.5
-    # 1 s after the first, then 2 s: the third try came too early.
-    assert codes == ["claim_wrong", "claim_wrong", "claim_wait", "claim_wrong"]
+    open_setup(tmp_path, until=1_000_000)
+    return sys_, uptime
+
+
+def _refusal(request: Any, sys_: Any) -> str:
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(request, sys_)
+    return str(refused.value.code)
+
+
+def _side(tmp_path: Path, side: str) -> dict[str, Any]:
     record = json.loads((tmp_path / "run/nox-os/claim-failures").read_text("ascii"))
-    assert record["kinds"]["lan"]["addresses"][NOISY_PEER]["count"] == 3
-    # Another address is not held up.
+    return dict(record["sides"][side])
+
+
+WRONG = "ZZZZ-ZZZZ-ZZZZ"
+
+
+def test_wrong_codes_slow_their_source_down_doubling_to_five_minutes(tmp_path: Path) -> None:
+    sys_, uptime = _clocked(tmp_path)
+    assert _refusal(_claim_req(WRONG, peer=NOISY_PEER), sys_) == "claim_wrong"
+    assert _refusal(_claim_req(peer=NOISY_PEER), sys_) == "claim_wait"  # even the right code
+    waits = []
+    for _ in range(12):
+        uptime["now"] += helper.CLAIM_BACKOFF_MAX_S + 1
+        assert _refusal(_claim_req(WRONG, peer=NOISY_PEER), sys_) == "claim_wrong"
+        mine = _side(tmp_path, "lan")["sources"][NOISY_PEER]
+        waits.append(mine["until"] - uptime["now"])
+    assert waits[:4] == [2.0, 4.0, 8.0, 16.0] and waits[-1] == helper.CLAIM_BACKOFF_MAX_S
+    # Another source is not held up.
     assert helper.handle(_claim_req(peer=LAN_PEER), sys_)["claim"] == "ok"
 
 
-def test_the_backoff_doubles_up_to_five_minutes(tmp_path: Path) -> None:
-    uptime = {"now": 100.0}
-    sys_ = helper.System(
-        run=FakeRun(), root=tmp_path, root_uid=OWN_UID, uptime=lambda: uptime["now"]
-    )
-    _claimable(tmp_path)
-    open_setup(tmp_path, until=100_000)
-    for _ in range(12):
-        with pytest.raises(helper.Refused):
-            helper.handle(_claim_req("ZZZZ-ZZZZ-ZZZZ", peer=NOISY_PEER), sys_)
-        uptime["now"] += helper.CLAIM_BACKOFF_MAX_S + 1
-    entry = json.loads((tmp_path / "run/nox-os/claim-failures").read_text("ascii"))
-    mine = entry["kinds"]["lan"]["addresses"][NOISY_PEER]
-    assert (
-        mine["until"] - (uptime["now"] - helper.CLAIM_BACKOFF_MAX_S - 1)
-        == helper.CLAIM_BACKOFF_MAX_S
-    )
+def test_ipv6_sources_are_grouped_by_their_64(tmp_path: Path) -> None:
+    sys_, _ = _clocked(tmp_path)
+    assert _refusal(_claim_req(WRONG, peer="2001:db8:1:2::10"), sys_) == "claim_wrong"
+    # Another address in the same /64: the same source, still waiting.
+    assert _refusal(_claim_req(WRONG, peer="2001:db8:1:2::99"), sys_) == "claim_wait"
+    assert helper.source_key("2001:db8:1:2::99") == "2001:db8:1:2::/64"
+    assert helper.source_key("::ffff:192.0.2.7") == "192.0.2.7"
+    # Another /64 is another source.
+    assert _refusal(_claim_req(WRONG, peer="2001:db8:1:3::10"), sys_) == "claim_wrong"
+
+
+def test_rotating_addresses_cannot_get_past_the_budget(tmp_path: Path) -> None:
+    sys_, uptime = _clocked(tmp_path)
+    codes = []
+    for n in range(helper.CLAIM_BUDGET + 5):
+        uptime["now"] += helper.CLAIM_BACKOFF_MAX_S + 1  # every wait over: room for new ones
+        peer = f"192.0.2.{n % 250 + 1}" if n < 250 else f"198.51.100.{n % 250 + 1}"
+        codes.append(_refusal(_claim_req(WRONG, peer=peer), sys_))
+    assert codes[: helper.CLAIM_BUDGET] == ["claim_wrong"] * helper.CLAIM_BUDGET
+    assert set(codes[helper.CLAIM_BUDGET :]) == {"claim_locked_lan"}
+    # Locked until the next boot - the right code too, from anyone on the LAN.
+    assert _refusal(_claim_req(peer="203.0.113.9"), sys_) == "claim_locked_lan"
+    assert _side(tmp_path, "lan")["total"] == helper.CLAIM_BUDGET
+
+
+def test_a_full_table_of_waiting_sources_makes_the_side_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A small table (256 is more than the budget of 200 lets fill): the same rule.
+    monkeypatch.setattr(helper, "CLAIM_SOURCES", 8)
+    sys_, uptime = _clocked(tmp_path)
+    for n in range(helper.CLAIM_SOURCES):
+        peer = f"10.{n // 250}.{n % 250}.1"
+        assert _refusal(_claim_req(WRONG, peer=peer), sys_) == "claim_wrong"
+    # Every one of them still waits: none is forgotten to make room ...
+    assert len(_side(tmp_path, "lan")["sources"]) == helper.CLAIM_SOURCES
+    assert _refusal(_claim_req(WRONG, peer="203.0.113.1"), sys_) == "claim_wrong"
+    sources = _side(tmp_path, "lan")["sources"]
+    assert "203.0.113.1" not in sources and "10.0.0.1" in sources
+    # ... the whole side waits instead (fail closed), a new source included.
+    assert _refusal(_claim_req(peer="203.0.113.2"), sys_) == "claim_wait"
+    # The hotspot side is its own.
+    assert helper.handle(_stage_req(pin="135790"), sys_)["staged"] == "ok"
+    # Once the waits are over, room is made from sources whose wait is over.
+    uptime["now"] += helper.CLAIM_BACKOFF_MAX_S + 1
+    assert _refusal(_claim_req(WRONG, peer="203.0.113.3"), sys_) == "claim_wrong"
+    assert "203.0.113.3" in _side(tmp_path, "lan")["sources"]
 
 
 def test_staged_secrets_never_exempt_lan_guesses(tmp_path: Path) -> None:
-    """A verified-looking pending record changes nothing: every wrong LAN code still counts."""
-    uptime = {"now": 100.0}
-    sys_ = helper.System(
-        run=FakeRun(), root=tmp_path, root_uid=OWN_UID, uptime=lambda: uptime["now"]
-    )
-    _claimable(tmp_path)
-    open_setup(tmp_path, until=100_000)
+    sys_, _ = _clocked(tmp_path)
     helper.handle(_stage_req(pin="135790", new=PASS), sys_)
     pending = tmp_path / "run/nox-os/setup/pending.json"
     record = json.loads(pending.read_text("ascii"))
-    assert "verified" not in record
-    record["verified"] = True  # whatever got there
+    record["verified"] = True  # whatever got there changes nothing
     pending.write_text(json.dumps(record), "ascii")
-    with pytest.raises(helper.Refused) as refused:
-        helper.handle(_claim_req("ZZZZ-ZZZZ-ZZZZ", peer=NOISY_PEER), sys_)
-    assert refused.value.code == "claim_wrong"
-    with pytest.raises(helper.Refused) as refused:
-        helper.handle(_claim_req("ZZZZ-ZZZZ-ZZZZ", peer=NOISY_PEER), sys_)
-    assert refused.value.code == "claim_wait"  # backed off, no exemption
-    failures = json.loads((tmp_path / "run/nox-os/claim-failures").read_text("ascii"))
-    assert failures["kinds"]["lan"]["total"] == 1
+    assert _refusal(_claim_req(WRONG, peer=NOISY_PEER), sys_) == "claim_wrong"
+    assert _refusal(_claim_req(WRONG, peer=NOISY_PEER), sys_) == "claim_wait"
+    assert _side(tmp_path, "lan")["total"] == 1
 
 
-def test_the_owner_on_the_hotspot_is_not_held_up_by_a_lan_peer(tmp_path: Path) -> None:
-    uptime = {"now": 100.0}
-    sys_ = helper.System(
-        run=FakeRun(), root=tmp_path, root_uid=OWN_UID, uptime=lambda: uptime["now"]
-    )
-    _claimable(tmp_path)
-    open_setup(tmp_path, until=100_000)
-    with pytest.raises(helper.Refused):
-        helper.handle(_claim_req("ZZZZ-ZZZZ-ZZZZ", peer=NOISY_PEER), sys_)
-    with pytest.raises(helper.Refused) as refused:
-        helper.handle(_claim_req(peer=NOISY_PEER), sys_)
-    assert refused.value.code == "claim_wait"  # the noisy peer waits, even with the right code
-    # The owner, on the hotspot, right now: not held up.
-    assert helper.handle(_stage_req(pin="135790"), sys_)["staged"] == "ok"
-    # ... nor from another address in the home network.
-    assert helper.handle(_claim_req(peer=LAN_PEER), sys_)["claim"] == "ok"
-
-
-def test_a_spent_budget_slows_every_wrong_code_but_never_locks_the_owner_out(
-    tmp_path: Path,
-) -> None:
-    uptime = {"now": 100.0}
-    sys_ = helper.System(
-        run=FakeRun(), root=tmp_path, root_uid=OWN_UID, uptime=lambda: uptime["now"]
-    )
-    _claimable(tmp_path)
-    open_setup(tmp_path, until=100_000)
-    failures = {
+def test_a_locked_lan_does_not_lock_the_owner_on_the_hotspot_out(tmp_path: Path) -> None:
+    sys_, _ = _clocked(tmp_path)
+    locked = {
         "boot_id": BOOT_ID,
-        "kinds": {"lan": {"total": helper.CLAIM_BUDGET, "addresses": {}}},
+        "sides": {"lan": {"total": helper.CLAIM_BUDGET, "sources": {}, "full_until": 0.0}},
     }
-    (tmp_path / "run/nox-os/claim-failures").write_text(json.dumps(failures), "ascii")
-    with pytest.raises(helper.Refused) as refused:
-        helper.handle(_claim_req("ZZZZ-ZZZZ-ZZZZ", peer="192.0.2.41"), sys_)
-    assert refused.value.code == "claim_wrong"
-    record = json.loads((tmp_path / "run/nox-os/claim-failures").read_text("ascii"))
-    first = record["kinds"]["lan"]["addresses"]["192.0.2.41"]
-    assert first["until"] == 100.0 + helper.CLAIM_BACKOFF_MAX_S  # the longest wait at once
-    assert "hotspot" not in record["kinds"]  # the hotspot's budget is its own
-    # A right code from an address that is not waiting still claims.
-    assert helper.handle(_claim_req(peer="192.0.2.42"), sys_)["claim"] == "ok"
+    (tmp_path / "run/nox-os/claim-failures").write_text(json.dumps(locked), "ascii")
+    assert _refusal(_claim_req(peer=LAN_PEER), sys_) == "claim_locked_lan"
+    # The owner on the hotspot: the right code there, with the portal's ticket ...
+    ticket = "t" * 32
+    staged = _stage_req(pin="135790")
+    staged = helper.Request(**{**staged.__dict__, "ticket": ticket})
+    assert helper.handle(staged, sys_)["staged"] == "ok"
+    # ... then the claim from the home network presenting the ticket counts on the hotspot side.
+    with_ticket = helper.Request(**{**_claim_req(peer=LAN_PEER).__dict__, "ticket": ticket})
+    assert helper.handle(with_ticket, sys_)["claim"] == "ok"
+
+
+def test_a_wrong_ticket_counts_on_the_lan(tmp_path: Path) -> None:
+    sys_, _ = _clocked(tmp_path)
+    staged = helper.Request(**{**_stage_req().__dict__, "ticket": "t" * 32})
+    helper.handle(staged, sys_)
+    forged = helper.Request(**{**_claim_req(WRONG, peer=NOISY_PEER).__dict__, "ticket": "f" * 32})
+    assert _refusal(forged, sys_) == "claim_wrong"
+    assert _side(tmp_path, "lan")["total"] == 1
+    assert (
+        "hotspot"
+        not in json.loads((tmp_path / "run/nox-os/claim-failures").read_text("ascii"))["sides"]
+        or _side(tmp_path, "hotspot")["total"] == 0
+    )
+
+
+def test_the_hotspot_side_locks_on_its_own(tmp_path: Path) -> None:
+    sys_, _ = _clocked(tmp_path)
+    locked = {
+        "boot_id": BOOT_ID,
+        "sides": {"hotspot": {"total": helper.CLAIM_BUDGET, "sources": {}, "full_until": 0.0}},
+    }
+    (tmp_path / "run/nox-os/claim-failures").write_text(json.dumps(locked), "ascii")
+    assert _refusal(_stage_req(pin="135790"), sys_) == "claim_locked_hotspot"
+    assert helper.handle(_claim_req(), sys_)["claim"] == "ok"
+
+
+def test_the_ticket_is_parsed_strictly() -> None:
+    line = "ticket " + base64.b64encode(b"t" * 32).decode()
+    request = helper.parse_request(
+        f"claim 0a1b2c {LAN_PEER}\n{_code_line(CLAIM_CODE)}\n{line}".encode()
+    )
+    assert request.ticket == "t" * 32 and "t" * 32 not in repr(request)
+    bad = "ticket " + base64.b64encode(b"short").decode()
+    with pytest.raises(helper.Refused):
+        helper.parse_request(f"claim 0a1b2c {LAN_PEER}\n{_code_line(CLAIM_CODE)}\n{bad}".encode())
 
 
 def test_no_claim_outside_the_window_or_without_a_code(tmp_path: Path) -> None:

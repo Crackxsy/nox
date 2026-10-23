@@ -1065,6 +1065,8 @@ class PortalRequest:
     claim_code: str = field(default="", repr=False)
     #: The phone's address as the portal saw it (the root helper slows wrong codes per address).
     peer: str = ""
+    #: The portal's one-time ticket for the claim link (counts the claim on the hotspot side).
+    ticket: str | None = field(default=None, repr=False)
     pin: str | None = field(default=None, repr=False)
     passphrase: str | None = field(default=None, repr=False)
 
@@ -1079,7 +1081,7 @@ def parse_portal_request(raw: bytes) -> PortalRequest:
         )
     except (ValueError, RecursionError, UnicodeDecodeError):
         raise ProvisionError("not_json") from None
-    allowed = {"v", "wifi", "pin", "passphrase", "claim_code", "peer"}
+    allowed = {"v", "wifi", "pin", "passphrase", "claim_code", "peer", "ticket"}
     if not isinstance(data, dict) or set(data) - allowed:
         raise ProvisionError("unknown_field")
     if data.get("v") != 1 or isinstance(data.get("v"), bool):
@@ -1116,7 +1118,14 @@ def parse_portal_request(raw: bytes) -> PortalRequest:
     peer = data.get("peer")
     if not isinstance(peer, str) or not re.fullmatch(r"[0-9a-fA-F:.]{2,45}", peer):
         raise ProvisionError("invalid_peer")
-    return PortalRequest(wifi=wifi, claim_code=code, peer=peer, pin=pin, passphrase=passphrase)
+    ticket = data.get("ticket")
+    if ticket is not None and (
+        not isinstance(ticket, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", ticket)
+    ):
+        raise ProvisionError("invalid_ticket")
+    return PortalRequest(
+        wifi=wifi, claim_code=code, peer=peer, ticket=ticket, pin=pin, passphrase=passphrase
+    )
 
 
 def take_request(system: System) -> PortalRequest | None:
@@ -1193,6 +1202,8 @@ def apply(
         lines.append(f"pin {_b64(request.pin)}")
     if request.passphrase:
         lines.append(f"new {_b64(request.passphrase)}")
+    if request.ticket:
+        lines.append(f"ticket {_b64(request.ticket)}")
     try:
         answer = helper(system, lines)
     except (OSError, ValueError):

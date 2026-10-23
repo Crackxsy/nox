@@ -1076,14 +1076,22 @@ breaks it and the QEMU boot test checks it on the running system. In short:
     is applied without the right claim code; PIN and passphrase are only kept (root 0600, RAM) and
     applied by the claim itself - no first-come credential setting.
   - **Claim:** while unclaimed the core serves only the claim on the LAN and the firewall keeps the
-    node port closed (fail closed). Claiming needs the one-time claim code within the window; the
-    root helper checks it - wrong codes slow their address down (1 s doubling to 5 minutes) and
-    count towards a budget of 200 per boot, separate for the LAN and the hotspot (past it: 5
-    minutes per wrong code at once); no exemptions and no hard lock, so one noisy peer cannot lock
-    the owner out (codes have 40-60 bits) - and only it writes the root-owned
-    claim mark the firewall and the core go by. The claim ends setup mode (hotspot down before the
-    firewall opens the node port), applies the PIN and passphrase, and is audited without any
-    secret.
+    node port closed (fail closed). Claiming needs the one-time claim code within the window; only
+    the root helper checks it and writes the root-owned claim mark the firewall and the core go by.
+    The claim ends setup mode (hotspot down before the firewall opens the node port), applies the
+    PIN and passphrase, and is audited without any secret.
+  - **Guessing the claim code:** two independent sides (`lan`, `hotspot`); per side and source
+    (IPv4 address, IPv6 /64) a wrong code costs a wait of 1 s doubling to 5 minutes, waiting
+    sources are never dropped (a full table of 256 makes the whole side wait), and 200 wrong
+    codes lock a side until the next boot. A right code (constant-time compare) succeeds unless
+    its source waits or its side is locked. **Math:** codes have 60 bits (12 characters of
+    Crockford base32; the schema's minimum for a hand-made card is 8 characters, 40 bits). At most
+    2 x 200 = 400 wrong guesses per boot reach the comparison, so the chance to hit a 60-bit code
+    in a boot is at most 400 / 2^60, about 3.5e-16 (40 bits: 3.6e-10) - and every boot makes a new
+    device code. A locked LAN side cannot lock the owner out: the hotspot side needs its WPA2
+    password, shown only on the console (or the setup card, or the LED from O5), never on the
+    LAN, and the portal's one-time ticket lets the owner's claim from the home network count on
+    the hotspot side.
 
 Accepted limits: physical access to the card is full access (the boot partition is plain FAT); the
 service user can choose which unprivileged ports its own listener uses, and the firewall follows.

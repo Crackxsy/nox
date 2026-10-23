@@ -153,6 +153,8 @@ def test_a_good_form_writes_one_request_for_root_and_shows_the_next_step(
     status, _, page = post(portal, GOOD)
     assert status == 200, page
     request_file = json.loads(state.request.read_text("utf-8"))
+    ticket = request_file.pop("ticket")
+    assert len(ticket) >= 32 and f"ticket={ticket}" in page  # in the claim link, once
     assert request_file == {
         "v": 1,
         "wifi": {"ssid": SSID, "psk": PSK, "hidden": False},

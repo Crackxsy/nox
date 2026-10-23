@@ -142,6 +142,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "err_claim_code": "Type the claim code.",
         "err_claim_wrong": "That claim code is not right - nothing was saved.",
         "err_claim_wait": "Wrong claim codes slow Nox down. Wait a moment, then try again.",
+        "err_claim_locked_hotspot": "Too many wrong claim codes. Unplug the Pi's power and plug "
+        "it in again.",
         "err_wrong_password": "Nox could not join {ssid}: the password was not accepted. "
         "Try again.",
         "err_not_found": "Nox could not find {ssid}. Is it in range?",
@@ -212,6 +214,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "err_claim_wrong": "Dieser Besitzer-Code stimmt nicht - es wurde nichts gespeichert.",
         "err_claim_wait": "Falsche Besitzer-Codes bremsen Nox. Warte kurz und versuch es dann "
         "noch einmal.",
+        "err_claim_locked_hotspot": "Zu viele falsche Besitzer-Codes. Zieh kurz den Strom vom Pi "
+        "und steck ihn wieder ein.",
         "err_wrong_password": "Nox konnte {ssid} nicht beitreten: Das Passwort wurde nicht "
         "angenommen. Versuch es noch einmal.",
         "err_not_found": "Nox hat {ssid} nicht gefunden. Ist es in Reichweite?",
@@ -622,7 +626,7 @@ def form_page(
     if isinstance(provision, dict) and provision.get("imported") is False:
         notices.append(t["err_provision"].format(code=str(provision.get("error", ""))[:40]))
     error = status.get("error")
-    if error in ("claim_wrong", "claim_wait"):
+    if error in ("claim_wrong", "claim_wait", "claim_locked_hotspot"):
         notices.append(t["err_" + str(error)])
     elif isinstance(error, str) and error and status.get("state") != "failed":
         notices.append(t["err_saved"].format(code=error[:40]))
@@ -750,18 +754,27 @@ def form_page(
     return page(lang, t["title"], "".join(body))
 
 
-def claim_url(code: str | None) -> str:
+def claim_url(code: str | None, ticket: str | None = None) -> str:
+    """The claim page, with the device's code (if it made one) and the portal's one-time ticket
+    in the fragment - which never reaches a server log."""
+    parts = []
+    if code:
+        parts.append(f"code={urllib.parse.quote(code.replace('-', ''))}")
+    if ticket:
+        parts.append(f"ticket={urllib.parse.quote(ticket)}")
     base = f"https://nox.local:{DASHBOARD_PORT}/claim/"
-    return base + (f"#code={urllib.parse.quote(code.replace('-', ''))}" if code else "")
+    return base + ("#" + "&".join(parts) if parts else "")
 
 
-def done_page(lang: str, *, ssid: str | None, code: str | None, fingerprint: str) -> str:
+def done_page(
+    lang: str, *, ssid: str | None, code: str | None, fingerprint: str, ticket: str | None = None
+) -> str:
     t = STRINGS[lang]
     body = [f"<h1>{_e(t['done_title'])}</h1>"]
     body.append(f"<p>{_e(t['done_wifi'].format(ssid=ssid) if ssid else t['done_cable'])}</p>")
     body.append(f"<p>{_e(t['done_back'])}</p>")
     body.append(f"<p>{_e(t['done_open'])}</p>")
-    url = claim_url(code)
+    url = claim_url(code, ticket)
     body.append(f'<p class="box mono"><a href="{_e(url)}">{_e(url.split("#")[0])}</a></p>')
     if code:
         body.append(f'<p>{_e(t["done_code"])}</p><p class="box code">{_e(code)}</p>')
@@ -942,6 +955,9 @@ def make_handler(portal: Portal) -> type[BaseHTTPRequestHandler]:
                 )
                 return
             request["peer"] = peer
+            # A one-time ticket for the claim link: root keeps its hash only with the right claim
+            # code, and a claim presenting it counts on the hotspot side (not the LAN's).
+            request["ticket"] = secrets.token_urlsafe(24)
             try:
                 portal.state.write_request(request)
             except OSError:
@@ -961,6 +977,7 @@ def make_handler(portal: Portal) -> type[BaseHTTPRequestHandler]:
                     ssid=wifi["ssid"] if isinstance(wifi, dict) else None,
                     code=code,
                     fingerprint=portal.state.fingerprint(),
+                    ticket=request["ticket"],
                 ),
                 lang,
             )

@@ -56,6 +56,8 @@ class Helper:
         self.pending_passphrase: str | None = None
         self.set_passphrase: str | None = None
         self.wait = False
+        self.locked = False
+        self.ticket: str | None = None
         self.code = normalize_claim_code(CODE)
         self.down = False
 
@@ -88,8 +90,14 @@ class Helper:
         code = base64.b64decode(lines[1].removeprefix("code ")).decode()
         if code != self.code:
             raise HelperError("wrong claim code", refused=True, code="claim_wrong")
-        if len(lines) == 3:
-            self.set_passphrase = base64.b64decode(lines[2].removeprefix("new ")).decode()
+        extra = {
+            line.split(" ")[0]: base64.b64decode(line.split(" ")[1]).decode() for line in lines[2:]
+        }
+        self.ticket = extra.get("ticket")
+        if self.locked and self.ticket is None:
+            raise HelperError("locked", refused=True, code="claim_locked_lan")
+        if "new" in extra:
+            self.set_passphrase = extra["new"]
         elif self.pending_passphrase is not None:
             self.set_passphrase = self.pending_passphrase
         self.passphrase = self.set_passphrase is not None
@@ -369,3 +377,15 @@ def test_claim_codes_normalize_like_the_root_side() -> None:
     assert normalize_claim_code("ABCD") is None
     assert normalize_claim_code("ABCD-EFGH-JKM!") is None
     assert normalize_claim_code("ABCD-EFGH-JKMU") is None  # U is not in the alphabet
+
+
+def test_the_setup_portals_ticket_goes_to_the_helper_and_a_locked_lan_is_said(
+    client: TestClient, helper: Helper
+) -> None:
+    helper.locked = True
+    answer = claim(client)
+    assert (answer.status_code, answer.json()) == (429, {"error": "locked"})
+    answer = claim(client, ticket="ticket-for-this-test-only-aaaaaa")
+    assert answer.status_code == 201, answer.text
+    assert helper.ticket == "ticket-for-this-test-only-aaaaaa"
+    assert claim(client, ticket="bad ticket").status_code in (400, 409)

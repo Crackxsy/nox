@@ -24,8 +24,8 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   with the claim itself; the hotspot comes back with the reason if joining fails. **Claim:**
   while unclaimed the core serves only `/claim/` and `/api/claim` on the LAN and the firewall keeps
   the node port closed; the one-time claim code (card, or screen and portal) checked by the root
-  helper (wrong codes slow their address down, a budget per boot for the LAN and the hotspot
-  each) makes the claiming browser the owner's first device, sets PIN and passphrase, ends setup
+  helper (per-source backoff, 200 wrong codes per side - LAN, hotspot - and boot lock only
+  that side; the portal's one-time ticket keeps the hotspot path open) makes the claiming browser the owner's first device, sets PIN and passphrase, ends setup
   mode and opens the node port. New read-only request `noxos.claim.status` (O4).
   `systemd-firstboot.service` is masked (it failed on headless first boots). The QEMU smoke boots
   twice (provisioned with portal and claim; fresh with the window expiring).

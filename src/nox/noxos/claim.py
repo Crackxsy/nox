@@ -82,6 +82,8 @@ CLAIMS_TOTAL = 20
 REFUSALS: dict[str, tuple[int, str]] = {
     "claim_wrong": (401, "wrong_code"),
     "claim_wait": (429, "wait"),
+    "claim_locked_lan": (429, "locked"),
+    "claim_locked_hotspot": (429, "locked"),
     "not_setup": (403, "window_closed"),
     "claimed": (409, "claimed"),
     "no_claim_code": (503, "no_code"),
@@ -147,6 +149,8 @@ class ClaimBody(BaseModel):
     pin: str | None = Field(default=None, max_length=MAX_PIN, repr=False)
     #: Needed only when none is set yet (`needs_passphrase`).
     passphrase: str | None = Field(default=None, max_length=MAX_PASSPHRASE, repr=False)
+    #: The setup portal's one-time ticket (from the claim link): the claim counts on its side.
+    ticket: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_-]{16,64}$")
 
 
 def _b64(text: str) -> str:
@@ -293,6 +297,8 @@ class ClaimService:
         lines = [f"claim {result.device_id} {_address(peer)}", f"code {_b64(code)}"]
         if body.passphrase is not None:
             lines.append(f"new {_b64(body.passphrase)}")
+        if body.ticket is not None:
+            lines.append(f"ticket {_b64(body.ticket)}")
         try:
             answer = await self._helper(lines)
         except HelperError as exc:
@@ -373,6 +379,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "passphrase_staged": "A passphrase was set in the setup Wi-Fi. Leave these empty to keep "
         "it.",
         "err_wait": "Wrong claim codes slow Nox down. Wait a moment, then try again.",
+        "err_locked": "Too many wrong claim codes from the home network. Unplug the Pi's power "
+        "and plug it in again - or use the link from the setup Wi-Fi.",
         "fingerprint": "Your browser warned because Nox made its own certificate. It is Nox if "
         "this fingerprint is the one shown on the Pi's screen or in the setup Wi-Fi:",
         "submit": "Claim Nox",
@@ -425,6 +433,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "Felder leer, um sie zu behalten.",
         "err_wait": "Falsche Besitzer-Codes bremsen Nox. Warte kurz und versuch es dann noch "
         "einmal.",
+        "err_locked": "Zu viele falsche Besitzer-Codes aus dem Heimnetz. Zieh kurz den Strom vom "
+        "Pi und steck ihn wieder ein - oder nimm den Link aus dem Einrichtungs-WLAN.",
         "fingerprint": "Dein Browser hat gewarnt, weil Nox sein eigenes Zertifikat gemacht hat. "
         "Es ist Nox, wenn dieser Fingerabdruck der vom Bildschirm am Pi oder aus dem "
         "Einrichtungs-WLAN ist:",

@@ -16,15 +16,20 @@
     if (info) show(info);
   }
   function state(text) { $('state').textContent = text; }
+  var ticket = '';
+  // The claim code and the setup portal's one-time ticket arrive in the fragment; both leave the
+  // address bar at once, so they never land in history or a bookmark.
   function codeFromHash() {
     var parts = location.hash.replace(/^#/, '').split('&');
-    var rest = [], code = '';
+    var rest = [], code = '', taken = false;
     for (var i = 0; i < parts.length; i++) {
-      if (parts[i].indexOf('code=') === 0) {
-        try { code = decodeURIComponent(parts[i].slice(5)); } catch (e) { code = ''; }
-      } else if (parts[i]) { rest.push(parts[i]); }
+      var key = parts[i].split('=')[0], value = '';
+      try { value = decodeURIComponent(parts[i].slice(key.length + 1)); } catch (e) { value = ''; }
+      if (key === 'code') { code = value; taken = true; }
+      else if (key === 'ticket') { ticket = value.replace(/[^0-9A-Za-z_-]/g, '').slice(0, 64); taken = true; }
+      else if (parts[i]) { rest.push(parts[i]); }
     }
-    if (code) history.replaceState(null, '', location.pathname + (rest.length ? '#' + rest.join('&') : ''));
+    if (taken) history.replaceState(null, '', location.pathname + (rest.length ? '#' + rest.join('&') : ''));
     return code.replace(/[^0-9A-Za-z-]/g, '').slice(0, 40);
   }
   function show(data) {
@@ -83,6 +88,7 @@
     var code = $('code').value.trim();
     if (code.replace(/[\s-]/g, '').length < 8) problems.push(['code', 'code']);
     var body = { code: code, name: $('name').value.trim(), default_name: guessName() };
+    if (ticket.length >= 16) body.ticket = ticket;
     if (info && (info.needs_pin || $('pin').value)) {
       if ($('pin').value.length < (info.min_pin || 6)) problems.push(['pin', 'pin_short']);
       else if ($('pin').value !== $('pin2').value) problems.push(['pin2', 'pin_mismatch']);

@@ -314,7 +314,15 @@ o3_hotspot_profile() {
   done
   [ "$(field /run/nox-os/setup/status.json hotspot)" = no_wifi_device ] \
     || finish "NOX-SMOKE-FAIL: hotspot state $(field /run/nox-os/setup/status.json hotspot)"
-  say "NOX-SMOKE: setup hotspot profile ready ($(field /run/nox-os/setup/console.json ssid), WPA2, 10.42.0.1/24), no radio in QEMU"
+  # NetworkManager itself reads the profile back: the name, AP mode and the password exactly.
+  nmcli connection load "$profile" >/dev/null 2>&1 || true
+  ssid="$(field /run/nox-os/setup/console.json ssid)"
+  [ "$(nmcli -g 802-11-wireless.ssid connection show nox-setup-hotspot 2>&1)" = "$ssid" ] \
+    || finish "NOX-SMOKE-FAIL: NetworkManager reads another hotspot SSID: $(nmcli -g 802-11-wireless.ssid connection show nox-setup-hotspot 2>&1)"
+  [ "$(nmcli -g 802-11-wireless.mode connection show nox-setup-hotspot 2>&1)" = ap ] || finish "NOX-SMOKE-FAIL: hotspot not in AP mode"
+  [ "$(nmcli -s -g 802-11-wireless-security.psk connection show nox-setup-hotspot 2>&1)" = "$1" ] \
+    || finish "NOX-SMOKE-FAIL: NetworkManager reads another hotspot password"
+  say "NOX-SMOKE: setup hotspot profile ready ($ssid, WPA2, 10.42.0.1/24, read back by NetworkManager), no radio in QEMU"
 }
 # Unclaimed: the dashboard port serves the claim only; the node port is closed.
 o3_unclaimed_firewall() {
@@ -347,7 +355,11 @@ o3_provisioned() {
   [ ! -e /run/nox-os/setup/claim-code ] || finish "NOX-SMOKE-FAIL: a device code next to the card's"
   if journalctl -b --no-pager 2>/dev/null | grep -qF "$SMOKE_WIFI_PSK"; then finish "NOX-SMOKE-FAIL: the Wi-Fi password is in the journal"; fi
   if grep -rqsF -D skip "$SMOKE_WIFI_PSK" /run/nox-os /run/NetworkManager /var/lib/nox /var/log; then finish "NOX-SMOKE-FAIL: the Wi-Fi password outside its keyfile"; fi
-  say "NOX-SMOKE: provisioning imported (Wi-Fi keyfile root 0600, time zone, claim code hash), file deleted, password in no log"
+  [ "$(nmcli -g 802-11-wireless.ssid connection show nox-wifi 2>&1)" = Springfield-WLAN ] \
+    || finish "NOX-SMOKE-FAIL: NetworkManager reads another Wi-Fi SSID: $(nmcli -g 802-11-wireless.ssid connection show nox-wifi 2>&1)"
+  [ "$(nmcli -s -g 802-11-wireless-security.psk connection show nox-wifi 2>&1)" = "$SMOKE_WIFI_PSK" ] \
+    || finish "NOX-SMOKE-FAIL: NetworkManager reads another Wi-Fi password"
+  say "NOX-SMOKE: provisioning imported (Wi-Fi keyfile root 0600, read back by NetworkManager, time zone, claim code hash), file deleted, password in no log"
 }
 # The portal as a phone sees it: a phone in a namespace on a virtual hotspot interface.
 o3_portal() {

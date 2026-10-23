@@ -17,26 +17,29 @@ shell, no paths, no units, no options:
                                   (root's; the first-boot setup creates it) and none is set yet
                                   - or root created /var/lib/nox-os/reset-maintenance
     maint change                  then `pass <old>` and `new <passphrase>`
-    claim <device id> <address>   then `code <claim code>` and optionally `new <passphrase>`
-                                  (step O3, from Nox's claim page on the LAN): only in setup mode,
-                                  only while unclaimed. Marks the device claimed
+    claim <device id> <address>   then `code <claim code>`, optionally `new <passphrase>` and
+                                  `ticket <ticket>` (step O3, from Nox's claim page): only in
+                                  setup mode, only while unclaimed. Marks the device claimed
                                   (/var/lib/nox-os-claim/claimed), sets the maintenance passphrase
-                                  (the one sent, else the one staged in the setup portal), ends
-                                  setup mode and answers with the staged security PIN (once)
-    stage <address>               then `code <claim code>` and optionally `pin <PIN>` and
-                                  `new <passphrase>` (root only: the setup portal's request, via
-                                  nox_setup.py): checks the claim code and only then keeps PIN and
-                                  passphrase for the claim (/run/nox-os/setup/pending.json, root
-                                  0600). Nothing is applied before the claim
+                                  (the one sent, else the one kept from the setup portal), ends
+                                  setup mode and answers with the kept security PIN (once)
+    stage <address>               then `code <claim code>` and optionally `pin <PIN>`,
+                                  `new <passphrase>` and `ticket <ticket>` (root only: the setup
+                                  portal's request, via nox_setup.py): checks the claim code and
+                                  only then keeps PIN, passphrase and the ticket's hash for the
+                                  claim (/run/nox-os/setup/pending.json, root 0600). Nothing is
+                                  applied before the claim
 
-Wrong claim codes slow the address that sent them down (1 s, doubling, at most 5 minutes) and
-count towards a budget per boot - one for the LAN, one for the setup hotspot, so a noisy peer in
-one cannot use up the other's. Once a budget is spent, every further wrong code from that side
-costs its address the full 5 minutes at once. There is no exemption and no hard lock: a right
-code always succeeds unless its own address is waiting, so nobody can lock the owner out. A claim
-code has at least 40 bits (8 characters of a 32-letter alphabet; the device's own and the PC
-assistant's have 12 = 60 bits): the 200 guesses of a budget find a 40-bit code with a chance of
-at most 200 / 2^40, about 2e-10, and past the budget each address gets one guess per 5 minutes.
+**Wrong claim codes** are counted on two independent sides, `lan` (Nox's claim page) and
+`hotspot` (the setup portal). Per side and per source - an IPv4 address, an IPv6 /64 - each wrong
+code makes that source wait (1 s, doubling, at most 5 minutes); a waiting source is never
+forgotten, and when a side's table of 256 sources is full of waiting ones, the whole side waits 5
+minutes (fail closed). Per side and boot, 200 wrong codes lock that side until the next boot
+(`claim_locked_lan`, `claim_locked_hotspot`); the other side is unaffected. A right code (compared
+in constant time) succeeds unless its source waits or its side is locked. A claim that carries the
+ticket the setup portal issued with the right code counts on the hotspot side - the owner who
+joined the hotspot (its WPA2 password is on the Pi's screen, the setup card or the LED, never on
+the LAN) finishes the claim even when someone in the home network locked the LAN side.
 
 Passphrases and claim codes travel base64-encoded (UTF-8); passphrases have at least 12
 characters.
@@ -133,14 +136,15 @@ PENDING = RUN / "setup" / "pending.json"
 CLAIM_LOCK = RUN / "helper" / "claim.lock"
 CLAIM_PREFIX = b"nox-claim-v1:"
 CLAIM_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-#: Wrong claim codes per boot and per source kind (LAN, hotspot) before every further one costs
-#: its address the longest wait at once.
+#: Wrong claim codes per side (lan, hotspot) and boot before that side is locked until reboot.
 CLAIM_BUDGET = 200
-#: Per address: the first wrong code costs 1 s, each further one twice as much, at most 5 min.
+#: Per source: the first wrong code costs 1 s, each further one twice as much, at most 5 min.
 CLAIM_BACKOFF_S = 1.0
 CLAIM_BACKOFF_MAX_S = 300.0
-#: Addresses remembered per kind (the oldest go first).
-CLAIM_ADDRESSES = 256
+#: Sources remembered per side; a waiting one is never dropped - a full table makes the side wait.
+CLAIM_SOURCES = 256
+CLAIM_SIDES = ("lan", "hotspot")
+MAX_TICKET = 64
 MIN_PIN = 6
 MAX_PIN = 64
 SETUP_CLOSE_UNIT = "nox-setup-close.service"
@@ -266,6 +270,8 @@ class Request:
     address: str = ""
     code: str | None = field(default=None, repr=False)
     pin: str | None = field(default=None, repr=False)
+    #: The setup portal's one-time ticket (stage: to keep; claim: to present).
+    ticket: str | None = field(default=None, repr=False)
 
 
 _FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
@@ -296,6 +302,23 @@ def _coded(line: str, label: str) -> str:
         return base64.b64decode(data, validate=True).decode("utf-8")
     except (binascii.Error, ValueError):
         raise Refused("the claim code is not readable", "claim_wrong") from None
+
+
+def _labelled(lines: list[str], allowed: set[str]) -> dict[str, str]:
+    """Optional `<label> <value>` lines, each label at most once, no others."""
+    out = {line.partition(" ")[0]: line for line in lines}
+    if len(out) != len(lines) or set(out) - allowed:
+        raise Refused("unknown request")
+    return out
+
+
+def _ticket(line: str | None) -> str | None:
+    if line is None:
+        return None
+    ticket = _coded(line, "ticket")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", ticket):
+        raise Refused("the ticket is not readable", "claim_wrong")
+    return ticket
 
 
 def _code_line(line: str) -> str:
@@ -359,24 +382,32 @@ def parse_request(data: bytes) -> Request:
         len(words) == 3
         and words[0] == "claim"
         and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", words[1])
-        and 1 <= len(rest) <= 2
+        and 1 <= len(rest) <= 3
     ):
-        code = _code_line(rest[0])
-        new = _new_secret(rest[1]) if len(rest) == 2 else None
-        address = _address(words[2])
-        return Request("claim", device=words[1], address=address, code=code, new_passphrase=new)
-    if len(words) == 2 and words[0] == "stage" and 1 <= len(rest) <= 3:
-        code = _code_line(rest[0])
-        extra = {line.partition(" ")[0]: line for line in rest[1:]}
-        if len(extra) != len(rest) - 1 or set(extra) - {"pin", "new"}:
-            raise Refused("unknown request")
+        extra = _labelled(rest[1:], {"new", "ticket"})
+        return Request(
+            "claim",
+            device=words[1],
+            address=_address(words[2]),
+            code=_code_line(rest[0]),
+            new_passphrase=_new_secret(extra["new"]) if "new" in extra else None,
+            ticket=_ticket(extra.get("ticket")),
+        )
+    if len(words) == 2 and words[0] == "stage" and 1 <= len(rest) <= 4:
+        extra = _labelled(rest[1:], {"pin", "new", "ticket"})
         pin = None
         if "pin" in extra:
             pin = _coded(extra["pin"], "pin")
             if not MIN_PIN <= len(pin) <= MAX_PIN or not pin.isprintable():
                 raise Refused(f"a security PIN has {MIN_PIN} to {MAX_PIN} characters", "pin_short")
-        new = _new_secret(extra["new"]) if "new" in extra else None
-        return Request("stage", address=_address(words[1]), code=code, pin=pin, new_passphrase=new)
+        return Request(
+            "stage",
+            address=_address(words[1]),
+            code=_code_line(rest[0]),
+            pin=pin,
+            new_passphrase=_new_secret(extra["new"]) if "new" in extra else None,
+            ticket=_ticket(extra.get("ticket")),
+        )
     if words == ["maint", "change"] and len(rest) == 2:
         return Request(
             "maint_change", passphrase=_secret(rest[0], "pass"), new_passphrase=_new_secret(rest[1])
@@ -732,99 +763,143 @@ def _staged(system: System) -> dict[str, bool]:
     }
 
 
-def _failures(system: System) -> dict[str, object]:
+def source_key(address: str) -> str:
+    """Who is slowed down: an IPv4 address, or an IPv6 /64 (one home network's devices may change
+    their IPv6 address at will within it)."""
+    import ipaddress  # noqa: PLC0415 - only the claim needs it
+
+    parsed = ipaddress.ip_address(address)
+    if isinstance(parsed, ipaddress.IPv6Address):
+        if parsed.ipv4_mapped is not None:
+            return str(parsed.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{parsed}/64", strict=False))
+    return str(parsed)
+
+
+def _failures(system: System) -> dict[str, dict[str, object]]:
     record = _read_json(system, CLAIM_FAILURES)
-    if record.get("boot_id") != _boot_id(system) or not isinstance(record.get("kinds"), dict):
-        return {"boot_id": _boot_id(system), "kinds": {}}
-    return record
+    sides = record.get("sides") if record.get("boot_id") == _boot_id(system) else None
+    out: dict[str, dict[str, object]] = {}
+    for side in CLAIM_SIDES:
+        entry = sides.get(side) if isinstance(sides, dict) else None
+        if not isinstance(entry, dict) or not isinstance(entry.get("sources"), dict):
+            entry = {"total": 0, "sources": {}, "full_until": 0.0}
+        out[side] = entry
+    return out
 
 
-def _kind(record: dict[str, object], kind: str) -> dict[str, object]:
-    kinds = record["kinds"]
-    assert isinstance(kinds, dict)
-    entry = kinds.setdefault(kind, {"total": 0, "addresses": {}})
-    if not isinstance(entry, dict) or not isinstance(entry.get("addresses"), dict):
-        entry = kinds[kind] = {"total": 0, "addresses": {}}
-    return entry
+def _number(value: object) -> float:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
 
 
-def _may_try(system: System, kind: str, address: str) -> None:
-    """Refuse while this address waits after a wrong code - nothing else holds a sender up."""
-    entry = _kind(_failures(system), kind)
-    addresses = entry["addresses"]
-    assert isinstance(addresses, dict)
-    mine = addresses.get(address)
-    until = mine.get("until") if isinstance(mine, dict) else None
-    if isinstance(until, (int, float)) and until > system.uptime():
-        wait = int(until - system.uptime()) + 1
-        raise Refused(f"wait {wait} s before the next claim code", "claim_wait")
+def _may_try(system: System, side: str, key: str) -> None:
+    """Refuse a locked side, a side whose table is full of waiting sources, a waiting source."""
+    entry = _failures(system)[side]
+    if _number(entry.get("total")) >= CLAIM_BUDGET:
+        raise Refused(
+            f"too many wrong claim codes on the {side} side; unplug the power and plug it in again",
+            f"claim_locked_{side}",
+        )
+    now = system.uptime()
+    sources = entry["sources"]
+    assert isinstance(sources, dict)
+    mine = sources.get(key)
+    until = max(
+        _number(entry.get("full_until")),
+        _number(mine.get("until")) if isinstance(mine, dict) else 0.0,
+    )
+    if until > now:
+        raise Refused(f"wait {int(until - now) + 1} s before the next claim code", "claim_wait")
 
 
-def _failed(system: System, kind: str, address: str) -> None:
-    record = _failures(system)
-    entry = _kind(record, kind)
-    total = entry.get("total")
-    entry["total"] = (total if isinstance(total, int) else 0) + 1
-    addresses = entry["addresses"]
-    assert isinstance(addresses, dict)
-    mine = addresses.pop(address, None)
-    count = mine.get("count") if isinstance(mine, dict) else 0
-    count = (count if isinstance(count, int) else 0) + 1
+def _failed(system: System, side: str, key: str) -> None:
+    """One wrong code: the side's count, the source's wait. Waiting sources are kept; only
+    sources whose wait is over may make room, and a table full of waiting ones makes the whole
+    side wait (fail closed)."""
+    sides = _failures(system)
+    entry = sides[side]
+    entry["total"] = int(_number(entry.get("total"))) + 1
+    now = system.uptime()
+    sources = entry["sources"]
+    assert isinstance(sources, dict)
+    # Room only from sources whose wait is over (their count is kept as long as there is room).
+    over = [k for k, v in sources.items() if k != key and _number(v.get("until")) <= now]
+    while key not in sources and len(sources) >= CLAIM_SOURCES and over:
+        sources.pop(over.pop(0))
+    mine = sources.get(key)
+    count = int(_number(mine.get("count"))) + 1 if isinstance(mine, dict) else 1
     delay = min(CLAIM_BACKOFF_S * 2 ** (count - 1), CLAIM_BACKOFF_MAX_S)
-    if entry["total"] >= CLAIM_BUDGET:  # type: ignore[operator]
-        delay = CLAIM_BACKOFF_MAX_S  # this side's budget is spent: the longest wait at once
-    addresses[address] = {"count": count, "until": system.uptime() + delay}
-    while len(addresses) > CLAIM_ADDRESSES:
-        addresses.pop(next(iter(addresses)))
+    if key in sources or len(sources) < CLAIM_SOURCES:
+        sources[key] = {"count": count, "until": now + delay}
+    else:
+        entry["full_until"] = now + CLAIM_BACKOFF_MAX_S
+    record = {"boot_id": _boot_id(system), "sides": sides}
     system.write(CLAIM_FAILURES, json.dumps(record) + "\n", 0o600)
 
 
-def _check_code(system: System, request: Request, kind: str) -> None:
-    """Unclaimed, in the window, the sender not waiting - then the code, compared in constant
-    time. Every wrong one counts, whatever was staged."""
+def _ticket_hash(ticket: str) -> str:
+    return hashlib.sha256(b"nox-claim-ticket-v1:" + ticket.encode("ascii")).hexdigest()
+
+
+def _check_code(system: System, request: Request, side: str, key: str) -> None:
+    """Unclaimed, in the window, the side not locked and the source not waiting - then the code,
+    compared in constant time. Every wrong one counts, whatever was staged."""
     if claimed(system):
         raise Refused("this Nox already has an owner", "claimed")
     if not in_setup_mode(system):
         raise Refused(
             "setup is closed; unplug the power and plug it in again to reopen it", "not_setup"
         )
-    _may_try(system, kind, request.address)
+    _may_try(system, side, key)
     expected = str(_read_json(system, CLAIM).get("hash", ""))
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected):
         raise Refused("this device has no claim code", "no_claim_code")
     if not hmac.compare_digest(claim_hash(request.code or ""), expected):
-        _failed(system, kind, request.address)
+        _failed(system, side, key)
         raise Refused("wrong claim code", "claim_wrong")
 
 
 def stage(system: System, request: Request) -> dict[str, object]:
     """The setup portal's PIN and passphrase - kept, never applied, and only with the right
     claim code: whoever reaches the portal first sets nothing without it. The claim applies
-    them, in the same step that marks the device claimed."""
+    them, in the same step that marks the device claimed. The portal's ticket is kept as a hash,
+    with the source it came from: a claim presenting it counts on the hotspot side."""
     with exclusive(system, CLAIM_LOCK):
-        _check_code(system, request, "hotspot")
+        key = source_key(request.address)
+        _check_code(system, request, "hotspot", key)
         pending = _read_json(system, PENDING) if _root_flag(system, PENDING) else {}
-        pending = {k: v for k, v in pending.items() if k in ("pin", "passphrase")}
+        pending = {k: v for k, v in pending.items() if k in ("pin", "passphrase", "ticket")}
         if request.pin is not None:
             pending["pin"] = request.pin
         if request.new_passphrase is not None:
             pending["passphrase"] = request.new_passphrase
+        if request.ticket is not None:
+            pending["ticket"] = {"hash": _ticket_hash(request.ticket), "source": key}
         system.write(PENDING, json.dumps(pending) + "\n", 0o600)
     answer = status(system)
     answer["staged"] = "ok"
     return answer
 
 
+def _claim_side(pending: dict[str, object], request: Request) -> tuple[str, str]:
+    """(side, source key): the hotspot side with the portal's ticket, else the LAN."""
+    ticket = pending.get("ticket")
+    if request.ticket is not None and isinstance(ticket, dict):
+        if hmac.compare_digest(str(ticket.get("hash", "")), _ticket_hash(request.ticket)):
+            return "hotspot", str(ticket.get("source", ""))
+    return "lan", source_key(request.address)
+
+
 def claim(system: System, request: Request) -> dict[str, object]:
     """The claim (step O3): the code against its hash, in the setup window, while unclaimed.
     Success marks the device claimed - root's file, the firewall and Nox go by it - sets the
-    maintenance passphrase (the one sent, else the one staged with the right code in the setup
-    portal; never over an existing one), ends setup mode - hotspot and portal down before the
-    firewall is regenerated - and hands over the staged PIN. What was staged changes nothing
-    about how the code is checked."""
+    maintenance passphrase (the one sent, else the one staged with the right claim code in the
+    setup portal; never over an existing one), ends setup mode - hotspot and portal down before
+    the firewall is regenerated - and hands over the staged PIN."""
     with exclusive(system, CLAIM_LOCK):
         pending = _read_json(system, PENDING) if _root_flag(system, PENDING) else {}
-        _check_code(system, request, "lan")
+        side, key = _claim_side(pending, request)
+        _check_code(system, request, side, key)
         passphrase = request.new_passphrase
         if passphrase is None and isinstance(pending.get("passphrase"), str):
             passphrase = str(pending["passphrase"])
