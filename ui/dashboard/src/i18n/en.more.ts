@@ -1016,4 +1016,5 @@ export const enMore: Record<MoreKey, string> = {
   ssh_err_passphrase_wrong: 'The maintenance passphrase is wrong. After five wrong tries it is locked for a while.',
   ssh_err_passphrase_locked: 'Too many wrong maintenance passphrases. Try again later.',
   ssh_err_passphrase_short: 'A maintenance passphrase has at least 12 characters.',
+  ssh_err_passphrase_exists: 'A maintenance passphrase is already set. It can only be changed with the current one.',
 };

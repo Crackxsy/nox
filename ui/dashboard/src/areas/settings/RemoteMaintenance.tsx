@@ -94,6 +94,7 @@ const REASONS: Record<string, Key> = {
   passphrase_missing: 'ssh_passphrase_missing',
   passphrase_short: 'ssh_err_passphrase_short',
   not_setup: 'ssh_passphrase_missing',
+  passphrase_exists: 'ssh_err_passphrase_exists',
 };
 
 function clock(iso: string | null, lang: Lang): string {

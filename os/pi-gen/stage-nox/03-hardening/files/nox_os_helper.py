@@ -14,7 +14,8 @@ shell, no paths, no units, no options:
                                   keys - only if their fingerprints are exactly the confirmed ones
     ssh off
     maint set                     then `new <passphrase>`: only while /run/nox-os/setup-mode exists
-                                  (root's; the first-boot setup creates it)
+                                  (root's; the first-boot setup creates it) and none is set yet
+                                  - or root created /var/lib/nox-os/reset-maintenance
     maint change                  then `pass <old>` and `new <passphrase>`
 
 Passphrases travel base64-encoded (UTF-8), at least 12 characters.
@@ -56,6 +57,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import hashlib
 import hmac
 import json
@@ -68,7 +70,7 @@ import struct
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -86,6 +88,10 @@ STORED_KEYS = Path("/var/lib/nox-os/ssh_keys")
 #: The maintenance passphrase (scrypt) and its lockout: root's, 0600.
 PASSPHRASE = Path("/var/lib/nox-os/maintenance")
 LOCKOUT = Path("/var/lib/nox-os/maintenance-lockout")
+#: Serialises every check of the passphrase across helper instances (flock).
+PASSPHRASE_LOCK = RUN / "helper" / "passphrase.lock"
+#: Root's deliberate reset: with it (and in setup mode) `maint set` may replace a passphrase.
+RESET_FLAG = Path("/var/lib/nox-os/reset-maintenance")
 #: Present (root's) only while the first-boot setup runs: the one time a passphrase may be set
 #: without knowing an old one.
 SETUP_MODE = RUN / "setup-mode"
@@ -507,19 +513,16 @@ def handle(request: Request, system: System) -> dict[str, object]:
         return switch_off(system, "dashboard")
     if request.command == "keys_clear":
         return clear_keys(system)
-    if request.command == "maint_set":
-        if not in_setup_mode(system):
-            raise Refused(
-                "a maintenance passphrase can be set only during setup; change it with the old one",
-                "not_setup",
-            )
-        store_passphrase(system, request.new_passphrase or "")
-        return status(system)
-    # Everything else needs the maintenance passphrase.
-    verify_passphrase(system, request.passphrase or "")
-    if request.command == "maint_change":
-        store_passphrase(system, request.new_passphrase or "")
-        return status(system)
+    # One request at a time touches the passphrase and its lockout, whatever runs in parallel.
+    with passphrase_lock(system):
+        if request.command == "maint_set":
+            set_first_passphrase(system, request.new_passphrase or "")
+            return status(system)
+        # Everything else needs the maintenance passphrase.
+        verify_passphrase(system, request.passphrase or "")
+        if request.command == "maint_change":
+            store_passphrase(system, request.new_passphrase or "")
+            return status(system)
     if request.command == "keys_set":
         return set_keys(system, request.keys)
     return switch_on(system, request.minutes, request.fingerprints)
@@ -528,14 +531,58 @@ def handle(request: Request, system: System) -> dict[str, object]:
 # ---- the maintenance passphrase ------------------------------------------------------------
 
 
-def in_setup_mode(system: System) -> bool:
-    """/run/nox-os/setup-mode exists, is a plain file and belongs to root (only root can put it
-    in /run/nox-os)."""
+def _root_flag(system: System, path: Path) -> bool:
+    """`path` exists, is a plain file and belongs to root (only root can put it there)."""
     try:
-        info = system.path(SETUP_MODE).lstat()
+        info = system.path(path).lstat()
     except OSError:
         return False
     return stat.S_ISREG(info.st_mode) and info.st_uid == system.root_uid
+
+
+def in_setup_mode(system: System) -> bool:
+    return _root_flag(system, SETUP_MODE)
+
+
+@contextlib.contextmanager
+def passphrase_lock(system: System) -> Iterator[None]:
+    """An exclusive lock (flock) held from reading the lockout state through the scrypt check to
+    writing the new count: each helper instance is its own process, and parallel guesses must
+    not all read the same count and each add one."""
+    path = system.path(PASSPHRASE_LOCK)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        try:
+            import fcntl  # noqa: PLC0415 - POSIX only; the tests on Windows run one at a time
+        except ImportError:
+            fcntl = None  # type: ignore[assignment]
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)  # closing the descriptor releases the lock
+
+
+def set_first_passphrase(system: System, passphrase: str) -> None:
+    """Only during setup, and only when none is set - or when root deliberately asked for a reset
+    with a flag only root can create (/var/lib/nox-os/reset-maintenance: physical access to the
+    card, or a running maintenance session). Never a way around the old passphrase for the
+    service."""
+    if not in_setup_mode(system):
+        raise Refused(
+            "a maintenance passphrase can be set only during setup; change it with the old one",
+            "not_setup",
+        )
+    reset = _root_flag(system, RESET_FLAG)
+    if passphrase_set(system) and not reset:
+        raise Refused(
+            "a maintenance passphrase is already set; change it with the old one",
+            "passphrase_exists",
+        )
+    store_passphrase(system, passphrase)
+    if reset:
+        system.remove(RESET_FLAG)
 
 
 def _scrypt(passphrase: str, salt: bytes, params: dict[str, int]) -> bytes:

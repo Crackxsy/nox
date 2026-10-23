@@ -84,7 +84,14 @@ MIN_PASSPHRASE = 12
 MAX_PASSPHRASE = 256
 #: The helper's refusal codes the dashboard words itself (`details.reason`).
 HELPER_CODES = frozenset(
-    {"passphrase_missing", "passphrase_wrong", "passphrase_locked", "passphrase_short", "not_setup"}
+    {
+        "passphrase_missing",
+        "passphrase_wrong",
+        "passphrase_locked",
+        "passphrase_short",
+        "passphrase_exists",
+        "not_setup",
+    }
 )
 
 #: One call to the root helper: request lines in, its JSON answer out.

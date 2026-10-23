@@ -159,8 +159,12 @@ new $(b64 "$pass")")"
   touch /run/nox-os/setup-mode
   answer="$(ask "maint set
 new $(b64 "$pass")")"
-  rm -f /run/nox-os/setup-mode
   echo "$answer" | grep -q '"passphrase": true' || finish "NOX-SMOKE-FAIL: passphrase set in setup mode: $answer"
+  # Set once: even in setup mode, not again without the old one.
+  answer="$(ask "maint set
+new $(b64 "another smoke passphrase")")"
+  rm -f /run/nox-os/setup-mode
+  echo "$answer" | grep -q '"code": "passphrase_exists"' || finish "NOX-SMOKE-FAIL: passphrase replaced without the old one: $answer"
   [ "$(stat -c '%a %U' /var/lib/nox-os/maintenance)" = '600 root' ] || finish "NOX-SMOKE-FAIL: passphrase not root's 0600"
   if grep -rqs "$pass" /var/lib/nox /var/lib/nox-os /run/nox-os; then finish "NOX-SMOKE-FAIL: the passphrase is stored in clear"; fi
   # ... keys stored root-owned, answered with their fingerprints; on only with exactly those.

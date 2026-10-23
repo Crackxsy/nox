@@ -538,3 +538,57 @@ def test_a_passphrase_file_anyone_else_wrote_is_no_passphrase(tmp_path: Path) ->
     with pytest.raises(helper.Refused) as refused:
         helper.verify_passphrase(sys_, PASS)
     assert refused.value.code == "passphrase_missing"
+
+
+@posix
+def test_parallel_wrong_guesses_are_all_counted(tmp_path: Path) -> None:
+    """Each helper instance is a process of its own; the lock makes them take turns, so N guesses
+    in parallel count N times and the fifth locks - no guess slips past the count."""
+    import threading
+
+    sys_ = system(tmp_path)
+    helper.store_passphrase(sys_, PASS)
+    barrier = threading.Barrier(8)
+    codes: list[str] = []
+
+    def guess() -> None:
+        own = system(tmp_path)  # its own descriptors, like its own process
+        barrier.wait()
+        try:
+            helper.handle(_req(f"keys set\n{_pass('a parallel wrong guess')}\n{ED25519}"), own)
+        except helper.Refused as exc:
+            codes.append(exc.code)
+
+    threads = [threading.Thread(target=guess) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    lockout = json.loads((tmp_path / "var/lib/nox-os/maintenance-lockout").read_text("ascii"))
+    assert sorted(codes) == ["passphrase_locked"] * 3 + ["passphrase_wrong"] * 5
+    assert lockout["failures"] == 5 and lockout["until"] == int(1_000_000.0 + 15 * 60)
+
+
+def test_maint_set_never_replaces_a_passphrase_without_roots_reset(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    mode = tmp_path / "run/nox-os/setup-mode"
+    mode.parent.mkdir(parents=True, exist_ok=True)
+    mode.write_text("", "ascii")
+    helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
+    # Setup mode again (a second claim), but the passphrase stays without the old one.
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(_req(f"maint set\n{_new('somebody elses passphrase')}"), sys_)
+    assert refused.value.code == "passphrase_exists"
+    helper.verify_passphrase(sys_, PASS)
+    # Root's deliberate reset: a flag only root can create, used up by the next set.
+    flag = tmp_path / "var/lib/nox-os/reset-maintenance"
+    flag.write_text("", "ascii")
+    helper.handle(_req(f"maint set\n{_new('a fresh start passphrase')}"), sys_)
+    helper.verify_passphrase(sys_, "a fresh start passphrase")
+    assert not flag.exists()
+    # Without setup mode, not even the flag helps.
+    flag.write_text("", "ascii")
+    mode.unlink()
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
+    assert refused.value.code == "not_setup"

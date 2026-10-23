@@ -125,8 +125,13 @@ root 0600), never written to a file the service user can read and never logged -
 passes it through in the one request. Five wrong passphrases lock it for 15 minutes, every five
 more for twice as long, at most a day (counted root-side, `/var/lib/nox-os/maintenance-lockout`).
 It is set once during the first-boot setup - the helper accepts `maint set` only while the
-root-owned `/run/nox-os/setup-mode` exists (O3 creates it during the claim) - and changed later
-with the old one. Without it, setting keys and switching on are refused ("set a maintenance
+root-owned `/run/nox-os/setup-mode` exists (O3 creates it during the claim) and no passphrase is
+set yet - and changed later only with the old one. A forgotten passphrase is reset by root only:
+create `/var/lib/nox-os/reset-maintenance` (physical access to the card, or a maintenance session
+still open), and the next `maint set` in setup mode replaces it and removes the flag. Every check
+of the passphrase holds an exclusive lock (`flock` on `/run/nox-os/helper/passphrase.lock`) from
+reading the lockout count to writing it, so parallel guesses - one helper instance per
+connection, at most 4 at once - are counted one by one. Without it, setting keys and switching on are refused ("set a maintenance
 passphrase during setup").
 
 The unprivileged `nox.service` (`NoNewPrivileges`, no capabilities) cannot change the system

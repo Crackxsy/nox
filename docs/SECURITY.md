@@ -1006,8 +1006,10 @@ breaks it and the QEMU boot test checks it on the running system. In short:
   **maintenance passphrase** (at least 12 characters, set during the first-boot setup), audited.
   The PIN is checked by Nox, whose files the service user can read - a short PIN could be guessed
   offline there - so the passphrase is checked only by the root helper (scrypt, root 0600, its own
-  lockout: 5 wrong, then 15 minutes, doubling up to a day); it never touches a file the service
-  user can read and is never logged. The keys are stored by the root helper alone (root, 0600) and
+  lockout: 5 wrong, then 15 minutes, doubling up to a day, counted under a lock so parallel
+  guesses cannot slip past it); it never touches a file the service user can read and is never
+  logged. Once set, it is changed only with the old one; a reset takes root (a flag file only
+  root can create, then setup mode). The keys are stored by the root helper alone (root, 0600) and
   shown by fingerprint; switching on names the fingerprints the owner confirmed and is refused for
   any other stored keys. Nothing the service user can write is read as a key. Key only
   (ed25519/ECDSA), `nox-admin` only, private networks only - never from the device itself (dropped

@@ -1034,4 +1034,5 @@ export const deMore = {
   ssh_err_passphrase_wrong: 'Die Wartungs-Passphrase stimmt nicht. Nach fünf falschen Versuchen wird sie für eine Weile gesperrt.',
   ssh_err_passphrase_locked: 'Zu viele falsche Wartungs-Passphrasen. Bitte später erneut versuchen.',
   ssh_err_passphrase_short: 'Eine Wartungs-Passphrase hat mindestens 12 Zeichen.',
+  ssh_err_passphrase_exists: 'Es gibt schon eine Wartungs-Passphrase. Ändern geht nur mit der bisherigen.',
 } as const;
