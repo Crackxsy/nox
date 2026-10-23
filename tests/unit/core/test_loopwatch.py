@@ -28,7 +28,7 @@ async def test_a_blocked_loop_is_reported_with_its_stack_and_its_end() -> None:
     stalled = [e for e in captured if e["event"] == "core.loop_stalled"]
     resumed = [e for e in captured if e["event"] == "core.loop_resumed"]
     assert stalled and resumed
-    assert any("_block_the_loop" in line for line in stalled[0]["stack"])
+    assert any("_block_the_loop" in line for line in stalled[0]["frames"])
     assert resumed[0]["stalled_s"] >= 0.6
 
 
@@ -52,3 +52,18 @@ def test_the_stack_names_modules_and_functions_never_file_paths() -> None:
     lines = describe_stack(sys._getframe())  # noqa: SLF001 - the current frame, for the test
     assert lines[-1].startswith(f"{__name__}:test_the_stack_names_modules")
     assert all("\\" not in line and "/" not in line for line in lines)
+
+
+def test_the_stall_event_renders_in_the_console_without_a_logging_error() -> None:
+    """structlog's console renderer takes a `stack` key for `stack_info` text and failed on the
+    list ("Logging error"): the frames travel under another name and render as a list."""
+    import sys
+
+    renderer = structlog.dev.ConsoleRenderer(colors=False)
+    event = {
+        "event": "core.loop_stalled",
+        "for_s": 3.2,
+        "frames": describe_stack(sys._getframe()),  # noqa: SLF001 - the current frame
+    }
+    line = renderer(None, "warning", event)  # type: ignore[arg-type]
+    assert "core.loop_stalled" in line and "frames=" in line
