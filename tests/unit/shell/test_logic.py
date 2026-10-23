@@ -174,3 +174,17 @@ def test_urls_keep_token_out_of_query() -> None:
     ):
         query = url.split("?", 1)[1].split("#", 1)[0] if "?" in url else ""
         assert "tok" not in query
+
+
+def test_model_knows_which_paired_pcs_nox_controls() -> None:
+    from nox.shell.logic import ShellModel
+
+    m = ShellModel()
+    m.apply_event("desktop.computer_use", {"active": True, "device_id": "a" * 32})
+    m.apply_event("desktop.computer_use", {"active": True, "device_id": ""})  # this machine
+    assert m.node_control == ["a" * 32]
+    m.apply_event("desktop.computer_use", {"active": False, "device_id": "a" * 32})
+    assert m.node_control == []
+    sessions = [{"active": True, "device_id": "b" * 32}, {"active": False, "device_id": "c"}, "x"]
+    m.apply_event("node.computer.status", {"sessions": sessions})
+    assert m.node_control == ["b" * 32]

@@ -48,7 +48,32 @@ def test_the_stop_key_is_ctrl_alt_shift_k() -> None:
 def test_what_nox_may_do_here_names_the_allowed_groups(tmp_path: Path) -> None:
     home = NodeHome(tmp_path / "node")
     text = allowed_here(home, german=False)
-    assert text.startswith("Nox may here:") and "nox node allow" in text
+    assert text.startswith("Nox may do here:") and "nox-node allow" in text
+    # The dashboard's words under a German heading - never English ones, "- nichts" in German.
+    german = allowed_here(home)
+    assert german.startswith("Nox darf hier:\n- Systemwerte lesen\n- Hinweise zeigen")
+    assert "read system values" not in german
+
+
+def test_the_tray_says_when_listening_is_not_switched_on_in_the_dashboard(tmp_path: Path) -> None:
+    import json
+
+    from nox.node.tray import has_voice, not_switched_on
+    from nox.node.voice import STATE_FILE
+
+    home = NodeHome(tmp_path / "node")
+    home.ensure()
+    home.write_status({"state": "connected"})
+    assert not has_voice(home)
+    state = {"running": True, "mic_open": False, "muted": False, "core_allows": False}
+    (home.path / STATE_FILE).write_text(
+        json.dumps({**state, "core_reason": "voice_not_enabled"}), encoding="utf-8"
+    )
+    assert has_voice(home)
+    assert view(home).tooltip == "Nox hört hier nicht zu: im Dashboard noch nicht eingeschaltet."
+    assert view(home, german=False).tooltip.startswith("Nox is not listening here")
+    assert not not_switched_on({**state, "core_reason": "microphone_off"})
+    assert not not_switched_on({**state, "core_allows": True, "core_reason": "voice_not_enabled"})
 
 
 def test_the_toast_names_its_sender_through_the_environment_only() -> None:
