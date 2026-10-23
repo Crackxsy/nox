@@ -620,27 +620,31 @@ class VoiceSatellite:
 #: The last code point of the Latin blocks a German or English voice reads: Basic Latin, Latin-1
 #: Supplement (ä ö ü ß é ...), Latin Extended-A and -B.
 _LAST_LATIN = 0x024F
-#: Dropped from anything said: control and format characters, combining marks left after NFKC
-#: (variation selectors, the combining grapheme joiner), private-use, surrogate and unassigned.
-_UNSPEAKABLE = frozenset({"Cc", "Cf", "Mn", "Me", "Co", "Cs", "Cn"})
+#: The only punctuation that is said (or rather, shapes how the rest is said).
+_SPOKEN_PUNCTUATION = frozenset(".,;:!?'\"-–—()/%&+=@#")
 
 
 def latin_only(text: str) -> str:
-    """`text` as a German or English voice may read it out: NFKC (fullwidth and styled letters
-    become plain ones), then every letter or digit outside the Latin blocks and every invisible
-    character removed, whitespace collapsed. A speech engine reads letters by their sound, not
-    their look - Cyrillic "ноx" is read "nox" - so no letter of another script is ever spoken;
-    the wake-word and kill-phrase checks then run on exactly what remains (C10)."""
+    """`text` as a German or English voice may read it out - an allowlist: after NFKC (fullwidth
+    and many styled letters become plain ones) only letters and digits up to the end of Latin
+    Extended-B, whitespace (as single spaces) and `_SPOKEN_PUNCTUATION` are kept; everything
+    else - letters of other scripts, letterlike and enclosed forms, mathematical alphanumerics
+    NFKC leaves alone, symbols, emoji, invisible characters - is dropped. A speech engine reads
+    letters by their sound, not their look (Cyrillic "ноx" is read "nox"), and may read out a
+    symbol's name. The wake-word and kill-phrase checks and the speech engine all get exactly
+    this result (C10)."""
     import unicodedata  # noqa: PLC0415
 
     kept: list[str] = []
     for c in unicodedata.normalize("NFKC", text):
-        category = unicodedata.category(c)
-        if category in _UNSPEAKABLE:
-            continue
-        if category[0] in "LN" and ord(c) > _LAST_LATIN:
-            continue
-        kept.append(c)
+        if c.isspace():
+            kept.append(" ")
+        elif c in _SPOKEN_PUNCTUATION:
+            kept.append(c)
+        elif ord(c) <= _LAST_LATIN and unicodedata.category(c) in ("Lu", "Ll", "Lt", "Lo", "Nd"):
+            kept.append(c)
+        # anything else is dropped without a gap: an invisible character inside a word must not
+        # split it in two for the checks while the engine still reads it as one
     return " ".join("".join(kept).split())
 
 

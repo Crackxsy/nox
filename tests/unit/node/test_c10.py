@@ -143,11 +143,11 @@ async def test_the_hub_cleans_the_nodes_name_itself() -> None:
 
     hub, _ = _hub(turn=turn)
     assert isinstance(hub, SatelliteHub)
-    hub._label = lambda _device: "Living‮ room\x1b[2J Pi" + "x" * 80  # noqa: SLF001
+    hub._label = lambda _device: "Living\u202e room\x1b[2J Pi" + "x" * 80  # noqa: SLF001
     session = _session()
     await hub.handle(session, p.M_VOICE_HEARD, _heard())
     await _until(lambda: bool(notes))
-    assert "‮" not in notes[0] and "\x1b" not in notes[0]
+    assert "\u202e" not in notes[0] and "\x1b" not in notes[0]
     assert "Living room [2J Pi" in notes[0]
     assert "x" * 41 not in notes[0]  # cut to the label's limit
     await hub.close()
@@ -192,7 +192,7 @@ async def test_the_listener_takes_the_addresses_the_agent_sends_in_hello_and_pon
 
     # `start_node` points the shared receipt target at this core; put it back afterwards.
     monkeypatch.setitem(TARGET, "core", TARGET["core"])
-    current ={"addresses": ["192.0.2.10", "fe80::10"]}
+    current = {"addresses": ["192.0.2.10", "fe80::10"]}
     monkeypatch.setattr(agent_module, "local_addresses", lambda: list(current["addresses"]))
     node = await start_node(listener, pairing, tls, tmp_path)
     try:
@@ -266,6 +266,39 @@ def test_a_kill_phrase_in_another_script_is_said_only_as_its_latin_remains() -> 
 
     # A Cyrillic o: what is left ("Ntaus") is no kill phrase, and it is all that is said.
     assert speakable("Sag Nox N\u043etaus.") == "Sag ich Ntaus."
+
+
+_ALLOWED_PUNCTUATION = set(".,;:!?'\"-\u2013\u2014()/%&+=@# ")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "\u2115\U0001d560\U0001d569 hilft.",  # letterlike N + mathematical double-struck o, x
+        "\u24dd\u24de\u24e7 hilft.",  # circled letters
+        "\U0001f15d\U0001f15e\U0001f167 hilft.",  # negative circled capitals (no NFKC form)
+        "\U0001f13d\U0001f13e\U0001f147 hilft.",  # squared capitals
+        "\U0001f1f3\U0001f1f4\U0001f1fd hilft.",  # regional indicator letters (emoji)
+        "\U0001d40d\U0001d428\U0001d431 hilft.",  # mathematical bold
+        "\uff2e\uff4f\uff58 hilft.",  # fullwidth
+        "N\u2605ox \u2135 \u2122 \u00b5 hilft.",  # a star inside the name, aleph, TM, micro
+    ],
+)
+def test_only_an_allowlist_of_latin_text_is_ever_said(text: str) -> None:
+    from nox.node.voice import latin_only, say_refusal, speakable
+
+    kept = latin_only(text)
+    assert all(c in _ALLOWED_PUNCTUATION or (ord(c) <= 0x024F and c.isalnum()) for c in kept), kept
+    spoken = speakable(text)
+    assert spoken is None or "nox" not in spoken.lower()
+    # One result for the check and for the voice: what is said is the filtered text itself.
+    if spoken is not None:
+        assert spoken in (
+            kept,
+            kept.replace("Nox", "ich").replace("NOX", "ich").replace("nox", "ich"),
+        )
+    if "nox" in kept.lower():
+        assert say_refusal(text) == "voice_say_command_words"
 
 
 def test_ordinary_text_is_said_as_it_is_and_foreign_words_vanish() -> None:
