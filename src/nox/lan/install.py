@@ -8,7 +8,9 @@ is off and how to turn it on. The listener itself only starts when `ipc.lan.enab
     when its addresses changed (a new DHCP lease) or the certificate nears its end
     (`LanListener`),
   * the device registry plugged into the hub's token store, so `device` sessions authenticate,
-  * the HTTPS listener (`nox.lan.app`) on `ipc.lan.host:port`.
+  * the HTTPS listener (`nox.lan.app`) on `ipc.lan.host:port`,
+  * on Nox-OS, the claim (`nox.noxos.claim`): until the device has an owner, the listener serves
+    the claim and nothing else.
 
 Requests, for the UI roles (`nox.ipc.roles`):
   * `lan.status` - on or off, the addresses, the authority's fingerprint,
@@ -44,6 +46,8 @@ from nox.ipc.server import CLOSE_POLICY_VIOLATION, CLOSE_SIGNED_OUT
 from nox.lan.app import LanSettings, PairLimiter, create_lan_app
 from nox.lan.devices import CLIENT_PREFIX, LanDevices
 from nox.lan.tls import KeyNotProtectedError, TlsMaterial, ensure_tls
+from nox.noxos.claim import ClaimGate, ClaimService
+from nox.noxos.helper import unix_helper
 from nox.remote.models import DeviceRow
 from nox.remote.repo import RemoteRepository
 from nox.security.device_pin import DevicePinGuard
@@ -252,6 +256,20 @@ def install(core: Any) -> LanRuntime:
     runtime = LanRuntime(devices=devices, enabled=bool(cfg.enabled), port=cfg.port, _core=core)
     # `nox.node` installs after this extension and needs the certificates and the pairing route.
     core.lan_runtime = runtime
+    # Nox-OS: the claim guards the listener from its very first request (`nox.noxos.claim`).
+    gate = getattr(core, "claim_gate", None) or ClaimGate()
+    claim: ClaimService | None = None
+    if gate.nox_os:
+        claim = ClaimService(
+            gate=gate,
+            devices=devices,
+            helper=getattr(core, "noxos_helper", None) or unix_helper(),
+            pin=core.security.pin,
+            audit=core.security.audit,
+            tls=lambda: runtime.tls,
+        )
+        log.info("lan.claim", claimed=gate.claimed())
+    core.noxos_claim = claim
     _register_requests(core, runtime)
     if not runtime.enabled:
         log.info("lan.disabled", note="network access is off (ipc.lan.enabled)")
@@ -293,6 +311,7 @@ def install(core: Any) -> LanRuntime:
             allow_public_clients=cfg.allow_public_clients,
             max_frame_bytes=core.hub.settings.max_frame_bytes,
             node_pair=lambda: runtime.node_pair,
+            claim=claim.surface() if claim is not None else None,
         )
         return HttpServer(
             app,

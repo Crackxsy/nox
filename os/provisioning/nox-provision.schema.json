@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Crackxsy/nox/blob/develop/os/provisioning/nox-provision.schema.json",
+  "title": "Nox-OS provisioning file (nox-provision.json)",
+  "description": "Written to the boot partition of a freshly flashed Nox-OS card (by the PC dashboard's 'Raspberry Pi einrichten' assistant, or by hand). Read once at the next boot, imported, then overwritten and deleted. Checked by os/pi-gen/stage-nox/04-firstboot/files/nox_setup.py (validate), which refuses anything this schema does not allow. See os/README.md, 'The provisioning file'. At most 16 KiB, UTF-8.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "v": { "const": 1, "description": "Schema version." },
+    "hostname": {
+      "type": ["string", "null"],
+      "description": "The device's name in the home network (RFC 1123 label, lower case, not only digits).",
+      "pattern": "^(?![0-9]+$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "timezone": {
+      "type": ["string", "null"],
+      "description": "An IANA time zone name the image has under /usr/share/zoneinfo.",
+      "maxLength": 64,
+      "pattern": "^[A-Za-z][A-Za-z0-9_+-]{0,30}(?:/[A-Za-z0-9][A-Za-z0-9_+-]{0,30}){0,2}$"
+    },
+    "locale": {
+      "type": ["string", "null"],
+      "enum": ["de_DE", "en_GB", "en_US", null],
+      "description": "The system language (the locales the image has generated)."
+    },
+    "country": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Z]{2}$",
+      "description": "ISO 3166-1 alpha-2 Wi-Fi regulatory country; required with wifi."
+    },
+    "wifi": {
+      "description": "The home Wi-Fi, or null for none (Ethernet).",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ssid"],
+          "properties": {
+            "ssid": {
+              "type": "string",
+              "minLength": 1,
+              "description": "1 to 32 bytes in UTF-8, no control characters."
+            },
+            "psk": {
+              "description": "WPA2/WPA3-transition passphrase (8-63 printable ASCII characters) or a 64-digit hex key; null for an open network.",
+              "oneOf": [
+                { "type": "null" },
+                { "type": "string", "pattern": "^[ -~]{8,63}$" },
+                { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" }
+              ]
+            },
+            "hidden": { "type": "boolean", "default": false }
+          }
+        }
+      ]
+    },
+    "claim_hash": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "sha256 of 'nox-claim-v1:' + the claim code printed on the setup card (upper case, without spaces or dashes; Crockford base32, 8-32 characters). Without it the device makes a claim code at every boot."
+    },
+    "hotspot_psk": {
+      "type": ["string", "null"],
+      "pattern": "^[!-~]{8,63}$",
+      "description": "The setup hotspot's WPA2 password, printed on the setup card. Without it the device makes 12 random digits at every boot."
+    }
+  },
+  "if": {
+    "properties": { "wifi": { "type": "object" } },
+    "required": ["wifi"]
+  },
+  "then": {
+    "properties": { "country": { "type": "string" } },
+    "required": ["country"]
+  }
+}

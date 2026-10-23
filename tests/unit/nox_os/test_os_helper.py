@@ -54,8 +54,29 @@ class FakeRun:
 
 def system(tmp_path: Path, run: FakeRun | None = None) -> Any:
     return helper.System(
-        run=run or FakeRun(), clock=lambda: 1_000_000.0, root=tmp_path, root_uid=OWN_UID
+        run=run or FakeRun(),
+        clock=lambda: 1_000_000.0,
+        root=tmp_path,
+        root_uid=OWN_UID,
+        uptime=lambda: UPTIME,
     )
+
+
+#: Seconds since boot in these tests, and this boot's id.
+UPTIME = 120.0
+BOOT_ID = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
+
+
+def open_setup(tmp_path: Path, *, until: float = 1800.0, boot_id: str = BOOT_ID) -> Path:
+    """Root's setup-mode file as nox_setup.py writes it (this boot, end in seconds since boot)."""
+    ident = tmp_path / "proc/sys/kernel/random/boot_id"
+    ident.parent.mkdir(parents=True, exist_ok=True)
+    ident.write_text(BOOT_ID + "\n", "ascii")
+    mode = tmp_path / "run/nox-os/setup-mode"
+    mode.parent.mkdir(parents=True, exist_ok=True)
+    record = {"v": 1, "boot_id": boot_id, "until": until, "reason": "unclaimed"}
+    mode.write_text(json.dumps(record), "ascii")
+    return mode
 
 
 # ---- the requests ----------------------------------------------------------------------------
@@ -468,7 +489,16 @@ def test_the_passphrase_is_set_only_in_setup_mode(tmp_path: Path) -> None:
         with pytest.raises(helper.Refused):
             helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
         mode.unlink()
-    mode.write_text("", "ascii")
+    # No window (O3): an empty flag, one whose end is reached, one of an earlier boot.
+    for no_window in (
+        lambda: mode.write_text("", "ascii"),
+        lambda: open_setup(tmp_path, until=UPTIME),
+        lambda: open_setup(tmp_path, boot_id="00000000-0000-0000-0000-000000000000"),
+    ):
+        no_window()
+        with pytest.raises(helper.Refused):
+            helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
+    open_setup(tmp_path)
     answer = helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
     assert answer["passphrase"] is True and answer["setup_mode"] is True
     record = (tmp_path / "var/lib/nox-os/maintenance").read_text("ascii")
@@ -571,9 +601,7 @@ def test_parallel_wrong_guesses_are_all_counted(tmp_path: Path) -> None:
 
 def test_maint_set_never_replaces_a_passphrase_without_roots_reset(tmp_path: Path) -> None:
     sys_ = system(tmp_path)
-    mode = tmp_path / "run/nox-os/setup-mode"
-    mode.parent.mkdir(parents=True, exist_ok=True)
-    mode.write_text("", "ascii")
+    mode = open_setup(tmp_path)
     helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
     # Setup mode again (a second claim), but the passphrase stays without the old one.
     with pytest.raises(helper.Refused) as refused:
@@ -592,3 +620,108 @@ def test_maint_set_never_replaces_a_passphrase_without_roots_reset(tmp_path: Pat
     with pytest.raises(helper.Refused) as refused:
         helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
     assert refused.value.code == "not_setup"
+
+
+# ---- the claim (O3) --------------------------------------------------------------------------
+
+CLAIM_CODE = "ABCD-EFGH-JKMN"  # fictitious
+
+
+def _claim_req(code: str = CLAIM_CODE, device: str = "0a1b2c", new: str | None = None) -> Any:
+    lines = [f"claim {device}", "code " + base64.b64encode(code.encode()).decode()]
+    if new is not None:
+        lines.append(_new(new))
+    return helper.parse_request("\n".join(lines).encode())
+
+
+def _claimable(tmp_path: Path) -> Path:
+    open_setup(tmp_path)
+    record = {"v": 1, "hash": helper.claim_hash("ABCDEFGHJKMN"), "source": "card"}
+    state = tmp_path / "var/lib/nox-os/claim.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps(record), "ascii")
+    return state
+
+
+def test_the_claim_request_is_strict() -> None:
+    request = _claim_req("abcd efgh jkmn")
+    assert (request.command, request.device, request.code) == ("claim", "0a1b2c", "ABCDEFGHJKMN")
+    assert "ABCDEFGHJKMN" not in repr(request)
+    for bad in (
+        b"claim",
+        b"claim ../x\ncode QUJD",
+        b"claim 0a1b2c",
+        b"claim 0a1b2c\npass QUJD",
+        b"claim 0a1b2c a\ncode QUJD",
+    ):
+        with pytest.raises(helper.Refused):
+            helper.parse_request(bad)
+    with pytest.raises(helper.Refused) as refused:
+        _claim_req("not-a-code!")
+    assert refused.value.code == "claim_wrong"
+
+
+def test_a_claim_marks_the_owner_ends_setup_and_hands_over_the_pin(tmp_path: Path) -> None:
+    run = FakeRun()
+    sys_ = system(tmp_path, run)
+    state = _claimable(tmp_path)
+    pending = tmp_path / "run/nox-os/setup/pending-pin"
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    pending.write_text("135790\n", "utf-8")
+    assert helper.status(sys_)["claim_code"] == "card"
+    assert helper.status(sys_)["pending_pin"] is True
+    answer = helper.handle(_claim_req(new=PASS), sys_)
+    assert answer["claim"] == "ok" and answer["claimed"] is True
+    assert base64.b64decode(answer["pin"]).decode() == "135790"
+    marker = json.loads((tmp_path / "var/lib/nox-os-claim/claimed").read_text("ascii"))
+    assert marker["owner_device"] == "0a1b2c"
+    assert not (tmp_path / "run/nox-os/setup-mode").exists()
+    assert not state.exists() and not pending.exists()
+    helper.verify_passphrase(sys_, PASS)  # set with the claim
+    assert ("systemctl", "start", "--no-block", "nox-setup-close.service") in run.calls
+    assert ("systemctl", "restart", "nox-firewall.service") in run.calls
+    if sys.platform != "win32":
+        assert (tmp_path / "var/lib/nox-os-claim/claimed").stat().st_mode & 0o777 == 0o644
+    # Once claimed, never again - not even with the right code in a new window.
+    _claimable(tmp_path)
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(_claim_req(), sys_)
+    assert refused.value.code == "claimed"
+
+
+def test_a_claim_never_replaces_a_passphrase(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    _claimable(tmp_path)
+    helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
+    helper.handle(_claim_req(new="somebody elses passphrase"), sys_)
+    helper.verify_passphrase(sys_, PASS)
+
+
+def test_wrong_claim_codes_count_and_lock_the_window(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    _claimable(tmp_path)
+    codes = []
+    for _ in range(helper.MAX_CLAIM_FAILURES + 1):
+        with pytest.raises(helper.Refused) as refused:
+            helper.handle(_claim_req("ZZZZ-ZZZZ-ZZZZ"), sys_)
+        codes.append(refused.value.code)
+    assert codes == ["claim_wrong"] * helper.MAX_CLAIM_FAILURES + ["claim_locked"]
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(_claim_req(), sys_)  # the right one too, until a power cycle
+    assert refused.value.code == "claim_locked"
+    assert not (tmp_path / "var/lib/nox-os-claim/claimed").exists()
+
+
+def test_no_claim_outside_the_window_or_without_a_code(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    _claimable(tmp_path)
+    open_setup(tmp_path, until=UPTIME)  # its end reached
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(_claim_req(), sys_)
+    assert refused.value.code == "not_setup"
+    open_setup(tmp_path)
+    (tmp_path / "var/lib/nox-os/claim.json").unlink()
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(_claim_req(), sys_)
+    assert refused.value.code == "no_claim_code"
+    assert helper.status(sys_)["claimed"] is False

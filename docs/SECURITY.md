@@ -1054,7 +1054,29 @@ breaks it and the QEMU boot test checks it on the running system. In short:
   <fingerprints>`, `ssh off`, `maint set` (setup mode only), `maint change` - no shell, no paths,
   no options.
 - **No firewall, no Nox:** `nox.service` requires `nftables.service`.
-- **Console:** a status screen without secrets on tty1, no login there; no account has a password.
+- **Console:** a status screen on tty1, no login there; no account has a password. It shows no
+  secrets - except, during the setup window of an unclaimed device, the setup hotspot's password
+  and the claim code made on the device (a screen is physical access).
+- **First boot without a screen** ([`os/README.md`](../os/README.md#first-boot-without-a-screen-o3)):
+  - **Setup window:** root's file with this boot's id and its end in seconds since boot, at most
+    30 minutes after power-on, only while unclaimed; only a power cycle opens another. Every
+    grant of setup mode (hotspot ports, portal, `maint set`, `claim`) checks the file itself, so
+    an expired window grants nothing; closing it removes every setup secret.
+  - **Provisioning file:** validated strictly (unknown fields refused), imported, then overwritten
+    and deleted (best effort on FAT and flash: earlier copies of the clusters may survive in the
+    card's controller), never logged; the Wi-Fi password only in a root 0600 NetworkManager
+    keyfile.
+  - **Setup hotspot:** WPA2 only, never open, a per-device password (the setup card's, or 12 random
+    digits per boot shown on the screen / blinked by the LED from O5); the hotspot interface
+    reaches the portal, DHCP and DNS and nothing else, no forwarding.
+  - **Portal:** its own user, no root, only port 80 as a capability, network only the hotspot and
+    loopback; no JavaScript, strict CSP; CSRF token bound to the phone and the time plus a required
+    same-origin `Origin`; rate-limited; it only writes a request that root checks again.
+  - **Claim:** while unclaimed the core serves only the claim on the LAN and the firewall keeps the
+    node port closed (fail closed). Claiming needs the one-time claim code within the window; the
+    root helper checks it (10 wrong per window), and only it writes the root-owned claim mark the
+    firewall and the core go by. The claim ends setup mode, sets the PIN and passphrase taken
+    during setup, and is audited without any secret.
 
 Accepted limits: physical access to the card is full access (the boot partition is plain FAT); the
 service user can choose which unprivileged ports its own listener uses, and the firewall follows.
@@ -1062,7 +1084,13 @@ Root over SSH takes the security PIN **and** the maintenance passphrase **and** 
 confirmed **and** a connection from the home network; while remote maintenance is on, whoever
 holds one of its keys in the home network is root, and what root changed stays changed after it
 is switched off. IPv6 clients from the home's global prefix are not "private" and are refused (fail
-closed).
+closed). **Setup without a setup card (owner decision D2):** within the 30 minutes after power-on,
+whoever reads the screen or the blink code - a neighbour at the window at the same moment - can
+join the setup hotspot and learn the claim code; the 12-digit hotspot password can be cracked
+offline from a recorded handshake, so that window's portal traffic (home Wi-Fi password, PIN,
+passphrase) must be considered readable by a determined attacker in radio range. A setup card
+(long random hotspot password, the claim code only as a hash on the device) closes this; the
+manual names it.
 
 ## Known limits of network access
 

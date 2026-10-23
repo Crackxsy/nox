@@ -10,10 +10,13 @@ atomically. Open: loopback, answers to connections this device made, the ICMP th
 need, the DHCP client, mDNS (`nox.local`), and - only while network access is on
 (`ipc.lan.enabled`) - Nox's dashboard and node ports, from private networks only unless
 `ipc.lan.allow_public_clients` says otherwise, with new connections rate-limited per address.
-SSH (port 22) only while remote maintenance is on (/run/nox-os/ssh.json, written by the root
-helper), from private networks only. The setup ports (HTTP, DNS, DHCP server) only in setup mode
-(/run/nox-os/setup-mode, step O3). Outbound is open - Nox needs the internet - except the cloud
-metadata addresses.
+While the device has no owner yet (no root-owned /var/lib/nox-os-claim/claimed, step O3) only
+the dashboard port is opened - Nox serves nothing there but its claim page then - and the node
+port stays closed. SSH (port 22) only while remote maintenance is on (/run/nox-os/ssh.json,
+written by the root helper), from private networks only. The setup ports (HTTP, DNS, DHCP server)
+only in setup mode (/run/nox-os/setup-mode, its end not reached) and only on the setup hotspot's
+interface (/run/nox-os/setup/hotspot.json) - which gets nothing else: neither Nox's ports nor SSH.
+Outbound is open - Nox needs the internet - except the cloud metadata addresses.
 
 The ports come from `config/defaults.yaml` of the installed release and `/var/lib/nox/user.yaml`,
 so they follow the configuration instead of drifting from it. A port this script would not open
@@ -29,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -45,6 +49,12 @@ USER = Path("/var/lib/nox/user.yaml")
 SSH_STATE = Path("/run/nox-os/ssh.json")
 #: Step O3 creates it while the device is in setup mode (hotspot and captive portal).
 SETUP_MODE = Path("/run/nox-os/setup-mode")
+BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
+#: The setup hotspot's interface while it is up (nox_setup.py).
+HOTSPOT = Path("/run/nox-os/setup/hotspot.json")
+HOTSPOT_NET = "10.42.0.0/24"
+#: Root's mark that the device has an owner (the root helper writes it at the claim).
+CLAIMED = Path("/var/lib/nox-os-claim/claimed")
 #: What the console status screen reads (no secrets: ports and switches).
 SUMMARY = Path("/run/nox-os/firewall.json")
 NFT = "/usr/sbin/nft"
@@ -84,6 +94,10 @@ class Settings:
     public: bool = False
     ssh: bool = False
     setup: bool = False
+    #: The device has an owner: the node port may open. Before, only the dashboard (claim page).
+    claimed: bool = False
+    #: The setup hotspot's interface, while setup mode is on and the hotspot is up.
+    hotspot: str | None = None
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -128,7 +142,13 @@ def openable(port: int) -> bool:
 
 
 def settings_from(
-    defaults: Mapping[str, Any], user: Mapping[str, Any], *, ssh: bool, setup: bool
+    defaults: Mapping[str, Any],
+    user: Mapping[str, Any],
+    *,
+    ssh: bool,
+    setup: bool,
+    claimed: bool = False,
+    hotspot: str | None = None,
 ) -> Settings:
     """The firewall's view of the configuration: the user layer over the defaults, ipc.lan only."""
     lan = {**FALLBACK, **_lan_section(defaults)}
@@ -141,7 +161,62 @@ def settings_from(
         public=lan.get("allow_public_clients") is True,
         ssh=ssh,
         setup=setup,
+        claimed=claimed,
+        hotspot=hotspot if setup and hotspot and _IFACE.fullmatch(hotspot) else None,
     )
+
+
+_IFACE = re.compile(r"[a-z][a-z0-9]{0,14}")
+
+
+def _root_file(path: Path, owner: int = 0) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and info.st_uid == owner
+
+
+def _boottime() -> float:
+    return time.clock_gettime(time.CLOCK_BOOTTIME)  # type: ignore[attr-defined,unused-ignore]
+
+
+def setup_window_open(
+    path: Path = SETUP_MODE, boot_id: Path = BOOT_ID, uptime: float | None = None, owner: int = 0
+) -> bool:
+    """Root's setup-mode file, this boot's, its end (seconds since boot) not reached - the same
+    rule as the root helper and nox_setup.py. An expired window opens nothing, even before it
+    is removed."""
+    if not _root_file(path, owner):
+        return False
+    try:
+        mode = json.loads(path.read_text("utf-8"))
+        current = boot_id.read_text("ascii").strip()
+    except (OSError, ValueError):
+        return False
+    if not isinstance(mode, dict):
+        return False
+    until = mode.get("until")
+    now = _boottime() if uptime is None else uptime
+    return (
+        mode.get("v") == 1
+        and bool(current)
+        and mode.get("boot_id") == current
+        and not isinstance(until, bool)
+        and isinstance(until, (int, float))
+        and now < until
+    )
+
+
+def hotspot_iface(path: Path = HOTSPOT, owner: int = 0) -> str | None:
+    if not _root_file(path, owner):
+        return None
+    try:
+        state = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    iface = state.get("iface") if isinstance(state, dict) else None
+    return iface if isinstance(iface, str) and _IFACE.fullmatch(iface) else None
 
 
 def ssh_on(path: Path = SSH_STATE, now: float | None = None) -> bool:
@@ -186,7 +261,9 @@ def render(settings: Settings, *, boot: bool = False) -> str:
     """The complete nftables script: replaces the table atomically and touches no other table -
     except at boot (`boot`, /etc/nftables.conf), where it starts from an empty ruleset."""
     opened: list[int] = []
-    for port in (settings.port, settings.node_port):
+    # Unclaimed: the dashboard port only (Nox serves its claim page there), never the node port.
+    ports = (settings.port, settings.node_port) if settings.claimed else (settings.port,)
+    for port in ports:
         if settings.lan_enabled and openable(port) and port not in opened:
             opened.append(port)
     private = ", ".join(PRIVATE_V4)
@@ -222,18 +299,24 @@ def render(settings: Settings, *, boot: bool = False) -> str:
         # The DHCP client's answers (not a connection the kernel tracks), DHCPv6 from the router.
         "udp sport 67 udp dport 68 accept",
         "ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept",
-        # mDNS: `nox.local` and finding devices in the home network.
-        *_private("udp dport 5353 accept"),
     ]
+    if settings.setup and settings.hotspot:
+        iface = f'iifname "{settings.hotspot}"'
+        rules += [
+            "# Setup mode (O3): the setup hotspot gets the portal, DHCP and DNS - nothing else",
+            f"{iface} ip saddr {HOTSPOT_NET} tcp dport 80 accept",
+            f"{iface} udp sport 68 udp dport 67 accept",
+            f"{iface} ip saddr {HOTSPOT_NET} meta l4proto {{ tcp, udp }} th dport 53 accept",
+            f"{iface} drop",
+        ]
+    # mDNS: `nox.local` and finding devices in the home network.
+    rules += _private("udp dport 5353 accept")
     for port in opened:
         rules.append(f"# Nox: {'dashboard' if port == settings.port else 'nodes'} (ipc.lan)")
         rules.extend(_limited(port, DASHBOARD_RATE, not settings.public))
     if settings.ssh:
         rules.append("# Remote maintenance: on, key only, from the home network")
         rules.extend(_limited(SSH_PORT, SSH_RATE, True))
-    if settings.setup:
-        rules.append("# Setup mode (O3): captive portal, DNS and DHCP for the setup hotspot")
-        rules.extend(["tcp dport 80 accept", "udp dport { 53, 67 } accept"])
     output = [
         f"ip daddr {METADATA_V4} drop",
         f"ip6 daddr {METADATA_V6} drop",
@@ -277,14 +360,22 @@ def summary(settings: Settings) -> dict[str, Any]:
         ),
         "ssh": settings.ssh,
         "setup": settings.setup,
+        "hotspot": settings.hotspot,
+        "claimed": settings.claimed,
         "public": settings.public,
         "updated": int(time.time()),
     }
 
 
 def current_settings() -> Settings:
+    setup = setup_window_open()
     return settings_from(
-        _read_yaml(DEFAULTS), _read_yaml(USER), ssh=ssh_on(), setup=SETUP_MODE.exists()
+        _read_yaml(DEFAULTS),
+        _read_yaml(USER),
+        ssh=ssh_on(),
+        setup=setup,
+        claimed=_root_file(CLAIMED),
+        hotspot=hotspot_iface() if setup else None,
     )
 
 
@@ -303,7 +394,9 @@ def main(argv: list[str]) -> int:
         return 0
     if argv[1:2] == ["sample"] and argv[2:] in ([], ["public"]):
         public = argv[2:] == ["public"]
-        sample = Settings(lan_enabled=True, public=public, ssh=True, setup=True)
+        sample = Settings(
+            lan_enabled=True, public=public, ssh=True, setup=True, claimed=True, hotspot="wlan0"
+        )
         sys.stdout.write(render(sample))
         return 0
     if command == "print":

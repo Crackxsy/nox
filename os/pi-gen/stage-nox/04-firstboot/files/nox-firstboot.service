@@ -1,0 +1,30 @@
+# Nox-OS first boot and setup window (nox_setup.py boot, os/README.md): every boot, before the
+# network and before Nox. Imports /boot/firmware/nox-provision.json if there is one (then
+# overwrites and deletes it) and - while the device is unclaimed - opens the setup window and
+# makes this boot's setup secrets. Takes over what systemd-firstboot.service would ask on a
+# console a headless Pi does not have (that unit is masked).
+[Unit]
+Description=Nox-OS first boot and setup window
+Documentation=https://github.com/Crackxsy/nox/blob/develop/os/README.md
+DefaultDependencies=no
+After=local-fs.target systemd-tmpfiles-setup.service systemd-sysctl.service
+RequiresMountsFor=/boot/firmware /var/lib
+Before=network-pre.target NetworkManager.service nox.service nox-firewall.service
+Before=nox-console.service avahi-daemon.service shutdown.target
+Wants=network-pre.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 -I -S /usr/local/lib/nox-os/nox_setup.py boot
+UMask=0077
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+TimeoutStartSec=120
+
+[Install]
+WantedBy=sysinit.target

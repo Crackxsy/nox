@@ -8,6 +8,26 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+### Added
+- **Nox-OS first boot without a screen (O3)** (`os/pi-gen/stage-nox/04-firstboot`, os/README.md):
+  a provisioning file on the boot partition (`nox-provision.json`, versioned JSON schema in
+  `os/provisioning/`: Wi-Fi, country, hostname, time zone, locale, the setup card's claim-code hash
+  and hotspot password) is validated strictly, imported (Wi-Fi as a root 0600 NetworkManager
+  keyfile) and overwritten and deleted, never logged. A **setup window** of at most 30 minutes after
+  power-on (root's `/run/nox-os/setup-mode`, seconds since boot; only a power cycle reopens it)
+  while the device has no owner. When Nox has no network - or the claim code can only be learnt
+  there - a **setup hotspot** `Nox-Setup-XXXX` (WPA2, a per-device password: the card's or 12
+  random digits per boot, shown on a screen and later blinked by the LED) with captive DNS and a
+  **captive portal** (own unprivileged user, no JavaScript, strict CSP, CSRF token plus Origin,
+  rate limits, German and English, accessible): home Wi-Fi, security PIN, maintenance passphrase;
+  root carries it out and the hotspot comes back with the reason if joining fails. **Claim:**
+  while unclaimed the core serves only `/claim/` and `/api/claim` on the LAN and the firewall keeps
+  the node port closed; the one-time claim code (card, or screen and portal) checked by the root
+  helper (10 wrong per window) makes the claiming browser the owner's first device, sets the PIN,
+  ends setup mode and opens the node port. New read-only request `noxos.claim.status` (O4).
+  `systemd-firstboot.service` is masked (it failed on headless first boots). The QEMU smoke boots
+  twice (provisioned with portal and claim; fresh with the window expiring).
+
 ### Changed
 - **The dashboard is rebuilt around four areas** (Spec UX-Neubau): Heute, Nox (Gespräch, Ansichten,
   Clips, Verlauf), Geräte & Fähigkeiten, Einstellungen (eight pages instead of one form). Every page

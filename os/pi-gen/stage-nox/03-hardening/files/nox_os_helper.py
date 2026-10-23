@@ -17,8 +17,20 @@ shell, no paths, no units, no options:
                                   (root's; the first-boot setup creates it) and none is set yet
                                   - or root created /var/lib/nox-os/reset-maintenance
     maint change                  then `pass <old>` and `new <passphrase>`
+    claim <device id>             then `code <claim code>` and optionally `new <passphrase>`
+                                  (step O3): only in setup mode, only while unclaimed, at most
+                                  10 wrong codes per setup window. Marks the device claimed
+                                  (/var/lib/nox-os-claim/claimed), sets the passphrase if given
+                                  and none is set, ends setup mode and answers with the security
+                                  PIN the setup portal took (once)
 
-Passphrases travel base64-encoded (UTF-8), at least 12 characters.
+Passphrases and claim codes travel base64-encoded (UTF-8); passphrases have at least 12
+characters.
+
+**Setup mode** is root's file /run/nox-os/setup-mode (nox_setup.py writes it at boot while the
+device is unclaimed): it counts only while it is this boot's and its end - seconds since boot,
+CLOCK_BOOTTIME - is not reached, at most 30 minutes after power-on. The same rule as nox_setup.py
+and the firewall.
 
 **The maintenance passphrase** is the barrier between code running as the service user and root:
 the security PIN is checked by Nox, whose files that user can read - a short PIN's hash there can
@@ -93,8 +105,22 @@ PASSPHRASE_LOCK = RUN / "helper" / "passphrase.lock"
 #: Root's deliberate reset: with it (and in setup mode) `maint set` may replace a passphrase.
 RESET_FLAG = Path("/var/lib/nox-os/reset-maintenance")
 #: Present (root's) only while the first-boot setup runs: the one time a passphrase may be set
-#: without knowing an old one.
+#: without knowing an old one, and the claim's window (step O3).
 SETUP_MODE = RUN / "setup-mode"
+BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
+#: The claim code's hash (nox_setup.py; from the setup card or made at boot), root 0600.
+CLAIM = Path("/var/lib/nox-os/claim.json")
+#: Root's mark that the device has an owner: Nox and the firewall read it (0644).
+CLAIMED = Path("/var/lib/nox-os-claim/claimed")
+#: Wrong claim codes in this setup window (in RAM: a power cycle starts again).
+CLAIM_FAILURES = RUN / "claim-failures"
+#: The security PIN the setup portal took, until a claim hands it to Nox.
+PENDING_PIN = RUN / "setup" / "pending-pin"
+CLAIM_LOCK = RUN / "helper" / "claim.lock"
+CLAIM_PREFIX = b"nox-claim-v1:"
+CLAIM_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+MAX_CLAIM_FAILURES = 10
+SETUP_CLOSE_UNIT = "nox-setup-close.service"
 MIN_PASSPHRASE = 12
 MAX_PASSPHRASE = 256
 SCRYPT = {"n": 2**15, "r": 8, "p": 1}
@@ -203,7 +229,7 @@ def parse_key(line: str) -> PublicKey:
 
 @dataclass(frozen=True)
 class Request:
-    command: str  # status | off | keys_set | keys_clear | on | maint_set | maint_change
+    command: str  # status | off | keys_set | keys_clear | on | maint_set | maint_change | claim
     minutes: int = 0
     keys: tuple[PublicKey, ...] = field(default_factory=tuple)
     #: For "on": the fingerprints the owner confirmed - they must be exactly the stored keys.
@@ -211,6 +237,9 @@ class Request:
     #: The maintenance passphrase given (`pass`), and a new one (`new`). Never logged.
     passphrase: str | None = field(default=None, repr=False)
     new_passphrase: str | None = field(default=None, repr=False)
+    #: For "claim": Nox's id for the owner's device, and the claim code typed.
+    device: str = ""
+    code: str | None = field(default=None, repr=False)
 
 
 _FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
@@ -230,6 +259,29 @@ def _secret(line: str, label: str) -> str:
     if not 1 <= len(text) <= MAX_PASSPHRASE or any(c in text for c in "\x00\n\r"):
         raise Refused("the maintenance passphrase is not readable", "passphrase_wrong")
     return text
+
+
+def _coded(line: str, label: str) -> str:
+    """`<label> <base64 of UTF-8>` for a claim code (refused as a wrong code otherwise)."""
+    prefix, sep, data = line.partition(" ")
+    if prefix != label or not sep or not _BASE64.fullmatch(data) or len(data) > 128:
+        raise Refused("the request needs the claim code", "claim_wrong")
+    try:
+        return base64.b64decode(data, validate=True).decode("utf-8")
+    except (binascii.Error, ValueError):
+        raise Refused("the claim code is not readable", "claim_wrong") from None
+
+
+def normalize_claim_code(text: str) -> str | None:
+    """The same rule as nox_setup.py: no spaces or dashes, any case, I/L/O read as 1/1/0."""
+    code = re.sub(r"[\s-]", "", text).upper().translate(str.maketrans("ILO", "110"))
+    if not 8 <= len(code) <= 32 or any(c not in CLAIM_ALPHABET for c in code):
+        return None
+    return code
+
+
+def claim_hash(code: str) -> str:
+    return "sha256:" + hashlib.sha256(CLAIM_PREFIX + code.encode("ascii")).hexdigest()
 
 
 def _new_secret(line: str) -> str:
@@ -260,6 +312,17 @@ def parse_request(data: bytes) -> Request:
         return Request("keys_clear")
     if words == ["maint", "set"] and len(rest) == 1:
         return Request("maint_set", new_passphrase=_new_secret(rest[0]))
+    if (
+        len(words) == 2
+        and words[0] == "claim"
+        and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", words[1])
+        and 1 <= len(rest) <= 2
+    ):
+        code = normalize_claim_code(_coded(rest[0], "code"))
+        if code is None:
+            raise Refused("that is not a claim code", "claim_wrong")
+        new = _new_secret(rest[1]) if len(rest) == 2 else None
+        return Request("claim", device=words[1], code=code, new_passphrase=new)
     if words == ["maint", "change"] and len(rest) == 2:
         return Request(
             "maint_change", passphrase=_secret(rest[0], "pass"), new_passphrase=_new_secret(rest[1])
@@ -314,6 +377,10 @@ def _uid_of(name: str) -> int | None:
         return None
 
 
+def _uptime() -> float:
+    return time.clock_gettime(time.CLOCK_BOOTTIME)  # type: ignore[attr-defined,unused-ignore]
+
+
 @dataclass
 class System:
     """Everything the helper reads and changes, in one place (tests replace it)."""
@@ -324,6 +391,8 @@ class System:
     uid_of: Callable[[str], int | None] = _uid_of
     #: Who owns what only root may create (tests run as someone else).
     root_uid: int = 0
+    #: Seconds since boot (CLOCK_BOOTTIME): the setup window's clock, which no clock change moves.
+    uptime: Callable[[], float] = _uptime
 
     def path(self, path: Path) -> Path:
         return self.root / path.relative_to("/")
@@ -412,6 +481,10 @@ def status(system: System) -> dict[str, object]:
         "passphrase": passphrase_set(system),
         "locked_until": locked_until(system),
         "setup_mode": in_setup_mode(system),
+        "setup_seconds_left": setup_seconds_left(system),
+        "claimed": claimed(system),
+        "claim_code": claim_source(system),
+        "pending_pin": _root_flag(system, PENDING_PIN),
     }
 
 
@@ -513,6 +586,8 @@ def handle(request: Request, system: System) -> dict[str, object]:
         return switch_off(system, "dashboard")
     if request.command == "keys_clear":
         return clear_keys(system)
+    if request.command == "claim":
+        return claim(system, request)
     # One request at a time touches the passphrase and its lockout, whatever runs in parallel.
     with passphrase_lock(system):
         if request.command == "maint_set":
@@ -540,16 +615,112 @@ def _root_flag(system: System, path: Path) -> bool:
     return stat.S_ISREG(info.st_mode) and info.st_uid == system.root_uid
 
 
+def _boot_id(system: System) -> str:
+    try:
+        value = system.read(BOOT_ID).strip()
+    except OSError:
+        return ""
+    return value if re.fullmatch(r"[0-9a-f-]{36}", value) else ""
+
+
+def _setup_window(system: System) -> dict[str, object] | None:
+    """Root's setup-mode file, this boot's, its end (seconds since boot) not reached."""
+    if not _root_flag(system, SETUP_MODE):
+        return None
+    mode = _read_json(system, SETUP_MODE)
+    until = mode.get("until")
+    current = _boot_id(system)
+    if (
+        mode.get("v") != 1
+        or not current
+        or mode.get("boot_id") != current
+        or isinstance(until, bool)
+        or not isinstance(until, (int, float))
+        or system.uptime() >= until
+    ):
+        return None
+    return mode
+
+
 def in_setup_mode(system: System) -> bool:
-    return _root_flag(system, SETUP_MODE)
+    return _setup_window(system) is not None
+
+
+def setup_seconds_left(system: System) -> int | None:
+    mode = _setup_window(system)
+    until = mode.get("until") if mode else None
+    return max(0, int(until - system.uptime())) if isinstance(until, (int, float)) else None
+
+
+def claimed(system: System) -> bool:
+    return _root_flag(system, CLAIMED)
+
+
+def claim_source(system: System) -> str | None:
+    """Where this device's claim code is: on the setup card, or made on the device (shown on its
+    screen and in the setup portal) - never the code itself."""
+    if claimed(system):
+        return None
+    source = _read_json(system, CLAIM).get("source")
+    return source if source in ("card", "device") else None
+
+
+def claim(system: System, request: Request) -> dict[str, object]:
+    """The claim (step O3): the code against its hash, in the setup window, while unclaimed. A
+    wrong code counts; after ten in one window only a power cycle opens a new one. Success marks
+    the device claimed - root's file, the firewall and Nox go by it - sets the maintenance
+    passphrase if one came along, ends setup mode and hands over the PIN from the setup portal."""
+    with exclusive(system, CLAIM_LOCK):
+        if claimed(system):
+            raise Refused("this Nox already has an owner", "claimed")
+        if not in_setup_mode(system):
+            raise Refused(
+                "setup is closed; unplug the power and plug it in again to reopen it", "not_setup"
+            )
+        failures = _read_json(system, CLAIM_FAILURES)
+        count = failures.get("count") if failures.get("boot_id") == _boot_id(system) else 0
+        count = count if isinstance(count, int) and not isinstance(count, bool) else 0
+        if count >= MAX_CLAIM_FAILURES:
+            raise Refused(
+                "too many wrong claim codes; unplug the power and plug it in again", "claim_locked"
+            )
+        expected = str(_read_json(system, CLAIM).get("hash", ""))
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected):
+            raise Refused("this device has no claim code", "no_claim_code")
+        if not hmac.compare_digest(claim_hash(request.code or ""), expected):
+            record = {"boot_id": _boot_id(system), "count": count + 1}
+            system.write(CLAIM_FAILURES, json.dumps(record) + "\n", 0o600)
+            raise Refused("wrong claim code", "claim_wrong")
+        if request.new_passphrase is not None:
+            with passphrase_lock(system):
+                reset = _root_flag(system, RESET_FLAG)
+                if not passphrase_set(system) or reset:
+                    store_passphrase(system, request.new_passphrase)
+                    system.remove(RESET_FLAG)
+        pin = None
+        if _root_flag(system, PENDING_PIN):
+            with contextlib.suppress(OSError):
+                pin = system.path(PENDING_PIN).read_text("utf-8").strip() or None
+        marker = {"v": 1, "claimed_at": int(system.clock()), "owner_device": request.device}
+        system.write(CLAIMED, json.dumps(marker) + "\n", 0o644)
+        # The window ends with the claim, before anything else happens.
+        system.remove(SETUP_MODE)
+        system.remove(CLAIM)
+        system.remove(PENDING_PIN)
+        system.remove(CLAIM_FAILURES)
+    # The hotspot, the portal and the setup secrets go too; the firewall opens the node port.
+    system.systemctl("start", "--no-block", SETUP_CLOSE_UNIT)
+    system.systemctl("restart", FIREWALL_UNIT)
+    answer = status(system)
+    answer["claim"] = "ok"
+    answer["pin"] = base64.b64encode(pin.encode("utf-8")).decode("ascii") if pin else None
+    return answer
 
 
 @contextlib.contextmanager
-def passphrase_lock(system: System) -> Iterator[None]:
-    """An exclusive lock (flock) held from reading the lockout state through the scrypt check to
-    writing the new count: each helper instance is its own process, and parallel guesses must
-    not all read the same count and each add one."""
-    path = system.path(PASSPHRASE_LOCK)
+def exclusive(system: System, lock: Path) -> Iterator[None]:
+    """An exclusive lock (flock) on `lock` across helper instances - one process each."""
+    path = system.path(lock)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
@@ -562,6 +733,12 @@ def passphrase_lock(system: System) -> Iterator[None]:
         yield
     finally:
         os.close(fd)  # closing the descriptor releases the lock
+
+
+def passphrase_lock(system: System) -> contextlib.AbstractContextManager[None]:
+    """An exclusive lock held from reading the lockout state through the scrypt check to writing
+    the new count: parallel guesses must not all read the same count and each add one."""
+    return exclusive(system, PASSPHRASE_LOCK)
 
 
 def set_first_passphrase(system: System, passphrase: str) -> None:
@@ -775,6 +952,8 @@ def _describe(request: Request) -> str:
         return f"ssh on for {request.minutes} min, keys {list(request.fingerprints)}"
     if request.command == "keys_set":
         return f"keys set {[k.fingerprint for k in request.keys]}"
+    if request.command == "claim":
+        return f"claim for device {request.device}"
     return request.command
 
 

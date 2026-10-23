@@ -1,0 +1,15 @@
+# Nox-OS setup mode, one step (nox_setup.py tick; nox-setup.timer).
+[Unit]
+Description=Nox-OS setup mode: window and hotspot (one step)
+After=nox-firstboot.service NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I -S /usr/local/lib/nox-os/nox_setup.py tick
+UMask=0077
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+TimeoutStartSec=150
