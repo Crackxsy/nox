@@ -435,7 +435,8 @@ except OSError as exc:
   say "NOX-SMOKE: portal: captive redirect, CSP, Origin checked, claim code and Wi-Fi only (no PIN or passphrase), wrong claim code keeps nothing, root's CA fingerprint, portal on the hotspot only, Nox's port closed to the hotspot"
 }
 o3_claim() {
-  code="$(claim '{"code": "ZZZZ-ZZZZ-ZZZZ", "name": "Smoke phone"}')"
+  # A complete claim (PIN and passphrase too) with a wrong code: the root helper refuses it.
+  code="$(claim "{\"code\": \"ZZZZ-ZZZZ-ZZZZ\", \"name\": \"Smoke phone\", \"pin\": \"$SMOKE_PIN\", \"passphrase\": \"$pass\"}")"
   [ "$code" = 401 ] || finish "NOX-SMOKE-FAIL: a wrong claim code: $code $(cat /run/nox-smoke-claim.json)"
   [ ! -e /var/lib/nox-os/maintenance ] || finish "NOX-SMOKE-FAIL: a wrong claim applied the passphrase"
   sleep 3  # the slow-down of this address after a wrong code
