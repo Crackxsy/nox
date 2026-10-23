@@ -172,6 +172,24 @@ first_boot_units() {
 captive_dns() {
   has_lines "$root/etc/NetworkManager/dnsmasq-shared.d/50-nox-setup.conf" 'address=/#/10.42.0.1' 'no-resolv'
 }
+# Root never runs code a lower layer can change: no unit that runs as root (no User=, or
+# User=root) and no root-owned setup program refers to Nox's own Python environment, which Nox
+# updates itself (#145). Reading Nox's settings as data is fine; running its interpreter is not.
+root_never_runs_noxs_code() {
+  local unit found=""
+  for unit in "$root"/etc/systemd/system/*.service "$root"/etc/systemd/system/*.service.d/*.conf; do
+    [ -f "$unit" ] || continue
+    case "$unit" in */nox.service | */nox.service.d/*) continue ;; esac  # User=nox
+    if grep -qE '^User=' "$unit" && ! grep -qE '^User=root$' "$unit"; then continue; fi
+    if grep -qE '/opt/nox/[^[:space:]]*\.venv|/opt/nox/[^[:space:]]*/bin/' "$unit"; then
+      found="$found ${unit#"$root"}"
+    fi
+  done
+  if grep -rlqsE '/opt/nox/[^[:space:]]*\.venv' "$root/usr/local/lib/nox-os" "$root/usr/local/sbin"; then
+    found="$found /usr/local/lib/nox-os"
+  fi
+  [ -z "$found" ] || { printf '      found:%s\n' "$found"; return 1; }
+}
 cmdline_is_plain() {
   [ ! -f "$boot/cmdline.txt" ] || ! grep -qE '(^|[[:space:]])(systemd\.run|init)=' "$boot/cmdline.txt"
 }
@@ -243,6 +261,7 @@ run_checks() {
   check "no claim mark, claim code or hotspot password ship" absent "$root/var/lib/nox-os-claim/claimed" \
     "$root/var/lib/nox-os/claim.json" "$root/var/lib/nox-os/hotspot-psk"
   check "no test-only setup window (/etc/nox-os/testing)" absent "$root/etc/nox-os/testing"
+  check "no root unit or root setup program runs Nox's own Python" root_never_runs_noxs_code
 
   # Seeds and secrets of the system are made per device.
   check "machine-id made on first boot" none < <(grep -vx 'uninitialized' "$root/etc/machine-id")

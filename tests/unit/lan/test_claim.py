@@ -399,37 +399,138 @@ def test_the_setup_portals_ticket_goes_to_the_helper_and_a_locked_lan_is_said(
 # ---- reclaim -----------------------------------------------------------------------------------
 
 
-def test_a_reclaim_revokes_every_pairing_and_the_pin_once(
-    tmp_path: Path, devices: LanDevices, db: Any, pin: PinManager, audit: Audit
+def _every_credential(tmp_path: Path, devices: LanDevices, db: Any) -> dict[str, Any]:
+    """One of every kind of credential and grant Nox keeps across a restart, all valid."""
+    import asyncio
+    from datetime import UTC, datetime, timedelta
+
+    from nox.ipc.overlay_tokens import OverlayTokenStore
+    from nox.node.repo import NodeRepository
+    from nox.remote.repo import RemoteRepository
+    from nox.security.model import Risk, TemporaryGrant
+    from nox.security.permissions import DefaultPermissionEngine
+
+    now = datetime.now(UTC)
+    remote, nodes = RemoteRepository(db), NodeRepository(db)
+
+    async def pair(name: str) -> str:
+        start = await devices.start(name=name)
+        token = (await devices.redeem(start.code, name=name)).token
+        assert token is not None
+        return token
+
+    lan_token = asyncio.run(pair("Phone"))
+    companion = remote.create_device(
+        name="Chat", channel="telegram", sender_id="4711", pairing_code_hash="x", paired_at=now
+    )
+    node = remote.create_device(
+        name="PC", channel="node", sender_id="node-pc", pairing_code_hash="y", paired_at=now
+    )
+    node_id = node.id if hasattr(node, "id") else str(node)
+    nodes.create_node(node_id, os="linux", arch="x86_64", version="0.7.0", when=now)
+    nodes.record_cert(
+        serial="01AB",
+        device_id=node_id,
+        spki_sha256="ab" * 32,
+        issued_at=now,
+        not_after=now + timedelta(days=30),
+    )
+    nodes.set_opted_in(node_id, "computer", True, when=now)
+    remote.create_pairing(
+        "ABCDEFGH",
+        channel="lan",
+        device_name="Later",
+        created_at=now,
+        expires_at=now + timedelta(minutes=5),
+    )
+    overlay = OverlayTokenStore(tmp_path / "overlay_tokens.json")
+    _, obs_token = overlay.issue()
+    _, node_overlay_token = overlay.issue(f"node:{node_id}")
+    from nox.security.profiles import YamlProfileProvider
+
+    profiles = YamlProfileProvider(Path(__file__).resolve().parents[3] / "config" / "profiles")
+    engine = DefaultPermissionEngine(profiles=profiles, privacy=object())  # type: ignore[arg-type]
+    for scope in ("project:nox", "session:shell.run/run", f"device:{node_id}|session:x/y"):
+        engine._grants.add(  # noqa: SLF001 - planting one of each kind
+            TemporaryGrant(
+                grant_id=scope,
+                scope=scope,
+                max_risk=Risk.MEDIUM,
+                expires_at=now + timedelta(hours=1),
+            )
+        )
+    pin = PinManager(InMemorySecretStore(), prefer_argon2=False)
+    pin.set_pin("135790", by="test")
+    return {
+        "remote": remote,
+        "nodes": nodes,
+        "node_id": node_id,
+        "overlay": overlay,
+        "engine": engine,
+        "pin": pin,
+        "lan_token": lan_token,
+        "obs_token": obs_token,
+        "node_overlay_token": node_overlay_token,
+        "now": now,
+        "companion": companion,
+    }
+
+
+def test_revoke_everything_leaves_no_valid_credential(
+    tmp_path: Path, devices: LanDevices, db: Any, audit: Audit
 ) -> None:
+    from nox.noxos.claim import revoke_everything
+
+    c = _every_credential(tmp_path, devices, db)
+    counts = revoke_everything(
+        db=db, pin=c["pin"], engine=c["engine"], overlay=c["overlay"], audit=audit
+    )
+    assert counts["devices"] == 3 and counts["overlay"] == 2 and counts["pairing_codes"] == 1
+    # Every store, one by one: nothing in it still lets anyone in.
+    assert c["remote"].list_devices(include_revoked=False) == []
+    assert devices.verify(c["lan_token"]) is None
+    assert c["nodes"].revoked_serials() == {"01AB"}
+    assert c["nodes"].opted_in_groups(c["node_id"]) == set()
+    assert (
+        db.execute("SELECT COUNT(*) FROM remote_pairings WHERE redeemed_at IS NULL").fetchone()[0]
+        == 0
+    )
+    assert c["overlay"].credentials() == []
+    assert c["overlay"].verify(c["obs_token"]) is None
+    assert c["overlay"].verify(c["node_overlay_token"]) is None
+    assert c["engine"]._grants.active(c["now"]) == []  # noqa: SLF001
+    assert c["engine"].pending() == []
+    assert not c["pin"].is_set()
+    assert [r["action"] for r in audit.rows] == ["noxos.reclaim"]
+    assert "135790" not in json.dumps(audit.rows)
+
+
+def test_a_reclaim_runs_once_per_roots_note(
+    tmp_path: Path, devices: LanDevices, db: Any, audit: Audit
+) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
     from nox.noxos.claim import apply_reclaim
 
-    async def pair_two() -> list[str]:
-        out = []
-        for name in ("Phone", "Tablet"):
-            start = await devices.start(name=name)
-            redeemed = await devices.redeem(start.code, name=name)
-            assert redeemed.token is not None
-            out.append(redeemed.token)
-        return out
-
-    import asyncio
-
-    tokens = asyncio.run(pair_two())
-    pin.set_pin("135790", by="test")
-    mark = tmp_path / "reclaim"
-    me = tmp_path.stat().st_uid
+    c = _every_credential(tmp_path, devices, db)
     data = tmp_path / "data"
     data.mkdir()
-    assert apply_reclaim(db, pin, data, mark=mark, root_uid=me) is None  # no note: nothing
+    core = SimpleNamespace(
+        db=db,
+        config=SimpleNamespace(paths=SimpleNamespace(data_dir=str(data))),
+        security=SimpleNamespace(pin=c["pin"], engine=c["engine"], audit=audit),
+        tokens=SimpleNamespace(overlay=c["overlay"]),
+    )
+    mark = tmp_path / "reclaim"
+    me = tmp_path.stat().st_uid
+    assert apply_reclaim(core, mark=mark, root_uid=me) is None  # no note: nothing
     mark.write_text(json.dumps({"v": 1, "id": "a" * 32}), "utf-8")
-    assert apply_reclaim(db, pin, data, mark=mark, root_uid=me + 1) is None  # not root's
-    assert apply_reclaim(db, pin, data, mark=mark, root_uid=me, audit=audit) == 2
-    assert all(devices.verify(t) is None for t in tokens)
-    assert not pin.is_set()
-    assert [r["action"] for r in audit.rows] == ["noxos.reclaim"]
-    # Once per note: Nox restarting does not do it again (a new pairing survives).
+    assert apply_reclaim(core, mark=mark, root_uid=me + 1) is None  # not root's
+    assert apply_reclaim(core, mark=mark, root_uid=me) is not None
+    assert devices.verify(c["lan_token"]) is None and not c["pin"].is_set()
+    # Once per note: a new pairing after the reclaim survives Nox restarting.
     start = asyncio.run(devices.start(name="Laptop"))
     token = asyncio.run(devices.redeem(start.code, name="Laptop")).token
-    assert apply_reclaim(db, pin, data, mark=mark, root_uid=me) is None
+    assert apply_reclaim(core, mark=mark, root_uid=me) is None
     assert token is not None and devices.verify(token) is not None

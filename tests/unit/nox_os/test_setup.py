@@ -628,23 +628,14 @@ def test_the_qr_code_is_drawn_for_a_dark_console() -> None:
     assert set("".join(setup.qr_text([[0]], quiet=2))) == {"\u2588"}  # all light: full blocks
 
 
-def test_the_console_gets_the_qr_code_from_noxs_python(tmp_path: Path, system: Any) -> None:
-    python = tmp_path / "opt/nox/current/.venv/bin/python"
-    python.parent.mkdir(parents=True)
-    python.write_text("", "ascii")
-    seen: list[tuple[list[str], str]] = []
-
-    def run_input(args: list[str], data: str) -> str:
-        seen.append((args, data))
-        return json.dumps([[1, 0], [0, 1]])
-
-    system.run_input = run_input
+def test_the_console_gets_the_qr_code_from_roots_own_encoder(tmp_path: Path, system: Any) -> None:
     setup.boot(system)
     console = json.loads(read(tmp_path, "run/nox-os/setup/console.json"))
     assert console["qr"] and all(isinstance(line, str) for line in console["qr"])
-    args, data = seen[0]
-    assert console["psk"] not in " ".join(args)  # the password only on stdin
-    assert data == setup.wifi_qr_payload(console["ssid"], console["psk"])
+    # The encoder is the setup programs' own file, never Nox's environment.
+    assert setup.QR_ENCODER.name == "nox_qr.py" and setup.QR_ENCODER.parent == FIRSTBOOT
+    source = (FIRSTBOOT / "nox_setup.py").read_text("utf-8")
+    assert "/opt/nox" not in source and ".venv" not in source
 
 
 def _ca_pem() -> tuple[str, str]:
@@ -761,20 +752,3 @@ def test_nothing_is_decided_while_networkmanager_cannot_answer(
     setup.tick(system)
     assert not (tmp_path / "run/NetworkManager/system-connections").exists()
     assert json.loads(read(tmp_path, "run/nox-os/setup/status.json"))["hotspot"] == "down"
-
-
-def test_the_qr_matrix_program_runs_with_noxs_python() -> None:
-    """The very program nox_setup.py hands Nox's Python (segno, already a dependency)."""
-    payload = setup.wifi_qr_payload("Nox-Setup-1A2B", "ABCD-EFGH-JKMN-PQRS")
-    done = subprocess.run(
-        [sys.executable, "-I", "-c", setup._QR_MATRIX],  # noqa: SLF001
-        input=payload,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=60,
-    )
-    matrix = json.loads(done.stdout)
-    assert len(matrix) >= 25 and all(len(row) == len(matrix) for row in matrix)
-    lines = setup.qr_text(matrix)
-    assert len(lines) == (len(matrix) + 4 + 1) // 2 and len(lines[0]) == len(matrix) + 4

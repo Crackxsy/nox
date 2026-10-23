@@ -27,7 +27,8 @@ configuration file belongs to the service user, and the service user must not be
 SSH or a privileged port. When anything fails, the rules loaded at boot (`baseline`, no Nox port
 open) stay in force: the firewall fails closed.
 
-Standard library plus PyYAML (Nox's own Python environment), nothing else.
+Standard library plus PyYAML - the distribution's (python3-yaml), run by the system interpreter:
+root never runs code from Nox's own environment, which Nox updates itself.
 """
 
 from __future__ import annotations

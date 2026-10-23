@@ -316,6 +316,11 @@ def test_the_console_status_runs_without_rights() -> None:
 def test_the_firewall_fails_closed() -> None:
     service = _unit("nox-firewall.service")
     assert service["Unit"]["Requires"] == ["nftables.service"]
+    # Root runs the system interpreter with the distribution's PyYAML, never Nox's environment.
+    assert service["Service"]["ExecStart"] == [
+        "/usr/bin/python3 -I /usr/local/lib/nox-os/nox_firewall.py apply"
+    ]
+    assert "python3-yaml" in (HARDENING_STAGE / "00-packages").read_text("utf-8").split()
     run = (HARDENING_STAGE / "00-run.sh").read_text("utf-8")
     assert "nox_firewall.py baseline > /etc/nftables.conf" in run
     assert "nftables.service nox-firewall.service nox-firewall.path nox-os-helper.socket" in run
@@ -399,6 +404,23 @@ def test_the_setup_window_has_one_clock_and_closes_itself() -> None:
     # The root helper may write the claim mark, nothing more.
     dropin = _o3_unit("nox-os-helper-claim.conf")
     assert dropin == {"Service": {"ReadWritePaths": ["/var/lib/nox-os-claim"]}}
+
+
+def test_no_root_unit_or_setup_program_runs_noxs_python() -> None:
+    for folder in (HARDENING_STAGE / "files", FIRSTBOOT_STAGE / "files"):
+        for path in folder.iterdir():
+            if path.name in ("nox-service-nox-os.conf",) or path.suffix not in (
+                ".service",
+                ".conf",
+                ".py",
+                ".timer",
+                ".path",
+            ):
+                continue
+            text = path.read_text("utf-8")
+            assert ".venv/bin" not in text and "/opt/nox/current/.venv" not in text, path.name
+    run = (FIRSTBOOT_STAGE / "00-run.sh").read_text("utf-8")
+    assert 'install -m 0644 files/nox_qr.py "$lib/"' in run
 
 
 def test_o3_is_checked_by_the_workflow() -> None:

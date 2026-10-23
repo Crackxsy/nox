@@ -329,9 +329,12 @@ every boot** - shown as `ABCD-EFGH-JKMN-PQRS`, the dashes part of it (what is sh
 typed): **80 bits**, so a recorded WPA2 handshake cannot be cracked offline later to read what the
 portal's plain HTTP carried (the home Wi-Fi's password). A screen plugged into the Pi shows it as
 text **and as a Wi-Fi QR code** (`WIFI:T:WPA;S:Nox-Setup-XXXX;P:<password>;;`, drawn with Unicode
-half blocks on the console; the phone's camera joins with it). The QR matrix comes from segno -
-already a dependency of Nox (the pairing QR codes), run by Nox's own Python with the payload on
-stdin - so nothing new is installed. Without a card or a screen the hotspot cannot be joined yet:
+half blocks on the console; the phone's camera joins with it). Root draws it with the image's
+own small encoder (`nox_qr.py`, standard library only, root 0644 next to the other setup
+programs; tested module by module against segno) - **root never runs code from Nox's own Python
+environment**, which Nox updates itself; `check-image.sh` refuses an image where a root unit or a
+root setup program does (the firewall too runs on `/usr/bin/python3` with the distribution's
+PyYAML). Without a card or a screen the hotspot cannot be joined yet:
 use the setup card (O7) or a screen. **Blink code (O5):** an LED can carry about 12 digits (40
 bits), which is too little for the hotspot password; `nox_setup.new_blink_digits` is kept for O5,
 which has to give a blink code a role of its own (e.g. comparing a claim), never the WPA2
@@ -437,10 +440,21 @@ The way back when the only key is lost - **physical access is full access**: put
 and power the Pi on. At that boot root overwrites and deletes the marker, removes the claim mark,
 forgets the remote-maintenance keys, lets the next claim set a fresh maintenance passphrase
 (`reset-maintenance`) and leaves Nox a note (`/var/lib/nox-os-claim/reclaim`, an id). When Nox
-starts - before its listener - it revokes **every paired device, node and token** (and the nodes'
-certificates) and clears the security PIN, once per note (`nox.noxos.claim.apply_reclaim`,
-audited). Everything else Nox knows - memory, settings, history - stays: whoever holds the card
-could read it anyway. The setup window then opens as on a new device, with a new claim code.
+starts - after its security and IPC, before any extension could let anyone in - it runs
+`nox.noxos.claim.revoke_everything` once per note (audited):
+
+| Revoked | Kept |
+| --- | --- |
+| every paired device of every channel (browsers and phones on the network listener, the phone companion's senders, nodes) - their tokens die | memory, conversations, history |
+| every node's certificates and its second-key opt-ins | settings and configuration |
+| every pairing code not redeemed yet | the owner's stored account secrets (AI logins, bot tokens) - data like the rest |
+| every overlay credential (`node:<id>`, OBS) | Nox's certificate authority (node certificates are revoked by serial) |
+| every permission grant - remembered, session, node-bound - and waiting confirmations | |
+| the security PIN; root: the claim mark, remote-maintenance keys, the maintenance passphrase at the next claim, every setup secret | |
+
+Made per start and never stored, so nothing to rotate: the session and worker tokens, the hub's
+bridge secret, the node-session lock. Whoever holds the card could read what is kept anyway. The
+setup window then opens as on a new device, with a new claim code.
 
 **Residual risks (D2):** without a setup card, whoever reads the screen within the 30 minutes - a
 neighbour at the window at the same moment - can join the hotspot and learn the claim code. The

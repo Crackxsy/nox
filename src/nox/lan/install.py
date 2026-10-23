@@ -46,7 +46,7 @@ from nox.ipc.server import CLOSE_POLICY_VIOLATION, CLOSE_SIGNED_OUT
 from nox.lan.app import LanSettings, PairLimiter, create_lan_app
 from nox.lan.devices import CLIENT_PREFIX, LanDevices
 from nox.lan.tls import KeyNotProtectedError, TlsMaterial, ensure_tls
-from nox.noxos.claim import ClaimGate, ClaimService, apply_reclaim
+from nox.noxos.claim import ClaimGate, ClaimService
 from nox.noxos.helper import unix_helper
 from nox.remote.models import DeviceRow
 from nox.remote.repo import RemoteRepository
@@ -260,14 +260,6 @@ def install(core: Any) -> LanRuntime:
     gate = getattr(core, "claim_gate", None) or ClaimGate()
     claim: ClaimService | None = None
     if gate.nox_os:
-        # A reclaim (physical access to the card) first: every pairing goes before anyone can
-        # connect (`nox.noxos.claim.apply_reclaim`).
-        apply_reclaim(
-            core.db,
-            core.security.pin,
-            Path(core.config.paths.data_dir),
-            audit=core.security.audit,
-        )
         claim = ClaimService(
             gate=gate,
             devices=devices,

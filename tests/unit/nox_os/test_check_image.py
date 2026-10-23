@@ -363,6 +363,13 @@ SPOILERS: dict[str, Spoil] = {
     ),
     "a shipped claim mark": lambda r, b: _write(r / "var/lib/nox-os-claim/claimed", "{}"),
     "a reclaim marker on the boot partition": lambda r, b: _write(b / "nox-reclaim", "reclaim"),
+    "a root unit running Nox's Python": lambda r, b: _write(
+        r / "etc/systemd/system/nox-firewall.service",
+        "[Service]\nExecStart=/opt/nox/current/.venv/bin/python -I /usr/local/lib/nox-os/x.py\n",
+    ),
+    "a root setup program calling Nox's Python": lambda r, b: _write(
+        r / "usr/local/lib/nox-os/nox_x.py", 'PY = "/opt/nox/current/.venv/bin/python"\n'
+    ),
     "a shipped test window": lambda r, b: _write(r / "etc/nox-os/testing/setup-window-s", "60"),
 }
 

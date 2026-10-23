@@ -966,6 +966,24 @@ class DefaultPermissionEngine:
             )
         return removed
 
+    def revoke_all_grants(self, *, reason: str, by: str = "system") -> int:
+        """Revoke every grant there is - remembered, session and node-bound alike, and every
+        confirmation still waiting (a reclaim: whoever answered them is no owner any more)."""
+        removed = self._grants.remove_scope_prefix("")
+        for grant_id in list(self._pending):
+            self.reply(grant_id, Decision.DENY, by=by)
+        self._audit.append(
+            actor=by,
+            tool="security",
+            action="grant.revoke_all",
+            target="",
+            decision=Decision.ALLOW.value,
+            result="ok",
+            details={"removed": str(removed), "reason": reason},
+        )
+        log.warning("security.all_grants_revoked", removed=removed, reason=reason)
+        return removed
+
     def revoke_command_grants(self, *, reason: str, by: str = "system") -> int:
         """Revoke every remembered shell command (`cmd:` grants).
 

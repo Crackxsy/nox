@@ -355,19 +355,82 @@ def _address(peer: str) -> str:
         return "0.0.0.0"  # noqa: S104 - a key, not a bind address
 
 
-def apply_reclaim(
+def revoke_everything(
+    *,
     db: Any,
     pin: PinManager,
-    data_dir: Path,
+    engine: Any = None,
+    overlay: Any = None,
+    reason: str = "reclaim",
+    audit: AuditLog | None = None,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> dict[str, int]:
+    """Every credential and grant a previous owner or one of their devices could still use, gone:
+
+    * every paired device of every channel - browsers and phones on the network listener, the
+      phone companion's senders, nodes - revoked, so their tokens die (`remote_devices`);
+    * every node's certificates revoked (the listener checks the revoked serials) and its
+      second-key opt-ins cleared (`node_certs`, `node_capabilities`), as `NodePairing.revoke`
+      does;
+    * every pairing code not redeemed yet deleted (`remote_pairings`);
+    * every overlay credential revoked - `node:<id>` and the OBS one alike (`overlay_tokens`);
+    * every permission grant - remembered, session and node-bound - and every confirmation still
+      waiting (`DefaultPermissionEngine.revoke_all_grants`);
+    * the security PIN cleared.
+
+    Made per start and never stored, so nothing to rotate: the session token, worker tokens, the
+    hub's bridge secret, the node-session lock (derived from what nodes report - a revoked node
+    reports nothing). Root's side of a reclaim (the claim mark, remote-maintenance keys, setup
+    secrets in /run, the maintenance passphrase on the next claim) is nox_setup.py's.
+
+    Kept: what Nox knows and the owner configured - memory, conversations, settings, stored
+    secrets of the owner's accounts. Returns what was revoked, per store (never a secret)."""
+    from nox.node.repo import NodeRepository  # noqa: PLC0415 - only a reclaim needs it
+    from nox.remote.repo import RemoteRepository  # noqa: PLC0415
+
+    remote, nodes, now = RemoteRepository(db), NodeRepository(db), clock()
+    counts = {"devices": 0, "node_grants": 0, "pairing_codes": 0, "overlay": 0, "grants": 0}
+    for device in remote.list_devices(include_revoked=False):
+        if remote.revoke_device(device.id, reason=reason, when=now):
+            counts["devices"] += 1
+        nodes.revoke_certs(device.id, reason=reason, when=now)
+        nodes.clear_opt_in(device.id, when=now)
+        if engine is not None:
+            counts["node_grants"] += int(engine.revoke_device_grants(device.id, reason=reason))
+    counts["pairing_codes"] = remote.purge_pending_pairings()
+    if overlay is not None:
+        for credential in overlay.credentials():
+            if overlay.revoke(credential.credential_id):
+                counts["overlay"] += 1
+    if engine is not None:
+        counts["grants"] = int(engine.revoke_all_grants(reason=reason, by=reason))
+    counts["pin"] = 1 if pin.is_set() else 0
+    if pin.is_set():
+        pin.clear_pin(by=reason)
+    if audit is not None:
+        audit.append(
+            actor="root",
+            tool="noxos",
+            action=f"noxos.{reason}",
+            target="owner",
+            decision="allow",
+            result="ok",
+            details={k: str(v) for k, v in counts.items()},
+        )
+    log.warning("noxos.revoked_everything", reason=reason, **counts)
+    return counts
+
+
+def apply_reclaim(
+    core: Any,
     *,
     mark: Path = RECLAIM_MARK,
     root_uid: int = 0,
-    audit: AuditLog | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-) -> int | None:
-    """The owner was forgotten (root's reclaim note, a new id): revoke every paired device and
-    node - their tokens and certificates - and clear the security PIN. Once per id; None when
-    there is nothing to do, else how many pairings were revoked."""
+) -> dict[str, int] | None:
+    """Root forgot the owner (its reclaim note, a new id): `revoke_everything`, once per note.
+    Called while Nox starts, after its security and IPC are built and before any extension -
+    the network listener, the phone companion, the nodes - can let anyone in."""
     try:
         info = mark.lstat()
         note = json.loads(mark.read_text("utf-8"))
@@ -378,36 +441,30 @@ def apply_reclaim(
     ident = note.get("id")
     if not isinstance(ident, str) or not re.fullmatch(r"[0-9a-f]{32}", ident):
         return None
-    done = data_dir / RECLAIM_DONE
+    done = Path(core.config.paths.data_dir) / RECLAIM_DONE
     try:
         if json.loads(done.read_text("utf-8")).get("id") == ident:
             return None
     except (OSError, ValueError, AttributeError):
         pass
-    from nox.node.repo import NodeRepository  # noqa: PLC0415 - only a reclaim needs it
-    from nox.remote.repo import RemoteRepository  # noqa: PLC0415
+    tokens = getattr(core, "tokens", None)
+    counts = revoke_everything(
+        db=core.db,
+        pin=core.security.pin,
+        engine=getattr(core.security, "engine", None),
+        overlay=tokens.overlay if tokens is not None else None,
+        audit=core.security.audit,
+        clock=clock,
+    )
+    done.write_text(json.dumps({"id": ident, "at": clock().isoformat()}) + "\n", "utf-8")
+    return counts
 
-    remote, nodes, now = RemoteRepository(db), NodeRepository(db), clock()
-    revoked = 0
-    for device in remote.list_devices(include_revoked=False):
-        if remote.revoke_device(device.id, reason="reclaim", when=now):
-            revoked += 1
-        nodes.revoke_certs(device.id, reason="reclaim", when=now)
-    if pin.is_set():
-        pin.clear_pin(by="reclaim")
-    done.write_text(json.dumps({"id": ident, "at": now.isoformat()}) + "\n", "utf-8")
-    if audit is not None:
-        audit.append(
-            actor="root",
-            tool="noxos",
-            action="noxos.reclaim",
-            target="owner",
-            decision="allow",
-            result="ok",
-            details={"revoked": str(revoked)},
-        )
-    log.warning("noxos.reclaimed", revoked=revoked)
-    return revoked
+
+def reclaim_on_nox_os(core: Any, release: Path = OS_RELEASE) -> dict[str, int] | None:
+    """`apply_reclaim` on Nox-OS; nothing anywhere else."""
+    if not release.is_file():
+        return None
+    return apply_reclaim(core)
 
 
 # ---- the claim page (claim_page/) ----------------------------------------------------------

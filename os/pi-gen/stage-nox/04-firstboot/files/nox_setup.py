@@ -153,7 +153,6 @@ HOTSPOT_GROUPS = 4
 #: Digits a blink code could carry (O5, not used yet): see new_blink_digits.
 BLINK_DIGITS = 12
 MIN_CARD_HOTSPOT_PSK = 16
-VENV_PYTHON = Path("/opt/nox/current/.venv/bin/python")
 MIN_PIN = 6
 MAX_PIN = 64
 MIN_PASSPHRASE = 12
@@ -405,16 +404,23 @@ def wifi_qr_payload(ssid: str, psk: str) -> str:
     return f"WIFI:T:WPA;S:{_wifi_qr_escape(ssid)};P:{_wifi_qr_escape(psk)};;"
 
 
-#: Nox's own Python has segno (BSD-3-Clause, already a dependency of Nox: the pairing QR codes);
-#: only the module matrix comes back, the payload goes in on stdin (never on a command line).
-_QR_MATRIX = (
-    "import json, sys, segno\n"
-    "q = segno.make(sys.stdin.read(), error='m', micro=False)\n"
-    "print(json.dumps([[1 if b else 0 for b in row] for row in q.matrix]))"
-)
+#: The QR encoder is one of the image's own root-owned setup programs (nox_qr.py, next to this
+#: file): root never runs code from Nox's environment, which Nox updates itself.
+QR_ENCODER = Path(__file__).with_name("nox_qr.py")
 
 
-def qr_text(matrix: list[list[int]], quiet: int = 2) -> list[str]:
+def _qr_module() -> Any:
+    import importlib.util  # noqa: PLC0415 - only the QR code needs it
+
+    spec = importlib.util.spec_from_file_location("nox_os_qr", QR_ENCODER)
+    if spec is None or spec.loader is None:
+        raise ImportError("no QR encoder")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def qr_text(matrix: list[list[bool]] | list[list[int]], quiet: int = 2) -> list[str]:
     """A QR matrix as text for a dark console: light modules (and the quiet zone) as full
     blocks, dark ones as spaces, two rows per line with half blocks."""
     size = len(matrix)
@@ -437,18 +443,11 @@ def qr_text(matrix: list[list[int]], quiet: int = 2) -> list[str]:
     return lines
 
 
-def wifi_qr(system: System, ssid: str, psk: str) -> list[str] | None:
-    """The hotspot's Wi-Fi QR code as console text, or None when Nox's Python cannot make it."""
-    if not system.path(VENV_PYTHON).exists():
-        return None
+def wifi_qr(ssid: str, psk: str) -> list[str] | None:
+    """The hotspot's Wi-Fi QR code as console text, or None when it cannot be made."""
     try:
-        made = system.run_input(
-            [str(VENV_PYTHON), "-I", "-c", _QR_MATRIX], wifi_qr_payload(ssid, psk)
-        )
-        matrix = json.loads(made)
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
-    if not isinstance(matrix, list) or not all(isinstance(r, list) for r in matrix):
+        matrix = _qr_module().matrix(wifi_qr_payload(ssid, psk).encode("utf-8"))
+    except (ImportError, OSError, ValueError):
         return None
     return qr_text(matrix)
 
@@ -727,13 +726,6 @@ class System:
     def systemctl(self, *args: str) -> bool:
         return self.run("systemctl", *args).returncode == 0
 
-    def run_input(self, args: list[str], data: str) -> str:
-        """A fixed program with `data` on stdin; its stdout (tests replace it)."""
-        done = subprocess.run(  # noqa: S603 - a fixed program, the data on stdin
-            args, input=data, capture_output=True, text=True, check=True, timeout=60
-        )
-        return done.stdout
-
     def nmcli(self, *args: str, timeout: float = 120) -> subprocess.CompletedProcess[str]:
         return self.run("nmcli", *args, timeout=timeout)
 
@@ -965,7 +957,7 @@ def prepare_secrets(system: System) -> dict[str, Any]:
         "psk": psk,
         "psk_from_card": card_psk is not None,
         "claim_code": show_claim_code(code) if code else None,
-        "qr": wifi_qr(system, ssid, psk),
+        "qr": wifi_qr(ssid, psk),
     }
     system.write(CONSOLE, json.dumps(console) + "\n", 0o640, group=SETUP_GROUP)
     return console

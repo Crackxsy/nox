@@ -7,6 +7,8 @@ lib="${ROOTFS_DIR}/usr/local/lib/nox-os"
 units="${ROOTFS_DIR}/etc/systemd/system"
 install -d -m 0755 "$lib"
 install -m 0755 files/nox_setup.py files/nox_setup_portal.py "$lib/"
+# The QR encoder the console's Wi-Fi code comes from: root's, read-only (no code from /opt/nox).
+install -m 0644 files/nox_qr.py "$lib/"
 for unit in nox-firstboot.service nox-setup.timer nox-setup.service nox-setup-close.service \
 	nox-setup-apply.path nox-setup-apply.service nox-setup-portal.service; do
 	install -m 0644 "files/$unit" "$units/$unit"

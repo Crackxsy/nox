@@ -1212,9 +1212,16 @@ breaks it and the QEMU boot test checks it on the running system. In short:
     prefixes) gets one backoff record per /64 - which the 200-guess budget caps; the LAN side
     **can** be locked on purpose, and the owner then falls back to the hotspot ticket or a power
     cycle (a new boot, a new device code).
-  - **Reclaim:** a `nox-reclaim` marker on the boot partition forgets the owner at the next boot
-    (all pairings, nodes and tokens revoked, the PIN cleared, a fresh passphrase at the next claim,
-    the marker securely deleted); Nox's other data stays. That is deliberate: physical access to
+  - **Reclaim:** a `nox-reclaim` marker on the boot partition forgets the owner at the next boot,
+    before any extension can let anyone in: every paired device of every channel, every node
+    certificate and opt-in, every pending pairing code, every overlay credential, every
+    permission grant and the PIN (`revoke_everything`, tested to leave no valid credential);
+    root removes the claim mark and the maintenance keys and asks for a fresh passphrase; the
+    marker is securely deleted. Memory, settings and the owner's stored account secrets stay
+    (os/README.md lists both).
+  - **Root never runs Nox's code:** no unit running as root and no root setup program uses Nox's
+    own Python environment (which Nox updates itself) - the console's QR code comes from the
+    image's own encoder, the firewall runs on the system interpreter; `check-image.sh` enforces it. That is deliberate: physical access to
     the card is full access - whoever holds it could read and change everything on it anyway.
 
 Accepted limits: physical access to the card is full access (the boot partition is plain FAT); the
