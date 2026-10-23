@@ -29,7 +29,11 @@ requests.
 | Tampering with audit or security config | Hash-chain verified at boot; changes to the security core require a PIN; config changes are themselves audited. |
 | Data loss | Checkpoints; the vault is the source of truth; Nox-written notes can be rolled back. |
 | A device in the home network reaches the node port (47844) | Mutual TLS 1.3: only a client certificate of this installation's authority completes the handshake; serial denylist, revoked pairings and the paired key are checked before the upgrade; no browser `Origin`. See "Nodes" below. |
-| A compromised node (malware on a laptop, a stolen laptop) | Role `node`: a fixed JSON-RPC allow-list - no memory, audit, config, prompts or other nodes; refused messages are audited and cut the connection; revocation closes it at once; certificates live 30 days. The one way to talk to Nox is a voice satellite's text (C9), and only with two keys: `voice` enabled on the device *and* switched on for it on the core by the owner with the PIN (a persisted fact, checked for every utterance); its turns run in a conversation of their own, approve nothing, and what Nox learns from them waits for confirmation. Residual risk: with both keys, a taken-over node can ask Nox what a person in that room could ask - narrow `voice` or remove the node. See "Satellites" below. |
+| A device in the home network during node pairing (a look-alike core, a spoofed address, guessed codes) | The pairing link carries the authority's SHA-256 fingerprint and the node compares it before it sends the code, so there is no first-contact trust and no browser warning to click through; the code is single-use, valid 5 minutes and rate-limited; afterwards the node trusts only the pinned authority. Flooding the pairing endpoint or claiming addresses can deny service, never grant access ([Accepted limits (nodes)](#accepted-limits-nodes)). |
+| A compromised node (malware on a laptop, a stolen laptop) | Role `node`: a fixed JSON-RPC allow-list - no memory, audit, config, prompts or other nodes; refused messages are audited and cut the connection; revocation closes it at once; certificates live 30 days; its results are untrusted (schema-checked, bounded, tainting). The one way to talk to Nox is a voice satellite's text (C9), and only with two keys: `voice` enabled on the device *and* switched on for it on the core by the owner (with the PIN when one is set; a persisted fact, checked for every utterance); its turns run in a conversation of their own, approve nothing, and what Nox learns from them waits for confirmation. What it can still do - stop Nox, lock devices out during its own computer-use session, ask what a person in that room could ask - is listed in [Accepted limits (nodes)](#accepted-limits-nodes). See "Satellites" below. |
+| A compromised core (the Pi taken over, a malicious update) as seen by a node | The node treats the core as untrusted for its hard limits: hard prohibitions, the game lock, the groups enabled on the device, the device's own dialog for high risk (nodes with a screen), its sandbox, budget and audit trail are enforced on the node and hold even against a core patched to allow everything (tested with a deliberately permissive fake core). No code flows from the core to a node; updates come only from the signed release. Residual: whatever the device enabled at medium risk or below, and on a headless node with `trust_core_for_high` also high ([Accepted limits (nodes)](#accepted-limits-nodes)). |
+| Nox approving its own question while it controls a PC | The node is the authority on whether a session runs; while it does, the browser on that PC approves and changes nothing, every other device and this machine need the PIN (never from a remote session), and with no PIN set nothing can be approved. See "Self-approval lock on nodes" below. |
+| A voice in the room (a satellite microphone hears whoever is there) | Text only, its own conversation `voice:node:<id>` that counts as untrusted from its first turn, no approvals by voice, no presets or mode changes from the room, rate limits, an echo window, the kill phrase handled on the device; the home boundary refuses locks, alarm panels, garage doors and valves for every channel. See "Satellites" below. |
 | A copied overlay URL, or a web page on the streaming PC | The overlay a node relays carries no credential (`#overlay=relay`); the node swaps in a read-only one it holds in memory only, rotated on every connection; the relay answers loopback Host headers and its own Origin only, and carries nothing but the overlay role. |
 
 **Out of scope**: an attacker with local admin on the machine, physical access, or a compromised
@@ -111,8 +115,8 @@ conversation is discarded - the user asked for a new one, or it sat idle past
 `conversation_idle_s` (one hour by default) - and when the core shuts down. Grants are not per
 conversation, so ending any conversation ends them all. Remembered shell commands end even sooner
 (`revoke_command_grants`, audited as `grant.revoke_cmd`): when the privacy mode changes, when the
-kill switch fires, and whenever untrusted content enters a conversation (taint, see below). While a
-conversation is tainted, any other remembered grant above LOW asks again.
+kill switch fires, and when a conversation becomes tainted (see below). While a conversation is
+tainted, any other remembered grant above LOW asks again, and nothing is remembered in it.
 
 Every decision — allowed or denied — is audited with the request fields (redacted per privacy
 class where appropriate). The engine is pure and deterministic given (request, profile, privacy
@@ -224,10 +228,15 @@ the real Windows Credential Manager or a real credential.
 Every tool result Nox did not compose itself (a web page, a file, a window title, an MCP result,
 the AI provider's own web search) taints the conversation it entered (`nox.security.taint`). Voice,
 each dashboard client and each paired phone are conversations of their own, with their own history,
-model context and taint. Every remembered shell command (`cmd:` grant) is revoked whenever
-untrusted content enters any conversation. While a conversation is tainted, any other remembered
-grant above LOW asks again, and any call that sends data off the machine asks - so injected text
-cannot exfiltrate silently.
+model context and taint. Every remembered shell command (`cmd:` grant) is revoked when a
+conversation becomes tainted, and whenever untrusted content arrives outside any conversation;
+grants are not per conversation, so that revocation takes all of them - whatever the content sets
+up to run later must not find one waiting. Further content in a conversation that is tainted
+already revokes nothing more: in a tainted conversation no remembered grant above LOW applies
+(it asks again), "remember" is not offered, and no remember answer creates a grant - so a command
+remembered since was remembered by the user in another, untainted conversation. Any call that
+sends data off the machine from a tainted conversation asks - so injected text cannot exfiltrate
+silently.
 To keep this from turning into confirmation fatigue, a read-only lookup whose free text is
 demonstrably taken from what the user said runs without asking. Two conditions, both required.
 Positive: a `web.search` query (to the user's own search backend) is plain words forming an
@@ -648,8 +657,11 @@ installer CI job.
 ## Nodes (`nox node`)
 
 A node is Nox on another PC in the home (spec wave C), paired like a phone but holding a **client
-certificate** of this installation's authority instead of a token. What protects the core so far
-(`nox.node`, `nox.lan.tls`):
+certificate** of this installation's authority instead of a token. Every call to a node passes
+two gates - the core's permission engine with a device-bound target, then the node's own
+`NodeGate` - and either can refuse. Every limit this design accepts is listed in one place,
+[Accepted limits (nodes)](#accepted-limits-nodes). What protects the core (`nox.node`,
+`nox.lan.tls`):
 
 - **Pairing pins the authority.** The pairing link (`nox-node://pair?h=..&p=..&c=..&fp=..`, shown
   on a trusted session - the dashboard on this machine, or a paired device with the PIN)
@@ -681,14 +693,22 @@ certificate** of this installation's authority instead of a token. What protects
   refused on its next handshake.
 
 On the node itself (`nox node`, [`NODES.md`](NODES.md)) - a compromised core can send
-well-formed calls, so the node decides on its own authority (`nox.node.gate.NodeGate`):
+well-formed calls with valid receipts, so **for its hard limits the node treats the core as
+untrusted** and decides on its own authority (`nox.node.gate.NodeGate`). A disabled group, a hard
+prohibition, the game lock and the device's own dialog for high risk are refused or asked on the
+node even when the core is patched to allow everything (acceptance criterion C 1.12.3, tested
+with a deliberately permissive core in `tests/unit/node/test_agent.py`). `game.input.send` is
+never possible on any device. Nodes add no path around the home boundary: Nox has no tool for
+locks, alarm panels, garage doors and valves, and refuses them in code for every channel,
+voice satellites included (`nox.home.boundary`).
 
 - **Pairing pins the authority** before the code leaves the device: the authority is fetched,
   hashed and compared with the link's fingerprint; a mismatch sends nothing. The answer must be a
   certificate for the node's own key from the pinned authority. Later connections trust only the
   pinned authority (TLS 1.3); a stored authority that no longer matches the pin stops the node.
 - **The key never leaves the device**; it is encrypted with a passphrase in the OS keyring where
-  there is one. Residual risk: on a headless Linux node only its 0600 mode protects it.
+  there is one. On a headless Linux node only its 0600 mode protects it
+  ([accepted](#accepted-limits-nodes)).
 - **The gate, before any handler:** hard prohibitions (the core's immutable list, by name and
   glob), known tools only, the tool's capability group enabled in the device's `node.yaml` and not
   narrowed by the core, the risk ceiling `max_risk` (default high, critical never) and the core
@@ -719,7 +739,7 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   question to the device only when the node said at `initialize` that it can ask; otherwise the
   core asks itself, and a node without a screen runs high risk only when a **person** confirmed
   it on the core (`decided_by: user`) and `trust_core_for_high` was confirmed on that device
-  (`nox node allow trust_core_for_high`; documented residual risk). The answer comes back as
+  (`nox node allow trust_core_for_high`; [accepted limit](#accepted-limits-nodes)). The answer comes back as
   `nox/confirm_result` and is audited on both sides. A real presence check on the device
   (Windows Hello, polkit) is a later task.
 - **Stopping:** the core's kill switch sends `nox/kill` to every node over the open sockets; a
@@ -733,8 +753,8 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   does.
 - **Widening needs a person at the device:** `nox node allow` only in an interactive terminal
   and after a typed "yes" - a boundary against the core and remote tools, **not** against a local
-  process of the same user (a real presence check, Windows Hello / UAC consent or polkit, is a
-  later task). The confirmed manifest is recorded in the node's audit trail with an HMAC under a
+  process of the same user ([accepted limit](#accepted-limits-nodes); a real presence check,
+  Windows Hello / UAC consent or polkit, is a later task). The confirmed manifest is recorded in the node's audit trail with an HMAC under a
   key made at pairing (OS keyring, else `manifest.key` 0600 in the node folder); the MAC covers
   the entry's place in the chain and a counter kept with the key, so an old confirmation appended
   again is rejected. Pairing confirms only the defaults, never a `node.yaml` that was there.
@@ -830,11 +850,11 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   this machine's own dashboard and shell are refused approvals, changes and messages (only deny,
   Stopp and reading work), audited once, and the dashboard says "Nox steuert ein Gerät mit sehr
   vielen Adressen - Freigaben nur nach Ende der Sitzung". "This machine" is matched against every address of every local interface,
-  uncapped; an address that cannot be classified counts as this machine. Fail closed (owner decision): a device that shares such an address is
-  treated as the controlled PC. **Accepted:** a compromised node could report the owner's phone
-  address and lock that phone out of approving during its session - it can only come from the
-  controlled machine itself; the owner ends it on the computer Nox runs on with the PIN (ending
-  the session, `node.computer.release`, or removing the node), and deny and Stopp always work.
+  uncapped; an address that cannot be classified counts as this machine, and when this machine's
+  addresses cannot be read at all its dashboard and shell count as the controlled PC. Fail closed
+  (owner decision): a device that shares such an address is treated as the controlled PC. A
+  compromised node can use this to lock a device out of approving during its own session, and a
+  full binding locks everyone out - both are [accepted limits](#accepted-limits-nodes).
   A paired device's message during the session marks its conversation as holding **unreadable
   untrusted content**: nothing in it counts as the user's own words any more
   (`TaintLedger.user_directed`), so every off-machine call - a URL or a search taken from that
@@ -853,46 +873,37 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   grant and the header line ("Nox steuert gerade Maus und Tastatur auf ...", sent again to a
   dashboard that reconnects) follow the derived state. **No new input-synthesis code:** the node
   calls `nox.desktop.computer_use` and `nox.desktop.keyboard`, the two files the Security Model
-  §10 CI guard allows, so the guard needs no exception. **Residual risks:** a remote-control tool
-  that draws into the console session itself (Parsec, AnyDesk and the like) cannot be told apart
-  from a person at the machine - the PIN is the guard there; node-local privacy zones are not
-  applied to node screenshots yet (this core's privacy mode and capture switches are); a node
-  without a desktop takes no camera picture at all (no visible indicator); a full-screen video
-  also counts as "owns the screen" (refused, never the other way round).
+  §10 CI guard allows, so the guard needs no exception. Remote-control tools, privacy zones on node
+  screenshots, headless cameras and full-screen video are covered in
+  [Accepted limits (nodes)](#accepted-limits-nodes).
 - **Only the core's methods** (`CORE_TO_NODE`) are answered; a node never acts while disconnected
   and queues nothing.
 - **Its own audit trail**: every decision, hash-chained, on the device (`nox node log`); the core
   cannot read or erase it. `nox/revoked` deletes the key and the certificate. The chain shows
-  tampering, it does not prevent it: whoever controls the user's account can rewrite the whole
-  file. A notice always starts with "Nox"; Windows PowerShell is started by its absolute path.
+  tampering, it does not prevent it ([accepted limit](#accepted-limits-nodes)). A notice always
+  starts with "Nox"; Windows PowerShell is started by its absolute path.
 - **Self-update only from the signed release** (`nox.node.update`, docs/NODES.md#updates): the
   signature against the keys of the installed version (none configured: no update at all), no
   downgrade below the highest version that ran, **no replay** of a validly signed but older
   manifest (`created` must not go back), bundle size and SHA-256 from the manifest, every file
   against `BUNDLE.json`, the same `uv.lock`. It installs by itself only a stable, code-only patch
-  whose node protocol the paired core accepts. **Freeze:** an attacker on the network can still
-  withhold new manifests; after 30 days without a newer one the node says so (`nox node status`,
-  a notice). **A taken-over node account** can write its own `app/` folder, so the launcher runs
+  whose node protocol the paired core accepts. After 30 days without a newer manifest the node
+  says so (`nox node status`, a notice) - the freeze it warns about is an
+  [accepted limit](#accepted-limits-nodes). **A taken-over node account** can write its own `app/` folder, so the launcher runs
   a self-installed version only after checking that folder at every start, with the installed
   program's code and keys, and every installer run drops those versions; a headless node's
   program (`/opt/nox-node`) is root's. The launcher, the tray and the trial start run Python
   isolated (`-I`, a trusted working folder, no `PYTHON*` variables); nothing elevated runs code
   from the user's folders (Windows Setup runs it as the original user and refuses node mode when
-  elevated on purpose). **Accepted residual risks:** (a) a process a taken-over node account
-  leaves running in the node's service cgroup (headless Linux) can change a release folder
-  between the launcher's check and a later lazy import - surviving the launcher's own restarts,
-  not `systemctl stop`, a reboot or a reinstall; (b) a taken-over node account can pin an older
-  signed release that is still newer than the installed program via `state.json` until the next
-  install.
+  elevated on purpose). What a taken-over node account can still do to updates is listed in
+  [Accepted limits (nodes)](#accepted-limits-nodes).
 - **Certificate renewal never strands a node:** the old certificate stays valid until the node
   first connects with the new one (then it is revoked) or ends by itself; a lost answer or a
   clock behind by more than an hour is retried after 10 minutes. Renewals are recorded in one
   database transaction under a per-node lock: concurrent requests get at most one certificate.
-- **Residual risk, stated plainly:** "local" means the logged-in user. Malware running as that
-  user with full user rights can read that user's keyring and files - the node key, the
-  confirmation key - and act as the node towards the core within what the node may do. Nox's
-  controls keep the *core* and the *AI* from widening a node; they do not defend a device whose
-  user account is already compromised.
+- **"Local" means the logged-in user.** Nox's controls keep the *core* and the *AI* from widening
+  a node; they do not defend a device whose user account is already compromised
+  ([accepted limit](#accepted-limits-nodes)).
 
 **Routing on the core** (`nox.node.registry`, `nox.node.router`): a node's tool list is
 filtered (only tools the core routes, never a hard-prohibited name, at most 64) and its reported
@@ -953,8 +964,8 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   `core-plugins.json`); every entry of a folder is looked at, only dot-folders are opened, and a
   folder too full to read whole is refused rather than half-read -
   so a repository or vault around the allowed folder counts too; `nox node allow files --folder`
-  refuses such a folder up front. Not detectable, and documented: an allowed folder linked
-  (symlink, junction) *into* a vault from the vault's side. `.md` text is checked without
+  refuses such a folder up front. Not detectable: an allowed folder linked (symlink, junction)
+  *into* a vault from the vault's side ([accepted limit](#accepted-limits-nodes)). `.md` text is checked without
   parsing Markdown (a parser that differs from the note app's is a bypass) and with linear
   patterns only (no quantifier can overlap the next one, and no cap turns into a skip - an
   over-long code-block language or a fence followed by an unreadable character is refused; a
@@ -967,8 +978,8 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   `dataview-js`, `js-engine`, `templater`, `meta-bind-js`, `<%`, `<script`, `javascript:`,
   `vbscript:`, `obsidian://`, `file:`, `<iframe`, `<object`, `<embed`, inline Dataview JS (`$=`
   or `=this.` after a backtick or tilde), `%>` with Templater's `tp.`, or an `on...=` handler in
-  a raw HTML tag - wherever it stands. Accepted false positive: Nox cannot write a note that
-  merely mentions these plugin keywords. Every text write is capped at 256 KB, JSON/YAML at 64 KB (YAML is parsed
+  a raw HTML tag - wherever it stands. Nox therefore cannot write a note that merely mentions
+  these plugin keywords ([accepted false positive](#accepted-limits-nodes)). Every text write is capped at 256 KB, JSON/YAML at 64 KB (YAML is parsed
   with libyaml's `CSafeLoader` where available). An append to a
   `.md` file is judged on the whole file - read through the verified handle, refused when the
   file is over the cap - so it cannot be assembled in pieces, and the refusal says what blocks
@@ -989,8 +1000,8 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   is truncated only after the check. The core's target and the device's dialog show path, mode,
   bytes, lines, a short SHA-256 and the content - in full up to 400 characters, otherwise the
   first and last 200 with "content shortened - N characters not shown". A started write
-  completes; a stop ends everything after it. Accepted residual risk for PASSIVE formats: a
-  `.csv` formula runs only after the spreadsheet's own prompt and a user action.
+  completes; a stop ends everything after it. A `.csv` may carry a spreadsheet formula
+  ([accepted limit](#accepted-limits-nodes)).
 - **Profile rules and nodes**: a profile rule that ALLOWS applies to a call on a node only when it
   names that device exactly (`device:` with the full 32-hex id - `validate_profile` refuses a
   pattern for an ALLOW); rules that confirm or deny apply everywhere and may use a glob.
@@ -1012,13 +1023,18 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
   means `sandbox_unavailable`, never an unconfined run. A stopped call (`nox/kill`, dead man)
   kills the sandboxed tree (bwrap: the cancelled run kills its cgroup and process; Windows: the
   job object). `package.*` is not offered on nodes: it could not work in the sandbox.
-- A refusal by a hand is answered like the gate's and audited (`node.refused`). Residual: a
-  Windows listing enumerates by the verified path while the folder's handle is held, with the
-  folder's identity compared before and after.
+- A refusal by a hand is answered like the gate's and audited (`node.refused`). A Windows
+  listing enumerates by the verified path while the folder's handle is held, with the folder's
+  identity compared before and after ([accepted limit](#accepted-limits-nodes)).
+- **`package.*` on nodes is an open decision**, not a gap in the checks: it needs either a
+  privileged helper service on the device with a fixed request set, or a sandbox profile for
+  package managers. Until the owner decides, nodes do not offer it and the core does not route
+  it, so "install a program on the laptop" cannot be carried out on the laptop
+  ([NODES.md](NODES.md#installing-programs-not-available-yet)).
 
-Still to come in wave C: certificate renewal (C7) and a real presence check for
-`nox node allow`. Negative tests: `tests/unit/node/` (a deliberately permissive core in `test_agent.py`),
-`tests/integration/test_nodes.py`.
+Later work: a real presence check for `nox node allow` (Windows Hello, polkit) and for the
+device's dialog. Negative tests: `tests/unit/node/` (a deliberately permissive core in
+`test_agent.py`), `tests/integration/test_nodes.py`.
 
 ## Satellites (C9): voice, OBS and the pet overlay on a node
 
@@ -1085,6 +1101,16 @@ What leaves a node, and what a node may send the core (`nox.node.voice`, `nox.no
   sentences it was sent). `voice.say` never says the wake word, a spelling of it or a kill phrase
   (case- and diacritics-insensitive, refused on the core and on the node) and is medium - asked -
   in a conversation that holds untrusted content.
+- **Only Latin text is spoken.** A speech engine reads letters by their sound, not their look, and
+  may read out a symbol's name: "Nox" spelled with Cyrillic, Greek or styled letters, or with an
+  invisible character inside, would still be heard as the name. What a node says - every answer
+  sentence, on the core and again on the node, and every `voice.say` - is first reduced to an
+  allowlist (`latin_only`): after NFKC, only letters and digits up to the end of Latin
+  Extended-B, whitespace and a fixed set of punctuation; everything else is dropped. The
+  wake-word and kill-phrase checks run on exactly that result, and only that result is spoken. On
+  the listening side, transcripts are folded the other way (`fold_confusables`: lookalikes of
+  Latin letters in both cases, invisible characters removed), so a kill phrase in lookalike
+  letters still stops Nox.
 - **Not from the PC Nox controls.** While a computer-use session runs on a node, the core refuses
   that node's utterances (`controlled_here`) and tells its microphone to stay closed; while a
   node's address binding is saturated (nobody can be told apart from the controlled PC), every
@@ -1119,17 +1145,159 @@ What leaves a node, and what a node may send the core (`nox.node.voice`, `nox.no
   node may hold one, asked again at every use (fail closed: no check, no access) - the OBS
   overlay credential of the core itself stays loopback-only. The relay
   answers loopback Host headers only (no DNS rebinding), accepts a WebSocket without an Origin
-  (OBS) or with its own, and forwards only an `ipc.auth` for role `overlay`. Residual: any
-  local process or user of that PC can open the relay and watch what an overlay sees - the
-  pet's state, speech levels and the public state snapshot, never transcripts, chat or memory.
-  The network listener now also serves the static pet page (`/pet/`, no credential in it). It
-  shares the dashboard's origin there, so a flaw in the pet's own code could read what the
-  dashboard keeps in that origin (a paired device's token): both bundles come from the same
-  signed release, so this adds no new author, but it is one origin, not two.
+  (OBS) or with its own, and forwards only an `ipc.auth` for role `overlay`. Any local process
+  or user of that PC can still open the relay, and the network listener serves the static pet
+  page (`/pet/`, no credential in it) in the dashboard's origin - both are
+  [accepted limits](#accepted-limits-nodes).
 - **Speech levels.** `nox/voice/level` becomes `tts.level` with the node's id on the channel
   `node`; only an overlay that authenticated with that node's own credential receives it (with
   the id, so its `?device=<id>` pet follows), never another overlay and never the core's desktop
   pet (`nox.ipc.pet_view`).
+
+## Accepted limits (nodes)
+
+Every limit of nodes and satellites that is known and accepted, in one place - the sections
+above point here. Each entry says what remains possible, why it is accepted, and what limits the
+damage. None of them grants access to anything a device did not enable; most are a denial of
+service, or need an attacker who already controls the node's user account, the core, or a place
+in the home network.
+
+**Denial of service**
+
+- **Address binding during a computer-use session.** *What:* while Nox controls mouse and
+  keyboard on a node, every paired device that connects from an address bound to that node (its
+  connection address as the core sees it, plus up to 16 private addresses it reports) counts as
+  the browser on the controlled PC and can neither approve, change nor send messages. A
+  compromised node can report the owner's phone address and lock that phone out for the length
+  of the lock; a device that shares an address with the controlled PC - behind the same NAT, or
+  because someone on the home network took that address over - is locked out the same way.
+  *Why accepted:* owner decision for security over availability. A home network offers nothing
+  a node cannot influence to tell devices apart; failing open would let Nox approve its own
+  question from the PC it controls. *Mitigation:* it only ever comes from the controlled machine
+  (or the network it is on) while its lock holds and ends with the lock; deny and Stopp always
+  work; every other device - and the computer Nox runs on - approves with the PIN; the owner
+  lifts a stuck lock with "Sperre lösen" (`node.computer.release`, PIN, on the computer Nox runs
+  on) and can remove the node.
+- **Saturation and flooding.** *What:* (a) a node that fills its address binding during one lock
+  (64 reported or 16 observed addresses) is *saturated*: until the lock lifts nobody can be told
+  apart from the controlled PC, so every paired device and this machine's own dashboard and shell
+  are refused approvals, changes and messages, and voice from every node is refused. (b) Before
+  a certificate is known, only the TLS handshake timeout (5 s) and the listen backlog bound a
+  connection to the node port; after the certificate check at most 2 connections per node and
+  16 in total wait for their hello. (c) The pairing endpoint shares the network listener's rate
+  limit ([Known limits of network access](#known-limits-of-network-access)). *Why accepted:*
+  dropping addresses would reopen the self-approval path, and before authentication a flood
+  cannot be told from use. *Mitigation:* reading, deny and Stopp always work; saturation is
+  audited once and the dashboard says why; a flood costs CPU, never access; satellite messages
+  are limited before anything else is looked at (12 utterances and 3 credential requests per
+  minute and node; 30 and 10 count as flooding and cut the connection), five refused messages
+  close a connection, and a node cut off for violations is refused for 30 s.
+- **Lock-outs a node can cause.** *What:* (a) a node's `security.kill` always stops Nox, so a
+  compromised node can stop Nox again after every "Fortsetzen". (b) The self-approval lock holds
+  while a node says a session is open - a compromised node can keep saying so - and for up to
+  120 minutes after a node that said so went silent; while it holds, approvals need the PIN.
+  (c) Wrong PINs sent during such a lock count towards the PIN's own lockout (5 wrong, then 15
+  minutes). (d) A kernel anti-cheat driver that starts with Windows keeps mouse and keyboard on
+  that PC locked for as long as it is installed. *Why accepted:* stopping must always work, and
+  every lock fails closed - a lock that an attacker could lift would be the hole. *Mitigation:*
+  repeated stops while Nox is stopped change nothing and are audited at most every 10 s; deny
+  and Stopp always work; "Sperre lösen" with the PIN on the computer Nox runs on lifts a stuck
+  lock (a node still reporting a session locks again); a paired device is removed after
+  repeated wrong PINs before it alone reaches the lockout; removing a node needs no PIN on the
+  computer Nox runs on and ends its connection, its stops and its reports.
+
+**Behaviour when no PIN is set**
+
+- *What is refused:* from a paired phone, tablet or browser nothing about nodes that needs
+  authorization works - pairing, removing, switching groups off or on, the voice opt-in, default
+  devices, `node.link` ("needs the security PIN; set one on the server"); Stopp still works.
+  While Nox controls mouse and keyboard on a node, nothing can be approved or changed anywhere,
+  and "Sperre lösen" is refused: the lock ends with the session, or 120 minutes after the node's
+  last report. *What needs the device or the core machine:* on the computer Nox runs on (not
+  through a remote session where that is checked), pairing, switching groups back on, the voice
+  opt-in, presets marked for satellites and default devices work without a PIN; widening what a
+  node may do always needs `nox node allow` on the device itself. *Why accepted:* the PIN is the
+  only secret that neither the AI nor a controlled PC holds; without it, the safe answer on every
+  path that could be the controlled PC or a stolen phone is "no", and the core machine is treated
+  as the owner's console. *Mitigation:* set a security PIN.
+
+**Outside Nox's control**
+
+- **Remote-desktop tools.** A remote-control tool that draws into the console session itself
+  cannot be told apart from a person at the machine: the remote-session check (Windows
+  `SM_REMOTESESSION` and the console session, Linux SSH and `loginctl` `Remote=yes`) sees
+  nothing. Other remote-desktop software installed on a node can drive that node's desktop -
+  including its confirmation dialog - and Nox can neither see nor stop it. *Why accepted:* such
+  tools are designed to be indistinguishable from local input. *Mitigation:* approvals during a
+  session need the PIN; the device's dialog counts a "yes" within 1.5 s as no; every decision
+  is in the node's audit trail; remove or disable remote-desktop tools you do not use.
+- **A compromised user account on the device.** "Local" means the logged-in user. Malware
+  running as that user can read the user's keyring and files - the node key, the confirmation
+  key - act as the node towards the core within what the node may do, run `nox node allow` in a
+  terminal of its own (the typed "yes" is a boundary against the core and remote tools, not
+  against a local process; a real presence check is later work), and rewrite the node's audit
+  trail (the hash chain shows tampering, it does not prevent it). On a headless Linux node the
+  key is protected by its 0600 mode only, since there is no keyring. *Why accepted:* Nox
+  defends against the AI layer, the core and the network, not against an account that is
+  already taken over (see "Out of scope" above). *Mitigation:* certificates live 30 days;
+  removing the node revokes them at once.
+- **A compromised core.** Everything a device enabled at medium risk or below stays within reach
+  of a core that was taken over, with valid receipts; on a headless node with
+  `trust_core_for_high` set, high risk too, because the core vouches for the person's
+  confirmation. *Why accepted:* a node exists to act for the core; the device's own dialog is the
+  boundary for high risk wherever there is a screen. *Mitigation:* enable only what a device
+  needs, leave `trust_core_for_high` off unless a headless node must do high-risk work, and keep
+  hard prohibitions, the game lock, the sandbox, the budget and the audit trail on the device.
+- **Self-updates.** (a) An attacker on the network can withhold new manifests (a *freeze*);
+  after 30 days without a newer one the node says so. (b) A process a taken-over node account
+  leaves running in the node's service cgroup (headless Linux) can change a release folder
+  between the launcher's check and a later lazy import - surviving the launcher's own restarts,
+  not `systemctl stop`, a reboot or a reinstall. (c) A taken-over node account can pin an older
+  signed release that is still newer than the installed program via `state.json` until the next
+  install. *Why accepted:* each needs the network position or the account; none lets code in
+  that the project did not sign. *Mitigation:* the launcher checks the folder at every start with
+  the installed program's code and keys, and every installer run drops self-installed versions.
+
+**Satellites and the overlay**
+
+- **A voice in the room.** With both keys, whoever is in the room - or a taken-over node - can
+  ask Nox what a person there could ask. *Why accepted:* that is what a voice satellite is for.
+  *Mitigation:* text only, its own conversation that counts as untrusted from its first turn,
+  no approvals and no remembered grants above LOW by voice, no presets or mode changes unless
+  the owner marked a preset for satellites, rate limits, and narrowing `voice` or removing the
+  node at any time.
+- **Local readability of the overlay relay.** Any local process or user of the PC that runs the
+  relay can open `127.0.0.1:47845` and watch what an overlay sees: the pet's state, speech levels
+  and the public state snapshot - never transcripts, chat or memory. The overlay credential the
+  relay holds lives in that node process's memory, readable to the same user. *Why accepted:*
+  OBS's browser source cannot present a secret, and the credential is read-only. *Mitigation:*
+  the URL carries no credential; the relay answers loopback Host headers and its own Origin
+  only and forwards nothing but the overlay role; the credential rotates on every connection
+  and is revoked when the node is removed or `obs` is narrowed.
+- **One origin for the pet page and the dashboard.** The network listener serves the static pet
+  page (`/pet/`) in the dashboard's origin, so a flaw in the pet's own code could read what the
+  dashboard keeps there (a paired device's token). *Why accepted:* both bundles come from the
+  same signed release, so this adds no new author. *Mitigation:* the pet page carries no
+  credential and is built and signed with the dashboard.
+
+**Hands, captures and files**
+
+- **What a computer-use session can reach.** Mouse and keyboard act on whatever the node's screen
+  shows, including apps Nox has no tool for. *Why accepted:* that is the feature. *Mitigation:*
+  each session is confirmed on the device, lasts at most 15 minutes and 200 actions, shows a
+  notification, never runs in a game, and ends on `Ctrl+Alt+Shift+K`, the kill switch or a lost
+  connection.
+- **Captures.** Node-local privacy zones are not applied to node screenshots yet (this core's
+  privacy mode and capture switches are); a node without a desktop takes no camera picture at
+  all (no visible indicator); a full-screen video counts as "owns the screen", so the game lock
+  refuses then - always the safe way round.
+- **Files.** A `.csv` may carry a spreadsheet formula, which runs only after the spreadsheet's
+  own prompt and a user action; Nox cannot write a note that merely mentions the refused plugin
+  keywords (an accepted false positive); an allowed folder linked *into* a vault from the vault's
+  side cannot be detected from the folder's side; a Windows listing enumerates by the verified
+  path while the folder's handle is held, with the folder's identity compared before and after.
+  *Why accepted:* each is the smaller cost of a check that otherwise holds. *Mitigation:*
+  writes stay text-only, are asked, and are never remembered.
 
 ## Nox-OS (the Raspberry Pi image)
 
