@@ -6,7 +6,9 @@ number - may ask."""
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +22,10 @@ from tests.unit.noxos.conftest import ECDSA, ED25519, ED25519_B, RSA, SK_ED25519
 
 helper = load_tool("nox_os_helper", HARDENING)
 FPB = parse_key(ED25519).fingerprint.encode()
+PASS = "correct horse battery staple"  # fictitious
+PASSLINE = "pass " + base64.b64encode(PASS.encode()).decode()
+PASSB = PASSLINE.encode()
+OWN_UID = getattr(os, "getuid", lambda: 0)()
 
 
 class FakeRun:
@@ -47,7 +53,9 @@ class FakeRun:
 
 
 def system(tmp_path: Path, run: FakeRun | None = None) -> Any:
-    return helper.System(run=run or FakeRun(), clock=lambda: 1_000_000.0, root=tmp_path)
+    return helper.System(
+        run=run or FakeRun(), clock=lambda: 1_000_000.0, root=tmp_path, root_uid=OWN_UID
+    )
 
 
 # ---- the requests ----------------------------------------------------------------------------
@@ -57,11 +65,18 @@ def test_the_requests() -> None:
     assert helper.parse_request(b"status\n").command == "status"
     assert helper.parse_request(b"ssh off").command == "off"
     assert helper.parse_request(b"keys clear").command == "keys_clear"
-    request = helper.parse_request(f"keys set\n{ED25519}\n{ECDSA} admin@example.invalid\n".encode())
-    assert (request.command, len(request.keys)) == ("keys_set", 2)
+    request = helper.parse_request(
+        f"keys set\n{PASSLINE}\n{ED25519}\n{ECDSA} admin@example.invalid\n".encode()
+    )
+    assert (request.command, len(request.keys), request.passphrase) == ("keys_set", 2, PASS)
     fp = FPB.decode()
-    request = helper.parse_request(f"ssh on 60 {fp},{fp}".encode())
+    request = helper.parse_request(f"ssh on 60 {fp},{fp}\n{PASSLINE}".encode())
     assert (request.command, request.minutes, request.fingerprints) == ("on", 60, (fp, fp))
+    assert request.passphrase == PASS and PASS not in repr(request)
+    new = "new " + base64.b64encode(b"another long passphrase").decode()
+    assert helper.parse_request(f"maint set\n{new}".encode()).command == "maint_set"
+    change = helper.parse_request(f"maint change\n{PASSLINE}\n{new}".encode())
+    assert (change.passphrase, change.new_passphrase) == (PASS, "another long passphrase")
 
 
 @pytest.mark.parametrize(
@@ -84,12 +99,23 @@ def test_the_requests() -> None:
         b"ssh on 60 " + FPB + b"\n" + ED25519.encode(),
         b"shell rm -rf /",
         b"keys set",
-        b"keys set\n" + RSA.encode(),
-        b"keys set\n" + b"\n".join([ED25519.encode()] * 9),
-        b"keys set\n" + b'command="id" ' + ED25519.encode(),
+        b"keys set\n" + PASSB + b"\n" + RSA.encode(),
+        b"keys set\n" + PASSB + b"\n" + b"\n".join([ED25519.encode()] * 9),
+        b"keys set\n" + PASSB + b"\n" + b'command="id" ' + ED25519.encode(),
         "keys set\nssh-ed25519 AAAAé".encode(),
         b"keys clear\n" + ED25519.encode(),
         b"ssh off\n" + ED25519.encode(),
+        # The maintenance passphrase: required, readable, and long enough when new.
+        b"keys set\n" + ED25519.encode(),
+        b"ssh on 60 " + FPB,
+        b"ssh on 60 " + FPB + b"\npass not-base64!",
+        b"ssh on 60 " + FPB + b"\nnew " + PASSB[5:],
+        b"maint set",
+        b"maint set\nnew " + base64.b64encode(b"too short"),
+        b"maint set\n" + PASSB,
+        b"maint change\n" + PASSB,
+        b"maint change\nnew " + PASSB[5:] + b"\n" + PASSB,
+        b"maint set\nnew " + base64.b64encode(b"long enough but\nwith a newline"),
         b"x" * (17 * 1024),
     ],
 )
@@ -145,13 +171,14 @@ FP = parse_key(ED25519).fingerprint
 
 
 def stored(sys_: Any, *lines: str) -> None:
-    keys = helper.parse_request(("keys set\n" + "\n".join(lines)).encode()).keys
+    keys = helper.parse_request(("keys set\n" + PASSLINE + "\n" + "\n".join(lines)).encode()).keys
     helper.set_keys(sys_, keys)
 
 
 def test_keys_are_stored_root_only_and_answered_with_their_fingerprints(tmp_path: Path) -> None:
     sys_ = system(tmp_path)
-    request = helper.parse_request(f"keys set\n{ED25519} laptop\n{ECDSA}\n".encode())
+    helper.store_passphrase(sys_, PASS)
+    request = helper.parse_request(f"keys set\n{PASSLINE}\n{ED25519} laptop\n{ECDSA}\n".encode())
     answer = helper.handle(request, sys_)
     assert [(k["fingerprint"], k["comment"]) for k in answer["keys"]] == [
         (FP, "laptop"),
@@ -194,7 +221,8 @@ def test_on_writes_keys_sudo_and_state_then_starts_sshd_firewall_and_timer(tmp_p
     run = FakeRun()
     sys_ = system(tmp_path, run)
     stored(sys_, ED25519)
-    request = helper.parse_request(f"ssh on 30 {FP}".encode())
+    helper.store_passphrase(sys_, PASS)
+    request = helper.parse_request(f"ssh on 30 {FP}\n{PASSLINE}".encode())
     answer = helper.handle(request, sys_)
     assert answer["ssh"] == "on" and answer["until"] == 1_000_000 + 30 * 60
     assert answer["active"] == [FP]
@@ -359,3 +387,154 @@ def test_no_main_process_no_answer(tmp_path: Path) -> None:
     p = proc(tmp_path)
     p.run = lambda *a: subprocess.CompletedProcess(a, 0, "MainPID=0\nControlGroup=\n", "")
     assert helper.peer_allowed(helper.Peer(0, NOX_UID), p) is False
+
+
+# ---- order, recovery ---------------------------------------------------------------------
+
+
+@posix
+def test_the_sudo_rule_comes_only_after_sshd_runs(tmp_path: Path) -> None:
+    sudoers = tmp_path / "run/nox-os/sudoers.d/nox-admin"
+    seen: list[bool] = []
+
+    class Watch(FakeRun):
+        def __call__(self, *args: str) -> subprocess.CompletedProcess[str]:
+            if args[:3] == ("systemctl", "start", "nox-ssh.service"):
+                seen.append(sudoers.exists())
+            return super().__call__(*args)
+
+    sys_ = system(tmp_path, Watch())
+    stored(sys_, ED25519)
+    helper.switch_on(sys_, 30, [FP])
+    assert seen == [False] and sudoers.exists()
+    # sshd that does not come up: no sudo rule at all.
+    dead = Watch(fail="is-active")
+    sys_ = system(tmp_path / "b", dead)
+    stored(sys_, ED25519)
+    with pytest.raises(helper.Refused):
+        helper.switch_on(sys_, 30, [FP])
+    assert not (tmp_path / "b/run/nox-os/sudoers.d/nox-admin").exists()
+
+
+@posix
+def test_a_request_cleans_up_what_sshd_left_on(tmp_path: Path) -> None:
+    run = FakeRun()
+    sys_ = system(tmp_path, run)
+    stored(sys_, ED25519)
+    helper.switch_on(sys_, 30, [FP])
+    run.active.clear()  # sshd died, or the power went
+    answer = helper.handle(helper.parse_request(b"status"), sys_)
+    assert answer["ssh"] == "off"
+    assert not (tmp_path / "run/nox-os/sudoers.d/nox-admin").exists()
+    assert not (tmp_path / "run/nox-os/ssh/authorized_keys").exists()
+    state = json.loads((tmp_path / "run/nox-os/ssh.json").read_text("utf-8"))
+    assert state == state | {"on": False, "reason": "reconciled"}
+
+
+# ---- the maintenance passphrase ----------------------------------------------------------
+
+
+def _req(text: str) -> Any:
+    return helper.parse_request(text.encode())
+
+
+def _new(secret: str) -> str:
+    return "new " + base64.b64encode(secret.encode()).decode()
+
+
+def _pass(secret: str) -> str:
+    return "pass " + base64.b64encode(secret.encode()).decode()
+
+
+def test_without_a_passphrase_keys_and_on_are_refused(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    for text in (f"keys set\n{PASSLINE}\n{ED25519}", f"ssh on 30 {FP}\n{PASSLINE}"):
+        with pytest.raises(helper.Refused) as refused:
+            helper.handle(_req(text), sys_)
+        assert refused.value.code == "passphrase_missing"
+        assert "during setup" in str(refused.value)
+    assert helper.status(sys_)["passphrase"] is False
+
+
+def test_the_passphrase_is_set_only_in_setup_mode(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
+    assert refused.value.code == "not_setup"
+    mode = tmp_path / "run/nox-os/setup-mode"
+    mode.parent.mkdir(parents=True, exist_ok=True)
+    if sys.platform != "win32":
+        os.symlink(tmp_path / "elsewhere", mode)  # a link is not the setup flag
+        with pytest.raises(helper.Refused):
+            helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
+        mode.unlink()
+    mode.write_text("", "ascii")
+    answer = helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
+    assert answer["passphrase"] is True and answer["setup_mode"] is True
+    record = (tmp_path / "var/lib/nox-os/maintenance").read_text("ascii")
+    assert PASS not in record and json.loads(record)["kdf"] == "scrypt"
+    if sys.platform != "win32":
+        assert (tmp_path / "var/lib/nox-os/maintenance").stat().st_mode & 0o777 == 0o600
+    # With it, the keys can be set.
+    assert helper.handle(_req(f"keys set\n{PASSLINE}\n{ED25519}"), sys_)["keys"]
+
+
+def test_the_passphrase_is_changed_only_with_the_old_one(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    helper.store_passphrase(sys_, PASS)
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(
+            _req(f"maint change\n{_pass('not the old one')}\n{_new('next passphrase!')}"), sys_
+        )
+    assert refused.value.code == "passphrase_wrong"
+    helper.handle(_req(f"maint change\n{PASSLINE}\n{_new('next passphrase!')}"), sys_)
+    helper.verify_passphrase(sys_, "next passphrase!")
+    with pytest.raises(helper.Refused):
+        helper.verify_passphrase(sys_, PASS)
+
+
+def test_five_wrong_passphrases_lock_it_and_the_lock_grows(tmp_path: Path) -> None:
+    now = [1_000_000.0]
+    sys_ = helper.System(run=FakeRun(), clock=lambda: now[0], root=tmp_path, root_uid=OWN_UID)
+    helper.store_passphrase(sys_, PASS)
+    for _ in range(5):
+        with pytest.raises(helper.Refused) as refused:
+            helper.verify_passphrase(sys_, "wrong guess number")
+        assert refused.value.code == "passphrase_wrong"
+    assert helper.locked_until(sys_) == int(now[0] + 15 * 60)
+    # Locked: even the right one is refused, and the guess is not even checked.
+    with pytest.raises(helper.Refused) as refused:
+        helper.verify_passphrase(sys_, PASS)
+    assert refused.value.code == "passphrase_locked"
+    assert helper.status(sys_)["locked_until"] == int(now[0] + 15 * 60)
+    now[0] += 15 * 60 + 1
+    for _ in range(5):
+        with pytest.raises(helper.Refused):
+            helper.verify_passphrase(sys_, "wrong guess number")
+    assert helper.locked_until(sys_) == int(now[0] + 30 * 60)  # twice as long
+    now[0] += 30 * 60 + 1
+    helper.verify_passphrase(sys_, PASS)  # right: the count starts over
+    assert not (tmp_path / "var/lib/nox-os/maintenance-lockout").exists()
+    with pytest.raises(helper.Refused):
+        helper.verify_passphrase(sys_, "wrong guess number")
+    assert helper.locked_until(sys_) is None
+
+
+def test_the_lock_is_at_most_a_day(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    helper.store_passphrase(sys_, PASS)
+    lockout = tmp_path / "var/lib/nox-os/maintenance-lockout"
+    lockout.write_text(json.dumps({"failures": 99}), "ascii")
+    with pytest.raises(helper.Refused):
+        helper.verify_passphrase(sys_, "wrong guess number")
+    assert helper.locked_until(sys_) == int(1_000_000.0 + 24 * 3600)
+
+
+def test_a_passphrase_file_anyone_else_wrote_is_no_passphrase(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    planted = tmp_path / "var/lib/nox/maintenance"
+    planted.parent.mkdir(parents=True)
+    planted.write_text('{"hash": "x"}', "ascii")
+    with pytest.raises(helper.Refused) as refused:
+        helper.verify_passphrase(sys_, PASS)
+    assert refused.value.code == "passphrase_missing"

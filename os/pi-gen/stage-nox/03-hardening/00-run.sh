@@ -8,7 +8,7 @@ units="${ROOTFS_DIR}/etc/systemd/system"
 install -d -m 0755 "$lib" "${ROOTFS_DIR}/etc/nox-os/ssh"
 install -m 0755 files/nox_firewall.py files/nox_os_helper.py files/nox_console.py "$lib/"
 for unit in nox-firewall.service nox-firewall.path nox-os-helper.socket nox-os-helper@.service \
-	nox-ssh.service nox-console.service; do
+	nox-os-helper-recover.service nox-ssh.service nox-console.service; do
 	install -m 0644 "files/$unit" "$units/$unit"
 done
 
@@ -28,7 +28,7 @@ on_chroot <<'EOF2'
 getent group nox-os-helper >/dev/null || groupadd --system nox-os-helper
 EOF2
 install -d -m 0755 "$units/nox.service.d"
-install -m 0644 files/nox-service-helper.conf "$units/nox.service.d/50-nox-os-helper.conf"
+install -m 0644 files/nox-service-nox-os.conf "$units/nox.service.d/50-nox-os.conf"
 install -m 0644 files/sshd_config "${ROOTFS_DIR}/etc/nox-os/ssh/sshd_config"
 install -m 0644 files/tmpfiles-nox-os.conf "${ROOTFS_DIR}/etc/tmpfiles.d/nox-os.conf"
 install -m 0440 files/sudoers-nox-os "${ROOTFS_DIR}/etc/sudoers.d/50-nox-os"

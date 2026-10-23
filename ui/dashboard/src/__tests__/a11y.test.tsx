@@ -169,6 +169,7 @@ describe('axe-core: zero findings', () => {
       until: on ? new Date(Date.now() + 3_600_000).toISOString() : null,
       active_keys: on ? ['SHA256:fictitious'] : [],
       keys: [{ type: 'ssh-ed25519', fingerprint: 'SHA256:fictitious', comment: 'laptop' }],
+      passphrase_set: true,
       default_minutes: 60,
       min_minutes: 5,
       max_minutes: 240,

@@ -1,10 +1,13 @@
 /**
  * Einstellungen › System › Fernwartung (SSH) - only on Nox-OS, the Raspberry Pi image (Spec §2.2).
  *
- * SSH is off there. Two steps, each with the security PIN (always, also on a paired device):
+ * SSH is off there. Everything that can switch it on needs two secrets: the security PIN (checked
+ * by Nox) and the **maintenance passphrase** (at least 12 characters, checked only by the Pi's root
+ * helper - it never lands in a file Nox's service user can read). The passphrase is set during the
+ * first-boot setup and changed here with the old one.
  *
- *   1. **Keys.** Paste public keys (ed25519 or ECDSA). The Pi's root helper stores them - not Nox -
- *      and answers with their fingerprints, which this section shows.
+ *   1. **Keys.** Paste public keys (ed25519 or ECDSA). The root helper stores them - not Nox - and
+ *      answers with their fingerprints, which this section shows.
  *   2. **On.** The owner confirms that those fingerprints are theirs, chooses a time and switches
  *      on. The request names exactly the confirmed fingerprints; the Pi refuses if its stored
  *      keys are any others.
@@ -14,8 +17,8 @@
  * which needs nothing; forgetting the keys needs nothing either. On any other system the core
  * answers `available: false` and nothing is shown.
  *
- * The PIN is only ever a request field, as everywhere in this UI: sent when typed, cleared after
- * every attempt, never stored.
+ * The PIN and the passphrase are only ever request fields: sent when typed, cleared after every
+ * attempt, never stored.
  */
 
 import { type FormEvent, useCallback, useId, useState } from 'react';
@@ -37,6 +40,9 @@ export interface SshStatus {
   until: string | null;
   keys: SshKeyView[];
   activeKeys: string[];
+  passphraseSet: boolean;
+  lockedUntil: string | null;
+  setupMode: boolean;
   defaultMinutes: number;
   minMinutes: number;
   maxMinutes: number;
@@ -46,6 +52,8 @@ export interface SshStatus {
 const DURATIONS = [15, 30, 60, 120, 240];
 /** While on: refresh now and then, so the notice ends when SSH does. */
 export const SSH_REFRESH_MS = 30000;
+/** The helper's rule for a new maintenance passphrase. */
+export const MIN_PASSPHRASE = 12;
 
 /** `noxos.ssh.*` reply -> status; `null` when this is no Nox-OS (or the reply is unreadable). */
 export function parseSshStatus(payload: unknown): SshStatus | null {
@@ -65,6 +73,9 @@ export function parseSshStatus(payload: unknown): SshStatus | null {
     activeKeys: Array.isArray(payload.active_keys)
       ? payload.active_keys.filter((k): k is string => typeof k === 'string')
       : [],
+    passphraseSet: payload.passphrase_set === true,
+    lockedUntil: typeof payload.locked_until === 'string' ? payload.locked_until : null,
+    setupMode: payload.setup_mode === true,
     defaultMinutes: num(payload.default_minutes, 60),
     minMinutes: num(payload.min_minutes, 5),
     maxMinutes: num(payload.max_minutes, 240),
@@ -78,6 +89,11 @@ const REASONS: Record<string, Key> = {
   invalid_fingerprint: 'ssh_err_helper',
   helper_refused: 'ssh_err_helper',
   helper_unreachable: 'ssh_err_helper',
+  passphrase_wrong: 'ssh_err_passphrase_wrong',
+  passphrase_locked: 'ssh_err_passphrase_locked',
+  passphrase_missing: 'ssh_passphrase_missing',
+  passphrase_short: 'ssh_err_passphrase_short',
+  not_setup: 'ssh_passphrase_missing',
 };
 
 function clock(iso: string | null, lang: Lang): string {
@@ -93,20 +109,26 @@ export interface RemoteMaintenanceProps {
   client: IpcClient | null;
 }
 
-type Busy = 'keys' | 'on' | 'off' | 'forget' | null;
+type Busy = 'keys' | 'on' | 'off' | 'forget' | 'passphrase' | null;
 
 export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
   const id = useId();
   const [status, setStatus] = useState<SshStatus | null>(null);
   const [pinSet, setPinSet] = useState(false);
   const [keys, setKeys] = useState('');
-  const [keysPin, setKeysPin] = useState('');
   const [minutes, setMinutes] = useState(60);
+  /** The PIN and the passphrases of the form in use; all cleared after every attempt. */
   const [pin, setPin] = useState('');
+  const [secret, setSecret] = useState('');
+  const [nextSecret, setNextSecret] = useState('');
+  /** The passphrase form's own PIN and old passphrase, so two forms never share a field. */
+  const [ppPin, setPpPin] = useState('');
+  const [ppOld, setPpOld] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const [replacing, setReplacing] = useState(false);
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
 
   const load = useCallback(async (c: IpcClient, cancelled: () => boolean = () => false) => {
     try {
@@ -139,28 +161,32 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
   };
 
   /** Runs one request; a new status replaces the shown one, a refusal is worded. */
-  const act = async (label: Exclude<Busy, null>, sentPin: string, fn: (c: IpcClient) => Promise<unknown>) => {
+  const act = async (label: Exclude<Busy, null>, pinSent: boolean, fn: (c: IpcClient) => Promise<unknown>) => {
     if (!client || busy) return false;
     setBusy(label);
     setError('');
+    setNotice('');
     try {
       const parsed = parseSshStatus(await fn(client));
       if (parsed) setStatus(parsed);
       return true;
     } catch (err) {
-      setError(describe(err, sentPin !== ''));
+      setError(describe(err, pinSent));
       return false;
     } finally {
       setBusy(null);
+      setPin('');
+      setSecret('');
+      setNextSecret('');
+      setPpPin('');
+      setPpOld('');
     }
   };
 
   const saveKeys = async (e: FormEvent) => {
     e.preventDefault();
-    const sentPin = keysPin.trim();
-    const ok = await act('keys', sentPin, (c) => api.sshKeysSet(c, keys.trim(), sentPin));
-    setKeysPin('');
-    if (ok) {
+    const [p, s, k] = [pin.trim(), secret, keys.trim()];
+    if (await act('keys', p !== '', (c) => api.sshKeysSet(c, k, s, p))) {
       setKeys('');
       setReplacing(false);
       setConfirmed(false); // new keys: their fingerprints are to be checked anew
@@ -169,17 +195,57 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
 
   const switchOn = async (e: FormEvent) => {
     e.preventDefault();
-    const sentPin = pin.trim();
+    const [p, s] = [pin.trim(), secret];
     const fingerprints = status.keys.map((k) => k.fingerprint);
-    await act('on', sentPin, (c) => api.sshEnable(c, minutes, fingerprints, sentPin));
-    setPin('');
+    await act('on', p !== '', (c) => api.sshEnable(c, minutes, fingerprints, s, p));
+  };
+
+  const savePassphrase = async (e: FormEvent) => {
+    e.preventDefault();
+    const [p, old, next] = [ppPin.trim(), ppOld, nextSecret];
+    const change = status.passphraseSet;
+    const ok = await act('passphrase', p !== '', (c) =>
+      change ? api.sshPassphraseChange(c, old, next, p) : api.sshPassphraseSet(c, next, p),
+    );
+    if (ok) setNotice(t('ssh_passphrase_saved'));
   };
 
   const durations = DURATIONS.filter((m) => m >= status.minMinutes && m <= status.maxMinutes);
   const hasKeys = status.keys.length > 0;
-  const showKeyForm = !status.on && (!hasKeys || replacing);
+  const usable = status.passphraseSet && !status.lockedUntil;
+  const showKeyForm = !status.on && usable && (!hasKeys || replacing);
+  const disabled = busy !== null;
+  const ready = pinSet && pin.trim() !== '' && secret !== '';
 
-  const pinField = (fieldId: string, value: string, onChange: (v: string) => void) => (
+  const secretField = (
+    fieldId: string,
+    labelKey: Key,
+    value: string,
+    onChange: (v: string) => void,
+    hint?: Key,
+  ) => (
+    <div className="field">
+      <label htmlFor={fieldId} className="label">
+        {t(labelKey)}
+      </label>
+      <input
+        id={fieldId}
+        className="input"
+        type="password"
+        autoComplete="off"
+        value={value}
+        disabled={disabled}
+        aria-describedby={hint ? `${fieldId}-hint` : undefined}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {hint && (
+        <p id={`${fieldId}-hint`} className="hint">
+          {t(hint)}
+        </p>
+      )}
+    </div>
+  );
+  const pinField = (fieldId: string, value = pin, onChange: (v: string) => void = setPin) => (
     <div className="field">
       <label htmlFor={fieldId} className="label">
         {t('lan_pair_pin')}
@@ -191,7 +257,7 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
         inputMode="numeric"
         autoComplete="off"
         value={value}
-        disabled={busy !== null}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
       />
     </div>
@@ -206,6 +272,11 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
       {error && (
         <p role="alert" className="alert">
           {error}
+        </p>
+      )}
+      {notice && (
+        <p role="status" className="ok-note">
+          {notice}
         </p>
       )}
 
@@ -227,8 +298,8 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
           <button
             type="button"
             className="btn"
-            disabled={!client || busy !== null}
-            onClick={() => void act('off', '', (c) => api.sshDisable(c))}
+            disabled={!client || disabled}
+            onClick={() => void act('off', false, (c) => api.sshDisable(c))}
           >
             {busy === 'off' ? t('ssh_turning_off') : t('ssh_off_now')}
           </button>
@@ -240,8 +311,12 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
       )}
 
       {!pinSet && !status.on && <p className="hint">{t('ssh_needs_pin')}</p>}
+      {!status.passphraseSet && !status.setupMode && <p className="hint">{t('ssh_passphrase_missing')}</p>}
+      {status.lockedUntil && (
+        <p className="note note--warn">{fill(t('ssh_passphrase_locked_until'), clock(status.lockedUntil, lang))}</p>
+      )}
 
-      {!status.on && hasKeys && !replacing && (
+      {!status.on && usable && hasKeys && !replacing && (
         <form noValidate onSubmit={(e) => void switchOn(e)}>
           <fieldset className="fieldset-plain">
             <legend className="label">{t('ssh_keys_saved')}</legend>
@@ -257,7 +332,7 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
               <input
                 type="checkbox"
                 checked={confirmed}
-                disabled={busy !== null}
+                disabled={disabled}
                 aria-describedby={`${id}-confirm-hint`}
                 onChange={(e) => setConfirmed(e.target.checked)}
               />
@@ -276,7 +351,7 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
                 id={`${id}-minutes`}
                 className="input"
                 value={minutes}
-                disabled={busy !== null}
+                disabled={disabled}
                 onChange={(e) => setMinutes(Number(e.target.value))}
               >
                 {durations.map((m) => (
@@ -286,12 +361,9 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
                 ))}
               </select>
             </div>
-            {pinSet && pinField(`${id}-pin`, pin, setPin)}
-            <button
-              type="submit"
-              className="btn"
-              disabled={!client || busy !== null || !pinSet || !confirmed || pin.trim() === ''}
-            >
+            {secretField(`${id}-on-secret`, 'ssh_passphrase', secret, setSecret)}
+            {pinSet && pinField(`${id}-pin`)}
+            <button type="submit" className="btn" disabled={!client || disabled || !ready || !confirmed}>
               {busy === 'on' ? t('ssh_turning_on') : t('ssh_on')}
             </button>
           </div>
@@ -299,7 +371,7 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
             <button
               type="button"
               className="btn btn--sm btn--plain"
-              disabled={busy !== null}
+              disabled={disabled}
               onClick={() => setReplacing(true)}
             >
               {t('ssh_keys_other')}
@@ -307,8 +379,8 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
             <button
               type="button"
               className="btn btn--sm btn--plain"
-              disabled={!client || busy !== null}
-              onClick={() => void act('forget', '', (c) => api.sshDisable(c, true))}
+              disabled={!client || disabled}
+              onClick={() => void act('forget', false, (c) => api.sshDisable(c, true))}
             >
               {t('ssh_keys_forget')}
             </button>
@@ -331,7 +403,7 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
               aria-describedby={`${id}-keys-hint`}
               placeholder="ssh-ed25519 AAAA… name@example.invalid"
               value={keys}
-              disabled={busy !== null}
+              disabled={disabled}
               onChange={(e) => setKeys(e.target.value)}
             />
             <p id={`${id}-keys-hint`} className="hint">
@@ -339,12 +411,9 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
             </p>
           </div>
           <div className="row-controls">
-            {pinSet && pinField(`${id}-keys-pin`, keysPin, setKeysPin)}
-            <button
-              type="submit"
-              className="btn"
-              disabled={!client || busy !== null || !pinSet || keys.trim() === '' || keysPin.trim() === ''}
-            >
+            {secretField(`${id}-keys-secret`, 'ssh_passphrase', secret, setSecret)}
+            {pinSet && pinField(`${id}-keys-pin`)}
+            <button type="submit" className="btn" disabled={!client || disabled || !ready || keys.trim() === ''}>
               {busy === 'keys' ? t('ssh_keys_saving') : t('ssh_keys_save')}
             </button>
             {hasKeys && (
@@ -354,6 +423,34 @@ export function RemoteMaintenance({ t, lang, client }: RemoteMaintenanceProps) {
             )}
           </div>
         </form>
+      )}
+
+      {(status.setupMode || status.passphraseSet) && (
+        <details className="more" open={!status.passphraseSet}>
+          <summary>{status.passphraseSet ? t('ssh_passphrase_change') : t('ssh_passphrase_set')}</summary>
+          <form noValidate onSubmit={(e) => void savePassphrase(e)}>
+            <p className="hint">{t('ssh_passphrase_hint')}</p>
+            <div className="row-controls">
+              {status.passphraseSet && secretField(`${id}-old`, 'ssh_passphrase_old', ppOld, setPpOld)}
+              {secretField(`${id}-new`, 'ssh_passphrase_new', nextSecret, setNextSecret, 'ssh_passphrase_rule')}
+              {pinSet && pinField(`${id}-pp-pin`, ppPin, setPpPin)}
+              <button
+                type="submit"
+                className="btn"
+                disabled={
+                  !client ||
+                  disabled ||
+                  !pinSet ||
+                  ppPin.trim() === '' ||
+                  Array.from(nextSecret).length < MIN_PASSPHRASE ||
+                  (status.passphraseSet && ppOld === '')
+                }
+              >
+                {t('ssh_passphrase_save')}
+              </button>
+            </div>
+          </form>
+        </details>
       )}
     </section>
   );

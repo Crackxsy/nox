@@ -40,7 +40,12 @@ POLICY_PATH = REPO_ROOT / "docs" / "scan_policy_secrets.yaml"
 
 # Named patterns: (label, compiled regex). Matched against individual lines.
 NAMED_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("anthropic_or_openai_key", re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b")),
+    # Not OpenSSH's own key type names (`sk-ssh-ed25519@openssh.com`, `sk-ecdsa-sha2-nistp256@...`):
+    # protocol identifiers, not keys.
+    (
+        "anthropic_or_openai_key",
+        re.compile(r"\bsk-(?!(?:ssh|ecdsa)-[a-z0-9-]+@openssh\.com\b)[A-Za-z0-9_-]{16,}\b"),
+    ),
     ("twitch_irc_oauth", re.compile(r"\boauth:[A-Za-z0-9]{10,}\b")),
     ("github_token", re.compile(r"\bghp_[A-Za-z0-9]{20,}\b")),
     ("telegram_bot_token", re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b")),

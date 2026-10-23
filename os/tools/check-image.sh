@@ -120,7 +120,24 @@ helper_socket_for_nox_service_only() {
   [ "$(grep -hE '^[[:space:]]*SupplementaryGroups=' "$root"/etc/systemd/system/nox.service.d/*.conf 2>/dev/null)" \
     = 'SupplementaryGroups=nox-os-helper' ]
 }
-# No stored remote-maintenance keys ship: the folder is made at boot, root only.
+# Every file or folder named authorized_keys*, but the manual page openssh-server ships
+# (/usr/share/man/[<lang>/]man5/authorized_keys.5.gz) - that one is named on stderr as skipped.
+authorized_keys_files() {
+  local path
+  while IFS= read -r path; do
+    case "${path#"$root"}" in
+      /usr/share/man/man5/authorized_keys.5.gz | /usr/share/man/*/man5/authorized_keys.5.gz)
+        [ -f "$path" ] && [ ! -L "$path" ] && { printf '      skipped (manual page): %s\n' "${path#"$root"}" >&2; continue; } ;;
+    esac
+    printf '%s\n' "${path#"$root"}"
+  done < <(find "$root" -xdev -name 'authorized_keys*' 2>/dev/null)
+}
+# No firewall, no Nox: nox.service requires nftables.service (a drop-in).
+nox_needs_the_firewall() {
+  grep -qsx 'Requires=nftables.service' "$root"/etc/systemd/system/nox.service.d/*.conf \
+    && grep -qsx 'After=nftables.service' "$root"/etc/systemd/system/nox.service.d/*.conf
+}
+# No stored remote-maintenance keys or passphrase ship: the folder is made at boot, root only.
 no_stored_keys() {
   [ ! -e "$root/var/lib/nox-os" ] || none < <(find "$root/var/lib/nox-os" -mindepth 1 2>/dev/null)
 }
@@ -150,9 +167,8 @@ run_checks() {
   check "no password in /etc/shadow" none < <(awk -F: '$2 != "*" && $2 != "!" && $2 != "!*" && $2 != "!!" {print $1}' "$root/etc/shadow")
   check "no password in /etc/passwd" none < <(awk -F: '$2 != "x" {print $1}' "$root/etc/passwd")
   check "no NOPASSWD sudo" none < <(grep -rls 'NOPASSWD' "$root/etc/sudoers" "$root/etc/sudoers.d" 2>/dev/null)
-  # Anywhere a key could be read from - everything but the packages' own files under /usr.
-  check "no authorized_keys anywhere outside /usr" none < <(find "$root" -xdev -path "$root/usr" -prune \
-    -o -name 'authorized_keys*' -print 2>/dev/null)
+  # Anywhere at all - except the one file openssh-server ships by that name, its manual page.
+  check "no authorized_keys anywhere (but sshd's manual page)" none < <(authorized_keys_files)
   check "no stored remote-maintenance keys" no_stored_keys
   check "no SSH host keys (made per device on first boot)" none < <(find "$root/etc/ssh" -name 'ssh_host_*' 2>/dev/null)
   check "ssh.service, ssh.socket, sshswitch.service masked" masked ssh.service ssh.socket sshswitch.service
@@ -172,6 +188,7 @@ run_checks() {
 
   # O2: firewall, default deny from the start.
   check "nftables.service enabled" enabled sysinit.target nftables.service
+  check "nox.service does not start without the firewall" nox_needs_the_firewall
   check "nox-firewall.service and .path enabled" firewall_units_enabled
   check "boot firewall: default deny, no port of Nox's or SSH open" firewall_closed_at_boot
 

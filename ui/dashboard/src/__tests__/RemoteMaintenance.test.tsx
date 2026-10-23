@@ -1,7 +1,8 @@
 /**
- * Einstellungen › System › Fernwartung (SSH): shown only on Nox-OS; keys first (PIN), shown by
- * their fingerprints; on only after the owner confirmed exactly those (PIN, time); a visible
- * notice while on; off and forgetting with one click; refusals in words - against a scripted core.
+ * Einstellungen › System › Fernwartung (SSH): shown only on Nox-OS; keys first (PIN and maintenance
+ * passphrase), shown by their fingerprints; on only after the owner confirmed exactly those (PIN,
+ * passphrase, time); the passphrase set during setup and changed with the old one; a visible notice
+ * while on; off and forgetting with one click; refusals in words - against a scripted core.
  */
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
@@ -12,9 +13,17 @@ import { translator } from '../i18n';
 import { type IpcClient, IpcError } from '../ipc';
 
 const t = translator('de');
-const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f admin@example.invalid';
+/** A fictitious ed25519 public key, built here from the bytes 0..31 (nobody owns it). */
+function publicKey(): string {
+  const field = (bytes: number[]) => [0, 0, 0, bytes.length, ...bytes];
+  const kind = Array.from('ssh-ed25519', (c) => c.charCodeAt(0));
+  const blob = [...field(kind), ...field(Array.from({ length: 32 }, (_, i) => i))];
+  return `ssh-ed25519 ${btoa(String.fromCharCode(...blob))} admin@example.invalid`;
+}
+const KEY = publicKey();
 const FP = 'SHA256:fictitiousFingerprintOfAKeyNobodyOwns000000';
 const STORED = [{ type: 'ssh-ed25519', fingerprint: FP, comment: 'laptop' }];
+const PASS = 'correct horse battery staple'; // fictitious
 
 function status(over: Record<string, unknown> = {}) {
   return {
@@ -25,6 +34,9 @@ function status(over: Record<string, unknown> = {}) {
     seconds_left: null,
     active_keys: [],
     keys: [],
+    passphrase_set: true,
+    locked_until: null,
+    setup_mode: false,
     default_minutes: 60,
     min_minutes: 5,
     max_minutes: 240,
@@ -50,6 +62,8 @@ function core(over: Answers = {}) {
     'noxos.ssh.keys.set': status({ keys: STORED }),
     'noxos.ssh.enable': ON,
     'noxos.ssh.disable': status({ keys: STORED }),
+    'noxos.ssh.passphrase.set': status(),
+    'noxos.ssh.passphrase.change': status(),
     ...over,
   };
   const client = {
@@ -77,6 +91,10 @@ async function click(name: string) {
   });
 }
 
+/** The PIN field of the main form (the passphrase form below has its own). */
+const mainPin = () => screen.getAllByLabelText(t('lan_pair_pin'))[0] as HTMLInputElement;
+const type = (el: HTMLElement, value: string) => fireEvent.change(el, { target: { value } });
+
 describe('RemoteMaintenance', () => {
   it('shows nothing where it is not Nox-OS', async () => {
     await show({ 'noxos.ssh.status': status({ available: false, reason: 'not_nox_os' }) });
@@ -89,14 +107,20 @@ describe('RemoteMaintenance', () => {
     expect(screen.queryByText(t('ssh_title'))).toBeNull();
   });
 
-  it('stores keys first and shows their fingerprints, switching nothing on', async () => {
+  it('stores keys first, with PIN and passphrase, and shows their fingerprints', async () => {
     const { calls } = await show();
     const save = screen.getByRole('button', { name: t('ssh_keys_save') }) as HTMLButtonElement;
-    expect(save.disabled).toBe(true); // no key, no PIN yet
-    fireEvent.change(screen.getByLabelText(t('ssh_keys_label')), { target: { value: KEY } });
-    fireEvent.change(screen.getByLabelText(t('lan_pair_pin')), { target: { value: '4711' } });
+    type(screen.getByLabelText(t('ssh_keys_label')), KEY);
+    type(mainPin(), '4711');
+    expect(save.disabled).toBe(true); // no passphrase yet
+    const secret = screen.getByLabelText(t('ssh_passphrase')) as HTMLInputElement;
+    type(secret, PASS);
     await click(t('ssh_keys_save'));
-    expect(calls.find((c) => c.name === 'noxos.ssh.keys.set')?.payload).toEqual({ keys: KEY, pin: '4711' });
+    expect(calls.find((c) => c.name === 'noxos.ssh.keys.set')?.payload).toEqual({
+      keys: KEY,
+      passphrase: PASS,
+      pin: '4711',
+    });
     expect(calls.some((c) => c.name === 'noxos.ssh.enable')).toBe(false);
     expect(screen.getByText(FP)).toBeTruthy();
     expect(screen.getByText(t('ssh_off_state'))).toBeTruthy();
@@ -105,8 +129,9 @@ describe('RemoteMaintenance', () => {
   it('switches on only after the fingerprints are confirmed, naming exactly those', async () => {
     const { calls } = await show({ 'noxos.ssh.status': status({ keys: STORED }) });
     const on = screen.getByRole('button', { name: t('ssh_on') }) as HTMLButtonElement;
-    fireEvent.change(screen.getByLabelText(t('lan_pair_pin')), { target: { value: '4711' } });
-    fireEvent.change(screen.getByLabelText(t('ssh_minutes_label')), { target: { value: '30' } });
+    type(mainPin(), '4711');
+    type(screen.getByLabelText(t('ssh_passphrase')), PASS);
+    type(screen.getByLabelText(t('ssh_minutes_label')), '30');
     expect(on.disabled).toBe(true); // not confirmed yet
     fireEvent.click(screen.getByLabelText(t('ssh_confirm_keys')));
     expect(on.disabled).toBe(false);
@@ -114,6 +139,7 @@ describe('RemoteMaintenance', () => {
     expect(calls.find((c) => c.name === 'noxos.ssh.enable')?.payload).toEqual({
       minutes: 30,
       fingerprints: [FP],
+      passphrase: PASS,
       pin: '4711',
     });
     const notice = screen.getAllByRole('status').find((n) => n.textContent?.includes('SSH ist an'));
@@ -135,16 +161,73 @@ describe('RemoteMaintenance', () => {
     expect(screen.queryByLabelText(t('lan_pair_pin'))).toBeNull();
   });
 
-  it('words a refused key and clears the PIN', async () => {
+  it('without a passphrase, says it is set during setup and offers no keys or switch', async () => {
+    await show({ 'noxos.ssh.status': status({ passphrase_set: false }) });
+    expect(screen.getByText(t('ssh_passphrase_missing'))).toBeTruthy();
+    expect(screen.queryByRole('button', { name: t('ssh_keys_save') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('ssh_passphrase_save') })).toBeNull();
+  });
+
+  it('during setup, sets the passphrase (at least 12 characters) with the PIN', async () => {
+    const { calls } = await show({ 'noxos.ssh.status': status({ passphrase_set: false, setup_mode: true }) });
+    const save = screen.getByRole('button', { name: t('ssh_passphrase_save') }) as HTMLButtonElement;
+    type(screen.getByLabelText(t('lan_pair_pin')), '4711');
+    type(screen.getByLabelText(t('ssh_passphrase_new')), 'too short');
+    expect(save.disabled).toBe(true);
+    type(screen.getByLabelText(t('ssh_passphrase_new')), PASS);
+    expect(save.disabled).toBe(false);
+    await click(t('ssh_passphrase_save'));
+    expect(calls.find((c) => c.name === 'noxos.ssh.passphrase.set')?.payload).toEqual({ new: PASS, pin: '4711' });
+    expect(screen.getByText(t('ssh_passphrase_saved'))).toBeTruthy();
+    expect((screen.getByLabelText(t('ssh_passphrase_new')) as HTMLInputElement).value).toBe('');
+  });
+
+  it('changes the passphrase with the old one', async () => {
+    const { calls } = await show();
+    const pins = screen.getAllByLabelText(t('lan_pair_pin'));
+    type(pins[pins.length - 1], '4711');
+    type(screen.getByLabelText(t('ssh_passphrase_old')), PASS);
+    type(screen.getByLabelText(t('ssh_passphrase_new')), 'a brand new passphrase');
+    await click(t('ssh_passphrase_save'));
+    expect(calls.find((c) => c.name === 'noxos.ssh.passphrase.change')?.payload).toEqual({
+      old: PASS,
+      new: 'a brand new passphrase',
+      pin: '4711',
+    });
+  });
+
+  it('says when the passphrase is locked and offers nothing to switch on', async () => {
+    await show({
+      'noxos.ssh.status': status({ keys: STORED, locked_until: '2026-10-22T13:00:00+00:00' }),
+    });
+    expect(screen.getByText((text) => text.startsWith('Zu viele falsche Wartungs-Passphrasen'))).toBeTruthy();
+    expect(screen.queryByRole('button', { name: t('ssh_on') })).toBeNull();
+  });
+
+  it('words a wrong passphrase and clears both secrets', async () => {
+    await show({
+      'noxos.ssh.status': status({ keys: STORED }),
+      'noxos.ssh.enable': new IpcError('permission.denied', 'wrong', false, { reason: 'passphrase_wrong' }),
+    });
+    fireEvent.click(screen.getByLabelText(t('ssh_confirm_keys')));
+    type(mainPin(), '4711');
+    const secret = screen.getByLabelText(t('ssh_passphrase')) as HTMLInputElement;
+    type(secret, 'not the passphrase');
+    await click(t('ssh_on'));
+    expect(screen.getByRole('alert').textContent).toBe(t('ssh_err_passphrase_wrong'));
+    expect(secret.value).toBe('');
+    expect(mainPin().value).toBe('');
+  });
+
+  it('words a refused key', async () => {
     await show({
       'noxos.ssh.keys.set': new IpcError('validation.failed', 'only ed25519', false, { reason: 'invalid_key', key: 'type' }),
     });
-    fireEvent.change(screen.getByLabelText(t('ssh_keys_label')), { target: { value: 'ssh-rsa AAAA' } });
-    const pin = screen.getByLabelText(t('lan_pair_pin')) as HTMLInputElement;
-    fireEvent.change(pin, { target: { value: '4711' } });
+    type(screen.getByLabelText(t('ssh_keys_label')), 'ssh-rsa AAAA');
+    type(mainPin(), '4711');
+    type(screen.getByLabelText(t('ssh_passphrase')), PASS);
     await click(t('ssh_keys_save'));
     expect(screen.getByRole('alert').textContent).toBe(t('ssh_err_key'));
-    expect(pin.value).toBe('');
   });
 
   it('words a refusal to switch on with keys that are not the stored ones', async () => {
@@ -153,7 +236,8 @@ describe('RemoteMaintenance', () => {
       'noxos.ssh.enable': new IpcError('unavailable', 'not the ones confirmed', false, { reason: 'helper_refused' }),
     });
     fireEvent.click(screen.getByLabelText(t('ssh_confirm_keys')));
-    fireEvent.change(screen.getByLabelText(t('lan_pair_pin')), { target: { value: '4711' } });
+    type(mainPin(), '4711');
+    type(screen.getByLabelText(t('ssh_passphrase')), PASS);
     await click(t('ssh_on'));
     expect(screen.getByRole('alert').textContent).toBe(t('ssh_err_helper'));
   });

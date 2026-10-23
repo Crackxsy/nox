@@ -100,15 +100,20 @@ def _o2(root: Path) -> None:
         "ModemManager.service",
     ):
         _link(system / unit, "/dev/null")
-    for unit in ("nox-os-helper.socket", "nox-os-helper@.service", "nox-ssh.service"):
+    for unit in (
+        "nox-os-helper.socket",
+        "nox-os-helper@.service",
+        "nox-os-helper-recover.service",
+        "nox-ssh.service",
+    ):
         shutil.copy(HARDENING / unit, system / unit)
     (system / "nox.service.d").mkdir()
-    shutil.copy(
-        HARDENING / "nox-service-helper.conf", system / "nox.service.d" / "50-nox-os-helper.conf"
-    )
+    shutil.copy(HARDENING / "nox-service-nox-os.conf", system / "nox.service.d" / "50-nox-os.conf")
     _write(
         root / "etc" / "group", "root:x:0:\nsudo:x:27:nox-admin\nnox:x:999:\nnox-os-helper:x:998:\n"
     )
+    # The one file by that name a package ships: sshd's manual page.
+    _write(root / "usr" / "share" / "man" / "man5" / "authorized_keys.5.gz", "x")
     firewall = load_tool("nox_firewall", HARDENING)
     _write(root / "etc" / "nftables.conf", firewall.render(firewall.Settings(), boot=True))
     _write(
@@ -278,9 +283,19 @@ SPOILERS: dict[str, Spoil] = {
     "a member in the helper's group": lambda r, b: _replace(
         r / "etc/group", "nox-os-helper:x:998:", "nox-os-helper:x:998:nox"
     ),
-    "nox.service without the helper's group": lambda r, b: (
-        r / "etc/systemd/system/nox.service.d/50-nox-os-helper.conf"
-    ).unlink(),
+    "nox.service without the helper's group": lambda r, b: _replace(
+        r / "etc/systemd/system/nox.service.d/50-nox-os.conf",
+        "SupplementaryGroups=nox-os-helper\n",
+        "",
+    ),
+    "nox.service without the firewall": lambda r, b: _replace(
+        r / "etc/systemd/system/nox.service.d/50-nox-os.conf", "Requires=nftables.service\n", ""
+    ),
+    "authorized_keys under /usr": lambda r, b: _write(r / "usr/share/doc/x/authorized_keys", "x"),
+    "a link named like the manual page": lambda r, b: _link(
+        r / "usr/share/man/de/man5/authorized_keys.5.gz", "/home/nox-admin/.ssh/authorized_keys"
+    ),
+    "a shipped maintenance passphrase": lambda r, b: _write(r / "var/lib/nox-os/maintenance", "x"),
     "a boot firewall letting SSH in from the device itself": lambda r, b: _replace(
         r / "etc/nftables.conf", 'iif "lo" tcp dport 22 drop\n', ""
     ),

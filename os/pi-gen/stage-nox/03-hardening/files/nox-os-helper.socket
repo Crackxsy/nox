@@ -4,6 +4,7 @@
 [Unit]
 Description=Nox-OS root helper socket
 After=systemd-tmpfiles-setup.service
+OnFailure=nox-os-helper-recover.service
 
 [Socket]
 ListenStream=/run/nox-os/helper/helper.sock
@@ -12,6 +13,10 @@ SocketGroup=nox-os-helper
 SocketMode=0660
 Accept=yes
 MaxConnections=4
+# At most 20 connections in 10 s; more fails the socket, and nox-os-helper-recover.service starts it
+# again after a pause.
+TriggerLimitIntervalSec=10s
+TriggerLimitBurst=20
 
 [Install]
 WantedBy=sockets.target

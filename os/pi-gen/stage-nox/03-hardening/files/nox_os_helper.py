@@ -4,14 +4,27 @@ Socket-activated (`nox-os-helper.socket`, one `nox-os-helper@.service` per conne
 one request and answers with one JSON line. It knows exactly these requests and nothing else - no
 shell, no paths, no units, no options:
 
-    status                        on/off, until when, the stored keys' fingerprints
-    keys set                      followed by 1-8 public keys, one per line (ed25519 or ECDSA,
-                                  optionally security-key backed; no options, no other types):
-                                  stored root-owned, answered with their fingerprints
+    status                        on/off, until when, the stored keys' fingerprints, whether a
+                                  maintenance passphrase is set or locked
+    keys set                      then `pass <passphrase>` and 1-8 public keys, one per line
+                                  (ed25519 or ECDSA, optionally security-key backed; no options,
+                                  no other types): stored root-owned, answered with fingerprints
     keys clear                    forget the stored keys
-    ssh on <minutes> <fp>[,<fp>]  on for 5-240 minutes with the stored keys - only if their
-                                  fingerprints are exactly the ones the owner confirmed
+    ssh on <minutes> <fp>[,<fp>]  then `pass <passphrase>`: on for 5-240 minutes with the stored
+                                  keys - only if their fingerprints are exactly the confirmed ones
     ssh off
+    maint set                     then `new <passphrase>`: only while /run/nox-os/setup-mode exists
+                                  (root's; the first-boot setup creates it)
+    maint change                  then `pass <old>` and `new <passphrase>`
+
+Passphrases travel base64-encoded (UTF-8), at least 12 characters.
+
+**The maintenance passphrase** is the barrier between code running as the service user and root:
+the security PIN is checked by Nox, whose files that user can read - a short PIN's hash there can
+be guessed offline. The passphrase is checked here only: scrypt, root 0600 in
+/var/lib/nox-os/maintenance, never in a file the service user can read, never logged. Five wrong
+ones lock it for 15 minutes, every further five for twice as long (at most a day), counted in
+/var/lib/nox-os/maintenance-lockout. Without a passphrase, `keys set` and `ssh on` are refused.
 
 The keys are this helper's alone (/var/lib/nox-os/ssh_keys, root 0600). Nothing the service user
 can write is ever read as a key: a planted file in Nox's folder grants nothing.
@@ -25,11 +38,13 @@ runs for someone run as that user and may inherit the group, but are never the m
 core makes itself non-dumpable on Nox-OS, so they cannot trace it either. The core asks only after
 the security PIN and an administrator's request (`nox.noxos`), and audits it.
 
-`ssh on` writes the keys and a time-limited sudo rule for `nox-admin` under /run/nox-os (gone at
-the next boot), starts `nox-ssh.service` (its own sshd configuration: key only, `nox-admin` only,
-from private networks only - never from this device itself, the firewall drops that), opens port
-22 for private networks and starts a timer that switches all of it off again - open sessions
-included. `ssh off` does that at once. `ssh.service` itself stays masked throughout.
+`ssh on` writes the keys under /run/nox-os, starts `nox-ssh.service`, and only once sshd runs a
+time-limited sudo rule for `nox-admin` (all gone at the next boot). `nox-ssh.service` is sshd with
+its own configuration: key only, `nox-admin` only, from private networks only - never from this
+device itself, the firewall drops that. It then opens port 22 for private networks and starts a
+timer that switches all of it off again - open sessions included. `ssh off` does that at once.
+`ssh.service` itself stays masked throughout. A request that finds the state file saying "on"
+while sshd is not running cleans up first.
 
 Also run by systemd without a socket: `--expire` (the timer) and `--stopped` (`ExecStopPost=` of
 nox-ssh.service: whatever stopped sshd, the keys, the sudo rule and port 22 go with it).
@@ -42,11 +57,13 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 import os
 import re
 import signal
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -66,6 +83,19 @@ KEYS = RUN / "ssh" / "authorized_keys"
 SUDOERS = RUN / "sudoers.d" / "nox-admin"
 #: The keys the owner pasted, kept for the next switch-on: root's, on the card, 0600.
 STORED_KEYS = Path("/var/lib/nox-os/ssh_keys")
+#: The maintenance passphrase (scrypt) and its lockout: root's, 0600.
+PASSPHRASE = Path("/var/lib/nox-os/maintenance")
+LOCKOUT = Path("/var/lib/nox-os/maintenance-lockout")
+#: Present (root's) only while the first-boot setup runs: the one time a passphrase may be set
+#: without knowing an old one.
+SETUP_MODE = RUN / "setup-mode"
+MIN_PASSPHRASE = 12
+MAX_PASSPHRASE = 256
+SCRYPT = {"n": 2**15, "r": 8, "p": 1}
+SCRYPT_MAXMEM = 64 * 1024 * 1024
+LOCK_AFTER = 5
+LOCK_SECONDS = 15 * 60
+LOCK_MAX_SECONDS = 24 * 3600
 SSH_UNIT = "nox-ssh.service"
 FIREWALL_UNIT = "nox-firewall.service"
 OFF_TIMER_PREFIX = "nox-ssh-off-"
@@ -94,7 +124,11 @@ _COMMENT = re.compile(r"[\x21-\x7e]+(?: [\x21-\x7e]+)*")
 
 
 class Refused(ValueError):
-    """A request the helper does not carry out; the message is safe to show."""
+    """A request the helper does not carry out; the message is safe to show, `code` is stable."""
+
+    def __init__(self, message: str, code: str = "refused") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -163,14 +197,42 @@ def parse_key(line: str) -> PublicKey:
 
 @dataclass(frozen=True)
 class Request:
-    command: str  # "status" | "off" | "keys_set" | "keys_clear" | "on"
+    command: str  # status | off | keys_set | keys_clear | on | maint_set | maint_change
     minutes: int = 0
     keys: tuple[PublicKey, ...] = field(default_factory=tuple)
     #: For "on": the fingerprints the owner confirmed - they must be exactly the stored keys.
     fingerprints: tuple[str, ...] = field(default_factory=tuple)
+    #: The maintenance passphrase given (`pass`), and a new one (`new`). Never logged.
+    passphrase: str | None = field(default=None, repr=False)
+    new_passphrase: str | None = field(default=None, repr=False)
 
 
 _FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
+
+
+def _secret(line: str, label: str) -> str:
+    """`<label> <base64 of UTF-8>` -> the passphrase. Its value never reaches a message."""
+    prefix, sep, data = line.partition(" ")
+    if prefix != label or not sep or not _BASE64.fullmatch(data):
+        raise Refused(
+            f"the request needs `{label}` with the maintenance passphrase", "passphrase_missing"
+        )
+    try:
+        text = base64.b64decode(data, validate=True).decode("utf-8")
+    except (binascii.Error, ValueError):
+        raise Refused("the maintenance passphrase is not readable", "passphrase_wrong") from None
+    if not 1 <= len(text) <= MAX_PASSPHRASE or any(c in text for c in "\x00\n\r"):
+        raise Refused("the maintenance passphrase is not readable", "passphrase_wrong")
+    return text
+
+
+def _new_secret(line: str) -> str:
+    text = _secret(line, "new")
+    if len(text) < MIN_PASSPHRASE:
+        raise Refused(
+            f"a maintenance passphrase has at least {MIN_PASSPHRASE} characters", "passphrase_short"
+        )
+    return text
 
 
 def parse_request(data: bytes) -> Request:
@@ -190,21 +252,31 @@ def parse_request(data: bytes) -> Request:
         return Request("off")
     if words == ["keys", "clear"] and not rest:
         return Request("keys_clear")
+    if words == ["maint", "set"] and len(rest) == 1:
+        return Request("maint_set", new_passphrase=_new_secret(rest[0]))
+    if words == ["maint", "change"] and len(rest) == 2:
+        return Request(
+            "maint_change", passphrase=_secret(rest[0], "pass"), new_passphrase=_new_secret(rest[1])
+        )
     if words == ["keys", "set"]:
         if not rest:
+            raise Refused("the maintenance passphrase and at least one public key")
+        passphrase = _secret(rest[0], "pass")
+        key_lines = rest[1:]
+        if not key_lines:
             raise Refused("at least one public key")
-        if len(rest) > MAX_KEYS:
+        if len(key_lines) > MAX_KEYS:
             raise Refused(f"at most {MAX_KEYS} public keys")
         keys: dict[bytes, PublicKey] = {}
-        for line in rest:
+        for line in key_lines:
             key = parse_key(line)
             keys.setdefault(key.blob, key)
-        return Request("keys_set", keys=tuple(keys.values()))
+        return Request("keys_set", keys=tuple(keys.values()), passphrase=passphrase)
     if (
         len(words) == 4
         and words[:2] == ["ssh", "on"]
         and re.fullmatch(r"[0-9]{1,4}", words[2])
-        and not rest
+        and len(rest) == 1
     ):
         minutes = int(words[2])
         if not MIN_MINUTES <= minutes <= MAX_MINUTES:
@@ -214,7 +286,9 @@ def parse_request(data: bytes) -> Request:
             _FINGERPRINT.fullmatch(f) for f in confirmed
         ):
             raise Refused("the confirmed key fingerprints are missing or malformed")
-        return Request("on", minutes, fingerprints=tuple(confirmed))
+        return Request(
+            "on", minutes, fingerprints=tuple(confirmed), passphrase=_secret(rest[0], "pass")
+        )
     raise Refused("unknown request")
 
 
@@ -242,6 +316,8 @@ class System:
     clock: Callable[[], float] = time.time
     root: Path = Path("/")
     uid_of: Callable[[str], int | None] = _uid_of
+    #: Who owns what only root may create (tests run as someone else).
+    root_uid: int = 0
 
     def path(self, path: Path) -> Path:
         return self.root / path.relative_to("/")
@@ -327,6 +403,9 @@ def status(system: System) -> dict[str, object]:
         "active": state.get("keys", []) if on else [],
         "keys": _key_views(stored_keys(system)),
         "running": running,
+        "passphrase": passphrase_set(system),
+        "locked_until": locked_until(system),
+        "setup_mode": in_setup_mode(system),
     }
 
 
@@ -371,22 +450,20 @@ def switch_on(system: System, minutes: int, confirmed: Sequence[str]) -> dict[st
     now = system.clock()
     until = int(now + minutes * 60)
     system.write(KEYS, "".join(f"{key.line}\n" for key in keys), 0o644)
-    # Administration over SSH needs root; nox-admin has no password, so sudo asks for none - and
-    # only while remote maintenance is on (the rule lives under /run and goes with it).
-    system.write(SUDOERS, f"{ADMIN_USER} ALL=(ALL:ALL) NOPASSWD: ALL\n", 0o440)
     system.write(
         STATE,
         json.dumps({"on": True, "until": until, "keys": [k.fingerprint for k in keys]}) + "\n",
         0o644,
     )
-    steps = (
-        ("start", (SSH_UNIT,)),
-        ("restart", (FIREWALL_UNIT,)),
-    )
-    for verb, units in steps:
-        if not system.systemctl(verb, *units):
-            switch_off(system, "failed")
-            raise Refused(f"remote maintenance could not be switched on ({verb} {units[0]})")
+    if not system.systemctl("start", SSH_UNIT) or not system.active(SSH_UNIT):
+        switch_off(system, "failed")
+        raise Refused(f"remote maintenance could not be switched on (start {SSH_UNIT})")
+    # Administration over SSH needs root; nox-admin has no password, so sudo asks for none - and
+    # only while sshd runs for remote maintenance (the rule lives under /run and goes with it).
+    system.write(SUDOERS, f"{ADMIN_USER} ALL=(ALL:ALL) NOPASSWD: ALL\n", 0o440)
+    if not system.systemctl("restart", FIREWALL_UNIT):
+        switch_off(system, "failed")
+        raise Refused(f"remote maintenance could not be switched on (restart {FIREWALL_UNIT})")
     # The way back: a timer of its own per switch-on. An earlier one that fires first finds a
     # later end in the state file and does nothing (`expire`).
     timer = system.run(
@@ -415,16 +492,127 @@ def expire(system: System) -> None:
     switch_off(system, "expired")
 
 
+def reconcile(system: System) -> None:
+    """The state file says "on" but sshd does not run (it crashed, or the machine lost power
+    halfway): clean up before anything else, so nothing stays switched on without sshd."""
+    if system.read_state().get("on") is True and not system.active(SSH_UNIT):
+        clean_up(system, "reconciled")
+
+
 def handle(request: Request, system: System) -> dict[str, object]:
+    reconcile(system)
     if request.command == "status":
         return status(system)
     if request.command == "off":
         return switch_off(system, "dashboard")
-    if request.command == "keys_set":
-        return set_keys(system, request.keys)
     if request.command == "keys_clear":
         return clear_keys(system)
+    if request.command == "maint_set":
+        if not in_setup_mode(system):
+            raise Refused(
+                "a maintenance passphrase can be set only during setup; change it with the old one",
+                "not_setup",
+            )
+        store_passphrase(system, request.new_passphrase or "")
+        return status(system)
+    # Everything else needs the maintenance passphrase.
+    verify_passphrase(system, request.passphrase or "")
+    if request.command == "maint_change":
+        store_passphrase(system, request.new_passphrase or "")
+        return status(system)
+    if request.command == "keys_set":
+        return set_keys(system, request.keys)
     return switch_on(system, request.minutes, request.fingerprints)
+
+
+# ---- the maintenance passphrase ------------------------------------------------------------
+
+
+def in_setup_mode(system: System) -> bool:
+    """/run/nox-os/setup-mode exists, is a plain file and belongs to root (only root can put it
+    in /run/nox-os)."""
+    try:
+        info = system.path(SETUP_MODE).lstat()
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and info.st_uid == system.root_uid
+
+
+def _scrypt(passphrase: str, salt: bytes, params: dict[str, int]) -> bytes:
+    return hashlib.scrypt(
+        passphrase.encode("utf-8"),
+        salt=salt,
+        n=params["n"],
+        r=params["r"],
+        p=params["p"],
+        maxmem=SCRYPT_MAXMEM,
+        dklen=32,
+    )
+
+
+def store_passphrase(system: System, passphrase: str) -> None:
+    if len(passphrase) < MIN_PASSPHRASE:
+        raise Refused(
+            f"a maintenance passphrase has at least {MIN_PASSPHRASE} characters",
+            "passphrase_short",
+        )
+    salt = os.urandom(16)
+    record = {
+        "v": 1,
+        "kdf": "scrypt",
+        **SCRYPT,
+        "salt": base64.b64encode(salt).decode("ascii"),
+        "hash": base64.b64encode(_scrypt(passphrase, salt, SCRYPT)).decode("ascii"),
+    }
+    system.write(PASSPHRASE, json.dumps(record) + "\n", 0o600)
+    system.remove(LOCKOUT)
+
+
+def _read_json(system: System, path: Path) -> dict[str, object]:
+    try:
+        data = json.loads(system.read(path))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def passphrase_set(system: System) -> bool:
+    return bool(_read_json(system, PASSPHRASE).get("hash"))
+
+
+def locked_until(system: System) -> int | None:
+    until = _read_json(system, LOCKOUT).get("until")
+    if isinstance(until, (int, float)) and not isinstance(until, bool) and until > system.clock():
+        return int(until)
+    return None
+
+
+def verify_passphrase(system: System, passphrase: str) -> None:
+    """Pass, or raise Refused - a wrong one counts towards the lockout."""
+    if locked_until(system) is not None:
+        raise Refused(
+            "too many wrong maintenance passphrases; try again later", "passphrase_locked"
+        )
+    record = _read_json(system, PASSPHRASE)
+    try:
+        salt = base64.b64decode(str(record["salt"]), validate=True)
+        expected = base64.b64decode(str(record["hash"]), validate=True)
+        params = {k: int(str(record[k])) for k in ("n", "r", "p")}
+    except (KeyError, ValueError, binascii.Error):
+        raise Refused(
+            "no maintenance passphrase is set; set one during setup", "passphrase_missing"
+        ) from None
+    if hmac.compare_digest(_scrypt(passphrase, salt, params), expected):
+        system.remove(LOCKOUT)
+        return
+    previous = _read_json(system, LOCKOUT).get("failures")
+    failures = (previous if isinstance(previous, int) else 0) + 1
+    entry: dict[str, object] = {"failures": failures}
+    if failures % LOCK_AFTER == 0:
+        seconds = min(LOCK_SECONDS * 2 ** (failures // LOCK_AFTER - 1), LOCK_MAX_SECONDS)
+        entry["until"] = int(system.clock() + seconds)
+    system.write(LOCKOUT, json.dumps(entry) + "\n", 0o600)
+    raise Refused("wrong maintenance passphrase", "passphrase_wrong")
 
 
 # ---- who is asking -------------------------------------------------------------------------
@@ -557,15 +745,15 @@ def serve(conn: socket.socket, system: System) -> int:
         print(
             f"nox-os-helper: refused a request from pid {peer.pid} uid {peer.uid}", file=sys.stderr
         )
-        answer({"ok": False, "error": "not allowed"})
-        return 1
+        answer({"ok": False, "error": "not allowed", "code": "not_allowed"})
+        return 0
     try:
         request = parse_request(_read_request(conn))
         result = handle(request, system)
     except Refused as exc:
         print(f"nox-os-helper: refused: {exc}", file=sys.stderr)
-        answer({"ok": False, "error": str(exc)})
-        return 1
+        answer({"ok": False, "error": str(exc), "code": exc.code})
+        return 0  # a refusal is an answer, not a failure of the unit
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"nox-os-helper: failed: {type(exc).__name__}", file=sys.stderr)
         answer({"ok": False, "error": "the helper failed"})

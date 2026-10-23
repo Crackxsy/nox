@@ -69,6 +69,8 @@ DEVICE_SURFACE = frozenset(
         "noxos.ssh.disable",
         "noxos.ssh.enable",
         "noxos.ssh.keys.set",
+        "noxos.ssh.passphrase.change",
+        "noxos.ssh.passphrase.set",
         "noxos.ssh.status",
         "personality.get",
         "plans.approve",

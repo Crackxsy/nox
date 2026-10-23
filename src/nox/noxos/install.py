@@ -21,17 +21,28 @@ never from the device itself), port 22 open for private networks, sudo for `nox-
 timer that ends all of it - open sessions included - after the chosen time (60 minutes unless
 asked otherwise, 5 to 240).
 
+**The maintenance passphrase.** The security PIN is checked by Nox, and Nox's files can be read
+by the service user - a short PIN's hash there could be guessed offline, and code running as that
+user would then be one step from root. So setting the keys and switching on also need the
+maintenance passphrase (at least 12 characters), which only the root helper checks (scrypt, root
+0600, its own lockout). The core passes it through in the one request and never stores, logs or
+audits it. It is set during the first-boot setup (`noxos.ssh.passphrase.set`, accepted by the
+helper only in setup mode) and changed with the old one (`noxos.ssh.passphrase.change`).
+
 Requests, for the UI roles:
   * `noxos.ssh.status` - available here or not, on/off, until when, the stored keys,
-  * `noxos.ssh.keys.set` - `{pin, keys}`: pasted public keys replace the stored ones; the answer
-    has their fingerprints,
-  * `noxos.ssh.enable` - `{pin, minutes, fingerprints}`: the fingerprints the owner confirmed,
-  * `noxos.ssh.disable` - `{forget_keys?}`.
+  * `noxos.ssh.keys.set` - `{pin, passphrase, keys}`: pasted public keys replace the stored ones;
+    the answer has their fingerprints,
+  * `noxos.ssh.enable` - `{pin, passphrase, minutes, fingerprints}`: the confirmed fingerprints,
+  * `noxos.ssh.disable` - `{forget_keys?}`,
+  * `noxos.ssh.passphrase.set` - `{pin, new}`: only during setup,
+  * `noxos.ssh.passphrase.change` - `{pin, old, new}`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
 import sys
@@ -48,6 +59,7 @@ from nox.ipc.errors import ERR_PERMISSION, ERR_UNAVAILABLE, ERR_VALIDATION, IpcE
 from nox.ipc.roles import UI_ROLES
 from nox.lan.install import authorize_admin
 from nox.noxos.keys import MAX_KEYS, InvalidKeyError, parse_keys
+from nox.noxos.protect import protected
 
 log = get_logger(__name__)
 
@@ -56,7 +68,6 @@ __all__ = [
     "HELPER_SOCKET",
     "HelperError",
     "install",
-    "protect_core",
     "unix_helper",
 ]
 
@@ -69,6 +80,12 @@ MAX_MINUTES = 240
 HELPER_TIMEOUT_S = 90.0
 MAX_ANSWER_BYTES = 64 * 1024
 FINGERPRINT_PATTERN = r"^SHA256:[A-Za-z0-9+/]{43}$"
+MIN_PASSPHRASE = 12
+MAX_PASSPHRASE = 256
+#: The helper's refusal codes the dashboard words itself (`details.reason`).
+HELPER_CODES = frozenset(
+    {"passphrase_missing", "passphrase_wrong", "passphrase_locked", "passphrase_short", "not_setup"}
+)
 
 #: One call to the root helper: request lines in, its JSON answer out.
 HelperCall = Callable[[list[str]], Awaitable[dict[str, Any]]]
@@ -77,9 +94,10 @@ HelperCall = Callable[[list[str]], Awaitable[dict[str, Any]]]
 class HelperError(Exception):
     """The helper could not be reached, or refused (`refused`: its message is safe to show)."""
 
-    def __init__(self, message: str, *, refused: bool = False) -> None:
+    def __init__(self, message: str, *, refused: bool = False, code: str = "") -> None:
         super().__init__(message)
         self.refused = refused
+        self.code = code
 
 
 def unix_helper(path: Path = HELPER_SOCKET, timeout_s: float = HELPER_TIMEOUT_S) -> HelperCall:
@@ -108,7 +126,11 @@ def unix_helper(path: Path = HELPER_SOCKET, timeout_s: float = HELPER_TIMEOUT_S)
         if not isinstance(answer, dict):
             raise HelperError("the Nox-OS helper gave an answer that cannot be read")
         if answer.get("ok") is not True:
-            raise HelperError(str(answer.get("error", "refused"))[:200], refused=True)
+            raise HelperError(
+                str(answer.get("error", "refused"))[:200],
+                refused=True,
+                code=str(answer.get("code", ""))[:40],
+            )
         return answer
 
     return call
@@ -118,14 +140,26 @@ class StatusRequest(BaseModel):
     pass
 
 
+def _passphrase(min_length: int = 1) -> Any:
+    # Never logged: validation errors carry no input values (`nox.ipc.dispatch`).
+    return Field(min_length=min_length, max_length=MAX_PASSPHRASE, repr=False)
+
+
+def _line(label: str, secret: str) -> str:
+    """How the helper takes a passphrase: base64 of its UTF-8, on a line of its own."""
+    return f"{label} {base64.b64encode(secret.encode('utf-8')).decode('ascii')}"
+
+
 class KeysRequest(BaseModel):
     pin: str | None = Field(default=None, max_length=128)
+    passphrase: str = _passphrase()
     #: Pasted public keys, one per line; they replace the stored ones.
     keys: str = Field(min_length=1, max_length=MAX_KEYS * 1100)
 
 
 class EnableRequest(BaseModel):
     pin: str | None = Field(default=None, max_length=128)
+    passphrase: str = _passphrase()
     minutes: int = Field(default=DEFAULT_MINUTES, ge=MIN_MINUTES, le=MAX_MINUTES)
     #: The stored keys' fingerprints as the owner saw and confirmed them.
     fingerprints: list[str] = Field(min_length=1, max_length=MAX_KEYS)
@@ -143,6 +177,17 @@ class EnableRequest(BaseModel):
 
 class DisableRequest(BaseModel):
     forget_keys: bool = False
+
+
+class PassphraseSetRequest(BaseModel):
+    pin: str | None = Field(default=None, max_length=128)
+    new: str = _passphrase(MIN_PASSPHRASE)
+
+
+class PassphraseChangeRequest(BaseModel):
+    pin: str | None = Field(default=None, max_length=128)
+    old: str = _passphrase()
+    new: str = _passphrase(MIN_PASSPHRASE)
 
 
 def on_nox_os(release: Path = OS_RELEASE, socket_path: Path = HELPER_SOCKET) -> tuple[bool, str]:
@@ -183,30 +228,15 @@ def _view(answer: dict[str, Any], now: datetime) -> dict[str, Any]:
         if isinstance(active, list)
         else [],
         "keys": _keys_of(answer),
+        "passphrase_set": answer.get("passphrase") is True,
+        "locked_until": datetime.fromtimestamp(locked, UTC).isoformat()
+        if isinstance(locked := answer.get("locked_until"), int)
+        else None,
+        "setup_mode": answer.get("setup_mode") is True,
         "default_minutes": DEFAULT_MINUTES,
         "min_minutes": MIN_MINUTES,
         "max_minutes": MAX_MINUTES,
     }
-
-
-def protect_core() -> bool:
-    """Make this process non-dumpable (Linux `PR_SET_DUMPABLE` 0).
-
-    The root helper trusts the main process of nox.service, not the user `nox`: commands Nox runs
-    for someone run as that user too. Without this, such a process could trace the core or read
-    and write its memory (`/proc/<pid>/mem`) and speak to the helper as the core - Raspberry Pi
-    OS's kernel has no Yama to stop it. Non-dumpable, the core is out of their reach; it changes
-    nothing for the core itself. Children that start another program are dumpable again."""
-    if sys.platform != "linux":
-        return False
-    import ctypes  # noqa: PLC0415 - Linux only
-
-    pr_set_dumpable = 4
-    try:
-        libc = ctypes.CDLL(None, use_errno=True)
-        return int(libc.prctl(pr_set_dumpable, 0, 0, 0, 0)) == 0
-    except (OSError, AttributeError):
-        return False
 
 
 def install(
@@ -215,11 +245,12 @@ def install(
     helper: HelperCall | None = None,
     available: Callable[[], tuple[bool, str]] = on_nox_os,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-    protect: Callable[[], bool] = protect_core,
+    is_protected: Callable[[], bool | None] = protected,
 ) -> None:
     call = helper or unix_helper()
     if available()[0]:
-        if protect():
+        # `nox core` made the process non-dumpable before anything started (nox.noxos.protect).
+        if is_protected():
             log.info("noxos.core_protected", note="not dumpable: no trace, no memory access")
         else:
             log.warning("noxos.core_not_protected")
@@ -244,6 +275,9 @@ def install(
             "seconds_left": None,
             "active_keys": [],
             "keys": [],
+            "passphrase_set": False,
+            "locked_until": None,
+            "setup_mode": False,
             "default_minutes": DEFAULT_MINUTES,
             "min_minutes": MIN_MINUTES,
             "max_minutes": MAX_MINUTES,
@@ -272,7 +306,9 @@ def install(
         try:
             return await call(lines)
         except HelperError as exc:
-            log.warning("noxos.helper_failed", refused=exc.refused, error=str(exc))
+            log.warning("noxos.helper_failed", refused=exc.refused, code=exc.code)
+            if exc.refused and exc.code in HELPER_CODES:
+                raise IpcError(ERR_PERMISSION, str(exc), details={"reason": exc.code}) from exc
             raise IpcError(
                 ERR_UNAVAILABLE,
                 str(exc) if exc.refused else "the Nox-OS helper is not reachable",
@@ -304,7 +340,7 @@ def install(
             )
         fingerprints = ",".join(k.fingerprint for k in keys)
         try:
-            answer = await ask(["keys set", *(k.line for k in keys)])
+            answer = await ask(["keys set", _line("pass", p.passphrase), *(k.line for k in keys)])
         except IpcError:
             audit(ctx, "noxos.ssh.keys.set", "allow", "failed", keys=fingerprints)
             raise
@@ -327,7 +363,7 @@ def install(
         confirmed = p.checked()
         joined = ",".join(confirmed)
         try:
-            answer = await ask([f"ssh on {p.minutes} {joined}"])
+            answer = await ask([f"ssh on {p.minutes} {joined}", _line("pass", p.passphrase)])
         except IpcError:
             audit(ctx, "noxos.ssh.enable", "allow", "failed", minutes=str(p.minutes), keys=joined)
             raise
@@ -348,8 +384,46 @@ def install(
         log.info("noxos.ssh_off", by=ctx.role)
         return _view(answer, clock())
 
+    async def h_passphrase_set(ctx: RequestContext, p: PassphraseSetRequest) -> dict[str, Any]:
+        require_available()
+        await require_admin(ctx, p.pin, "noxos.ssh.passphrase.set")
+        try:
+            answer = await ask(["maint set", _line("new", p.new)])
+        except IpcError as exc:
+            audit(
+                ctx, "noxos.ssh.passphrase.set", "allow", str(exc.details.get("reason", "failed"))
+            )
+            raise
+        audit(ctx, "noxos.ssh.passphrase.set", "allow", "ok")
+        return _view(answer, clock())
+
+    async def h_passphrase_change(
+        ctx: RequestContext, p: PassphraseChangeRequest
+    ) -> dict[str, Any]:
+        require_available()
+        await require_admin(ctx, p.pin, "noxos.ssh.passphrase.change")
+        try:
+            answer = await ask(["maint change", _line("pass", p.old), _line("new", p.new)])
+        except IpcError as exc:
+            audit(
+                ctx,
+                "noxos.ssh.passphrase.change",
+                "allow",
+                str(exc.details.get("reason", "failed")),
+            )
+            raise
+        audit(ctx, "noxos.ssh.passphrase.change", "allow", "ok")
+        return _view(answer, clock())
+
     reg = core.registry.register
     reg("noxos.ssh.status", StatusRequest, h_status, roles=UI_ROLES)
     reg("noxos.ssh.keys.set", KeysRequest, h_keys, roles=UI_ROLES)
     reg("noxos.ssh.enable", EnableRequest, h_enable, roles=UI_ROLES)
     reg("noxos.ssh.disable", DisableRequest, h_disable, roles=UI_ROLES)
+    reg("noxos.ssh.passphrase.set", PassphraseSetRequest, h_passphrase_set, roles=UI_ROLES)
+    reg(
+        "noxos.ssh.passphrase.change",
+        PassphraseChangeRequest,
+        h_passphrase_change,
+        roles=UI_ROLES,
+    )

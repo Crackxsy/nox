@@ -133,35 +133,127 @@ other = h.peer_allowed(h.Peer(os.getpid(), uid, os.pidfd_open(os.getpid())), s)
 print(f"core={core} fallback={fallback} other={other}")' "$main" 2>&1)"
   [ "$verdict" = "core=True fallback=True other=False" ] || finish "NOX-SMOKE-FAIL: peer check: $verdict"
   say "NOX-SMOKE: helper peer check on the real core: $verdict"
-  # ... keys stored root-owned, answered with their fingerprints; on only with exactly those.
+  # A real request through the core: `noxos.ssh.status` as the local shell, which the core answers
+  # by asking the sandboxed helper itself - the path the dashboard takes, not root's shortcut.
+  answer="$(NOX_HOME=/var/lib/nox HOME=/var/lib/nox /opt/nox/current/.venv/bin/python -I -c 'import asyncio, json
+from pathlib import Path
+from nox.cli import _config
+from nox.lan.terminal import _call, _text
+print(json.dumps(asyncio.run(_call(Path(_config().paths.runtime_dir), "noxos.ssh.status", {}, _text("en")))))' 2>&1 | tail -n 1)"
+  echo "$answer" | grep -q '"available": true' && echo "$answer" | grep -q '"passphrase_set": false' \
+    || finish "NOX-SMOKE-FAIL: noxos.ssh.status through the core: $answer"
+  say "NOX-SMOKE: noxos.ssh.status through the core and the sandboxed helper: available, no passphrase yet"
+  b64() { printf '%s' "$1" | base64 -w0; }
+  pass="smoke maintenance passphrase"
   rm -f /run/nox-smoke-key /run/nox-smoke-key.pub
   ssh-keygen -q -t ed25519 -N '' -C smoke -f /run/nox-smoke-key
   fp="$(ssh-keygen -lf /run/nox-smoke-key.pub | cut -d' ' -f2)"
+  # The maintenance passphrase: nothing works without one, and it is set only in setup mode.
   answer="$(ask "keys set
+pass $(b64 "$pass")
+$(cat /run/nox-smoke-key.pub)")"
+  echo "$answer" | grep -q '"code": "passphrase_missing"' || finish "NOX-SMOKE-FAIL: keys without a passphrase: $answer"
+  answer="$(ask "maint set
+new $(b64 "$pass")")"
+  echo "$answer" | grep -q '"code": "not_setup"' || finish "NOX-SMOKE-FAIL: passphrase set outside setup: $answer"
+  touch /run/nox-os/setup-mode
+  answer="$(ask "maint set
+new $(b64 "$pass")")"
+  rm -f /run/nox-os/setup-mode
+  echo "$answer" | grep -q '"passphrase": true' || finish "NOX-SMOKE-FAIL: passphrase set in setup mode: $answer"
+  [ "$(stat -c '%a %U' /var/lib/nox-os/maintenance)" = '600 root' ] || finish "NOX-SMOKE-FAIL: passphrase not root's 0600"
+  if grep -rqs "$pass" /var/lib/nox /var/lib/nox-os /run/nox-os; then finish "NOX-SMOKE-FAIL: the passphrase is stored in clear"; fi
+  # ... keys stored root-owned, answered with their fingerprints; on only with exactly those.
+  answer="$(ask "keys set
+pass $(b64 'not the maintenance passphrase')
+$(cat /run/nox-smoke-key.pub)")"
+  echo "$answer" | grep -q '"code": "passphrase_wrong"' || finish "NOX-SMOKE-FAIL: keys with a wrong passphrase: $answer"
+  answer="$(ask "keys set
+pass $(b64 "$pass")
 $(cat /run/nox-smoke-key.pub)")"
   echo "$answer" | grep -qF "\"$fp\"" || finish "NOX-SMOKE-FAIL: keys set: $answer"
   [ "$(stat -c '%a %U' /var/lib/nox-os/ssh_keys)" = '600 root' ] || finish "NOX-SMOKE-FAIL: stored keys not root's 0600"
-  answer="$(ask "ssh on 5 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")"
+  answer="$(ask "ssh on 5 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+pass $(b64 "$pass")")"
   echo "$answer" | grep -q 'not the ones confirmed' || finish "NOX-SMOKE-FAIL: on with unconfirmed keys: $answer"
-  answer="$(ask "ssh on 5 $fp")"
-  echo "$answer" | grep -q '"ssh": "on"' || finish "NOX-SMOKE-FAIL: ssh on: $answer"
-  tries=0
-  until listening22 || [ "$tries" -ge 30 ]; do sleep 2; tries=$((tries + 1)); done
-  systemctl is-active --quiet nox-ssh.service && listening22 \
-    || finish "NOX-SMOKE-FAIL: sshd not started: $(journalctl -u nox-ssh.service -b --no-pager -n 20 2>&1)"
+  ssh_on() {
+    answer="$(ask "ssh on 5 $fp
+pass $(b64 "$pass")")"
+    echo "$answer" | grep -q '"ssh": "on"' || finish "NOX-SMOKE-FAIL: ssh on: $answer"
+    tries=0
+    until listening22 || [ "$tries" -ge 30 ]; do sleep 2; tries=$((tries + 1)); done
+    systemctl is-active --quiet nox-ssh.service && listening22 \
+      || finish "NOX-SMOKE-FAIL: sshd not started: $(journalctl -u nox-ssh.service -b --no-pager -n 20 2>&1)"
+  }
+  ssh_on
   nft list table inet nox_os | grep -q 'ip saddr @private4 tcp dport 22 ct state new accept' \
     || finish "NOX-SMOKE-FAIL: port 22 not opened for the home network"
   systemctl list-timers --all --no-pager 2>/dev/null | grep -q 'nox-ssh-off-' || finish "NOX-SMOKE-FAIL: no off timer"
+  [ -e /run/nox-os/sudoers.d/nox-admin ] || finish "NOX-SMOKE-FAIL: no sudo rule while sshd runs"
   effective="$(sshd -T -f /etc/nox-os/ssh/sshd_config -C user=nox-admin,host=nox,addr=192.0.2.10 2>&1)"
   for want in 'passwordauthentication no' 'permitrootlogin no' 'kbdinteractiveauthentication no' 'authenticationmethods publickey'; do
     echo "$effective" | grep -qx "$want" || finish "NOX-SMOKE-FAIL: sshd: $want missing"
   done
-  # Never from the device itself (the firewall drops it), even with the right key.
-  if timeout 60 ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -i /run/nox-smoke-key nox-admin@127.0.0.1 true 2>/dev/null; then
-    finish "NOX-SMOKE-FAIL: SSH login from the device itself"
+  # The firewall alone drops SSH from the device itself - before sshd (and its AllowUsers) could
+  # even answer: a TCP connection to its own addresses never completes.
+  tcp22() {
+    python3 -I -S -c 'import socket, sys
+try:
+    socket.create_connection((sys.argv[1], 22), timeout=8).close()
+    print("open")
+except OSError as exc:
+    print(type(exc).__name__)' "$1"
+  }
+  verdict="$(tcp22 127.0.0.1)"
+  [ "$verdict" = TimeoutError ] || finish "NOX-SMOKE-FAIL: SSH from the device itself: $verdict"
+  # A home network in a namespace: 10.200.0.0/24 is private, 192.0.2.0/24 (documentation) is not.
+  modprobe veth 2>/dev/null || true
+  ip netns add nox-lan
+  ip link add nox-pi type veth peer name nox-peer
+  nmcli device set nox-pi managed no >/dev/null 2>&1 || true
+  ip link set nox-peer netns nox-lan
+  ip addr add 10.200.0.1/24 dev nox-pi
+  ip addr add 192.0.2.1/24 dev nox-pi
+  ip link set nox-pi up
+  ip -n nox-lan addr add 10.200.0.2/24 dev nox-peer
+  ip -n nox-lan addr add 192.0.2.10/24 dev nox-peer
+  ip -n nox-lan link set nox-peer up
+  ip -n nox-lan link set lo up
+  sleep 3
+  verdict="$(tcp22 10.200.0.1)"
+  [ "$verdict" = TimeoutError ] || finish "NOX-SMOKE-FAIL: SSH from the device's own LAN address: $verdict"
+  sshopts="-o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /run/nox-smoke-key"
+  # shellcheck disable=SC2086 # the options are words on purpose
+  login="$(ip netns exec nox-lan timeout 90 ssh $sshopts -b 10.200.0.2 nox-admin@10.200.0.1 'id -un; sudo -n true && echo SUDO-OK' 2>&1)"
+  echo "$login" | grep -qx nox-admin && echo "$login" | grep -qx SUDO-OK \
+    || finish "NOX-SMOKE-FAIL: key login from the home network: $login"
+  say "NOX-SMOKE: key login as nox-admin from 10.200.0.2 with sudo -n: ok"
+  # shellcheck disable=SC2086
+  if ip netns exec nox-lan timeout 60 ssh $sshopts -b 192.0.2.10 nox-admin@192.0.2.1 true >/dev/null 2>&1; then
+    finish "NOX-SMOKE-FAIL: SSH login from a non-private address"
   fi
-  say "NOX-SMOKE: SSH on through the helper: sshd up, port 22 for private networks, off timer set"
+  # The timer's way out, with an open session: the end moves into the past, the expiry runs.
+  # shellcheck disable=SC2086
+  ip netns exec nox-lan ssh $sshopts -b 10.200.0.2 nox-admin@10.200.0.1 'sleep 600' >/dev/null 2>&1 &
+  session=$!
+  tries=0
+  until loginctl list-sessions --no-legend 2>/dev/null | grep -q nox-admin || [ "$tries" -ge 30 ]; do sleep 1; tries=$((tries + 1)); done
+  loginctl list-sessions --no-legend 2>/dev/null | grep -q nox-admin || finish "NOX-SMOKE-FAIL: no SSH session to end"
+  python3 -I -S -c 'import json
+p = "/run/nox-os/ssh.json"
+s = json.load(open(p)); s["until"] = 1
+open(p, "w").write(json.dumps(s))'
+  python3 -I -S /usr/local/lib/nox-os/nox_os_helper.py --expire
+  tries=0
+  while kill -0 "$session" 2>/dev/null && [ "$tries" -lt 30 ]; do sleep 1; tries=$((tries + 1)); done
+  if kill -0 "$session" 2>/dev/null; then kill "$session"; finish "NOX-SMOKE-FAIL: the open session outlived the expiry"; fi
+  if loginctl list-sessions --no-legend 2>/dev/null | grep -q nox-admin; then finish "NOX-SMOKE-FAIL: nox-admin still logged in"; fi
+  if systemctl is-active --quiet nox-ssh.service || listening22; then finish "NOX-SMOKE-FAIL: sshd outlived the expiry"; fi
+  [ ! -e /run/nox-os/ssh/authorized_keys ] && [ ! -e /run/nox-os/sudoers.d/nox-admin ] \
+    || finish "NOX-SMOKE-FAIL: keys or sudo rule left after the expiry"
+  say "NOX-SMOKE: expiry ended sshd and the open session, keys and sudo rule gone"
+  # And `ssh off` from the dashboard's side.
+  ssh_on
   answer="$(ask "ssh off")"
   echo "$answer" | grep -q '"ssh": "off"' || finish "NOX-SMOKE-FAIL: ssh off: $answer"
   sleep 2
@@ -169,6 +261,8 @@ $(cat /run/nox-smoke-key.pub)")"
   [ ! -e /run/nox-os/ssh/authorized_keys ] && [ ! -e /run/nox-os/sudoers.d/nox-admin ] \
     || finish "NOX-SMOKE-FAIL: keys or sudo rule left behind"
   if nft list table inet nox_os | grep -q 'dport 22 .*accept'; then finish "NOX-SMOKE-FAIL: port 22 left open"; fi
+  ip netns del nox-lan 2>/dev/null || true
+  ip link del nox-pi 2>/dev/null || true
   ask "keys clear" >/dev/null
   rm -f /run/nox-smoke-key /run/nox-smoke-key.pub
   say "NOX-SMOKE: SSH off again: sshd stopped, keys and sudo rule gone, port 22 closed"

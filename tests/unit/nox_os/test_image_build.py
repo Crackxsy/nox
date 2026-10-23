@@ -257,13 +257,21 @@ def test_the_root_helper_is_for_nox_service_only_and_has_no_privileges() -> None
         ["0660"],
     )
     assert socket["Accept"] == ["yes"]
+    # A flood trips the trigger limit; the socket then comes back on its own after a pause.
+    assert (socket["TriggerLimitIntervalSec"], socket["TriggerLimitBurst"]) == (["10s"], ["20"])
+    assert _unit("nox-os-helper.socket")["Unit"]["OnFailure"] == ["nox-os-helper-recover.service"]
+    recover = _unit("nox-os-helper-recover.service")["Service"]
+    assert recover["ExecStart"][-1] == "/usr/bin/systemctl start nox-os-helper.socket"
+    assert recover["ExecStartPre"] == ["/usr/bin/sleep 30"]
     tmpfiles = (HARDENING_STAGE / "files" / "tmpfiles-nox-os.conf").read_text("utf-8")
     assert re.search(r"^d /run/nox-os/helper\s+0750 root nox-os-helper ", tmpfiles, re.M)
     # The keys are the helper's: root only.
     assert re.search(r"^d /var/lib/nox-os\s+0700 root root ", tmpfiles, re.M)
     # Only nox.service carries the group - as a drop-in, and nobody is made a member of it.
-    dropin = _unit("nox-service-helper.conf")
-    assert dropin == {"Service": {"SupplementaryGroups": ["nox-os-helper"]}}
+    dropin = _unit("nox-service-nox-os.conf")
+    assert dropin["Service"] == {"SupplementaryGroups": ["nox-os-helper"]}
+    # No firewall, no Nox.
+    assert dropin["Unit"] == {"Requires": ["nftables.service"], "After": ["nftables.service"]}
     run = (HARDENING_STAGE / "00-run.sh").read_text("utf-8")
     assert "groupadd --system nox-os-helper" in run
     assert "usermod" not in run and "gpasswd" not in run and "adduser" not in run

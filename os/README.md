@@ -86,6 +86,15 @@ addresses (`169.254.169.254`, `fd00:ec2::254`). A port from the settings is open
 loopback ports 47800/47801): the settings file belongs to the service user, which must not be able
 to open SSH or a privileged port through it.
 
+**IPv6 in the home network:** "private" means unique-local (`fc00::/7`) and link-local
+(`fe80::/10`) addresses only. A phone that reaches the Pi from its global IPv6 address (the home's
+prefix from the provider) is not let in - the firewall fails closed, as Nox's own listener does.
+Browsers fall back to IPv4 or to the link-local address; allowing the Pi's own on-link global
+prefix is left for later.
+
+If `nftables.service` cannot load its rules, `nox.service` does not start either (it requires
+the firewall, a drop-in): never a Nox listening without a firewall.
+
 **No fail2ban:** there is no password login to guess (key only), SSH is off unless switched on for
 a limited time, reachable from private networks only and rate-limited per address. A ban list
 would have nothing left to do, and one more daemon writing logs is what the SD card does not need.
@@ -94,7 +103,8 @@ would have nothing left to do, and one more daemon writing logs is what the SD c
 
 Off. `ssh.service`, `ssh.socket` and `sshswitch.service` stay masked (O1), and no account has a
 password. Dashboard -> Einstellungen -> System -> **Fernwartung (SSH)**, in two steps, each with
-the **security PIN** - always, also on a paired phone, and refused while no PIN is set:
+two secrets - the **security PIN** (always, also on a paired phone, and refused while no PIN is
+set) **and the maintenance passphrase**:
 
 1. **Keys** (`noxos.ssh.keys.set`): public keys pasted there (ed25519 or ECDSA, optionally on a
    security key). The root helper stores them - not Nox - and answers with their fingerprints,
@@ -103,9 +113,21 @@ the **security PIN** - always, also on a paired phone, and refused while no PIN 
    time (15 minutes to 4 hours, 1 hour by default). The request names exactly the confirmed
    fingerprints; the helper refuses unless its stored keys are exactly those.
 
-Both, and their outcome, are in Nox's audit chain; switching off and forgetting the keys
-(`noxos.ssh.disable`) need nothing. While SSH is on, the dashboard and the console status say so,
-with the end time.
+Both, and their outcome, are in Nox's audit chain (never the passphrase); switching off and
+forgetting the keys (`noxos.ssh.disable`) need nothing. While SSH is on, the dashboard and the
+console status say so, with the end time.
+
+**Why a second secret.** The security PIN is checked by Nox, and Nox's files can be read by its
+service user - code running as that user could guess a short PIN's hash offline and would then
+be one step from root (keys, SSH as `nox-admin`, sudo). The **maintenance passphrase** closes that
+step: at least 12 characters, checked only by the root helper (scrypt, `/var/lib/nox-os/maintenance`,
+root 0600), never written to a file the service user can read and never logged - the core only
+passes it through in the one request. Five wrong passphrases lock it for 15 minutes, every five
+more for twice as long, at most a day (counted root-side, `/var/lib/nox-os/maintenance-lockout`).
+It is set once during the first-boot setup - the helper accepts `maint set` only while the
+root-owned `/run/nox-os/setup-mode` exists (O3 creates it during the claim) - and changed later
+with the old one. Without it, setting keys and switching on are refused ("set a maintenance
+passphrase during setup").
 
 The unprivileged `nox.service` (`NoNewPrivileges`, no capabilities) cannot change the system
 itself. It asks the **root helper**, `/usr/local/lib/nox-os/nox_os_helper.py`:
@@ -113,39 +135,46 @@ itself. It asks the **root helper**, `/usr/local/lib/nox-os/nox_os_helper.py`:
 - socket-activated (`nox-os-helper.socket`: `/run/nox-os/helper/helper.sock`,
   `root:nox-os-helper 0660`, in a folder only root and that group may enter). The group has no
   members; only `nox.service` carries it (`SupplementaryGroups=`, a drop-in in
-  `nox.service.d/`) - the user `nox` itself cannot even connect. One sandboxed instance per
-  request (`ProtectSystem=strict`, writes only `/run/nox-os` and `/var/lib/nox-os`, no network,
-  no capabilities);
+  `nox.service.d/`) - the user `nox` itself cannot even connect. At most 20 connections in 10 s:
+  a flood fails the socket, and `nox-os-helper-recover.service` starts it again after 30 s. One
+  sandboxed instance per request (`ProtectSystem=strict`, writes only `/run/nox-os` and
+  `/var/lib/nox-os`, no network, no capabilities);
 - answers **root and the main process of `nox.service` only**, bound to the process, not to its
   number: the service user's uid, `nox.service`'s `MainPID`, in `nox.service`'s cgroup (its own
   or the sandbox's `nox-core` leaf), and still the same process at the end of the check - by the
   pidfd of the peer (`SO_PEERPIDFD`, Linux 6.5+) or, without one, by its start time read before and
   after. Commands Nox runs for someone run as that user and inherit the group, but are never the
-  main process; and they cannot take it over: on Nox-OS the core makes itself non-dumpable at start
-  (`PR_SET_DUMPABLE`), so no other process of the user may trace it or touch its memory -
-  Raspberry Pi OS's kernel has no Yama that would;
-- knows exactly these requests, without options: `status`, `keys set` (1-8 public keys, checked
-  again itself: type, base64, the blob's own type and curve, no `authorized_keys` options, a
-  printable comment), `keys clear`, `ssh on <minutes> <fingerprints>` (5-240), `ssh off`.
-  Anything else is refused.
+  main process; and they cannot take it over: `nox core` makes itself non-dumpable as its very
+  first step on Nox-OS (`PR_SET_DUMPABLE`, before the event loop, the extensions or any
+  subprocess), so no other process of the user may trace it or touch its memory - Raspberry Pi
+  OS's kernel has no Yama that would;
+- knows exactly these requests, without options: `status`, `keys set` (the passphrase and 1-8
+  public keys, checked again itself: type, base64, the blob's own type and curve, no
+  `authorized_keys` options, a printable comment), `keys clear`, `ssh on <minutes> <fingerprints>`
+  (5-240, with the passphrase), `ssh off`, `maint set` (setup mode only), `maint change` (with the
+  old passphrase). Anything else is refused.
 
 The keys are the helper's alone: `/var/lib/nox-os/ssh_keys`, root, 0600 (on the card, so they
 survive a reboot until forgotten). Nothing the service user can write is ever read as a key - a
 planted file in Nox's folder grants nothing.
 
-`ssh on` copies the stored keys to `/run/nox-os/ssh/authorized_keys` and writes a sudo rule for
-`nox-admin` (`NOPASSWD` - the account has no password) to `/run/nox-os/sudoers.d/`, which
-`/etc/sudoers.d/50-nox-os` includes: both in memory, gone at the next boot. It starts
+`ssh on` copies the stored keys to `/run/nox-os/ssh/authorized_keys` and starts
 `nox-ssh.service` - sshd with a complete configuration of its own (`/etc/nox-os/ssh/sshd_config`:
 `AuthenticationMethods publickey`, no passwords, no root, `AllowUsers nox-admin@<private
-networks>`, no forwarding or tunnels, three tries) - opens port 22 for private networks and starts
-a timer. SSH from the device itself is always dropped by the firewall (`iif "lo" tcp dport 22
-drop`, before anything else): a local process must not reach `nox-admin`'s root that way. When the
-time is up, on `ssh off`, or whenever sshd stops for any other reason (`ExecStopPost=`), sshd
-**and its open sessions** end (`loginctl terminate-user nox-admin`), and the copied keys, the sudo
-rule and port 22 go with it. `nox-ssh.service` has no `[Install]` section and a
-`RuntimeMaxSec=4h15min` of its own as the last stop. Keys are never baked in: they come only from
-the dashboard.
+networks>`, no forwarding or tunnels, three tries). Only once sshd runs does it write a sudo rule
+for `nox-admin` (`NOPASSWD` - the account has no password) to `/run/nox-os/sudoers.d/`, which
+`/etc/sudoers.d/50-nox-os` includes; then it opens port 22 for private networks and starts a
+timer. Keys and sudo rule live in memory, gone at the next boot; a request that finds the state
+"on" while sshd does not run cleans up first. SSH from the device itself is always dropped by the
+firewall (`iif "lo" tcp dport 22 drop`, before anything else): a local process must not reach
+`nox-admin`'s root that way. When the time is up, on `ssh off`, or whenever sshd stops for any
+other reason (`ExecStopPost=`), sshd **and its open sessions** end (`loginctl terminate-user
+nox-admin`), and the copied keys, the sudo rule and port 22 go with it. `nox-ssh.service` has no
+`[Install]` section and a `RuntimeMaxSec=4h15min` of its own as the last stop. Keys are never baked
+in: they come only from the dashboard.
+
+**What switching off does not undo:** it ends the access, not its effects. Whatever was changed
+as root during maintenance - packages, files, settings - stays changed.
 
 ### SD-card wear
 
@@ -230,9 +259,14 @@ hand, on a machine that runs Nox:
      the firewall is loaded and default deny with the dashboard port opened from Nox's settings,
      journal, `/`, `/tmp` and swap as above, sysctl applied, the console status renders, the root
      helper is out of reach of the user `nox` and refuses another process with its group, the core
-     is non-dumpable, and SSH goes on (keys stored root-only and answered by fingerprint, refused
-     for unconfirmed ones; sshd up, port 22 for private networks, off timer, login from the
-     device itself dropped) and off again (all of it gone). Test-only
+     is non-dumpable, `noxos.ssh.status` answers through the core and the sandboxed helper, the
+     maintenance passphrase is refused outside setup mode and stored only as root's scrypt hash,
+     and SSH goes on (keys stored root-only and answered by fingerprint, refused for unconfirmed
+     ones or a wrong passphrase; sshd up, port 22 for private networks, off timer, TCP to port 22
+     from the device itself dropped by the firewall alone). In a network namespace with a private
+     and a documentation address: a key login as `nox-admin` with `sudo -n` works from the private
+     one and is refused from the other; the expiry then ends sshd and an open session, and `ssh
+     off` leaves nothing behind. Test-only
      boot settings, because of the emulator: no hardware watchdog (QEMU resets on it), Bluetooth
      off the serial port, no first-boot resize. The verdict is read from the copy's disk.
   4. The SHA-256 taken right after the build is checked again, then xz, SHA-256, the Imager entry,
