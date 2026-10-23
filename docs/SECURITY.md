@@ -823,8 +823,12 @@ well-formed calls, so the node decides on its own authority (`nox.node.gate.Node
   them, and their messages count as untrusted.
   They only ever grow while the lock holds for that node (a later report or a reconnection from
   another address adds, never removes), also while it is disconnected, and are dropped when the
-  lock lifts - at most 64 per node, of them at most 16 connection addresses; a real connection
-  always gets a place (the oldest reported address gives way). "This machine" is matched against every address of every local interface,
+  lock lifts - nothing is ever dropped while the lock holds. Memory is bounded (64 reported and
+  16 connection addresses per node); a node that fills either is **saturated** for the rest of
+  its lock: then nobody is told apart from the controlled PC any more - every paired device and
+  this machine's own dashboard and shell are refused approvals, changes and messages (only deny,
+  Stopp and reading work), audited once, and the dashboard says "Nox steuert ein Gerät mit sehr
+  vielen Adressen - Freigaben nur nach Ende der Sitzung". "This machine" is matched against every address of every local interface,
   uncapped; an address that cannot be classified counts as this machine. Fail closed (owner decision): a device that shares such an address is
   treated as the controlled PC. **Accepted:** a compromised node could report the owner's phone
   address and lock that phone out of approving during its session - it can only come from the

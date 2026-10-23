@@ -174,6 +174,7 @@ export function StatusStrip({
           {fill(t('computer_use_banner_node'), node.device)}{' '}
           {node.stop ? fill(t('computer_use_banner_node_hotkey'), showCombo(node.stop, lang)) : ''}
         </p>
+        {node.saturated && <p className="hint">{t('computer_use_saturated')}</p>}
         <StopButton placement="inline" />
         {!device && (
           // A lock that outlived its PC (it went silent): lifted only here, with the PIN.

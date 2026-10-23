@@ -523,28 +523,76 @@ def test_the_binding_only_grows_while_the_lock_holds() -> None:
     assert control.node_addresses == {} and control.node_observed == {}
 
 
-def test_the_binding_is_capped_and_a_real_connection_always_gets_a_place() -> None:
-    from nox.node.world_routes import MAX_BOUND_ADDRESSES, MAX_OBSERVED_ADDRESSES
-
+def _saturating(control: NodeControl) -> dict[str, Any]:
     now: dict[str, Any] = {"peer": "192.168.1.20", "reported": []}
-    control = NodeControl(
-        None, lambda _n: None, addresses=lambda: {LAPTOP: (now["peer"], now["reported"])}
-    )
+    control._addresses = lambda: {LAPTOP: (now["peer"], now["reported"])}  # type: ignore[assignment]
+    return now
+
+
+def test_a_full_binding_drops_nothing_and_treats_everyone_as_the_controlled_pc() -> None:
+    from nox.node.world_routes import MAX_REPORTED_BOUND
+
+    audited: list[str] = []
+    control = NodeControl(None, lambda _n: None, audit=audited.append)
+    now = _saturating(control)
     control.observe(LAPTOP, _report(2, True))
-    for block in range(10):  # a node that keeps reporting new addresses, 16 at a time
+    control.pull()
+    first = [f"10.0.0.{i}" for i in range(16)]
+    now["reported"] = first
+    control.pull()
+    for block in range(1, 10):  # a node that keeps reporting new addresses
         now["reported"] = [f"10.{block}.0.{i}" for i in range(16)]
         control.pull()
-    assert len(control.node_reported[LAPTOP]) == MAX_BOUND_ADDRESSES - 1  # full: no more
-    assert control._bound(LAPTOP) == MAX_BOUND_ADDRESSES
-    # A real connection from a new address still gets a place: the oldest report gives way.
-    oldest = control.node_reported[LAPTOP][0]
-    now.update(peer="192.168.1.30", reported=[])
+    assert len(control.node_reported[LAPTOP]) == MAX_REPORTED_BOUND
+    assert control.node_reported[LAPTOP][:16] == first  # nothing evicted, the first ones kept
+    assert control.from_controlled("192.168.1.20")  # the first observed address stays
+    assert control.is_saturated() and len(audited) == 1
+    # Everyone counts as the controlled PC now.
+    assert control.from_controlled("198.51.100.99") and control.controls_local()
+    control.observe(LAPTOP, _report(3, False))  # the lock lifts: so does the saturation
     control.pull()
-    assert control.from_controlled("192.168.1.30") and not control.from_controlled(oldest)
-    assert control._bound(LAPTOP) == MAX_BOUND_ADDRESSES
-    # Observed connection addresses have their own cap.
-    for i in range(40):
+    assert not control.is_saturated() and control.saturated == set()
+
+
+def test_too_many_connection_addresses_saturate_as_well() -> None:
+    from nox.node.world_routes import MAX_OBSERVED_ADDRESSES
+
+    control = NodeControl(None, lambda _n: None)
+    now = _saturating(control)
+    control.observe(LAPTOP, _report(2, True))
+    for i in range(MAX_OBSERVED_ADDRESSES + 1):
         now["peer"] = f"192.168.2.{i}"
         control.pull()
     assert len(control.node_observed[LAPTOP]) == MAX_OBSERVED_ADDRESSES
-    assert control._bound(LAPTOP) <= MAX_BOUND_ADDRESSES
+    assert "192.168.2.0" in control.node_observed[LAPTOP] and control.is_saturated()
+
+
+async def test_while_saturated_only_deny_stop_and_reading_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nox.ipc.handlers.core import CoreHandlers, PermissionReply
+    from nox.ipc.protocol import Kind
+    from nox.node.world_routes import REFUSE_SATURATED
+    from nox.security.model import Decision
+
+    core, control, ran = _registry(monkeypatch)
+    roles = ("dashboard", "shell", "device")
+
+    async def kill(_ctx: Any, _p: Any) -> dict[str, Any]:
+        ran.append("security.kill")
+        return {}
+
+    core.registry.register("security.kill", Text, kill, roles=roles)
+    control.saturated.add(LAPTOP)
+    for client in (LOCAL, PHONE):
+        for name, payload in (("chat.send", {}), ("plans.approve", {"pin": "4711"})):
+            reply = await _send_from(core, name, client, payload, "192.0.2.99")
+            assert reply.kind is Kind.ERROR and reply.payload["message"] == REFUSE_SATURATED
+        assert (await _send_from(core, "security.kill", client, {}, "")).kind is Kind.RESPONSE
+    assert ran == ["security.kill", "security.kill"]
+    handlers = CoreHandlers(core)  # type: ignore[arg-type]
+    local = _ctx("dashboard", LOCAL)
+    allow = PermissionReply(grant_id="g", decision=Decision.ALLOW, pin="4711")
+    deny = PermissionReply(grant_id="g", decision=Decision.DENY)
+    assert (await handlers.permission_reply(local, allow))["ok"] is False
+    assert (await handlers.permission_reply(local, deny))["ok"] is True

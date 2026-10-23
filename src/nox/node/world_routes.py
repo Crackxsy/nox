@@ -176,9 +176,9 @@ def host_of(address: str) -> str:
 
 #: Addresses a node may report about itself in one hello or pong, at most (`NodeHello.addresses`).
 MAX_REPORTED_ADDRESSES = 16
-#: Addresses bound to one node during one lock, at most - so a node cannot grow the binding
-#: without end; and of these, connection addresses this core saw, at most.
-MAX_BOUND_ADDRESSES = 64
+#: Addresses bound to one node during one lock, at most - reported ones, and connection
+#: addresses this core saw. Full: everyone counts as the controlled PC (`_saturate`).
+MAX_REPORTED_BOUND = 64
 MAX_OBSERVED_ADDRESSES = 16
 _PRIVATE_NETWORKS = tuple(
     ipaddress.ip_network(n)
@@ -250,6 +250,7 @@ class NodeControl:
         reports: Reports = tuple,
         labels: Callable[[str], str] = lambda device_id: device_id[:8],
         linked: Callable[[str], str | None] = lambda _device_id: None,
+        audit: Callable[[str], None] = lambda _what: None,
         addresses: Callable[[], Mapping[str, tuple[str, Iterable[str]]]] = dict,
         own_addresses: Callable[[], Iterable[str]] = tuple,
         stop_hotkey: str = "ctrl+alt+shift+k",
@@ -261,15 +262,18 @@ class NodeControl:
         self._reports = reports
         self._labels = labels
         self._linked = linked
+        self._audit = audit
         self._addresses = addresses
         self._own_addresses = own_addresses
         #: Where each node the lock holds for is on the network, kept while the lock holds (also
         #: while it is disconnected): the connection addresses this core saw (at most
-        #: `MAX_OBSERVED_ADDRESSES`) and the private addresses it reported, oldest first (all
-        #: together at most `MAX_BOUND_ADDRESSES`; an observed address always gets a place).
+        #: `MAX_OBSERVED_ADDRESSES`) and the private addresses it reported, oldest first (at most
+        #: `MAX_REPORTED_BOUND`). Never dropped while the lock holds; full means `saturated`.
         self.node_observed: dict[str, set[str]] = {}
         self.node_reported: dict[str, list[str]] = {}
         self._full_logged: set[str] = set()
+        #: Nodes whose binding is full for the current lock (`_saturate`).
+        self.saturated: set[str] = set()
         self._stop = stop_hotkey
         self._clock = clock
         self.devices: dict[str, _Device] = {}
@@ -357,6 +361,7 @@ class NodeControl:
                 if device is None or not self._locked(device):
                     del known[device_id]
                     self._full_logged.discard(device_id)
+                    self.saturated.discard(device_id)
 
     @property
     def node_addresses(self) -> dict[str, set[str]]:
@@ -381,23 +386,38 @@ class NodeControl:
         if host in observed:
             return
         if len(observed) >= MAX_OBSERVED_ADDRESSES:
-            self._full(device_id, "observed")
+            self._saturate(device_id, "observed")  # nothing is ever dropped instead
             return
-        reported = self.node_reported.get(device_id, [])
-        if host in reported:
-            reported.remove(host)  # it is a real connection now
-        elif self._bound(device_id) >= MAX_BOUND_ADDRESSES and reported:
-            reported.pop(0)  # a real connection always wins a place over what a node said
         observed.add(host)
 
     def _bind_reported(self, device_id: str, host: str) -> None:
         reported = self.node_reported.setdefault(device_id, [])
         if host in reported or host in self.node_observed.get(device_id, set()):
             return
-        if self._bound(device_id) >= MAX_BOUND_ADDRESSES:
-            self._full(device_id, "reported")
+        if len(reported) >= MAX_REPORTED_BOUND:
+            self._saturate(device_id, "reported")
             return
         reported.append(host)
+
+    def _saturate(self, device_id: str, what: str) -> None:
+        """A node's binding is full: from now on until its lock lifts, nobody is told apart from
+        the controlled PC any more - every paired device and this machine's dashboard and shell
+        are treated as that PC (fail closed, never an address dropped)."""
+        if device_id in self.saturated:
+            return
+        self.saturated.add(device_id)
+        self._full(device_id, what)
+        self._audit(f"saturated:{device_id[:8]}:{what}")
+        device = self.devices.get(device_id)
+        if device is not None:
+            self._publish(self._payload(device_id, device, "too many addresses"))
+
+    def is_saturated(self) -> bool:
+        """Whether the binding of a node the lock holds for is full (see `_saturate`)."""
+        return any(
+            device_id in self.saturated and self._locked(device)
+            for device_id, device in self.devices.items()
+        )
 
     def controls_local(self) -> bool:
         """Whether a node the lock holds for runs on this machine: it connects over loopback or
@@ -405,6 +425,8 @@ class NodeControl:
         the controlled PC."""
         if not self.active():
             return False
+        if self.is_saturated():
+            return True
         own = {h for h in (host_of(a) for a in self._own_addresses()) if h}
         for device_id, device in self.devices.items():
             if not self._locked(device):
@@ -422,6 +444,8 @@ class NodeControl:
         """Whether a client connecting from `peer` sits on a PC the lock holds for: the same
         address as that node. Such a browser counts as linked, whatever was set in the
         dashboard."""
+        if self.active() and self.is_saturated():
+            return True
         host = host_of(peer)
         if not host or not self.active():
             return False
@@ -474,6 +498,7 @@ class NodeControl:
             "stop": self._stop,
             "device": device.label,
             "device_id": device_id,
+            "saturated": device_id in self.saturated,
         }
 
     def _sync(self, device_id: str, device: _Device, *, reason: str = "") -> None:
@@ -746,6 +771,10 @@ REFUSE_NO_PIN = (
     "Nox controls mouse and keyboard on a paired PC; approving or changing anything now needs "
     "the security PIN, and none is set - deny, stop, or set a PIN first"
 )
+REFUSE_SATURATED = (
+    "Nox steuert ein Gerät mit sehr vielen Adressen - Freigaben und Nachrichten erst nach Ende "
+    "der Sitzung; Ablehnen und Stopp gehen immer"
+)
 REFUSE_ROLE = "Nox controls mouse and keyboard on a paired PC; this client cannot approve now"
 #: How long the remote-session check may take (it may start `loginctl`); slower is "unknown".
 REMOTE_CHECK_S = 3.0
@@ -811,6 +840,9 @@ async def session_refusal(
 
     if not control.active():
         return None
+    if control.is_saturated():
+        # A node's binding is full: nobody is told apart from the controlled PC any more.
+        return REFUSE_SATURATED
     role = getattr(ctx, "role", "")
     if role == DEVICE_ROLE:
         device = str(getattr(ctx, "client_id", "")).removeprefix(DEVICE_CLIENT_PREFIX)

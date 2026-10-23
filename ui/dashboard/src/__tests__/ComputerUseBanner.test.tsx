@@ -63,6 +63,7 @@ describe('parseComputerUse', () => {
       stop: 'ctrl+alt+shift+k',
       device: '',
       deviceId: '',
+      saturated: false,
     });
     expect(parseComputerUse({ active: 'yes' })).toBeNull();
     expect(parseComputerUse(null)).toBeNull();
@@ -147,6 +148,13 @@ describe('the computer-use strip in the app', () => {
     expect(parseControlledHere({ sessions, controlled_here: true })).toBe(true);
     expect(parseControlledHere({ sessions, controlled_here: 'yes' })).toBe(false);
     expect(parseControlledHere(null)).toBe(false);
+  });
+
+  it('says when nobody can approve until the session ends', async () => {
+    render(<App auth={LOCAL} lang="de" theme="system" />);
+    await vi.waitFor(() => expect(captured.handlers).not.toBeNull());
+    emit({ active: true, reason: 'too many addresses', stop: '', device: 'Laptop', device_id: 'b1', saturated: true });
+    expect(screen.getByText(t('computer_use_saturated'))).toBeTruthy();
   });
 
   it('keeps one line per PC and forgets them on disconnect', () => {

@@ -407,6 +407,7 @@ export const en: Record<CoreKey, string> = {
   computer_use_banner_node: 'Nox is controlling mouse and keyboard on {0}.',
   computer_use_banner_node_hotkey: '{0} on that device stops it at once, “Stop” stops everything.',
   computer_use_release: 'Release the lock',
+  computer_use_saturated: 'Nox is controlling a device with very many addresses - approvals only after the session ends.',
   computer_use_release_pin: 'PIN to release the lock',
   computer_use_release_failed: 'The lock was not released.',
   computer_use_banner_no_hotkey: 'Nox is controlling mouse and keyboard – the kill switch stops it at once.',

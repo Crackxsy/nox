@@ -423,6 +423,7 @@ export const de = {
   computer_use_banner_node: 'Nox steuert gerade Maus und Tastatur auf {0}.',
   computer_use_banner_node_hotkey: '{0} an diesem Gerät beendet sofort, „Stopp“ beendet überall.',
   computer_use_release: 'Sperre lösen',
+  computer_use_saturated: 'Nox steuert ein Gerät mit sehr vielen Adressen – Freigaben nur nach Ende der Sitzung.',
   computer_use_release_pin: 'PIN zum Lösen der Sperre',
   computer_use_release_failed: 'Die Sperre wurde nicht gelöst.',
   computer_use_banner_no_hotkey: 'Nox steuert gerade Maus und Tastatur – der Not-Aus beendet sofort.',

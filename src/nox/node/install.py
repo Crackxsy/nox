@@ -489,6 +489,17 @@ def _world_specs(
             return {}
         return {d: (s.peer_host, list(s.reported_addresses)) for d, s in listener.sessions.items()}
 
+    def audit_control(what: str) -> None:
+        if security is not None and getattr(security, "audit", None) is not None:
+            security.audit.append(
+                actor="core",
+                tool="node",
+                action="node.computer.binding",
+                target="",
+                decision="deny",
+                result=what[:64],
+            )
+
     def linked(device_id: str) -> str | None:
         entry = next((e for e in registry.known() if e.device_id == device_id), None)
         return entry.linked_device_id if entry is not None else None
@@ -506,6 +517,7 @@ def _world_specs(
         linked=linked,
         addresses=addresses,
         own_addresses=all_local_addresses,
+        audit=audit_control,
         stop_hotkey=desktop.computer_use.stop_hotkey if desktop is not None else "",
     )
     wire_guards(core, control)
