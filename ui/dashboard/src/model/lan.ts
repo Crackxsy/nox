@@ -173,22 +173,16 @@ export interface PermissionPrompt {
 }
 
 /**
- * A call routed to a paired PC has the target `"<label>: <what>"`, the label being the PC's name
- * and its short id (`nox.node.router`, e.g. `Laptop (3f2a): Archiv/neu.zip`). Only that exact
- * shape is split - any other colon in a target stays where it is.
+ * The paired PC a question is about - only from the core's own fields (`device_id` and
+ * `device_name`, set by its router), never read out of the target: the target is what the tool
+ * says, and a path or argument can look like anything, "Laptop (ab12): ..." included. Without
+ * those fields (an older core) there is no device, and the target is shown exactly as it came.
  */
-const NODE_TARGET = /^(.{1,64}?) \(([0-9a-f]{4,8})\): ([\s\S]*)$/;
-
-/** The device and the target apart: the core's device name when it sends one (an id is not a
- * name and is never shown), else the prefix the router writes. */
-export function splitDeviceTarget(target: string, device: unknown): { device: string; target: string } {
-  const named = str(device) && !/^[0-9a-f]{16,}$/.test(device.trim()) ? device.trim().slice(0, 64) : '';
-  const match = NODE_TARGET.exec(target);
-  if (match) {
-    const [, name = '', , rest = ''] = match;
-    return { device: named || name, target: rest };
-  }
-  return { device: named, target };
+export function promptDevice(payload: Record<string, unknown>): string {
+  const id = payload.device_id;
+  const name = payload.device_name;
+  if (!str(id) || id.trim() === '' || !str(name)) return '';
+  return name.trim().slice(0, 64);
 }
 
 /**
@@ -201,18 +195,17 @@ export function parsePermissionRequested(payload: unknown, skewMs = 0): Permissi
   if (!str(p.request_id) || !str(p.tool) || !str(p.action)) return null;
   const expires = str(p.expires_at) ? Date.parse(p.expires_at) : Number.NaN;
   const ttl = typeof p.remember_ttl_s === 'number' && Number.isFinite(p.remember_ttl_s) ? p.remember_ttl_s : 0;
-  const where = splitDeviceTarget(str(p.target) ? p.target : '', p.device_name ?? p.device);
   return {
     id: p.request_id,
     agent: str(p.agent) ? p.agent : '',
     tool: p.tool,
     action: p.action,
-    target: where.target,
+    target: str(p.target) ? p.target : '',
     risk: str(p.risk) ? p.risk : '',
     deadline: Number.isFinite(expires) ? expires - skewMs : null,
     rememberTtlS: ttl > 0 ? ttl : 0,
     voiceSatellite: str(p.voice_satellite) ? p.voice_satellite.slice(0, 64) : '',
-    device: where.device,
+    device: promptDevice(p),
   };
 }
 
