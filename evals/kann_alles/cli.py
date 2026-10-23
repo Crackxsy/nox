@@ -22,7 +22,7 @@ from kann_alles.runner import (
     summarize_tasks,
     write_reports,
 )
-from kann_alles.tasks import load_quality, load_tasks
+from kann_alles.tasks import Task, load_quality, load_tasks
 
 HERE = Path(__file__).resolve().parent
 EXIT_OK = 0
@@ -73,12 +73,19 @@ def _git_rev(src: Path) -> str:
     return out.stdout.strip() or "unknown"
 
 
+def run_order(tasks: list[Task]) -> list[Task]:
+    """The tasks in file order, except that a spoken stop runs after everything else: it stops
+    the whole core, so a stop (and the resume after it) can never colour another task."""
+    return sorted(tasks, key=lambda t: t.via == "kill_phrase")
+
+
 async def _run(ns: argparse.Namespace, nox_src: Path) -> int:
     parts = {p.strip() for p in ns.parts.split(",") if p.strip()}
     tasks = load_tasks(HERE / "tasks")
     if ns.only:
         wanted = {w.strip() for w in ns.only.split(",")}
         tasks = [t for t in tasks if t.id in wanted or t.category.value in wanted]
+    tasks = run_order(tasks)
     quality = load_quality(HERE / "quality.yaml")
     judge = Judge(model=ns.judge_model)
     payload: dict[str, Any] = {

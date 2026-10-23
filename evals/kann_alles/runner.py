@@ -119,10 +119,15 @@ async def run_task(world: World, task: Task, judge: Judge) -> TaskResult:
     used_followup = False
     error = ""
     try:
-        turn, seconds, _ = await _turn(world, prompt, speak=False)
-        answers.append(turn.response)
-        elapsed += seconds
-        world.probe.provider_tools += list(getattr(turn, "provider_tools", []))
+        if task.via == "kill_phrase":
+            # Heard, not typed: the stop never reaches the model, so there is no answer.
+            elapsed += await world.hear_kill_phrase(prompt)
+            answers.append("")
+        else:
+            turn, seconds, _ = await _turn(world, prompt, speak=False)
+            answers.append(turn.response)
+            elapsed += seconds
+            world.probe.provider_tools += list(getattr(turn, "provider_tools", []))
     except Exception as exc:  # noqa: BLE001 - a crashed turn is a scored row, not a crashed run
         error = f"{type(exc).__name__}: {exc}"[:300]
     obs, checks, verdict = await _assess(world, task, prompt, answers, elapsed, False, judge)
@@ -193,6 +198,8 @@ async def _assess(
         used_followup=used_followup,
         sql=sql,
         skills=world.skill_states(),
+        node_runs=world.node_runs(),
+        node_stop_s=world.node_stop_s,
     )
     empty = TaskVerdict()
     deterministic = {
