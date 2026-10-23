@@ -9,17 +9,20 @@ What it serves, and nothing else:
   * `/ws` - the device's WebSocket, bridged to the loopback hub,
   * `POST /api/node/pair` - a new `nox node` redeems a one-time code for a client certificate
     (`nox.node`). Not a browser route: a request with an `Origin` header is refused.
+  * `/pet/` - the built pet page (static files, no credential in them), for a paired node's
+    overlay relay (`nox.node.overlay`, C9).
 
 **Unclaimed Nox-OS** (`ClaimSurface`, `nox.noxos.claim`): a Raspberry Pi image that has no owner
 yet serves nothing but its claim - `/claim/` (a small page of its own), `GET`/`POST /api/claim`,
-`/api/lan/info` and `/nox-ca.crt`. The dashboard, pairing, nodes and the WebSocket are refused
-(`403 unclaimed`; a page under `/dashboard/` is redirected to the claim page) until the claim
-succeeded - checked on every request, so the claim takes effect without a restart, and
+`/api/lan/info` and `/nox-ca.crt`. The dashboard, the pet page, pairing, nodes and the WebSocket
+are refused (`403 unclaimed`; a page under `/dashboard/` is redirected to the claim page) until the
+claim succeeded - checked on every request, so the claim takes effect without a restart, and
 "unclaimed" is what an unreadable claim state counts as.
 
-What it never serves: the per-start session token, `/api/state`, `/api/providers` or the pet. A
-device authenticates on the hub with its own token, as role `device`, and the hub accepts nothing
-else on a bridged connection (`nox.ipc.server.LAN_BRIDGE_HEADER`).
+What it never serves: the per-start session token, `/api/state` or `/api/providers`. A device
+authenticates on the hub with its own token, as role `device`; the only other role the hub
+accepts on a bridged connection is the read-only `overlay`, with a credential the core issued to a
+paired node (`nox.ipc.tokens`, label `node:<id>`) - nothing else (`LAN_BRIDGE_HEADER`).
 
 Browser hardening, on every response:
   * **Host check.** The Host header must be one of the names and addresses the certificate was
@@ -417,6 +420,7 @@ def create_lan_app(
     bridge_secret: Callable[[], str],
     dashboard_dist: Path | None,
     limiter: PairLimiter,
+    pet_dist: Path | None = None,
     allow_public_clients: bool = False,
     max_frame_bytes: int = MAX_FRAME_BYTES,
     node_pair: Callable[[], NodePairHandler | None] = lambda: None,
@@ -658,6 +662,8 @@ def create_lan_app(
         Route("/nox-ca.crt", ca_certificate, methods=["GET"]),
         WebSocketRoute(WS_PATH, bridge),
     ]
+    if pet_dist is not None and (pet_dist / "index.html").is_file():
+        routes.append(Mount("/pet", app=StaticFiles(directory=str(pet_dist), html=True)))
     if claim is not None:
         routes += [
             Route("/claim/{rest:path}", claim_page, methods=["GET"]),

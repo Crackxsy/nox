@@ -84,6 +84,8 @@ function NodeDetail({
   const id = useId();
   const [pin, setPin] = useState('');
   const [explain, setExplain] = useState<string | null>(null);
+  // Switching voice on here makes that device's microphone an input for Nox: said, then confirmed.
+  const [voiceAsk, setVoiceAsk] = useState(false);
   const [saved, setSaved] = useState('');
   const [armed, setArmed] = useState(false);
   /** Chosen in a select, not yet applied: group -> device. */
@@ -119,9 +121,14 @@ function NodeDetail({
     return value;
   };
 
-  const toggle = (group: NodeGroup) => {
+  const toggle = (group: NodeGroup, confirmed = false) => {
     if (busy !== null) return;
     setSaved('');
+    if (group.group === 'voice' && group.narrowed && group.enabledOnDevice && !confirmed) {
+      setVoiceAsk(!voiceAsk);
+      return;
+    }
+    setVoiceAsk(false);
     // The device's word first: what it does not allow is never switched on here. A switch-off
     // made here is still cleared, so it does not linger once the device allows the group again.
     if (!group.enabledOnDevice) {
@@ -270,6 +277,25 @@ function NodeDetail({
                       onClick={() => toggle(g)}
                     />
                   </div>
+                  {g.group === 'voice' && (
+                    // Always in the page, so a screen reader hears it when it fills.
+                    <div role="status" className={voiceAsk ? 'node-how' : undefined}>
+                      {voiceAsk && (
+                        <>
+                          <p className="set-t">{t('node_voice_confirm_title')}</p>
+                          <p className="hint">{t('node_voice_confirm_text')}</p>
+                          <button
+                            type="button"
+                            className="btn"
+                            data-testid="node-voice-confirm"
+                            onClick={() => toggle(g, true)}
+                          >
+                            {t('node_voice_confirm_go')}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
                   {!g.enabledOnDevice && (
                     // Always in the page, so a screen reader hears it when it fills.
                     <div role="status" className={explain === g.group ? 'node-how' : undefined}>

@@ -511,6 +511,95 @@ def node_games(
         raise typer.Exit(1) from exc
 
 
+node_voice_app = typer.Typer(help="The voice satellite on this device (group voice).")
+node_obs_app = typer.Typer(help="OBS on this device (group obs).")
+node_app.add_typer(node_voice_app, name="voice")
+node_app.add_typer(node_obs_app, name="obs")
+
+
+@node_voice_app.command("mute")
+def node_voice_mute() -> None:
+    """Mute the microphone here (only this device unmutes it)."""
+    from nox.node.satellite_cli import voice_mute  # noqa: PLC0415
+
+    typer.echo(voice_mute(_node_home(), True))
+
+
+@node_voice_app.command("unmute")
+def node_voice_unmute() -> None:
+    """Unmute the microphone here."""
+    from nox.node.satellite_cli import voice_mute  # noqa: PLC0415
+
+    typer.echo(voice_mute(_node_home(), False))
+
+
+@node_voice_app.command("status")
+def node_voice_status() -> None:
+    """Whether the voice satellite runs here, and whether the microphone is open."""
+    from nox.node.satellite_cli import voice_status  # noqa: PLC0415
+
+    for line in voice_status(_node_home()):
+        typer.echo(line)
+
+
+@node_voice_app.command("talk")
+def node_voice_talk() -> None:
+    """Push-to-talk from this terminal: speak, then press Enter (at most 25 seconds)."""
+    import threading  # noqa: PLC0415
+
+    from nox.node.satellite_cli import talk  # noqa: PLC0415
+
+    def wait(seconds: float) -> None:
+        done = threading.Event()
+
+        def read() -> None:
+            sys.stdin.readline()
+            done.set()
+
+        threading.Thread(target=read, daemon=True).start()
+        done.wait(seconds)
+
+    typer.echo("Listening - speak now, then press Enter.")
+    typer.echo(talk(_node_home(), wait=wait))
+
+
+@node_obs_app.command("password")
+def node_obs_password(
+    clear: bool = typer.Option(False, "--clear", help="Remove the stored password."),
+) -> None:
+    """Store the obs-websocket password in this device's keyring (asked, never shown)."""
+    from nox.node.cli import secret_store  # noqa: PLC0415
+    from nox.node.satellite_cli import SatelliteCliError, obs_password  # noqa: PLC0415
+
+    secret = None if clear else typer.prompt("obs-websocket password", hide_input=True)
+    try:
+        typer.echo(obs_password(secret_store(), secret, clear=clear))
+    except SatelliteCliError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
+@node_obs_app.command("resume")
+def node_obs_resume() -> None:
+    """After the panic button: let Nox change OBS on this device again."""
+    from nox.node.satellite_cli import obs_resume  # noqa: PLC0415
+
+    typer.echo(obs_resume(_node_home()))
+
+
+@node_app.command("overlay")
+def node_overlay(variant: str = typer.Option("", help="A pet variant, e.g. sprite:<id>.")) -> None:
+    """The URL for an OBS browser source on this PC: the pet, from the Nox at home. No secret in
+    it - this node fills in its own read-only credential."""
+    from nox.node.satellite_cli import SatelliteCliError, overlay_line  # noqa: PLC0415
+
+    try:
+        typer.echo(overlay_line(_node_home(), variant=variant))
+    except SatelliteCliError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
 sandbox_app = typer.Typer(help="The command sandbox (Windows: AppContainer access rights).")
 app.add_typer(sandbox_app, name="sandbox")
 

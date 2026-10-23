@@ -176,7 +176,8 @@ export const api = {
 
   // -- editable settings (Settings page) ---------------------------------------------------------
   configGet: (c: IpcClient) => c.request('config.get', {}),
-  configSet: (c: IpcClient, values: Record<string, unknown>) => c.request('config.set', { values }),
+  configSet: (c: IpcClient, values: Record<string, unknown>, pin?: string) =>
+    c.request('config.set', pin ? { values, pin } : { values }),
   secretsStatus: (c: IpcClient) => c.request('secrets.status', {}),
   /** `{configured}` — whether a secret change has to carry a PIN (#23). */
   pinStatus: (c: IpcClient) => c.request('security.pin.status', {}),

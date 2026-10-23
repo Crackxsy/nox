@@ -77,6 +77,13 @@ _PREFIX_GROUP: dict[str, str] = {
     "voice": "voice",
     "obs": "obs",
 }
+#: Groups that need two keys (C9): enabled on the device *and* switched on for that node on the
+#: core by the owner - a voice satellite sends what it hears to Nox as the user's words. The
+#: second key is a persisted fact (`node_capabilities.core_opted_in`, migration 0018), set only by
+#: clearing the narrowing in the Devices page (`node.narrow`, with the PIN when one is set, from
+#: a paired device always) and cleared by narrowing it again or removing the node. Without it the
+#: group is narrowed on every listing.
+CORE_OPT_IN: frozenset[str] = frozenset({"voice"})
 #: "No default": the router decides as if nothing was configured (`nox.node.router.resolve`).
 AUTO = "auto"
 DEFAULT_WORDS: frozenset[str] = frozenset({AUTO, "core", "origin"})
@@ -140,13 +147,29 @@ class NodePolicy:
             if not complete:
                 for group in narrowed - listed:
                     enabled[group] = before.get(group, (False, True))[0]
+        # Two keys (C9): a `CORE_OPT_IN` group the owner has not switched on here is narrowed -
+        # on every listing, whatever the device says and whenever it says it, the first one
+        # included. Only the owner's PIN-protected clearing in the Devices page opts it in.
+        opted = self._nodes.opted_in_groups(device_id)
+        for group in CORE_OPT_IN - opted:
+            if enabled.get(group) and group not in narrowed:
+                self._nodes.narrow(device_id, group, True, when=self._clock())
+            narrowed.add(group)  # filtered here even if writing the narrowing failed
         self._nodes.set_reported_groups(device_id, enabled, when=self._clock())
         return {
             t: r for t, r in tools.items() if (g := group_of(t)) is not None and g not in narrowed
         }
 
     def set_narrowed(self, device_id: str, group: str, narrowed: bool) -> None:
+        """The owner's switch in the Devices page. For a `CORE_OPT_IN` group, clearing the
+        narrowing is the owner's second key and narrowing it again takes the key back."""
+        if group in CORE_OPT_IN:
+            self._nodes.set_opted_in(device_id, group, not narrowed, when=self._clock())
         self._nodes.narrow(device_id, group, narrowed, when=self._clock())
+
+    def opted_in(self, device_id: str, group: str) -> bool:
+        """Whether the owner switched `group` on for this node on the core (`CORE_OPT_IN`)."""
+        return group not in CORE_OPT_IN or group in self._nodes.opted_in_groups(device_id)
 
     def state(self, device_id: str, group: str) -> tuple[bool, bool]:
         """(enabled on the device, narrowed here)."""

@@ -235,6 +235,14 @@ class NodeAgent:
         #: Answers the node waits for (its own requests to the core), by JSON-RPC id.
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._request_seq = 0
+        #: What the connected core said it understands (`features`); empty while not connected.
+        self.features: frozenset[str] = frozenset()
+        #: The satellites' handlers for what the core sends them (`p.SATELLITE_TO_NODE`): each
+        #: validates its own parameters and returns at once (long work goes into a task).
+        self.satellites: dict[str, Callable[[dict[str, Any]], Awaitable[None]]] = {}
+        #: Told whenever the connection to a compatible core comes (True) or goes (False).
+        self.on_connection: list[Callable[[bool], None]] = []
+        self._ws: ClientConnection | None = None
 
     @property
     def busy(self) -> bool:
@@ -359,6 +367,14 @@ class NodeAgent:
             self.connected.set()
         self._status("connected" if self.compatible else "update_needed", identity)
         log.info("node.connected", compatible=self.compatible)
+        offered = result.get("features")
+        self.features = (
+            frozenset(f for f in offered[:16] if isinstance(f, str) and f in p.FEATURES)
+            if isinstance(offered, list) and self.compatible
+            else frozenset()
+        )
+        self._ws = ws
+        self._tell_connection(self.compatible)
         pinger = asyncio.create_task(self._ping(ws))
         watcher = asyncio.create_task(self._watch_local_stop(ws))
         renewer = asyncio.create_task(self._renew_loop(ws, identity))
@@ -396,8 +412,51 @@ class NodeAgent:
             for waiting in self._pending.values():
                 waiting.cancel()
             self._pending.clear()
+            self._ws = None
+            self.features = frozenset()
+            self._tell_connection(False)
             # The connection is gone: nothing keeps running without the core.
             await self._cancel_calls()
+
+    def _tell_connection(self, connected: bool) -> None:
+        for listener in list(self.on_connection):
+            try:
+                listener(connected)
+            except Exception as exc:  # noqa: BLE001 - a satellite never breaks the connection
+                log.warning("node.connection_listener_failed", error=type(exc).__name__)
+
+    async def notify_core(self, method: str, params: dict[str, Any]) -> bool:
+        """A satellite's notification to the core - only one the core said it understands, on
+        the current connection; False when there is none."""
+        ws = self._ws
+        if ws is None or method not in p.NODE_TO_CORE or not self._understood(method):
+            return False
+        try:
+            await ws.send(json.dumps({"jsonrpc": "2.0", "method": method, "params": params}))
+        except ConnectionClosed:
+            return False
+        return True
+
+    async def ask_core(
+        self, method: str, params: dict[str, Any], *, timeout_s: float = 10.0
+    ) -> dict[str, Any] | None:
+        """A satellite's request to the core and its answer; None without a connection, for a
+        method the core did not say it understands, or without an answer in time."""
+        ws = self._ws
+        if ws is None or method not in p.NODE_TO_CORE or not self._understood(method):
+            return None
+        try:
+            return await self._request(ws, method, params, timeout_s=timeout_s)
+        except (TimeoutError, ConnectionClosed, asyncio.CancelledError):
+            return None
+
+    def _understood(self, method: str) -> bool:
+        needs = {
+            p.M_VOICE_HEARD: p.FEATURE_VOICE,
+            p.M_VOICE_LEVEL: p.FEATURE_VOICE,
+            p.M_OVERLAY_CREDENTIAL: p.FEATURE_OVERLAY,
+        }.get(method)
+        return needs is None or needs in self.features
 
     def _groups(self) -> dict[str, list[str]]:
         """What this device enabled, said outright (the core shows it; it widens nothing): the
@@ -507,6 +566,17 @@ class NodeAgent:
                 )
             return None
         if method == p.M_PONG:
+            return None
+        if method in p.SATELLITE_TO_NODE:
+            handler = self.satellites.get(method)
+            if handler is None:
+                await self._reply(ws, msg_id, error=(ERR_METHOD_NOT_FOUND, "not supported"))
+                return None
+            try:
+                await handler(params)
+            except Exception as exc:  # noqa: BLE001 - a satellite never breaks the connection
+                log.warning("node.satellite_failed", method=method, error=type(exc).__name__)
+            await self._reply(ws, msg_id, result={})
             return None
         if method == p.M_REVOKED:
             self._forget("revoked by the core")
@@ -677,7 +747,12 @@ class NodeAgent:
             self._home.save_identity(identity)
 
     async def _request(
-        self, ws: ClientConnection, method: str, params: dict[str, Any]
+        self,
+        ws: ClientConnection,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout_s: float = RENEW_TIMEOUT_S,
     ) -> dict[str, Any]:
         """Send one request to the core and wait for its answer (TimeoutError after a while)."""
         self._request_seq += 1
@@ -688,7 +763,7 @@ class NodeAgent:
             await ws.send(
                 json.dumps({"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params})
             )
-            return await asyncio.wait_for(waiting, RENEW_TIMEOUT_S)
+            return await asyncio.wait_for(waiting, timeout_s)
         finally:
             self._pending.pop(msg_id, None)
 

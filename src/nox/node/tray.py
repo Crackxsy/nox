@@ -8,6 +8,9 @@ glance, and a stop that works even when the core is gone.
   core is told to stop everywhere. Only this device resumes it (**Hier fortsetzen**).
 * **Was Nox hier darf** lists the capability groups this device allowed; changing them stays a
   terminal command (`nox node allow`), on purpose.
+* **Voice satellite** (C9): while its microphone is open the icon says so ("Nox hört zu"); the
+  menu mutes and unmutes the microphone here (`nox node voice mute`); `Ctrl+Alt+Space` held is
+  push-to-talk.
 
 It is a separate process started by `nox node run` (only with a desktop and the `shell` extra's
 PySide6; the key needs pynput) and does nothing but read the node's files and write the stop file,
@@ -16,6 +19,7 @@ so a crash here never touches the node.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -27,10 +31,21 @@ from typing import IO
 from nox.node.home import NodeHome
 from nox.node.manifest import GROUPS, load_manifest
 
-__all__ = ["STOP_KEYS", "TrayView", "spawn_tray", "stop_here", "tray_available", "view"]
+__all__ = [
+    "PTT_KEYS",
+    "STOP_KEYS",
+    "TrayView",
+    "spawn_tray",
+    "stop_here",
+    "toggle_mute",
+    "tray_available",
+    "view",
+]
 
 #: The stop key (spec C §1.7).
 STOP_KEYS = frozenset({"ctrl", "alt", "shift", "k"})
+#: Push-to-talk for the voice satellite, held (the core's default key).
+PTT_KEYS = frozenset({"ctrl", "alt", "space"})
 REFRESH_MS = 1000
 
 _STATES = {
@@ -49,6 +64,16 @@ class TrayView:
     stopped_here: bool
 
 
+def _voice(home: NodeHome) -> dict[str, object]:
+    from nox.node.voice import STATE_FILE  # noqa: PLC0415
+
+    try:
+        data = json.loads((home.path / STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def view(home: NodeHome, *, german: bool = True) -> TrayView:
     """What the icon shows, from the node's own files only."""
     if home.stop_file.exists():
@@ -56,7 +81,37 @@ def view(home: NodeHome, *, german: bool = True) -> TrayView:
         return TrayView("safe_mode", text, True)
     state = str(home.read_status().get("state", "disconnected"))
     tint, de, en = _STATES.get(state, _STATES["disconnected"])
+    voice = _voice(home) if state == "connected" else {}
+    if voice.get("mic_open"):
+        # Seen as well as heard: the microphone is open for Nox right now.
+        return TrayView("capturing", "Nox hört zu" if german else "Nox is listening", False)
+    if voice.get("running") and voice.get("muted"):
+        de, en, tint = f"{de} (Mikrofon stumm)", f"{en} (microphone muted)", "muted"
     return TrayView(tint, de if german else en, False)
+
+
+def toggle_mute(home: NodeHome) -> bool:
+    """The mute switch of the voice satellite, here (only this device unmutes). True: muted."""
+    from nox.node.satellite_cli import voice_mute  # noqa: PLC0415
+    from nox.node.voice import MUTE_FILE  # noqa: PLC0415
+
+    muted = not (home.path / MUTE_FILE).exists()
+    voice_mute(home, muted)
+    return muted
+
+
+def ptt(home: NodeHome, pressed: bool) -> None:
+    """Push-to-talk held or released (a file write: safe from the key hook's own thread)."""
+    import time  # noqa: PLC0415
+
+    from nox.node.voice import PTT_FILE  # noqa: PLC0415
+
+    marker = home.path / PTT_FILE
+    if pressed:
+        home.ensure()
+        marker.write_text(str(time.time()), encoding="utf-8")
+    else:
+        marker.unlink(missing_ok=True)
 
 
 def allowed_here(home: NodeHome, *, german: bool = True) -> str:
@@ -163,6 +218,7 @@ def main() -> None:  # pragma: no cover - Qt and a desktop; the logic above is t
     )
     resume = QAction("Hier fortsetzen" if german else "Resume here")
     allowed = QAction("Was Nox hier darf" if german else "What Nox may do here")
+    mute = QAction("Mikrofon stumm / an" if german else "Mute / unmute microphone")
     close = QAction("Symbol ausblenden" if german else "Hide icon")
     stop.triggered.connect(lambda: stop_here(home))
     resume.triggered.connect(lambda: home.stop_file.unlink(missing_ok=True))
@@ -170,7 +226,8 @@ def main() -> None:  # pragma: no cover - Qt and a desktop; the logic above is t
         lambda: QMessageBox.information(None, "Nox", allowed_here(home, german=german))
     )
     close.triggered.connect(app.quit)
-    for action in (state_line, None, stop, resume, allowed, None, close):
+    mute.triggered.connect(lambda: toggle_mute(home))
+    for action in (state_line, None, stop, resume, allowed, mute, None, close):
         if action is None:
             menu.addSeparator()
         else:
@@ -191,8 +248,12 @@ def main() -> None:  # pragma: no cover - Qt and a desktop; the logic above is t
     def on_key(action: HotkeyAction, pressed: bool) -> None:
         if action == HotkeyAction.KILL and pressed:
             stop_here(home)  # a file write: safe from the hook's own thread
+        elif action == HotkeyAction.PTT:
+            ptt(home, pressed)
 
-    keys = GlobalHotkeys(HotkeyTracker({STOP_KEYS: HotkeyAction.KILL}), on_key)
+    keys = GlobalHotkeys(
+        HotkeyTracker({STOP_KEYS: HotkeyAction.KILL, PTT_KEYS: HotkeyAction.PTT}), on_key
+    )
     keys.start()  # False without pynput: the menu entry still works
     timer = QTimer()
     timer.timeout.connect(refresh)

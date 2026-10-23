@@ -827,6 +827,9 @@ class DefaultPermissionEngine:
         #: Conversations (`PermissionRequest.conversation`) that hold untrusted content, and
         #: what the user said in each.
         self._taint = TaintLedger()
+        #: A node's name by its id, for a question that came from its voice satellite (C9, set by
+        #: `nox.node.install`).
+        self.satellite_label: Callable[[str], str] | None = None
 
     # ---- PermissionEngine protocol ---------------------------------------------------------------
 
@@ -1063,7 +1066,20 @@ class DefaultPermissionEngine:
             remember_ttl_s=(
                 self._session_grant_ttl.total_seconds() if self._can_remember(request) else 0.0
             ),
+            voice_satellite=self._satellite_of(request.conversation),
         )
+
+    def _satellite_of(self, conversation: str) -> str:
+        """The voice satellite a conversation was spoken at (`voice:node:<id>#...`), by name."""
+        prefix = "voice:node:"
+        if not conversation.startswith(prefix):
+            return ""
+        device_id = conversation[len(prefix) :].split("#", 1)[0]
+        try:
+            name = self.satellite_label(device_id) if self.satellite_label is not None else ""
+        except Exception:  # noqa: BLE001 - a name is a courtesy; the marker itself stays
+            name = ""
+        return (name or device_id[:8] or "?")[:64]
 
     def pending_requests(self) -> list[PermissionRequested]:
         """The questions still waiting for an answer, as their `permission_requested` events - for

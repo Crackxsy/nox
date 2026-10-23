@@ -91,15 +91,32 @@ class Resolution:
     error: dict[str, Any] | None = None
 
 
+#: The origin of a turn spoken to a node's voice satellite (`voice:node:<id>#...`): that node.
+NODE_ORIGIN = "node:"
+VOICE_NODE_CHANNEL = "voice:node:"
+
+
 def origin_device() -> str | None:
-    """The paired browser device the current turn came from, if any: its conversation is
-    `chat:device:<id>#...` (`nox.core.orchestrator.conversation_for`)."""
+    """Where the current turn came from: the paired browser device of a `chat:device:<id>#...`
+    conversation (`nox.core.orchestrator.conversation_for`), or - for a question asked at a
+    node's voice satellite (`voice:node:<id>#...`, C9) - `node:<id>`, that node itself."""
     conversation = current_conversation()
-    prefix = "chat:device:"
-    if not conversation.startswith(prefix):
-        return None
-    device = conversation[len(prefix) :].split("#", 1)[0]
-    return device or None
+    for prefix, mark in (("chat:device:", ""), (VOICE_NODE_CHANNEL, NODE_ORIGIN)):
+        if conversation.startswith(prefix):
+            device = conversation[len(prefix) :].split("#", 1)[0]
+            return f"{mark}{device}" if device else None
+    return None
+
+
+def _at_origin(entries: list[NodeEntry], origin: str | None) -> list[NodeEntry]:
+    """The node the user is at: the one asked through its voice satellite, or the one linked to
+    the browser the request came from."""
+    if origin is None:
+        return []
+    if origin.startswith(NODE_ORIGIN):
+        node = origin[len(NODE_ORIGIN) :]
+        return [e for e in entries if e.device_id == node]
+    return [e for e in entries if e.linked_device_id == origin]
 
 
 def _matches(entries: list[NodeEntry], wanted: str) -> list[NodeEntry]:
@@ -136,7 +153,7 @@ def waits_for(
     if wanted is not None:  # (1) the user's choice decides alone
         word = wanted.casefold()
         if word in _HERE_WORDS and origin is not None:
-            linked = [e for e in entries if e.linked_device_id == origin]
+            linked = _at_origin(entries, origin)
             if len(linked) == 1:
                 return only(linked)
         if word in _CORE_WORDS:
@@ -145,7 +162,7 @@ def waits_for(
     if default == CORE and core_has:  # (2) the default, when it decides
         return []
     if default == "origin":
-        linked = [e for e in entries if origin is not None and e.linked_device_id == origin]
+        linked = _at_origin(entries, origin)
         if len(linked) == 1:
             return only(linked)
     elif default and default not in (CORE, "auto"):
@@ -217,7 +234,7 @@ def resolve(
         word = requested.strip().casefold()
         if word in _HERE_WORDS and origin is not None:
             # "hier" from a browser on a PC with a node means that PC (review N5).
-            linked = [e for e in entries if e.linked_device_id == origin]
+            linked = _at_origin(entries, origin)
             if len(linked) == 1:
                 return at(linked[0])
         if word in _CORE_WORDS:
@@ -235,7 +252,7 @@ def resolve(
             return Resolution(CORE)
         if default == "origin":
             # The PC the user is at: its node, online or not - never another one instead.
-            linked = [e for e in entries if origin is not None and e.linked_device_id == origin]
+            linked = _at_origin(entries, origin)
             if len(linked) == 1:
                 return at(linked[0])
             if side_effects and candidates:
@@ -305,6 +322,7 @@ def routed_spec(
     remember_on_node: bool = True,
     precheck: Callable[[dict[str, Any]], str | None] | None = None,
     around: NodeAround | None = None,
+    node_action: Callable[[dict[str, Any]], str] | None = None,
 ) -> ToolSpec:
     """One routable tool: the core's own spec (if the core has the tool) plus every node that
     offers it. `input_model` describes the arguments when the core has no spec of its own.
@@ -319,6 +337,9 @@ def routed_spec(
     core), and it turns the node's answer into what the model sees (a capture stored here). It
     runs in the handler - always after `precheck`, which refuses in the scope before anyone is
     asked; a call `precheck` refused never reaches `around`.
+    `node_action` names a node call's permission action from its arguments, for a generic tool
+    whose calls must not share one decision or one remembered answer (`obs.request`: one action
+    per request type, as on the core).
     `network` overrides the template's
     (a download is network whether or not the core has the tool itself)."""
     base = core.input_model if core is not None else input_model
@@ -391,7 +412,7 @@ def routed_spec(
         # The device travels in its own field: the permission request, the audit and a
         # remembered grant carry it; the target stays what the tool says (shown with the name).
         return CallScope(
-            action=action,
+            action=node_action(inner(payload)) if node_action is not None else action,
             risk=node_risk_,
             target=f"{entry.label}: {base_target or name}",
             device=resolution.device,

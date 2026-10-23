@@ -307,6 +307,7 @@ def install(core: Any) -> LanRuntime:
             hub_url=lambda: f"ws://{hub_host}:{core.hub.port}/ws",
             bridge_secret=lambda: core.hub.lan_bridge_secret,
             dashboard_dist=core.dashboard_dist if core.dashboard_dist.exists() else None,
+            pet_dist=_pet_dist(core),
             limiter=PairLimiter(per_address=cfg.pair_attempts_per_minute),
             allow_public_clients=cfg.allow_public_clients,
             max_frame_bytes=core.hub.settings.max_frame_bytes,
@@ -494,3 +495,9 @@ def _register_requests(core: Any, runtime: LanRuntime) -> None:
     reg("lan.devices.list", EmptyRequest, h_devices, roles=UI_ROLES)
     reg("lan.pair.start", PairStartRequest, h_pair_start, roles=UI_ROLES)
     reg("lan.unpair", UnpairRequest, h_unpair, roles=UI_ROLES)
+
+
+def _pet_dist(core: Any) -> Path | None:
+    """The built pet page, for a node's overlay relay (C9); None when it is not built."""
+    dist = getattr(core, "pet_dist", None)
+    return dist if isinstance(dist, Path) and dist.exists() else None

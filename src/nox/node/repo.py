@@ -222,6 +222,29 @@ class NodeRepository:
             (device_id, group, int(narrowed), _iso(when)),
         )
 
+    def set_opted_in(self, device_id: str, group: str, opted_in: bool, *, when: datetime) -> None:
+        """The owner's second key for a `CORE_OPT_IN` group (migration 0018)."""
+        self._db.execute(
+            "INSERT INTO node_capabilities (device_id, grp, core_opted_in, updated_at)"
+            " VALUES (?, ?, ?, ?) ON CONFLICT(device_id, grp) DO UPDATE SET"
+            " core_opted_in = excluded.core_opted_in, updated_at = excluded.updated_at",
+            (device_id, group, int(opted_in), _iso(when)),
+        )
+
+    def opted_in_groups(self, device_id: str) -> set[str]:
+        rows = self._db.fetch_all(
+            "SELECT grp FROM node_capabilities WHERE device_id = ? AND core_opted_in = 1",
+            (device_id,),
+        )
+        return {str(r["grp"]) for r in rows}
+
+    def clear_opt_in(self, device_id: str, *, when: datetime) -> None:
+        """A removed node keeps no second key a re-paired one could inherit."""
+        self._db.execute(
+            "UPDATE node_capabilities SET core_opted_in = 0, updated_at = ? WHERE device_id = ?",
+            (_iso(when), device_id),
+        )
+
     def effective_groups(self, device_id: str) -> set[str]:
         """Enabled on the node *and* not narrowed on the core - both have to agree."""
         rows = self._db.fetch_all(

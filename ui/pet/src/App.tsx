@@ -8,6 +8,7 @@ import {
   type IpcClient,
   type PetRole,
   createPetClient,
+  forThisPet,
   petVariantChanged,
   variantFromStateReply,
 } from './ipc';
@@ -67,6 +68,9 @@ export interface AppProps {
   tourEveryMs?: number;
   /** Dev-only (`?renderer=rig`): keep the older rig renderer even for a relief creature. */
   forceRig?: boolean;
+  /** `?device=<id>`: the pet of one paired node (its overlay relay, C9) - it follows that node's
+   * speech, not the core's. */
+  device?: string | null;
 }
 
 export function App({
@@ -82,6 +86,7 @@ export function App({
   tour = null,
   tourEveryMs = 3500,
   forceRig = false,
+  device = null,
 }: AppProps) {
   const t = useMemo(() => petTranslator(lang), [lang]);
   // The variant is state, not just a prop: `config.set pet.variant` swaps it live, without a page
@@ -138,6 +143,7 @@ export function App({
   // read back. The pet role may call `state.get`; if the core does not expose `pet.variant` there
   // the swap does not happen here and the shell's page reload (shell/app.py) is what applies it.
   const onEvent = useCallback((env: Envelope) => {
+    if (!forThisPet(env, device)) return;
     setState((s) => reduceEvent(s, env.name, env.payload));
     if (!petVariantChanged(env)) return;
     const client = clientRef.current;
@@ -150,7 +156,7 @@ export function App({
         else console.info('pet.variant_not_readable', 'waiting for the shell to reload the page');
       })
       .catch((err: unknown) => console.info('pet.variant_read_failed', reasonOf(err)));
-  }, []);
+  }, [device]);
 
   useEffect(() => {
     if (still || animate || !token) return;
@@ -412,6 +418,11 @@ export function App({
         />
       )}
       <AiVoiceLabel label={state.aiVoiceLabel} overlay={overlay && !still} />
+      {overlay && !still && !animate && token && !state.connected && (
+        <span className="pet-overlay-offline" role="status" data-testid="overlay-offline">
+          {t('offline')}
+        </span>
+      )}
       {!overlay && !still && (
         <CaptureIndicator
           t={t}
