@@ -491,11 +491,14 @@ o3_reclaim() {
   [ "$(mode_of /var/lib/nox-os-claim/reclaim)" = '644 root root' ] || finish "NOX-SMOKE-FAIL: no reclaim note"
   [ -e /var/lib/nox-os/reset-maintenance ] || finish "NOX-SMOKE-FAIL: no passphrase reset with the reclaim"
   [ "$(field /run/nox-os/setup-mode reason)" = unclaimed ] || finish "NOX-SMOKE-FAIL: no fresh setup window"
-  waited=0
-  until curl -fsS -o /dev/null http://127.0.0.1:47801/health && [ "$(status_code https://127.0.0.1:47843/api/lan/info)" = 200 ]; do
-    [ "$waited" -lt 300 ] || finish "NOX-SMOKE-FAIL: Nox did not come back after the reclaim"
+  tries=0
+  while :; do
+    health="$(curl -s -m 10 -o /dev/null -w '%{http_code}' http://127.0.0.1:47801/health)"
+    lan="$(curl -sk -m 10 -o /dev/null -w '%{http_code}' https://127.0.0.1:47843/api/lan/info)"
+    [ "$health" = 200 ] && [ "$lan" = 200 ] && break
+    [ "$tries" -lt 60 ] || finish "NOX-SMOKE-FAIL: Nox did not come back after the reclaim (health $health, listener $lan; $(ss -Htln 2>&1 | tr -s ' ' | cut -d' ' -f4 | tr '\n' ' '))"
     sleep 5
-    waited=$((waited + 5))
+    tries=$((tries + 1))
   done
   answer="$(core_call security.pin.status)"
   echo "$answer" | grep -q '"configured": false' || finish "NOX-SMOKE-FAIL: the PIN survived the reclaim: $answer"
