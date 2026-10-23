@@ -216,12 +216,19 @@ speakerphone, say.
   unmutes it (`nox node voice unmute`). Nox's privacy settings close it too: the microphone
   switch, panic, safe mode, a privacy zone and the stop button.
 - "Nox, Notaus" stops this node - and with it Nox everywhere - and never reaches Nox as text.
-- What you say becomes a conversation of its own on Nox, recorded or not by Nox's privacy mode
-  like anything said into its own microphone; facts Nox learns from it wait for your
-  confirmation. "Hier" means this device: "Mach hier die Musik leiser". Approvals are never given
-  by voice.
-- Nox can also say something here on purpose (`voice.say`, low risk): "Sag im Wohnzimmer, dass
-  das Essen fertig ist".
+- What you say becomes a conversation of its own on Nox, recorded or not by Nox's privacy mode;
+  facts Nox learns from it wait for your confirmation. "Hier" means this device: "Mach hier die
+  Musik leiser". Nox treats it as words from a room, not as yours for sure: anything that sends
+  data out asks first, a "remember for this session" you gave elsewhere does not count for it,
+  and the question says "von Sprach-Satellit <name>". Approvals are never given by voice. It
+  waits for whatever Nox is doing on the dashboard instead of interrupting it.
+- While Nox speaks here the microphone is closed (and for a moment after), so Nox does not hear
+  itself; push-to-talk still works and stops Nox speaking. One question per "Nox": the next one
+  needs the name again. While Nox controls mouse and keyboard on this PC, it does not listen to
+  it.
+- Nox can also say something here on purpose (`voice.say`, low risk; asked when the
+  conversation holds outside content): "Sag im Wohnzimmer, dass das Essen fertig ist". It never
+  says its own name or "Notaus".
 
 **OBS** (`obs`): OBS runs on this PC, Nox on another one.
 
@@ -236,8 +243,9 @@ speakerphone, say.
   in the dialog on this PC - and stopping the stream or reading the stream key is never possible.
   A scene switch through `obs.request` on a node is always asked here (Nox's core does not know
   this PC's scene set). The privacy scene and everything in it cannot be changed.
-- The panic button switches this OBS to its privacy scene; after that Nox changes nothing in OBS
-  here until you run `nox node obs resume` on this PC.
+- The panic button switches this OBS to its privacy scene (also when this PC was off and comes
+  back during the panic); after that Nox changes nothing in OBS here until you run
+  `nox node obs resume` on this PC - that works at once, while the node runs.
 
 **Pet overlay**: the pet as an OBS browser source on this PC, from the Nox at home.
 
@@ -246,8 +254,10 @@ speakerphone, say.
   `http://127.0.0.1:47845/pet/?overlay=1&device=<id>#overlay=relay`. The URL holds no secret: the
   node adds its own read-only credential, renews it on every connection and loses it when the
   node is removed or OBS is switched off for it in the dashboard.
-- The pet moves its mouth with what this device says. Without a connection it shows "offline"
-  and reconnects by itself.
+- The pet moves its mouth with what this device says (only this overlay gets that). Without a
+  connection it shows "offline" and reconnects by itself.
+- Anything running on this PC can open that address too and see what the overlay sees (how the
+  pet looks, never what is said).
 
 ## In the dashboard
 

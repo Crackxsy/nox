@@ -9,7 +9,7 @@ from typing import Any
 
 from PySide6.QtWidgets import QCheckBox, QLabel, QLineEdit, QMessageBox, QWidget
 
-from nox.shell.logic import permission_reply, rememberable
+from nox.shell.logic import permission_reply, rememberable, voice_satellite_line
 
 _TEXT = {
     "de": {
@@ -54,6 +54,9 @@ class PermissionDialog:
             )
         )
         details = []
+        satellite = voice_satellite_line(request, language)
+        if satellite:
+            details.append(satellite)
         if request.get("target"):
             details.append(t["target"].format(target=request["target"]))
         details.append(

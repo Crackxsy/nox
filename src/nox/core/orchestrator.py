@@ -271,6 +271,8 @@ class Orchestrator:
     _safe_mode: bool = False
     #: The live conversation of each channel (`conversation_for`).
     _conversations: dict[str, _Conversation] = field(default_factory=dict)
+    #: Turns that wait for their turn instead of cancelling one (`handle_text(barge_in=False)`).
+    _waiting: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def start(self) -> None:
         self._unsubs = [
@@ -303,23 +305,43 @@ class Orchestrator:
         speak: bool | None = None,
         on_chunk: Callable[[str], Awaitable[None] | None] | None = None,
         channel: str = DEFAULT_CHANNEL,
+        barge_in: bool = True,
+        context_note: str = "",
     ) -> Turn:
         """Process a user utterance. Cancels an in-flight turn (barge-in semantics).
 
         `channel` names where the user is talking: `voice`, `chat:<client>` for a dashboard client,
         `remote:<device>` for a paired phone. Each channel has a conversation of its own - its own
         history, model context and taint (`nox.security.taint`).
+
+        `barge_in=False` (a node's voice satellite, C9) cancels nothing and interrupts no speech:
+        the turn waits until the one in flight - and the question it may be waiting on - is over.
+        `context_note` is said to the model in this turn's context (where the words came from).
         """
         if self._safe_mode:
             raise RuntimeError("safe mode: AI requests are disabled until resume")
-        await self.cancel(reason="new_input")
-        self._active = asyncio.create_task(
-            self._run(text, language or self.config.default_language, speak, on_chunk, channel)
-        )
+        language = language or self.config.default_language
+        if barge_in:
+            await self.cancel(reason="new_input")
+            task = asyncio.create_task(
+                self._run(text, language, speak, on_chunk, channel, note=context_note)
+            )
+            self._active = task
+        else:
+            async with self._waiting:
+                while (running := self._active) is not None and not running.done():
+                    await asyncio.wait({running})
+                if self._safe_mode:
+                    raise RuntimeError("safe mode: AI requests are disabled until resume")
+                task = asyncio.create_task(
+                    self._run(text, language, speak, on_chunk, channel, note=context_note)
+                )
+                self._active = task
         try:
-            return await self._active
+            return await task
         finally:
-            self._active = None
+            if self._active is task:
+                self._active = None
 
     async def cancel(self, *, reason: str) -> None:
         task = self._active
@@ -413,6 +435,8 @@ class Orchestrator:
         speak: bool | None,
         on_chunk: Callable[[str], Awaitable[None] | None] | None = None,
         channel: str = DEFAULT_CHANNEL,
+        *,
+        note: str = "",
     ) -> Turn:
         started = time.perf_counter()
         request_id = uuid.uuid4().hex
@@ -474,7 +498,7 @@ class Orchestrator:
             ):
                 messages.append(Message(role=past.role, content=past.text, private=past.private))
         messages.append(Message(role="user", content=text))
-        turn_context = self._turn_context(context, with_caveats=tools is not None)
+        turn_context = self._turn_context(context, with_caveats=tools is not None, note=note)
         decision = self.escalation.decide(text, relevance=context.relevance)
         turn.escalated = decision.reason
         turn.timings.prompt_build_ms = (time.perf_counter() - build_started) * 1000
@@ -775,7 +799,7 @@ class Orchestrator:
         finally:
             timings.context_ms = (time.perf_counter() - started) * 1000
 
-    def _turn_context(self, context: TurnContext, *, with_caveats: bool) -> str:
+    def _turn_context(self, context: TurnContext, *, with_caveats: bool, note: str = "") -> str:
         """Per-turn context: current facts, what Nox knows about the user, memory, and what is
         not available right now (only when tools are on offer - a model told about caveats of a
         protocol it cannot use will eventually try to use it anyway).
@@ -785,7 +809,7 @@ class Orchestrator:
         """
         facts = self._facts()
         caveats = self.tool_loop.caveats() if with_caveats and self.tool_loop is not None else ""
-        parts = [facts, self._profile(), context.block, caveats]
+        parts = [facts, note, self._profile(), context.block, caveats]
         return "\n\n".join(part for part in parts if part)
 
     def _facts(self) -> str:

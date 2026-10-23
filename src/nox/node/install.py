@@ -17,6 +17,7 @@ Requests, for the UI roles (`nox.ipc.roles`):
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -207,6 +208,8 @@ def install(core: Any) -> NodeRuntime:
     killswitch.register_resume_hook("nodes", resume_nodes)
     control = _install_routes(core, registry, [listener])
     controls.append(control)
+    # The PC Nox controls cannot talk to it (`controlled_here`).
+    satellites.controlled = control.locked
     _keep(runtime, _watch_sessions(control, core, listener, satellites), "nox-node-computer")
 
     async def redeem(body: NodePairRequest) -> tuple[int, dict[str, Any]]:
@@ -385,6 +388,36 @@ async def _watch_sessions(
             log.error("node.computer_watch_failed", error=type(exc).__name__)
 
 
+#: How long the hub may reuse its answer to "may this node hold an overlay credential?".
+OVERLAY_CHECK_TTL_S = 2.0
+
+
+class TtlCache:
+    """`read(key)` remembered for `ttl_s`; `forget(key)` drops one answer at once."""
+
+    def __init__(
+        self,
+        read: Callable[[str], bool],
+        *,
+        ttl_s: float,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._read, self._ttl, self._clock = read, ttl_s, clock
+        self._answers: dict[str, tuple[float, bool]] = {}
+
+    def __call__(self, key: str) -> bool:
+        now = self._clock()
+        cached = self._answers.get(key)
+        if cached is not None and now - cached[0] < self._ttl:
+            return cached[1]
+        value = bool(self._read(key))
+        self._answers[key] = (now, value)
+        return value
+
+    def forget(self, key: str) -> None:
+        self._answers.pop(key, None)
+
+
 def install_satellites(
     core: Any, runtime: NodeRuntime, registry: NodeRegistry, listener: Any, pairing: NodePairing
 ) -> SatelliteHub:
@@ -427,16 +460,29 @@ def install_satellites(
 
     orchestrator = getattr(core, "orchestrator", None)
 
-    async def turn(text: str, language: str, on_chunk: Any, channel: str) -> Any:
+    async def turn(text: str, language: str, on_chunk: Any, channel: str, note: str) -> Any:
         assert orchestrator is not None
+        # Waits for the turn in flight instead of cancelling it (and a question it may wait on),
+        # and interrupts no speech here; the conversation counts as tainted from its first turn
+        # (`nox.security.taint.UNTRUSTED_CONVERSATIONS`).
         return await orchestrator.handle_text(
-            text, language=language, speak=False, on_chunk=on_chunk, channel=channel
+            text,
+            language=language,
+            speak=False,
+            on_chunk=on_chunk,
+            channel=channel,
+            barge_in=False,
+            context_note=note,
         )
+
+    def label_of(device_id: str) -> str:
+        entry = entry_of(device_id)
+        return entry.label if entry is not None else device_id[:8]
 
     def publish(name: str, payload: dict[str, Any]) -> None:
         publish_nowait(getattr(core, "bus", None), name, payload, source="node")
 
-    def overlay_allowed(device_id: str) -> bool:
+    def read_overlay_allowed(device_id: str) -> bool:
         """May this node hold an overlay credential (blocking: the database)? Paired, not
         removed, `obs` enabled on the device as it last said and not narrowed here."""
         device = pairing.get(device_id)
@@ -444,6 +490,10 @@ def install_satellites(
             return False
         on_device, narrowed = registry.policy.state(device_id, "obs")
         return on_device and not narrowed
+
+    # The hub asks at every use of a node's overlay credential, on its own loop: a short cache,
+    # emptied for a node the moment it is narrowed or removed.
+    overlay_allowed = TtlCache(read_overlay_allowed, ttl_s=OVERLAY_CHECK_TTL_S)
 
     tokens = getattr(core, "tokens", None)
     if tokens is not None and hasattr(tokens, "node_overlay_allowed"):
@@ -462,14 +512,28 @@ def install_satellites(
         disconnect_credential=getattr(hub, "disconnect_credential", None),
         overlay_allowed=overlay_allowed,
         opted_in=registry.policy.opted_in,
+        label=label_of,
     )
     listener.on_satellite = satellites.handle
+    engine = getattr(security, "engine", None)
+    if engine is not None and hasattr(engine, "satellite_label"):
+        engine.satellite_label = label_of  # "von Sprach-Satellit <name>" in its questions
     connected, disconnected = listener._on_connected, listener._on_disconnected  # noqa: SLF001
+
+    def panicking() -> bool:
+        privacy = getattr(security, "privacy", None)
+        try:
+            return bool(getattr(privacy, "panic", False))
+        except Exception:  # noqa: BLE001 - cannot tell: protective
+            return True
 
     async def on_connected(session: Any) -> None:
         if connected is not None:
             await connected(session)
         await satellites.push_gates()
+        if panicking():
+            # Offline when the panic button was pressed: its OBS goes to the privacy scene now.
+            await satellites.panic("panic", sessions=[session])
 
     async def on_disconnected(session: Any) -> None:
         satellites.disconnected(session.device_id)
@@ -480,11 +544,14 @@ def install_satellites(
     listener._on_disconnected = on_disconnected  # noqa: SLF001
 
     async def forget(device_id: str, reason: str) -> None:
+        overlay_allowed.forget(device_id)
         await satellites.revoke_overlay(device_id, f"node removed: {reason}")
 
     pairing.on_revoked(forget)
 
     async def narrowed(device_id: str, group: str, on: bool) -> None:
+        if group == "obs":
+            overlay_allowed.forget(device_id)
         if group == "obs" and on:
             # Switched off in the Devices page: its overlay goes dark now, online or not.
             await satellites.revoke_overlay(device_id, "obs narrowed")
@@ -567,7 +634,17 @@ def _install_routes(
         )
     world, control = _world_specs(core, registry, defaults, listeners or [])
     specs += world
-    specs.append(voice_say_spec(registry, defaults))  # C9: speaking on a node
+    engine = getattr(getattr(core, "security", None), "engine", None)
+
+    def tainted_now() -> bool:
+        from nox.security.taint import current_conversation  # noqa: PLC0415
+
+        try:
+            return engine is None or bool(engine.is_tainted(current_conversation()))
+        except Exception:  # noqa: BLE001 - cannot tell: tainted
+            return True
+
+    specs.append(voice_say_spec(registry, defaults, tainted=tainted_now))  # C9: speak on a node
     on_core = {spec.name for spec in specs if own(spec.name) is not None}
     install_routes(core.tool_registry, specs)
     node_only = {spec.name for spec in specs} - on_core

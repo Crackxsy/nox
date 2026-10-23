@@ -948,6 +948,10 @@ export const deMore = {
   node_group_device_off: 'Am Gerät aus.',
   node_enable_title: 'Das geht nur am Gerät selbst',
   node_enable_how: 'Gib dazu auf dem Gerät selbst im Terminal ein:',
+  node_voice_confirm_title: 'Das Mikrofon dieses Geräts wird zur Eingabe für Nox',
+  node_voice_confirm_text:
+    'Was dort jemand zu Nox sagt, kommt als Text bei Nox an - wer im Raum ist, muss nicht du sein. Nox fragt bei allem, was Daten nach draußen schickt, und erlaubt nichts per Stimme.',
+  node_voice_confirm_go: 'Zuhören und sprechen einschalten',
   node_enable_tray: 'Das Nox-Symbol im Infobereich zeigt nur an, was erlaubt ist. Ein Pi oder Server ohne Bildschirm hat kein Symbol – dort geht es im Terminal, etwa über SSH.',
   node_enable_folder: '<Ordner>',
   node_enable_close: 'Verstanden',

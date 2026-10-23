@@ -232,11 +232,19 @@ USB-Lautsprechermikrofon.
   der Mikrofon-Schalter, Panik, abgesicherter Modus, eine Privatsphäre-Zone und der Stopp-Knopf.
 - "Nox, Notaus" stoppt diesen Node - und damit Nox überall - und kommt nie als Text bei Nox an.
 - Was du sagst, wird bei Nox ein eigenes Gespräch, gespeichert oder nicht nach Nox'
-  Privatsphäre-Modus wie alles, was in sein eigenes Mikrofon gesagt wird; was Nox daraus über dich
-  lernt, wartet auf deine Bestätigung. "Hier" heißt dieses Gerät: "Mach hier die Musik leiser".
-  Erlaubnisse gibt es nie per Stimme.
-- Nox kann hier auch gezielt etwas sagen (`voice.say`, geringes Risiko): "Sag im Wohnzimmer, dass
-  das Essen fertig ist".
+  Privatsphäre-Modus; was Nox daraus über dich lernt, wartet auf deine Bestätigung. "Hier" heißt
+  dieses Gerät: "Mach hier die Musik leiser". Nox behandelt es als Worte aus einem Raum, nicht
+  sicher als deine: Alles, was Daten nach draußen schickt, fragt vorher, ein anderswo gegebenes
+  "für diese Sitzung merken" gilt dafür nicht, und die Frage zeigt "von Sprach-Satellit <Name>".
+  Erlaubnisse gibt es nie per Stimme. Es wartet, bis Nox im Dashboard fertig ist, statt es zu
+  unterbrechen.
+- Während Nox hier spricht, ist das Mikrofon zu (und einen Moment danach), damit Nox sich nicht
+  selbst hört; Push-to-Talk geht trotzdem und unterbricht Nox. Eine Frage pro "Nox": Die nächste
+  braucht den Namen wieder. Während Nox Maus und Tastatur auf diesem PC steuert, hört es ihm nicht
+  zu.
+- Nox kann hier auch gezielt etwas sagen (`voice.say`, geringes Risiko; gefragt, wenn das
+  Gespräch fremde Inhalte enthält): "Sag im Wohnzimmer, dass das Essen fertig ist". Seinen eigenen
+  Namen oder "Notaus" sagt es nie.
 
 **OBS** (`obs`): OBS läuft auf diesem PC, Nox auf einem anderen.
 
@@ -251,8 +259,9 @@ USB-Lautsprechermikrofon.
   auf diesem PC -, und den Stream stoppen oder den Stream-Schlüssel lesen geht nie. Ein
   Szenenwechsel über `obs.request` auf einem Node wird immer hier gefragt (Nox' Core kennt die
   Szenenliste dieses PCs nicht). Die Privatsphäre-Szene und alles darin lassen sich nicht ändern.
-- Der Panik-Knopf schaltet dieses OBS auf seine Privatsphäre-Szene; danach ändert Nox hier nichts
-  mehr in OBS, bis du auf diesem PC `nox node obs resume` ausführst.
+- Der Panik-Knopf schaltet dieses OBS auf seine Privatsphäre-Szene (auch wenn dieser PC aus war
+  und während der Panik wiederkommt); danach ändert Nox hier nichts mehr in OBS, bis du auf diesem
+  PC `nox node obs resume` ausführst - das wirkt sofort, auch während der Node läuft.
 
 **Pet-Overlay**: das Pet als OBS-Browserquelle auf diesem PC, vom Nox zuhause.
 
@@ -261,8 +270,10 @@ USB-Lautsprechermikrofon.
   `http://127.0.0.1:47845/pet/?overlay=1&device=<id>#overlay=relay`. Die Adresse enthält kein
   Geheimnis: Der Node ergänzt seinen eigenen Nur-Lese-Zugang, erneuert ihn bei jeder Verbindung und
   verliert ihn, wenn der Node entfernt oder OBS für ihn im Dashboard ausgeschaltet wird.
-- Das Pet bewegt den Mund zu dem, was dieses Gerät sagt. Ohne Verbindung zeigt es "offline" und
-  verbindet sich von selbst neu.
+- Das Pet bewegt den Mund zu dem, was dieses Gerät sagt (nur dieses Overlay bekommt das). Ohne
+  Verbindung zeigt es "offline" und verbindet sich von selbst neu.
+- Alles, was auf diesem PC läuft, kann diese Adresse auch öffnen und sieht, was das Overlay sieht
+  (wie das Pet aussieht, nie was gesagt wird).
 
 ## Im Dashboard
 

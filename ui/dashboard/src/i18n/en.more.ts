@@ -930,6 +930,10 @@ export const enMore: Record<MoreKey, string> = {
   node_group_device_off: 'Off on the device.',
   node_enable_title: 'This only works on the device itself',
   node_enable_how: 'Type this in a terminal on the device itself:',
+  node_voice_confirm_title: "This device's microphone becomes an input for Nox",
+  node_voice_confirm_text:
+    'What someone there says to Nox reaches Nox as text - whoever is in the room need not be you. Nox asks before anything that sends data out and allows nothing by voice.',
+  node_voice_confirm_go: 'Switch on listening and speaking',
   node_enable_tray: 'The Nox icon in the notification area only shows what is allowed. A Pi or server without a screen has no icon – use a terminal there, for example over SSH.',
   node_enable_folder: '<folder>',
   node_enable_close: 'Got it',

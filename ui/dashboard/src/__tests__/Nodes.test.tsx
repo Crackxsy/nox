@@ -254,6 +254,28 @@ describe('the detail sheet', () => {
     });
   });
 
+  it('says what switching voice on means and needs a second, explicit yes', async () => {
+    const narrowed = node(PC, {
+      groups: [{ group: 'voice', enabled_on_device: true, narrowed: true, active: false }],
+    });
+    const { calls } = await show({ answers: { 'node.list': listing([narrowed]) } });
+    const sheet = await openSheet();
+    const voice = within(sheet).getByRole('switch', { name: 'Zuhören und sprechen' });
+    await act(async () => {
+      fireEvent.click(voice);
+    });
+    expect(calls.some((c) => c.name === 'node.narrow')).toBe(false);
+    expect(within(sheet).getByText(t('node_voice_confirm_title'))).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(within(sheet).getByTestId('node-voice-confirm'));
+    });
+    expect(calls.find((c) => c.name === 'node.narrow')?.payload).toMatchObject({
+      node_id: PC,
+      group: 'voice',
+      narrowed: false,
+    });
+  });
+
   it('says so when the core refuses to widen', async () => {
     const narrowed = node(PC, {
       groups: [{ group: 'notify', enabled_on_device: true, narrowed: true, active: false }],

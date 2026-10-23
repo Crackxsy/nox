@@ -366,6 +366,9 @@ class ClientSession:
     device_id: str = ""
     #: The persistent credential this connection authenticated with (overlay role only).
     credential_id: str = ""
+    #: The node whose own overlay credential that was (`node:<id>`, C9): only it gets that
+    #: node's speech (`pet_view`).
+    overlay_node: str = ""
 
     @property
     def client_id(self) -> str:
@@ -749,6 +752,7 @@ class IpcHub:
             via_lan=via_lan,
             device_id=decision.device_id,
             credential_id=decision.credential_id,
+            overlay_node=decision.overlay_node,
         )
         response = AuthResponse(ok=True, session_id=session_id, core_version=s.core_version)
         await conn.send(
@@ -951,7 +955,11 @@ class IpcHub:
             if client.role in pet_view.ROLES:
                 # The pet and the overlay get their own, allow-listed view of each event.
                 shown = pet_view.view(
-                    client.role, event.name, event.payload, privacy_mode=self.privacy_mode()
+                    client.role,
+                    event.name,
+                    event.payload,
+                    privacy_mode=self.privacy_mode(),
+                    overlay_device=client.overlay_node,
                 )
                 if shown is not None:
                     self._enqueue_text(

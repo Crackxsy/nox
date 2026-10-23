@@ -26,7 +26,7 @@ import contextlib
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -169,6 +169,9 @@ class NodeObs:
 
     @property
     def panicked(self) -> bool:
+        """Read again before every request: `nox node obs resume` in a terminal (which removes
+        the file) takes effect on the running node at once. In memory only when there is no
+        file, or it could not be written."""
         return self._panicked or (self.panic_file is not None and self.panic_file.exists())
 
     def _url(self) -> str:
@@ -232,6 +235,11 @@ class NodeObs:
                 "comment": redact_text(exc.comment),
             }
         response = redact(raw)
+        if request_type == "GetRecordDirectory" and isinstance(response, dict):
+            # Where this PC keeps its recordings is its business: the folder's name at most.
+            folder = str(raw.get("recordDirectory") or "") if isinstance(raw, dict) else ""
+            name = PureWindowsPath(folder.replace("/", "\\")).name
+            response["recordDirectory"] = redact_text(name) if name else "[hidden]"
         text = json.dumps(response, default=str)
         if len(text) > MAX_RESPONSE_CHARS:
             return {
@@ -245,10 +253,15 @@ class NodeObs:
     async def panic(self, reason: str = "") -> bool:
         """`nox/obs/panic`: latch first (nothing changes OBS from now on), then the privacy scene.
         True when OBS switched. Never raises."""
-        self._panicked = True
+        written = False
         if self.panic_file is not None:
-            with contextlib.suppress(OSError):
+            try:
                 self.panic_file.write_text("panic", encoding="utf-8")
+                written = True
+            except OSError:
+                written = False
+        # The file is the latch (this device lifts it); in memory only when it cannot be written.
+        self._panicked = not written
         scene = self.settings().privacy_scene
         if not scene:
             log.warning("node.obs_panic_no_privacy_scene")

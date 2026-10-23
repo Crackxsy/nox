@@ -93,6 +93,9 @@ SessionFn = Callable[["NodeSession"], Awaitable[None]]
 SatelliteFn = Callable[["NodeSession", str, BaseModel], Awaitable[dict[str, Any] | None]]
 #: Satellite levels a node may send per second; more are dropped (never a violation).
 MAX_LEVELS_PER_S = 40
+#: Satellite requests per minute beyond which a node is flooding (each one more is a violation);
+#: well above what the core accepts (`nox.node.satellites`: 12 utterances, 3 credential asks).
+FLOOD_PER_MINUTE: dict[str, int] = {p.M_VOICE_HEARD: 30, p.M_OVERLAY_CREDENTIAL: 10}
 
 
 @dataclass
@@ -124,6 +127,8 @@ class NodeSession:
     computer: p.SessionReport | None = None
     #: `nox/voice/level` in the current second: (second, count).
     levels: tuple[int, int] = (0, 0)
+    #: Satellite requests in the current minute, per method: (minute, count).
+    satellite_asks: dict[str, tuple[int, int]] = field(default_factory=dict)
     blobs: dict[str, list[bytes]] = field(default_factory=dict)
     complete: set[str] = field(default_factory=set)
     blob_bytes: int = 0
@@ -554,6 +559,17 @@ class NodeListener:
         """A satellite method (C9). A core without satellites answers "not supported" - a node
         only sends these to a core that said it understands them, so it is no violation."""
         handler = self.on_satellite
+        limit = FLOOD_PER_MINUTE.get(method)
+        if limit is not None:
+            minute = int(time.monotonic() // 60)
+            at, count = session.satellite_asks.get(method, (minute, 0))
+            count = count + 1 if at == minute else 1
+            session.satellite_asks[method] = (minute, count)
+            if count > limit:
+                # Far beyond what the core takes anyway (`nox.node.satellites`): flooding, which
+                # counts against the node like any refused message and ends its connection.
+                await self._violation(session, method, msg_id, ERR_INVALID_PARAMS, "flooding")
+                return
         if method == p.M_VOICE_LEVEL:
             second = int(time.monotonic())
             at, count = session.levels

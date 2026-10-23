@@ -144,6 +144,8 @@ class AuthDecision:
     #: Which persistent credential authenticated the connection (overlay only), so revoking the
     #: credential can close the connections that used it.
     credential_id: str = ""
+    #: The paired node an overlay credential was issued to (`node:<id>`, C9), or "".
+    overlay_node: str = ""
 
 
 class TokenStore:
@@ -256,7 +258,12 @@ class TokenStore:
                     return AuthDecision(ok=False, reason="no overlay credential of a paired node")
                 if not self._node_may_hold(credential.label[len(NODE_OVERLAY_PREFIX) :]):
                     return AuthDecision(ok=False, reason="the node may not show an overlay now")
-                return AuthDecision(ok=True, kind="overlay", credential_id=credential.credential_id)
+                return AuthDecision(
+                    ok=True,
+                    kind="overlay",
+                    credential_id=credential.credential_id,
+                    overlay_node=credential.label[len(NODE_OVERLAY_PREFIX) :],
+                )
             if role != DEVICE_ROLE:
                 return AuthDecision(ok=False, reason="only paired devices connect over the network")
             return self._authenticate_device(token, client_id)

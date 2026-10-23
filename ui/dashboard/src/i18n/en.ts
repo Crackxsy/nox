@@ -333,6 +333,8 @@ export const en: Record<CoreKey, string> = {
   perm_remember_minute: 'Allow for 1 minute',
   perm_deny: 'Deny',
   perm_device_note: 'From this device a permission counts for this one time only.',
+  perm_voice_satellite:
+    'From voice satellite {0}: spoken into a room - not necessarily by you. Allow only if you wanted this yourself.',
   perm_pin: 'Security PIN',
   perm_pin_hint: 'At high risk, allowing from this device needs the PIN. After three wrong tries the device is removed.',
   perm_pin_missing: 'Enter the security PIN first.',

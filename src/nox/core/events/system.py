@@ -132,6 +132,9 @@ class PermissionRequested(BaseModel):
     expires_at: str = ""
     #: How long a remembered "allow" lasts, so the button can say so instead of "always".
     remember_ttl_s: float = 0.0
+    #: The words that led here were spoken at a node's voice satellite (C9): its name, shown as
+    #: "von Sprach-Satellit <name>". Empty for everything else.
+    voice_satellite: str = ""
 
 
 class PermissionDecided(BaseModel):

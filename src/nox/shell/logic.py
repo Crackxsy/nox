@@ -217,6 +217,21 @@ def rememberable(request: dict[str, Any]) -> bool:
     return str(request.get("risk", "")).lower() not in NEVER_REMEMBERED_RISKS
 
 
+_SATELLITE_LINE = {
+    "de": "Von Sprach-Satellit {name}: in einen Raum gesprochen - nicht unbedingt von dir.",
+    "en": "From voice satellite {name}: spoken into a room - not necessarily by you.",
+}
+
+
+def voice_satellite_line(request: dict[str, Any], language: str = "de") -> str:
+    """The dialog's line for a question that came from a node's voice satellite (C9), or ""."""
+    name = request.get("voice_satellite")
+    if not isinstance(name, str) or not name.strip():
+        return ""
+    text = _SATELLITE_LINE["de" if language.startswith("de") else "en"]
+    return text.format(name=name.strip()[:64])
+
+
 def permission_reply(
     request: dict[str, Any], *, allow: bool, remember: bool, pin: str = ""
 ) -> dict[str, Any]:

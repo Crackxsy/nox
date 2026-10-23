@@ -375,6 +375,7 @@ export interface PermissionRequested {
   target?: string;
   expires_at?: string;
   remember_ttl_s?: number;
+  voice_satellite?: string;
 }
 
 export interface PermissionDecided {

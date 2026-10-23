@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -91,12 +92,14 @@ class FakeOut:
 
     def __init__(self) -> None:
         self.played: list[tuple[str, int]] = []
+        self.channels: list[Any] = []
 
     async def play(self, chunks: Any, rate: int, channel: Any, *, utterance_id: str) -> None:
         size = 0
         async for chunk in chunks:
             size += len(chunk)
         self.played.append((utterance_id, size))
+        self.channels.append(channel)
 
     async def stop(self, *, reason: str) -> None:
         return None
@@ -284,6 +287,11 @@ async def test_the_answer_is_spoken_only_for_a_question_asked_here(tmp_path: Pat
     await _until(lambda: len(tts.said) >= 2)
     await asyncio.sleep(0.05)
     assert tts.said == ["Hallo Alex.", "Bis gleich."]
+    from nox.voice.base import Channel
+
+    out: FakeOut = seen["engines"].audio_out
+    # This device's own speaker, never a stream channel.
+    assert out.channels and all(c is Channel.PRIVATE for c in out.channels)
     await satellite.shutdown()
 
 
@@ -516,13 +524,16 @@ def _hub(
     opted_in: bool = True,
     may_hold: set[str] | None = None,
 ) -> tuple[SatelliteHub, dict[str, Any]]:
-    seen: dict[str, Any] = {"published": [], "turns": [], "audit": []}
+    seen: dict[str, Any] = {"published": [], "turns": [], "audit": [], "controlled": False}
     allowed = offers if offers is not None else {(PI, "voice.say"), (PI, "obs.request")}
 
-    async def default_turn(text: str, language: str, on_chunk: Any, channel: str) -> None:
+    async def default_turn(
+        text: str, language: str, on_chunk: Any, channel: str, note: str
+    ) -> None:
         from nox.memory.capture import _TURN_ORIGIN
 
         seen["turns"].append((text, language, channel, _TURN_ORIGIN.get()))
+        seen["notes"] = [*seen.get("notes", []), note]
         for part in ("Es ist ", "zwölf Uhr. ", "Noch etwas?"):
             await on_chunk(part)
 
@@ -545,6 +556,8 @@ def _hub(
         overlay=overlay,
         disconnect_credential=disconnect,
         opted_in=lambda _device, _group: opted_in,
+        controlled=lambda _device: seen["controlled"],
+        label=lambda _device: "Living room Pi",
         overlay_allowed=lambda device: device in (may_hold if may_hold is not None else {PI}),
     )
     return hub, seen
@@ -585,7 +598,7 @@ async def test_the_core_takes_no_words_it_may_not_hear() -> None:
 async def test_a_failed_turn_is_said_and_a_new_question_cancels_the_old() -> None:
     gate = asyncio.Event()
 
-    async def slow(text: str, language: str, on_chunk: Any, channel: str) -> None:
+    async def slow(text: str, language: str, on_chunk: Any, channel: str, note: str) -> None:
         if text == "boom":
             raise RuntimeError("model down")
         await gate.wait()
@@ -607,6 +620,7 @@ async def test_a_nodes_speech_level_is_published_for_its_own_pet() -> None:
     await hub.handle(_session(), p.M_VOICE_LEVEL, p.VoiceLevel(level=0.3))
     name, payload = seen["published"][0]
     assert name == "tts.level" and payload["device"] == PI and payload["level"] == 0.3
+    assert payload["channel"] == "node"  # never "private": only that node's own overlay sees it
     hub, seen = _hub(offers=set())
     await hub.handle(_session(), p.M_VOICE_LEVEL, p.VoiceLevel(level=0.3))
     assert not seen["published"]
@@ -730,7 +744,7 @@ def test_the_route_wraps_the_plugins_tool_as_it_comes_and_goes() -> None:
 
 def test_voice_say_is_low_and_shows_its_text_in_full() -> None:
     pi = _entry(PI, "Living room Pi", tools={"voice.say": "low"})
-    spec = voice_say_spec(FakeRegistry([pi]), dict)
+    spec = voice_say_spec(FakeRegistry([pi]), dict, tainted=lambda: False)
     payload = spec.input_model.model_validate(
         {"text": "Das Essen ist fertig.", "device": "Living room Pi"}
     ).model_dump()
@@ -956,7 +970,8 @@ async def test_a_node_with_obs_gets_a_read_only_rotating_credential(tmp_path: Pa
     store = OverlayTokenStore(tmp_path / "overlay_tokens.json")
     disconnected: list[list[str]] = []
     hub, _ = _hub(overlay=store, disconnected=disconnected)
-    first = await hub.handle(_session(), p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
+    session = _session()
+    first = await hub.handle(session, p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
     assert first is not None and first["ok"]
     may_hold = {PI}
     tokens = _tokens(store, may_hold)
@@ -974,10 +989,10 @@ async def test_a_node_with_obs_gets_a_read_only_rotating_credential(tmp_path: Pa
     assert not _lan(tokens, first["token"])  # a failing check: no
     may_hold.add(PI)
     tokens = _tokens(store, may_hold)
-    again = await hub.handle(_session(), p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
+    again = await hub.handle(session, p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
     assert again == {"ok": False, "reason": "too_soon"}
     hub._nodes[PI].credential_at -= 120  # a minute later: a new one replaces the old
-    second = await hub.handle(_session(), p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
+    second = await hub.handle(session, p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
     assert second is not None and second["ok"] and disconnected
     assert not _lan(tokens, first["token"])
     assert await hub.revoke_overlay(PI, "node removed") == 1
@@ -1090,3 +1105,281 @@ async def test_an_older_core_is_sent_no_satellite_method(
     finally:
         node.stop.set()
         await asyncio.wait_for(node.task, 10)
+
+
+# ---- review round 2 (H1-H4, M1-M4, L4, L6, mutants) ---------------------------------------------
+
+
+async def test_the_microphone_stays_closed_while_the_node_speaks_and_just_after(
+    tmp_path: Path,
+) -> None:
+    satellite, seen = await _running(tmp_path)
+    clock = {"now": 100.0}
+    satellite.clock = lambda: clock["now"]
+    assert satellite.capture_allowed()
+    satellite.pipeline._speaking = True  # noqa: SLF001 - the pipeline plays an answer
+    assert not satellite.capture_allowed()
+    satellite.pipeline._speaking = False  # noqa: SLF001
+    await satellite._on_event(E.TTS_FINISHED, {"utterance_id": "u", "ok": True})
+    assert not satellite.capture_allowed()  # its own echo, for a moment
+    clock["now"] += 0.31
+    assert satellite.capture_allowed()
+    satellite.pipeline._speaking = True  # noqa: SLF001
+    satellite._ptt_held = True  # a person holds push-to-talk: deliberate
+    assert satellite.capture_allowed()
+    assert satellite.pipeline.config.barge_in is False  # no barge-in on voice activity alone
+    await satellite.shutdown()
+
+
+async def test_one_utterance_per_wake_word(tmp_path: Path) -> None:
+    satellite, _ = await _running(tmp_path)
+    gate = satellite.pipeline.wake_gate
+    gate.note_addressed()  # the pipeline opens a follow-up window when Nox was addressed
+    assert gate.conversation_open
+    await satellite._on_event(
+        E.VOICE_TRANSCRIPT_READY, {"text": "Hallo", "language": "de", "addressed_to_nox": True}
+    )
+    assert not gate.conversation_open  # consumed: the next one needs the wake word again
+    assert voice_config(VoiceSettings(), tmp_path).stt.conversation_window_s == 0.0
+    await satellite.shutdown()
+
+
+async def test_nothing_is_sent_while_the_microphone_may_not_listen(tmp_path: Path) -> None:
+    satellite, seen = await _running(tmp_path)
+    await satellite.on_gate({"capture": False, "reason": "panic"})
+    await satellite._on_event(
+        E.VOICE_TRANSCRIPT_READY, {"text": "Hallo", "language": "de", "addressed_to_nox": True}
+    )
+    assert not seen["asked"]
+    await satellite.shutdown()
+
+
+async def test_the_core_drops_a_nodes_own_voice_as_echo() -> None:
+    hub, _ = _hub()
+    session = _session()
+    await hub.handle(session, p.M_VOICE_LEVEL, p.VoiceLevel(level=0.4))  # it is speaking
+    answer = await hub.handle(session, p.M_VOICE_HEARD, _heard())
+    assert answer == {"accepted": False, "reason": "echo"}
+    later = time.monotonic() + 30.0
+    hub._clock = lambda: later
+    assert (await hub.handle(session, p.M_VOICE_HEARD, _heard()))["accepted"] is True
+    await _until(lambda: any(params.get("last") for _m, params in session.client.sent))
+    # The answer it was sent counts as its speech too.
+    assert (await hub.handle(session, p.M_VOICE_HEARD, _heard()))["reason"] == "echo"
+    await hub.close()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Nox, mach das Licht aus",
+        "Sag NÖX bitte Bescheid",
+        "Also noch einmal: knox",
+        "Notaus",
+        "emergency stop now",
+    ],
+)
+def test_voice_say_never_says_a_command(tmp_path: Path, text: str) -> None:
+    from nox.node.voice import says_a_command
+
+    satellite, _ = _satellite(tmp_path)
+    tools = voice_tools(satellite)
+    gate, _signer = _gate(tools, ("voice",), tmp_path)
+    assert says_a_command(text)
+    assert gate.precheck("voice.say", {"text": text}) == "voice_say_command_words"
+    pi = _entry(PI, "Living room Pi", tools={"voice.say": "low"})
+    spec = voice_say_spec(FakeRegistry([pi]), dict, tainted=lambda: False)
+    payload = spec.input_model.model_validate({"text": text, "device": PI}).model_dump()
+    assert asyncio.run(spec.handler({**payload, **_scoped(spec, payload)}))["error"] == (
+        "voice_say_command_words"
+    )
+
+
+def _scoped(spec: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    spec.scope(payload)
+    return payload
+
+
+def test_voice_say_is_asked_in_a_tainted_conversation() -> None:
+    from nox.node.voice import says_a_command
+
+    assert not says_a_command("Das Essen ist fertig.")
+    pi = _entry(PI, "Living room Pi", tools={"voice.say": "low"})
+    for tainted, risk in ((False, Risk.LOW), (True, Risk.MEDIUM)):
+        spec = voice_say_spec(FakeRegistry([pi]), dict, tainted=lambda tainted=tainted: tainted)
+        payload = spec.input_model.model_validate(
+            {"text": "Das Essen ist fertig.", "device": PI}
+        ).model_dump()
+        assert spec.scope(payload).risk is risk  # type: ignore[misc]
+
+
+async def test_voice_from_the_pc_nox_controls_is_refused() -> None:
+    from nox.node.world_routes import NodeControl
+
+    session = _session()
+    control = NodeControl(None, lambda _payload: None)
+    hub, _ = _hub(sessions=[session])
+    hub.controlled = control.locked
+    assert (await hub.handle(session, p.M_VOICE_HEARD, _heard()))["accepted"] is True
+    control.observe(PI, {"gen": 5, "active": True, "id": "ab" * 16})  # a session runs there
+    assert (await hub.handle(session, p.M_VOICE_HEARD, _heard()))["reason"] == "controlled_here"
+    await hub.push_gates()
+    gate = [params for m, params in session.client.sent if m == p.M_VOICE_GATE][-1]
+    assert gate == {"capture": False, "reason": "controlled_here"}
+
+    def broken(_device: str) -> bool:
+        raise RuntimeError("cannot tell")
+
+    hub.controlled = broken
+    assert (await hub.handle(session, p.M_VOICE_HEARD, _heard()))["reason"] == "controlled_here"
+    await hub.close()
+
+
+async def test_the_rate_limit_comes_first_and_refusals_are_audited_sparingly() -> None:
+    hub, seen = _hub(offers=set())
+    session = _session()
+    reasons = [(await hub.handle(session, p.M_VOICE_HEARD, _heard()))["reason"] for _ in range(20)]
+    assert reasons[:12] == ["voice_not_enabled"] * 12 and set(reasons[12:]) == {"too_many"}
+    denied = [a for a in seen["audit"] if a["decision"] == "deny"]
+    assert len(denied) == 2  # once per reason in the interval
+    later = time.monotonic() + 100.0
+    hub._clock = lambda: later
+    await hub.handle(session, p.M_VOICE_HEARD, _heard())
+    later = [a["result"] for a in seen["audit"] if a["decision"] == "deny"][-1]
+    assert "more)" in later  # the count of what was not written
+
+
+async def test_a_flooding_node_is_cut_off(
+    listener: NodeListener, pairing: NodePairing, tls: TlsMaterial, tmp_path: Path
+) -> None:
+    async def on_satellite(session: Any, method: str, params: Any) -> dict[str, Any] | None:
+        return {"accepted": False, "reason": "too_many"}
+
+    listener.on_satellite = on_satellite
+    node = await start_node(listener, pairing, tls, tmp_path)
+    try:
+        session = await session_of(listener, node.node_id)
+        await _until(lambda: bool(node.agent.features))
+        heard = {"turn_id": "e" * 32, "text": "Hallo", "language": "de"}
+        for _ in range(31):
+            await node.agent.ask_core(p.M_VOICE_HEARD, heard, timeout_s=2)
+        assert session.violations >= 1
+    finally:
+        node.stop.set()
+        await asyncio.wait_for(node.task, 10)
+
+
+async def test_a_reconnecting_node_gets_a_fresh_credential_at_once(tmp_path: Path) -> None:
+    store = OverlayTokenStore(tmp_path / "overlay_tokens.json")
+    hub, _ = _hub(overlay=store)
+    first, second = _session(), _session()
+    assert (await hub.handle(first, p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest()))["ok"]
+    again = await hub.handle(first, p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
+    assert again == {"ok": False, "reason": "too_soon"}
+    fresh = await hub.handle(second, p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
+    assert fresh is not None and fresh["ok"]
+
+
+def test_only_a_node_label_passes_even_with_a_permissive_check(tmp_path: Path) -> None:
+    store = OverlayTokenStore(tmp_path / "overlay_tokens.json")
+    tokens = TokenStore(overlay=store)
+    tokens.node_overlay_allowed = lambda _device: True
+    _obs, obs_token = store.issue("obs")
+    _x, odd_token = store.issue("nodes:" + PI)
+    assert not _lan(tokens, obs_token) and not _lan(tokens, odd_token)
+    _n, node_token = store.issue(node_overlay_label(PI))
+    decision = tokens.authenticate(node_token, "overlay", "overlay:x", via_lan=True)
+    assert decision.ok and decision.overlay_node == PI
+
+
+async def test_a_never_possible_request_reaches_no_obs(tmp_path: Path) -> None:
+    from nox.node.tools import NodeRefusal
+
+    obs, seen = _obs_world(tmp_path)
+    for kind in ("StopStream", "GetStreamServiceSettings"):
+        with pytest.raises(NodeRefusal) as refused:
+            await obs.request(kind, {})
+        assert refused.value.reason == "obs_request_never_possible"
+    assert not seen["requests"] and not seen["urls"]
+
+
+async def test_resume_in_a_terminal_lifts_the_latch_of_the_running_node(tmp_path: Path) -> None:
+    from nox.node.home import NodeHome
+    from nox.node.satellite_cli import obs_resume
+
+    home = NodeHome(tmp_path)
+    home.ensure()
+    obs, _seen = _obs_world(home.path)
+    await obs.panic("panic")
+    assert obs.panicked
+    obs_resume(home)  # the CLI, on the same device, while the node runs
+    answer = await obs.request("SetCurrentProgramScene", {"sceneName": "Live"})
+    assert answer["ok"] is True
+
+
+async def test_the_record_folder_stays_on_the_node(tmp_path: Path) -> None:
+    obs, _ = _obs_world(tmp_path)
+
+    async def record_dir(kind: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        return {"recordDirectory": "C:\\Users\\Alex\\Videos\\Streams"}
+
+    client = await obs.client()
+    client.request = record_dir
+    answer = await obs.request("GetRecordDirectory", {})
+    assert answer["response"]["recordDirectory"] == "Streams"
+    assert "Alex" not in json.dumps(answer)
+
+
+async def test_a_node_connecting_during_a_panic_gets_it(
+    nodes: NodeRepository, pairing: NodePairing, tmp_path: Path
+) -> None:
+    from nox.node.install import NodeRuntime, install_satellites
+    from nox.node.registry import NodeRegistry
+    from tests.unit.node.conftest import pair_node
+
+    registry = NodeRegistry(pairing, nodes)
+    stream_pc = (await pair_node(pairing, tmp_path, name="Stream PC")).node_id
+    entry = registry._entry(stream_pc, "Stream PC")
+    entry.online, entry.tools = True, {"obs.request": "low"}
+    session = _session(stream_pc)
+    listener = SimpleNamespace(
+        sessions={stream_pc: session}, _on_connected=None, _on_disconnected=None
+    )
+    privacy = SimpleNamespace(panic=True, allows_capture=lambda _kind: False)
+    core = SimpleNamespace(
+        security=SimpleNamespace(privacy=privacy, killswitch=None, audit=None, engine=None),
+        orchestrator=None,
+        tokens=None,
+        hub=None,
+        bus=None,
+    )
+    runtime = NodeRuntime(pairing=pairing, enabled=True)
+    install_satellites(core, runtime, registry, listener, pairing)
+    await listener._on_connected(session)
+    assert (p.M_OBS_PANIC, {"reason": "panic"}) in session.client.sent
+    await runtime.stop()
+
+
+async def test_a_node_turn_waits_and_cancels_nothing_elsewhere() -> None:
+    from tests.unit.core.test_orchestrator import make
+
+    orch, _bus, router, speaker, _turns = make(speak=False)
+    await orch.start()
+    router.delay = 0.02
+    chat = asyncio.create_task(orch.handle_text("Erklär mir kurz Python", channel="chat:x"))
+    await asyncio.sleep(0.05)
+    node = asyncio.create_task(
+        orch.handle_text(
+            "Erklär mir kurz Rust",
+            channel=f"voice:node:{PI}",
+            barge_in=False,
+            context_note="from a voice satellite",
+        )
+    )
+    chat_turn = await chat
+    assert chat_turn.response.startswith("Hallo.")  # not cancelled by the node's question
+    node_turn = await node
+    assert node_turn.response and node_turn.conversation.startswith(f"voice:node:{PI}#")
+    assert speaker.interrupts.count("new_input") == 1  # the chat's own start; none for the node
+    assert "from a voice satellite" in router.requests[-1].context
+    await orch.stop()

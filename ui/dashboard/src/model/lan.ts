@@ -166,6 +166,8 @@ export interface PermissionPrompt {
   deadline: number | null;
   /** How long a remembered "allow" lasts, in seconds; 0 when the core did not say. */
   rememberTtlS: number;
+  /** The voice satellite (a node's name) the words that led here were spoken at; empty when not. */
+  voiceSatellite?: string;
 }
 
 /**
@@ -187,6 +189,7 @@ export function parsePermissionRequested(payload: unknown, skewMs = 0): Permissi
     risk: str(p.risk) ? p.risk : '',
     deadline: Number.isFinite(expires) ? expires - skewMs : null,
     rememberTtlS: ttl > 0 ? ttl : 0,
+    voiceSatellite: str(p.voice_satellite) ? p.voice_satellite.slice(0, 64) : '',
   };
 }
 

@@ -1014,15 +1014,35 @@ What leaves a node, and what a node may send the core (`nox.node.voice`, `nox.no
   re-applied on every tool listing - the first one included, whatever the device reports -
   cleared by narrowing the group again and by removing the node, and checked again (fail closed)
   for every utterance (`SatelliteHub`).
-- **Voice turns.** An utterance is a turn of the conversation `voice:node:<id>`: own history,
-  model context and taint; "hier" and the family default `origin` mean that node. It is recorded
+- **Voice turns are lower-trust input.** A far-field microphone in a room hears whoever is
+  there, not necessarily the owner. An utterance is a turn of the conversation `voice:node:<id>`
+  (own history and model context), and that conversation counts as tainted from its first turn
+  and for good (`nox.security.taint.UNTRUSTED_CONVERSATIONS`): nothing in it is user-directed,
+  every call that sends data off the machine asks, and no remembered or session grant above LOW
+  applies - permission grants are not per conversation, so this is what keeps a grant made at the
+  dashboard from serving a voice in the living room. A question it leads to says "von
+  Sprach-Satellit <name>" in the dashboard and the native dialog, and the model is told in the
+  turn's context that the text came from a far-field microphone and may not be the owner. It
+  cannot approve anything. "hier" and the family default `origin` mean that node. It is recorded
   - or not - by the core's privacy mode; facts learned from it are unconfirmed
-  (`turn_origin("node")`). It cannot approve anything - a question that needs an approval is
-  asked where approvals are always asked, high risk on a node in its own dialog. At most 12
-  utterances per minute per node. The answer goes back as text, sentence by sentence; the node
-  speaks only answers to a question it asked in the last three minutes, in order, at most 40
-  sentences. `voice.say` (Nox speaks on a device on purpose) is a node tool like any other: low
-  risk, receipt, budget, audit.
+  (`turn_origin("node")`). It cancels no turn of another channel and interrupts no speech: it
+  waits until the turn in flight - and a question that turn waits on - is over (at most 90 s).
+- **Limits before checks.** At most 12 utterances and 3 credential requests per minute per node,
+  counted before anything else is looked at; refusals are audited at most once per 10 s per node
+  and reason, with a count of the rest; 30 utterances or 10 credential requests in a minute count
+  as flooding - violations that end the connection like any refused message.
+- **Echo and self-instruction.** The node closes its microphone while it speaks and for 0.3 s
+  after (push-to-talk overrides it - a person's deliberate act), never barges in on voice
+  activity alone, and takes one utterance per wake word (no follow-up window). The core drops an
+  utterance from a node that is speaking or spoke within the last second (its levels, the answer
+  sentences it was sent). `voice.say` never says the wake word, a spelling of it or a kill phrase
+  (case- and diacritics-insensitive, refused on the core and on the node) and is medium - asked -
+  in a conversation that holds untrusted content.
+- **Not from the PC Nox controls.** While a computer-use session runs on a node, the core refuses
+  that node's utterances (`controlled_here`) and tells its microphone to stay closed.
+- **Answers.** The answer goes back as text, sentence by sentence; the node speaks only answers
+  to a question it asked in the last three minutes, in order, at most 40 sentences, on its own
+  speaker. `voice.say` is otherwise a node tool like any other: receipt, budget, audit.
 - **OBS on a node.** `obs.request` is routed to the node where OBS runs; the node connects only
   to `127.0.0.1` and keeps the obs-websocket password in its keyring - it never reaches the core.
   The node classifies every request again with the core-local rules ("OBS control" above) and its
@@ -1033,12 +1053,14 @@ What leaves a node, and what a node may send the core (`nox.node.voice`, `nox.no
   are redacted before they leave. The core keeps one permission action per request type and,
   not knowing the device's scene set, treats every scene switch on a node as high. The panic
   button sends `nox/obs/panic`: OBS on every node that enabled `obs` goes to its privacy scene
-  and takes nothing but reads until that device lifts the latch (`nox node obs resume`; a restart
-  does not).
+  - also a node that connects while the panic is on - and takes nothing but reads until that
+  device lifts the latch (`nox node obs resume`, which works on the running node at once; a
+  restart does not lift it). A node's record folder is shown by its name only.
 - **The overlay relay.** A node with `obs` enabled serves the pet page on `127.0.0.1:47845` and
   relays its one WebSocket to the core's network listener over TLS against the pinned authority.
   The URL carries no credential; the relay asks the core for a read-only overlay credential
-  (role `overlay`, label `node:<id>`, at most once a minute, each one revoking the previous and
+  (role `overlay`, label `node:<id>`, once per connection and at most once a minute on it, each
+  one revoking the previous and
   disconnecting its pages; revoked at once when the node is removed or `obs` narrowed for it,
   online or not) and keeps it in memory. A sweep over the persisted credentials - at every start
   and every second - revokes every `node:` credential whose node is unknown, removed, has `obs`
@@ -1047,10 +1069,17 @@ What leaves a node, and what a node may send the core (`nox.node.voice`, `nox.no
   node may hold one, asked again at every use (fail closed: no check, no access) - the OBS
   overlay credential of the core itself stays loopback-only. The relay
   answers loopback Host headers only (no DNS rebinding), accepts a WebSocket without an Origin
-  (OBS) or with its own, and forwards only an `ipc.auth` for role `overlay`. The network
-  listener now also serves the static pet page (`/pet/`); it holds no credential.
-- **Speech levels.** `nox/voice/level` becomes `tts.level` with the node's id, which only the pet
-  and overlay roles receive, and only a pet opened for that node (`?device=<id>`) follows it.
+  (OBS) or with its own, and forwards only an `ipc.auth` for role `overlay`. Residual: any
+  local process or user of that PC can open the relay and watch what an overlay sees - the
+  pet's state, speech levels and the public state snapshot, never transcripts, chat or memory.
+  The network listener now also serves the static pet page (`/pet/`, no credential in it). It
+  shares the dashboard's origin there, so a flaw in the pet's own code could read what the
+  dashboard keeps in that origin (a paired device's token): both bundles come from the same
+  signed release, so this adds no new author, but it is one origin, not two.
+- **Speech levels.** `nox/voice/level` becomes `tts.level` with the node's id on the channel
+  `node`; only an overlay that authenticated with that node's own credential receives it (with
+  the id, so its `?device=<id>` pet follows), never another overlay and never the core's desktop
+  pet (`nox.ipc.pet_view`).
 
 ## Known limits of network access
 

@@ -79,6 +79,8 @@ PTT_STALE_S = 30.0
 TURN_TTL_S = 180.0
 MAX_TURNS = 8
 MAX_SENTENCES = 40
+#: How long the microphone stays closed after this device stopped speaking (its echo).
+ECHO_TAIL_S = 0.3
 #: Levels sent to the core per second at most (the pet needs no more).
 LEVEL_HZ = 15
 POLL_S = 0.2
@@ -121,6 +123,8 @@ def voice_config(settings: VoiceSettings, home: Path) -> Any:
                 "language": settings.language,
                 "wake_word": settings.wake_word,
                 "listening_mode": "ptt_only" if settings.mode == "push_to_talk" else "continuous",
+                # No follow-up without the wake word on a satellite (one utterance per wake).
+                "conversation_window_s": 0.0,
             },
             "tts": {
                 "engine": settings.tts_engine,
@@ -222,6 +226,8 @@ class VoiceSatellite:
     _last_level_at: float = 0.0
     _was_open: bool = False
     _ptt_held: bool = False
+    #: Until when the microphone stays closed after this device last spoke.
+    _quiet_from: float = 0.0
     _loading: asyncio.Lock = field(default_factory=asyncio.Lock)
     _background: set[asyncio.Task[Any]] = field(default_factory=set)
 
@@ -250,8 +256,18 @@ class VoiceSatellite:
         return True
 
     def capture_allowed(self) -> bool:
-        """Every condition at once, read fresh (the pipeline asks before every frame)."""
-        return self.connected and self.core_capture and self.allowed()
+        """Every condition at once, read fresh (the pipeline asks before every frame). While
+        this device speaks - and `ECHO_TAIL_S` after - the microphone hears its own voice:
+        nothing is captured then, unless push-to-talk is held (a person's deliberate act)."""
+        if not (self.connected and self.core_capture and self.allowed()):
+            return False
+        return self._ptt_held or not self.echo()
+
+    def echo(self) -> bool:
+        """This device is speaking, or stopped a moment ago."""
+        pipeline = self.pipeline
+        speaking = bool(pipeline is not None and pipeline.speaking)
+        return speaking or self.clock() < self._quiet_from
 
     # -- lifecycle --------------------------------------------------------------------------------
 
@@ -282,6 +298,8 @@ class VoiceSatellite:
             held = self.ptt_held()
             if held != self._ptt_held:
                 self._ptt_held = held
+                if held and pipeline.speaking:
+                    await pipeline.interrupt(reason="push_to_talk")  # a person wants to speak
                 await pipeline.push_to_talk(held)
             await pipeline.refresh_gate()
             is_open = bool(pipeline.capture_active())
@@ -311,6 +329,9 @@ class VoiceSatellite:
                 listening_mode="ptt_only" if settings.mode == "push_to_talk" else "continuous",
                 # Speech without the wake word (or push-to-talk) is never reported at all.
                 require_wake_word=True,
+                # No barge-in on a speaker device: what the microphone hears while this device
+                # speaks is mostly its own voice. Push-to-talk interrupts instead (`refresh`).
+                barge_in=False,
             )
             pipeline = DefaultVoicePipeline(
                 audio_in=engines.audio_in,
@@ -385,7 +406,10 @@ class VoiceSatellite:
         elif name == E.TTS_LEVEL:
             await self._level(float(payload.get("level", 0.0) or 0.0))
         elif name in (E.TTS_FINISHED, E.TTS_INTERRUPTED):
+            self._quiet_from = self.clock() + ECHO_TAIL_S
             await self._level(0.0, force=True)
+        elif name == E.TTS_STARTED:
+            self._quiet_from = self.clock() + ECHO_TAIL_S
 
     async def _heard(self, payload: dict[str, Any]) -> None:
         text = str(payload.get("text", "")).strip()
@@ -409,6 +433,10 @@ class VoiceSatellite:
         answer = await self.ask_core(p.M_VOICE_HEARD, message.model_dump())
         result = answer.get("result") if isinstance(answer, dict) else None
         accepted = isinstance(result, dict) and result.get("accepted") is True
+        if self.pipeline is not None:
+            # One utterance per wake word: the next one needs the wake word (or push-to-talk)
+            # again - no open window an echo or a passer-by could use.
+            self.pipeline.wake_gate.reset()
         # What was heard is never recorded here - only that it was, and how long it was.
         self.audit("node.voice_heard", f"{len(text)} chars, {'sent' if accepted else 'refused'}")
         if not accepted:
@@ -576,6 +604,34 @@ class VoiceSatellite:
             (self.home / STATE_FILE).write_text(json.dumps(self.state()), encoding="utf-8")
 
 
+def _plain(text: str) -> list[str]:
+    """Words, case- and diacritics-insensitive ("NÖX" -> "nox")."""
+    import unicodedata  # noqa: PLC0415
+
+    from nox.voice.stt.wake_word import normalize  # noqa: PLC0415
+
+    decomposed = unicodedata.normalize("NFKD", text)
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return normalize(stripped).split()
+
+
+def says_a_command(text: str, wake_word: str = "Nox") -> bool:
+    """Whether `text`, spoken here, could address Nox: the wake word (or a spelling of it)
+    anywhere, or a kill phrase. Nox never says that itself (`voice.say`): its own voice would
+    come back through a microphone as a command."""
+    from nox.voice.stt.wake_word import KILL_PHRASES, is_wake_token  # noqa: PLC0415
+
+    names = {w for w in _plain(wake_word)} or {"nox"}
+    words = _plain(text)
+    if any(is_wake_token(word, name=name) for word in words for name in names):
+        return True
+    return any(
+        tuple(words[i : i + len(phrase)]) == phrase
+        for phrase in KILL_PHRASES
+        for i in range(len(words))
+    )
+
+
 class SayArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -593,6 +649,11 @@ def voice_tools(satellite: VoiceSatellite) -> dict[str, NodeTool]:
         spoken = await satellite.say(args.text, args.language)
         return {"spoken": spoken}
 
+    def precheck(args: BaseModel) -> str | None:
+        assert isinstance(args, SayArgs)
+        wake = satellite.settings().wake_word
+        return "voice_say_command_words" if says_a_command(args.text, wake) else None
+
     tool = NodeTool(
         "voice.say",
         "voice",
@@ -601,5 +662,6 @@ def voice_tools(satellite: VoiceSatellite) -> dict[str, NodeTool]:
         SayArgs,
         say,
         path_safe=True,  # opens no path
+        precheck=precheck,  # never the wake word or a kill phrase: it would come back as one
     )
     return {tool.name: tool}
