@@ -202,6 +202,68 @@ Alles aus, außer Musik; jedes wird nur hier eingeschaltet, mit `nox node allow 
   über MPRIS (`playerctl` oder D-Bus) und PipeWire (`wpctl`) oder PulseAudio (`pactl`). Noch
   nicht unter macOS.
 
+## Sprache, OBS und das Pet-Overlay (Satelliten)
+
+Drei Dinge, die ein Node über seine Hände hinaus für Nox tun kann - alle standardmäßig aus, jedes
+nur hier eingeschaltet (`nox node allow voice`, `nox node allow obs`). Wie sie arbeiten, steht in
+`satellites.yaml` im Node-Ordner (nur Einstellungen, nichts Geheimes, nie *ob*).
+
+**Sprache** (`voice`): Nox hört und spricht auf diesem Gerät - etwa ein Pi im Wohnzimmer mit einem
+USB-Lautsprechermikrofon.
+
+- Es braucht zwei Schlüssel: `nox node allow voice` hier *und* "zuhören und sprechen" für dieses
+  Gerät im Dashboard einschalten (Geräte › Computer und Server, mit der PIN). Bis dahin steht die
+  Gruppe dort als ausgeschaltet.
+- Zuhören geht standardmäßig per Push-to-Talk (`mode: push_to_talk`): `Strg+Alt+Leertaste`
+  halten, wo das Symbol läuft, oder `nox node voice talk` ausführen und Enter drücken, wenn du
+  fertig bist. Mit `mode: wake_word` bleibt das Mikrofon offen und Nox reagiert auf seinen
+  Namen ("Nox, ...").
+- Die Spracherkennung läuft hier (faster-whisper, `tiny` auf einem Pi, sonst `base` - `stt_model`
+  ändert es); nur der erkannte **Text** geht an Nox. Audio verlässt das Gerät nie und wird nie
+  gespeichert. Die Antwort kommt als Text zurück und wird hier gesprochen (Supertonic 3, Stimme
+  F3; Piper, wenn Supertonic fehlt). Die Sprachmodelle einmal mit der Sprach-Einrichtung laden
+  (`python -m nox.worker --download-supertonic --models-dir <Node-Ordner>/models`); von selbst
+  wird nichts geladen.
+- Du siehst und hörst, wenn es zuhört: Das Symbol zeigt "Nox hört zu", solange das Mikrofon offen
+  ist, und ein kurzer Ton erklingt, wenn Push-to-Talk beginnt und wenn Nox deine Frage angenommen
+  hat (`earcon: false` schaltet die Töne aus). `nox node voice status` sagt dasselbe im Terminal.
+- `nox node voice mute` schaltet das Mikrofon hier stumm (auch im Menü des Symbols); nur dieses
+  Gerät hebt das auf (`nox node voice unmute`). Auch Nox' Privatsphäre-Einstellungen schließen es:
+  der Mikrofon-Schalter, Panik, abgesicherter Modus, eine Privatsphäre-Zone und der Stopp-Knopf.
+- "Nox, Notaus" stoppt diesen Node - und damit Nox überall - und kommt nie als Text bei Nox an.
+- Was du sagst, wird bei Nox ein eigenes Gespräch, gespeichert oder nicht nach Nox'
+  Privatsphäre-Modus wie alles, was in sein eigenes Mikrofon gesagt wird; was Nox daraus über dich
+  lernt, wartet auf deine Bestätigung. "Hier" heißt dieses Gerät: "Mach hier die Musik leiser".
+  Erlaubnisse gibt es nie per Stimme.
+- Nox kann hier auch gezielt etwas sagen (`voice.say`, geringes Risiko): "Sag im Wohnzimmer, dass
+  das Essen fertig ist".
+
+**OBS** (`obs`): OBS läuft auf diesem PC, Nox auf einem anderen.
+
+- `nox node obs password` legt das obs-websocket-Passwort im Schlüsselbund dieses Geräts ab; es
+  geht nie an Nox' Core. Der Node verbindet sich nur mit dem OBS auf diesem PC (`127.0.0.1`,
+  Port `4455` - `obs: port:` ändert ihn).
+- In `satellites.yaml` die Privatsphäre-Szene dieses OBS und die Szenen nennen, zu denen Nox
+  wechseln darf (`obs: privacy_scene: "Technical Problems"`, `scene_set: ["Live", "Pause"]`).
+- `obs.request` geht hierher, wenn du es sagst ("auf dem Stream-PC") oder das Dashboard dieses
+  Gerät zum Standard für OBS macht. Die Regeln sind dieselben wie auf dem Core: Lesen läuft sofort,
+  Änderungen werden bestätigt, folgenreiche (live gehen, aufnehmen, löschen) jedes Mal - im Dialog
+  auf diesem PC -, und den Stream stoppen oder den Stream-Schlüssel lesen geht nie. Ein
+  Szenenwechsel über `obs.request` auf einem Node wird immer hier gefragt (Nox' Core kennt die
+  Szenenliste dieses PCs nicht). Die Privatsphäre-Szene und alles darin lassen sich nicht ändern.
+- Der Panik-Knopf schaltet dieses OBS auf seine Privatsphäre-Szene; danach ändert Nox hier nichts
+  mehr in OBS, bis du auf diesem PC `nox node obs resume` ausführst.
+
+**Pet-Overlay**: das Pet als OBS-Browserquelle auf diesem PC, vom Nox zuhause.
+
+- Mit erlaubtem `obs` stellt der Node das Pet nur auf diesem PC bereit. `nox node overlay` zeigt
+  die Adresse für eine OBS-Browserquelle (oder einen Browser hier), etwa
+  `http://127.0.0.1:47845/pet/?overlay=1&device=<id>#overlay=relay`. Die Adresse enthält kein
+  Geheimnis: Der Node ergänzt seinen eigenen Nur-Lese-Zugang, erneuert ihn bei jeder Verbindung und
+  verliert ihn, wenn der Node entfernt oder OBS für ihn im Dashboard ausgeschaltet wird.
+- Das Pet bewegt den Mund zu dem, was dieses Gerät sagt. Ohne Verbindung zeigt es "offline" und
+  verbindet sich von selbst neu.
+
 ## Im Dashboard
 
 Geräte › Computer und Server zeigt jeden Node: ob er verbunden ist, was Nox dort darf, wofür er
@@ -301,6 +363,9 @@ Bewusst hingenommene Restrisiken der Selbst-Updates:
 | `audit.db` | Jeder Aufruf, erlaubt oder abgelehnt, als Hash-Kette: `nox node log` |
 | `app/` | Versionen, die der Node selbst installiert hat (`releases/<Version>`), und `state.json`, welche läuft |
 | `update.json` | Die letzte Update-Prüfung, gezeigt von `nox node status` und dem Symbol |
+| `satellites.yaml` | Wie Sprache, OBS und das Overlay hier arbeiten (nichts Geheimes) |
+| `voice.json`, `voice-muted`, `voice-ptt` | Was der Sprach-Satellit gerade tut (für das Symbol), der Stummschalter, Push-to-Talk gehalten |
+| `obs-panic` | Da nach dem Panik-Knopf: Nox ändert hier nichts in OBS bis `nox node obs resume` |
 
 Ordner: `%LOCALAPPDATA%\Nox\node` (Windows), `~/.local/share/nox/node` (Linux),
 `~/Library/Application Support/Nox/node` (macOS); `NOX_NODE_HOME` ändert ihn. Der Node läuft als

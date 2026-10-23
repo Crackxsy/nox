@@ -38,6 +38,7 @@ from nox.node.home import NodeHome, restrict_dir_to_owner
 from nox.node.keystore import NodeKeyStore
 from nox.node.manifest import GROUPS, NodeManifest, load_manifest, save_manifest
 from nox.node.protocol import PairLink, PairLinkError, escape_controls
+from nox.node.satellite_node import NodeSatellites, build_satellites
 from nox.node.tools import PlatformNotifier, default_tools
 from nox.node.update import NodeUpdater, UpdateCheck
 from nox.node.world import GameLock, World, default_games, world_tools
@@ -90,6 +91,8 @@ class NodeRuntime:
     manifest_key: ConfirmationKey | None = None
     #: The C6 tools' device side (captures, browser, desktop, computer use, media).
     world: World | None = None
+    #: The C9 satellites (voice, OBS, the overlay relay).
+    satellites: NodeSatellites | None = None
 
 
 def secret_store() -> SecretStore | None:
@@ -164,17 +167,21 @@ def build(
         lock=GameLock(watched=watched),
         extra_games=extra_games,
     )
+    satellites = build_satellites(
+        home, gate=lambda: holder[0] if holder else None, secrets=secrets, audit=audit
+    )
     tools = {
         **default_tools(notifier),  # type: ignore[arg-type]
         **hand_tools(hands),
         **world_tools(world),
+        **satellites.tools(),
     }
     gate = NodeGate(tools, manifest, audit, protected=home.path)
     gate.input_lock = world.lock.reason  # the game lock, before anything else (spec C §1.6)
     holder.append(gate)
     keystore = NodeKeyStore(home.key_file, secrets)
     gate.restore_budget(audit)  # a restart does not refill the hour's budget
-    return NodeRuntime(home, keystore, gate, audit, key, world)
+    return NodeRuntime(home, keystore, gate, audit, key, world, satellites)
 
 
 MEDIA_NOTICE = (
@@ -419,6 +426,18 @@ def run(runtime: NodeRuntime, *, install_signals: bool = True, tray: bool = Fals
             agent.session_report = runtime.world.session_report
             agent.on_games = runtime.world.add_games
             await media_notice_once(runtime)
+        satellites = runtime.satellites
+        satellite_task: asyncio.Task[None] | None = None
+        if satellites is not None:
+            satellites.attach(agent)
+            before = agent.on_stop
+
+            def on_stop(reason: str) -> None:
+                before(reason)
+                satellites.stopped(reason)  # nothing more is said, the overlay goes dark
+
+            agent.on_stop = on_stop
+            satellite_task = asyncio.create_task(satellites.run(stop))
         updates = asyncio.create_task(
             keep_updated(
                 runtime,
@@ -437,6 +456,10 @@ def run(runtime: NodeRuntime, *, install_signals: bool = True, tray: bool = Fals
             outcome = await agent.run(stop)
         finally:
             updates.cancel()
+            if satellite_task is not None:
+                stop.set()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await asyncio.wait_for(satellite_task, 10)
             if tray_process is not None:
                 with contextlib.suppress(OSError):
                     tray_process.terminate()

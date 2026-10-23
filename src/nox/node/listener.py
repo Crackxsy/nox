@@ -88,6 +88,11 @@ ERR_INVALID_PARAMS = -32602
 
 SecurityKillFn = Callable[[str, str], Awaitable[None]]
 SessionFn = Callable[["NodeSession"], Awaitable[None]]
+#: A satellite method from a node (C9): (session, method, validated params) -> the answer's
+#: `result`, or None for a notification. Must return quickly - it runs on the node's channel.
+SatelliteFn = Callable[["NodeSession", str, BaseModel], Awaitable[dict[str, Any] | None]]
+#: Satellite levels a node may send per second; more are dropped (never a violation).
+MAX_LEVELS_PER_S = 40
 
 
 @dataclass
@@ -117,6 +122,8 @@ class NodeSession:
     renewed: bool = False
     #: The node's last word on computer use (`p.SessionReport`, from its hello and pongs).
     computer: p.SessionReport | None = None
+    #: `nox/voice/level` in the current second: (second, count).
+    levels: tuple[int, int] = (0, 0)
     blobs: dict[str, list[bytes]] = field(default_factory=dict)
     complete: set[str] = field(default_factory=set)
     blob_bytes: int = 0
@@ -163,6 +170,7 @@ class NodeListener:
         ping_interval_s: float = PING_INTERVAL_S,
         allow_public_clients: bool = False,
         kill_engaged: Callable[[], bool] | None = None,
+        on_satellite: SatelliteFn | None = None,
     ) -> None:
         self._pairing = pairing
         self._nodes = nodes
@@ -187,6 +195,9 @@ class NodeListener:
             weakref.WeakKeyDictionary()
         )
         self._kill_engaged = kill_engaged
+        #: The satellites' side on this core (`nox.node.satellites`); None: no satellite methods
+        #: are offered (`features` stays empty, and a node sends none).
+        self.on_satellite = on_satellite
         self._last_kill: dict[str, float] = {}
         #: device id -> monotonic time until which a node cut off for violations is refused.
         self._cooling: dict[str, float] = {}
@@ -398,6 +409,8 @@ class NodeListener:
                     "node_id": device.id,
                     "receipt_key": self._receipt_key,
                     "engaged": bool(self._kill_engaged is not None and self._kill_engaged()),
+                    # The satellite methods this core understands (C9): a node sends no other.
+                    "features": sorted(p.FEATURES) if self.on_satellite is not None else [],
                     "serverInfo": {"name": "nox-core", "version": str(p.NODE_PROTOCOL)},
                 },
             }
@@ -469,7 +482,13 @@ class NodeListener:
         p.M_RENEW: p.RenewRequest,
         p.M_INITIALIZED: None,
         p.M_LIST_CHANGED: None,
+        p.M_VOICE_HEARD: p.VoiceHeard,
+        p.M_VOICE_LEVEL: p.VoiceLevel,
+        p.M_OVERLAY_CREDENTIAL: p.OverlayCredentialRequest,
     }
+    _SATELLITE: frozenset[str] = frozenset(
+        {p.M_VOICE_HEARD, p.M_VOICE_LEVEL, p.M_OVERLAY_CREDENTIAL}
+    )
 
     async def _peer(self, session: NodeSession, message: dict[str, Any]) -> None:
         method = str(message.get("method"))
@@ -486,6 +505,10 @@ class NodeListener:
             await self._violation(session, method, msg_id, ERR_INVALID_PARAMS, "invalid params")
             return
         session.last_seen = time.monotonic()
+        if method in self._SATELLITE:
+            assert params is not None
+            await self._satellite(session, method, msg_id, params)
+            return
         if method == p.M_PING:
             assert isinstance(params, p.Ping)
             await session.client.notify(p.M_PONG, {"seq": params.seq, "ts": time.time()})
@@ -524,6 +547,37 @@ class NodeListener:
             return
         if msg_id is not None:
             await session.answer({"jsonrpc": "2.0", "id": msg_id, "result": {}})
+
+    async def _satellite(
+        self, session: NodeSession, method: str, msg_id: Any, params: BaseModel
+    ) -> None:
+        """A satellite method (C9). A core without satellites answers "not supported" - a node
+        only sends these to a core that said it understands them, so it is no violation."""
+        handler = self.on_satellite
+        if method == p.M_VOICE_LEVEL:
+            second = int(time.monotonic())
+            at, count = session.levels
+            count = count + 1 if at == second else 1
+            session.levels = (second, count)
+            if count > MAX_LEVELS_PER_S:
+                return  # a pet needs no more; dropped, not counted against the node
+        if handler is None:
+            if msg_id is not None:
+                await session.answer(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": msg_id,
+                        "error": {"code": ERR_METHOD_NOT_FOUND, "message": "not supported"},
+                    }
+                )
+            return
+        try:
+            result = await handler(session, method, params)
+        except Exception as exc:  # noqa: BLE001 - a failing satellite never ends the connection
+            log.warning("node.satellite_failed", method=method, error=type(exc).__name__)
+            result = {"accepted": False, "reason": "failed"}
+        if msg_id is not None:
+            await session.answer({"jsonrpc": "2.0", "id": msg_id, "result": result or {}})
 
     async def _renew(self, session: NodeSession, msg_id: Any, request: p.RenewRequest) -> None:
         """`nox/renew`: once per connection, only inside the renewal window, only for the paired

@@ -312,6 +312,7 @@ export interface TtsLevel {
   utterance_id: string;
   channel: string;
   level: number;
+  device?: string;
 }
 
 export interface AiRequestStarted {

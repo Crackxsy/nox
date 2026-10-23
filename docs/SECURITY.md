@@ -29,7 +29,8 @@ requests.
 | Tampering with audit or security config | Hash-chain verified at boot; changes to the security core require a PIN; config changes are themselves audited. |
 | Data loss | Checkpoints; the vault is the source of truth; Nox-written notes can be rolled back. |
 | A device in the home network reaches the node port (47844) | Mutual TLS 1.3: only a client certificate of this installation's authority completes the handshake; serial denylist, revoked pairings and the paired key are checked before the upgrade; no browser `Origin`. See "Nodes" below. |
-| A compromised node (malware on a laptop, a stolen laptop) | Role `node`: a fixed JSON-RPC allow-list - no chat, memory, audit, config, prompts or other nodes; refused messages are audited and cut the connection; revocation closes it at once; certificates live 30 days. |
+| A compromised node (malware on a laptop, a stolen laptop) | Role `node`: a fixed JSON-RPC allow-list - no memory, audit, config, prompts or other nodes; refused messages are audited and cut the connection; revocation closes it at once; certificates live 30 days. The one way to talk to Nox is a voice satellite's text (C9), and only with two keys: `voice` enabled on the device *and* switched on for it on the core by the owner with the PIN (a persisted fact, checked for every utterance); its turns run in a conversation of their own, approve nothing, and what Nox learns from them waits for confirmation. Residual risk: with both keys, a taken-over node can ask Nox what a person in that room could ask - narrow `voice` or remove the node. See "Satellites" below. |
+| A copied overlay URL, or a web page on the streaming PC | The overlay a node relays carries no credential (`#overlay=relay`); the node swaps in a read-only one it holds in memory only, rotated on every connection; the relay answers loopback Host headers and its own Origin only, and carries nothing but the overlay role. |
 
 **Out of scope**: an attacker with local admin on the machine, physical access, or a compromised
 OS. Nox defends against a malicious/hallucinating AI layer and a malicious remote party — not
@@ -988,6 +989,64 @@ boundary *after* `NodeGate`, the device's confirmation and the receipt:
 Still to come in wave C: certificate renewal (C7) and a real presence check for
 `nox node allow`. Negative tests: `tests/unit/node/` (a deliberately permissive core in `test_agent.py`),
 `tests/integration/test_nodes.py`.
+
+## Satellites (C9): voice, OBS and the pet overlay on a node
+
+What leaves a node, and what a node may send the core (`nox.node.voice`, `nox.node.obs`,
+`nox.node.overlay`, core side `nox.node.satellites`):
+
+- **Only between a core and a node that agreed.** The core names the satellite methods it
+  understands in its `initialize` answer (`features`); a node sends `nox/voice/heard`,
+  `nox/voice/level` and `nox/overlay/credential` only to such a core (an older one would count
+  them as violations). They are on the role `node` allow-list with strict models: an utterance is
+  at most 500 characters of text, a level one number, a credential request empty.
+- **Voice: text, never audio.** Wake word, voice activity and speech recognition run on the node;
+  audio exists in memory for one utterance and is never written or sent. The node's audit records
+  that something was heard and its length - never the words; nor does the core's. The
+  microphone is open only while the group `voice` is enabled on the device and not narrowed, the
+  node is not stopped and connected, the local mute switch is off (only the device unmutes) and
+  the core's privacy allows a microphone (`nox/voice/gate`: closed by default, closed again by the
+  capture switch, panic, safe mode, a privacy zone or the kill switch - pushed at once and every
+  second). "Nox, Notaus" is never sent as text: it stops the node, which stops Nox everywhere.
+- **Two keys for `voice`.** `CORE_OPT_IN`: a group enabled on the device stays narrowed on the
+  core until the owner clears it in the Devices page (`node.narrow`, PIN when set, from a paired
+  device always). That is stored per node (`node_capabilities.core_opted_in`, migration 0018),
+  re-applied on every tool listing - the first one included, whatever the device reports -
+  cleared by narrowing the group again and by removing the node, and checked again (fail closed)
+  for every utterance (`SatelliteHub`).
+- **Voice turns.** An utterance is a turn of the conversation `voice:node:<id>`: own history,
+  model context and taint; "hier" and the family default `origin` mean that node. It is recorded
+  - or not - by the core's privacy mode; facts learned from it are unconfirmed
+  (`turn_origin("node")`). It cannot approve anything - a question that needs an approval is
+  asked where approvals are always asked, high risk on a node in its own dialog. At most 12
+  utterances per minute per node. The answer goes back as text, sentence by sentence; the node
+  speaks only answers to a question it asked in the last three minutes, in order, at most 40
+  sentences. `voice.say` (Nox speaks on a device on purpose) is a node tool like any other: low
+  risk, receipt, budget, audit.
+- **OBS on a node.** `obs.request` is routed to the node where OBS runs; the node connects only
+  to `127.0.0.1` and keeps the obs-websocket password in its keyring - it never reaches the core.
+  The node classifies every request again with the core-local rules ("OBS control" above) and its
+  own privacy scene and scene set: never-possible types are refused before anything else, reads
+  are low (so they carry a receipt too), the core may not claim a lower risk than the node's,
+  high requests are confirmed in the dialog on that device, the privacy scene and its contents
+  cannot be changed (asked from OBS before every change, refused when OBS cannot say), answers
+  are redacted before they leave. The core keeps one permission action per request type and,
+  not knowing the device's scene set, treats every scene switch on a node as high. The panic
+  button sends `nox/obs/panic`: OBS on every node that enabled `obs` goes to its privacy scene
+  and takes nothing but reads until that device lifts the latch (`nox node obs resume`; a restart
+  does not).
+- **The overlay relay.** A node with `obs` enabled serves the pet page on `127.0.0.1:47845` and
+  relays its one WebSocket to the core's network listener over TLS against the pinned authority.
+  The URL carries no credential; the relay asks the core for a read-only overlay credential
+  (role `overlay`, label `node:<id>`, at most once a minute, each one revoking the previous and
+  disconnecting its pages; revoked when the node is removed or `obs` narrowed) and keeps it in
+  memory. Through the network listener the hub accepts an overlay credential only with a
+  `node:` label - the OBS overlay credential of the core itself stays loopback-only. The relay
+  answers loopback Host headers only (no DNS rebinding), accepts a WebSocket without an Origin
+  (OBS) or with its own, and forwards only an `ipc.auth` for role `overlay`. The network
+  listener now also serves the static pet page (`/pet/`); it holds no credential.
+- **Speech levels.** `nox/voice/level` becomes `tts.level` with the node's id, which only the pet
+  and overlay roles receive, and only a pet opened for that node (`?device=<id>`) follows it.
 
 ## Known limits of network access
 

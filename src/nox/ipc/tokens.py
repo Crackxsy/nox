@@ -61,6 +61,9 @@ HUBLESS_ROLES: frozenset[str] = frozenset({"core", "supervisor", "remote", "node
 DEVICE_ROLES: frozenset[str] = frozenset({DEVICE_ROLE})
 #: Authenticated by a persistent overlay credential, never by the session token.
 OVERLAY_ROLES: frozenset[str] = frozenset({"overlay"})
+#: The label of an overlay credential issued to a paired node's overlay relay (`node:<id>`): the
+#: only overlay credentials accepted through the network listener.
+NODE_OVERLAY_PREFIX = "node:"
 
 _CREATE_NO_WINDOW = 0x08000000
 
@@ -239,9 +242,16 @@ class TokenStore:
         """Check `token` for a connection claiming `role`/`client_id`; worker tokens are used up.
 
         `via_lan` says the connection came through the network listener. Such a connection may
-        only be a paired device, and a paired device may only come that way.
+        only be a paired device - or the read-only overlay of a paired node's overlay relay
+        (C9), with a credential the core issued to that node (label `node:<id>`) - and a paired
+        device may only come that way.
         """
         if via_lan:
+            if role in OVERLAY_ROLES:
+                credential = self._overlay.verify(token) if self._overlay is not None else None
+                if credential is None or not credential.label.startswith(NODE_OVERLAY_PREFIX):
+                    return AuthDecision(ok=False, reason="no overlay credential of a paired node")
+                return AuthDecision(ok=True, kind="overlay", credential_id=credential.credential_id)
             if role != DEVICE_ROLE:
                 return AuthDecision(ok=False, reason="only paired devices connect over the network")
             return self._authenticate_device(token, client_id)

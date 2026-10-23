@@ -76,6 +76,9 @@ ROUTABLE: frozenset[str] = frozenset(
         "computer.keys",
         "computer.session_end",
         "media.control",
+        # C9: the satellites - speaking on a node, and OBS where it runs.
+        "voice.say",
+        "obs.request",
     }
 )
 #: Where a node's bytes (a capture's `nox/blob` chunks) travel inside a call's result on the

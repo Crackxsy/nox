@@ -66,6 +66,8 @@ class TtsLevel(BaseModel):
     utterance_id: str
     channel: str  # private | stream | both
     level: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    #: The paired node that played it (its voice satellite, C9); empty: this core.
+    device: str = ""
 
 
 class AiRequestStarted(BaseModel):
