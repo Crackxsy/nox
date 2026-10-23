@@ -67,13 +67,67 @@ def test_taint_revokes_cmd_grants(
     assert _scopes(grants) == {"session:obs/scene.switch", "task:t1"}
 
 
-def test_taint_also_revokes_a_cmd_grant_made_while_already_tainted(
+def test_more_content_in_a_tainted_conversation_keeps_other_conversations_grants(
     engine: DefaultPermissionEngine, grants: InMemoryGrantStore
 ) -> None:
+    """C10: a remembered command made since in another, untainted conversation stays when
+    `c1` - already tainted - gets more untrusted content (a paired device's every message during
+    a session used to revoke them all). `c1` itself can neither use nor create one."""
     engine.mark_tainted("c1", "first page")
-    _grant(engine, "cmd", CMD_SCOPE)
+    _grant(engine, "cmd", CMD_SCOPE)  # remembered by the user in conversation c2
     engine.mark_tainted("c1", "second page")
+    engine.mark_tainted("c1", None)
+    assert CMD_SCOPE in _scopes(grants)
+    engine.mark_tainted("c3", "a page in another conversation")  # c3 becomes tainted: revoked
     assert CMD_SCOPE not in _scopes(grants)
+
+
+def test_untrusted_content_outside_any_conversation_always_revokes(
+    engine: DefaultPermissionEngine, grants: InMemoryGrantStore
+) -> None:
+    engine.mark_tainted("", "page text")
+    _grant(engine, "cmd", CMD_SCOPE)
+    engine.mark_tainted("", "more page text")  # nothing to tie it to: revoked every time
+    assert CMD_SCOPE not in _scopes(grants)
+
+
+def test_a_tainted_conversation_creates_no_remembered_grant(
+    engine: DefaultPermissionEngine, grants: InMemoryGrantStore
+) -> None:
+    import asyncio
+
+    from nox.hands.shell import argv_digest
+    from nox.security.model import Decision, PermissionRequest
+
+    target = f"{CMD_SCOPE.split(' argv=')[0]} argv={argv_digest('whoami', ())} whoami"
+
+    def request(conversation: str) -> PermissionRequest:
+        return PermissionRequest.model_validate(
+            {
+                "agent": "companion",
+                "tool": "shell",
+                "action": "run",
+                "mode": "companion",
+                "risk": Risk.HIGH,
+                "target": target,
+                "conversation": conversation,
+            }
+        )
+
+    async def scenario() -> None:
+        engine.mark_tainted("c1", "page text")
+        grant_id = engine.request_confirmation(request("c1"))
+        (pending,) = [p for p in engine.pending_requests() if p.request_id == grant_id]
+        assert pending.remember_ttl_s == 0  # "remember" is not offered here
+        engine.reply(grant_id, Decision.ALLOW, remember=True)
+        result = await engine.await_confirmation(grant_id)
+        assert result.decision is Decision.ALLOW and result.grant_id is None
+        # The same question in a clean conversation may still be remembered.
+        grant_id = engine.request_confirmation(request("c2"))
+        engine.reply(grant_id, Decision.ALLOW, remember=True)
+        assert (await engine.await_confirmation(grant_id)).grant_id is not None
+
+    asyncio.run(scenario())
 
 
 def test_revoke_command_grants_reports_what_it_removed(

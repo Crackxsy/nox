@@ -841,11 +841,25 @@ class DefaultPermissionEngine:
         with `None` (not readable: nothing in the conversation is user-directed any more). It
         stays set until `clear_taint` - when the orchestrator discards that conversation's
         context - never merely because a new turn began.
+
+        Remembered shell commands (`cmd:`) are revoked when a conversation *becomes* tainted, and
+        whenever untrusted content arrives outside any conversation (nothing to tie it to). Not
+        again for every further piece of content in a conversation that is tainted already -
+        a paired device's every message during a session, every web page in a long research
+        turn - because nothing more can widen there: a tainted conversation never uses a grant
+        above LOW (`_temporary_grant`) and never creates one ("remember" is not offered in it,
+        `_can_remember`), so a command remembered since was remembered in another, untainted
+        conversation, by the user, and stays. Grants are not per conversation (see
+        `end_session`), so the first revocation still takes every remembered command: what the
+        untrusted content could set up to run later outside its own conversation must not find
+        one waiting.
         """
-        if self._taint.mark(conversation, content):
+        fresh = self._taint.mark(conversation, content)
+        if fresh:
             log.info("security.taint_changed", tainted=True)
-        # Untrusted content may now steer the next tool call: no remembered shell command stays.
-        self.revoke_command_grants(reason="taint")
+        if fresh or not conversation:
+            # Untrusted content may now steer a tool call: no remembered shell command stays.
+            self.revoke_command_grants(reason="taint")
 
     def clear_taint(self, conversation: str) -> None:
         """The conversation's context was discarded: nothing untrusted is in it any more."""
@@ -1197,6 +1211,10 @@ class DefaultPermissionEngine:
         """
         scope = self._remember_scope(request)
         if scope is None:
+            return False
+        if self.is_tainted(request.conversation):
+            # Grants are not per conversation: one remembered here would act in every other,
+            # untainted one - on a question untrusted content may have prompted.
             return False
         if is_simple_shell_target(request):
             return True
