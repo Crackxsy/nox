@@ -189,6 +189,24 @@ class _Conversation:
     last_used: float
 
 
+async def _unwound(task: asyncio.Task[Turn]) -> Turn:
+    """`await task`, except when the caller is cancelled: then the turn is cancelled once and
+    waited for until it has finished unwinding - however often the caller is cancelled
+    meanwhile - so the turn slot is never handed on while the turn still runs, and its clean-up
+    is never cut short by a second cancellation."""
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if not task.done():
+            task.cancel()
+        while not task.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait({task})
+        if not task.cancelled():
+            task.exception()  # retrieved: the caller's cancellation is what goes up
+        raise
+
+
 @dataclass
 class OrchestratorConfig:
     history_turns: int = 8
@@ -275,6 +293,8 @@ class Orchestrator:
     #: The one turn that may run (`handle_text`), and how many barge-ins wait to take it.
     _slot: asyncio.Lock = field(default_factory=asyncio.Lock)
     _barge_pending: int = 0
+    #: Counts barge-ins; the newest one's number is the one that may run.
+    _barge_ticket: int = 0
 
     async def start(self) -> None:
         self._unsubs = [
@@ -326,14 +346,21 @@ class Orchestrator:
         # One turn at a time (the slot). A barge-in says so before its first await, cancels what
         # runs and takes the slot next; a waiting turn that gets the slot while a barge-in is
         # pending gives it back at once - so two turns never run together, and a kill or the next
-        # input always cancels the one that does.
+        # input always cancels the one that does. Of two barge-ins in the same cancel window the
+        # newer wins: the older one, once it holds the slot, sees that it was superseded before
+        # it starts anything and steps aside, exactly as if its turn had been cancelled.
         if barge_in:
             self._barge_pending += 1
+            self._barge_ticket += 1
+            mine = self._barge_ticket
             try:
                 await self.cancel(reason="new_input")
                 await self._slot.acquire()
             finally:
                 self._barge_pending -= 1
+            if mine != self._barge_ticket:
+                self._slot.release()
+                raise asyncio.CancelledError("superseded by newer input")
         else:
             await self._wait_for_slot()
         try:
@@ -344,7 +371,7 @@ class Orchestrator:
             )
             self._active = task
             try:
-                return await task
+                return await _unwound(task)
             finally:
                 if self._active is task:
                     self._active = None
@@ -364,10 +391,13 @@ class Orchestrator:
         task = self._active
         if task and not task.done():
             task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception) as exc:
-                log.debug("orchestrator.cancelled", reason=reason, error=str(exc))
+            # `wait`, not `await task`: when this caller is cancelled meanwhile (a barge-in whose
+            # caller gave up) the error goes up - it must not take the slot and start a turn
+            # nobody waits for - and the turn is not cancelled a second time, which would cut
+            # its own clean-up short.
+            await asyncio.wait({task})
+            error = None if task.cancelled() else task.exception()
+            log.debug("orchestrator.cancelled", reason=reason, error=str(error or "cancelled"))
         if self.speaker is not None:
             try:
                 await self.speaker.interrupt(reason=reason)
