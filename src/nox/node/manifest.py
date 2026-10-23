@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +18,18 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-__all__ = ["GROUPS", "GroupInfo", "NodeManifest", "load_manifest", "manifest_hash", "save_manifest"]
+__all__ = [
+    "GAME_NAME",
+    "GROUPS",
+    "GroupInfo",
+    "NodeManifest",
+    "load_manifest",
+    "manifest_hash",
+    "save_manifest",
+]
+
+#: A program name on the watched-game list (`RocketLeague.exe`): no path, no wildcard.
+GAME_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.+()\-]{0,63}$")
 
 
 @dataclass(frozen=True)
@@ -66,6 +78,22 @@ class NodeManifest(BaseModel):
     #: The folders `file.*` may open on this device (group `files`); none by default. Absolute,
     #: local paths only, added on the device (`nox node allow files --folder <path>`).
     folders: list[str] = Field(default_factory=list, max_length=16)
+    #: Games of this device on top of the core's default list (`nox node games add`): while one
+    #: runs or is in front, Nox sends no input here. Adding only narrows; removing is confirmed
+    #: like a widening (`nox.node.cli.games`).
+    games: list[str] = Field(default_factory=list, max_length=64)
+
+    @field_validator("games")
+    @classmethod
+    def _game_names(cls, value: list[str]) -> list[str]:
+        out: list[str] = []
+        for raw in value:
+            name = str(raw).strip()
+            if not GAME_NAME.match(name):
+                raise ValueError(f"not a program name: {name!r}")
+            if name.lower() not in (o.lower() for o in out):
+                out.append(name)
+        return out
 
     @field_validator("folders")
     @classmethod

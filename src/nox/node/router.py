@@ -19,14 +19,21 @@ call fails fast with `device_offline`; nothing is queued and no other device is 
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, Field, create_model
 
 from nox.core.logging import get_logger
-from nox.node.registry import RISKS, NodeEntry, NodeRegistry, offline_error
+from nox.node.confirm import CONFIRM_TIMEOUT_S
+from nox.node.registry import (
+    RISKS,
+    SESSION_RESULT_KEY,
+    NodeEntry,
+    NodeRegistry,
+    offline_error,
+)
 from nox.node.tools import off_loop
 from nox.security.model import Risk
 from nox.security.taint import current_conversation
@@ -57,8 +64,15 @@ ROUTE_RISK_KEY = "_route_risk"
 ROUTE_DELEGATE_KEY = "_route_delegate"
 #: How long a node call may take before the core gives up on it.
 NODE_CALL_TIMEOUT_S = 30.0
+#: The executor's limit for a routed tool: the node call, the device's dialog, and some slack.
+ROUTED_TIMEOUT_S = NODE_CALL_TIMEOUT_S + CONFIRM_TIMEOUT_S + 10.0
 _CORE_WORDS = frozenset({"core", "dieser core", "this core", "hier", "here"})
 _HERE_WORDS = frozenset({"hier", "here"})
+
+
+#: `around(entry, arguments, call)`: `call(blob=...)` runs the call on the node.
+NodeCall = Callable[..., Awaitable[dict[str, Any]]]
+NodeAround = Callable[[NodeEntry, dict[str, Any], NodeCall], Awaitable[dict[str, Any]]]
 
 
 class CannotShow(ValueError):  # noqa: N818 - a refusal, named for what it says
@@ -290,6 +304,7 @@ def routed_spec(
     node_risk: Callable[[dict[str, Any]], Risk] | None = None,
     remember_on_node: bool = True,
     precheck: Callable[[dict[str, Any]], str | None] | None = None,
+    around: NodeAround | None = None,
 ) -> ToolSpec:
     """One routable tool: the core's own spec (if the core has the tool) plus every node that
     offers it. `input_model` describes the arguments when the core has no spec of its own.
@@ -300,6 +315,10 @@ def routed_spec(
     call in full raises `CannotShow`, and the call is refused (`cannot_show_in_full`).
     `node_risk` raises a node call's risk from its arguments (a write that replaces a file);
     `remember_on_node=False` never lets a "remember" answer cover a call on a node.
+    `around` wraps the call on a node: it may refuse before the call (a privacy rule of this
+    core), and it turns the node's answer into what the model sees (a capture stored here). It
+    runs in the handler - always after `precheck`, which refuses in the scope before anyone is
+    asked; a call `precheck` refused never reaches `around`.
     `network` overrides the template's
     (a download is network whether or not the core has the tool itself)."""
     base = core.input_model if core is not None else input_model
@@ -396,14 +415,23 @@ def routed_spec(
         decided_risk = payload.get(ROUTE_RISK_KEY)
         if decided_risk not in ("read", "low", "medium", "high"):
             return {"error": "not_routed", "tool": name}
-        return await registry.call(
-            entry,
-            name,
-            inner(payload),
-            risk=str(decided_risk),
-            timeout_s=NODE_CALL_TIMEOUT_S,
-            confirm_on_device=bool(payload.get(ROUTE_DELEGATE_KEY)),
-        )
+        arguments = inner(payload)
+
+        async def on_node(*, blob: bool = False) -> dict[str, Any]:
+            extra: dict[str, Any] = {"blob": True} if blob else {}
+            return await registry.call(
+                entry,
+                name,
+                arguments,
+                risk=str(decided_risk),
+                timeout_s=NODE_CALL_TIMEOUT_S,
+                confirm_on_device=bool(payload.get(ROUTE_DELEGATE_KEY)),
+                **extra,
+            )
+
+        answer = await around(entry, arguments, on_node) if around is not None else await on_node()
+        answer.pop(SESSION_RESULT_KEY, None)  # the node's report is for the core, not the model
+        return answer
 
     template = core or ToolSpec(
         name=name,
@@ -445,6 +473,14 @@ def routed_spec(
         prepare=prepare,
         local=False,
         network=template.network if network is None else network,
+        # A call on a node may wait for the person at the device (`CONFIRM_TIMEOUT_S`): the
+        # executor must not give up before the node call itself does. A call that stays on
+        # this core keeps its own limit.
+        call_timeout_s=lambda payload: (
+            max(template.timeout_s or 0.0, ROUTED_TIMEOUT_S)
+            if payload.get(DEVICE_KEY) not in (None, "", CORE)
+            else None
+        ),
     )
 
 

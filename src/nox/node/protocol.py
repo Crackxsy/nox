@@ -80,6 +80,8 @@ M_KILLED = "nox/killed"
 M_RESUME = "nox/resume"
 M_REVOKED = "nox/revoked"
 M_POLICY = "nox/policy"
+#: core -> node: games to watch on top of the node's own list (an addition, never a removal).
+M_GAMES = "nox/games"
 M_PING = "nox/ping"
 M_PONG = "nox/pong"
 M_CONFIRM_RESULT = "nox/confirm_result"
@@ -106,7 +108,7 @@ NODE_TO_CORE: frozenset[str] = frozenset(
 )
 #: Everything the core sends to a node. `nox/policy` may only narrow what the node offers.
 CORE_TO_NODE: frozenset[str] = frozenset(
-    {M_TOOLS_LIST, M_TOOLS_CALL, M_KILL, M_RESUME, M_REVOKED, M_POLICY, M_PING, M_PONG}
+    {M_TOOLS_LIST, M_TOOLS_CALL, M_KILL, M_RESUME, M_REVOKED, M_POLICY, M_GAMES, M_PING, M_PONG}
 )
 
 # ---- text from the other side ----------------------------------------------------------------
@@ -186,6 +188,19 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class SessionReport(_Strict):
+    """The node's own truth about computer use on it, in every answer, pong and hello: the
+    session generation (strictly increasing over the node's runs), whether a session is open
+    now, and its id. The core derives its approval lock from the highest generation it saw
+    (`nox.node.world_routes.NodeControl`). Strict: "no" is not a boolean here."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    gen: int = Field(ge=0, le=2**62)
+    active: bool
+    id: str = Field(default="", max_length=64, pattern=r"^[0-9a-f]{0,64}$")
+
+
 class NodeHello(_Strict):
     """`initialize` from the node: who it is and what it offers (by hash; the list comes later)."""
 
@@ -199,6 +214,8 @@ class NodeHello(_Strict):
     #: does the core leave a high-risk confirmation to the device (D1).
     confirmer: bool = False
     clientInfo: dict[_Short, _Short] = Field(default_factory=dict, max_length=4)  # noqa: N815
+    #: Computer use on this device right now (`SessionReport`); None from a node without it.
+    session: SessionReport | None = None
 
 
 class NoxCallMeta(_Strict):
@@ -226,6 +243,16 @@ class Ping(_Strict):
     ts: float = Field(ge=0)
     #: In a node's `nox/pong`: why it refuses everything right now ("" = it does not).
     state: str = Field(default="", max_length=32)
+    #: In a node's `nox/pong`: computer use on it right now (`SessionReport`).
+    session: SessionReport | None = None
+
+
+class GamesAdd(_Strict):
+    """`nox/games`: the core's watched games, added to the node's own list."""
+
+    add: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 _.+()\-]{0,63}$")]] = Field(
+        default_factory=list, max_length=64
+    )
 
 
 class Killed(_Strict):

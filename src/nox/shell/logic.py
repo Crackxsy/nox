@@ -217,17 +217,23 @@ def rememberable(request: dict[str, Any]) -> bool:
     return str(request.get("risk", "")).lower() not in NEVER_REMEMBERED_RISKS
 
 
-def permission_reply(request: dict[str, Any], *, allow: bool, remember: bool) -> dict[str, Any]:
-    """Payload for `security.permission.reply` from a PermissionRequested payload + decision."""
+def permission_reply(
+    request: dict[str, Any], *, allow: bool, remember: bool, pin: str = ""
+) -> dict[str, Any]:
+    """Payload for `security.permission.reply` from a PermissionRequested payload + decision.
+    The PIN goes with an "allow" only (needed while Nox controls a paired PC)."""
     grant_id = request.get("request_id") or request.get("grant_id")
     if not grant_id:
         raise ValueError("permission request without request_id")
     decision = "allow" if allow else "deny"
-    return {
+    reply: dict[str, Any] = {
         "grant_id": str(grant_id),
         "decision": decision,
         "remember": remember and rememberable(request),
     }
+    if allow and pin.strip():
+        reply["pin"] = pin.strip()
+    return reply
 
 
 def kill_path(model: ShellModel) -> str:

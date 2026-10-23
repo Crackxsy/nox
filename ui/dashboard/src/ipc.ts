@@ -212,6 +212,10 @@ export const api = {
     c.request('noxos.ssh.disable', forgetKeys ? { forget_keys: true } : {}),
   // -- PCs, laptops and servers as nodes (`nox.node`) -------------------------------------------
   nodeList: (c: IpcClient) => c.request('node.list', {}),
+  /** Computer-use sessions on paired PCs right now (`{sessions}`), for the header after a (re)connect. */
+  nodeComputerStatus: (c: IpcClient) => c.request('node.computer.status', {}),
+  /** Lift a stuck computer-use lock by hand: only on the computer Nox runs on, with the PIN. */
+  nodeComputerRelease: (c: IpcClient, pin: string) => c.request('node.computer.release', { pin }),
   nodePairStart: (c: IpcClient, name: string, pin = '') =>
     c.request('node.pair.start', pin ? { name, pin } : { name }),
   nodeUnpair: (c: IpcClient, nodeId: string, pin = '') =>

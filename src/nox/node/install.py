@@ -17,7 +17,7 @@ Requests, for the UI roles (`nox.ipc.roles`):
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -30,6 +30,8 @@ from nox.ipc.errors import ERR_NOT_FOUND, ERR_UNAVAILABLE, IpcError
 from nox.ipc.roles import UI_ROLES
 from nox.lan.install import authorize_admin, qr_data_uri
 from nox.lan.tls import TlsMaterial
+from nox.mcp.client import McpClientError
+from nox.node.console import console_is_remote
 from nox.node.hands import (
     PathArgs,
     ShellArgs,
@@ -44,10 +46,11 @@ from nox.node.pairing import NodePairing
 from nox.node.policy import defaults_view, register_policy_requests
 from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink, render
 from nox.node.receipts import ReceiptSigner
-from nox.node.registry import NodeRegistry
+from nox.node.registry import NodeEntry, NodeRegistry
 from nox.node.repo import NodeRepository
 from nox.node.router import CannotShow, install_routes, routed_spec
 from nox.node.tools import NoArgs, NotifyArgs, system_info
+from nox.node.world_routes import NodeControl, local_pin_refusal, session_refusal, world_specs
 from nox.remote.models import DeviceRow
 from nox.remote.repo import RemoteRepository
 from nox.security.model import Risk
@@ -165,6 +168,9 @@ def install(core: Any) -> NodeRuntime:
             origin="node", reason=f"node {device_id[:8]}: {reason}"[:200]
         )
 
+    controls: list[NodeControl] = []
+    on_connected = connection_hook(core, registry, controls)
+
     listener = NodeListener(
         pairing=pairing,
         nodes=NodeRepository(core.db),
@@ -176,7 +182,7 @@ def install(core: Any) -> NodeRuntime:
         allow_public_clients=cfg.allow_public_clients,
         kill_engaged=core.security.killswitch.is_engaged,
         receipt_key=signer.public_key,
-        on_connected=registry.on_connected,
+        on_connected=on_connected,
         on_disconnected=registry.on_disconnected,
         on_tools_changed=registry.on_tools_changed,
     )
@@ -193,7 +199,9 @@ def install(core: Any) -> NodeRuntime:
     killswitch = core.security.killswitch
     killswitch.register_stop_hook("nodes", stop_nodes)
     killswitch.register_resume_hook("nodes", resume_nodes)
-    _install_routes(core, registry)
+    control = _install_routes(core, registry, [listener])
+    controls.append(control)
+    _keep(runtime, _watch_sessions(control, core, listener), "nox-node-computer")
 
     async def redeem(body: NodePairRequest) -> tuple[int, dict[str, Any]]:
         if not listener.running:
@@ -307,7 +315,67 @@ def _field(name: str) -> Callable[[dict[str, Any]], str]:
 _Target = Callable[[dict[str, Any]], str]
 
 
-def _install_routes(core: Any, registry: NodeRegistry) -> None:
+async def send_games(core: Any, session: Any) -> None:
+    """The core's watched games, for the node's game lock - an addition there, never a removal."""
+    names = watched_games(core)
+    if not names:
+        return
+    try:
+        await session.client.request("nox/games", {"add": names[:64]}, timeout_s=5)
+    except (TimeoutError, McpClientError) as exc:
+        log.warning("node.games_failed", device_id=session.device_id, error=str(exc))
+
+
+def connection_hook(
+    core: Any, registry: NodeRegistry, controls: list[NodeControl]
+) -> Callable[[Any], Awaitable[None]]:
+    """What happens on every new authenticated node connection: its hello resets how computer
+    use stands there (`NodeControl.hello`), the registry lists its tools, and it gets the core's
+    watched games."""
+
+    async def on_connected(session: Any) -> None:
+        for control in controls:
+            control.hello(session.device_id, session.computer)
+        await registry.on_connected(session)
+        await send_games(core, session)
+
+    return on_connected
+
+
+def watched_games(core: Any) -> list[str]:
+    sensors = getattr(core.config, "sensors", None)
+    return list(sensors.game.process_names)[:64] if sensors is not None else []
+
+
+async def resend_games_if_changed(core: Any, listener: Any, sent: list[list[str]]) -> bool:
+    """The core's watched games changed (settings): every connected node gets them again (the
+    node only ever adds). True when they were sent."""
+    games = watched_games(core)
+    if sent and sent[0] == games:
+        return False
+    sent[:] = [games]
+    for session in list(listener.sessions.values()):
+        await send_games(core, session)
+    return True
+
+
+async def _watch_sessions(control: NodeControl, core: Any, listener: Any) -> None:
+    """Every second: the nodes' latest reports, so the lock, the grant and the dashboard follow
+    a session that ends on the node (time, stop hotkey, kill) without another call; and the
+    core's watched games, sent again when they change."""
+    sent: list[list[str]] = [watched_games(core)]  # sent on every connection already
+    while True:
+        await asyncio.sleep(1.0)
+        try:
+            control.active()
+            await resend_games_if_changed(core, listener, sent)
+        except Exception as exc:  # noqa: BLE001 - the watcher outlives one bad round
+            log.error("node.computer_watch_failed", error=type(exc).__name__)
+
+
+def _install_routes(
+    core: Any, registry: NodeRegistry, listeners: list[Any] | None = None
+) -> NodeControl:
     """`system.info` (the core has it too), `notify.show` (nodes only) and the hands - `file.*`
     and `shell.run`, each the core's own tool when the call stays here - become routable; the
     capability report hides a node-only tool while no node offers it, and every turn's context
@@ -362,6 +430,8 @@ def _install_routes(core: Any, registry: NodeRegistry) -> None:
                 precheck=_write_precheck if name == "file.write" else None,
             )
         )
+    world, control = _world_specs(core, registry, defaults, listeners or [])
+    specs += world
     on_core = {spec.name for spec in specs if own(spec.name) is not None}
     install_routes(core.tool_registry, specs)
     node_only = {spec.name for spec in specs} - on_core
@@ -384,6 +454,137 @@ def _install_routes(core: Any, registry: NodeRegistry) -> None:
             return f"{text}\n{line}" if text and line else (text or line)
 
         orchestrator.facts = facts
+    return control
+
+
+def _world_specs(
+    core: Any, registry: NodeRegistry, defaults: Callable[[], Any], listeners: list[Any]
+) -> tuple[list[ToolSpec], NodeControl]:
+    """C6: captures, browser, desktop, computer use and media, routable to nodes; and the
+    record of computer-use sessions on nodes (dashboard notice, grant, "allow" lock)."""
+    from nox.security._events import publish_nowait  # noqa: PLC0415
+
+    def publish(payload: dict[str, Any]) -> None:
+        publish_nowait(getattr(core, "bus", None), "desktop.computer_use", payload, source="node")
+
+    async def end_on_node(entry: NodeEntry) -> dict[str, Any]:
+        answer: dict[str, Any] = await registry.call(
+            entry, "computer.session_end", {}, risk="low", timeout_s=10
+        )
+        return answer
+
+    security = getattr(core, "security", None)
+    desktop = getattr(core.config, "desktop", None)
+
+    def reports() -> list[tuple[str, Any]]:
+        listener = listeners[0] if listeners else None
+        if listener is None:
+            return []
+        return [(d, s.computer) for d, s in listener.sessions.items() if s.computer is not None]
+
+    def linked(device_id: str) -> str | None:
+        entry = next((e for e in registry.known() if e.device_id == device_id), None)
+        return entry.linked_device_id if entry is not None else None
+
+    def label_of(device_id: str) -> str:
+        entry = next((e for e in registry.entries() if e.device_id == device_id), None)
+        return entry.label if entry is not None else device_id[:8]
+
+    control = NodeControl(
+        getattr(security, "engine", None),
+        publish,
+        end_on_node=end_on_node,
+        reports=reports,
+        labels=label_of,
+        linked=linked,
+        stop_hotkey=desktop.computer_use.stop_hotkey if desktop is not None else "",
+    )
+    wire_guards(core, control)
+    # A stop never lifts the lock by itself: the node ends its session on `nox/kill` and says
+    # so in its next pong, which `pull` reads (also every second, `_watch_sessions`).
+    paths = getattr(core.config, "paths", None)
+    captures = Path(paths.runtime_dir if paths is not None else ".") / "hands" / "captures"
+    specs = world_specs(
+        registry=registry,
+        own=core.tool_registry.get,
+        defaults=defaults,
+        control=control,
+        captures_root=lambda: captures,
+        privacy=lambda: getattr(security, "privacy", None),
+    )
+    return specs, control
+
+
+def wire_guards(core: Any, control: NodeControl) -> None:
+    """While Nox controls a node: every "allow" (`security.permission.reply`) and every request
+    that changes something (`RequestRegistry.node_guard`) go through `session_refusal`; and the
+    `node.computer.*` requests. Separate so a test can wire a fake core exactly like this."""
+    security = getattr(core, "security", None)
+
+    def gate() -> Any:
+        return getattr(security, "gate", None)
+
+    async def guard(ctx: Any, pin: str | None, action: str) -> str | None:
+        return await session_refusal(
+            control,
+            ctx,
+            pin,
+            action=action,
+            gate=gate(),
+            device_guard=getattr(core, "device_pin_guard", None),
+            remote=console_is_remote,
+        )
+
+    async def approval(ctx: Any, pin: str | None) -> str | None:
+        return await guard(ctx, pin, "security.permission.reply")
+
+    core.node_approval_guard = approval
+    ipc = getattr(core, "registry", None)
+    if ipc is not None and hasattr(ipc, "register"):
+        ipc.node_guard = guard
+        _register_control_requests(core, ipc, control, gate)
+
+
+class ReleaseRequest(BaseModel):
+    pin: str | None = Field(default=None, max_length=128)
+
+
+def _register_control_requests(core: Any, ipc: Any, control: NodeControl, gate: Any) -> None:
+    """`node.computer.status` (what the header shows, for a dashboard that (re)connects) and
+    `node.computer.release` (lift a stuck lock by hand: only at the computer Nox runs on, with
+    the PIN, not remotely; a node that still reports a session locks again at once)."""
+    from nox.ipc.roles import LOCAL_UI_ROLES  # noqa: PLC0415
+
+    async def h_status(_ctx: RequestContext, _p: EmptyRequest) -> dict[str, Any]:
+        return {"sessions": control.status()}
+
+    async def h_release(ctx: RequestContext, p: ReleaseRequest) -> dict[str, Any]:
+        refusal = await local_pin_refusal(
+            ctx, p.pin, gate=gate(), remote=console_is_remote, action="node.computer.release"
+        )
+        if refusal is not None:
+            core.security.audit.append(
+                actor=ctx.client_id or ctx.role,
+                tool="node",
+                action="node.computer.release",
+                target="",
+                decision="deny",
+                result=refusal[:64],
+            )
+            raise IpcError(ERR_UNAVAILABLE, refusal, details={"reason": "refused"})
+        released = control.release("released by the owner")
+        core.security.audit.append(
+            actor=ctx.client_id or ctx.role,
+            tool="node",
+            action="node.computer.release",
+            target="",
+            decision="allow",
+            result=f"released {released}",
+        )
+        return {"ok": True, "released": released, "sessions": control.status()}
+
+    ipc.register("node.computer.status", EmptyRequest, h_status, roles=UI_ROLES)
+    ipc.register("node.computer.release", ReleaseRequest, h_release, roles=LOCAL_UI_ROLES)
 
 
 def core_system_info_spec() -> ToolSpec:

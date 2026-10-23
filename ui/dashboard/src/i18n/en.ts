@@ -336,6 +336,9 @@ export const en: Record<CoreKey, string> = {
   perm_pin: 'Security PIN',
   perm_pin_hint: 'At high risk, allowing from this device needs the PIN. After three wrong tries the device is removed.',
   perm_pin_missing: 'Enter the security PIN first.',
+  perm_node_control_device:
+    'Allowing does not work from the browser on the PC Nox is controlling - from another device it works with the PIN. Denying works everywhere.',
+  perm_node_control_pin_hint: 'Nox is controlling mouse and keyboard on a PC: allowing now needs the PIN.',
   perm_only_at_computer: 'This can only be allowed on the computer Nox runs on. Denying works here too.',
   perm_countdown: '{0} seconds left. Without an answer, Nox will not do it.',
   perm_countdown_over: 'Time is up – without an answer, Nox will not do it.',
@@ -397,6 +400,11 @@ export const en: Record<CoreKey, string> = {
   perm_risk_high: 'high',
   perm_risk_critical: 'critical',
   computer_use_banner: 'Nox is controlling mouse and keyboard – {0} stops it at once.',
+  computer_use_banner_node: 'Nox is controlling mouse and keyboard on {0}.',
+  computer_use_banner_node_hotkey: '{0} on that device stops it at once, “Stop” stops everything.',
+  computer_use_release: 'Release the lock',
+  computer_use_release_pin: 'PIN to release the lock',
+  computer_use_release_failed: 'The lock was not released.',
   computer_use_banner_no_hotkey: 'Nox is controlling mouse and keyboard – the kill switch stops it at once.',
 
   // -- UX redesign (Spec UX-Neubau): shell, Today, palette, permission, Stop, settings pages --
