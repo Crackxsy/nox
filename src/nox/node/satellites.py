@@ -172,6 +172,8 @@ class SatelliteHub:
         #: Whether Nox controls mouse and keyboard on that node right now (`NodeControl.locked`).
         #: Failing: yes.
         self.controlled = controlled
+        #: Whether Nox controls mouse and keyboard on any node right now (`NodeControl.active`).
+        self.session_active: Callable[[], bool] = lambda: False
         self._label = label
         self._clock = clock
         self._nodes: dict[str, _Node] = {}

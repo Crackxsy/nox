@@ -1069,7 +1069,10 @@ What leaves a node, and what a node may send the core (`nox.node.voice`, `nox.no
   (case- and diacritics-insensitive, refused on the core and on the node) and is medium - asked -
   in a conversation that holds untrusted content.
 - **Not from the PC Nox controls.** While a computer-use session runs on a node, the core refuses
-  that node's utterances (`controlled_here`) and tells its microphone to stay closed.
+  that node's utterances (`controlled_here`) and tells its microphone to stay closed; while a
+  node's address binding is saturated (nobody can be told apart from the controlled PC), every
+  node's. Voice from other nodes during a session is marked like paired-device chat
+  (`mark_tainted(conversation, None)`), on top of being lower-trust anyway.
 - **Answers.** The answer goes back as text, sentence by sentence; the node speaks only answers
   to a question it asked in the last three minutes, in order, at most 40 sentences, on its own
   speaker. `voice.say` is otherwise a node tool like any other: receipt, budget, audit.

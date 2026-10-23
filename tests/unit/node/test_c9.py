@@ -1383,3 +1383,74 @@ async def test_a_node_turn_waits_and_cancels_nothing_elsewhere() -> None:
     assert speaker.interrupts.count("new_input") == 1  # the chat's own start; none for the node
     assert "from a voice satellite" in router.requests[-1].context
     await orch.stop()
+
+
+# ---- with #167's lock: session_refusal, saturation, taint during a session -----------------
+
+
+def _session_control() -> Any:
+    from nox.node.world_routes import NodeControl
+
+    control = NodeControl(None, lambda _payload: None)
+    control.observe(PC, {"gen": 2, "active": True, "id": "ab" * 16})  # Nox controls the PC
+    return control
+
+
+async def test_a_session_on_one_pc_keeps_that_pc_quiet_and_saturation_all_of_them() -> None:
+    from nox.node.install import attach_control
+    from nox.node.world_routes import REFUSE_SATURATED, session_refusal
+
+    control = _session_control()
+    hub, _ = _hub(offers={(PI, "voice.say"), (PC, "voice.say")})
+    attach_control(hub, control)
+    pc, pi = _session(PC), _session(PI)
+    assert (await hub.handle(pc, p.M_VOICE_HEARD, _heard()))["reason"] == "controlled_here"
+    assert (await hub.handle(pi, p.M_VOICE_HEARD, _heard()))["accepted"] is True
+    assert hub.session_active()  # the other node's turn is marked untrusted (see `turn`)
+    # A binding that is full: nobody can be told apart from the controlled PC - neither the
+    # dashboard (#167) nor any satellite.
+    control.saturated.add(PC)
+    ctx = SimpleNamespace(role="dashboard", client_id="dashboard:1", peer="")
+    refusal = await session_refusal(
+        control, ctx, None, action="chat.send", gate=None, device_guard=None, remote=lambda: False
+    )
+    assert refusal == REFUSE_SATURATED
+    assert (await hub.handle(pi, p.M_VOICE_HEARD, _heard()))["reason"] == "controlled_here"
+    await hub.close()
+
+
+async def test_voice_during_a_session_is_marked_like_paired_device_chat(
+    nodes: NodeRepository, pairing: NodePairing, tmp_path: Path
+) -> None:
+    from nox.node.install import NodeRuntime, attach_control, install_satellites
+    from nox.node.registry import NodeRegistry
+    from tests.unit.node.conftest import pair_node
+
+    marked: list[tuple[str, Any]] = []
+    registry = NodeRegistry(pairing, nodes)
+    pi = (await pair_node(pairing, tmp_path, name="Living room Pi")).node_id
+
+    async def handle_text(text: str, **kw: Any) -> Any:
+        return SimpleNamespace(response="")
+
+    engine = SimpleNamespace(
+        mark_tainted=lambda conversation, content: marked.append((conversation, content)),
+        satellite_label=None,
+    )
+    orchestrator = SimpleNamespace(
+        handle_text=handle_text, conversation_for=lambda channel: f"{channel}#c0ffee"
+    )
+    core = SimpleNamespace(
+        security=SimpleNamespace(privacy=None, killswitch=None, audit=None, engine=engine),
+        orchestrator=orchestrator,
+        tokens=None,
+        hub=None,
+        bus=None,
+    )
+    listener = SimpleNamespace(sessions={}, _on_connected=None, _on_disconnected=None)
+    runtime = NodeRuntime(pairing=pairing, enabled=True)
+    satellites = install_satellites(core, runtime, registry, listener, pairing)
+    attach_control(satellites, _session_control())
+    await satellites._turn("Hallo", "de", lambda _d: None, f"voice:node:{pi}", "note")  # type: ignore[misc,arg-type]
+    assert marked == [(f"voice:node:{pi}#c0ffee", None)]
+    await runtime.stop()

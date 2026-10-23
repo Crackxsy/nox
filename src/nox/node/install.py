@@ -210,7 +210,7 @@ def install(core: Any) -> NodeRuntime:
     control = _install_routes(core, registry, [listener])
     controls.append(control)
     # The PC Nox controls cannot talk to it (`controlled_here`).
-    satellites.controlled = control.locked
+    attach_control(satellites, control)
     _keep(runtime, _watch_sessions(control, core, listener, satellites), "nox-node-computer")
 
     async def redeem(body: NodePairRequest) -> tuple[int, dict[str, Any]]:
@@ -389,6 +389,19 @@ async def _watch_sessions(
             log.error("node.computer_watch_failed", error=type(exc).__name__)
 
 
+def attach_control(satellites: SatelliteHub, control: NodeControl) -> None:
+    """Computer use and the satellites (C9 review H4, with #167's lock): the node Nox controls
+    is refused (`controlled_here`) - and every node while a binding is saturated, when nobody
+    can be told apart from the controlled PC any more; while any session runs, voice turns from
+    other nodes are marked as holding unreadable untrusted content, like paired-device chat."""
+
+    def controlled(device_id: str) -> bool:
+        return bool(control.locked(device_id) or control.is_saturated())
+
+    satellites.controlled = controlled
+    satellites.session_active = control.active
+
+
 #: How long the hub may reuse its answer to "may this node hold an overlay credential?".
 OVERLAY_CHECK_TTL_S = 2.0
 
@@ -463,6 +476,15 @@ def install_satellites(
 
     async def turn(text: str, language: str, on_chunk: Any, channel: str, note: str) -> Any:
         assert orchestrator is not None
+        engine = getattr(security, "engine", None)
+        try:
+            during_session = bool(satellites.session_active())
+        except Exception:  # noqa: BLE001 - cannot tell: as if one ran
+            during_session = True
+        if during_session and engine is not None:
+            # While Nox controls a paired PC, the same rule as for paired-device chat (#167):
+            # the conversation holds unreadable untrusted content.
+            engine.mark_tainted(orchestrator.conversation_for(channel), None)
         # Waits for the turn in flight instead of cancelling it (and a question it may wait on),
         # and interrupts no speech here; the conversation counts as tainted from its first turn
         # (`nox.security.taint.UNTRUSTED_CONVERSATIONS`).
