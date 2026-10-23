@@ -49,7 +49,8 @@ ask us not to.
 
 In scope: anything that breaks one of Nox's stated guarantees — the kill switch, privacy modes and
 zones, the permission engine, the egress guard, the audit chain, IPC authentication, secret
-handling, plugin sandboxing, and the Rocket League observation-only boundary. See
+handling, plugin sandboxing, the Rocket League observation-only boundary, and the Nox-OS image's
+hardening (firewall, remote maintenance switch, root helper; [`os/README.md`](os/README.md)). See
 [`docs/SECURITY.md`](docs/SECURITY.md) for what those guarantees are and
 [`docs/PRIVACY.md`](docs/PRIVACY.md) for the privacy claims a report can be measured against.
 

@@ -200,6 +200,22 @@ export const api = {
     c.request('lan.pair.start', pin ? { name, pin } : { name }),
   lanUnpair: (c: IpcClient, deviceId: string, pin = '') =>
     c.request('lan.unpair', pin ? { device_id: deviceId, pin } : { device_id: deviceId }),
+  // -- Nox-OS remote maintenance (`nox.noxos`) -----------------------------------------------------
+  sshStatus: (c: IpcClient) => c.request('noxos.ssh.status', {}),
+  /** Pasted public keys replace the stored ones (kept by the Pi's root helper, not by Nox). */
+  // The maintenance passphrase, like the PIN, is passed per call and never kept in this UI.
+  sshKeysSet: (c: IpcClient, keys: string, passphrase: string, pin = '') =>
+    c.request('noxos.ssh.keys.set', { keys, passphrase, ...(pin ? { pin } : {}) }),
+  /** `fingerprints`: the stored keys exactly as the owner saw and confirmed them. */
+  sshEnable: (c: IpcClient, minutes: number, fingerprints: string[], passphrase: string, pin = '') =>
+    c.request('noxos.ssh.enable', { minutes, fingerprints, passphrase, ...(pin ? { pin } : {}) }),
+  /** Only during the first-boot setup; later with the old one (`sshPassphraseChange`). */
+  sshPassphraseSet: (c: IpcClient, next: string, pin = '') =>
+    c.request('noxos.ssh.passphrase.set', { new: next, ...(pin ? { pin } : {}) }),
+  sshPassphraseChange: (c: IpcClient, old: string, next: string, pin = '') =>
+    c.request('noxos.ssh.passphrase.change', { old, new: next, ...(pin ? { pin } : {}) }),
+  sshDisable: (c: IpcClient, forgetKeys = false) =>
+    c.request('noxos.ssh.disable', forgetKeys ? { forget_keys: true } : {}),
   // -- PCs, laptops and servers as nodes (`nox.node`) -------------------------------------------
   nodeList: (c: IpcClient) => c.request('node.list', {}),
   /** Computer-use sessions on paired PCs right now (`{sessions}`), for the header after a (re)connect. */

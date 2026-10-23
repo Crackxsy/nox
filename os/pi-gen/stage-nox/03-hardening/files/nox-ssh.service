@@ -1,0 +1,23 @@
+# Nox-OS remote maintenance: sshd with its own configuration (/etc/nox-os/ssh/sshd_config: key
+# only, nox-admin only, private networks only). Never enabled; only the root helper starts it,
+# from the dashboard, and a timer stops it again. ssh.service stays masked.
+[Unit]
+Description=Nox-OS remote maintenance (SSH, key only, home network only)
+Documentation=https://github.com/Crackxsy/nox/blob/develop/os/README.md
+Wants=nox-ssh-hostkeys.service
+After=network.target nox-ssh-hostkeys.service
+ConditionPathExists=/run/nox-os/ssh/authorized_keys
+
+[Service]
+Type=exec
+ExecStartPre=/usr/sbin/sshd -t -f /etc/nox-os/ssh/sshd_config
+ExecStart=/usr/sbin/sshd -D -e -f /etc/nox-os/ssh/sshd_config
+# Whatever stops it - the timer, the dashboard, a crash: keys, sudo rule and port 22 go too.
+ExecStopPost=/usr/bin/python3 -I -S /usr/local/lib/nox-os/nox_os_helper.py --stopped
+RuntimeDirectory=sshd
+RuntimeDirectoryMode=0755
+# Open sessions end with it.
+KillMode=control-group
+Restart=no
+# The helper's longest window (240 min) plus a margin: never longer, whatever happens to timers.
+RuntimeMaxSec=4h15min

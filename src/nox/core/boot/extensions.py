@@ -60,6 +60,8 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = (
     "lan",
     # `nox node` on other PCs: its own listener, next to the network listener it builds on.
     "node",
+    # Nox-OS only (the Raspberry Pi image): remote maintenance through the image's root helper.
+    "noxos",
     # Late on purpose: it describes the others, and reads the registry they filled.
     "capabilities",
     # After capabilities: serves its tool loop to Claude Code over MCP.

@@ -1,0 +1,3 @@
+# Nox-OS: sudo for nox-admin exists only while remote maintenance is on - the root helper writes
+# the rule under /run and removes it when maintenance ends (os/README.md).
+@includedir /run/nox-os/sudoers.d

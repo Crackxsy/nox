@@ -1,0 +1,39 @@
+# Nox-OS remote maintenance (os/README.md): sshd as nox-ssh.service runs it. A complete
+# configuration on purpose - nothing from /etc/ssh/sshd_config.d can relax it.
+Port 22
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+
+# Who: nox-admin only, from private networks only (the firewall agrees), never root.
+PermitRootLogin no
+AllowUsers nox-admin@10.0.0.0/8 nox-admin@172.16.0.0/12 nox-admin@192.168.0.0/16 nox-admin@169.254.0.0/16 nox-admin@fc00::/7 nox-admin@fe80::/10
+
+# How: a public key from the dashboard, nothing else. The keys live under /run (gone at reboot).
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+HostbasedAuthentication no
+AuthorizedKeysFile /run/nox-os/ssh/authorized_keys
+PubkeyAcceptedAlgorithms ssh-ed25519,sk-ssh-ed25519@openssh.com,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ecdsa-sha2-nistp256@openssh.com
+UsePAM yes
+StrictModes yes
+
+# Few tries, few connections, no tunnels into the home network.
+MaxAuthTries 3
+MaxSessions 4
+MaxStartups 4:50:10
+LoginGraceTime 30
+ClientAliveInterval 60
+ClientAliveCountMax 3
+AllowTcpForwarding no
+AllowStreamLocalForwarding no
+AllowAgentForwarding no
+X11Forwarding no
+PermitTunnel no
+GatewayPorts no
+PermitUserEnvironment no
+PrintMotd no
+LogLevel VERBOSE
+Subsystem sftp internal-sftp

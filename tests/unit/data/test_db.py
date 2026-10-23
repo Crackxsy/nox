@@ -45,6 +45,9 @@ def db(tmp_path: Path) -> Iterator[Database]:
 def test_pragmas(db: Database) -> None:
     assert db.fetch_one("PRAGMA journal_mode")[0] == "wal"  # type: ignore[index]
     assert db.fetch_one("PRAGMA foreign_keys")[0] == 1  # type: ignore[index]
+    # Fewer writes on an SD card: NORMAL in WAL mode, a larger checkpoint interval.
+    assert db.fetch_one("PRAGMA synchronous")[0] == 1  # type: ignore[index]
+    assert db.fetch_one("PRAGMA wal_autocheckpoint")[0] == 4000  # type: ignore[index]
     assert db.path.parent.is_dir()
 
 
