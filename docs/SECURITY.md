@@ -1019,6 +1019,51 @@ Still to come in wave C: certificate renewal (C7) and a real presence check for
 `nox node allow`. Negative tests: `tests/unit/node/` (a deliberately permissive core in `test_agent.py`),
 `tests/integration/test_nodes.py`.
 
+## Nox-OS (the Raspberry Pi image)
+
+What the image guarantees, and how each part is enforced, is in
+[`os/README.md`](../os/README.md#hardening-o2); `os/tools/check-image.sh` refuses an image that
+breaks it and the QEMU boot test checks it on the running system. In short:
+
+- **Nothing to log in with is shipped.** No password, no key, no `authorized_keys`, SSH masked.
+- **Inbound default deny** (nftables, IPv4 and IPv6). Nox's ports open only while network access
+  is on, from private networks only, rate-limited per address; generated from Nox's settings but
+  never SSH or a port below 1024, whatever the settings file says - it belongs to the service user.
+  If generating fails, the boot rules (nothing of Nox's open) stay.
+- **Remote maintenance (SSH) is off.** Choosing its keys and switching it on each need an
+  administrator's request with **two secrets**: the security PIN (refused while no PIN is set;
+  from a paired device the PIN always, with removal after repeated wrong ones) and the
+  **maintenance passphrase** (at least 12 characters, set during the first-boot setup), audited.
+  The PIN is checked by Nox, whose files the service user can read - a short PIN could be guessed
+  offline there - so the passphrase is checked only by the root helper (scrypt, root 0600, its own
+  lockout: 5 wrong, then 15 minutes, doubling up to a day, counted under a lock so parallel
+  guesses cannot slip past it); it never touches a file the service user can read and is never
+  logged. Once set, it is changed only with the old one; a reset takes root (a flag file only
+  root can create, then setup mode). The keys are stored by the root helper alone (root, 0600) and
+  shown by fingerprint; switching on names the fingerprints the owner confirmed and is refused for
+  any other stored keys. Nothing the service user can write is read as a key. Key only
+  (ed25519/ECDSA), `nox-admin` only, private networks only - never from the device itself (dropped
+  in the firewall) - at most four hours, then sshd, its sessions, the sudo rule and port 22 end
+  together. The sudo rule lives under `/run` only and is written only once sshd runs.
+- **One root helper, a fixed set of requests.** The service runs without privileges; the only way
+  it changes the system is the socket-activated helper. Its socket belongs to a group only
+  `nox.service` carries, with a trigger limit against floods; it answers root and `nox.service`'s
+  main process only, checked against the process itself (pidfd, cgroup, start time - not a
+  reusable number), and `nox core` makes itself non-dumpable as its first step, so the processes
+  it starts cannot take it over. Requests: `status`, `keys set`, `keys clear`, `ssh on <minutes>
+  <fingerprints>`, `ssh off`, `maint set` (setup mode only), `maint change` - no shell, no paths,
+  no options.
+- **No firewall, no Nox:** `nox.service` requires `nftables.service`.
+- **Console:** a status screen without secrets on tty1, no login there; no account has a password.
+
+Accepted limits: physical access to the card is full access (the boot partition is plain FAT); the
+service user can choose which unprivileged ports its own listener uses, and the firewall follows.
+Root over SSH takes the security PIN **and** the maintenance passphrase **and** a key the owner
+confirmed **and** a connection from the home network; while remote maintenance is on, whoever
+holds one of its keys in the home network is root, and what root changed stays changed after it
+is switched off. IPv6 clients from the home's global prefix are not "private" and are refused (fail
+closed).
+
 ## Known limits of network access
 
 Paired devices in the home network (`nox.lan`, see [`NETWORK_ACCESS.md`](NETWORK_ACCESS.md)) are

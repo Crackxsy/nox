@@ -1,0 +1,10 @@
+# Nox-OS: the root helper's socket back after a failure (a flood of connections trips its trigger
+# limit and leaves it failed) - after a pause, so a flood cannot keep it busy.
+[Unit]
+Description=Nox-OS root helper socket: start it again after a failure
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/sleep 30
+ExecStart=/usr/bin/systemctl reset-failed nox-os-helper.socket
+ExecStart=/usr/bin/systemctl start nox-os-helper.socket

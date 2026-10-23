@@ -12,6 +12,7 @@ Migrations are `NNNN_name.sql` files applied in order, each inside one transacti
 
 from __future__ import annotations
 
+import contextlib
 import re
 import sqlite3
 import threading
@@ -26,6 +27,8 @@ from nox.core.logging import get_logger
 MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 _MIGRATION_FILE = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
 Params = Sequence[Any] | dict[str, Any]
+#: Pages in the write-ahead log before SQLite checkpoints it into the database (default 1000).
+WAL_AUTOCHECKPOINT_PAGES = 4000
 
 
 class MigrationError(RuntimeError):
@@ -76,7 +79,12 @@ class Database:
             mode = self._conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
             if str(mode).lower() != "wal":
                 self._log.warning("db.wal_unavailable", mode=mode)
+            # WAL with NORMAL: the database stays consistent on a power cut, the last
+            # transactions before it may be lost. A larger checkpoint interval writes a page
+            # changed many times once per checkpoint instead of once per change - fewer writes
+            # on an SD card (os/README.md, "SD-card wear").
             self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute(f"PRAGMA wal_autocheckpoint={WAL_AUTOCHECKPOINT_PAGES}")
 
     # ---- basics ------------------------------------------------------------------------------
 
@@ -154,6 +162,10 @@ class Database:
 
     def close(self) -> None:
         with self._lock:
+            # SQLite's advice for a long-lived connection: let it refresh its statistics where
+            # they are stale before it goes. Cheap, and never a reason not to close.
+            with contextlib.suppress(sqlite3.Error):
+                self._conn.execute("PRAGMA optimize")
             self._conn.close()
 
     def __enter__(self) -> Database:

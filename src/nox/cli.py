@@ -38,6 +38,11 @@ def core(
     ),
 ) -> None:
     """Run the core process in the foreground (normally the supervisor spawns it)."""
+    # First, before anything starts: on Nox-OS the core makes itself non-dumpable, so the
+    # processes it will run cannot trace it (nox.noxos.protect).
+    from nox.noxos.protect import protect_on_nox_os  # noqa: PLC0415
+
+    protect_on_nox_os()
     import asyncio  # noqa: PLC0415 - imported per command so `nox --help` stays instant
 
     from nox.entrypoints import run_core  # noqa: PLC0415
