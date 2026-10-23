@@ -92,3 +92,37 @@ def test_nothing_secret_reaches_the_screen() -> None:
     ssh = {"on": True, "until": NOW + 60, "keys": ["SHA256:abcdef"]}
     text = console.render(RELEASE, ["192.0.2.10"], health, FIREWALL, ssh, NOW)
     assert "secret-token-value" not in text and "SHA256" not in text
+
+
+BOOT = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
+SETUP_CONSOLE = {
+    "ssid": "Nox-Setup-1A2B",
+    "psk": "ABCD-EFGH-JKMN-PQRS",  # fictitious, the device's format
+    "psk_from_card": False,
+    "claim_code": "ZYXW-VTSR-QPNM",
+    "qr": ["\u2588\u2580\u2588", "\u2588\u2584\u2588"],
+}
+
+
+def test_the_setup_block_shows_hotspot_qr_and_claim_code_only_while_the_window_is_open() -> None:
+    mode = {"v": 1, "boot_id": BOOT, "until": 1800}
+    view = console.setup_view(mode, SETUP_CONSOLE, {}, BOOT, 600.0)
+    assert view is not None
+    screen = console.render(
+        RELEASE,
+        ["192.0.2.10"],
+        HEALTH,
+        {"dashboard_port": 47843},
+        None,
+        NOW,
+        setup=view,
+        claimed=False,
+    )
+    assert "Setup Wi-Fi:    Nox-Setup-1A2B   password ABCD-EFGH-JKMN-PQRS" in screen
+    assert "  \u2588\u2580\u2588" in screen and "ZYXW-VTSR-QPNM" in screen
+    assert "Owner:          not claimed yet" in screen
+    # Over, or another boot's: nothing of it.
+    assert console.setup_view(mode, SETUP_CONSOLE, {}, BOOT, 1800.0) is None
+    assert console.setup_view({**mode, "boot_id": "x"}, SETUP_CONSOLE, {}, BOOT, 600.0) is None
+    plain = console.render(RELEASE, ["192.0.2.10"], HEALTH, None, None, NOW, setup=None)
+    assert "ABCD-EFGH" not in plain and "\u2588" not in plain

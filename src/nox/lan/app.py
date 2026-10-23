@@ -256,6 +256,8 @@ class ClaimSurface:
     claim: Callable[[bytes, str], Awaitable[tuple[int, dict[str, Any]]]]
     #: The claim page's files: `/claim/<name>` -> (content, media type), or None.
     asset: Callable[[str], tuple[bytes, str] | None]
+    #: The claim page's own Content-Security-Policy ("" keeps the listener's).
+    policy: str = ""
 
 
 #: What an unclaimed device answers at all (besides `/claim/...`).
@@ -385,8 +387,10 @@ class _Guard:
                 out = MutableHeaders(scope=message)
                 for key, value in _BASE_HEADERS.items():
                     out[key] = value
-                # Built from the validated host and a numeric port, never from the raw header.
-                out["Content-Security-Policy"] = policy
+                # Built from the validated host and a numeric port, never from the raw header -
+                # unless a route set a narrower policy of its own (the claim page).
+                if "content-security-policy" not in out:
+                    out["Content-Security-Policy"] = policy
             await send(message)
 
         await self._app(scope, receive, send_with_headers)
@@ -635,7 +639,9 @@ def create_lan_app(
         if found is None:
             return Response("not found\n", status_code=404)
         content, media_type = found
-        return Response(content, media_type=media_type)
+        # Its own, narrower policy (the listener keeps it instead of its general one).
+        headers = {"Content-Security-Policy": claim.policy} if claim.policy else None
+        return Response(content, media_type=media_type, headers=headers)
 
     async def claim_api(request: Request) -> Response:
         assert claim is not None

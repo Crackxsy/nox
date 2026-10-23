@@ -11,9 +11,10 @@ Run by systemd as root, one short step at a time - never a daemon:
                                          when Nox has no network (or the claim code can only be
                                          learnt there), keep the portal running while it is up
     python3 -I -S nox_setup.py apply    what the captive portal asked for (nox-setup-apply.path),
-                                         only with the right claim code: PIN and maintenance
-                                         passphrase kept for the claim (the root helper's
-                                         `stage`), then the home Wi-Fi
+                                         only with the right claim code (the root helper's
+                                         `stage`): the home Wi-Fi. PIN and maintenance passphrase
+                                         are never set over the hotspot - only on the claim page,
+                                         over TLS
     python3 -I -S nox_setup.py close [reason]   end setup mode now (the root helper after a claim)
     python3 -I -S nox_setup.py status   what is going on, without any secret
 
@@ -26,13 +27,20 @@ physical act that proves someone is at the device. Everything that grants someth
 so an expired window grants nothing even before `tick` removed it.
 
 **Secrets of the setup**, all in RAM under /run, all gone when the window closes:
-  * the hotspot password: from the provisioning file (printed on the setup card), else 12 random
-    digits made at every boot - shown on a screen plugged into the Pi and, from O5 on, blinked by
-    its LED (`/run/nox-os/setup/blink`, root only);
+  * the hotspot password: from the provisioning file (printed on the setup card), else 16 random
+    characters of Crockford's base32 (80 bits) made at every boot - shown on a screen plugged
+    into the Pi as text and as a Wi-Fi QR code;
   * the claim code: only its hash on the device when it came on the setup card; otherwise 12
     random characters made at every boot, shown on the screen and in the portal;
-  * the security PIN and maintenance passphrase typed into the portal - kept by the root helper
-    only after the right claim code, and applied only by the claim itself.
+  * the portal's one-time ticket for the claim link (only its hash, kept by the root helper with
+    the right claim code).
+
+**Reclaiming** (physical access is full access): a file `nox-reclaim` on the boot partition, or
+`"reclaim": true` in the provisioning file, makes the next boot forget the owner - root removes
+the claim mark, asks for a fresh maintenance passphrase and forgets the remote-maintenance keys;
+Nox revokes every paired device, node and token and clears the security PIN when it starts
+(`nox.noxos.claim`). Everything else Nox knows stays. The marker is overwritten and deleted, and
+the setup window opens as on a new device.
 
 The provisioning file is checked strictly (`validate`), imported, then overwritten and deleted.
 Its Wi-Fi password goes into a NetworkManager keyfile (root, 0600) and nowhere else; nothing of
@@ -78,8 +86,16 @@ CLAIM_CODE = SETUP / "claim-code"  # root:nox-os-setup 0640 - the portal shows i
 NETWORKS = SETUP / "networks.json"  # root:nox-os-setup 0640 - the portal's Wi-Fi list
 STATUS = SETUP / "status.json"  # root:nox-os-setup 0640 - no secrets
 HOTSPOT_STATE = SETUP / "hotspot.json"  # root 0644 - the firewall's setup ports
-BLINK = SETUP / "blink"  # root 0600 - for the LED (O5)
-PENDING = SETUP / "pending.json"  # root 0600 - the root helper's, applied by the claim
+BLINK = SETUP / "blink"  # root 0600 - reserved for the LED (O5); not written yet
+PENDING = SETUP / "pending.json"  # root 0600 - the root helper's (the portal ticket's hash)
+CA_FINGERPRINT = SETUP / "ca_fingerprint"  # root:nox-os-setup 0640 - from Nox's CA file
+#: Nox's certificate authority (nox.lan.tls); root reads it - the portal cannot, and must not
+#: ask a port on loopback that any local process could have taken first.
+NOX_CA = Path("/var/lib/nox/tls/ca.crt")
+RECLAIM_FILE = BOOT / "nox-reclaim"
+#: Root's note for Nox: forget every pairing and the PIN (an id, so it happens once).
+RECLAIM_MARK = Path("/var/lib/nox-os-claim/reclaim")
+STORED_KEYS = Path("/var/lib/nox-os/ssh_keys")
 PORTAL_DIR = SETUP / "portal"  # nox-setup 0700 - the portal's requests
 REQUEST = PORTAL_DIR / "request.json"
 HELPER_SOCKET = RUN / "helper" / "helper.sock"
@@ -131,7 +147,13 @@ LOCALES = ("de_DE", "en_GB", "en_US")
 CLAIM_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 CLAIM_LENGTH = 12
 CLAIM_PREFIX = b"nox-claim-v1:"
-HOTSPOT_DIGITS = 12
+#: The hotspot password made on the device: 16 characters of the claim-code alphabet, grouped by
+#: four with dashes that are part of it (what is shown is what is typed): 80 bits.
+HOTSPOT_GROUPS = 4
+#: Digits a blink code could carry (O5, not used yet): see new_blink_digits.
+BLINK_DIGITS = 12
+MIN_CARD_HOTSPOT_PSK = 16
+VENV_PYTHON = Path("/opt/nox/current/.venv/bin/python")
 MIN_PIN = 6
 MAX_PIN = 64
 MIN_PASSPHRASE = 12
@@ -174,6 +196,8 @@ class Provision:
     wifi: Wifi | None = None
     claim_hash: str | None = None
     hotspot_psk: str | None = field(default=None, repr=False)
+    #: Forget the owner at this boot (physical access is full access).
+    reclaim: bool = False
 
     def fields(self) -> list[str]:
         """The names of what is set - what may be logged."""
@@ -203,6 +227,7 @@ _TOP = frozenset(
         "wifi",
         "claim_hash",
         "hotspot_psk",
+        "reclaim",
     }
 )
 _WIFI = frozenset({"ssid", "psk", "hidden"})
@@ -293,9 +318,13 @@ def validate(raw: bytes) -> Provision:
         raise ProvisionError("invalid_claim_hash")
     hotspot_psk = _optional_str(data, "hotspot_psk")
     if hotspot_psk is not None and not (
-        8 <= len(hotspot_psk) <= 63 and all(0x21 <= ord(c) <= 0x7E for c in hotspot_psk)
+        MIN_CARD_HOTSPOT_PSK <= len(hotspot_psk) <= 63
+        and all(0x21 <= ord(c) <= 0x7E for c in hotspot_psk)
     ):
         raise ProvisionError("invalid_hotspot_psk")
+    reclaim = data.get("reclaim", False)
+    if not isinstance(reclaim, bool):
+        raise ProvisionError("invalid_reclaim")
     wifi = None
     section = data.get("wifi")
     if section is not None:
@@ -322,6 +351,7 @@ def validate(raw: bytes) -> Provision:
         wifi=wifi,
         claim_hash=claim_hash,
         hotspot_psk=hotspot_psk,
+        reclaim=reclaim,
     )
 
 
@@ -351,8 +381,76 @@ def show_claim_code(code: str) -> str:
 
 
 def new_hotspot_psk() -> str:
-    """12 random digits: what a screen shows and an LED can blink (about 40 bits)."""
-    return "".join(str(secrets.randbelow(10)) for _ in range(HOTSPOT_DIGITS))
+    """16 random characters of the claim-code alphabet in four groups (`ABCD-EFGH-JKMN-PQRS`, the
+    dashes part of it): 80 bits - enough that a recorded WPA2 handshake cannot be cracked offline
+    to read what the portal's plain HTTP carried (the home Wi-Fi's password)."""
+    groups = ["".join(secrets.choice(CLAIM_ALPHABET) for _ in range(4)) for _ in range(4)]
+    return "-".join(groups[:HOTSPOT_GROUPS])
+
+
+def new_blink_digits() -> str:
+    """12 random digits (about 40 bits): what an LED could blink (step O5). Not the hotspot
+    password - 40 bits are crackable offline from a recorded handshake; O5 decides how a blink
+    code may be used (os/README.md)."""
+    return "".join(str(secrets.randbelow(10)) for _ in range(BLINK_DIGITS))
+
+
+def _wifi_qr_escape(text: str) -> str:
+    return "".join("\\" + c if c in '\\;,:"' else c for c in text)
+
+
+def wifi_qr_payload(ssid: str, psk: str) -> str:
+    """The Wi-Fi QR code's text (`WIFI:T:WPA;S:<ssid>;P:<password>;;`), special characters
+    escaped as the format asks."""
+    return f"WIFI:T:WPA;S:{_wifi_qr_escape(ssid)};P:{_wifi_qr_escape(psk)};;"
+
+
+#: Nox's own Python has segno (BSD-3-Clause, already a dependency of Nox: the pairing QR codes);
+#: only the module matrix comes back, the payload goes in on stdin (never on a command line).
+_QR_MATRIX = (
+    "import json, sys, segno\n"
+    "q = segno.make(sys.stdin.read(), error='m', micro=False)\n"
+    "print(json.dumps([[1 if b else 0 for b in row] for row in q.matrix]))"
+)
+
+
+def qr_text(matrix: list[list[int]], quiet: int = 2) -> list[str]:
+    """A QR matrix as text for a dark console: light modules (and the quiet zone) as full
+    blocks, dark ones as spaces, two rows per line with half blocks."""
+    size = len(matrix)
+    width = size + 2 * quiet
+
+    def light(y: int, x: int) -> bool:
+        if not (quiet <= y < size + quiet and quiet <= x < size + quiet):
+            return True
+        return not matrix[y - quiet][x - quiet]
+
+    lines = []
+    for y in range(0, width, 2):
+        row = []
+        for x in range(width):
+            top, bottom = light(y, x), light(y + 1, x) if y + 1 < width else True
+            row.append(
+                "\u2588" if top and bottom else "\u2580" if top else "\u2584" if bottom else " "
+            )
+        lines.append("".join(row))
+    return lines
+
+
+def wifi_qr(system: System, ssid: str, psk: str) -> list[str] | None:
+    """The hotspot's Wi-Fi QR code as console text, or None when Nox's Python cannot make it."""
+    if not system.path(VENV_PYTHON).exists():
+        return None
+    try:
+        made = system.run_input(
+            [str(VENV_PYTHON), "-I", "-c", _QR_MATRIX], wifi_qr_payload(ssid, psk)
+        )
+        matrix = json.loads(made)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if not isinstance(matrix, list) or not all(isinstance(r, list) for r in matrix):
+        return None
+    return qr_text(matrix)
 
 
 def hotspot_ssid(machine_id: str) -> str:
@@ -629,6 +727,13 @@ class System:
     def systemctl(self, *args: str) -> bool:
         return self.run("systemctl", *args).returncode == 0
 
+    def run_input(self, args: list[str], data: str) -> str:
+        """A fixed program with `data` on stdin; its stdout (tests replace it)."""
+        done = subprocess.run(  # noqa: S603 - a fixed program, the data on stdin
+            args, input=data, capture_output=True, text=True, check=True, timeout=60
+        )
+        return done.stdout
+
     def nmcli(self, *args: str, timeout: float = 120) -> subprocess.CompletedProcess[str]:
         return self.run("nmcli", *args, timeout=timeout)
 
@@ -808,6 +913,7 @@ def import_provision(system: System) -> dict[str, Any]:
         report = {"imported": False, "error": "unreadable"}
     else:
         report = {"imported": True, "error": None, "fields": provision.fields()}
+        report["reclaim"] = provision.reclaim
         if provision.hostname:
             _set_hostname(system, provision.hostname)
         if provision.timezone and not _set_timezone(system, provision.timezone):
@@ -846,6 +952,7 @@ def prepare_secrets(system: System) -> dict[str, Any]:
         with contextlib.suppress(OSError, UnicodeDecodeError):
             card_psk = system.read(HOTSPOT_PSK, 128).decode("ascii").strip() or None
     psk = card_psk or new_hotspot_psk()
+    ssid = hotspot_ssid(_machine_id(system))
     claim = _json(system, CLAIM)
     code = None
     if claim.get("source") != "card" or not _CLAIM_HASH.fullmatch(str(claim.get("hash", ""))):
@@ -853,16 +960,63 @@ def prepare_secrets(system: System) -> dict[str, Any]:
         record = {"v": 1, "hash": claim_hash(code), "source": "device"}
         system.write(CLAIM, json.dumps(record) + "\n", 0o600)
         system.write(CLAIM_CODE, show_claim_code(code) + "\n", 0o640, group=SETUP_GROUP)
-    if card_psk is None:
-        system.write(BLINK, psk + "\n", 0o600)
     console = {
-        "ssid": hotspot_ssid(_machine_id(system)),
+        "ssid": ssid,
         "psk": psk,
         "psk_from_card": card_psk is not None,
         "claim_code": show_claim_code(code) if code else None,
+        "qr": wifi_qr(system, ssid, psk),
     }
     system.write(CONSOLE, json.dumps(console) + "\n", 0o640, group=SETUP_GROUP)
     return console
+
+
+def ca_fingerprint(system: System) -> str | None:
+    """SHA-256 of Nox's CA certificate (DER), as Nox shows it (`nox.lan.tls.fingerprint`)."""
+    import ssl  # noqa: PLC0415 - only this needs it
+
+    try:
+        pem = system.read(NOX_CA, 64 * 1024).decode("ascii")
+        der = ssl.PEM_cert_to_DER_cert(pem)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    return ":".join(f"{b:02X}" for b in hashlib.sha256(der).digest())
+
+
+def publish_ca_fingerprint(system: System) -> None:
+    """For the portal, which may not read Nox's files: root reads the CA and writes its
+    fingerprint where the setup group can read it."""
+    found = ca_fingerprint(system)
+    if found is None:
+        return
+    try:
+        current = system.read(CA_FINGERPRINT, 256).decode("ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        current = ""
+    if current != found:
+        system.write(CA_FINGERPRINT, found + "\n", 0o640, group=SETUP_GROUP)
+
+
+def reclaim_requested(system: System, provision: dict[str, Any]) -> bool:
+    """The reclaim marker on the boot partition (deleted securely), or the provisioning file's
+    `reclaim`."""
+    asked = bool(provision.get("reclaim"))
+    if system.exists(RECLAIM_FILE):
+        asked = True
+        secure_delete(system, RECLAIM_FILE)
+    return asked
+
+
+def reclaim(system: System) -> None:
+    """Forget the owner: the claim mark goes, the next claim sets a fresh maintenance
+    passphrase, the remote-maintenance keys are forgotten, and Nox is told (an id it handles
+    once) to revoke every pairing and token and clear the PIN. Everything else stays."""
+    system.remove(CLAIMED)
+    system.remove(STORED_KEYS)
+    system.write(RESET_FLAG, "reclaim\n", 0o600)
+    mark = {"v": 1, "id": secrets.token_hex(16), "at": int(system.clock())}
+    system.write(RECLAIM_MARK, json.dumps(mark) + "\n", 0o644)
+    print("nox-setup: reclaim - the owner is forgotten, setup opens", file=sys.stderr)
 
 
 def boot(system: System) -> int:
@@ -885,6 +1039,8 @@ def boot(system: System) -> int:
     system.path(STATE).mkdir(parents=True, exist_ok=True)
     os.chmod(system.path(STATE), 0o700)
     report = import_provision(system)
+    if reclaim_requested(system, report):
+        reclaim(system)
     if report:
         print(
             "nox-setup: provisioning file "
@@ -897,6 +1053,7 @@ def boot(system: System) -> int:
             file=sys.stderr,
         )
     write_status(system, state="idle", provision=report or None, hotspot="down")
+    publish_ca_fingerprint(system)
     is_claimed = claimed(system)
     if not is_claimed:
         mode = open_window(system, "unclaimed")
@@ -1039,6 +1196,7 @@ def tick(system: System) -> int:
         return 0
     if mode.get("reason") != "unclaimed":
         return 0
+    publish_ca_fingerprint(system)
     status = read_status(system)
     if status.get("state") == "joining":
         return 0
@@ -1067,8 +1225,6 @@ class PortalRequest:
     peer: str = ""
     #: The portal's one-time ticket for the claim link (counts the claim on the hotspot side).
     ticket: str | None = field(default=None, repr=False)
-    pin: str | None = field(default=None, repr=False)
-    passphrase: str | None = field(default=None, repr=False)
 
 
 def parse_portal_request(raw: bytes) -> PortalRequest:
@@ -1081,7 +1237,8 @@ def parse_portal_request(raw: bytes) -> PortalRequest:
         )
     except (ValueError, RecursionError, UnicodeDecodeError):
         raise ProvisionError("not_json") from None
-    allowed = {"v", "wifi", "pin", "passphrase", "claim_code", "peer", "ticket"}
+    # PIN and maintenance passphrase never travel over the hotspot's plain HTTP.
+    allowed = {"v", "wifi", "claim_code", "peer", "ticket"}
     if not isinstance(data, dict) or set(data) - allowed:
         raise ProvisionError("unknown_field")
     if data.get("v") != 1 or isinstance(data.get("v"), bool):
@@ -1100,18 +1257,6 @@ def parse_portal_request(raw: bytes) -> PortalRequest:
         if not isinstance(hidden, bool):
             raise ProvisionError("invalid_wifi_hidden")
         wifi = Wifi(ssid=ssid, psk=psk, hidden=hidden)
-    pin = data.get("pin")
-    if pin is not None and (
-        not isinstance(pin, str) or not MIN_PIN <= len(pin) <= MAX_PIN or not pin.isprintable()
-    ):
-        raise ProvisionError("invalid_pin")
-    passphrase = data.get("passphrase")
-    if passphrase is not None and (
-        not isinstance(passphrase, str)
-        or not MIN_PASSPHRASE <= len(passphrase) <= MAX_PASSPHRASE
-        or any(c in passphrase for c in "\x00\r\n")
-    ):
-        raise ProvisionError("invalid_passphrase")
     code = normalize_claim_code(str(data.get("claim_code", "")))
     if code is None:
         raise ProvisionError("claim_wrong")
@@ -1123,9 +1268,7 @@ def parse_portal_request(raw: bytes) -> PortalRequest:
         not isinstance(ticket, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", ticket)
     ):
         raise ProvisionError("invalid_ticket")
-    return PortalRequest(
-        wifi=wifi, claim_code=code, peer=peer, ticket=ticket, pin=pin, passphrase=passphrase
-    )
+    return PortalRequest(wifi=wifi, claim_code=code, peer=peer, ticket=ticket)
 
 
 def take_request(system: System) -> PortalRequest | None:
@@ -1195,13 +1338,9 @@ def apply(
         write_status(system, error="window_closed")
         return 0
     # The claim code first, checked by the root helper: with a wrong one nothing at all happens -
-    # no PIN or passphrase kept, no Wi-Fi changed. With the right one they are only kept: the
-    # claim applies them, in the same step that marks the device claimed.
+    # no Wi-Fi changed, no ticket kept. With the right one the helper keeps the ticket's hash for
+    # the claim, and the home Wi-Fi is joined.
     lines = [f"stage {request.peer}", f"code {_b64(request.claim_code)}"]
-    if request.pin:
-        lines.append(f"pin {_b64(request.pin)}")
-    if request.passphrase:
-        lines.append(f"new {_b64(request.passphrase)}")
     if request.ticket:
         lines.append(f"ticket {_b64(request.ticket)}")
     try:
@@ -1211,8 +1350,7 @@ def apply(
     if answer.get("ok") is not True:
         write_status(system, error=str(answer.get("code", "stage_failed"))[:40])
         return 0
-    staged = answer.get("pending_pin") is True and answer.get("pending_passphrase") is True
-    write_status(system, security_done=staged, error=None)
+    write_status(system, code_ok=True, error=None)
     if request.wifi is None:
         write_status(system, state="ready")
         return 0
@@ -1242,7 +1380,7 @@ def close(system: System, reason: str) -> int:
     hotspot and the portal, then every secret of the setup, then the firewall."""
     system.remove(SETUP_MODE)
     stop_hotspot(system)
-    for path in (CLAIM_CODE, CONSOLE, BLINK, PENDING, NETWORKS, REQUEST):
+    for path in (CLAIM_CODE, CONSOLE, BLINK, PENDING, NETWORKS, REQUEST, CA_FINGERPRINT):
         system.remove(path)
     if claimed(system) or not card_claim_code(system):
         system.remove(CLAIM)  # a claimed device keeps none; a device code is this boot's only

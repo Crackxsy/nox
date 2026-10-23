@@ -4,9 +4,10 @@
 
 It runs only while the setup hotspot is up (`nox-setup-portal.service`, started by nox_setup.py),
 as the user `nox-setup` - no root, no capabilities but binding port 80, no network but the
-hotspot's (systemd's IP filter) and Nox's loopback port for its certificate fingerprint. It
-changes nothing itself: it writes one request file that root's `nox_setup.py apply` checks again
-and carries out (home Wi-Fi, security PIN, maintenance passphrase).
+hotspot's (systemd's IP filter). It changes nothing itself: it writes one request file that
+root's `nox_setup.py apply` checks again and carries out (the home Wi-Fi, with the right claim
+code). The CA fingerprint it shows comes from root, who read Nox's CA file
+(/run/nox-os/setup/ca_fingerprint) - never from a port any local process could have taken.
 
 What the phone gets:
   * any address that is not the portal's - the operating systems' captive-portal probes
@@ -14,9 +15,10 @@ What the phone gets:
     the portal, so the phone opens it by itself;
   * one form, no JavaScript at all: the claim code (filled in when the device made it - it is shown
     on the Pi's screen too; from the setup card otherwise), the home Wi-Fi (from a scan made
-    before the hotspot started, or typed), its password, the security PIN and the maintenance
-    passphrase; or "Nox has a cable" to skip the Wi-Fi. Root applies nothing without the right
-    claim code, and PIN and passphrase only with the claim itself;
+    before the hotspot started, or typed) and its password; or "Nox has a cable" to skip the
+    Wi-Fi. Root applies nothing without the right claim code. The security PIN and the
+    maintenance passphrase are not asked here: this is plain HTTP over a Wi-Fi others may record -
+    they are set on the claim page, over TLS whose fingerprint the phone can check;
   * then the next step: back to the home Wi-Fi, open `https://nox.local:47843/claim/` with the
     claim code.
 
@@ -40,7 +42,6 @@ import json
 import os
 import re
 import secrets
-import ssl
 import stat
 import sys
 import threading
@@ -65,7 +66,7 @@ CLAIM_CODE = SETUP / "claim-code"
 NETWORKS = SETUP / "networks.json"
 STATUS = SETUP / "status.json"
 REQUEST = SETUP / "portal" / "request.json"
-LAN_INFO_URL = "https://127.0.0.1:47843/api/lan/info"
+CA_FINGERPRINT = SETUP / "ca_fingerprint"
 DASHBOARD_PORT = 47843
 ADDRESS = "10.42.0.1"
 
@@ -73,10 +74,6 @@ MAX_BODY = 4096
 MAX_CONNECTIONS = 16
 TIMEOUT_S = 10
 TOKEN_TTL_S = 30 * 60
-MIN_PIN = 6
-MAX_PIN = 64
-MIN_PASSPHRASE = 12
-MAX_PASSPHRASE = 256
 OTHER = "__other__"
 CABLE = "__cable__"
 
@@ -114,16 +111,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "other_ssid": "Network name",
         "psk": "Wi-Fi password",
         "psk_hint": "Leave it empty only for an open network.",
-        "security_legend": "Protect your Nox",
-        "pin": "Security PIN",
-        "pin_hint": "At least 6 characters. Nox asks for it before anything important.",
-        "pin2": "Security PIN again",
-        "passphrase": "Maintenance passphrase",
-        "passphrase_hint": "At least 12 characters. Only needed if you ever switch on remote "
-        "maintenance (SSH); write it down somewhere safe.",
-        "passphrase2": "Maintenance passphrase again",
-        "security_done": "A security PIN and a maintenance passphrase are kept for the claim; "
-        "you can set others when you claim Nox.",
         "claim_legend": "Claim code",
         "claim_code": "Claim code",
         "claim_hint_device": "Nox made it for this setup; it is also on a screen plugged into "
@@ -135,10 +122,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "err_ssid_invalid": "Type the network's name (at most 32 characters).",
         "err_psk_missing": "Type the Wi-Fi password.",
         "err_psk_invalid": "A Wi-Fi password has 8 to 63 characters.",
-        "err_pin_short": "The PIN needs at least 6 characters.",
-        "err_pin_mismatch": "The two PINs are not the same.",
-        "err_passphrase_short": "The passphrase needs at least 12 characters.",
-        "err_passphrase_mismatch": "The two passphrases are not the same.",
         "err_claim_code": "Type the claim code.",
         "err_claim_wrong": "That claim code is not right - nothing was saved.",
         "err_claim_wait": "Wrong claim codes slow Nox down. Wait a moment, then try again.",
@@ -154,6 +137,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "forbidden": "This form has expired. Open the page again.",
         "rate_limited": "Too many attempts. Wait a minute, then try again.",
         "done_title": "Almost done",
+        "done_security": "On the claim page you set the security PIN and the maintenance "
+        "passphrase - over an encrypted connection, not here.",
         "done_wifi": "Nox now joins {ssid}. This setup network goes away for that.",
         "done_cable": "Nox stays on its cable.",
         "done_back": "1. Connect this phone to your home network again.",
@@ -185,16 +170,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "other_ssid": "Name des Netzes",
         "psk": "WLAN-Passwort",
         "psk_hint": "Nur bei einem offenen Netz leer lassen.",
-        "security_legend": "Nox schützen",
-        "pin": "Sicherheits-PIN",
-        "pin_hint": "Mindestens 6 Zeichen. Nox fragt danach, bevor es etwas Wichtiges tut.",
-        "pin2": "Sicherheits-PIN wiederholen",
-        "passphrase": "Wartungs-Passphrase",
-        "passphrase_hint": "Mindestens 12 Zeichen. Nur nötig, wenn du je die Fernwartung (SSH) "
-        "einschaltest; schreib sie an einen sicheren Ort.",
-        "passphrase2": "Wartungs-Passphrase wiederholen",
-        "security_done": "Eine Sicherheits-PIN und eine Wartungs-Passphrase sind für die Übernahme "
-        "vorgemerkt; beim Übernehmen kannst du andere festlegen.",
         "claim_legend": "Besitzer-Code",
         "claim_code": "Besitzer-Code",
         "claim_hint_device": "Nox hat ihn für diese Einrichtung gemacht; er steht auch auf einem "
@@ -206,10 +181,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "err_ssid_invalid": "Gib den Namen des Netzes ein (höchstens 32 Zeichen).",
         "err_psk_missing": "Gib das WLAN-Passwort ein.",
         "err_psk_invalid": "Ein WLAN-Passwort hat 8 bis 63 Zeichen.",
-        "err_pin_short": "Die PIN braucht mindestens 6 Zeichen.",
-        "err_pin_mismatch": "Die beiden PINs sind nicht gleich.",
-        "err_passphrase_short": "Die Passphrase braucht mindestens 12 Zeichen.",
-        "err_passphrase_mismatch": "Die beiden Passphrasen sind nicht gleich.",
         "err_claim_code": "Gib den Besitzer-Code ein.",
         "err_claim_wrong": "Dieser Besitzer-Code stimmt nicht - es wurde nichts gespeichert.",
         "err_claim_wait": "Falsche Besitzer-Codes bremsen Nox. Warte kurz und versuch es dann "
@@ -226,6 +197,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "forbidden": "Dieses Formular ist abgelaufen. Öffne die Seite neu.",
         "rate_limited": "Zu viele Versuche. Warte eine Minute und versuch es dann noch einmal.",
         "done_title": "Fast fertig",
+        "done_security": "Auf der Übernahme-Seite legst du die Sicherheits-PIN und die "
+        "Wartungs-Passphrase fest - über eine verschlüsselte Verbindung, nicht hier.",
         "done_wifi": "Nox verbindet sich jetzt mit {ssid}. Dieses Einrichtungsnetz verschwindet "
         "dafür.",
         "done_cable": "Nox bleibt am Kabel.",
@@ -337,7 +310,12 @@ class State:
     status: Path = STATUS
     request: Path = REQUEST
     uptime: Callable[[], float] = _uptime
-    fingerprint: Callable[[], str] = lambda: ""
+    ca_fingerprint: Path = CA_FINGERPRINT
+
+    def fingerprint(self) -> str:
+        """Root's copy of Nox's CA fingerprint, or "" while Nox has not made its CA yet."""
+        value = _read_text(self.ca_fingerprint)
+        return value if re.fullmatch(r"[0-9A-F]{2}(:[0-9A-F]{2}){31}", value) else ""
 
     def seconds_left(self) -> int | None:
         """What the page says; root decides, the portal only words it."""
@@ -366,33 +344,6 @@ class State:
         finally:
             os.close(fd)
         os.replace(tmp, self.request)
-
-
-def fetch_fingerprint(url: str = LAN_INFO_URL) -> Callable[[], str]:
-    """Nox's certificate authority fingerprint, from its own listener on loopback (a public fact
-    it shows anyone who asks), cached for a minute."""
-    cache: dict[str, Any] = {"at": 0.0, "value": ""}
-
-    def get() -> str:
-        if time.monotonic() - cache["at"] < 60:
-            return str(cache["value"])
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        # Loopback only, and only a public fact is read: the portal (user nox-setup) cannot read
-        # Nox's CA file itself (/var/lib/nox is the service user's 0700 folder).
-        context.verify_mode = ssl.CERT_NONE
-        value = ""
-        with contextlib.suppress(OSError, ValueError):
-            with urllib.request.urlopen(url, timeout=3, context=context) as answer:  # noqa: S310
-                data = json.loads(answer.read(16 * 1024))
-            if isinstance(data, dict) and re.fullmatch(
-                r"[0-9A-Fa-f:]{16,200}", str(data.get("ca_fingerprint", ""))
-            ):
-                value = str(data["ca_fingerprint"])
-        cache.update(at=time.monotonic(), value=value)
-        return value
-
-    return get
 
 
 # ---- protection ----------------------------------------------------------------------------
@@ -463,10 +414,6 @@ class Form:
     network: str = ""
     other_ssid: str = ""
     psk: str = field(default="", repr=False)
-    pin: str = field(default="", repr=False)
-    pin2: str = field(default="", repr=False)
-    passphrase: str = field(default="", repr=False)
-    passphrase2: str = field(default="", repr=False)
 
 
 def parse_form(body: bytes) -> tuple[Form, str, str]:
@@ -487,10 +434,6 @@ def parse_form(body: bytes) -> tuple[Form, str, str]:
         network=one("network", 64),
         other_ssid=one("other_ssid", 64),
         psk=one("psk", 80),
-        pin=one("pin", MAX_PIN + 1),
-        pin2=one("pin2", MAX_PIN + 1),
-        passphrase=one("passphrase", MAX_PASSPHRASE + 1),
-        passphrase2=one("passphrase2", MAX_PASSPHRASE + 1),
     )
     lang = one("lang", 4)
     return form, one("token", 80), lang if lang in STRINGS else "en"
@@ -508,7 +451,7 @@ def _psk_ok(psk: str) -> bool:
 
 
 def check_form(
-    form: Form, networks: list[dict[str, Any]], security_done: bool
+    form: Form, networks: list[dict[str, Any]]
 ) -> tuple[dict[str, str], dict[str, Any] | None]:
     """({field: error code}, the request for root) - the request only when there is no error."""
     errors: dict[str, str] = {}
@@ -533,18 +476,6 @@ def check_form(
     if wifi is not None and form.psk and not _psk_ok(form.psk):
         errors["psk"] = "psk_invalid"
     request: dict[str, Any] = {"v": 1, "wifi": wifi, "claim_code": form.claim_code.strip()}
-    if not security_done:
-        if len(form.pin) < MIN_PIN or len(form.pin) > MAX_PIN or not form.pin.isprintable():
-            errors["pin"] = "pin_short"
-        elif form.pin != form.pin2:
-            errors["pin2"] = "pin_mismatch"
-        if not MIN_PASSPHRASE <= len(form.passphrase) <= MAX_PASSPHRASE or any(
-            c in form.passphrase for c in "\x00\r\n"
-        ):
-            errors["passphrase"] = "passphrase_short"
-        elif form.passphrase != form.passphrase2:
-            errors["passphrase2"] = "passphrase_mismatch"
-        request.update(pin=form.pin, passphrase=form.passphrase)
     return errors, (None if errors else request)
 
 
@@ -701,55 +632,6 @@ def form_page(
         )
     )
     body.append("</fieldset>")
-    body.append(f"<fieldset><legend>{_e(t['security_legend'])}</legend>")
-    if status.get("security_done") is True:
-        body.append(f"<p>{_e(t['security_done'])}</p>")
-    else:
-        body.append(
-            _field(
-                "pin",
-                t["pin"],
-                "password",
-                errors,
-                t,
-                hint=t["pin_hint"],
-                extra=' inputmode="numeric" autocomplete="new-password" '
-                f'minlength="{MIN_PIN}" maxlength="{MAX_PIN}" required',
-            )
-        )
-        body.append(
-            _field(
-                "pin2",
-                t["pin2"],
-                "password",
-                errors,
-                t,
-                extra=' inputmode="numeric" autocomplete="new-password" required',
-            )
-        )
-        body.append(
-            _field(
-                "passphrase",
-                t["passphrase"],
-                "password",
-                errors,
-                t,
-                hint=t["passphrase_hint"],
-                extra=f' autocomplete="new-password" minlength="{MIN_PASSPHRASE}" '
-                f'maxlength="{MAX_PASSPHRASE}" required',
-            )
-        )
-        body.append(
-            _field(
-                "passphrase2",
-                t["passphrase2"],
-                "password",
-                errors,
-                t,
-                extra=' autocomplete="new-password" required',
-            )
-        )
-    body.append("</fieldset>")
     body.append(f'<button type="submit">{_e(t["submit"])}</button></form>')
     return page(lang, t["title"], "".join(body))
 
@@ -784,6 +666,7 @@ def done_page(
         body.append(f'<p>{_e(t["done_fingerprint"])}</p><p class="box mono">{_e(fingerprint)}</p>')
     if ssid:
         body.append(f'<p class="muted">{_e(t["done_failed"])}</p>')
+    body.append(f"<p>{_e(t['done_security'])}</p>")
     body.append(f'<p class="muted">{_e(t["done_router"])}</p>')
     return page(lang, t["done_title"], "".join(body))
 
@@ -938,10 +821,7 @@ def make_handler(portal: Portal) -> type[BaseHTTPRequestHandler]:
             if portal.state.seconds_left() is None:
                 self._html(410, message_page(lang, "closed"), lang)
                 return
-            status = _read_json(portal.state.status)
-            errors, request = check_form(
-                form, portal.state.networks_list(), status.get("security_done") is True
-            )
+            errors, request = check_form(form, portal.state.networks_list())
             if request is None:
                 self._show_form(
                     lang,
@@ -1020,7 +900,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--bind", default=ADDRESS)
     parser.add_argument("--port", type=int, default=80)
     args = parser.parse_args(argv[1:])
-    portal = Portal(state=State(fingerprint=fetch_fingerprint()), address=args.bind, port=args.port)
+    portal = Portal(state=State(), address=args.bind, port=args.port)
     try:
         server = serve(portal)
     except OSError as exc:

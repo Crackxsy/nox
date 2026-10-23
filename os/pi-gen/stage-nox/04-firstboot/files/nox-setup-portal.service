@@ -1,6 +1,6 @@
 # Nox-OS captive portal on the setup hotspot (nox_setup_portal.py). Started by nox_setup.py only
 # while the hotspot is up (no [Install]); a user of its own, no root, no capability but binding
-# port 80, no network but the hotspot's and Nox's loopback port. It changes nothing itself: it
+# port 80, no network but the hotspot's. It changes nothing itself: it
 # writes one request that root checks again (nox-setup-apply.path).
 [Unit]
 Description=Nox-OS setup portal (captive portal on the setup hotspot)
@@ -34,7 +34,7 @@ ProtectHostname=yes
 ProtectProc=invisible
 RestrictAddressFamilies=AF_INET AF_UNIX
 IPAddressDeny=any
-IPAddressAllow=10.42.0.0/24 127.0.0.1
+IPAddressAllow=10.42.0.0/24
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

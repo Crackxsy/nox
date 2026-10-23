@@ -102,6 +102,9 @@ def mode_of(path: Path) -> int:
     return path.stat().st_mode & 0o777
 
 
+#: The hotspot password the device makes: 16 characters in four groups, the dashes part of it.
+PSK_PATTERN = r"[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){3}"
+
 POSIX = pytest.mark.skipif(sys.platform == "win32", reason="file modes and links")
 
 # ---- the provisioning file -----------------------------------------------------------------
@@ -155,6 +158,8 @@ def test_secrets_never_reach_a_repr() -> None:
         ({"v": 1, "claim_hash": "md5:abc"}, "invalid_claim_hash"),
         ({"v": 1, "hotspot_psk": "has space"}, "invalid_hotspot_psk"),
         ({"v": 1, "hotspot_psk": "short"}, "invalid_hotspot_psk"),
+        ({"v": 1, "hotspot_psk": "fifteen-chars-x"}, "invalid_hotspot_psk"),  # 16 at least
+        ({"v": 1, "reclaim": "yes"}, "invalid_reclaim"),
     ],
 )
 def test_the_provisioning_file_is_refused_field_by_field(data: object, code: str) -> None:
@@ -280,11 +285,10 @@ def test_an_unclaimed_device_opens_the_window_with_this_boots_secrets(
     code = setup.normalize_claim_code(shown)
     assert claim == {"v": 1, "hash": setup.claim_hash(code), "source": "device"}
     console = json.loads(read(tmp_path, "run/nox-os/setup/console.json"))
-    assert re.fullmatch(r"[0-9]{12}", console["psk"]) and console["claim_code"] == shown
+    assert re.fullmatch(PSK_PATTERN, console["psk"]) and console["claim_code"] == shown
     assert re.fullmatch(r"Nox-Setup-[0-9A-F]{4}", console["ssid"])
-    assert read(tmp_path, "run/nox-os/setup/blink").strip() == console["psk"]
+    assert not (tmp_path / "run/nox-os/setup/blink").exists()  # 40 bits: no hotspot password
     if sys.platform != "win32":
-        assert mode_of(tmp_path / "run/nox-os/setup/blink") == 0o600
         assert mode_of(tmp_path / "run/nox-os/setup/claim-code") == 0o640
     # The next boot: new secrets.
     setup.close(system, "test")
@@ -484,25 +488,20 @@ def test_apply_stages_the_secrets_with_the_code_then_joins_the_home_wifi(
     setup.boot(system)
     _request(
         tmp_path,
-        {"v": 1, "wifi": {"ssid": SSID, "psk": PSK}, "pin": "135790", "passphrase": "x" * 14},
+        {"v": 1, "wifi": {"ssid": SSID, "psk": PSK}, "ticket": "t" * 32},
     )
     ask = AskHelper()
     setup.apply(system, helper=ask)
     b64 = setup._b64  # noqa: SLF001
     assert ask.calls == [
-        [
-            "stage 10.42.0.20",
-            "code " + b64("ABCDEFGHJKMN"),
-            "pin " + b64("135790"),
-            "new " + b64("x" * 14),
-        ]
+        ["stage 10.42.0.20", "code " + b64("ABCDEFGHJKMN"), "ticket " + b64("t" * 32)]
     ]
     # Nothing applied by the portal itself: the helper keeps them for the claim.
     assert not (tmp_path / "run/nox-os/setup/pending-pin").exists()
     assert not (tmp_path / "run/nox-os/setup/portal/request.json").exists()
     assert run.ran("nmcli", "--wait", "60", "connection", "up", "nox-wifi")
     status = json.loads(read(tmp_path, "run/nox-os/setup/status.json"))
-    assert status["state"] == "joined" and status["security_done"] is True
+    assert status["state"] == "joined" and status["code_ok"] is True
     assert PSK not in json.dumps(status) and "135790" not in json.dumps(status)
     keyfile = read(tmp_path, "etc/NetworkManager/system-connections/nox-wifi.nmconnection")
     assert f"psk={PSK}" in keyfile
@@ -514,7 +513,7 @@ def test_a_wrong_claim_code_applies_nothing_at_all(
     setup.boot(system)
     _request(
         tmp_path,
-        {"v": 1, "wifi": {"ssid": SSID, "psk": PSK}, "pin": "135790", "passphrase": "x" * 14},
+        {"v": 1, "wifi": {"ssid": SSID, "psk": PSK}},
     )
     setup.apply(system, helper=AskHelper(WRONG_CODE))
     assert json.loads(read(tmp_path, "run/nox-os/setup/status.json"))["error"] == "claim_wrong"
@@ -524,7 +523,7 @@ def test_a_wrong_claim_code_applies_nothing_at_all(
 
 def test_a_request_without_a_claim_code_is_refused_by_root(tmp_path: Path, system: Any) -> None:
     setup.boot(system)
-    _request(tmp_path, {"v": 1, "pin": "135790", "claim_code": ""})
+    _request(tmp_path, {"v": 1, "claim_code": ""})
     ask = AskHelper()
     setup.apply(system, helper=ask)
     assert ask.calls == []
@@ -554,15 +553,18 @@ def test_root_checks_the_request_again(tmp_path: Path, system: Any, run: FakeRun
     _request(tmp_path, {"v": 1, "wifi": {"ssid": SSID, "psk": "short"}})
     setup.apply(system, helper=ask)
     assert json.loads(read(tmp_path, "run/nox-os/setup/status.json"))["error"] == "invalid_wifi_psk"
-    _request(tmp_path, {"v": 1, "pin": "12"})
-    setup.apply(system, helper=ask)
-    assert json.loads(read(tmp_path, "run/nox-os/setup/status.json"))["error"] == "invalid_pin"
-    _request(tmp_path, {"v": 1, "pin": "135790", "peer": "not an address"})
+    # No PIN or passphrase over the hotspot's plain HTTP, whatever a request carries.
+    for field in ("pin", "passphrase"):
+        _request(tmp_path, {"v": 1, field: "135790135790"})
+        setup.apply(system, helper=ask)
+        status = json.loads(read(tmp_path, "run/nox-os/setup/status.json"))
+        assert status["error"] == "unknown_field"
+    _request(tmp_path, {"v": 1, "peer": "not an address"})
     setup.apply(system, helper=ask)
     assert json.loads(read(tmp_path, "run/nox-os/setup/status.json"))["error"] == "invalid_peer"
     # A request someone else wrote counts for nothing.
     system.uid_of = lambda _n: OWN_UID + 1
-    _request(tmp_path, {"v": 1, "pin": "135790"})
+    _request(tmp_path, {"v": 1})
     setup.apply(system, helper=ask)
     assert not (tmp_path / "run/nox-os/setup/portal/request.json").exists()
     assert ask.calls == []
@@ -573,7 +575,7 @@ def test_no_request_counts_once_the_window_closed(
 ) -> None:
     setup.boot(system)
     clock["uptime"] = 1900.0
-    _request(tmp_path, {"v": 1, "pin": "135790"})
+    _request(tmp_path, {"v": 1})
     ask = AskHelper()
     setup.apply(system, helper=ask)
     assert ask.calls == []
@@ -599,9 +601,129 @@ def test_the_hotspot_name_is_per_device_and_stable() -> None:
     assert "0123" not in one.removeprefix("Nox-Setup-") or len(one) == 14
 
 
-def test_hotspot_passwords_are_random_digits() -> None:
+def test_hotspot_passwords_have_80_bits() -> None:
     seen = {setup.new_hotspot_psk() for _ in range(50)}
-    assert len(seen) == 50 and all(re.fullmatch(r"[0-9]{12}", p) for p in seen)
+    assert len(seen) == 50 and all(re.fullmatch(PSK_PATTERN, p) for p in seen)
+    # 16 characters of a 32-letter alphabet.
+    assert 16 * 5 == 80 and len(setup.CLAIM_ALPHABET) == 32
+    # The blink digits (O5) are not the hotspot password.
+    assert re.fullmatch(r"[0-9]{12}", setup.new_blink_digits())
+
+
+def test_the_wifi_qr_code_payload_is_escaped() -> None:
+    assert setup.wifi_qr_payload("Nox-Setup-1A2B", "ABCD-EFGH-JKMN-PQRS") == (
+        "WIFI:T:WPA;S:Nox-Setup-1A2B;P:ABCD-EFGH-JKMN-PQRS;;"
+    )
+    assert (
+        setup.wifi_qr_payload('a;b,c:d"e\\f', "p;w")
+        == 'WIFI:T:WPA;S:a\\;b\\,c\\:d\\"e\\\\f;P:p\\;w;;'
+    )
+
+
+def test_the_qr_code_is_drawn_for_a_dark_console() -> None:
+    # A 2x2 "matrix": dark top-left and bottom-right.
+    lines = setup.qr_text([[1, 0], [0, 1]], quiet=1)
+    # A lit upper half = a light module above a dark one; dark modules stay unlit (black).
+    assert lines == ["\u2588\u2580\u2588\u2588", "\u2588\u2588\u2584\u2588"]
+    assert set("".join(setup.qr_text([[0]], quiet=2))) == {"\u2588"}  # all light: full blocks
+
+
+def test_the_console_gets_the_qr_code_from_noxs_python(tmp_path: Path, system: Any) -> None:
+    python = tmp_path / "opt/nox/current/.venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text("", "ascii")
+    seen: list[tuple[list[str], str]] = []
+
+    def run_input(args: list[str], data: str) -> str:
+        seen.append((args, data))
+        return json.dumps([[1, 0], [0, 1]])
+
+    system.run_input = run_input
+    setup.boot(system)
+    console = json.loads(read(tmp_path, "run/nox-os/setup/console.json"))
+    assert console["qr"] and all(isinstance(line, str) for line in console["qr"])
+    args, data = seen[0]
+    assert console["psk"] not in " ".join(args)  # the password only on stdin
+    assert data == setup.wifi_qr_payload(console["ssid"], console["psk"])
+
+
+def _ca_pem() -> tuple[str, str]:
+    """A throwaway self-signed certificate (fictitious name) and its fingerprint as Nox shows it."""
+    from datetime import UTC, datetime, timedelta
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    from nox.lan.tls import fingerprint
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Nox test CA (example.invalid)")])
+    now = datetime.now(UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(1)
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
+    pem = cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
+    return pem, fingerprint(cert.public_bytes(serialization.Encoding.DER))
+
+
+def test_root_publishes_the_ca_fingerprint_from_noxs_file(tmp_path: Path, system: Any) -> None:
+    setup.boot(system)
+    assert not (tmp_path / "run/nox-os/setup/ca_fingerprint").exists()  # no CA yet
+    pem, expected = _ca_pem()
+    ca = tmp_path / "var/lib/nox/tls/ca.crt"
+    ca.parent.mkdir(parents=True)
+    ca.write_text(pem, "ascii")
+    setup.tick(system)
+    assert read(tmp_path, "run/nox-os/setup/ca_fingerprint").strip() == expected
+    if sys.platform != "win32":
+        assert mode_of(tmp_path / "run/nox-os/setup/ca_fingerprint") == 0o640
+    setup.close(system, "test")
+    assert not (tmp_path / "run/nox-os/setup/ca_fingerprint").exists()
+
+
+def _claimed(tmp_path: Path) -> None:
+    (tmp_path / "var/lib/nox-os-claim").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "var/lib/nox-os-claim/claimed").write_text("{}", "ascii")
+    (tmp_path / "var/lib/nox-os").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "var/lib/nox-os/ssh_keys").write_text("ssh-ed25519 AAAA\n", "ascii")
+
+
+@pytest.mark.parametrize("how", ["file", "provisioning"])
+def test_a_reclaim_marker_forgets_the_owner_and_opens_setup(
+    tmp_path: Path, system: Any, how: str
+) -> None:
+    _claimed(tmp_path)
+    marker = tmp_path / "boot/firmware/nox-reclaim"
+    if how == "file":
+        marker.write_text("reclaim\n", "ascii")
+    else:
+        provision(tmp_path, {"v": 1, "reclaim": True})
+    setup.boot(system)
+    assert not marker.exists() and not (tmp_path / "boot/firmware/nox-provision.json").exists()
+    assert not (tmp_path / "var/lib/nox-os-claim/claimed").exists()
+    assert not (tmp_path / "var/lib/nox-os/ssh_keys").exists()
+    assert (tmp_path / "var/lib/nox-os/reset-maintenance").exists()
+    note = json.loads(read(tmp_path, "var/lib/nox-os-claim/reclaim"))
+    assert re.fullmatch(r"[0-9a-f]{32}", note["id"])
+    # A fresh setup window, as on a new device.
+    assert setup.setup_mode(system)["reason"] == "unclaimed"
+    assert (tmp_path / "run/nox-os/setup/claim-code").exists()
+
+
+def test_without_a_marker_a_claimed_device_stays_claimed(tmp_path: Path, system: Any) -> None:
+    _claimed(tmp_path)
+    setup.boot(system)
+    assert (tmp_path / "var/lib/nox-os-claim/claimed").exists()
+    assert not (tmp_path / "var/lib/nox-os-claim/reclaim").exists()
 
 
 @pytest.mark.parametrize(
@@ -639,3 +761,20 @@ def test_nothing_is_decided_while_networkmanager_cannot_answer(
     setup.tick(system)
     assert not (tmp_path / "run/NetworkManager/system-connections").exists()
     assert json.loads(read(tmp_path, "run/nox-os/setup/status.json"))["hotspot"] == "down"
+
+
+def test_the_qr_matrix_program_runs_with_noxs_python() -> None:
+    """The very program nox_setup.py hands Nox's Python (segno, already a dependency)."""
+    payload = setup.wifi_qr_payload("Nox-Setup-1A2B", "ABCD-EFGH-JKMN-PQRS")
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", setup._QR_MATRIX],  # noqa: SLF001
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    matrix = json.loads(done.stdout)
+    assert len(matrix) >= 25 and all(len(row) == len(matrix) for row in matrix)
+    lines = setup.qr_text(matrix)
+    assert len(lines) == (len(matrix) + 4 + 1) // 2 and len(lines[0]) == len(matrix) + 4

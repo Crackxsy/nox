@@ -22,9 +22,9 @@ portal_mod = load_tool("nox_setup_portal", FIRSTBOOT)
 
 SSID = "Springfield-WLAN"  # fictitious
 PSK = "springfield-example-psk"  # fictitious
-PIN = "135790"
-PASSPHRASE = "a long maintenance passphrase"  # fictitious
 CODE = "ABCD-EFGH-JKMN"
+#: As root writes it from Nox's CA file (a fictitious value of the right shape).
+FINGERPRINT = ":".join(["AB"] * 32)
 
 
 @pytest.fixture
@@ -40,6 +40,7 @@ def state(tmp_path: Path) -> Any:
     )
     (setup / "status.json").write_text(json.dumps({"state": "idle"}), "utf-8")
     (setup / "claim-code").write_text(CODE + "\n", "ascii")
+    (setup / "ca_fingerprint").write_text(FINGERPRINT + "\n", "ascii")
     return portal_mod.State(
         setup_mode=tmp_path / "setup-mode",
         console=setup / "console.json",
@@ -48,7 +49,7 @@ def state(tmp_path: Path) -> Any:
         status=setup / "status.json",
         request=setup / "portal" / "request.json",
         uptime=lambda: 300.0,
-        fingerprint=lambda: "AB:CD:EF:01:23:45:67:89",
+        ca_fingerprint=setup / "ca_fingerprint",
     )
 
 
@@ -109,10 +110,6 @@ GOOD = {
     "claim_code": CODE,
     "network": SSID,
     "psk": PSK,
-    "pin": PIN,
-    "pin2": PIN,
-    "passphrase": PASSPHRASE,
-    "passphrase2": PASSPHRASE,
 }
 
 
@@ -140,8 +137,10 @@ def test_the_form_is_strict_accessible_and_without_scripts(portal: Any) -> None:
     assert headers["cache-control"] == "no-store" and headers["x-frame-options"] == "DENY"
     assert '<html lang="de">' in page and "Nox einrichten" in page
     assert "<script" not in page and "style=" not in page and "https://" not in page
-    for field in ("other_ssid", "psk", "pin", "pin2", "passphrase", "passphrase2"):
+    for field in ("claim_code", "other_ssid", "psk"):
         assert f'<label for="{field}">' in page, field
+    # PIN and maintenance passphrase are never asked over the hotspot's plain HTTP.
+    assert 'type="password" id="pin"' not in page and 'id="passphrase"' not in page
     assert "<legend>" in page and SSID in page and "Open-Cafe" in page
     css_status, css_headers, _ = request(portal, "GET", "/portal.css")
     assert css_status == 200 and css_headers["content-type"].startswith("text/css")
@@ -160,12 +159,26 @@ def test_a_good_form_writes_one_request_for_root_and_shows_the_next_step(
         "wifi": {"ssid": SSID, "psk": PSK, "hidden": False},
         "claim_code": CODE,
         "peer": "127.0.0.1",
-        "pin": PIN,
-        "passphrase": PASSPHRASE,
     }
     assert CODE in page and "https://nox.local:47843/claim/#code=ABCDEFGHJKMN" in page
-    assert "AB:CD:EF:01:23:45:67:89" in page
-    assert PSK not in page and PIN not in page
+    assert FINGERPRINT in page and "encrypted connection" in page
+    assert PSK not in page
+
+
+def test_secrets_sent_to_the_portal_anyway_are_dropped(portal: Any, state: Any) -> None:
+    status, _, _ = post(portal, {**GOOD, "pin": "135790", "passphrase": "x" * 14})
+    assert status == 200
+    written = state.request.read_text("utf-8")
+    assert "135790" not in written and "x" * 14 not in written
+
+
+def test_the_fingerprint_is_only_roots_and_only_well_formed(portal: Any, state: Any) -> None:
+    state.ca_fingerprint.write_text("not a fingerprint\n", "ascii")
+    _, _, page = post(portal, GOOD)
+    assert "not a fingerprint" not in page
+    state.ca_fingerprint.unlink()  # Nox has made no CA yet
+    status, _, page = post(portal, GOOD)
+    assert status == 200 and FINGERPRINT not in page
 
 
 def test_the_cable_needs_no_wifi_and_an_open_network_no_password(portal: Any, state: Any) -> None:
@@ -185,10 +198,6 @@ def test_the_cable_needs_no_wifi_and_an_open_network_no_password(portal: Any, st
         ({"psk": ""}, "psk"),
         ({"psk": "short"}, "psk"),
         ({"network": "__other__", "other_ssid": ""}, "other_ssid"),
-        ({"pin": "123", "pin2": "123"}, "pin"),
-        ({"pin2": "246802"}, "pin2"),
-        ({"passphrase": "too short", "passphrase2": "too short"}, "passphrase"),
-        ({"passphrase2": "another long passphrase"}, "passphrase2"),
         ({"claim_code": ""}, "claim_code"),
         ({"claim_code": "ABC"}, "claim_code"),
     ],
@@ -201,7 +210,7 @@ def test_a_bad_form_writes_nothing_and_names_the_field(
     assert not state.request.exists()
     assert f'href="#{field}"' in page and 'role="alert"' in page
     assert 'aria-invalid="true"' in page
-    assert PSK not in page and PASSPHRASE not in page  # secrets are never sent back
+    assert PSK not in page  # a password is never sent back
 
 
 def test_the_claim_code_comes_first_filled_in_when_the_device_made_it(
@@ -223,23 +232,12 @@ def test_a_wrong_code_reported_by_root_is_shown(portal: Any, state: Any) -> None
     assert "nothing was saved" in page
 
 
-def test_once_the_secrets_are_set_the_portal_asks_only_for_wifi(portal: Any, state: Any) -> None:
+def test_a_failed_join_is_explained(portal: Any, state: Any) -> None:
     state.status.write_text(
-        json.dumps(
-            {
-                "state": "failed",
-                "error": "wrong_password",
-                "tried_ssid": SSID,
-                "security_done": True,
-            }
-        ),
-        "utf-8",
+        json.dumps({"state": "failed", "error": "wrong_password", "tried_ssid": SSID}), "utf-8"
     )
     _, _, page = request(portal, "GET", "/")
-    assert 'id="pin"' not in page and "password was not accepted" in page
-    status, _, _ = post(portal, {"claim_code": CODE, "network": SSID, "psk": PSK})
-    assert status == 200
-    assert "pin" not in json.loads(state.request.read_text("utf-8"))
+    assert "password was not accepted" in page and SSID in page
 
 
 @pytest.mark.parametrize(
@@ -281,7 +279,7 @@ def test_a_post_without_origin_is_refused(portal: Any, state: Any) -> None:
 
 
 def test_posts_are_rate_limited(portal: Any) -> None:
-    codes = [post(portal, {**GOOD, "pin": "1"})[0] for _ in range(7)]
+    codes = [post(portal, {**GOOD, "psk": "short"})[0] for _ in range(7)]
     assert codes == [400] * 6 + [429]
 
 

@@ -64,8 +64,13 @@
     },
     "hotspot_psk": {
       "type": ["string", "null"],
-      "pattern": "^[!-~]{8,63}$",
-      "description": "The setup hotspot's WPA2 password, printed on the setup card. Without it the device makes 12 random digits at every boot."
+      "pattern": "^[!-~]{16,63}$",
+      "description": "The setup hotspot's WPA2 password, printed on the setup card: 16 to 63 printable ASCII characters without spaces (a random one: about 80 bits or more). Without it the device makes 16 random characters (80 bits) at every boot."
+    },
+    "reclaim": {
+      "type": "boolean",
+      "default": false,
+      "description": "Forget the owner at this boot (physical access is full access): every paired device, node and token is revoked, the security PIN cleared, the next claim sets a fresh maintenance passphrase; Nox's other data stays. The same as a file named nox-reclaim on the boot partition."
     }
   },
   "if": {

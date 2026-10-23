@@ -377,7 +377,7 @@ def test_the_setup_portal_is_unprivileged_and_never_enabled() -> None:
         ("ProtectSystem", "strict"),
         ("ReadWritePaths", "/run/nox-os/setup/portal"),
         ("IPAddressDeny", "any"),
-        ("IPAddressAllow", "10.42.0.0/24 127.0.0.1"),
+        ("IPAddressAllow", "10.42.0.0/24"),
         ("RestrictAddressFamilies", "AF_INET AF_UNIX"),
     ):
         assert service[key] == [value], key

@@ -225,9 +225,9 @@ def test_the_claim_status_names_what_is_needed_and_no_secret(
     assert status["needs_pin"] is True and status["needs_passphrase"] is True
     assert status["ca_fingerprint"] == tls.fingerprint
     assert CODE not in json.dumps(status)
-    helper.pending_pin, helper.passphrase = "135790", True
+    helper.passphrase = True  # a passphrase set before (a re-claim keeps none: reset flag)
     status = client.get("/api/claim").json()
-    assert status["needs_pin"] is False and status["needs_passphrase"] is False
+    assert status["needs_pin"] is True and status["needs_passphrase"] is False
     helper.down = True
     assert client.get("/api/claim").json()["available"] is False
 
@@ -246,6 +246,7 @@ def test_the_claim_pairs_the_owner_sets_pin_and_passphrase_and_opens_everything(
     assert answer.status_code == 201, answer.text
     body = answer.json()
     assert body["next"] == ONBOARDING_URL and body["client_id"] == f"device:{body['device_id']}"
+    assert body["pair_url"] == "/dashboard/#/devices/devices"  # a second key, offered at once
     assert devices.verify(body["token"]) is not None
     assert pin.is_set() and pin.verify_pin("135790").ok
     sent = helper.calls[-1]
@@ -261,28 +262,32 @@ def test_the_claim_pairs_the_owner_sets_pin_and_passphrase_and_opens_everything(
     assert again.headers["location"] == "/dashboard/"
 
 
-def test_what_the_setup_portal_kept_is_used_unless_the_claimant_sets_others(
-    client: TestClient, helper: Helper, pin: PinManager
+def test_without_a_pin_in_the_claim_there_is_no_claim(
+    client: TestClient, devices: LanDevices, pin: PinManager
 ) -> None:
-    helper.pending_pin, helper.pending_passphrase = "246802", "the portal's passphrase"
-    status = client.get("/api/claim").json()
-    assert status["needs_pin"] is False and status["needs_passphrase"] is False
-    assert status["staged_pin"] is True and status["staged_passphrase"] is True
-    answer = client.post("/api/claim", json={"code": CODE, "name": "Phone"}, headers=ORIGIN)
-    assert answer.status_code == 201, answer.text
-    assert len(helper.calls[-1]) == 2  # nothing sent: the kept ones apply
-    assert pin.verify_pin("246802").ok
-    assert helper.set_passphrase == "the portal's passphrase"
+    """Nothing comes from the setup portal any more: PIN and passphrase only over TLS here."""
+    answer = client.post("/api/claim", json={"code": CODE, "passphrase": PASS}, headers=ORIGIN)
+    assert (answer.status_code, answer.json()) == (400, {"error": "pin_required"})
+    assert not pin.is_set() and [d for d in devices.devices() if not d.revoked] == []
 
 
-def test_the_claimant_overrides_what_the_setup_portal_kept(
-    client: TestClient, helper: Helper, pin: PinManager
-) -> None:
-    helper.pending_pin, helper.pending_passphrase = "246802", "the portal's passphrase"
-    answer = claim(client)  # with its own PIN and passphrase
-    assert answer.status_code == 201, answer.text
-    assert pin.verify_pin("135790").ok and not pin.verify_pin("246802").ok
-    assert helper.set_passphrase == PASS
+def test_the_claim_page_has_its_own_strict_policy(client: TestClient) -> None:
+    for path in ("/claim/", "/claim/claim.js", "/claim/claim.css"):
+        headers = client.get(path).headers
+        csp = headers["content-security-policy"]
+        for directive in (
+            "default-src 'self'",
+            "script-src 'self'",
+            "style-src 'self'",
+            "frame-ancestors 'none'",
+            "object-src 'none'",
+        ):
+            assert directive in csp, (path, directive)
+        assert "unsafe-inline" not in csp and "data:" not in csp
+        assert headers["x-content-type-options"] == "nosniff"
+        assert headers["referrer-policy"] == "no-referrer"
+    # Everything else keeps the listener's own policy.
+    assert "unsafe-inline" in client.get("/api/lan/info").headers["content-security-policy"]
 
 
 def test_a_slowed_down_address_is_told_to_wait(
@@ -389,3 +394,42 @@ def test_the_setup_portals_ticket_goes_to_the_helper_and_a_locked_lan_is_said(
     assert answer.status_code == 201, answer.text
     assert helper.ticket == "ticket-for-this-test-only-aaaaaa"
     assert claim(client, ticket="bad ticket").status_code in (400, 409)
+
+
+# ---- reclaim -----------------------------------------------------------------------------------
+
+
+def test_a_reclaim_revokes_every_pairing_and_the_pin_once(
+    tmp_path: Path, devices: LanDevices, db: Any, pin: PinManager, audit: Audit
+) -> None:
+    from nox.noxos.claim import apply_reclaim
+
+    async def pair_two() -> list[str]:
+        out = []
+        for name in ("Phone", "Tablet"):
+            start = await devices.start(name=name)
+            redeemed = await devices.redeem(start.code, name=name)
+            assert redeemed.token is not None
+            out.append(redeemed.token)
+        return out
+
+    import asyncio
+
+    tokens = asyncio.run(pair_two())
+    pin.set_pin("135790", by="test")
+    mark = tmp_path / "reclaim"
+    me = tmp_path.stat().st_uid
+    data = tmp_path / "data"
+    data.mkdir()
+    assert apply_reclaim(db, pin, data, mark=mark, root_uid=me) is None  # no note: nothing
+    mark.write_text(json.dumps({"v": 1, "id": "a" * 32}), "utf-8")
+    assert apply_reclaim(db, pin, data, mark=mark, root_uid=me + 1) is None  # not root's
+    assert apply_reclaim(db, pin, data, mark=mark, root_uid=me, audit=audit) == 2
+    assert all(devices.verify(t) is None for t in tokens)
+    assert not pin.is_set()
+    assert [r["action"] for r in audit.rows] == ["noxos.reclaim"]
+    # Once per note: Nox restarting does not do it again (a new pairing survives).
+    start = asyncio.run(devices.start(name="Laptop"))
+    token = asyncio.run(devices.redeem(start.code, name="Laptop")).token
+    assert apply_reclaim(db, pin, data, mark=mark, root_uid=me) is None
+    assert token is not None and devices.verify(token) is not None

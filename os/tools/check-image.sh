@@ -157,7 +157,7 @@ portal_unprivileged() {
   local unit="$root/etc/systemd/system/nox-setup-portal.service"
   has_lines "$unit" 'User=nox-setup' 'NoNewPrivileges=yes' 'ProtectSystem=strict' \
     'CapabilityBoundingSet=CAP_NET_BIND_SERVICE' 'AmbientCapabilities=CAP_NET_BIND_SERVICE' \
-    'IPAddressDeny=any' 'IPAddressAllow=10.42.0.0/24 127.0.0.1' || return 1
+    'IPAddressDeny=any' 'IPAddressAllow=10.42.0.0/24' || return 1
   ! grep -qE '^\[Install\]' "$unit"
 }
 # The portal's user cannot log in; the group for the setup secrets has no members.
@@ -237,7 +237,7 @@ run_checks() {
   check "systemd-firstboot.service masked (Nox-OS answers what it would ask)" masked systemd-firstboot.service
   check "nox-firstboot.service, nox-setup.timer and nox-setup-apply.path enabled" first_boot_units
   check "setup portal started only by setup mode (not enabled)" not_enabled nox-setup-portal.service
-  check "setup portal: user nox-setup, port 80 only, hotspot and loopback only" portal_unprivileged
+  check "setup portal: user nox-setup, port 80 only, hotspot only" portal_unprivileged
   check "setup portal user cannot log in; setup-secrets group has no members" setup_accounts_locked
   check "captive DNS for the setup hotspot (every name answers with the portal)" captive_dns
   check "no claim mark, claim code or hotspot password ship" absent "$root/var/lib/nox-os-claim/claimed" \
@@ -261,7 +261,7 @@ run_checks() {
   check "no provisioning seeds on the boot partition" none < <(find "$boot" -maxdepth 1 \
     \( -iname 'user-data' -o -iname 'meta-data' -o -iname 'network-config' -o -iname 'ssh' \
        -o -iname 'ssh.txt' -o -iname 'userconf*' -o -iname 'wpa_supplicant.conf' -o -iname 'firstrun.sh' \
-       -o -iname 'custom.toml' -o -iname 'nox-provision.json' \))
+       -o -iname 'custom.toml' -o -iname 'nox-provision.json' -o -iname 'nox-reclaim' \))
   check "cmdline.txt runs nothing extra (no systemd.run=, init=)" cmdline_is_plain
 
   # Packages Nox-OS leaves out.

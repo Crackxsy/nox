@@ -38,12 +38,9 @@
     if (!data.window_open) { state(t('closed')); $('form').hidden = true; return; }
     state(t('minutes').replace('{minutes}', String(Math.max(1, Math.round((data.seconds_left || 60) / 60)))));
     $('code-hint').textContent = t(data.code_on_card ? 'code_hint_card' : 'code_hint_device');
-    // Kept by the setup portal: shown as such, and the claimant may set others (optional then).
-    $('pin-fields').hidden = !(data.needs_pin || data.staged_pin);
-    $('passphrase-fields').hidden = !(data.needs_passphrase || data.staged_passphrase);
-    $('pin-staged').hidden = !data.staged_pin;
-    $('passphrase-staged').hidden = !data.staged_passphrase;
-    $('security').hidden = $('pin-fields').hidden && $('passphrase-fields').hidden;
+    $('pin-fields').hidden = !data.needs_pin;
+    $('passphrase-fields').hidden = !data.needs_passphrase;
+    $('security').hidden = !(data.needs_pin || data.needs_passphrase);
     if (data.ca_fingerprint) { $('fp').textContent = data.ca_fingerprint; $('fp-box').hidden = false; }
     $('form').hidden = false;
   }
@@ -117,8 +114,15 @@
             token: data.token, clientId: data.client_id, deviceId: data.device_id, name: data.name
           }));
         } catch (e) { saved = false; }
-        state(t('done') + (saved ? '' : ' ' + t('not_saved')));
-        location.replace(data.next || '/dashboard/');
+        // This browser holds the only key: say so, and offer a second device before anything
+        // else (the onboarding follows with "Continue").
+        state(saved ? '' : t('not_saved'));
+        $('form').hidden = true;
+        if (data.pair_url) $('pair-now').setAttribute('href', data.pair_url);
+        if (data.next) $('continue').setAttribute('href', data.next);
+        $('done').hidden = false;
+        $('done-title').setAttribute('tabindex', '-1');
+        $('done-title').focus();
         return;
       }
       $('submit').disabled = false;

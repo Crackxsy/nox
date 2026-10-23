@@ -9,8 +9,8 @@ works on every 64-bit Pi the base supports (3B/3B+/Zero 2 W, 4B/400/CM4, 5/CM5).
 > with a switch in the dashboard, SD-card care, console status), sets itself up without a screen
 > (Wi-Fi from a provisioning file, a setup hotspot with a captive portal, claiming the device from
 > a phone - [First boot](#first-boot-without-a-screen-o3)), and is checked and boot-tested. The
-> onboarding wizard after the claim (AI login, PC node) is O4, the LED (and with it the blink code
-> for a setup without card or screen) O5, the PC assistant that writes the provisioning file O7.
+> onboarding wizard after the claim (AI login, PC node) is O4, the LED O5, the PC assistant that
+> writes the provisioning file O7.
 > Until then use a screen or a hand-written provisioning file, and
 > [`docs/RASPBERRY_PI.md`](../docs/RASPBERRY_PI.md) (the installer on a stock Raspberry Pi OS) for a
 > real home server.
@@ -286,7 +286,8 @@ screen.
 | `country` | Wi-Fi regulatory country, ISO 3166-1 alpha-2 (required with `wifi`) | `cfg80211` (modprobe.d), root's `/var/lib/nox-os/country` |
 | `wifi` | `{ssid, psk, hidden}` or `null` - `psk` 8-63 printable ASCII or 64 hex, `null` for an open network | NetworkManager keyfile `/etc/NetworkManager/system-connections/nox-wifi.nmconnection`, **root 0600** |
 | `claim_hash` | `sha256:` + hex of `sha256("nox-claim-v1:" + code)`, the code in upper case without spaces or dashes (Crockford base32, 8-32 characters) - the code itself is printed on the setup card | root's `/var/lib/nox-os/claim.json` (0600); ignored on a claimed device |
-| `hotspot_psk` | the setup hotspot's WPA2 password printed on the card, 8-63 printable ASCII without spaces | root's `/var/lib/nox-os/hotspot-psk` (0600) |
+| `hotspot_psk` | the setup hotspot's WPA2 password printed on the card, **16**-63 printable ASCII without spaces (a random one: 80 bits or more) | root's `/var/lib/nox-os/hotspot-psk` (0600) |
+| `reclaim` | `true`: forget the owner at this boot ([Reclaiming](#reclaiming-the-device)) - the same as a file `nox-reclaim` | - |
 
 The example's code is `ABCD-EFGH-JKMN` (fictitious). The file is read **every boot** it is there -
 placing a new one re-provisions the Wi-Fi of a claimed device too (physical access to the card is
@@ -322,12 +323,19 @@ of the id itself), **WPA2 (CCMP) only, never open**, channel 6, NetworkManager's
 with the portal and tells the phone where it is (DHCP option 114, RFC 8910), so Android and iPhone
 open it by themselves.
 
-**Its password, per device, never a default:** the setup card's `hotspot_psk` when there is one;
-otherwise **12 random digits made at every boot** (about 40 bits) - the same digits a screen
-plugged into the Pi shows, and from O5 on the ACT LED blinks (the **blink code**: digits as counts
-of blinks; `/run/nox-os/setup/blink`, root 0600, is what `nox-led.service` will read). Without a
-card, a screen or the LED (before O5), the hotspot cannot be joined: use the setup card (O7) or a
-screen for now.
+**Its password, per device, never a default:** the setup card's `hotspot_psk` when there is one
+(16 characters at least); otherwise **16 random characters of the claim-code alphabet made at
+every boot** - shown as `ABCD-EFGH-JKMN-PQRS`, the dashes part of it (what is shown is what is
+typed): **80 bits**, so a recorded WPA2 handshake cannot be cracked offline later to read what the
+portal's plain HTTP carried (the home Wi-Fi's password). A screen plugged into the Pi shows it as
+text **and as a Wi-Fi QR code** (`WIFI:T:WPA;S:Nox-Setup-XXXX;P:<password>;;`, drawn with Unicode
+half blocks on the console; the phone's camera joins with it). The QR matrix comes from segno -
+already a dependency of Nox (the pairing QR codes), run by Nox's own Python with the payload on
+stdin - so nothing new is installed. Without a card or a screen the hotspot cannot be joined yet:
+use the setup card (O7) or a screen. **Blink code (O5):** an LED can carry about 12 digits (40
+bits), which is too little for the hotspot password; `nox_setup.new_blink_digits` is kept for O5,
+which has to give a blink code a role of its own (e.g. comparing a claim), never the WPA2
+password.
 
 **Firewall:** while setup mode is on, the hotspot interface gets the portal (TCP 80), DHCP (UDP
 67) and DNS (53) from `10.42.0.0/24` - and **nothing else**: an explicit drop before Nox's ports
@@ -341,8 +349,8 @@ network or the internet.
 
 `nox-setup-portal.service`, started only while the hotspot is up (no `[Install]`, at most 31
 minutes), as the user **`nox-setup`**: no login, no root, no capability but binding port 80,
-`ProtectSystem=strict`, writes only its own request folder, network only `10.42.0.0/24` and Nox's
-loopback port (systemd's IP filter). It changes nothing itself: it writes one request
+`ProtectSystem=strict`, writes only its own request folder, network only `10.42.0.0/24`
+(systemd's IP filter - not even loopback). It changes nothing itself: it writes one request
 (`/run/nox-os/setup/portal/request.json`, 0600) that root's `nox_setup.py apply`
 (`nox-setup-apply.path`) checks again the same way and carries out.
 
@@ -351,8 +359,9 @@ loopback port (systemd's IP filter). It changes nothing itself: it writes one re
 - **One form, no JavaScript at all**, German and English (from the phone's language, with a
   switch): the **claim code** (filled in when the device made it - it is on the Pi's screen too;
   typed from the setup card otherwise), the home Wi-Fi from the scan or typed (or "Nox is on a
-  cable"), its password, the **security PIN** (at least 6 characters) and the **maintenance
-  passphrase** (at least 12) - each twice. Labels, legends, hints and errors are tied to their fields (`aria-describedby`,
+  cable") and its password - **nothing else**. The security PIN and the maintenance passphrase
+  are never asked here: the portal is plain HTTP over a Wi-Fi others may record; they are set on
+  the claim page, over TLS. Labels, legends, hints and errors are tied to their fields (`aria-describedby`,
   `aria-invalid`), an error summary with links is announced (`role="alert"`), targets are at least
   44 px, light and dark follow the phone.
 - **Hardening:** Content-Security-Policy `default-src 'none'; style-src 'self'; img-src 'self';
@@ -363,28 +372,28 @@ loopback port (systemd's IP filter). It changes nothing itself: it writes one re
   `application/x-www-form-urlencoded`. **Rate limits:** 6 POSTs a minute per address and 30 in
   total, 120 page views per address; bodies at most 4 KB; at most 16 connections at once, 10 s
   each. Nothing a phone sends is logged, and a password is never sent back in a page.
-- **Root's side - nothing without the claim code, credentials only with the claim:** root passes
-  the claim code to the root helper's `stage` first. A wrong one applies **nothing** (no Wi-Fi
-  change, nothing kept) and slows that phone's address down. With the right one the helper
-  **keeps** PIN and passphrase (`/run/nox-os/setup/pending.json`, root 0600, RAM) - it does not
-  set them: they are applied by the claim, in the same step that marks the device claimed, and the
-  claimant sees that they are kept and may set others. Then the home Wi-Fi becomes the
-  NetworkManager keyfile (root 0600) - the hotspot goes down and Nox joins within 60 s. **Wrong
-  password or network not found:** the hotspot comes back and the portal says why. Once PIN and
-  passphrase are kept, the portal asks only for the claim code and the Wi-Fi. (First-come
-  credential setting is closed this way: whoever reaches the portal first sets nothing without
-  the code, and with it could claim the device anyway.)
+- **Root's side - nothing without the claim code:** root passes the claim code to the root
+  helper's `stage` first. A wrong one applies **nothing** (no Wi-Fi change, nothing kept) and slows
+  that phone's address down. With the right one the helper keeps only the hash of the portal's
+  one-time ticket (`/run/nox-os/setup/pending.json`, root 0600, RAM), and the home Wi-Fi becomes
+  the NetworkManager keyfile (root 0600) - the hotspot goes down and Nox joins within 60 s. **Wrong
+  password or network not found:** the hotspot comes back and the portal says why.
 - **The next step,** on the portal's last page: back to the home Wi-Fi, open
   `https://nox.local:47843/claim/` (the link carries the claim code made on the device, in the
   fragment, so it never reaches a server log), with the claim code shown and the certificate
   authority's fingerprint to compare with the browser warning; or "the code on your setup card".
+  That fingerprint is root's: `nox_setup.py` reads Nox's CA file (`/var/lib/nox/tls/ca.crt`) and
+  writes its SHA-256 to `/run/nox-os/setup/ca_fingerprint` (root:nox-os-setup 0640) - the portal
+  never asks a port on loopback, which any local process could have taken first.
   The IP address cannot be shown before Nox joined the network: the router's device list is the
   fallback.
 
 ### The claim
 
 An **unclaimed** Nox-OS core serves on the LAN only its claim: `/claim/` (a page of its own, no
-inline script, German and English), `GET`/`POST /api/claim`, `/api/lan/info`, `/nox-ca.crt`.
+inline script, German and English, with its own Content-Security-Policy `default-src 'self';
+script-src 'self'; style-src 'self'; ... frame-ancestors 'none'` plus `nosniff` and
+`no-referrer`), `GET`/`POST /api/claim`, `/api/lan/info`, `/nox-ca.crt`.
 The dashboard, pairing, nodes and the WebSocket are refused (`403 unclaimed`; `/` and pages under
 `/dashboard/` are redirected to the claim page) - checked on every request, fail closed (an
 unreadable state counts as unclaimed). **The firewall opens the dashboard port only (for the
@@ -397,13 +406,12 @@ setup window**. `POST /api/claim` (same origin, at most 2 KB, 5 a minute per add
 pairs the claiming browser as the first device, then asks the root helper's **`claim`**: the code
 against its hash, and on success the helper - only root - writes the claim mark
 `/var/lib/nox-os-claim/claimed` (root 0644: Nox, the firewall and the console read it), sets the
-maintenance passphrase (the one the claim page sent, else the one kept from the portal), **ends
-setup mode** - hotspot and portal down, waited for, before the firewall is regenerated - and
-hands over the kept PIN. Nox then sets the PIN (the claim page's if it sent one, else the kept
-one),
-audits the claim (`noxos.claim`, never a code or secret), and the browser stores its device token
-like a paired device and opens `/dashboard/#onboarding` (O4's wizard). A refused claim removes the
-device it paired. After the claim: `nox-setup-close.service` stops the hotspot and the portal and
+maintenance passphrase the claim page sent, and **ends setup mode** - hotspot and portal down,
+waited for, before the firewall is regenerated. Nox then sets the security PIN the claim page
+sent (the claim page asks for both, over TLS; nothing comes from the portal), audits the claim (`noxos.claim`, never a code or secret), and the browser stores its device token
+like a paired device. The page then says that **this browser is now the only key** and offers
+to pair a second device at once (`/dashboard/#/devices/devices`), before "Continue" to
+`/dashboard/#onboarding` (O4's wizard). A refused claim removes the device it paired. After the claim: `nox-setup-close.service` stops the hotspot and the portal and
 removes the setup secrets, the firewall opens the node port.
 
 **Wrong claim codes** are counted root-side on **two independent sides**: `lan` (the claim page)
@@ -422,13 +430,23 @@ in [`docs/SECURITY.md`](../docs/SECURITY.md#nox-os-the-raspberry-pi-image).
 The core has one read-only request for O4, `noxos.claim.status` (owner or not, setup window, its
 time left).
 
-**Residual risks (D2):** without a setup card, whoever reads the blink code or the screen within
-the 30 minutes - a neighbour at the window at the same moment - can join the hotspot and learn the
-claim code; the 12-digit password could be cracked offline from a recorded handshake (minutes to
-hours), so the portal's traffic of that window should be treated as readable by a determined
-attacker in radio range: use a setup card (a long random hotspot password) where that matters, and
-change the Wi-Fi password if in doubt. A claimed device never opens the hotspot again.
+### Reclaiming the device
 
+The way back when the only key is lost - **physical access is full access**: put a file named
+`nox-reclaim` (any content) on the boot partition, or `"reclaim": true` in a provisioning file,
+and power the Pi on. At that boot root overwrites and deletes the marker, removes the claim mark,
+forgets the remote-maintenance keys, lets the next claim set a fresh maintenance passphrase
+(`reset-maintenance`) and leaves Nox a note (`/var/lib/nox-os-claim/reclaim`, an id). When Nox
+starts - before its listener - it revokes **every paired device, node and token** (and the nodes'
+certificates) and clears the security PIN, once per note (`nox.noxos.claim.apply_reclaim`,
+audited). Everything else Nox knows - memory, settings, history - stays: whoever holds the card
+could read it anyway. The setup window then opens as on a new device, with a new claim code.
+
+**Residual risks (D2):** without a setup card, whoever reads the screen within the 30 minutes - a
+neighbour at the window at the same moment - can join the hotspot and learn the claim code. The
+hotspot's password has 80 bits, so a recorded handshake does not reveal the home Wi-Fi password
+the portal carried; PIN and passphrase never cross the hotspot. A claimed device never opens the
+hotspot again (unless reclaimed).
 
 ## Getting it
 
@@ -477,12 +495,15 @@ hand, on a machine that runs Nox:
      code and hotspot password) is imported and deleted, its password in no log, the setup window
      is open at boot, the hotspot profile is written, the firewall opens the claim port only;
      then the portal as a phone in a network namespace on a virtual hotspot interface sees it
-     (captive redirect, CSP, Origin check, a wrong claim code keeps nothing, the right one keeps
-     PIN and passphrase root-only without applying them, Nox's port closed to the hotspot); a wrong claim code is refused, the card's code claims the device (PIN set,
-     passphrase set by the claim, setup closed, secrets and hotspot gone, node port open) - and then the O2 checks below run on
-     the claimed device; once *fresh* - no provisioning file and a test-only 600-second window:
-     claim code and hotspot password made on the device, shown on the console as its throwaway
-     user sees it, then the window closes by itself and takes them along, and a claim and `maint
+     (captive redirect, CSP, Origin check, claim code and Wi-Fi only, a wrong claim code keeps
+     nothing, root's CA fingerprint, Nox's port closed to the hotspot); a wrong claim code is
+     refused, a claim without PIN too, the card's code with PIN and passphrase claims the device
+     (setup closed, secrets and hotspot gone, node port open, a second device offered, the claim
+     page's own CSP) - then the O2 checks below run on the claimed device, and a reclaim marker
+     forgets the owner again (pairings and PIN gone, fresh window, a new owner claims); once
+     *fresh* - no provisioning file and a test-only 600-second window: claim code and an 80-bit
+     hotspot password made on the device, shown on the console (text and QR code) as its
+     throwaway user sees it, then the window closes by itself and takes them along, and a claim and `maint
      set` after it are refused. Each boot runs until `nox.service` is active and `/health`
      answers, SSH is not running and the host keys and machine id were made; then O2:
      the firewall is loaded and default deny with the dashboard port opened from Nox's settings,

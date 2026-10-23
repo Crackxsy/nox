@@ -18,17 +18,17 @@ shell, no paths, no units, no options:
                                   - or root created /var/lib/nox-os/reset-maintenance
     maint change                  then `pass <old>` and `new <passphrase>`
     claim <device id> <address>   then `code <claim code>`, optionally `new <passphrase>` and
-                                  `ticket <ticket>` (step O3, from Nox's claim page): only in
-                                  setup mode, only while unclaimed. Marks the device claimed
-                                  (/var/lib/nox-os-claim/claimed), sets the maintenance passphrase
-                                  (the one sent, else the one kept from the setup portal), ends
-                                  setup mode and answers with the kept security PIN (once)
-    stage <address>               then `code <claim code>` and optionally `pin <PIN>`,
-                                  `new <passphrase>` and `ticket <ticket>` (root only: the setup
-                                  portal's request, via nox_setup.py): checks the claim code and
-                                  only then keeps PIN, passphrase and the ticket's hash for the
-                                  claim (/run/nox-os/setup/pending.json, root 0600). Nothing is
-                                  applied before the claim
+                                  `ticket <ticket>` (step O3, from Nox's claim page, over TLS):
+                                  only in setup mode, only while unclaimed. Marks the device
+                                  claimed (/var/lib/nox-os-claim/claimed), sets the maintenance
+                                  passphrase sent (if none is set, or root asked for a reset) and
+                                  ends setup mode
+    stage <address>               then `code <claim code>` and optionally `ticket <ticket>` (root
+                                  only: the setup portal's request, via nox_setup.py): checks the
+                                  claim code and only then keeps the ticket's hash for the claim
+                                  (/run/nox-os/setup/pending.json, root 0600). No PIN or
+                                  passphrase ever comes this way: they never travel over the
+                                  hotspot's plain HTTP
 
 **Wrong claim codes** are counted on two independent sides, `lan` (Nox's claim page) and
 `hotspot` (the setup portal). Per side and per source - an IPv4 address, an IPv6 /64 - each wrong
@@ -393,19 +393,12 @@ def parse_request(data: bytes) -> Request:
             new_passphrase=_new_secret(extra["new"]) if "new" in extra else None,
             ticket=_ticket(extra.get("ticket")),
         )
-    if len(words) == 2 and words[0] == "stage" and 1 <= len(rest) <= 4:
-        extra = _labelled(rest[1:], {"pin", "new", "ticket"})
-        pin = None
-        if "pin" in extra:
-            pin = _coded(extra["pin"], "pin")
-            if not MIN_PIN <= len(pin) <= MAX_PIN or not pin.isprintable():
-                raise Refused(f"a security PIN has {MIN_PIN} to {MAX_PIN} characters", "pin_short")
+    if len(words) == 2 and words[0] == "stage" and 1 <= len(rest) <= 2:
+        extra = _labelled(rest[1:], {"ticket"})
         return Request(
             "stage",
             address=_address(words[1]),
             code=_code_line(rest[0]),
-            pin=pin,
-            new_passphrase=_new_secret(extra["new"]) if "new" in extra else None,
             ticket=_ticket(extra.get("ticket")),
         )
     if words == ["maint", "change"] and len(rest) == 2:
@@ -757,10 +750,7 @@ def claim_source(system: System) -> str | None:
 
 def _staged(system: System) -> dict[str, bool]:
     pending = _read_json(system, PENDING) if _root_flag(system, PENDING) else {}
-    return {
-        "pending_pin": isinstance(pending.get("pin"), str),
-        "pending_passphrase": isinstance(pending.get("passphrase"), str),
-    }
+    return {"ticket": isinstance(pending.get("ticket"), dict)}
 
 
 def source_key(address: str) -> str:
@@ -860,22 +850,15 @@ def _check_code(system: System, request: Request, side: str, key: str) -> None:
 
 
 def stage(system: System, request: Request) -> dict[str, object]:
-    """The setup portal's PIN and passphrase - kept, never applied, and only with the right
-    claim code: whoever reaches the portal first sets nothing without it. The claim applies
-    them, in the same step that marks the device claimed. The portal's ticket is kept as a hash,
-    with the source it came from: a claim presenting it counts on the hotspot side."""
+    """The setup portal's request, only with the right claim code: whoever reaches the portal
+    first changes nothing without it. The portal's ticket is kept as a hash, with the source it
+    came from: a claim presenting it counts on the hotspot side."""
     with exclusive(system, CLAIM_LOCK):
         key = source_key(request.address)
         _check_code(system, request, "hotspot", key)
-        pending = _read_json(system, PENDING) if _root_flag(system, PENDING) else {}
-        pending = {k: v for k, v in pending.items() if k in ("pin", "passphrase", "ticket")}
-        if request.pin is not None:
-            pending["pin"] = request.pin
-        if request.new_passphrase is not None:
-            pending["passphrase"] = request.new_passphrase
         if request.ticket is not None:
-            pending["ticket"] = {"hash": _ticket_hash(request.ticket), "source": key}
-        system.write(PENDING, json.dumps(pending) + "\n", 0o600)
+            pending = {"ticket": {"hash": _ticket_hash(request.ticket), "source": key}}
+            system.write(PENDING, json.dumps(pending) + "\n", 0o600)
     answer = status(system)
     answer["staged"] = "ok"
     return answer
@@ -893,23 +876,19 @@ def _claim_side(pending: dict[str, object], request: Request) -> tuple[str, str]
 def claim(system: System, request: Request) -> dict[str, object]:
     """The claim (step O3): the code against its hash, in the setup window, while unclaimed.
     Success marks the device claimed - root's file, the firewall and Nox go by it - sets the
-    maintenance passphrase (the one sent, else the one staged with the right claim code in the
-    setup portal; never over an existing one), ends setup mode - hotspot and portal down before
-    the firewall is regenerated - and hands over the staged PIN."""
+    maintenance passphrase sent (never over an existing one, unless root asked for a reset),
+    and ends setup mode - hotspot and portal down before the firewall is regenerated."""
     with exclusive(system, CLAIM_LOCK):
         pending = _read_json(system, PENDING) if _root_flag(system, PENDING) else {}
         side, key = _claim_side(pending, request)
         _check_code(system, request, side, key)
         passphrase = request.new_passphrase
-        if passphrase is None and isinstance(pending.get("passphrase"), str):
-            passphrase = str(pending["passphrase"])
         if passphrase is not None:
             with passphrase_lock(system):
                 reset = _root_flag(system, RESET_FLAG)
                 if not passphrase_set(system) or reset:
                     store_passphrase(system, passphrase)
                     system.remove(RESET_FLAG)
-        pin = pending.get("pin") if isinstance(pending.get("pin"), str) else None
         marker = {"v": 1, "claimed_at": int(system.clock()), "owner_device": request.device}
         system.write(CLAIMED, json.dumps(marker) + "\n", 0o644)
         # The window ends with the claim, before anything else happens.
@@ -923,7 +902,6 @@ def claim(system: System, request: Request) -> dict[str, object]:
     system.systemctl("restart", FIREWALL_UNIT)
     answer = status(system)
     answer["claim"] = "ok"
-    answer["pin"] = base64.b64encode(str(pin).encode("utf-8")).decode("ascii") if pin else None
     return answer
 
 

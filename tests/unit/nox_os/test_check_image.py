@@ -362,6 +362,7 @@ SPOILERS: dict[str, Spoil] = {
         b / "nox-provision.json", '{"v": 1}'
     ),
     "a shipped claim mark": lambda r, b: _write(r / "var/lib/nox-os-claim/claimed", "{}"),
+    "a reclaim marker on the boot partition": lambda r, b: _write(b / "nox-reclaim", "reclaim"),
     "a shipped test window": lambda r, b: _write(r / "etc/nox-os/testing/setup-window-s", "60"),
 }
 

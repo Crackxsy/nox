@@ -12,15 +12,21 @@ the Pi and in the setup hotspot's portal (`os/pi-gen/stage-nox/04-firstboot/file
 helper checks it (`claim`), slows down the address of wrong ones, and alone marks the device claimed
 (`/var/lib/nox-os-claim/claimed`, root's): neither this process nor its user can mark it.
 
-**What a claim does**, in one request (`POST /api/claim`): pairs the claiming browser as the first
-device (its token goes to that browser only, exactly as `POST /api/pair` would), asks the helper
-to verify the code - which also sets the maintenance passphrase, ends setup mode and hands over
-the security PIN - sets that PIN, and audits it. PIN and passphrase are the ones the claim page
-sent, else the ones the setup portal kept with the right claim code (the portal itself applies
-nothing): the claimant sees that some are kept and may set others. A refused claim removes the
-device it had paired. Wrong codes slow the sender's address down, root-side (`claim_wait`).
-After a claim the guard lets everything through, setup mode is over and the firewall opens the
-node port.
+**What a claim does**, in one request (`POST /api/claim`, over the listener's TLS): pairs the
+claiming browser as the first device (its token goes to that browser only, exactly as
+`POST /api/pair` would), asks the helper to verify the code - which also sets the maintenance
+passphrase sent and ends setup mode - sets the security PIN sent, and audits it. PIN and
+passphrase come only from the claim page, never from the setup portal (plain HTTP over the
+hotspot). A refused claim removes the device it had paired. Wrong codes slow the sender down,
+root-side (`claim_wait`). After a claim the guard lets everything through, setup mode is over
+and the firewall opens the node port. The claim page then says that this browser holds the only
+key and offers to pair a second device right away.
+
+**Reclaim** (physical access is full access): a `nox-reclaim` file on the boot partition makes
+root forget the owner at the next boot and leave a note (`/var/lib/nox-os-claim/reclaim`, an id).
+`apply_reclaim` - when Nox starts, before its listener - revokes every paired device, node and
+their tokens and certificates, clears the security PIN, and remembers the id so it happens once.
+Everything else Nox knows stays.
 
 **State.** `ClaimGate.required()` is checked on every request: on Nox-OS and without root's mark,
 the device is unclaimed - also when the mark cannot be read (fail closed). Once seen, "claimed"
@@ -34,13 +40,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import binascii
 import functools
 import ipaddress
 import json
 import re
 import stat
 from collections.abc import Callable
+from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -70,6 +76,17 @@ __all__ = [
 CLAIMED_MARKER = Path("/var/lib/nox-os-claim/claimed")
 #: Where the claim page sends the new owner: O4's onboarding wizard starts there.
 ONBOARDING_URL = "/dashboard/#onboarding"
+#: The dashboard's devices page, where a second device is paired.
+PAIR_URL = "/dashboard/#/devices/devices"
+#: Root's note that the owner was forgotten (nox_setup.py reclaim), and what Nox did about it.
+RECLAIM_MARK = Path("/var/lib/nox-os-claim/reclaim")
+RECLAIM_DONE = "noxos-reclaim.json"
+#: The claim page's own policy: its files, its API, nothing else, never framed.
+CLAIM_PAGE_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; "
+    "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
+    "frame-ancestors 'none'"
+)
 CLAIM_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 MIN_PIN = 6
 MAX_PIN = 64
@@ -180,7 +197,11 @@ class ClaimService:
 
     def surface(self) -> ClaimSurface:
         return ClaimSurface(
-            required=self.gate.required, status=self.status, claim=self.claim, asset=asset
+            required=self.gate.required,
+            status=self.status,
+            claim=self.claim,
+            asset=asset,
+            policy=CLAIM_PAGE_CSP,
         )
 
     def _fingerprints(self) -> dict[str, str]:
@@ -214,12 +235,8 @@ class ClaimService:
             "window_open": answer.get("setup_mode") is True,
             "seconds_left": left if isinstance(left, int) else None,
             "code_on_card": answer.get("claim_code") == "card",
-            "needs_pin": answer.get("pending_pin") is not True and not self._pin.is_set(),
-            "needs_passphrase": answer.get("passphrase") is not True
-            and answer.get("pending_passphrase") is not True,
-            # Kept by the setup portal for this claim: shown, and the claimant may set others.
-            "staged_pin": answer.get("pending_pin") is True,
-            "staged_passphrase": answer.get("pending_passphrase") is True,
+            "needs_pin": not self._pin.is_set(),
+            "needs_passphrase": answer.get("passphrase") is not True,
             "min_pin": MIN_PIN,
             "min_passphrase": MIN_PASSPHRASE,
             **self._fingerprints(),
@@ -265,7 +282,7 @@ class ClaimService:
             return 409, {"error": "claimed"}
         if state.get("setup_mode") is not True:
             return 403, {"error": "window_closed"}
-        needs_pin = state.get("pending_pin") is not True and not self._pin.is_set()
+        needs_pin = not self._pin.is_set()
         if body.pin == "":
             body.pin = None
         if body.passphrase == "":
@@ -275,9 +292,7 @@ class ClaimService:
             pin_ok and body.pin is not None and body.pin.isprintable()
         ):
             return 400, {"error": "pin_required"}
-        needs_passphrase = (
-            state.get("passphrase") is not True and state.get("pending_passphrase") is not True
-        )
+        needs_passphrase = state.get("passphrase") is not True
         if (needs_passphrase or body.passphrase is not None) and (
             body.passphrase is None
             or len(body.passphrase) < MIN_PASSPHRASE
@@ -300,7 +315,7 @@ class ClaimService:
         if body.ticket is not None:
             lines.append(f"ticket {_b64(body.ticket)}")
         try:
-            answer = await self._helper(lines)
+            await self._helper(lines)
         except HelperError as exc:
             await self._devices.revoke(result.device_id, reason="claim_refused")
             unknown = (503, "unavailable")
@@ -311,8 +326,7 @@ class ClaimService:
             log.warning("noxos.claim_refused", reason=error, peer=peer)
             return status, {"error": error}
         self.gate.mark_claimed()
-        # The claimant's own PIN wins over the one the setup portal kept.
-        pin = body.pin or _decoded(answer.get("pin"))
+        pin = body.pin
         pin_set = False
         if pin and not self._pin.is_set():
             try:
@@ -328,6 +342,8 @@ class ClaimService:
             "name": result.name,
             "token": redeemed.token,
             "next": ONBOARDING_URL,
+            # This browser holds the only key: the page offers to pair a second device at once.
+            "pair_url": PAIR_URL,
         }
 
 
@@ -339,13 +355,59 @@ def _address(peer: str) -> str:
         return "0.0.0.0"  # noqa: S104 - a key, not a bind address
 
 
-def _decoded(value: object) -> str | None:
-    if not isinstance(value, str) or not value:
-        return None
+def apply_reclaim(
+    db: Any,
+    pin: PinManager,
+    data_dir: Path,
+    *,
+    mark: Path = RECLAIM_MARK,
+    root_uid: int = 0,
+    audit: AuditLog | None = None,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> int | None:
+    """The owner was forgotten (root's reclaim note, a new id): revoke every paired device and
+    node - their tokens and certificates - and clear the security PIN. Once per id; None when
+    there is nothing to do, else how many pairings were revoked."""
     try:
-        return base64.b64decode(value, validate=True).decode("utf-8") or None
-    except (binascii.Error, ValueError):
+        info = mark.lstat()
+        note = json.loads(mark.read_text("utf-8"))
+    except (OSError, ValueError):
         return None
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != root_uid or not isinstance(note, dict):
+        return None
+    ident = note.get("id")
+    if not isinstance(ident, str) or not re.fullmatch(r"[0-9a-f]{32}", ident):
+        return None
+    done = data_dir / RECLAIM_DONE
+    try:
+        if json.loads(done.read_text("utf-8")).get("id") == ident:
+            return None
+    except (OSError, ValueError, AttributeError):
+        pass
+    from nox.node.repo import NodeRepository  # noqa: PLC0415 - only a reclaim needs it
+    from nox.remote.repo import RemoteRepository  # noqa: PLC0415
+
+    remote, nodes, now = RemoteRepository(db), NodeRepository(db), clock()
+    revoked = 0
+    for device in remote.list_devices(include_revoked=False):
+        if remote.revoke_device(device.id, reason="reclaim", when=now):
+            revoked += 1
+        nodes.revoke_certs(device.id, reason="reclaim", when=now)
+    if pin.is_set():
+        pin.clear_pin(by="reclaim")
+    done.write_text(json.dumps({"id": ident, "at": now.isoformat()}) + "\n", "utf-8")
+    if audit is not None:
+        audit.append(
+            actor="root",
+            tool="noxos",
+            action="noxos.reclaim",
+            target="owner",
+            decision="allow",
+            result="ok",
+            details={"revoked": str(revoked)},
+        )
+    log.warning("noxos.reclaimed", revoked=revoked)
+    return revoked
 
 
 # ---- the claim page (claim_page/) ----------------------------------------------------------
@@ -375,9 +437,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "passphrase": "Maintenance passphrase",
         "passphrase_hint": "At least 12 characters, for remote maintenance (SSH). Keep it safe.",
         "passphrase2": "Maintenance passphrase again",
-        "pin_staged": "A PIN was set in the setup Wi-Fi. Leave these empty to keep it.",
-        "passphrase_staged": "A passphrase was set in the setup Wi-Fi. Leave these empty to keep "
-        "it.",
+        "only_key": "This browser is now the only key to your Nox. Pair a second device now - "
+        "a phone or a computer - so that losing this one does not lock you out.",
+        "pair_now": "Pair a second device",
+        "continue": "Continue",
         "err_wait": "Wrong claim codes slow Nox down. Wait a moment, then try again.",
         "err_locked": "Too many wrong claim codes from the home network. Unplug the Pi's power "
         "and plug it in again - or use the link from the setup Wi-Fi.",
@@ -427,10 +490,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "passphrase_hint": "Mindestens 12 Zeichen, für die Fernwartung (SSH). Bewahr sie sicher "
         "auf.",
         "passphrase2": "Wartungs-Passphrase wiederholen",
-        "pin_staged": "Im Einrichtungs-WLAN wurde eine PIN festgelegt. Lass die Felder leer, um "
-        "sie zu behalten.",
-        "passphrase_staged": "Im Einrichtungs-WLAN wurde eine Passphrase festgelegt. Lass die "
-        "Felder leer, um sie zu behalten.",
+        "only_key": "Dieser Browser ist jetzt der einzige Schlüssel zu deinem Nox. Kopple jetzt "
+        "ein zweites Gerät - ein Handy oder einen Computer -, damit du nicht ausgesperrt bist, "
+        "wenn dieses verloren geht.",
+        "pair_now": "Zweites Gerät koppeln",
+        "continue": "Weiter",
         "err_wait": "Falsche Besitzer-Codes bremsen Nox. Warte kurz und versuch es dann noch "
         "einmal.",
         "err_locked": "Zu viele falsche Besitzer-Codes aus dem Heimnetz. Zieh kurz den Strom vom "

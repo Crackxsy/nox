@@ -128,10 +128,12 @@ def render(
         lines.append(f"Setup:          open for about {minutes} more min")
         ssid, psk = setup.get("ssid"), setup.get("psk")
         if isinstance(ssid, str) and isinstance(psk, str):
-            shown = (
-                " ".join(psk[i : i + 4] for i in range(0, len(psk), 4)) if psk.isdigit() else psk
-            )
-            lines.append(f"Setup Wi-Fi:    {ssid}   password {shown}")
+            # The password exactly as it is typed (the dashes are part of it).
+            lines.append(f"Setup Wi-Fi:    {ssid}   password {psk}")
+            qr = setup.get("qr")
+            if isinstance(qr, list) and qr and all(isinstance(row, str) for row in qr):
+                lines.append("                or scan this with the phone's camera:")
+                lines += ["  " + row[:76] for row in qr[:40]]
         code = setup.get("claim_code")
         lines.append(
             "Claim code:     " + (code if isinstance(code, str) else "the one on your setup card")

@@ -24,7 +24,6 @@
 <fieldset id="security" hidden>
 <legend data-t="security"></legend>
 <div id="pin-fields" hidden>
-<p class="hint" id="pin-staged" data-t="pin_staged" hidden></p>
 <label for="pin"><span data-t="pin"></span>
 <span class="hint" id="pin-hint" data-t="pin_hint"></span></label>
 <input id="pin" type="password" inputmode="numeric" autocomplete="new-password" maxlength="64"
@@ -33,7 +32,6 @@
 <input id="pin2" type="password" inputmode="numeric" autocomplete="new-password" maxlength="64">
 </div>
 <div id="passphrase-fields" hidden>
-<p class="hint" id="passphrase-staged" data-t="passphrase_staged" hidden></p>
 <label for="passphrase"><span data-t="passphrase"></span>
 <span class="hint" id="passphrase-hint" data-t="passphrase_hint"></span></label>
 <input id="passphrase" type="password" autocomplete="new-password" maxlength="256"
@@ -48,6 +46,12 @@
 </div>
 <button type="submit" id="submit" data-t="submit"></button>
 </form>
+<section id="done" hidden aria-labelledby="done-title">
+<h2 id="done-title" data-t="done"></h2>
+<p class="box" data-t="only_key"></p>
+<p><a id="pair-now" class="button" data-t="pair_now" href="/dashboard/#/devices/devices"></a></p>
+<p><a id="continue" class="link" data-t="continue" href="/dashboard/#onboarding"></a></p>
+</section>
 <noscript><p>This page needs JavaScript. Diese Seite braucht JavaScript.</p></noscript>
 </main>
 </body>
