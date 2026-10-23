@@ -304,6 +304,11 @@ async def test_an_inconclusive_probe_means_the_appcontainer_is_not_strong(
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows sandbox")
+# Granting the container read on the interpreter and the virtual environment propagates an
+# inheritable ACE to every file below them, and the low-integrity run in `finally` removes it
+# again: on a hosted runner with the full development environment that alone took longer than
+# the default 60 s. Each `icacls` is bounded by `ICACLS_TIMEOUT_S`; this is the budget for all.
+@pytest.mark.timeout(900)
 async def test_appcontainer_runs_python_and_still_cannot_read_user_files(tmp_path) -> None:  # noqa: ANN001
     from nox.sandbox.windows import RuntimeGrants, WindowsSandbox, appcontainer_available
 
@@ -636,3 +641,28 @@ def test_the_nox_package_root_is_readable_but_never_nox_home(tmp_path) -> None: 
     # A package root that contains Nox's home (or lies inside it) is never granted.
     assert nox_runtime_dirs(home=src / "home", root=src) == python_runtime_dirs(home=src / "home")
     assert nox_runtime_dirs(home=tmp_path / "h", root=Path.home()) == runtime
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows sandbox")
+def test_an_icacls_change_that_hangs_fails_instead_of_blocking(
+    tmp_path,  # noqa: ANN001
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C10: `icacls` had no timeout - a propagation that never ended blocked the run (and a CI
+    job until pytest-timeout ended the whole session)."""
+    import subprocess
+
+    from nox.sandbox import windows
+
+    seen: dict[str, float] = {}
+
+    def hanging(argv: list[str], **kw: object) -> object:
+        seen["timeout"] = float(kw["timeout"])  # type: ignore[arg-type]
+        raise subprocess.TimeoutExpired(argv, seen["timeout"])
+
+    monkeypatch.setattr(windows.subprocess, "run", hanging)
+    assert windows._icacls(["icacls", "C:/x", "/grant", "*S-1-15-2-1:(RX)"]) != 0  # noqa: SLF001
+    assert seen["timeout"] == windows.ICACLS_TIMEOUT_S
+    with pytest.raises(OSError, match="took too long"):
+        windows._explicit_aces(tmp_path)  # noqa: SLF001
+    assert seen["timeout"] == windows.ACL_READ_TIMEOUT_S
