@@ -18,7 +18,7 @@ export type T = (key: Key) => string;
  * UX-Neubau §12). The test setup loads everything.
  */
 const tables: Record<Lang, Partial<Record<Key, string>>> = { de: {}, en: {} };
-const loaded = { de: false, en: false, deMore: false, enMore: false };
+const loaded = { de: false, en: false, deMore: false, enMore: false, deNodes: false, enNodes: false };
 /** The page's language, as `loadLang` was last asked for it. */
 let active: Lang = 'de';
 
@@ -51,6 +51,23 @@ export async function loadMore(lang: Lang): Promise<void> {
     Object.assign(tables.en, (await import('./en.more')).enMore);
     loaded.enMore = true;
   }
+}
+
+/** The copy of Geräte › Computer und Server, for `lang` (only that section uses it). */
+export async function loadNodes(lang: Lang): Promise<void> {
+  if (lang === 'de' && !loaded.deNodes) {
+    Object.assign(tables.de, (await import('./de.nodes')).deNodes);
+    loaded.deNodes = true;
+  }
+  if (lang === 'en' && !loaded.enNodes) {
+    Object.assign(tables.en, (await import('./en.nodes')).enNodes);
+    loaded.enNodes = true;
+  }
+}
+
+/** A lazily loaded module together with the computer copy of the page's language. */
+export function withNodeCopy<M>(load: () => Promise<M>): Promise<M> {
+  return Promise.all([load(), loadNodes(active)]).then(([module]) => module);
 }
 
 /**

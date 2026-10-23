@@ -13,8 +13,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { errorText, ipcReason } from '../../shared/errors';
-import { type T, ipcReasonLabel } from './i18n';
+import { NODE_SESSION, errorText, ipcReason } from '../../shared/errors';
+import { type T, hasKey, ipcReasonLabel, nodeSessionReason } from './i18n';
 import { type IpcClient, IpcError } from './ipc';
 import { pinErrorKey } from './model';
 
@@ -22,14 +22,20 @@ import { pinErrorKey } from './model';
  * A refusal in the words of this UI: the core's machine-readable reason first (`details.reason`),
  * then the PIN wording the local PIN gate implies, and only then `fallback` - or, without one, the
  * core's own message behind the error prefix (honest, but English operator text).
+ *
+ * A refusal while Nox controls a paired PC (`node_session`) is never "Die PIN stimmt nicht" unless
+ * it is about a PIN that was sent, and never the core's English sentence.
  */
 export function refusalText(t: T, e: unknown, pinSent = false, fallback?: string): string {
-  const reason = ipcReasonLabel(t, ipcReason(e));
+  let raw = ipcReason(e);
+  if (raw === NODE_SESSION && e instanceof IpcError) raw = nodeSessionReason(e.message) || NODE_SESSION;
+  const reason = ipcReasonLabel(t, raw);
   if (reason) return reason;
   if (e instanceof IpcError) {
     const pin = pinErrorKey(e.code, e.message, pinSent);
     if (pin) return t(pin);
   }
+  if (raw === NODE_SESSION && hasKey('reason_node_session')) return t('reason_node_session');
   return fallback ?? errorText(t('error_prefix'), e);
 }
 

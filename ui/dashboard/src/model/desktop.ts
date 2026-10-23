@@ -22,6 +22,9 @@ export interface ComputerUseNotice {
   deviceId: string;
   /** That PC reported more addresses than Nox keeps: until the session ends nobody can approve. */
   saturated?: boolean;
+  /** The core says that PC went silent while locked: lifting the lock by hand is what is left.
+   * `undefined` when the core does not say (older): the page then offers it folded away. */
+  stale?: boolean;
 }
 
 /** A malformed event is `null`: the banner never appears on a payload nobody can read. */
@@ -34,6 +37,7 @@ export function parseComputerUse(payload: unknown): ComputerUseNotice | null {
     device: str(payload.device),
     deviceId: str(payload.device_id),
     saturated: payload.saturated === true,
+    ...(typeof payload.stale === 'boolean' ? { stale: payload.stale } : {}),
   };
 }
 

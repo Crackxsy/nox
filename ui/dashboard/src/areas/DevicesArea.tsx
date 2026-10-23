@@ -13,7 +13,7 @@
 
 import { Suspense, lazy } from 'react';
 
-import type { Lang, T } from '../i18n';
+import { type Lang, type T, withNodeCopy } from '../i18n';
 import type { IpcClient } from '../ipc';
 import type { DashboardState } from '../model';
 import { CapabilitiesPage } from '../pages/Capabilities';
@@ -28,7 +28,9 @@ import { SubTabs } from '../shell/SubTabs';
 
 // Its own chunk: the area stays within its budget (Spec UX-Neubau §12), and the copy is loaded
 // with the area already.
-const ComputersSection = lazy(() => import('../pages/Nodes').then((m) => ({ default: m.ComputersSection })));
+const ComputersSection = lazy(() =>
+  withNodeCopy(() => import('../pages/Nodes')).then((m) => ({ default: m.ComputersSection })),
+);
 
 export interface DevicesAreaProps {
   t: T;

@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { translator } from '../i18n';
 import { type IpcClient, IpcError } from '../ipc';
-import type { PermissionPrompt } from '../model';
+import { type PermissionPrompt, parsePermissionRequested, splitDeviceTarget } from '../model';
 import { PermissionNote } from '../PermissionNote';
 import { ARM_DELAY_MS, PermissionPromptDialog } from '../PermissionPrompt';
 
@@ -77,6 +77,27 @@ describe('what the prompt says', () => {
     expect(dialog.textContent).toContain(t('perm_risk_high'));
   });
 
+  it('names the paired PC on its own, in bold, before what Nox wants to do there', () => {
+    const prompt = parsePermissionRequested({
+      request_id: 'g2',
+      agent: 'companion',
+      tool: 'file',
+      action: 'delete',
+      target: 'Laptop (3f2a): Archiv/neu.zip',
+      risk: 'high',
+    });
+    expect(prompt?.device).toBe('Laptop');
+    expect(prompt?.target).toBe('Archiv/neu.zip');
+    show({ queue: [prompt!] });
+    const sentence = screen.getByText(/Nox möchte auf/);
+    expect(sentence.textContent).toBe('Nox möchte auf Laptop löschen: Archiv/neu.zip');
+    expect(sentence.querySelector('strong')?.textContent).toBe('Laptop');
+    // A colon in an ordinary target is left alone; an id is never shown as a name.
+    expect(splitDeviceTarget('C:/tmp/a.txt', undefined)).toEqual({ device: '', target: 'C:/tmp/a.txt' });
+    expect(splitDeviceTarget('x', 'a'.repeat(32))).toEqual({ device: '', target: 'x' });
+    expect(splitDeviceTarget('x', 'Arbeits-PC')).toEqual({ device: 'Arbeits-PC', target: 'x' });
+  });
+
   it('keeps the identifiers behind "technical details"', () => {
     show();
     const details = screen.getByText(t('perm_technical')).closest('details')!;
@@ -94,7 +115,7 @@ describe('what the prompt says', () => {
   it('says when the words came from a voice satellite, and only then', () => {
     show({ queue: [{ ...PROMPT, voiceSatellite: 'Wohnzimmer-Pi' }] });
     expect(screen.getByTestId('perm-voice-satellite').textContent).toContain(
-      'Von Sprach-Satellit Wohnzimmer-Pi',
+      'Vom Lautsprecher-Mikrofon Wohnzimmer-Pi',
     );
     cleanupView();
     show();

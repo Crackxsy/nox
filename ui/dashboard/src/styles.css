@@ -1029,12 +1029,12 @@ code,
   color: #ffffff;
 }
 
-/* High or critical risk: "Erlauben" is never the inviting filled button. */
+/* High or critical risk: "Erlauben" is never the inviting filled button - ink on a red outline. */
 .btn--risky,
 .btn--risky:hover:not(:disabled) {
   border: 1.5px solid var(--danger);
   background: var(--surface);
-  color: var(--danger);
+  color: var(--ink);
 }
 
 .btn--sm {
@@ -3007,6 +3007,14 @@ details > summary:hover {
   display: grid;
   gap: var(--s-2);
   align-content: start;
+  /* A grid item: without this a long link would set the column's width, not wrap. */
+  min-width: 0;
+}
+
+.mono.break,
+.pairing-facts .mono {
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .pairing-facts .label {
@@ -3377,14 +3385,15 @@ details > summary:hover {
 }
 
 /*
- * Allowing at high or critical risk: an outlined button in the danger colour, so the inviting blue
- * fill never sits on the answer that can do the most harm.
+ * Allowing at high or critical risk: ink on a red outline, so the inviting filled button never sits
+ * on the answer that can do the most harm. While it waits its half second (or a reply travels) it
+ * keeps that look - a greyed "Erlauben" read as "not possible".
  */
 .btn--risky,
 .btn--risky:hover:not(:disabled) {
   background: transparent;
   border: 1.5px solid var(--danger);
-  color: var(--danger);
+  color: var(--ink);
 }
 
 .btn--risky:hover:not(:disabled) {
@@ -3392,8 +3401,10 @@ details > summary:hover {
 }
 
 .btn--risky:disabled {
-  border-color: var(--hairline);
-  color: var(--ink-2);
+  border-color: var(--danger);
+  color: var(--ink);
+  opacity: 1;
+  cursor: not-allowed;
 }
 
 .perm-more {
@@ -3782,4 +3793,97 @@ details > summary:hover {
 .dlg-h h2 {
   overflow-wrap: anywhere;
   min-width: 0;
+}
+
+/* ------------------------------------------------------ computers (nodes) - */
+
+/* A group the device allows: the whole row is the switch (one target as wide as the sheet). */
+.set-row--switch {
+  width: 100%;
+  min-height: var(--hit);
+  margin: 0;
+  border-left: 0;
+  border-right: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.set-row--switch .grow {
+  display: grid;
+  gap: 2px;
+}
+
+.set-row--switch:disabled {
+  cursor: default;
+}
+
+.set-row--switch:disabled .switch-btn {
+  opacity: 0.5;
+}
+
+/* The drawn switch inside the row: the state comes from the row's `aria-checked`. */
+.switch-btn[data-on="true"] {
+  background: var(--ink);
+}
+
+.switch-btn[data-on="true"]::after {
+  transform: translateX(20px);
+  background: var(--bg);
+}
+
+/* A group only the device can switch on: a lock, never a switch that does nothing. */
+.set-row--locked {
+  min-height: var(--hit);
+}
+
+.set-row--locked .grow {
+  display: grid;
+  gap: 2px;
+}
+
+.node-lock {
+  display: inline-flex;
+  flex: none;
+  color: var(--ink-3);
+}
+
+.node-how .mono {
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-m);
+  background: var(--surface);
+}
+
+.node-defaults {
+  margin-top: var(--s-6);
+}
+
+.node-defaults > * + * {
+  margin-top: var(--s-2);
+}
+
+/* Touch targets in the computer sheets and the list: 44 x 44 like every other button (M9). */
+.node-sheet .btn--sm,
+.node-list .btn--sm,
+.node-defaults .btn--sm,
+.node-sheet .ib {
+  min-height: var(--hit);
+  min-width: var(--hit);
+}
+
+.node-sheet .select,
+.node-defaults .select {
+  min-height: var(--hit);
+}
+
+/* "Antwortet Laptop nicht mehr?": the lock release, folded away until it is needed. */
+.strip-more > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--hit);
+  cursor: pointer;
+  font-weight: 600;
 }

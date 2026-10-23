@@ -176,37 +176,42 @@ export function StatusStrip({
         </p>
         {node.saturated && <p className="hint">{t('computer_use_saturated')}</p>}
         <StopButton placement="inline" />
-        {!device && (
-          // A lock that outlived its PC (it went silent): lifted only here, with the PIN.
-          <form
-            className="strip-act"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!client) return;
-              setReleaseError('');
-              api
-                .nodeComputerRelease(client, releasePin.trim())
-                .then(() => setReleasePin(''))
-                .catch((err: unknown) => setReleaseError(refusalText(t, err, true, t('computer_use_release_failed'))));
-            }}
-          >
-            <label className="sr-only" htmlFor={`release-pin-${node.deviceId}`}>
-              {t('computer_use_release_pin')}
-            </label>
-            <input
-              id={`release-pin-${node.deviceId}`}
-              type="password"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              className="input input--pin"
-              placeholder={t('perm_pin')}
-              value={releasePin}
-              onChange={(e) => setReleasePin(e.target.value)}
-            />
-            <button type="submit" className="btn btn--sm" disabled={!client || !releasePin.trim()}>
-              {t('computer_use_release')}
-            </button>
-          </form>
+        {!device && node.stale !== false && (
+          // A lock that outlived its PC (it went silent): lifted only here, with the PIN - and only
+          // then. Folded away with what it is for; open when the core says the PC went silent.
+          <details className="strip-more" open={node.stale === true}>
+            <summary>{fill(t('computer_use_stuck'), node.device)}</summary>
+            <p className="hint">{fill(t('computer_use_release_hint'), node.device)}</p>
+            <form
+              className="strip-act"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!client) return;
+                setReleaseError('');
+                api
+                  .nodeComputerRelease(client, releasePin.trim())
+                  .then(() => setReleasePin(''))
+                  .catch((err: unknown) => setReleaseError(refusalText(t, err, true, t('computer_use_release_failed'))));
+              }}
+            >
+              <label className="sr-only" htmlFor={`release-pin-${node.deviceId}`}>
+                {t('computer_use_release_pin')}
+              </label>
+              <input
+                id={`release-pin-${node.deviceId}`}
+                type="password"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                className="input input--pin"
+                placeholder={t('perm_pin')}
+                value={releasePin}
+                onChange={(e) => setReleasePin(e.target.value)}
+              />
+              <button type="submit" className="btn btn--sm" disabled={!client || !releasePin.trim()}>
+                {t('computer_use_release')}
+              </button>
+            </form>
+          </details>
         )}
         {releaseError && (
           <p role="alert" className="strip-err">

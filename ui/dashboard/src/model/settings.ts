@@ -169,12 +169,18 @@ export function parsePinConfigured(payload: unknown): boolean {
   return isRecord(payload) && payload.configured === true;
 }
 
+/** The core's sentences for a refusal while Nox controls a paired PC (`nox.node.world_routes`). */
+const NODE_SESSION_SENTENCE = /controls mouse and keyboard|steuert (?:gerade )?(?:ein Gerät|Maus)/i;
+
 /**
  * Which PIN message an error from `secrets.set`/`secrets.delete` deserves, if any.
  *
  * The core answers every refusal with the same code, so the message is the only thing separating
  * "no PIN was sent" from "that PIN was wrong" — and a permission error that has nothing to do with
  * the PIN (an unknown secret name) keeps its own message instead of being relabelled.
+ *
+ * A refusal because Nox controls a paired PC names the PIN too ("needs the security PIN, and none
+ * is set") but is about something else: it is not a PIN message (`refusalText` words it).
  */
 export function pinErrorKey(
   code: string,
@@ -182,6 +188,7 @@ export function pinErrorKey(
   pinSent: boolean,
 ): 'pin_required' | 'pin_wrong' | null {
   if (code !== 'permission.denied' || !/\bpin\b/i.test(message)) return null;
+  if (NODE_SESSION_SENTENCE.test(message)) return null;
   return pinSent ? 'pin_wrong' : 'pin_required';
 }
 

@@ -227,12 +227,14 @@ describe('axe-core: zero findings', () => {
     expect(await violations()).toEqual([]);
     await act(async () => open.click());
     const sheet = await screen.findByRole('dialog', { name: 'Arbeits-PC' });
-    await act(async () => within(sheet).getByRole('switch', { name: 'Befehle ausführen' }).click());
+    // A group the device does not allow is no switch: its "how" opens in place.
+    expect(within(sheet).queryByRole('switch', { name: 'Befehle ausführen' })).toBeNull();
+    await act(async () => within(sheet).getByRole('button', { name: t('node_enable_show') }).click());
     expect(await violations()).toEqual([]);
     await act(async () => within(sheet).getByRole('button', { name: t('ux_close') }).click());
     await act(async () => screen.getByRole('button', { name: t('node_add_more') }).click());
     const add = await screen.findByRole('dialog', { name: t('node_add') });
-    await act(async () => within(add).getByRole('button', { name: t('lan_pair_button') }).click());
+    await act(async () => within(add).getByRole('button', { name: t('node_add_ready_windows') }).click());
     await within(add).findByRole('img', { name: t('node_add_qr_alt') });
     expect(await violations()).toEqual([]);
   });

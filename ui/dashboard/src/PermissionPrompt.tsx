@@ -32,6 +32,7 @@ import { auditActionLabel, auditToolLabel, fill, type Key, rememberLabel, type T
 import { type IpcClient, api } from './ipc';
 import { type PermissionPrompt, needsDevicePin, secondsLeft } from './model';
 import { StopButton } from './shell/stop';
+import { Filled } from './ui';
 
 export interface PermissionPromptProps {
   t: T;
@@ -224,9 +225,18 @@ function PromptBody({
   });
 
   const action = auditActionLabel(t, prompt.action);
-  const sentence = prompt.target
-    ? fill(t('perm_sentence'), action, prompt.target)
-    : fill(t('perm_sentence_no_target'), action);
+  // On a paired PC the device is named on its own and in bold: "Nox möchte auf **Laptop** löschen".
+  const sentence = prompt.device ? (
+    <Filled
+      pattern={t(prompt.target ? 'perm_sentence_device' : 'perm_sentence_device_no_target')}
+      args={[prompt.device, action, prompt.target]}
+      strong={[0]}
+    />
+  ) : prompt.target ? (
+    fill(t('perm_sentence'), action, prompt.target)
+  ) : (
+    fill(t('perm_sentence_no_target'), action)
+  );
   const riskKey = RISK_KEYS[prompt.risk];
   const left = secondsLeft(prompt.deadline, now);
   const disabled = busy || offline;
@@ -345,6 +355,12 @@ function PromptBody({
             <>
               <dt>{t('perm_agent')}</dt>
               <dd className="mono">{prompt.agent}</dd>
+            </>
+          )}
+          {prompt.device && (
+            <>
+              <dt>{t('perm_device')}</dt>
+              <dd>{prompt.device}</dd>
             </>
           )}
           <dt>{t('perm_area')}</dt>

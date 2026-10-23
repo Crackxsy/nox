@@ -514,11 +514,30 @@ const IPC_REASON_KEYS: Record<string, Key> = {
   pin_required: 'reason_pin_required',
   pin_wrong: 'reason_pin_wrong',
   removed: 'reason_removed',
+  // While Nox controls mouse and keyboard on a paired PC (`nox.node.world_routes.session_refusal`).
+  node_session_linked: 'reason_node_session_linked',
+  node_session_remote: 'reason_node_session_remote',
+  node_session_no_pin: 'reason_node_session_no_pin',
+  node_session_saturated: 'reason_node_session_saturated',
 };
+
+/**
+ * A core that refuses with `node_session` but names no second word yet: which of the four it
+ * is, from its own (English, or for "saturated" German) sentence. `''` when none fits - a wrong
+ * PIN, say, which the PIN wording then covers.
+ */
+export function nodeSessionReason(message: string): string {
+  if (/browser runs on|this browser|steuert gerade diesen/i.test(message)) return 'node_session_linked';
+  if (/used remotely|remote/i.test(message)) return 'node_session_remote';
+  if (/none is set|no pin is set|keine (?:pin|sicherheits-pin)/i.test(message)) return 'node_session_no_pin';
+  if (/sehr vielen adressen|many addresses|saturat/i.test(message)) return 'node_session_saturated';
+  return '';
+}
 
 export function ipcReasonLabel(t: T, reason: string): string | null {
   const key = IPC_REASON_KEYS[reason];
-  return key ? t(key) : null;
+  // The node-session sentences are area copy: before it is fetched the caller's own line stands.
+  return key && hasKey(key) ? t(key) : null;
 }
 
 /**
