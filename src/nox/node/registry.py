@@ -18,7 +18,7 @@ import json
 import time
 import uuid
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -236,6 +236,9 @@ class NodeRegistry:
         self._dirty: set[tuple[str, int]] = set()
         #: Retries of a first listing that failed (`on_connected`).
         self._retries: set[asyncio.Future[None]] = set()
+        #: Told after the owner's narrowing of a group is stored: (node, group, narrowed) - also
+        #: for a node that is offline (C9: its overlay credential goes with `obs`).
+        self.on_narrowed: list[Callable[[str, str, bool], Awaitable[None]]] = []
 
     def _lock(self, device_id: str) -> asyncio.Lock:
         lock = self._locks.get(device_id)
@@ -402,6 +405,11 @@ class NodeRegistry:
                     return  # a later request for this group was applied already
                 self._applied[key] = seq
                 await asyncio.to_thread(self.policy.set_narrowed, device_id, group, narrowed)
+                for listener in list(self.on_narrowed):
+                    try:
+                        await listener(device_id, group, narrowed)
+                    except Exception as exc:  # noqa: BLE001 - the narrowing itself stands
+                        log.error("node.narrow_listener_failed", error=type(exc).__name__)
                 now = await asyncio.to_thread(self.policy.narrowed, device_id)
                 entry = self._entries.get(device_id)  # it may have connected meanwhile
                 if entry is None:

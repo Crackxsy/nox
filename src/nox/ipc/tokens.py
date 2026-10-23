@@ -165,6 +165,9 @@ class TokenStore:
         self._session_file: Path | None = None
         self._session_file_restricted: bool | None = None
         self._device_verifier: DeviceVerifier | None = None
+        #: Whether the node an overlay credential was issued to (`node:<id>`) may still hold one
+        #: (C9, set by `nox.node.install`). Not set, or failing: no node overlay over the network.
+        self.node_overlay_allowed: Callable[[str], bool] | None = None
 
     @property
     def session_token(self) -> str:
@@ -251,6 +254,8 @@ class TokenStore:
                 credential = self._overlay.verify(token) if self._overlay is not None else None
                 if credential is None or not credential.label.startswith(NODE_OVERLAY_PREFIX):
                     return AuthDecision(ok=False, reason="no overlay credential of a paired node")
+                if not self._node_may_hold(credential.label[len(NODE_OVERLAY_PREFIX) :]):
+                    return AuthDecision(ok=False, reason="the node may not show an overlay now")
                 return AuthDecision(ok=True, kind="overlay", credential_id=credential.credential_id)
             if role != DEVICE_ROLE:
                 return AuthDecision(ok=False, reason="only paired devices connect over the network")
@@ -278,6 +283,15 @@ class TokenStore:
                 return AuthDecision(ok=False, reason="invalid or revoked overlay credential")
             return AuthDecision(ok=True, kind="overlay", credential_id=credential.credential_id)
         return AuthDecision(ok=False, reason=f"role {role!r} cannot authenticate over the hub")
+
+    def _node_may_hold(self, device_id: str) -> bool:
+        check = self.node_overlay_allowed
+        if check is None:
+            return False
+        try:
+            return bool(check(device_id))
+        except Exception:  # noqa: BLE001 - cannot tell: no
+            return False
 
     def _authenticate_worker(self, token: str, client_id: str, *, role: str) -> AuthDecision:
         now = self._clock()

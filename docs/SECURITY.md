@@ -1039,9 +1039,13 @@ What leaves a node, and what a node may send the core (`nox.node.voice`, `nox.no
   relays its one WebSocket to the core's network listener over TLS against the pinned authority.
   The URL carries no credential; the relay asks the core for a read-only overlay credential
   (role `overlay`, label `node:<id>`, at most once a minute, each one revoking the previous and
-  disconnecting its pages; revoked when the node is removed or `obs` narrowed) and keeps it in
-  memory. Through the network listener the hub accepts an overlay credential only with a
-  `node:` label - the OBS overlay credential of the core itself stays loopback-only. The relay
+  disconnecting its pages; revoked at once when the node is removed or `obs` narrowed for it,
+  online or not) and keeps it in memory. A sweep over the persisted credentials - at every start
+  and every second - revokes every `node:` credential whose node is unknown, removed, has `obs`
+  off on the device (as it last said) or narrowed here; it fails closed. Through the network
+  listener the hub accepts an overlay credential only with a `node:` label and only while that
+  node may hold one, asked again at every use (fail closed: no check, no access) - the OBS
+  overlay credential of the core itself stays loopback-only. The relay
   answers loopback Host headers only (no DNS rebinding), accepts a WebSocket without an Origin
   (OBS) or with its own, and forwards only an `ipc.auth` for role `overlay`. The network
   listener now also serves the static pet page (`/pet/`); it holds no credential.

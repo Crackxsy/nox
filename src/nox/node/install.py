@@ -436,7 +436,19 @@ def install_satellites(
     def publish(name: str, payload: dict[str, Any]) -> None:
         publish_nowait(getattr(core, "bus", None), name, payload, source="node")
 
+    def overlay_allowed(device_id: str) -> bool:
+        """May this node hold an overlay credential (blocking: the database)? Paired, not
+        removed, `obs` enabled on the device as it last said and not narrowed here."""
+        device = pairing.get(device_id)
+        if device is None or device.revoked:
+            return False
+        on_device, narrowed = registry.policy.state(device_id, "obs")
+        return on_device and not narrowed
+
     tokens = getattr(core, "tokens", None)
+    if tokens is not None and hasattr(tokens, "node_overlay_allowed"):
+        # The hub asks again whenever a node's overlay credential is used over the network.
+        tokens.node_overlay_allowed = overlay_allowed
     hub = getattr(core, "hub", None)
     satellites = SatelliteHub(
         offers=offers,
@@ -448,7 +460,7 @@ def install_satellites(
         audit=getattr(security, "audit", None),
         overlay=getattr(tokens, "overlay", None),
         disconnect_credential=getattr(hub, "disconnect_credential", None),
-        online=lambda device_id: (entry := entry_of(device_id)) is not None and entry.online,
+        overlay_allowed=overlay_allowed,
         opted_in=registry.policy.opted_in,
     )
     listener.on_satellite = satellites.handle
@@ -471,6 +483,14 @@ def install_satellites(
         await satellites.revoke_overlay(device_id, f"node removed: {reason}")
 
     pairing.on_revoked(forget)
+
+    async def narrowed(device_id: str, group: str, on: bool) -> None:
+        if group == "obs" and on:
+            # Switched off in the Devices page: its overlay goes dark now, online or not.
+            await satellites.revoke_overlay(device_id, "obs narrowed")
+
+    registry.on_narrowed.append(narrowed)
+    _keep(runtime, satellites.sweep(), "nox-node-overlay-sweep")  # stale ones from earlier runs
     bus = getattr(core, "bus", None)
     if bus is not None:
 

@@ -514,6 +514,7 @@ def _hub(
     overlay: Any = None,
     disconnected: list[list[str]] | None = None,
     opted_in: bool = True,
+    may_hold: set[str] | None = None,
 ) -> tuple[SatelliteHub, dict[str, Any]]:
     seen: dict[str, Any] = {"published": [], "turns": [], "audit": []}
     allowed = offers if offers is not None else {(PI, "voice.say"), (PI, "obs.request")}
@@ -544,6 +545,7 @@ def _hub(
         overlay=overlay,
         disconnect_credential=disconnect,
         opted_in=lambda _device, _group: opted_in,
+        overlay_allowed=lambda device: device in (may_hold if may_hold is not None else {PI}),
     )
     return hub, seen
 
@@ -940,43 +942,99 @@ def test_offline_or_switched_off_the_page_is_closed_and_retries(tmp_path: Path) 
 # ---- the core: overlay credentials --------------------------------------------------------------
 
 
+def _tokens(store: OverlayTokenStore, may_hold: set[str]) -> TokenStore:
+    tokens = TokenStore(overlay=store)
+    tokens.node_overlay_allowed = lambda device: device in may_hold
+    return tokens
+
+
+def _lan(tokens: TokenStore, token: str, role: str = "overlay") -> bool:
+    return tokens.authenticate(token, role, f"{role}:x", via_lan=True).ok
+
+
 async def test_a_node_with_obs_gets_a_read_only_rotating_credential(tmp_path: Path) -> None:
     store = OverlayTokenStore(tmp_path / "overlay_tokens.json")
     disconnected: list[list[str]] = []
     hub, _ = _hub(overlay=store, disconnected=disconnected)
     first = await hub.handle(_session(), p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
     assert first is not None and first["ok"]
-    tokens = TokenStore(overlay=store)
+    may_hold = {PI}
+    tokens = _tokens(store, may_hold)
     # Through the network listener: only a node's overlay credential, and only as `overlay`.
-    assert tokens.authenticate(first["token"], "overlay", "overlay:x", via_lan=True).ok
-    assert not tokens.authenticate(first["token"], "dashboard", "dashboard:x", via_lan=True).ok
+    assert _lan(tokens, first["token"])
+    assert not _lan(tokens, first["token"], "dashboard")
     _obs, obs_token = store.issue("obs")
-    assert not tokens.authenticate(obs_token, "overlay", "overlay:x", via_lan=True).ok
+    assert not _lan(tokens, obs_token)
     assert tokens.authenticate(obs_token, "overlay", "overlay:x").ok  # OBS on the core itself
+    # The hub asks again at every use: a node that may not hold one now gets nothing.
+    may_hold.clear()
+    assert not _lan(tokens, first["token"])
+    assert not _lan(TokenStore(overlay=store), first["token"])  # no check installed: no
+    tokens.node_overlay_allowed = lambda _device: 1 / 0  # type: ignore[assignment,return-value]
+    assert not _lan(tokens, first["token"])  # a failing check: no
+    may_hold.add(PI)
+    tokens = _tokens(store, may_hold)
     again = await hub.handle(_session(), p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
     assert again == {"ok": False, "reason": "too_soon"}
     hub._nodes[PI].credential_at -= 120  # a minute later: a new one replaces the old
     second = await hub.handle(_session(), p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
     assert second is not None and second["ok"] and disconnected
-    assert not tokens.authenticate(first["token"], "overlay", "overlay:x", via_lan=True).ok
+    assert not _lan(tokens, first["token"])
     assert await hub.revoke_overlay(PI, "node removed") == 1
-    assert not tokens.authenticate(second["token"], "overlay", "overlay:x", via_lan=True).ok
-    labels = {c.label for c in store.credentials()}
-    assert node_overlay_label(PI) not in labels
+    assert not _lan(tokens, second["token"])
+    assert node_overlay_label(PI) not in {c.label for c in store.credentials()}
 
 
-async def test_no_obs_no_credential_and_switching_it_off_revokes_it(tmp_path: Path) -> None:
+async def test_no_obs_no_credential(tmp_path: Path) -> None:
     store = OverlayTokenStore(tmp_path / "overlay_tokens.json")
     hub, _ = _hub(overlay=store, offers={(PI, "voice.say")})
     answer = await hub.handle(_session(), p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
     assert answer == {"ok": False, "reason": "obs_not_enabled"}
-    offers = {(PI, "obs.request")}
-    hub, _ = _hub(overlay=store, offers=offers)
-    assert (await hub.handle(_session(), p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest()))[
-        "ok"
-    ]
-    offers.clear()  # `obs` narrowed in the Devices page
-    await hub.sweep()
+    hub, _ = _hub(overlay=store, may_hold=set())  # offered, but narrowed meanwhile
+    answer = await hub.handle(_session(), p.M_OVERLAY_CREDENTIAL, p.OverlayCredentialRequest())
+    assert answer == {"ok": False, "reason": "obs_not_enabled"} and not store.credentials()
+
+
+async def test_a_restarted_core_sweeps_stale_node_credentials(tmp_path: Path) -> None:
+    store = OverlayTokenStore(tmp_path / "overlay_tokens.json")
+    store.issue(node_overlay_label(PI))  # from an earlier run: PI may still hold it
+    store.issue(node_overlay_label(PC))  # from an earlier run: PC was narrowed, offline, removed
+    store.issue("obs")  # the core's own OBS overlay: not a node's, never swept
+    reopened = OverlayTokenStore(tmp_path / "overlay_tokens.json")  # the restart
+    hub, _ = _hub(overlay=reopened, may_hold={PI})
+    assert await hub.sweep() == 1
+    assert {c.label for c in reopened.credentials()} == {node_overlay_label(PI), "obs"}
+    hub, _ = _hub(overlay=reopened, may_hold={PI})
+    hub._overlay_allowed = lambda _device: 1 / 0  # type: ignore[assignment,return-value]
+    assert await hub.sweep() == 1  # cannot tell: revoked (fail closed)
+    assert {c.label for c in reopened.credentials()} == {"obs"}
+
+
+async def test_narrowing_obs_or_removing_the_node_revokes_its_overlay_while_offline(
+    nodes: NodeRepository, pairing: NodePairing, tmp_path: Path
+) -> None:
+    from nox.node.registry import NodeRegistry
+    from tests.unit.node.conftest import pair_node
+
+    store = OverlayTokenStore(tmp_path / "overlay_tokens.json")
+    registry = NodeRegistry(pairing, nodes)
+    hub, _ = _hub(overlay=store)
+
+    async def narrowed(device_id: str, group: str, on: bool) -> None:
+        if group == "obs" and on:
+            await hub.revoke_overlay(device_id, "obs narrowed")
+
+    async def removed(device_id: str, reason: str) -> None:
+        await hub.revoke_overlay(device_id, reason)
+
+    registry.on_narrowed.append(narrowed)
+    pairing.on_revoked(removed)
+    laptop = (await pair_node(pairing, tmp_path, name="Stream PC")).node_id
+    store.issue(node_overlay_label(laptop))
+    await registry.set_narrowed(laptop, "obs", True)  # the node is not connected
+    assert not store.credentials()
+    store.issue(node_overlay_label(laptop))
+    assert await pairing.revoke(laptop, reason="test")
     assert not store.credentials()
 
 

@@ -26,7 +26,8 @@ for that node (`?device=<id>`) moves its mouth with the node's speech, and no ot
 **Overlay credential** (`nox/overlay/credential`) - a node with `obs` enabled (and not narrowed)
 gets a read-only overlay credential, label `node:<id>`, at most once a minute; each new one
 revokes the previous and disconnects its pages. Revoked when the node is removed or `obs` is
-narrowed for it.
+narrowed for it - also while it is offline - and by a sweep over the persisted credentials at start
+and every second; the hub checks the node again whenever one is used (`TokenStore`).
 
 **Panic** - `security.panic` sends `nox/obs/panic` to every connected node that enabled `obs`.
 """
@@ -94,7 +95,7 @@ class SatelliteHub:
         audit: AuditLog | None = None,
         overlay: Any = None,
         disconnect_credential: Callable[[list[str]], Awaitable[int]] | None = None,
-        online: Callable[[str], bool] = lambda _device_id: True,
+        overlay_allowed: Callable[[str], bool] = lambda _device_id: False,
         opted_in: Callable[[str, str], bool] = lambda _device_id, _group: False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -109,14 +110,15 @@ class SatelliteHub:
         self._audit = audit
         self._overlay = overlay
         self._disconnect = disconnect_credential
-        self._online = online
+        #: Whether node `device_id` may hold an overlay credential: paired and not removed,
+        #: `obs` enabled on the device as it last said and not narrowed here - online or not.
+        #: Blocking (the database): read in a worker thread. Default and on failure: no.
+        self._overlay_allowed = overlay_allowed
         #: The owner's second key for `voice` on this node, from the database (blocking: read in
         #: a worker thread). Default and on any failure: no.
         self._opted_in = opted_in
         self._clock = clock
         self._nodes: dict[str, _Node] = {}
-        #: Nodes holding an overlay credential issued by this core since it started.
-        self.issued: set[str] = set()
         self._background: set[asyncio.Task[Any]] = set()
 
     def _node(self, device_id: str) -> _Node:
@@ -253,7 +255,9 @@ class SatelliteHub:
     async def _credential(self, device_id: str) -> dict[str, Any]:
         if self._overlay is None:
             return {"ok": False, "reason": "no_overlay"}
-        if not self._offers(device_id, "obs.request"):
+        if not self._offers(device_id, "obs.request") or not await self._may_hold_overlay(
+            device_id
+        ):
             return {"ok": False, "reason": "obs_not_enabled"}
         node = self._node(device_id)
         now = self._clock()
@@ -265,7 +269,6 @@ class SatelliteHub:
         credential, token = await asyncio.to_thread(self._overlay.issue, label)
         if revoked and self._disconnect is not None:
             await self._disconnect(list(revoked))
-        self.issued.add(device_id)
         self._record("node.overlay_credential", device_id, "allow", credential.credential_id)
         return {"ok": True, "token": token}
 
@@ -275,7 +278,6 @@ class SatelliteHub:
         """The node was removed, or `obs` narrowed for it: its overlay pages go dark now."""
         if self._overlay is None:
             return 0
-        self.issued.discard(device_id)
         label = node_overlay_label(device_id)
         revoked = await asyncio.to_thread(self._overlay.revoke_label, label)
         if revoked and self._disconnect is not None:
@@ -284,12 +286,31 @@ class SatelliteHub:
             self._record("node.overlay_revoked", device_id, "allow", reason[:64])
         return len(revoked)
 
-    async def sweep(self) -> None:
-        """A node that is connected but no longer offers `obs` (switched off on the device or
-        here) keeps no overlay credential."""
-        for device_id in list(self.issued):
-            if self._online(device_id) and not self._offers(device_id, "obs.request"):
-                await self.revoke_overlay(device_id, "obs switched off")
+    async def sweep(self) -> int:
+        """Every node overlay credential in the store - issued in this run or an earlier one -
+        whose node may not hold one any more (unknown, removed, `obs` off on the device or
+        narrowed here; online or not) is revoked. Run at start and every second. Returns how
+        many were revoked."""
+        if self._overlay is None:
+            return 0
+        from nox.ipc.tokens import NODE_OVERLAY_PREFIX  # noqa: PLC0415
+
+        devices = {
+            c.label[len(NODE_OVERLAY_PREFIX) :]
+            for c in self._overlay.credentials()
+            if c.label.startswith(NODE_OVERLAY_PREFIX)
+        }
+        revoked = 0
+        for device_id in sorted(devices):
+            if not await self._may_hold_overlay(device_id):
+                revoked += await self.revoke_overlay(device_id, "obs not allowed for the node")
+        return revoked
+
+    async def _may_hold_overlay(self, device_id: str) -> bool:
+        try:
+            return bool(await asyncio.to_thread(self._overlay_allowed, device_id))
+        except Exception:  # noqa: BLE001 - cannot tell: no
+            return False
 
     async def push_gates(self) -> None:
         """Tell every connected node with voice whether its microphone may listen - only when
