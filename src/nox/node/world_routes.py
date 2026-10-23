@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import ipaddress
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -160,6 +161,47 @@ EndOnNode = Callable[[NodeEntry], Awaitable[dict[str, Any]]]
 Reports = Callable[[], Iterable[tuple[str, Any]]]
 
 
+def host_of(address: str) -> str:
+    """An address as one spelling: no port, no brackets, no IPv6 zone, IPv4 out of `::ffff:`."""
+    text = str(address).strip().strip("[]").split("%", 1)[0].lower()
+    if not text:
+        return ""
+    try:
+        ip = ipaddress.ip_address(text)
+    except ValueError:
+        return text[:64]
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return str(mapped or ip)
+
+
+#: Addresses a node may report about itself in one hello or pong, at most (`NodeHello.addresses`).
+MAX_REPORTED_ADDRESSES = 16
+#: Addresses bound to one node during one lock, at most - reported ones, and connection
+#: addresses this core saw. Full: everyone counts as the controlled PC (`_saturate`).
+MAX_REPORTED_BOUND = 64
+MAX_OBSERVED_ADDRESSES = 16
+_PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",
+        "fe80::/10",
+        "fc00::/7",
+    )
+)
+
+
+def private_address(host: str) -> bool:
+    """RFC 1918, link-local or a unique-local IPv6 address - where a home's PCs are."""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(ip.version == net.version and ip in net for net in _PRIVATE_NETWORKS)
+
+
 def read_report(raw: Any) -> SessionReport | None:
     """A node's report, or None when it cannot be read (then nothing changes: fail closed)."""
     if isinstance(raw, SessionReport):
@@ -208,6 +250,9 @@ class NodeControl:
         reports: Reports = tuple,
         labels: Callable[[str], str] = lambda device_id: device_id[:8],
         linked: Callable[[str], str | None] = lambda _device_id: None,
+        audit: Callable[[str], None] = lambda _what: None,
+        addresses: Callable[[], Mapping[str, tuple[str, Iterable[str]]]] = dict,
+        own_addresses: Callable[[], Iterable[str]] = tuple,
         stop_hotkey: str = "ctrl+alt+shift+k",
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -217,6 +262,18 @@ class NodeControl:
         self._reports = reports
         self._labels = labels
         self._linked = linked
+        self._audit = audit
+        self._addresses = addresses
+        self._own_addresses = own_addresses
+        #: Where each node the lock holds for is on the network, kept while the lock holds (also
+        #: while it is disconnected): the connection addresses this core saw (at most
+        #: `MAX_OBSERVED_ADDRESSES`) and the private addresses it reported, oldest first (at most
+        #: `MAX_REPORTED_BOUND`). Never dropped while the lock holds; full means `saturated`.
+        self.node_observed: dict[str, set[str]] = {}
+        self.node_reported: dict[str, list[str]] = {}
+        self._full_logged: set[str] = set()
+        #: Nodes whose binding is full for the current lock (`_saturate`).
+        self.saturated: set[str] = set()
         self._stop = stop_hotkey
         self._clock = clock
         self.devices: dict[str, _Device] = {}
@@ -283,9 +340,119 @@ class NodeControl:
         ]
 
     def pull(self) -> None:
-        """Read the latest hello/pong reports of connected nodes."""
+        """Read the latest hello/pong reports and addresses of connected nodes."""
         for device_id, raw in self._reports():
             self.observe(device_id, raw)
+        for device_id, (peer, reported) in self._addresses().items():
+            # Only ever more while the lock holds: a later report cannot shrink the binding.
+            observed = host_of(peer)
+            if observed:
+                self._bind_observed(device_id, observed)
+            # What a node says about itself counts as a second signal: private addresses only.
+            for raw in list(reported)[:MAX_REPORTED_ADDRESSES]:
+                host = host_of(raw)
+                if host and private_address(host):
+                    self._bind_reported(device_id, host)
+        # Kept while the lock holds for a node - also while it is disconnected -, gone once it
+        # lifts: fail closed (spec C §1.5, SECURITY.md).
+        for known in (self.node_observed, self.node_reported):
+            for device_id in list(known):
+                device = self.devices.get(device_id)
+                if device is None or not self._locked(device):
+                    del known[device_id]
+                    self._full_logged.discard(device_id)
+                    self.saturated.discard(device_id)
+
+    @property
+    def node_addresses(self) -> dict[str, set[str]]:
+        """Every address bound to each node: observed and reported."""
+        ids = set(self.node_observed) | set(self.node_reported)
+        return {
+            d: self.node_observed.get(d, set()) | set(self.node_reported.get(d, [])) for d in ids
+        }
+
+    def _bound(self, device_id: str) -> int:
+        return len(self.node_observed.get(device_id, set())) + len(
+            self.node_reported.get(device_id, [])
+        )
+
+    def _full(self, device_id: str, what: str) -> None:
+        if device_id not in self._full_logged:
+            self._full_logged.add(device_id)
+            log.warning("node.addresses_full", device_id=device_id[:8], what=what)
+
+    def _bind_observed(self, device_id: str, host: str) -> None:
+        observed = self.node_observed.setdefault(device_id, set())
+        if host in observed:
+            return
+        if len(observed) >= MAX_OBSERVED_ADDRESSES:
+            self._saturate(device_id, "observed")  # nothing is ever dropped instead
+            return
+        observed.add(host)
+
+    def _bind_reported(self, device_id: str, host: str) -> None:
+        reported = self.node_reported.setdefault(device_id, [])
+        if host in reported or host in self.node_observed.get(device_id, set()):
+            return
+        if len(reported) >= MAX_REPORTED_BOUND:
+            self._saturate(device_id, "reported")
+            return
+        reported.append(host)
+
+    def _saturate(self, device_id: str, what: str) -> None:
+        """A node's binding is full: from now on until its lock lifts, nobody is told apart from
+        the controlled PC any more - every paired device and this machine's dashboard and shell
+        are treated as that PC (fail closed, never an address dropped)."""
+        if device_id in self.saturated:
+            return
+        self.saturated.add(device_id)
+        self._full(device_id, what)
+        self._audit(f"saturated:{device_id[:8]}:{what}")
+        device = self.devices.get(device_id)
+        if device is not None:
+            self._publish(self._payload(device_id, device, "too many addresses"))
+
+    def is_saturated(self) -> bool:
+        """Whether the binding of a node the lock holds for is full (see `_saturate`)."""
+        return any(
+            device_id in self.saturated and self._locked(device)
+            for device_id, device in self.devices.items()
+        )
+
+    def controls_local(self) -> bool:
+        """Whether a node the lock holds for runs on this machine: it connects over loopback or
+        from one of this machine's own addresses. This machine's dashboard and shell are then
+        the controlled PC."""
+        if not self.active():
+            return False
+        if self.is_saturated():
+            return True
+        own = {h for h in (host_of(a) for a in self._own_addresses()) if h}
+        for device_id, device in self.devices.items():
+            if not self._locked(device):
+                continue
+            for observed in self.node_observed.get(device_id, set()):
+                try:
+                    loopback = ipaddress.ip_address(observed).is_loopback
+                except ValueError:
+                    return True  # not an address that can be told apart: this machine
+                if loopback or observed in own:
+                    return True
+        return False
+
+    def from_controlled(self, peer: str) -> bool:
+        """Whether a client connecting from `peer` sits on a PC the lock holds for: the same
+        address as that node. Such a browser counts as linked, whatever was set in the
+        dashboard."""
+        if self.active() and self.is_saturated():
+            return True
+        host = host_of(peer)
+        if not host or not self.active():
+            return False
+        return any(
+            self._locked(device) and host in self.node_addresses.get(device_id, set())
+            for device_id, device in self.devices.items()
+        )
 
     # -- the lock --------------------------------------------------------------------------------
 
@@ -331,6 +498,7 @@ class NodeControl:
             "stop": self._stop,
             "device": device.label,
             "device_id": device_id,
+            "saturated": device_id in self.saturated,
         }
 
     def _sync(self, device_id: str, device: _Device, *, reason: str = "") -> None:
@@ -603,6 +771,10 @@ REFUSE_NO_PIN = (
     "Nox controls mouse and keyboard on a paired PC; approving or changing anything now needs "
     "the security PIN, and none is set - deny, stop, or set a PIN first"
 )
+REFUSE_SATURATED = (
+    "Nox steuert ein Gerät mit sehr vielen Adressen - Freigaben und Nachrichten erst nach Ende "
+    "der Sitzung; Ablehnen und Stopp gehen immer"
+)
 REFUSE_ROLE = "Nox controls mouse and keyboard on a paired PC; this client cannot approve now"
 #: How long the remote-session check may take (it may start `loginctl`); slower is "unknown".
 REMOTE_CHECK_S = 3.0
@@ -649,24 +821,35 @@ async def session_refusal(
     """Why an "allow" or a request that changes something is refused while Nox controls a node,
     or None (spec C §1.5). Nox does not know the PIN, so the PIN is the guard:
 
-    1. the browser linked to a node Nox controls never approves or changes anything;
+    1. the browser on a node Nox controls never approves or changes anything - linked to it in
+       the dashboard, or connecting from that node's address;
     2. any other paired device, and this machine's dashboard or shell, only with the PIN (with
        the PIN's usual lockout; a paired device is removed after repeated wrong PINs);
     3. this machine's dashboard or shell not from a remote session - a remote desktop could be
        opened from the very PC Nox controls; a core running as a service without a login
        session counts as not remote (the PIN still applies);
-    4. no PIN set: refused. Reading, "deny" and Stopp are never asked here."""
+    4. no PIN set: refused. Reading, "deny" and Stopp are never asked here.
+
+    Talking to Nox (`chat.send`, `voice.ptt`) needs no PIN - except from the browser on the PC
+    Nox controls, which could otherwise be the one typing; the remote-session check still holds
+    for this machine's own dashboard and shell."""
+    from nox.ipc.dispatch import conversation_request  # noqa: PLC0415
     from nox.ipc.errors import IpcError  # noqa: PLC0415
     from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
     from nox.ipc.tokens import DEVICE_CLIENT_PREFIX  # noqa: PLC0415
 
     if not control.active():
         return None
+    if control.is_saturated():
+        # A node's binding is full: nobody is told apart from the controlled PC any more.
+        return REFUSE_SATURATED
     role = getattr(ctx, "role", "")
     if role == DEVICE_ROLE:
         device = str(getattr(ctx, "client_id", "")).removeprefix(DEVICE_CLIENT_PREFIX)
-        if control.controls_browser(device):
+        if control.controls_browser(device) or control.from_controlled(getattr(ctx, "peer", "")):
             return REFUSE_LINKED
+        if conversation_request(action):
+            return None
         if gate is None or not gate.is_required():
             return REFUSE_NO_PIN
         if device_guard is None:
@@ -677,5 +860,12 @@ async def session_refusal(
             return exc.message
         return None
     if role in LOCAL_UI_ROLES:
+        if conversation_request(action):
+            # Only the PIN is waived for talking, never the remote check (and talking on the
+            # controlled machine itself counts as untrusted, `wire_guards`).
+            return REFUSE_REMOTE if (await remote_now(remote)) is not False else None
+        if control.controls_local():
+            # The controlled PC is this machine: its own dashboard and shell are that PC.
+            return REFUSE_LINKED
         return await local_pin_refusal(ctx, pin, gate=gate, remote=remote, action=action)
     return REFUSE_ROLE

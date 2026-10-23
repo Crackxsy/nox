@@ -179,7 +179,9 @@ All off by default except music; each is switched on only here, with `nox node a
   anything; every other device and the computer Nox runs on can, with the security PIN (no PIN
   set: nothing can be allowed until the session ends). On the computer Nox runs on it is refused
   through a remote desktop (a Pi running Nox as a service has no remote session: the PIN
-  applies). Deny and Stopp always work. If a PC went silent and its line stays, "Sperre lösen"
+  applies). Deny and Stopp always work, and talking to Nox (chat, push-to-talk) needs no PIN -
+  except from the browser on the controlled PC, which sees "nothing can be approved from here"
+  instead of a PIN field. If a PC went silent and its line stays, "Sperre lösen"
   with the PIN on the computer Nox runs on lifts it.
 - **Vanguard and similar drivers:** an anti-cheat driver that starts with Windows (Riot Vanguard's
   `vgk`) runs all the time - mouse and keyboard stay locked on that PC for as long as it is

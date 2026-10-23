@@ -20,6 +20,8 @@ export interface ComputerUseNotice {
   device: string;
   /** That PC's node id; empty for the machine Nox runs on. */
   deviceId: string;
+  /** That PC reported more addresses than Nox keeps: until the session ends nobody can approve. */
+  saturated?: boolean;
 }
 
 /** A malformed event is `null`: the banner never appears on a payload nobody can read. */
@@ -31,6 +33,7 @@ export function parseComputerUse(payload: unknown): ComputerUseNotice | null {
     stop: str(payload.stop),
     device: str(payload.device),
     deviceId: str(payload.device_id),
+    saturated: payload.saturated === true,
   };
 }
 
@@ -40,6 +43,11 @@ export function parseNodeControl(payload: unknown): ComputerUseNotice[] {
   return payload.sessions
     .map(parseComputerUse)
     .filter((n): n is ComputerUseNotice => n !== null && n.active && n.deviceId !== '');
+}
+
+/** `node.computer.status {controlled_here}`: this browser runs on a PC Nox controls right now. */
+export function parseControlledHere(payload: unknown): boolean {
+  return isRecord(payload) && payload.controlled_here === true;
 }
 
 /** The sessions on paired PCs after one notice: a start replaces that PC's entry, an end removes it. */

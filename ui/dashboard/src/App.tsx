@@ -36,6 +36,7 @@ import {
   parseHealthReport,
   parseHomeCommand,
   parseLanStatus,
+  parseControlledHere,
   parseNodeControl,
   parsePendingPrompts,
   parsePermissionRequested,
@@ -272,7 +273,11 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
       let next = s;
       // The header line for PCs Nox controls survives a reconnect: the core says it again.
       if (control.status === 'fulfilled') {
-        next = { ...next, nodeComputerUse: parseNodeControl(control.value) };
+        next = {
+          ...next,
+          nodeComputerUse: parseNodeControl(control.value),
+          nodeControlHere: parseControlledHere(control.value),
+        };
       }
       if (snapshot.status === 'fulfilled') next = applyStateSnapshot(next, snapshot.value);
       if (health.status === 'fulfilled') {
@@ -346,7 +351,13 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
     void api
       .nodeComputerStatus(client)
       .then((payload) => {
-        if (!cancelled) setState((s) => ({ ...s, nodeComputerUse: parseNodeControl(payload) }));
+        if (!cancelled) {
+          setState((s) => ({
+            ...s,
+            nodeComputerUse: parseNodeControl(payload),
+            nodeControlHere: parseControlledHere(payload),
+          }));
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -524,7 +535,8 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
   );
 
   const nodeControl = state.nodeComputerUse.length > 0;
-  const promptProps = { pinSet, onAnswered, nodeControl };
+  const controlledHere = nodeControl && state.nodeControlHere;
+  const promptProps = { pinSet, onAnswered, nodeControl, controlledHere };
   const onTalk = route.area === 'nox' && route.tab === 'talk';
   const inlineHere = route.area === 'today' || onTalk;
   const sheetPrompt = prompts.length > 0 && !inlineHere;
@@ -773,6 +785,7 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
               device={device}
               pinSet={pinSet}
               nodeControl={nodeControl}
+              controlledHere={controlledHere}
               onAnswered={onAnswered}
             />
             <Mounted onMount={onSheetMounted} />
