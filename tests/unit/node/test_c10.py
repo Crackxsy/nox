@@ -256,3 +256,50 @@ def test_the_wake_word_matcher_folds_lookalikes_too() -> None:
     assert match.addressed and match.kill
     assert fold_confusables("\uff2e\u200b\u03bf\u0445") == "nox"
     assert fold_confusables("Straße") == "straße"  # German letters are left alone
+
+
+# ---- this machine's own addresses (B4) ------------------------------------------------------
+
+
+def test_unreadable_own_addresses_count_as_this_machine_during_a_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import psutil
+
+    from nox.node.agent import ADDRESSES_UNREADABLE, all_local_addresses
+    from nox.node.world_routes import NodeControl
+    from tests.unit.node.test_c6_followup import LAPTOP, _report
+
+    def broken() -> Any:
+        raise PermissionError("no access to the interface table")
+
+    monkeypatch.setattr(psutil, "net_if_addrs", broken)
+    assert all_local_addresses() == [ADDRESSES_UNREADABLE]  # never an empty list
+    control = NodeControl(
+        None,
+        lambda _n: None,
+        addresses=lambda: {LAPTOP: ("192.0.2.20", [])},  # some other address on the LAN
+        own_addresses=all_local_addresses,
+    )
+    assert not control.controls_local()  # no session: nothing to protect
+    control.observe(LAPTOP, _report(2, True))
+    control.pull()
+    assert control.controls_local()  # cannot tell this machine apart: it is the controlled PC
+
+
+def test_an_own_address_lookup_that_raises_fails_closed() -> None:
+    from nox.node.world_routes import NodeControl
+    from tests.unit.node.test_c6_followup import LAPTOP, _report
+
+    def raising() -> list[str]:
+        raise RuntimeError("psutil is gone")
+
+    control = NodeControl(
+        None,
+        lambda _n: None,
+        addresses=lambda: {LAPTOP: ("192.0.2.20", [])},
+        own_addresses=raising,
+    )
+    control.observe(LAPTOP, _report(2, True))
+    control.pull()
+    assert control.controls_local()

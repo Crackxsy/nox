@@ -427,7 +427,16 @@ class NodeControl:
             return False
         if self.is_saturated():
             return True
-        own = {h for h in (host_of(a) for a in self._own_addresses()) if h}
+        from nox.node.agent import ADDRESSES_UNREADABLE  # noqa: PLC0415
+
+        try:
+            addresses = list(self._own_addresses())
+        except Exception:  # noqa: BLE001 - cannot tell: this machine
+            addresses = [ADDRESSES_UNREADABLE]
+        if ADDRESSES_UNREADABLE in addresses:
+            # This machine's addresses are unknown: any locked node could be running here.
+            return any(self._locked(device) for device in self.devices.values())
+        own = {h for h in (host_of(a) for a in addresses) if h}
         for device_id, device in self.devices.items():
             if not self._locked(device):
                 continue

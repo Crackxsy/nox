@@ -132,16 +132,24 @@ def local_addresses() -> list[str]:
     return found[:16]
 
 
+#: What `all_local_addresses` returns when this machine's addresses cannot be read: "could be
+#: any of them" - while Nox controls a node, this machine's own dashboard and shell then count
+#: as the controlled PC (`NodeControl.controls_local`), never as some other machine.
+ADDRESSES_UNREADABLE = "*"
+
+
 def all_local_addresses() -> list[str]:
     """Every address of every interface of this machine - uncapped and unfiltered, loopback,
     virtual adapters and interfaces that are down included: for telling whether a peer is this
-    machine (`NodeControl.controls_local`), where a missing address would fail open."""
+    machine (`NodeControl.controls_local`), where a missing address would fail open. When they
+    cannot be read: `[ADDRESSES_UNREADABLE]` (fail closed), never an empty list."""
     import psutil  # noqa: PLC0415
 
     try:
         interfaces = psutil.net_if_addrs()
-    except (OSError, RuntimeError):
-        return []
+    except Exception as exc:  # noqa: BLE001 - whatever went wrong, the answer is "unknown"
+        log.warning("node.own_addresses_unreadable", error=type(exc).__name__)
+        return [ADDRESSES_UNREADABLE]
     found: list[str] = []
     for entries in interfaces.values():
         for entry in entries:
