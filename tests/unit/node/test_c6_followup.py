@@ -521,3 +521,30 @@ def test_the_binding_only_grows_while_the_lock_holds() -> None:
     control.observe(LAPTOP, _report(3, False))  # the lock lifts: everything goes
     control.pull()
     assert control.node_addresses == {} and control.node_observed == {}
+
+
+def test_the_binding_is_capped_and_a_real_connection_always_gets_a_place() -> None:
+    from nox.node.world_routes import MAX_BOUND_ADDRESSES, MAX_OBSERVED_ADDRESSES
+
+    now: dict[str, Any] = {"peer": "192.168.1.20", "reported": []}
+    control = NodeControl(
+        None, lambda _n: None, addresses=lambda: {LAPTOP: (now["peer"], now["reported"])}
+    )
+    control.observe(LAPTOP, _report(2, True))
+    for block in range(10):  # a node that keeps reporting new addresses, 16 at a time
+        now["reported"] = [f"10.{block}.0.{i}" for i in range(16)]
+        control.pull()
+    assert len(control.node_reported[LAPTOP]) == MAX_BOUND_ADDRESSES - 1  # full: no more
+    assert control._bound(LAPTOP) == MAX_BOUND_ADDRESSES
+    # A real connection from a new address still gets a place: the oldest report gives way.
+    oldest = control.node_reported[LAPTOP][0]
+    now.update(peer="192.168.1.30", reported=[])
+    control.pull()
+    assert control.from_controlled("192.168.1.30") and not control.from_controlled(oldest)
+    assert control._bound(LAPTOP) == MAX_BOUND_ADDRESSES
+    # Observed connection addresses have their own cap.
+    for i in range(40):
+        now["peer"] = f"192.168.2.{i}"
+        control.pull()
+    assert len(control.node_observed[LAPTOP]) == MAX_OBSERVED_ADDRESSES
+    assert control._bound(LAPTOP) <= MAX_BOUND_ADDRESSES

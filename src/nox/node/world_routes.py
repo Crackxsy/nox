@@ -174,8 +174,12 @@ def host_of(address: str) -> str:
     return str(mapped or ip)
 
 
-#: Addresses a node may report about itself, at most (`NodeHello.addresses`).
+#: Addresses a node may report about itself in one hello or pong, at most (`NodeHello.addresses`).
 MAX_REPORTED_ADDRESSES = 16
+#: Addresses bound to one node during one lock, at most - so a node cannot grow the binding
+#: without end; and of these, connection addresses this core saw, at most.
+MAX_BOUND_ADDRESSES = 64
+MAX_OBSERVED_ADDRESSES = 16
 _PRIVATE_NETWORKS = tuple(
     ipaddress.ip_network(n)
     for n in (
@@ -259,12 +263,13 @@ class NodeControl:
         self._linked = linked
         self._addresses = addresses
         self._own_addresses = own_addresses
-        #: Each node's connection address as this core sees it (kept like `node_addresses`).
+        #: Where each node the lock holds for is on the network, kept while the lock holds (also
+        #: while it is disconnected): the connection addresses this core saw (at most
+        #: `MAX_OBSERVED_ADDRESSES`) and the private addresses it reported, oldest first (all
+        #: together at most `MAX_BOUND_ADDRESSES`; an observed address always gets a place).
         self.node_observed: dict[str, set[str]] = {}
-        #: Where each node the lock holds for is on the network: its connection's address as
-        #: this core sees it and the private addresses its hello reported - kept while the lock
-        #: holds, also while the node is disconnected.
-        self.node_addresses: dict[str, set[str]] = {}
+        self.node_reported: dict[str, list[str]] = {}
+        self._full_logged: set[str] = set()
         self._stop = stop_hotkey
         self._clock = clock
         self.devices: dict[str, _Device] = {}
@@ -335,25 +340,64 @@ class NodeControl:
         for device_id, raw in self._reports():
             self.observe(device_id, raw)
         for device_id, (peer, reported) in self._addresses().items():
+            # Only ever more while the lock holds: a later report cannot shrink the binding.
             observed = host_of(peer)
             if observed:
-                self.node_observed.setdefault(device_id, set()).add(observed)
-            hosts = {observed} if observed else set()
+                self._bind_observed(device_id, observed)
             # What a node says about itself counts as a second signal: private addresses only.
             for raw in list(reported)[:MAX_REPORTED_ADDRESSES]:
                 host = host_of(raw)
                 if host and private_address(host):
-                    hosts.add(host)
-            if hosts:
-                # Only ever more while the lock holds: a later report cannot shrink the binding.
-                self.node_addresses.setdefault(device_id, set()).update(hosts)
+                    self._bind_reported(device_id, host)
         # Kept while the lock holds for a node - also while it is disconnected -, gone once it
         # lifts: fail closed (spec C §1.5, SECURITY.md).
-        for known in (self.node_addresses, self.node_observed):
+        for known in (self.node_observed, self.node_reported):
             for device_id in list(known):
                 device = self.devices.get(device_id)
                 if device is None or not self._locked(device):
                     del known[device_id]
+                    self._full_logged.discard(device_id)
+
+    @property
+    def node_addresses(self) -> dict[str, set[str]]:
+        """Every address bound to each node: observed and reported."""
+        ids = set(self.node_observed) | set(self.node_reported)
+        return {
+            d: self.node_observed.get(d, set()) | set(self.node_reported.get(d, [])) for d in ids
+        }
+
+    def _bound(self, device_id: str) -> int:
+        return len(self.node_observed.get(device_id, set())) + len(
+            self.node_reported.get(device_id, [])
+        )
+
+    def _full(self, device_id: str, what: str) -> None:
+        if device_id not in self._full_logged:
+            self._full_logged.add(device_id)
+            log.warning("node.addresses_full", device_id=device_id[:8], what=what)
+
+    def _bind_observed(self, device_id: str, host: str) -> None:
+        observed = self.node_observed.setdefault(device_id, set())
+        if host in observed:
+            return
+        if len(observed) >= MAX_OBSERVED_ADDRESSES:
+            self._full(device_id, "observed")
+            return
+        reported = self.node_reported.get(device_id, [])
+        if host in reported:
+            reported.remove(host)  # it is a real connection now
+        elif self._bound(device_id) >= MAX_BOUND_ADDRESSES and reported:
+            reported.pop(0)  # a real connection always wins a place over what a node said
+        observed.add(host)
+
+    def _bind_reported(self, device_id: str, host: str) -> None:
+        reported = self.node_reported.setdefault(device_id, [])
+        if host in reported or host in self.node_observed.get(device_id, set()):
+            return
+        if self._bound(device_id) >= MAX_BOUND_ADDRESSES:
+            self._full(device_id, "reported")
+            return
+        reported.append(host)
 
     def controls_local(self) -> bool:
         """Whether a node the lock holds for runs on this machine: it connects over loopback or
