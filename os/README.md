@@ -409,12 +409,14 @@ removes the setup secrets, the firewall opens the node port.
 **Wrong claim codes** slow down the address that sent them, root-side: 1 s after the first,
 doubling to at most 5 minutes; and they count towards a budget of 200 per boot - **one budget for
 the LAN and one for the setup hotspot**, so a noisy peer in the home network cannot lock out the
-owner on the hotspot (or the other way round), and an owner who proved the code in the portal
-this boot can claim from the home network even after the LAN's budget is spent. The math: a claim
-code has at least 40 bits (8 characters of 32 letters; the device's own and the PC assistant's
-have 12 characters = 60 bits); 200 guesses find a 40-bit code with a chance of at most 2e-10, a
-60-bit one with 2e-16. A small hard lock would only hand a LAN peer a way to lock the owner out
-until the next power cycle.
+owner on the hotspot (or the other way round). Past a spent budget, every further wrong code costs
+its address the full 5 minutes at once. There is **no exemption and no hard lock**: the code is
+compared first (in constant time), a right code succeeds unless its own address is waiting, and
+every wrong one counts - whatever the portal staged. The math: a claim code has at least 40 bits
+(8 characters of 32 letters; the device's own and the PC assistant's have 12 characters = 60
+bits); 200 guesses find a 40-bit code with a chance of at most 2e-10, a 60-bit one with 2e-16, and
+past the budget each address gets one guess per 5 minutes. A small hard lock would only hand a
+LAN peer a way to lock the owner out until the next power cycle.
 
 The core has one read-only request for O4, `noxos.claim.status` (owner or not, setup window, its
 time left).

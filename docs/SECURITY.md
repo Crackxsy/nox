@@ -1078,8 +1078,9 @@ breaks it and the QEMU boot test checks it on the running system. In short:
   - **Claim:** while unclaimed the core serves only the claim on the LAN and the firewall keeps the
     node port closed (fail closed). Claiming needs the one-time claim code within the window; the
     root helper checks it - wrong codes slow their address down (1 s doubling to 5 minutes) and
-    count towards a budget of 200 per boot, separate for the LAN and the hotspot, so one noisy
-    peer cannot lock the owner out (codes have 40-60 bits) - and only it writes the root-owned
+    count towards a budget of 200 per boot, separate for the LAN and the hotspot (past it: 5
+    minutes per wrong code at once); no exemptions and no hard lock, so one noisy peer cannot lock
+    the owner out (codes have 40-60 bits) - and only it writes the root-owned
     claim mark the firewall and the core go by. The claim ends setup mode (hotspot down before the
     firewall opens the node port), applies the PIN and passphrase, and is audited without any
     secret.

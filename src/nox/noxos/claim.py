@@ -81,7 +81,6 @@ CLAIMS_TOTAL = 20
 #: The helper's refusals -> (HTTP status, the page's error code).
 REFUSALS: dict[str, tuple[int, str]] = {
     "claim_wrong": (401, "wrong_code"),
-    "claim_locked": (429, "locked"),
     "claim_wait": (429, "wait"),
     "not_setup": (403, "window_closed"),
     "claimed": (409, "claimed"),
@@ -387,7 +386,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "err_passphrase_short": "The passphrase needs at least 12 characters.",
         "err_passphrase_mismatch": "The two passphrases are not the same.",
         "err_wrong_code": "That claim code is not right.",
-        "err_locked": "Too many wrong codes. Unplug the Pi's power and plug it in again.",
         "err_window_closed": "Setup is closed. Unplug the Pi's power and plug it in again.",
         "err_claimed": "This Nox already has an owner.",
         "err_rate_limited": "Too many attempts. Wait a minute.",
@@ -441,8 +439,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "err_passphrase_short": "Die Passphrase braucht mindestens 12 Zeichen.",
         "err_passphrase_mismatch": "Die beiden Passphrasen sind nicht gleich.",
         "err_wrong_code": "Dieser Besitzer-Code stimmt nicht.",
-        "err_locked": "Zu viele falsche Codes. Zieh kurz den Strom vom Pi und steck ihn "
-        "wieder ein.",
         "err_window_closed": "Die Einrichtung ist geschlossen. Zieh kurz den Strom vom Pi und "
         "steck ihn wieder ein.",
         "err_claimed": "Dieser Nox hat schon einen Besitzer.",

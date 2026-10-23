@@ -31,9 +31,12 @@ shell, no paths, no units, no options:
 
 Wrong claim codes slow the address that sent them down (1 s, doubling, at most 5 minutes) and
 count towards a budget per boot - one for the LAN, one for the setup hotspot, so a noisy peer in
-one cannot use up the other's. A claim code has at least 40 bits (8 characters of a 32-letter
-alphabet; the device's own and the PC assistant's have 12 = 60 bits), so even a spent budget of
-200 guesses finds it with a chance of at most 200 / 2^40, about 2e-10.
+one cannot use up the other's. Once a budget is spent, every further wrong code from that side
+costs its address the full 5 minutes at once. There is no exemption and no hard lock: a right
+code always succeeds unless its own address is waiting, so nobody can lock the owner out. A claim
+code has at least 40 bits (8 characters of a 32-letter alphabet; the device's own and the PC
+assistant's have 12 = 60 bits): the 200 guesses of a budget find a 40-bit code with a chance of
+at most 200 / 2^40, about 2e-10, and past the budget each address gets one guess per 5 minutes.
 
 Passphrases and claim codes travel base64-encoded (UTF-8); passphrases have at least 12
 characters.
@@ -130,7 +133,8 @@ PENDING = RUN / "setup" / "pending.json"
 CLAIM_LOCK = RUN / "helper" / "claim.lock"
 CLAIM_PREFIX = b"nox-claim-v1:"
 CLAIM_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-#: Wrong claim codes per boot and per source kind (LAN, hotspot) before only a power cycle helps.
+#: Wrong claim codes per boot and per source kind (LAN, hotspot) before every further one costs
+#: its address the longest wait at once.
 CLAIM_BUDGET = 200
 #: Per address: the first wrong code costs 1 s, each further one twice as much, at most 5 min.
 CLAIM_BACKOFF_S = 1.0
@@ -744,14 +748,9 @@ def _kind(record: dict[str, object], kind: str) -> dict[str, object]:
     return entry
 
 
-def _may_try(system: System, kind: str, address: str, *, budget: bool = True) -> None:
-    """Refuse while this address waits, or when the kind's budget for this boot is spent."""
+def _may_try(system: System, kind: str, address: str) -> None:
+    """Refuse while this address waits after a wrong code - nothing else holds a sender up."""
     entry = _kind(_failures(system), kind)
-    total = entry.get("total")
-    if budget and isinstance(total, int) and total >= CLAIM_BUDGET:
-        raise Refused(
-            "too many wrong claim codes; unplug the power and plug it in again", "claim_locked"
-        )
     addresses = entry["addresses"]
     assert isinstance(addresses, dict)
     mine = addresses.get(address)
@@ -772,21 +771,24 @@ def _failed(system: System, kind: str, address: str) -> None:
     count = mine.get("count") if isinstance(mine, dict) else 0
     count = (count if isinstance(count, int) else 0) + 1
     delay = min(CLAIM_BACKOFF_S * 2 ** (count - 1), CLAIM_BACKOFF_MAX_S)
+    if entry["total"] >= CLAIM_BUDGET:  # type: ignore[operator]
+        delay = CLAIM_BACKOFF_MAX_S  # this side's budget is spent: the longest wait at once
     addresses[address] = {"count": count, "until": system.uptime() + delay}
     while len(addresses) > CLAIM_ADDRESSES:
         addresses.pop(next(iter(addresses)))
     system.write(CLAIM_FAILURES, json.dumps(record) + "\n", 0o600)
 
 
-def _check_code(system: System, request: Request, kind: str, *, budget: bool = True) -> None:
-    """Before anything: unclaimed, in the window, the sender may try - then the code."""
+def _check_code(system: System, request: Request, kind: str) -> None:
+    """Unclaimed, in the window, the sender not waiting - then the code, compared in constant
+    time. Every wrong one counts, whatever was staged."""
     if claimed(system):
         raise Refused("this Nox already has an owner", "claimed")
     if not in_setup_mode(system):
         raise Refused(
             "setup is closed; unplug the power and plug it in again to reopen it", "not_setup"
         )
-    _may_try(system, kind, request.address, budget=budget)
+    _may_try(system, kind, request.address)
     expected = str(_read_json(system, CLAIM).get("hash", ""))
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected):
         raise Refused("this device has no claim code", "no_claim_code")
@@ -807,7 +809,6 @@ def stage(system: System, request: Request) -> dict[str, object]:
             pending["pin"] = request.pin
         if request.new_passphrase is not None:
             pending["passphrase"] = request.new_passphrase
-        pending["verified"] = True
         system.write(PENDING, json.dumps(pending) + "\n", 0o600)
     answer = status(system)
     answer["staged"] = "ok"
@@ -819,11 +820,11 @@ def claim(system: System, request: Request) -> dict[str, object]:
     Success marks the device claimed - root's file, the firewall and Nox go by it - sets the
     maintenance passphrase (the one sent, else the one staged with the right code in the setup
     portal; never over an existing one), ends setup mode - hotspot and portal down before the
-    firewall is regenerated - and hands over the staged PIN. Someone who already proved the code
-    in the setup portal this boot is not held up by a LAN whose budget a noisy peer spent."""
+    firewall is regenerated - and hands over the staged PIN. What was staged changes nothing
+    about how the code is checked."""
     with exclusive(system, CLAIM_LOCK):
         pending = _read_json(system, PENDING) if _root_flag(system, PENDING) else {}
-        _check_code(system, request, "lan", budget=pending.get("verified") is not True)
+        _check_code(system, request, "lan")
         passphrase = request.new_passphrase
         if passphrase is None and isinstance(pending.get("passphrase"), str):
             passphrase = str(pending["passphrase"])

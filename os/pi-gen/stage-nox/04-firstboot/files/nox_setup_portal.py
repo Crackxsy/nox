@@ -142,8 +142,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "err_claim_code": "Type the claim code.",
         "err_claim_wrong": "That claim code is not right - nothing was saved.",
         "err_claim_wait": "Wrong claim codes slow Nox down. Wait a moment, then try again.",
-        "err_claim_locked": "Too many wrong claim codes. Unplug the Pi's power and plug it in "
-        "again.",
         "err_wrong_password": "Nox could not join {ssid}: the password was not accepted. "
         "Try again.",
         "err_not_found": "Nox could not find {ssid}. Is it in range?",
@@ -214,8 +212,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "err_claim_wrong": "Dieser Besitzer-Code stimmt nicht - es wurde nichts gespeichert.",
         "err_claim_wait": "Falsche Besitzer-Codes bremsen Nox. Warte kurz und versuch es dann "
         "noch einmal.",
-        "err_claim_locked": "Zu viele falsche Besitzer-Codes. Zieh kurz den Strom vom Pi und "
-        "steck ihn wieder ein.",
         "err_wrong_password": "Nox konnte {ssid} nicht beitreten: Das Passwort wurde nicht "
         "angenommen. Versuch es noch einmal.",
         "err_not_found": "Nox hat {ssid} nicht gefunden. Ist es in Reichweite?",
@@ -626,7 +622,7 @@ def form_page(
     if isinstance(provision, dict) and provision.get("imported") is False:
         notices.append(t["err_provision"].format(code=str(provision.get("error", ""))[:40]))
     error = status.get("error")
-    if error in ("claim_wrong", "claim_wait", "claim_locked"):
+    if error in ("claim_wrong", "claim_wait"):
         notices.append(t["err_" + str(error)])
     elif isinstance(error, str) and error and status.get("state") != "failed":
         notices.append(t["err_saved"].format(code=error[:40]))

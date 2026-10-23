@@ -802,36 +802,71 @@ def test_the_backoff_doubles_up_to_five_minutes(tmp_path: Path) -> None:
     )
 
 
-def test_a_noisy_lan_cannot_block_a_claim_from_the_hotspot(tmp_path: Path) -> None:
-    sys_ = system(tmp_path)
+def test_staged_secrets_never_exempt_lan_guesses(tmp_path: Path) -> None:
+    """A verified-looking pending record changes nothing: every wrong LAN code still counts."""
+    uptime = {"now": 100.0}
+    sys_ = helper.System(
+        run=FakeRun(), root=tmp_path, root_uid=OWN_UID, uptime=lambda: uptime["now"]
+    )
     _claimable(tmp_path)
-    # The LAN's budget for this boot, spent by a crowd of addresses.
+    open_setup(tmp_path, until=100_000)
+    helper.handle(_stage_req(pin="135790", new=PASS), sys_)
+    pending = tmp_path / "run/nox-os/setup/pending.json"
+    record = json.loads(pending.read_text("ascii"))
+    assert "verified" not in record
+    record["verified"] = True  # whatever got there
+    pending.write_text(json.dumps(record), "ascii")
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(_claim_req("ZZZZ-ZZZZ-ZZZZ", peer=NOISY_PEER), sys_)
+    assert refused.value.code == "claim_wrong"
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(_claim_req("ZZZZ-ZZZZ-ZZZZ", peer=NOISY_PEER), sys_)
+    assert refused.value.code == "claim_wait"  # backed off, no exemption
+    failures = json.loads((tmp_path / "run/nox-os/claim-failures").read_text("ascii"))
+    assert failures["kinds"]["lan"]["total"] == 1
+
+
+def test_the_owner_on_the_hotspot_is_not_held_up_by_a_lan_peer(tmp_path: Path) -> None:
+    uptime = {"now": 100.0}
+    sys_ = helper.System(
+        run=FakeRun(), root=tmp_path, root_uid=OWN_UID, uptime=lambda: uptime["now"]
+    )
+    _claimable(tmp_path)
+    open_setup(tmp_path, until=100_000)
+    with pytest.raises(helper.Refused):
+        helper.handle(_claim_req("ZZZZ-ZZZZ-ZZZZ", peer=NOISY_PEER), sys_)
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(_claim_req(peer=NOISY_PEER), sys_)
+    assert refused.value.code == "claim_wait"  # the noisy peer waits, even with the right code
+    # The owner, on the hotspot, right now: not held up.
+    assert helper.handle(_stage_req(pin="135790"), sys_)["staged"] == "ok"
+    # ... nor from another address in the home network.
+    assert helper.handle(_claim_req(peer=LAN_PEER), sys_)["claim"] == "ok"
+
+
+def test_a_spent_budget_slows_every_wrong_code_but_never_locks_the_owner_out(
+    tmp_path: Path,
+) -> None:
+    uptime = {"now": 100.0}
+    sys_ = helper.System(
+        run=FakeRun(), root=tmp_path, root_uid=OWN_UID, uptime=lambda: uptime["now"]
+    )
+    _claimable(tmp_path)
+    open_setup(tmp_path, until=100_000)
     failures = {
         "boot_id": BOOT_ID,
         "kinds": {"lan": {"total": helper.CLAIM_BUDGET, "addresses": {}}},
     }
     (tmp_path / "run/nox-os/claim-failures").write_text(json.dumps(failures), "ascii")
     with pytest.raises(helper.Refused) as refused:
-        helper.handle(_claim_req(peer="192.0.2.40"), sys_)
-    assert refused.value.code == "claim_locked"
-    # The hotspot is counted on its own: the owner proves the code there ...
-    helper.handle(_stage_req(pin="135790", new=PASS), sys_)
-    # ... and then claims from the home network with it, past the spent LAN budget.
-    assert helper.handle(_claim_req(peer="192.0.2.40"), sys_)["claim"] == "ok"
-
-
-def test_the_hotspots_budget_is_its_own(tmp_path: Path) -> None:
-    sys_ = system(tmp_path)
-    _claimable(tmp_path)
-    failures = {
-        "boot_id": BOOT_ID,
-        "kinds": {"hotspot": {"total": helper.CLAIM_BUDGET, "addresses": {}}},
-    }
-    (tmp_path / "run/nox-os/claim-failures").write_text(json.dumps(failures), "ascii")
-    with pytest.raises(helper.Refused) as refused:
-        helper.handle(_stage_req(pin="135790"), sys_)
-    assert refused.value.code == "claim_locked"
-    assert helper.handle(_claim_req(), sys_)["claim"] == "ok"
+        helper.handle(_claim_req("ZZZZ-ZZZZ-ZZZZ", peer="192.0.2.41"), sys_)
+    assert refused.value.code == "claim_wrong"
+    record = json.loads((tmp_path / "run/nox-os/claim-failures").read_text("ascii"))
+    first = record["kinds"]["lan"]["addresses"]["192.0.2.41"]
+    assert first["until"] == 100.0 + helper.CLAIM_BACKOFF_MAX_S  # the longest wait at once
+    assert "hotspot" not in record["kinds"]  # the hotspot's budget is its own
+    # A right code from an address that is not waiting still claims.
+    assert helper.handle(_claim_req(peer="192.0.2.42"), sys_)["claim"] == "ok"
 
 
 def test_no_claim_outside_the_window_or_without_a_code(tmp_path: Path) -> None:
