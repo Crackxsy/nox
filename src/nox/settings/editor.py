@@ -193,22 +193,42 @@ class ConfigEditor:
             raise PermissionError(exc.reason) from exc
 
     def _satellite_widening(self, values: Mapping[str, Any]) -> bool:
-        """Whether `presets.items` switches `from_satellites` on for a preset that did not have
-        it (C9): a phrase anyone near a satellite can say, so it needs the PIN."""
-        items = values.get("presets.items")
-        if not isinstance(items, list):
+        """Whether this write lets a voice satellite start something it could not start before
+        (C9): a preset that ends up `from_satellites` with phrases and steps that no preset marked
+        so had already - newly marked, or an allowed one rewritten (its phrases, its steps, or
+        another preset's id). Decided on the validated candidate, never on raw values; a
+        candidate that does not validate changes nothing (the write is refused anyway) - unless
+        it cannot be told, then the PIN is asked."""
+        if not any(key.startswith("presets.") for key in values):
             return False
-        before = {
-            preset.id
-            for preset in getattr(getattr(self._config, "presets", None), "items", [])
-            if getattr(preset, "from_satellites", False)
-        }
-        return any(
-            isinstance(item, Mapping)
-            and item.get("from_satellites") is True
-            and item.get("id") not in before
-            for item in items
-        )
+        from nox.core.config.presets import PresetsConfig  # noqa: PLC0415
+
+        current = getattr(self._config, "presets", None)
+        if current is None:
+            return True
+        merged = current.model_dump()
+        for key in ("enabled", "actions", "items"):
+            if f"presets.{key}" in values:
+                merged[key] = values[f"presets.{key}"]
+        try:
+            candidate = PresetsConfig.model_validate(merged)
+        except ValueError:
+            return False
+
+        def reachable(config: Any) -> set[str]:
+            import json  # noqa: PLC0415
+
+            return {
+                json.dumps(
+                    preset.model_dump(include={"triggers", "steps"}),
+                    sort_keys=True,
+                    default=str,
+                )
+                for preset in config.items
+                if preset.from_satellites
+            }
+
+        return not reachable(candidate) <= reachable(current)
 
     def _coerce(self, path: str, value: Any) -> Any:
         """Reject a non-editable path early; the value itself is validated by `NoxConfig`."""

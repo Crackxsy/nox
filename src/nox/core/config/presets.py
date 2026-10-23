@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import PurePath
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, StrictBool, field_validator, model_validator
 
 from nox.core.config.types import StrictSection
 
@@ -218,7 +218,7 @@ class PresetConfig(StrictSection):
     #: needs the PIN when one is set (`nox.settings.editor`). Such a run is an untrusted turn's:
     #: its steps go through the normal permission rules in the node's conversation, and it never
     #: switches the mode.
-    from_satellites: bool = False
+    from_satellites: StrictBool = False
 
 
 class PresetsConfig(StrictSection):

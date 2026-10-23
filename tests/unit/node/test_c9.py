@@ -1596,6 +1596,63 @@ async def test_marking_a_preset_for_satellites_needs_the_pin() -> None:
     await editor._authorize(widened, by="dashboard", pin="2468")
 
 
+@pytest.mark.parametrize("value", ["true", 1, "yes", "on"])
+def test_only_a_real_boolean_marks_a_preset_for_satellites(value: Any) -> None:
+    from pydantic import ValidationError
+
+    from nox.core.config.presets import PresetConfig
+
+    with pytest.raises(ValidationError):
+        PresetConfig.model_validate(
+            {
+                "id": "cosy",
+                "name": "Cosy",
+                "from_satellites": value,
+                "triggers": {"phrases": ["kuschelabend"]},
+                "steps": [{"kind": "scene", "entity_id": "scene.living_room"}],
+            }
+        )
+
+
+async def test_rewriting_a_preset_marked_for_satellites_needs_the_pin_too() -> None:
+    from nox.core.config import NoxConfig
+    from nox.core.config.presets import PresetsConfig
+    from nox.settings.editor import ConfigEditor
+
+    marked = {
+        "id": "cosy",
+        "name": "Cosy",
+        "from_satellites": True,
+        "triggers": {"phrases": ["kuschelabend"]},
+        "steps": [{"kind": "scene", "entity_id": "scene.living_room"}],
+    }
+    other = {
+        "id": "office",
+        "name": "Office",
+        "triggers": {"phrases": ["buero an"]},
+        "steps": [{"kind": "scene", "entity_id": "scene.office"}],
+    }
+    config = NoxConfig()
+    config.presets = PresetsConfig.model_validate({"items": [marked, other]})
+    editor = ConfigEditor.__new__(ConfigEditor)
+    editor._config = config  # type: ignore[attr-defined]
+
+    def widens(items: list[dict[str, Any]]) -> bool:
+        return editor._satellite_widening({"presets.items": items})
+
+    assert not widens([marked, other])  # unchanged
+    assert not widens([{**marked, "name": "Kuschelig"}, other])  # a new name only
+    assert not widens([{**marked, "id": "kuschel"}, other])  # a new id, the same content
+    assert not widens([{**marked, "from_satellites": False}, other])  # narrowing
+    new_steps = [{"kind": "scene", "entity_id": "scene.everything"}]
+    assert widens([{**marked, "steps": new_steps}, other])  # its steps rewritten
+    assert widens([{**marked, "triggers": {"phrases": ["alles an"]}}, other])  # its phrase
+    # The id of the marked one put on the other preset's content: still a new reachable thing.
+    swapped = [{**other, "id": "cosy", "from_satellites": True}, {**marked, "id": "office"}]
+    assert widens(swapped)
+    assert not widens([{**marked, "from_satellites": "true"}, other])  # refused by validation
+
+
 async def test_one_turn_runs_at_a_time_and_a_kill_cancels_it() -> None:
     from nox.core.events import Event as CoreEvent
     from tests.unit.core.test_orchestrator import make
