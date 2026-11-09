@@ -75,6 +75,9 @@ EDITABLE_PATHS: dict[str, str] = {
     "stream.twitch.rate_limit_min_gap_s": "integrations",
     "stream.twitch.min_backoff_s": "integrations",
     "stream.twitch.max_backoff_s": "integrations",
+    # What `!streamplan` answers and which other bots Nox ignores (read at plugin start).
+    "stream.twitch.schedule_text": "integrations",
+    "stream.twitch.ignored_chatters": "integrations",
     # Saying on stream that Nox's voice is AI-generated (`nox.stream.disclosure`). Read at start,
     # like the Twitch knobs: the chat line is posted per session, the overlay label set at boot.
     "stream.ai_voice_disclosure.enabled": "integrations",

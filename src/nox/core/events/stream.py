@@ -50,8 +50,12 @@ class StreamFunkenAwarded(BaseModel):
     """A viewer earned currency: chat activity, a subscription, bits, a raid."""
 
     viewer_id: str
+    #: Funken to credit. 0 means "at the configured rate for `reason`, times `units`": a plugin
+    #: that only saw "this viewer sent a message" does not know what that is worth.
     delta: float
     reason: str = ""
+    #: How many of the thing `reason` names (bits cheered, subs gifted); 1 for a single event.
+    units: float = 1.0
     #: A plugin never books currency itself, it only requests
     #: an award; the core's `FunkenService` decides and knows the real balance
     #: (`StreamFunkenChanged` carries the authoritative `balance_after`). Optional here so a

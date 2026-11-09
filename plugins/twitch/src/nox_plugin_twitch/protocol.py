@@ -89,12 +89,24 @@ class ChatTags:
     mod: bool = False
     subscriber: bool = False
     badges: list[str] = field(default_factory=list)
+    #: Bits cheered with this message (`bits` tag); 0 for an ordinary message.
+    bits: int = 0
+
+
+def non_negative_int(value: object) -> int:
+    """A tag value as a count; anything that is not a plain non-negative integer is 0."""
+    try:
+        number = int(str(value))
+    except ValueError:
+        return 0
+    return max(number, 0)
 
 
 def parse_chat_tags(tags: Mapping[str, Any]) -> ChatTags:
     badges_raw = str(tags.get("badges", ""))
     badges = [b for b in badges_raw.split(",") if b]
     return ChatTags(
+        bits=non_negative_int(tags.get("bits", 0)),
         display_name=str(tags.get("display-name", "")),
         user_id=str(tags.get("user-id", "")),
         mod=str(tags.get("mod", "0")) == "1",

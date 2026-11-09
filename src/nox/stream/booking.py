@@ -87,6 +87,11 @@ class FunkenBooking:
         reason = str(ev.payload.get("reason", ""))
         delta = float(ev.payload.get("delta", 0.0))
         if delta <= 0:
+            # No explicit amount: the configured rate for this reason, times the units. Reasons
+            # without a rate (and non-positive units) are worth nothing and are dropped here.
+            units = float(ev.payload.get("units", 1.0))
+            delta = self._funken.rate(reason) * units if units > 0 else 0.0
+        if delta <= 0:
             return
         cap = self._config.earn_daily_cap
         if cap > 0:

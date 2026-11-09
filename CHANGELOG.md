@@ -34,6 +34,22 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
 
 ### Added
+- **Twitch chat, every interaction (Stream Bot):** `!befehle` (English `!commands`) lists all chat
+  commands from one table, so the list cannot drift from what the bot answers; `!streamplan`
+  (`!schedule`) answers `stream.twitch.schedule_text` - or says honestly that none is set; info
+  commands answer at most once per 20 s for everyone, so a busy chat cannot turn the bot into a
+  spammer. **Funken can now be earned by taking part:** chatting, cheered bits, subscriptions,
+  gifted subs and raids request Funken at the configured `stream.funken.earn_per_*` rates (before,
+  only an `!rps` win paid out; the configured rates were never used). The core still decides:
+  cooldown, daily cap, "only while the stream is live". Other bots (`stream.twitch.ignored_chatters`,
+  Nightbot, StreamElements, Moobot, ... by default) are never answered, paid or able to trigger a
+  command, so two bots cannot answer each other's `!` lines.
+- **Twitch connection heals itself:** a connection that went silent without Twitch closing it
+  (sleep, Wi-Fi drop) is replaced after six minutes instead of listening to nothing for ever;
+  Twitch's `RECONNECT` and a malformed login token (`Improperly formatted auth`) are handled.
+- **The Twitch chat stays up in `rocket_league` mode** (profile, OBS and Twitch plugin): the
+  profile's one exception to "no egress" is `irc.chat.twitch.tv:6697` plus the local OBS
+  websocket, so the bot keeps answering while a game is in the foreground.
 - **Nodes: Nox's hands on your other computers** (Spec wave C, C1-C10; guide docs/NODES.md and
   docs/NODES.de.md, threat model and accepted limits in docs/SECURITY.md). Another PC, laptop or
   Pi in the home pairs as a `nox node` and lets Nox act there - only within what that device

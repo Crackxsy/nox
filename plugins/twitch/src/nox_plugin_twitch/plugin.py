@@ -4,8 +4,14 @@ Wraps one `TwitchIrcClient` (see `nox_plugin_twitch.irc_client`) and exposes it 
 (`twitch.chat.send`, `twitch.chat.status.read`), the events named in `manifest.yaml`
 (`twitch.connected/disconnected`, `twitch.chat_message` scored by a `RelevanceClassifier`,
 `twitch.command_invoked`, `stream.funken_awarded`, `stream.minigame_started/ended`), and the built-
-in `!rps`/`!funken`/`!hilfe`/`!help` chat commands, all answered through the same `_send` path as
-the `twitch.chat.send` tool (rate limiter + `ModerationGate`, never bypassed).
+in `!rps`/`!funken`/`!streamplan`/`!befehle`/`!hilfe` chat commands (English aliases `!schedule`,
+`!commands`, `!help`), all answered through the same `_send` path as the `twitch.chat.send` tool
+(rate limiter + `ModerationGate`, never bypassed).
+
+Funken are requested, never booked: chat messages, cheered bits, subscriptions, gifted subs and
+raids become `stream.funken_awarded` events (`delta` 0 = "use the configured rate"), and the
+core's `FunkenBooking` decides - cooldown, daily cap and "only while a stream session is live"
+live there.
 
 Health is reported honestly by `TwitchPlugin.health`: AVAILABLE only once actually connected and
 joined; UNAVAILABLE when the plugin has no `nox/twitch/oauth_token`/`nox/twitch/bot_username`
@@ -14,7 +20,9 @@ secret yet (no bot account exists until the operator creates one) or Twitch is u
 
 from __future__ import annotations
 
+import time
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -26,7 +34,7 @@ from nox.security.model import Risk
 
 from .irc_client import TwitchIrcClient, has_line_break
 from .moderation import ModerationGate
-from .protocol import ChatTags
+from .protocol import ChatTags, non_negative_int
 from .ratelimit import RateLimiter
 from .relevance import RelevanceClassifier
 from .rps import ALIASES as RPS_ALIASES
@@ -48,10 +56,35 @@ class ChatSendInput(BaseModel):
     text: str = Field(..., min_length=1, max_length=500, pattern=r"^[^\r\n\x00]+$")
 
 
-def _help_text(lang: str) -> str:
+#: What `!befehle` lists, as `(command, German usage, English usage)`. One table, so the list
+#: cannot drift from what the bot answers: `test_every_listed_command_is_handled` pins that.
+LISTED_COMMANDS: tuple[tuple[str, str, str], ...] = (
+    ("rps", "!rps <stein|schere|papier>", "!rps <rock|paper|scissors>"),
+    ("funken", "!funken", "!funken"),
+    ("streamplan", "!streamplan", "!schedule"),
+    ("befehle", "!befehle", "!commands"),
+)
+
+#: Commands that only inform. A busy chat asking the same thing must not turn the bot into a
+#: spammer, so each of them answers at most once per `INFO_COMMAND_COOLDOWN_S`, for everyone.
+INFO_COMMANDS: frozenset[str] = frozenset(
+    {"befehle", "commands", "hilfe", "help", "streamplan", "schedule"}
+)
+INFO_COMMAND_COOLDOWN_S = 20.0
+
+#: A viewer's chat messages are offered to the Funken ledger at most this often (the core applies
+#: its own, configured cooldown on top - this only keeps the event traffic down).
+MESSAGE_AWARD_GAP_S = 30.0
+
+#: Upper bound for the units of one gift-sub bundle, so a malformed tag cannot book a fortune.
+MAX_GIFT_UNITS = 100
+
+
+def command_list(lang: str) -> str:
+    """The `!befehle` / `!commands` answer: every listed command with its usage."""
     if lang == "de":
-        return "Befehle: !rps <stein|schere|papier>, !funken, !hilfe"
-    return "Commands: !rps <rock|paper|scissors>, !funken, !help"
+        return "Befehle: " + ", ".join(german for _name, german, _english in LISTED_COMMANDS)
+    return "Commands: " + ", ".join(english for _name, _german, english in LISTED_COMMANDS)
 
 
 class TwitchPlugin:
@@ -88,6 +121,7 @@ class TwitchPlugin:
             token_provider=self._get_token,
             nick_provider=self._get_nick,
             on_privmsg=self._on_privmsg,
+            on_usernotice=self._on_usernotice,
             on_connected=self._on_connected,
             on_disconnected=self._on_disconnected,
             tls=bool(api.config.get("tls", True)),
@@ -98,9 +132,18 @@ class TwitchPlugin:
         self._commands: dict[str, Any] = {
             "rps": self._cmd_rps,
             "funken": self._cmd_funken,
+            "befehle": self._cmd_help_de,
             "hilfe": self._cmd_help_de,
+            "commands": self._cmd_help,
             "help": self._cmd_help,
+            "streamplan": self._cmd_schedule_de,
+            "schedule": self._cmd_schedule,
         }
+        #: Injectable so tests can move time without sleeping.
+        self._clock: Callable[[], float] = time.monotonic
+        self._info_answered_at: dict[str, float] = {}
+        self._message_award_at: dict[str, float] = {}
+        self._ignored = {name.lower() for name in self.settings.ignored_chatters}
 
     async def _get_token(self) -> str | None:
         return await self.api.secrets.get(TWITCH_OAUTH_SECRET)
@@ -139,6 +182,10 @@ class TwitchPlugin:
         )
 
     async def _on_privmsg(self, tags: ChatTags, login: str, _channel: str, text: str) -> None:
+        if login.lower() in self._ignored:
+            # Another bot (or Nox's own account): never answered, never paid, never able to
+            # trigger a command - two bots reacting to each other's `!` lines is a loop.
+            return
         self._chat_event_id += 1
         chat_event_id = self._chat_event_id
         viewer_id = tags.user_id or login
@@ -157,6 +204,47 @@ class TwitchPlugin:
         )
         if text.startswith("!"):
             await self._handle_command(chat_event_id, viewer_id, text)
+        else:
+            await self._award_message(viewer_id)
+        if tags.bits > 0:
+            await self._award(viewer_id, "bit", float(tags.bits))
+
+    # -- Funken requests ---------------------------------------------------------------------------
+
+    async def _award(self, viewer_id: str, reason: str, units: float = 1.0) -> None:
+        """Ask the core to credit `viewer_id`; `delta` 0 means "at the configured rate"."""
+        if not viewer_id or units <= 0:
+            return
+        await self.api.events.emit(
+            "stream.funken_awarded",
+            {"viewer_id": viewer_id, "delta": 0.0, "reason": reason, "units": units},
+        )
+
+    async def _award_message(self, viewer_id: str) -> None:
+        now = self._clock()
+        last = self._message_award_at.get(viewer_id)
+        if last is not None and now - last < MESSAGE_AWARD_GAP_S:
+            return
+        self._message_award_at[viewer_id] = now
+        await self._award(viewer_id, "message")
+
+    async def _on_usernotice(
+        self, tags: dict[str, str], login: str, _channel: str, _text: str
+    ) -> None:
+        """Subscriptions, gifted subs and raids earn Funken (`msg-id` says which)."""
+        if login.lower() in self._ignored:
+            return
+        kind = tags.get("msg-id", "")
+        user_id = tags.get("user-id", "") or login
+        if kind in ("sub", "resub"):
+            await self._award(user_id, "sub")
+        elif kind == "subgift":
+            await self._award(user_id, "sub")  # the gifter earns; the recipient is not the actor
+        elif kind == "submysterygift":
+            count = non_negative_int(tags.get("msg-param-mass-gift-count", 1))
+            await self._award(user_id, "sub", float(min(count, MAX_GIFT_UNITS)))
+        elif kind == "raid":
+            await self._award(user_id, "raid")
 
     async def _handle_command(self, chat_event_id: int, viewer_id: str, text: str) -> None:
         parts = text[1:].split()
@@ -173,6 +261,12 @@ class TwitchPlugin:
             },
         )
         handler = self._commands.get(command)
+        if handler is not None and command in INFO_COMMANDS:
+            now = self._clock()
+            last = self._info_answered_at.get(command)
+            if last is not None and now - last < INFO_COMMAND_COOLDOWN_S:
+                return
+            self._info_answered_at[command] = now
         if handler is not None:
             try:
                 await handler(viewer_id, args)
@@ -183,13 +277,26 @@ class TwitchPlugin:
     # -- built-in commands -------------------------------------------------------------------------
 
     async def _cmd_help(self, _viewer_id: str, _args: list[str]) -> None:
-        """`!help` - English reply. `!hilfe` is wired to `_cmd_help_de` instead (`_commands` in
-        `__init__`): the dispatcher only ever hands a handler `(viewer_id, args)`, not the alias."""
-        await self._send(_help_text("en"))
+        """`!help` / `!commands` - English reply. `!hilfe` / `!befehle` are wired to
+        `_cmd_help_de` instead (`_commands` in `__init__`): the dispatcher only ever hands a handler
+        `(viewer_id, args)`, not the alias."""
+        await self._send(command_list("en"))
 
     async def _cmd_help_de(self, _viewer_id: str, _args: list[str]) -> None:
-        """`!hilfe` - German reply, see `_cmd_help`."""
-        await self._send(_help_text("de"))
+        """`!hilfe` / `!befehle` - German reply, see `_cmd_help`."""
+        await self._send(command_list("de"))
+
+    async def _cmd_schedule_de(self, _viewer_id: str, _args: list[str]) -> None:
+        """`!streamplan` - the schedule text the streamer wrote (`stream.twitch.schedule_text`)."""
+        text = self.settings.schedule_text.strip()
+        await self._send(
+            f"Streamplan: {text}" if text else "Es ist noch kein Streamplan hinterlegt."
+        )
+
+    async def _cmd_schedule(self, _viewer_id: str, _args: list[str]) -> None:
+        """`!schedule` - the same text, English frame."""
+        text = self.settings.schedule_text.strip()
+        await self._send(f"Schedule: {text}" if text else "No stream schedule has been set yet.")
 
     async def _cmd_funken(self, _viewer_id: str, _args: list[str]) -> None:
         """Balances live in the core's Funken ledger, not here (plugins never book

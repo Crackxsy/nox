@@ -48,7 +48,18 @@ def _require_param(value: str, what: str) -> str:
     return value
 
 
+#: Twitch pings an idle connection about every five minutes. A connection that has been silent
+#: for longer than this has died without the server saying so (sleep, Wi-Fi drop, NAT timeout):
+#: `readline()` would wait for ever and the bot would look connected while hearing nothing.
+DEFAULT_IDLE_TIMEOUT_S = 360.0
+
+#: `NOTICE` texts with which Twitch refuses the login (the wrong token format has its own text).
+_AUTH_FAILURES = ("authentication failed", "improperly formatted auth")
+
 PrivmsgHandler = Callable[[ChatTags, str, str, str], Awaitable[None] | None]
+#: `USERNOTICE` (subscription, gifted sub, raid, ...): `(tags, login, channel, text)`, where `tags`
+#: is the raw tag map (`msg-id`, `user-id`, `msg-param-*`).
+UsernoticeHandler = Callable[[dict[str, str], str, str, str], Awaitable[None] | None]
 ConnectedHook = Callable[[], Awaitable[None]]
 DisconnectedHook = Callable[[str], Awaitable[None]]
 TokenProvider = Callable[[], Awaitable[str | None]]
@@ -96,6 +107,8 @@ class TwitchIrcClient:
         max_backoff_s: float = 30.0,
         connector: Connector | None = None,
         authorize: Callable[[], None] | None = None,
+        on_usernotice: UsernoticeHandler | None = None,
+        idle_timeout_s: float = DEFAULT_IDLE_TIMEOUT_S,
     ) -> None:
         self.host = host
         self.port = port
@@ -106,6 +119,8 @@ class TwitchIrcClient:
         self._token_provider = token_provider
         self._nick_provider = nick_provider
         self._on_privmsg = on_privmsg
+        self._on_usernotice = on_usernotice
+        self._idle_timeout_s = idle_timeout_s
         self._on_connected = on_connected
         self._on_disconnected = on_disconnected
         #: Called synchronously before every connection attempt (: raw asyncio streams
@@ -196,7 +211,12 @@ class TwitchIrcClient:
         if self._on_connected is not None:
             await self._on_connected()
         while True:
-            raw = await reader.readline()
+            try:
+                raw = await asyncio.wait_for(reader.readline(), self._idle_timeout_s)
+            except TimeoutError:
+                raise ConnectionError(
+                    f"no data from Twitch for {self._idle_timeout_s:g} s; reconnecting"
+                ) from None
             if not raw:
                 raise ConnectionError("connection closed by server")
             await self._dispatch(raw.decode("utf-8", errors="replace"))
@@ -210,10 +230,22 @@ class TwitchIrcClient:
             target = msg.params[-1] if msg.params else ""
             await self._send_raw(f"PONG :{target}")
             return
+        if msg.command == "RECONNECT":
+            # Twitch is about to restart this chat server and asks clients to come back.
+            raise ConnectionError("Twitch asked the client to reconnect")
         if msg.command == "NOTICE":
             text = " ".join(msg.params).lower()
-            if "authentication failed" in text or "login authentication failed" in text:
+            if any(failure in text for failure in _AUTH_FAILURES):
                 raise TwitchAuthError(" ".join(msg.params))
+            return
+        if msg.command == "USERNOTICE":
+            if self._on_usernotice is not None:
+                channel = msg.params[0].lstrip("#") if msg.params else ""
+                text = msg.params[-1] if len(msg.params) > 1 else ""
+                login = msg.tags.get("login", "")
+                result = self._on_usernotice(msg.tags, login, channel, text)
+                if result is not None:
+                    await result
             return
         if msg.command == "JOIN":
             if msg.nick and self._nick and msg.nick.lower() == self._nick.lower():

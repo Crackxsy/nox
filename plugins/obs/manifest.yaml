@@ -16,7 +16,7 @@ name: OBS Studio
 version: 0.2.0
 api_version: 1
 entry: nox_plugin_obs:create
-profiles: [companion, stream]
+profiles: [companion, stream, rocket_league]   # rocket_league: Nox still sees OBS go live
 permissions:
   - tool: obs.status.read             # risk: read - full scene/source/stream-state snapshot
     risk: read
