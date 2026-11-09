@@ -66,10 +66,15 @@ def test_rocket_league_profile_matches_spec_6_5() -> None:
     profile = load_profile(PROFILES_DIR / "rocket_league.yaml")
     assert profile.id == "rocket_league"
     assert profile.cloud_allowed is False
-    assert profile.egress_allowlist == []
-    assert profile.loopback_allowlist == []
-    assert profile.integrations_allowed == ["rl"]
+    # The one deliberate exception to "no egress while a game is in the foreground": the Twitch
+    # chat connection (and the local OBS websocket that tells Nox the stream is live), so the chat
+    # bot does not go silent the moment a stream's game starts. Nothing else may be added here.
+    assert profile.egress_allowlist == ["irc.chat.twitch.tv:6697"]
+    assert profile.loopback_allowlist == ["127.0.0.1:4455"]
+    assert profile.integrations_allowed == ["rl", "twitch", "obs"]
     rule_ids = {r.id for r in profile.rules}
+    assert "rocket_league.twitch.chat" in rule_ids
+    assert "rocket_league.obs.read" in rule_ids
     assert "rocket_league.rl.read" in rule_ids
     assert "rocket_league.rl.calibrate" in rule_ids
     assert "rocket_league.rl.vision_enable" in rule_ids

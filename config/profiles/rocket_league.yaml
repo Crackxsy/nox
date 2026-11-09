@@ -10,8 +10,12 @@ permissions:
   id: rocket_league
   description: Rocket League is in the foreground. Observation only, minimal proactivity, no egress.
   cloud_allowed: false
-  egress_allowlist: []
-  loopback_allowlist: []            # no Ollama GPU use in this mode (config.py's
+  # Exactly one exception to "no egress": the Twitch chat connection (a few bytes per message).
+  # Streaming a game is the main reason to run the chat bot, and a bot that goes silent the moment
+  # the game starts answers no `!befehle`, `!rps` or `!funken`. Nothing else leaves the machine.
+  egress_allowlist: ["irc.chat.twitch.tv:6697"]
+  loopback_allowlist: ["127.0.0.1:4455"]   # the OBS websocket, to see the stream go live; no
+                                     # Ollama GPU use in this mode (config.py's
                                      # OllamaProviderConfig._never_in_game already enforces this
                                      # independent of this profile)
   memory_writes_allowed: true       # coaching-profile/pattern writes still allowed locally
@@ -22,8 +26,17 @@ permissions:
     # letter; the user layer overrides this entry if the install machine differs.
     - "%USERPROFILE%/Documents/My Games/Rocket League/TAGame/DemosEpic"
   tools_allowed: []
-  integrations_allowed: [rl]
+  integrations_allowed: [rl, twitch, obs]
   rules:
+    # The built-in chat commands answer through `twitch.chat.send`; OBS is read-only here.
+    - id: rocket_league.twitch.chat
+      tool: "twitch*"
+      action: "chat.send"
+      decision: allow
+    - id: rocket_league.obs.read
+      tool: "obs*"
+      risk: "read"
+      decision: allow
     - id: rocket_league.rl.read
       tool: "rl*"
       risk: "read"

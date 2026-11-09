@@ -11,7 +11,7 @@ name: Twitch Bot
 version: 0.1.0
 api_version: 1
 entry: nox_plugin_twitch:create
-profiles: [stream]
+profiles: [stream, rocket_league]   # chat must keep working while a game is in the foreground
 permissions:
   - tool: twitch.chat.send            # risk: low - rate-limited (20 msg/30s, >=1.5s gap) and
     risk: low                         # passed through ModerationGate.check before every send
