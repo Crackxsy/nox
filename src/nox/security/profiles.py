@@ -10,6 +10,7 @@ add prohibitions, never remove one.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Protocol
@@ -56,6 +57,15 @@ def validate_profile(profile: Profile) -> Profile:
         if rule.id in seen:
             raise ProfileError(f"profile {profile.id!r}: duplicate rule id {rule.id!r}")
         seen.add(rule.id)
+        if (
+            rule.decision is Decision.ALLOW
+            and rule.device
+            and re.fullmatch(r"[0-9a-f]{32}", rule.device) is None
+        ):
+            raise ProfileError(
+                f"profile {profile.id!r}: rule {rule.id!r} allows on device {rule.device!r}; "
+                "an allow for a node names exactly one device id (32 hex digits), no pattern"
+            )
         if rule.decision is Decision.DENY:
             continue
         hit = _rule_targets_prohibition(rule)

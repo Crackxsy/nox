@@ -27,7 +27,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nox import __version__
 
-__all__ = ["NodeTool", "Notifier", "PlatformNotifier", "default_tools"]
+__all__ = [
+    "CHECK_TIMEOUT_S",
+    "off_loop",
+    "NodeRefusal",
+    "NodeTool",
+    "Notifier",
+    "PlatformNotifier",
+    "default_tools",
+]
 
 _CREATE_NO_WINDOW = 0x08000000
 
@@ -46,6 +54,29 @@ class NotifyArgs(BaseModel):
 Handler = Callable[[BaseModel], Awaitable[dict[str, Any]]]
 
 
+#: The most time a text check (the gate, a write's content) may take before the call is refused.
+#: The checks are linear and capped, so this is never reached by honest input.
+CHECK_TIMEOUT_S = 2.0
+
+
+async def off_loop(func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+    """`func(*args, **kwargs)` in a worker thread with `CHECK_TIMEOUT_S`: the event loop - and
+    with it the stop button and the dead-man rule - keeps running whatever the text is.
+    Raises `TimeoutError` when the time is up."""
+    return await asyncio.wait_for(asyncio.to_thread(func, *args, **kwargs), CHECK_TIMEOUT_S)
+
+
+class NodeRefusal(Exception):  # noqa: N818 - a refusal, named for what it is
+    """A tool refused on this device's own authority (outside the allowed folders, no sandbox):
+    answered and audited like a refusal of `NodeGate`. `reason` is a short machine token."""
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        super().__init__(reason)
+        self.reason = reason
+        #: In a few words, what caused it (shown to the person, never a secret).
+        self.detail = detail
+
+
 @dataclass(frozen=True)
 class NodeTool:
     name: str
@@ -54,10 +85,27 @@ class NodeTool:
     description: str
     args: type[BaseModel]
     handler: Handler = field(compare=False)
-    #: Declared by every tool with a side effect: it opens no path, or it checks
-    #: `nox.node.gate.inside()` on the resolved real path at the moment it opens one. A tool
-    #: without this declaration is not offered at all (`NodeGate`).
+    #: Declared by every tool with a side effect: it opens no path, it opens every path through
+    #: `nox.node.safe_fs` (checked on the handle at open time), or it runs only inside the node's
+    #: sandbox, which cannot see the node's folder (`nox.node.hands`). A tool without this
+    #: declaration is not offered at all (`NodeGate`).
     path_safe: bool = False
+    #: The risk of one call when it depends on its arguments (a write that replaces a file is
+    #: higher than one that creates it); never below `risk`. None: always `risk`.
+    risk_for: Callable[[BaseModel], str] | None = field(default=None, compare=False)
+    #: What the confirmation on the device shows instead of the raw arguments (a write: the
+    #: size and a preview, not a megabyte of text). None: every argument in full.
+    shown: Callable[[BaseModel], dict[str, Any]] | None = field(default=None, compare=False)
+    #: A check on the arguments' text alone, before the budget and before anyone is asked (a
+    #: JSON file that does not parse is refused, not confirmed first). A reason, or None.
+    precheck: Callable[[BaseModel], str | None] | None = field(default=None, compare=False)
+
+    def call_risk(self, args: BaseModel) -> str:
+        risk = self.risk_for(args) if self.risk_for is not None else self.risk
+        order = ("read", "low", "medium", "high", "critical")
+        if risk not in order:
+            return "critical"
+        return risk if order.index(risk) >= order.index(self.risk) else self.risk
 
     def describe(self) -> dict[str, Any]:
         """The MCP `tools/list` entry, with the Nox extensions the core routes by."""
@@ -124,8 +172,7 @@ _WINDOWS_TOAST = (
     "$n=$t.GetElementsByTagName('text');"
     "$n.Item(0).AppendChild($t.CreateTextNode($env:NOX_NOTIFY_TITLE))|Out-Null;"
     "$n.Item(1).AppendChild($t.CreateTextNode($env:NOX_NOTIFY_TEXT))|Out-Null;"
-    "$a='{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe';"
-    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($a)"
+    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:NOX_NOTIFY_APPID)"
     ".Show([Windows.UI.Notifications.ToastNotification]::new($t))"
 )
 
@@ -146,7 +193,14 @@ class PlatformNotifier:
     """Windows toast, freedesktop `notify-send`, macOS Notification Center."""
 
     async def show(self, title: str, text: str) -> None:
-        env = {**os.environ, "NOX_NOTIFY_TITLE": title, "NOX_NOTIFY_TEXT": text}
+        from nox.node.appid import toast_app_id  # noqa: PLC0415
+
+        env = {
+            **os.environ,
+            "NOX_NOTIFY_TITLE": title,
+            "NOX_NOTIFY_TEXT": text,
+            "NOX_NOTIFY_APPID": toast_app_id(),  # the node's own ID once the installer set it
+        }
         kwargs: dict[str, Any] = {"env": env, "stdout": subprocess.DEVNULL}
         if sys.platform == "win32":
             argv = [str(_powershell()), "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_TOAST]

@@ -171,6 +171,27 @@ describe('Presets page', () => {
     expect(Object.keys(values)).toContain('presets.items');
   });
 
+  it('asks for the PIN for every change and sends it along (also marking for satellites)', async () => {
+    const { client, sent } = fakeClient({ 'config.set': { ok: true, errors: {} } });
+    await renderPage(client);
+
+    const [editPreset] = await screen.findAllByRole('button', { name: t('presets_edit') });
+    await userEvent.click(editPreset!);
+    await userEvent.click(screen.getByRole('checkbox', { name: t('presets_from_satellites') }));
+    await userEvent.type(screen.getByLabelText(t('presets_pin')), '2468');
+    await userEvent.click(screen.getByRole('button', { name: t('presets_save') }));
+
+    await waitFor(() => {
+      expect(sent.some((entry) => entry.name === 'config.set')).toBe(true);
+    });
+    const write = sent.find((entry) => entry.name === 'config.set')?.payload as {
+      values: Record<string, { id: string; from_satellites?: boolean }[]>;
+      pin?: string;
+    };
+    expect(write.pin).toBe('2468');
+    expect(write.values['presets.items']?.find((p) => p.id === 'gaming')?.from_satellites).toBe(true);
+  });
+
   it('shows the reason when the core refuses a preset', async () => {
     const { client } = fakeClient({
       'config.set': { ok: false, errors: { 'presets.items': "unknown action 'ghost'" } },

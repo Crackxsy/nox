@@ -55,7 +55,7 @@ export interface ReliefTargets {
   talk: number;
   /** Speaking level for the envelope, 0..1. */
   speech: number;
-  /** Measured loudness of the voice (`tts.level`) while it is fresh; null = synthesise. */
+  /** Measured loudness of the voice (`tts.level`), gated by `VoiceTracker`; null = synthesise. */
   voice: number | null;
   /** 0..1 lifts the body and opens the stance (proud, hype). */
   puff: number;

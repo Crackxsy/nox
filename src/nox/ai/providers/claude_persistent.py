@@ -377,7 +377,8 @@ class PersistentClaude:
             log.error("claude_persistent.disabled", reason=self.disabled_reason)
 
     async def _discard(self, session: ClaudeSession, launch: Launch | None) -> None:
-        session.kill()
+        # Waits until the process has ended: whoever sees the start fail sees it gone, too.
+        await session.kill_and_wait()
         if launch is not None and self._bridge is not None:
             await self._bridge.retire(launch)
 

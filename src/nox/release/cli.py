@@ -66,6 +66,13 @@ def verify(
             "--allow-downgrade", help="Accept a version below --min-version (deliberate)."
         ),
     ] = False,
+    kind: Annotated[
+        str,
+        typer.Option(
+            help="Which manifest this is: release (release-manifest.json) or os-image "
+            "(nox-os-manifest.json, the Nox-OS image files)."
+        ),
+    ] = "release",
     as_json: Annotated[bool, typer.Option("--json", help="Print the result as JSON.")] = False,
 ) -> None:
     """Verify a release manifest's signature and contents. Fails closed."""
@@ -104,6 +111,7 @@ def verify(
             expect_commit=expect_commit,
             min_version=min_version,
             allow_downgrade=allow_downgrade,
+            expect_kind=kind,
         )
         for path in files:
             if not path.is_file():
@@ -195,5 +203,6 @@ def describe_key(
     typer.echo("src/nox/release/trusted_keys.py, inside TRUSTED_KEYS = ( ... ):")
     typer.echo(f'    TrustedKey(key_id="{key_id}", public_key="{spki}", not_after="{not_after}"),')
     typer.echo("")
-    typer.echo("scripts/install-linux.sh, inside TRUSTED_RELEASE_KEYS=( ... ):")
+    typer.echo("scripts/install-linux.sh and scripts/install-macos.sh,")
+    typer.echo("inside TRUSTED_RELEASE_KEYS=( ... ):")
     typer.echo(f'  "{key_id}|{not_after}|{spki}"')

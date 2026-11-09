@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { pickLang } from '../../shared/lang';
 import { queryFlag, queryInt, queryString, takeCredential } from '../../shared/token';
 import { App } from './App';
+import { deviceFromQuery } from './ipc';
 // Shared design tokens + pet chrome (#25). Imported here so the whole page, including the
 // transparent window's chips and notes, follows the same palette as the dashboard.
 import './styles.css';
@@ -31,6 +32,8 @@ const tourParam = animate ? queryString(window.location.search, 'tour') : null;
 const tour = tourParam ? tourParam.split(',').filter(Boolean) : null;
 const tourEveryMs = queryInt(window.location.search, 'every') ?? 3500;
 const forceRig = animate && queryString(window.location.search, 'renderer') === 'rig';
+// `?device=<id>`: the overlay a paired node serves (C9) - its pet follows that node's speech.
+const device = deviceFromQuery(queryString(window.location.search, 'device'));
 // One language per window (#43/#55): the same rule the dashboard uses, so a German desktop shows
 // German in both. `<html lang>` follows, so a screen reader pronounces the words correctly.
 const lang = pickLang(window.location.search, navigator.languages ?? []);
@@ -51,6 +54,7 @@ createRoot(document.getElementById('root')!).render(
       tour={tour}
       tourEveryMs={tourEveryMs}
       forceRig={forceRig}
+      device={device}
     />
   </React.StrictMode>,
 );

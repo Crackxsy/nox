@@ -141,8 +141,9 @@ class LanConfig(StrictSection):
 class DevicesConfig(StrictSection):
     """Which device a routable tool runs on when the user did not say (`nox.node.router`).
 
-    Per tool: `core`, `origin` (the node linked to the browser device the request came from) or a
-    node's name. A side effect is never guessed onto a device beyond this.
+    Per tool: `core`, `origin` (the node linked to the browser device the request came from),
+    `auto` (as if nothing was set) or a node's name or id. A side effect is never guessed onto a
+    device beyond this. The dashboard writes these per tool family (`node.defaults.set`).
     """
 
     defaults: dict[str, str] = Field(

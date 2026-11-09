@@ -46,6 +46,9 @@ export function PresetsPage({ t, client }: PresetsPageProps) {
   const [runs, setRuns] = useState<Record<string, PresetRunResult>>({});
   const [tests, setTests] = useState<Record<string, ActionTestResult>>({});
   const [saveError, setSaveError] = useState('');
+  // Presets start programs (and can be marked for voice satellites): every change needs the
+  // security PIN when one is set.
+  const [pin, setPin] = useState('');
   const [loadFailed, setLoadFailed] = useState(false);
   const action = useIpcAction(client, t);
 
@@ -67,7 +70,7 @@ export function PresetsPage({ t, client }: PresetsPageProps) {
   const persist = async (path: string, value: unknown) => {
     if (!client) return;
     setSaveError('');
-    const response = await api.configSet(client, { [path]: value });
+    const response = await api.configSet(client, { [path]: value }, pin.trim() || undefined);
     const errors = (response as { errors?: Record<string, string> }).errors ?? {};
     const reason = errors[path];
     if (reason) {
@@ -78,6 +81,7 @@ export function PresetsPage({ t, client }: PresetsPageProps) {
     setData(parsePresets(listing));
     setEditing(null);
     setEditingAction(null);
+    setPin('');
   };
 
   const savePreset = (preset: Preset) => {
@@ -135,6 +139,26 @@ export function PresetsPage({ t, client }: PresetsPageProps) {
         </p>
       )}
       {saveError && <p className="alert">{`${t('presets_save_failed')}: ${saveError}`}</p>}
+      {client && (
+        <div className="field">
+          <label htmlFor="preset-pin" className="label">
+            {t('presets_pin')}
+          </label>
+          <input
+            id="preset-pin"
+            className="input"
+            type="password"
+            inputMode="numeric"
+            autoComplete="off"
+            value={pin}
+            onChange={(e) => setPin(e.target.value)}
+            aria-describedby="preset-pin-hint"
+          />
+          <p id="preset-pin-hint" className="hint">
+            {t('presets_pin_hint')}
+          </p>
+        </div>
+      )}
       {action.error && <p className="alert">{action.error}</p>}
 
       <section aria-labelledby="h-presets" className="sec">

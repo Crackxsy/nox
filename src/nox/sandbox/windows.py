@@ -622,28 +622,46 @@ _ACL_PS = (
 )
 
 
+#: The longest an `icacls` change may take. An inheritable ACE is propagated to every file
+#: below the folder - a virtual environment with a large package holds tens of thousands - so it
+#: is not instant, but it must never block a run (or a test) for ever: past this it counts as
+#: failed, and the run goes on without the grant (the container then cannot start that Python).
+ICACLS_TIMEOUT_S = 180.0
+#: The longest reading a folder's ACL (one PowerShell call, no propagation) may take.
+ACL_READ_TIMEOUT_S = 30.0
+
+
 def _icacls(argv: list[str]) -> int:
-    done = subprocess.run(  # noqa: S603 - fixed argv
-        argv,
-        capture_output=True,
-        check=False,
-        creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined,unused-ignore]
-    )
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed argv
+            argv,
+            capture_output=True,
+            check=False,
+            timeout=ICACLS_TIMEOUT_S,
+            creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined,unused-ignore]
+        )
+    except subprocess.TimeoutExpired:
+        log.warning("sandbox.icacls_timeout", after_s=ICACLS_TIMEOUT_S, change=argv[2:3])
+        return 1
     return done.returncode
 
 
 def _explicit_aces(folder: Path) -> list[Ace]:
     """The explicit allow ACEs on `folder` (inherited ones are not the folder's own)."""
-    done = subprocess.run(  # noqa: S603 - fixed argv; the path travels in the environment
-        [_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", _ACL_PS],
-        capture_output=True,
-        text=True,
-        encoding="ascii",
-        errors="replace",
-        check=False,
-        env={**os.environ, "NOX_ACL_PATH": str(folder)},
-        creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined,unused-ignore]
-    )
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed argv; the path travels in the environment
+            [_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", _ACL_PS],
+            capture_output=True,
+            text=True,
+            encoding="ascii",
+            errors="replace",
+            check=False,
+            env={**os.environ, "NOX_ACL_PATH": str(folder)},
+            timeout=ACL_READ_TIMEOUT_S,
+            creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined,unused-ignore]
+        )
+    except subprocess.TimeoutExpired as exc:  # unreadable, as callers already handle
+        raise OSError(f"reading the ACL of {folder} took too long") from exc
     if done.returncode != 0:
         raise OSError(f"could not read the ACL of {folder}")
     aces: list[Ace] = []
@@ -810,6 +828,7 @@ def python_runtime_dirs(
     from nox.paths import nox_home
 
     nox = (home or nox_home()).resolve()
+    node = _node_home()
     profile = Path.home().resolve()
     # Never a broad profile folder: the profile itself, anything above it, or a folder directly
     # in it (Documents, AppData, ...). A runtime lives deeper (AppData/Roaming/uv/python/...).
@@ -821,11 +840,23 @@ def python_runtime_dirs(
         if len(folder.parts) <= 1 or _contains(folder, profile) or folder.parent == profile:
             log.warning("sandbox.runtime_dir_refused", reason="root or broad profile folder")
             continue
-        if _contains(folder, nox) or _contains(nox, folder):
+        if (
+            _contains(folder, nox)
+            or _contains(nox, folder)
+            or _contains(folder, node)
+            or _contains(node, folder)
+        ):
             log.warning("sandbox.runtime_dir_refused", reason="overlaps Nox's home")
             continue
         out.append(folder)
     return tuple(out)
+
+
+def _node_home() -> Path:
+    """A node's own folder (key, certificates, audit trail): never granted to a container."""
+    from nox.node.home import default_home  # noqa: PLC0415
+
+    return Path(os.path.realpath(default_home()))
 
 
 def _runs_python(argv: list[str]) -> bool:
@@ -864,7 +895,7 @@ def nox_runtime_dirs(*, home: Path | None = None, root: Path | None = None) -> t
     if len(folder.parts) <= 1 or _contains(folder, profile) or folder.parent == profile:
         log.warning("sandbox.package_dir_refused", reason="root or broad profile folder")
         return dirs
-    if _contains(folder, nox) or _contains(nox, folder):
+    if _contains(folder, nox) or _contains(nox, folder) or _contains(folder, _node_home()):
         log.warning("sandbox.package_dir_refused", reason="overlaps Nox's home")
         return dirs
     return (*dirs, folder)

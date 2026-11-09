@@ -332,10 +332,24 @@ export const en: Record<CoreKey, string> = {
   perm_remember_minutes: 'Allow for {0} minutes',
   perm_remember_minute: 'Allow for 1 minute',
   perm_deny: 'Deny',
+  presets_from_satellites: 'Also from voice satellites',
+  presets_from_satellites_hint:
+    'Then the phrase also starts it at a device with a voice satellite - whoever is in that room need not be you. Every step then asks as with outside content, and the mode never changes.',
+  presets_pin: 'Security PIN',
+  presets_pin_hint: 'Presets start programs: every change needs the PIN when one is set.',
   perm_device_note: 'From this device a permission counts for this one time only.',
+  perm_voice_satellite:
+    'From voice satellite {0}: spoken into a room - not necessarily by you. Allow only if you wanted this yourself.',
   perm_pin: 'Security PIN',
   perm_pin_hint: 'At high risk, allowing from this device needs the PIN. After three wrong tries the device is removed.',
   perm_pin_missing: 'Enter the security PIN first.',
+  perm_node_control_device:
+    'Allowing does not work from the browser on the PC Nox is controlling - from another device it works with the PIN. Denying works everywhere.',
+  chat_unchecked_node: 'While Nox is controlling the PC, messages count as unchecked.',
+  chat_controlled_here: 'Nox is controlling this PC - messages cannot be sent from here. Stop always works.',
+  perm_node_control_here:
+    'Nox is controlling mouse and keyboard on this PC. Allowing does not work from here - use another device with the PIN. Denying works here too.',
+  perm_node_control_pin_hint: 'Nox is controlling mouse and keyboard on a PC: allowing now needs the PIN.',
   perm_only_at_computer: 'This can only be allowed on the computer Nox runs on. Denying works here too.',
   perm_countdown: '{0} seconds left. Without an answer, Nox will not do it.',
   perm_countdown_over: 'Time is up – without an answer, Nox will not do it.',
@@ -397,6 +411,12 @@ export const en: Record<CoreKey, string> = {
   perm_risk_high: 'high',
   perm_risk_critical: 'critical',
   computer_use_banner: 'Nox is controlling mouse and keyboard – {0} stops it at once.',
+  computer_use_banner_node: 'Nox is controlling mouse and keyboard on {0}.',
+  computer_use_banner_node_hotkey: '{0} on that device stops it at once, “Stop” stops everything.',
+  computer_use_release: 'Release the lock',
+  computer_use_saturated: 'Nox is controlling a device with very many addresses - approvals only after the session ends.',
+  computer_use_release_pin: 'PIN to release the lock',
+  computer_use_release_failed: 'The lock was not released.',
   computer_use_banner_no_hotkey: 'Nox is controlling mouse and keyboard – the kill switch stops it at once.',
 
   // -- UX redesign (Spec UX-Neubau): shell, Today, palette, permission, Stop, settings pages --

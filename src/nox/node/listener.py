@@ -33,7 +33,7 @@ import time
 import weakref
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cryptography import x509
@@ -88,6 +88,14 @@ ERR_INVALID_PARAMS = -32602
 
 SecurityKillFn = Callable[[str, str], Awaitable[None]]
 SessionFn = Callable[["NodeSession"], Awaitable[None]]
+#: A satellite method from a node (C9): (session, method, validated params) -> the answer's
+#: `result`, or None for a notification. Must return quickly - it runs on the node's channel.
+SatelliteFn = Callable[["NodeSession", str, BaseModel], Awaitable[dict[str, Any] | None]]
+#: Satellite levels a node may send per second; more are dropped (never a violation).
+MAX_LEVELS_PER_S = 40
+#: Satellite requests per minute beyond which a node is flooding (each one more is a violation);
+#: well above what the core accepts (`nox.node.satellites`: 12 utterances, 3 credential asks).
+FLOOD_PER_MINUTE: dict[str, int] = {p.M_VOICE_HEARD: 30, p.M_OVERLAY_CREDENTIAL: 10}
 
 
 @dataclass
@@ -113,6 +121,18 @@ class NodeSession:
     cert_not_after: datetime | None = None
     #: What the node reported in its last `nox/pong`: why it refuses everything, or "".
     node_state: str = ""
+    #: A new certificate was issued over this connection (`nox/renew`, at most once).
+    renewed: bool = False
+    #: The node's last word on computer use (`p.SessionReport`, from its hello and pongs).
+    computer: p.SessionReport | None = None
+    #: `nox/voice/level` in the current second: (second, count).
+    levels: tuple[int, int] = (0, 0)
+    #: Satellite requests in the current minute, per method: (minute, count).
+    satellite_asks: dict[str, tuple[int, int]] = field(default_factory=dict)
+    #: The address the node connects from, as this core sees it.
+    peer_host: str = ""
+    #: The addresses the node last reported about itself (hello, then every pong).
+    reported_addresses: list[str] = field(default_factory=list)
     blobs: dict[str, list[bytes]] = field(default_factory=dict)
     complete: set[str] = field(default_factory=set)
     blob_bytes: int = 0
@@ -159,6 +179,7 @@ class NodeListener:
         ping_interval_s: float = PING_INTERVAL_S,
         allow_public_clients: bool = False,
         kill_engaged: Callable[[], bool] | None = None,
+        on_satellite: SatelliteFn | None = None,
     ) -> None:
         self._pairing = pairing
         self._nodes = nodes
@@ -183,6 +204,9 @@ class NodeListener:
             weakref.WeakKeyDictionary()
         )
         self._kill_engaged = kill_engaged
+        #: The satellites' side on this core (`nox.node.satellites`); None: no satellite methods
+        #: are offered (`features` stays empty, and a node sends none).
+        self.on_satellite = on_satellite
         self._last_kill: dict[str, float] = {}
         #: device id -> monotonic time until which a node cut off for violations is refused.
         self._cooling: dict[str, float] = {}
@@ -357,6 +381,9 @@ class NodeListener:
             compatible=compatible,
             transport=transport,
             cert_not_after=cert.not_valid_after_utc,
+            computer=hello_msg.session,
+            peer_host=str(connection.remote_address[0]) if connection.remote_address else "",
+            reported_addresses=list(hello_msg.addresses),
         )
         # Replacing an older session and registering this one happen under the device's lock,
         # which a revocation takes too: a revocation either sees this session registered and
@@ -393,6 +420,8 @@ class NodeListener:
                     "node_id": device.id,
                     "receipt_key": self._receipt_key,
                     "engaged": bool(self._kill_engaged is not None and self._kill_engaged()),
+                    # The satellite methods this core understands (C9): a node sends no other.
+                    "features": sorted(p.FEATURES) if self.on_satellite is not None else [],
                     "serverInfo": {"name": "nox-core", "version": str(p.NODE_PROTOCOL)},
                 },
             }
@@ -461,9 +490,16 @@ class NodeListener:
         p.M_CONFIRM_RESULT: p.ConfirmResult,
         p.M_SECURITY_KILL: p.SecurityKill,
         p.M_BLOB: p.Blob,
+        p.M_RENEW: p.RenewRequest,
         p.M_INITIALIZED: None,
         p.M_LIST_CHANGED: None,
+        p.M_VOICE_HEARD: p.VoiceHeard,
+        p.M_VOICE_LEVEL: p.VoiceLevel,
+        p.M_OVERLAY_CREDENTIAL: p.OverlayCredentialRequest,
     }
+    _SATELLITE: frozenset[str] = frozenset(
+        {p.M_VOICE_HEARD, p.M_VOICE_LEVEL, p.M_OVERLAY_CREDENTIAL}
+    )
 
     async def _peer(self, session: NodeSession, message: dict[str, Any]) -> None:
         method = str(message.get("method"))
@@ -480,12 +516,20 @@ class NodeListener:
             await self._violation(session, method, msg_id, ERR_INVALID_PARAMS, "invalid params")
             return
         session.last_seen = time.monotonic()
+        if method in self._SATELLITE:
+            assert params is not None
+            await self._satellite(session, method, msg_id, params)
+            return
         if method == p.M_PING:
             assert isinstance(params, p.Ping)
             await session.client.notify(p.M_PONG, {"seq": params.seq, "ts": time.time()})
         elif method == p.M_PONG:
             assert isinstance(params, p.Ping)
             session.node_state = params.state
+            if params.session is not None:
+                session.computer = params.session
+            if params.addresses is not None:
+                session.reported_addresses = list(params.addresses)
         elif method == p.M_SECURITY_KILL:
             assert isinstance(params, p.SecurityKill)
             status = self._kill(session.device_id, params.reason)
@@ -510,8 +554,87 @@ class NodeListener:
             if not self._take_chunk(session, params):
                 await self._violation(session, method, msg_id, ERR_INVALID_PARAMS, "blob")
                 return
+        elif method == p.M_RENEW:
+            assert isinstance(params, p.RenewRequest)
+            await self._renew(session, msg_id, params)
+            return
         if msg_id is not None:
             await session.answer({"jsonrpc": "2.0", "id": msg_id, "result": {}})
+
+    async def _satellite(
+        self, session: NodeSession, method: str, msg_id: Any, params: BaseModel
+    ) -> None:
+        """A satellite method (C9). A core without satellites answers "not supported" - a node
+        only sends these to a core that said it understands them, so it is no violation."""
+        handler = self.on_satellite
+        limit = FLOOD_PER_MINUTE.get(method)
+        if limit is not None:
+            minute = int(time.monotonic() // 60)
+            at, count = session.satellite_asks.get(method, (minute, 0))
+            count = count + 1 if at == minute else 1
+            session.satellite_asks[method] = (minute, count)
+            if count > limit:
+                # Far beyond what the core takes anyway (`nox.node.satellites`): flooding, which
+                # counts against the node like any refused message and ends its connection.
+                await self._violation(session, method, msg_id, ERR_INVALID_PARAMS, "flooding")
+                return
+        if method == p.M_VOICE_LEVEL:
+            second = int(time.monotonic())
+            at, count = session.levels
+            count = count + 1 if at == second else 1
+            session.levels = (second, count)
+            if count > MAX_LEVELS_PER_S:
+                return  # a pet needs no more; dropped, not counted against the node
+        if handler is None:
+            if msg_id is not None:
+                await session.answer(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": msg_id,
+                        "error": {"code": ERR_METHOD_NOT_FOUND, "message": "not supported"},
+                    }
+                )
+            return
+        try:
+            result = await handler(session, method, params)
+        except Exception as exc:  # noqa: BLE001 - a failing satellite never ends the connection
+            log.warning("node.satellite_failed", method=method, error=type(exc).__name__)
+            result = {"accepted": False, "reason": "failed"}
+        if msg_id is not None:
+            await session.answer({"jsonrpc": "2.0", "id": msg_id, "result": result or {}})
+
+    async def _renew(self, session: NodeSession, msg_id: Any, request: p.RenewRequest) -> None:
+        """`nox/renew`: once per connection, only inside the renewal window, only for the paired
+        key. The connection goes on; its end moves to the new certificate's."""
+
+        async def refuse(reason: str) -> None:
+            self._append_audit("node.cert_renewed", session.device_id, "deny", reason)
+            if msg_id is not None:
+                await session.answer(
+                    {"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32000, "message": reason}}
+                )
+
+        ends = session.cert_not_after
+        if session.renewed:
+            await refuse("already_renewed")
+            return
+        if ends is None or ends - datetime.now(UTC) > timedelta(days=p.RENEW_WINDOW_DAYS + 1):
+            await refuse("too_early")
+            return
+        session.renewed = True
+        try:
+            issued = await self._pairing.renew(session.device_id, session.serial, request.csr)
+        except Exception as exc:  # noqa: BLE001 - a failed issuance is a refusal, not a crash
+            log.error("node.renew_failed", error=type(exc).__name__)
+            issued = None
+        if issued is None:
+            await refuse("refused")
+            return
+        session.cert_not_after = issued.not_after
+        self._append_audit("node.cert_renewed", session.device_id, "allow", issued.serial)
+        if msg_id is not None:
+            result = {"cert": issued.cert_pem, "not_after": issued.not_after.isoformat()}
+            await session.answer({"jsonrpc": "2.0", "id": msg_id, "result": result})
 
     def _kill(self, device_id: str, reason: str) -> str:
         """A stop from the node. Never suppressed while Nox runs: every one engages the switch

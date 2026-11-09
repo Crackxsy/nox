@@ -312,6 +312,7 @@ export interface TtsLevel {
   utterance_id: string;
   channel: string;
   level: number;
+  device?: string;
 }
 
 export interface AiRequestStarted {
@@ -374,6 +375,7 @@ export interface PermissionRequested {
   target?: string;
   expires_at?: string;
   remember_ttl_s?: number;
+  voice_satellite?: string;
 }
 
 export interface PermissionDecided {

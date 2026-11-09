@@ -324,3 +324,34 @@ def test_versions_are_ordered_by_semantic_versioning(lower: str, higher: str) ->
     assert Version.parse(lower) < Version.parse(higher)
     assert Version.parse(higher) > Version.parse(lower)
     assert Version.parse(lower) <= Version.parse(lower)
+
+
+def test_an_os_image_manifest_never_stands_in_for_the_release(release_key: ThrowawayKey) -> None:
+    # Both are signed by the same key (os/README.md); each verifier names the one it expects.
+    image = _manifest(kind="os-image")
+    signature = sign_manifest(image, release_key.private)
+    with pytest.raises(ReleaseVerificationError) as excinfo:
+        verify_release(image, signature, trusted_keys=[release_key.trusted])
+    assert _code(excinfo) == "wrong_kind"
+    release = verify_release(
+        image, signature, trusted_keys=[release_key.trusted], expect_kind="os-image"
+    )
+    assert release.manifest.kind == "os-image"
+    plain = _manifest()
+    with pytest.raises(ReleaseVerificationError) as excinfo:
+        verify_release(
+            plain,
+            sign_manifest(plain, release_key.private),
+            trusted_keys=[release_key.trusted],
+            expect_kind="os-image",
+        )
+    assert _code(excinfo) == "wrong_kind"
+
+
+def test_a_release_manifest_keeps_its_layout_and_unknown_kinds_are_refused() -> None:
+    assert b'"kind"' not in _manifest()
+    assert json.loads(_manifest(kind="os-image"))["kind"] == "os-image"
+    document = json.loads(_manifest())
+    document["kind"] = "firmware"
+    with pytest.raises(ManifestError):
+        parse_manifest(json.dumps(document).encode())

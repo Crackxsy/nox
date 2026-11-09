@@ -42,6 +42,7 @@ def _gate(
     class Args(BaseModel):
         model_config = ConfigDict(extra="forbid")
         text: str = "x"
+        path: str = ""
 
     async def run(_a: BaseModel) -> dict[str, Any]:
         return {}
@@ -99,9 +100,12 @@ def test_core_strings_never_reach_the_file_system(
     monkeypatch.setattr(
         os, "stat", lambda p, *a, **k: touched.append(str(p)) or (_ for _ in ()).throw(OSError())
     )
-    args = {"text": text}
-    decision = gate.check("notify.show", args, meta=_meta(signer, "notify.show", args))
+    args = {"path": text}
+    decision = gate.check("system.low", args, meta=_meta(signer, "system.low", args))
     assert decision.reason == "path_alias_refused", decision.reason  # refused on the text alone
+    # Free text (a notice, a note) is not a path (C5 review N4): allowed - and never touched.
+    words = {"text": text}
+    assert gate.check("notify.show", words, meta=_meta(signer, "notify.show", words)).allowed
     assert not any("attacker" in t or "geheim" in t for t in touched), touched
 
 
@@ -267,6 +271,7 @@ async def test_the_executor_says_who_decided() -> None:
 def test_nothing_with_a_side_effect_runs_while_a_dialog_is_open(tmp_path: Path) -> None:
     gate, signer = _gate(tmp_path)
     gate.dialog_open = lambda: True
+    gate.input_lock = lambda: None  # no game here (the game lock is tested in test_c6)
     args = {"text": "y"}
     for name in ("desktop.type_text", "system.low", "notify.show"):
         meta = _meta(signer, name, args)
@@ -437,7 +442,7 @@ _ = json
 )
 def test_path_aliases_are_refused_on_the_text_alone(tmp_path: Path, text: str) -> None:
     gate, signer = _gate(tmp_path)
-    args = {"text": text}
+    args = {"path": text}
     assert gate.check("system.low", args, meta=_meta(signer, "system.low", args)).reason in (
         "path_alias_refused",
         "node_home_protected",
@@ -485,6 +490,7 @@ async def test_running_input_calls_stop_before_a_question_appears(
         "desktop.type_text", "desktop", "low", "t", _Args, typing, path_safe=True
     )
     node.agent._gate._manifest.groups["desktop"] = True
+    node.agent._gate.input_lock = lambda: None  # no game here (the game lock: test_c6)
     try:
         session = await session_of(listener, node.node_id)
         typing_call = asyncio.create_task(

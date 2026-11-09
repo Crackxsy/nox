@@ -161,12 +161,79 @@ describe('axe-core: zero findings', () => {
     expect(await violations()).toEqual([]);
   });
 
+  it.each([false, true])('on System on Nox-OS, remote maintenance on: %s', async (on) => {
+    harness.answers['security.pin.status'] = { configured: true };
+    harness.answers['noxos.ssh.status'] = {
+      available: true,
+      on,
+      until: on ? new Date(Date.now() + 3_600_000).toISOString() : null,
+      active_keys: on ? ['SHA256:fictitious'] : [],
+      keys: [{ type: 'ssh-ed25519', fingerprint: 'SHA256:fictitious', comment: 'laptop' }],
+      passphrase_set: true,
+      default_minutes: 60,
+      min_minutes: 5,
+      max_minutes: 240,
+    };
+    await start('#/settings/system');
+    expect(screen.getByText(t('ssh_title'))).toBeTruthy();
+    expect(await violations()).toEqual([]);
+  });
+
   it('while stopped, and with a question as a sheet', async () => {
     await start('#/settings');
     await emit('security.kill_switch', { origin: 'ui' });
     expect(await violations()).toEqual([]);
     await emit('security.permission_requested', { ...prompt, request_id: 'p2' });
     await screen.findByRole('alertdialog');
+    expect(await violations()).toEqual([]);
+  });
+
+  it('on Geräte with computers, in the sheet of one and in the add sheet', async () => {
+    const pc = 'a'.repeat(32);
+    harness.answers['node.list'] = {
+      enabled: true,
+      nodes: [
+        {
+          id: pc,
+          name: 'Arbeits-PC',
+          label: 'Arbeits-PC (aaaa)',
+          online: true,
+          compatible: true,
+          os: 'windows',
+          arch: 'AMD64',
+          version: '0.7.0',
+          paired_at: '2026-10-20T09:00:00+00:00',
+          last_seen_at: null,
+          revoked: false,
+          tools: ['system.info', 'notify.show'],
+          groups: [
+            { group: 'system', enabled_on_device: true, narrowed: false, active: true },
+            { group: 'notify', enabled_on_device: true, narrowed: true, active: false },
+            { group: 'shell', enabled_on_device: false, narrowed: false, active: false },
+          ],
+        },
+      ],
+      defaults: [{ group: 'notify', tools: ['notify.show'], device: pc, raw: pc }],
+    };
+    harness.answers['node.pair.start'] = {
+      code: 'K7F29QAB',
+      expires_at: new Date(Date.now() + 300_000).toISOString(),
+      link: 'nox-node://pair?h=192.168.1.20&p=47843&c=K7F29QAB&fp=' + 'ab'.repeat(32),
+      qr: 'data:image/svg+xml;charset=utf-8,%3Csvg%3E',
+      ca_fingerprint: '11:22:33:44:55:66:77:88',
+    };
+    await start('#/devices/devices');
+    const open = await screen.findByRole('button', { name: 'Arbeits-PC öffnen' });
+    expect(await violations()).toEqual([]);
+    await act(async () => open.click());
+    const sheet = await screen.findByRole('dialog', { name: 'Arbeits-PC' });
+    await act(async () => within(sheet).getByRole('switch', { name: 'Befehle ausführen' }).click());
+    expect(await violations()).toEqual([]);
+    await act(async () => within(sheet).getByRole('button', { name: t('ux_close') }).click());
+    await act(async () => screen.getByRole('button', { name: t('node_add_more') }).click());
+    const add = await screen.findByRole('dialog', { name: t('node_add') });
+    await act(async () => within(add).getByRole('button', { name: t('lan_pair_button') }).click());
+    await within(add).findByRole('img', { name: t('node_add_qr_alt') });
     expect(await violations()).toEqual([]);
   });
 
@@ -178,7 +245,7 @@ describe('axe-core: zero findings', () => {
 
 describe('copy', () => {
   // A string missing from a dictionary would show its key; every page is checked in both languages.
-  const KEY = /\b(?:ux|perm|caps|settings|stream|home|day|presets|lan|device|privacy|mode)_[a-z0-9_]+\b/;
+  const KEY = /\b(?:ux|perm|caps|settings|stream|home|day|presets|lan|device|node|privacy|mode)_[a-z0-9_]+\b/;
   it.each(['de', 'en'] as const)('shows no dictionary key on any page (%s)', async (lang) => {
     for (const hash of ['#/today', '#/nox/talk', '#/nox/history', '#/devices/devices', '#/devices/skills', '#/settings', '#/settings/privacy', '#/settings/voice', '#/settings/system']) {
       await start(hash, { kind: 'local', token: 'tok' }, lang);

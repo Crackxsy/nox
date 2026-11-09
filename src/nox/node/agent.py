@@ -23,6 +23,7 @@ Stopping (spec C §1.7):
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import platform
@@ -48,7 +49,8 @@ from nox.node.home import NodeHome, NodeIdentity
 from nox.node.keystore import NodeKeyStore
 from nox.node.manifest import GROUPS, NodeManifest, manifest_hash
 from nox.node.receipts import ReceiptVerifier, normalize_arguments
-from nox.node.tools import NodeTool
+from nox.node.renewal import RenewalRefusedError, accept_renewed, due, store_certificate
+from nox.node.tools import NodeRefusal, NodeTool, off_loop
 from nox.security.model import AuditLog
 
 log = get_logger(__name__)
@@ -65,6 +67,8 @@ MAX_RESULT_CHARS = 512 * 1024
 DEAD_MAN_S = 3.0
 DEAD_MAN_TICK_S = 0.25
 LOCAL_STOP_POLL_S = 0.2
+#: A tool result's field holding bytes for the core (a capture), sent as `nox/blob` chunks.
+BLOB_KEY = "_blob"
 #: Calls running on this node at the same time, at most.
 MAX_CONCURRENT_CALLS = 8
 ERR_METHOD_NOT_FOUND = -32601
@@ -82,20 +86,96 @@ MAX_CONFIRM_CHARS = 1200
 MIN_DECISION_S = 1.5
 #: Consecutive pings from a core that is not stopped after which a dead-man stop lifts.
 DEAD_MAN_RESET_PINGS = 3
+#: How often a connected node looks at its certificate's end, and how long it waits for an answer.
+RENEW_CHECK_S = 3600.0
+RENEW_TIMEOUT_S = 30.0
+
+
+#: Interface names of virtual adapters (Hyper-V, WSL, Docker, VirtualBox, VMware, bridges):
+#: their addresses are listed last, after the real ones, before the cap of 16.
+_VIRTUAL_ADAPTERS = ("vethernet", "wsl", "docker", "veth", "br-", "virbr", "hyper-v", "virtualbox",
+                     "vmware", "vboxnet", "vmnet", "zt", "tailscale")  # fmt: skip
+
+
+def local_addresses() -> list[str]:
+    """This device's own IP addresses (no loopback), at most 16 - for the core to recognise a
+    browser on this PC (`NodeHello.addresses`, every `nox/pong`). Private addresses of real,
+    active interfaces first; virtual adapters and interfaces that are down last."""
+    import ipaddress  # noqa: PLC0415
+
+    import psutil  # noqa: PLC0415
+
+    try:
+        interfaces = psutil.net_if_addrs()
+        stats = psutil.net_if_stats()
+    except (OSError, RuntimeError):
+        return []
+    ranked: list[tuple[int, str]] = []
+    for name, entries in interfaces.items():
+        up = bool(getattr(stats.get(name), "isup", False))
+        virtual = name.lower().startswith(_VIRTUAL_ADAPTERS) or any(
+            word in name.lower() for word in ("virtual", "hyper-v", "wsl")
+        )
+        for entry in entries:
+            try:
+                ip = ipaddress.ip_address(str(entry.address).split("%", 1)[0])
+            except ValueError:
+                continue
+            if ip.is_loopback:
+                continue
+            rank = (0 if up else 2) + (1 if virtual else 0) + (0 if ip.is_private else 4)
+            ranked.append((rank, str(ip)))
+    found: list[str] = []
+    for _rank, address in sorted(ranked, key=lambda item: item[0]):
+        if address not in found:
+            found.append(address)
+    return found[:16]
+
+
+#: What `all_local_addresses` returns when this machine's addresses cannot be read: "could be
+#: any of them" - while Nox controls a node, this machine's own dashboard and shell then count
+#: as the controlled PC (`NodeControl.controls_local`), never as some other machine.
+ADDRESSES_UNREADABLE = "*"
+
+
+def all_local_addresses() -> list[str]:
+    """Every address of every interface of this machine - uncapped and unfiltered, loopback,
+    virtual adapters and interfaces that are down included: for telling whether a peer is this
+    machine (`NodeControl.controls_local`), where a missing address would fail open. When they
+    cannot be read: `[ADDRESSES_UNREADABLE]` (fail closed), never an empty list."""
+    import psutil  # noqa: PLC0415
+
+    try:
+        interfaces = psutil.net_if_addrs()
+    except Exception as exc:  # noqa: BLE001 - whatever went wrong, the answer is "unknown"
+        log.warning("node.own_addresses_unreadable", error=type(exc).__name__)
+        return [ADDRESSES_UNREADABLE]
+    found: list[str] = []
+    for entries in interfaces.values():
+        for entry in entries:
+            address = str(entry.address).split("%", 1)[0]
+            if address and address not in found:
+                found.append(address)
+    return found
+
+
+#: How long the addresses are reused between pongs (they rarely change; a rotating IPv6
+#: temporary address is picked up within this).
+ADDRESSES_TTL_S = 30.0
 
 
 def confirmation_text(tool: str, arguments: dict[str, Any], *, tainted: bool = False) -> str | None:
-    """The question for the person at the device: every argument in full, control characters
-    escaped, one per line. None when it would be too long to read - then nothing is asked and the
-    call is refused (no silent truncation)."""
+    """The question for the person at the device: every argument in full, one per line, rendered
+    exactly as the core's permission target renders it (`protocol.render`: quoted, look-alikes,
+    bidi and invisible characters escaped, runs of spaces counted). None when it would be too long
+    to read - then nothing is asked and the call is refused (no silent truncation)."""
     try:
         json.dumps(arguments, ensure_ascii=False).encode("utf-8")
     except (UnicodeEncodeError, TypeError, ValueError):
         return None  # not valid Unicode (a lone surrogate): refused, not shown escaped
     lines = [f"Nox möchte auf diesem Gerät „{p.escape_controls(tool)}“ ausführen:"]
     for key, value in arguments.items():
-        shown = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-        lines.append(f"  {p.escape_controls(str(key))}: {p.escape_controls(str(shown))}")
+        lines.append(f"  {p.escape_controls(str(key))}: {p.render(value)}")
     if tainted:
         lines.append(
             "Achtung: Die Anfrage kam aus einem Gespräch mit fremden Inhalten (Web, Dateien, "
@@ -134,6 +214,13 @@ class NodeAgent:
         self._good_pings = 0
         self._dialogs = 0
         self._local_stopped = False
+        #: Called whenever the node stops its calls (kill, local stop, connection lost, dead man).
+        self.on_stop: Callable[[str], None] = lambda _reason: None
+        #: This device's computer-use truth (`p.SessionReport` as a dict), told to the core in the
+        #: hello, every pong and every tool answer; None where there is none.
+        self.session_report: Callable[[], dict[str, Any] | None] = lambda: None
+        #: The core's watched games (`nox/games`): added to this device's list, never removed.
+        self.on_games: Callable[[list[str]], None] = lambda _games: None
         #: call id -> (the running call, its JSON-RPC id)
         self._calls: dict[str, tuple[asyncio.Task[None], Any, str]] = {}
         self._last_core = time.monotonic()
@@ -150,7 +237,25 @@ class NodeAgent:
         self._ping_interval_s = ping_interval_s
         self.connected = asyncio.Event()
         self.compatible = True
+        #: The core answered that it does not accept this node's protocol (`compatible: false`).
+        self.protocol_refused = False
         self.attempts = 0
+        #: Answers the node waits for (its own requests to the core), by JSON-RPC id.
+        self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._request_seq = 0
+        #: What the connected core said it understands (`features`); empty while not connected.
+        self.features: frozenset[str] = frozenset()
+        #: The satellites' handlers for what the core sends them (`p.SATELLITE_TO_NODE`): each
+        #: validates its own parameters and returns at once (long work goes into a task).
+        self.satellites: dict[str, Callable[[dict[str, Any]], Awaitable[None]]] = {}
+        #: Told whenever the connection to a compatible core comes (True) or goes (False).
+        self.on_connection: list[Callable[[bool], None]] = []
+        self._ws: ClientConnection | None = None
+
+    @property
+    def busy(self) -> bool:
+        """A call runs or a question is open: no restart now."""
+        return bool(self._calls) or self._dialogs > 0
 
     # -- the loop --------------------------------------------------------------------------------
 
@@ -232,6 +337,8 @@ class NodeAgent:
                     self._gate.manifest.enabled(), [t.name for t in offered]
                 ),
                 "confirmer": bool(self._confirmer.available),
+                "addresses": self._addresses_now(),
+                **self._session_field(),
             },
         }
 
@@ -255,16 +362,30 @@ class NodeAgent:
             log.error("node.receipt_key_changed")
             return "failed"
         self.compatible = bool(result.get("compatible", False))
+        self.protocol_refused = not self.compatible
+        self._remember_core_protocol(identity, result.get("node_protocol"))
         self.core_killed = bool(result.get("engaged", False))
         if not self.core_killed:
             self.dead_man = False  # the core is back and not stopped
         self._last_core = time.monotonic()
         self._gate.narrowed = set()
-        self.connected.set()
+        if self.compatible:
+            # Only a core that accepts this node counts as connected: a version on trial is
+            # confirmed by nothing less (`nox.node.cli.keep_updated`).
+            self.connected.set()
         self._status("connected" if self.compatible else "update_needed", identity)
         log.info("node.connected", compatible=self.compatible)
+        offered = result.get("features")
+        self.features = (
+            frozenset(f for f in offered[:16] if isinstance(f, str) and f in p.FEATURES)
+            if isinstance(offered, list) and self.compatible
+            else frozenset()
+        )
+        self._ws = ws
+        self._tell_connection(self.compatible)
         pinger = asyncio.create_task(self._ping(ws))
         watcher = asyncio.create_task(self._watch_local_stop(ws))
+        renewer = asyncio.create_task(self._renew_loop(ws, identity))
         stopper = asyncio.create_task(stop.wait())
         try:
             while True:
@@ -294,9 +415,62 @@ class NodeAgent:
         finally:
             pinger.cancel()
             watcher.cancel()
+            renewer.cancel()
             stopper.cancel()
+            for waiting in self._pending.values():
+                waiting.cancel()
+            self._pending.clear()
+            self._ws = None
+            self.features = frozenset()
+            self._tell_connection(False)
             # The connection is gone: nothing keeps running without the core.
             await self._cancel_calls()
+
+    def _tell_connection(self, connected: bool) -> None:
+        for listener in list(self.on_connection):
+            try:
+                listener(connected)
+            except Exception as exc:  # noqa: BLE001 - a satellite never breaks the connection
+                log.warning("node.connection_listener_failed", error=type(exc).__name__)
+
+    async def notify_core(self, method: str, params: dict[str, Any]) -> bool:
+        """A satellite's notification to the core - only one the core said it understands, on
+        the current connection; False when there is none."""
+        ws = self._ws
+        if ws is None or method not in p.NODE_TO_CORE or not self._understood(method):
+            return False
+        try:
+            await ws.send(json.dumps({"jsonrpc": "2.0", "method": method, "params": params}))
+        except ConnectionClosed:
+            return False
+        return True
+
+    async def ask_core(
+        self, method: str, params: dict[str, Any], *, timeout_s: float = 10.0
+    ) -> dict[str, Any] | None:
+        """A satellite's request to the core and its answer; None without a connection, for a
+        method the core did not say it understands, or without an answer in time."""
+        ws = self._ws
+        if ws is None or method not in p.NODE_TO_CORE or not self._understood(method):
+            return None
+        try:
+            return await self._request(ws, method, params, timeout_s=timeout_s)
+        except (TimeoutError, ConnectionClosed, asyncio.CancelledError):
+            return None
+
+    def _understood(self, method: str) -> bool:
+        needs = {
+            p.M_VOICE_HEARD: p.FEATURE_VOICE,
+            p.M_VOICE_LEVEL: p.FEATURE_VOICE,
+            p.M_OVERLAY_CREDENTIAL: p.FEATURE_OVERLAY,
+        }.get(method)
+        return needs is None or needs in self.features
+
+    def _groups(self) -> dict[str, list[str]]:
+        """What this device enabled, said outright (the core shows it; it widens nothing): the
+        core cannot infer it from the tool list, which leaves out a narrowed group and every tool
+        above `max_risk`."""
+        return {"groups": sorted(self._gate.manifest.enabled())}
 
     def reload_manifest(self) -> bool:
         """Re-read `node.yaml` when it changed; True when what the node offers changed."""
@@ -353,6 +527,14 @@ class NodeAgent:
             message["error"] = {"code": error[0], "message": error[1]}
         else:
             message["result"] = result if result is not None else {}
+            report = self._session_field()
+            if isinstance(result, dict) and "content" in result and report:
+                # Every tool answer - result, error or refusal - carries the node's truth about
+                # computer use, read after the call (the core's lock follows it).
+                message["result"] = {
+                    **result,
+                    "_nox": {**(result.get("_nox") or {}), **report},
+                }
         with contextlib.suppress(ConnectionClosed):
             await ws.send(json.dumps(message, ensure_ascii=False))
 
@@ -360,7 +542,10 @@ class NodeAgent:
         method = message.get("method")
         msg_id = message.get("id")
         if not isinstance(method, str):
-            return None  # an answer to one of our pings, or noise: nothing to do
+            waiting = self._pending.pop(str(msg_id), None) if msg_id is not None else None
+            if waiting is not None and not waiting.done():
+                waiting.set_result(message)
+            return None  # otherwise an answer to one of our pings, or noise: nothing to do
         if method not in p.CORE_TO_NODE:
             await self._reply(ws, msg_id, error=(ERR_METHOD_NOT_FOUND, "not supported"))
             return None
@@ -381,12 +566,25 @@ class NodeAgent:
                                 "seq": ping.seq,
                                 "ts": time.time(),
                                 "state": self.stopped_reason() or "",
+                                "addresses": self._addresses_now(),
+                                **self._session_field(),
                             },
                         }
                     )
                 )
             return None
         if method == p.M_PONG:
+            return None
+        if method in p.SATELLITE_TO_NODE:
+            handler = self.satellites.get(method)
+            if handler is None:
+                await self._reply(ws, msg_id, error=(ERR_METHOD_NOT_FOUND, "not supported"))
+                return None
+            try:
+                await handler(params)
+            except Exception as exc:  # noqa: BLE001 - a satellite never breaks the connection
+                log.warning("node.satellite_failed", method=method, error=type(exc).__name__)
+            await self._reply(ws, msg_id, result={})
             return None
         if method == p.M_REVOKED:
             self._forget("revoked by the core")
@@ -396,8 +594,20 @@ class NodeAgent:
             if isinstance(groups, list):
                 self._gate.narrow([g for g in groups if isinstance(g, str)][:32])
             await self._reply(
-                ws, msg_id, result={"offered": [t.name for t in self._gate.offered()]}
+                ws,
+                msg_id,
+                result={"offered": [t.name for t in self._gate.offered()], "_nox": self._groups()},
             )
+            return None
+        if method == p.M_GAMES:
+            try:
+                games = p.GamesAdd.model_validate(params)
+            except ValidationError:
+                await self._reply(ws, msg_id, error=(ERR_INVALID_PARAMS, "invalid games"))
+                return None
+            self.on_games(list(games.add))
+            self._audit_event("node.games", "core", f"added {len(games.add)}")
+            await self._reply(ws, msg_id, result={"ok": True})
             return None
         if method == p.M_TOOLS_LIST:
             offered = (
@@ -405,7 +615,8 @@ class NodeAgent:
                 if self.compatible
                 else [t for t in self._gate.offered() if t.name == "system.info"]
             )
-            await self._reply(ws, msg_id, result={"tools": [t.describe() for t in offered]})
+            result = {"tools": [t.describe() for t in offered], "_nox": self._groups()}
+            await self._reply(ws, msg_id, result=result)
             return None
         if method == p.M_TOOLS_CALL:
             if len(self._calls) >= MAX_CONCURRENT_CALLS:
@@ -488,7 +699,13 @@ class NodeAgent:
             await self._refused(ws, msg_id, name, "dialog_open")
 
     async def _cancel_calls(self, ws: ClientConnection | None = None) -> list[str]:
-        """Cancel every running call; with `ws`, each is answered "stopped". Their ids."""
+        """Cancel every running call; with `ws`, each is answered "stopped". Their ids. A stop,
+        a lost connection and the dead-man rule also end what outlives a call (a computer-use
+        session, `on_stop`)."""
+        try:
+            self.on_stop("stopped")
+        except Exception as exc:  # noqa: BLE001 - stopping goes on whatever a hook does
+            log.error("node.on_stop_failed", error=type(exc).__name__)
         running = dict(self._calls)
         for task, _msg_id, _name in running.values():
             task.cancel()
@@ -523,6 +740,80 @@ class NodeAgent:
                 self._audit_event("node.local_resume", "local", "ok")
             await asyncio.sleep(LOCAL_STOP_POLL_S)
 
+    def _remember_core_protocol(self, identity: NodeIdentity, offered: Any) -> None:
+        """Keep the range of node protocols the core accepts, for deciding about updates."""
+        if not (
+            isinstance(offered, list)
+            and len(offered) == 2
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in offered)
+            and 0 < offered[0] <= offered[1] <= 1000
+        ):
+            return
+        span = (offered[0], offered[1])
+        if identity.core_node_protocol != span:
+            identity.core_node_protocol = span
+            self._home.save_identity(identity)
+
+    async def _request(
+        self,
+        ws: ClientConnection,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout_s: float = RENEW_TIMEOUT_S,
+    ) -> dict[str, Any]:
+        """Send one request to the core and wait for its answer (TimeoutError after a while)."""
+        self._request_seq += 1
+        msg_id = f"node-{self._request_seq}"
+        waiting: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self._pending[msg_id] = waiting
+        try:
+            await ws.send(
+                json.dumps({"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params})
+            )
+            return await asyncio.wait_for(waiting, timeout_s)
+        finally:
+            self._pending.pop(msg_id, None)
+
+    async def _renew_loop(self, ws: ClientConnection, identity: NodeIdentity) -> None:
+        while True:
+            try:
+                await self.renew_certificate(ws, identity)
+            except (TimeoutError, ConnectionClosed):
+                pass  # tried again in an hour, or on the next connection
+            except Exception as exc:  # noqa: BLE001 - a failed renewal never ends the connection
+                log.warning("node.renew_failed", error=type(exc).__name__)
+            await asyncio.sleep(RENEW_CHECK_S)
+
+    async def renew_certificate(self, ws: ClientConnection, identity: NodeIdentity) -> bool:
+        """Ask for a new certificate once the current one is in its last days (spec C Â§1.2).
+        True when a new one is stored; it is used from the next connection on."""
+        if not due(self._home.cert_file):
+            return False
+        key = self._keystore.load()
+        answer = await self._request(ws, p.M_RENEW, {"csr": self._keystore.csr(key, identity.name)})
+        result = answer.get("result")
+        cert_pem = result.get("cert") if isinstance(result, dict) else None
+        if not isinstance(cert_pem, str):
+            log.warning("node.renew_refused", reason=str(answer.get("error"))[:100])
+            return False
+        try:
+            accept_renewed(
+                cert_pem,
+                ca_file=self._home.ca_file,
+                current_file=self._home.cert_file,
+                key=key,
+                node_id=identity.node_id,
+            )
+        except RenewalRefusedError as exc:
+            log.error("node.renew_bad_certificate", reason=str(exc))
+            self._audit_event("node.cert_renewed", "core", f"refused: {exc}")
+            return False
+        store_certificate(self._home.cert_file, cert_pem)
+        self._audit_event("node.cert_renewed", "core", "ok")
+        log.info("node.certificate_renewed")
+        return True
+
     def _pin_receipt_key(self, identity: NodeIdentity, offered: Any) -> bool:
         """The core's receipt key: pinned at pairing; adopted once over the pinned connection by
         a node paired before receipts existed; never replaced."""
@@ -547,6 +838,17 @@ class NodeAgent:
             return False
         return True
 
+    def _audit_refusal(self, tool: str, call_id: str, reason: str) -> None:
+        if self._audit is not None:
+            self._audit.append(
+                actor="local",
+                tool=p.safe_name(tool),
+                action="node.refused",
+                target=p.safe_name(call_id, 64),
+                decision="deny",
+                result=reason,
+            )
+
     def _audit_event(self, action: str, by: str, result: str) -> None:
         if self._audit is not None:
             self._audit.append(
@@ -570,7 +872,20 @@ class NodeAgent:
         # One text for everything: the receipt's hash, the dialog and the handler all see the
         # same NFC form of the arguments (review: never sign one and run another).
         arguments = normalize_arguments(params.get("arguments"))
-        decision = self._gate.check(name, arguments, call_id=meta.call_id, meta=meta)
+        # The slow text check first, off the event loop and stateless: pings, the stop and the
+        # dead man keep running, and a check that runs out of time is simply abandoned - it
+        # never spends budget, consumes a receipt or records an "allow".
+        try:
+            early = await off_loop(self._gate.precheck, name, arguments)
+        except TimeoutError:
+            early = "check_timeout"
+        if early is not None:
+            self._audit_refusal(name, meta.call_id, p.safe_name(early, 64))
+            await self._refused(ws, msg_id, name, early)
+            return
+        decision = self._gate.check(
+            name, arguments, call_id=meta.call_id, meta=meta, prechecked=True
+        )
         if not decision.allowed or decision.tool is None or decision.args is None:
             await self._refused(ws, msg_id, name, decision.reason)
             return
@@ -587,8 +902,17 @@ class NodeAgent:
                 result = await asyncio.wait_for(work, 30)
         except DeadManError:
             self.dead_man = True
+            with contextlib.suppress(Exception):
+                self.on_stop("dead_man")
             self._audit_event("node.dead_man", "local", p.safe_name(name))
             await self._refused(ws, msg_id, name, "dead_man")
+            return
+        except NodeRefusal as exc:
+            # The hand's own boundary (outside the allowed folders, no sandbox): a refusal on
+            # this device, audited like the gate's.
+            reason = p.safe_name(exc.reason, 64)
+            self._audit_refusal(name, meta.call_id, reason)
+            await self._refused(ws, msg_id, name, reason, detail=exc.detail)
             return
         except Exception as exc:  # noqa: BLE001 - a failing tool is an error result, not a crash
             log.warning("node.tool_failed", tool=p.safe_name(name), error=type(exc).__name__)
@@ -601,6 +925,22 @@ class NodeAgent:
                 },
             )
             return
+        blob = result.pop(BLOB_KEY, None) if isinstance(result, dict) else None
+        if isinstance(blob, bytes):
+            # A capture: its bytes go to the core that asked, in chunks, and are dropped here
+            # with this call - the node keeps no copy (spec C §1.4, C6).
+            sent = await self._send_blob(ws, meta.call_id, blob)
+            del blob
+            if not sent:
+                await self._reply(
+                    ws,
+                    msg_id,
+                    result={
+                        "isError": True,
+                        "content": [{"type": "text", "text": "capture too large"}],
+                    },
+                )
+                return
         text = json.dumps(result, ensure_ascii=False)
         if len(text) > MAX_RESULT_CHARS:
             # Too large for one frame: an honest error rather than a cut result or a broken link.
@@ -615,6 +955,40 @@ class NodeAgent:
             msg_id,
             result={"content": [{"type": "text", "text": text}], "structuredContent": result},
         )
+
+    def _addresses_now(self) -> list[str]:
+        """`local_addresses`, reused for `ADDRESSES_TTL_S`."""
+        now = time.monotonic()
+        cached = getattr(self, "_addresses_cache", None)
+        if cached is None or now - cached[0] > ADDRESSES_TTL_S:
+            cached = (now, local_addresses())
+            self._addresses_cache = cached
+        return list(cached[1])
+
+    def _session_field(self) -> dict[str, Any]:
+        try:
+            report = self.session_report()
+        except Exception as exc:  # noqa: BLE001 - no report rather than no answer
+            log.warning("node.session_report_failed", error=type(exc).__name__)
+            return {}
+        return {"session": report} if report is not None else {}
+
+    async def _send_blob(self, ws: ClientConnection, call_id: str, data: bytes) -> bool:
+        """`nox/blob` chunks of one result, before its answer; False when it is too large."""
+        if not data or len(data) > p.MAX_RESULT_BYTES:
+            return False
+        size = p.BLOB_CHUNK_BYTES
+        pieces = [data[i : i + size] for i in range(0, len(data), size)]
+        for seq, piece in enumerate(pieces):
+            params = {
+                "call_id": call_id,
+                "seq": seq,
+                "last": seq == len(pieces) - 1,
+                "data": base64.b64encode(piece).decode("ascii"),
+            }
+            with contextlib.suppress(ConnectionClosed):
+                await ws.send(json.dumps({"jsonrpc": "2.0", "method": p.M_BLOB, "params": params}))
+        return True
 
     async def _under_dead_man(self, work: Awaitable[dict[str, Any]]) -> dict[str, Any]:
         """Run a call with a side effect; abort it when the core went silent for `DEAD_MAN_S`."""
@@ -648,7 +1022,8 @@ class NodeAgent:
                 self._audit_event("node.confirm", "core", "trusted (no screen)")
                 return None
             return "high_needs_local_confirmation"
-        text = confirmation_text(tool.name, args.model_dump(), tainted=meta.tainted)
+        shown = tool.shown(args) if tool.shown is not None else args.model_dump()
+        text = confirmation_text(tool.name, shown, tainted=meta.tainted)
         if text is None:
             # Never ask about something the person cannot see in full.
             self._audit_event("node.confirm", "local", f"{p.safe_name(tool.name)}:cannot_show")
@@ -682,15 +1057,20 @@ class NodeAgent:
             return self.stopped_reason()  # stopped while the dialog was open
         return None
 
-    async def _refused(self, ws: ClientConnection, msg_id: Any, name: str, reason: str) -> None:
+    async def _refused(
+        self, ws: ClientConnection, msg_id: Any, name: str, reason: str, *, detail: str = ""
+    ) -> None:
         log.warning("node.call_refused", tool=p.safe_name(name, 64), reason=reason)
+        text = f"refused on the device: {reason}"
+        if detail:
+            text += f" ({p.escape_controls(detail)[:200]})"
         await self._reply(
             ws,
             msg_id,
             result={
                 "isError": True,
                 "_nox": {"refused": reason},
-                "content": [{"type": "text", "text": f"refused on the device: {reason}"}],
+                "content": [{"type": "text", "text": text}],
             },
         )
 

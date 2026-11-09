@@ -66,6 +66,8 @@ export default function NoxArea(props: NoxAreaProps) {
                 onDraft={props.onDraft}
                 outbox={props.outbox}
                 stopped={props.stopped}
+                untrusted={device && state.nodeComputerUse.length > 0}
+                controlledHere={state.nodeControlHere && state.nodeComputerUse.length > 0}
                 inline={props.inlinePrompt}
               />
             ),

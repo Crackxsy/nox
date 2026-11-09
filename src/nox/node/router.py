@@ -19,14 +19,22 @@ call fails fast with `device_offline`; nothing is queued and no other device is 
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, Field, create_model
 
 from nox.core.logging import get_logger
-from nox.node.registry import RISKS, NodeEntry, NodeRegistry, offline_error
+from nox.node.confirm import CONFIRM_TIMEOUT_S
+from nox.node.registry import (
+    RISKS,
+    SESSION_RESULT_KEY,
+    NodeEntry,
+    NodeRegistry,
+    offline_error,
+)
+from nox.node.tools import off_loop
 from nox.security.model import Risk
 from nox.security.taint import current_conversation
 from nox.tools.registry import CallScope, ToolRegistry, ToolSpec
@@ -35,6 +43,7 @@ log = get_logger(__name__)
 
 __all__ = [
     "CORE",
+    "CannotShow",
     "DEVICE_KEY",
     "Resolution",
     "origin_device",
@@ -47,14 +56,32 @@ CORE = "core"
 DEVICE_KEY = "device"
 #: Where a refused resolution travels from the scope to the handler, inside the call's payload.
 ROUTE_ERROR_KEY = "_route_error"
+#: A node call's text check, run in `prepare` off the event loop ("" when it passed).
+ROUTE_PRECHECK_KEY = "_route_precheck"
 #: Risk and delegation as decided in the permission scope - computed once, so the handler and the
 #: node act on exactly what the executor decided on (no second look at changing registry state).
 ROUTE_RISK_KEY = "_route_risk"
 ROUTE_DELEGATE_KEY = "_route_delegate"
 #: How long a node call may take before the core gives up on it.
 NODE_CALL_TIMEOUT_S = 30.0
+#: The executor's limit for a routed tool: the node call, the device's dialog, and some slack.
+ROUTED_TIMEOUT_S = NODE_CALL_TIMEOUT_S + CONFIRM_TIMEOUT_S + 10.0
 _CORE_WORDS = frozenset({"core", "dieser core", "this core", "hier", "here"})
 _HERE_WORDS = frozenset({"hier", "here"})
+
+
+#: `around(entry, arguments, call)`: `call(blob=...)` runs the call on the node.
+NodeCall = Callable[..., Awaitable[dict[str, Any]]]
+NodeAround = Callable[[NodeEntry, dict[str, Any], NodeCall], Awaitable[dict[str, Any]]]
+
+
+class CannotShow(ValueError):  # noqa: N818 - a refusal, named for what it says
+    """A node call cannot be put before anyone: its target would not fit a confirmation in
+    full, or the node would refuse it anyway (`error` says which). The call is refused."""
+
+    def __init__(self, message: str, *, error: str = "cannot_show_in_full") -> None:
+        super().__init__(message)
+        self.error = error
 
 
 @dataclass(frozen=True)
@@ -64,15 +91,32 @@ class Resolution:
     error: dict[str, Any] | None = None
 
 
+#: The origin of a turn spoken to a node's voice satellite (`voice:node:<id>#...`): that node.
+NODE_ORIGIN = "node:"
+VOICE_NODE_CHANNEL = "voice:node:"
+
+
 def origin_device() -> str | None:
-    """The paired browser device the current turn came from, if any: its conversation is
-    `chat:device:<id>#...` (`nox.core.orchestrator.conversation_for`)."""
+    """Where the current turn came from: the paired browser device of a `chat:device:<id>#...`
+    conversation (`nox.core.orchestrator.conversation_for`), or - for a question asked at a
+    node's voice satellite (`voice:node:<id>#...`, C9) - `node:<id>`, that node itself."""
     conversation = current_conversation()
-    prefix = "chat:device:"
-    if not conversation.startswith(prefix):
-        return None
-    device = conversation[len(prefix) :].split("#", 1)[0]
-    return device or None
+    for prefix, mark in (("chat:device:", ""), (VOICE_NODE_CHANNEL, NODE_ORIGIN)):
+        if conversation.startswith(prefix):
+            device = conversation[len(prefix) :].split("#", 1)[0]
+            return f"{mark}{device}" if device else None
+    return None
+
+
+def _at_origin(entries: list[NodeEntry], origin: str | None) -> list[NodeEntry]:
+    """The node the user is at: the one asked through its voice satellite, or the one linked to
+    the browser the request came from."""
+    if origin is None:
+        return []
+    if origin.startswith(NODE_ORIGIN):
+        node = origin[len(NODE_ORIGIN) :]
+        return [e for e in entries if e.device_id == node]
+    return [e for e in entries if e.linked_device_id == origin]
 
 
 def _matches(entries: list[NodeEntry], wanted: str) -> list[NodeEntry]:
@@ -83,6 +127,49 @@ def _matches(entries: list[NodeEntry], wanted: str) -> list[NodeEntry]:
 def _match(entries: list[NodeEntry], wanted: str) -> NodeEntry | None:
     found = _matches(entries, wanted)
     return found[0] if len(found) == 1 else None
+
+
+def waits_for(
+    requested: str | None,
+    *,
+    entries: list[NodeEntry],
+    core_has: bool,
+    default: str | None,
+    origin: str | None,
+) -> list[str]:
+    """The devices a call may have to wait for before it is resolved (`NodeRegistry.settle`):
+    those `resolve` could pick, when they have just connected. A call that stays on the core
+    waits for none; a call that names a device, or whose default names one, waits only for that
+    one; only a call that could land anywhere waits for every device still announcing its tools.
+    """
+    connecting = {e.device_id for e in entries if e.connecting}
+    if not connecting:
+        return []
+
+    def only(chosen: list[NodeEntry]) -> list[str]:
+        return [e.device_id for e in chosen if e.device_id in connecting]
+
+    wanted = requested.strip() if requested is not None and requested.strip() else None
+    if wanted is not None:  # (1) the user's choice decides alone
+        word = wanted.casefold()
+        if word in _HERE_WORDS and origin is not None:
+            linked = _at_origin(entries, origin)
+            if len(linked) == 1:
+                return only(linked)
+        if word in _CORE_WORDS:
+            return []
+        return only(_matches(entries, wanted))
+    if default == CORE and core_has:  # (2) the default, when it decides
+        return []
+    if default == "origin":
+        linked = _at_origin(entries, origin)
+        if len(linked) == 1:
+            return only(linked)
+    elif default and default not in (CORE, "auto"):
+        named = _matches(entries, default)
+        if len(named) == 1:
+            return only(named)
+    return sorted(connecting)  # (3)/(4) every device could be the one
 
 
 def resolve(
@@ -105,10 +192,32 @@ def resolve(
     def at(entry: NodeEntry) -> Resolution:
         if entry.offers(tool):
             return Resolution(entry.device_id)
-        if not entry.online:
+        if entry.online and entry.listing_failed:
+            # Connected, but its tool list did not arrive yet (it is retried): say so.
+            return Resolution(
+                "",
+                {
+                    "error": "device_listing",
+                    "device": entry.label,
+                    "tool": tool,
+                    "hint": "das Gerät meldet seine Werkzeuge noch – gleich noch einmal",
+                },
+            )
+        if not entry.online or entry.connecting:
             return Resolution("", offline_error(entry))
         if not entry.compatible:
             return Resolution("", {"error": "update_needed", "device": entry.label})
+        if entry.narrowed_out(tool):
+            # Switched off in the dashboard, not on the device: it can be switched on there again.
+            return Resolution(
+                "",
+                {
+                    "error": "narrowed_on_core",
+                    "device": entry.label,
+                    "tool": tool,
+                    "hint": "im Dashboard ausgeschaltet – dort wieder einschaltbar",
+                },
+            )
         # Online, but this device does not offer the tool: only the device itself can change that.
         return Resolution(
             "",
@@ -125,7 +234,7 @@ def resolve(
         word = requested.strip().casefold()
         if word in _HERE_WORDS and origin is not None:
             # "hier" from a browser on a PC with a node means that PC (review N5).
-            linked = [e for e in entries if e.linked_device_id == origin]
+            linked = _at_origin(entries, origin)
             if len(linked) == 1:
                 return at(linked[0])
         if word in _CORE_WORDS:
@@ -143,13 +252,13 @@ def resolve(
             return Resolution(CORE)
         if default == "origin":
             # The PC the user is at: its node, online or not - never another one instead.
-            linked = [e for e in entries if origin is not None and e.linked_device_id == origin]
+            linked = _at_origin(entries, origin)
             if len(linked) == 1:
                 return at(linked[0])
             if side_effects and candidates:
                 # Not linked (or not asked from a browser): where the user is, is unknown.
                 return needs()
-        elif default not in (CORE, "origin"):
+        elif default not in (CORE, "origin", "auto"):  # `auto`: as if nothing was configured
             entry = _match(entries, default)
             if entry is not None:
                 # The configured device, or why not - never quietly another one.
@@ -207,14 +316,43 @@ def routed_spec(
     input_model: type[BaseModel] | None = None,
     defaults: Callable[[], Mapping[str, str]] = dict,
     rememberable: bool = True,
+    node_target: Callable[[dict[str, Any]], str] | None = None,
+    network: bool | Callable[[dict[str, Any]], bool] | None = None,
+    node_risk: Callable[[dict[str, Any]], Risk] | None = None,
+    remember_on_node: bool = True,
+    precheck: Callable[[dict[str, Any]], str | None] | None = None,
+    around: NodeAround | None = None,
+    node_action: Callable[[dict[str, Any]], str] | None = None,
 ) -> ToolSpec:
     """One routable tool: the core's own spec (if the core has the tool) plus every node that
-    offers it. `input_model` describes the arguments when the core has no spec of its own."""
+    offers it. `input_model` describes the arguments when the core has no spec of its own.
+
+    `node_target` names what a call on a node does, for the confirmation and the audit - the
+    core's own `targets` may describe this machine (`shell.run` resolves programs here), so it
+    is used for a node only when no `node_target` is given. A `node_target` that cannot show the
+    call in full raises `CannotShow`, and the call is refused (`cannot_show_in_full`).
+    `node_risk` raises a node call's risk from its arguments (a write that replaces a file);
+    `remember_on_node=False` never lets a "remember" answer cover a call on a node.
+    `around` wraps the call on a node: it may refuse before the call (a privacy rule of this
+    core), and it turns the node's answer into what the model sees (a capture stored here). It
+    runs in the handler - always after `precheck`, which refuses in the scope before anyone is
+    asked; a call `precheck` refused never reaches `around`.
+    `node_action` names a node call's permission action from its arguments, for a generic tool
+    whose calls must not share one decision or one remembered answer (`obs.request`: one action
+    per request type, as on the core).
+    `network` overrides the template's
+    (a download is network whether or not the core has the tool itself)."""
     base = core.input_model if core is not None else input_model
     model = _routed_model(base, name)
 
     def inner(payload: dict[str, Any]) -> dict[str, Any]:
-        hidden = (DEVICE_KEY, ROUTE_ERROR_KEY, ROUTE_RISK_KEY, ROUTE_DELEGATE_KEY)
+        hidden = (
+            DEVICE_KEY,
+            ROUTE_ERROR_KEY,
+            ROUTE_RISK_KEY,
+            ROUTE_DELEGATE_KEY,
+            ROUTE_PRECHECK_KEY,
+        )
         return {k: v for k, v in payload.items() if k not in hidden}
 
     def scope(payload: dict[str, Any]) -> CallScope:
@@ -241,21 +379,45 @@ def routed_spec(
             target = core.targets(inner(payload)) if core.targets is not None else ""
             return CallScope(action=action, risk=core.risk, target=target)
         entry = next(e for e in registry.entries() if e.device_id == resolution.device)
-        node_risk = _max_risk(risk, entry.tools.get(name, "high"))
-        base_target = core.targets(inner(payload)) if core is not None and core.targets else ""
+        node_risk_ = _max_risk(risk, entry.tools.get(name, "high"))
+        if node_risk is not None:
+            node_risk_ = _max_risk(node_risk_, node_risk(inner(payload)).value)
+        early = payload.get(ROUTE_PRECHECK_KEY)
+        if early is None and precheck is not None:
+            early = precheck(inner(payload)) or ""  # without `prepare` (a direct call): here
+        if early:
+            # The node would refuse this text anyway: nobody is asked, nothing is sent.
+            payload[DEVICE_KEY] = ""
+            payload[ROUTE_ERROR_KEY] = {"error": early, "tool": name}
+            return CallScope(action=action, risk=Risk.READ, target="device:none")
+        if node_target is not None:
+            try:
+                base_target = node_target(inner(payload))
+            except CannotShow as exc:
+                # Never a shortened target: nothing runs, nobody is asked about half a call.
+                payload[DEVICE_KEY] = ""
+                payload[ROUTE_ERROR_KEY] = {
+                    "error": exc.error,
+                    "tool": name,
+                    "detail": str(exc)[:200],
+                }
+                return CallScope(action=action, risk=Risk.READ, target="device:none")
+        else:
+            base_target = core.targets(inner(payload)) if core is not None and core.targets else ""
         # Left to the device only when it can ask; otherwise the core asks itself (and the
         # node still refuses high risk it cannot confirm, unless trusted there).
-        delegate = node_risk is Risk.HIGH and entry.confirmer
-        payload[ROUTE_RISK_KEY] = node_risk.value
+        delegate = node_risk_ is Risk.HIGH and entry.confirmer
+        payload[ROUTE_RISK_KEY] = node_risk_.value
         payload[ROUTE_DELEGATE_KEY] = delegate
         # The device travels in its own field: the permission request, the audit and a
         # remembered grant carry it; the target stays what the tool says (shown with the name).
         return CallScope(
-            action=action,
-            risk=node_risk,
+            action=node_action(inner(payload)) if node_action is not None else action,
+            risk=node_risk_,
             target=f"{entry.label}: {base_target or name}",
             device=resolution.device,
             confirm_on_device=delegate,
+            rememberable=remember_on_node,
         )
 
     async def handler(payload: dict[str, Any]) -> dict[str, Any]:
@@ -274,14 +436,23 @@ def routed_spec(
         decided_risk = payload.get(ROUTE_RISK_KEY)
         if decided_risk not in ("read", "low", "medium", "high"):
             return {"error": "not_routed", "tool": name}
-        return await registry.call(
-            entry,
-            name,
-            inner(payload),
-            risk=str(decided_risk),
-            timeout_s=NODE_CALL_TIMEOUT_S,
-            confirm_on_device=bool(payload.get(ROUTE_DELEGATE_KEY)),
-        )
+        arguments = inner(payload)
+
+        async def on_node(*, blob: bool = False) -> dict[str, Any]:
+            extra: dict[str, Any] = {"blob": True} if blob else {}
+            return await registry.call(
+                entry,
+                name,
+                arguments,
+                risk=str(decided_risk),
+                timeout_s=NODE_CALL_TIMEOUT_S,
+                confirm_on_device=bool(payload.get(ROUTE_DELEGATE_KEY)),
+                **extra,
+            )
+
+        answer = await around(entry, arguments, on_node) if around is not None else await on_node()
+        answer.pop(SESSION_RESULT_KEY, None)  # the node's report is for the core, not the model
+        return answer
 
     template = core or ToolSpec(
         name=name,
@@ -291,6 +462,25 @@ def routed_spec(
         handler=handler,
         side_effects=side_effects,
     )
+
+    async def prepare(payload: dict[str, Any]) -> None:
+        await registry.settle(
+            waits_for(
+                payload.get(DEVICE_KEY),
+                entries=registry.known(),  # from memory: no database read per call
+                core_has=core is not None,
+                default=defaults().get(name),
+                origin=origin_device(),
+            )
+        )
+        if precheck is not None:
+            # The text check of a call for a node, before the scope and before anyone is
+            # asked - in a worker thread with a time limit, never on the core's event loop.
+            try:
+                payload[ROUTE_PRECHECK_KEY] = await off_loop(precheck, inner(payload)) or ""
+            except TimeoutError:
+                payload[ROUTE_PRECHECK_KEY] = "check_timeout"
+
     return dataclasses.replace(
         template,
         description=description,
@@ -301,7 +491,17 @@ def routed_spec(
         rememberable=rememberable and template.rememberable,
         targets=None,
         scope=scope,
+        prepare=prepare,
         local=False,
+        network=template.network if network is None else network,
+        # A call on a node may wait for the person at the device (`CONFIRM_TIMEOUT_S`): the
+        # executor must not give up before the node call itself does. A call that stays on
+        # this core keeps its own limit.
+        call_timeout_s=lambda payload: (
+            max(template.timeout_s or 0.0, ROUTED_TIMEOUT_S)
+            if payload.get(DEVICE_KEY) not in (None, "", CORE)
+            else None
+        ),
     )
 
 

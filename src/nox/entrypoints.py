@@ -31,6 +31,7 @@ from nox.core.config import ConfigError, NoxConfig, load_config
 from nox.core.events import HealthStatus
 from nox.core.logging import get_logger
 from nox.core.state import PrivacyMode
+from nox.noxos.protect import protect_on_nox_os
 from nox.paths import PROFILES_DIR, REPO_ROOT, resolve_config_paths
 from nox.security.egress import EgressGuard
 from nox.security.profiles import YamlProfileProvider
@@ -109,6 +110,10 @@ async def _wait_for_shutdown(*events: asyncio.Event) -> None:
 async def run_core(
     *, profile: str | None = None, voice: bool = True, user_config: Path | None = None
 ) -> int:
+    # Before the core builds anything: on Nox-OS it makes itself non-dumpable (`nox.noxos.protect`)
+    # whatever started it - `nox core` does this even earlier, `python -m nox.app` and any other
+    # caller of `run_core` get it here. Idempotent.
+    protect_on_nox_os()
     try:
         config = build_config(profile, user_config)
     except ConfigError as exc:
@@ -128,6 +133,7 @@ def _spawn_dev_shell(config: NoxConfig) -> subprocess.Popen[bytes]:
 
 async def run_dev(*, voice: bool = True, shell: bool = True, profile: str | None = None) -> int:
     """Core and shell in one console, without the supervisor."""
+    protect_on_nox_os()  # as `run_core`
     config = build_config(profile, None)
     core = NoxCore(config, voice=voice)
     shell_process = _spawn_dev_shell(config) if shell else None
@@ -269,6 +275,7 @@ def main() -> None:
     parser.add_argument("--no-voice", action="store_true", help="do not spawn the voice worker")
     parser.add_argument("--user-config", default=None, help="path to user.yaml")
     args = parser.parse_args()
+    protect_on_nox_os()  # before the event loop, as `nox core` does
     code = asyncio.run(
         run_core(
             profile=args.profile,

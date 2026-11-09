@@ -69,6 +69,10 @@ export interface DashboardState {
   twitchAuth: string | null;
   /** Last `desktop.computer_use` notice; `null` until one arrives and again after a disconnect. */
   computerUse: ComputerUseNotice | null;
+  /** Computer-use sessions running on paired PCs, one per PC; emptied on a disconnect. */
+  nodeComputerUse: ComputerUseNotice[];
+  /** This browser runs on the PC Nox controls (it cannot approve anything then). */
+  nodeControlHere: boolean;
   /** When the kill switch engaged, from its event; `null` while running or when only the level is known. */
   stoppedAt: string | null;
   /**
@@ -98,6 +102,8 @@ export const INITIAL_STATE: DashboardState = {
   viewsRevision: 0,
   twitchAuth: null,
   computerUse: null,
+  nodeComputerUse: [],
+  nodeControlHere: false,
   stoppedAt: null,
   seq: 0,
 };
@@ -130,5 +136,7 @@ export function setConnected(state: DashboardState, connected: boolean): Dashboa
     // Whether Nox still steers mouse and keyboard is unknown while the core is gone; the banner
     // only ever shows what the core said on this connection.
     computerUse: null,
+    nodeComputerUse: [],
+    nodeControlHere: false,
   };
 }

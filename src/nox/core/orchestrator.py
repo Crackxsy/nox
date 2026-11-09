@@ -26,6 +26,7 @@ from nox.core.events import E, Event, EventBus
 from nox.core.logging import get_logger
 from nox.core.state import StateManager
 from nox.core.toolloop import ActiveTurn, ToolEvent, ToolLoop
+from nox.security.taint import UNTRUSTED_CONVERSATIONS
 from nox.voice.base import Channel, TtsRequest
 
 log = get_logger(__name__)
@@ -188,6 +189,24 @@ class _Conversation:
     last_used: float
 
 
+async def _unwound(task: asyncio.Task[Turn]) -> Turn:
+    """`await task`, except when the caller is cancelled: then the turn is cancelled once and
+    waited for until it has finished unwinding - however often the caller is cancelled
+    meanwhile - so the turn slot is never handed on while the turn still runs, and its clean-up
+    is never cut short by a second cancellation."""
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if not task.done():
+            task.cancel()
+        while not task.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait({task})
+        if not task.cancelled():
+            task.exception()  # retrieved: the caller's cancellation is what goes up
+        raise
+
+
 @dataclass
 class OrchestratorConfig:
     history_turns: int = 8
@@ -271,6 +290,11 @@ class Orchestrator:
     _safe_mode: bool = False
     #: The live conversation of each channel (`conversation_for`).
     _conversations: dict[str, _Conversation] = field(default_factory=dict)
+    #: The one turn that may run (`handle_text`), and how many barge-ins wait to take it.
+    _slot: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _barge_pending: int = 0
+    #: Counts barge-ins; the newest one's number is the one that may run.
+    _barge_ticket: int = 0
 
     async def start(self) -> None:
         self._unsubs = [
@@ -303,32 +327,77 @@ class Orchestrator:
         speak: bool | None = None,
         on_chunk: Callable[[str], Awaitable[None] | None] | None = None,
         channel: str = DEFAULT_CHANNEL,
+        barge_in: bool = True,
+        context_note: str = "",
     ) -> Turn:
         """Process a user utterance. Cancels an in-flight turn (barge-in semantics).
 
         `channel` names where the user is talking: `voice`, `chat:<client>` for a dashboard client,
         `remote:<device>` for a paired phone. Each channel has a conversation of its own - its own
         history, model context and taint (`nox.security.taint`).
+
+        `barge_in=False` (a node's voice satellite, C9) cancels nothing and interrupts no speech:
+        the turn waits until the one in flight - and the question it may be waiting on - is over.
+        `context_note` is said to the model in this turn's context (where the words came from).
         """
         if self._safe_mode:
             raise RuntimeError("safe mode: AI requests are disabled until resume")
-        await self.cancel(reason="new_input")
-        self._active = asyncio.create_task(
-            self._run(text, language or self.config.default_language, speak, on_chunk, channel)
-        )
+        language = language or self.config.default_language
+        # One turn at a time (the slot). A barge-in says so before its first await, cancels what
+        # runs and takes the slot next; a waiting turn that gets the slot while a barge-in is
+        # pending gives it back at once - so two turns never run together, and a kill or the next
+        # input always cancels the one that does. Of two barge-ins in the same cancel window the
+        # newer wins: the older one, once it holds the slot, sees that it was superseded before
+        # it starts anything and steps aside, exactly as if its turn had been cancelled.
+        if barge_in:
+            self._barge_pending += 1
+            self._barge_ticket += 1
+            mine = self._barge_ticket
+            try:
+                await self.cancel(reason="new_input")
+                await self._slot.acquire()
+            finally:
+                self._barge_pending -= 1
+            if mine != self._barge_ticket:
+                self._slot.release()
+                raise asyncio.CancelledError("superseded by newer input")
+        else:
+            await self._wait_for_slot()
         try:
-            return await self._active
+            if self._safe_mode:
+                raise RuntimeError("safe mode: AI requests are disabled until resume")
+            task = asyncio.create_task(
+                self._run(text, language, speak, on_chunk, channel, note=context_note)
+            )
+            self._active = task
+            try:
+                return await _unwound(task)
+            finally:
+                if self._active is task:
+                    self._active = None
         finally:
-            self._active = None
+            self._slot.release()
+
+    async def _wait_for_slot(self) -> None:
+        """The slot for a turn that waits its turn: never ahead of a pending barge-in."""
+        while True:
+            await self._slot.acquire()
+            if self._barge_pending == 0:
+                return
+            self._slot.release()
+            await asyncio.sleep(0.01)
 
     async def cancel(self, *, reason: str) -> None:
         task = self._active
         if task and not task.done():
             task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception) as exc:
-                log.debug("orchestrator.cancelled", reason=reason, error=str(exc))
+            # `wait`, not `await task`: when this caller is cancelled meanwhile (a barge-in whose
+            # caller gave up) the error goes up - it must not take the slot and start a turn
+            # nobody waits for - and the turn is not cancelled a second time, which would cut
+            # its own clean-up short.
+            await asyncio.wait({task})
+            error = None if task.cancelled() else task.exception()
+            log.debug("orchestrator.cancelled", reason=reason, error=str(error or "cancelled"))
         if self.speaker is not None:
             try:
                 await self.speaker.interrupt(reason=reason)
@@ -413,11 +482,18 @@ class Orchestrator:
         speak: bool | None,
         on_chunk: Callable[[str], Awaitable[None] | None] | None = None,
         channel: str = DEFAULT_CHANNEL,
+        *,
+        note: str = "",
     ) -> Turn:
         started = time.perf_counter()
         request_id = uuid.uuid4().hex
         speak_enabled = self.config.speak if speak is None else speak
-        if is_new_conversation_request(text):
+        # A node's voice satellite (C9): words from a room, not necessarily the owner's. Neither
+        # the preset nor the mode shortcut runs on them (only presets the owner marked
+        # `from_satellites`, as an untrusted turn's), and "neues Gespräch" does not discard the
+        # conversation or end its grants: the text goes on like any other untrusted turn.
+        satellite = channel.startswith(UNTRUSTED_CONVERSATIONS)
+        if is_new_conversation_request(text) and not satellite:
             self.new_conversation(channel)
             turn = Turn(request_id=request_id, text=text, fast_path="new_conversation")
             turn.conversation = self.conversation_for(channel)
@@ -428,7 +504,15 @@ class Orchestrator:
         turn = Turn(request_id=request_id, text=text, conversation=self.conversation_for(channel))
 
         if self.preset_gate is not None:
-            spoken = await self.preset_gate.handle(text, language)
+            if satellite:
+                from_satellite = getattr(self.preset_gate, "handle_from_satellite", None)
+                spoken = (
+                    await from_satellite(text, language, conversation=turn.conversation)
+                    if from_satellite is not None
+                    else None
+                )
+            else:
+                spoken = await self.preset_gate.handle(text, language)
             if spoken is not None:
                 turn.fast_path = "preset"
                 return await self._deliver_fast_path(
@@ -440,7 +524,7 @@ class Orchestrator:
                     started=started,
                 )
 
-        if self.mode_gate is not None:
+        if self.mode_gate is not None and not satellite:
             spoken = await self.mode_gate.handle(text, language)
             if spoken is not None:
                 turn.fast_path = "mode"
@@ -474,7 +558,7 @@ class Orchestrator:
             ):
                 messages.append(Message(role=past.role, content=past.text, private=past.private))
         messages.append(Message(role="user", content=text))
-        turn_context = self._turn_context(context, with_caveats=tools is not None)
+        turn_context = self._turn_context(context, with_caveats=tools is not None, note=note)
         decision = self.escalation.decide(text, relevance=context.relevance)
         turn.escalated = decision.reason
         turn.timings.prompt_build_ms = (time.perf_counter() - build_started) * 1000
@@ -775,7 +859,7 @@ class Orchestrator:
         finally:
             timings.context_ms = (time.perf_counter() - started) * 1000
 
-    def _turn_context(self, context: TurnContext, *, with_caveats: bool) -> str:
+    def _turn_context(self, context: TurnContext, *, with_caveats: bool, note: str = "") -> str:
         """Per-turn context: current facts, what Nox knows about the user, memory, and what is
         not available right now (only when tools are on offer - a model told about caveats of a
         protocol it cannot use will eventually try to use it anyway).
@@ -785,7 +869,7 @@ class Orchestrator:
         """
         facts = self._facts()
         caveats = self.tool_loop.caveats() if with_caveats and self.tool_loop is not None else ""
-        parts = [facts, self._profile(), context.block, caveats]
+        parts = [facts, note, self._profile(), context.block, caveats]
         return "\n\n".join(part for part in parts if part)
 
     def _facts(self) -> str:

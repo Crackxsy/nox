@@ -25,6 +25,12 @@ def test_a_node_may_send_exactly_these_methods() -> None:
         "security.kill",
         "notifications/tools/list_changed",
         "nox/blob",
+        "nox/renew",  # a new certificate for the key it already holds (C7)
+        # C9, only to a core that named the feature: what a voice satellite heard (text), its
+        # speech level for a pet, and a read-only overlay credential for its overlay relay.
+        "nox/voice/heard",
+        "nox/voice/level",
+        "nox/overlay/credential",
     }
 
 

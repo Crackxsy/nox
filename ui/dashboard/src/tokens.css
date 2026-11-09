@@ -63,6 +63,8 @@
 
   /* layout */
   --hit: 44px;
+  /* WCAG 2.2 target size (2.5.8): the least a control may ever shrink to, in either direction */
+  --hit-min: 24px;
   --top-h: 64px;
   --side-w: 232px;
   --read: 720px;

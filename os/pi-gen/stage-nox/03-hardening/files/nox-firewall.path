@@ -1,0 +1,10 @@
+# Nox-OS: new firewall rules when Nox's settings change (the dashboard switching network access).
+[Unit]
+Description=Nox-OS firewall: watch Nox's settings
+
+[Path]
+PathChanged=/var/lib/nox/user.yaml
+Unit=nox-firewall.service
+
+[Install]
+WantedBy=multi-user.target

@@ -3,7 +3,10 @@
 A compromised core can send well-formed calls with valid receipts; the node refuses on its own
 authority (spec C §1.6). In order:
 
-1. **Hard prohibitions** - the core's immutable list, by name and as a glob.
+1. **Hard prohibitions** - the core's immutable list, by name and as a glob; and the **game
+   lock**: mouse, keys, typing and window changes (`LOCKED_TOOLS`) are refused while a game or
+   anti-cheat software runs on this device, a game is in front or owns the screen, or that
+   cannot be told (`input_lock`, installed by `nox.node.world`; without one: refused).
 2. **Stopped** - stopped on this device (only this device resumes), stopped by the core (until
    `nox/resume`), or after the dead-man rule fired (until the core is back and not stopped).
 3. **Known tool, capability** - the tool's group enabled in this device's confirmed manifest and
@@ -17,14 +20,21 @@ authority (spec C §1.6). In order:
 8. High risk then still needs the **confirmation on this device** (`nox.node.agent`, D1).
 
 Every decision - allowed or refused - goes into the node's own hash-chained audit trail
-(`nox node log`), which the core cannot read or erase. Shell and package tools on nodes run only
-in the node's own sandbox (C5).
+(`nox node log`), which the core cannot read or erase.
+
+After the gate, each hand holds its own boundary when it acts (`nox.node.hands`): `file.*` open
+every path through `nox.node.safe_fs` - inside a folder this device allowed, decided on the real
+file at open time (on the handle), never the node's folder or the keyring's; `shell.run` and
+`package.*` run only inside this device's `make_sandbox()`, which cannot see the node's folder,
+and are refused (`sandbox_unavailable`) where there is none. A refusal there is audited like one
+of the gate's.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -42,13 +52,29 @@ from nox.node.tools import NodeTool
 from nox.security.model import AuditLog
 from nox.security.prohibitions import matching_hard_prohibition
 
-__all__ = ["CEILING", "GateDecision", "NodeGate", "RISK_ORDER"]
+__all__ = ["CEILING", "GateDecision", "INPUT_TOOLS", "LOCKED_TOOLS", "NodeGate", "RISK_ORDER"]
 
 RISK_ORDER = ("read", "low", "medium", "high", "critical")
 #: What never runs on a node, whatever any manifest says.
 CEILING = "high"
 #: The budget's window.
 BUDGET_WINDOW_S = 3600.0
+#: Tools that send input on this device: refused while a game runs or is in front (spec C §1.6
+#: step 1). Ending a session sends nothing, so `computer.session_end` always runs.
+INPUT_TOOLS: frozenset[str] = frozenset(
+    {"computer.session_start", "computer.pointer", "computer.keys", "desktop.type_text"}
+)
+#: Everything the game lock refuses: input, and every change to windows and programs (pulling a
+#: game's window away or ending it is the same broken promise). Listing them stays allowed.
+LOCKED_TOOLS: frozenset[str] = INPUT_TOOLS | frozenset(
+    {
+        "desktop.window_focus",
+        "desktop.window_minimize",
+        "desktop.window_restore",
+        "desktop.window_close",
+        "desktop.process_stop",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -75,6 +101,22 @@ def _strings(value: Any) -> list[str]:
     return []
 
 
+#: Argument fields that name a path: only these are refused for a path alias. Free text - a
+#: note to write, a shell line such as `git log HEAD~1` - is not a path (the shell runs in the
+#: sandbox; the node-folder check above still covers every string).
+PATH_FIELDS = frozenset({"path", "to", "cwd", "folder", "dir", "directory", "source", "file"})
+
+
+def _path_strings(value: Any, key: str = "") -> list[str]:
+    if isinstance(value, str):
+        return [value] if key in PATH_FIELDS else []
+    if isinstance(value, dict):
+        return [s for k, v in value.items() for s in _path_strings(v, str(k))]
+    if isinstance(value, list | tuple):
+        return [s for v in value for s in _path_strings(v, key)]
+    return []
+
+
 def _norm(text: str) -> str:
     return text.replace("\\", "/").rstrip("/").casefold()
 
@@ -97,10 +139,9 @@ def touches(arguments: Any, forms: tuple[str, ...]) -> bool:
     SMB lookup could leak the user's NetNTLM hash) and never blocks the event loop.
 
     An early refusal (defence in depth), not the boundary: file tools on a node check the real
-    path at the moment they open it (`inside()`), and shell/package tools run only in the node's
-    sandbox without access to its folder or the keyring.
-    TODO(C5): node file tools call `inside()` at open time; shell/package tools on nodes only
-    inside `make_sandbox()` with the node folder not mounted."""
+    file on its handle at the moment they open it (`nox.node.safe_fs`), and shell/package tools
+    run only inside the node's `make_sandbox()`, where neither its folder nor the keyring is
+    mounted or granted (`nox.node.hands`)."""
     for text in _strings(arguments):
         flat = _norm(text)
         if any(form in flat for form in forms):
@@ -139,9 +180,11 @@ def is_remote_or_device_path(path: str) -> bool:
 
 
 def inside(path: str | Path, folder: Path) -> bool:
-    """For a node FILE tool, at the moment it opens `path`: whether the real path (symlinks,
-    junctions, 8.3 names) lies in `folder`. Remote and device paths count as inside (refused)
-    without being touched."""
+    """Whether the real path of `path` (symlinks, junctions, 8.3 names) lies in `folder`, resolved
+    by name. Remote and device paths count as inside (refused) without being touched.
+
+    A by-name answer can be outdated a moment later (a link swapped in between), so node file
+    tools do not rely on it: they decide on the opened handle (`nox.node.safe_fs`)."""
     if is_remote_or_device_path(str(path)):
         return True
     try:
@@ -173,9 +216,13 @@ class NodeGate:
         self.stop_state = stopped
         #: Whether a confirmation dialog is open on this device right now (set by the agent).
         self.dialog_open: Callable[[], bool] = lambda: False
+        #: Why no input may be sent on this device right now (a game), or None (`INPUT_TOOLS`).
+        #: Until a check is installed, input is refused: the lock fails closed.
+        self.input_lock: Callable[[], str | None] = lambda: "game_lock_unavailable"
         self._protected_forms = protected_forms(protected) if protected is not None else ()
         self.receipts = receipts
         self._clock = clock
+        self._lock = threading.Lock()
         self._side_effects: deque[float] = deque()
         self._high: deque[float] = deque()
         # Registration rule: a tool with a side effect that has not declared how it treats
@@ -218,14 +265,43 @@ class NodeGate:
         call_id: str = "",
         by: str = "core",
         meta: NoxCallMeta | None = None,
+        prechecked: bool = False,
     ) -> GateDecision:
-        decision = self._decide(name, arguments, meta)
-        self._record(name, decision, call_id=call_id, by=by)
+        """The gate's decision, recorded. Fast and stateful: the slow, stateless text check runs
+        before it (`precheck`, off the event loop) - `prechecked=True` says that happened.
+        One call at a time (a lock), so the budget, the receipts' replay memory and the audit
+        always see a consistent state, also from more than one thread."""
+        with self._lock:
+            decision = self._decide(name, arguments, meta, prechecked=prechecked)
+            self._record(name, decision, call_id=call_id, by=by)
         return decision
 
-    def _decide(self, name: str, arguments: Any, meta: NoxCallMeta | None) -> GateDecision:
+    def precheck(self, name: str, arguments: Any) -> str | None:
+        """A tool's text check (`NodeTool.precheck`) on its validated arguments: stateless - no
+        lock, no budget, no receipt, no audit - so it may run in a worker thread with a time
+        limit and simply be abandoned when the limit is hit. None when there is nothing to say
+        (`check` decides everything else)."""
+        tool = self._tools.get(name)
+        if tool is None or tool.precheck is None or not isinstance(arguments, dict):
+            return None
+        try:
+            args = tool.args.model_validate(arguments)
+        except ValidationError:
+            return None
+        return tool.precheck(args)
+
+    def _decide(
+        self, name: str, arguments: Any, meta: NoxCallMeta | None, *, prechecked: bool = False
+    ) -> GateDecision:
         if matching_hard_prohibition(name) is not None:
             return GateDecision(False, "hard_prohibition")
+        if name in LOCKED_TOOLS:
+            try:
+                locked = self.input_lock()
+            except Exception:  # noqa: BLE001 - a check that fails is a lock, never a pass
+                locked = "game_lock_unavailable"
+            if locked is not None:
+                return GateDecision(False, locked)
         stopped = self.stop_state()
         if stopped is not None:
             return GateDecision(False, stopped)
@@ -254,21 +330,32 @@ class NodeGate:
             return GateDecision(False, "invalid_arguments", tool)
         if self._protected_forms and touches(args.model_dump(), self._protected_forms):
             return GateDecision(False, "node_home_protected", tool)
-        if any(names_a_path_alias(text) for text in _strings(args.model_dump())):
+        if any(names_a_path_alias(text) for text in _path_strings(args.model_dump())):
             return GateDecision(False, "path_alias_refused", tool)
+        if tool.precheck is not None and not prechecked:
+            early = tool.precheck(args)
+            if early is not None:
+                return GateDecision(False, early, tool)
+        # This call's own risk (a write that replaces a file is high): the core must have judged
+        # it at least as risky, and the ceiling applies to it as well.
+        risk = tool.call_risk(args)
+        if not self._within(risk):
+            return GateDecision(False, "risk_ceiling", tool)
+        if risk != "read" and (meta is None or _rank(meta.risk) < _rank(risk)):
+            return GateDecision(False, "risk_understated", tool)
         charged = ""
-        if tool.risk != "read":
+        if risk != "read":
             # By rank, never by spelling: the higher of the node's and the core's risk, an
             # unknown value as the highest, clamped to the ceiling's name for the books.
-            rank = max(_rank(tool.risk), _rank(meta.risk) if meta is not None else 0)
+            rank = max(_rank(risk), _rank(meta.risk) if meta is not None else 0)
             charged = RISK_ORDER[min(rank, _rank(CEILING))]
             if not self._spend(charged):
                 return GateDecision(False, "budget", tool)
         high = _rank("high")
-        local = _rank(tool.risk) >= high or (
+        local = _rank(risk) >= high or (
             meta is not None and (_rank(meta.risk) >= high or meta.confirm_on_device)
         )
-        charged_risk = "" if tool.risk == "read" else charged
+        charged_risk = "" if risk == "read" else charged
         return GateDecision(
             True, "", tool, args, needs_local_confirmation=local, charged=charged_risk
         )

@@ -1,0 +1,35 @@
+# Nox-OS console status on the first screen (tty1): no login, no secrets (nox_console.py).
+[Unit]
+Description=Nox-OS console status (tty1)
+After=systemd-user-sessions.service
+Conflicts=getty@tty1.service autovt@tty1.service
+
+[Service]
+ExecStart=/usr/bin/python3 -I -S /usr/local/lib/nox-os/nox_console.py
+StandardInput=null
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Restart=always
+RestartSec=5
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+IPAddressAllow=localhost
+IPAddressDeny=any
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

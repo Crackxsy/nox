@@ -45,7 +45,7 @@ from __future__ import annotations
 import ipaddress
 import re
 import string
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from pathlib import PurePath
 from typing import Any
 from urllib.parse import urlsplit
@@ -530,6 +530,62 @@ def privacy_refusal(
             continue
         return "this touches the privacy scene or something in it; it cannot be changed"
     return None
+
+
+#: How deep the privacy scene's nested scenes and groups are followed.
+PRIVACY_SCENE_DEPTH = 8
+#: One obs-websocket request: `request(type, data)` -> OBS's `responseData`.
+ObsRequest = Callable[..., Awaitable[dict[str, Any]]]
+
+
+async def privacy_scene_refusal(
+    request: ObsRequest, privacy_scene: str, request_type: str, request_data: Mapping[str, Any]
+) -> str | None:
+    """`privacy_refusal` with what the privacy scene holds asked from OBS right now - by the
+    plugin on the core and by `nox.node.obs` on a node alike. Raises `PermissionError` when OBS
+    cannot say: the panic path is worth more than one request."""
+    if not privacy_scene:
+        return None
+    try:
+        scenes = await request("GetSceneList")
+        entry = next(
+            (s for s in scenes.get("scenes", []) if s.get("sceneName") == privacy_scene), None
+        )
+        own = {privacy_scene}
+        protected: set[str] = set()
+        if entry is not None:
+            own.add(str(entry.get("sceneUuid", "")))
+            await _collect(request, privacy_scene, group=False, into=protected, depth=0)
+    except PermissionError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - whatever OBS did, nothing is changed
+        raise PermissionError(
+            f"could not check the privacy scene in OBS ({type(exc).__name__}); nothing was changed"
+        ) from exc
+    return privacy_refusal(request_type, request_data, scene_names=own, protected=protected)
+
+
+async def _collect(
+    request: ObsRequest, name: str, *, group: bool, into: set[str], depth: int
+) -> None:
+    """Every source in scene (or group) `name`, by name and UUID, descending into nested scenes
+    and groups - a source two levels down is still on screen when the panic hits."""
+    if depth > PRIVACY_SCENE_DEPTH:
+        raise RecursionError("the privacy scene is nested too deeply to check")
+    kind = "GetGroupSceneItemList" if group else "GetSceneItemList"
+    items = await request(kind, {"sceneName": name})
+    for item in items.get("sceneItems", []):
+        source = str(item.get("sourceName", ""))
+        if not source:
+            continue
+        already = source in into
+        into.update({source, str(item.get("sourceUuid", ""))})
+        if already:
+            continue  # a scene nested twice, or a cycle
+        if item.get("isGroup"):
+            await _collect(request, source, group=True, into=into, depth=depth + 1)
+        elif item.get("sourceType") == "OBS_SOURCE_TYPE_SCENE":
+            await _collect(request, source, group=False, into=into, depth=depth + 1)
 
 
 def scope_for_tool(config: Mapping[str, Any]) -> Scope:

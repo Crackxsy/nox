@@ -18,9 +18,10 @@ home network that answers in the core's place is refused instead of trusted on f
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 import unicodedata
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -45,6 +46,8 @@ __all__ = [
     "PairLink",
     "PairLinkError",
     "Ping",
+    "RENEW_WINDOW_DAYS",
+    "RenewRequest",
     "SecurityKill",
     "escape_controls",
     "safe_name",
@@ -61,6 +64,9 @@ MAX_FRAME_BYTES = 1024 * 1024
 #: One tool result, all its blob chunks together.
 MAX_RESULT_BYTES = 8 * 1024 * 1024
 BLOB_CHUNK_BYTES = 512 * 1024
+#: A node asks for a new certificate once its current one has this many days left (spec C §1.2:
+#: from day 20 of 30). The core refuses earlier requests (one more day of slack for clocks).
+RENEW_WINDOW_DAYS = 10
 
 # ---- methods ---------------------------------------------------------------------------------
 
@@ -74,11 +80,41 @@ M_KILLED = "nox/killed"
 M_RESUME = "nox/resume"
 M_REVOKED = "nox/revoked"
 M_POLICY = "nox/policy"
+#: core -> node: games to watch on top of the node's own list (an addition, never a removal).
+M_GAMES = "nox/games"
 M_PING = "nox/ping"
 M_PONG = "nox/pong"
 M_CONFIRM_RESULT = "nox/confirm_result"
 M_SECURITY_KILL = "security.kill"
 M_BLOB = "nox/blob"
+#: node -> core: a new certificate for the same key, over the already authenticated channel.
+M_RENEW = "nox/renew"
+
+# ---- satellites (C9): only between a core and a node that agreed on them (`features`) ----------
+
+#: node -> core: what the voice satellite heard, as text (never audio). Answered at once with
+#: `{accepted, reason}`; the answer to the question follows as `nox/voice/say`.
+M_VOICE_HEARD = "nox/voice/heard"
+#: node -> core: how loud the node's own speech is right now, for a pet (`tts.level`). A number.
+M_VOICE_LEVEL = "nox/voice/level"
+#: node -> core: a read-only overlay credential for this node's overlay relay (`nox.node.overlay`).
+M_OVERLAY_CREDENTIAL = "nox/overlay/credential"
+#: core -> node: one sentence of the answer to an utterance this node sent (`turn_id`).
+M_VOICE_SAY = "nox/voice/say"
+#: core -> node: stop speaking the answer to `turn_id` (a new question, a stop).
+M_VOICE_CANCEL = "nox/voice/cancel"
+#: core -> node: whether this core's privacy lets the node's microphone listen right now.
+M_VOICE_GATE = "nox/voice/gate"
+#: core -> node: the panic button - OBS on that node goes to its privacy scene and stays as it is.
+M_OBS_PANIC = "nox/obs/panic"
+
+#: What a core of this release understands (`features` in its `initialize` answer). A node sends
+#: a satellite method only to a core that named its feature: an older core would count it as a
+#: violation and close the connection.
+FEATURE_VOICE = "voice"
+FEATURE_OVERLAY = "overlay"
+FEATURE_OBS_PANIC = "obs_panic"
+FEATURES: frozenset[str] = frozenset({FEATURE_VOICE, FEATURE_OVERLAY, FEATURE_OBS_PANIC})
 
 #: Everything a node may send to the core - the role `node` allow-list. Anything else is answered
 #: with "method not found", counted, and after a few the connection is closed.
@@ -93,11 +129,33 @@ NODE_TO_CORE: frozenset[str] = frozenset(
         M_SECURITY_KILL,
         M_LIST_CHANGED,
         M_BLOB,
+        M_RENEW,
+        M_VOICE_HEARD,
+        M_VOICE_LEVEL,
+        M_OVERLAY_CREDENTIAL,
     }
 )
 #: Everything the core sends to a node. `nox/policy` may only narrow what the node offers.
 CORE_TO_NODE: frozenset[str] = frozenset(
-    {M_TOOLS_LIST, M_TOOLS_CALL, M_KILL, M_RESUME, M_REVOKED, M_POLICY, M_PING, M_PONG}
+    {
+        M_TOOLS_LIST,
+        M_TOOLS_CALL,
+        M_KILL,
+        M_RESUME,
+        M_REVOKED,
+        M_POLICY,
+        M_GAMES,
+        M_PING,
+        M_PONG,
+        M_VOICE_SAY,
+        M_VOICE_CANCEL,
+        M_VOICE_GATE,
+        M_OBS_PANIC,
+    }
+)
+#: The satellite methods among them: the agent hands these to the satellite that registered.
+SATELLITE_TO_NODE: frozenset[str] = frozenset(
+    {M_VOICE_SAY, M_VOICE_CANCEL, M_VOICE_GATE, M_OBS_PANIC}
 )
 
 # ---- text from the other side ----------------------------------------------------------------
@@ -122,6 +180,39 @@ def escape_controls(text: str) -> str:
     return "".join(out)
 
 
+#: Runs of spaces are counted, not shown: a wide gap can push the part that matters out of view.
+_SPACE_RUN = re.compile(r" {3,}")
+
+
+def _visible(char: str) -> bool:
+    """Shown as itself: printable ASCII and the Latin-1 letters (umlauts, accents). Everything
+    else - other scripts (look-alikes), bidi and zero-width characters, C1 controls - is escaped."""
+    code = ord(char)
+    return 0x20 <= code <= 0x7E or (0xC0 <= code <= 0xFF and code not in (0xD7, 0xF7))
+
+
+def render(value: Any) -> str:
+    """One value the way a person decides on it - the same text in the core's permission target
+    and in the device's dialog: a string JSON-quoted (so a space or a quote inside it is visible
+    and two arguments never read as one), every character outside `_visible` escaped
+    (`\\u202e`), runs of spaces counted (`[40 spaces]`); a list token by token."""
+    if isinstance(value, str):
+        quoted = json.dumps(value, ensure_ascii=False)
+        out = []
+        for char in quoted:
+            code = ord(char)
+            if _visible(char):
+                out.append(char)
+            else:
+                out.append(f"\\u{code:04x}" if code <= 0xFFFF else f"\\U{code:08x}")
+        return _SPACE_RUN.sub(lambda m: f"[{len(m.group())} spaces]", "".join(out))
+    if isinstance(value, list | tuple):
+        return "[" + ", ".join(render(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{render(str(k))}: {render(v)}" for k, v in value.items()) + "}"
+    return json.dumps(value, ensure_ascii=True, default=str)
+
+
 def safe_name(value: object, limit: int = 96) -> str:
     """A name for an audit entry or a log line: itself when it is a plain name, otherwise its
     escaped form - never raw control characters."""
@@ -144,6 +235,19 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class SessionReport(_Strict):
+    """The node's own truth about computer use on it, in every answer, pong and hello: the
+    session generation (strictly increasing over the node's runs), whether a session is open
+    now, and its id. The core derives its approval lock from the highest generation it saw
+    (`nox.node.world_routes.NodeControl`). Strict: "no" is not a boolean here."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    gen: int = Field(ge=0, le=2**62)
+    active: bool
+    id: str = Field(default="", max_length=64, pattern=r"^[0-9a-f]{0,64}$")
+
+
 class NodeHello(_Strict):
     """`initialize` from the node: who it is and what it offers (by hash; the list comes later)."""
 
@@ -157,6 +261,13 @@ class NodeHello(_Strict):
     #: does the core leave a high-risk confirmation to the device (D1).
     confirmer: bool = False
     clientInfo: dict[_Short, _Short] = Field(default_factory=dict, max_length=4)  # noqa: N815
+    #: Computer use on this device right now (`SessionReport`); None from a node without it.
+    session: SessionReport | None = None
+    #: This device's own network addresses: a paired browser connecting from one of them sits on
+    #: this PC (`nox.node.world_routes.NodeControl.from_controlled`).
+    addresses: list[Annotated[str, StringConstraints(max_length=64)]] = Field(
+        default_factory=list, max_length=16
+    )
 
 
 class NoxCallMeta(_Strict):
@@ -184,6 +295,20 @@ class Ping(_Strict):
     ts: float = Field(ge=0)
     #: In a node's `nox/pong`: why it refuses everything right now ("" = it does not).
     state: str = Field(default="", max_length=32)
+    #: In a node's `nox/pong`: computer use on it right now (`SessionReport`).
+    session: SessionReport | None = None
+    #: In a node's `nox/pong`: its own addresses now (like `NodeHello.addresses`).
+    addresses: list[Annotated[str, StringConstraints(max_length=64)]] | None = Field(
+        default=None, max_length=16
+    )
+
+
+class GamesAdd(_Strict):
+    """`nox/games`: the core's watched games, added to the node's own list."""
+
+    add: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 _.+()\-]{0,63}$")]] = Field(
+        default_factory=list, max_length=64
+    )
 
 
 class Killed(_Strict):
@@ -212,6 +337,69 @@ class Blob(_Strict):
     seq: int = Field(ge=0, le=64)
     last: bool
     data: str = Field(max_length=(BLOB_CHUNK_BYTES * 4) // 3 + 8)
+
+
+class RenewRequest(_Strict):
+    """`nox/renew`: a certificate request for the key this node already holds. Only the key is
+    used (`nox.lan.tls.issue_client_certificate`); another key is refused."""
+
+    csr: str = Field(min_length=64, max_length=4096)
+
+
+# ---- satellites (C9) ---------------------------------------------------------------------------
+
+#: A turn the node started: 32 hex digits it chose itself.
+_TurnId = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{32}$")]
+_OptionalTurn = Annotated[str, StringConstraints(pattern=r"^(?:[0-9a-f]{32})?$")]
+#: Longest utterance a node may send, and longest sentence of an answer.
+MAX_HEARD_CHARS = 500
+MAX_SAY_CHARS = 600
+Language = Literal["de", "en"]
+
+
+class VoiceHeard(_Strict):
+    """`nox/voice/heard`: one utterance the node's voice satellite recognised, as text."""
+
+    turn_id: _TurnId
+    text: str = Field(min_length=1, max_length=MAX_HEARD_CHARS)
+    language: Language = "de"
+
+
+class VoiceLevel(_Strict):
+    """`nox/voice/level`: the loudness of the node's own speech (RMS 0..1), never the words."""
+
+    level: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    turn_id: _OptionalTurn = ""
+
+
+class OverlayCredentialRequest(_Strict):
+    """`nox/overlay/credential`: nothing to say - the node is who the credential is for."""
+
+
+class VoiceSay(_Strict):
+    """`nox/voice/say`: one sentence of the answer to the node's own utterance `turn_id`."""
+
+    turn_id: _TurnId
+    seq: int = Field(ge=0, le=200)
+    text: str = Field(default="", max_length=MAX_SAY_CHARS)
+    language: Language = "de"
+    #: The last sentence of this answer (it may be empty: the answer simply ends).
+    last: bool = False
+
+
+class VoiceCancel(_Strict):
+    turn_id: _OptionalTurn = ""
+
+
+class VoiceGate(_Strict):
+    """`nox/voice/gate`: whether the core's privacy lets the microphone listen (default: no)."""
+
+    capture: bool
+    reason: str = Field(default="", max_length=64)
+
+
+class ObsPanic(_Strict):
+    reason: str = Field(default="", max_length=64)
 
 
 class NodePairRequest(_Strict):

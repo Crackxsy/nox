@@ -36,6 +36,8 @@ import {
   parseHealthReport,
   parseHomeCommand,
   parseLanStatus,
+  parseControlledHere,
+  parseNodeControl,
   parsePendingPrompts,
   parsePermissionRequested,
   parseProviders,
@@ -262,9 +264,21 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
 
   // Initial snapshot after every (re)connect: the core is the only source of truth.
   const refresh = useCallback(async (c: IpcClient) => {
-    const [snapshot, health] = await Promise.allSettled([api.stateGet(c), api.healthGet(c)]);
+    const [snapshot, health, control] = await Promise.allSettled([
+      api.stateGet(c),
+      api.healthGet(c),
+      api.nodeComputerStatus(c),
+    ]);
     setState((s) => {
       let next = s;
+      // The header line for PCs Nox controls survives a reconnect: the core says it again.
+      if (control.status === 'fulfilled') {
+        next = {
+          ...next,
+          nodeComputerUse: parseNodeControl(control.value),
+          nodeControlHere: parseControlledHere(control.value),
+        };
+      }
       if (snapshot.status === 'fulfilled') next = applyStateSnapshot(next, snapshot.value);
       if (health.status === 'fulfilled') {
         const parsed = parseHealthReport(health.value);
@@ -329,6 +343,27 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
   // On a paired device, whether allowing at high risk can ask for a PIN: read on connect and
   // again whenever a new question comes up, so a PIN set meanwhile is noticed.
   const headPrompt = prompts[0]?.id;
+  // Whether Nox controls a paired PC decides whether a question needs the PIN: asked of the core
+  // for every new question, never taken from what this page last heard.
+  useEffect(() => {
+    if (!client || status !== 'online' || !headPrompt) return;
+    let cancelled = false;
+    void api
+      .nodeComputerStatus(client)
+      .then((payload) => {
+        if (!cancelled) {
+          setState((s) => ({
+            ...s,
+            nodeComputerUse: parseNodeControl(payload),
+            nodeControlHere: parseControlledHere(payload),
+          }));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [client, status, headPrompt]);
   useEffect(() => {
     if (!device || !client || status !== 'online') return;
     let cancelled = false;
@@ -499,7 +534,9 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
     [ask, closePalette, home, lang, liveClient, navigate, t],
   );
 
-  const promptProps = { pinSet, onAnswered };
+  const nodeControl = state.nodeComputerUse.length > 0;
+  const controlledHere = nodeControl && state.nodeControlHere;
+  const promptProps = { pinSet, onAnswered, nodeControl, controlledHere };
   const onTalk = route.area === 'nox' && route.tab === 'talk';
   const inlineHere = route.area === 'today' || onTalk;
   const sheetPrompt = prompts.length > 0 && !inlineHere;
@@ -586,6 +623,7 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
           stopped={stopped}
           stoppedAt={state.stoppedAt}
           computerUse={state.computerUse}
+          nodeComputerUse={state.nodeComputerUse}
           offline={offline}
           lanOff={lanOff}
           onReconnect={() => setAttempt((n) => n + 1)}
@@ -746,6 +784,8 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
               queue={prompts}
               device={device}
               pinSet={pinSet}
+              nodeControl={nodeControl}
+              controlledHere={controlledHere}
               onAnswered={onAnswered}
             />
             <Mounted onMount={onSheetMounted} />

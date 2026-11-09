@@ -13,7 +13,7 @@ import { DEFAULT_MOOD, type PetInput, deriveAnim } from '../petState';
 import { type Face, ReliefBrain, hopShape } from '../relief/brain';
 import { parseReliefDefinition } from '../relief/reliefFile';
 import { Skeleton } from '../relief/skeleton';
-import { FULL_OPEN_RMS, SpeechEnvelope, VOICE_FRESH_MS, VoiceTracker } from '../relief/speech';
+import { FULL_OPEN_RMS, SpeechEnvelope, VOICE_HOLD_MS, VoiceTracker } from '../relief/speech';
 import { reliefTargets } from '../relief/stateMapping';
 import { PoseSwitch, SWITCH_MS, SWITCH_REDUCED_MS, switchMix, switchSquash } from '../relief/transition';
 
@@ -177,11 +177,12 @@ describe('speech envelope', () => {
 
   it('trusts a measured level only while new ones keep arriving', () => {
     const tracker = new VoiceTracker();
-    expect(tracker.sample(0, 0, 0)).toBeNull(); // nothing has arrived since the pet started
-    expect(tracker.sample(100, 1, 0.3)).toBeCloseTo(0.3);
-    expect(tracker.sample(100 + VOICE_FRESH_MS - 1, 1, 0.3)).toBeCloseTo(0.3);
-    expect(tracker.sample(100 + VOICE_FRESH_MS + 1, 1, 0.3)).toBeNull(); // stalled: synthesise again
-    expect(tracker.sample(1000, 2, 0.1)).toBeCloseTo(0.1);
+    expect(tracker.sample(0, 0, 0, true)).toBeNull(); // nothing has arrived since the pet started
+    expect(tracker.sample(100, 1, 0.3, true)).toBeCloseTo(0.3);
+    expect(tracker.sample(100 + VOICE_HOLD_MS - 1, 1, 0.3, true)).toBeCloseTo(0.3);
+    // stalled (a dropped tts.finished, a lost connection): shut, never frozen open
+    expect(tracker.sample(100 + VOICE_HOLD_MS + 1, 1, 0.3, true)).toBe(0);
+    expect(tracker.sample(1000, 2, 0.1, true)).toBeCloseTo(0.1);
   });
 
   it('opens the jaw with the measured voice, and keeps it shut when muted', () => {

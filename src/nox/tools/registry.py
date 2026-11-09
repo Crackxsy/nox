@@ -41,6 +41,9 @@ class CallScope:
     #: High risk on a node: the person at that device confirms it there (owner decision D1),
     #: so the core does not ask anyone itself. A refusal by the core's rules still refuses.
     confirm_on_device: bool = False
+    #: False: no "remember" answer for this call, whatever the tool allows otherwise (a write on
+    #: a node is asked every time).
+    rememberable: bool = True
 
 
 Scope = Callable[[dict[str, Any]], CallScope]
@@ -81,11 +84,17 @@ class ToolSpec:
     #: How long one call may take, when the executor's default is too short by design - a coding
     #: session takes minutes. None means the executor's default.
     timeout_s: float | None = None
+    #: The limit for one call, decided from its payload after `scope` (a call routed to another
+    #: device waits for the person there); None from it means `timeout_s`.
+    call_timeout_s: Callable[[dict[str, Any]], float | None] | None = None
     #: Derives the permission action and risk from the validated input, for a tool whose risk
     #: depends on what it is asked to do (see `CallScope`). None means the tool's own action
     #: (the part of its name after the first dot) and `risk`. Only core code supplies one: a
     #: plugin cannot lower the risk of its own calls.
     scope: Scope | None = None
+    #: Awaited before `scope`, bounded by the tool itself: lets state the scope reads settle
+    #: first (a device that has just connected and is still announcing its tools).
+    prepare: Callable[[dict[str, Any]], Awaitable[None]] | None = None
 
 
 class ToolDescription(BaseModel):
@@ -104,12 +113,25 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, ToolSpec] = {}
+        #: Tools wrapped by a route (`wrap`): name -> the wrapper, and the spec of this core's
+        #: own that registered under that name (None while there is none).
+        self._wrappers: dict[str, Callable[[ToolSpec | None], ToolSpec]] = {}
+        self._own: dict[str, ToolSpec | None] = {}
 
     def register(self, spec: ToolSpec) -> None:
         # `-` is the wire form of `.` (`nox.tools.names`); a name containing it would make the
         # mapping ambiguous, and a model could reach one tool by spelling another.
         if "-" in spec.name:
             raise ValueError(f"tool names may not contain '-': {spec.name!r}")
+        wrapper = self._wrappers.get(spec.name)
+        if wrapper is not None:
+            if self._own.get(spec.name) is not None:
+                raise ValueError(f"tool already registered: {spec.name!r}")
+            # A plugin's tool under a routed name (`obs.request` while OBS may run on a node):
+            # it becomes the route's "on this core", the route stays the one tool the model sees.
+            self._own[spec.name] = spec
+            self._tools[spec.name] = wrapper(spec)
+            return
         if spec.name in self._tools:
             raise ValueError(f"tool already registered: {spec.name!r}")
         self._tools[spec.name] = spec
@@ -117,11 +139,32 @@ class ToolRegistry:
     def get(self, name: str) -> ToolSpec | None:
         return self._tools.get(name)
 
+    def own(self, name: str) -> ToolSpec | None:
+        """This core's own spec of `name`: under a route, what registered beneath it."""
+        if name in self._wrappers:
+            return self._own.get(name)
+        return self._tools.get(name)
+
     def names(self) -> list[str]:
         return sorted(self._tools)
 
     def unregister(self, name: str) -> None:
+        wrapper = self._wrappers.get(name)
+        if wrapper is not None:
+            # The plugin went away: the route stays, now for paired devices only.
+            self._own[name] = None
+            self._tools[name] = wrapper(None)
+            return
         self._tools.pop(name, None)
+
+    def wrap(self, name: str, wrapper: Callable[[ToolSpec | None], ToolSpec]) -> None:
+        """Route `name`: from now on the registry holds `wrapper(own)`, where `own` is this
+        core's spec of that name - the one registered now, or one registered (and unregistered)
+        later. For tools that come and go with a plugin while the route stays."""
+        current = self._own.get(name) if name in self._wrappers else self._tools.get(name)
+        self._wrappers[name] = wrapper
+        self._own[name] = current
+        self._tools[name] = wrapper(current)
 
     def describe(self) -> list[ToolDescription]:
         """List for the model prompt / dashboard. Never includes handlers."""

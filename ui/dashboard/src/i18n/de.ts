@@ -348,10 +348,24 @@ export const de = {
   perm_remember_minutes: 'Für {0} Minuten erlauben',
   perm_remember_minute: 'Für 1 Minute erlauben',
   perm_deny: 'Ablehnen',
+  presets_from_satellites: 'Auch über Sprach-Satelliten',
+  presets_from_satellites_hint:
+    'Dann startet der Satz auch an einem Gerät mit Sprach-Satellit - wer dort im Raum ist, muss nicht du sein. Jeder Schritt fragt dann wie bei fremden Inhalten, und die Betriebsart wechselt nie.',
+  presets_pin: 'Sicherheits-PIN',
+  presets_pin_hint: 'Presets starten Programme: Jede Änderung braucht die PIN, wenn eine gesetzt ist.',
   perm_device_note: 'Von diesem Gerät aus gilt eine Erlaubnis nur dieses eine Mal.',
+  perm_voice_satellite:
+    'Von Sprach-Satellit {0}: in einen Raum gesprochen - nicht unbedingt von dir. Nur erlauben, wenn du das selbst wolltest.',
   perm_pin: 'Sicherheits-PIN',
   perm_pin_hint: 'Bei hohem Risiko braucht das Erlauben von diesem Gerät aus die PIN. Nach drei falschen Versuchen wird das Gerät entfernt.',
   perm_pin_missing: 'Bitte zuerst die Sicherheits-PIN eingeben.',
+  perm_node_control_device:
+    'Vom Browser auf dem PC, den Nox gerade steuert, geht Erlauben nicht – von einem anderen Gerät mit der PIN. Ablehnen geht überall.',
+  chat_unchecked_node: 'Während Nox den PC steuert, gelten Nachrichten als ungeprüft.',
+  chat_controlled_here: 'Nox steuert gerade diesen PC – von hier kann man Nox nichts schreiben. Stopp geht immer.',
+  perm_node_control_here:
+    'Nox steuert gerade Maus und Tastatur auf diesem PC. Von hier geht Erlauben nicht – an einem anderen Gerät mit der PIN. Ablehnen geht auch hier.',
+  perm_node_control_pin_hint: 'Nox steuert gerade Maus und Tastatur auf einem PC: Erlauben braucht jetzt die PIN.',
   perm_only_at_computer: 'Erlauben geht dafür nur am Rechner, auf dem Nox läuft. Ablehnen geht auch hier.',
   perm_countdown: 'Noch {0} Sekunden. Ohne Antwort tut Nox es nicht.',
   perm_countdown_over: 'Die Zeit ist um – ohne Antwort tut Nox es nicht.',
@@ -413,6 +427,12 @@ export const de = {
   perm_risk_high: 'hoch',
   perm_risk_critical: 'kritisch',
   computer_use_banner: 'Nox steuert gerade Maus und Tastatur – {0} beendet sofort.',
+  computer_use_banner_node: 'Nox steuert gerade Maus und Tastatur auf {0}.',
+  computer_use_banner_node_hotkey: '{0} an diesem Gerät beendet sofort, „Stopp“ beendet überall.',
+  computer_use_release: 'Sperre lösen',
+  computer_use_saturated: 'Nox steuert ein Gerät mit sehr vielen Adressen – Freigaben nur nach Ende der Sitzung.',
+  computer_use_release_pin: 'PIN zum Lösen der Sperre',
+  computer_use_release_failed: 'Die Sperre wurde nicht gelöst.',
   computer_use_banner_no_hotkey: 'Nox steuert gerade Maus und Tastatur – der Not-Aus beendet sofort.',
 
   // -- UX redesign (Spec UX-Neubau): shell, Heute, palette, permission, Stopp, settings pages --

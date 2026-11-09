@@ -101,6 +101,7 @@ class SqliteAuditLog:
             "secret",
             "token",
             "password",
+            "passphrase",
             "passwd",
             "pwd",
             "api_key",

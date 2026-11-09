@@ -102,6 +102,9 @@ class ClaudeSession:
         self.lock = asyncio.Lock()
         self._creationflags = creationflags
         self._proc: asyncio.subprocess.Process | None = None
+        #: The process `kill` last ended, for `kill_and_wait` to wait on (a kill switch may have
+        #: killed it already, without waiting).
+        self._killed_proc: asyncio.subprocess.Process | None = None
         self._lines: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._reader: asyncio.Task[None] | None = None
         self._stderr: asyncio.Task[None] | None = None
@@ -176,6 +179,8 @@ class ClaudeSession:
         exited and the bridge is nobody's child any more.
         """
         proc, self._proc = self._proc, None
+        if proc is not None:
+            self._killed_proc = proc
         job, self._job = self._job, None
         if job is not None:
             job.close()
@@ -184,6 +189,17 @@ class ClaudeSession:
         for task in (self._reader, self._stderr):
             if task is not None and not task.done():
                 task.cancel()
+
+    async def kill_and_wait(self, timeout_s: float = 2.0) -> None:
+        """`kill`, then wait (at most `timeout_s`) until the process has really ended: a start
+        that throws its session away returns only once the process is gone, not merely signalled
+        - SIGKILL is delivered asynchronously, and right after `kill` the process may still run
+        for a moment."""
+        self.kill()
+        proc = self._killed_proc
+        if proc is not None and proc.returncode is None:
+            with contextlib.suppress(TimeoutError, ProcessLookupError, ChildProcessError):
+                await asyncio.wait_for(proc.wait(), timeout=timeout_s)
 
     async def close(self) -> None:
         """End the session politely (stdin closed), then make sure it is gone."""

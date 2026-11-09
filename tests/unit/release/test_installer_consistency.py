@@ -19,8 +19,11 @@ INSTALLER = (REPO / "scripts" / "install-linux.sh").read_text("utf-8")
 COMMAND = (REPO / "installer" / "linux" / "nox-command.sh").read_text("utf-8")
 
 
-def _installer_keys() -> list[str]:
-    block = re.search(r"^TRUSTED_RELEASE_KEYS=\(\n(.*?)^\)$", INSTALLER, re.M | re.S)
+MACOS = (REPO / "scripts" / "install-macos.sh").read_text("utf-8")
+
+
+def _installer_keys(script: str = INSTALLER) -> list[str]:
+    block = re.search(r"^TRUSTED_RELEASE_KEYS=\(\n(.*?)^\)$", script, re.M | re.S)
     assert block is not None, "TRUSTED_RELEASE_KEYS=( ... ) not found in install-linux.sh"
     entries = []
     for line in block.group(1).splitlines():
@@ -37,6 +40,10 @@ def test_the_installer_trusts_exactly_the_keys_nox_trusts() -> None:
     expected = [f"{k.key_id}|{k.not_after}|{k.public_key}" for k in trusted_release_keys()]
     assert _installer_keys() == expected, (
         "scripts/install-linux.sh TRUSTED_RELEASE_KEYS and src/nox/release/trusted_keys.py differ"
+    )
+    # The macOS beta refuses tagged releases once a key is trusted: its list must be the same.
+    assert _installer_keys(MACOS) == expected, (
+        "scripts/install-macos.sh TRUSTED_RELEASE_KEYS differ"
     )
 
 

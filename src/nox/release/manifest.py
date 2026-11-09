@@ -56,6 +56,13 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 #: A plain file name: no folders, no `..`, nothing a shell or a URL would treat specially.
 _ASSET_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}$")
 _CHANNELS = frozenset({"stable", "prerelease"})
+#: What a manifest lists: the release itself (release-manifest.json; no "kind" field) or the
+#: Nox-OS image files of that release (nox-os-manifest.json, os/README.md). Both are signed by the
+#: same key, so a verifier checks which one it holds - an image manifest never stands in for the
+#: release manifest, nor the other way round.
+KIND_RELEASE = "release"
+KIND_OS_IMAGE = "os-image"
+KINDS = frozenset({KIND_RELEASE, KIND_OS_IMAGE})
 
 
 class ManifestError(ValueError):
@@ -127,6 +134,14 @@ class ReleaseManifest:
     next_keys: tuple[TrustedKey, ...] = ()
     node_protocol: tuple[int, int] | None = None
     min_node_version: Version | None = None
+    #: The node protocol the `nox node` of this release speaks (C7): a node installs it by itself
+    #: only when its paired core accepts that protocol.
+    node_speaks: int | None = None
+    #: Whether `uv.lock` changed since the previous release: then a node's code-only update
+    #: cannot apply and the installer is needed.
+    deps_changed: bool | None = None
+    #: KIND_RELEASE or KIND_OS_IMAGE.
+    kind: str = KIND_RELEASE
     project: str = PROJECT
     extra: Mapping[str, Any] = field(default_factory=dict)
 
@@ -162,6 +177,9 @@ def build_manifest(
     next_keys: Iterable[TrustedKey] = (),
     node_protocol: tuple[int, int] | None = None,
     min_node_version: str | None = None,
+    node_speaks: int | None = None,
+    deps_changed: bool | None = None,
+    kind: str = KIND_RELEASE,
 ) -> bytes:
     """The manifest file's bytes. Validated by parsing them back, so nothing is signed that a
     verifier would refuse."""
@@ -190,6 +208,13 @@ def build_manifest(
             for asset in sorted(assets, key=lambda item: item.name)
         ],
     }
+    # Written only when known, so a manifest without them keeps its earlier layout.
+    if node_speaks is not None:
+        document["node_speaks"] = node_speaks
+    if deps_changed is not None:
+        document["deps_changed"] = deps_changed
+    if kind != KIND_RELEASE:
+        document["kind"] = kind
     data = (json.dumps(document, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode()
     parse_manifest(data)
     return data
@@ -283,7 +308,21 @@ def parse_manifest(data: bytes) -> ReleaseManifest:
         None if raw_min_node is None else Version.parse(_require(document, "min_node_version", str))
     )
 
+    speaks: int | None = None
+    if document.get("node_speaks") is not None:
+        speaks = _require(document, "node_speaks", int)
+        if not 0 < speaks <= 1000:
+            raise ManifestError("field 'node_speaks' is not a protocol number")
+    deps_changed: bool | None = None
+    if document.get("deps_changed") is not None:
+        deps_changed = _require(document, "deps_changed", bool)
+
+    kind = document.get("kind", KIND_RELEASE)
+    if kind not in KINDS:
+        raise ManifestError(f"unknown manifest kind {str(kind)[:20]!r}")
+
     known = {
+        "kind",
         "schema",
         "project",
         "version",
@@ -295,6 +334,8 @@ def parse_manifest(data: bytes) -> ReleaseManifest:
         "next_keys",
         "node_protocol",
         "min_node_version",
+        "node_speaks",
+        "deps_changed",
     }
     return ReleaseManifest(
         version=version,
@@ -306,6 +347,9 @@ def parse_manifest(data: bytes) -> ReleaseManifest:
         next_keys=tuple(next_keys),
         node_protocol=protocol,
         min_node_version=min_node,
+        node_speaks=speaks,
+        deps_changed=deps_changed,
+        kind=kind,
         project=project,
         extra={key: value for key, value in document.items() if key not in known},
     )

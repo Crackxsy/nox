@@ -52,6 +52,7 @@ from urllib.parse import urlsplit
 
 __all__ = [
     "CONVERSATION",
+    "UNTRUSTED_CONVERSATIONS",
     "COPIED_RUN_CHARS",
     "MAX_UNTRUSTED_CHARS",
     "TRUSTED_INTERNAL_TOOLS",
@@ -61,6 +62,13 @@ __all__ = [
     "result_taints",
     "untrusted_text",
 ]
+
+#: Conversations whose every message comes from a source Nox cannot vouch for, tainted from their
+#: first turn and never cleared (C9): what a node's voice satellite heard - a far-field microphone
+#: in a room, not necessarily the owner. As if `mark(conversation, None)` had been called: nothing
+#: in them is user-directed, a remembered grant above LOW asks again, and every call that sends
+#: data off the machine asks.
+UNTRUSTED_CONVERSATIONS: tuple[str, ...] = ("voice:node:",)
 
 #: The conversation the current tool call belongs to; empty outside a conversation.
 CONVERSATION: ContextVar[str] = ContextVar("nox_conversation", default="")
@@ -233,7 +241,9 @@ class TaintLedger:
         return self._records.pop(conversation, None) is not None
 
     def is_tainted(self, conversation: str) -> bool:
-        return bool(conversation) and conversation in self._records
+        if not conversation:
+            return False
+        return conversation in self._records or conversation.startswith(UNTRUSTED_CONVERSATIONS)
 
     def note_user_message(self, conversation: str, text: str) -> None:
         """What the user said in a turn of `conversation` (kept until the conversation ends)."""
@@ -247,6 +257,8 @@ class TaintLedger:
         copied from untrusted content). Whatever cannot be shown to come from the user does not."""
         record = self._records.get(conversation)
         said = self._user.get(conversation, [])
+        if conversation.startswith(UNTRUSTED_CONVERSATIONS):
+            return False  # not the owner's words for sure: nothing is user-directed
         if record is None or record.opaque or not said or not value.strip():
             return False
         if len(value) > MAX_CHECKED_CHARS or _copies_untrusted(value, record.text, said):

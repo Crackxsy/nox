@@ -139,6 +139,9 @@ class RequestContext:
     request: Envelope
     services: frozenset[str] = field(default_factory=frozenset)
     stream: StreamFn = _no_stream
+    #: The network address a paired device connects from (bridged in by the network listener);
+    #: "" for local clients.
+    peer: str = ""
 
 
 @dataclass(frozen=True)
@@ -160,8 +163,13 @@ INPUT_ROLES: frozenset[str] = frozenset(UI_ROLES)
 CALM_UI_REQUESTS: frozenset[str] = frozenset(
     {"state.get", "health.get", "health.history", "config.effective", "config.get",
      "security.kill", "security.panic", "security.pin.status", "voice.mute", "plugin.status",
-     "secrets.status", "security.permission.reply"}
+     "secrets.status", "security.permission.reply", "security.permission.pending",
+     "personality.get", "day.today"}
 )  # fmt: skip
+#: Talking to Nox: while Nox controls mouse and keyboard on a paired PC these need no PIN - from
+#: anywhere but the browser on that very PC, so Nox cannot type instructions to itself
+#: (`nox.node.world_routes.session_refusal`). Anything they lead to is asked as usual.
+CONVERSATION_UI_REQUESTS: frozenset[str] = frozenset({"chat.send", "voice.ptt"})
 
 
 def calm_ui_request(name: str) -> bool:
@@ -169,6 +177,24 @@ def calm_ui_request(name: str) -> bool:
     return (
         name in CALM_UI_REQUESTS or name.startswith("ipc.") or name.endswith((".list", ".status"))
     )
+
+
+def conversation_request(name: str) -> bool:
+    """Talking to Nox (`CONVERSATION_UI_REQUESTS`)."""
+    return name in CONVERSATION_UI_REQUESTS
+
+
+def calm_call(name: str, payload: Any) -> bool:
+    """`calm_ui_request` for one call. `voice.mute` is calm only when it mutes - `muted` literally
+    `true`; anything else (unmuting, "false", 0, a missing field) is not: it could give Nox an ear
+    again. The field is a strict boolean, so the model never reads it otherwise."""
+    if name == "voice.mute":
+        return isinstance(payload, dict) and payload.get("muted") is True
+    return calm_ui_request(name)
+
+
+#: (context, the request's `pin`, the request's name) -> why it is refused, or None.
+NodeGuard = Callable[[RequestContext, str | None, str], Awaitable[str | None]]
 
 
 class RequestRegistry:
@@ -180,6 +206,11 @@ class RequestRegistry:
         #: then keep only `calm_ui_request`s, so no click Nox sends can activate, approve or
         #: change anything. Set by the desktop extension.
         self.input_lock: Callable[[], bool] | None = None
+        #: While Nox controls mouse and keyboard on a paired PC: why a UI client's request that
+        #: changes something is refused (`nox.node.world_routes.session_refusal`: the PIN, never
+        #: the browser on that PC, not from a remote session), or None. Given the request's
+        #: `pin` and name. Set by the node extension.
+        self.node_guard: NodeGuard | None = None
 
     def register(
         self,
@@ -254,8 +285,23 @@ class RequestRegistry:
                 ERR_PERMISSION,
                 "Nox is controlling mouse and keyboard; end it with the stop hotkey and try again",
             )
+        payload = envelope.payload
+        node_guard = self.node_guard
+        if (
+            ctx.role in INPUT_ROLES
+            and node_guard is not None
+            and not calm_call(envelope.name, payload)
+        ):
+            raw_pin = payload.get("pin") if isinstance(payload, dict) else None
+            pin = raw_pin if isinstance(raw_pin, str) else None
+            refusal = await node_guard(ctx, pin, envelope.name)
+            if refusal is not None:
+                raise IpcError(ERR_PERMISSION, refusal, details={"reason": "node_session"})
+            if pin is not None and "pin" not in reg.payload_model.model_fields:
+                # The PIN was for this check only; the request itself takes none.
+                payload = {k: v for k, v in payload.items() if k != "pin"}
         try:
-            model = reg.payload_model.model_validate(envelope.payload)
+            model = reg.payload_model.model_validate(payload)
         except ValidationError as exc:
             raise IpcError(
                 ERR_VALIDATION,

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 from nox.core.events import E, Event
 from nox.core.logging import get_logger
@@ -121,7 +121,9 @@ class VoicePtt(BaseModel):
 
 
 class VoiceMute(BaseModel):
-    muted: bool
+    #: Strict: "false", 0 or "no" are not booleans - never quietly read as one (the calm rule of
+    #: `nox.ipc.dispatch.calm_call` depends on it).
+    muted: StrictBool
 
 
 class ChatSend(BaseModel):
@@ -338,6 +340,14 @@ class CoreHandlers:
                 "ok": False,
                 "reason": "Nox controls mouse and keyboard; press the stop hotkey, then allow",
             }
+        node_guard = getattr(self._core, "node_approval_guard", None)
+        if p.decision is Decision.ALLOW and node_guard is not None:
+            # The same while Nox controls a paired PC (spec C §1.5): no paired device approves,
+            # and this machine only with the PIN and not remotely
+            # (`nox.node.world_routes.approval_refusal`). A "deny" always counts.
+            refusal = await node_guard(ctx, p.pin)
+            if refusal is not None:
+                return {"ok": False, "reason": refusal}
         engine = self._core.security.engine
         if ctx.role == DEVICE_ROLE and p.decision is Decision.ALLOW:
             request = engine.pending_request(p.grant_id)
@@ -394,6 +404,14 @@ class CoreHandlers:
             await ctx.stream({"delta": delta}, False)
 
         # Each dashboard client is a conversation of its own (history, model context, taint).
+        untrusted = getattr(self._core, "node_chat_untrusted", None)
+        if untrusted is not None and untrusted(ctx) and self._core.security is not None:
+            # While Nox controls a paired PC, a message from there may have been typed by Nox
+            # itself: the conversation counts as holding unreadable untrusted content, so no
+            # lookup in it counts as the user's own (`TaintLedger.user_directed`) and every
+            # off-machine call asks (`nox.node.install.wire_guards`).
+            conversation = self._core.orchestrator.conversation_for(f"chat:{ctx.client_id}")
+            self._core.security.engine.mark_tainted(conversation, None)
         with turn_origin("chat"):  # facts learned from it count as the user's own words
             turn = await self._core.orchestrator.handle_text(
                 p.text,

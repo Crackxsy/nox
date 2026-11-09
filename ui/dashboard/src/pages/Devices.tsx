@@ -578,7 +578,7 @@ export function DevicesSection({
       </Sheet>
 
       {device && (
-        <section aria-labelledby="h-lan-ca" className="tiles tiles--single">
+        <div className="tiles tiles--single">
           <Tile id="lan-ca" title={t('lan_ca_title')} lede={t('lan_ca_lede')}>
             {ios && (
               <div className="ca-order">
@@ -617,7 +617,7 @@ export function DevicesSection({
               </div>
             )}
           </Tile>
-        </section>
+        </div>
       )}
     </>
   );

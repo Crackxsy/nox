@@ -431,12 +431,12 @@ async def test_the_node_says_whether_it_can_ask(
     ],
 )
 def test_the_question_shows_everything_or_nothing(value: str) -> None:
+    from nox.node.protocol import render
+
     text = confirmation_text("package.install", {"name": value})
     assert text is not None
     assert "\x1b" not in text and "\r" not in text and "\u202e" not in text
-    escaped = value.replace("\x1b", "\\x1b").replace("\r", "\\x0d").replace("\n", "\\x0a")
-    escaped = escaped.replace("\u202e", "\\u202e")
-    assert escaped in text  # in full - nothing cut silently
+    assert render(value) in text  # in full, rendered as the core renders it - nothing cut
     assert confirmation_text("package.install", {"name": "y" * 5000}) is None  # too long: refuse
 
 

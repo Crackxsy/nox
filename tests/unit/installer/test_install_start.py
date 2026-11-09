@@ -122,4 +122,38 @@ def test_every_shortcut_starts_the_launcher(name: str) -> None:
         line for line in script.splitlines() if "pythonw.exe" in line and "Parameters" in line
     ]
     assert starts, "no shortcut found"
-    assert all("start_nox.pyw" in line and "-m nox.supervisor" not in line for line in starts)
+    # The core's launcher, or the node's (installer/start_node.pyw) - never `-m nox.supervisor`.
+    launchers = ("start_nox.pyw", "start_node.pyw")
+    assert all(
+        any(launcher in line for launcher in launchers) and "-m nox.supervisor" not in line
+        for line in starts
+    )
+
+
+def _section(script: str, name: str) -> list[str]:
+    lines, inside = [], False
+    for line in script.splitlines():
+        if line.startswith("["):
+            inside = line.strip() == f"[{name}]"
+            continue
+        if inside and line.strip() and not line.startswith(";"):
+            lines.append(line)
+    return lines
+
+
+def test_nothing_from_the_user_writable_app_folder_runs_elevated() -> None:
+    """#145: Setup may be elevated (the sandbox-rules step); code from {app}, which the user's
+    account can change, must still run as the original, non-elevated user."""
+    script = (REPO / "installer" / "nox.iss").read_text(encoding="utf-8")
+    runs = [line for line in _section(script, "Run") if "{app}" in line]
+    assert runs, "no [Run] entry found"
+    for line in runs:
+        assert "runasoriginaluser" in line, line
+    code = script[script.index("\n[Code]\n") :]
+    for call in (" Exec(ExpandConstant('{app}", "ShellExec('runas', ExpandConstant('{app}"):
+        assert call not in code, call
+    assert "ExecAsOriginalUser(ExpandConstant('{app}\\runtime\\python.exe')" in code
+    # The node's launcher and the CLI run isolated (-I): no current folder, no PYTHON* variable.
+    for line in runs + _section(script, "UninstallRun"):
+        if "start_node.pyw" in line or "nox.cli" in line:
+            assert 'Parameters: "-I ' in line, line

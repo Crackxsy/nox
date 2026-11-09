@@ -38,3 +38,16 @@ def test_dialog_english_strings(qapp: Any) -> None:
     d = PermissionDialog(REQ, language="en")
     assert d.allow_button.text() == "Allow" and d.deny_button.text() == "Deny"
     assert d.remember.text() == "Remember for this session"
+
+
+def test_dialog_sends_the_pin_with_an_allow_only(qapp: Any) -> None:
+    d = PermissionDialog(REQ, language="de")
+    assert d.pin.echoMode() == d.pin.EchoMode.Password
+    d.pin.setText(" 4711 ")
+    assert d.decision(True) == {
+        "grant_id": "req-7",
+        "decision": "allow",
+        "remember": False,
+        "pin": "4711",
+    }
+    assert "pin" not in d.decision(False)  # a "deny" never carries it

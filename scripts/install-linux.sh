@@ -33,8 +33,65 @@
 #
 # Language: German when the system language is German (LC_ALL, LC_MESSAGES or LANG starting with
 # "de"), English otherwise; NOX_LANG=de|en overrides it (`curl ... | sudo NOX_LANG=en bash`).
+#
+# Node mode (docs/NODES.md) - this device as the hands of a Nox elsewhere in the home, never the
+# Nox itself; the same version choice and signature check, then only what a node needs:
+#   curl -fsSL <address> | bash -s -- --node                    a desktop: as yourself (no sudo),
+#       a systemd *user* unit, the tray where there is one; ~/.local/share/nox-node-app
+#   curl -fsSL <address> | sudo bash -s -- --node --headless    no screen (a Pi): a system user
+#       nox-node, a hardened system unit; /opt/nox-node, data in /var/lib/nox-node
+#   ... --node [--headless] --pair '<nox-node://pair?... link>'  pair right away
+#   ... --node [--headless] --uninstall                         remove the program and the unit;
+#       the node's identity and audit trail stay (remove the device in Nox's Devices page too)
+# Run it again to update; the node also updates itself from signed releases (nox node update).
+#
+# Image mode (os/README.md) - Nox-OS, the flashable Raspberry Pi image, is built with this script
+# inside the image's chroot, so a flashed Pi has exactly the layout an install gives:
+#   install-linux.sh --image --version <tag or commit> [--ui-bundle <file>]
+# The same version choice and signature check, then the release is built and the service enabled -
+# but nothing is started, no health check, no snapshot, and no data, keys or accounts are created
+# (Nox makes its own on the Pi's first start). --ui-bundle: a dashboard package built next to the
+# image, for versions without a release (a signed release always takes the one its manifest names).
+# Refused on a running system. An image carries the core; a node image is not built (yet), so
+# --image does not combine with --node. --version <ref> is NOX_REF, in every mode.
 set -euo pipefail
 umask 022
+
+NODE_MODE=""
+NODE_HEADLESS=""
+NODE_UNINSTALL=""
+NODE_PAIR=""
+IMAGE_MODE=""
+IMAGE_UI_BUNDLE=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --node) NODE_MODE=1 ;;
+    --headless) NODE_HEADLESS=1 ;;
+    --uninstall) NODE_UNINSTALL=1 ;;
+    --pair) shift; NODE_PAIR="${1:-}" ;;
+    --image) IMAGE_MODE=1 ;;
+    --version) shift; NOX_REF="${1:-}" ;;
+    --ui-bundle) shift; IMAGE_UI_BUNDLE="${1:-}" ;;
+    *) printf 'Unknown option: %s (known: --node --headless --pair <link> --uninstall --image --version <ref> --ui-bundle <file>)\n' "$1" >&2; exit 2 ;;
+  esac
+  shift
+done
+if [ -z "$NODE_MODE" ] && { [ -n "$NODE_HEADLESS$NODE_UNINSTALL" ] || [ -n "$NODE_PAIR" ]; }; then
+  printf '%s\n' "--headless, --pair and --uninstall belong to --node." >&2
+  exit 2
+fi
+if [ -z "$IMAGE_MODE" ] && [ -n "$IMAGE_UI_BUNDLE" ]; then
+  printf '%s\n' "--ui-bundle belongs to --image." >&2
+  exit 2
+fi
+if [ -n "$IMAGE_MODE" ] && [ -n "$NODE_MODE" ]; then
+  printf '%s\n' "--image builds a core image; it does not combine with --node." >&2
+  exit 2
+fi
+if [ -n "$IMAGE_MODE" ] && [ "${NOX_ACTION:-install}" != install ]; then
+  printf '%s\n' "--image only installs; NOX_ACTION does not go with it." >&2
+  exit 2
+fi
 
 REPO_URL="https://github.com/Crackxsy/nox"
 PREFIX="/opt/nox"
@@ -68,6 +125,32 @@ if [ -n "${NOX_SOURCE:-}" ]; then
   GIT+=(-c "safe.directory=$NOX_SOURCE" -c "safe.directory=$NOX_SOURCE/.git")
 fi
 ACTION="${NOX_ACTION:-install}"
+LOCK_FILE="/run/nox-install.lock"
+
+# A node lives elsewhere, so a node and a core on one machine never touch each other's files.
+NODE_USER="nox-node"
+if [ -n "$NODE_MODE" ]; then
+  if [ -n "$NODE_HEADLESS" ]; then
+    PREFIX="/opt/nox-node"
+    NODE_HOME_DIR="/var/lib/nox-node"
+    NODE_DIR="$NODE_HOME_DIR/node"
+    NODE_UNIT="/etc/systemd/system/nox-node.service"
+    NODE_BIN="/usr/local/bin/nox-node"
+    LOCK_FILE="/run/nox-node-install.lock"
+  else
+    data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+    PREFIX="$data_home/nox-node-app"
+    NODE_DIR="$data_home/nox/node"  # nox.node.home.default_home
+    NODE_UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/nox-node.service"
+    NODE_BIN="$HOME/.local/bin/nox-node"
+    LOCK_FILE="$PREFIX/.install.lock"
+  fi
+  SRC="$PREFIX/src"
+  RELEASES="$PREFIX/releases"
+  CURRENT="$PREFIX/current"
+  STATE="$PREFIX/state"
+  [ "$ACTION" = "install" ] || { printf '%s\n' "NOX_ACTION is for the core, not --node." >&2; exit 2; }
+fi
 
 # ---- messages -------------------------------------------------------------------------------------
 
@@ -181,6 +264,9 @@ define arch_unsupported \
 define step_packages \
   'Pakete installieren (git, curl, openssl, bubblewrap)' \
   'Installing packages (git, curl, openssl, bubblewrap)'
+define apt_failed \
+  'apt-get %s ist fehlgeschlagen oder hing zu lange. Läuft gerade ein anderes Update oder ist das Netz weg? Später erneut versuchen; Details zeigt: sudo apt-get %s' \
+  'apt-get %s failed or took too long. Is another update running, or is the network down? Try again later; for details run: sudo apt-get %s'
 define untested_system \
   'Hinweis: getestet ist Nox auf Raspberry Pi OS, Debian und Ubuntu. Auf diesem System kann etwas fehlen.' \
   'Note: Nox is tested on Raspberry Pi OS, Debian and Ubuntu. Something may be missing on this system.'
@@ -257,6 +343,9 @@ define sig_reason_wrong_tag \
 define sig_reason_wrong_commit \
   'die Version zeigt auf einen anderen Commit als im signierten Manifest' \
   'the version points to another commit than the signed manifest names'
+define sig_reason_wrong_kind \
+  'das ist nicht das Manifest des Releases (sondern z. B. das des Nox-OS-Images)' \
+  'this is not the manifest of the release (it lists other files, such as the Nox-OS image)'
 define sig_reason_downgrade \
   'älter als die neueste schon angenommene Version %s (Schutz vor Rückstufung; bewusst zurück: nox update <version> --allow-downgrade, oder nox rollback)' \
   'older than %s, the newest version already accepted (rollback protection; to go back on purpose: nox update <version> --allow-downgrade, or nox rollback)'
@@ -314,6 +403,17 @@ define step_settings \
   'Grundeinstellungen für einen Server schreiben' \
   'Writing the basic settings for a server'
 
+# Image mode
+define image_running_system \
+  'Der Image-Modus (--image) baut ein Image (in dessen chroot), nicht ein laufendes System. Hier: sudo bash install-linux.sh' \
+  'Image mode (--image) is for building an image (inside its chroot), not for a running system. Here: sudo bash install-linux.sh'
+define image_bundle_missing \
+  'Oberflächen-Paket %s gibt es nicht.' \
+  'Interface package %s does not exist.'
+define image_ready \
+  'Nox %s ist im Image eingerichtet; der Dienst startet beim ersten Einschalten.' \
+  'Nox %s is set up in the image; the service starts when it is first switched on.'
+
 # Switching over
 define step_backup \
   'Sicherung vor dem Update' \
@@ -362,6 +462,50 @@ define timezone_unknown \
 define timezone_hint \
   'In Deutschland: sudo timedatectl set-timezone Europe/Berlin' \
   'In Germany: sudo timedatectl set-timezone Europe/Berlin'
+
+# Node mode
+define node_no_root \
+  'als Knoten für diesen Desktop bitte ohne sudo starten (als die Person, die ihn benutzt). Ohne Bildschirm: sudo bash install-linux.sh --node --headless' \
+  'as a node for this desktop, run it without sudo (as the person who uses it). Without a screen: sudo bash install-linux.sh --node --headless'
+define node_need_root \
+  'ein Knoten ohne Bildschirm braucht sudo: sudo bash install-linux.sh --node --headless' \
+  'a node without a screen needs sudo: sudo bash install-linux.sh --node --headless'
+define node_bad_path \
+  'der Ordner %s enthält Zeichen, die eine systemd-Unit nicht sicher aufnehmen kann (%% $ " \ oder Zeilenumbruch).' \
+  'the folder %s holds characters a systemd unit cannot take safely (%% $ " \ or a line break).'
+define node_too_old \
+  '%s kann noch nicht als Knoten laufen. Bitte eine neuere Version wählen.' \
+  '%s cannot run as a node yet. Please choose a newer version.'
+define node_step_build \
+  'Knoten %s einrichten (Python-Umgebung, ohne Oberfläche)' \
+  'Setting up node %s (Python environment, no dashboard)'
+define node_step_unit \
+  'Autostart einrichten (%s)' \
+  'Setting up the autostart (%s)'
+define node_no_user_manager \
+  'Hinweis: kein systemd-Benutzerdienst erreichbar - der Knoten startet nicht von selbst. Von Hand: nox-node run' \
+  'Note: no systemd user manager is reachable - the node does not start by itself. By hand: nox-node run'
+define node_selftest_failed \
+  'Der neue Knoten startet nicht; die vorige Version bleibt. Nichts weiter wurde geändert.' \
+  'The new node does not start; the previous version stays. Nothing else was changed.'
+define node_pair_failed \
+  'Koppeln hat nicht geklappt. Später: nox-node pair "<Link>"' \
+  'Pairing did not work. Later: nox-node pair "<link>"'
+define node_ready \
+  'Nox-Knoten %s ist eingerichtet.' \
+  'Nox node %s is set up.'
+define node_next \
+  'Koppeln: am Nox zu Hause "Geräte" -> "PC oder Laptop hinzufügen", dann hier: nox-node pair "<Link>"' \
+  'Pair: on the Nox at home, Devices -> "Add a PC or laptop", then here: nox-node pair "<link>"'
+define node_daily \
+  'Zustand: nox-node status   Protokoll: nox-node log   Update: nox-node update   Entfernen: install-linux.sh --node%s --uninstall' \
+  'Status: nox-node status   Log: nox-node log   Update: nox-node update   Remove: install-linux.sh --node%s --uninstall'
+define node_link_refused \
+  '%s (oder ein Ordner darüber oder darin) ist ein Link oder zeigt woanders hin. Aus Sicherheitsgründen wird nichts entfernt; bitte von Hand prüfen.' \
+  '%s (or a folder above or inside it) is a link or resolves elsewhere. For safety nothing is removed; please check it by hand.'
+define node_removed \
+  'Nox-Knoten entfernt. Kennung und Protokoll bleiben in %s (löschen, um das Gerät zu vergessen; am Nox unter "Geräte" ebenfalls entfernen).' \
+  'Nox node removed. Its identity and audit trail stay in %s (delete it to forget this device; remove it in Nox'"'"'s Devices page too).'
 
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
@@ -444,6 +588,24 @@ install_service_files() {
   install -m 0644 "$CURRENT/installer/linux/nox.service" /etc/systemd/system/nox.service
   install -m 0755 "$CURRENT/installer/linux/nox-command.sh" /usr/local/bin/nox
   systemctl daemon-reload
+}
+
+#: Image mode's end: the release becomes the current one and the service is enabled for the first
+#: boot. Nothing is started and there is no daemon-reload - an image's chroot has no running
+#: systemd - and nothing of the service's own (keys, certificates, pairings) exists yet.
+image_finish() {
+  switch_to "$release"
+  install -m 0644 "$CURRENT/installer/linux/nox.service" /etc/systemd/system/nox.service
+  install -m 0755 "$CURRENT/installer/linux/nox-command.sh" /usr/local/bin/nox
+  systemctl enable --quiet nox
+  # `nox update` fetches from the project, never from the build machine's copy of the source.
+  "${GIT[@]}" -C "$SRC" remote set-url origin "$REPO_URL"
+  if [ -n "$release_verified" ]; then
+    printf '%s\n' "$MANIFEST_FLOOR" > "$STATE/release-floor"
+  fi
+  # Download caches are of no use on the card; uv and Python stay for `nox update`.
+  rm -rf -- "$PREFIX/.cache"
+  say "$(msg image_ready "$label")"
 }
 
 #: Data back from a snapshot - into a fresh folder, never over the current one: files a newer
@@ -623,6 +785,9 @@ elif mode == "manifest":
     if not isinstance(document, dict) or document.get("schema") != "nox-release-manifest/1" \
             or document.get("project") != "Crackxsy/nox":
         refuse("bad_manifest")
+    # The Nox-OS image manifest is signed by the same key; it never stands in for this one.
+    if document.get("kind", "release") != "release":
+        refuse("wrong_kind")
     version = document.get("version")
     if not isinstance(version, str) or order(version) is None \
             or document.get("tag") != "v" + version:
@@ -717,14 +882,179 @@ verify_release() {
   read -r _ MANIFEST_UI_SHA256 MANIFEST_UI_SIZE MANIFEST_FLOOR <<<"$out"
 }
 
+# ---- node mode ------------------------------------------------------------------------------------
+
+#: systemctl for the node's unit: the user's own manager on a desktop, the system's when headless.
+node_systemctl() {
+  if [ -n "$NODE_HEADLESS" ]; then systemctl "$@"; else systemctl --user "$@"; fi
+}
+
+#: Runs `nox node ...` with the installed copy, as the node's user (the wrapper does the same).
+node_cli() {
+  local python="$CURRENT/.venv/bin/python" launcher="$CURRENT/installer/start_node.pyw"
+  if [ -n "$NODE_HEADLESS" ]; then
+    (cd "$CURRENT" && sudo -u "$NODE_USER" env NOX_NODE_HOME="$NODE_DIR" HOME="$NODE_HOME_DIR" "$python" -I "$launcher" "$@")
+  else
+    (cd "$CURRENT" && "$python" -I "$launcher" "$@")
+  fi
+}
+
+#: Headless: the node's folders belong to the nox-node user, who could have replaced one with a
+#: link to anywhere. Root acts on them only when none of them is a link and the folder resolves to
+#: exactly where it should be.
+node_paths_untampered() {
+  local path
+  for path in "$NODE_HOME_DIR" "$NODE_DIR" "$NODE_DIR/app"; do
+    [ -L "$path" ] && return 1
+  done
+  if [ -e "$NODE_DIR" ] && [ "$(realpath -e -- "$NODE_DIR")" != "$NODE_DIR" ]; then return 1; fi
+  return 0
+}
+
+node_uninstall() {
+  if [ -n "$NODE_HEADLESS" ] && ! node_paths_untampered; then
+    fail "$(msg node_link_refused "$NODE_DIR")"
+  fi
+  node_systemctl disable --now nox-node >/dev/null 2>&1 || true
+  rm -f -- "$NODE_UNIT" "$NODE_BIN"
+  node_systemctl daemon-reload >/dev/null 2>&1 || true
+  rm -rf -- "$PREFIX"  # program files (root's, headless)
+  # The versions the node installed itself live in its own folder: removed as the node's user
+  # (headless), so a link planted there can never make root delete something else.
+  if [ -d "$NODE_DIR/app" ]; then
+    if [ -n "$NODE_HEADLESS" ]; then
+      runuser -u "$NODE_USER" -- rm -rf --one-file-system -- "$NODE_DIR/app"
+    else
+      rm -rf --one-file-system -- "$NODE_DIR/app"
+    fi
+  fi
+  say "$(msg node_removed "$NODE_DIR")"
+}
+
+#: The unit and the `nox-node` command, from the templates of the release that was just built.
+node_write_unit() {
+  local template unit_text
+  if [ -n "$NODE_HEADLESS" ]; then template="nox-node.service"; else template="nox-node-user.service"; fi
+  unit_text="$(cat "$CURRENT/installer/linux/$template")"
+  unit_text="${unit_text//@PREFIX@/$PREFIX}"
+  install -d -m 0755 "$(dirname "$NODE_UNIT")" "$(dirname "$NODE_BIN")"
+  printf '%s\n' "$unit_text" > "$NODE_UNIT.next"
+  chmod 0644 "$NODE_UNIT.next"
+  mv -f -- "$NODE_UNIT.next" "$NODE_UNIT"
+  {
+    # bash, not sh: the paths below are quoted with printf %q.
+    printf '#!/usr/bin/env bash\n# nox node ... for this device (written by install-linux.sh --node).\n'
+    if [ -n "$NODE_HEADLESS" ]; then
+      printf 'run() { (cd %q && sudo -u %q env NOX_NODE_HOME=%q HOME=%q %q -I %q --cli node "$@"); }\n' \
+        "$CURRENT" "$NODE_USER" "$NODE_DIR" "$NODE_HOME_DIR" "$CURRENT/.venv/bin/python" "$CURRENT/installer/start_node.pyw"
+      printf 'run "$@" || exit $?\n[ "${1:-}" = pair ] && sudo systemctl restart nox-node\nexit 0\n'
+    else
+      printf 'run() { (cd %q && %q -I %q --cli node "$@"); }\n' "$CURRENT" "$CURRENT/.venv/bin/python" "$CURRENT/installer/start_node.pyw"
+      printf 'run "$@" || exit $?\n[ "${1:-}" = pair ] && systemctl --user restart nox-node\nexit 0\n'
+    fi
+  } > "$NODE_BIN.next"
+  chmod 0755 "$NODE_BIN.next"
+  mv -f -- "$NODE_BIN.next" "$NODE_BIN"
+}
+
+#: Everything after the version and its signature are settled.
+node_install() {
+  local previous python_dir user_manager=1
+  "${GIT[@]}" -C "$SRC" cat-file -e "$commit:installer/start_node.pyw" 2>/dev/null \
+    || fail "$(msg node_too_old "$label")"
+  if [ -n "$NODE_HEADLESS" ]; then
+    if ! id "$NODE_USER" >/dev/null 2>&1; then
+      say "$(msg step_user "$NODE_USER")"
+      useradd --system --home-dir "$NODE_HOME_DIR" --shell /usr/sbin/nologin "$NODE_USER"
+    fi
+    install -d -m 0700 -o "$NODE_USER" -g "$NODE_USER" "$NODE_HOME_DIR"
+  elif ! node_systemctl show-environment >/dev/null 2>&1; then
+    user_manager=""
+  fi
+
+  if [ ! -f "$RELEASES/$release/.complete" ]; then
+    say "$(msg node_step_build "$label")"
+    rm -rf -- "${RELEASES:?}/$release"
+    mkdir -p "$RELEASES/$release"
+    "${GIT[@]}" -C "$SRC" archive "$commit" | tar -x -C "$RELEASES/$release"
+    export UV_INSTALL_DIR="$PREFIX/.tools" UV_PYTHON_INSTALL_DIR="$PREFIX/.python" UV_NO_MODIFY_PATH=1
+    export UV_CACHE_DIR="$PREFIX/.cache/uv"
+    if [ ! -x "$UV_INSTALL_DIR/uv" ] || [ "$("$UV_INSTALL_DIR/uv" --version | awk '{print $2}')" != "$UV_VERSION" ]; then
+      install_uv
+    fi
+    # No extras: a node needs the base packages only (the tray uses PySide6 where it is installed).
+    (cd "$RELEASES/$release" && UV_COMPILE_BYTECODE=1 "$UV_INSTALL_DIR/uv" sync --quiet --frozen --no-build --python 3.13)
+    "$UV_INSTALL_DIR/uv" cache prune --ci --quiet || true
+    printf '%s\n' "$NOX_REF" > "$RELEASES/$release/.complete"
+  else
+    say "$(msg release_ready "$label")"
+  fi
+  python_dir="$PREFIX/.python"
+  [ -n "$NODE_HEADLESS" ] && chmod -R go+rX "$RELEASES/$release" "$python_dir" 2>/dev/null || true
+
+  previous="$(basename "$(readlink "$CURRENT" 2>/dev/null || true)")"
+  [ "$previous" = "." ] && previous=""
+  switch_to "$release"
+  # A new base: the versions the node installed itself go (as the node's user, never through a
+  # link it planted); the floor and the failure record stay.
+  if [ -n "$NODE_HEADLESS" ] && ! node_paths_untampered; then fail "$(msg node_link_refused "$NODE_DIR")"; fi
+  node_cli --reset-overlays
+  if ! node_cli --selftest >/dev/null; then
+    if [ -n "$previous" ] && [ -d "$RELEASES/$previous" ]; then switch_to "$previous"; fi
+    fail "$(msg node_selftest_failed)"
+  fi
+
+  say "$(msg node_step_unit "$NODE_UNIT")"
+  node_write_unit
+  if [ -n "$user_manager" ]; then
+    node_systemctl daemon-reload
+    node_systemctl enable --quiet nox-node
+    node_systemctl restart nox-node || true  # an unpaired node ends at once; pairing restarts it
+  else
+    note "$(msg node_no_user_manager)"
+  fi
+  if [ -n "$release_verified" ]; then
+    printf '%s\n' "$MANIFEST_FLOOR" > "$STATE/release-floor.next"
+    mv -f -- "$STATE/release-floor.next" "$STATE/release-floor"
+  fi
+  for old in "$RELEASES"/*/; do
+    name="$(basename "$old")"
+    [ "$name" = "$release" ] || [ "$name" = "$previous" ] || rm -rf -- "$old"
+  done
+  trap - ERR
+
+  say "$(msg node_ready "$label")"
+  if [ -n "$NODE_PAIR" ]; then
+    if "$NODE_BIN" pair "$NODE_PAIR"; then :; else note "$(msg node_pair_failed)"; fi
+  else
+    note "$(msg node_next)"
+  fi
+  note "$(msg node_daily "${NODE_HEADLESS:+ --headless}")"
+}
+
 # ---- preconditions --------------------------------------------------------------------------------
 
-[ "$(id -u)" -eq 0 ] || fail "$(msg need_root)"
+if [ -n "$NODE_MODE" ]; then
+  if [ -n "$NODE_HEADLESS" ]; then
+    [ "$(id -u)" -eq 0 ] || fail "$(msg node_need_root)"
+  else
+    [ "$(id -u)" -ne 0 ] || fail "$(msg node_no_root)"
+  fi
+  case "$PREFIX$NODE_DIR" in *[%\$\"\\]* | *$'\n'*) fail "$(msg node_bad_path "$PREFIX")" ;; esac
+  if [ -n "$NODE_UNINSTALL" ]; then
+    trap - ERR
+    node_uninstall
+    exit 0
+  fi
+  mkdir -p "$PREFIX"
+else
+  [ "$(id -u)" -eq 0 ] || fail "$(msg need_root)"
+fi
 [ "$(uname -s)" = "Linux" ] || fail "$(msg not_linux)"
 
 # One installer at a time: two runs (two `nox update`s from two terminals, say) would race on the
 # release folders, the snapshot and the link.
-exec 9>/run/nox-install.lock
+exec 9>"$LOCK_FILE"
 flock -n 9 || fail "$(msg locked)"
 
 if [ "$ACTION" = "verify-bundle" ]; then
@@ -784,6 +1114,11 @@ if [ "$ACTION" = "restore" ]; then
 fi
 
 [ "$ACTION" = "install" ] || fail "$(msg unknown_action "$ACTION")"
+if [ -n "$IMAGE_MODE" ]; then
+  # A booted system has /run/systemd/system; an image's chroot does not.
+  [ ! -d /run/systemd/system ] || fail "$(msg image_running_system)"
+  [ -z "$IMAGE_UI_BUNDLE" ] || [ -f "$IMAGE_UI_BUNDLE" ] || fail "$(msg image_bundle_missing "$IMAGE_UI_BUNDLE")"
+fi
 
 case "$(uname -m)" in
   aarch64|arm64|x86_64) ;;
@@ -791,19 +1126,28 @@ case "$(uname -m)" in
   *) fail "$(msg arch_unsupported "$(uname -m)")" ;;
 esac
 
-if command -v apt-get >/dev/null 2>&1; then
+if [ -n "$NODE_MODE" ] && [ -z "$NODE_HEADLESS" ]; then
+  # A desktop node installs nothing system-wide: what it needs must be there.
+  for tool in git curl tar sha256sum python3 flock; do command -v "$tool" >/dev/null 2>&1 || fail "$(msg tool_missing "$tool")"; done
+  command -v bwrap >/dev/null 2>&1 || note "$(msg bwrap_missing)"
+elif command -v apt-get >/dev/null 2>&1; then
   # bubblewrap + python3: the command sandbox (bwrap, and the tiny relay that gives a sandboxed
   # program its only way out - the egress proxy). Without them Nox refuses to run commands.
   say "$(msg step_packages)"
-  apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates openssl tar sudo bubblewrap python3 >/dev/null
+  # Never wait forever: for the dpkg lock (another update running), for a mirror that stopped
+  # answering, or at all - a stuck apt once held a CI job for 30 minutes.
+  APT_OPTS=(-o DPkg::Lock::Timeout=300 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3)
+  APT_PACKAGES=(git curl ca-certificates openssl tar sudo bubblewrap python3)
+  timeout 900 apt-get "${APT_OPTS[@]}" update -qq || fail "$(msg apt_failed update update)"
+  DEBIAN_FRONTEND=noninteractive timeout 1800 apt-get "${APT_OPTS[@]}" install -y -qq "${APT_PACKAGES[@]}" >/dev/null \
+    || fail "$(msg apt_failed install "install ${APT_PACKAGES[*]}")"
 else
   note "$(msg untested_system)"
   for tool in git curl tar sha256sum sudo; do command -v "$tool" >/dev/null 2>&1 || fail "$(msg tool_missing "$tool")"; done
   command -v bwrap >/dev/null 2>&1 || note "$(msg bwrap_missing)"
 fi
 
-if [ -e "$PREFIX" ] && [ ! -d "$SRC/.git" ] && [ -n "$(ls -A "$PREFIX" 2>/dev/null)" ]; then
+if [ -e "$PREFIX" ] && [ ! -d "$SRC/.git" ] && [ -n "$(find "$PREFIX" -mindepth 1 -maxdepth 1 ! -name .install.lock -print -quit 2>/dev/null)" ]; then
   fail "$(msg prefix_foreign "$PREFIX")"
 fi
 
@@ -875,6 +1219,11 @@ else
   note "$(msg sig_dev_version "$label")"
 fi
 
+if [ -n "$NODE_MODE" ]; then
+  node_install
+  exit 0
+fi
+
 # ---- service user ---------------------------------------------------------------------------------
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
@@ -890,7 +1239,8 @@ install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$NOX_HOME_DIR"
 # What it starts runs stacked under a second profile that denies every capability and new user
 # namespaces (like Ubuntu's bwrap-userns-restrict) - on top of bwrap's own capability drop and
 # --disable-userns. Raspberry Pi OS and Debian have no such restriction: nothing is installed there, and
-# leftovers of an earlier install are removed.
+# leftovers of an earlier install are removed. Not in image mode: /proc there is the build machine's,
+# and the image (Raspberry Pi OS) needs no profile.
 nox_bwrap=/usr/lib/nox/bwrap
 nox_profile=/etc/apparmor.d/nox-bwrap
 nox_apt_hook=/etc/apt/apt.conf.d/99nox-bwrap
@@ -902,7 +1252,7 @@ remove_nox_bwrap() {
   fi
   rm -f "$nox_profile" "$nox_bwrap" "$nox_apt_hook"
 }
-if [ -r "$restrict" ] && [ "$(cat "$restrict")" = "1" ] && [ -x /usr/bin/bwrap ] && command -v apparmor_parser >/dev/null 2>&1; then
+if [ -z "$IMAGE_MODE" ] && [ -r "$restrict" ] && [ "$(cat "$restrict")" = "1" ] && [ -x /usr/bin/bwrap ] && command -v apparmor_parser >/dev/null 2>&1; then
   say "$(msg step_apparmor)"
   remove_nox_bwrap  # also unloads a profile an earlier installer version attached elsewhere
   install -d -m 0755 /usr/lib/nox
@@ -1003,6 +1353,10 @@ else
         || fail "$(msg ui_signed_mismatch)"
       ui_ready=1
     fi
+  elif [ -n "$IMAGE_UI_BUNDLE" ]; then
+    # Built next to the image from the same commit; checked like a download below.
+    cp -- "$IMAGE_UI_BUNDLE" "$work/$asset"
+    ui_ready=1
   elif [ -z "${NOX_SOURCE:-}" ] \
     && "${CURL[@]}" -o "$work/$asset" "$base/$asset" 2>/dev/null \
     && "${CURL[@]}" -o "$work/$asset.sha256" "$base/$asset.sha256" 2>/dev/null; then
@@ -1043,6 +1397,12 @@ YAML
   # Written into a root-owned temp folder and installed with its final owner and mode, so root
   # never writes through a path inside the service user's folder.
   install -m 0600 -o "$SERVICE_USER" -g "$SERVICE_USER" "$work/user.yaml" "$NOX_HOME_DIR/user.yaml"
+fi
+
+if [ -n "$IMAGE_MODE" ]; then
+  image_finish
+  trap - ERR
+  exit 0
 fi
 
 # ---- switch ---------------------------------------------------------------------------------------

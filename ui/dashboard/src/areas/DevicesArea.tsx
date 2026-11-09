@@ -1,14 +1,17 @@
 /**
  * Geräte & Fähigkeiten: what Nox is connected to and what it can do (Spec UX-Neubau §3).
  *
- * "Geräte" is everything Nox is connected to - phones, tablets and PCs (pairing in the home
- * network, and Telegram), the rooms of the house, the stream technology. "Fähigkeiten" is the
+ * "Geräte" is everything Nox is connected to - computers and servers paired as nodes (spec C
+ * §1.10, above the phones), phones, tablets and PCs (pairing in the home network, and Telegram),
+ * the rooms of the house, the stream technology. "Fähigkeiten" is the
  * Abläufe, the Wächter and, set apart, what is for advanced users. Loaded on first visit.
  *
  * On a paired device the administration stays read-only: the Fähigkeiten tab is a disabled
  * fieldset with one line saying where it works, and Telegram pairing is not offered at all - the
  * core refuses both to a device role.
  */
+
+import { Suspense, lazy } from 'react';
 
 import type { Lang, T } from '../i18n';
 import type { IpcClient } from '../ipc';
@@ -18,9 +21,14 @@ import { DevicesSection, type PairedNotice } from '../pages/Devices';
 import { type HomeController, HomeRooms } from '../pages/Home';
 import { RemotePage } from '../pages/Remote';
 import { StreamTech } from '../pages/Stream';
+import { ChunkBoundary } from '../shell/ChunkBoundary';
 import { LocalOnly } from '../shell/LocalOnly';
 import type { DevicesTab, Route } from '../shell/routes';
 import { SubTabs } from '../shell/SubTabs';
+
+// Its own chunk: the area stays within its budget (Spec UX-Neubau §12), and the copy is loaded
+// with the area already.
+const ComputersSection = lazy(() => import('../pages/Nodes').then((m) => ({ default: m.ComputersSection })));
 
 export interface DevicesAreaProps {
   t: T;
@@ -55,6 +63,20 @@ export default function DevicesArea(props: DevicesAreaProps) {
             label: t('ux_tab_devices'),
             render: () => (
               <>
+                <ChunkBoundary t={t}>
+                  <Suspense fallback={null}>
+                    <ComputersSection
+                      t={t}
+                      lang={lang}
+                      client={client}
+                      device={device}
+                      revision={props.lanRevision}
+                      audit={state.audit}
+                      onOpenSettings={() => navigate({ area: 'settings', page: 'privacy' })}
+                      onOpenHistory={() => navigate({ area: 'nox', tab: 'history' })}
+                    />
+                  </Suspense>
+                </ChunkBoundary>
                 <section className="sec" aria-labelledby="h-dev-phones">
                   <h2 id="h-dev-phones" className="sec-title">
                     {t('ux_dev_phones')}

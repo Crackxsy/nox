@@ -70,10 +70,64 @@ def test_taint_revokes_cmd_grants(
 def test_taint_also_revokes_a_cmd_grant_made_while_already_tainted(
     engine: DefaultPermissionEngine, grants: InMemoryGrantStore
 ) -> None:
+    """Every arrival of untrusted content revokes them, not only the first (owner decision, C10):
+    a command remembered since, in another conversation, must not stay usable while untrusted
+    content keeps arriving."""
     engine.mark_tainted("c1", "first page")
-    _grant(engine, "cmd", CMD_SCOPE)
+    _grant(engine, "cmd", CMD_SCOPE)  # remembered by the user in conversation c2
     engine.mark_tainted("c1", "second page")
     assert CMD_SCOPE not in _scopes(grants)
+    _grant(engine, "cmd", CMD_SCOPE)
+    engine.mark_tainted("c1", None)  # a paired device's next message during a session
+    assert CMD_SCOPE not in _scopes(grants)
+
+
+def test_untrusted_content_outside_any_conversation_always_revokes(
+    engine: DefaultPermissionEngine, grants: InMemoryGrantStore
+) -> None:
+    engine.mark_tainted("", "page text")
+    _grant(engine, "cmd", CMD_SCOPE)
+    engine.mark_tainted("", "more page text")  # nothing to tie it to: revoked every time
+    assert CMD_SCOPE not in _scopes(grants)
+
+
+def test_a_tainted_conversation_creates_no_remembered_grant(
+    engine: DefaultPermissionEngine, grants: InMemoryGrantStore
+) -> None:
+    import asyncio
+
+    from nox.hands.shell import argv_digest
+    from nox.security.model import Decision, PermissionRequest
+
+    target = f"{CMD_SCOPE.split(' argv=')[0]} argv={argv_digest('whoami', ())} whoami"
+
+    def request(conversation: str) -> PermissionRequest:
+        return PermissionRequest.model_validate(
+            {
+                "agent": "companion",
+                "tool": "shell",
+                "action": "run",
+                "mode": "companion",
+                "risk": Risk.HIGH,
+                "target": target,
+                "conversation": conversation,
+            }
+        )
+
+    async def scenario() -> None:
+        engine.mark_tainted("c1", "page text")
+        grant_id = engine.request_confirmation(request("c1"))
+        (pending,) = [p for p in engine.pending_requests() if p.request_id == grant_id]
+        assert pending.remember_ttl_s == 0  # "remember" is not offered here
+        engine.reply(grant_id, Decision.ALLOW, remember=True)
+        result = await engine.await_confirmation(grant_id)
+        assert result.decision is Decision.ALLOW and result.grant_id is None
+        # The same question in a clean conversation may still be remembered.
+        grant_id = engine.request_confirmation(request("c2"))
+        engine.reply(grant_id, Decision.ALLOW, remember=True)
+        assert (await engine.await_confirmation(grant_id)).grant_id is not None
+
+    asyncio.run(scenario())
 
 
 def test_revoke_command_grants_reports_what_it_removed(
@@ -120,3 +174,48 @@ async def test_the_kill_switch_revokes_cmd_grants(
     report = await ctx.killswitch.engage("user", "test")
     assert report.hooks.get("permissions.cmd_grants") == "ok"
     assert _scopes(grants) == {"session:obs/scene.switch", "task:t1"}
+
+
+def _simple_shell(conversation: str) -> object:
+    from nox.hands.shell import argv_digest
+    from nox.security.model import PermissionRequest
+
+    target = f"{CMD_SCOPE.split(' argv=')[0]} argv={argv_digest('whoami', ())} whoami"
+    return PermissionRequest.model_validate(
+        {
+            "agent": "companion",
+            "tool": "shell",
+            "action": "run",
+            "mode": "companion",
+            "risk": Risk.HIGH,
+            "target": target,
+            "conversation": conversation,
+        }
+    )
+
+
+@pytest.mark.parametrize("tainted_when", ["asked", "answered"])
+def test_remember_needs_a_clean_conversation_when_asked_and_when_answered(
+    engine: DefaultPermissionEngine, tainted_when: str
+) -> None:
+    """Tainted when asked, cleared before the answer ("new conversation"): no grant. Clean when
+    asked, tainted before the answer: no grant either (fail closed both ways)."""
+    import asyncio
+
+    from nox.security.model import Decision
+
+    async def scenario() -> None:
+        if tainted_when == "asked":
+            engine.mark_tainted("c1", "page text")
+        grant_id = engine.request_confirmation(_simple_shell("c1"))  # type: ignore[arg-type]
+        if tainted_when == "asked":
+            engine.clear_taint("c1")
+        else:
+            engine.mark_tainted("c1", "page text")
+        (pending,) = [p for p in engine.pending_requests() if p.request_id == grant_id]
+        assert pending.remember_ttl_s == 0
+        engine.reply(grant_id, Decision.ALLOW, remember=True)
+        result = await engine.await_confirmation(grant_id)
+        assert result.decision is Decision.ALLOW and result.grant_id is None
+
+    asyncio.run(scenario())

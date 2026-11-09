@@ -58,6 +58,13 @@ def _error_for(path: str, exc: ValidationError) -> str:
     return "; ".join(messages) or "invalid value"
 
 
+def preset_paths(values: Mapping[str, Any] | Sequence[str]) -> list[str]:
+    """The submitted `presets.*` paths: presets start registered programs and, marked
+    `from_satellites`, can be started at a voice satellite (C9) - every write to them needs the
+    PIN when one is set, whatever it changes (owner decision)."""
+    return [path for path in values if path == "presets" or path.startswith("presets.")]
+
+
 def security_paths(values: Mapping[str, Any] | Sequence[str]) -> list[str]:
     """The submitted paths that belong to the security or privacy area, in submitted order."""
     return [path for path in values if path.startswith(SECURITY_SETTING_PREFIXES)]
@@ -177,7 +184,8 @@ class ConfigEditor:
         )
 
     async def _authorize(self, values: Mapping[str, Any], *, by: str, pin: str | None) -> None:
-        """A security or privacy setting needs the PIN, when one is configured.
+        """A security or privacy setting - or any `presets.*` setting - needs the PIN, when one is
+        configured.
 
         These are the paths that can weaken what protects the user: the security profile, the
         capture devices. The gate itself decides whether a PIN is required at all; see
@@ -185,7 +193,7 @@ class ConfigEditor:
         """
         if self._gate is None or not self._gate.is_required():
             return
-        if not security_paths(values):
+        if not security_paths(values) and not preset_paths(values):
             return
         try:
             await self._gate.require(pin, action="config.set", by=by)

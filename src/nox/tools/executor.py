@@ -159,9 +159,12 @@ class ToolExecutor:
             )
 
         payload = validated.model_dump(mode="json")
+        if spec.prepare is not None:
+            await spec.prepare(payload)
         risk = spec.risk
         device = ""
         delegated = False
+        rememberable = spec.rememberable
         if spec.scope is not None:
             try:
                 scope = spec.scope(payload)
@@ -181,6 +184,7 @@ class ToolExecutor:
                 )
             action, risk, device = scope.action, scope.risk, scope.device
             delegated = scope.confirm_on_device and bool(scope.device)
+            rememberable = rememberable and scope.rememberable
         target = spec.targets(payload) if spec.targets is not None else ""
         if spec.scope is not None and scope.target:
             target = scope.target
@@ -193,7 +197,7 @@ class ToolExecutor:
             target=target,
             task_id=task_id,
             origin=origin,
-            rememberable=spec.rememberable,
+            rememberable=rememberable,
             network=spec.network(payload) if callable(spec.network) else spec.network,
             conversation=current_conversation(),
             lookup=spec.lookup(payload) if spec.lookup is not None else "",
@@ -322,7 +326,8 @@ class ToolExecutor:
         waitables: list[asyncio.Task[Any]] = [handler_task]
         if kill_task is not None:
             waitables.append(kill_task)
-        timeout_s = spec.timeout_s or self._timeout_s
+        per_call = spec.call_timeout_s(payload) if spec.call_timeout_s is not None else None
+        timeout_s = per_call or spec.timeout_s or self._timeout_s
         try:
             done, _pending = await asyncio.wait(
                 waitables, timeout=timeout_s, return_when=asyncio.FIRST_COMPLETED

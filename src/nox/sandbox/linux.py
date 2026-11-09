@@ -88,9 +88,18 @@ __all__ = [
     "forwarder_python",
     "nox_python_binds",
     "runtime_bind_paths",
+    "visible_system_paths",
 ]
 
 _RO_SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc")
+
+
+def visible_system_paths() -> tuple[str, ...]:
+    """The system folders every run sees read-only: whatever lies under them (a node folder
+    put under `/etc`, say) is readable inside the sandbox."""
+    return _RO_SYSTEM
+
+
 #: Where the launcher and the proxy socket appear inside the sandbox (bwrap creates the folder).
 _IN_SANDBOX_DIR = "/run/nox-sandbox"
 _FORWARDER_IN = f"{_IN_SANDBOX_DIR}/egress_forwarder.py"
@@ -192,6 +201,14 @@ def safe_python_binds(paths: list[str], *, private: list[str]) -> tuple[str, ...
     return tuple(out)
 
 
+def _private_folders(home: Path) -> list[str]:
+    """What a bind may never expose: the user's home, Nox's folder and a node's own folder
+    (key, certificates, audit trail - `NOX_NODE_HOME` may put it outside the home)."""
+    from nox.node.home import default_home  # noqa: PLC0415 - small, and only for this check
+
+    return [os.path.expanduser("~"), str(home), os.path.realpath(default_home())]
+
+
 def _own_python_binds(real: str) -> tuple[str, ...] | None:
     """The minimum Nox's own interpreter needs inside the sandbox with `-I -S`: the executable,
     its standard library (with `lib-dynload`) and `libpython` when it is linked dynamically -
@@ -212,7 +229,7 @@ def _own_python_binds(real: str) -> tuple[str, ...] | None:
             if lib and os.path.isfile(lib):
                 paths.append(lib)
                 paths.append(os.path.realpath(lib))
-    private = [os.path.expanduser("~"), str(nox_home())]
+    private = _private_folders(nox_home())
     return safe_python_binds(paths, private=private)
 
 
@@ -275,7 +292,7 @@ def nox_python_binds(argv0: str) -> tuple[str, ...] | None:
         package_root=str(Path(nox.__file__).resolve().parent.parent),
         interpreter=interpreter,
     )
-    private = [os.path.expanduser("~"), str(nox_home())]
+    private = _private_folders(nox_home())
     return safe_python_binds(paths, private=private)
 
 
@@ -913,6 +930,14 @@ class LinuxSandbox:
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
             out, err = b"", b""
+        except asyncio.CancelledError:
+            # Stopped from outside (the kill switch, a node's `nox/kill` or dead-man rule): the
+            # tree goes with the call, it does not run on until its timeout.
+            if launch.cgroup is not None:
+                DelegatedCgroups.kill(launch.cgroup)
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            raise
         finally:
             await asyncio.to_thread(launch.finish)
         cap = limits.max_output_bytes

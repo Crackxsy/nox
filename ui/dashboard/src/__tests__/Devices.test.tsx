@@ -450,7 +450,18 @@ describe('removing a device', () => {
 describe('the certificate on a paired device', () => {
   it('offers the download and the authority\'s own fingerprint to check it', async () => {
     await show({ device: true });
-    expect(screen.getByRole('link', { name: t('lan_ca_download') }).getAttribute('href')).toBe('/nox-ca.crt');
+    const download = screen.getByRole('link', { name: t('lan_ca_download') });
+    expect(download.getAttribute('href')).toBe('/nox-ca.crt');
+    // A full-size button (44 px, padded, one line - see targetSize.test.ts), not an inline link.
+    expect(download.classList.contains('btn')).toBe(true);
+    expect(download.closest('.tile-actions')).not.toBeNull();
+    // One region, named by the tile's own title; no label points at an id that does not exist.
+    const tile = screen.getByRole('region', { name: t('lan_ca_title') });
+    for (const el of [tile.parentElement!, tile, ...tile.querySelectorAll('*')]) {
+      for (const id of el.getAttribute('aria-labelledby')?.split(/\s+/) ?? []) {
+        expect(document.getElementById(id), `aria-labelledby="${id}"`).not.toBeNull();
+      }
+    }
     expect(screen.getByText(t('lan_ca_fingerprint'))).toBeTruthy();
     expect(screen.getByText('11:22:33:44:55:66:77:88')).toBeTruthy();
     expect(screen.queryByText(t('lan_ca_ios_order'))).toBeNull();

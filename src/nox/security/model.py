@@ -81,6 +81,9 @@ class ProfileRule(BaseModel):
     mode: str = "*"
     risk: str = "*"
     target: str = "*"
+    #: The node a rule is for (`device:` - a device id glob). Empty: this core only for an
+    #: ALLOW; a rule that allows something never reaches a node unless it names the device.
+    device: str = ""
     decision: Decision
     reason: str = ""
 

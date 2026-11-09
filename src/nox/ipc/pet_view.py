@@ -8,11 +8,17 @@ configuration (scene exports, screenshots of the properties dialog), so it gets 
 speech meant only for the headphones, and nothing but the privacy mode itself - plus the "AI
 voice" label, a fixed text from the configuration that says nothing about the user - while the
 privacy mode is PRIVATE or OFFLINE.
+
+Speech has a place (C9): a `tts.*` event with a `device` is a paired node's own speech, played on
+that node's speaker. Only an overlay that authenticated with that node's own credential
+(`node:<id>`, its overlay relay) receives it - with the `device`, so its `?device=` pet follows
+it - and no other overlay and never the core's desktop pet.
 """
 
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -24,6 +30,7 @@ HIDDEN_STATE_PATHS: frozenset[str] = frozenset(
 )
 
 ROLES: frozenset[str] = frozenset({"pet", "overlay"})
+_NODE_ID = re.compile(r"^[0-9a-f]{32}$")
 #: Privacy modes in which the overlay is told nothing but the mode itself.
 _QUIET_MODES: frozenset[str] = frozenset({"private", "offline"})
 
@@ -77,10 +84,30 @@ def public_snapshot(
     return public
 
 
+def _device(payload: Mapping[str, Any]) -> str:
+    device = payload.get("device")
+    return device if isinstance(device, str) and _NODE_ID.fullmatch(device) else ""
+
+
 def view(
-    role: str, name: str, payload: Mapping[str, Any], *, privacy_mode: str = ""
+    role: str,
+    name: str,
+    payload: Mapping[str, Any],
+    *,
+    privacy_mode: str = "",
+    overlay_device: str = "",
 ) -> dict[str, Any] | None:
-    """The payload `role` may receive for event `name`, or None when it gets nothing."""
+    """The payload `role` may receive for event `name`, or None when it gets nothing.
+    `overlay_device`: the node whose own overlay credential this overlay used (C9), or ""."""
+    if name.startswith("tts.") and payload.get("device"):
+        device = _device(payload)
+        # A node's own speech: only that node's overlay, never the desktop pet.
+        if not device or role != "overlay" or overlay_device != device:
+            return None
+        if _quiet(role, privacy_mode):
+            return None
+        shown = view("pet", name, {k: v for k, v in payload.items() if k != "device"})
+        return None if shown is None else {**shown, "device": device}
     if role == "overlay":
         if _quiet(role, privacy_mode):
             quiet_ok = name == "privacy.mode_changed" or (

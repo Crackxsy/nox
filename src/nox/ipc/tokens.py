@@ -61,6 +61,9 @@ HUBLESS_ROLES: frozenset[str] = frozenset({"core", "supervisor", "remote", "node
 DEVICE_ROLES: frozenset[str] = frozenset({DEVICE_ROLE})
 #: Authenticated by a persistent overlay credential, never by the session token.
 OVERLAY_ROLES: frozenset[str] = frozenset({"overlay"})
+#: The label of an overlay credential issued to a paired node's overlay relay (`node:<id>`): the
+#: only overlay credentials accepted through the network listener.
+NODE_OVERLAY_PREFIX = "node:"
 
 _CREATE_NO_WINDOW = 0x08000000
 
@@ -141,6 +144,8 @@ class AuthDecision:
     #: Which persistent credential authenticated the connection (overlay only), so revoking the
     #: credential can close the connections that used it.
     credential_id: str = ""
+    #: The paired node an overlay credential was issued to (`node:<id>`, C9), or "".
+    overlay_node: str = ""
 
 
 class TokenStore:
@@ -162,6 +167,9 @@ class TokenStore:
         self._session_file: Path | None = None
         self._session_file_restricted: bool | None = None
         self._device_verifier: DeviceVerifier | None = None
+        #: Whether the node an overlay credential was issued to (`node:<id>`) may still hold one
+        #: (C9, set by `nox.node.install`). Not set, or failing: no node overlay over the network.
+        self.node_overlay_allowed: Callable[[str], bool] | None = None
 
     @property
     def session_token(self) -> str:
@@ -239,9 +247,23 @@ class TokenStore:
         """Check `token` for a connection claiming `role`/`client_id`; worker tokens are used up.
 
         `via_lan` says the connection came through the network listener. Such a connection may
-        only be a paired device, and a paired device may only come that way.
+        only be a paired device - or the read-only overlay of a paired node's overlay relay
+        (C9), with a credential the core issued to that node (label `node:<id>`) - and a paired
+        device may only come that way.
         """
         if via_lan:
+            if role in OVERLAY_ROLES:
+                credential = self._overlay.verify(token) if self._overlay is not None else None
+                if credential is None or not credential.label.startswith(NODE_OVERLAY_PREFIX):
+                    return AuthDecision(ok=False, reason="no overlay credential of a paired node")
+                if not self._node_may_hold(credential.label[len(NODE_OVERLAY_PREFIX) :]):
+                    return AuthDecision(ok=False, reason="the node may not show an overlay now")
+                return AuthDecision(
+                    ok=True,
+                    kind="overlay",
+                    credential_id=credential.credential_id,
+                    overlay_node=credential.label[len(NODE_OVERLAY_PREFIX) :],
+                )
             if role != DEVICE_ROLE:
                 return AuthDecision(ok=False, reason="only paired devices connect over the network")
             return self._authenticate_device(token, client_id)
@@ -268,6 +290,15 @@ class TokenStore:
                 return AuthDecision(ok=False, reason="invalid or revoked overlay credential")
             return AuthDecision(ok=True, kind="overlay", credential_id=credential.credential_id)
         return AuthDecision(ok=False, reason=f"role {role!r} cannot authenticate over the hub")
+
+    def _node_may_hold(self, device_id: str) -> bool:
+        check = self.node_overlay_allowed
+        if check is None:
+            return False
+        try:
+            return bool(check(device_id))
+        except Exception:  # noqa: BLE001 - cannot tell: no
+            return False
 
     def _authenticate_worker(self, token: str, client_id: str, *, role: str) -> AuthDecision:
         now = self._clock()
