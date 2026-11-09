@@ -131,6 +131,12 @@ cannot be turned off or hidden by configuration — if something is being captur
   Every change asks you first; deleting, going live and anything that could put a private
   microphone or screen on air asks every time; Nox can never stop the stream or read the stream
   key (`docs/SECURITY.md`, "OBS control").
+  Chat commands viewers can use: `!befehle` lists them (`!commands` in English), `!rps`, `!funken`
+  and `!streamplan` (`!schedule`). Set the text for `!streamplan` under Einstellungen →
+  Integrationen (`stream.twitch.schedule_text`, one line). Viewers earn Funken by chatting, cheering
+  bits, subscribing, gifting subs and raiding - only while the stream is live. Other chat bots
+  (Nightbot, StreamElements, ...) are ignored by Nox; add more under `stream.twitch.ignored_chatters`.
+  The chat keeps working while Rocket League is in the foreground.
   - **Stream session starts by itself** when OBS goes live (or your channel does), from the
     everyday companion mode: Nox then answers chat, and goes back when the stream ends.
   - **Overlay**: *Stream → Set up → Set up OBS overlay* (or the tray) puts Nox into the current

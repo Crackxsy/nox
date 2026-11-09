@@ -443,6 +443,7 @@ export interface StreamFunkenAwarded {
   viewer_id: string;
   delta: number;
   reason?: string;
+  units?: number;
   balance_after?: number;
 }
 
