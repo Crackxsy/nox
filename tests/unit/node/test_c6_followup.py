@@ -107,7 +107,7 @@ def test_the_calm_rule_for_one_call() -> None:
 async def test_a_paired_device_without_a_pin_check_is_refused() -> None:
     """S6: no device PIN guard on this core - refused, never let through."""
     control = NodeControl(None, lambda _n: None, linked=lambda _d: None)
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     refusal = await session_refusal(
         control,
         _ctx("device", PHONE),
@@ -144,7 +144,7 @@ async def test_the_installed_link_lookup_finds_the_controlled_browser() -> None:
     )
     _specs, control = _world_specs(core, Registry(), dict, [])  # type: ignore[arg-type]
     assert not control.controls_browser(BROWSER)
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     assert control.controls_browser(BROWSER) and not control.controls_browser(OTHER_PHONE)
     status = core.registry.get("node.computer.status")
     assert status is not None
@@ -203,7 +203,7 @@ async def test_anything_but_a_literal_true_is_not_muting(
 
 async def test_talking_from_this_machine_keeps_the_remote_check() -> None:
     control = NodeControl(None, lambda _n: None)
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
 
     async def ask(remote: bool | None) -> str | None:
         return await session_refusal(
@@ -296,7 +296,7 @@ def _addressed(reported: list[str]) -> NodeControl:
     control = NodeControl(
         None, lambda _n: None, addresses=lambda: {LAPTOP: ("192.168.1.20", reported)}
     )
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     control.pull()
     return control
 
@@ -327,7 +327,7 @@ def test_a_disconnected_but_locked_node_keeps_its_addresses_until_the_lock_lifts
         lambda _n: None,
         addresses=lambda: {LAPTOP: ("192.168.1.20", [])} if connected["value"] else {},
     )
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     control.pull()
     connected["value"] = False  # gone, but the lock holds (it never said the session ended)
     control.pull()
@@ -370,7 +370,7 @@ def test_the_installed_chat_rule_marks_paired_devices_and_the_controlled_machine
     untrusted = core.node_chat_untrusted
     phone, local = _ctx("device", PHONE), _ctx("dashboard", LOCAL)
     assert not untrusted(phone) and not untrusted(local)  # no session
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     assert untrusted(phone) and not untrusted(local)  # the node is another PC
     observed["host"] = "127.0.0.1"  # the node runs on this machine
     control.pull()
@@ -382,7 +382,7 @@ def test_the_installed_chat_rule_marks_paired_devices_and_the_controlled_machine
 
 async def test_on_the_controlled_machine_its_own_dashboard_cannot_approve() -> None:
     control = NodeControl(None, lambda _n: None, addresses=lambda: {LAPTOP: ("::1", [])})
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     control.pull()
 
     async def ask(action: str) -> str | None:
@@ -492,7 +492,7 @@ def test_this_machine_is_recognised_whatever_its_number_of_adapters(
         addresses=lambda: {LAPTOP: ("192.168.1.5", [])},
         own_addresses=all_local_addresses,
     )
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     control.pull()
     assert control.controls_local()
 
@@ -501,7 +501,7 @@ def test_an_address_that_cannot_be_classified_counts_as_this_machine() -> None:
     control = NodeControl(
         None, lambda _n: None, addresses=lambda: {LAPTOP: ("pc.example.invalid", [])}
     )
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     control.pull()
     assert control.controls_local()
 
@@ -511,7 +511,7 @@ def test_the_binding_only_grows_while_the_lock_holds() -> None:
     control = NodeControl(
         None, lambda _n: None, addresses=lambda: {LAPTOP: (now["peer"], now["reported"])}
     )
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     control.pull()
     now.update(peer="192.168.1.30", reported=[])  # a later pong says less, and it reconnected
     control.pull()
@@ -535,7 +535,7 @@ def test_a_full_binding_drops_nothing_and_treats_everyone_as_the_controlled_pc()
     audited: list[str] = []
     control = NodeControl(None, lambda _n: None, audit=audited.append)
     now = _saturating(control)
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     control.pull()
     first = [f"10.0.0.{i}" for i in range(16)]
     now["reported"] = first
@@ -559,7 +559,7 @@ def test_too_many_connection_addresses_saturate_as_well() -> None:
 
     control = NodeControl(None, lambda _n: None)
     now = _saturating(control)
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     for i in range(MAX_OBSERVED_ADDRESSES + 1):
         now["peer"] = f"192.168.2.{i}"
         control.pull()
@@ -567,7 +567,7 @@ def test_too_many_connection_addresses_saturate_as_well() -> None:
     assert "192.168.2.0" in control.node_observed[LAPTOP] and control.is_saturated()
 
 
-async def test_while_saturated_only_deny_stop_and_reading_work(
+async def test_while_saturated_approvals_and_messages_wait_the_rest_follows_the_pin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from nox.ipc.handlers.core import CoreHandlers, PermissionReply
@@ -585,11 +585,14 @@ async def test_while_saturated_only_deny_stop_and_reading_work(
     core.registry.register("security.kill", Text, kill, roles=roles)
     control.saturated.add(LAPTOP)
     for client in (LOCAL, PHONE):
-        for name, payload in (("chat.send", {}), ("plans.approve", {"pin": "4711"})):
-            reply = await _send_from(core, name, client, payload, "192.0.2.99")
-            assert reply.kind is Kind.ERROR and reply.payload["message"] == REFUSE_SATURATED
+        reply = await _send_from(core, "chat.send", client, {}, "192.0.2.99")
+        assert reply.kind is Kind.ERROR and reply.payload["message"] == REFUSE_SATURATED
+        assert reply.payload["details"]["sub_reason"] == "node_session_saturated"
+        # Saturation binds approvals and messages only (review H1 d): the rest follows the PIN.
+        approve = await _send_from(core, "plans.approve", client, {"pin": "4711"}, "192.0.2.99")
+        assert approve.kind is Kind.RESPONSE
         assert (await _send_from(core, "security.kill", client, {}, "")).kind is Kind.RESPONSE
-    assert ran == ["security.kill", "security.kill"]
+    assert ran == ["plans.approve", "security.kill"] * 2
     handlers = CoreHandlers(core)  # type: ignore[arg-type]
     local = _ctx("dashboard", LOCAL)
     allow = PermissionReply(grant_id="g", decision=Decision.ALLOW, pin="4711")

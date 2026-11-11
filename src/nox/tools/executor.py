@@ -163,6 +163,7 @@ class ToolExecutor:
             await spec.prepare(payload)
         risk = spec.risk
         device = ""
+        device_name = ""
         delegated = False
         rememberable = spec.rememberable
         if spec.scope is not None:
@@ -183,6 +184,7 @@ class ToolExecutor:
                     error=ERR_INVALID_INPUT,
                 )
             action, risk, device = scope.action, scope.risk, scope.device
+            device_name = scope.device_name
             delegated = scope.confirm_on_device and bool(scope.device)
             rememberable = rememberable and scope.rememberable
         target = spec.targets(payload) if spec.targets is not None else ""
@@ -202,6 +204,7 @@ class ToolExecutor:
             conversation=current_conversation(),
             lookup=spec.lookup(payload) if spec.lookup is not None else "",
             device=device,
+            device_name=device_name,
         )
 
         result = self._permission_engine.check(request)

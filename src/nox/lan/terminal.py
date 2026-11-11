@@ -1,10 +1,15 @@
-"""`nox pair`, `nox devices`, `nox unpair`: devices from a terminal - the way on a server without
-a screen.
+"""`nox pair`, `nox devices`, `nox unpair`, `nox node release`: devices from a terminal - the way
+on a server without a screen.
 
 It asks the running core (as the local shell, with the per-start session token only this account
 can read) for a one-time code, and prints the pairing link, a QR code to scan and the authority's
 fingerprint. Nothing here talks to the network; the phone does that. The text follows
 `identity.ui_language` (German or English).
+
+`nox unpair --node <name>` removes a node without a PIN - also while Nox controls a PC, and also
+over SSH: removing only narrows, and it ends that node's computer-use lock at once.
+`nox node release` lifts a lock a node left behind, with the security PIN; over SSH too, because
+only the owner knows the PIN.
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ __all__ = [
     "devices_in_terminal",
     "pair_in_terminal",
     "pair_node_in_terminal",
+    "release_in_terminal",
     "render_node",
     "render",
     "unpair_in_terminal",
@@ -62,7 +68,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ambiguous": "Mehrere Geräte passen zu „{which}“; bitte die ID nehmen:",
         "unpaired": "{name} ist entfernt. Seine offenen Verbindungen sind beendet.",
         "node_run": "Auf dem anderen PC oder Laptop (mit installiertem Nox) ausführen:",
+        "node_headless": "Auf einem Linux-Knoten ohne Bildschirm: sudo nox-node pair „<Link>“",
         "node_fp": "Der Link enthält den Fingerabdruck dieses Nox; er beginnt so:",
+        "released": "Sperre gelöst ({count} Gerät(e)). Ein Gerät, das die Sitzung noch "
+        "meldet, sperrt sofort wieder.",
+        "release_none": "Es gab keine Sperre zu lösen.",
+        "release_no_pin": "Ohne Sicherheits-PIN lässt sich die Sperre nicht lösen. Den Knoten "
+        "entfernen beendet sie immer: nox unpair --node <Name>",
+        "release_role": "Die Sperre lässt sich nur an dem Rechner lösen, auf dem Nox läuft.",
     },
     "en": {
         "not_running": "Nox is not running. Start it: sudo systemctl start nox",
@@ -90,7 +103,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ambiguous": 'Several devices match "{which}"; please use the id:',
         "unpaired": "{name} is removed. Its open connections have ended.",
         "node_run": "On the other PC or laptop (with Nox installed), run:",
+        "node_headless": 'On a Linux node without a screen: sudo nox-node pair "<link>"',
         "node_fp": "The link carries this Nox's fingerprint; it starts like this:",
+        "released": "Lock lifted ({count} device(s)). A device that still reports the session "
+        "locks again at once.",
+        "release_none": "There was no lock to lift.",
+        "release_no_pin": "Without a security PIN the lock cannot be lifted. Removing the node "
+        "always ends it: nox unpair --node <name>",
+        "release_role": "The lock can only be lifted on the computer Nox runs on.",
     },
 }
 
@@ -222,7 +242,8 @@ def render_node(result: dict[str, Any], *, language: str = "de") -> str:
     lines = [
         "",
         f"  {text['node_run']}",
-        f'    nox node pair "{result["link"]}"',
+        f'    nox-node pair "{result["link"]}"',
+        f"  {text['node_headless']}",
         "",
         "  " + text["code"].format(code=f"{code[:4]} {code[4:]}"),
         "  " + text["valid"].format(time=f"{expires:%H:%M}"),
@@ -256,6 +277,36 @@ def pair_node_in_terminal(
         except IpcError as again:
             raise PairingError(_explain(again, text)) from again
     say(render_node(result, language=language))
+
+
+def release_in_terminal(
+    runtime_dir: Path,
+    *,
+    ask_pin: Callable[[str], str] | None,
+    language: str = "de",
+    say: Callable[[str], None] = print,
+) -> None:
+    """`nox node release`: lift a computer-use lock a paired PC left behind, with the PIN
+    (`node.computer.release`). Works from an SSH session to a headless core too."""
+    text = _text(language)
+    payload: dict[str, Any] = {}
+    if ask_pin is not None:
+        pin = ask_pin(text["pin_prompt"])
+        if pin:
+            payload["pin"] = pin
+    try:
+        result = asyncio.run(_call(runtime_dir, "node.computer.release", payload, text))
+    except IpcError as exc:
+        sub = str(exc.details.get("sub_reason", ""))
+        if sub == "node_session_no_pin":
+            raise PairingError(text["release_no_pin"]) from exc
+        if sub == "node_session_role":
+            raise PairingError(text["release_role"]) from exc
+        if sub == "node_session_pin" or exc.code == ERR_PERMISSION:
+            raise PairingError(text["bad_pin"]) from exc
+        raise PairingError(_explain(exc, text)) from exc
+    count = int(result.get("released") or 0)
+    say(text["released"].format(count=count) if count else text["release_none"])
 
 
 def _when(value: object, text: dict[str, str]) -> str:

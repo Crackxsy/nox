@@ -34,6 +34,13 @@ MANIFEST = "0" * 64
 
 
 @pytest.fixture(autouse=True)
+def _english_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The node's terminal and dialog words in English, whatever this machine's locale; the
+    German texts are tested on their own (`test_gremium_r1a.py`)."""
+    monkeypatch.setenv("NOX_LANG", "en")
+
+
+@pytest.fixture(autouse=True)
 def _instant_answers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scripted confirmers answer at once; the 1.5 s rule against reflex answers is tested on
     its own (`test_review_c4.py`)."""

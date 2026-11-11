@@ -366,7 +366,7 @@ def test_unreadable_own_addresses_count_as_this_machine_during_a_session(
         own_addresses=all_local_addresses,
     )
     assert not control.controls_local()  # no session: nothing to protect
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     control.pull()
     assert control.controls_local()  # cannot tell this machine apart: it is the controlled PC
 
@@ -384,6 +384,6 @@ def test_an_own_address_lookup_that_raises_fails_closed() -> None:
         addresses=lambda: {LAPTOP: ("192.0.2.20", [])},
         own_addresses=raising,
     )
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     control.pull()
     assert control.controls_local()

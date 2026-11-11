@@ -864,11 +864,12 @@ def voice_setup(
     `voice.models_dir`) - only after a yes (`confirm`; None: the person said `--yes`). Speech
     recognition (Whisper, sized for this device) and the configured voice (Supertonic 3; Piper
     voices are placed by hand). 0 when everything is there, 1 when refused or failed."""
+    from nox.node.cli_text import t  # noqa: PLC0415
     from nox.voice.models import engine_models_dir  # noqa: PLC0415
 
     support = voice_support()
     if support is not None:
-        echo(f"Voice is not installed on this device: {support}.")
+        echo(t("vs_not_installed", reason=support))
         return 1
     cfg = voice_config(settings, home)
     stt_model = str(cfg.stt.model)
@@ -876,30 +877,29 @@ def voice_setup(
     engine = settings.tts_engine
     tts_dir = engine_models_dir(engine, cfg.models_dir)
     sizes = {"tiny": "75 MB", "base": "145 MB", "small": "480 MB"}
-    voice = (
-        " and the Supertonic 3 voice (about 400 MB, OpenRAIL-M)" if engine == "supertonic" else ""
-    )
     size = sizes.get(stt_model, "?")
-    question = (
-        f"Download speech recognition (Whisper {stt_model}, about {size}) into {whisper_dir}"
-        f"{voice} from Hugging Face? Nothing about you is sent; afterwards the node never"
-        " downloads anything by itself."
+    question = t(
+        "vs_question",
+        model=stt_model,
+        size=size,
+        where=whisper_dir,
+        voice=t("vs_voice_part") if engine == "supertonic" else "",
     )
     if confirm is not None and not confirm(question):
-        echo("Nothing was downloaded.")
+        echo(t("vs_nothing"))
         return 1
     try:
-        echo(f"Whisper {stt_model} -> {whisper_dir}")
+        echo(t("vs_whisper", model=stt_model, where=whisper_dir))
         download_whisper(stt_model, whisper_dir)
     except Exception as exc:  # noqa: BLE001 - reported, nothing half-claimed
-        echo(f"Whisper could not be downloaded: {type(exc).__name__}: {str(exc)[:200]}")
+        echo(t("vs_whisper_failed", error=f"{type(exc).__name__}: {str(exc)[:200]}"))
         return 1
     if engine == "piper":
-        echo(f"Nox does not download Piper voices: put <voice>.onnx(.json) into {tts_dir}.")
+        echo(t("vs_piper", where=tts_dir))
         return 0
     code = download_tts(engine, tts_dir, echo)
     if code != 0:
-        echo(f"The {engine} voice could not be downloaded (code {code}).")
+        echo(t("vs_tts_failed", engine=engine, code=code))
         return 1
-    echo("Done. The node uses the models from its next start of the voice satellite.")
+    echo(t("vs_done"))
     return 0

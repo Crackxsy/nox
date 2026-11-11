@@ -44,6 +44,11 @@ class CallScope:
     #: False: no "remember" answer for this call, whatever the tool allows otherwise (a write on
     #: a node is asked every time).
     rememberable: bool = True
+    #: The device's name as the confirmation shows it, set by the router from its registry -
+    #: never from model or tool text: the node's label for a call on a node, this core's
+    #: computer name for a call here while nodes are paired ("" otherwise). Shown only, never
+    #: matched like `target`.
+    device_name: str = ""
 
 
 Scope = Callable[[dict[str, Any]], CallScope]

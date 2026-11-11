@@ -423,8 +423,8 @@ def test_invalid_unicode_is_refused_and_nfc_is_one_text(tmp_path: Path) -> None:
 
 def test_the_dialog_says_when_foreign_content_was_involved() -> None:
     """N6."""
-    plain = confirmation_text("package.install", {"name": "VLC"})
-    warned = confirmation_text("package.install", {"name": "VLC"}, tainted=True)
+    plain = confirmation_text("package.install", {"name": "VLC"}, lang="de")
+    warned = confirmation_text("package.install", {"name": "VLC"}, tainted=True, lang="de")
     assert plain is not None and warned is not None
     assert "fremden Inhalten" in warned and "fremden Inhalten" not in plain
 

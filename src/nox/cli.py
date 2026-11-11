@@ -353,12 +353,18 @@ def _node_home() -> Any:
 def node_pair(
     link: str = typer.Argument(..., help='The link from `nox pair --node`: "nox-node://pair?..."'),
     name: str = typer.Option("", help="A name for this device, e.g. 'Laptop'."),
+    again: bool = typer.Option(
+        False,
+        "--again",
+        help="Pair once more when the certificate expired, Nox removed this device or the "
+        "authority no longer matches (the log and the confirmation key stay).",
+    ),
 ) -> None:
     """Pair this device with the Nox at home. Checks Nox's fingerprint before sending anything."""
     from nox.node.cli import NodeCliError, pair, secret_store  # noqa: PLC0415
 
     try:
-        typer.echo(pair(link, home=_node_home(), name=name, secrets=secret_store()))
+        typer.echo(pair(link, home=_node_home(), name=name, secrets=secret_store(), again=again))
     except NodeCliError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
@@ -392,9 +398,10 @@ def node_update(
     """Update this node from the signed release (never from the core). Exit status: 0 done or
     up to date, 1 refused, 3 release signing is not configured yet."""
     from nox.node.cli import update  # noqa: PLC0415
+    from nox.node.cli_text import ask_yes  # noqa: PLC0415
 
     def ask(question: str) -> bool:
-        return sys.stdin.isatty() and typer.confirm(question, default=False)
+        return sys.stdin.isatty() and ask_yes(question)
 
     raise typer.Exit(update(_node_home(), check_only=check, yes=yes, say=typer.echo, ask=ask))
 
@@ -433,18 +440,21 @@ def node_log(limit: int = typer.Option(50, min=1, max=10_000)) -> None:
 def node_stop() -> None:
     """Stop Nox on this device at once - and everywhere (the core gets a stop too). Only this
     device can undo it: nox node resume."""
-    home = _node_home()
-    home.ensure()
-    home.stop_file.write_text("stopped on this device\n", encoding="utf-8")
-    typer.echo("Stopped. Undo on this device with: nox node resume")
+    from nox.node.cli import stop  # noqa: PLC0415
+
+    typer.echo(stop(_node_home()))
 
 
 @node_app.command("resume")
 def node_resume() -> None:
     """Undo a stop made on this device. A stop of the core is resumed on the core."""
-    home = _node_home()
-    home.stop_file.unlink(missing_ok=True)
-    typer.echo("Resumed on this device.")
+    from nox.node.cli import NodeCliError, resume  # noqa: PLC0415
+
+    try:
+        typer.echo(resume(_node_home()))
+    except NodeCliError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
 
 
 @node_app.command("allow")
@@ -454,6 +464,7 @@ def node_allow(
 ) -> None:
     """Let Nox use a capability group on this device. Only possible here, never from the core."""
     from nox.node.cli import NodeCliError, allow, secret_store  # noqa: PLC0415
+    from nox.node.cli_text import ask_yes  # noqa: PLC0415
 
     try:
         allow(
@@ -461,7 +472,7 @@ def node_allow(
             group,
             True,
             say=typer.echo,
-            confirm=lambda prompt: typer.confirm(prompt, default=False),
+            confirm=ask_yes,
             secrets=secret_store(),
             folder=folder,
         )
@@ -493,9 +504,10 @@ def node_games(
     """Games of this device: while one runs or is in front, Nox never uses mouse and keyboard
     here. Adding works at once; removing asks first."""
     from nox.node.cli import NodeCliError, games, secret_store  # noqa: PLC0415
+    from nox.node.cli_text import ask_yes, command  # noqa: PLC0415
 
     if action not in ("add", "remove"):
-        typer.echo("Use: nox node games add|remove <program>", err=True)
+        typer.echo(command("games add|remove <program>"), err=True)
         raise typer.Exit(2)
     try:
         games(
@@ -503,7 +515,7 @@ def node_games(
             name,
             action == "add",
             say=typer.echo,
-            confirm=lambda prompt: typer.confirm(prompt, default=False),
+            confirm=ask_yes,
             secrets=secret_store(),
         )
     except NodeCliError as exc:
@@ -525,12 +537,40 @@ def node_voice_mute() -> None:
     typer.echo(voice_mute(_node_home(), True))
 
 
+@node_app.command("release")
+def node_release(
+    pin: bool = typer.Option(
+        True, "--pin/--no-pin", help="Ask for the security PIN (it is needed whenever one is set)."
+    ),
+) -> None:
+    """On the computer Nox runs on (also over SSH to a headless Nox): lift a computer-use lock
+    that a paired PC left behind, with the security PIN. A PC that still reports the session
+    locks again at once; removing it (`nox unpair --node <name>`) always ends its lock."""
+    from nox.lan.terminal import PairingError, release_in_terminal  # noqa: PLC0415
+
+    config = _config()
+    try:
+        release_in_terminal(
+            Path(config.paths.runtime_dir),
+            language=config.identity.ui_language,
+            ask_pin=(lambda prompt: typer.prompt(prompt, hide_input=True)) if pin else None,
+            say=typer.echo,
+        )
+    except PairingError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+
+
 @node_voice_app.command("unmute")
 def node_voice_unmute() -> None:
     """Unmute the microphone here."""
-    from nox.node.satellite_cli import voice_mute  # noqa: PLC0415
+    from nox.node.satellite_cli import SatelliteCliError, voice_mute  # noqa: PLC0415
 
-    typer.echo(voice_mute(_node_home(), False))
+    try:
+        typer.echo(voice_mute(_node_home(), False))
+    except SatelliteCliError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
 
 
 @node_voice_app.command("status")
@@ -548,13 +588,14 @@ def node_voice_setup(
 ) -> None:
     """Download this device's speech models into the node's folder (asks first; the node never
     downloads a model by itself)."""
+    from nox.node.cli_text import ask_yes  # noqa: PLC0415
     from nox.node.satellite_settings import SATELLITES_FILE, SettingsFile  # noqa: PLC0415
     from nox.node.voice import voice_setup  # noqa: PLC0415
 
     home = _node_home()
     home.ensure()
     settings = SettingsFile(home.path / SATELLITES_FILE).read().voice
-    confirm = None if yes else (lambda question: typer.confirm(question, default=False))
+    confirm = None if yes else ask_yes
     raise typer.Exit(voice_setup(home.path, settings, confirm=confirm, echo=typer.echo))
 
 
@@ -598,9 +639,13 @@ def node_obs_password(
 @node_obs_app.command("resume")
 def node_obs_resume() -> None:
     """After the panic button: let Nox change OBS on this device again."""
-    from nox.node.satellite_cli import obs_resume  # noqa: PLC0415
+    from nox.node.satellite_cli import SatelliteCliError, obs_resume  # noqa: PLC0415
 
-    typer.echo(obs_resume(_node_home()))
+    try:
+        typer.echo(obs_resume(_node_home()))
+    except SatelliteCliError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
 
 
 @node_app.command("overlay")

@@ -259,7 +259,7 @@ class DeviceGuard:
 
 def _locked_control() -> NodeControl:
     control = NodeControl(None, lambda _n: None, linked=lambda d: BROWSER if d == LAPTOP else None)
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     return control
 
 
@@ -718,13 +718,13 @@ async def test_window_titles_from_a_node_are_hidden_in_panic(tmp_path: Path) -> 
 
 def test_a_new_hello_starts_a_new_epoch() -> None:
     control = NodeControl(None, lambda _n: None)
-    control.observe(LAPTOP, _report(2**50, True))
+    control.answered(LAPTOP, _report(2**50, True))
     control.observe(LAPTOP, _report(7, False))  # a lower generation: ignored ...
     assert control.active()
     control.hello(LAPTOP, _report(7, False))  # ... unless it is a new run's hello
     assert not control.active()
     control.hello(LAPTOP, None)  # a hello without a report changes nothing
-    control.observe(LAPTOP, _report(8, True))
+    control.answered(LAPTOP, _report(8, True))
     control.hello(LAPTOP, "broken")
     assert control.active()
 
@@ -754,7 +754,7 @@ def _clocked() -> tuple[NodeControl, dict[str, float], list[Any]]:
 
 def test_a_long_session_that_keeps_reporting_keeps_the_lock() -> None:
     control, now, _ = _clocked()
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     for _ in range(3 * 60):  # three hours of reports, one a minute
         now["t"] += 60
         control.observe(LAPTOP, _report(2, True))
@@ -763,10 +763,10 @@ def test_a_long_session_that_keeps_reporting_keeps_the_lock() -> None:
 
 def test_back_to_back_sessions_keep_the_lock_and_get_a_fresh_grant() -> None:
     control, now, granted = _clocked()
-    control.observe(LAPTOP, _report(2, True, "aa" * 16))
+    control.answered(LAPTOP, _report(2, True, "aa" * 16))
     for gen in range(3, 30, 2):  # ended and started again, every few minutes, for hours
         now["t"] += MAX_SESSION_MINUTES * 6
-        control.observe(LAPTOP, _report(gen, True, f"{gen:02x}" * 16))
+        control.answered(LAPTOP, _report(gen, True, f"{gen:02x}" * 16))
         assert control.active()
     grants = [g for g in granted if not isinstance(g, str)]
     assert len({g.grant_id for g in grants}) == len(grants) > 1  # one per session
@@ -774,7 +774,7 @@ def test_back_to_back_sessions_keep_the_lock_and_get_a_fresh_grant() -> None:
 
 def test_a_silent_node_lifts_the_lock_after_the_longest_session() -> None:
     control, now, _ = _clocked()
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     now["t"] += MAX_SESSION_MINUTES * 60 - 1
     assert control.active()
     now["t"] += 2
@@ -784,7 +784,7 @@ def test_a_silent_node_lifts_the_lock_after_the_longest_session() -> None:
 def test_the_owner_releases_a_stuck_lock_and_a_live_session_locks_again() -> None:
     notices: list[dict[str, Any]] = []
     control = NodeControl(None, notices.append)
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     assert control.status() and control.status()[0]["device_id"] == LAPTOP
     assert control.release("released by the owner") == 1
     assert not control.active() and notices[-1]["active"] is False
@@ -830,7 +830,7 @@ async def test_music_is_announced_once_on_the_device(tmp_path: Path) -> None:
     runtime = node_cli.build(home, notifier=Notifier())
     assert await node_cli.media_notice_once(runtime) is True
     assert await node_cli.media_notice_once(runtime) is False
-    assert shown == [node_cli.MEDIA_NOTICE]
+    assert shown == [node_cli.media_notice()]
 
 
 async def test_precheck_runs_before_around_and_stops_it() -> None:
