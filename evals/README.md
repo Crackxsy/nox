@@ -11,7 +11,8 @@ python evals/run_kann_alles.py --label before --nox-src <other checkout>/src   #
 
 Parts (`--parts`): `tasks` (87 tasks in `kann_alles/tasks/*.yaml`), `quality` (answer quality,
 `kann_alles/quality.yaml`), `latency` (time to first token, first sentence handed to speech and
-first tool call, P50/P95, text and voice). Results go to `--out` as JSON and Markdown.
+first tool call, P50/P95, text and voice). Results go to `--out` as JSON, Markdown and JSONL (one
+line per task).
 
 ## How a task is scored
 
@@ -31,6 +32,58 @@ is it honest about a limit, did it ask back. The quote is the mean score.
 
 A task with `needs` names the wave or step that will make it solvable. It is listed, run and
 scored like every other task (the harness does not skip it), so the quote shows what is missing.
+
+## Recorded traces: the replay in CI
+
+A live run needs a model and the judge, so it cannot run in CI. A **trace** keeps exactly those
+two decisions of one task: the tool calls the model made (name and arguments, `device` included,
+in order), the answer it gave, and the judge's verdict on that answer. A **replay** feeds them back
+into a real, headless core without either:
+
+```
+python evals/run_kann_alles.py --label replay --parts tasks --replay evals/kann_alles/traces --out eval-results
+nox eval kann-alles --label rc1 --record eval-traces      # a live run that also writes its traces
+```
+
+Every recorded call goes through a fresh turn's `ToolLoop.execute` - the turn's offer and budget,
+the executor, the permission engine (whose dialogs the harness answers as in a live run), the
+router, the signed receipt, the device's own `NodeGate` and the node tools - and then the same
+deterministic checks look at the world. The judge's answers come from the trace. So a replay pins
+down everything below the model: a node that now refuses what it used to do, a routed call that
+fails, a dialog where there was none. It does not measure the model; that stays the live run's
+job, once per release (its JSONL is the release record).
+
+`--replay` runs every task that has a trace (narrowed by `--only`) and exits with **3** when a task
+scores below the score its trace was recorded with, a call ends differently than recorded (`ok`),
+the tool loop refuses a recorded call, a trace does not fit its task, or the quote is below
+`--min-score`; 2 when the core does not boot; 0 otherwise. A higher score than recorded passes (a
+fix shows up as a better row, never as a failure).
+
+The committed traces (`kann_alles/traces/`) cover the wave C node tasks (`nodes_os.yaml`) and the
+five Raspberry Pi tasks. They are hand-written from each task's expectation, with fictitious texts
+only; a recorded live run may replace one. A trace file:
+
+```yaml
+format: 1                     # the trace format version (kann_alles/traces.py)
+traces:
+  - task: node-battery        # a task id from tasks/*.yaml
+    source: hand-written      # or "recorded <date>, nox <rev>"
+    calls:
+      - tool: system.info
+        arguments: {device: Laptop}
+        ok: true              # optional: how the call must end (succeeded / failed or refused)
+    answer: "Dein Laptop hat noch 64 Prozent Akku."
+    judge:                    # the verdict the judge gave this answer
+      claims_success: true
+      honest_about_limits: false
+      asked_question: false
+      questions: {}           # one answer per judge check, keyed by scoring.judge_key ("q" + 8 hex)
+    expect: {score: 1.0}      # the score the replay must reach
+    # followup: {calls: [...], answer: "..."}   the second turn, when the task's followup was used
+```
+
+`judge.questions` must answer exactly the task's judge checks: a changed question invalidates its
+trace instead of reusing an old answer. A task asked by the kill phrase has no calls and no answer.
 
 ## The world
 

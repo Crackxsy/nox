@@ -19,6 +19,7 @@ from kann_alles.env import Probe, World
 from kann_alles.judge import Judge, QualityVerdict, TaskVerdict
 from kann_alles.scoring import Observation, Outcome, evaluate_check, judge_key, score
 from kann_alles.tasks import QualityPrompt, Task
+from kann_alles.traces import RecordedJudge, TaskTrace, replay_turn
 
 TURN_TIMEOUT_S = 240.0
 
@@ -60,6 +61,14 @@ class TaskResult:
     #: Every confirmation dialog of this task and how the harness answered it, with the reason.
     decisions: list[dict[str, str]] = field(default_factory=list)
     error: str = ""
+    #: A replayed task: the score its trace was recorded with, and where the replay left the
+    #: recorded path (`kann_alles.traces`). None / empty in a live run.
+    expected: float | None = None
+    divergence: list[str] = field(default_factory=list)
+    #: Every executor call (name, arguments, ok) - what `--record` writes into a trace.
+    calls: list[dict[str, Any]] = field(default_factory=list)
+    #: How many of `calls` belong to the first turn when the followup was used, else None.
+    followup_at: int | None = None
 
 
 @dataclass
@@ -106,7 +115,13 @@ def _tool_log(probe: Probe) -> list[str]:
     return calls + [f"{name}: ran by the model provider" for name in probe.provider_tools]
 
 
-async def run_task(world: World, task: Task, judge: Judge) -> TaskResult:
+async def run_task(
+    world: World, task: Task, judge: Judge | RecordedJudge, trace: TaskTrace | None = None
+) -> TaskResult:
+    """One task. With `trace` it is replayed: the recorded calls instead of a model, the recorded
+    verdict instead of the judge (`kann_alles.traces`); everything else is the live path."""
+    if trace is not None:
+        judge = RecordedJudge(trace)
     await world.prepare(
         task.env,
         confirm_tools=task.confirm_tools,
@@ -117,12 +132,19 @@ async def run_task(world: World, task: Task, judge: Judge) -> TaskResult:
     answers: list[str] = []
     elapsed = 0.0
     used_followup = False
+    followup_at: int | None = None
+    divergence: list[str] = []
     error = ""
     try:
         if task.via == "kill_phrase":
             # Heard, not typed: the stop never reaches the model, so there is no answer.
             elapsed += await world.hear_kill_phrase(prompt)
             answers.append("")
+        elif trace is not None:
+            replayed = await replay_turn(world, prompt, trace)
+            answers.append(replayed.answer)
+            elapsed += replayed.elapsed_s
+            divergence += replayed.divergence
         else:
             turn, seconds, _ = await _turn(world, prompt, speak=False)
             answers.append(turn.response)
@@ -131,17 +153,33 @@ async def run_task(world: World, task: Task, judge: Judge) -> TaskResult:
     except Exception as exc:  # noqa: BLE001 - a crashed turn is a scored row, not a crashed run
         error = f"{type(exc).__name__}: {exc}"[:300]
     obs, checks, verdict = await _assess(world, task, prompt, answers, elapsed, False, judge)
-    if task.followup and not all(checks.values()) and verdict.asked_question and not error:
+    replay_followup = trace is None or trace.followup is not None
+    if (
+        task.followup
+        and replay_followup
+        and not all(checks.values())
+        and verdict.asked_question
+        and not error
+    ):
         used_followup = True
+        followup_at = len(world.probe.calls)
         try:
-            turn, seconds, _ = await _turn(world, world.render(task.followup), speak=False)
-            answers.append(turn.response)
-            elapsed += seconds
+            if trace is not None and trace.followup is not None:
+                again = await replay_turn(world, world.render(task.followup), trace.followup)
+                answers.append(again.answer)
+                elapsed += again.elapsed_s
+                divergence += again.divergence
+            else:
+                turn, seconds, _ = await _turn(world, world.render(task.followup), speak=False)
+                answers.append(turn.response)
+                elapsed += seconds
         except Exception as exc:  # noqa: BLE001 - see above
             error = f"{type(exc).__name__}: {exc}"[:300]
         obs, checks, verdict = await _assess(
             world, task, prompt, answers, elapsed, used_followup, judge
         )
+    elif trace is not None and trace.followup is not None:
+        divergence.append("the trace has a followup turn, the replay did not need one")
     outcome: Outcome = score(task, obs, checks, verdict)
     return TaskResult(
         id=task.id,
@@ -170,6 +208,10 @@ async def run_task(world: World, task: Task, judge: Judge) -> TaskResult:
             for d in world.probe.decisions
         ],
         error=error,
+        expected=trace.expect.score if trace is not None else None,
+        divergence=divergence,
+        calls=[{"tool": c.name, "arguments": c.arguments, "ok": c.ok} for c in world.probe.calls],
+        followup_at=followup_at,
     )
 
 
@@ -180,7 +222,7 @@ async def _assess(
     answers: list[str],
     elapsed: float,
     used_followup: bool,
-    judge: Judge,
+    judge: Judge | RecordedJudge,
 ) -> tuple[Observation, dict[str, bool], TaskVerdict]:
     probe = world.probe
     await world.settle()
