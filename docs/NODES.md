@@ -20,6 +20,22 @@ limits itself:** the node treats the core as untrusted for them, so a game lock,
 prohibition, a group that is off on the device or the device's own dialog for high risk hold even
 against a core that was taken over or patched to allow everything.
 
+## In 3 steps
+
+1. **Install the program on the new PC.** Windows: start `Nox-Setup-<version>.exe` and choose
+   "Connect to the Nox at home (this PC only)". Linux (Raspberry Pi too): the script
+   `install-linux.sh --node` ([table below](#installing-a-node)).
+2. **Make a code and carry the link over.** In the dashboard: Devices & skills › Devices ›
+   Computers and servers › **Add a PC or laptop** › **Installed – make a code**. Then **Copy
+   link**, open that page on the new PC and paste the link into the installer's "Pairing link"
+   field. A code lives five minutes only - make it once the program is installed.
+3. **Allow on the new PC what Nox may do there.** Windows: open the Command Prompt (Windows key,
+   type "cmd") and enter, for example, `nox-node allow shell`; Linux: the same in a terminal,
+   without a screen `sudo nox-node allow shell`. The dashboard shows the command that fits the
+   device under "How to switch it on".
+
+(A flow with a short code and a fingerprint check instead of the long link is planned.)
+
 ## Installing a node
 
 | Device | How | Starts with |
@@ -110,7 +126,7 @@ nox node deny notify     # no more notices on this device - at once, also while 
 | `browser` | `browser.*` in Nox's own headless browser | off | public pages only |
 | `desktop` | list, focus, minimise, restore, close windows; end a program; type text | off | Windows only |
 | `computer` | mouse and key combinations in a session | off | Windows only; `allow` asks twice |
-| `voice` | the voice satellite | off | also needs the owner's switch in the dashboard |
+| `voice` | the speaker microphone (voice satellite) | off | also needs the owner's switch in the dashboard |
 | `obs` | `obs.request` to the OBS on this PC, the pet overlay relay | off | |
 
 The core can switch groups off, never on. `allow` works only in an interactive terminal with a
@@ -303,7 +319,7 @@ Three things a node can do for Nox beyond its hands - all off by default, each s
 here (`nox node allow voice`, `nox node allow obs`). How they work is set in `satellites.yaml`
 in the node folder (preferences only, nothing secret, never *whether*).
 
-### Voice satellite
+### Speaker microphone (voice satellite)
 
 `voice`: Nox listens and speaks on this device - a Living room Pi with a USB speakerphone, say.
 
@@ -335,13 +351,13 @@ in the node folder (preferences only, nothing secret, never *whether*).
   hears becomes a conversation of its own on Nox (`voice:node:<id>`), recorded or not by Nox's
   privacy mode, and that conversation counts as holding outside content from its first word:
   anything that sends data out asks first, a "remember for this session" you gave elsewhere does
-  not count for it, and the question says "von Sprach-Satellit <name>" (from voice satellite
+  not count for it, and the question says "Vom Lautsprecher-Mikrofon <name>" (from the speaker microphone
   ...). Facts Nox learns from it wait for your confirmation. **Approvals are never given by
   voice.** "Here" means this device: "Turn the music down here". It waits for whatever Nox is
   doing on the dashboard instead of interrupting it (at most 90 s). Locks, alarm panels, garage
   doors and valves are out of reach as for every channel - Nox has no tool for them.
-- **No shortcuts from the room.** Presets and mode changes do not start from here - only a preset
-  you marked "Also from voice satellites" (with the PIN when one is set), and then every step
+- **No shortcuts from the room.** Flows and mode changes do not start from here - only a flow
+  you marked "Also start it by voice from a room" (with the PIN when one is set), and then every step
   follows the normal rules; the mode never changes by voice from a satellite, and "new
   conversation" said there neither discards the conversation nor ends its grants.
 - **Echo window.** While Nox speaks here, and for 0.3 s after, it does not take what it hears as a
@@ -402,10 +418,14 @@ device for, its version. Its sheet has one switch per group:
   after every reconnect.
 - **On again** works there only for a group you switched off there, with the PIN when one is set.
   A group the device itself does not allow is switched on only on the device:
-  `nox node allow <group>` in a terminal there (the tray icon only shows what is allowed; a Pi
-  without a screen has none - use a terminal there, over SSH for example).
+  `nox-node allow <group>` there (the tray icon only shows what is allowed; a Pi without a
+  screen has none). The dashboard names the command to fit the device: on Windows the Command
+  Prompt (Windows key, type "cmd"), on Linux a terminal, without a screen `sudo nox-node ...`,
+  over SSH for example. A group the device does not allow is not a switch there but a lock with
+  "How to switch it on".
 
-The same sheet sets the default device per tool family, shows "Recently done here" from the
+Under the list, "Default devices", you set where Nox does each tool family ("Where Nox reads
+system values") - it applies to all computers. The sheet of a node shows "Recently done here" from the
 audit, and removes the node ("Really remove", pressed twice); defaults that named a removed node
 go back to `auto`. The requests are `node.narrow` and `node.defaults.set` (see
 [SECURITY.md](SECURITY.md#nodes-nox-node)).
@@ -416,7 +436,7 @@ go back to `auto`. The requests are `node.narrow` and `node.defaults.set` (see
   connected node over its open connection, running actions are aborted (a sandboxed command's
   whole process tree with them), a computer-use session ends, and the node refuses everything
   until Nox resumes.
-- **On the device itself:** `nox node stop`, the tray's **Stop here** or `Ctrl+Alt+Shift+K`
+- **On the device itself:** `nox node stop`, the tray's **Stopp (überall)** or `Ctrl+Alt+Shift+K`
   (where a global key hook is available) - or "Nox, Notaus" on a voice satellite - stops it there
   and Nox everywhere; only `nox node resume` (or **Resume here**) on that device lifts the node's
   own stop.
@@ -424,7 +444,7 @@ go back to `auto`. The requests are `node.narrow` and `node.defaults.set` (see
   aborts that and refuses everything until Nox is back and not stopped.
 
 On a desktop with the tray (Windows; Linux where PySide6 is installed) the icon shows the state -
-connected, "Not connected to Nox", update needed, stopped - and its menu has **Stop here**,
+connected, "Not connected to Nox", update needed, stopped - and its menu has **Stopp (überall)**,
 **Resume here**, **What Nox may do here** and, with voice, the microphone switch. The tray only
 writes the same stop file as `nox node stop`. Notices from a node installed in node mode on
 Windows carry Nox's own name (AppUserModelID `Nox.Node`), not "Windows PowerShell".
@@ -578,7 +598,7 @@ cannot be overridden from Nox. Check:
   removed on the node;
 - mouse, keyboard and windows exist on Windows nodes only (`windows_only`).
 
-### The voice satellite does not listen
+### The speaker microphone does not listen
 
 Run `nox node voice status`. In order:
 
