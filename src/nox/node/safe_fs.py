@@ -27,6 +27,10 @@ Order for every open (list, read, write):
    `secret_locations`), not a hard link to a protected file, a regular file or a directory. For a
    write also: no second hard link, no executable bit, no execution trigger on the final path.
 
+`file.move` and `file.delete` (`move_file`, `trash_file`) take the same three steps for both ends of
+a move and for the file to delete, then act relative to the verified handles - a rename without
+replacing, into the trash only (never an unlink); see their docstrings.
+
 Everything read or written afterwards goes through that one handle, so swapping the path between
 the check and the use changes nothing (`test_c5.py` swaps it). What the OS cannot bind to a handle
 is said plainly: listing a folder on Windows enumerates by its verified path while the folder's
@@ -60,6 +64,7 @@ __all__ = [
     "broad_folder",
     "execution_trigger",
     "list_folder",
+    "move_file",
     "open_existing",
     "open_new",
     "INERT_FENCE_LANGUAGES",
@@ -70,6 +75,8 @@ __all__ = [
     "markdown_runs_code",
     "secret_locations",
     "structured",
+    "trash_file",
+    "trash_support",
     "write_refusal",
 ]
 
@@ -652,14 +659,24 @@ class Folders:
         if not _WINDOWS and info.st_mode & 0o111:
             raise OutsideFolders("executable_refused", "an executable file is not written")
         if final is not None:
-            refusal = write_refusal(re.split(r"[\\/]+", final[len(root.path.rstrip("\\/")) :]))
-            if refusal is not None:
-                raise OutsideFolders(refusal, "only data files are written (allowlist)")
-            if execution_trigger(final):
-                raise OutsideFolders("execution_trigger", "writing there could make something run")
-            marked = marked_above(os.path.dirname(final))
-            if marked is not None:
-                raise OutsideFolders(marked, "nothing in a repository or app workspace is written")
+            self._verify_name(root, final)
+
+    def _verify_name(self, root: _Root, final: str) -> None:
+        """The write rules on a real, final path (one that exists or one a file is about to get):
+        inside the allowed folder and no protected place, an allowlisted data file, no execution
+        trigger, no working tree or app workspace around it."""
+        if any(_within(final, g) for g in self.protected):
+            raise OutsideFolders("node_home_protected", "that file is protected on this device")
+        if not _within(final, root.path):
+            raise OutsideFolders("outside_folders", "the path leads outside the allowed folders")
+        refusal = write_refusal(re.split(r"[\\/]+", final[len(root.path.rstrip("\\/")) :]))
+        if refusal is not None:
+            raise OutsideFolders(refusal, "only data files are written (allowlist)")
+        if execution_trigger(final):
+            raise OutsideFolders("execution_trigger", "writing there could make something run")
+        marked = marked_above(os.path.dirname(final))
+        if marked is not None:
+            raise OutsideFolders(marked, "nothing in a repository or app workspace is written")
 
 
 #: How long the protected places' identities are reused: walking browser profiles on every call
@@ -942,31 +959,8 @@ def _posix_open(
     was itself checked on the way - and is removed from it again if its check fails."""
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     cloexec = getattr(os, "O_CLOEXEC", 0)
-    directory = getattr(os, "O_DIRECTORY", 0)
-    fd = os.open(root.path, os.O_RDONLY | directory | cloexec)
+    fd = _posix_walk(folders, root, parts[:-1], write=write)
     try:
-        info = os.fstat(fd)
-        if (info.st_dev, info.st_ino) != root.identity:
-            raise OutsideFolders("changed", "the allowed folder was replaced")
-        if write:
-            _marked_fd(fd)
-        for part in parts[:-1]:
-            seen = _peek(part, fd)
-            if seen is None:
-                raise FileNotFoundError(errno.ENOENT, "no such folder", part)
-            if stat.S_ISLNK(seen.st_mode):
-                raise OutsideFolders("link_refused", "links are not followed on this device")
-            if not stat.S_ISDIR(seen.st_mode):
-                raise NotADirectoryError(errno.ENOTDIR, "not a folder", part)
-            try:
-                step = os.open(part, os.O_RDONLY | directory | nofollow | cloexec, dir_fd=fd)
-            except OSError as exc:
-                raise _link_or(exc) from exc
-            os.close(fd)
-            fd = step
-            folders._verify(root, os.fstat(fd), None)
-            if write:
-                _marked_fd(fd)
         if not parts:
             final = os.dup(fd)
         else:
@@ -997,6 +991,44 @@ def _posix_open(
     if flags & _NONBLOCK:
         os.set_blocking(final, True)
     return final
+
+
+def _posix_walk(folders: Folders, root: _Root, folder_parts: list[str], *, write: bool) -> int:
+    """A directory fd for `root/folder_parts`, walked from the allowed folder (whose identity
+    must not have changed): every entry is looked at without following it, opened `O_NOFOLLOW`
+    relative to the one before, compared with the protected folders and - for a write - checked
+    for a working tree or an app workspace."""
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    cloexec = getattr(os, "O_CLOEXEC", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(root.path, os.O_RDONLY | directory | cloexec)
+    try:
+        info = os.fstat(fd)
+        if (info.st_dev, info.st_ino) != root.identity:
+            raise OutsideFolders("changed", "the allowed folder was replaced")
+        if write:
+            _marked_fd(fd)
+        for part in folder_parts:
+            seen = _peek(part, fd)
+            if seen is None:
+                raise FileNotFoundError(errno.ENOENT, "no such folder", part)
+            if stat.S_ISLNK(seen.st_mode):
+                raise OutsideFolders("link_refused", "links are not followed on this device")
+            if not stat.S_ISDIR(seen.st_mode):
+                raise NotADirectoryError(errno.ENOTDIR, "not a folder", part)
+            try:
+                step = os.open(part, os.O_RDONLY | directory | nofollow | cloexec, dir_fd=fd)
+            except OSError as exc:
+                raise _link_or(exc) from exc
+            os.close(fd)
+            fd = step
+            folders._verify(root, os.fstat(fd), None)
+            if write:
+                _marked_fd(fd)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 def _link_or(exc: OSError) -> Exception:
@@ -1152,3 +1184,580 @@ def _win_open(folders: Folders, root: _Root, parts: list[str], *, write: bool, c
         os.close(fd)
         raise
     return fd
+
+
+# -- 4. moving and deleting (`file.move`, `file.delete`) -----------------------------------------
+
+#: The largest file a node puts in the trash: far above any note or log, far below what a Recycle
+#: Bin holds - a file too large for the bin would be deleted for good by Windows, never that.
+MAX_TRASH_BYTES = 256 * 1024 * 1024
+_FILE_SHARE_DELETE = 0x4
+_FILE_READ_ATTRIBUTES = 0x80
+_FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+_FILE_RENAME_INFO = 3
+_FILE_STANDARD_INFO = 1
+_DRIVE_FIXED = 3
+#: `renameat2` (Linux) and `renameatx_np` (macOS): fail instead of replacing the target.
+_RENAME_NOREPLACE = 1
+_RENAME_EXCL = 0x4
+
+
+@dataclass(frozen=True)
+class Moved:
+    """Where a moved file was and where it is now (the real paths)."""
+
+    source: str
+    target: str
+
+
+def move_file(folders: Folders, source: str, target: str) -> Moved:
+    """Move or rename one regular file inside the allowed folders.
+
+    Both ends follow the write rules (allowlisted data formats only - `notes.txt` never becomes
+    `run.bat` -, no hidden names, no working tree or app workspace, no execution trigger, never a
+    protected place). A target that is an existing folder gets the file's own name; otherwise the
+    target must not exist (a move never replaces anything) and its folder must (folders are never
+    created). Links are refused, never followed, at both ends; folders are not moved; a move never
+    crosses drives (no copy-and-delete).
+
+    Bound to handles: on POSIX both folders are walked and verified as directory fds and the rename
+    is relative to them without replacing (`renameat2(RENAME_NOREPLACE)`,
+    `renameatx_np(RENAME_EXCL)`, else `linkat` + `unlinkat`); on Windows the verified source handle
+    (held without `FILE_SHARE_DELETE`, so nobody else renames it meanwhile) is renamed into the
+    verified target folder, which stays open meanwhile. The moved file is checked again
+    afterwards: anything else in its place is moved back and the call refused (`changed`)."""
+    sroot, sparts = folders.split(source)
+    troot, tparts = folders.split(target)
+    if not sparts or not tparts:
+        raise OutsideFolders("invalid_path", "a folder is not moved; name a file")
+    if _is_folder(folders, target):
+        tparts = [*tparts, sparts[-1]]
+    _lexical_write_check(sroot, sparts)
+    _lexical_write_check(troot, tparts)
+    if _WINDOWS:
+        return _win_move(folders, sroot, sparts, troot, tparts)
+    return _posix_move(folders, sroot, sparts, troot, tparts)
+
+
+def trash_support() -> str | None:
+    """Why `file.delete` cannot work on this device, or None (looked at without deleting)."""
+    if sys.platform == "darwin":
+        import importlib.util  # noqa: PLC0415
+
+        if importlib.util.find_spec("Foundation") is None:
+            return "the Trash needs PyObjC on a Mac (extra `shell`)"
+    return None
+
+
+def trash_file(folders: Folders, text: str) -> str:
+    """Move one regular file into this user's trash - the Recycle Bin on Windows, the Trash on a
+    Mac, the freedesktop trash (`~/.local/share/Trash`) on Linux - and return where it went. Never
+    an unlink: where the trash cannot take the file (another drive than the user's trash on
+    Linux, a removable drive or "delete immediately" on Windows, a file over `MAX_TRASH_BYTES`),
+    it is refused (`trash_unavailable`) and the file stays.
+
+    The same rules as a write (allowlisted data formats, no working tree or app workspace, no
+    execution trigger, no protected place, no link, no second hard link). On POSIX the file is
+    renamed relative to its verified directory fd into the trash (Linux: with its `.trashinfo`
+    written first, as the specification says), on a Mac by the system's `trashItemAtURL`; on
+    Windows the parent folder is pinned (held open without `FILE_SHARE_DELETE`) while the shell
+    recycles the file, and the file's own handle - open the whole time - must afterwards be in
+    the Recycle Bin. In every case the trashed item must be the file that was checked
+    (`changed` otherwise)."""
+    root, parts = folders.split(text)
+    if not parts:
+        raise OutsideFolders("invalid_path", "a folder is not deleted; name a file")
+    _lexical_write_check(root, parts)
+    if _WINDOWS:
+        return _win_trash(folders, root, parts)
+    directory = _posix_walk(folders, root, parts[:-1], write=True)
+    try:
+        identity, size = _posix_leaf(folders, root, directory, parts[-1])
+        if size > MAX_TRASH_BYTES:
+            raise OutsideFolders("too_large", "a file this large is not put in the trash here")
+        folder = _final_path(directory)
+        if folder is None:
+            raise OutsideFolders("trash_unavailable", "where the file lies cannot be told here")
+        original = os.path.join(folder, parts[-1])
+        if sys.platform == "darwin":
+            return _mac_trash(original, identity)
+        return _xdg_trash(directory, parts[-1], identity, original)
+    finally:
+        os.close(directory)
+
+
+def _is_folder(folders: Folders, text: str) -> bool:
+    """Whether `text` names an existing folder (checked on its handle, never followed)."""
+    try:
+        fd = open_existing(folders, text)
+    except (OSError, OutsideFolders):
+        return False
+    try:
+        return stat.S_ISDIR(os.fstat(fd).st_mode)
+    finally:
+        os.close(fd)
+
+
+def _posix_leaf(
+    folders: Folders, root: _Root, directory: int, name: str
+) -> tuple[tuple[int, int], int]:
+    """The file `name` in a verified directory: looked at without following, opened `O_NOFOLLOW`
+    and checked on its handle with the write rules. Its identity and size."""
+    seen = _peek(name, directory)
+    if seen is None:
+        raise FileNotFoundError(errno.ENOENT, "no such file", name)
+    if stat.S_ISLNK(seen.st_mode):
+        raise OutsideFolders("link_refused", "links are not followed on this device")
+    if stat.S_ISDIR(seen.st_mode):
+        raise OutsideFolders("not_a_file", "folders are not moved or deleted, only files")
+    if not stat.S_ISREG(seen.st_mode):
+        raise OutsideFolders("not_a_file", "only regular files are moved or deleted")
+    flags = os.O_RDONLY | _NONBLOCK | _NOCTTY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(name, flags | getattr(os, "O_CLOEXEC", 0), dir_fd=directory)
+    except OSError as exc:
+        raise _link_or(exc) from exc
+    try:
+        info = os.fstat(fd)
+        folders._verify(root, info, _final_path(fd), write=True)
+    finally:
+        os.close(fd)
+    identity = (info.st_dev, info.st_ino)
+    if identity != (seen.st_dev, seen.st_ino):
+        raise OutsideFolders("changed", "the file changed while it was opened")
+    return identity, info.st_size
+
+
+def _posix_move(
+    folders: Folders, sroot: _Root, sparts: list[str], troot: _Root, tparts: list[str]
+) -> Moved:
+    source_dir = _posix_walk(folders, sroot, sparts[:-1], write=True)
+    try:
+        target_dir = _posix_walk(folders, troot, tparts[:-1], write=True)
+        try:
+            identity, _size = _posix_leaf(folders, sroot, source_dir, sparts[-1])
+            if _peek(tparts[-1], target_dir) is not None:
+                raise FileExistsError(errno.EEXIST, "the target exists", tparts[-1])
+            if os.fstat(target_dir).st_dev != identity[0]:
+                raise OutsideFolders("cross_device", "a file is moved only within one drive")
+            source_folder, target_folder = _final_path(source_dir), _final_path(target_dir)
+            if source_folder is None or target_folder is None:
+                raise OutsideFolders("changed", "where the folders lie cannot be told here")
+            target_final = os.path.join(target_folder, tparts[-1])
+            folders._verify_name(troot, target_final)
+            _rename_noreplace(source_dir, sparts[-1], target_dir, tparts[-1])
+            moved = os.stat(tparts[-1], dir_fd=target_dir, follow_symlinks=False)
+            if (moved.st_dev, moved.st_ino) != identity:
+                with contextlib.suppress(OSError):
+                    _rename_noreplace(target_dir, tparts[-1], source_dir, sparts[-1])
+                raise OutsideFolders("changed", "the file changed while it was moved (moved back)")
+            return Moved(os.path.join(source_folder, sparts[-1]), target_final)
+        finally:
+            os.close(target_dir)
+    finally:
+        os.close(source_dir)
+
+
+@functools.cache
+def _libc() -> Any:
+    import ctypes  # noqa: PLC0415
+
+    loader: Any = ctypes
+    if sys.platform == "darwin":
+        return loader.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    return loader.CDLL(None, use_errno=True)
+
+
+def _rename_noreplace(source_dir: int, source: str, target_dir: int, target: str) -> None:
+    """Rename `source` (in `source_dir`) to `target` (in `target_dir`), failing with
+    `FileExistsError` when the target exists - atomically where the system can (`renameat2`
+    with `RENAME_NOREPLACE`, `renameatx_np` with `RENAME_EXCL`), else as a hard link (which
+    fails on an existing name) followed by removing the old name."""
+    import ctypes  # noqa: PLC0415
+
+    function: Any = None
+    flag = _RENAME_EXCL if sys.platform == "darwin" else _RENAME_NOREPLACE
+    with contextlib.suppress(OSError, AttributeError):
+        function = getattr(_libc(), "renameatx_np" if sys.platform == "darwin" else "renameat2")
+    if function is not None:
+        function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p]
+        function.argtypes += [ctypes.c_uint]
+        function.restype = ctypes.c_int
+        if function(source_dir, os.fsencode(source), target_dir, os.fsencode(target), flag) == 0:
+            return
+        code = ctypes.get_errno()
+        unsupported = {errno.EINVAL, errno.ENOSYS, errno.ENOTSUP, getattr(errno, "EOPNOTSUPP", 0)}
+        if code not in unsupported:
+            raise OSError(code, os.strerror(code), target)
+    os.link(source, target, src_dir_fd=source_dir, dst_dir_fd=target_dir, follow_symlinks=False)
+    try:
+        os.unlink(source, dir_fd=source_dir)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(target, dir_fd=target_dir)
+        raise
+
+
+def _trash_names(name: str) -> Iterator[str]:
+    """`name`, then `name.2`, `name.3`, ... (before the extension) - a free name in the trash."""
+    yield name
+    stem, dot, ext = name.rpartition(".")
+    if not stem:
+        stem, dot, ext = name, "", ""
+    for number in range(2, 1000):
+        yield f"{stem}.{number}{dot}{ext}"
+
+
+def _xdg_trash(directory: int, name: str, identity: tuple[int, int], original: str) -> str:
+    """The freedesktop trash in this user's data folder: `info/<name>.trashinfo` is created
+    exclusively first (it reserves the name), then the file is renamed into `files/` relative to
+    both verified folders. Only on the drive the trash is on - a file on another drive is
+    refused, never copied."""
+    from urllib.parse import quote  # noqa: PLC0415
+
+    data = os.environ.get("XDG_DATA_HOME") or ""
+    base = Path(data) if os.path.isabs(data) else Path.home() / ".local" / "share"
+    trash = base / "Trash"
+    nofollow, cloexec = getattr(os, "O_NOFOLLOW", 0), getattr(os, "O_CLOEXEC", 0)
+    folder_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow | cloexec
+    try:
+        trash.mkdir(mode=0o700, parents=True, exist_ok=True)
+        trash_fd = os.open(trash, folder_flags)
+    except OSError as exc:
+        raise OutsideFolders("trash_unavailable", "this user's trash cannot be used") from exc
+    opened: list[int] = []
+    try:
+        for sub in ("files", "info"):
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(sub, 0o700, dir_fd=trash_fd)
+            try:
+                opened.append(os.open(sub, folder_flags, dir_fd=trash_fd))
+            except OSError as exc:
+                raise OutsideFolders("trash_unavailable", "the trash is not a folder") from exc
+        files, info = opened
+        if os.fstat(files).st_dev != identity[0]:
+            raise OutsideFolders(
+                "trash_unavailable", "the file is on another drive than this user's trash"
+            )
+        exclusive = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow | cloexec
+        for candidate in _trash_names(name):
+            try:
+                record = os.open(f"{candidate}.trashinfo", exclusive, 0o600, dir_fd=info)
+            except FileExistsError:
+                continue
+            if _peek(candidate, files) is None:
+                break
+            os.close(record)
+            os.unlink(f"{candidate}.trashinfo", dir_fd=info)
+        else:
+            raise OutsideFolders("trash_unavailable", "no free name in the trash")
+        when = time.strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            with os.fdopen(record, "w", encoding="utf-8") as handle:
+                handle.write(f"[Trash Info]\nPath={quote(original)}\nDeletionDate={when}\n")
+            _rename_noreplace(directory, name, files, candidate)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(f"{candidate}.trashinfo", dir_fd=info)
+            raise
+        moved = os.stat(candidate, dir_fd=files, follow_symlinks=False)
+        if (moved.st_dev, moved.st_ino) != identity:
+            with contextlib.suppress(OSError):
+                _rename_noreplace(files, candidate, directory, name)
+                os.unlink(f"{candidate}.trashinfo", dir_fd=info)
+            raise OutsideFolders("changed", "the file changed while it was deleted (put back)")
+        return str(trash / "files" / candidate)
+    finally:
+        for fd in opened:
+            os.close(fd)
+        os.close(trash_fd)
+
+
+def _mac_trash(original: str, identity: tuple[int, int]) -> str:
+    """The system's own Trash (`NSFileManager.trashItemAtURL`, "Put Back" works); the item it
+    moved must be the file that was checked."""
+    try:
+        foundation: Any = __import__("Foundation")
+    except ImportError as exc:
+        raise OutsideFolders("trash_unavailable", "the Trash needs PyObjC on a Mac") from exc
+    url = foundation.NSURL.fileURLWithPath_(original)
+    manager = foundation.NSFileManager.defaultManager()
+    ok, result, _error = manager.trashItemAtURL_resultingItemURL_error_(url, None, None)
+    if not ok or result is None:
+        raise OutsideFolders("trash_unavailable", "macOS did not move the file to the Trash")
+    where = str(result.path())
+    moved = os.lstat(where)
+    if (moved.st_dev, moved.st_ino) != identity:
+        raise OutsideFolders("changed", f"something else went to the Trash ({where})")
+    return where
+
+
+# -- Windows: move and Recycle Bin ----------------------------------------------------------------
+
+
+@functools.cache
+def _kernel32_more() -> Any:
+    import ctypes  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+
+    k32 = _kernel32()
+    k32.GetFileInformationByHandleEx.restype = wintypes.BOOL
+    k32.GetFileInformationByHandleEx.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    k32.GetVolumePathNameW.restype = wintypes.BOOL
+    k32.GetVolumePathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    k32.GetVolumeNameForVolumeMountPointW.restype = wintypes.BOOL
+    k32.GetVolumeNameForVolumeMountPointW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+    ]
+    k32.GetDriveTypeW.restype = wintypes.UINT
+    k32.GetDriveTypeW.argtypes = [wintypes.LPCWSTR]
+    return k32
+
+
+def _win_fd(path: str, access: int, share: int, flags: int) -> int:
+    """An fd for an existing file or folder on a local disk (`CreateFileW`, long-path form)."""
+    import ctypes  # noqa: PLC0415
+
+    winapi: Any = ctypes
+    k32 = _kernel32()
+    handle = k32.CreateFileW(
+        path if path.startswith("\\\\?\\") else "\\\\?\\" + path,
+        access,
+        share,
+        None,
+        _OPEN_EXISTING,
+        flags,
+        None,
+    )
+    if handle in (None, ctypes.c_void_p(-1).value):
+        raise winapi.WinError(winapi.get_last_error())
+    try:
+        if k32.GetFileType(handle) != _FILE_TYPE_DISK:
+            raise OutsideFolders("not_a_file", "only files on a disk are opened")
+        fd: int = _msvcrt().open_osfhandle(handle, os.O_RDONLY)
+    except BaseException:
+        k32.CloseHandle(handle)
+        raise
+    return fd
+
+
+def _win_leaf(folders: Folders, root: _Root, path: str, access: int, share: int) -> tuple[int, str]:
+    """The file itself - never a link it may be (`FILE_FLAG_OPEN_REPARSE_POINT`) -, checked on
+    its handle with the write rules. The fd and its real path."""
+    fd = _win_fd(path, access, share, _FILE_FLAG_BACKUP_SEMANTICS | _FILE_FLAG_OPEN_REPARSE_POINT)
+    try:
+        info = os.fstat(fd)
+        if getattr(info, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT:
+            raise OutsideFolders("link_refused", "links are not followed on this device")
+        if stat.S_ISDIR(info.st_mode):
+            raise OutsideFolders("not_a_file", "folders are not moved or deleted, only files")
+        final = _win_final(fd)
+        if final is None:
+            raise OutsideFolders("outside_folders", "the path leads to a network or unknown place")
+        folders._verify(root, info, final, write=True)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd, final
+
+
+def _win_folder(folders: Folders, root: _Root, path: str) -> tuple[int, str]:
+    """A folder, pinned: open without `FILE_SHARE_DELETE` (it cannot be renamed or replaced
+    while held), verified on its handle. The fd and its real path."""
+    fd = _win_fd(
+        path, _GENERIC_READ, _FILE_SHARE_READ | _FILE_SHARE_WRITE, _FILE_FLAG_BACKUP_SEMANTICS
+    )
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISDIR(info.st_mode):
+            raise NotADirectoryError(errno.ENOTDIR, "not a folder", path)
+        final = _win_final(fd)
+        if final is None:
+            raise OutsideFolders("outside_folders", "the path leads to a network or unknown place")
+        folders._verify(root, info, final)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd, final
+
+
+def _win_rename(fd: int, new_path: str) -> None:
+    """`SetFileInformationByHandle(FileRenameInfo)` on this handle, never replacing a file."""
+    import ctypes  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+
+    winapi: Any = ctypes
+    name = new_path if new_path.startswith("\\\\?\\") else "\\\\?\\" + new_path
+
+    class RenameInfo(ctypes.Structure):
+        _fields_ = (
+            ("ReplaceIfExists", wintypes.DWORD),
+            ("RootDirectory", wintypes.HANDLE),
+            ("FileNameLength", wintypes.DWORD),
+            ("FileName", ctypes.c_wchar * (len(name) + 1)),
+        )
+
+    info = RenameInfo(0, None, len(name) * 2, name)
+    handle = _msvcrt().get_osfhandle(fd)
+    if not _kernel32().SetFileInformationByHandle(
+        handle, _FILE_RENAME_INFO, ctypes.byref(info), ctypes.sizeof(info)
+    ):
+        raise winapi.WinError(winapi.get_last_error())
+
+
+def _win_move(
+    folders: Folders, sroot: _Root, sparts: list[str], troot: _Root, tparts: list[str]
+) -> Moved:
+    folder_fd, folder = _win_folder(folders, troot, os.path.join(troot.path, *tparts[:-1]))
+    try:
+        target = os.path.join(folder, tparts[-1])
+        folders._verify_name(troot, target)
+        source_fd, source = _win_leaf(
+            folders,
+            sroot,
+            os.path.join(sroot.path, *sparts),
+            _GENERIC_READ | _DELETE,  # DELETE: renamed through this very handle
+            _FILE_SHARE_READ | _FILE_SHARE_WRITE,  # no FILE_SHARE_DELETE: nobody else renames it
+        )
+        try:
+            if _norm(source) == _norm(target):
+                raise FileExistsError(errno.EEXIST, "the target exists", target)
+            if os.fstat(source_fd).st_dev != os.fstat(folder_fd).st_dev:
+                raise OutsideFolders("cross_device", "a file is moved only within one drive")
+            _win_rename(source_fd, target)
+            now = _win_final(source_fd)
+            try:
+                if now is None or _norm(now) != _norm(target):
+                    raise OutsideFolders("changed", "the file did not arrive where it should")
+                folders._verify(troot, os.fstat(source_fd), now, write=True)
+            except OutsideFolders:
+                with contextlib.suppress(OSError):
+                    _win_rename(source_fd, source)  # back where it was
+                raise
+            return Moved(source, now)
+        finally:
+            os.close(source_fd)
+    finally:
+        os.close(folder_fd)
+
+
+def _win_volume(path: str) -> tuple[str, str]:
+    """The volume root of `path` (`D:\\`) and its GUID (`{...}`, empty when unknown)."""
+    import ctypes  # noqa: PLC0415
+
+    k32 = _kernel32_more()
+    buffer = ctypes.create_unicode_buffer(1024)
+    if not k32.GetVolumePathNameW(path, buffer, 1024):
+        return "", ""
+    root = buffer.value
+    guid = ctypes.create_unicode_buffer(128)
+    if not k32.GetVolumeNameForVolumeMountPointW(root, guid, 128):
+        return root, ""
+    found = re.search(r"\{[0-9A-Fa-f-]{36}\}", guid.value)
+    return root, found.group(0) if found else ""
+
+
+def _win_bin_refusal(final: str, size: int) -> str | None:
+    """Why the Recycle Bin would not keep this file (Windows would delete it for good), or None:
+    not a fixed drive, "delete immediately" (`NoRecycleFiles` policy, `NukeOnDelete`), or larger
+    than the bin's size (`MaxCapacity`, MB) - read like Explorer reads them."""
+    root, guid = _win_volume(final)
+    if not root or _kernel32_more().GetDriveTypeW(root) != _DRIVE_FIXED:
+        return "the drive has no Recycle Bin"
+    winreg: Any = __import__("winreg")
+
+    def value(hive: Any, key: str, name: str) -> int | None:
+        try:
+            with winreg.OpenKey(hive, key) as handle:
+                found, _kind = winreg.QueryValueEx(handle, name)
+        except OSError:
+            return None
+        return int(found) if isinstance(found, int) else None
+
+    policy = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        if value(hive, policy, "NoRecycleFiles") == 1:
+            return "the Recycle Bin is switched off by policy"
+    if guid:
+        volume = rf"Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket\Volume\{guid}"
+        if value(winreg.HKEY_CURRENT_USER, volume, "NukeOnDelete") == 1:
+            return "the Recycle Bin of this drive deletes files immediately"
+        capacity = value(winreg.HKEY_CURRENT_USER, volume, "MaxCapacity")
+        if capacity is not None and size > capacity * 1024 * 1024:
+            return "the file is larger than this drive's Recycle Bin"
+    return None
+
+
+def _win_delete_pending(fd: int) -> bool:
+    """`FILE_STANDARD_INFO.DeletePending` of this handle (True when it cannot be read)."""
+    import ctypes  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+
+    class StandardInfo(ctypes.Structure):
+        _fields_ = (
+            ("AllocationSize", ctypes.c_longlong),
+            ("EndOfFile", ctypes.c_longlong),
+            ("NumberOfLinks", wintypes.DWORD),
+            ("DeletePending", wintypes.BOOLEAN),
+            ("Directory", wintypes.BOOLEAN),
+        )
+
+    info = StandardInfo()
+    handle = _msvcrt().get_osfhandle(fd)
+    if not _kernel32_more().GetFileInformationByHandleEx(
+        handle, _FILE_STANDARD_INFO, ctypes.byref(info), ctypes.sizeof(info)
+    ):
+        return True
+    return bool(info.DeletePending)
+
+
+def _win_trash(folders: Folders, root: _Root, parts: list[str]) -> str:
+    from nox.files.recycle import RecycleError, to_recycle_bin  # noqa: PLC0415
+
+    folder_fd, folder = _win_folder(folders, root, os.path.join(root.path, *parts[:-1]))
+    try:
+        fd, final = _win_leaf(
+            folders,
+            root,
+            os.path.join(root.path, *parts),
+            # Attributes only, every sharing mode: this handle takes part in no sharing check,
+            # so the shell can move the file into the bin - and it shows where the file went.
+            _FILE_READ_ATTRIBUTES,
+            _FILE_SHARE_READ | _FILE_SHARE_WRITE | _FILE_SHARE_DELETE,
+        )
+        try:
+            if _norm(os.path.dirname(final)) != _norm(folder):
+                raise OutsideFolders("changed", "the file changed while it was opened")
+            size = os.fstat(fd).st_size
+            if size > MAX_TRASH_BYTES:
+                raise OutsideFolders("too_large", "a file this large is not put in the trash here")
+            refusal = _win_bin_refusal(final, size)
+            if refusal is not None:
+                raise OutsideFolders("trash_unavailable", refusal)
+            failure = ""
+            try:
+                to_recycle_bin(Path(final))
+            except RecycleError as exc:
+                failure = str(exc)
+            if _win_delete_pending(fd):
+                raise OutsideFolders(
+                    "trash_failed", "Windows deleted the file instead of recycling"
+                )
+            now = _win_final(fd)
+            if now is None or "\\$RECYCLE.BIN\\" not in now.upper():
+                if failure:
+                    raise OutsideFolders("trash_failed", failure[:200])
+                raise OutsideFolders("changed", "something else went to the Recycle Bin")
+            return now
+        finally:
+            os.close(fd)
+    finally:
+        os.close(folder_fd)

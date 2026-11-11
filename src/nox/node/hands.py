@@ -1,5 +1,5 @@
-"""The node's hands: `file.list/read/write` and `shell.run` - the core's tool names, run on this
-device under this device's rules (spec C §1.4, C5).
+"""The node's hands: `file.list/read/write/move/delete` and `shell.run` - the core's tool names,
+run on this device under this device's rules (spec C §1.4, C5).
 
 They run only after `NodeGate` allowed the call (prohibitions, stop state, capability group,
 risk ceiling, arguments, the core's receipt, budget, and the confirmation on this device for high
@@ -13,15 +13,21 @@ risk). On top of that, each one holds its own boundary at the moment it acts:
   programs), never on an executable file or one with a second hard link, never overwrites unless
   asked and never creates folders. Replacing or appending is high risk (asked on the device);
   a new file is medium. A write that has started completes - a stop ends everything after it.
+* **`file.move`** and **`file.delete`** are high risk (asked on the device every time, never
+  remembered) and follow the same rules for both ends of a move and for the file deleted
+  (`safe_fs.move_file`, `safe_fs.trash_file`): files only, never a link, a move never replaces
+  anything, never creates a folder and never crosses drives; a delete goes into this user's trash
+  (Recycle Bin, Trash, freedesktop trash) or does not happen - there is no unlink.
 * **`shell.run`** runs **only** in this device's own `make_sandbox()`: AppContainer on Windows,
   bwrap on Linux - with strong guarantees, the weaker mode is never accepted on a node. The
   node's folder is not mounted (Linux; the run is refused when it would lie under a read-only
   system bind) or not granted (Windows: owner-only ACL, no container grant) inside it. When there
   is no such sandbox (macOS, no bwrap, a weak backend), the call is refused with
   `sandbox_unavailable` - there is no unsandboxed fallback. A stop of the call (`nox/kill`, the
-  dead-man rule) kills the sandboxed process tree.
+  dead-man rule) kills the sandboxed process tree. On macOS, which has no such sandbox at all,
+  `shell.run` is not even offered (`hand_tools`), so no status claims it.
 * **`package.*`** is not offered on nodes yet: a package manager needs rights the sandbox does
-  not give, so it could not work there.
+  not give, so it could not work there (owner decision D6: a narrow privileged helper later).
 
 A refusal is raised as `NodeRefusal(reason)`; the agent answers it like a gate refusal and writes
 it to the node's audit trail.
@@ -32,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import re
 import stat
 import sys
 import threading
@@ -52,10 +59,13 @@ from nox.node.safe_fs import (
     extension_of,
     list_folder,
     markdown_finding,
+    move_file,
     open_existing,
     open_new,
     secret_locations,
     structured,
+    trash_file,
+    trash_support,
     write_refusal,
 )
 from nox.node.tools import NodeRefusal, NodeTool
@@ -64,6 +74,7 @@ from nox.sandbox import EgressDecl, Limits, Sandbox, SandboxUnavailable
 log = get_logger(__name__)
 
 __all__ = [
+    "MoveArgs",
     "NodeHands",
     "NodeRefusal",
     "hand_tools",
@@ -100,6 +111,47 @@ class WriteArgs(BaseModel):
     text: str = Field(max_length=MAX_WRITE_BYTES)
     append: bool = False
     overwrite: bool = False
+
+
+class MoveArgs(BaseModel):
+    """The core's `file.move` arguments. A node never replaces a file and never creates a folder:
+    `overwrite` and `create_folders` are accepted only as false (`move_refusal`)."""
+
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(min_length=1, max_length=400)
+    to: str = Field(min_length=1, max_length=400)
+    overwrite: bool = False
+    create_folders: bool = False
+
+
+def move_refusal(path: str, to: str, *, overwrite: bool, create_folders: bool) -> str | None:
+    """What refuses a move before anyone is asked - on the core and on the node: a replace, a
+    new folder, or a name a write would be refused for at either end."""
+    if overwrite:
+        return "overwrite_refused"
+    if create_folders:
+        return "folders_not_created"
+    source = _last_name(path)
+    refusal = write_refusal([source]) if source else "invalid_path"
+    if refusal is not None:
+        return refusal
+    target = _last_name(to)
+    if not target:
+        return "invalid_path"
+    if "." in target.lstrip("."):  # a file name; a name without one may be a folder to move into
+        return write_refusal([target])
+    return "hidden_refused" if target.startswith(".") else None
+
+
+def delete_refusal(path: str) -> str | None:
+    """What refuses a delete before anyone is asked: a name a write would be refused for."""
+    name = _last_name(path)
+    return write_refusal([name]) if name else "invalid_path"
+
+
+def _last_name(path: str) -> str:
+    parts = [p for p in re.split(r"[\\/]+", path) if p]
+    return parts[-1] if parts else ""
 
 
 class ShellArgs(BaseModel):
@@ -400,7 +452,16 @@ def _whole_file_refusal(fd: int, args: WriteArgs) -> NodeRefusal | None:
     return NodeRefusal(refusal)
 
 
-def hand_tools(hands: NodeHands) -> dict[str, NodeTool]:
+def hand_tools(
+    hands: NodeHands,
+    *,
+    platform: str = sys.platform,
+    trash: Callable[[], str | None] = trash_support,
+) -> dict[str, NodeTool]:
+    """The hands this device can really offer: `shell.run` not on macOS (no sandbox backend
+    there, so no status ever claims it), `file.delete` only where this user's trash can be used
+    (`safe_fs.trash_support`)."""
+
     async def on_files(
         work: Callable[[Folders, threading.Event], dict[str, Any]],
     ) -> dict[str, Any]:
@@ -446,6 +507,58 @@ def hand_tools(hands: NodeHands) -> dict[str, NodeTool]:
         argv = [*shell_program(), info.argv[0]] if info.needs_shell else list(info.argv)
         return await hands.run(argv, egress=tuple(args.egress), workload="shell")
 
+    async def file_move(args: BaseModel) -> dict[str, Any]:
+        assert isinstance(args, MoveArgs)
+        refusal = move_refusal(
+            args.path, args.to, overwrite=args.overwrite, create_folders=args.create_folders
+        )
+        if refusal is not None:
+            raise NodeRefusal(refusal)
+
+        def work(folders: Folders, _stop: threading.Event) -> dict[str, Any]:
+            try:
+                moved = move_file(folders, args.path, args.to)
+            except FileExistsError:
+                return {"ok": False, "error": "the target exists; a move never replaces a file"}
+            except FileNotFoundError:
+                return {"ok": False, "error": "no such file or folder (folders are never created)"}
+            return {"ok": True, "from": moved.source, "to": moved.target}
+
+        return await on_files(work)
+
+    async def file_delete(args: BaseModel) -> dict[str, Any]:
+        assert isinstance(args, PathArgs)
+        refusal = delete_refusal(args.path)
+        if refusal is not None:
+            raise NodeRefusal(refusal)
+
+        def work(folders: Folders, _stop: threading.Event) -> dict[str, Any]:
+            try:
+                where = trash_file(folders, args.path)
+            except FileNotFoundError:
+                return {"ok": False, "error": "no such file"}
+            return {"ok": True, "path": args.path, "trashed_to": where, "recoverable": True}
+
+        return await on_files(work)
+
+    def precheck_move(args: BaseModel) -> str | None:
+        assert isinstance(args, MoveArgs)
+        return move_refusal(
+            args.path, args.to, overwrite=args.overwrite, create_folders=args.create_folders
+        )
+
+    def shown_move(args: BaseModel) -> dict[str, Any]:
+        assert isinstance(args, MoveArgs)
+        return {"move": args.path, "to": args.to, "replaces": "never"}
+
+    def precheck_delete(args: BaseModel) -> str | None:
+        assert isinstance(args, PathArgs)
+        return delete_refusal(args.path)
+
+    def shown_delete(args: BaseModel) -> dict[str, Any]:
+        assert isinstance(args, PathArgs)
+        return {"delete": args.path, "goes to": "the trash (it can be put back)"}
+
     def risk_of_write(args: BaseModel) -> str:
         assert isinstance(args, WriteArgs)
         return write_risk(args.path, args.append, args.overwrite)
@@ -488,6 +601,28 @@ def hand_tools(hands: NodeHands) -> dict[str, NodeTool]:
             precheck=precheck_write,
         ),
         NodeTool(
+            "file.move",
+            "files",
+            "high",
+            "Move or rename a file in the allowed folders; never replaces, never crosses drives.",
+            MoveArgs,
+            file_move,
+            path_safe=True,  # both ends go through nox.node.safe_fs
+            shown=shown_move,
+            precheck=precheck_move,
+        ),
+        NodeTool(
+            "file.delete",
+            "files",
+            "high",
+            "Move a file in an allowed folder to this device's trash (it can be put back).",
+            PathArgs,
+            file_delete,
+            path_safe=True,  # through nox.node.safe_fs, into the trash only
+            shown=shown_delete,
+            precheck=precheck_delete,
+        ),
+        NodeTool(
             "shell.run",
             "shell",
             "high",
@@ -497,4 +632,9 @@ def hand_tools(hands: NodeHands) -> dict[str, NodeTool]:
             path_safe=True,  # runs only in the sandbox, which cannot see the node's folder
         ),
     ]
-    return {tool.name: tool for tool in tools}
+    withheld: set[str] = set()
+    if platform == "darwin":
+        withheld.add("shell.run")  # no sandbox backend on macOS: never offered, never claimed
+    if trash() is not None:
+        withheld.add("file.delete")
+    return {tool.name: tool for tool in tools if tool.name not in withheld}

@@ -35,9 +35,12 @@ from nox.mcp.client import McpClientError
 from nox.node.agent import all_local_addresses
 from nox.node.console import console_is_remote
 from nox.node.hands import (
+    MoveArgs,
     PathArgs,
     ShellArgs,
     WriteArgs,
+    delete_refusal,
+    move_refusal,
     write_risk,
     write_summary,
     write_text_refusal,
@@ -316,6 +319,34 @@ def _write_precheck(payload: dict[str, Any]) -> str | None:
 def _write_risk(payload: dict[str, Any]) -> Risk:
     path = str(payload.get("path") or "")
     return Risk(write_risk(path, bool(payload.get("append")), bool(payload.get("overwrite"))))
+
+
+def _move_target(payload: dict[str, Any]) -> str:
+    """A node move: from where to where - both in full, or not at all."""
+    source, to = str(payload.get("path") or ""), str(payload.get("to") or "")
+    return _complete(f"move {render(source)} to {render(to)} replaces never")
+
+
+def _move_precheck(payload: dict[str, Any]) -> str | None:
+    return move_refusal(
+        str(payload.get("path") or ""),
+        str(payload.get("to") or ""),
+        overwrite=bool(payload.get("overwrite")),
+        create_folders=bool(payload.get("create_folders")),
+    )
+
+
+def _delete_precheck(payload: dict[str, Any]) -> str | None:
+    return delete_refusal(str(payload.get("path") or ""))
+
+
+#: Node calls whose answer is never remembered: each one is asked on the device again.
+_NEVER_REMEMBERED = frozenset({"file.write", "file.move", "file.delete"})
+_PRECHECKS: dict[str, Callable[[dict[str, Any]], str | None]] = {
+    "file.write": _write_precheck,
+    "file.move": _move_precheck,
+    "file.delete": _delete_precheck,
+}
 
 
 def _field(name: str) -> Callable[[dict[str, Any]], str]:
@@ -613,6 +644,9 @@ def _install_routes(
         ("file.list", "What is in one folder", Risk.READ, False, PathArgs, _field("path")),
         ("file.read", "The text of one file", Risk.READ, False, PathArgs, _field("path")),
         ("file.write", "Write text to a file", Risk.MEDIUM, True, WriteArgs, _write_target),
+        # On a device both are high: asked there every time, never remembered (D1).
+        ("file.move", "Move or rename a file", Risk.HIGH, True, MoveArgs, _move_target),
+        ("file.delete", "Move a file to the trash", Risk.HIGH, True, PathArgs, _field("path")),
         ("shell.run", "Run a command sandboxed", Risk.HIGH, True, ShellArgs, _shell_target),
     ]
     specs = [
@@ -653,8 +687,8 @@ def _install_routes(
                 # Replacing or extending a file on a device is high there, and a write on a
                 # device is asked every time (never remembered).
                 node_risk=_write_risk if name == "file.write" else None,
-                remember_on_node=name != "file.write",
-                precheck=_write_precheck if name == "file.write" else None,
+                remember_on_node=name not in _NEVER_REMEMBERED,
+                precheck=_PRECHECKS.get(name),
             )
         )
     world, control = _world_specs(core, registry, defaults, listeners or [])

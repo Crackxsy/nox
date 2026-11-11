@@ -54,6 +54,8 @@ ROUTABLE: frozenset[str] = frozenset(
         "file.list",
         "file.read",
         "file.write",
+        "file.move",
+        "file.delete",
         "shell.run",
         # C6: the eyes, the browser, the desktop, mouse and keyboard, and music.
         "screen.capture",
