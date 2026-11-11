@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.13"
 
@@ -94,7 +94,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.13"
 
@@ -634,7 +634,7 @@ jobs:
       # scripts/relief/build_relief.py makes from the checked-in configs and art; the script's
       # dependencies are pinned in its header. vitest already compares the recorded hashes
       # (reliefAssets.test.ts); this rebuilds every creature and compares the bytes.
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         if: matrix.app == 'pet'
         with:
           python-version: "3.13"
@@ -662,7 +662,7 @@ jobs:
       # keybd_event, mouse_event, SetCursorPos, Post/SendMessage with keyboard or mouse-button
       # messages, and the automation / process-memory APIs; the unit test
       # tests/unit/security/test_input_synthesis_guard.py runs the same script.
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.13"
       - name: Input synthesis stays in two guarded files
@@ -678,7 +678,7 @@ jobs:
         with:
           fetch-depth: 0 # secrets_scan.py needs the base branch and the history, not a shallow clone
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.13"
 
@@ -735,7 +735,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.13"
 
