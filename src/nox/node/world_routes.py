@@ -11,20 +11,29 @@ gate, budget and audit. What this module adds:
   node sends the picture as `nox/blob` chunks; it is checked (PNG, size, SHA-256) and stored under
   this core's captures folder like a capture of its own, so `vision.describe` and its rules
   (camera pictures never to the cloud) apply unchanged. The model gets the path, never the image.
-* **Computer use** - the node is the authority. It reports its truth about computer use
-  (`SessionReport`: a generation that only grows, whether a session is open, its id) in its hello,
-  every pong and every tool answer. The core keeps, per node, the highest generation it saw and
-  derives its approval lock from it, monotonically: a report older than what it knows is ignored,
-  one it cannot read changes nothing. The lock (`blocks`) holds while the node says a session is
-  open (and, unreachable, until it says otherwise or the longest session time has passed since it
-  last said so) or while a start is on its way. While it holds, **no paired device** may approve
-  or send a privileged request - approvals come only from the core machine's own dashboard or a
-  node's own dialog. A start needs a browser device linked to that node and is refused while the
-  lock holds for it; a start without a readable answer sends `computer.session_end`. Stops,
-  kills and disconnects never lift the lock themselves - only the node's report does. While a
-  session is open, `computer.pointer` and `computer.keys` are granted on that node only
-  (`device:<id>|session:computer/*`, medium at most), and the dashboard shows "Nox steuert gerade
-  Maus und Tastatur auf ..." with a stop.
+* **Computer use** - the lock (`NodeControl`) comes only from sessions this core started itself.
+  A node reports its truth about computer use (`SessionReport`: a generation that only grows,
+  whether a session is open, its id) in its hello, every pong and every tool answer. The core keeps
+  per node the highest generation it saw; a report older than that is ignored, one it cannot read
+  changes nothing. A session counts only once the answer to the core's own `computer.session_start`
+  on this connection named it (or, while that start is on its way, a newer generation did): "open"
+  in a hello, or for any session the core did not start, is a protocol violation - audited, the
+  connection closed, and never a lock. Session reports of a node that does not offer
+  `computer.session_start` on its connection are not read for "open" at all. The lock holds while
+  that session is open (unreachable: until the node says otherwise or the longest session time
+  has passed since it last said so) or while a start is on its way. While it holds,
+  `session_refusal` decides every "allow" and every request that changes something: the browser
+  on the controlled PC never, every other device and this machine only with the PIN (not from a
+  remote session). Saturation of a node's address binding binds approvals and messages only.
+  Removing the node (`node.unpair`), lifting the lock by hand (`node.computer.release`) and
+  resuming after a stop (`security.resume`) always work with the PIN; removing works from this
+  machine's own shell and dashboard without one, and lifts that node's lock, address binding and
+  saturation at once (`forget`). A start needs a browser device linked to that node and is
+  refused while the lock holds for it; a start without a readable answer sends
+  `computer.session_end`. Stops, kills and disconnects never lift the lock themselves - only the
+  node's report does. While a session is open, `computer.pointer` and `computer.keys` are granted
+  on that node only (`device:<id>|session:computer/*`, medium at most), and the dashboard shows
+  "Nox steuert gerade Maus und Tastatur auf ..." with a stop.
 """
 
 from __future__ import annotations
@@ -159,6 +168,8 @@ LINK_HINT = (
 EndOnNode = Callable[[NodeEntry], Awaitable[dict[str, Any]]]
 #: Where the latest hello/pong reports come from: (device id, report) pairs.
 Reports = Callable[[], Iterable[tuple[str, Any]]]
+#: Told once per connection when a node breaks the computer-use rules: (device id, why).
+OnViolation = Callable[[str, str], None]
 
 
 def host_of(address: str) -> str:
@@ -236,6 +247,9 @@ class _Device:
     shown: bool = False
     #: The session the grant was made for: a new session (back to back) gets a fresh grant.
     grant_session: str = ""
+    #: The session this core started on the current connection (the answer to its own
+    #: `computer.session_start` named it): the only session that can hold the lock.
+    started: str = ""
 
 
 class NodeControl:
@@ -255,8 +269,12 @@ class NodeControl:
         own_addresses: Callable[[], Iterable[str]] = tuple,
         stop_hotkey: str = "ctrl+alt+shift+k",
         clock: Callable[[], float] = time.monotonic,
+        on_violation: OnViolation = lambda _device_id, _why: None,
     ) -> None:
         self._engine = engine
+        self._on_violation = on_violation
+        #: Nodes told about a violation on their current connection (once each, until a hello).
+        self._violated: set[str] = set()
         self._publish = publish
         self._end_on_node = end_on_node
         self._reports = reports
@@ -289,34 +307,111 @@ class NodeControl:
             device.label = label
         return device
 
-    def observe(self, device_id: str, raw: Any, *, outcome_of_attempt: bool = False) -> None:
+    def observe(
+        self, device_id: str, raw: Any, *, outcome_of_attempt: bool = False, own_start: bool = False
+    ) -> None:
         """One report from a node. An older generation than known is ignored; the same one
         updates whether a session is open (it may have run out); a newer one replaces it. A
         start in flight is settled only by a report that shows its outcome: a newer generation,
-        or the answer to that very start (`outcome_of_attempt`)."""
+        or the answer to that very start (`outcome_of_attempt`) - and only such a report can
+        name the session that holds the lock (`_Device.started`); `own_start` marks the answer
+        to this core's own `computer.session_start`, which names it even when a report on the
+        way settled the attempt first. "Open" for any other session is a violation
+        (`on_violation`) and changes nothing: no core start, no lock."""
         report = read_report(raw)
         if report is None:
             return
         device = self._device(device_id)
         if report.gen < device.gen:
             return
+        attempt = device.attempt
+        settles = attempt is not None and (outcome_of_attempt or report.gen > attempt.gen)
+        if report.active:
+            if (settles or own_start) and report.id:
+                device.started = report.id  # the outcome of this core's own start
+            if not report.id or report.id != device.started:
+                self._violation(device_id, "session_not_started_by_core")
+                return
+        else:
+            device.started = ""  # over: that session can never hold the lock again
         device.gen, device.active, device.session_id = report.gen, report.active, report.id
         if report.active:
             device.active_seen = self._clock()
-        attempt = device.attempt
-        if attempt is not None and (outcome_of_attempt or report.gen > attempt.gen):
+        if settles:
             device.attempt = None
         self._sync(device_id, device)
 
-    def hello(self, device_id: str, raw: Any) -> None:
+    def hello(self, device_id: str, raw: Any) -> bool:
         """A new authenticated connection of this node: a new run starts a new generation epoch,
         so its hello report replaces what was known (a node ends its sessions with a
-        connection). A hello without a readable report changes nothing (fail closed)."""
-        if read_report(raw) is None:
-            return
+        connection). A new connection has no session this core started, so a hello that says
+        one is open is a violation: False, and nothing changes (fail closed). A hello without a
+        readable report changes nothing either."""
+        report = read_report(raw)
+        self._violated.discard(device_id)
+        if report is None:
+            return True
+        if report.active:
+            self._violation(device_id, "session_in_hello")
+            return False
         device = self._device(device_id)
-        device.gen, device.active, device.attempt = -1, False, None
-        self.observe(device_id, raw)
+        device.gen, device.active, device.attempt, device.started = -1, False, None, ""
+        self.observe(device_id, report)
+        return True
+
+    def begin(self, device_id: str, label: str = "") -> None:
+        """This core sends `computer.session_start` to the node now: the lock holds from here
+        (`_Attempt`), and only the outcome of this start can name a session that holds it."""
+        device = self._device(device_id, label)
+        device.attempt = _Attempt(self._clock(), device.gen)
+        self._sync(device_id, device)
+
+    def answered(self, device_id: str, raw: Any) -> None:
+        """A start of this core went out (`begin`) and `raw` is the report in its answer - the
+        two steps `_start` takes around the call, in one (for a caller that has the answer)."""
+        device = self.devices.get(device_id)
+        if device is None or device.attempt is None:
+            self.begin(device_id)
+        self.observe(device_id, raw, outcome_of_attempt=True, own_start=True)
+
+    def _violation(self, device_id: str, why: str) -> None:
+        if device_id in self._violated:
+            return
+        self._violated.add(device_id)
+        log.warning("node.computer_violation", device_id=device_id[:8], why=why)
+        self._audit(f"violation:{device_id[:8]}:{why}")
+        try:
+            self._on_violation(device_id, why)
+        except Exception as exc:  # noqa: BLE001 - the report is ignored either way
+            log.error("node.violation_hook_failed", error=type(exc).__name__)
+
+    def forget(self, device_id: str, reason: str = "node removed") -> bool:
+        """A node was removed (`node.unpair`): its lock, its address binding and its saturation
+        end at once - it can no longer report anything. True when a lock held for it."""
+        device = self.devices.get(device_id)
+        held = device is not None and self._locked(device)
+        if device is not None:
+            device.active, device.attempt, device.started = False, None, ""
+            self._sync(device_id, device, reason=reason)
+            if device.grant_id and self._engine is not None:
+                with contextlib.suppress(Exception):
+                    self._engine.revoke(device.grant_id)
+            del self.devices[device_id]
+        self.node_observed.pop(device_id, None)
+        self.node_reported.pop(device_id, None)
+        self.saturated.discard(device_id)
+        self._full_logged.discard(device_id)
+        self._violated.discard(device_id)
+        return held
+
+    def may_delegate(self, device_id: str) -> bool:
+        """Whether a high-risk call may be left to `device_id`'s own dialog right now: always
+        while no session runs; while one does, only on the node it runs on (review M2) - any
+        other node's question is asked here, under `session_refusal` (the PIN)."""
+        if not self.active():
+            return True
+        device = self.devices.get(device_id)
+        return device is not None and self._locked(device)
 
     def release(self, reason: str) -> int:
         """The owner lifts the lock by hand (`node.computer.release`, with the PIN): for a node
@@ -419,13 +514,14 @@ class NodeControl:
             for device_id, device in self.devices.items()
         )
 
-    def controls_local(self) -> bool:
+    def controls_local(self, *, saturation: bool = True) -> bool:
         """Whether a node the lock holds for runs on this machine: it connects over loopback or
         from one of this machine's own addresses. This machine's dashboard and shell are then
-        the controlled PC."""
+        the controlled PC. `saturation=False`: a saturated binding does not count (it binds
+        approvals and messages only)."""
         if not self.active():
             return False
-        if self.is_saturated():
+        if saturation and self.is_saturated():
             return True
         from nox.node.agent import ADDRESSES_UNREADABLE  # noqa: PLC0415
 
@@ -449,11 +545,11 @@ class NodeControl:
                     return True
         return False
 
-    def from_controlled(self, peer: str) -> bool:
+    def from_controlled(self, peer: str, *, saturation: bool = True) -> bool:
         """Whether a client connecting from `peer` sits on a PC the lock holds for: the same
         address as that node. Such a browser counts as linked, whatever was set in the
-        dashboard."""
-        if self.active() and self.is_saturated():
+        dashboard. `saturation=False`: as `controls_local`."""
+        if saturation and self.active() and self.is_saturated():
             return True
         host = host_of(peer)
         if not host or not self.active():
@@ -554,8 +650,7 @@ class NodeControl:
                 "device": entry.label,
                 "hint": "end it first (computer.session_end) or stop",
             }
-        device.attempt = _Attempt(self._clock(), device.gen)
-        self._sync(entry.device_id, device)
+        self.begin(entry.device_id, entry.label)
         try:
             answer = await call()
         except BaseException:
@@ -564,7 +659,12 @@ class NodeControl:
             # session only because the caller went away.
             self._background_end(entry)
             raise
-        self.observe(entry.device_id, answer.get(SESSION_RESULT_KEY), outcome_of_attempt=True)
+        self.observe(
+            entry.device_id,
+            answer.get(SESSION_RESULT_KEY),
+            outcome_of_attempt=True,
+            own_start=True,
+        )
         if device.attempt is not None:
             # No readable report in the answer: end it there to be sure.
             await self._confirm_end(entry)
@@ -768,25 +868,60 @@ def world_specs(
 
 # ---- approvals while Nox controls a node ---------------------------------------------------------
 
-REFUSE_LINKED = (
-    "Nox controls mouse and keyboard on the PC this browser runs on; nothing can be approved or "
-    "changed from here until that ends - deny or stop"
+
+class Refusal(str):
+    """Why a request is refused while Nox controls a node: an English sentence (a fallback for
+    logs, the audit and clients without the code) that carries a stable `code` - the dashboard
+    shows its own text for the code (`details.sub_reason`)."""
+
+    code: str
+
+    def __new__(cls, code: str, text: str) -> Refusal:
+        refusal = super().__new__(cls, text)
+        refusal.code = code
+        return refusal
+
+
+#: The stable codes (`details.sub_reason` of a refused request, `sub_reason` of a refused "allow").
+SUB_LINKED = "node_session_linked"
+SUB_REMOTE = "node_session_remote"
+SUB_NO_PIN = "node_session_no_pin"
+SUB_SATURATED = "node_session_saturated"
+SUB_ROLE = "node_session_role"
+SUB_PIN = "node_session_pin"
+
+REFUSE_LINKED = Refusal(
+    SUB_LINKED,
+    "Nox controls mouse and keyboard on the PC this runs on; nothing can be approved or changed "
+    "from here until that ends - deny or stop",
 )
-REFUSE_REMOTE = (
+REFUSE_REMOTE = Refusal(
+    SUB_REMOTE,
     "Nox controls mouse and keyboard on a paired PC and this computer is used remotely (or that "
-    "cannot be told); approve at the computer itself with the PIN, or deny or stop"
+    "cannot be told); approve at the computer itself with the PIN, or deny or stop",
 )
-REFUSE_NO_PIN = (
+REFUSE_NO_PIN = Refusal(
+    SUB_NO_PIN,
     "Nox controls mouse and keyboard on a paired PC; approving or changing anything now needs "
-    "the security PIN, and none is set - deny, stop, or set a PIN first"
+    "the security PIN, and none is set - deny, stop, or set a PIN first",
 )
-REFUSE_SATURATED = (
-    "Nox steuert ein Gerät mit sehr vielen Adressen - Freigaben und Nachrichten erst nach Ende "
-    "der Sitzung; Ablehnen und Stopp gehen immer"
+REFUSE_SATURATED = Refusal(
+    SUB_SATURATED,
+    "Nox controls a device with very many addresses; approvals and messages wait until the "
+    "session ends - deny and stop always work",
 )
-REFUSE_ROLE = "Nox controls mouse and keyboard on a paired PC; this client cannot approve now"
+REFUSE_ROLE = Refusal(
+    SUB_ROLE, "Nox controls mouse and keyboard on a paired PC; this client cannot approve now"
+)
 #: How long the remote-session check may take (it may start `loginctl`); slower is "unknown".
 REMOTE_CHECK_S = 3.0
+#: An "allow" - what a saturated binding refuses, with talking to Nox (`conversation_request`).
+APPROVAL = "security.permission.reply"
+#: Always possible with the PIN, whatever the session: removing a node (which needs no PIN from
+#: this machine's own shell and dashboard), lifting a stuck lock, resuming after a stop. None of
+#: them can be bound by a saturated binding or a node's addresses - they are how the owner gets
+#: out of a lock a node holds (review H1).
+ESCAPES: frozenset[str] = frozenset({"node.unpair", "node.computer.release", "security.resume"})
 
 
 async def remote_now(remote: Callable[[], bool | None]) -> bool | None:
@@ -797,24 +932,65 @@ async def remote_now(remote: Callable[[], bool | None]) -> bool | None:
         return None
 
 
-async def local_pin_refusal(
-    ctx: Any, pin: str | None, *, gate: Any, remote: Callable[[], bool | None], action: str
-) -> str | None:
-    """The computer Nox runs on - a local UI, not used remotely - with the security PIN."""
+async def pin_refusal(ctx: Any, pin: str | None, *, gate: Any, action: str) -> Refusal | None:
+    """This machine's own shell or dashboard with the security PIN - from a remote session too
+    (an SSH login to a headless core), because only the owner knows the PIN."""
     from nox.ipc.roles import LOCAL_UI_ROLES  # noqa: PLC0415
     from nox.security.gate import PinRequiredError  # noqa: PLC0415
 
     if getattr(ctx, "role", "") not in LOCAL_UI_ROLES:
         return REFUSE_ROLE
-    if await remote_now(remote) is not False:
-        return REFUSE_REMOTE
     if gate is None or not gate.is_required():
         return REFUSE_NO_PIN
     try:
         await gate.require(pin, action=action, by=getattr(ctx, "client_id", "") or ctx.role)
     except PinRequiredError as exc:
-        return exc.reason
+        return Refusal(SUB_PIN, exc.reason)
     return None
+
+
+async def local_pin_refusal(
+    ctx: Any, pin: str | None, *, gate: Any, remote: Callable[[], bool | None], action: str
+) -> Refusal | None:
+    """The computer Nox runs on - a local UI, not used remotely - with the security PIN."""
+    from nox.ipc.roles import LOCAL_UI_ROLES  # noqa: PLC0415
+
+    if getattr(ctx, "role", "") not in LOCAL_UI_ROLES:
+        return REFUSE_ROLE
+    if await remote_now(remote) is not False:
+        return REFUSE_REMOTE
+    return await pin_refusal(ctx, pin, gate=gate, action=action)
+
+
+async def _device_pin(
+    ctx: Any, pin: str | None, action: str, gate: Any, device_guard: Any
+) -> Refusal | None:
+    from nox.ipc.errors import IpcError  # noqa: PLC0415
+
+    if gate is None or not gate.is_required():
+        return REFUSE_NO_PIN
+    if device_guard is None:
+        return REFUSE_ROLE
+    try:
+        await device_guard.require(ctx, pin, action)
+    except IpcError as exc:
+        return Refusal(SUB_PIN, exc.message)
+    return None
+
+
+async def escape_refusal(
+    ctx: Any, pin: str | None, *, action: str, gate: Any, device_guard: Any
+) -> Refusal | None:
+    """`ESCAPES` while a lock holds: the PIN, from any client that may send the request at all;
+    `node.unpair` from this machine's own shell and dashboard without one (removing narrows)."""
+    from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
+
+    role = getattr(ctx, "role", "")
+    if action == "node.unpair" and role in LOCAL_UI_ROLES:
+        return None
+    if role == DEVICE_ROLE:
+        return await _device_pin(ctx, pin, action, gate, device_guard)
+    return await pin_refusal(ctx, pin, gate=gate, action=action)
 
 
 async def session_refusal(
@@ -826,7 +1002,7 @@ async def session_refusal(
     gate: Any,
     device_guard: Any,
     remote: Callable[[], bool | None],
-) -> str | None:
+) -> Refusal | None:
     """Why an "allow" or a request that changes something is refused while Nox controls a node,
     or None (spec C §1.5). Nox does not know the PIN, so the PIN is the guard:
 
@@ -837,43 +1013,43 @@ async def session_refusal(
     3. this machine's dashboard or shell not from a remote session - a remote desktop could be
        opened from the very PC Nox controls; a core running as a service without a login
        session counts as not remote (the PIN still applies);
-    4. no PIN set: refused. Reading, "deny" and Stopp are never asked here.
+    4. no PIN set: refused. Reading, "deny" and Stopp are never asked here;
+    5. a saturated address binding (nobody can be told apart from the controlled PC) refuses
+       approvals and messages only;
+    6. `ESCAPES` - removing the node, lifting the lock, resuming - always work with the PIN
+       (`escape_refusal`), and removing from this machine's shell and dashboard without one.
 
     Talking to Nox (`chat.send`, `voice.ptt`) needs no PIN - except from the browser on the PC
     Nox controls, which could otherwise be the one typing; the remote-session check still holds
     for this machine's own dashboard and shell."""
     from nox.ipc.dispatch import conversation_request  # noqa: PLC0415
-    from nox.ipc.errors import IpcError  # noqa: PLC0415
     from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
     from nox.ipc.tokens import DEVICE_CLIENT_PREFIX  # noqa: PLC0415
 
     if not control.active():
         return None
-    if control.is_saturated():
+    if action in ESCAPES:
+        return await escape_refusal(ctx, pin, action=action, gate=gate, device_guard=device_guard)
+    talking = conversation_request(action)
+    binds = talking or action == APPROVAL
+    if binds and control.is_saturated():
         # A node's binding is full: nobody is told apart from the controlled PC any more.
         return REFUSE_SATURATED
     role = getattr(ctx, "role", "")
     if role == DEVICE_ROLE:
         device = str(getattr(ctx, "client_id", "")).removeprefix(DEVICE_CLIENT_PREFIX)
-        if control.controls_browser(device) or control.from_controlled(getattr(ctx, "peer", "")):
+        peer = getattr(ctx, "peer", "")
+        if control.controls_browser(device) or control.from_controlled(peer, saturation=binds):
             return REFUSE_LINKED
-        if conversation_request(action):
+        if talking:
             return None
-        if gate is None or not gate.is_required():
-            return REFUSE_NO_PIN
-        if device_guard is None:
-            return REFUSE_ROLE
-        try:
-            await device_guard.require(ctx, pin, action)
-        except IpcError as exc:
-            return exc.message
-        return None
+        return await _device_pin(ctx, pin, action, gate, device_guard)
     if role in LOCAL_UI_ROLES:
-        if conversation_request(action):
+        if talking:
             # Only the PIN is waived for talking, never the remote check (and talking on the
             # controlled machine itself counts as untrusted, `wire_guards`).
             return REFUSE_REMOTE if (await remote_now(remote)) is not False else None
-        if control.controls_local():
+        if control.controls_local(saturation=binds):
             # The controlled PC is this machine: its own dashboard and shell are that PC.
             return REFUSE_LINKED
         return await local_pin_refusal(ctx, pin, gate=gate, remote=remote, action=action)

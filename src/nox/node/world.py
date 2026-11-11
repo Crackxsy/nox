@@ -22,7 +22,12 @@ and the dialog on this device for high risk). On top of that:
   stop hotkey. A session is opened only by `computer.session_start` (high risk: the dialog on this
   device, every session) and ends with a stop, a lost connection or the dead-man rule. No input
   synthesis happens in this module: it calls `nox.desktop.computer_use`, one of the two files the
-  CI guard (Security Model §10) allows to synthesise input.
+  CI guard (Security Model §10) allows to synthesise input. While a session runs, the node keeps
+  a marker in its folder (`SESSION_MARKER`): every terminal command that widens what Nox may do
+  here refuses while it says a session runs - or cannot be read (`session_marker_state`), so Nox
+  cannot type `nox-node allow ...` into a terminal of the PC it controls. Terminal windows whose
+  process tree runs Nox count as Nox's own windows too (`terminal_runs_nox`): no click or key
+  goes into them.
 * **The game lock** (`GameLock`): `NodeGate` refuses mouse, keys and typing while a watched game
   or an anti-cheat service runs here or a game is in front, before anything else is looked at.
   `game.input.send` stays a hard prohibition.
@@ -34,13 +39,16 @@ and the dialog on this device for high risk). On top of that:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
+import json
 import os
 import re
 import secrets
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from dataclasses import dataclass, field
@@ -71,8 +79,73 @@ CAPTURE_NOTICE = {
     "screen": "Nox nimmt gerade ein Bildschirmfoto auf (vom Core angefragt).",
     "camera": "Nox nimmt gerade ein Kamerabild auf (vom Core angefragt).",
 }
+CAPTURE_NOTICE_EN = {
+    "screen": "Nox is taking a screenshot now (asked for by the Nox at home).",
+    "camera": "Nox is taking a camera picture now (asked for by the Nox at home).",
+}
 COMPUTER_NOTICE_ON = "Nox steuert jetzt Maus und Tastatur auf diesem Gerät. {0} beendet sofort."
 COMPUTER_NOTICE_OFF = "Nox steuert Maus und Tastatur nicht mehr."
+COMPUTER_NOTICE_ON_EN = "Nox is now controlling mouse and keyboard on this device. {0} stops it."
+COMPUTER_NOTICE_OFF_EN = "Nox no longer controls mouse and keyboard."
+#: In the node's folder while a computer-use session runs here (`World.mark_session`).
+SESSION_MARKER = "computer-session.json"
+
+
+def _german() -> bool:
+    from nox.node.cli_text import language  # noqa: PLC0415
+
+    return language() == "de"
+
+
+def capture_notice(kind: str) -> str:
+    return (CAPTURE_NOTICE if _german() else CAPTURE_NOTICE_EN)[kind]
+
+
+def computer_notice(active: bool, stop_hotkey: str) -> str:
+    if _german():
+        return COMPUTER_NOTICE_ON.format(stop_hotkey) if active else COMPUTER_NOTICE_OFF
+    return COMPUTER_NOTICE_ON_EN.format(stop_hotkey) if active else COMPUTER_NOTICE_OFF_EN
+
+
+def write_session_marker(path: Path, active: bool, *, minutes: int) -> None:
+    """The marker of a running session, or none: written before anyone is told it started,
+    removed when it ended. A marker that cannot be written leaves the old one (fail closed)."""
+    if not active:
+        with contextlib.suppress(FileNotFoundError):
+            path.unlink()
+        return
+    now = time.time()
+    record = {"since": now, "until": now + max(minutes, 1) * 60.0, "pid": os.getpid()}
+    try:
+        path.write_text(json.dumps(record), encoding="utf-8")
+    except OSError as exc:
+        log.error("node.session_marker_failed", error=type(exc).__name__)
+
+
+def session_marker_state(home: Path, *, now: float | None = None) -> str | None:
+    """`running` while the marker says a session runs, `unreadable` when it exists and cannot be
+    read (fail closed), None without one - or once the longest the session could last is over
+    (a node that crashed during a session; the next start removes the marker)."""
+    path = home / SESSION_MARKER
+    try:
+        if not path.exists():
+            return None
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "unreadable"
+    until = record.get("until") if isinstance(record, dict) else None
+    if not isinstance(until, int | float) or isinstance(until, bool):
+        return "unreadable"
+    current = time.time() if now is None else now
+    return "running" if current < float(until) else None
+
+
+def clear_session_marker(home: Path) -> None:
+    """At the start of `run`: no session outlives the node's process."""
+    with contextlib.suppress(OSError):
+        (home / SESSION_MARKER).unlink(missing_ok=True)
+
+
 #: Browser tools offered on a node: not `browser.screenshot`, which keeps a file on the device.
 NODE_BROWSER_TOOLS = (
     "browser.open",
@@ -508,6 +581,8 @@ class World:
     computer: Any = None
     #: Games the core asked this device to watch as well (`nox/games`); only ever grows.
     extra_games: set[str] = field(default_factory=set)
+    #: The session marker in the node's folder (`SESSION_MARKER`); None: none is kept.
+    marker: Path | None = None
     _background: set[asyncio.Task[None]] = field(default_factory=set)
 
     def session_report(self) -> dict[str, Any]:
@@ -521,10 +596,13 @@ class World:
             if len(self.extra_games) < 256:
                 self.extra_games.add(name.strip())
 
-    def session_changed(self, active: bool) -> None:
-        """A session started or ended here (`ComputerUse` says so through its notice)."""
+    def session_changed(self, active: bool, *, minutes: int = 120) -> None:
+        """A session started or ended here (`ComputerUse` says so through its notice): a new
+        generation, and the marker the terminal commands read."""
         self.gen += 1
         self.session_id = uuid.uuid4().hex if active else ""
+        if self.marker is not None:
+            write_session_marker(self.marker, active, minutes=minutes)
 
     def stop(self, reason: str) -> None:
         """`NodeAgent.on_stop`: end a computer-use session and close the browser."""
@@ -564,7 +642,7 @@ def _adapt(spec: ToolSpec, group: str, *, windows_only: World | None = None) -> 
 def _captures(world: World) -> list[NodeTool]:
     async def capture(kind: str, grab: Grabber | None) -> dict[str, Any]:
         try:
-            await world.notice(CAPTURE_NOTICE[kind])
+            await world.notice(capture_notice(kind))
         except Exception as exc:  # noqa: BLE001 - no visible notice, no picture
             log.warning("node.capture_notice_failed", kind=kind, error=type(exc).__name__)
             raise NodeRefusal("no_visible_indicator") from None
@@ -647,16 +725,16 @@ def _browser(world: World) -> list[NodeTool]:
 def _desktop_and_computer(world: World) -> list[NodeTool]:
     from nox.core.config.hands import ComputerUseConfig  # noqa: PLC0415
     from nox.desktop.computer_tools import register_computer_tools  # noqa: PLC0415
-    from nox.desktop.computer_use import ComputerUse  # noqa: PLC0415
+    from nox.desktop.computer_use import ComputerUse, terminal_runs_nox  # noqa: PLC0415
     from nox.desktop.install import _is_nox_process, _nox_pids  # noqa: PLC0415
     from nox.desktop.tools import register_desktop_tools  # noqa: PLC0415
 
     settings = ComputerUseConfig()
 
     def notice(active: bool, _reason: str) -> None:
-        world.session_changed(active)  # first: the report is right before anyone is told
-        text = COMPUTER_NOTICE_ON.format(settings.stop_hotkey) if active else COMPUTER_NOTICE_OFF
-        world._spawn(_quiet(world.notice(text)))
+        # First: the report and the marker are right before anyone is told.
+        world.session_changed(active, minutes=settings.session_minutes)
+        world._spawn(_quiet(world.notice(computer_notice(active, settings.stop_hotkey))))
 
     computer = ComputerUse(
         enabled=world.computer_enabled,
@@ -668,6 +746,8 @@ def _desktop_and_computer(world: World) -> list[NodeTool]:
         notice=notice,
         nox_process=_is_nox_process,
         confirmation_pending=world.dialog_open,
+        # A terminal running `nox-node` is Nox's own window here (review H2): never clicked.
+        terminal_nox=lambda pid: terminal_runs_nox(pid, is_nox=_is_nox_process),
     )
     scratch = ToolRegistry()
     # The permission side is the core's (a grant for this device); here the session is the

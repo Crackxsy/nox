@@ -193,7 +193,8 @@ def calm_call(name: str, payload: Any) -> bool:
     return calm_ui_request(name)
 
 
-#: (context, the request's `pin`, the request's name) -> why it is refused, or None.
+#: (context, the request's `pin`, the request's name) -> why it is refused, or None. The reason
+#: may carry a stable `code` (`nox.node.world_routes.Refusal`), sent as `details.sub_reason`.
 NodeGuard = Callable[[RequestContext, str | None, str], Awaitable[str | None]]
 
 
@@ -275,17 +276,18 @@ class RequestRegistry:
         if not self.is_allowed(envelope.name, ctx.role, service_patterns(ctx.services)):
             raise IpcError(ERR_PERMISSION, f"role {ctx.role!r} may not call {envelope.name!r}")
         lock = self.input_lock
+        payload = envelope.payload
+        # One rule for "calm" with the node lock below: unmuting is not calm (review H2).
         if (
             ctx.role in INPUT_ROLES
             and lock is not None
-            and not calm_ui_request(envelope.name)
+            and not calm_call(envelope.name, payload)
             and lock()
         ):
             raise IpcError(
                 ERR_PERMISSION,
                 "Nox is controlling mouse and keyboard; end it with the stop hotkey and try again",
             )
-        payload = envelope.payload
         node_guard = self.node_guard
         if (
             ctx.role in INPUT_ROLES
@@ -296,7 +298,13 @@ class RequestRegistry:
             pin = raw_pin if isinstance(raw_pin, str) else None
             refusal = await node_guard(ctx, pin, envelope.name)
             if refusal is not None:
-                raise IpcError(ERR_PERMISSION, refusal, details={"reason": "node_session"})
+                # `sub_reason`: a stable code the dashboard words itself (`world_routes.Refusal`);
+                # the message is the English fallback.
+                details = {"reason": "node_session"}
+                code = getattr(refusal, "code", "")
+                if isinstance(code, str) and code:
+                    details["sub_reason"] = code
+                raise IpcError(ERR_PERMISSION, str(refusal), details=details)
             if pin is not None and "pin" not in reg.payload_model.model_fields:
                 # The PIN was for this check only; the request itself takes none.
                 payload = {k: v for k, v in payload.items() if k != "pin"}

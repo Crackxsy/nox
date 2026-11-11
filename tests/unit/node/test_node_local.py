@@ -216,7 +216,7 @@ def test_nox_pair_node_prints_the_command_and_the_fingerprint() -> None:
         },
         language="en",
     )
-    assert 'nox node pair "nox-node://pair?h=192.168.1.20' in text
+    assert 'nox-node pair "nox-node://pair?h=192.168.1.20' in text
     assert "ABCD 2345" in text and "AB:AB:AB:AB:AB:AB:AB:AB" in text
 
 

@@ -352,7 +352,7 @@ async def test_malformed_params_count_as_a_violation(
     ws = await open_node(listener, client_context(tls, node))
     await greet(ws)
     await ws.send(
-        json.dumps({"jsonrpc": "2.0", "id": 3, "method": "security.kill", "params": {"x": 1}})
+        json.dumps({"jsonrpc": "2.0", "id": 3, "method": "security.kill", "params": {"reason": 5}})
     )
     answer = await recv_until(ws, lambda m: m.get("id") == 3)
     assert answer["error"]["code"] == -32602

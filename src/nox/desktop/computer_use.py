@@ -28,9 +28,12 @@ written out). The Win32 calls below are Nox's own.
 confirmation dialogs are in them, and a model that can click "Allow" has no permissions left.
 Before *every* event - each button down and up, each wheel turn, each key down - the window under
 the cursor (`WindowFromPoint(GetCursorPos())`) and the foreground window are checked against
-Nox's windows: its processes, its Qt window classes, and a title naming Nox (which covers the
-dashboard tab in a browser while it is the active tab). A move whose destination is a Nox window
-is refused too, and nothing at all is sent while a Nox confirmation is waiting for an answer.
+Nox's windows: its processes, its Qt window classes, a title naming Nox (which covers the
+dashboard tab in a browser while it is the active tab), and - where the caller asks for it, as a
+node does - a terminal window whose process tree runs Nox (`terminal_runs_nox`: a console host,
+Windows Terminal or a shell with `nox-node` beneath it; a tree that cannot be read counts as
+Nox's). A move whose destination is a Nox window is refused too, and nothing at all is sent while
+a Nox confirmation is waiting for an answer.
 
 That check is a race by nature (a window can appear between the check and the event), so it is
 not the guard that matters most. **A confirmation cannot be given by synthetic input:** while a
@@ -72,6 +75,7 @@ __all__ = [
     "foreground_pid",
     "parse_combo",
     "stop_hotkey_vks",
+    "terminal_runs_nox",
 ]
 
 PointerAction = Literal["move", "click", "double_click", "right_click", "scroll"]
@@ -359,6 +363,7 @@ class ComputerUse:
         clock: Callable[[], float] = time.monotonic,
         nox_process: Callable[[int], bool] | None = None,
         confirmation_pending: Callable[[], bool] = lambda: False,
+        terminal_nox: Callable[[int], bool] | None = None,
     ) -> None:
         self._enabled = enabled
         self._game_running = game_running
@@ -373,6 +378,9 @@ class ComputerUse:
         #: Whether a process id is one of Nox's (core, workers, shell) - by process, not title.
         self._nox_process = nox_process or (lambda pid: pid in self._nox_pids())
         self._confirmation_pending = confirmation_pending
+        #: Whether the window's process is a terminal with Nox running in it (a node's own
+        #: commands); None: not checked (the core's own terminals are not its windows).
+        self._terminal_nox = terminal_nox
         self._last_event: float | None = None
 
     # -- sessions ------------------------------------------------------------------------------
@@ -460,6 +468,12 @@ class ComputerUse:
         klass = str(window[2]) if len(window) > 2 else ""
         if pid and (pid in self._nox_pids() or self._nox_process(pid)):
             return True
+        if pid and self._terminal_nox is not None:
+            try:
+                if self._terminal_nox(pid):
+                    return True
+            except Exception:  # noqa: BLE001 - cannot tell: Nox's (fail closed)
+                return True
         if "nox" in title.lower():
             return True  # Nox's dialogs, and the dashboard while it is the browser's active tab
         # A Qt window whose process could not be read is treated as Nox's shell.
@@ -551,6 +565,81 @@ class ComputerUse:
             return
         for vk in reversed(pressed):
             self._sender.key(vk, up=True)
+
+
+#: Console hosts, terminal emulators and shells: a window of one of these is Nox's when Nox runs
+#: beneath it (`terminal_runs_nox`).
+TERMINAL_HOSTS: frozenset[str] = frozenset(
+    {
+        "conhost.exe",
+        "openconsole.exe",
+        "windowsterminal.exe",
+        "wt.exe",
+        "cmd.exe",
+        "powershell.exe",
+        "pwsh.exe",
+        "powershell_ise.exe",
+        "mintty.exe",
+        "alacritty.exe",
+        "wezterm-gui.exe",
+        "bash.exe",
+        "wsl.exe",
+    }
+)
+
+
+def _runs_nox(process: Any, is_nox: Callable[[int], bool]) -> bool:
+    """Whether one process is Nox: by `is_nox`, by its name, or by its command line."""
+    if is_nox(int(process.pid)):
+        return True
+    name = str(process.name()).lower()
+    if name.startswith("nox"):
+        return True
+    # `nox ...`, `nox-node.cmd`, and the installed node's launcher (`start_node.pyw --cli node`).
+    return any(
+        "nox" in str(part).lower() or "start_node" in str(part).lower()
+        for part in process.cmdline()
+    )
+
+
+def terminal_runs_nox(pid: int, *, is_nox: Callable[[int], bool]) -> bool:
+    """Whether `pid` is a terminal window's process (`TERMINAL_HOSTS`) with Nox running in it -
+    `nox-node allow` typed into PowerShell, say. Fail closed: a terminal whose process tree cannot
+    be read counts as running Nox. A console host's shell is its parent, so that tree is read too.
+    Any other process is no terminal (False)."""
+    if not pid:
+        return False
+    import psutil  # noqa: PLC0415
+
+    try:
+        process = psutil.Process(pid)
+        name = process.name().lower()
+    except psutil.NoSuchProcess:
+        return False  # the window is gone
+    except Exception:  # noqa: BLE001 - what it is cannot be read: Nox's (fail closed)
+        return True
+    if name not in TERMINAL_HOSTS:
+        return False
+    try:
+        roots = [process]
+        if name in ("conhost.exe", "openconsole.exe"):
+            parent = process.parent()
+            if parent is not None:
+                roots.append(parent)
+        for root in roots:
+            if _runs_nox(root, is_nox):
+                return True
+            for child in root.children(recursive=True):
+                try:
+                    if _runs_nox(child, is_nox):
+                        return True
+                except psutil.NoSuchProcess:
+                    continue
+    except psutil.NoSuchProcess:
+        return False
+    except Exception:  # noqa: BLE001 - a tree that cannot be read: Nox's (fail closed)
+        return True
+    return False
 
 
 def foreground_pid() -> int:

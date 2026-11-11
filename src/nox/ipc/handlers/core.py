@@ -347,7 +347,12 @@ class CoreHandlers:
             # (`nox.node.world_routes.approval_refusal`). A "deny" always counts.
             refusal = await node_guard(ctx, p.pin)
             if refusal is not None:
-                return {"ok": False, "reason": refusal}
+                # `sub_reason`: the stable code the dashboard words itself (`Refusal.code`).
+                answer: dict[str, Any] = {"ok": False, "reason": str(refusal)}
+                code = getattr(refusal, "code", "")
+                if isinstance(code, str) and code:
+                    answer["sub_reason"] = code
+                return answer
         engine = self._core.security.engine
         if ctx.role == DEVICE_ROLE and p.decision is Decision.ALLOW:
             request = engine.pending_request(p.grant_id)
