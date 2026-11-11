@@ -147,9 +147,15 @@ def journey(
         locale="de-DE" if lang == "de" else "en-US",
         color_scheme="light",
         reduced_motion="reduce",
-        permissions=["clipboard-read", "clipboard-write"],
     )
     context.add_init_script("window.localStorage.setItem('nox.firstRun', 'done')")
+    # The page is served over plain http (not a secure context): no real clipboard there, so a
+    # stand-in that keeps what was written.
+    context.add_init_script(
+        "window.__copied = '';"
+        "Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {"
+        " writeText: (t) => { window.__copied = t; return Promise.resolve(); } } });"
+    )
     page = context.new_page()
     stub = JourneyStub()
     _install(page, stub)
@@ -193,7 +199,7 @@ def test_pair_a_pc_switch_on_commands_and_answer_while_nox_controls_the_mouse(  
     link = add.get_by_text(re.compile(r"^nox-node://pair\?"))
     expect(link).to_be_visible()
     add.get_by_role("button", name=w["copy"]).click()
-    copied = page.evaluate("() => navigator.clipboard.readText()")
+    copied = page.evaluate("() => window.__copied")
     assert copied.startswith("nox-node://pair?") and '"' not in copied  # the link alone
     journey.shot("02-code")
     journey.axe("code")

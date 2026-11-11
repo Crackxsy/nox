@@ -3877,6 +3877,8 @@ details > summary:hover {
 .node-sheet .select,
 .node-defaults .select {
   min-height: var(--hit);
+  max-width: 100%;
+  min-width: 0;
 }
 
 /* "Antwortet Laptop nicht mehr?": the lock release, folded away until it is needed. */

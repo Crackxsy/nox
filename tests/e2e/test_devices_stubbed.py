@@ -194,7 +194,7 @@ def test_computers_and_what_nox_may_do_there(journey: Journey) -> None:  # noqa:
     ).to_be_visible()
     expect(section.get_by_text("Verbunden", exact=True)).to_be_visible()
     expect(section.get_by_text(re.compile(r"^Offline seit ")).first).to_be_visible()
-    expect(section.get_by_text(LONG_NAME, exact=True)).to_be_visible()
+    expect(section.locator("p.device-name", has_text=LONG_NAME)).to_be_visible()
     journey.shot("01-computer")
     journey.axe("computer")
     journey.no_sideways_scroll()
