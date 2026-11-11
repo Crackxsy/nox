@@ -17,7 +17,7 @@ from nox.node.manifest import load_manifest
 from nox.node.obs import OBS_PANIC_FILE, OBS_SECRET
 from nox.node.overlay import overlay_url
 from nox.node.satellite_settings import SATELLITES_FILE, SettingsFile
-from nox.node.voice import MUTE_FILE, PTT_FILE, STATE_FILE
+from nox.node.voice import MUTE_FILE, PTT_FILE, STATE_FILE, listening_mode
 from nox.security.model import SecretStore
 
 __all__ = [
@@ -57,7 +57,8 @@ def voice_status(home: NodeHome) -> list[str]:
     on = bool(manifest.groups.get("voice"))
     lines = [
         f"Voice:       {'allowed on this device' if on else 'off (nox node allow voice)'}",
-        f"Mode:        {settings.mode.replace('_', ' ')}",
+        f"Mode:        {listening_mode(settings).replace('_', ' ')}"
+        + (" (auto)" if settings.mode == "auto" else ""),
         f"Muted here:  {'yes' if (home.path / MUTE_FILE).exists() else 'no'}",
         f"Running:     {'yes' if state.get('running') else 'no'}",
         f"Microphone:  {'open' if state.get('mic_open') else 'closed'}",

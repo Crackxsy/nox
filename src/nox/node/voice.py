@@ -4,8 +4,10 @@ With the group `voice` enabled on this device (`nox node allow voice`, off by de
 switched on for it on the core as well, where it starts switched off (`nox.node.policy`,
 `CORE_OPT_IN`) - the node runs the core's own voice pipeline (`nox.voice.pipeline`) here:
 
-* **Listening** - push-to-talk (the default: the microphone is open only while it is held) or the
-  wake word (the microphone stays open behind the wake-word gate). Wake word, voice activity and
+* **Listening** - push-to-talk (the microphone is open only while it is held) or the wake word
+  (the microphone stays open behind the wake-word gate). `mode: auto`, the default, is
+  push-to-talk on a device with a screen (the tray's key, a terminal) and the wake word on one
+  without (a headless Pi has no key to hold; `listening_mode`). Wake word, voice activity and
   speech recognition (faster-whisper; `tiny` on a Pi, `base` elsewhere unless set) run on this
   device. Only the recognised **text** goes to the core (`nox/voice/heard`); audio never leaves
   the device and is never written anywhere - it lives in memory for one utterance.
@@ -25,6 +27,10 @@ switched on for it on the core as well, where it starts switched off (`nox.node.
   starts and when a question was taken.
 * **"Nox, Notaus"** never reaches the core as text: it stops this node at once (as
   `nox node stop`), which stops Nox everywhere; only this device resumes.
+
+**Models** come only from `nox node voice setup` (asks first, downloads into the node's folder):
+the node loads faster-whisper with `local_files_only` and never fetches a model by itself.
+`voice.say` is offered only where the voice libraries are installed (`voice_support`).
 
 No transcript is stored on this device; the node's audit records that something was heard and
 how long it was, never what. On the core the turn follows its privacy mode like a turn spoken
@@ -58,6 +64,9 @@ log = get_logger(__name__)
 
 __all__ = [
     "MUTE_FILE",
+    "listening_mode",
+    "voice_setup",
+    "voice_support",
     "PTT_FILE",
     "STATE_FILE",
     "SayArgs",
@@ -92,7 +101,8 @@ class VoiceSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["push_to_talk", "wake_word"] = "push_to_talk"
+    #: `auto`: push-to-talk with a screen, the wake word without one (`listening_mode`).
+    mode: Literal["auto", "push_to_talk", "wake_word"] = "auto"
     wake_word: str = Field(default="Nox", min_length=2, max_length=32)
     language: Literal["de", "en", "auto"] = "de"
     #: Empty: by device - `tiny` on a Raspberry Pi (arm), `base` elsewhere.
@@ -104,6 +114,36 @@ class VoiceSettings(BaseModel):
     earcon: bool = True
     #: Where the model files are; empty: `models` in the node's folder.
     models_dir: str = Field(default="", max_length=400)
+
+
+def listening_mode(
+    settings: VoiceSettings, screen: Callable[[], bool] | None = None
+) -> Literal["push_to_talk", "wake_word"]:
+    """How this device listens: the setting, or for `auto` push-to-talk where there is a screen
+    (a key to hold, a tray) and the wake word where there is none - read when asked, so a desktop
+    session that starts later counts."""
+    if settings.mode != "auto":
+        return settings.mode
+    if screen is None:
+        from nox.node.confirm import has_screen  # noqa: PLC0415
+
+        screen = has_screen
+    return "push_to_talk" if screen() else "wake_word"
+
+
+def voice_support(has_module: Callable[[str], bool] | None = None) -> str | None:
+    """Why the voice satellite cannot work on this device (a library is missing), or None."""
+    if has_module is None:
+        from nox.node.world import installed  # noqa: PLC0415
+
+        has_module = installed
+    if not has_module("sounddevice"):
+        return "the microphone and speaker need the extra `voice` (sounddevice)"
+    if not has_module("faster_whisper"):
+        return "speech recognition needs the extra `voice` (faster-whisper)"
+    if not (has_module("supertonic") or has_module("piper")):
+        return "speaking needs the extra `voice-supertonic` or `voice` (Piper)"
+    return None
 
 
 def small_device(machine: str | None = None) -> bool:
@@ -122,7 +162,9 @@ def voice_config(settings: VoiceSettings, home: Path) -> Any:
                 "model": model,
                 "language": settings.language,
                 "wake_word": settings.wake_word,
-                "listening_mode": "ptt_only" if settings.mode == "push_to_talk" else "continuous",
+                "listening_mode": "ptt_only"
+                if listening_mode(settings) == "push_to_talk"
+                else "continuous",
                 # No follow-up without the wake word on a satellite (one utterance per wake).
                 "conversation_window_s": 0.0,
             },
@@ -157,9 +199,11 @@ async def load_engines(settings: VoiceSettings, home: Path) -> VoiceEngines:
     cfg = voice_config(settings, home)
     parts = await asyncio.to_thread(build_components, cfg, service="voice")
     stt, tts = parts["stt"], parts["tts"]
+    # Never a download on its own: the models come from `nox node voice setup` (asked first).
+    stt.local_files_only = True
     await stt.load()
     tts = await load_tts(tts, cfg)
-    gate = build_wake_gate(cfg) if settings.mode == "wake_word" else None
+    gate = build_wake_gate(cfg) if listening_mode(settings) == "wake_word" else None
     return VoiceEngines(parts["audio_in"], parts["audio_out"], stt, tts, gate)
 
 
@@ -305,7 +349,7 @@ class VoiceSatellite:
                 await pipeline.push_to_talk(held)
             await pipeline.refresh_gate()
             is_open = bool(pipeline.capture_active())
-            if is_open and not self._was_open and self.settings().mode == "wake_word":
+            if is_open and not self._was_open and listening_mode(self.settings()) == "wake_word":
                 await self._beep(660.0)  # the microphone opened: heard as well as seen
             self._was_open = is_open
         self._write_state()
@@ -315,11 +359,14 @@ class VoiceSatellite:
             if self.pipeline is not None:
                 return
             settings = self.settings()
+            mode = listening_mode(settings)
             if self.engines is None:
                 try:
                     self.engines = await self.load(settings, self.home)
                 except Exception as exc:  # noqa: BLE001 - said in the state, retried later
                     self.last_error = f"engines: {type(exc).__name__}"
+                    if _models_missing(exc):
+                        self.last_error = "models missing: nox node voice setup"
                     log.warning("node.voice_engines_failed", error=self.last_error)
                     return
             from nox.voice.pipeline import DefaultVoicePipeline, PipelineConfig  # noqa: PLC0415
@@ -328,7 +375,7 @@ class VoiceSatellite:
             config = PipelineConfig(
                 wake_word=settings.wake_word,
                 language=settings.language,
-                listening_mode="ptt_only" if settings.mode == "push_to_talk" else "continuous",
+                listening_mode="ptt_only" if mode == "push_to_talk" else "continuous",
                 # Speech without the wake word (or push-to-talk) is never reported at all.
                 require_wake_word=True,
                 # No barge-in on a speaker device: what the microphone hears while this device
@@ -350,8 +397,8 @@ class VoiceSatellite:
             self._queue = asyncio.Queue()
             self._speaker = asyncio.create_task(self._speak_loop(), name="nox-node-voice-speak")
             self.last_error = ""
-            self.audit("node.voice_on", settings.mode)
-            log.info("node.voice_started", mode=settings.mode)
+            self.audit("node.voice_on", mode)
+            log.info("node.voice_started", mode=mode)
 
     async def shutdown(self) -> None:
         """Microphone closed, speech stopped, models freed."""
@@ -605,7 +652,7 @@ class VoiceSatellite:
             "mic_open": bool(pipeline is not None and pipeline.capture_active()),
             "speaking": bool(pipeline is not None and pipeline.speaking),
             "muted": self.muted(),
-            "mode": self.settings().mode,
+            "mode": listening_mode(self.settings()),
             "core_allows": self.core_capture,
             "core_reason": self.core_reason,
             "error": self.last_error,
@@ -726,8 +773,13 @@ class SayArgs(BaseModel):
     language: Literal["de", "en"] = "de"
 
 
-def voice_tools(satellite: VoiceSatellite) -> dict[str, NodeTool]:
-    """`voice.say` on this device (group `voice`)."""
+def voice_tools(
+    satellite: VoiceSatellite, *, support: Callable[[], str | None] = voice_support
+) -> dict[str, NodeTool]:
+    """`voice.say` on this device (group `voice`) - not offered where the voice libraries are
+    missing (`voice_support`), so no status ever claims it."""
+    if support() is not None:
+        return {}
 
     async def say(args: BaseModel) -> dict[str, Any]:
         assert isinstance(args, SayArgs)
@@ -752,3 +804,82 @@ def voice_tools(satellite: VoiceSatellite) -> dict[str, NodeTool]:
         precheck=precheck,  # never the wake word or a kill phrase: it would come back as one
     )
     return {tool.name: tool}
+
+
+# ---- the models: only with a yes (`nox node voice setup`) ---------------------------------------
+
+
+def _models_missing(exc: BaseException) -> bool:
+    """Whether loading failed because a model is not downloaded yet (never fetched by itself)."""
+    names = {type(e).__name__ for e in (exc, exc.__cause__, exc.__context__) if e is not None}
+    hints = ("LocalEntryNotFound", "EntryNotFound", "FileNotFound", "missing")
+    return any(hint in name for name in names for hint in hints) or "missing" in str(exc)
+
+
+def _download_whisper(model: str, target: Path) -> None:
+    """faster-whisper's own download into `target` - exactly where `WhisperModel(download_root=
+    target, local_files_only=True)` reads it from."""
+    from faster_whisper.utils import download_model  # noqa: PLC0415 - the extra `voice`
+
+    target.mkdir(parents=True, exist_ok=True)
+    download_model(model, cache_dir=str(target))
+
+
+def _download_tts(engine: str, target: Path, echo: Callable[[str], None]) -> int:
+    from nox.voice.models import download_engine  # noqa: PLC0415
+
+    return download_engine(engine, target, echo=echo)
+
+
+def voice_setup(
+    home: Path,
+    settings: VoiceSettings,
+    *,
+    confirm: Callable[[str], bool] | None,
+    echo: Callable[[str], None] = print,
+    download_whisper: Callable[[str, Path], None] = _download_whisper,
+    download_tts: Callable[[str, Path, Callable[[str], None]], int] = _download_tts,
+) -> int:
+    """`nox node voice setup`: the speech models for this device, into its own folder (or
+    `voice.models_dir`) - only after a yes (`confirm`; None: the person said `--yes`). Speech
+    recognition (Whisper, sized for this device) and the configured voice (Supertonic 3; Piper
+    voices are placed by hand). 0 when everything is there, 1 when refused or failed."""
+    from nox.voice.models import engine_models_dir  # noqa: PLC0415
+
+    support = voice_support()
+    if support is not None:
+        echo(f"Voice is not installed on this device: {support}.")
+        return 1
+    cfg = voice_config(settings, home)
+    stt_model = str(cfg.stt.model)
+    whisper_dir = engine_models_dir("faster-whisper", cfg.models_dir)
+    engine = settings.tts_engine
+    tts_dir = engine_models_dir(engine, cfg.models_dir)
+    sizes = {"tiny": "75 MB", "base": "145 MB", "small": "480 MB"}
+    voice = (
+        " and the Supertonic 3 voice (about 400 MB, OpenRAIL-M)" if engine == "supertonic" else ""
+    )
+    size = sizes.get(stt_model, "?")
+    question = (
+        f"Download speech recognition (Whisper {stt_model}, about {size}) into {whisper_dir}"
+        f"{voice} from Hugging Face? Nothing about you is sent; afterwards the node never"
+        " downloads anything by itself."
+    )
+    if confirm is not None and not confirm(question):
+        echo("Nothing was downloaded.")
+        return 1
+    try:
+        echo(f"Whisper {stt_model} -> {whisper_dir}")
+        download_whisper(stt_model, whisper_dir)
+    except Exception as exc:  # noqa: BLE001 - reported, nothing half-claimed
+        echo(f"Whisper could not be downloaded: {type(exc).__name__}: {str(exc)[:200]}")
+        return 1
+    if engine == "piper":
+        echo(f"Nox does not download Piper voices: put <voice>.onnx(.json) into {tts_dir}.")
+        return 0
+    code = download_tts(engine, tts_dir, echo)
+    if code != 0:
+        echo(f"The {engine} voice could not be downloaded (code {code}).")
+        return 1
+    echo("Done. The node uses the models from its next start of the voice satellite.")
+    return 0

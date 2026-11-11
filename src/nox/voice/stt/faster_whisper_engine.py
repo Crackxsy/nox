@@ -57,8 +57,12 @@ class FasterWhisperStt:
         cpu_threads: int = 0,
         beam_size: int = 1,
         vocabulary: tuple[str, ...] = (),
+        local_files_only: bool = False,
     ) -> None:
         self.model_size = model_size
+        #: True on a node: the model must already be in `models_dir` (`nox node voice setup`);
+        #: nothing is ever downloaded by itself there.
+        self.local_files_only = local_files_only
         self.device = device
         self.compute_type = compute_type
         self.models_dir = models_dir or str(engine_models_dir("faster-whisper"))
@@ -90,7 +94,7 @@ class FasterWhisperStt:
             compute_type=self.compute_type,
             download_root=self.models_dir,
             cpu_threads=self.cpu_threads,
-            local_files_only=False,
+            local_files_only=self.local_files_only,
         )
         self.load_time_ms = (time.perf_counter() - t0) * 1000.0
 

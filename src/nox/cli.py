@@ -542,6 +542,22 @@ def node_voice_status() -> None:
         typer.echo(line)
 
 
+@node_voice_app.command("setup")
+def node_voice_setup(
+    yes: bool = typer.Option(False, "--yes", "-y", help="do not ask before the download"),
+) -> None:
+    """Download this device's speech models into the node's folder (asks first; the node never
+    downloads a model by itself)."""
+    from nox.node.satellite_settings import SATELLITES_FILE, SettingsFile  # noqa: PLC0415
+    from nox.node.voice import voice_setup  # noqa: PLC0415
+
+    home = _node_home()
+    home.ensure()
+    settings = SettingsFile(home.path / SATELLITES_FILE).read().voice
+    confirm = None if yes else (lambda question: typer.confirm(question, default=False))
+    raise typer.Exit(voice_setup(home.path, settings, confirm=confirm, echo=typer.echo))
+
+
 @node_voice_app.command("talk")
 def node_voice_talk() -> None:
     """Push-to-talk from this terminal: speak, then press Enter (at most 25 seconds)."""
