@@ -755,9 +755,18 @@ voice satellites included (`nox.home.boundary`).
   a node refuses (`state`). `nox node stop` on the device stops it there and the core
   everywhere; only the device lifts it (`nox node resume`). A session ends when its certificate
   does.
-- **Widening needs a person at the device:** `nox node allow` only in an interactive terminal
-  and after a typed "yes" - a boundary against the core and remote tools, **not** against a local
-  process of the same user ([accepted limit](#accepted-limits-nodes); a real presence check,
+- **Widening needs a person at the device:** `nox-node allow` only in an interactive terminal
+  and after a typed "yes" (`j`/`y`) - a boundary against the core and remote tools, **not**
+  against a local process of the same user. **Not while Nox controls the PC:** the node keeps a
+  marker in its folder while a computer-use session runs, and every command that widens
+  something (`allow`, `games remove`, `voice unmute`, `obs resume`, `resume`, `update`,
+  `pair --again`) refuses while it says a session runs - or cannot be read (fail closed). The
+  session's dialog says it in plain words ("Nox steuert bis {n} min Maus und Tastatur und kann in
+  dieser Zeit alles, was du an diesem PC kannst"), and the click guard counts terminal windows
+  (console hosts, Windows Terminal, PowerShell) whose process tree runs Nox as Nox's own
+  windows. This narrows the gap, it does not close it: computer use on a node is user-level
+  control during a confirmed session, so anything the user can do with a mouse and keyboard
+  outside Nox's windows and the blocked combinations remains possible ([accepted limit](#accepted-limits-nodes); a real presence check,
   Windows Hello / UAC consent or polkit, is a later task). The confirmed manifest is recorded in the node's audit trail with an HMAC under a
   key made at pairing (OS keyring, else `manifest.key` 0600 in the node folder); the MAC covers
   the entry's place in the chain and a counter kept with the key, so an old confirmation appended
@@ -851,8 +860,8 @@ voice satellites included (`nox.home.boundary`).
   lock lifts - nothing is ever dropped while the lock holds. Memory is bounded (64 reported and
   16 connection addresses per node); a node that fills either is **saturated** for the rest of
   its lock: then nobody is told apart from the controlled PC any more - every paired device and
-  this machine's own dashboard and shell are refused approvals, changes and messages (only deny,
-  Stopp and reading work), audited once, and the dashboard says "Nox steuert ein Gerät mit sehr
+  this machine's own dashboard and shell are refused approvals and messages (deny, Stopp,
+  reading and - with the PIN - removing, releasing and resuming still work), audited once, and the dashboard says "Nox steuert ein Gerät mit sehr
   vielen Adressen - Freigaben nur nach Ende der Sitzung". "This machine" is matched against every address of every local interface,
   uncapped; an address that cannot be classified counts as this machine, and when this machine's
   addresses cannot be read at all its dashboard and shell count as the controlled PC. Fail closed
@@ -1185,7 +1194,7 @@ in the home network.
 - **Saturation and flooding.** *What:* (a) a node that fills its address binding during one lock
   (64 reported or 16 observed addresses) is *saturated*: until the lock lifts nobody can be told
   apart from the controlled PC, so every paired device and this machine's own dashboard and shell
-  are refused approvals, changes and messages, and voice from every node is refused. (b) Before
+  are refused approvals and messages, and voice from every node is refused. (b) Before
   a certificate is known, only the TLS handshake timeout (5 s) and the listen backlog bound a
   connection to the node port; after the certificate check at most 2 connections per node and
   16 in total wait for their hello. (c) The pairing endpoint shares the network listener's rate
@@ -1209,6 +1218,22 @@ in the home network.
   lock (a node still reporting a session locks again); a paired device is removed after
   repeated wrong PINs before it alone reaches the lockout; removing a node needs no PIN on the
   computer Nox runs on and ends its connection, its stops and its reports.
+
+- **A node that fakes computer use (review H1, fixed).** The lock comes only from a session
+  this core started itself (the answer to its own `computer.session_start` names the session);
+  "open" in a hello or for a session the core never started is a protocol violation - audited,
+  the connection closed, never a lock; reports of a node that does not offer computer use are
+  not read for "open"; saturation binds approvals and messages only; `node.unpair`,
+  `node.computer.release` and `security.resume` always work with the PIN (`node.unpair` from this
+  machine's shell and dashboard without one, also over SSH), `nox node release` does the same for
+  a headless core, and removing a node ends its lock, address binding and saturation at once.
+- **Computer use on a node undermines "only the device widens" (review H2, accepted).** During a
+  confirmed session Nox has user-level control of that PC; the marker, the terminal-window guard
+  and the dialog make the common paths refuse, not all of them.
+- **Remote maintenance over SSH.** `nox unpair --node` and `nox node release` work in an SSH
+  session to a headless core (they talk to the local core as its shell, with the session token
+  only the service account can read); the remote-session check does not apply to them because
+  removing narrows and the PIN is checked for releasing.
 
 **Behaviour when no PIN is set**
 

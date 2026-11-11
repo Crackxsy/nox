@@ -42,19 +42,20 @@ class GroupInfo:
 
 #: Spec C §1.4. Off by default unless it only reads or shows something harmless.
 GROUPS: dict[str, GroupInfo] = {
+    # The same words as the Devices page (`ui/dashboard/src/i18n`, `node_group_*`).
     "system": GroupInfo(True, "Systemwerte lesen", "read system values"),
     "notify": GroupInfo(True, "Hinweise zeigen", "show notices"),
     "media": GroupInfo(True, "Musik steuern", "control music"),
-    "files": GroupInfo(False, "Dateien", "files"),
+    "files": GroupInfo(False, "Dateien lesen und schreiben", "read and write files"),
     "shell": GroupInfo(False, "Befehle ausführen", "run commands"),
     "packages": GroupInfo(False, "Programme installieren", "install programs"),
     "screen": GroupInfo(False, "Bildschirm sehen", "see the screen"),
-    "camera": GroupInfo(False, "Kamera", "camera"),
-    "browser": GroupInfo(False, "Browser", "browser"),
-    "desktop": GroupInfo(False, "Fenster und Programme", "windows and programs"),
-    "computer": GroupInfo(False, "Maus und Tastatur", "mouse and keyboard"),
-    "voice": GroupInfo(False, "Sprache", "voice"),
-    "obs": GroupInfo(False, "OBS", "OBS"),
+    "camera": GroupInfo(False, "Kamera nutzen", "use the camera"),
+    "browser": GroupInfo(False, "Im Browser arbeiten", "work in the browser"),
+    "desktop": GroupInfo(False, "Fenster und Programme steuern", "control windows and programs"),
+    "computer": GroupInfo(False, "Maus und Tastatur steuern", "control mouse and keyboard"),
+    "voice": GroupInfo(False, "Zuhören und sprechen", "listen and speak"),
+    "obs": GroupInfo(False, "OBS steuern", "control OBS"),
 }
 
 RiskName = Literal["read", "low", "medium", "high"]

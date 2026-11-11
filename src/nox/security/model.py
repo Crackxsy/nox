@@ -59,6 +59,10 @@ class PermissionRequest(BaseModel):
     #: The node the call runs on (`nox.node.router`), "" for this core. Its own field - never
     #: read from `target`, which can hold free text (a window title, a purpose).
     device: str = Field(default="", pattern=r"^(|[0-9a-f]{32})$")
+    #: The device's name for the confirmation (`CallScope.device_name`, set by the router from
+    #: its registry): a node's label, or this core's name while nodes are paired. Shown only:
+    #: never matched, never serialised with the request.
+    device_name: str = Field(default="", max_length=96, exclude=True, repr=False)
 
 
 class PermissionResult(BaseModel):

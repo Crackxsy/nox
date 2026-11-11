@@ -438,7 +438,7 @@ class NodeUpdater:
             return _refused(
                 "failed_here",
                 f"{name} failed to start here; it is tried again in {BAD_FOR_DAYS} days or "
-                "with `nox node update --yes`",
+                f"with `{_node_command('update --yes')}`",
                 name,
             )
         kind: Kind = "patch"
@@ -471,8 +471,8 @@ class NodeUpdater:
         if reasons:
             return result(
                 "needs_confirmation",
-                f"Nox {name} is available ({'; '.join(reasons)}): run `nox node update` on "
-                "this device.",
+                f"Nox {name} is available ({'; '.join(reasons)}): run "
+                f"`{_node_command('update')}` on this device.",
             )
         return result("available", f"Nox {name} is available.")
 
@@ -605,3 +605,10 @@ class NodeUpdater:
     def restart_needed(self, running: str = __version__) -> bool:
         """A version other than the running one waits to start (installed by `nox node update`)."""
         return self.state().pending not in (None, running)
+
+
+def _node_command(rest: str) -> str:
+    """The node's command as this device needs it (`nox.node.cli_text.command`)."""
+    from nox.node.cli_text import command  # noqa: PLC0415
+
+    return command(rest)

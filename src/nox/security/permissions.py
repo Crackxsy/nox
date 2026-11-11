@@ -1084,6 +1084,10 @@ class DefaultPermissionEngine:
                 self._session_grant_ttl.total_seconds() if self._may_remember(pending) else 0.0
             ),
             voice_satellite=self._satellite_of(request.conversation),
+            # Structured, from the router's registry - the dashboard names the device from these
+            # two fields only, never from the target text (which a tool argument can shape).
+            device_id=request.device or ("core" if request.device_name else ""),
+            device_name=request.device_name,
         )
 
     def _satellite_of(self, conversation: str) -> str:

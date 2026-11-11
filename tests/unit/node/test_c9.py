@@ -1229,7 +1229,7 @@ async def test_voice_from_the_pc_nox_controls_is_refused() -> None:
     hub, _ = _hub(sessions=[session])
     hub.controlled = control.locked
     assert (await hub.handle(session, p.M_VOICE_HEARD, _heard()))["accepted"] is True
-    control.observe(PI, {"gen": 5, "active": True, "id": "ab" * 16})  # a session runs there
+    control.answered(PI, {"gen": 5, "active": True, "id": "ab" * 16})  # a session runs there
     assert (await hub.handle(session, p.M_VOICE_HEARD, _heard()))["reason"] == "controlled_here"
     await hub.push_gates()
     gate = [params for m, params in session.client.sent if m == p.M_VOICE_GATE][-1]
@@ -1400,7 +1400,7 @@ def _session_control() -> Any:
     from nox.node.world_routes import NodeControl
 
     control = NodeControl(None, lambda _payload: None)
-    control.observe(PC, {"gen": 2, "active": True, "id": "ab" * 16})  # Nox controls the PC
+    control.answered(PC, {"gen": 2, "active": True, "id": "ab" * 16})  # Nox controls the PC
     return control
 
 

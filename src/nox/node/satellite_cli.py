@@ -1,8 +1,10 @@
-"""`nox node voice | obs | overlay` - the satellites' own terminal commands (C9).
+"""`nox-node voice | obs | overlay` - the satellites' own terminal commands (C9).
 
 All of them act on this device only, as the logged-in user: the microphone's mute switch (only
 this device unmutes), push-to-talk from a terminal, the OBS password in this device's keyring,
-lifting the OBS panic latch, and the overlay URL for an OBS browser source here.
+lifting the OBS panic latch, and the overlay URL for an OBS browser source here. Unmuting and
+lifting the latch widen what Nox may do: both refuse while Nox controls mouse and keyboard here
+(`nox.node.cli.session_refusal`). The words follow `nox.node.cli_text`.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from nox.node.cli_text import command, t
 from nox.node.home import NodeHome
 from nox.node.manifest import load_manifest
 from nox.node.obs import OBS_PANIC_FILE, OBS_SECRET
@@ -37,14 +40,23 @@ class SatelliteCliError(RuntimeError):
     """A message for the person at the terminal."""
 
 
+def _refuse_during_session(home: NodeHome) -> None:
+    from nox.node.cli import session_refusal  # noqa: PLC0415 - the heavy module, only here
+
+    refusal = session_refusal(home)
+    if refusal is not None:
+        raise SatelliteCliError(refusal)
+
+
 def voice_mute(home: NodeHome, muted: bool) -> str:
     home.ensure()
     marker = home.path / MUTE_FILE
     if muted:
         marker.write_text("muted on this device\n", encoding="utf-8")
-        return "Microphone muted on this device. Unmute here with: nox node voice unmute"
+        return t("voice_muted", unmute=command("voice unmute"))
+    _refuse_during_session(home)
     marker.unlink(missing_ok=True)
-    return "Microphone unmuted on this device."
+    return t("voice_unmuted")
 
 
 def voice_status(home: NodeHome) -> list[str]:
@@ -55,17 +67,24 @@ def voice_status(home: NodeHome) -> list[str]:
         state = {}
     settings = SettingsFile(home.path / SATELLITES_FILE).read().voice
     on = bool(manifest.groups.get("voice"))
+
+    def yes_no(value: object) -> str:
+        return t("yes") if value else t("no")
+
     lines = [
-        f"Voice:       {'allowed on this device' if on else 'off (nox node allow voice)'}",
-        f"Mode:        {settings.mode.replace('_', ' ')}",
-        f"Muted here:  {'yes' if (home.path / MUTE_FILE).exists() else 'no'}",
-        f"Running:     {'yes' if state.get('running') else 'no'}",
-        f"Microphone:  {'open' if state.get('mic_open') else 'closed'}",
+        t(
+            "voice_line",
+            value=t("voice_on") if on else t("voice_off", allow=command("allow voice")),
+        ),
+        t("voice_mode", value=settings.mode.replace("_", " ")),
+        t("voice_muted_here", value=yes_no((home.path / MUTE_FILE).exists())),
+        t("voice_running", value=yes_no(state.get("running"))),
+        t("voice_mic", value=t("mic_open") if state.get("mic_open") else t("mic_closed")),
     ]
     if state and not state.get("core_allows"):
-        lines.append(f"Core says:   no ({str(state.get('core_reason', ''))[:80]})")
+        lines.append(t("voice_core", value=str(state.get("core_reason", ""))[:80]))
     if state.get("error"):
-        lines.append(f"Problem:     {str(state['error'])[:80]}")
+        lines.append(t("voice_problem", value=str(state["error"])[:80]))
     return lines
 
 
@@ -83,33 +102,39 @@ def talk(
         wait(max_s)
     finally:
         marker.unlink(missing_ok=True)
-    return "Released."
+    return t("released")
 
 
 def obs_password(secrets: SecretStore | None, password: str | None, *, clear: bool = False) -> str:
     if secrets is None:
-        raise SatelliteCliError("No keyring on this device: the OBS password cannot be stored.")
+        raise SatelliteCliError(t("obs_no_keyring"))
     if clear:
         secrets.delete(OBS_SECRET)
-        return "OBS password removed from this device's keyring."
+        return t("obs_cleared")
     if not password:
-        raise SatelliteCliError("No password given; nothing was stored.")
+        raise SatelliteCliError(t("obs_no_password"))
     secrets.set(OBS_SECRET, password)
-    return "OBS password stored in this device's keyring (it never goes to Nox's core)."
+    return t("obs_stored")
 
 
 def obs_resume(home: NodeHome) -> str:
-    """Lift the panic latch: OBS on this device takes changes again."""
+    """Lift the panic latch: OBS on this device takes changes again - never while Nox controls
+    mouse and keyboard here."""
+    _refuse_during_session(home)
     (home.path / OBS_PANIC_FILE).unlink(missing_ok=True)
-    return "OBS takes changes from Nox again (the panic latch is lifted on this device)."
+    return t("obs_resumed")
 
 
 def overlay_line(home: NodeHome, *, variant: str = "") -> str:
     identity = home.load_identity()
     if identity is None:
-        raise SatelliteCliError("This device is not paired yet: nox node pair <link>")
+        raise SatelliteCliError(t("not_paired", pair=command('pair "<link>"')))
     manifest = load_manifest(home.manifest_file)
     port = SettingsFile(home.path / SATELLITES_FILE).read().overlay.port
     url = overlay_url(port, identity.node_id, variant=variant)
-    note = "" if manifest.groups.get("obs") else "\n(Needs the group obs: nox node allow obs)"
+    note = (
+        ""
+        if manifest.groups.get("obs")
+        else "\n" + t("overlay_needs_obs", allow=command("allow obs"))
+    )
     return f"{url}{note}"
