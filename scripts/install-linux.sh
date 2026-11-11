@@ -549,6 +549,9 @@ define node_notify_missing \
 define node_audio_on \
   'Der Knoten darf die Soundkarte benutzen (Gruppe audio, /dev/snd): %s' \
   'The node may use the sound card (group audio, /dev/snd): %s'
+define node_portaudio_failed \
+  'libportaudio2 ließ sich nicht installieren; ohne sie kann der Knoten nicht hören oder sprechen.' \
+  'libportaudio2 could not be installed; without it the node can neither listen nor speak.'
 define node_audio_off \
   'Der Knoten benutzt die Soundkarte nicht mehr.' \
   'The node no longer uses the sound card.'
@@ -1026,6 +1029,11 @@ node_write_devices() {
   case "$NODE_AUDIO" in
     on)
       getent group audio >/dev/null 2>&1 || fail "$(msg node_audio_group)"
+      # sounddevice needs the system's PortAudio library (root installs it for a headless node).
+      if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive timeout 600 apt-get -o DPkg::Lock::Timeout=300 install -y -qq libportaudio2 >/dev/null \
+          || note "$(msg node_portaudio_failed)"
+      fi
       install -d -m 0755 "$dir"
       {
         printf '# Written by install-linux.sh --node --headless --with-audio (docs/NODES.md); removed\n'

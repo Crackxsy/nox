@@ -134,16 +134,36 @@ def listening_mode(
 def voice_support(has_module: Callable[[str], bool] | None = None) -> str | None:
     """Why the voice satellite cannot work on this device (a library is missing), or None."""
     if has_module is None:
-        from nox.node.world import installed  # noqa: PLC0415
-
-        has_module = installed
+        has_module = installed_module()
     if not has_module("sounddevice"):
         return "the microphone and speaker need the extra `voice` (sounddevice)"
+    if has_module is installed_module() and not _portaudio_there():
+        return (
+            "the microphone and speaker need the PortAudio library "
+            "(Linux: sudo apt install libportaudio2)"
+        )
     if not has_module("faster_whisper"):
         return "speech recognition needs the extra `voice` (faster-whisper)"
     if not (has_module("supertonic") or has_module("piper")):
         return "speaking needs the extra `voice-supertonic` or `voice` (Piper)"
     return None
+
+
+def installed_module() -> Callable[[str], bool]:
+    from nox.node.world import installed  # noqa: PLC0415
+
+    return installed
+
+
+def _portaudio_there() -> bool:
+    """sounddevice imports only with the system's PortAudio library behind it."""
+    try:
+        import sounddevice  # noqa: F401, PLC0415
+    except OSError:
+        return False
+    except ImportError:
+        return True  # not installed: said by the check before
+    return True
 
 
 def small_device(machine: str | None = None) -> bool:
