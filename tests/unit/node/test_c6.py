@@ -228,7 +228,7 @@ async def test_a_stop_ends_the_session_on_the_node() -> None:
     assert answer["ok"] is False and world.session_report()["active"] is False
     assert seen["sender"].events == []
     await asyncio.sleep(0)  # the notices are shown in the background
-    assert any("Maus und Tastatur" in n for n in seen["notices"])
+    assert any("mouse and keyboard" in n for n in seen["notices"])
 
 
 async def test_desktop_and_computer_are_windows_only() -> None:
@@ -256,7 +256,7 @@ def test_enabling_computer_needs_windows_and_a_second_yes(
 
     home = NodeHome(tmp_path / "node")
     monkeypatch.setattr(cli, "computer_supported", lambda: False)
-    with pytest.raises(cli.NodeCliError, match="Windows only"):
+    with pytest.raises(cli.NodeCliError, match="not available on this device"):
         cli.allow(
             home, "computer", True, say=print, interactive=lambda: True, confirm=lambda _p: True
         )
@@ -279,7 +279,7 @@ async def test_a_capture_shows_a_notice_first_and_keeps_nothing() -> None:
     world, seen = _world()
     tools = world_tools(world)
     result = await tools["camera.snapshot"].handler(tools["camera.snapshot"].args())
-    assert seen["notices"] == ["Nox nimmt gerade ein Kamerabild auf (vom Core angefragt)."]
+    assert seen["notices"] == ["Nox is taking a camera picture now (asked for by the Nox at home)."]
     assert result["_blob"] == PNG and result["sha256"] == hashlib.sha256(PNG).hexdigest()
 
 
@@ -581,7 +581,7 @@ async def test_disconnected_or_silent_nodes_keep_the_lock_for_the_longest_sessio
 ) -> None:
     now = {"t": 1000.0}
     control = NodeControl(None, lambda _n: None, clock=lambda: now["t"])
-    control.observe(LAPTOP, _report(2, True))
+    control.answered(LAPTOP, _report(2, True))
     now["t"] += 3600  # offline for an hour: no report, still locked
     assert control.active()
     now["t"] += 3 * 3600  # past the longest session since its last word
@@ -603,6 +603,7 @@ async def test_a_stop_lifts_the_lock_only_through_the_nodes_report() -> None:
     pongs: list[tuple[str, Any]] = []
     notices: list[dict[str, Any]] = []
     control = NodeControl(None, notices.append, reports=lambda: list(pongs))
+    control.answered(LAPTOP, _report(2, True))  # the answer to this core's own start
     pongs.append((LAPTOP, _report(2, True)))
     assert control.active() and notices[-1]["active"]
     pongs.clear()  # the kill switch went out; the node has not answered yet
@@ -732,8 +733,9 @@ def test_session_reports_are_read_strictly() -> None:
         {"gen": "1", "active": True},
         {"gen": -1, "active": False},
         {"gen": 1, "active": True, "id": "../x"},
-        {"gen": 1, "active": True, "more": 1},
     ):
         with pytest.raises(ValueError):
             SessionReport.model_validate(bad)
+    # A field of a newer protocol is ignored, the known ones stay strict (review K1).
+    assert SessionReport.model_validate({"gen": 1, "active": False, "more": 1}).gen == 1
     assert "session" in NodeHello.model_fields

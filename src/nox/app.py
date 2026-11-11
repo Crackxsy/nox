@@ -225,6 +225,7 @@ class NoxCore:
         await self._restore_state()
         await self._build_security()
         await self._build_ipc()
+        self._reclaim_on_nox_os()
         self._build_tools_and_plugins()
         self._build_models()
         await self._build_health()
@@ -579,6 +580,13 @@ class NoxCore:
     def _start_voice_worker(self) -> None:
         if self.voice_enabled:
             self.workers.spawn("voice")
+
+    def _reclaim_on_nox_os(self) -> None:
+        """Nox-OS only: if root forgot the owner (a reclaim marker on the card), every pairing,
+        token and grant goes before any extension can let anyone in (`nox.noxos.claim`)."""
+        from nox.noxos.claim import reclaim_on_nox_os  # noqa: PLC0415 - Nox-OS only
+
+        reclaim_on_nox_os(self)
 
     async def _install_extensions(self) -> None:
         if not self.auto_extensions:

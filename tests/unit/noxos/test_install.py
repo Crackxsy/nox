@@ -462,3 +462,25 @@ async def test_passphrase_requests_need_the_pin_too(tmp_path: Path, name: str) -
     error = await refused(core, name, payload, "device")
     assert error.code == ERR_PERMISSION
     assert helper.passphrase == PASS
+
+
+async def test_claim_status_is_read_only_and_says_where_there_is_no_claim(tmp_path: Path) -> None:
+    core, helper = make_core(tmp_path)
+    answer = await call(core, "noxos.claim.status", {})
+    assert answer == {
+        "available": False,
+        "claimed": False,
+        "setup_mode": False,
+        "seconds_left": None,
+    }
+
+    class Gate:
+        def required(self) -> bool:
+            return True
+
+    core.noxos_claim = SimpleNamespace(gate=Gate())
+    helper.setup_mode = True
+    answer = await call(core, "noxos.claim.status", {}, role="device")
+    assert answer["available"] is True and answer["claimed"] is False
+    assert answer["setup_mode"] is True
+    assert helper.calls[-1] == ["status"]  # only ever asks; changes nothing

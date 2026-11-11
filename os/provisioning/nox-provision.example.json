@@ -1,0 +1,14 @@
+{
+  "$schema": "./nox-provision.schema.json",
+  "v": 1,
+  "hostname": "nox",
+  "timezone": "Europe/Berlin",
+  "locale": "de_DE",
+  "country": "DE",
+  "wifi": {
+    "ssid": "Springfield-WLAN",
+    "psk": "example-wifi-password-not-real"
+  },
+  "claim_hash": "sha256:3c0408335e3462c03e744dee849ab8f767a84875c8cb44f2db7747dd26dec745",
+  "hotspot_psk": "example-setup-password"
+}

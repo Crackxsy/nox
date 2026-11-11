@@ -6,8 +6,12 @@ one WebSocket. The core is an MCP *client* of the node (`tools/list`, `tools/cal
 send only the handful of methods in `NODE_TO_CORE` - a node cannot chat, read memory, answer a
 permission prompt or reach another node, because no such method exists on this channel.
 
-Every model here forbids unknown fields and bounds every string: what a node sends is untrusted
-until it was validated, and a frame larger than `MAX_FRAME_BYTES` ends the connection.
+Every model here bounds every string and every list: what a node sends is untrusted until it was
+validated, and a frame larger than `MAX_FRAME_BYTES` ends the connection. **Unknown fields** in a
+message from the other side are ignored (`_Peer`, `extra="ignore"`): a peer of the next protocol
+may add a field without breaking this one, and the fields this release knows keep their strict
+types. Only what is read from this machine's own files and what a receipt signs (`NoxCallMeta`,
+`PairLink`) forbids unknown fields (`_Strict`): there an unknown field is never harmless.
 
 Pairing link (shown as a QR code on a trusted core session):
 `nox-node://pair?h=<host>&p=<port>&c=<code>&fp=<SHA-256 of the authority, 64 hex digits>`. The
@@ -40,6 +44,7 @@ __all__ = [
     "ConfirmResult",
     "Killed",
     "NodeHello",
+    "NodeHelloHead",
     "NodePairRequest",
     "NodePairResponse",
     "NoxCallMeta",
@@ -232,23 +237,44 @@ RiskName = Literal["read", "low", "medium", "high", "critical"]
 
 
 class _Strict(BaseModel):
+    """Local files and receipt-signed content: an unknown field is refused."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class SessionReport(_Strict):
+class _Peer(BaseModel):
+    """A message from the other side of the channel: unknown fields are ignored (a newer peer may
+    add one), every known field keeps its strict type and bound."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+
+#: A capability one side names in its hello (`features`): a short lower-case word.
+_Feature = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,31}$")]
+
+
+class SessionReport(_Peer):
     """The node's own truth about computer use on it, in every answer, pong and hello: the
     session generation (strictly increasing over the node's runs), whether a session is open
-    now, and its id. The core derives its approval lock from the highest generation it saw
-    (`nox.node.world_routes.NodeControl`). Strict: "no" is not a boolean here."""
+    now, and its id. The core derives its approval lock only from sessions it started itself
+    (`nox.node.world_routes.NodeControl`). Strict types: "no" is not a boolean here."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     gen: int = Field(ge=0, le=2**62)
     active: bool
     id: str = Field(default="", max_length=64, pattern=r"^[0-9a-f]{0,64}$")
 
 
-class NodeHello(_Strict):
+class NodeHelloHead(_Peer):
+    """The least of a hello: enough to answer a node of another protocol `compatible: false`
+    instead of dropping it when the rest of its hello is not what this release expects."""
+
+    node_protocol: int = Field(ge=0, le=1000)
+    protocolVersion: str = Field(default="", max_length=32)  # noqa: N815 - MCP's field name
+
+
+class NodeHello(_Peer):
     """`initialize` from the node: who it is and what it offers (by hash; the list comes later)."""
 
     protocolVersion: str = Field(max_length=32)  # noqa: N815 - MCP's field name
@@ -268,6 +294,9 @@ class NodeHello(_Strict):
     addresses: list[Annotated[str, StringConstraints(max_length=64)]] = Field(
         default_factory=list, max_length=16
     )
+    #: What this node understands beyond the base protocol (`FEATURES` on the core's side). The
+    #: core only reads it; an unknown word is no error.
+    features: list[_Feature] = Field(default_factory=list, max_length=16)
 
 
 class NoxCallMeta(_Strict):
@@ -290,7 +319,7 @@ class NoxCallMeta(_Strict):
     issued_at: float = Field(default=0.0, ge=0)
 
 
-class Ping(_Strict):
+class Ping(_Peer):
     seq: int = Field(ge=0)
     ts: float = Field(ge=0)
     #: In a node's `nox/pong`: why it refuses everything right now ("" = it does not).
@@ -303,7 +332,7 @@ class Ping(_Strict):
     )
 
 
-class GamesAdd(_Strict):
+class GamesAdd(_Peer):
     """`nox/games`: the core's watched games, added to the node's own list."""
 
     add: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 _.+()\-]{0,63}$")]] = Field(
@@ -311,26 +340,26 @@ class GamesAdd(_Strict):
     )
 
 
-class Killed(_Strict):
+class Killed(_Peer):
     """The node's answer to `nox/kill`: the calls it stopped."""
 
     call_ids: list[_Id] = Field(default_factory=list, max_length=256)
 
 
-class ConfirmResult(_Strict):
+class ConfirmResult(_Peer):
     """The outcome of a confirmation shown on the node itself."""
 
     call_id: _Id
     decision: Literal["allow", "deny", "timeout"]
 
 
-class SecurityKill(_Strict):
+class SecurityKill(_Peer):
     """A stop pressed on the node. Always honoured: stopping is always safe (DoS accepted)."""
 
     reason: str = Field(default="", max_length=200)
 
 
-class Blob(_Strict):
+class Blob(_Peer):
     """One chunk of a large result; `data` is base64."""
 
     call_id: _Id
@@ -339,7 +368,7 @@ class Blob(_Strict):
     data: str = Field(max_length=(BLOB_CHUNK_BYTES * 4) // 3 + 8)
 
 
-class RenewRequest(_Strict):
+class RenewRequest(_Peer):
     """`nox/renew`: a certificate request for the key this node already holds. Only the key is
     used (`nox.lan.tls.issue_client_certificate`); another key is refused."""
 
@@ -357,7 +386,7 @@ MAX_SAY_CHARS = 600
 Language = Literal["de", "en"]
 
 
-class VoiceHeard(_Strict):
+class VoiceHeard(_Peer):
     """`nox/voice/heard`: one utterance the node's voice satellite recognised, as text."""
 
     turn_id: _TurnId
@@ -365,18 +394,18 @@ class VoiceHeard(_Strict):
     language: Language = "de"
 
 
-class VoiceLevel(_Strict):
+class VoiceLevel(_Peer):
     """`nox/voice/level`: the loudness of the node's own speech (RMS 0..1), never the words."""
 
     level: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     turn_id: _OptionalTurn = ""
 
 
-class OverlayCredentialRequest(_Strict):
+class OverlayCredentialRequest(_Peer):
     """`nox/overlay/credential`: nothing to say - the node is who the credential is for."""
 
 
-class VoiceSay(_Strict):
+class VoiceSay(_Peer):
     """`nox/voice/say`: one sentence of the answer to the node's own utterance `turn_id`."""
 
     turn_id: _TurnId
@@ -387,22 +416,22 @@ class VoiceSay(_Strict):
     last: bool = False
 
 
-class VoiceCancel(_Strict):
+class VoiceCancel(_Peer):
     turn_id: _OptionalTurn = ""
 
 
-class VoiceGate(_Strict):
+class VoiceGate(_Peer):
     """`nox/voice/gate`: whether the core's privacy lets the microphone listen (default: no)."""
 
     capture: bool
     reason: str = Field(default="", max_length=64)
 
 
-class ObsPanic(_Strict):
+class ObsPanic(_Peer):
     reason: str = Field(default="", max_length=64)
 
 
-class NodePairRequest(_Strict):
+class NodePairRequest(_Peer):
     """`POST /api/node/pair` from a new node: the one-time code and a certificate request."""
 
     code: str = Field(min_length=4, max_length=16)
@@ -413,7 +442,7 @@ class NodePairRequest(_Strict):
     version: str = Field(max_length=32)
 
 
-class NodePairResponse(_Strict):
+class NodePairResponse(_Peer):
     node_id: str
     name: str
     cert: str

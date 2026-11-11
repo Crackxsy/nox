@@ -135,6 +135,11 @@ class PermissionRequested(BaseModel):
     #: The words that led here were spoken at a node's voice satellite (C9): its name, shown as
     #: "von Sprach-Satellit <name>". Empty for everything else.
     voice_satellite: str = ""
+    #: Where the call runs, set by the core's router from its registry (never from the model or
+    #: a tool's text): a node's id and label, or "core" and this core's computer name once nodes
+    #: are paired. Both empty for a call here while no node is paired.
+    device_id: str = ""
+    device_name: str = ""
 
 
 class PermissionDecided(BaseModel):

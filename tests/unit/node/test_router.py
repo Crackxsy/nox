@@ -450,8 +450,11 @@ def test_the_facts_line_names_every_device() -> None:
         PC: _entry(PC, "Arbeits-PC"),
     }
     registry.entries = lambda: sorted(registry._entries.values(), key=lambda e: e.name)  # type: ignore[method-assign]
+    registry.core_name = lambda: "Wohnzimmer-Pi"
     line = registry.prompt_line()
-    assert line.startswith("Geräte: dieser Core (core)")
+    # This machine by its name, and that a tool without `device` runs here only (review M1).
+    assert line.startswith('Geräte: dieser Rechner (Wohnzimmer-Pi, device "core")')
+    assert line.endswith("Werkzeuge ohne device-Feld laufen nur auf diesem Rechner.")
     assert "Arbeits-PC · bbbb (online)" in line and "Laptop · aaaa (offline seit 21.10." in line
 
 

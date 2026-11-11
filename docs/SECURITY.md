@@ -755,9 +755,18 @@ voice satellites included (`nox.home.boundary`).
   a node refuses (`state`). `nox node stop` on the device stops it there and the core
   everywhere; only the device lifts it (`nox node resume`). A session ends when its certificate
   does.
-- **Widening needs a person at the device:** `nox node allow` only in an interactive terminal
-  and after a typed "yes" - a boundary against the core and remote tools, **not** against a local
-  process of the same user ([accepted limit](#accepted-limits-nodes); a real presence check,
+- **Widening needs a person at the device:** `nox-node allow` only in an interactive terminal
+  and after a typed "yes" (`j`/`y`) - a boundary against the core and remote tools, **not**
+  against a local process of the same user. **Not while Nox controls the PC:** the node keeps a
+  marker in its folder while a computer-use session runs, and every command that widens
+  something (`allow`, `games remove`, `voice unmute`, `obs resume`, `resume`, `update`,
+  `pair --again`) refuses while it says a session runs - or cannot be read (fail closed). The
+  session's dialog says it in plain words ("Nox steuert bis {n} min Maus und Tastatur und kann in
+  dieser Zeit alles, was du an diesem PC kannst"), and the click guard counts terminal windows
+  (console hosts, Windows Terminal, PowerShell) whose process tree runs Nox as Nox's own
+  windows. This narrows the gap, it does not close it: computer use on a node is user-level
+  control during a confirmed session, so anything the user can do with a mouse and keyboard
+  outside Nox's windows and the blocked combinations remains possible ([accepted limit](#accepted-limits-nodes); a real presence check,
   Windows Hello / UAC consent or polkit, is a later task). The confirmed manifest is recorded in the node's audit trail with an HMAC under a
   key made at pairing (OS keyring, else `manifest.key` 0600 in the node folder); the MAC covers
   the entry's place in the chain and a counter kept with the key, so an old confirmation appended
@@ -851,8 +860,8 @@ voice satellites included (`nox.home.boundary`).
   lock lifts - nothing is ever dropped while the lock holds. Memory is bounded (64 reported and
   16 connection addresses per node); a node that fills either is **saturated** for the rest of
   its lock: then nobody is told apart from the controlled PC any more - every paired device and
-  this machine's own dashboard and shell are refused approvals, changes and messages (only deny,
-  Stopp and reading work), audited once, and the dashboard says "Nox steuert ein Gerät mit sehr
+  this machine's own dashboard and shell are refused approvals and messages (deny, Stopp,
+  reading and - with the PIN - removing, releasing and resuming still work), audited once, and the dashboard says "Nox steuert ein Gerät mit sehr
   vielen Adressen - Freigaben nur nach Ende der Sitzung". "This machine" is matched against every address of every local interface,
   uncapped; an address that cannot be classified counts as this machine, and when this machine's
   addresses cannot be read at all its dashboard and shell count as the controlled PC. Fail closed
@@ -1185,7 +1194,7 @@ in the home network.
 - **Saturation and flooding.** *What:* (a) a node that fills its address binding during one lock
   (64 reported or 16 observed addresses) is *saturated*: until the lock lifts nobody can be told
   apart from the controlled PC, so every paired device and this machine's own dashboard and shell
-  are refused approvals, changes and messages, and voice from every node is refused. (b) Before
+  are refused approvals and messages, and voice from every node is refused. (b) Before
   a certificate is known, only the TLS handshake timeout (5 s) and the listen backlog bound a
   connection to the node port; after the certificate check at most 2 connections per node and
   16 in total wait for their hello. (c) The pairing endpoint shares the network listener's rate
@@ -1209,6 +1218,22 @@ in the home network.
   lock (a node still reporting a session locks again); a paired device is removed after
   repeated wrong PINs before it alone reaches the lockout; removing a node needs no PIN on the
   computer Nox runs on and ends its connection, its stops and its reports.
+
+- **A node that fakes computer use (review H1, fixed).** The lock comes only from a session
+  this core started itself (the answer to its own `computer.session_start` names the session);
+  "open" in a hello or for a session the core never started is a protocol violation - audited,
+  the connection closed, never a lock; reports of a node that does not offer computer use are
+  not read for "open"; saturation binds approvals and messages only; `node.unpair`,
+  `node.computer.release` and `security.resume` always work with the PIN (`node.unpair` from this
+  machine's shell and dashboard without one, also over SSH), `nox node release` does the same for
+  a headless core, and removing a node ends its lock, address binding and saturation at once.
+- **Computer use on a node undermines "only the device widens" (review H2, accepted).** During a
+  confirmed session Nox has user-level control of that PC; the marker, the terminal-window guard
+  and the dialog make the common paths refuse, not all of them.
+- **Remote maintenance over SSH.** `nox unpair --node` and `nox node release` work in an SSH
+  session to a headless core (they talk to the local core as its shell, with the session token
+  only the service account can read); the remote-session check does not apply to them because
+  removing narrows and the PIN is checked for releasing.
 
 **Behaviour when no PIN is set**
 
@@ -1338,7 +1363,63 @@ breaks it and the QEMU boot test checks it on the running system. In short:
   <fingerprints>`, `ssh off`, `maint set` (setup mode only), `maint change` - no shell, no paths,
   no options.
 - **No firewall, no Nox:** `nox.service` requires `nftables.service`.
-- **Console:** a status screen without secrets on tty1, no login there; no account has a password.
+- **Console:** a status screen on tty1, no login there; no account has a password. It shows no
+  secrets - except, during the setup window of an unclaimed device, the setup hotspot's password
+  and the claim code made on the device (a screen is physical access).
+- **First boot without a screen** ([`os/README.md`](../os/README.md#first-boot-without-a-screen-o3)):
+  - **Setup window:** root's file with this boot's id and its end in seconds since boot, at most
+    30 minutes after power-on, only while unclaimed; only a power cycle opens another. Every
+    grant of setup mode (hotspot ports, portal, `maint set`, `claim`) checks the file itself, so
+    an expired window grants nothing; closing it removes every setup secret.
+  - **Provisioning file:** validated strictly (unknown fields refused), imported, then overwritten
+    and deleted (best effort on FAT and flash: earlier copies of the clusters may survive in the
+    card's controller), never logged; the Wi-Fi password only in a root 0600 NetworkManager
+    keyfile.
+  - **Setup hotspot:** WPA2 only, never open, a per-device password - the setup card's (16
+    characters at least), or 16 random characters per boot (80 bits) shown on the screen as text
+    and Wi-Fi QR code; a recorded handshake cannot be cracked offline to read the portal's plain
+    HTTP (the home Wi-Fi password). The hotspot interface
+    reaches the portal, DHCP and DNS (only in setup mode) and nothing else for as long as the
+    hotspot exists, no forwarding.
+  - **Portal:** its own user, no root, only port 80 as a capability, network only the hotspot
+    (not even loopback); no JavaScript, strict CSP; CSRF token bound to the phone and the time plus
+    a required same-origin `Origin`; rate-limited; it only writes a request that root checks again.
+    It asks only for the claim code and the Wi-Fi; nothing is applied without the right claim code.
+    **PIN and maintenance passphrase never cross the hotspot** - they are set on the claim page over
+    TLS. The CA fingerprint it shows is root's reading of Nox's CA file, not a loopback request
+    another local process could answer.
+  - **Claim:** while unclaimed the core serves only the claim on the LAN and the firewall keeps the
+    node port closed (fail closed). The claim page has its own Content-Security-Policy (`default-src
+    'self'; script-src 'self'; ... frame-ancestors 'none'`), `nosniff` and `no-referrer`. Claiming needs the one-time claim code within the window; only
+    the root helper checks it and writes the root-owned claim mark the firewall and the core go by.
+    The claim ends setup mode (hotspot down before the firewall opens the node port), applies the
+    PIN and passphrase, and is audited without any secret.
+  - **Guessing the claim code:** two independent sides (`lan`, `hotspot`); per side and source
+    (IPv4 address, IPv6 /64) a wrong code costs a wait of 1 s doubling to 5 minutes, waiting
+    sources are never dropped (a full table of 256 makes the whole side wait), and 200 wrong
+    codes lock a side until the next boot. A right code (constant-time compare) succeeds unless
+    its source waits or its side is locked. **Math:** codes have 60 bits (12 characters of
+    Crockford base32; the schema's minimum for a hand-made card is 8 characters, 40 bits). At most
+    2 x 200 = 400 wrong guesses per boot reach the comparison, so the chance to hit a 60-bit code
+    in a boot is at most 400 / 2^60, about 3.5e-16 (40 bits: 3.6e-10) - and every boot makes a new
+    device code. A locked LAN side cannot lock the owner out: the hotspot side needs its WPA2
+    password, shown only on the console (or the setup card, or the LED from O5), never on the
+    LAN, and the portal's one-time ticket lets the owner's claim from the home network count on
+    the hotspot side. On the LAN side, an attacker with many IPv6 /64s (e.g. unique-local
+    prefixes) gets one backoff record per /64 - which the 200-guess budget caps; the LAN side
+    **can** be locked on purpose, and the owner then falls back to the hotspot ticket or a power
+    cycle (a new boot, a new device code).
+  - **Reclaim:** a `nox-reclaim` marker on the boot partition forgets the owner at the next boot,
+    before any extension can let anyone in: every paired device of every channel, every node
+    certificate and opt-in, every pending pairing code, every overlay credential, every
+    permission grant and the PIN (`revoke_everything`, tested to leave no valid credential);
+    root removes the claim mark and the maintenance keys and asks for a fresh passphrase; the
+    marker is securely deleted. Memory, settings and the owner's stored account secrets stay
+    (os/README.md lists both).
+  - **Root never runs Nox's code:** no unit running as root and no root setup program uses Nox's
+    own Python environment (which Nox updates itself) - the console's QR code comes from the
+    image's own encoder, the firewall runs on the system interpreter; `check-image.sh` enforces it. That is deliberate: physical access to
+    the card is full access - whoever holds it could read and change everything on it anyway.
 
 Accepted limits: physical access to the card is full access (the boot partition is plain FAT); the
 service user can choose which unprivileged ports its own listener uses, and the firewall follows.
@@ -1346,7 +1427,12 @@ Root over SSH takes the security PIN **and** the maintenance passphrase **and** 
 confirmed **and** a connection from the home network; while remote maintenance is on, whoever
 holds one of its keys in the home network is root, and what root changed stays changed after it
 is switched off. IPv6 clients from the home's global prefix are not "private" and are refused (fail
-closed).
+closed). **Setup without a setup card (owner decision D2):** within the 30 minutes after power-on,
+whoever reads the screen - a neighbour at the window at the same moment - can join the setup
+hotspot and learn the claim code. The hotspot's 80-bit password keeps a recorded handshake from
+revealing the home Wi-Fi password the portal carried, and PIN and passphrase never cross the
+hotspot. A setup card (its own long hotspot password, the claim code only as a hash on the
+device) closes the first point too; the manual names it.
 
 ## Known limits of network access
 

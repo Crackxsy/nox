@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import itertools
 import json
+import socket
 import time
 import uuid
 from collections import Counter
@@ -30,6 +31,7 @@ from nox.node.listener import NodeSession
 from nox.node.names import display_name, label
 from nox.node.pairing import NodePairing
 from nox.node.policy import NodePolicy, group_of, reported_groups, send_policy
+from nox.node.protocol import escape_controls
 from nox.node.receipts import MAX_LIFETIME_S, ReceiptSigner
 from nox.node.repo import NodeRepository
 from nox.security.prohibitions import matching_hard_prohibition
@@ -93,6 +95,30 @@ MAX_RESULT_CHARS = 16_000
 RISKS = ("read", "low", "medium", "high", "critical")
 #: An incompatible (outdated) node offers only this (spec C §1.8).
 OUTDATED_TOOLS: frozenset[str] = frozenset({"system.info"})
+#: Folders a node may report for `files` (`_nox.folders` of its tool list), and their length.
+MAX_FOLDERS = 32
+MAX_FOLDER_CHARS = 260
+
+
+def reported_folders(listed: Any) -> tuple[str, ...]:
+    """The folders a device says it allowed for `files` - its word, shown on the Devices page
+    only (escaped, bounded); routing never reads it, the node checks every path itself."""
+    nox = listed.get("_nox") if isinstance(listed, dict) else None
+    raw = nox.get("folders") if isinstance(nox, dict) else None
+    if not isinstance(raw, list):
+        return ()
+    return tuple(
+        escape_controls(f)[:MAX_FOLDER_CHARS] for f in raw[:MAX_FOLDERS] if isinstance(f, str)
+    )
+
+
+def this_machine() -> str:
+    """This core's computer name, for the device line of the prompt (`dieser Rechner (<name>)`)."""
+    try:
+        name = socket.gethostname().split(".", 1)[0]
+    except OSError:
+        name = ""
+    return display_name(name) if name else "core"
 
 
 #: How long a call waits for a device that has just connected to finish announcing its tools.
@@ -134,6 +160,8 @@ class NodeEntry:
     #: Cleared while a new connection's first tool list is being recorded: until then nothing is
     #: offered from it, and a call waits for it (`settle`) instead of failing as offline.
     listed: asyncio.Event = field(default_factory=_set_event)
+    #: The folders the device allowed for `files`, as its last tool list said (Devices page).
+    folders: tuple[str, ...] = ()
 
     @property
     def label(self) -> str:
@@ -239,6 +267,11 @@ class NodeRegistry:
         #: Told after the owner's narrowing of a group is stored: (node, group, narrowed) - also
         #: for a node that is offline (C9: its overlay credential goes with `obs`).
         self.on_narrowed: list[Callable[[str, str, bool], Awaitable[None]]] = []
+        #: Whether a high-risk call may be left to this node's own dialog right now (set by the
+        #: computer-use lock: while Nox controls a PC, only that PC's, `NodeControl.may_delegate`).
+        self.may_delegate: Callable[[str], bool] = lambda _device_id: True
+        #: This core's computer name, for the prompt's device line.
+        self.core_name: Callable[[], str] = this_machine
 
     def _lock(self, device_id: str) -> asyncio.Lock:
         lock = self._locks.get(device_id)
@@ -350,6 +383,7 @@ class NodeRegistry:
             entry.tools, entry.listing_failed = {}, True
             return False
         accepted = self._accept_tools(listed.get("tools"))
+        folders = reported_folders(listed)
         policy, device_id, reported = self.policy, session.device_id, reported_groups(listed)
 
         def record() -> tuple[dict[str, str], set[str]]:
@@ -363,6 +397,7 @@ class NodeRegistry:
         # A group with a narrowing still on its way stays listed here but is not offered
         # (`NodeEntry.offers`); once that request is done, the list is right either way.
         entry.tools, entry.listing_failed = tools, False
+        entry.folders = folders
         if narrowed:
             await send_policy(session, narrowed)
             entry.told = session
@@ -472,6 +507,14 @@ class NodeRegistry:
             entry.linked_device_id = row.linked_device_id if row is not None else None
         return sorted(self._entries.values(), key=lambda e: e.name.lower())
 
+    async def set_linked(self, node_id: str, device_id: str | None) -> None:
+        """Which paired browser device sits on this node's PC (`node.link`): the only writer, so
+        the database and what routing and the computer-use lock read from memory never differ."""
+        await asyncio.to_thread(self._nodes.set_linked_device, node_id, device_id)
+        entry = self._entries.get(node_id)
+        if entry is not None:
+            entry.linked_device_id = device_id
+
     def online_with(self, tool: str) -> list[NodeEntry]:
         return [e for e in self.entries() if e.offers(tool)]
 
@@ -556,11 +599,17 @@ class NodeRegistry:
         return cleaned
 
     def prompt_line(self) -> str:
-        """One line for the turn context: which devices exist and whether they are reachable."""
+        """One line for the turn context: which devices exist and whether they are reachable -
+        this machine by its name first, and that a tool without a `device` field runs here only
+        (review M1)."""
         entries = self.entries()
         if not entries:
             return ""
-        parts = ["dieser Core (core)"]
+        try:
+            here = display_name(self.core_name()) or "core"
+        except Exception:  # noqa: BLE001 - a name is a courtesy
+            here = "core"
+        parts = [f'dieser Rechner ({here}, device "core")']
         for entry in entries:
             if entry.online and entry.compatible:
                 state = "online"
@@ -571,7 +620,11 @@ class NodeRegistry:
             else:
                 state = "offline"
             parts.append(f"{entry.label} ({state})")
-        return "Geräte: " + ", ".join(parts)
+        return (
+            "Geräte: "
+            + ", ".join(parts)
+            + ". Werkzeuge ohne device-Feld laufen nur auf diesem Rechner."
+        )
 
 
 def offline_error(entry: NodeEntry) -> dict[str, Any]:

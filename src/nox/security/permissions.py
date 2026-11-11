@@ -980,6 +980,24 @@ class DefaultPermissionEngine:
             )
         return removed
 
+    def revoke_all_grants(self, *, reason: str, by: str = "system") -> int:
+        """Revoke every grant there is - remembered, session and node-bound alike, and every
+        confirmation still waiting (a reclaim: whoever answered them is no owner any more)."""
+        removed = self._grants.remove_scope_prefix("")
+        for grant_id in list(self._pending):
+            self.reply(grant_id, Decision.DENY, by=by)
+        self._audit.append(
+            actor=by,
+            tool="security",
+            action="grant.revoke_all",
+            target="",
+            decision=Decision.ALLOW.value,
+            result="ok",
+            details={"removed": str(removed), "reason": reason},
+        )
+        log.warning("security.all_grants_revoked", removed=removed, reason=reason)
+        return removed
+
     def revoke_command_grants(self, *, reason: str, by: str = "system") -> int:
         """Revoke every remembered shell command (`cmd:` grants).
 
@@ -1084,6 +1102,10 @@ class DefaultPermissionEngine:
                 self._session_grant_ttl.total_seconds() if self._may_remember(pending) else 0.0
             ),
             voice_satellite=self._satellite_of(request.conversation),
+            # Structured, from the router's registry - the dashboard names the device from these
+            # two fields only, never from the target text (which a tool argument can shape).
+            device_id=request.device or ("core" if request.device_name else ""),
+            device_name=request.device_name,
         )
 
     def _satellite_of(self, conversation: str) -> str:

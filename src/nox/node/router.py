@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field, create_model
 
 from nox.core.logging import get_logger
 from nox.node.confirm import CONFIRM_TIMEOUT_S
+from nox.node.policy import group_of
 from nox.node.registry import (
     RISKS,
     SESSION_RESULT_KEY,
@@ -46,6 +47,7 @@ __all__ = [
     "CannotShow",
     "DEVICE_KEY",
     "Resolution",
+    "core_only_spec",
     "origin_device",
     "resolve",
     "routed_spec",
@@ -225,7 +227,8 @@ def resolve(
                 "error": "not_enabled_on_device",
                 "device": entry.label,
                 "tool": tool,
-                "hint": "nur am Gerät freischaltbar (nox node allow)",
+                "hint": "nur am Gerät freischaltbar: nox-node allow "
+                + (group_of(tool) or "<Gruppe>"),
             },
         )
 
@@ -297,6 +300,28 @@ def _routed_model(base: type[BaseModel] | None, tool: str) -> type[BaseModel]:
         __base__=base,
         device=field,
     )
+
+
+def _may_delegate(registry: NodeRegistry, device_id: str) -> bool:
+    check = getattr(registry, "may_delegate", None)
+    if check is None:
+        return True  # a registry without the computer-use lock (no session can run)
+    try:
+        return bool(check(device_id))
+    except Exception:  # noqa: BLE001 - cannot tell: the core asks itself
+        return False
+
+
+def core_where(registry: NodeRegistry) -> str:
+    """This core's computer name for a confirmation while nodes are paired (`device_name`, with
+    `device_id: "core"`), so a question about this machine never reads like one about a paired
+    PC; "" while no node is paired."""
+    try:
+        if not registry.known() and not registry.entries():
+            return ""
+        return str(registry.core_name())[:96]
+    except Exception:  # noqa: BLE001 - a name is a courtesy
+        return ""
 
 
 def _max_risk(a: Risk, b: str) -> Risk:
@@ -375,9 +400,12 @@ def routed_spec(
         if resolution.device == CORE:
             assert core is not None
             if core.scope is not None:
-                return core.scope(inner(payload))
+                own_scope = core.scope(inner(payload))
+                return dataclasses.replace(own_scope, device_name=core_where(registry))
             target = core.targets(inner(payload)) if core.targets is not None else ""
-            return CallScope(action=action, risk=core.risk, target=target)
+            return CallScope(
+                action=action, risk=core.risk, target=target, device_name=core_where(registry)
+            )
         entry = next(e for e in registry.entries() if e.device_id == resolution.device)
         node_risk_ = _max_risk(risk, entry.tools.get(name, "high"))
         if node_risk is not None:
@@ -404,9 +432,12 @@ def routed_spec(
                 return CallScope(action=action, risk=Risk.READ, target="device:none")
         else:
             base_target = core.targets(inner(payload)) if core is not None and core.targets else ""
-        # Left to the device only when it can ask; otherwise the core asks itself (and the
-        # node still refuses high risk it cannot confirm, unless trusted there).
-        delegate = node_risk_ is Risk.HIGH and entry.confirmer
+        # Left to the device only when it can ask, and - while Nox controls a PC - only when it
+        # is that PC (review M2); otherwise the core asks itself, under the session's PIN rule
+        # (and the node still refuses high risk it cannot confirm, unless trusted there).
+        delegate = (
+            node_risk_ is Risk.HIGH and entry.confirmer and _may_delegate(registry, entry.device_id)
+        )
         payload[ROUTE_RISK_KEY] = node_risk_.value
         payload[ROUTE_DELEGATE_KEY] = delegate
         # The device travels in its own field: the permission request, the audit and a
@@ -416,6 +447,7 @@ def routed_spec(
             risk=node_risk_,
             target=f"{entry.label}: {base_target or name}",
             device=resolution.device,
+            device_name=entry.label,
             confirm_on_device=delegate,
             rememberable=remember_on_node,
         )
@@ -502,6 +534,72 @@ def routed_spec(
             if payload.get(DEVICE_KEY) not in (None, "", CORE)
             else None
         ),
+    )
+
+
+#: Error for a core-only tool asked to run on a paired device.
+NOT_AVAILABLE_ON_DEVICE = "not_available_on_device"
+
+
+def core_only_spec(core: ToolSpec, registry: NodeRegistry) -> ToolSpec:
+    """A tool that exists on this core only (`package.*`: it cannot work in a node's sandbox
+    yet) with a `device` field that names this core and nothing else. A call that names a paired
+    device is refused (`not_available_on_device`) before anyone is asked - never run here
+    instead (review M1) - and the confirmation names this machine while nodes are paired."""
+    model = create_model(
+        f"CoreOnly_{core.input_model.__name__}",
+        __base__=core.input_model,
+        device=(
+            str | None,
+            Field(
+                default=None,
+                max_length=64,
+                description="Only 'core': this tool runs on this machine and on no paired "
+                "device. Leave it out.",
+                json_schema_extra={"enum": [CORE]},
+            ),
+        ),
+    )
+    _tool, _, action = core.name.partition(".")
+
+    def inner(payload: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in payload.items() if k not in (DEVICE_KEY, ROUTE_ERROR_KEY)}
+
+    def scope(payload: dict[str, Any]) -> CallScope:
+        wanted = payload.get(DEVICE_KEY)
+        word = wanted.strip().casefold() if isinstance(wanted, str) else ""
+        # "hier" from a browser on a PC with a node means that PC, not this machine.
+        here_is_a_node = word in _HERE_WORDS and bool(
+            _at_origin(registry.entries(), origin_device())
+        )
+        if word and (word not in _CORE_WORDS or here_is_a_node):
+            payload[ROUTE_ERROR_KEY] = {
+                "error": NOT_AVAILABLE_ON_DEVICE,
+                "tool": core.name,
+                "device": str(wanted).strip()[:64],
+                "hint": "läuft nur auf diesem Rechner (core), auf keinem gekoppelten Gerät",
+            }
+            return CallScope(action=action, risk=Risk.READ, target="device:none")
+        if core.scope is not None:
+            return dataclasses.replace(core.scope(inner(payload)), device_name=core_where(registry))
+        target = core.targets(inner(payload)) if core.targets is not None else ""
+        return CallScope(
+            action=action, risk=core.risk, target=target, device_name=core_where(registry)
+        )
+
+    async def handler(payload: dict[str, Any]) -> dict[str, Any]:
+        error = payload.get(ROUTE_ERROR_KEY)
+        if isinstance(error, dict):
+            return error
+        return await core.handler(inner(payload))
+
+    return dataclasses.replace(
+        core,
+        input_model=model,
+        handler=handler,
+        targets=None,
+        scope=scope,
+        description=core.description + " On this machine only (never on a paired device).",
     )
 
 
