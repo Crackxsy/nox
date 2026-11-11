@@ -29,6 +29,21 @@ against a core that was taken over or patched to allow everything.
 | Linux without a screen (a Pi) | the same with `sudo bash -s -- --node --headless` | A hardened system unit for its own system user `nox-node`; data in `/var/lib/nox-node`. Command: `sudo nox-node ...`. |
 | macOS (**beta**) | `bash scripts/install-macos.sh --node` in a checkout of this repository | A LaunchAgent at login, as you. **This script does not check release signatures yet:** once signing is set up it installs nothing from the network (no tag, branch or commit), only a checkout you verified (`NOX_SOURCE=<folder>`). |
 
+**What a node offers is installed with it.** The Linux and macOS installers add the libraries
+for what the node can do: the screen and camera (`senses`, on a desktop), the browser library
+(`browser`), the voice satellite (`voice`, `voice-supertonic`) and, on a desktop, the tray and its
+key (`shell`). The Windows installer carries the same. A tool whose library is missing is not
+offered by the node at all - so the Devices page never shows a capability that cannot work. Two
+things are never downloaded silently: Nox's own Chromium for `browser.*` (about 150 MB:
+`--with-browser`, or answer the question the installer asks in a terminal; on Windows run
+`playwright install chromium` once from the install folder's Python) and the speech models
+(`nox node voice setup`, below). On a headless unit the voice satellite also needs the sound card:
+install with `--node --headless --with-audio` (a drop-in `nox-node.service.d/devices.conf` opens
+only ALSA devices and adds the group `audio`; `--without-audio` removes it). A node without a
+screen never takes camera pictures - nobody could see that it does - so there is no camera option
+for it. On a Linux desktop the dialogs need `zenity` (KDE: `kdialog`) and notices need
+`notify-send` (`libnotify-bin`); the installer says so when they are missing.
+
 `--pair '<link>'` pairs right away; running the installer again updates; `--uninstall` removes the
 program and the autostart (the node's identity and audit trail stay; remove the device in Nox
 too). On Windows, `nox-node.cmd` in the install folder is the `nox node` command, and the
@@ -102,8 +117,8 @@ nox node deny notify     # no more notices on this device - at once, also while 
 | `system` | `system.info`: read OS, CPU, memory, disk, battery, temperature, uptime | on | everywhere |
 | `notify` | `notify.show`: show a notice | on | needs a notification service (Windows, macOS, `notify-send` on Linux) |
 | `media` | `media.control`: play, pause, skip, volume, mute | on | Windows and Linux; not on macOS yet |
-| `files` | `file.list`, `file.read`, `file.write` in folders you allow | off | no folder by default |
-| `shell` | `shell.run` in this device's sandbox | off | Windows (AppContainer), Linux (bubblewrap); refused on macOS |
+| `files` | `file.list`, `file.read`, `file.write`, `file.move`, `file.delete` in folders you allow | off | no folder by default; `file.delete` only where the trash can be used |
+| `shell` | `shell.run` in this device's sandbox | off | Windows (AppContainer), Linux (bubblewrap); not offered on macOS |
 | `packages` | install programs | off | **not available on nodes yet** |
 | `screen` | `screen.capture` | off | high risk every time, needs a visible notification |
 | `camera` | `camera.snapshot` | off | as `screen`; the core's camera switch is off by default |
@@ -125,7 +140,10 @@ A system dialog on this device shows what Nox wants to do, with every detail, fo
 means no, and a "yes" within the first 1.5 seconds counts as no. While it is open, other running
 actions with a side effect are stopped and new ones refused (only reads go on). A node without a
 screen refuses high risk, unless a person confirmed it on Nox itself and you allowed that on the
-device: `nox node allow trust_core_for_high`. The node also keeps its own budget: 60 actions and 5
+device: `nox node allow trust_core_for_high`. A device *with* a screen never trusts the core
+instead: if its dialog program is missing it refuses. The dialog is a system popup on Windows,
+`osascript` on macOS (macOS beta: "Ablehnen" is the default and cancel button) and `zenity` on
+Linux (`kdialog` on KDE without it). The node also keeps its own budget: 60 actions and 5
 high-risk ones per hour (`max_calls_per_hour`, `max_high_per_hour` in `node.yaml`), independent of
 the core's.
 
@@ -180,6 +198,19 @@ the core's.
   on this device, or on Nox for a node without a screen. A stop kills the whole sandboxed process
   tree.
 
+### Moving and deleting files
+
+`file.move` and `file.delete` are high risk: the dialog on this device asks every time and a
+"yes" is never remembered. Both ends of a move, and the file to delete, follow the rules of a
+write above (allowed folders only, data formats only - `notes.txt` cannot become `run.bat` -, no
+hidden names, no repository or app workspace, never a link). A move never replaces a file, never
+creates a folder and never crosses drives; folders are not moved. A delete goes into this user's
+trash - the Recycle Bin, the Mac's Trash or the freedesktop trash - or does not happen; where the
+trash cannot take the file (another drive than the trash on Linux, "delete immediately" or a
+removable drive on Windows, a file over 256 MB) the call is refused and the file stays. Both are
+decided on handles held open, so swapping a folder for a link between the check and the move
+changes nothing.
+
 ## Installing programs: not available yet
 
 `package.install` and `package.remove` exist only on the computer Nox itself runs on. On a node
@@ -217,7 +248,10 @@ asked; the node writes nothing. Nox itself must allow captures too: privacy mode
 and the capture switch for that kind on (the camera's is off by default), checked before the node
 is asked and again when the picture arrives. Nox keeps the picture in its own captures folder;
 camera pictures are never sent to a cloud model. Privacy zones of the node's own screen are not
-applied yet.
+applied yet. On Linux under Wayland there is no screenshot (`wayland_unsupported`: an X11 grab
+would show a black picture; log in to an X11 session) - the desktop portal is not used yet.
+Whether there is a screen is read at every call, so a node that started before you logged in
+works once the session is there.
 
 ### Browser
 
@@ -311,16 +345,19 @@ in the node folder (preferences only, nothing secret, never *whether*).
   device in the dashboard (the node's sheet; with the PIN when one is set, from a paired device
   always). Until then the group shows as switched off there. The core checks the second key again
   for every utterance.
-- **Listening** is push-to-talk by default (`mode: push_to_talk`): hold `Ctrl+Alt+Space` where the
-  tray runs, or run `nox node voice talk` and press Enter when you are done. With
-  `mode: wake_word` the microphone stays open and Nox reacts to its name ("Nox, ...").
+- **Listening** is `mode: auto` by default: push-to-talk on a device with a screen (hold
+  `Ctrl+Alt+Space` where the tray runs, or run `nox node voice talk` and press Enter when you are
+  done) and the wake word on one without (a headless Pi has no key to hold): the microphone stays
+  open and Nox reacts to its name ("Nox, ..."). `mode: push_to_talk` or `mode: wake_word` in
+  `satellites.yaml` decides it yourself.
 - **Text, never audio.** Speech recognition runs here (faster-whisper, `tiny` on a Pi, `base`
   elsewhere - `stt_model` changes it); only the recognised **text** goes to Nox, at most 500
   characters per utterance. Audio never leaves the device and is never saved; the audit trails
   record that something was heard and its length, never the words. The answer comes back as text
   and is spoken here (Supertonic 3, voice F3; Piper when Supertonic is missing). Download the
-  voice models once with the voice setup (`python -m nox.worker --download-supertonic
-  --models-dir <node folder>/models`); nothing is downloaded by itself.
+  voice models once with `nox node voice setup` (it asks first and writes into the node's
+  folder); the node loads them from there only - speech recognition runs with
+  `local_files_only`, so nothing is downloaded by itself, ever.
 - **You see and hear when it listens:** the tray icon says "Nox is listening" while the
   microphone is open, and a short tone plays when push-to-talk starts and when Nox took your
   question (`earcon: false` turns the tones off). `nox node voice status` says the same in a
@@ -589,8 +626,8 @@ Run `nox node voice status`. In order:
   privacy zone is active, Nox is stopped, or Nox controls mouse and keyboard on this PC;
 - **"Running: no"** or a **"Problem:"** line - the voice pipeline did not start: usually the
   voice models are missing (download them once, see above) or no microphone was found;
-- in `mode: push_to_talk` nothing is heard without the key or `nox node voice talk`; in
-  `mode: wake_word` every question starts with "Nox";
+- in push-to-talk nothing is heard without the key or `nox node voice talk`; in
+  the wake word every question starts with "Nox";
 - while Nox speaks here, and just after, what it hears is not taken as a question.
 
 ### An update failed or was rolled back

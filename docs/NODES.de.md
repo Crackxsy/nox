@@ -31,6 +31,16 @@ Gruppe und der eigene Dialog des Geräts für Hohes Risiko gelten also auch gege
 | Linux ohne Bildschirm (ein Pi) | dasselbe mit `sudo bash -s -- --node --headless` | Eine gehärtete System-Unit für den eigenen Systembenutzer `nox-node`; Daten in `/var/lib/nox-node`. Befehl: `sudo nox-node ...`. |
 | macOS (**Beta**) | `bash scripts/install-macos.sh --node` in einer Kopie dieses Repositorys | Ein LaunchAgent bei der Anmeldung, als du. **Dieses Skript prüft Release-Signaturen noch nicht:** sobald Signaturen eingerichtet sind, installiert es nichts aus dem Netz (keinen Tag, Branch oder Commit), nur eine Kopie, die du selbst geprüft hast (`NOX_SOURCE=<Ordner>`). |
 
+**Was ein Node anbietet, wird mitinstalliert** (Python-Extras): Bildschirm und Kamera
+(`senses`, auf dem Desktop), die Browser-Bibliothek (`browser`), der Sprach-Satellit (`voice`)
+und auf dem Desktop das Tray (`shell`). Ein Werkzeug, dem seine Bibliothek fehlt, bietet der Node
+gar nicht an. Nie still geladen werden Nox' eigenes Chromium für `browser.*` (ca. 150 MB:
+`--with-browser` oder im Terminal mit Ja antworten; unter Windows einmal `playwright install
+chromium`) und die Sprachmodelle (`nox node voice setup`). Ein Node ohne Bildschirm braucht für
+die Stimme die Soundkarte: `--node --headless --with-audio` (`--without-audio` nimmt sie wieder
+weg); Kamerabilder macht er nie. Auf dem Linux-Desktop braucht der Dialog `zenity` (KDE:
+`kdialog`), Hinweise brauchen `notify-send`.
+
 `--pair '<Link>'` koppelt gleich mit; den Installer erneut starten aktualisiert; `--uninstall`
 entfernt Programm und Autostart (Kennung und Protokoll des Nodes bleiben; das Gerät auch in Nox
 entfernen). Unter Windows ist `nox-node.cmd` im Installationsordner der Befehl `nox node`, und der
@@ -110,7 +120,7 @@ nox node deny notify     # keine Hinweise mehr auf diesem Gerät - sofort, auch 
 | `system` | `system.info`: Betriebssystem, CPU, Speicher, Platte, Akku, Temperatur, Laufzeit lesen | an | überall |
 | `notify` | `notify.show`: einen Hinweis zeigen | an | braucht einen Benachrichtigungsdienst (Windows, macOS, `notify-send` unter Linux) |
 | `media` | `media.control`: abspielen, pausieren, springen, Lautstärke, stumm | an | Windows und Linux; noch nicht unter macOS |
-| `files` | `file.list`, `file.read`, `file.write` in Ordnern, die du erlaubst | aus | standardmäßig kein Ordner |
+| `files` | `file.list`, `file.read`, `file.write`, `file.move`, `file.delete` in Ordnern, die du erlaubst | aus | standardmäßig kein Ordner |
 | `shell` | `shell.run` in der Sandbox dieses Geräts | aus | Windows (AppContainer), Linux (bubblewrap); unter macOS abgelehnt |
 | `packages` | Programme installieren | aus | **auf Nodes noch nicht verfügbar** |
 | `screen` | `screen.capture` | aus | jedes Mal Hohes Risiko, braucht eine sichtbare Benachrichtigung |
@@ -192,6 +202,14 @@ Stunde (`max_calls_per_hour`, `max_high_per_hour` in `node.yaml`).
   Sandbox - vorerst macOS, Linux ohne `bwrap` - werden Befehle abgelehnt, nie ohne ausgeführt.
   Hohes Risiko: gefragt an diesem Gerät, bei einem Node ohne Bildschirm an Nox. Ein Stopp beendet
   den ganzen Prozessbaum in der Sandbox.
+
+## Dateien verschieben und löschen
+
+`file.move` und `file.delete` sind hohes Risiko: der Dialog am Gerät fragt jedes Mal, ein „Ja“
+wird nie gemerkt. Beide Enden eines Verschiebens und die zu löschende Datei folgen den Regeln
+eines Schreibens (nur erlaubte Ordner und Datenformate, nie ein Link). Verschieben ersetzt nie
+etwas, legt keinen Ordner an und wechselt nie das Laufwerk. Gelöscht wird nur in den Papierkorb
+des Benutzers - geht das nicht, bleibt die Datei und der Aufruf wird abgelehnt.
 
 ## Programme installieren: noch nicht verfügbar
 
@@ -328,10 +346,11 @@ USB-Lautsprechermikrofon.
   dieses Gerät im Dashboard (im Blatt des Nodes; mit der PIN, wenn eine gesetzt ist, von einem
   gekoppelten Gerät immer). Bis dahin steht die Gruppe dort als ausgeschaltet. Den zweiten
   Schlüssel prüft der Core bei jeder Äußerung erneut.
-- **Zuhören** geht standardmäßig per Push-to-Talk (`mode: push_to_talk`): `Strg+Alt+Leertaste`
-  halten, wo das Symbol läuft, oder `nox node voice talk` ausführen und Enter drücken, wenn du
-  fertig bist. Mit `mode: wake_word` bleibt das Mikrofon offen und Nox reagiert auf seinen Namen
-  („Nox, ...“).
+- **Zuhören** geht standardmäßig per `mode: auto`: Push-to-Talk mit Bildschirm
+  (`Strg+Alt+Leertaste` halten, wo das Symbol läuft, oder `nox node voice talk` und Enter) und
+  das Weckwort ohne Bildschirm - ein Pi ohne Taste: das Mikrofon bleibt offen und Nox reagiert
+  auf seinen Namen („Nox, ...“). `mode: push_to_talk` / `wake_word` legt es fest. Modelle:
+  `nox node voice setup` (fragt zuerst; der Node lädt nie von selbst).
 - **Text, nie Audio.** Die Spracherkennung läuft hier (faster-whisper, `tiny` auf einem Pi, sonst
   `base` - `stt_model` ändert es); nur der erkannte **Text** geht an Nox, höchstens 500 Zeichen pro
   Äußerung. Audio verlässt das Gerät nie und wird nie gespeichert; die Protokolle halten fest, dass
