@@ -42,7 +42,7 @@ from nox import __version__
 from nox.core.logging import get_logger
 from nox.mcp.protocol import PROTOCOL_VERSION
 from nox.node import protocol as p
-from nox.node.confirm import Confirmer, PlatformConfirmer
+from nox.node.confirm import Confirmer, PlatformConfirmer, has_screen
 from nox.node.enroll import local_os
 from nox.node.gate import NodeGate
 from nox.node.home import NodeHome, NodeIdentity
@@ -1016,8 +1016,12 @@ class NodeAgent:
         if not self._confirmer.available:
             # `trust_core_for_high` trusts a confirmation a PERSON gave on the core. A call the
             # core left to this device, or allowed by a rule or a remembered answer, was
-            # confirmed by nobody for this call: refuse it (review M-b).
-            trusted = self._gate.manifest.trust_core_for_high
+            # confirmed by nobody for this call: refuse it (review M-b). And only a device
+            # WITHOUT a screen trusts at all: one with a screen but no working dialog program
+            # refuses (D1: high risk is confirmed on the device that has one).
+            screen = getattr(self._confirmer, "screen", None)
+            headless = not (has_screen() if screen is None else bool(screen))
+            trusted = self._gate.manifest.trust_core_for_high and headless
             if trusted and not meta.confirm_on_device and meta.decided_by == "user":
                 self._audit_event("node.confirm", "core", "trusted (no screen)")
                 return None

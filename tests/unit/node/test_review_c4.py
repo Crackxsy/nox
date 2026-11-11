@@ -300,21 +300,27 @@ async def test_a_yes_faster_than_reading_is_a_no(
 # ---- M-d: the Linux dialog is zenity only, default "No", no markup ----
 
 
-async def test_only_zenity_and_always_no_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_zenity_first_kdialog_on_kde_and_always_no_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review panel round 1 (M2): kdialog is the KDE fallback - its `--warningyesno` has "No" as
+    the default button; zenity, where it is there, is still preferred."""
     from nox.node import confirm as confirm_module
 
     monkeypatch.setattr(confirm_module.sys, "platform", "linux")
-    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(confirm_module, "has_screen", lambda: True)
     monkeypatch.setattr(
         confirm_module.shutil,
         "which",
         lambda name: "/usr/bin/kdialog" if name == "kdialog" else None,
     )
-    assert confirm_module.PlatformConfirmer().available is False  # kdialog alone is not enough
+    assert confirm_module.PlatformConfirmer().available is True  # KDE without zenity
     monkeypatch.setattr(confirm_module.shutil, "which", lambda name: f"/usr/bin/{name}")
     seen: list[list[str]] = []
 
     class Proc:
+        returncode = 1
+
         async def wait(self) -> int:
             return 1
 
@@ -324,7 +330,10 @@ async def test_only_zenity_and_always_no_by_default(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(confirm_module.asyncio, "create_subprocess_exec", fake_exec)
     assert await confirm_module.PlatformConfirmer().ask("<b>x</b>") == "deny"
-    assert seen[0][0] == "zenity" and "--default-cancel" in seen[0] and "--no-markup" in seen[0]
+    assert seen[0][0].endswith("zenity") and "--default-cancel" in seen[0]
+    assert "--no-markup" in seen[0]
+    monkeypatch.setattr(confirm_module.shutil, "which", lambda _name: None)
+    assert confirm_module.PlatformConfirmer().available is False  # nothing to ask with
 
 
 # ---- LOW ---------------------------------------------------------------------------------------
