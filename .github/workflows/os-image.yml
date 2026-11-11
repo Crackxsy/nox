@@ -58,7 +58,7 @@ jobs:
       - name: Python tools compile
         run: |
           python3 -I -m py_compile os/tools/imager_json.py os/tools/source_manifest.py \
-            os/pi-gen/stage-nox/03-hardening/files/*.py
+            os/pi-gen/stage-nox/03-hardening/files/*.py os/pi-gen/stage-nox/04-firstboot/files/*.py
 
       # O2's configuration files as the real programs read them: the firewall rules (every switch
       # off, every switch on, public clients), remote maintenance's sshd and the sudo include.

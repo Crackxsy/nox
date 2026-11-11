@@ -1338,7 +1338,63 @@ breaks it and the QEMU boot test checks it on the running system. In short:
   <fingerprints>`, `ssh off`, `maint set` (setup mode only), `maint change` - no shell, no paths,
   no options.
 - **No firewall, no Nox:** `nox.service` requires `nftables.service`.
-- **Console:** a status screen without secrets on tty1, no login there; no account has a password.
+- **Console:** a status screen on tty1, no login there; no account has a password. It shows no
+  secrets - except, during the setup window of an unclaimed device, the setup hotspot's password
+  and the claim code made on the device (a screen is physical access).
+- **First boot without a screen** ([`os/README.md`](../os/README.md#first-boot-without-a-screen-o3)):
+  - **Setup window:** root's file with this boot's id and its end in seconds since boot, at most
+    30 minutes after power-on, only while unclaimed; only a power cycle opens another. Every
+    grant of setup mode (hotspot ports, portal, `maint set`, `claim`) checks the file itself, so
+    an expired window grants nothing; closing it removes every setup secret.
+  - **Provisioning file:** validated strictly (unknown fields refused), imported, then overwritten
+    and deleted (best effort on FAT and flash: earlier copies of the clusters may survive in the
+    card's controller), never logged; the Wi-Fi password only in a root 0600 NetworkManager
+    keyfile.
+  - **Setup hotspot:** WPA2 only, never open, a per-device password - the setup card's (16
+    characters at least), or 16 random characters per boot (80 bits) shown on the screen as text
+    and Wi-Fi QR code; a recorded handshake cannot be cracked offline to read the portal's plain
+    HTTP (the home Wi-Fi password). The hotspot interface
+    reaches the portal, DHCP and DNS (only in setup mode) and nothing else for as long as the
+    hotspot exists, no forwarding.
+  - **Portal:** its own user, no root, only port 80 as a capability, network only the hotspot
+    (not even loopback); no JavaScript, strict CSP; CSRF token bound to the phone and the time plus
+    a required same-origin `Origin`; rate-limited; it only writes a request that root checks again.
+    It asks only for the claim code and the Wi-Fi; nothing is applied without the right claim code.
+    **PIN and maintenance passphrase never cross the hotspot** - they are set on the claim page over
+    TLS. The CA fingerprint it shows is root's reading of Nox's CA file, not a loopback request
+    another local process could answer.
+  - **Claim:** while unclaimed the core serves only the claim on the LAN and the firewall keeps the
+    node port closed (fail closed). The claim page has its own Content-Security-Policy (`default-src
+    'self'; script-src 'self'; ... frame-ancestors 'none'`), `nosniff` and `no-referrer`. Claiming needs the one-time claim code within the window; only
+    the root helper checks it and writes the root-owned claim mark the firewall and the core go by.
+    The claim ends setup mode (hotspot down before the firewall opens the node port), applies the
+    PIN and passphrase, and is audited without any secret.
+  - **Guessing the claim code:** two independent sides (`lan`, `hotspot`); per side and source
+    (IPv4 address, IPv6 /64) a wrong code costs a wait of 1 s doubling to 5 minutes, waiting
+    sources are never dropped (a full table of 256 makes the whole side wait), and 200 wrong
+    codes lock a side until the next boot. A right code (constant-time compare) succeeds unless
+    its source waits or its side is locked. **Math:** codes have 60 bits (12 characters of
+    Crockford base32; the schema's minimum for a hand-made card is 8 characters, 40 bits). At most
+    2 x 200 = 400 wrong guesses per boot reach the comparison, so the chance to hit a 60-bit code
+    in a boot is at most 400 / 2^60, about 3.5e-16 (40 bits: 3.6e-10) - and every boot makes a new
+    device code. A locked LAN side cannot lock the owner out: the hotspot side needs its WPA2
+    password, shown only on the console (or the setup card, or the LED from O5), never on the
+    LAN, and the portal's one-time ticket lets the owner's claim from the home network count on
+    the hotspot side. On the LAN side, an attacker with many IPv6 /64s (e.g. unique-local
+    prefixes) gets one backoff record per /64 - which the 200-guess budget caps; the LAN side
+    **can** be locked on purpose, and the owner then falls back to the hotspot ticket or a power
+    cycle (a new boot, a new device code).
+  - **Reclaim:** a `nox-reclaim` marker on the boot partition forgets the owner at the next boot,
+    before any extension can let anyone in: every paired device of every channel, every node
+    certificate and opt-in, every pending pairing code, every overlay credential, every
+    permission grant and the PIN (`revoke_everything`, tested to leave no valid credential);
+    root removes the claim mark and the maintenance keys and asks for a fresh passphrase; the
+    marker is securely deleted. Memory, settings and the owner's stored account secrets stay
+    (os/README.md lists both).
+  - **Root never runs Nox's code:** no unit running as root and no root setup program uses Nox's
+    own Python environment (which Nox updates itself) - the console's QR code comes from the
+    image's own encoder, the firewall runs on the system interpreter; `check-image.sh` enforces it. That is deliberate: physical access to
+    the card is full access - whoever holds it could read and change everything on it anyway.
 
 Accepted limits: physical access to the card is full access (the boot partition is plain FAT); the
 service user can choose which unprivileged ports its own listener uses, and the firewall follows.
@@ -1346,7 +1402,12 @@ Root over SSH takes the security PIN **and** the maintenance passphrase **and** 
 confirmed **and** a connection from the home network; while remote maintenance is on, whoever
 holds one of its keys in the home network is root, and what root changed stays changed after it
 is switched off. IPv6 clients from the home's global prefix are not "private" and are refused (fail
-closed).
+closed). **Setup without a setup card (owner decision D2):** within the 30 minutes after power-on,
+whoever reads the screen - a neighbour at the window at the same moment - can join the setup
+hotspot and learn the claim code. The hotspot's 80-bit password keeps a recorded handshake from
+revealing the home Wi-Fi password the portal carried, and PIN and passphrase never cross the
+hotspot. A setup card (its own long hotspot password, the claim code only as a hash on the
+device) closes the first point too; the manual names it.
 
 ## Known limits of network access
 

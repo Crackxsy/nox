@@ -1,0 +1,38 @@
+:root { color-scheme: light dark; --fg: #1a1a1a; --bg: #fff; --muted: #4a4a4a; --line: #8a8a8a;
+  --accent: #0b57d0; --error: #b3261e; --box: #f2f2f2; }
+@media (prefers-color-scheme: dark) { :root { --fg: #f2f2f2; --bg: #121212; --muted: #c4c4c4;
+  --accent: #8ab4f8; --error: #f2b8b5; --box: #1f1f1f; } }
+* { box-sizing: border-box; }
+body { margin: 0; font: 1.0625rem/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--fg); background: var(--bg); }
+main { max-width: 34rem; margin: 0 auto; padding: 1rem 1rem 3rem; }
+h1 { font-size: 1.6rem; margin: 0.5rem 0 0.75rem; }
+label { display: block; font-weight: 600; margin-top: 1rem; }
+.hint { display: block; font-weight: 400; color: var(--muted); font-size: 0.95rem; }
+input { display: block; width: 100%; min-height: 2.75rem; margin-top: 0.3rem;
+  padding: 0.5rem 0.75rem; font: inherit; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 0.4rem; }
+input[aria-invalid=true] { border: 2px solid var(--error); }
+#code { font-family: ui-monospace, Menlo, Consolas, monospace; letter-spacing: 0.08em;
+  text-transform: uppercase; }
+fieldset { border: 1px solid var(--line); border-radius: 0.5rem; margin: 1.25rem 0;
+  padding: 0.25rem 1rem 1rem; }
+legend { font-weight: 600; padding: 0 0.25rem; }
+button { font: inherit; }
+#submit { display: block; width: 100%; min-height: 3rem; margin-top: 1.5rem; font-weight: 600;
+  color: #fff; background: var(--accent); border: 0; border-radius: 0.5rem; }
+@media (prefers-color-scheme: dark) { #submit { color: #121212; } }
+#submit[disabled] { opacity: 0.6; }
+a.button { display: block; text-align: center; min-height: 3rem; line-height: 3rem;
+  font-weight: 600; color: #fff; background: var(--accent); border-radius: 0.5rem;
+  text-decoration: none; }
+@media (prefers-color-scheme: dark) { a.button { color: #121212; } }
+.link { background: none; border: 0; color: var(--accent); text-decoration: underline;
+  min-height: 2.75rem; padding: 0 0.25rem; cursor: pointer; }
+.lang { text-align: right; margin: 0; }
+.summary { border: 2px solid var(--error); border-radius: 0.5rem; padding: 0.5rem 1rem;
+  margin: 1rem 0; }
+.summary a { color: var(--error); }
+.box { background: var(--box); border-radius: 0.5rem; padding: 0.75rem 1rem; }
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; word-break: break-all; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }

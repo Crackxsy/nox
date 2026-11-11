@@ -54,8 +54,29 @@ class FakeRun:
 
 def system(tmp_path: Path, run: FakeRun | None = None) -> Any:
     return helper.System(
-        run=run or FakeRun(), clock=lambda: 1_000_000.0, root=tmp_path, root_uid=OWN_UID
+        run=run or FakeRun(),
+        clock=lambda: 1_000_000.0,
+        root=tmp_path,
+        root_uid=OWN_UID,
+        uptime=lambda: UPTIME,
     )
+
+
+#: Seconds since boot in these tests, and this boot's id.
+UPTIME = 120.0
+BOOT_ID = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
+
+
+def open_setup(tmp_path: Path, *, until: float = 1800.0, boot_id: str = BOOT_ID) -> Path:
+    """Root's setup-mode file as nox_setup.py writes it (this boot, end in seconds since boot)."""
+    ident = tmp_path / "proc/sys/kernel/random/boot_id"
+    ident.parent.mkdir(parents=True, exist_ok=True)
+    ident.write_text(BOOT_ID + "\n", "ascii")
+    mode = tmp_path / "run/nox-os/setup-mode"
+    mode.parent.mkdir(parents=True, exist_ok=True)
+    record = {"v": 1, "boot_id": boot_id, "until": until, "reason": "unclaimed"}
+    mode.write_text(json.dumps(record), "ascii")
+    return mode
 
 
 # ---- the requests ----------------------------------------------------------------------------
@@ -468,7 +489,16 @@ def test_the_passphrase_is_set_only_in_setup_mode(tmp_path: Path) -> None:
         with pytest.raises(helper.Refused):
             helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
         mode.unlink()
-    mode.write_text("", "ascii")
+    # No window (O3): an empty flag, one whose end is reached, one of an earlier boot.
+    for no_window in (
+        lambda: mode.write_text("", "ascii"),
+        lambda: open_setup(tmp_path, until=UPTIME),
+        lambda: open_setup(tmp_path, boot_id="00000000-0000-0000-0000-000000000000"),
+    ):
+        no_window()
+        with pytest.raises(helper.Refused):
+            helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
+    open_setup(tmp_path)
     answer = helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
     assert answer["passphrase"] is True and answer["setup_mode"] is True
     record = (tmp_path / "var/lib/nox-os/maintenance").read_text("ascii")
@@ -571,9 +601,7 @@ def test_parallel_wrong_guesses_are_all_counted(tmp_path: Path) -> None:
 
 def test_maint_set_never_replaces_a_passphrase_without_roots_reset(tmp_path: Path) -> None:
     sys_ = system(tmp_path)
-    mode = tmp_path / "run/nox-os/setup-mode"
-    mode.parent.mkdir(parents=True, exist_ok=True)
-    mode.write_text("", "ascii")
+    mode = open_setup(tmp_path)
     helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
     # Setup mode again (a second claim), but the passphrase stays without the old one.
     with pytest.raises(helper.Refused) as refused:
@@ -592,3 +620,305 @@ def test_maint_set_never_replaces_a_passphrase_without_roots_reset(tmp_path: Pat
     with pytest.raises(helper.Refused) as refused:
         helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
     assert refused.value.code == "not_setup"
+
+
+# ---- the claim (O3) --------------------------------------------------------------------------
+
+CLAIM_CODE = "ABCD-EFGH-JKMN"  # fictitious
+LAN_PEER = "192.0.2.30"
+NOISY_PEER = "192.0.2.66"
+PHONE = "10.42.0.20"
+
+
+def _code_line(code: str) -> str:
+    return "code " + base64.b64encode(code.encode()).decode()
+
+
+def _claim_req(
+    code: str = CLAIM_CODE, device: str = "0a1b2c", new: str | None = None, peer: str = LAN_PEER
+) -> Any:
+    lines = [f"claim {device} {peer}", _code_line(code)]
+    if new is not None:
+        lines.append(_new(new))
+    return helper.parse_request("\n".join(lines).encode())
+
+
+def _stage_req(code: str = CLAIM_CODE, peer: str = PHONE, ticket: str | None = None) -> Any:
+    lines = [f"stage {peer}", _code_line(code)]
+    if ticket is not None:
+        lines.append("ticket " + base64.b64encode(ticket.encode()).decode())
+    return helper.parse_request("\n".join(lines).encode())
+
+
+def _claimable(tmp_path: Path) -> Path:
+    open_setup(tmp_path)
+    record = {"v": 1, "hash": helper.claim_hash("ABCDEFGHJKMN"), "source": "card"}
+    state = tmp_path / "var/lib/nox-os/claim.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps(record), "ascii")
+    return state
+
+
+def test_the_claim_and_stage_requests_are_strict() -> None:
+    request = _claim_req("abcd efgh jkmn")
+    assert (request.command, request.device, request.code) == ("claim", "0a1b2c", "ABCDEFGHJKMN")
+    assert request.address == LAN_PEER and "ABCDEFGHJKMN" not in repr(request)
+    staged = _stage_req(ticket="t" * 32)
+    assert (staged.command, staged.address, staged.ticket) == ("stage", PHONE, "t" * 32)
+    pin = "pin " + base64.b64encode(b"135790").decode()
+    for bad in (
+        b"claim",
+        b"claim 0a1b2c\ncode QUJD",  # no address
+        b"claim ../x 192.0.2.1\ncode QUJD",
+        b"claim 0a1b2c not-an-address\ncode QUJD",
+        b"claim 0a1b2c 192.0.2.1\npass QUJD",
+        b"stage 10.42.0.20\ncode QUJDREVGR0hKS01O\nkey QUJD",
+        # No PIN or passphrase ever comes over the hotspot.
+        f"stage 10.42.0.20\n{_code_line(CLAIM_CODE)}\n{pin}".encode(),
+        f"stage 10.42.0.20\n{_code_line(CLAIM_CODE)}\n{_new(PASS)}".encode(),
+    ):
+        with pytest.raises(helper.Refused):
+            helper.parse_request(bad)
+    with pytest.raises(helper.Refused) as refused:
+        _claim_req("not-a-code!")
+    assert refused.value.code == "claim_wrong"
+
+
+def test_only_root_stages(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    _claimable(tmp_path)
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(_stage_req(ticket="t" * 32), sys_, root=False)
+    assert refused.value.code == "not_allowed"
+    assert not (tmp_path / "run/nox-os/setup/pending.json").exists()
+
+
+def test_the_portal_keeps_only_a_ticket_and_the_claim_sets_what_it_sends(tmp_path: Path) -> None:
+    run = FakeRun()
+    sys_ = system(tmp_path, run)
+    state = _claimable(tmp_path)
+    pending = tmp_path / "run/nox-os/setup/pending.json"
+    # A wrong code in the portal keeps nothing.
+    assert _refusal(_stage_req("ZZZZ-ZZZZ-ZZZZ", ticket="t" * 32), sys_) == "claim_wrong"
+    assert not pending.exists()
+    # The right one keeps the ticket's hash - nothing else, and sets nothing.
+    answer = helper.handle(_stage_req(ticket="t" * 32, peer="10.42.0.21"), sys_)
+    assert answer["staged"] == "ok" and answer["ticket"] is True
+    kept = json.loads(pending.read_text("ascii"))
+    assert set(kept) == {"ticket"} and "t" * 32 not in pending.read_text("ascii")
+    assert answer["passphrase"] is False
+    if sys.platform != "win32":
+        assert pending.stat().st_mode & 0o777 == 0o600
+    # A wrong claim sets nothing.
+    with pytest.raises(helper.Refused):
+        helper.handle(_claim_req("ZZZZ-ZZZZ-ZZZZ"), sys_)
+    assert not (tmp_path / "var/lib/nox-os/maintenance").exists()
+    # The claim sets the passphrase it sends and marks the owner in the same step.
+    answer = helper.handle(_claim_req(peer="192.0.2.31", new=PASS), sys_)
+    assert answer["claim"] == "ok" and answer["claimed"] is True and "pin" not in answer
+    helper.verify_passphrase(sys_, PASS)
+    marker = json.loads((tmp_path / "var/lib/nox-os-claim/claimed").read_text("ascii"))
+    assert marker["owner_device"] == "0a1b2c"
+    assert not (tmp_path / "run/nox-os/setup-mode").exists()
+    assert not state.exists() and not pending.exists()
+    # Hotspot and portal down (waited for) before the firewall opens the node port.
+    close = run.calls.index(("systemctl", "start", "nox-setup-close.service"))
+    assert close < len(run.calls) - 1 - run.calls[::-1].index(
+        ("systemctl", "restart", "nox-firewall.service")
+    )
+    if sys.platform != "win32":
+        assert (tmp_path / "var/lib/nox-os-claim/claimed").stat().st_mode & 0o777 == 0o644
+    # Once claimed, never again - not even with the right code in a new window.
+    _claimable(tmp_path)
+    assert _refusal(_claim_req(peer="192.0.2.32"), sys_) == "claimed"
+
+
+def test_a_reclaim_lets_the_next_claim_set_a_fresh_passphrase(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    _claimable(tmp_path)
+    helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
+    (tmp_path / "var/lib/nox-os/reset-maintenance").write_text("reclaim\n", "ascii")
+    helper.handle(_claim_req(new="the new owner's passphrase"), sys_)
+    helper.verify_passphrase(sys_, "the new owner's passphrase")
+    assert not (tmp_path / "var/lib/nox-os/reset-maintenance").exists()
+
+
+def test_a_claim_never_replaces_a_passphrase(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    _claimable(tmp_path)
+    helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
+    helper.handle(_claim_req(new="somebody elses passphrase"), sys_)
+    helper.verify_passphrase(sys_, PASS)
+
+
+def _clocked(tmp_path: Path) -> tuple[Any, dict[str, float]]:
+    uptime = {"now": 100.0}
+    sys_ = helper.System(
+        run=FakeRun(),
+        clock=lambda: 1_000_000.0,
+        root=tmp_path,
+        root_uid=OWN_UID,
+        uptime=lambda: uptime["now"],
+    )
+    _claimable(tmp_path)
+    open_setup(tmp_path, until=1_000_000)
+    return sys_, uptime
+
+
+def _refusal(request: Any, sys_: Any) -> str:
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(request, sys_)
+    return str(refused.value.code)
+
+
+def _side(tmp_path: Path, side: str) -> dict[str, Any]:
+    record = json.loads((tmp_path / "run/nox-os/claim-failures").read_text("ascii"))
+    return dict(record["sides"][side])
+
+
+WRONG = "ZZZZ-ZZZZ-ZZZZ"
+
+
+def test_wrong_codes_slow_their_source_down_doubling_to_five_minutes(tmp_path: Path) -> None:
+    sys_, uptime = _clocked(tmp_path)
+    assert _refusal(_claim_req(WRONG, peer=NOISY_PEER), sys_) == "claim_wrong"
+    assert _refusal(_claim_req(peer=NOISY_PEER), sys_) == "claim_wait"  # even the right code
+    waits = []
+    for _ in range(12):
+        uptime["now"] += helper.CLAIM_BACKOFF_MAX_S + 1
+        assert _refusal(_claim_req(WRONG, peer=NOISY_PEER), sys_) == "claim_wrong"
+        mine = _side(tmp_path, "lan")["sources"][NOISY_PEER]
+        waits.append(mine["until"] - uptime["now"])
+    assert waits[:4] == [2.0, 4.0, 8.0, 16.0] and waits[-1] == helper.CLAIM_BACKOFF_MAX_S
+    # Another source is not held up.
+    assert helper.handle(_claim_req(peer=LAN_PEER), sys_)["claim"] == "ok"
+
+
+def test_ipv6_sources_are_grouped_by_their_64(tmp_path: Path) -> None:
+    sys_, _ = _clocked(tmp_path)
+    assert _refusal(_claim_req(WRONG, peer="2001:db8:1:2::10"), sys_) == "claim_wrong"
+    # Another address in the same /64: the same source, still waiting.
+    assert _refusal(_claim_req(WRONG, peer="2001:db8:1:2::99"), sys_) == "claim_wait"
+    assert helper.source_key("2001:db8:1:2::99") == "2001:db8:1:2::/64"
+    assert helper.source_key("::ffff:192.0.2.7") == "192.0.2.7"
+    # Another /64 is another source.
+    assert _refusal(_claim_req(WRONG, peer="2001:db8:1:3::10"), sys_) == "claim_wrong"
+
+
+def test_rotating_addresses_cannot_get_past_the_budget(tmp_path: Path) -> None:
+    sys_, uptime = _clocked(tmp_path)
+    codes = []
+    for n in range(helper.CLAIM_BUDGET + 5):
+        uptime["now"] += helper.CLAIM_BACKOFF_MAX_S + 1  # every wait over: room for new ones
+        peer = f"192.0.2.{n % 250 + 1}" if n < 250 else f"198.51.100.{n % 250 + 1}"
+        codes.append(_refusal(_claim_req(WRONG, peer=peer), sys_))
+    assert codes[: helper.CLAIM_BUDGET] == ["claim_wrong"] * helper.CLAIM_BUDGET
+    assert set(codes[helper.CLAIM_BUDGET :]) == {"claim_locked_lan"}
+    # Locked until the next boot - the right code too, from anyone on the LAN.
+    assert _refusal(_claim_req(peer="203.0.113.9"), sys_) == "claim_locked_lan"
+    assert _side(tmp_path, "lan")["total"] == helper.CLAIM_BUDGET
+
+
+def test_a_full_table_of_waiting_sources_makes_the_side_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A small table (256 is more than the budget of 200 lets fill): the same rule.
+    monkeypatch.setattr(helper, "CLAIM_SOURCES", 8)
+    sys_, uptime = _clocked(tmp_path)
+    for n in range(helper.CLAIM_SOURCES):
+        peer = f"10.{n // 250}.{n % 250}.1"
+        assert _refusal(_claim_req(WRONG, peer=peer), sys_) == "claim_wrong"
+    # Every one of them still waits: none is forgotten to make room ...
+    assert len(_side(tmp_path, "lan")["sources"]) == helper.CLAIM_SOURCES
+    assert _refusal(_claim_req(WRONG, peer="203.0.113.1"), sys_) == "claim_wrong"
+    sources = _side(tmp_path, "lan")["sources"]
+    assert "203.0.113.1" not in sources and "10.0.0.1" in sources
+    # ... the whole side waits instead (fail closed), a new source included.
+    assert _refusal(_claim_req(peer="203.0.113.2"), sys_) == "claim_wait"
+    # The hotspot side is its own.
+    assert helper.handle(_stage_req(), sys_)["staged"] == "ok"
+    # Once the waits are over, room is made from sources whose wait is over.
+    uptime["now"] += helper.CLAIM_BACKOFF_MAX_S + 1
+    assert _refusal(_claim_req(WRONG, peer="203.0.113.3"), sys_) == "claim_wrong"
+    assert "203.0.113.3" in _side(tmp_path, "lan")["sources"]
+
+
+def test_staged_secrets_never_exempt_lan_guesses(tmp_path: Path) -> None:
+    sys_, _ = _clocked(tmp_path)
+    helper.handle(_stage_req(ticket="t" * 32), sys_)
+    pending = tmp_path / "run/nox-os/setup/pending.json"
+    record = json.loads(pending.read_text("ascii"))
+    record["verified"] = True  # whatever got there changes nothing
+    pending.write_text(json.dumps(record), "ascii")
+    assert _refusal(_claim_req(WRONG, peer=NOISY_PEER), sys_) == "claim_wrong"
+    assert _refusal(_claim_req(WRONG, peer=NOISY_PEER), sys_) == "claim_wait"
+    assert _side(tmp_path, "lan")["total"] == 1
+
+
+def test_a_locked_lan_does_not_lock_the_owner_on_the_hotspot_out(tmp_path: Path) -> None:
+    sys_, _ = _clocked(tmp_path)
+    locked = {
+        "boot_id": BOOT_ID,
+        "sides": {"lan": {"total": helper.CLAIM_BUDGET, "sources": {}, "full_until": 0.0}},
+    }
+    (tmp_path / "run/nox-os/claim-failures").write_text(json.dumps(locked), "ascii")
+    assert _refusal(_claim_req(peer=LAN_PEER), sys_) == "claim_locked_lan"
+    # The owner on the hotspot: the right code there, with the portal's ticket ...
+    ticket = "t" * 32
+    staged = _stage_req(ticket=ticket)
+    assert helper.handle(staged, sys_)["staged"] == "ok"
+    # ... then the claim from the home network presenting the ticket counts on the hotspot side.
+    with_ticket = helper.Request(**{**_claim_req(peer=LAN_PEER).__dict__, "ticket": ticket})
+    assert helper.handle(with_ticket, sys_)["claim"] == "ok"
+
+
+def test_a_wrong_ticket_counts_on_the_lan(tmp_path: Path) -> None:
+    sys_, _ = _clocked(tmp_path)
+    staged = _stage_req(ticket="t" * 32)
+    helper.handle(staged, sys_)
+    forged = helper.Request(**{**_claim_req(WRONG, peer=NOISY_PEER).__dict__, "ticket": "f" * 32})
+    assert _refusal(forged, sys_) == "claim_wrong"
+    assert _side(tmp_path, "lan")["total"] == 1
+    assert (
+        "hotspot"
+        not in json.loads((tmp_path / "run/nox-os/claim-failures").read_text("ascii"))["sides"]
+        or _side(tmp_path, "hotspot")["total"] == 0
+    )
+
+
+def test_the_hotspot_side_locks_on_its_own(tmp_path: Path) -> None:
+    sys_, _ = _clocked(tmp_path)
+    locked = {
+        "boot_id": BOOT_ID,
+        "sides": {"hotspot": {"total": helper.CLAIM_BUDGET, "sources": {}, "full_until": 0.0}},
+    }
+    (tmp_path / "run/nox-os/claim-failures").write_text(json.dumps(locked), "ascii")
+    assert _refusal(_stage_req(), sys_) == "claim_locked_hotspot"
+    assert helper.handle(_claim_req(), sys_)["claim"] == "ok"
+
+
+def test_the_ticket_is_parsed_strictly() -> None:
+    line = "ticket " + base64.b64encode(b"t" * 32).decode()
+    request = helper.parse_request(
+        f"claim 0a1b2c {LAN_PEER}\n{_code_line(CLAIM_CODE)}\n{line}".encode()
+    )
+    assert request.ticket == "t" * 32 and "t" * 32 not in repr(request)
+    bad = "ticket " + base64.b64encode(b"short").decode()
+    with pytest.raises(helper.Refused):
+        helper.parse_request(f"claim 0a1b2c {LAN_PEER}\n{_code_line(CLAIM_CODE)}\n{bad}".encode())
+
+
+def test_no_claim_outside_the_window_or_without_a_code(tmp_path: Path) -> None:
+    sys_ = system(tmp_path)
+    _claimable(tmp_path)
+    open_setup(tmp_path, until=UPTIME)  # its end reached
+    for request in (_claim_req(), _stage_req()):
+        with pytest.raises(helper.Refused) as refused:
+            helper.handle(request, sys_)
+        assert refused.value.code == "not_setup"
+    open_setup(tmp_path)
+    (tmp_path / "var/lib/nox-os/claim.json").unlink()
+    with pytest.raises(helper.Refused) as refused:
+        helper.handle(_claim_req(), sys_)
+    assert refused.value.code == "no_claim_code"
+    assert helper.status(sys_)["claimed"] is False

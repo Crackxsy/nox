@@ -66,6 +66,8 @@ DEVICE_SURFACE = frozenset(
         "node.unpair",
         # Nox-OS remote maintenance: switching on needs the PIN, always (`nox.noxos`); a headless
         # Pi is administered from a paired device.
+        # Nox-OS claim (O3): read-only - whether the device has its owner (O4's onboarding).
+        "noxos.claim.status",
         "noxos.ssh.disable",
         "noxos.ssh.enable",
         "noxos.ssh.keys.set",
@@ -707,6 +709,7 @@ CALM_SNAPSHOT = frozenset(
         "memory.profile.list",
         "node.computer.status",
         "node.list",
+        "noxos.claim.status",
         "noxos.ssh.status",
         "personality.get",
         "plans.list",
