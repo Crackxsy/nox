@@ -549,9 +549,6 @@ define node_notify_missing \
 define node_audio_on \
   'Der Knoten darf die Soundkarte benutzen (Gruppe audio, /dev/snd): %s' \
   'The node may use the sound card (group audio, /dev/snd): %s'
-define node_portaudio_failed \
-  'libportaudio2 ließ sich nicht installieren; ohne sie kann der Knoten nicht hören oder sprechen.' \
-  'libportaudio2 could not be installed; without it the node can neither listen nor speak.'
 define node_audio_off \
   'Der Knoten benutzt die Soundkarte nicht mehr.' \
   'The node no longer uses the sound card.'
@@ -1029,11 +1026,6 @@ node_write_devices() {
   case "$NODE_AUDIO" in
     on)
       getent group audio >/dev/null 2>&1 || fail "$(msg node_audio_group)"
-      # sounddevice needs the system's PortAudio library (root installs it for a headless node).
-      if command -v apt-get >/dev/null 2>&1; then
-        DEBIAN_FRONTEND=noninteractive timeout 600 apt-get -o DPkg::Lock::Timeout=300 install -y -qq libportaudio2 >/dev/null \
-          || note "$(msg node_portaudio_failed)"
-      fi
       install -d -m 0755 "$dir"
       {
         printf '# Written by install-linux.sh --node --headless --with-audio (docs/NODES.md); removed\n'
@@ -1286,6 +1278,8 @@ elif command -v apt-get >/dev/null 2>&1; then
   # answering, or at all - a stuck apt once held a CI job for 30 minutes.
   APT_OPTS=(-o DPkg::Lock::Timeout=300 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3)
   APT_PACKAGES=(git curl ca-certificates openssl tar sudo bubblewrap python3)
+  # sounddevice (the node's voice satellite) needs the system's PortAudio library.
+  if [ "$NODE_AUDIO" = on ]; then APT_PACKAGES+=(libportaudio2); fi
   timeout 900 apt-get "${APT_OPTS[@]}" update -qq || fail "$(msg apt_failed update update)"
   DEBIAN_FRONTEND=noninteractive timeout 1800 apt-get "${APT_OPTS[@]}" install -y -qq "${APT_PACKAGES[@]}" >/dev/null \
     || fail "$(msg apt_failed install "install ${APT_PACKAGES[*]}")"

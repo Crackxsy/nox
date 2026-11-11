@@ -95,6 +95,7 @@ def _world(
         probe=Probe,
         sender=lambda: seen["sender"],
         has_module=lambda _module: True,  # every optional library "installed"
+        media=PlatformMedia(platform="linux"),  # the same catalogue on every test OS
     )
     return world, seen
 
