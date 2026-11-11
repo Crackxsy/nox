@@ -170,7 +170,7 @@ jobs:
   # installed: the dialogs and the trash are faked, the file operations run in temporary folders.
   python-macos:
     name: Python on macOS (node tests)
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
