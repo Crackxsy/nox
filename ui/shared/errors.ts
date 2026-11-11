@@ -54,10 +54,9 @@ export function ipcReason(e: unknown): string {
   if (typeof reason !== 'string') return '';
   if (reason === NODE_SESSION) {
     // While Nox controls a paired PC the core says why in a second, stable word
-    // (`node_session_linked`, ...): that is the reason a page words, whichever field carries it.
-    for (const value of Object.values(e.details)) {
-      if (typeof value === 'string' && value.startsWith(`${NODE_SESSION}_`)) return value;
-    }
+    // (`details.sub_reason`: `node_session_linked|remote|no_pin|saturated|role|pin`).
+    const sub = e.details.sub_reason;
+    if (typeof sub === 'string' && sub.startsWith(`${NODE_SESSION}_`)) return sub;
   }
   return reason;
 }

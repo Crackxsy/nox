@@ -51,39 +51,6 @@ STOP_KEYS = frozenset({"ctrl", "alt", "shift", "k"})
 PTT_KEYS = frozenset({"ctrl", "alt", "space"})
 REFRESH_MS = 1000
 
-#: The dashboard's words for the groups (`node_group_*`), as labels: one set for tray and page.
-_LABELS = {
-    "de": {
-        "system": "Systemwerte lesen",
-        "notify": "Hinweise zeigen",
-        "media": "Musik steuern",
-        "files": "Dateien lesen und schreiben",
-        "shell": "Befehle ausführen",
-        "packages": "Programme installieren",
-        "screen": "Bildschirm sehen",
-        "camera": "Kamera nutzen",
-        "browser": "Im Browser arbeiten",
-        "desktop": "Fenster und Programme steuern",
-        "computer": "Maus und Tastatur steuern",
-        "voice": "Zuhören und sprechen",
-        "obs": "OBS steuern",
-    },
-    "en": {
-        "system": "Read system values",
-        "notify": "Show notices",
-        "media": "Control music",
-        "files": "Read and write files",
-        "shell": "Run commands",
-        "packages": "Install programs",
-        "screen": "See the screen",
-        "camera": "Use the camera",
-        "browser": "Work in the browser",
-        "desktop": "Control windows and programs",
-        "computer": "Control mouse and keyboard",
-        "voice": "Listen and speak",
-        "obs": "Control OBS",
-    },
-}
 #: What the core says when this device's microphone may not listen because the owner has not
 #: switched listening on in the dashboard yet (`nox.node.satellites`).
 _NOT_SWITCHED_ON = frozenset({"voice_not_enabled", "voice_not_switched_on_here"})
@@ -179,8 +146,13 @@ def ptt(home: NodeHome, pressed: bool) -> None:
 
 def allowed_here(home: NodeHome, *, german: bool = True) -> str:
     manifest = load_manifest(home.manifest_file)
-    words = _LABELS["de" if german else "en"]
-    labels = [words.get(g, g) for g in GROUPS if manifest.groups.get(g)]
+    # `GROUPS` carries the dashboard's words for each group (sentence case there: capitalised here).
+    labels = [
+        (GROUPS[g].label_de if german else GROUPS[g].label_en)[:1].upper()
+        + (GROUPS[g].label_de if german else GROUPS[g].label_en)[1:]
+        for g in GROUPS
+        if manifest.groups.get(g)
+    ]
     head = "Nox darf hier:" if german else "Nox may do here:"
     nothing = "- nichts" if german else "- nothing"
     hint = (

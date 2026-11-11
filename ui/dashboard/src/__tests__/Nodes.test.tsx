@@ -294,7 +294,7 @@ describe('the detail sheet', () => {
           'permission.denied',
           'Nox controls mouse and keyboard on a paired PC; approving or changing anything now needs the security PIN, and none is set - deny, stop, or set a PIN first',
           false,
-          { reason: 'node_session', detail: 'node_session_linked' },
+          { reason: 'node_session', sub_reason: 'node_session_linked' },
         ),
       },
     });

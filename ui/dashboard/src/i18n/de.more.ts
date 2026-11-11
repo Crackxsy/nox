@@ -33,6 +33,8 @@ export const deMore = {
     'Während Nox einen PC steuert, braucht Erlauben die Sicherheits-PIN – es ist noch keine festgelegt. Ablehnen und Stopp gehen immer.',
   reason_node_session_saturated:
     'Nox kann gerade nicht sicher erkennen, von welchem Gerät eine Antwort kommt. Erlauben geht wieder, sobald Nox Maus und Tastatur loslässt. Ablehnen und Stopp gehen immer.',
+  reason_node_session_role:
+    'Während Nox einen PC steuert, kann dieses Gerät nichts erlauben. Ablehnen und Stopp gehen immer.',
   reason_node_session:
     'Nox steuert gerade Maus und Tastatur auf einem PC. Erlauben und Ändern gehen jetzt nur mit der Sicherheits-PIN. Ablehnen und Stopp gehen immer.',
   hotkey_record: 'Taste festlegen',

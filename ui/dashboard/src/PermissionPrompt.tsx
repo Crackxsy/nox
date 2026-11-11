@@ -29,7 +29,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { refusalText } from './hooks';
 import { auditActionLabel, auditToolLabel, fill, type Key, rememberLabel, type T } from './i18n';
-import { type IpcClient, api } from './ipc';
+import { type IpcClient, IpcError, api } from './ipc';
 import { type PermissionPrompt, needsDevicePin, secondsLeft } from './model';
 import { StopButton } from './shell/stop';
 import { Filled } from './ui';
@@ -204,7 +204,22 @@ function PromptBody({
       // The buttons are disabled while the answer travels; keep focus where it can stay.
       holdFocus?.();
       try {
-        await api.permissionReply(client, prompt.id, decision, remembered && !device, sendPin ? pin.trim() : '');
+        const result = await api.permissionReply(
+          client,
+          prompt.id,
+          decision,
+          remembered && !device,
+          sendPin ? pin.trim() : '',
+        );
+        // A refused "allow" comes back as an answer, not an error: `{ok: false, sub_reason}` while
+        // Nox controls a paired PC. The question stays; the reason is worded, not the English text.
+        if (typeof result === 'object' && result !== null && (result as { ok?: unknown }).ok === false) {
+          const sub = (result as { sub_reason?: unknown }).sub_reason;
+          throw new IpcError('permission.denied', 'refused', false, {
+            reason: typeof sub === 'string' ? 'node_session' : 'refused',
+            ...(typeof sub === 'string' ? { sub_reason: sub } : {}),
+          });
+        }
         onAnswered(prompt.id, decision);
       } catch (e) {
         setError(refusalText(t, e, sendPin, t('perm_reply_failed')));

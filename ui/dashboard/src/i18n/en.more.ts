@@ -34,6 +34,8 @@ export const enMore: Record<MoreKey, string> = {
     'While Nox controls a PC, allowing needs the security PIN – and none is set yet. Deny and Stop always work.',
   reason_node_session_saturated:
     'Nox cannot tell for sure right now which device an answer comes from. Allowing works again once Nox lets go of mouse and keyboard. Deny and Stop always work.',
+  reason_node_session_role:
+    'While Nox controls a PC, this device cannot allow anything. Deny and Stop always work.',
   reason_node_session:
     'Nox is controlling mouse and keyboard on a PC. Allowing and changing things now need the security PIN. Deny and Stop always work.',
   hotkey_record: 'Set key',

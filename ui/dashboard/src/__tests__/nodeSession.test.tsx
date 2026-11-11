@@ -11,20 +11,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { refusalText } from '../hooks';
 import { translator } from '../i18n';
 import { type IpcClient, IpcError } from '../ipc';
-import { type PermissionPrompt, pinErrorKey } from '../model';
+import type { PermissionPrompt } from '../model';
 import { PermissionPromptDialog } from '../PermissionPrompt';
 
 const t = translator('de');
 
 // The core's sentences today (`nox.node.world_routes`), made up nowhere else.
-const LINKED =
-  'Nox controls mouse and keyboard on the PC this browser runs on; nothing can be approved or changed from here until that ends - deny or stop';
-const REMOTE =
-  'Nox controls mouse and keyboard on a paired PC and this computer is used remotely (or that cannot be told); approve at the computer itself with the PIN, or deny or stop';
 const NO_PIN =
   'Nox controls mouse and keyboard on a paired PC; approving or changing anything now needs the security PIN, and none is set - deny, stop, or set a PIN first';
-const SATURATED =
-  'Nox steuert ein Gerät mit sehr vielen Adressen - Freigaben und Nachrichten erst nach Ende der Sitzung; Ablehnen und Stopp gehen immer';
 
 const refusal = (message: string, details: Record<string, unknown>) =>
   new IpcError('permission.denied', message, false, details);
@@ -36,36 +30,18 @@ describe('a refusal while Nox controls a PC', () => {
     ['node_session_no_pin', 'reason_node_session_no_pin'],
     ['node_session_saturated', 'reason_node_session_saturated'],
   ] as const)('words the second reason %s', (sub, key) => {
-    // Wherever the core puts the second word, and whatever it says next to it.
-    for (const details of [{ reason: sub }, { reason: 'node_session', detail: sub }, { reason: 'node_session', sub_reason: sub }]) {
-      expect(refusalText(t, refusal(NO_PIN, details), true, t('perm_reply_failed'))).toBe(t(key));
-    }
+    const text = refusalText(t, refusal(NO_PIN, { reason: 'node_session', sub_reason: sub }), true, t('perm_reply_failed'));
+    expect(text).toBe(t(key));
+    expect(text).not.toBe(t('reason_pin_wrong'));
   });
 
-  it.each([
-    [LINKED, 'reason_node_session_linked'],
-    [REMOTE, 'reason_node_session_remote'],
-    [NO_PIN, 'reason_node_session_no_pin'],
-    [SATURATED, 'reason_node_session_saturated'],
-  ] as const)('reads an older core by its sentence (%#)', (message, key) => {
-    for (const pinSent of [false, true]) {
-      const text = refusalText(t, refusal(message, { reason: 'node_session' }), pinSent, t('perm_reply_failed'));
-      expect(text).toBe(t(key));
-      expect(text).not.toBe(t('reason_pin_wrong'));
-      expect(text).not.toBe(t('perm_reply_failed'));
-    }
-  });
-
-  it('keeps a wrong PIN a wrong PIN, and anything else in German', () => {
-    expect(refusalText(t, refusal('wrong PIN', { reason: 'node_session' }), true)).toBe(t('pin_wrong'));
-    expect(refusalText(t, refusal('this client cannot approve now', { reason: 'node_session' }), true)).toBe(
-      t('reason_node_session'),
-    );
-  });
-
-  it('is never a PIN message where a page reads the PIN by itself', () => {
-    expect(pinErrorKey('permission.denied', NO_PIN, true)).toBeNull();
-    expect(pinErrorKey('permission.denied', 'wrong PIN', true)).toBe('pin_wrong');
+  it('words role and pin too, and an older core without a sub-reason in German', () => {
+    const pin = refusal('x', { reason: 'node_session', sub_reason: 'node_session_pin' });
+    expect(refusalText(t, pin, true)).toBe(t('reason_pin_wrong'));
+    const role = refusal('x', { reason: 'node_session', sub_reason: 'node_session_role' });
+    expect(refusalText(t, role, true)).toBe(t('reason_node_session_role'));
+    const old = refusal(NO_PIN, { reason: 'node_session' });
+    expect(refusalText(t, old, true)).toBe(t('reason_node_session'));
   });
 
   it('shows in the permission prompt in the sentence for it', async () => {
@@ -79,8 +55,10 @@ describe('a refusal while Nox controls a PC', () => {
       deadline: null,
       rememberTtlS: 0,
     };
+    const onAnswered = vi.fn();
     const client = {
-      request: vi.fn(() => Promise.reject(refusal(LINKED, { reason: 'node_session', detail: 'node_session_linked' }))),
+      // A refused "allow" is an answer, not an error (`security.permission.reply`).
+      request: vi.fn(() => Promise.resolve({ ok: false, reason: NO_PIN, sub_reason: 'node_session_linked' })),
     } as unknown as IpcClient;
     render(
       <PermissionPromptDialog
@@ -90,7 +68,7 @@ describe('a refusal while Nox controls a PC', () => {
         device={false}
         pinSet
         nodeControl
-        onAnswered={() => undefined}
+        onAnswered={onAnswered}
         armDelayMs={0}
       />,
     );
@@ -99,5 +77,6 @@ describe('a refusal while Nox controls a PC', () => {
       fireEvent.click(screen.getByRole('button', { name: t('perm_allow') }));
     });
     expect(screen.getByRole('alert').textContent).toBe(t('reason_node_session_linked'));
+    expect(onAnswered).not.toHaveBeenCalled(); // the question stays
   });
 });

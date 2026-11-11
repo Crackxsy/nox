@@ -39,7 +39,6 @@ from tests.e2e.test_ux_redesign_stubbed import (
     UI_TIMEOUT_MS,
     WS_PORT,
     Journey,
-    StubError,
     _artifacts,
     _install,
     _now,
@@ -116,12 +115,12 @@ class JourneyStub(NodeStub):
         if name == "security.permission.reply" and self.refuse_first_reply and p.get("pin"):
             self.requests.append((name, p))
             self.refuse_first_reply = False
-            raise StubError(
-                "permission.denied",
-                "Nox controls mouse and keyboard on the PC this browser runs on; nothing can be "
-                "approved or changed from here until that ends - deny or stop",
-                {"reason": "node_session", "detail": "node_session_linked"},
-            )
+            # A refused "allow" is an answer: `{ok: false, sub_reason}`.
+            return {
+                "ok": False,
+                "reason": "Nox controls mouse and keyboard on the PC this runs on",
+                "sub_reason": "node_session_linked",
+            }
         return super().answer(name, p)
 
 
