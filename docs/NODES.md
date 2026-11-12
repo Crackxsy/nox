@@ -2,6 +2,8 @@
 
 *Deutsch: [NODES.de.md](NODES.de.md)*
 
+> Commands: `nox-node ...` is the same as `nox node ...` and works in the Command Prompt on Windows and in a terminal on Linux/macOS.
+
 A household has **one** Nox - the *core*, ideally on a Raspberry Pi. Every other PC or laptop can
 run a small **`nox node`**: it connects to the core and lets Nox do things *on that device* - and
 only the things you allowed there.
@@ -64,7 +66,7 @@ later).
    link into the Windows installer's "Connect to Nox" page, or run the command shown, for example
 
    ```text
-   nox node pair "nox-node://pair?h=192.0.2.20&p=47843&c=ABCD2345&fp=…" --name Laptop
+   nox-node pair "nox-node://pair?h=192.0.2.20&p=47843&c=ABCD2345&fp=…" --name Laptop
    ```
 
    The link carries the SHA-256 fingerprint of your Nox's certificate authority. The node fetches
@@ -79,7 +81,7 @@ later).
    60 s apart) and never acts while it is not connected. The dashboard's sheet flips from
    "Waiting for the device …" to "… is connected." when it arrives.
 
-`nox node status` shows whether it is paired and connected and what Nox may do here.
+`nox-node status` shows whether it is paired and connected and what Nox may do here.
 
 Names: only `A-Z a-z 0-9 ä ö ü Ä Ö Ü ß`, space and `- _ .`, up to 40 characters. A name Nox
 already has (also as "LAPTOP" or "Kueche" for "Küche") is refused - pick another with `--name`.
@@ -107,10 +109,10 @@ and never queues the request. A remembered "allow" for the laptop covers only th
 The file `node.yaml` in the node folder decides, and **only this device can widen it**:
 
 ```text
-nox node allow shell     # let Nox run commands here, in this device's sandbox; asks "yes?"
-nox node allow files --folder "C:\Users\Alex\Documents\Nox"   # one folder Nox may open
-nox node deny files --folder "C:\Users\Alex\Documents\Nox"    # take that folder away again
-nox node deny notify     # no more notices on this device - at once, also while it runs
+nox-node allow shell     # let Nox run commands here, in this device's sandbox; asks "yes?"
+nox-node allow files --folder "C:\Users\Alex\Documents\Nox"   # one folder Nox may open
+nox-node deny files --folder "C:\Users\Alex\Documents\Nox"    # take that folder away again
+nox-node deny notify     # no more notices on this device - at once, also while it runs
 ```
 
 | Group | What Nox may do | Default | Notes |
@@ -131,7 +133,7 @@ nox node deny notify     # no more notices on this device - at once, also while 
 
 The core can switch groups off, never on. `allow` works only in an interactive terminal with a
 typed confirmation; editing `node.yaml` by hand can only take something away - anything it adds is
-ignored until you confirm it with `nox node allow`. `max_risk` lowers what the node accepts
+ignored until you confirm it with `nox-node allow`. `max_risk` lowers what the node accepts
 (default `high`; `critical` is never accepted). Pairing confirms only these defaults: a
 `node.yaml` that was there before is not adopted.
 
@@ -141,7 +143,7 @@ A system dialog on this device shows what Nox wants to do, with every detail, fo
 means no, and a "yes" within the first 1.5 seconds counts as no. While it is open, other running
 actions with a side effect are stopped and new ones refused (only reads go on). A node without a
 screen refuses high risk, unless a person confirmed it on Nox itself and you allowed that on the
-device: `nox node allow trust_core_for_high`. The node also keeps its own budget: 60 actions and 5
+device: `nox-node allow trust_core_for_high`. The node also keeps its own budget: 60 actions and 5
 high-risk ones per hour (`max_calls_per_hour`, `max_high_per_hour` in `node.yaml`), independent of
 the core's.
 
@@ -180,7 +182,7 @@ the core's.
   language (a plugin can run it on a click), for a plugin (`dataview`, `jsx`, ...) or one the app
   draws (`mermaid`, `math`, `html`) is refused. An append is judged together with what the file
   already holds, and a refusal says what blocks it. Notes are at most 256 KB, JSON/YAML files 64 KB.
-- **Your notes vault:** `nox node allow files --folder` refuses a folder that is (or lies in) a
+- **Your notes vault:** `nox-node allow files --folder` refuses a folder that is (or lies in) a
   repository or an app workspace - also a vault whose config folder was renamed (found by what
   it holds). Allow a plain folder outside it - for example `Nox` next to the vault - and move
   what Nox wrote into the vault yourself. **Don't link (symlink, junction) Nox's allowed folder
@@ -201,7 +203,7 @@ the core's.
 `package.install` and `package.remove` exist only on the computer Nox itself runs on. On a node
 they are not offered, and the core does not route them there: a package manager needs rights the
 node's sandbox does not give (a system-wide install needs an administrator or root; even a
-per-user install writes outside every folder the sandbox may see). `nox node allow packages` can
+per-user install writes outside every folder the sandbox may see). `nox-node allow packages` can
 be set, but changes nothing yet.
 
 This is an **open decision** for the project owner, between two designs:
@@ -220,7 +222,7 @@ run on the computer Nox runs on, not on the laptop: check what the question show
 
 ## Screen, camera, browser, windows, mouse and keyboard, music
 
-All off by default except music; each is switched on only here, with `nox node allow <group>`.
+All off by default except music; each is switched on only here, with `nox-node allow <group>`.
 
 ### Screen and camera
 
@@ -251,7 +253,7 @@ is in panic or safe mode.
 
 ### Mouse and keyboard (computer use)
 
-`computer`, Windows only (elsewhere refused): `nox node allow computer` asks twice. A session is
+`computer`, Windows only (elsewhere refused): `nox-node allow computer` asks twice. A session is
 asked for on this device every time (high), lasts at most 15 minutes and 200 actions, shows a
 notification, and ends on Ctrl+Alt+Shift+K, the kill switch, a lost connection or its time.
 Inside it Nox may move, click, scroll and press key combinations - never into Nox's own windows,
@@ -316,19 +318,19 @@ yet. "Turn the music down on the Work PC" runs `media.control` there without a q
 ## Voice, OBS and the pet overlay (satellites)
 
 Three things a node can do for Nox beyond its hands - all off by default, each switched on only
-here (`nox node allow voice`, `nox node allow obs`). How they work is set in `satellites.yaml`
+here (`nox-node allow voice`, `nox-node allow obs`). How they work is set in `satellites.yaml`
 in the node folder (preferences only, nothing secret, never *whether*).
 
 ### Speaker microphone (voice satellite)
 
 `voice`: Nox listens and speaks on this device - a Living room Pi with a USB speakerphone, say.
 
-- **Two keys.** `nox node allow voice` here *and* "Switch on listening and speaking" for this
+- **Two keys.** `nox-node allow voice` here *and* "Switch on listening and speaking" for this
   device in the dashboard (the node's sheet; with the PIN when one is set, from a paired device
   always). Until then the group shows as switched off there. The core checks the second key again
   for every utterance.
 - **Listening** is push-to-talk by default (`mode: push_to_talk`): hold `Ctrl+Alt+Space` where the
-  tray runs, or run `nox node voice talk` and press Enter when you are done. With
+  tray runs, or run `nox-node voice talk` and press Enter when you are done. With
   `mode: wake_word` the microphone stays open and Nox reacts to its name ("Nox, ...").
 - **Text, never audio.** Speech recognition runs here (faster-whisper, `tiny` on a Pi, `base`
   elsewhere - `stt_model` changes it); only the recognised **text** goes to Nox, at most 500
@@ -339,10 +341,10 @@ in the node folder (preferences only, nothing secret, never *whether*).
   --models-dir <node folder>/models`); nothing is downloaded by itself.
 - **You see and hear when it listens:** the tray icon says "Nox is listening" while the
   microphone is open, and a short tone plays when push-to-talk starts and when Nox took your
-  question (`earcon: false` turns the tones off). `nox node voice status` says the same in a
+  question (`earcon: false` turns the tones off). `nox-node voice status` says the same in a
   terminal.
-- **Mute and privacy.** `nox node voice mute` mutes the microphone here (also in the tray menu);
-  only this device unmutes it (`nox node voice unmute`). Nox's privacy closes it too: the
+- **Mute and privacy.** `nox-node voice mute` mutes the microphone here (also in the tray menu);
+  only this device unmutes it (`nox-node voice unmute`). Nox's privacy closes it too: the
   microphone (capture) switch, panic, safe mode, a privacy zone and the stop button. While Nox
   controls mouse and keyboard on this PC, it does not listen to it.
 - **"Nox, Notaus"** (or "Nox, emergency stop") stops this node - and with it Nox everywhere - and
@@ -378,7 +380,7 @@ in the node folder (preferences only, nothing secret, never *whether*).
 
 `obs`: OBS runs on this PC, Nox on another one.
 
-- `nox node obs password` stores the obs-websocket password in this device's keyring; it never
+- `nox-node obs password` stores the obs-websocket password in this device's keyring; it never
   goes to Nox's core. The node connects only to the OBS on this PC (`127.0.0.1`, port `4455` -
   `obs: port:` changes it).
 - In `satellites.yaml` name this OBS's privacy scene and the scenes Nox may switch to
@@ -391,13 +393,13 @@ in the node folder (preferences only, nothing secret, never *whether*).
   this PC's scene set). The privacy scene and everything in it cannot be changed.
 - The panic button switches this OBS to its privacy scene (also when this PC was off and comes
   back during the panic); after that Nox changes nothing in OBS here until you run
-  `nox node obs resume` on this PC - that works at once, while the node runs.
+  `nox-node obs resume` on this PC - that works at once, while the node runs.
 
 ### Pet overlay
 
 The pet as an OBS browser source on this PC, from the Nox at home.
 
-- With `obs` allowed, the node serves the pet on this PC only. `nox node overlay` prints the URL
+- With `obs` allowed, the node serves the pet on this PC only. `nox-node overlay` prints the URL
   to put into an OBS browser source (or a browser here), e.g.
   `http://127.0.0.1:47845/pet/?overlay=1&device=<id>#overlay=relay`. The URL holds no secret: the
   node adds its own read-only credential, renews it on every connection and loses it when the
@@ -436,9 +438,9 @@ go back to `auto`. The requests are `node.narrow` and `node.defaults.set` (see
   connected node over its open connection, running actions are aborted (a sandboxed command's
   whole process tree with them), a computer-use session ends, and the node refuses everything
   until Nox resumes.
-- **On the device itself:** `nox node stop`, the tray's **Stopp (überall)** or `Ctrl+Alt+Shift+K`
+- **On the device itself:** `nox-node stop`, the tray's **Stopp (überall)** or `Ctrl+Alt+Shift+K`
   (where a global key hook is available) - or "Nox, Notaus" on a voice satellite - stops it there
-  and Nox everywhere; only `nox node resume` (or **Resume here**) on that device lifts the node's
+  and Nox everywhere; only `nox-node resume` (or **Resume here**) on that device lifts the node's
   own stop.
 - **Dead man:** if a node hears nothing from Nox for 3 seconds while it is doing something, it
   aborts that and refuses everything until Nox is back and not stopped.
@@ -446,7 +448,7 @@ go back to `auto`. The requests are `node.narrow` and `node.defaults.set` (see
 On a desktop with the tray (Windows; Linux where PySide6 is installed) the icon shows the state -
 connected, "Not connected to Nox", update needed, stopped - and its menu has **Stopp (überall)**,
 **Resume here**, **What Nox may do here** and, with voice, the microphone switch. The tray only
-writes the same stop file as `nox node stop`. Notices from a node installed in node mode on
+writes the same stop file as `nox-node stop`. Notices from a node installed in node mode on
 Windows carry Nox's own name (AppUserModelID `Nox.Node`), not "Windows PowerShell".
 
 Hard prohibitions (anti-cheat, game input, stream key, ...) are checked on the node itself as well.
@@ -463,11 +465,11 @@ and its signature and checks, in this order (any "no" stops it; nothing is chang
 3. the manifest is well-formed and names this project;
 4. no downgrade and no replay: not below the running version nor below the highest version that
    ran here, and not created before the newest manifest this node already saw. A version that
-   failed here is skipped for 7 days (or tried again with `nox node update --yes`);
+   failed here is skipped for 7 days (or tried again with `nox-node update --yes`);
 5. it installs **by itself** only when it is a stable patch release, it changed no library
    (`deps_changed: false` in the manifest) and the **paired core accepts the protocol the new node
    speaks** (`node_speaks`, against the range the core sent at the last connection). A minor or
-   major update, a pre-release or an unknown or refused protocol waits for `nox node update` on
+   major update, a pre-release or an unknown or refused protocol waits for `nox-node update` on
    the device; a release that changed libraries needs the installer (a notice says which);
 6. the bundle `nox-app-<tag>.zip`, from that tag's own release, matches the manifest's size and
    SHA-256 (hashed and unpacked from one open file);
@@ -481,9 +483,9 @@ version - after checking its folder again, at every start, against the signed ma
 runs the installed program instead. The new version counts as working once it connected and the
 core accepted its protocol. Two real crashes before that (not a logoff, a shutdown or a stop), or
 a core that refuses its protocol, roll it back. Installing the program again (any installer)
-drops the versions the node installed itself. `nox node update --check` only looks; exit status 3
+drops the versions the node installed itself. `nox-node update --check` only looks; exit status 3
 means release signing is not configured yet. When no newer signed release information was seen
-for more than 30 days, `nox node status` and a notice say so: updates may be held back.
+for more than 30 days, `nox-node status` and a notice say so: updates may be held back.
 
 A node whose protocol the core does not accept shows "update needed" and offers only
 `system.info` until it is updated.
@@ -505,12 +507,12 @@ The accepted residual risks of self-updates are listed in
 | `node.crt`, `ca.crt`, `node.json` | Its certificate (30 days), the pinned authority, the core's address and the node's identity |
 | `node.yaml` | What Nox may do here |
 | `manifest.key` | Only where there is no keyring: the key that signs the confirmations of `node.yaml` (0600) |
-| `audit.db` | Every call, allowed or refused, hash-chained: `nox node log` |
+| `audit.db` | Every call, allowed or refused, hash-chained: `nox-node log` |
 | `app/` | Versions the node installed itself (`releases/<version>`) and `state.json`, which one runs |
-| `update.json` | The last update check, shown by `nox node status` and the tray |
+| `update.json` | The last update check, shown by `nox-node status` and the tray |
 | `satellites.yaml` | How voice, OBS and the overlay relay work here (nothing secret) |
 | `voice.json`, `voice-muted`, `voice-ptt` | What the voice satellite does now (for the tray), the mute switch, push-to-talk held |
-| `obs-panic` | Present after the panic button: Nox changes nothing in OBS here until `nox node obs resume` |
+| `obs-panic` | Present after the panic button: Nox changes nothing in OBS here until `nox-node obs resume` |
 
 Folder: `%LOCALAPPDATA%\Nox\node` (Windows), `~/.local/share/nox/node` (Linux),
 `~/Library/Application Support/Nox/node` (macOS); `NOX_NODE_HOME` overrides it. The node runs as
@@ -531,12 +533,12 @@ off is refused when it comes back. To pair such a device again, see
 
 ## Troubleshooting
 
-`nox node status` on the device and the node's line in the dashboard are the first places to
-look; `nox node log` shows every decision the node made, with its reason.
+`nox-node status` on the device and the node's line in the dashboard are the first places to
+look; `nox-node log` shows every decision the node made, with its reason.
 
 ### The node shows "offline"
 
-- **Is it running?** `nox node status` says `not running`, `disconnected` (it cannot reach Nox),
+- **Is it running?** `nox-node status` says `not running`, `disconnected` (it cannot reach Nox),
   `connected`, `update_needed`, `pin_mismatch` or "Removed from Nox". Start it with
   `nox node run`, or check the logon task "Nox Node" (Windows), `systemctl --user status
   nox-node` (Linux desktop) or `sudo systemctl status nox-node` (headless).
@@ -570,9 +572,9 @@ already paired" - see the next section.
   every node has to be paired again.
 
 To pair a device again: remove it in Nox (if it is still listed), stop the node on the device,
-delete `node.json`, `node.crt` and `node.key` from the node folder, then run `nox node pair`
+delete `node.json`, `node.crt` and `node.key` from the node folder, then run `nox-node pair`
 with a new link. Pairing again starts from the default groups; allow what you need again with
-`nox node allow`.
+`nox-node allow`.
 
 ### Firewall: port 47844
 
@@ -600,27 +602,27 @@ cannot be overridden from Nox. Check:
 
 ### The speaker microphone does not listen
 
-Run `nox node voice status`. In order:
+Run `nox-node voice status`. In order:
 
-- **"Voice: off"** - `nox node allow voice` on the device;
-- **"Muted here: yes"** - `nox node voice unmute` on the device;
+- **"Voice: off"** - `nox-node allow voice` on the device;
+- **"Muted here: yes"** - `nox-node voice unmute` on the device;
 - **"Core says: no (...)"** - the reason is Nox's: the device is not switched on in the dashboard
   (the second key), the microphone or capture switch is off, Nox is in panic or safe mode, a
   privacy zone is active, Nox is stopped, or Nox controls mouse and keyboard on this PC;
 - **"Running: no"** or a **"Problem:"** line - the voice pipeline did not start: usually the
   voice models are missing (download them once, see above) or no microphone was found;
-- in `mode: push_to_talk` nothing is heard without the key or `nox node voice talk`; in
+- in `mode: push_to_talk` nothing is heard without the key or `nox-node voice talk`; in
   `mode: wake_word` every question starts with "Nox";
 - while Nox speaks here, and just after, what it hears is not taken as a question.
 
 ### An update failed or was rolled back
 
-`nox node status` shows the last check in its "Update:" line. "Release signing is not configured"
-means there are no self-updates yet (exit status 3 of `nox node update --check`). A version that
-failed is skipped for 7 days; `nox node update --yes` tries it again. A version that crashed twice
+`nox-node status` shows the last check in its "Update:" line. "Release signing is not configured"
+means there are no self-updates yet (exit status 3 of `nox-node update --check`). A version that
+failed is skipped for 7 days; `nox-node update --yes` tries it again. A version that crashed twice
 before it connected, or whose protocol the core refused, was rolled back to the previous one - the
 node keeps working on that. A release that changed libraries needs the installer; a minor or
-major release waits for `nox node update` on the device. A warning that no newer signed release
+major release waits for `nox-node update` on the device. A warning that no newer signed release
 was seen for 30 days means updates may be held back on the way: check the network, or install
 the current release with the installer.
 

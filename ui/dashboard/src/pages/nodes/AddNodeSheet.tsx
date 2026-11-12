@@ -184,7 +184,6 @@ function AddNode({ t, lang, client, pinSet, nodes, onClose, onCode }: AddNodeShe
               name={`${id}-os`}
               value={s.os}
               checked={os === s.os}
-              disabled={pairing !== null && !expired}
               onChange={() => setOs(s.os)}
             />
             <span className="opt-t">{t(s.label)}</span>

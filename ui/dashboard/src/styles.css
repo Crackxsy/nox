@@ -2989,7 +2989,7 @@ details > summary:hover {
 
 .pairing {
   display: grid;
-  grid-template-columns: minmax(180px, 260px) 1fr;
+  grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
   gap: var(--s-6);
   align-items: start;
 }
@@ -3108,6 +3108,8 @@ details > summary:hover {
 .pairing-buttons {
   display: flex;
   flex-wrap: wrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
   gap: var(--s-2) var(--s-3);
 }
 
@@ -3888,4 +3890,39 @@ details > summary:hover {
   min-height: var(--hit);
   cursor: pointer;
   font-weight: 600;
+}
+
+/* The steps and commands of the add sheet never reach past the sheet's edge. */
+.node-steps,
+.node-steps > li {
+  min-width: 0;
+}
+
+.node-steps .mono {
+  max-width: 100%;
+}
+
+/* On a touch screen every small button is still a 44 px target. */
+@media (pointer: coarse) {
+  .btn--sm,
+  .btn--quiet {
+    min-height: var(--hit);
+    min-width: var(--hit);
+  }
+}
+
+/* The chosen system in the add sheet stays as clear as an enabled choice. */
+.node-os .opt--sel {
+  opacity: 1;
+}
+
+/* The code beside the QR code is set smaller and may break into its two groups: nowrap at 46 px
+   was wider than the column it sits in. */
+.pairing-facts .code-display {
+  font-size: clamp(22px, 3vw, 30px);
+  letter-spacing: 0.1em;
+}
+
+.pairing-facts .code-display-value {
+  white-space: normal;
 }
