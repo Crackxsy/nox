@@ -222,7 +222,7 @@ def test_computers_and_what_nox_may_do_there(journey: Journey) -> None:  # noqa:
 
     # 4. Where "Systemwerte lesen" runs when nobody names a device: under "Standardgeräte",
     #    for all computers.
-    section.get_by_label("Wo Nox Systemwerte liest").select_option(PC)
+    section.get_by_label("Wo Nox Systemwerte liest", exact=True).select_option(PC)
     assert _sent(stub, "node.defaults.set") == []  # choosing alone changes nothing
     section.get_by_role("button", name="Übernehmen: Wo Nox Systemwerte liest").click()
     expect(section.get_by_text("Gespeichert.")).to_be_visible()
