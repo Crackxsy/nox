@@ -549,7 +549,8 @@ def test_widening_commands_refuse_while_a_session_runs_or_cannot_be_read(
         return True
 
     with pytest.raises(cli.NodeCliError, match="mouse and keyboard"):
-        cli.allow(home, "shell", True, say=print, interactive=lambda: True, confirm=confirm)
+        # `notify` works on every OS: the session refusal is what is tested, not the platform.
+        cli.allow(home, "notify", True, say=print, interactive=lambda: True, confirm=confirm)
     with pytest.raises(cli.NodeCliError):
         cli.games(home, "Game.exe", False, say=print, interactive=lambda: True, confirm=confirm)
     with pytest.raises(cli.NodeCliError):
@@ -564,6 +565,17 @@ def test_widening_commands_refuse_while_a_session_runs_or_cannot_be_read(
     # Narrowing always works.
     assert "Microphone muted" in satellite_cli.voice_mute(home, True)
     cli.allow(home, "media", False, say=print)
+
+
+def test_shell_is_not_available_on_a_mac(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review round 1: `allow shell` on macOS says so plainly, whatever else is going on."""
+    from nox.node import cli, cli_text
+
+    real = cli_text.unsupported_reason
+    monkeypatch.setattr(cli, "unsupported_reason", lambda group: real(group, "darwin"))
+    home = _home(tmp_path)
+    with pytest.raises(cli.NodeCliError, match="not available on this device"):
+        cli.allow(home, "shell", True, say=print, interactive=lambda: True, confirm=lambda _p: True)
 
 
 def test_update_refuses_to_install_during_a_session(
