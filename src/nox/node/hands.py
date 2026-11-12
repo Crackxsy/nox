@@ -56,6 +56,7 @@ from nox.node.safe_fs import (
     Folders,
     OutsideFolders,
     content_refusal,
+    extension_class,
     extension_of,
     list_folder,
     markdown_finding,
@@ -139,6 +140,8 @@ def move_refusal(path: str, to: str, *, overwrite: bool, create_folders: bool) -
     if not target:
         return "invalid_path"
     if "." in target.lstrip("."):  # a file name; a name without one may be a folder to move into
+        if extension_class(source) != extension_class(target):
+            return "extension_class_changed"
         return write_refusal([target])
     return "hidden_refused" if target.startswith(".") else None
 

@@ -204,7 +204,9 @@ the core's.
 "yes" is never remembered. Both ends of a move, and the file to delete, follow the rules of a
 write above (allowed folders only, data formats only - `notes.txt` cannot become `run.bat` -, no
 hidden names, no repository or app workspace, never a link). A move never replaces a file, never
-creates a folder and never crosses drives; folders are not moved. A delete goes into this user's
+creates a folder and never crosses drives, and a file keeps its kind: plain text, Markdown, JSON
+and YAML are not renamed into each other (`extension_class_changed`), because each is checked
+differently when written - the file's text must also pass the checks of its new name; folders are not moved. A delete goes into this user's
 trash - the Recycle Bin, the Mac's Trash or the freedesktop trash - or does not happen; where the
 trash cannot take the file (another drive than the trash on Linux, "delete immediately" or a
 removable drive on Windows, a file over 256 MB) the call is refused and the file stays. Both are
@@ -357,7 +359,11 @@ in the node folder (preferences only, nothing secret, never *whether*).
   and is spoken here (Supertonic 3, voice F3; Piper when Supertonic is missing). Download the
   voice models once with `nox node voice setup` (it asks first and writes into the node's
   folder); the node loads them from there only - speech recognition runs with
-  `local_files_only`, so nothing is downloaded by itself, ever.
+  `local_files_only`, so nothing is downloaded by itself, ever. The Whisper files are fetched at a pinned revision (a commit, like
+  Supertonic's), into `models/faster-whisper/whisper-<size>`.
+- **A refused question is not silent.** When Nox refuses what you said (the device is not switched
+  on in the dashboard, the microphone is off at Nox, ...), a low two-tone "no" plays (at most every
+  20 seconds; `earcon: false` silences it) and `nox node voice status` says why in words.
 - **You see and hear when it listens:** the tray icon says "Nox is listening" while the
   microphone is open, and a short tone plays when push-to-talk starts and when Nox took your
   question (`earcon: false` turns the tones off). `nox node voice status` says the same in a

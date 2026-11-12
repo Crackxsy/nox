@@ -1211,6 +1211,43 @@ class Moved:
     target: str
 
 
+def extension_class(name: str) -> str:
+    """The kind of checks a file's text gets when written under this name: `md` (nothing a note
+    app runs), `json`, `yaml` (parsed plainly, no tags or aliases) or `passive` (plain data, no
+    checks beyond the size)."""
+    ext = extension_of(name)
+    if ext == ".md":
+        return "md"
+    if ext == ".json":
+        return "json"
+    if ext in (".yaml", ".yml"):
+        return "yaml"
+    return "passive"
+
+
+def _class_refusal(source: str, target: str) -> None:
+    """A move keeps the file's class: its text passed the checks of one class, and renamed into
+    another it would skip those of the new one (`a.txt` with a Dataview marker becoming `a.md`)."""
+    if extension_class(source) != extension_class(target):
+        raise OutsideFolders(
+            "extension_class_changed",
+            "a file keeps its kind: text, Markdown, JSON and YAML are not renamed into each other",
+        )
+
+
+def _target_content_refusal(read: Callable[[int], bytes], size: int, target: str) -> None:
+    """The write checks of the TARGET name on the file's own text, read through the verified
+    handle - before anything moves (a second line of defence behind `_class_refusal`)."""
+    if extension_class(target) == "passive":
+        return
+    if size > MAX_TEXT_BYTES:
+        raise OutsideFolders("too_large", "a file this large is not renamed into a checked kind")
+    text = read(MAX_TEXT_BYTES + 1).decode("utf-8", errors="replace")
+    refusal = content_refusal(target, text)
+    if refusal is not None:
+        raise OutsideFolders(refusal, "the text would not be written under that name")
+
+
 def move_file(folders: Folders, source: str, target: str) -> Moved:
     """Move or rename one regular file inside the allowed folders.
 
@@ -1226,13 +1263,20 @@ def move_file(folders: Folders, source: str, target: str) -> Moved:
     `renameatx_np(RENAME_EXCL)`, else `linkat` + `unlinkat`); on Windows the verified source handle
     (held without `FILE_SHARE_DELETE`, so nobody else renames it meanwhile) is renamed into the
     verified target folder, which stays open meanwhile. The moved file is checked again
-    afterwards: anything else in its place is moved back and the call refused (`changed`)."""
+    afterwards: anything else in its place is moved back and the call refused (`changed`).
+
+    **A file keeps its kind.** Plain text (`.txt`, `.csv`, ...), Markdown, JSON and YAML get
+    different content checks when written, so a move refuses any change from one of these kinds
+    to another (`extension_class_changed`, both directions: `a.txt` -> `a.md` and `a.md` ->
+    `a.txt`); renaming within a kind is fine. And the file's text - read through the verified
+    handle, bounded by `MAX_TEXT_BYTES` - must pass the target name's checks too."""
     sroot, sparts = folders.split(source)
     troot, tparts = folders.split(target)
     if not sparts or not tparts:
         raise OutsideFolders("invalid_path", "a folder is not moved; name a file")
     if _is_folder(folders, target):
         tparts = [*tparts, sparts[-1]]
+    _class_refusal(sparts[-1], tparts[-1])
     _lexical_write_check(sroot, sparts)
     _lexical_write_check(troot, tparts)
     if _WINDOWS:
@@ -1300,10 +1344,11 @@ def _is_folder(folders: Folders, text: str) -> bool:
 
 
 def _posix_leaf(
-    folders: Folders, root: _Root, directory: int, name: str
+    folders: Folders, root: _Root, directory: int, name: str, *, read_as: str | None = None
 ) -> tuple[tuple[int, int], int]:
     """The file `name` in a verified directory: looked at without following, opened `O_NOFOLLOW`
-    and checked on its handle with the write rules. Its identity and size."""
+    and checked on its handle with the write rules. Its identity and size. With `read_as`, its
+    text must also pass the checks of that (target) name."""
     seen = _peek(name, directory)
     if seen is None:
         raise FileNotFoundError(errno.ENOENT, "no such file", name)
@@ -1321,6 +1366,8 @@ def _posix_leaf(
     try:
         info = os.fstat(fd)
         folders._verify(root, info, _final_path(fd), write=True)
+        if read_as is not None:
+            _target_content_refusal(lambda n: os.read(fd, n), info.st_size, read_as)
     finally:
         os.close(fd)
     identity = (info.st_dev, info.st_ino)
@@ -1336,7 +1383,9 @@ def _posix_move(
     try:
         target_dir = _posix_walk(folders, troot, tparts[:-1], write=True)
         try:
-            identity, _size = _posix_leaf(folders, sroot, source_dir, sparts[-1])
+            identity, _size = _posix_leaf(
+                folders, sroot, source_dir, sparts[-1], read_as=tparts[-1]
+            )
             if _peek(tparts[-1], target_dir) is not None:
                 raise FileExistsError(errno.EEXIST, "the target exists", tparts[-1])
             if os.fstat(target_dir).st_dev != identity[0]:
@@ -1632,6 +1681,9 @@ def _win_move(
                 raise FileExistsError(errno.EEXIST, "the target exists", target)
             if os.fstat(source_fd).st_dev != os.fstat(folder_fd).st_dev:
                 raise OutsideFolders("cross_device", "a file is moved only within one drive")
+            _target_content_refusal(
+                lambda n: os.read(source_fd, n), os.fstat(source_fd).st_size, tparts[-1]
+            )
             _win_rename(source_fd, target)
             now = _win_final(source_fd)
             try:

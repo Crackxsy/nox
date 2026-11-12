@@ -88,8 +88,11 @@ class FasterWhisperStt:
 
         Path(self.models_dir).mkdir(parents=True, exist_ok=True)
         t0 = time.perf_counter()
+        # A model fetched by `nox node voice setup` lies in a plain folder (a pinned revision).
+        pinned = Path(self.models_dir) / f"whisper-{self.model_size}"
+        source = str(pinned) if (pinned / "model.bin").is_file() else self.model_size
         self._model = WhisperModel(
-            self.model_size,
+            source,
             device=self.device,
             compute_type=self.compute_type,
             download_root=self.models_dir,

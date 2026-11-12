@@ -258,6 +258,19 @@ TEXTS: dict[str, dict[str, str]] = {
         "voice_mic": "Mikrofon:    {value}",
         "voice_core": "Nox sagt:    nein ({value})",
         "voice_problem": "Problem:     {value}",
+        "voice_refused": "Zuletzt abgelehnt: {value}",
+        "refusal_voice_not_switched_on_here": "Hier noch nicht eingeschaltet: Schalte „Zuhören "
+        "und sprechen“ für dieses Gerät im Dashboard ein.",
+        "refusal_voice_not_enabled": "Auf diesem Gerät nicht erlaubt oder bei Nox ausgeschaltet "
+        "({allow}, dann im Dashboard „Zuhören und sprechen“).",
+        "refusal_controlled_here": "Nox steuert gerade Maus und Tastatur an diesem PC und hört "
+        "deshalb nicht zu.",
+        "refusal_microphone_off": "Das Mikrofon ist bei Nox ausgeschaltet (Aufnahme-Schalter, "
+        "Panik, Sicherer Modus oder Privatzone).",
+        "refusal_too_many": "Zu viele Äußerungen in kurzer Zeit; kurz warten.",
+        "refusal_no_assistant": "Nox ist gerade nicht bereit zu antworten.",
+        "refusal_echo": "Nox hat sich selbst gehört und das ignoriert.",
+        "refusal_other": "Von Nox abgelehnt ({code}).",
         "yes": "ja",
         "no": "nein",
         "mic_open": "offen",
@@ -396,6 +409,19 @@ TEXTS: dict[str, dict[str, str]] = {
         "voice_mic": "Microphone:  {value}",
         "voice_core": "Core says:   no ({value})",
         "voice_problem": "Problem:     {value}",
+        "voice_refused": "Last refused: {value}",
+        "refusal_voice_not_switched_on_here": 'Not switched on here yet: switch on "Listening '
+        'and speaking" for this device in the dashboard.',
+        "refusal_voice_not_enabled": "Not allowed on this device or switched off at Nox "
+        '({allow}, then "Listening and speaking" in the dashboard).',
+        "refusal_controlled_here": "Nox is controlling mouse and keyboard on this PC right now "
+        "and does not listen to it.",
+        "refusal_microphone_off": "The microphone is switched off at Nox (capture switch, panic, "
+        "safe mode or a privacy zone).",
+        "refusal_too_many": "Too many utterances in a short time; wait a moment.",
+        "refusal_no_assistant": "Nox is not ready to answer right now.",
+        "refusal_echo": "Nox heard itself and ignored that.",
+        "refusal_other": "Refused by Nox ({code}).",
         "vs_not_installed": "Voice is not installed on this device: {reason}.",
         "vs_voice_part": " and the Supertonic 3 voice (about 400 MB, OpenRAIL-M)",
         "vs_question": "Download speech recognition (Whisper {model}, about {size}) into "

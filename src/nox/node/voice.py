@@ -90,6 +90,9 @@ MAX_TURNS = 8
 MAX_SENTENCES = 40
 #: How long after this device stopped speaking what it hears still counts as its own echo.
 ECHO_TAIL_S = 0.3
+#: The low two-tone "no" after the core refused an utterance, and how often it may sound.
+REFUSAL_TONES = (330.0, 220.0)
+REFUSAL_SOUND_EVERY_S = 20.0
 #: Levels sent to the core per second at most (the pet needs no more).
 LEVEL_HZ = 15
 POLL_S = 0.2
@@ -288,6 +291,9 @@ class VoiceSatellite:
     _speaking_turn: str = ""
     _last_level: float = 0.0
     _last_level_at: float = 0.0
+    #: The core's last refusal of an utterance ({"reason": code, "at": time}), until one is taken.
+    last_refusal: dict[str, str] | None = None
+    _refusal_sound_at: float = 0.0
     _was_open: bool = False
     _ptt_held: bool = False
     #: Until when what the microphone hears counts as this device's own voice.
@@ -520,7 +526,9 @@ class VoiceSatellite:
             self.turns.pop(turn_id, None)
             reason = result.get("reason") if isinstance(result, dict) else "no_answer"
             log.info("node.voice_refused_by_core", reason=str(reason)[:64])
+            await self._refused(str(reason or "no_answer"))
             return
+        self.last_refusal = None
         await self._beep(1320.0, ms=60)
 
     async def _level(self, level: float, *, force: bool = False) -> None:
@@ -536,7 +544,22 @@ class VoiceSatellite:
         with contextlib.suppress(Exception):
             await self.tell_core(p.M_VOICE_LEVEL, {"level": level, "turn_id": self._speaking_turn})
 
-    async def _beep(self, freq: float, *, ms: int = 90) -> None:
+    async def _refused(self, reason: str) -> None:
+        """The core refused an utterance: the reason (a code, never the words) goes into
+        `voice.json` for `nox node voice status` and the tray, and a low two-tone "no" says so
+        once - at most every `REFUSAL_SOUND_EVERY_S`, so a refusing core is not a nagging one."""
+        now = self.clock()
+        self.last_refusal = {
+            "reason": reason[:64],
+            "at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        self._write_state()
+        if now - self._refusal_sound_at < REFUSAL_SOUND_EVERY_S and self._refusal_sound_at > 0.0:
+            return
+        self._refusal_sound_at = now
+        await self._beep(REFUSAL_TONES[0], ms=140, then=REFUSAL_TONES[1])
+
+    async def _beep(self, freq: float, *, ms: int = 90, then: float | None = None) -> None:
         engines = self.engines
         if not self.settings().earcon or engines is None or self.pipeline is None:
             return
@@ -544,6 +567,8 @@ class VoiceSatellite:
             return
         rate = int(getattr(engines.tts, "sample_rate", 16000) or 16000)
         pcm = earcon_pcm(rate, freq=freq, ms=ms)
+        if then is not None:
+            pcm += earcon_pcm(rate, freq=then, ms=ms)
 
         async def chunks() -> AsyncIterator[bytes]:
             yield pcm
@@ -676,6 +701,7 @@ class VoiceSatellite:
             "core_allows": self.core_capture,
             "core_reason": self.core_reason,
             "error": self.last_error,
+            "last_refusal": self.last_refusal,
             "at": datetime.now(UTC).isoformat(timespec="seconds"),
         }
 
@@ -836,13 +862,28 @@ def _models_missing(exc: BaseException) -> bool:
     return any(hint in name for name in names for hint in hints) or "missing" in str(exc)
 
 
+#: The Hugging Face revision of each faster-whisper model `nox node voice setup` fetches - a commit,
+#: so the files are exactly the ones this release was checked with, whatever `main` becomes.
+#: Read from the repositories' heads on 2026-11-12; moved on purpose, with a release.
+WHISPER_REVISIONS = {
+    "tiny": "d90ca5fe260221311c53c58e660288d3deb8d356",
+    "base": "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66",
+    "small": "536b0662742c02347bc0e980a01041f333bce120",
+}
+
+
 def _download_whisper(model: str, target: Path) -> None:
-    """faster-whisper's own download into `target` - exactly where `WhisperModel(download_root=
-    target, local_files_only=True)` reads it from."""
+    """faster-whisper's own download, pinned to `WHISPER_REVISIONS`, into a plain folder
+    `<target>/whisper-<model>` - which the speech engine prefers over its cache
+    (`FasterWhisperStt._load_sync`)."""
     from faster_whisper.utils import download_model  # noqa: PLC0415 - the extra `voice`
 
-    target.mkdir(parents=True, exist_ok=True)
-    download_model(model, cache_dir=str(target))
+    revision = WHISPER_REVISIONS.get(model)
+    if revision is None:
+        raise ValueError(f"no pinned revision for the model {model!r}")
+    folder = target / f"whisper-{model}"
+    folder.mkdir(parents=True, exist_ok=True)
+    download_model(model, output_dir=str(folder), revision=revision)
 
 
 def _download_tts(engine: str, target: Path, echo: Callable[[str], None]) -> int:

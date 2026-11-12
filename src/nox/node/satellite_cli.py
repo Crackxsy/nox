@@ -59,6 +59,15 @@ def voice_mute(home: NodeHome, muted: bool) -> str:
     return t("voice_unmuted")
 
 
+def refusal_words(code: str) -> str:
+    """A core's refusal of an utterance, in words (the code only when it is not known)."""
+    key = f"refusal_{code}"
+    try:
+        return t(key, allow=command("allow voice"))
+    except KeyError:
+        return t("refusal_other", code=code[:64])
+
+
 def voice_status(home: NodeHome) -> list[str]:
     manifest = load_manifest(home.manifest_file)
     try:
@@ -86,6 +95,9 @@ def voice_status(home: NodeHome) -> list[str]:
     ]
     if state and not state.get("core_allows"):
         lines.append(t("voice_core", value=str(state.get("core_reason", ""))[:80]))
+    refusal = state.get("last_refusal")
+    if isinstance(refusal, dict) and refusal.get("reason"):
+        lines.append(t("voice_refused", value=refusal_words(str(refusal["reason"]))))
     if state.get("error"):
         lines.append(t("voice_problem", value=str(state["error"])[:80]))
     return lines

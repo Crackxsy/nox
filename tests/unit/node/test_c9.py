@@ -392,6 +392,83 @@ async def test_a_refused_question_is_forgotten(tmp_path: Path) -> None:
     await satellite.shutdown()
 
 
+async def test_a_refusal_is_remembered_in_words_and_sounds_once(tmp_path: Path) -> None:
+    """Review of #195 (UX): a core's "no" must not be silent - the reason goes to voice.json for
+    `nox node voice status`, a low two-tone "no" plays, and not again within the rate limit."""
+    import json
+
+    from nox.node.satellite_cli import voice_status
+    from nox.node.voice import REFUSAL_SOUND_EVERY_S, STATE_FILE
+
+    satellite, seen = await _running(
+        tmp_path, answer={"result": {"accepted": False, "reason": "voice_not_switched_on_here"}}
+    )
+    out = seen["engines"].audio_out
+    out.played.clear()
+    heard = {"text": "Hallo", "language": "de", "addressed_to_nox": True}
+    await satellite._on_event(E.VOICE_TRANSCRIPT_READY, heard)
+    assert out.played == [("earcon", 4 * int(16000 * 140 / 1000))]  # two tones, no real sound
+    state = json.loads((tmp_path / STATE_FILE).read_text(encoding="utf-8"))
+    assert state["last_refusal"]["reason"] == "voice_not_switched_on_here"
+    assert state["last_refusal"]["at"]
+    await satellite._on_event(E.VOICE_TRANSCRIPT_READY, heard)
+    assert len(out.played) == 1  # rate-limited: the reason is updated, the sound is not repeated
+    satellite.clock = lambda c=satellite.clock: c() + REFUSAL_SOUND_EVERY_S + 1  # type: ignore[assignment]
+    await satellite._on_event(E.VOICE_TRANSCRIPT_READY, heard)
+    assert len(out.played) == 2
+    # The status says it in words, in both languages.
+    from nox.node.home import NodeHome
+
+    home = NodeHome(tmp_path)
+    for lang, words in (
+        ("en", "Not switched on here yet"),
+        ("de", "Hier noch nicht eingeschaltet"),
+    ):
+        import os
+
+        os.environ["NOX_LANG"] = lang
+        try:
+            lines = voice_status(home)
+        finally:
+            del os.environ["NOX_LANG"]
+        assert any(words in line for line in lines), lines
+        assert not any("voice_not_switched_on_here" in line for line in lines)
+    # An accepted question clears it.
+    satellite.ask_core = lambda *_a: _accepted()  # type: ignore[assignment]
+    await satellite._on_event(E.VOICE_TRANSCRIPT_READY, heard)
+    assert satellite.last_refusal is None
+    await satellite.shutdown()
+
+
+async def _accepted() -> dict[str, Any]:
+    return {"result": {"accepted": True}}
+
+
+def test_every_refusal_the_core_gives_has_words() -> None:
+    from nox.node.satellite_cli import refusal_words
+
+    for code in (
+        "voice_not_switched_on_here",
+        "voice_not_enabled",
+        "controlled_here",
+        "microphone_off",
+        "too_many",
+        "no_assistant",
+        "echo",
+    ):
+        assert code not in refusal_words(code)
+    assert "strange_code" in refusal_words("strange_code")  # an unknown one is shown as it is
+
+
+def test_whisper_is_fetched_by_pinned_revision() -> None:
+    from nox.node.voice import WHISPER_REVISIONS
+
+    assert set(WHISPER_REVISIONS) == {"tiny", "base", "small"}
+    assert all(
+        len(r) == 40 and set(r) <= set("0123456789abcdef") for r in WHISPER_REVISIONS.values()
+    )
+
+
 async def test_the_kill_phrase_stops_the_node_and_never_reaches_the_core(tmp_path: Path) -> None:
     satellite, seen = await _running(tmp_path)
     await satellite._on_event(E.VOICE_KILL_PHRASE, {"by": "voice", "language": "de"})

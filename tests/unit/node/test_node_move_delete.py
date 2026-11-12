@@ -111,7 +111,7 @@ def test_a_move_never_replaces_and_never_creates_folders(world: dict[str, Path])
         ("archiv/start.bat", "extension_refused"),
         ("archiv/seite.html", "format_not_writable"),
         ("archiv/.bashrc", "hidden_refused"),
-        ("archiv/package.json", "config_refused"),
+        ("archiv/package.json", "extension_class_changed"),
     ],
 )
 def test_a_move_cannot_turn_data_into_something_that_runs(
@@ -121,6 +121,49 @@ def test_a_move_cannot_turn_data_into_something_that_runs(
     assert reason(lambda: move_file(f, "notizen/einkauf.txt", target)) == why
     assert move_refusal("notizen/einkauf.txt", target, overwrite=False, create_folders=False) == why
     assert (world["root"] / "notizen" / "einkauf.txt").exists()
+
+
+def test_a_move_cannot_change_the_kind_of_a_file(world: dict[str, Path]) -> None:
+    """Review of #195: text that passed the plain-text checks must not become Markdown or YAML
+    (whose checks it would skip) by being renamed - in either direction."""
+    f = folders(world)
+    notes = world["root"] / "notizen"
+    (notes / "a.txt").write_text("```dataviewjs\nx\n```", encoding="utf-8")
+    (notes / "d.txt").write_text("x: !!python/object:os.system y", encoding="utf-8")
+    (notes / "ok.md").write_text("harmlos", encoding="utf-8")
+    assert reason(lambda: move_file(f, "notizen/a.txt", "archiv/c.md")) == "extension_class_changed"
+    assert reason(lambda: move_file(f, "notizen/d.txt", "archiv/e.yaml")) == (
+        "extension_class_changed"
+    )
+    assert reason(lambda: move_file(f, "notizen/ok.md", "archiv/ok.txt")) == (
+        "extension_class_changed"
+    )
+    assert reason(lambda: move_file(f, "notizen/ok.md", "archiv/ok.json")) == (
+        "extension_class_changed"
+    )
+    assert move_refusal("notizen/a.txt", "archiv/c.md", overwrite=False, create_folders=False) == (
+        "extension_class_changed"
+    )
+    assert (notes / "a.txt").exists() and not (world["root"] / "archiv" / "c.md").exists()
+    # Within a kind: plain text to plain text, Markdown to Markdown, yaml to yml.
+    move_file(f, "notizen/a.txt", "archiv/a.csv")
+    move_file(f, "notizen/ok.md", "archiv/neu.md")
+    (notes / "y.yaml").write_text("a: 1", encoding="utf-8")
+    move_file(f, "notizen/y.yaml", "archiv/y.yml")
+
+
+def test_the_text_must_pass_the_targets_checks_even_within_a_kind(
+    world: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second line: a file already holding what its (same-kind) target name refuses is not
+    moved - here a Markdown note that turned bad after it was written, e.g. by hand."""
+    f = folders(world)
+    notes = world["root"] / "notizen"
+    (notes / "alt.md").write_text("<script>x</script>", encoding="utf-8")
+    assert reason(lambda: move_file(f, "notizen/alt.md", "archiv/neu.md")) == "content_refused"
+    (notes / "k.json").write_text("{kaputt", encoding="utf-8")
+    assert reason(lambda: move_file(f, "notizen/k.json", "archiv/k2.json")) == "invalid_content"
+    assert (notes / "alt.md").exists() and not (world["root"] / "archiv" / "neu.md").exists()
 
 
 def test_the_source_follows_the_write_rules_too(world: dict[str, Path]) -> None:
