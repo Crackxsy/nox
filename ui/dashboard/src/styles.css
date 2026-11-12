@@ -3915,3 +3915,14 @@ details > summary:hover {
 .node-os .opt--sel {
   opacity: 1;
 }
+
+/* The code beside the QR code is set smaller and may break into its two groups: nowrap at 46 px
+   was wider than the column it sits in. */
+.pairing-facts .code-display {
+  font-size: clamp(22px, 3vw, 30px);
+  letter-spacing: 0.1em;
+}
+
+.pairing-facts .code-display-value {
+  white-space: normal;
+}
