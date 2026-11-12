@@ -258,6 +258,19 @@ TEXTS: dict[str, dict[str, str]] = {
         "voice_mic": "Mikrofon:    {value}",
         "voice_core": "Nox sagt:    nein ({value})",
         "voice_problem": "Problem:     {value}",
+        "voice_refused": "Zuletzt abgelehnt: {value}",
+        "refusal_voice_not_switched_on_here": "Hier noch nicht eingeschaltet: Schalte „Zuhören "
+        "und sprechen“ für dieses Gerät im Dashboard ein.",
+        "refusal_voice_not_enabled": "Auf diesem Gerät nicht erlaubt oder bei Nox ausgeschaltet "
+        "({allow}, dann im Dashboard „Zuhören und sprechen“).",
+        "refusal_controlled_here": "Nox steuert gerade Maus und Tastatur an diesem PC und hört "
+        "deshalb nicht zu.",
+        "refusal_microphone_off": "Das Mikrofon ist bei Nox ausgeschaltet (Aufnahme-Schalter, "
+        "Panik, Sicherer Modus oder Privatzone).",
+        "refusal_too_many": "Zu viele Äußerungen in kurzer Zeit; kurz warten.",
+        "refusal_no_assistant": "Nox ist gerade nicht bereit zu antworten.",
+        "refusal_echo": "Nox hat sich selbst gehört und das ignoriert.",
+        "refusal_other": "Von Nox abgelehnt ({code}).",
         "yes": "ja",
         "no": "nein",
         "mic_open": "offen",
@@ -272,6 +285,18 @@ TEXTS: dict[str, dict[str, str]] = {
         "obs_resumed": "OBS nimmt wieder Änderungen von Nox an (die Panik-Sperre auf diesem "
         "Gerät ist aufgehoben).",
         "overlay_needs_obs": "(Braucht die Gruppe obs: {allow})",
+        "vs_not_installed": "Sprache ist auf diesem Gerät nicht installiert: {reason}.",
+        "vs_voice_part": " und die Supertonic-3-Stimme (ca. 400 MB, OpenRAIL-M)",
+        "vs_question": "Spracherkennung (Whisper {model}, ca. {size}) nach {where}{voice} von "
+        "Hugging Face laden? Nichts über dich wird gesendet; danach lädt der Knoten nie etwas "
+        "von selbst.",
+        "vs_nothing": "Nichts wurde geladen.",
+        "vs_whisper": "Whisper {model} -> {where}",
+        "vs_whisper_failed": "Whisper konnte nicht geladen werden: {error}",
+        "vs_piper": "Nox lädt keine Piper-Stimmen: <Stimme>.onnx(.json) nach {where} legen.",
+        "vs_tts_failed": "Die Stimme {engine} konnte nicht geladen werden (Code {code}).",
+        "vs_done": "Fertig. Der Knoten nutzt die Modelle beim nächsten Start des "
+        "Sprach-Satelliten.",
     },
     "en": {
         "pair_bad_link": "Not a Nox node link: {error}",
@@ -384,6 +409,30 @@ TEXTS: dict[str, dict[str, str]] = {
         "voice_mic": "Microphone:  {value}",
         "voice_core": "Core says:   no ({value})",
         "voice_problem": "Problem:     {value}",
+        "voice_refused": "Last refused: {value}",
+        "refusal_voice_not_switched_on_here": 'Not switched on here yet: switch on "Listening '
+        'and speaking" for this device in the dashboard.',
+        "refusal_voice_not_enabled": "Not allowed on this device or switched off at Nox "
+        '({allow}, then "Listening and speaking" in the dashboard).',
+        "refusal_controlled_here": "Nox is controlling mouse and keyboard on this PC right now "
+        "and does not listen to it.",
+        "refusal_microphone_off": "The microphone is switched off at Nox (capture switch, panic, "
+        "safe mode or a privacy zone).",
+        "refusal_too_many": "Too many utterances in a short time; wait a moment.",
+        "refusal_no_assistant": "Nox is not ready to answer right now.",
+        "refusal_echo": "Nox heard itself and ignored that.",
+        "refusal_other": "Refused by Nox ({code}).",
+        "vs_not_installed": "Voice is not installed on this device: {reason}.",
+        "vs_voice_part": " and the Supertonic 3 voice (about 400 MB, OpenRAIL-M)",
+        "vs_question": "Download speech recognition (Whisper {model}, about {size}) into "
+        "{where}{voice} from Hugging Face? Nothing about you is sent; afterwards the node never "
+        "downloads anything by itself.",
+        "vs_nothing": "Nothing was downloaded.",
+        "vs_whisper": "Whisper {model} -> {where}",
+        "vs_whisper_failed": "Whisper could not be downloaded: {error}",
+        "vs_piper": "Nox does not download Piper voices: put <voice>.onnx(.json) into {where}.",
+        "vs_tts_failed": "The {engine} voice could not be downloaded (code {code}).",
+        "vs_done": "Done. The node uses the models from its next start of the voice satellite.",
         "yes": "yes",
         "no": "no",
         "mic_open": "open",

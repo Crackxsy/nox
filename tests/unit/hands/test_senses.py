@@ -136,9 +136,15 @@ def test_headless_linux_has_no_screen(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("XDG_SESSION_TYPE", raising=False)
     assert "headless" in (senses_mod.screen_support() or "")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
-    assert "Wayland" in (senses_mod.screen_support() or "")
+    assert (senses_mod.screen_support() or "").startswith("wayland_unsupported")
+    # GNOME on Wayland sets DISPLAY too (XWayland): still refused, never a black picture.
+    monkeypatch.delenv("WAYLAND_DISPLAY")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    assert (senses_mod.screen_support() or "").startswith("wayland_unsupported")
 
 
 # ---- camera.snapshot -------------------------------------------------------------------------

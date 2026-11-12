@@ -235,3 +235,23 @@ async def recv_until(ws: ClientConnection, predicate: Any, timeout: float = 5.0)
 async def greet(ws: ClientConnection, node_protocol: int = 1) -> dict[str, Any]:
     await ws.send(json.dumps(hello(node_protocol)))
     return await recv_until(ws, lambda m: m.get("id") == 1)
+
+
+@pytest.fixture(autouse=True)
+def _same_groups_on_every_test_os(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On the macOS runner `shell` and `media` are not available (`cli_text.supported_here`), so
+    tests that switch them on would fail there for a reason they are not about. They see the
+    groups of Linux; a test about the platform sets its own answer."""
+    import sys
+
+    if sys.platform != "darwin":
+        return
+    from nox.node import cli, cli_text
+
+    real = cli_text.unsupported_reason
+    monkeypatch.setattr(
+        cli, "unsupported_reason", lambda group, platform="linux": real(group, platform)
+    )
+    monkeypatch.setattr(
+        cli, "supported_here", lambda group, platform="linux": real(group, platform) is None
+    )
