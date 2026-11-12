@@ -1,11 +1,16 @@
 /**
- * One computer in detail (Spec C §1.10): what Nox may do there, group by group, where a tool
- * family runs when nobody names a device, what Nox did there lately, and removing it.
+ * One computer in detail (Spec C §1.10): what Nox may do there, group by group, what Nox did
+ * there lately, and removing it. Where a tool family runs when nobody names a device applies to
+ * every computer and lives under "Standardgeräte" on the page itself (`DefaultsSection`).
  *
- * The switches only ever narrow. A group the device allows can be switched off here and back on
- * (with the PIN when one is set); a group the device does not allow cannot be switched on from
- * here at all - the switch then says so and shows how to do it on the device itself. The core
- * refuses it anyway (`enable_on_device`); the page never pretends otherwise.
+ * The switches only ever narrow. A group the device allows is a switch - the whole row - that
+ * turns it off here and back on (with the PIN when one is set). A group the device does not allow
+ * is no switch at all: a lock, and "So schaltest du es ein" opens how to do it on that device, in
+ * the words of its system (the Windows Command Prompt, a terminal, `sudo` on a Pi). The core
+ * refuses to widen anyway (`enable_on_device`); the page never pretends otherwise.
+ *
+ * From a paired phone or tablet every change needs the security PIN; with none set there is no
+ * PIN field, only where it can be done instead.
  */
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
@@ -17,19 +22,18 @@ import { auditActionLabel, auditToolLabel, fill, type Lang, type T } from '../..
 import { type IpcClient, api } from '../../ipc';
 import {
   type AuditRow,
-  type FamilyDefault,
   type NodeGroup,
   type NodeInfo,
   isNodeTarget,
   nodeState,
-  parseFamilyDefaults,
   parseNodeGroups,
+  shortFolder,
 } from '../../model';
 import { Sheet } from '../../shell/Sheet';
 import { Icon } from '../../shell/icons';
-import { StateWord } from '../../ui';
+import { Filled, StateWord } from '../../ui';
 import { outcomeOf } from '../History';
-import { allowCommand, defaultWords, groupLabel, stateWords } from './words';
+import { allowCommand, enableHowKey, groupLabel, mayBeHeadless, stateWords } from './words';
 
 /** How long "Wirklich entfernen" stays armed. */
 export const REMOVE_DISARM_MS = 12000;
@@ -44,12 +48,9 @@ export interface NodeSheetProps {
   device: boolean;
   pinSet: boolean;
   node: NodeInfo | null;
-  nodes: NodeInfo[];
-  defaults: FamilyDefault[];
   audit: AuditRow[];
   onClose: () => void;
   onGroups: (nodeId: string, groups: NodeGroup[]) => void;
-  onDefaults: (defaults: FamilyDefault[]) => void;
   onRemoved: (node: NodeInfo) => void;
   onOpenHistory: () => void;
 }
@@ -57,13 +58,25 @@ export interface NodeSheetProps {
 export function NodeSheet(props: NodeSheetProps) {
   const { node, onClose } = props;
   return (
-    <Sheet open={node !== null} onClose={onClose} labelledBy="node-sheet-title">
+    <Sheet open={node !== null} onClose={onClose} labelledBy="node-sheet-title" className="node-sheet">
       {node && <NodeDetail {...props} node={node} />}
     </Sheet>
   );
 }
 
-const TONE = { connected: 'ok', update: 'warn', offline: 'off', removed: 'off' } as const;
+const TONE = { connected: 'ok', listing: 'off', update: 'warn', offline: 'off', removed: 'off' } as const;
+
+/** What a group's row says under its name. */
+function groupNote(t: T, node: NodeInfo, g: NodeGroup): string {
+  if (!g.enabledOnDevice) return t('node_group_device_off');
+  if (g.narrowed) return g.group === 'voice' ? t('node_voice_off_here') : t('node_group_narrowed');
+  if (g.group === 'files' && node.folders !== null) {
+    if (node.folders.length === 0) return t('node_group_no_folder');
+    const shown = node.folders.map(shortFolder).join(', ');
+    return fill(t(node.folders.length === 1 ? 'node_group_on_folder' : 'node_group_on_folders'), shown);
+  }
+  return t('node_group_on');
+}
 
 function NodeDetail({
   t,
@@ -72,12 +85,9 @@ function NodeDetail({
   device,
   pinSet,
   node,
-  nodes,
-  defaults,
   audit,
   onClose,
   onGroups,
-  onDefaults,
   onRemoved,
   onOpenHistory,
 }: NodeSheetProps & { node: NodeInfo }) {
@@ -86,10 +96,7 @@ function NodeDetail({
   const [explain, setExplain] = useState<string | null>(null);
   // Switching voice on here makes that device's microphone an input for Nox: said, then confirmed.
   const [voiceAsk, setVoiceAsk] = useState(false);
-  const [saved, setSaved] = useState('');
   const [armed, setArmed] = useState(false);
-  /** Chosen in a select, not yet applied: group -> device. */
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const pinSentRef = useRef(false);
   const pinRef = useRef<HTMLInputElement | null>(null);
   const describe = useCallback(
@@ -97,12 +104,15 @@ function NodeDetail({
       const reason = ipcReason(e);
       if (reason === 'enable_on_device') return t('node_enable_title');
       if (reason === 'no_node') return t('node_reason_no_node');
-      return refusalText(t, e, pinSentRef.current);
+      // Never the core's English sentence in this sheet.
+      return refusalText(t, e, pinSentRef.current, t('node_change_failed'));
     },
     [t],
   );
   const { busy, error, setError, run } = useIpcAction(client, t, describe);
-  const needsPin = device || pinSet;
+  /** A paired device without a PIN set can change nothing here: no field, only where instead. */
+  const locked = device && !pinSet;
+  const needsPin = (device || pinSet) && !locked;
   // Disarm after a while, so a stray second tap much later removes nothing.
   useEffect(() => {
     if (!armed) return;
@@ -121,26 +131,11 @@ function NodeDetail({
     return value;
   };
 
-  const toggle = (group: NodeGroup, confirmed = false) => {
-    if (busy !== null) return;
-    setSaved('');
-    if (group.group === 'voice' && group.narrowed && group.enabledOnDevice && !confirmed) {
-      setVoiceAsk(!voiceAsk);
-      return;
-    }
-    setVoiceAsk(false);
-    // The device's word first: what it does not allow is never switched on here. A switch-off
-    // made here is still cleared, so it does not linger once the device allows the group again.
-    if (!group.enabledOnDevice) {
-      setExplain(explain === group.group ? null : group.group);
-      if (!group.narrowed) return;
-    } else {
-      setExplain(null);
-    }
-    const narrowed = !group.narrowed;
+  const narrow = (group: NodeGroup, narrowed: boolean, quiet = false) => {
     // Switching off narrows: no PIN here (from a paired device, always one).
     const required = device || (!narrowed && pinSet);
     if (required && !pin.trim()) {
+      if (quiet) return;
       setError(t('reason_pin_required'));
       pinRef.current?.focus();
       return;
@@ -154,27 +149,23 @@ function NodeDetail({
     });
   };
 
-  const setDefault = (entry: FamilyDefault, value: string) => {
-    if (busy !== null) return;
-    setSaved('');
-    if (needsPin && !pin.trim()) {
-      setError(t('reason_pin_required'));
-      pinRef.current?.focus();
+  const toggle = (group: NodeGroup, confirmed = false) => {
+    if (busy !== null || locked) return;
+    if (group.group === 'voice' && group.narrowed && !confirmed) {
+      setVoiceAsk(!voiceAsk);
       return;
     }
-    void run(`default-${entry.group}`, async (c) => {
-      const answer = (await api.nodeDefaultsSet(c, entry.group, value, usedPin(needsPin))) as {
-        defaults?: unknown;
-      };
-      const next = parseFamilyDefaults(answer.defaults);
-      if (next) onDefaults(next);
-      setDrafts((d) => {
-        const next = { ...d };
-        delete next[entry.group];
-        return next;
-      });
-      setSaved(t('node_default_saved'));
-    });
+    setVoiceAsk(false);
+    setExplain(null);
+    narrow(group, !group.narrowed);
+  };
+
+  const showHow = (group: NodeGroup) => {
+    const opening = explain !== group.group;
+    setExplain(opening ? group.group : null);
+    // A switch-off made here is cleared on the way, so it does not linger once the device allows
+    // the group (never widening: the device still has it off). Only when no PIN is needed for it.
+    if (opening && group.narrowed && busy === null && !locked) narrow(group, false, true);
   };
 
   const remove = () => {
@@ -195,8 +186,6 @@ function NodeDetail({
     });
   };
 
-  const others = nodes.filter((n) => !n.revoked);
-
   return (
     <>
       <div className="dlg-h">
@@ -215,6 +204,7 @@ function NodeDetail({
           {error}
         </p>
       )}
+      {locked && <p className="hint">{t('node_pin_missing_device')}</p>}
       {needsPin && (
         <div className="field">
           <label htmlFor={`${id}-pin`} className="label">
@@ -248,35 +238,59 @@ function NodeDetail({
           <ul className="node-groups">
             {node.groups.map((g) => {
               const label = `${id}-g-${g.group}`;
-              const note = !g.enabledOnDevice
-                ? t('node_group_device_off')
-                : g.narrowed
-                  ? t('node_group_narrowed')
-                  : t('node_group_on');
+              const how = `${label}-how`;
+              const open = explain === g.group;
               return (
                 <li key={g.group}>
-                  <div className="set-row set-row--flat">
-                    <span className="grow">
-                      <span className="set-t" id={`${label}-l`}>
-                        {groupLabel(t, g.group)}
-                      </span>
-                      <span className="set-d" id={`${label}-d`}>
-                        {note}
-                      </span>
-                    </span>
+                  {g.enabledOnDevice ? (
+                    // The whole row is the switch: a target as wide as the sheet, one tap.
                     <button
                       type="button"
                       role="switch"
-                      className="switch-btn"
+                      className="set-row set-row--flat set-row--switch"
                       aria-checked={g.active}
                       aria-labelledby={`${label}-l`}
                       aria-describedby={`${label}-d`}
-                      disabled={!client}
+                      disabled={!client || locked}
                       // Not `disabled` while a request runs: focus stays where it is.
                       aria-disabled={busy !== null || undefined}
                       onClick={() => toggle(g)}
-                    />
-                  </div>
+                    >
+                      <span className="grow">
+                        <span className="set-t" id={`${label}-l`}>
+                          {groupLabel(t, g.group)}
+                        </span>
+                        <span className="set-d" id={`${label}-d`}>
+                          {groupNote(t, node, g)}
+                        </span>
+                      </span>
+                      <span className="switch-btn" data-on={g.active} aria-hidden="true" />
+                    </button>
+                  ) : (
+                    <div className="set-row set-row--flat set-row--locked">
+                      <span className="node-lock" aria-hidden="true">
+                        <Icon name="lock" size={18} />
+                      </span>
+                      <span className="grow">
+                        <span className="set-t" id={`${label}-l`}>
+                          {groupLabel(t, g.group)}
+                        </span>
+                        <span className="set-d" id={`${label}-d`}>
+                          {groupNote(t, node, g)}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn--sm btn--quiet"
+                        aria-expanded={open}
+                        aria-controls={how}
+                        aria-describedby={`${label}-l`}
+                        onClick={() => showHow(g)}
+                      >
+                        {t('node_enable_show')}
+                      </button>
+                    </div>
+                  )}
                   {g.group === 'voice' && (
                     // Always in the page, so a screen reader hears it when it fills.
                     <div role="status" className={voiceAsk ? 'node-how' : undefined}>
@@ -284,6 +298,7 @@ function NodeDetail({
                         <>
                           <p className="set-t">{t('node_voice_confirm_title')}</p>
                           <p className="hint">{t('node_voice_confirm_text')}</p>
+                          <p className="hint">{t('node_voice_two_keys')}</p>
                           <button
                             type="button"
                             className="btn"
@@ -296,17 +311,22 @@ function NodeDetail({
                       )}
                     </div>
                   )}
-                  {!g.enabledOnDevice && (
-                    // Always in the page, so a screen reader hears it when it fills.
-                    <div role="status" className={explain === g.group ? 'node-how' : undefined}>
-                      {explain === g.group && (
+                  {!g.enabledOnDevice && open && (
+                    <div id={how} className="node-how">
+                      <p className="set-t">{t('node_enable_title')}</p>
+                      <p className="hint">
+                        <Filled pattern={t(enableHowKey(node))} args={[node.name]} strong={[0]} />
+                      </p>
+                      <p className="mono break">{allowCommand(t, g.group, node.headless === true)}</p>
+                      {mayBeHeadless(node) && (
                         <>
-                          <p className="set-t">{t('node_enable_title')}</p>
-                          <p className="hint">{t('node_enable_how')}</p>
-                          <p className="mono break">{allowCommand(t, g.group)}</p>
-                          <p className="hint">{t('node_enable_tray')}</p>
+                          <p className="hint">{fill(t('node_enable_headless_hint'), node.name)}</p>
+                          <p className="mono break">{allowCommand(t, g.group, true)}</p>
                         </>
                       )}
+                      <p className="hint">{t('node_enable_after')}</p>
+                      {node.headless !== true && <p className="hint">{t('node_enable_tray')}</p>}
+                      {g.group === 'voice' && <p className="hint">{t('node_voice_two_keys')}</p>}
                     </div>
                   )}
                 </li>
@@ -315,69 +335,6 @@ function NodeDetail({
           </ul>
         )}
       </section>
-
-      {defaults.length > 0 && (
-        <section className="node-sec" aria-labelledby={`${id}-defaults`}>
-          <h3 id={`${id}-defaults`} className="rail-title">
-            {t('node_defaults_title')}
-          </h3>
-          <p className="hint">{t('node_defaults_lede')}</p>
-          {defaults.map((entry) => {
-            const field = `${id}-d-${entry.group}`;
-            const known =
-              ['auto', 'core', 'origin'].includes(entry.device) || others.some((n) => n.id === entry.device);
-            const current = known ? entry.device : '';
-            const draft = drafts[entry.group] ?? current;
-            return (
-              <div key={entry.group} className="field node-default">
-                <label htmlFor={field} className="label">
-                  {fill(t('node_default_select'), groupLabel(t, entry.group))}
-                </label>
-                <div className="row-controls">
-                  <select
-                    id={field}
-                    className="select"
-                    value={draft}
-                    disabled={!client}
-                    aria-disabled={busy !== null || undefined}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      if (busy === null) setDrafts((d) => ({ ...d, [entry.group]: value }));
-                    }}
-                  >
-                    {!known && (
-                      <option value="" disabled>
-                        {defaultWords(t, entry, nodes)}
-                      </option>
-                    )}
-                    <option value="auto">{t('node_default_auto')}</option>
-                    <option value="origin">{t('node_default_origin')}</option>
-                    <option value="core">{t('node_default_core')}</option>
-                    {others.map((n) => (
-                      <option key={n.id} value={n.id}>
-                        {n.name}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    className="btn btn--sm"
-                    disabled={!client || draft === current || draft === ''}
-                    aria-disabled={busy !== null || undefined}
-                    aria-label={`${t('node_default_apply')}: ${groupLabel(t, entry.group)}`}
-                    onClick={() => setDefault(entry, draft)}
-                  >
-                    {t('node_default_apply')}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-          <p role="status" className={saved ? 'hint' : 'sr-only'}>
-            {saved}
-          </p>
-        </section>
-      )}
 
       <section className="node-sec" aria-labelledby={`${id}-done`}>
         <h3 id={`${id}-done`} className="rail-title">
@@ -420,14 +377,20 @@ function NodeDetail({
           <dd>{formatTimestamp(node.pairedAt, lang)}</dd>
           <dt>{t('node_tech_tools')}</dt>
           <dd className="mono break">{node.tools.length ? node.tools.join(', ') : t('node_tech_none')}</dd>
+          {node.folders !== null && (
+            <>
+              <dt>{t('node_tech_folders')}</dt>
+              <dd className="mono break">{node.folders.length ? node.folders.join(', ') : t('node_tech_none')}</dd>
+            </>
+          )}
         </dl>
       </details>
 
       <div className="node-remove">
         <button
           type="button"
-          className={armed ? 'btn btn--sm btn--armed' : 'btn btn--sm btn--quiet'}
-          disabled={!client || busy === 'remove'}
+          className={armed ? 'btn btn--sm btn--danger' : 'btn btn--sm btn--quiet'}
+          disabled={!client || busy === 'remove' || locked}
           onClick={remove}
           aria-describedby={armed ? `${id}-remove` : undefined}
         >

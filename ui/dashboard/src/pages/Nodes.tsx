@@ -2,7 +2,9 @@
  * Geräte › Computer und Server (Spec C §1.10): every PC, laptop and small server paired as a
  * node, above the phones. One row per node - its kind, name, state ("Verbunden", "Offline seit
  * 14:02", "Update nötig"), in one sentence what Nox may do there, whether it is the default
- * device for something, its version - and a detail sheet per node (`nodes/NodeSheet.tsx`).
+ * device for something, its version - and a detail sheet per node (`nodes/NodeSheet.tsx`). Below
+ * the list, "Standardgeräte": where each tool family runs when nobody names a device
+ * (`nodes/DefaultsSection.tsx`) - it applies to all computers, so it is not in one computer's sheet.
  *
  * Honest about the state like the phones section: loading, an answer this page cannot read, a
  * request that failed, network access off. A core without nodes at all (an older version: it
@@ -33,6 +35,7 @@ import {
 import { Icon } from '../shell/icons';
 import { StateWord } from '../ui';
 import { AddNodeSheet } from './nodes/AddNodeSheet';
+import { DefaultsSection } from './nodes/DefaultsSection';
 import { NodeSheet } from './nodes/NodeSheet';
 import { groupLabel, groupWords, stateWords } from './nodes/words';
 
@@ -64,7 +67,7 @@ type View =
   | { kind: 'failed'; message: string }
   | { kind: 'ready'; list: NodeList };
 
-const TONE = { connected: 'ok', update: 'warn', offline: 'off', removed: 'off' } as const;
+const TONE = { connected: 'ok', listing: 'off', update: 'warn', offline: 'off', removed: 'off' } as const;
 
 export function ComputersSection({
   t,
@@ -284,6 +287,17 @@ export function ComputersSection({
           <p className="hint">{t('node_only_at_computer')}</p>
         ))}
 
+      {list.enabled && nodes.length > 0 && (
+        <DefaultsSection
+          t={t}
+          client={client}
+          device={device}
+          pinSet={pinSet}
+          nodes={nodes}
+          defaults={list.defaults}
+          onDefaults={onDefaults}
+        />
+      )}
       <NodeSheet
         t={t}
         lang={lang}
@@ -291,12 +305,9 @@ export function ComputersSection({
         device={device}
         pinSet={pinSet}
         node={open}
-        nodes={nodes}
-        defaults={list.defaults}
         audit={audit}
         onClose={() => setOpenId(null)}
         onGroups={onGroups}
-        onDefaults={onDefaults}
         onRemoved={onRemoved}
         onOpenHistory={() => {
           setOpenId(null);

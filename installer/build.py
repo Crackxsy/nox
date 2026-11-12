@@ -458,7 +458,8 @@ def step_record_sizes(python_version: str) -> None:
 
 def app_version() -> str:
     """Nox's version, as `nox.iss` names the installer."""
-    for line in (INSTALLER_DIR / "nox.iss").read_text(encoding="ascii").splitlines():
+    # UTF-8 with a byte order mark (Inno Setup reads it as Unicode; real umlauts in German).
+    for line in (INSTALLER_DIR / "nox.iss").read_text(encoding="utf-8-sig").splitlines():
         if line.startswith("#define MyAppVersion "):
             return line.split('"')[1]
     raise RuntimeError("nox.iss has no MyAppVersion")

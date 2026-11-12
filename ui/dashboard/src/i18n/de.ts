@@ -8,8 +8,9 @@
  *  - a label is a word, never a config path, an id or a file path — those belong in a secondary
  *    muted line or a `title`, never in a headline;
  *  - a state word says the state ("nicht verbunden"), never "Loading …";
- *  - one word per concept across tray, dashboard and README ("Not-Aus", never "Notaus"/"Kill
- *    switch"; "Sicherheitsmodus", never "Safe Mode").
+ *  - one word per concept across tray, dashboard and README ("Stopp", never "Not-Aus"/"Kill
+ *    switch" on a button; "Modus", never "Betriebsart"; "Abläufe", never "Presets"; "koppeln" for
+ *    the act and "verbunden" for the state; "Sicherheitsmodus", never "Safe Mode").
  *
  * `{0}` in a value is a placeholder filled by `fill()` in `index.ts`.
  */
@@ -117,16 +118,16 @@ export const de = {
   option_plugin_coding: 'Programmieren – Code-Sitzungen mit Claude Code',
   option_plugin_creative: 'Kreativ – Texte und Ideen',
   option_plugin_echo: 'Echo – Testplugin für Entwickler',
-  settings_group_presets: 'Presets',
+  settings_group_presets: 'Abläufe',
   option_lang_auto: 'Automatisch',
 
   // -- shell --------------------------------------------------------------------------------------
   app_title: 'Nox Dashboard',
   skip_to_main: 'Zum Inhalt springen',
   nav: 'Bereiche',
-  setting_presets_enabled: 'Presets aktiv',
+  setting_presets_enabled: 'Abläufe aktiv',
   setting_presets_actions: 'Programme, die Nox starten darf',
-  setting_presets_items: 'Presets',
+  setting_presets_items: 'Abläufe',
   presets_run: 'Ausführen',
   presets_running: 'Läuft …',
   presets_run_ok: 'Alle Schritte liefen durch',
@@ -348,25 +349,10 @@ export const de = {
   perm_remember_minutes: 'Für {0} Minuten erlauben',
   perm_remember_minute: 'Für 1 Minute erlauben',
   perm_deny: 'Ablehnen',
-  presets_from_satellites: 'Auch über Sprach-Satelliten',
-  presets_from_satellites_hint:
-    'Dann startet der Satz auch an einem Gerät mit Sprach-Satellit - wer dort im Raum ist, muss nicht du sein. Jeder Schritt fragt dann wie bei fremden Inhalten, und die Betriebsart wechselt nie.',
-  presets_pin: 'Sicherheits-PIN',
-  presets_pin_hint: 'Presets starten Programme: Jede Änderung braucht die PIN, wenn eine gesetzt ist.',
-  perm_device_note: 'Von diesem Gerät aus gilt eine Erlaubnis nur dieses eine Mal.',
-  perm_voice_satellite:
-    'Von Sprach-Satellit {0}: in einen Raum gesprochen - nicht unbedingt von dir. Nur erlauben, wenn du das selbst wolltest.',
   perm_pin: 'Sicherheits-PIN',
-  perm_pin_hint: 'Bei hohem Risiko braucht das Erlauben von diesem Gerät aus die PIN. Nach drei falschen Versuchen wird das Gerät entfernt.',
   perm_pin_missing: 'Bitte zuerst die Sicherheits-PIN eingeben.',
-  perm_node_control_device:
-    'Vom Browser auf dem PC, den Nox gerade steuert, geht Erlauben nicht – von einem anderen Gerät mit der PIN. Ablehnen geht überall.',
   chat_unchecked_node: 'Während Nox den PC steuert, gelten Nachrichten als ungeprüft.',
   chat_controlled_here: 'Nox steuert gerade diesen PC – von hier kann man Nox nichts schreiben. Stopp geht immer.',
-  perm_node_control_here:
-    'Nox steuert gerade Maus und Tastatur auf diesem PC. Von hier geht Erlauben nicht – an einem anderen Gerät mit der PIN. Ablehnen geht auch hier.',
-  perm_node_control_pin_hint: 'Nox steuert gerade Maus und Tastatur auf einem PC: Erlauben braucht jetzt die PIN.',
-  perm_only_at_computer: 'Erlauben geht dafür nur am Rechner, auf dem Nox läuft. Ablehnen geht auch hier.',
   perm_countdown: 'Noch {0} Sekunden. Ohne Antwort tut Nox es nicht.',
   perm_countdown_over: 'Die Zeit ist um – ohne Antwort tut Nox es nicht.',
   perm_countdown_announce: 'Noch {0} Sekunden für eine Antwort.',
@@ -430,10 +416,13 @@ export const de = {
   computer_use_banner_node: 'Nox steuert gerade Maus und Tastatur auf {0}.',
   computer_use_banner_node_hotkey: '{0} an diesem Gerät beendet sofort, „Stopp“ beendet überall.',
   computer_use_release: 'Sperre lösen',
+  computer_use_stuck: 'Antwortet {0} nicht mehr?',
+  computer_use_release_hint:
+    'Nur dann: Ist {0} aus oder ohne Netz, hält Nox die Sperre, bis die längste Sitzung um ist. Mit der PIN löst du sie hier früher. Steuert Nox dort noch, sperrt er gleich wieder.',
   computer_use_saturated: 'Nox steuert ein Gerät mit sehr vielen Adressen – Freigaben nur nach Ende der Sitzung.',
   computer_use_release_pin: 'PIN zum Lösen der Sperre',
   computer_use_release_failed: 'Die Sperre wurde nicht gelöst.',
-  computer_use_banner_no_hotkey: 'Nox steuert gerade Maus und Tastatur – der Not-Aus beendet sofort.',
+  computer_use_banner_no_hotkey: 'Nox steuert gerade Maus und Tastatur – „Stopp“ beendet sofort.',
 
   // -- UX redesign (Spec UX-Neubau): shell, Heute, palette, permission, Stopp, settings pages --
   ux_area_today: 'Heute',
@@ -592,4 +581,6 @@ export const de = {
 export type CoreKey = keyof typeof de;
 /** Keys only the lazily loaded areas use (`de.more.ts`, fetched by `loadMore`). */
 export type MoreKey = keyof typeof import('./de.more').deMore;
-export type Key = CoreKey | MoreKey;
+/** Geräte › Computer und Server: fetched with that section only (`de.nodes.ts`). */
+export type NodeKey = keyof typeof import('./de.nodes').deNodes;
+export type Key = CoreKey | MoreKey | NodeKey;

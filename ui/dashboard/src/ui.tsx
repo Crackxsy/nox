@@ -234,3 +234,26 @@ export function Detail({ label, detail }: { label: ReactNode; detail?: string | 
     </span>
   );
 }
+
+/* ----------------------------------------------------------------- filled - */
+
+/**
+ * A translated pattern with `{0}`, `{1}` … filled in, where the arguments named in `strong` are set
+ * in bold ("Öffne auf **Laptop** ein Terminal"). The words around them stay translatable as one
+ * sentence; only the names stand out.
+ */
+export function Filled({ pattern, args, strong = [] }: { pattern: string; args: string[]; strong?: number[] }) {
+  const parts = pattern.split(/(\{\d+\})/);
+  return (
+    <>
+      {parts.map((part, i) => {
+        const m = /^\{(\d+)\}$/.exec(part);
+        if (!m) return part;
+        const index = Number(m[1]);
+        const value = args[index];
+        if (value === undefined) return part;
+        return strong.includes(index) ? <strong key={i}>{value}</strong> : value;
+      })}
+    </>
+  );
+}

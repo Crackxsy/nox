@@ -85,6 +85,15 @@ def _envelope(kind: str, name: str, payload: dict[str, Any], corr: str | None) -
     )
 
 
+class StubError(Exception):
+    """An answer that is an error: `code`, the English operator text and `details` (the reason)."""
+
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
+
+
 @dataclass
 class StubCore:
     """The core as far as the page can tell: request name -> answer, plus pushed events."""
@@ -463,7 +472,12 @@ def _install(page: Page, stub: StubCore) -> None:
             if name == "ipc.auth":
                 ws.send(_envelope("response", name, {"ok": True, "session_id": "e2e"}, corr))
                 return
-            result = stub.answer(name, payload)
+            try:
+                result = stub.answer(name, payload)
+            except StubError as error:
+                body = {"code": error.code, "message": str(error), "details": error.details}
+                ws.send(_envelope("error", name, body, corr))
+                return
             if result is None:
                 ws.send(
                     _envelope(
@@ -500,6 +514,10 @@ class Journey:
     _selector: str = ""
 
     def shot(self, step: str) -> None:
+        # Not in the middle of a sheet's rise (or any other animation): wait until they ended.
+        self.page.evaluate(
+            "() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => null)))"
+        )
         self.page.screenshot(
             path=str(self.shots / f"{self.size}_{self.scheme}_{step}.png"), full_page=False
         )

@@ -88,6 +88,8 @@ class ShellModel(BaseModel):
     muted: bool = False
     pet_visible: bool = True
     click_through: bool = False
+    #: The paired PCs Nox controls mouse and keyboard on right now (node ids).
+    node_control: list[str] = Field(default_factory=list)
 
     def apply_event(self, name: str, payload: dict[str, Any]) -> set[str]:
         """Apply an IPC event; return the set of changed field names."""
@@ -106,8 +108,27 @@ class ShellModel(BaseModel):
             self.system_level = SystemLevel.STOPPING
         elif name == "state.changed":
             self._apply_state_change(payload)
+        elif name == "desktop.computer_use":
+            self._apply_node_control(payload)
+        elif name == "node.computer.status":
+            sessions = payload.get("sessions")
+            self.node_control = sorted(
+                {
+                    str(s["device_id"])
+                    for s in (sessions if isinstance(sessions, list) else [])
+                    if isinstance(s, dict) and s.get("active") is True and s.get("device_id")
+                }
+            )
         after = self.model_dump()
         return {k for k in after if after[k] != before[k]}
+
+    def _apply_node_control(self, payload: dict[str, Any]) -> None:
+        """A session on a paired PC started or ended (this machine's own has no device id)."""
+        device_id = payload.get("device_id")
+        if not isinstance(device_id, str) or not device_id:
+            return
+        rest = [d for d in self.node_control if d != device_id]
+        self.node_control = sorted([*rest, device_id]) if payload.get("active") is True else rest
 
     def _apply_state_change(self, payload: dict[str, Any]) -> None:
         path = str(payload.get("path", ""))
@@ -218,9 +239,21 @@ def rememberable(request: dict[str, Any]) -> bool:
 
 
 _SATELLITE_LINE = {
-    "de": "Von Sprach-Satellit {name}: in einen Raum gesprochen - nicht unbedingt von dir.",
-    "en": "From voice satellite {name}: spoken into a room - not necessarily by you.",
+    "de": "Vom Lautsprecher-Mikrofon {name}: in einen Raum gesprochen – nicht unbedingt von dir.",
+    "en": "From the speaker microphone {name}: spoken into a room – not necessarily by you.",
 }
+
+
+def permission_device(request: dict[str, Any]) -> tuple[str, str]:
+    """(device name, target) of a PermissionRequested payload. The device comes only from the
+    core's own fields (`device_id` and `device_name`, set by its router) - never out of the target
+    text, which is what the tool says and may look like anything. The target is returned as sent."""
+    target = request.get("target")
+    target = target if isinstance(target, str) else ""
+    device_id, name = request.get("device_id"), request.get("device_name")
+    if not isinstance(device_id, str) or not device_id.strip() or not isinstance(name, str):
+        return "", target
+    return name.strip()[:64], target
 
 
 def voice_satellite_line(request: dict[str, Any], language: str = "de") -> str:

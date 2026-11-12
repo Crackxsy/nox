@@ -194,7 +194,7 @@ def test_computers_and_what_nox_may_do_there(journey: Journey) -> None:  # noqa:
     ).to_be_visible()
     expect(section.get_by_text("Verbunden", exact=True)).to_be_visible()
     expect(section.get_by_text(re.compile(r"^Offline seit ")).first).to_be_visible()
-    expect(section.get_by_text(LONG_NAME, exact=True)).to_be_visible()
+    expect(section.locator("p.device-name", has_text=LONG_NAME)).to_be_visible()
     journey.shot("01-computer")
     journey.axe("computer")
     journey.no_sideways_scroll()
@@ -207,25 +207,27 @@ def test_computers_and_what_nox_may_do_there(journey: Journey) -> None:  # noqa:
     expect(notify).to_have_attribute("aria-checked", "true")
     notify.click()
     expect(notify).to_have_attribute("aria-checked", "false")
-    expect(sheet.get_by_text("Hier ausgeschaltet.", exact=False)).to_be_visible()
+    expect(sheet.get_by_text("Hier aus.", exact=False)).to_be_visible()
     assert _sent(stub, "node.narrow") == [{"node_id": PC, "group": "notify", "narrowed": True}]
 
-    # 3. A group the device does not allow: explained, never sent.
-    sheet.get_by_role("switch", name="Befehle ausführen").click()
+    # 3. A group the device does not allow is no switch: a lock, explained, never sent.
+    expect(sheet.get_by_role("switch", name="Befehle ausführen")).to_have_count(0)
+    sheet.get_by_role("button", name="So schaltest du es ein").click()
     expect(sheet.get_by_text("Das geht nur am Gerät selbst")).to_be_visible()
-    expect(sheet.get_by_text("nox node allow shell")).to_be_visible()
+    expect(sheet.get_by_text("nox-node allow shell", exact=True)).to_be_visible()
     assert len(_sent(stub, "node.narrow")) == 1
     journey.shot("02-sheet")
     journey.axe("sheet")
+    sheet.get_by_role("button", name="Schließen", exact=True).click()
 
-    # 4. Where "Systemwerte lesen" runs when nobody names a device.
-    sheet.get_by_label("Systemwerte lesen: Standardgerät").select_option(PC)
+    # 4. Where "Systemwerte lesen" runs when nobody names a device: under "Standardgeräte",
+    #    for all computers.
+    section.get_by_label("Wo Nox Systemwerte liest", exact=True).select_option(PC)
     assert _sent(stub, "node.defaults.set") == []  # choosing alone changes nothing
-    sheet.get_by_role("button", name="Übernehmen: Systemwerte lesen").click()
-    expect(sheet.get_by_text("Gespeichert.")).to_be_visible()
+    section.get_by_role("button", name="Übernehmen: Wo Nox Systemwerte liest").click()
+    expect(section.get_by_text("Gespeichert.")).to_be_visible()
     assert _sent(stub, "node.defaults.set") == [{"group": "system", "device": PC}]
     journey.shot("03-standard")
-    sheet.get_by_role("button", name="Schließen", exact=True).click()
     expect(section.get_by_text("Standard für: Systemwerte lesen")).to_be_visible()
 
     # 5. Add a Linux laptop: code, QR, steps - and the status flips when it connects.
@@ -234,11 +236,11 @@ def test_computers_and_what_nox_may_do_there(journey: Journey) -> None:  # noqa:
     expect(add).to_be_visible()
     add.get_by_label("Linux").check()
     add.get_by_label("Name des Geräts (freiwillig)").fill("Laptop")
-    add.get_by_role("button", name="Code erzeugen").click()
+    add.get_by_role("button", name="Installiert – Code erzeugen").click()
     expect(add.get_by_role("img", name=re.compile("QR-Code zum Verbinden"))).to_be_visible(
         timeout=UI_TIMEOUT_MS
     )
-    expect(add.get_by_text("bash install-linux.sh --node")).to_be_visible()
+    expect(add.get_by_text("bash install-linux.sh --node", exact=True)).to_be_visible()
     expect(add.get_by_text("Wartet auf das Gerät …")).to_be_visible()
     journey.shot("04-hinzufuegen")
     journey.axe("hinzufuegen")

@@ -851,7 +851,8 @@ def _iss() -> str:
 
 def test_the_installer_never_runs_its_own_python_elevated() -> None:
     script = _iss()
-    assert script.isascii()  # Inno reads a file without BOM as ANSI
+    # Inno reads a file without BOM as ANSI: this one is UTF-8 with a BOM (real umlauts).
+    assert (REPO / "installer" / "nox.iss").read_bytes().startswith(b"\xef\xbb\xbf")
     assert "PrivilegesRequired=lowest" in script  # the install itself stays per-user
     task = next(line for line in script.splitlines() if line.startswith('Name: "sandboxrules"'))
     assert "Flags: unchecked" not in task  # ticked by default
