@@ -242,6 +242,7 @@ def test_computers_and_what_nox_may_do_there(journey: Journey) -> None:  # noqa:
     )
     expect(add.get_by_text("bash install-linux.sh --node", exact=True)).to_be_visible()
     expect(add.get_by_text("Wartet auf das Gerät …")).to_be_visible()
+    journey.no_overflow_in("dialog[open]", "add sheet")
     journey.shot("04-hinzufuegen")
     journey.axe("hinzufuegen")
     journey.no_sideways_scroll()

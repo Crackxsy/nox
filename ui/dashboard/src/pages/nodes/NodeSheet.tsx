@@ -281,7 +281,7 @@ function NodeDetail({
                       </span>
                       <button
                         type="button"
-                        className="btn btn--sm btn--quiet"
+                        className="btn btn--sm"
                         aria-expanded={open}
                         aria-controls={how}
                         aria-describedby={`${label}-l`}
