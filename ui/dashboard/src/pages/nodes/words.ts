@@ -35,11 +35,35 @@ export function groupLabel(t: T, group: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/** "Verbunden" / "Offline seit 14:02" / "Update nötig". */
+const WHERE_KEYS: Record<string, Key> = {
+  system: 'node_where_system',
+  notify: 'node_where_notify',
+  media: 'node_where_media',
+  files: 'node_where_files',
+  shell: 'node_where_shell',
+  packages: 'node_where_packages',
+  screen: 'node_where_screen',
+  camera: 'node_where_camera',
+  browser: 'node_where_browser',
+  desktop: 'node_where_desktop',
+  computer: 'node_where_computer',
+  voice: 'node_where_voice',
+  obs: 'node_where_obs',
+};
+
+/** "Wo Nox Systemwerte liest": a row of the default devices. */
+export function whereLabel(t: T, group: string): string {
+  const key = WHERE_KEYS[group];
+  return key ? t(key) : fill(t('node_where_other'), group);
+}
+
+/** "Verbunden" / "Meldet seine Fähigkeiten noch …" / "Offline seit 14:02" / "Update nötig". */
 export function stateWords(t: T, lang: Lang, node: NodeInfo): string {
   switch (nodeState(node)) {
     case 'connected':
       return t('node_state_connected');
+    case 'listing':
+      return t('node_state_listing');
     case 'update':
       return t('node_state_update');
     case 'removed':
@@ -51,11 +75,34 @@ export function stateWords(t: T, lang: Lang, node: NodeInfo): string {
   }
 }
 
-/** The command that enables a group on the device itself (`nox node allow`). */
-export function allowCommand(t: T, group: string): string {
-  return group === 'files'
-    ? `nox node allow files --folder ${t('node_enable_folder')}`
-    : `nox node allow ${group}`;
+/**
+ * The command that enables a group on the device itself, as that device's installer named it:
+ * `nox-node` everywhere (Windows: on the user's PATH, from the installer; Linux and macOS: in
+ * `~/.local/bin`), with `sudo` on a Linux device without a screen, whose node runs as its own
+ * system user.
+ */
+export function allowCommand(t: T, group: string, sudo = false): string {
+  const base = group === 'files' ? `nox-node allow files --folder ${t('node_enable_folder')}` : `nox-node allow ${group}`;
+  return sudo ? `sudo ${base}` : base;
+}
+
+/** How to get to a command line on that device, in words: the OS decides (K1). */
+export function enableHowKey(node: NodeInfo): Key {
+  switch (node.os) {
+    case 'windows':
+      return 'node_enable_how_windows';
+    case 'macos':
+      return 'node_enable_how_macos';
+    case 'linux':
+      return node.headless ? 'node_enable_how_headless' : 'node_enable_how_linux';
+    default:
+      return 'node_enable_how_unknown';
+  }
+}
+
+/** A Linux device that has not said whether it has a screen: the `sudo` line is offered too. */
+export function mayBeHeadless(node: NodeInfo): boolean {
+  return node.os === 'linux' && node.headless === null;
 }
 
 /** Where a family runs when nobody says, in words. */

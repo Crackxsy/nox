@@ -22,6 +22,23 @@ den Core als nicht vertrauenswürdig. Spielsperre, harte Verbote, eine am Gerät
 Gruppe und der eigene Dialog des Geräts für Hohes Risiko gelten also auch gegen einen Core, der
 übernommen oder so verändert wurde, dass er alles erlaubt.
 
+## In 3 Schritten
+
+1. **Programm auf dem neuen PC installieren.** Windows: die Datei `Nox-Setup-<Version>.exe` starten
+   und „Mit dem Nox zu Hause verbinden (nur dieser PC)“ wählen. Linux (auch Raspberry Pi): das
+   Skript `install-linux.sh --node` ([Tabelle unten](#einen-node-installieren)).
+2. **Code erzeugen und Link übertragen.** Im Dashboard: Geräte & Fähigkeiten › Geräte › Computer und
+   Server › **PC oder Laptop hinzufügen** › **Installiert – Code erzeugen**. Dann **Link
+   kopieren**, die Seite auf dem neuen PC öffnen und den Link in das Feld „Kopplungs-Link“ des
+   Installers einfügen. Der Code gilt nur fünf Minuten - erzeuge ihn erst, wenn das Programm
+   installiert ist.
+3. **Am neuen PC erlauben, was Nox dort darf.** Windows: Eingabeaufforderung öffnen (Windows-Taste,
+   „cmd“ tippen) und zum Beispiel `nox-node allow shell` eingeben; Linux: in einem Terminal
+   dasselbe, ohne Bildschirm mit `sudo nox-node allow shell`. Das Dashboard zeigt dir den Befehl
+   passend zum Gerät unter „So schaltest du es ein“.
+
+(Ein Ablauf mit kurzem Code und Abgleich des Fingerabdrucks statt des langen Links ist geplant.)
+
 ## Einen Node installieren
 
 | Gerät | Wie | Startet mit |
@@ -118,7 +135,7 @@ nox node deny notify     # keine Hinweise mehr auf diesem Gerät - sofort, auch 
 | `browser` | `browser.*` in Nox' eigenem unsichtbarem Browser | aus | nur öffentliche Seiten |
 | `desktop` | Fenster auflisten, nach vorn holen, minimieren, wiederherstellen, schließen; ein Programm beenden; Text tippen | aus | nur Windows |
 | `computer` | Maus und Tastenkombinationen in einer Sitzung | aus | nur Windows; `allow` fragt zweimal |
-| `voice` | der Sprach-Satellit | aus | braucht zusätzlich den Schalter des Besitzers im Dashboard |
+| `voice` | das Lautsprecher-Mikrofon | aus | braucht zusätzlich den Schalter des Besitzers im Dashboard |
 | `obs` | `obs.request` an das OBS auf diesem PC, das Pet-Overlay-Relay | aus | |
 
 Der Core kann Gruppen abschalten, nie anschalten. `allow` geht nur in einem interaktiven Terminal
@@ -251,7 +268,7 @@ Fenstertitel von einem Node werden verborgen, solange Nox im Panik- oder abgesic
 
 `computer`, nur Windows (sonst abgelehnt): `nox node allow computer` fragt zweimal. Eine Sitzung
 wird jedes Mal an diesem Gerät erfragt (hoch), dauert höchstens 15 Minuten und 200 Aktionen, zeigt
-eine Benachrichtigung und endet mit Strg+Alt+Umschalt+K, dem Not-Aus, einer verlorenen Verbindung
+eine Benachrichtigung und endet mit Strg+Alt+Umschalt+K, Stopp, einer verlorenen Verbindung
 oder ihrer Zeit. Darin darf Nox bewegen, klicken, scrollen und Tastenkombinationen drücken - nie
 in Nox' eigene Fenster, nie während hier eine Frage offen ist. Dafür muss der Browser auf diesem
 PC im Dashboard mit dem Node verknüpft sein (`node.link`), damit Nox erkennt, welcher Browser auf
@@ -319,7 +336,7 @@ Drei Dinge, die ein Node über seine Hände hinaus für Nox tun kann - alle stan
 nur hier eingeschaltet (`nox node allow voice`, `nox node allow obs`). Wie sie arbeiten, steht in
 `satellites.yaml` im Node-Ordner (nur Einstellungen, nichts Geheimes, nie *ob*).
 
-### Sprach-Satellit
+### Lautsprecher-Mikrofon (Sprach-Satellit)
 
 `voice`: Nox hört und spricht auf diesem Gerät - etwa ein Wohnzimmer-Pi mit einem
 USB-Lautsprechermikrofon.
@@ -354,13 +371,13 @@ USB-Lautsprechermikrofon.
   hört, wird bei Nox ein eigenes Gespräch (`voice:node:<Kennung>`), gespeichert oder nicht nach
   Nox' Privatsphäre-Modus, und dieses Gespräch gilt vom ersten Wort an als eines mit fremden
   Inhalten: Alles, was Daten nach draußen schickt, fragt vorher, ein anderswo gegebenes „für diese
-  Sitzung merken“ gilt dafür nicht, und die Frage zeigt „von Sprach-Satellit <Name>“. Was Nox
+  Sitzung merken“ gilt dafür nicht, und die Frage zeigt „Vom Lautsprecher-Mikrofon <Name>“. Was Nox
   daraus lernt, wartet auf deine Bestätigung. **Erlaubnisse gibt es nie per Stimme.** „Hier“ heißt
   dieses Gerät: „Mach hier die Musik leiser“. Es wartet, bis Nox im Dashboard fertig ist, statt es
   zu unterbrechen (höchstens 90 s). Schlösser, Alarmanlagen, Garagentore und Ventile sind wie für
   jeden Kanal unerreichbar - dafür hat Nox kein Werkzeug.
-- **Keine Abkürzungen aus dem Raum.** Presets und Moduswechsel starten von hier nicht - nur ein
-  Preset, das du „Auch über Sprach-Satelliten“ markiert hast (mit der PIN, wenn eine gesetzt ist),
+- **Keine Abkürzungen aus dem Raum.** Abläufe und Moduswechsel starten von hier nicht - nur ein
+  Ablauf, den du „Auch per Sprache aus einem Raum starten“ markiert hast (mit der PIN, wenn eine gesetzt ist),
   und dann folgt jeder Schritt den normalen Regeln; der Modus wechselt per Stimme von einem
   Satelliten nie, und ein dort gesagtes „neues Gespräch“ verwirft das Gespräch nicht und beendet
   seine Erlaubnisse nicht.
@@ -423,21 +440,25 @@ ist, seine Version. Sein Blatt hat einen Schalter je Gruppe:
   auch nach jedem Neuverbinden.
 - **Wieder an** geht dort nur für eine Gruppe, die du dort ausgeschaltet hast, mit der PIN, wenn
   eine gesetzt ist. Was das Gerät selbst nicht erlaubt, schaltest du nur am Gerät ein:
-  `nox node allow <Gruppe>` im Terminal dort (das Symbol im Infobereich zeigt nur, was erlaubt
-  ist; ein Pi ohne Bildschirm hat keins - dort ein Terminal nutzen, etwa über SSH).
+  `nox-node allow <Gruppe>` dort (das Symbol im Infobereich zeigt nur, was erlaubt ist; ein Pi
+  ohne Bildschirm hat keins). Das Dashboard nennt dafür den Befehl passend zum Gerät: unter
+  Windows die Eingabeaufforderung (Windows-Taste, „cmd“ tippen), unter Linux ein Terminal, ohne
+  Bildschirm `sudo nox-node ...` etwa über SSH. Eine Gruppe, die das Gerät nicht erlaubt, ist
+  dort kein Schalter, sondern ein Schloss mit „So schaltest du es ein“.
 
-Im selben Blatt stellst du das Standardgerät je Werkzeugfamilie ein, siehst „Zuletzt hier getan“
+Unter der Liste, bei „Standardgeräte“, stellst du je Werkzeugfamilie ein, wo Nox etwas tut
+(„Wo Nox Systemwerte liest“) - das gilt für alle Computer. Im Blatt eines Nodes siehst du „Zuletzt hier getan“
 aus dem Protokoll und entfernst den Node („Wirklich entfernen“, zweimal gedrückt); Standards, die
 einen entfernten Node nannten, stehen danach wieder auf `auto`. Die Anfragen heißen `node.narrow`
 und `node.defaults.set` (siehe [SECURITY.md](SECURITY.md#nodes-nox-node)).
 
 ## Stoppen
 
-- **Der Stopp-Knopf von Nox stoppt jeden Node in unter einer Sekunde:** Der Not-Aus erreicht jeden
+- **Der Stopp-Knopf von Nox stoppt jeden Node in unter einer Sekunde:** Stopp erreicht jeden
   verbundenen Node über seine offene Verbindung, laufende Aktionen werden abgebrochen (bei einem
   Befehl in der Sandbox der ganze Prozessbaum), eine Sitzung mit Maus und Tastatur endet, und der
   Node lehnt alles ab, bis Nox fortsetzt.
-- **Am Gerät selbst:** `nox node stop`, **Not-Aus hier** im Symbol-Menü oder
+- **Am Gerät selbst:** `nox node stop`, **Stopp (überall)** im Symbol-Menü oder
   `Strg+Alt+Umschalt+K` (wo ein globaler Tasten-Hook verfügbar ist) - oder „Nox, Notaus“ an einem
   Sprach-Satelliten - stoppt es dort und Nox überall; den eigenen Stopp des Nodes hebt nur
   `nox node resume` (oder **Hier fortsetzen**) an diesem Gerät auf.
@@ -446,7 +467,7 @@ und `node.defaults.set` (siehe [SECURITY.md](SECURITY.md#nodes-nox-node)).
 
 Auf einem Desktop mit Infobereich-Symbol (Windows; Linux, wo PySide6 installiert ist) zeigt das
 Symbol den Zustand - verbunden, „Nicht verbunden mit Nox“, Update nötig, gestoppt - und sein Menü
-hat **Not-Aus hier**, **Hier fortsetzen**, **Was Nox hier darf** und, mit Sprache, den
+hat **Stopp (überall)**, **Hier fortsetzen**, **Was Nox hier darf** und, mit Sprache, den
 Mikrofon-Schalter. Das Symbol schreibt nur dieselbe Stopp-Datei wie `nox node stop`. Hinweise eines
 unter Windows im Node-Modus installierten Nodes tragen Nox' eigenen Namen (AppUserModelID
 `Nox.Node`), nicht „Windows PowerShell“.
@@ -607,7 +628,7 @@ lässt sich von Nox aus nicht übergehen. Prüfe:
   hinzugefügt hat, lässt sich am Node nicht entfernen;
 - Maus, Tastatur und Fenster gibt es nur auf Windows-Nodes (`windows_only`).
 
-### Der Sprach-Satellit hört nicht zu
+### Das Lautsprecher-Mikrofon hört nicht zu
 
 `nox node voice status` ausführen. Der Reihe nach:
 

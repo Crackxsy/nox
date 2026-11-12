@@ -35,6 +35,12 @@ export interface NodeInfo {
   revoked: boolean;
   tools: string[];
   groups: NodeGroup[];
+  /** The folders this device allows for `files`; `null` when the core does not say (older). */
+  folders: string[] | null;
+  /** A Linux device without a screen (a Pi, a server): its command needs `sudo`. `null`: not known. */
+  headless: boolean | null;
+  /** Connected, but its list of what it offers has not arrived yet. */
+  listing: boolean;
 }
 
 /** One tool family and the device it runs on when nobody says: `auto`, `core`, `origin`, a node
@@ -52,7 +58,7 @@ export interface NodeList {
   defaults: FamilyDefault[];
 }
 
-export type NodeState = 'connected' | 'update' | 'offline' | 'removed';
+export type NodeState = 'connected' | 'listing' | 'update' | 'offline' | 'removed';
 
 function str(value: unknown): value is string {
   return typeof value === 'string';
@@ -89,6 +95,22 @@ export function parseNodeGroups(value: unknown): NodeGroup[] | null {
 }
 
 const OS: readonly string[] = ['windows', 'linux', 'macos'];
+
+/** `folders`: plain paths, or `{path}` entries; anything else is "not known" rather than "none". */
+function parseFolders(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const out: string[] = [];
+  for (const item of value) {
+    if (str(item)) {
+      out.push(item);
+    } else if (typeof item === 'object' && item !== null && str((item as Record<string, unknown>).path)) {
+      out.push((item as Record<string, string>).path);
+    } else {
+      return null;
+    }
+  }
+  return out;
+}
 
 function parseNode(value: unknown): NodeInfo | null {
   if (typeof value !== 'object' || value === null) return null;
@@ -129,6 +151,13 @@ function parseNode(value: unknown): NodeInfo | null {
     revoked: n.revoked,
     tools,
     groups,
+    folders: parseFolders(n.folders),
+    headless: typeof n.headless === 'boolean' ? n.headless : null,
+    // The core's word when it gives one; else: connected, and nothing reported at all yet.
+    listing:
+      n.listing === true ||
+      n.state === 'listing' ||
+      (n.listing === undefined && n.online === true && tools.length === 0 && groups.length === 0),
   };
 }
 
@@ -161,7 +190,18 @@ export function parseNodeList(payload: unknown): NodeList | null {
 export function nodeState(node: NodeInfo): NodeState {
   if (node.revoked) return 'removed';
   if (!node.online) return 'offline';
-  return node.compatible === false ? 'update' : 'connected';
+  if (node.compatible === false) return 'update';
+  return node.listing ? 'listing' : 'connected';
+}
+
+/**
+ * A folder as a person reads it: its last two parts (`Dokumente\Nox`), with the device's own
+ * separator. The whole path stays under "Technische Angaben".
+ */
+export function shortFolder(path: string): string {
+  const sep = path.includes('\\') ? '\\' : '/';
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  return parts.length <= 2 ? path : parts.slice(-2).join(sep);
 }
 
 /** The groups Nox may use there right now, in the core's order. */

@@ -126,8 +126,17 @@ describe('the computer-use strip in the app', () => {
     expect(line.textContent).toContain('Strg + Alt + Umschalt + K');
     // The stop in the line is the same `security.kill` as the header's Stopp.
     expect(strip.querySelector('button.stop')?.textContent).toContain(t('ux_stop'));
-    // On the computer Nox runs on, a stuck lock can be lifted - with the PIN.
+    // On the computer Nox runs on, a stuck lock can be lifted - with the PIN, folded away with
+    // what it is for (an older core does not say whether the PC went silent).
     expect(within(strip as HTMLElement).getByRole('button', { name: t('computer_use_release') })).toBeTruthy();
+    const more = strip.querySelector('details.strip-more') as HTMLDetailsElement;
+    expect(more.open).toBe(false);
+    expect(more.querySelector('summary')?.textContent).toBe('Antwortet Arbeits-PC nicht mehr?');
+    // The core says the PC still answers: nothing to lift. It went silent: offered open.
+    emit({ active: true, ...node, stale: false });
+    expect(screen.queryByRole('button', { name: t('computer_use_release') })).toBeNull();
+    emit({ active: true, ...node, stale: true });
+    expect((document.querySelector('details.strip-more') as HTMLDetailsElement).open).toBe(true);
     // This machine's own session is a line of its own; ending it leaves the PC's line.
     emit({ active: true, reason: '', stop: 'f12' });
     emit({ active: false, reason: 'done', stop: 'f12' });

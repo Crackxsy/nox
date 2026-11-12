@@ -187,15 +187,123 @@ describe('the detail sheet', () => {
   it('never switches on what the device does not allow, and says how to do it there', async () => {
     const { calls } = await show();
     const sheet = await openSheet();
-    const shell = within(sheet).getByRole('switch', { name: 'Befehle ausführen' });
-    expect(shell.getAttribute('aria-checked')).toBe('false');
+    // No switch that does nothing: a lock and a button that opens how.
+    expect(within(sheet).queryByRole('switch', { name: 'Befehle ausführen' })).toBeNull();
+    const how = within(sheet).getByRole('button', { name: t('node_enable_show') });
+    expect(how.getAttribute('aria-expanded')).toBe('false');
     await act(async () => {
-      fireEvent.click(shell);
+      fireEvent.click(how);
     });
+    expect(how.getAttribute('aria-expanded')).toBe('true');
+    expect(document.getElementById(how.getAttribute('aria-controls') ?? '')).not.toBeNull();
     expect(calls.some((c) => c.name === 'node.narrow')).toBe(false);
     expect(within(sheet).getByText(t('node_enable_title'))).toBeTruthy();
-    expect(within(sheet).getByText('nox node allow shell')).toBeTruthy();
+    // Windows: the Command Prompt, the device in bold, the command its installer put on the PATH.
+    const where = within(sheet).getByText(/die Eingabeaufforderung/);
+    expect(where.textContent).toBe('Öffne auf Arbeits-PC die Eingabeaufforderung (Windows-Taste, „cmd“ tippen) und gib ein:');
+    expect(where.querySelector('strong')?.textContent).toBe('Arbeits-PC');
+    expect(within(sheet).getByText('nox-node allow shell')).toBeTruthy();
+    expect(within(sheet).queryByText(/sudo/)).toBeNull();
     expect(within(sheet).getByText(t('node_enable_tray'))).toBeTruthy();
+  });
+
+  it('names the command line of each system, with sudo on a device without a screen', async () => {
+    const off = [{ group: 'shell', enabled_on_device: false, narrowed: false, active: false }];
+    await show({
+      answers: {
+        'node.list': listing([
+          node(PC, { name: 'Laptop', os: 'linux', arch: 'x86_64', groups: off }),
+          node(PI, { name: 'Wohnzimmer-Pi', os: 'linux', arch: 'aarch64', headless: true, groups: off }),
+          node(OLD, { name: 'Mac', os: 'macos', arch: 'arm64', groups: off }),
+        ]),
+      },
+    });
+    const expand = async (name: string) => {
+      const sheet = await openSheet(name);
+      await act(async () => {
+        fireEvent.click(within(sheet).getByRole('button', { name: t('node_enable_show') }));
+      });
+      return sheet;
+    };
+    // A Linux device that did not say whether it has a screen: both lines.
+    let sheet = await expand('Laptop');
+    expect(within(sheet).getByText(/ein Terminal und gib ein:/).textContent).toBe('Öffne auf Laptop ein Terminal und gib ein:');
+    expect(within(sheet).getByText('nox-node allow shell')).toBeTruthy();
+    expect(within(sheet).getByText('sudo nox-node allow shell')).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(within(sheet).getByRole('button', { name: t('ux_close') }));
+    });
+    sheet = await expand('Wohnzimmer-Pi');
+    expect(within(sheet).getByText('sudo nox-node allow shell')).toBeTruthy();
+    expect(within(sheet).queryByText('nox-node allow shell')).toBeNull();
+    expect(within(sheet).queryByText(t('node_enable_tray'))).toBeNull(); // no tray without a screen
+    await act(async () => {
+      fireEvent.click(within(sheet).getByRole('button', { name: t('ux_close') }));
+    });
+    sheet = await expand('Mac');
+    expect(within(sheet).getByText(/das Programm Terminal/)).toBeTruthy();
+  });
+
+  it('says which folders the device allows for files', async () => {
+    const files = [{ group: 'files', enabled_on_device: true, narrowed: false, active: true }];
+    await show({
+      answers: {
+        'node.list': listing([
+          node(PC, { groups: files, folders: ['C:\\Users\\Mila\\Dokumente\\Nox'] }),
+          node(PI, { name: 'Laptop', groups: files, folders: [] }),
+        ]),
+      },
+    });
+    let sheet = await openSheet();
+    expect(within(sheet).getByText('An – im Ordner Dokumente\\Nox')).toBeTruthy();
+    expect(within(sheet).getByText('C:\\Users\\Mila\\Dokumente\\Nox')).toBeTruthy(); // under "Technische Angaben"
+    await act(async () => {
+      fireEvent.click(within(sheet).getByRole('button', { name: t('ux_close') }));
+    });
+    sheet = await openSheet('Laptop');
+    expect(within(sheet).getByText(t('node_group_no_folder'))).toBeTruthy();
+  });
+
+  it('shows a computer that is still reporting what it can do', async () => {
+    await show({ answers: { 'node.list': listing([node(PC, { tools: [], groups: [] })]) } });
+    expect(screen.getByText(t('node_state_listing'))).toBeTruthy();
+  });
+
+  it('offers no PIN field on a paired device without a PIN, and says where instead', async () => {
+    const { calls } = await show({ device: true });
+    const sheet = await openSheet();
+    expect(within(sheet).queryByLabelText(t('node_pin'))).toBeNull();
+    expect(within(sheet).getByText(t('node_pin_missing_device'))).toBeTruthy();
+    const notify = within(sheet).getByRole('switch', { name: 'Hinweise zeigen' }) as HTMLButtonElement;
+    expect(notify.disabled).toBe(true);
+    await act(async () => {
+      fireEvent.click(notify);
+    });
+    expect(calls.some((c) => c.name === 'node.narrow')).toBe(false);
+  });
+
+  it('never shows the core\'s English or a PIN error for a refusal while Nox controls a PC', async () => {
+    const narrowed = node(PC, {
+      groups: [{ group: 'notify', enabled_on_device: true, narrowed: true, active: false }],
+    });
+    await show({
+      answers: {
+        'node.list': listing([narrowed]),
+        'security.pin.status': { configured: true },
+        'node.narrow': new IpcError(
+          'permission.denied',
+          'Nox controls mouse and keyboard on a paired PC; approving or changing anything now needs the security PIN, and none is set - deny, stop, or set a PIN first',
+          false,
+          { reason: 'node_session', sub_reason: 'node_session_linked' },
+        ),
+      },
+    });
+    const sheet = await openSheet();
+    fireEvent.change(within(sheet).getByLabelText(t('node_pin')), { target: { value: '2468' } });
+    await act(async () => {
+      fireEvent.click(within(sheet).getByRole('switch', { name: 'Hinweise zeigen' }));
+    });
+    expect(within(sheet).getByRole('alert').textContent).toBe(t('reason_node_session_linked'));
   });
 
   it('puts the device first: narrowed here but off there is "off on the device"', async () => {
@@ -207,11 +315,11 @@ describe('the detail sheet', () => {
     const sheet = await openSheet();
     expect(within(sheet).getByText(t('node_group_device_off'))).toBeTruthy();
     await act(async () => {
-      fireEvent.click(within(sheet).getByRole('switch', { name: 'Hinweise zeigen' }));
+      fireEvent.click(within(sheet).getByRole('button', { name: t('node_enable_show') }));
     });
     // It explains where to switch it on, and clears the switch-off made here (never widening:
     // the device still has it off).
-    expect(within(sheet).getByText('nox node allow notify')).toBeTruthy();
+    expect(within(sheet).getByText('nox-node allow notify')).toBeTruthy();
     expect(calls.find((c) => c.name === 'node.narrow')?.payload).toEqual({
       node_id: PC,
       group: 'notify',
@@ -223,7 +331,7 @@ describe('the detail sheet', () => {
     const long = 'Wohnzimmerrechnerimkellerdesnachbarhauses';
     expect(long.length).toBeGreaterThanOrEqual(40);
     await show({ answers: { 'node.list': listing([node(PC, { name: long })]) } });
-    expect(screen.getByText(long).className).toContain('device-name');
+    expect(screen.getAllByText(long).some((el) => el.className.includes('device-name'))).toBe(true);
     const sheet = await openSheet(long);
     expect(within(sheet).getByRole('heading', { name: long })).toBeTruthy();
   });
@@ -261,9 +369,12 @@ describe('the detail sheet', () => {
     const { calls } = await show({ answers: { 'node.list': listing([narrowed]) } });
     const sheet = await openSheet();
     const voice = within(sheet).getByRole('switch', { name: 'Zuhören und sprechen' });
+    // Not listening yet, and why: the second key is here.
+    expect(within(sheet).getByText(t('node_voice_off_here'))).toBeTruthy();
     await act(async () => {
       fireEvent.click(voice);
     });
+    expect(within(sheet).getByText(t('node_voice_two_keys'))).toBeTruthy();
     expect(calls.some((c) => c.name === 'node.narrow')).toBe(false);
     expect(within(sheet).getByText(t('node_voice_confirm_title'))).toBeTruthy();
     await act(async () => {
@@ -293,12 +404,14 @@ describe('the detail sheet', () => {
     expect(within(sheet).getByRole('alert').textContent).toBe(t('node_enable_title'));
   });
 
-  it('sets where a family runs when nobody names a device', async () => {
+  it('sets where a family runs when nobody names a device, for all computers at once', async () => {
     const { calls } = await show();
-    const sheet = await openSheet();
-    const select = within(sheet).getByLabelText('Systemwerte lesen: Standardgerät') as HTMLSelectElement;
+    // On the page under "Standardgeräte", not in one computer's sheet.
+    const section = screen.getByRole('heading', { name: t('node_defaults_title') }).closest('section')!;
+    const select = within(section as HTMLElement).getByLabelText('Wo Nox Systemwerte liest') as HTMLSelectElement;
     expect(select.value).toBe('auto');
-    const apply = within(sheet).getByRole('button', { name: 'Übernehmen: Systemwerte lesen' }) as HTMLButtonElement;
+    const sheet = section as HTMLElement;
+    const apply = within(sheet).getByRole('button', { name: 'Übernehmen: Wo Nox Systemwerte liest' }) as HTMLButtonElement;
     expect(apply.disabled).toBe(true);
     await act(async () => {
       fireEvent.change(select, { target: { value: PC } });
@@ -348,6 +461,9 @@ describe('the detail sheet', () => {
     });
     expect(calls.some((c) => c.name === 'node.unpair')).toBe(false);
     expect(within(sheet).getByText(/Nox kann auf Arbeits-PC dann nichts mehr tun/)).toBeTruthy();
+    expect(within(sheet).getByText(/Tippe zum Bestätigen noch einmal/)).toBeTruthy();
+    // Armed, it looks like what it does.
+    expect(within(sheet).getByRole('button', { name: t('lan_remove_armed') }).className).toContain('btn--danger');
     answers['node.list'] = listing([]);
     await act(async () => {
       fireEvent.click(within(sheet).getByRole('button', { name: t('lan_remove_armed') }));
@@ -377,14 +493,20 @@ describe('adding a computer', () => {
       fireEvent.click(screen.getByRole('button', { name: t('node_add') }));
     });
     const sheet = screen.getByRole('dialog', { name: t('node_add') });
-    fireEvent.click(within(sheet).getByLabelText('Linux'));
+    // Step 1 first: install on the new device - the code lives five minutes, so it comes after.
+    expect(within(sheet).getByText(t('node_add_step_windows'))).toBeTruthy();
+    expect(within(sheet).getByRole('button', { name: t('node_add_ready_windows') })).toBeTruthy();
+    fireEvent.click(within(sheet).getByLabelText(t('node_os_linux')));
+    expect(within(sheet).getByText('bash install-linux.sh --node')).toBeTruthy();
+    expect(within(sheet).getByText('sudo bash install-linux.sh --node --headless')).toBeTruthy();
+    expect(calls.some((c) => c.name === 'node.pair.start')).toBe(false);
     fireEvent.change(within(sheet).getByLabelText(t('lan_pair_name')), { target: { value: 'Laptop' } });
     await act(async () => {
-      fireEvent.click(within(sheet).getByRole('button', { name: t('lan_pair_button') }));
+      fireEvent.click(within(sheet).getByRole('button', { name: t('node_add_ready_other') }));
     });
     expect(calls.find((c) => c.name === 'node.pair.start')?.payload).toEqual({ name: 'Laptop' });
-    expect(within(sheet).getByText('bash install-linux.sh --node')).toBeTruthy();
-    expect(within(sheet).getByText(`nox node pair "${PAIRING.link}"`)).toBeTruthy();
+    expect(within(sheet).getByText(`nox-node pair "${PAIRING.link}"`)).toBeTruthy();
+    expect(within(sheet).getByRole('button', { name: t('node_add_copy_link') })).toBeTruthy();
     expect(within(sheet).getByRole('img', { name: t('node_add_qr_alt') })).toBeTruthy();
     expect(within(sheet).getByText('11:22:33:44:55:66:77:88')).toBeTruthy();
     expect(within(sheet).getByText(t('node_add_waiting'))).toBeTruthy();

@@ -108,9 +108,9 @@ class TrayController:
         self.menu.addAction(self.action_dashboard)
 
         self.menu.addSeparator()
-        # "Not-Aus" everywhere — the tray said "Notaus (Kill switch)", the dashboard "Not-Aus" and
-        # the README "Kill switch", which is three names for one control.
-        self.action_kill = QAction("Not-Aus" if de else "Kill switch")
+        # "Stopp" everywhere, like the dashboard's button (Spec UX-Neubau, glossary): one name for
+        # one control - it stops Nox everywhere.
+        self.action_kill = QAction("Stopp (überall)" if de else "Stop (everywhere)")
         self.action_kill.triggered.connect(on_kill)
         self.menu.addAction(self.action_kill)
 

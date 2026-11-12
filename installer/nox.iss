@@ -1,4 +1,4 @@
-; Inno Setup script for Nox. Installs the embedded-Python payload produced by
+﻿; Inno Setup script for Nox. Installs the embedded-Python payload produced by
 ; `installer/build.py` (build/app/ + build/runtime/) into a per-user LOCALAPPDATA location, with a
 ; Start-menu shortcut and an optional autostart entry. Never touches the user's vault (or any
 ; existing vault path); uninstall removes only the program files it installed.
@@ -19,6 +19,11 @@
 ; a node - this PC as the hands of a Nox elsewhere in the home. A node gets no dashboards, a
 ; per-user logon task "Nox Node" (least privilege, registered by the user's own Python, never
 ; elevated, never a service) and its own notification ID; uninstall ends and removes the task.
+; A node's command (`nox-node.cmd` in {app}) goes on the user's PATH and gets a Start-menu entry
+; "Nox-Befehlszeile", so `nox-node allow shell` works in any Command Prompt as the dashboard says.
+;
+; This file is UTF-8 with a byte order mark: Inno Setup then reads it as Unicode, and the German
+; messages carry real umlauts (keep the BOM when editing).
 ;
 ; Licenses: this installer bundles the `voice` extra (Piper with espeak-ng, GPL-3.0-or-later), so
 ; it is distributed under GPL-3.0-or-later as a whole. The wizard shows the notice and written
@@ -62,7 +67,8 @@ DisableWelcomePage=no
 WizardStyle=modern
 SetupIconFile=
 UninstallDisplayName={#MyAppName}
-ChangesEnvironment=no
+; A node puts its command on the user's PATH (HKCU\Environment): Explorer is told.
+ChangesEnvironment=yes
 ; The combined license notice and the written source offer (GPL-3.0 section 6), shown before
 ; anything is installed.
 LicenseFile={#BuildLegalDir}\INSTALLER_LICENSE.txt
@@ -110,8 +116,14 @@ Name: "{userstartup}\Nox"; Filename: "{app}\runtime\pythonw.exe"; Parameters: ""
 ; Node: "Nox Node" starts the logon task now (never a second copy). Its AppUserModelID is the one
 ; the node's notifications carry (nox.node.appid), so a toast says "Nox", not "Windows PowerShell".
 Name: "{group}\Nox Node"; Filename: "{app}\runtime\pythonw.exe"; Parameters: "-I ""{app}\app\start_node.pyw"" --start"; WorkingDir: "{app}\app"; IconFilename: "{app}\runtime\pythonw.exe"; AppUserModelID: "Nox.Node"; Check: IsNodeMode
+; Node: a Command Prompt where `nox-node ...` works (status, allow, pair) - what the dashboard's
+; "So schaltest du es ein" asks for.
+Name: "{group}\{cm:NodeShellName}"; Filename: "{cmd}"; Parameters: "/k nox-node.cmd status"; WorkingDir: "{app}"; Comment: "{cm:NodeShellComment}"; Check: IsNodeMode
 
 [Registry]
+; Node: `nox-node` on this user's PATH (no administrator), added once; uninstall takes it out again
+; ([Code], RemoveFromUserPath).
+Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: IsNodeMode and NeedsUserPath(ExpandConstant('{app}'))
 ; The node's notification sender, per user (no administrator). The 64-bit view explicitly: the
 ; WFP status key once landed in WOW6432Node because a 32-bit view was used by accident.
 Root: HKCU64; Subkey: "Software\Classes\AppUserModelId\Nox.Node"; ValueType: string; ValueName: "DisplayName"; ValueData: "Nox"; Flags: uninsdeletekey; Check: IsNodeMode
@@ -160,39 +172,63 @@ german.SandboxRulesGroup=Sicherheit:
 english.SandboxRulesTask=Keep sandboxed commands away from this computer's local services and the home network (asks for administrator rights once)
 german.SandboxRulesTask=Sandbox von lokalen Diensten dieses Computers und vom Heimnetz fernhalten (fragt einmal nach Administratorrechten)
 english.SandboxRulesFailed=The sandbox network rules were not added (%1).%n%nNox works without them, but on this Windows build it then runs shell commands only if you accept the weaker sandbox in its settings. To add the rules later, run this setup again.
-german.SandboxRulesFailed=Die Netzwerkregeln der Sandbox wurden nicht angelegt (%1).%n%nNox funktioniert auch ohne sie, fuehrt Shell-Befehle auf diesem Windows-Build dann aber nur aus, wenn du die schwaechere Sandbox in den Einstellungen akzeptierst. Spaeter nachholen: dieses Setup erneut ausfuehren.
+german.SandboxRulesFailed=Die Netzwerkregeln der Sandbox wurden nicht angelegt (%1).%n%nNox funktioniert auch ohne sie, führt Befehle auf diesem Windows-Build dann aber nur aus, wenn du die schwächere Sandbox in den Einstellungen akzeptierst. Später nachholen: dieses Setup erneut ausführen.
 english.SandboxRulesUninstallAsk=%1%n%nRemoving them needs administrator rights once: Windows will ask next. Remove Nox's sandbox network rules now?%n%n(If you say no, they stay until you run an administrator prompt with the command shown by "nox sandbox firewall remove".)
-german.SandboxRulesUninstallAsk=%1%n%nZum Entfernen braucht es einmal Administratorrechte: Windows fragt gleich danach. Die Netzwerkregeln der Nox-Sandbox jetzt entfernen?%n%n(Bei Nein bleiben sie bestehen, bis du den Befehl von "nox sandbox firewall remove" in einer Administrator-Eingabeaufforderung ausfuehrst.)
+german.SandboxRulesUninstallAsk=%1%n%nZum Entfernen braucht es einmal Administratorrechte: Windows fragt gleich danach. Die Netzwerkregeln der Nox-Sandbox jetzt entfernen?%n%n(Bei Nein bleiben sie bestehen, bis du den Befehl von "nox sandbox firewall remove" in einer Administrator-Eingabeaufforderung ausführst.)
 english.SandboxRulesUninstallFound=This setup did not add sandbox network rules itself, but Windows still has rules from Nox (from an older version or added by hand).
-german.SandboxRulesUninstallFound=Dieses Setup hat selbst keine Netzwerkregeln angelegt, Windows hat aber noch Regeln von Nox (aus einer aelteren Version oder von Hand angelegt).
+german.SandboxRulesUninstallFound=Dieses Setup hat selbst keine Netzwerkregeln angelegt, Windows hat aber noch Regeln von Nox (aus einer älteren Version oder von Hand angelegt).
 english.SandboxRulesUninstallUnknown=This setup did not add sandbox network rules itself, and whether Windows still has rules from Nox could not be checked.
-german.SandboxRulesUninstallUnknown=Dieses Setup hat selbst keine Netzwerkregeln angelegt, und ob Windows noch Regeln von Nox hat, liess sich nicht pruefen.
+german.SandboxRulesUninstallUnknown=Dieses Setup hat selbst keine Netzwerkregeln angelegt, und ob Windows noch Regeln von Nox hat, ließ sich nicht prüfen.
 english.ModeCaption=How will this PC be used?
-german.ModeCaption=Wofuer ist dieser PC?
-english.ModeDescription=Nox runs once per home. Other PCs connect to it as nodes.
-german.ModeDescription=Nox laeuft einmal pro Zuhause. Weitere PCs verbinden sich als Knoten damit.
-english.ModeCore=Nox runs on this PC (the Nox of this home)
-german.ModeCore=Nox laeuft auf diesem PC (der Nox dieses Zuhauses)
-english.ModeNode=Connect to a Nox in the home network (only this device)
-german.ModeNode=Mit einem Nox im Heimnetz verbinden (nur dieses Geraet)
+german.ModeCaption=Wofür ist dieser PC?
+english.ModeDescription=Nox runs once per home. Other PCs connect to it.
+german.ModeDescription=Nox läuft einmal pro Zuhause. Weitere PCs verbinden sich mit ihm.
+english.ModeCore=Run Nox on this PC
+german.ModeCore=Nox auf diesem PC starten
+english.ModeNode=Connect to the Nox at home (this PC only)
+german.ModeNode=Mit dem Nox zu Hause verbinden (nur dieser PC)
 english.PairCaption=Connect to Nox
 german.PairCaption=Mit Nox verbinden
-english.PairDescription=On the Nox at home: Devices, "Add a PC or laptop". Paste the link shown there, or leave this empty and pair later.
-german.PairDescription=Am Nox zu Hause: Geraete, "PC oder Laptop hinzufuegen". Den angezeigten Link hier einfuegen - oder leer lassen und spaeter koppeln.
+english.PairDescription=In the dashboard of the Nox at home: Devices, "Add a PC or laptop", then "make a code". Paste the pairing link shown there - or leave this empty and pair later.
+german.PairDescription=Im Dashboard des Nox zu Hause: Geräte › „PC oder Laptop hinzufügen“, dann „Code erzeugen“. Den Kopplungs-Link von dort hier einfügen – oder leer lassen und später koppeln.
 english.PairPrompt=Pairing link (nox-node://pair?...):
 german.PairPrompt=Kopplungs-Link (nox-node://pair?...):
 english.PairInvalid=That is not a Nox pairing link. It starts with nox-node://pair? and contains only letters, digits and : / ? = & . - _ %
-german.PairInvalid=Das ist kein Nox-Kopplungs-Link. Er beginnt mit nox-node://pair? und enthaelt nur Buchstaben, Ziffern und : / ? = & . - _ %
-english.PairFailed=Connecting to Nox did not work (code %1).%n%nPair later in a terminal:%n"%2" pair "<link>"
-german.PairFailed=Die Verbindung mit Nox hat nicht geklappt (Code %1).%n%nSpaeter in einem Terminal koppeln:%n"%2" pair "<Link>"
+german.PairInvalid=Das ist kein Nox-Kopplungs-Link. Er beginnt mit nox-node://pair? und enthält nur Buchstaben, Ziffern und : / ? = & . - _ %
+english.PairFailed=Connecting to Nox did not work.%n%n%1%n%nTo pair later, make a new code in the dashboard and enter in a Command Prompt:%nnox-node pair "<link>"
+german.PairFailed=Die Verbindung mit Nox hat nicht geklappt.%n%n%1%n%nSpäter koppeln: Erzeuge im Dashboard einen neuen Code und gib in der Eingabeaufforderung ein:%nnox-node pair "<Link>"
+english.PairExpired=The link has expired (a code lives five minutes). Make a new one in the dashboard and run this setup again - you can paste it there.
+german.PairExpired=Der Link ist abgelaufen (ein Code gilt fünf Minuten). Erzeuge im Dashboard einen neuen und starte dieses Setup noch einmal – dort kannst du ihn einfügen.
+english.PairUsed=This link was already used. Make a new one in the dashboard and run this setup again.
+german.PairUsed=Dieser Link wurde schon benutzt. Erzeuge im Dashboard einen neuen und starte dieses Setup noch einmal.
+english.PairUnknown=Nox does not know this link (a typo?). Make a new one in the dashboard and run this setup again.
+german.PairUnknown=Nox kennt diesen Link nicht (vielleicht ein Tippfehler). Erzeuge im Dashboard einen neuen und starte dieses Setup noch einmal.
+english.PairUnreachable=Nox cannot be reached at the address in the link. Is the computer Nox runs on switched on and in the same home network? Then run this setup again.
+german.PairUnreachable=Nox ist unter der Adresse aus dem Link nicht erreichbar. Ist der Rechner, auf dem Nox läuft, an und im selben Heimnetz? Dann starte dieses Setup noch einmal.
+english.PairNotYours=The device at that address is not your Nox (its fingerprint differs). Nothing was sent. Pair only in your own home network.
+german.PairNotYours=Unter dieser Adresse antwortet nicht dein Nox (der Fingerabdruck stimmt nicht). Es wurde nichts gesendet. Kopple nur in deinem eigenen Heimnetz.
+english.PairAlready=This PC is already connected to Nox. Remove it in the dashboard first (Devices › Computers and servers), then run this setup again.
+german.PairAlready=Dieser PC ist schon mit Nox verbunden. Entferne ihn zuerst im Dashboard (Geräte › Computer und Server) und starte dieses Setup dann noch einmal.
+english.PairBusy=Too many attempts. Wait a minute, then run this setup again.
+german.PairBusy=Zu viele Versuche. Warte eine Minute und starte dieses Setup dann noch einmal.
+english.PairFull=Nox already has as many PCs as it accepts. Remove one in the dashboard first.
+german.PairFull=Nox hat schon so viele PCs, wie er annimmt. Entferne zuerst einen im Dashboard.
+english.PairName=Nox already has a device with a similar name. Pair later in a Command Prompt with another name:%nnox-node pair "<link>" --name <name>
+german.PairName=Nox hat schon ein Gerät mit einem ähnlichen Namen. Kopple später in der Eingabeaufforderung mit einem anderen Namen:%nnox-node pair "<Link>" --name <Name>
+english.PairNoDetail=Nox did not say why.
+german.PairNoDetail=Nox hat keinen Grund genannt.
+english.NodeShellName=Nox command line
+german.NodeShellName=Nox-Befehlszeile
+english.NodeShellComment=A Command Prompt for nox-node (status, allow, pair)
+german.NodeShellComment=Eingabeaufforderung für nox-node (status, allow, pair)
 english.NodeTaskStatus=Starting Nox with Windows (for this user only)...
-german.NodeTaskStatus=Nox mit Windows starten (nur fuer diesen Benutzer)...
-english.NodeStartNow=Start the Nox node now
-english.NodeNoAdminInstall=Node mode is installed for one user only, never for all users. Run Setup again without administrator mode.
-german.NodeNoAdminInstall=Der Node-Modus wird nur fuer einen Benutzer installiert, nie fuer alle. Setup bitte ohne Administratormodus erneut starten.
-english.NodeNotElevated=Node mode never runs with administrator rights. Start Setup normally, not with "Run as administrator".
-german.NodeNotElevated=Der Node-Modus laeuft nie mit Administratorrechten. Setup bitte normal starten, nicht mit "Als Administrator ausfuehren".
-german.NodeStartNow=Nox-Knoten jetzt starten
+german.NodeTaskStatus=Nox mit Windows starten (nur für diesen Benutzer) …
+english.NodeStartNow=Connect to Nox now
+english.NodeNoAdminInstall=Connecting to the Nox at home is installed for one user only, never for all users. Run Setup again without administrator mode.
+german.NodeNoAdminInstall=Das Verbinden mit dem Nox zu Hause wird nur für einen Benutzer installiert, nie für alle. Starte Setup bitte noch einmal ohne Administratormodus.
+english.NodeNotElevated=Connecting to the Nox at home never runs with administrator rights. Start Setup normally, not with "Run as administrator".
+german.NodeNotElevated=Das Verbinden mit dem Nox zu Hause läuft nie mit Administratorrechten. Starte Setup bitte normal, nicht mit „Als Administrator ausführen“.
+german.NodeStartNow=Jetzt mit Nox verbinden
 
 [Code]
 { No vault path is ever written or read by the installer itself - first-start config (vault path,
@@ -253,6 +289,40 @@ begin
       Exit;
     end;
   end;
+end;
+
+{ ---- nox-node on the user's PATH ----------------------------------------------------------
+  The dashboard says "nox-node allow shell" in a Command Prompt: the program folder holds nox-node.cmd, so it
+  goes on this user's PATH (HKCU, no administrator) once, and comes off again on uninstall. }
+
+function PathHas(const Paths, Dir: String): Boolean;
+begin
+  Result := Pos(';' + Lowercase(Dir) + ';', ';' + Lowercase(Paths) + ';') > 0;
+end;
+
+function NeedsUserPath(const Dir: String): Boolean;
+var
+  Paths: String;
+begin
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Paths) then
+    Paths := '';
+  Result := not PathHas(Paths, Dir);
+end;
+
+procedure RemoveFromUserPath(const Dir: String);
+var
+  Paths: String;
+  P: Integer;
+begin
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Paths) then
+    Exit;
+  Paths := ';' + Paths + ';';
+  P := Pos(';' + Lowercase(Dir) + ';', Lowercase(Paths));
+  if P = 0 then
+    Exit;
+  Delete(Paths, P, Length(Dir) + 1);
+  Paths := Copy(Paths, 2, Length(Paths) - 2);
+  RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Paths);
 end;
 
 function PairLinkValue(): String;
@@ -347,11 +417,60 @@ begin
     ewWaitUntilTerminated, ErrorCode);
 end;
 
-{ Pair right away when a link was given: the node's own `nox node pair`, as this user. }
+{ What went wrong while pairing, in words a person can act on - read from what `nox node pair`
+  printed (its reason, e.g. "The code has expired"), never just an exit code. Empty: no reason
+  this setup knows; then the node's own first line is shown. }
+function PairReason(const Output: String): String;
+var
+  S: String;
+begin
+  S := Lowercase(Output);
+  if Pos('expired', S) > 0 then
+    Result := CustomMessage('PairExpired')
+  else if (Pos('already used', S) > 0) or (Pos('reason: used', S) > 0) then
+    Result := CustomMessage('PairUsed')
+  else if (Pos('does not know this code', S) > 0) or (Pos('unknown_code', S) > 0) then
+    Result := CustomMessage('PairUnknown')
+  else if (Pos('fingerprint', S) > 0) or (Pos('not answer like nox', S) > 0) then
+    Result := CustomMessage('PairNotYours')
+  else if (Pos('not reachable', S) > 0) or (Pos('unreachable', S) > 0) then
+    Result := CustomMessage('PairUnreachable')
+  else if (Pos('already paired', S) > 0) or (Pos('already_paired', S) > 0) then
+    Result := CustomMessage('PairAlready')
+  else if (Pos('too many attempts', S) > 0) or (Pos('rate_limited', S) > 0) then
+    Result := CustomMessage('PairBusy')
+  else if (Pos('as many nodes', S) > 0) or (Pos('max_devices', S) > 0) then
+    Result := CustomMessage('PairFull')
+  else if (Pos('name_taken', S) > 0) or (Pos('looks like a device', S) > 0) or
+      (Pos('invalid_characters', S) > 0) then
+    Result := CustomMessage('PairName')
+  else
+    Result := '';
+end;
+
+{ The first line of what the node printed, shortened: shown when no reason above fits. }
+function FirstLine(const Output: String): String;
+var
+  P: Integer;
+begin
+  Result := Trim(Output);
+  P := Pos(#10, Result);
+  if P > 0 then
+    Result := Trim(Copy(Result, 1, P - 1));
+  if Length(Result) > 200 then
+    Result := Copy(Result, 1, 200) + '...';
+end;
+
+{ Pair right away when a link was given: the node's own `nox node pair`, as this user. Its output
+  goes to a file in the program folder (through the system's cmd.exe, as this user), so a
+  failure can say why. A link with a percent sign is passed without cmd.exe (cmd would expand
+  it); such a failure then has no reason to show. }
 procedure PairNode();
 var
-  Link: String;
+  Link, Python, Script, OutFile, Reason: String;
+  Output: AnsiString;
   Code: Integer;
+  Ran: Boolean;
 begin
   Link := PairLinkValue();
   if Link = '' then
@@ -361,18 +480,40 @@ begin
     Log('Pairing link refused: unexpected characters');
     Exit;
   end;
+  Python := ExpandConstant('{app}\runtime\python.exe');
+  Script := ExpandConstant('{app}\app\start_node.pyw');
+  { In the program folder, as this user writes it (never Setup's own, possibly elevated temp). }
+  OutFile := ExpandConstant('{app}\pair-output.txt');
+  DeleteFile(OutFile);
+  Output := '';
   { As the original user: never elevated, whoever started Setup. }
-  if ExecAsOriginalUser(ExpandConstant('{app}\runtime\python.exe'),
-      '-I "' + ExpandConstant('{app}\app\start_node.pyw') + '" --cli node pair "' + Link + '"',
-      ExpandConstant('{app}\app'), SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
-    Log('Node paired')
+  if Pos('%', Link) = 0 then
+    Ran := ExecAsOriginalUser(ExpandConstant('{sys}\cmd.exe'),
+      '/d /s /c ""' + Python + '" -I "' + Script + '" --cli node pair "' + Link + '" > "' +
+      OutFile + '" 2>&1"', ExpandConstant('{app}\app'), SW_HIDE, ewWaitUntilTerminated, Code)
   else
+    Ran := ExecAsOriginalUser(ExpandConstant('{app}\runtime\python.exe'),
+      '-I "' + Script + '" --cli node pair "' + Link + '"',
+      ExpandConstant('{app}\app'), SW_HIDE, ewWaitUntilTerminated, Code);
+  if Ran and (Code = 0) then
   begin
-    Log('Node pairing failed: ' + IntToStr(Code));
-    { No line may start with "[" here: ISCC would read it as a section tag. }
-    SuppressibleMsgBox(FmtMessage(CustomMessage('PairFailed'), [IntToStr(Code),
-      ExpandConstant('{app}\nox-node.cmd')]), mbInformation, MB_OK, IDOK);
+    Log('Node paired');
+    Exit;
   end;
+  if FileExists(OutFile) then
+  begin
+    LoadStringFromFile(OutFile, Output);
+    DeleteFile(OutFile);
+  end;
+  Log('Node pairing failed: ' + IntToStr(Code) + ' ' + FirstLine(String(Output)));
+  Reason := PairReason(String(Output));
+  if Reason = '' then
+    Reason := FirstLine(String(Output));
+  if Reason = '' then
+    Reason := CustomMessage('PairNoDetail');
+  { No line may start with "[" here: ISCC would read it as a section tag. }
+  SuppressibleMsgBox(FmtMessage(CustomMessage('PairFailed'), [Reason]), mbInformation, MB_OK,
+    IDOK);
 end;
 
 { The system's own 64-bit Windows PowerShell, by full path (never one found on PATH). }
@@ -517,6 +658,8 @@ var
   ErrorCode, State: Integer;
   Why: String;
 begin
+  if CurUninstallStep = usPostUninstall then
+    RemoveFromUserPath(ExpandConstant('{app}'));
   if CurUninstallStep <> usUninstall then
     Exit;
   State := SandboxRulesState();

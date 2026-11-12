@@ -3,14 +3,17 @@ glance, and a stop that works even when the core is gone.
 
 * Icon and tooltip follow `status.json` of the running node: connected, not connected with Nox
   ("Nicht verbunden mit Nox"), update needed, stopped.
-* **Not-Aus hier** (also `Ctrl+Alt+Shift+K` anywhere, where a global key hook is available) writes
-  the node's stop file - exactly `nox node stop`: everything on this device stops at once and the
-  core is told to stop everywhere. Only this device resumes it (**Hier fortsetzen**).
-* **Was Nox hier darf** lists the capability groups this device allowed; changing them stays a
-  terminal command (`nox node allow`), on purpose.
-* **Voice satellite** (C9): while its microphone is open the icon says so ("Nox hört zu"); the
-  menu mutes and unmutes the microphone here (`nox node voice mute`); `Ctrl+Alt+Space` held is
-  push-to-talk.
+* **Stopp (überall)** (also `Ctrl+Alt+Shift+K` anywhere, where a global key hook is available)
+  writes the node's stop file - exactly `nox-node stop`: everything on this device stops at once
+  and the core is told to stop everywhere. Only this device resumes it here (**Hier
+  fortsetzen**); Nox itself is started again in the dashboard ("Wieder starten"), which the tray
+  says once it resumed.
+* **Was Nox hier darf** lists the capability groups this device allowed, in the dashboard's words;
+  changing them stays a command on this device (`nox-node allow`), on purpose.
+* **Zuhören und sprechen** (C9): while its microphone is open the icon says so ("Nox hört zu"); a
+  microphone the dashboard has not switched on yet says that too ("Nox hört hier nicht zu: im
+  Dashboard noch nicht eingeschaltet."). With listening set up, the menu has a checkable
+  **Mikrofon stumm** (`nox-node voice mute`); `Ctrl+Alt+Space` held is push-to-talk.
 
 It is a separate process started by `nox node run` (only with a desktop and the `shell` extra's
 PySide6; the key needs pynput) and does nothing but read the node's files and write the stop file,
@@ -47,6 +50,13 @@ STOP_KEYS = frozenset({"ctrl", "alt", "shift", "k"})
 #: Push-to-talk for the voice satellite, held (the core's default key).
 PTT_KEYS = frozenset({"ctrl", "alt", "space"})
 REFRESH_MS = 1000
+
+#: What the core says when this device's microphone may not listen because the owner has not
+#: switched listening on in the dashboard yet (`nox.node.satellites`).
+_NOT_SWITCHED_ON = frozenset({"voice_not_enabled", "voice_not_switched_on_here"})
+#: After "Hier fortsetzen": only this device resumed; Nox itself stays stopped.
+RESUMED_DE = "Hier fortgesetzt. Nox selbst startest du im Dashboard mit „Wieder starten“."
+RESUMED_EN = "Resumed here. Start Nox itself again in the dashboard with “Start again”."
 
 _STATES = {
     "connected": ("normal", "Nox: verbunden", "Nox: connected"),
@@ -87,7 +97,27 @@ def view(home: NodeHome, *, german: bool = True) -> TrayView:
         return TrayView("capturing", "Nox hört zu" if german else "Nox is listening", False)
     if voice.get("running") and voice.get("muted"):
         de, en, tint = f"{de} (Mikrofon stumm)", f"{en} (microphone muted)", "muted"
+    elif voice.get("running") and not_switched_on(voice):
+        # Seen, not guessed: the core refused the microphone because listening is not on yet.
+        de = "Nox hört hier nicht zu: im Dashboard noch nicht eingeschaltet."
+        en = "Nox is not listening here: not switched on in the dashboard yet."
     return TrayView(tint, de if german else en, False)
+
+
+def not_switched_on(voice: dict[str, object]) -> bool:
+    """The core keeps this microphone closed only because the dashboard has not switched
+    listening on (the second key), from the satellite's own state file."""
+    if voice.get("core_allows") is True:
+        return False
+    reasons = {str(voice.get(k, "")) for k in ("core_reason", "refused", "last_refusal")}
+    return bool(reasons & _NOT_SWITCHED_ON)
+
+
+def has_voice(home: NodeHome) -> bool:
+    """Listening is set up here: the satellite runs, or this device allows the group."""
+    if _voice(home).get("running"):
+        return True
+    return bool(load_manifest(home.manifest_file).groups.get("voice"))
 
 
 def toggle_mute(home: NodeHome) -> bool:
@@ -116,14 +146,23 @@ def ptt(home: NodeHome, pressed: bool) -> None:
 
 def allowed_here(home: NodeHome, *, german: bool = True) -> str:
     manifest = load_manifest(home.manifest_file)
-    labels = [GROUPS[g].label_en for g in GROUPS if manifest.groups.get(g)]
-    head = "Nox darf hier:" if german else "Nox may here:"
+    # `GROUPS` carries the dashboard's words for each group (sentence case there: capitalised here).
+    labels = [
+        (GROUPS[g].label_de if german else GROUPS[g].label_en)[:1].upper()
+        + (GROUPS[g].label_de if german else GROUPS[g].label_en)[1:]
+        for g in GROUPS
+        if manifest.groups.get(g)
+    ]
+    head = "Nox darf hier:" if german else "Nox may do here:"
+    nothing = "- nichts" if german else "- nothing"
     hint = (
-        "Ändern nur am Gerät: nox node allow/deny <Gruppe>"
+        "Ändern nur hier am Gerät, in der Eingabeaufforderung oder einem Terminal:\n"
+        "nox-node allow <Gruppe>  /  nox-node deny <Gruppe>"
         if german
-        else "Change it on this device only: nox node allow/deny <group>"
+        else "Change it on this device only, in the Command Prompt or a terminal:\n"
+        "nox-node allow <group>  /  nox-node deny <group>"
     )
-    return f"{head}\n" + ("\n".join(f"- {label}" for label in labels) or "- nichts") + f"\n\n{hint}"
+    return f"{head}\n" + ("\n".join(f"- {label}" for label in labels) or nothing) + f"\n\n{hint}"
 
 
 def stop_here(home: NodeHome) -> None:
@@ -214,19 +253,27 @@ def main() -> None:  # pragma: no cover - Qt and a desktop; the logic above is t
     state_line = QAction("")
     state_line.setEnabled(False)
     stop = QAction(
-        "Not-Aus hier (Strg+Alt+Umschalt+K)" if german else "Stop here (Ctrl+Alt+Shift+K)"
+        "Stopp (überall) – Strg+Alt+Umschalt+K"
+        if german
+        else "Stop (everywhere) – Ctrl+Alt+Shift+K"
     )
     resume = QAction("Hier fortsetzen" if german else "Resume here")
     allowed = QAction("Was Nox hier darf" if german else "What Nox may do here")
-    mute = QAction("Mikrofon stumm / an" if german else "Mute / unmute microphone")
+    mute = QAction("Mikrofon stumm" if german else "Microphone muted")
+    mute.setCheckable(True)
     close = QAction("Symbol ausblenden" if german else "Hide icon")
     stop.triggered.connect(lambda: stop_here(home))
-    resume.triggered.connect(lambda: home.stop_file.unlink(missing_ok=True))
+
+    def on_resume() -> None:
+        home.stop_file.unlink(missing_ok=True)
+        tray.showMessage("Nox", RESUMED_DE if german else RESUMED_EN)
+
+    resume.triggered.connect(on_resume)
     allowed.triggered.connect(
         lambda: QMessageBox.information(None, "Nox", allowed_here(home, german=german))
     )
     close.triggered.connect(app.quit)
-    mute.triggered.connect(lambda: toggle_mute(home))
+    mute.triggered.connect(lambda: mute.setChecked(toggle_mute(home)))
     for action in (state_line, None, stop, resume, allowed, mute, None, close):
         if action is None:
             menu.addSeparator()
@@ -244,6 +291,11 @@ def main() -> None:  # pragma: no cover - Qt and a desktop; the logic above is t
         state_line.setText(shown.tooltip)
         resume.setEnabled(shown.stopped_here)
         stop.setEnabled(not shown.stopped_here)
+        # Only where listening is set up; its tick is the microphone's real state.
+        voice = has_voice(home)
+        mute.setVisible(voice)
+        if voice:
+            mute.setChecked(bool(_voice(home).get("muted")))
 
     def on_key(action: HotkeyAction, pressed: bool) -> None:
         if action == HotkeyAction.KILL and pressed:
