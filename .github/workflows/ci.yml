@@ -82,6 +82,12 @@ jobs:
           NOX_WFP_LIVE: "1"
         run: pytest tests/integration -m "" -p no:cacheprovider
 
+      # The kann-alles benchmark replays the committed traces (evals/kann_alles/traces) of the node
+      # and Pi tasks through the real tool loop, router, receipts, node gate and node tools; it
+      # fails when a task scores below its recording. No model, no judge, no network.
+      - name: Benchmark replay (recorded traces)
+        run: python evals/run_kann_alles.py --label replay --parts tasks --replay evals/kann_alles/traces --out eval-results
+
   python-linux:
     name: Python on Linux (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
@@ -105,6 +111,11 @@ jobs:
       # What scripts/install-linux.sh does on a Pi: prebuilt wheels only, nothing compiled as root.
       - name: Server install needs no compiler
         run: python -m uv sync --frozen --no-build --dry-run
+
+      # What `install-linux.sh --node` adds for a node: prebuilt wheels exist for every library
+      # a node offers (screen, camera, browser, voice), also on the Pi's architecture.
+      - name: Node extras need no compiler
+        run: python -m uv sync --frozen --no-build --dry-run --extra senses --extra browser --extra voice --extra voice-supertonic
 
       # No `shell` extra: the server has no desktop, and PySide6 has no wheel for the Pi's glibc.
       # `rl` for the Rocket League plugin's tests (OpenCV headless has ARM64 wheels).
@@ -153,6 +164,39 @@ jobs:
             chown -R "$0:$1" "$cg"
             exec setpriv --reuid="$0" --regid="$1" --init-groups env HOME="$2"               NOX_CGROUP_DELEGATED=1 NOX_EXPECT_CEILING=cgroup NOX_REQUIRE_BWRAP=1               "$3/.venv/bin/pytest" "$3/tests/integration/test_linux_sandbox.py" -p no:cacheprovider
           ' "$(id -u)" "$(id -g)" "$HOME" "$PWD"
+
+  # The node on a Mac (beta): its unit tests, on a real macOS runner - the dialog arguments, the
+  # safe_fs handle code (fcntl F_GETPATH, renameatx_np), the platform guards. Nothing is shown or
+  # installed: the dialogs and the trash are faked, the file operations run in temporary folders.
+  python-macos:
+    name: Python on macOS (node tests)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: python -m pip install "uv==0.12.18"
+
+      # What install-macos.sh --node installs, as prebuilt wheels only.
+      - name: Node extras need no compiler
+        run: python -m uv sync --frozen --no-build --dry-run --extra senses --extra browser --extra voice --extra voice-supertonic --extra shell
+
+      - name: Sync dependencies
+        run: python -m uv sync --extra dev
+
+      - name: Put the project venv on PATH
+        run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: mypy (node)
+        run: mypy src/nox/node src/nox/hands
+
+      - name: pytest unit (node)
+        run: pytest tests/unit/node tests/unit/hands -m "not hardware and not network and not spike" -p no:cacheprovider
 
   installer-linux:
     name: Installer on Linux (${{ matrix.runner }})
@@ -514,6 +558,11 @@ jobs:
           if sudo test -e /etc/systemd/system/nox-node.service; then echo "no system unit"; exit 1; fi
           test "$(stat -c %U "$HOME/.local/share/nox-node-app/current/")" = "$USER"
           "$HOME/.local/bin/nox-node" status | tee /dev/stderr | grep -q "Not paired."
+          # The graphical session owns the node; it still starts at login without one.
+          grep -qx 'PartOf=graphical-session.target' "$unit"
+          grep -q 'WantedBy=default.target graphical-session.target' "$unit"
+          # What the node offers is installed with it (the tray's PySide6 has no wheel here).
+          "$HOME/.local/share/nox-node-app/current/.venv/bin/python" -I -c "import mss, cv2, playwright, faster_whisper"
 
       - name: Desktop node - uninstall keeps the node's identity folder
         run: |
@@ -537,6 +586,27 @@ jobs:
 
       # Code the node account planted as a "self-installed version" never survives an install of
       # the program, and is never run: the launcher checks it against a signed release first.
+      - name: Headless node - the sound card only on request
+        run: |
+          # Without --with-audio the unit keeps PrivateDevices=yes and there is no drop-in.
+          grep -qx 'PrivateDevices=yes' /etc/systemd/system/nox-node.service
+          test ! -e /etc/systemd/system/nox-node.service.d/devices.conf
+          sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh --node --headless --with-audio
+          drop=/etc/systemd/system/nox-node.service.d/devices.conf
+          grep -qx 'PrivateDevices=no' "$drop"
+          grep -qx 'DeviceAllow=char-alsa rw' "$drop"
+          grep -qx 'SupplementaryGroups=audio' "$drop"
+          if grep -q 'video4linux' "$drop"; then echo "a headless node never gets the camera"; exit 1; fi
+          systemd-analyze verify /etc/systemd/system/nox-node.service
+          systemctl show nox-node -p PrivateDevices -p SupplementaryGroups | tee /dev/stderr | grep -q 'PrivateDevices=no'
+          # The node's own libraries are there (the voice satellite), the camera one is not offered.
+          sudo nox-node status >/dev/null
+          sudo -u nox-node /opt/nox-node/current/.venv/bin/python -I -c "import faster_whisper, sounddevice, playwright"
+          if bash scripts/install-linux.sh --node --headless --with-camera; then exit 1; fi
+          sudo env NOX_SOURCE="$PWD" bash scripts/install-linux.sh --node --headless --without-audio
+          test ! -e "$drop"
+          grep -qx 'PrivateDevices=yes' /etc/systemd/system/nox-node.service
+
       - name: Headless node - a reinstall drops versions the node account left behind
         run: |
           app=/var/lib/nox-node/node/app

@@ -43,6 +43,14 @@
 #   ... --node [--headless] --pair '<nox-node://pair?... link>'  pair right away
 #   ... --node [--headless] --uninstall                         remove the program and the unit;
 #       the node's identity and audit trail stay (remove the device in Nox's Devices page too)
+#   ... --node [--headless] --with-browser                      also download Nox's own Chromium
+#       for browser.* (about 150 MB; asked when there is a terminal, never downloaded silently)
+#   ... --node --headless --with-audio | --without-audio        let the node's unit reach the
+#       sound card (the voice satellite: /dev/snd, group audio) - or take that away again
+# What a node offers is installed with it: the screen and camera libraries (extra `senses`, on a
+# desktop), the browser library (`browser`), the voice satellite (`voice`, `voice-supertonic`) and,
+# on a desktop, the tray and its key (`shell`; pynput without its evdev backend, which would need a
+# compiler). A tool whose library is still missing is not offered by the node at all.
 # Run it again to update; the node also updates itself from signed releases (nox node update).
 #
 # Image mode (os/README.md) - Nox-OS, the flashable Raspberry Pi image, is built with this script
@@ -61,6 +69,8 @@ NODE_MODE=""
 NODE_HEADLESS=""
 NODE_UNINSTALL=""
 NODE_PAIR=""
+NODE_BROWSER=""
+NODE_AUDIO=""
 IMAGE_MODE=""
 IMAGE_UI_BUNDLE=""
 while [ "$#" -gt 0 ]; do
@@ -69,15 +79,25 @@ while [ "$#" -gt 0 ]; do
     --headless) NODE_HEADLESS=1 ;;
     --uninstall) NODE_UNINSTALL=1 ;;
     --pair) shift; NODE_PAIR="${1:-}" ;;
+    --with-browser) NODE_BROWSER=1 ;;
+    --with-audio) NODE_AUDIO=on ;;
+    --without-audio) NODE_AUDIO=off ;;
+    --with-camera)
+      printf '%s\n' "--with-camera: a node without a screen never takes camera pictures (nobody could see that it does; docs/NODES.md). On a desktop the camera needs nothing extra." >&2
+      exit 2 ;;
     --image) IMAGE_MODE=1 ;;
     --version) shift; NOX_REF="${1:-}" ;;
     --ui-bundle) shift; IMAGE_UI_BUNDLE="${1:-}" ;;
-    *) printf 'Unknown option: %s (known: --node --headless --pair <link> --uninstall --image --version <ref> --ui-bundle <file>)\n' "$1" >&2; exit 2 ;;
+    *) printf 'Unknown option: %s (known: --node --headless --pair <link> --uninstall --with-browser --with-audio --without-audio --image --version <ref> --ui-bundle <file>)\n' "$1" >&2; exit 2 ;;
   esac
   shift
 done
-if [ -z "$NODE_MODE" ] && { [ -n "$NODE_HEADLESS$NODE_UNINSTALL" ] || [ -n "$NODE_PAIR" ]; }; then
-  printf '%s\n' "--headless, --pair and --uninstall belong to --node." >&2
+if [ -z "$NODE_MODE" ] && { [ -n "$NODE_HEADLESS$NODE_UNINSTALL$NODE_BROWSER$NODE_AUDIO" ] || [ -n "$NODE_PAIR" ]; }; then
+  printf '%s\n' "--headless, --pair, --uninstall, --with-browser and --with(out)-audio belong to --node." >&2
+  exit 2
+fi
+if [ -n "$NODE_AUDIO" ] && [ -z "$NODE_HEADLESS" ]; then
+  printf '%s\n' "--with-audio and --without-audio are for --node --headless: a desktop node runs as you and reaches your sound card already." >&2
   exit 2
 fi
 if [ -z "$IMAGE_MODE" ] && [ -n "$IMAGE_UI_BUNDLE" ]; then
@@ -135,6 +155,8 @@ if [ -n "$NODE_MODE" ]; then
     NODE_HOME_DIR="/var/lib/nox-node"
     NODE_DIR="$NODE_HOME_DIR/node"
     NODE_UNIT="/etc/systemd/system/nox-node.service"
+    #: The headless unit's device drop-in (--with-audio): written and removed by this script only.
+    NODE_DEVICES="/etc/systemd/system/nox-node.service.d/devices.conf"
     NODE_BIN="/usr/local/bin/nox-node"
     LOCK_FILE="/run/nox-node-install.lock"
   else
@@ -503,6 +525,39 @@ define node_daily \
 define node_link_refused \
   '%s (oder ein Ordner darüber oder darin) ist ein Link oder zeigt woanders hin. Aus Sicherheitsgründen wird nichts entfernt; bitte von Hand prüfen.' \
   '%s (or a folder above or inside it) is a link or resolves elsewhere. For safety nothing is removed; please check it by hand.'
+define node_step_browser \
+  'Nox'"'"'s eigenes Chromium für browser.* laden (etwa 150 MB)' \
+  'Downloading Nox'"'"'s own Chromium for browser.* (about 150 MB)'
+define node_ask_browser \
+  'Nox'"'"'s eigenes Chromium für browser.* jetzt laden (etwa 150 MB)? [j/N] ' \
+  'Download Nox'"'"'s own Chromium for browser.* now (about 150 MB)? [y/N] '
+define node_browser_later \
+  'Ohne Chromium bietet der Knoten browser.* nicht an. Später: install-linux.sh --node%s --with-browser' \
+  'Without Chromium the node does not offer browser.*. Later: install-linux.sh --node%s --with-browser'
+define node_browser_failed \
+  'Chromium konnte nicht geladen werden; browser.* bleibt aus. Systembibliotheken fehlen vielleicht: sudo %s -m playwright install-deps chromium' \
+  'Chromium could not be downloaded; browser.* stays off. System libraries may be missing: sudo %s -m playwright install-deps chromium'
+define node_extras_reduced \
+  'Hinweis: %s ließ sich hier nicht installieren (kein fertiges Paket für dieses System); der Knoten bietet es nicht an.' \
+  'Note: %s could not be installed here (no prebuilt package for this system); the node does not offer it.'
+define node_dialog_missing \
+  'Hinweis: zenity fehlt (KDE: kdialog) - ohne es fragt der Knoten nicht und lehnt alles mit hohem Risiko ab. Installieren: sudo apt install zenity' \
+  'Note: zenity is missing (KDE: kdialog) - without it the node cannot ask and refuses everything high-risk. Install it: sudo apt install zenity'
+define node_notify_missing \
+  'Hinweis: notify-send fehlt - ohne Benachrichtigungen gibt es keine Hinweise und keine Bildschirmfotos. Installieren: sudo apt install libnotify-bin' \
+  'Note: notify-send is missing - without notifications there are no notices and no screenshots. Install it: sudo apt install libnotify-bin'
+define node_audio_on \
+  'Der Knoten darf die Soundkarte benutzen (Gruppe audio, /dev/snd): %s' \
+  'The node may use the sound card (group audio, /dev/snd): %s'
+define node_audio_off \
+  'Der Knoten benutzt die Soundkarte nicht mehr.' \
+  'The node no longer uses the sound card.'
+define node_audio_group \
+  'Die Gruppe audio fehlt auf diesem System; ohne sie erreicht der Knoten die Soundkarte nicht.' \
+  'This system has no group audio; without it the node cannot reach the sound card.'
+define node_voice_next \
+  'Stimme: nox-node allow voice, dann die Modelle laden: nox-node voice setup' \
+  'Voice: nox-node allow voice, then fetch the models: nox-node voice setup'
 define node_removed \
   'Nox-Knoten entfernt. Kennung und Protokoll bleiben in %s (löschen, um das Gerät zu vergessen; am Nox unter "Geräte" ebenfalls entfernen).' \
   'Nox node removed. Its identity and audit trail stay in %s (delete it to forget this device; remove it in Nox'"'"'s Devices page too).'
@@ -917,6 +972,10 @@ node_uninstall() {
   fi
   node_systemctl disable --now nox-node >/dev/null 2>&1 || true
   rm -f -- "$NODE_UNIT" "$NODE_BIN"
+  if [ -n "$NODE_HEADLESS" ]; then
+    rm -f -- "$NODE_DEVICES"
+    rmdir -- "$(dirname "$NODE_DEVICES")" 2>/dev/null || true
+  fi
   node_systemctl daemon-reload >/dev/null 2>&1 || true
   rm -rf -- "$PREFIX"  # program files (root's, headless)
   # The versions the node installed itself live in its own folder: removed as the node's user
@@ -957,6 +1016,82 @@ node_write_unit() {
   mv -f -- "$NODE_BIN.next" "$NODE_BIN"
 }
 
+#: Headless: the sound card for the voice satellite. The unit keeps PrivateDevices=yes unless this
+#: drop-in exists; it opens the host's /dev, but the device policy stays closed - only ALSA's
+#: character devices (and the pseudo devices every service has) - and the node user joins audio.
+#: Sticky: a later install without --with-audio keeps it; --without-audio removes it.
+node_write_devices() {
+  local dir
+  dir="$(dirname "$NODE_DEVICES")"
+  case "$NODE_AUDIO" in
+    on)
+      getent group audio >/dev/null 2>&1 || fail "$(msg node_audio_group)"
+      install -d -m 0755 "$dir"
+      {
+        printf '# Written by install-linux.sh --node --headless --with-audio (docs/NODES.md); removed\n'
+        printf '# with --without-audio or --uninstall. The voice satellite needs the sound card.\n'
+        printf '[Service]\nPrivateDevices=no\nDevicePolicy=closed\nDeviceAllow=char-alsa rw\n'
+        printf 'SupplementaryGroups=audio\n'
+      } > "$NODE_DEVICES.next"
+      chmod 0644 "$NODE_DEVICES.next"
+      mv -f -- "$NODE_DEVICES.next" "$NODE_DEVICES"
+      note "$(msg node_audio_on "$NODE_DEVICES")"
+      ;;
+    off)
+      rm -f -- "$NODE_DEVICES"
+      rmdir -- "$dir" 2>/dev/null || true
+      note "$(msg node_audio_off)"
+      ;;
+  esac
+}
+
+#: Nox's own Chromium for browser.* - only with --with-browser or a yes at the terminal. Headless:
+#: as root into the program folder (read-only for the node), with the system libraries it needs;
+#: a desktop: as the user into their own cache.
+node_browser() {
+  local python="$CURRENT/.venv/bin/python" answer=""
+  if [ -z "$NODE_BROWSER" ] && [ -r /dev/tty ] && [ -w /dev/tty ] && { : < /dev/tty; } 2>/dev/null; then
+    printf '%s' "$(msg node_ask_browser)" > /dev/tty
+    read -r answer < /dev/tty || answer=""
+    case "$answer" in [JjYy]*) NODE_BROWSER=1 ;; esac
+  fi
+  if [ -z "$NODE_BROWSER" ]; then
+    note "$(msg node_browser_later "${NODE_HEADLESS:+ --headless}")"
+    return 0
+  fi
+  say "$(msg node_step_browser)"
+  if [ -n "$NODE_HEADLESS" ]; then
+    if PLAYWRIGHT_BROWSERS_PATH="$PREFIX/ms-playwright" "$python" -I -m playwright install --with-deps chromium; then
+      chmod -R go+rX "$PREFIX/ms-playwright" 2>/dev/null || true
+      return 0
+    fi
+  elif "$python" -I -m playwright install chromium; then
+    return 0
+  fi
+  note "$(msg node_browser_failed "$python")"
+}
+
+#: The Python environment of a node release: what the node offers, as far as this system has
+#: prebuilt packages for it - never compiled (`--no-build`). What cannot be installed is said and
+#: left out (the node then does not offer it); the base always installs.
+node_sync() {
+  local uv="$UV_INSTALL_DIR/uv" extras=(--extra browser --extra voice --extra voice-supertonic)
+  local sync=(sync --quiet --frozen --no-build --python 3.13)
+  if [ -z "$NODE_HEADLESS" ]; then
+    # A desktop: the screen and the camera, the tray and its key. pynput without evdev (the
+    # uinput backend, an sdist that would need a compiler); X11 keys work without it.
+    extras+=(--extra senses --extra shell --no-install-package evdev)
+  fi
+  if UV_COMPILE_BYTECODE=1 "$uv" "${sync[@]}" "${extras[@]}"; then return 0; fi
+  if [ -z "$NODE_HEADLESS" ]; then
+    note "$(msg node_extras_reduced "the tray (PySide6)")"
+    extras=(--extra browser --extra voice --extra voice-supertonic --extra senses)
+    if UV_COMPILE_BYTECODE=1 "$uv" "${sync[@]}" "${extras[@]}"; then return 0; fi
+  fi
+  note "$(msg node_extras_reduced "browser, voice, senses")"
+  UV_COMPILE_BYTECODE=1 "$uv" "${sync[@]}"
+}
+
 #: Everything after the version and its signature are settled.
 node_install() {
   local previous python_dir user_manager=1
@@ -982,8 +1117,7 @@ node_install() {
     if [ ! -x "$UV_INSTALL_DIR/uv" ] || [ "$("$UV_INSTALL_DIR/uv" --version | awk '{print $2}')" != "$UV_VERSION" ]; then
       install_uv
     fi
-    # No extras: a node needs the base packages only (the tray uses PySide6 where it is installed).
-    (cd "$RELEASES/$release" && UV_COMPILE_BYTECODE=1 "$UV_INSTALL_DIR/uv" sync --quiet --frozen --no-build --python 3.13)
+    (cd "$RELEASES/$release" && node_sync)
     "$UV_INSTALL_DIR/uv" cache prune --ci --quiet || true
     printf '%s\n' "$NOX_REF" > "$RELEASES/$release/.complete"
   else
@@ -1006,6 +1140,8 @@ node_install() {
 
   say "$(msg node_step_unit "$NODE_UNIT")"
   node_write_unit
+  [ -n "$NODE_HEADLESS" ] && node_write_devices
+  node_browser
   if [ -n "$user_manager" ]; then
     node_systemctl daemon-reload
     node_systemctl enable --quiet nox-node
@@ -1029,6 +1165,7 @@ node_install() {
   else
     note "$(msg node_next)"
   fi
+  note "$(msg node_voice_next)"
   note "$(msg node_daily "${NODE_HEADLESS:+ --headless}")"
 }
 
@@ -1130,6 +1267,9 @@ if [ -n "$NODE_MODE" ] && [ -z "$NODE_HEADLESS" ]; then
   # A desktop node installs nothing system-wide: what it needs must be there.
   for tool in git curl tar sha256sum python3 flock; do command -v "$tool" >/dev/null 2>&1 || fail "$(msg tool_missing "$tool")"; done
   command -v bwrap >/dev/null 2>&1 || note "$(msg bwrap_missing)"
+  # The dialog for high risk and the notices: nothing is installed system-wide from here.
+  command -v zenity >/dev/null 2>&1 || command -v kdialog >/dev/null 2>&1 || note "$(msg node_dialog_missing)"
+  command -v notify-send >/dev/null 2>&1 || note "$(msg node_notify_missing)"
 elif command -v apt-get >/dev/null 2>&1; then
   # bubblewrap + python3: the command sandbox (bwrap, and the tiny relay that gives a sandboxed
   # program its only way out - the egress proxy). Without them Nox refuses to run commands.
@@ -1138,6 +1278,8 @@ elif command -v apt-get >/dev/null 2>&1; then
   # answering, or at all - a stuck apt once held a CI job for 30 minutes.
   APT_OPTS=(-o DPkg::Lock::Timeout=300 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3)
   APT_PACKAGES=(git curl ca-certificates openssl tar sudo bubblewrap python3)
+  # sounddevice (the node's voice satellite) needs the system's PortAudio library.
+  if [ "$NODE_AUDIO" = on ]; then APT_PACKAGES+=(libportaudio2); fi
   timeout 900 apt-get "${APT_OPTS[@]}" update -qq || fail "$(msg apt_failed update update)"
   DEBIAN_FRONTEND=noninteractive timeout 1800 apt-get "${APT_OPTS[@]}" install -y -qq "${APT_PACKAGES[@]}" >/dev/null \
     || fail "$(msg apt_failed install "install ${APT_PACKAGES[*]}")"

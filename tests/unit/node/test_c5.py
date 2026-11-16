@@ -268,7 +268,8 @@ def _hands(world: dict[str, Path], sandbox: Any = None) -> dict[str, Any]:
     hands = NodeHands(
         folders=lambda: [str(world["root"])], protected=(world["node"],), sandbox=lambda: sandbox
     )
-    return hand_tools(hands)
+    # The same catalogue on every OS the tests run on (macOS withholds `shell.run` itself).
+    return hand_tools(hands, platform="linux", trash=lambda: None)
 
 
 async def test_write_never_overwrites_unless_asked_and_never_makes_folders(
@@ -378,7 +379,14 @@ def test_every_hand_is_offered_only_with_its_group(world: dict[str, Path]) -> No
     assert gate.offered() == []  # files and shell are off by default
     on = {g: g in ("files", "shell") for g in GROUPS}
     gate.set_manifest(NodeManifest(groups=on))
-    assert {t.name for t in gate.offered()} == {"file.list", "file.read", "file.write", "shell.run"}
+    assert {t.name for t in gate.offered()} == {
+        "file.list",
+        "file.read",
+        "file.write",
+        "file.move",
+        "file.delete",
+        "shell.run",
+    }
 
 
 def test_folders_count_only_as_confirmed_on_the_device(tmp_path: Path) -> None:
@@ -435,7 +443,7 @@ async def start(
         protected=(home.path,),
         sandbox=lambda: sandbox,
     )
-    gate = NodeGate(hand_tools(hands), manifest, audit, protected=home.path)
+    gate = NodeGate(hand_tools(hands, platform="linux"), manifest, audit, protected=home.path)
     holder.append(gate)
     agent = NodeAgent(
         home,
@@ -779,7 +787,8 @@ async def test_replacing_or_extending_a_file_is_high_and_shown_with_size_and_pre
     verifier = ReceiptVerifier(signer.public_key, device_id="d" * 32, core_id="c" * 64)
     groups = {g: g == "files" for g in GROUPS}
     world_tools = hand_tools(
-        NodeHands(folders=lambda: [], protected=(tmp_path / "n",), sandbox=lambda: None)
+        NodeHands(folders=lambda: [], protected=(tmp_path / "n",), sandbox=lambda: None),
+        platform="linux",
     )
     gate = NodeGate(world_tools, NodeManifest(groups=groups), None, receipts=verifier)
     args = {"path": "a.txt", "text": "x" * 500, "append": False, "overwrite": True}
@@ -866,7 +875,10 @@ def test_free_text_is_not_a_path_but_a_path_still_is(tmp_path: Path) -> None:
     from nox.node.hands import ShellArgs as _Shell  # noqa: F401 - the model the gate validates
 
     gate = NodeGate(
-        hand_tools(NodeHands(folders=lambda: [], protected=(tmp_path,), sandbox=lambda: None)),
+        hand_tools(
+            NodeHands(folders=lambda: [], protected=(tmp_path,), sandbox=lambda: None),
+            platform="linux",
+        ),
         NodeManifest(groups={g: g in ("files", "shell") for g in GROUPS}),
         None,
     )

@@ -20,7 +20,7 @@ from nox.node.manifest import load_manifest
 from nox.node.obs import OBS_PANIC_FILE, OBS_SECRET
 from nox.node.overlay import overlay_url
 from nox.node.satellite_settings import SATELLITES_FILE, SettingsFile
-from nox.node.voice import MUTE_FILE, PTT_FILE, STATE_FILE
+from nox.node.voice import MUTE_FILE, PTT_FILE, STATE_FILE, listening_mode
 from nox.security.model import SecretStore
 
 __all__ = [
@@ -59,6 +59,15 @@ def voice_mute(home: NodeHome, muted: bool) -> str:
     return t("voice_unmuted")
 
 
+def refusal_words(code: str) -> str:
+    """A core's refusal of an utterance, in words (the code only when it is not known)."""
+    key = f"refusal_{code}"
+    try:
+        return t(key, allow=command("allow voice"))
+    except KeyError:
+        return t("refusal_other", code=code[:64])
+
+
 def voice_status(home: NodeHome) -> list[str]:
     manifest = load_manifest(home.manifest_file)
     try:
@@ -71,18 +80,24 @@ def voice_status(home: NodeHome) -> list[str]:
     def yes_no(value: object) -> str:
         return t("yes") if value else t("no")
 
+    mode_text = listening_mode(settings).replace("_", " ") + (
+        " (auto)" if settings.mode == "auto" else ""
+    )
     lines = [
         t(
             "voice_line",
             value=t("voice_on") if on else t("voice_off", allow=command("allow voice")),
         ),
-        t("voice_mode", value=settings.mode.replace("_", " ")),
+        t("voice_mode", value=mode_text),
         t("voice_muted_here", value=yes_no((home.path / MUTE_FILE).exists())),
         t("voice_running", value=yes_no(state.get("running"))),
         t("voice_mic", value=t("mic_open") if state.get("mic_open") else t("mic_closed")),
     ]
     if state and not state.get("core_allows"):
         lines.append(t("voice_core", value=str(state.get("core_reason", ""))[:80]))
+    refusal = state.get("last_refusal")
+    if isinstance(refusal, dict) and refusal.get("reason"):
+        lines.append(t("voice_refused", value=refusal_words(str(refusal["reason"]))))
     if state.get("error"):
         lines.append(t("voice_problem", value=str(state["error"])[:80]))
     return lines
