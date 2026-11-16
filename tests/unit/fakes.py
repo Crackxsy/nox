@@ -17,9 +17,11 @@ from nox.voice.base import TtsRequest
 
 
 async def wait_until(
-    predicate: Callable[[], bool], timeout: float = 5.0, *, interval: float = 0.02
+    predicate: Callable[[], bool], timeout: float = 5.0, *, interval: float = 0.02, what: str = ""
 ) -> None:
     """Poll `predicate()` until it's true or `timeout` seconds pass.
+
+    `what` says in words what the test waits for; it is the message when it never happens.
 
     For tests that wait on a condition becoming true (a background task publishing an event,
     a client finishing a handshake) rather than on a fixed amount of time passing. Prefer this
@@ -31,7 +33,7 @@ async def wait_until(
     deadline = time.monotonic() + timeout
     while not predicate():
         if time.monotonic() >= deadline:
-            raise AssertionError(f"condition not met within {timeout}s")
+            raise AssertionError(f"{what or 'condition not met'} (waited {timeout}s)")
         await asyncio.sleep(interval)
 
 

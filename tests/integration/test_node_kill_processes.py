@@ -39,8 +39,16 @@ from nox.node.receipts import ReceiptSigner
 from nox.node.repo import NodeRepository
 from nox.remote.repo import RemoteRepository
 from tests.unit.ipc.conftest import SimpleBus
-from tests.unit.node.conftest import ADDRESSES, NAMES, key_pem, pair_node
-from tests.unit.node.test_c4 import call, kill_switch_for, percentile, session_of
+from tests.unit.node.support import (
+    ADDRESSES,
+    NAMES,
+    call,
+    key_pem,
+    kill_switch_for,
+    pair_node,
+    percentile,
+    session_of,
+)
 
 pytestmark = [
     pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the strong sandbox (bwrap)"),

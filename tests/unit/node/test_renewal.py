@@ -26,7 +26,7 @@ from nox.node.renewal import RenewalRefusedError, accept_renewed, due, store_cer
 from nox.node.repo import NodeRepository
 from nox.node.tools import default_tools
 from nox.security.audit import SqliteAuditLog
-from tests.unit.node.conftest import (
+from tests.unit.node.support import (
     client_context,
     greet,
     key_pem,

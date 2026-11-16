@@ -30,7 +30,7 @@ from nox.lan.install import LanRuntime
 from nox.node.install import NodeRuntime
 from nox.node.protocol import NODE_PATH, PairLink
 from tests.integration.test_lan import _config as lan_config
-from tests.unit.node.conftest import hello, key_pem, make_csr, make_key
+from tests.unit.node.support import hello, key_pem, make_csr, make_key
 
 
 def _config(tmp_path: Path) -> Any:

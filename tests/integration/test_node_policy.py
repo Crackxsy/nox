@@ -34,7 +34,7 @@ from tests.integration.test_lan import _auth, _request, _with_pin
 from tests.integration.test_lan import _connect as lan_connect
 from tests.integration.test_lan import _pair as lan_pair
 from tests.integration.test_nodes import _config, _local, _nodes, _pair
-from tests.unit.node.conftest import greet
+from tests.unit.node.support import greet
 
 PIN = "4711"
 TOOLS = {

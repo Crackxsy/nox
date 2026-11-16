@@ -1,7 +1,8 @@
-"""The dialog on the device on every platform (review panel round 1, M1/M2): macOS through
-`osascript` with "Ablehnen" as default and cancel button, KDE through `kdialog` when zenity is
-missing, a screen read when asked (never frozen at start), and no trust in the core on a device
-that has a screen. No dialog is ever shown here: the programs' answers are given."""
+"""The dialog and the notice on the device on every platform: macOS through `osascript`
+with the refusal as default and cancel button, zenity first and `kdialog` on KDE, a
+screen read when asked (never frozen at start), a notice that always says Nox, and no
+trust in the core on a device that has a screen. No dialog is ever shown here: the
+programs' answers are given."""
 
 from __future__ import annotations
 
@@ -18,7 +19,83 @@ from nox.node.confirm import MAC_DIALOG, PlatformConfirmer, answer_of, kdialog_t
 from nox.node.listener import NodeListener
 from nox.node.manifest import NodeManifest
 from nox.node.pairing import NodePairing
-from tests.unit.node.test_c4 import TARGET, Confirmer, call, session_of, start_node
+from tests.unit.node.support import Confirmer, call, session_of, start_node
+
+# ---- M-d: the Linux dialog is zenity only, default "No", no markup ----
+
+
+async def test_zenity_first_kdialog_on_kde_and_always_no_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review panel round 1 (M2): kdialog is the KDE fallback - its `--warningyesno` has "No" as
+    the default button; zenity, where it is there, is still preferred."""
+    from nox.node import confirm as confirm_module
+
+    monkeypatch.setattr(confirm_module.sys, "platform", "linux")
+    monkeypatch.setattr(confirm_module, "has_screen", lambda: True)
+    monkeypatch.setattr(
+        confirm_module.shutil,
+        "which",
+        lambda name: "/usr/bin/kdialog" if name == "kdialog" else None,
+    )
+    assert confirm_module.PlatformConfirmer().available is True  # KDE without zenity
+    monkeypatch.setattr(confirm_module.shutil, "which", lambda name: f"/usr/bin/{name}")
+    seen: list[list[str]] = []
+
+    class Proc:
+        returncode = 1
+
+        async def wait(self) -> int:
+            return 1
+
+    async def fake_exec(*argv: str, **_kw: Any) -> Proc:
+        seen.append(list(argv))
+        return Proc()
+
+    monkeypatch.setattr(confirm_module.asyncio, "create_subprocess_exec", fake_exec)
+    assert await confirm_module.PlatformConfirmer().ask("<b>x</b>") == "deny"
+    assert seen[0][0].endswith("zenity") and "--default-cancel" in seen[0]
+    assert "--no-markup" in seen[0]
+    monkeypatch.setattr(confirm_module.shutil, "which", lambda _name: None)
+    assert confirm_module.PlatformConfirmer().available is False  # nothing to ask with
+
+
+async def test_a_notice_always_says_nox_and_uses_the_systems_powershell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nox.node import tools as node_tools
+
+    shown: list[tuple[str, str]] = []
+
+    class Fake:
+        async def show(self, title: str, text: str) -> None:
+            shown.append((title, text))
+
+    notify = node_tools.default_tools(Fake())["notify.show"]
+    await notify.handler(node_tools.NotifyArgs(title="Windows Update", text="x"))
+    await notify.handler(node_tools.NotifyArgs(text="y"))
+    assert shown == [("Nox: Windows Update", "x"), ("Nox", "y")]
+
+    seen: list[list[str]] = []
+
+    class Proc:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def fake_exec(*argv: str, **_kw: Any) -> Proc:
+        seen.append(list(argv))
+        return Proc()
+
+    monkeypatch.setattr(node_tools.sys, "platform", "win32")
+    monkeypatch.setattr(node_tools.asyncio, "create_subprocess_exec", fake_exec)
+    await node_tools.PlatformNotifier().show("Nox", "z")
+    from pathlib import PureWindowsPath
+
+    program = PureWindowsPath(seen[0][0])  # a Windows path, whatever the test runs on
+    assert program.is_absolute() and program.name.lower() == "powershell.exe"
+    assert "system32" in str(program).lower()
 
 
 @pytest.mark.parametrize(
@@ -116,7 +193,6 @@ async def test_a_device_with_a_screen_never_trusts_the_core_for_high_risk(
 ) -> None:
     """D1: `trust_core_for_high` is for a device without a screen. A desktop whose dialog
     program is missing refuses, whatever the manifest says."""
-    saved = dict(TARGET)  # `start_node` points the shared receipt target at this node
     confirmer: Any = Confirmer(available=False)
     confirmer.screen = True
     node = await start_node(
@@ -134,4 +210,3 @@ async def test_a_device_with_a_screen_never_trusts_the_core_for_high_risk(
     finally:
         node.stop.set()
         await asyncio.wait_for(node.task, 5)
-        TARGET.update(saved)
