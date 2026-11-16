@@ -3926,3 +3926,26 @@ details > summary:hover {
 .pairing-facts .code-display-value {
   white-space: normal;
 }
+
+/*
+ * The QR code and its facts sit side by side only where the sheet itself has room for both -
+ * decided by the sheet's width, not the window's, so it holds at every width in between.
+ */
+.pairing {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+}
+
+.pairing-qr {
+  max-width: 260px;
+}
+
+/* Long labels wrap inside the add sheet instead of pushing a button past its edge. */
+.node-steps .btn,
+.pairing-buttons .btn {
+  max-width: 100%;
+  min-width: 0;
+  padding-block: 8px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
