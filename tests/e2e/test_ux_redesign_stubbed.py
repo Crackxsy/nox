@@ -581,6 +581,30 @@ class Journey:
         )
         assert overflow <= 0, f"page scrolls sideways by {overflow}px"
 
+    def no_overflow_in(self, selector: str, what: str) -> None:
+        """Nothing inside `selector` reaches past its right edge (a sheet clips, never scrolls)."""
+        clipped = self.page.evaluate(
+            """(sel) => {
+                const box = document.querySelector(sel);
+                if (!box) return ['missing ' + sel];
+                const edge = box.getBoundingClientRect().right;
+                const out = [];
+                if (box.scrollWidth > box.clientWidth) out.push('scrollWidth ' + box.scrollWidth);
+                for (const el of box.querySelectorAll('button, p, a, li, input, img, span')) {
+                  const r = el.getBoundingClientRect();
+                  // Stopp sits at the header's spot, outside the sheet on purpose.
+                  if (el.closest('.stop--corner')) continue;
+                  const name = el.tagName + '.' + el.className + ' ' + el.textContent.slice(0, 24);
+                  if (r.width > 0 && r.right > edge + 1) out.push(name);
+                }
+                return out;
+            }""",
+            selector,
+        )
+        assert clipped == [], (
+            f"{what} ({self.size}, {self.scheme}) reaches past its edge: {clipped}"
+        )
+
     def area(self, name: str) -> None:
         label = {"devices": "Geräte" if self.size == "phone" else "Geräte & Fähigkeiten"}.get(
             name, name
