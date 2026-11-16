@@ -94,6 +94,8 @@ def _world(
         windows=windows,
         probe=Probe,
         sender=lambda: seen["sender"],
+        has_module=lambda _module: True,  # every optional library "installed"
+        media=PlatformMedia(platform="linux"),  # the same catalogue on every test OS
     )
     return world, seen
 
@@ -233,7 +235,12 @@ async def test_a_stop_ends_the_session_on_the_node() -> None:
 
 async def test_desktop_and_computer_are_windows_only() -> None:
     world, seen = _world(windows=False)
+    # Off Windows they are not offered at all (no status claims them) ...
+    assert not any(n.startswith(("desktop.", "computer.")) for n in world_tools(world))
+    # ... and a handler made on Windows refuses once the device is not Windows (defence in depth).
+    world.windows = True
     tools = world_tools(world)
+    world.windows = False
     calls = {
         "computer.session_start": {"purpose": "Fenster ordnen"},
         "desktop.windows": {},
@@ -706,7 +713,8 @@ def test_building_the_tools_touches_no_window_api() -> None:
         raise RuntimeError("RealWindowProbe requires Windows (ctypes.windll)")
 
     world.probe = no_windows
-    assert "desktop.windows" in world_tools(world)
+    tools = world_tools(world)
+    assert "desktop.windows" not in tools and "media.control" in tools
 
 
 async def test_the_node_reports_its_sessions_with_a_growing_generation() -> None:
@@ -739,3 +747,23 @@ def test_session_reports_are_read_strictly() -> None:
     # A field of a newer protocol is ignored, the known ones stay strict (review K1).
     assert SessionReport.model_validate({"gen": 1, "active": False, "more": 1}).gen == 1
     assert "session" in NodeHello.model_fields
+
+
+def test_a_tool_whose_library_or_os_is_missing_is_not_offered() -> None:
+    """Review panel round 1 (H1): the node never lists what cannot work here, so the core's
+    status and the dashboard never claim it."""
+    from nox.node.world import withheld
+
+    world, _ = _world()
+    world.screen = world.camera = None
+    world.has_module = lambda module: module not in ("mss", "cv2", "playwright")
+    tools = world_tools(world)
+    assert not {"screen.capture", "camera.snapshot"} & set(tools)
+    assert not any(name.startswith("browser.") for name in tools)
+    assert "media.control" in tools and "desktop.windows" in tools
+    assert "senses" in withheld(world)["screen.capture"]
+    assert "browser" in withheld(world)["browser."]
+    world.has_module = lambda _module: True
+    assert {"screen.capture", "camera.snapshot", "browser.open"} <= set(world_tools(world))
+    world.media = PlatformMedia(platform="darwin")
+    assert "media.control" not in world_tools(world)

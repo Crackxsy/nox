@@ -34,6 +34,12 @@ and the dialog on this device for high risk). On top of that:
 * **`media.control`** (low): play, pause, next, previous, volume, mute - SMTC and Core Audio on
   Windows, MPRIS (`playerctl` or D-Bus) and PipeWire/PulseAudio on Linux. The action is one word
   of a fixed list and the level a number; neither ever becomes script text.
+* **Only what can work is offered** (`world_tools`): a tool whose library is missing on this device
+  (`mss` for the screen, OpenCV for the camera - the extra `senses` -, Playwright for the browser -
+  the extra `browser`), `desktop.*` and `computer.*` off Windows and `media.control` where there
+  is no backend (macOS) are not in the node's list at all, so neither the core's status nor the
+  dashboard ever claims them. What can change while the node runs - a display that comes or
+  goes, Chromium not downloaded yet - is still refused per call with its reason.
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -158,6 +165,14 @@ NODE_BROWSER_TOOLS = (
 
 class NoArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+def installed(module: str) -> bool:
+    """Whether a Python module this device's tools need is installed (looked up, not imported)."""
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def _strict(model: type[BaseModel]) -> type[BaseModel]:
@@ -579,6 +594,8 @@ class World:
     gen: int = field(default_factory=lambda: secrets.randbits(40) << 20)
     session_id: str = ""
     computer: Any = None
+    #: Whether a module is installed here (`installed`; a test passes its own answer).
+    has_module: Callable[[str], bool] = installed
     #: Games the core asked this device to watch as well (`nox/games`); only ever grows.
     extra_games: set[str] = field(default_factory=set)
     #: The session marker in the node's folder (`SESSION_MARKER`); None: none is kept.
@@ -775,17 +792,37 @@ async def _quiet(coro: Awaitable[None]) -> None:
         log.warning("node.notice_failed", error=type(exc).__name__)
 
 
+def withheld(world: World) -> dict[str, str]:
+    """Tool families this device does not offer at all, and why (a missing library, the wrong
+    OS). A grabber or a browser a test put in counts as there."""
+    missing: dict[str, str] = {}
+    if world.screen is None and not world.has_module("mss"):
+        missing["screen.capture"] = "screen capture needs the extra `senses` (mss)"
+    if world.camera is None and not world.has_module("cv2"):
+        missing["camera.snapshot"] = "the camera needs the extra `senses` (OpenCV)"
+    if world.browser is None and not world.has_module("playwright"):
+        missing["browser."] = "the browser needs the extra `browser` (Playwright)"
+    if not world.windows:
+        missing["desktop."] = missing["computer."] = "Windows only"
+    media = world.media
+    if isinstance(media, PlatformMedia) and not media.platform.startswith(("win32", "linux")):
+        missing["media.control"] = "no media backend on this OS"
+    return missing
+
+
 def world_tools(world: World) -> dict[str, NodeTool]:
-    """The C6 tools of this device: captures, browser, desktop, computer use and media."""
+    """The C6 tools of this device: captures, browser, desktop, computer use and media - those
+    that can work here (`withheld`)."""
 
     async def media(args: BaseModel) -> dict[str, Any]:
         assert isinstance(args, MediaArgs)
         return await world.media.control(args.action, args.level)
 
+    missing = withheld(world)
     tools = [
         *_captures(world),
-        *_browser(world),
-        *_desktop_and_computer(world),
+        *([] if "browser." in missing else _browser(world)),
+        *([] if "desktop." in missing else _desktop_and_computer(world)),
         NodeTool(
             "media.control",
             "media",
@@ -796,4 +833,8 @@ def world_tools(world: World) -> dict[str, NodeTool]:
             path_safe=True,  # opens no path
         ),
     ]
-    return {tool.name: tool for tool in tools}
+    return {
+        tool.name: tool
+        for tool in tools
+        if tool.name not in missing and f"{tool.name.split('.', 1)[0]}." not in missing
+    }

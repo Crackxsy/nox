@@ -52,6 +52,14 @@ from nox.tools.registry import ToolRegistry, ToolSpec
 from tests.unit.node.test_c4 import session_of, signed, start_node
 from tests.unit.node.test_router import FakeRegistry, _entry
 
+
+@pytest.fixture(autouse=True)
+def _a_screen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests are about a device with a screen (`mode: auto` is push-to-talk there); the
+    headless default is tested on its own (`test_a_headless_device_listens_for_the_wake_word`)."""
+    monkeypatch.setattr("nox.node.confirm.has_screen", lambda: True)
+
+
 _NOW = datetime(2026, 10, 22, tzinfo=UTC)
 PI = "a" * 32
 PC = "b" * 32
@@ -201,6 +209,71 @@ def test_a_pi_gets_the_small_speech_model(tmp_path: Path, monkeypatch: pytest.Mo
     assert voice_config(VoiceSettings(stt_model="small"), tmp_path).stt.model == "small"
 
 
+def test_a_headless_device_listens_for_the_wake_word(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review panel round 1 (M3): push-to-talk needs a key to hold - a tray or a terminal. A
+    device without a screen listens for the wake word unless its settings say otherwise."""
+    from nox.node.voice import listening_mode
+
+    assert VoiceSettings().mode == "auto"
+    assert listening_mode(VoiceSettings(), screen=lambda: False) == "wake_word"
+    assert listening_mode(VoiceSettings(), screen=lambda: True) == "push_to_talk"
+    assert listening_mode(VoiceSettings(mode="push_to_talk"), screen=lambda: False) == (
+        "push_to_talk"
+    )
+    monkeypatch.setattr("nox.node.confirm.has_screen", lambda: False)
+    assert voice_config(VoiceSettings(), tmp_path).stt.listening_mode == "continuous"
+
+
+def test_voice_say_is_offered_only_where_the_voice_libraries_are(tmp_path: Path) -> None:
+    from nox.node.voice import voice_support
+
+    satellite, _seen = _satellite(tmp_path)
+    assert voice_tools(satellite, support=lambda: "the extra voice is missing") == {}
+    assert "voice.say" in voice_tools(satellite, support=lambda: None)
+    assert voice_support(lambda module: module != "sounddevice") is not None
+    assert voice_support(lambda module: module != "supertonic") is None  # Piper speaks then
+    assert voice_support(lambda module: module not in ("supertonic", "piper")) is not None
+    assert voice_support(lambda _module: True) is None
+
+
+def test_voice_setup_asks_first_and_downloads_into_the_node_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review panel round 1 (M4): the models only after a yes, into the node's own folder - and
+    the node's speech recognition never downloads by itself (`local_files_only`)."""
+    from nox.node import voice as voice_module
+    from nox.voice.stt.faster_whisper_engine import FasterWhisperStt
+
+    monkeypatch.setattr(voice_module, "voice_support", lambda: None)
+    fetched: list[tuple[str, Path]] = []
+    said: list[str] = []
+
+    def whisper(model: str, target: Path) -> None:
+        fetched.append((model, target))
+
+    def tts(engine: str, target: Path, _echo: Any) -> int:
+        fetched.append((engine, target))
+        return 0
+
+    kw: dict[str, Any] = {"echo": said.append, "download_whisper": whisper, "download_tts": tts}
+    refused = voice_module.voice_setup(tmp_path, VoiceSettings(), confirm=lambda _q: False, **kw)
+    assert refused == 1 and fetched == [] and "Nothing was downloaded." in said
+    questions: list[str] = []
+    done = voice_module.voice_setup(
+        tmp_path, VoiceSettings(), confirm=lambda q: questions.append(q) or True, **kw
+    )
+    assert done == 0 and "Hugging Face" in questions[0]
+    assert [name for name, _ in fetched] == [
+        "base" if not voice_module.small_device() else "tiny",
+        "supertonic",
+    ]
+    assert all(str(target).startswith(str(tmp_path / "models")) for _, target in fetched)
+    assert FasterWhisperStt().local_files_only is False  # the core keeps its own behaviour
+    assert FasterWhisperStt(local_files_only=True).local_files_only is True
+
+
 # ---- the voice satellite on the node -------------------------------------------------------------
 
 
@@ -319,6 +392,83 @@ async def test_a_refused_question_is_forgotten(tmp_path: Path) -> None:
     await satellite.shutdown()
 
 
+async def test_a_refusal_is_remembered_in_words_and_sounds_once(tmp_path: Path) -> None:
+    """Review of #195 (UX): a core's "no" must not be silent - the reason goes to voice.json for
+    `nox node voice status`, a low two-tone "no" plays, and not again within the rate limit."""
+    import json
+
+    from nox.node.satellite_cli import voice_status
+    from nox.node.voice import REFUSAL_SOUND_EVERY_S, STATE_FILE
+
+    satellite, seen = await _running(
+        tmp_path, answer={"result": {"accepted": False, "reason": "voice_not_switched_on_here"}}
+    )
+    out = seen["engines"].audio_out
+    out.played.clear()
+    heard = {"text": "Hallo", "language": "de", "addressed_to_nox": True}
+    await satellite._on_event(E.VOICE_TRANSCRIPT_READY, heard)
+    assert out.played == [("earcon", 4 * int(16000 * 140 / 1000))]  # two tones, no real sound
+    state = json.loads((tmp_path / STATE_FILE).read_text(encoding="utf-8"))
+    assert state["last_refusal"]["reason"] == "voice_not_switched_on_here"
+    assert state["last_refusal"]["at"]
+    await satellite._on_event(E.VOICE_TRANSCRIPT_READY, heard)
+    assert len(out.played) == 1  # rate-limited: the reason is updated, the sound is not repeated
+    satellite.clock = lambda c=satellite.clock: c() + REFUSAL_SOUND_EVERY_S + 1  # type: ignore[assignment]
+    await satellite._on_event(E.VOICE_TRANSCRIPT_READY, heard)
+    assert len(out.played) == 2
+    # The status says it in words, in both languages.
+    from nox.node.home import NodeHome
+
+    home = NodeHome(tmp_path)
+    for lang, words in (
+        ("en", "Not switched on here yet"),
+        ("de", "Hier noch nicht eingeschaltet"),
+    ):
+        import os
+
+        os.environ["NOX_LANG"] = lang
+        try:
+            lines = voice_status(home)
+        finally:
+            del os.environ["NOX_LANG"]
+        assert any(words in line for line in lines), lines
+        assert not any("voice_not_switched_on_here" in line for line in lines)
+    # An accepted question clears it.
+    satellite.ask_core = lambda *_a: _accepted()  # type: ignore[assignment]
+    await satellite._on_event(E.VOICE_TRANSCRIPT_READY, heard)
+    assert satellite.last_refusal is None
+    await satellite.shutdown()
+
+
+async def _accepted() -> dict[str, Any]:
+    return {"result": {"accepted": True}}
+
+
+def test_every_refusal_the_core_gives_has_words() -> None:
+    from nox.node.satellite_cli import refusal_words
+
+    for code in (
+        "voice_not_switched_on_here",
+        "voice_not_enabled",
+        "controlled_here",
+        "microphone_off",
+        "too_many",
+        "no_assistant",
+        "echo",
+    ):
+        assert code not in refusal_words(code)
+    assert "strange_code" in refusal_words("strange_code")  # an unknown one is shown as it is
+
+
+def test_whisper_is_fetched_by_pinned_revision() -> None:
+    from nox.node.voice import WHISPER_REVISIONS
+
+    assert set(WHISPER_REVISIONS) == {"tiny", "base", "small"}
+    assert all(
+        len(r) == 40 and set(r) <= set("0123456789abcdef") for r in WHISPER_REVISIONS.values()
+    )
+
+
 async def test_the_kill_phrase_stops_the_node_and_never_reaches_the_core(tmp_path: Path) -> None:
     satellite, seen = await _running(tmp_path)
     await satellite._on_event(E.VOICE_KILL_PHRASE, {"by": "voice", "language": "de"})
@@ -435,7 +585,7 @@ def test_obs_on_a_node_follows_the_core_local_rules(tmp_path: Path) -> None:
 def test_obs_and_voice_need_their_group_on_the_device(tmp_path: Path) -> None:
     obs, _ = _obs_world(tmp_path)
     satellite, _ = _satellite(tmp_path)
-    tools = {**obs_tools(obs), **voice_tools(satellite)}
+    tools = {**obs_tools(obs), **voice_tools(satellite, support=lambda: None)}
     gate, signer = _gate(tools, ("system",), tmp_path)
     assert not gate.offered()
     args = _req("GetSceneList")
@@ -1191,7 +1341,7 @@ def test_voice_say_never_says_a_command(tmp_path: Path, text: str) -> None:
     from nox.node.voice import says_a_command
 
     satellite, _ = _satellite(tmp_path)
-    tools = voice_tools(satellite)
+    tools = voice_tools(satellite, support=lambda: None)
     gate, _signer = _gate(tools, ("voice",), tmp_path)
     assert says_a_command(text)
     assert gate.precheck("voice.say", {"text": text}) == "voice_say_command_words"

@@ -112,6 +112,8 @@ class ToolCallRecord:
     error: str
     started_s: float
     duration_ms: float
+    #: The arguments as the caller (the model) gave them - what a recorded trace replays.
+    arguments: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -288,6 +290,7 @@ class World:
 
         async def recording_call(*args: Any, **kwargs: Any) -> Any:
             name = str(kwargs.get("name", args[1] if len(args) > 1 else ""))
+            given = kwargs.get("arguments", args[2] if len(args) > 2 else {})
             started = time.perf_counter()
             result = await original(*args, **kwargs)
             ok, error = _outcome(result)
@@ -298,6 +301,7 @@ class World:
                     error=error,
                     started_s=started,
                     duration_ms=(time.perf_counter() - started) * 1000,
+                    arguments=dict(given) if isinstance(given, dict) else {},
                 )
             )
             return result
@@ -309,6 +313,7 @@ class World:
         """Answer a dialog by the rules in `kann_alles.confirm` (deny unless proven harmless)."""
         assert self.core is not None and self.core.security is not None
         payload = event.payload
+        engine = self.core.security.engine
         verdict = decide(
             tool=str(payload.get("tool", "")),
             action=str(payload.get("action", "")),
@@ -321,14 +326,27 @@ class World:
             isolated=self._isolated,
             simulated=self.simulated,
             approve_high=self.approve_high,
-            device=str(payload.get("device") or ""),
+            device=self._request_device(engine, payload),
             simulated_devices=self.simulated_devices,
         )
         self.probe.confirmations += 1
         self.probe.decisions.append(verdict)
-        self.core.security.engine.reply(
-            str(payload.get("request_id", "")), verdict.decision, by="eval"
-        )
+        engine.reply(str(payload.get("request_id", "")), verdict.decision, by="eval")
+
+    @staticmethod
+    def _request_device(engine: Any, payload: dict[str, Any]) -> str:
+        """The device id of the request a dialog is about. The `permission_requested` event does
+        not carry it, so it is read from the engine's own pending request (`pending_request`) -
+        never parsed from the target text, which a tool composes. Without either: no device, and
+        a `shell.run` dialog is then denied (`kann_alles.confirm`)."""
+        given = str(payload.get("device") or "")
+        if given:
+            return given
+        lookup = getattr(engine, "pending_request", None)
+        if lookup is None:
+            return ""
+        request = lookup(str(payload.get("request_id", "")))
+        return str(getattr(request, "device", "") or "")
 
     # -- per task -----------------------------------------------------------------------------
 

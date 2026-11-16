@@ -5,6 +5,16 @@
 #   bash install-macos.sh --node                       install or update, as yourself (no sudo)
 #   bash install-macos.sh --node --pair '<link>'       ... and pair right away
 #   bash install-macos.sh --node --uninstall           remove the program and the LaunchAgent
+#   bash install-macos.sh --node --with-browser        ... and Nox's own Chromium for browser.*
+#                                                      (about 150 MB; otherwise asked when run in
+#                                                      a terminal, never downloaded silently)
+#
+# What the node offers is installed with it (Python extras): the screen and camera (`senses`), the
+# browser library (`browser`), the voice satellite (`voice`, `voice-supertonic`) and the tray with
+# its key (`shell`, PyObjC). A tool whose library is missing is not offered by the node at all; on
+# macOS `shell.run` never is (there is no sandbox backend), and high risk is asked in a system
+# dialog ("Ablehnen" is the default). macOS asks once for screen recording, camera and microphone
+# access when a tool first needs it.
 #
 # What it does: takes the version (NOX_REF, default the newest release; NOX_SOURCE=<checkout> for a
 # local one) from git into ~/Library/Application Support/Nox/node-app/releases/<commit>, builds its
@@ -41,13 +51,14 @@ say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
 fail() { printf '\nError: %s\n' "$*" >&2; exit 1; }
 
-NODE_MODE="" UNINSTALL="" PAIR=""
+NODE_MODE="" UNINSTALL="" PAIR="" BROWSER=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --node) NODE_MODE=1 ;;
     --uninstall) UNINSTALL=1 ;;
     --pair) shift; PAIR="${1:-}" ;;
-    *) fail "unknown option: $1 (known: --node --pair <link> --uninstall)" ;;
+    --with-browser) BROWSER=1 ;;
+    *) fail "unknown option: $1 (known: --node --pair <link> --uninstall --with-browser)" ;;
   esac
   shift
 done
@@ -124,7 +135,14 @@ if [ ! -f "$RELEASES/$release/.complete" ]; then
   rm -rf -- "${RELEASES:?}/$release"
   mkdir -p "$RELEASES/$release"
   git -C "$SRC" archive "$commit" | tar -x -C "$RELEASES/$release"
-  (cd "$RELEASES/$release" && UV_COMPILE_BYTECODE=1 "$UV_INSTALL_DIR/uv" sync --quiet --frozen --no-build --python 3.13)
+  # What the node offers, from prebuilt packages only; what cannot be installed is left out (and
+  # then not offered), the base always installs.
+  sync=(sync --quiet --frozen --no-build --python 3.13)
+  extras=(--extra senses --extra browser --extra voice --extra voice-supertonic --extra shell)
+  if ! (cd "$RELEASES/$release" && UV_COMPILE_BYTECODE=1 "$UV_INSTALL_DIR/uv" "${sync[@]}" "${extras[@]}"); then
+    note "Note: the optional parts (screen, camera, browser, voice, tray) could not be installed here; the node does not offer them."
+    (cd "$RELEASES/$release" && UV_COMPILE_BYTECODE=1 "$UV_INSTALL_DIR/uv" "${sync[@]}")
+  fi
   printf '%s\n' "$NOX_REF" > "$RELEASES/$release/.complete"
 fi
 
@@ -141,6 +159,19 @@ if ! (cd "$CURRENT" && "$python" -I "$launcher" --selftest >/dev/null); then
     mv -fh "$CURRENT.next" "$CURRENT"
   fi
   fail "the new node does not start; the previous version stays"
+fi
+
+# Nox's own Chromium for browser.* - only with --with-browser or a yes at the terminal.
+if [ -z "$BROWSER" ] && [ -r /dev/tty ] && { : < /dev/tty; } 2>/dev/null; then
+  printf "Download Nox's own Chromium for browser.* now (about 150 MB)? [y/N] " > /dev/tty
+  read -r answer < /dev/tty || answer=""
+  case "$answer" in [JjYy]*) BROWSER=1 ;; esac
+fi
+if [ -n "$BROWSER" ]; then
+  say "Downloading Nox's own Chromium for browser.* (about 150 MB)"
+  "$python" -I -m playwright install chromium || note "Chromium could not be downloaded; browser.* stays off."
+else
+  note "Without Chromium the node does not offer browser.*. Later: bash install-macos.sh --node --with-browser"
 fi
 
 say "LaunchAgent $LABEL (at login, as you)"
@@ -186,4 +217,5 @@ if [ -n "$PAIR" ]; then
 else
   note "Pair: on the Nox at home, Devices -> \"Add a PC or laptop\", then here: nox-node pair \"<link>\""
 fi
+note "Voice: nox-node allow voice, then fetch the models: nox-node voice setup"
 note "Status: nox-node status   Log: nox-node log   Update: nox-node update   Remove: bash install-macos.sh --node --uninstall"

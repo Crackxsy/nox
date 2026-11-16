@@ -9,6 +9,11 @@
 # against the signed release with the installed program's code and keys, and every install of the
 # program drops them. With no screen there is nobody to ask, so high-risk calls are refused unless
 # this device allowed `trust_core_for_high` itself (spec C §1.6, a documented residual risk).
+#
+# No devices (PrivateDevices=yes): the voice satellite cannot reach a sound card unless the node
+# was installed with `--with-audio`, which adds nox-node.service.d/devices.conf (the host's /dev,
+# device policy closed except ALSA, group audio). Cameras are never opened by a node without a
+# screen (nobody could see that it does), so there is no such option for them.
 
 [Unit]
 Description=Nox node (headless) - this device as the hands of the Nox at home
@@ -25,6 +30,8 @@ Environment=HOME=/var/lib/nox-node
 Environment=PYTHONUNBUFFERED=1
 Environment=NOX_NODE_TRAY=0
 Environment=NOX_CGROUP_DELEGATED=1
+# Nox's own Chromium for browser.*, when installed with --with-browser (read-only to the node).
+Environment=PLAYWRIGHT_BROWSERS_PATH=@PREFIX@/ms-playwright
 WorkingDirectory=@PREFIX@/current
 # -I: isolated - no current folder, user site or PYTHON* variable decides what is imported.
 ExecStart=@PREFIX@/current/.venv/bin/python -I @PREFIX@/current/installer/start_node.pyw

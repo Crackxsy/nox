@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import math
 import sqlite3
 import statistics
 import time
@@ -43,6 +44,9 @@ class _Args(BaseModel):
 class Confirmer:
     def __init__(self, answer: str = "allow", *, available: bool = True) -> None:
         self.answer, self._available, self.asked = answer, available, []  # type: ignore[var-annotated]
+        #: A scripted device without a dialog stands for one without a screen (only that one
+        #: may trust the core for high risk).
+        self.screen = available
 
     @property
     def available(self) -> bool:
@@ -614,14 +618,51 @@ async def test_an_expired_certificate_ends_the_session(
         await server.stop()
 
 
+def percentile(values: list[float], pct: float) -> float:
+    """The nearest-rank percentile of `values` (p99 of 20 rounds is the slowest one)."""
+    ordered = sorted(values)
+    rank = max(1, math.ceil(pct / 100 * len(ordered)))
+    return ordered[rank - 1]
+
+
+def kill_switch_for(listener: NodeListener) -> tuple[Any, list[float], list[dict[str, bool]]]:
+    """A `KillSwitchService` whose "nodes" stop hook is the listener's `broadcast_kill` (and its
+    resume hook `broadcast_resume`), wired as `nox.node.install` wires them. Also returns when
+    each kill's last `nox/killed` came in (`broadcast_kill` returns once every node answered or
+    its wait ran out) and which nodes answered."""
+    from nox.security.killswitch import KillSwitchService
+
+    class Audit:
+        def append(self, **_k: Any) -> int:
+            return 0
+
+    switch = KillSwitchService(audit=Audit())  # type: ignore[arg-type]
+    all_killed: list[float] = []
+    acks: list[dict[str, bool]] = []
+
+    async def stop_nodes() -> None:
+        acks.append(await listener.broadcast_kill("kill switch"))
+        all_killed.append(time.monotonic())
+
+    async def resume_nodes() -> None:
+        await listener.broadcast_resume()
+
+    switch.register_stop_hook("nodes", stop_nodes)
+    switch.register_resume_hook("nodes", resume_nodes)
+    return switch, all_killed, acks
+
+
 async def test_the_stop_reaches_five_loopback_nodes_quickly(
     listener: NodeListener, pairing: NodePairing, tls: TlsMaterial, tmp_path: Path
 ) -> None:
     """Spec C §1.7, as far as a single test runner can show it: five nodes on loopback in one
-    process, a long call on each, `broadcast_kill` -> every `nox/killed`. 20 rounds; the slowest
-    round (the p95 of 20) stays under a second and no call completes after its node said killed.
-    This is not the real-hardware p99 (Pi + PCs over Wi-Fi, a real sandboxed process): that
-    measurement belongs to the hardware checklist (spec §7)."""
+    process, a long call on each, the kill switch engaged -> every `nox/killed`. Each round is
+    timed from `KillSwitchService.engage()` until the last node's `nox/killed` arrived. 20
+    rounds; the p99 (and so the slowest round) stays under a second and no call completes after
+    its node said killed. With separate node processes and a real sandboxed `sleep 60`:
+    `tests/integration/test_node_kill_processes.py`; over Wi-Fi on a Pi and PCs it belongs to
+    the hardware checklist (spec §7)."""
+    switch, all_killed, acks = kill_switch_for(listener)
     nodes = [await start_node(listener, pairing, tls, tmp_path) for _ in range(5)]
     try:
         sessions = [await session_of(listener, n.node_id) for n in nodes]
@@ -636,19 +677,21 @@ async def test_the_stop_reaches_five_loopback_nodes_quickly(
                     break
                 await asyncio.sleep(0.01)
             started = time.monotonic()
-            acked = await listener.broadcast_kill("latency test")
-            durations.append(time.monotonic() - started)
-            assert all(acked.values()), acked
+            await switch.engage("ui", "latency test")
+            durations.append(all_killed[-1] - started)
+            assert len(acks[-1]) == 5 and all(acks[-1].values()), acks[-1]
+            assert all(s.killed.is_set() for s in sessions)  # every `nox/killed` is in
             results = await asyncio.gather(*running)
             assert all(r["_nox"]["refused"] == "stopped" for r in results)
-            await listener.broadcast_resume()
+            assert await switch.resume(pin_ok=False, by="test")
             for _ in range(200):
                 if all(n.agent.stopped_reason() is None for n in nodes):
                     break
                 await asyncio.sleep(0.01)
         assert not any("wait-end" in n.ran for n in nodes)
-        slowest = max(durations)
-        assert slowest < 1.0, (slowest, statistics.mean(durations))
+        p99 = percentile(durations, 99)
+        assert p99 < 1.0, (p99, statistics.mean(durations))
+        assert max(durations) < 1.0, (max(durations), statistics.mean(durations))
     finally:
         for n in nodes:
             n.stop.set()
