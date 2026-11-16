@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from tests.unit.core.test_orchestrator import make
+from tests.unit.fakes import make_orchestrator as make
 
 NODE = "voice:node:" + "a" * 32
 

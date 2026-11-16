@@ -192,7 +192,7 @@ async def test_a_flooding_node_is_cut_off(
 
 
 async def test_a_node_turn_waits_and_cancels_nothing_elsewhere() -> None:
-    from tests.unit.core.test_orchestrator import make
+    from tests.unit.fakes import make_orchestrator as make
 
     orch, _bus, router, speaker, _turns = make(speak=False)
     await orch.start()
@@ -317,7 +317,7 @@ class _ModeGate:
 
 
 async def test_satellite_words_skip_presets_modes_and_new_conversation() -> None:
-    from tests.unit.core.test_orchestrator import make
+    from tests.unit.fakes import make_orchestrator as make
 
     orch, _bus, router, _speaker, _turns = make(speak=False)
     gates = _Gates()
@@ -404,7 +404,7 @@ def test_only_a_real_boolean_marks_a_preset_for_satellites(value: Any) -> None:
 
 async def test_one_turn_runs_at_a_time_and_a_kill_cancels_it() -> None:
     from nox.core.events import Event as CoreEvent
-    from tests.unit.core.test_orchestrator import make
+    from tests.unit.fakes import make_orchestrator as make
 
     orch, bus, router, speaker, _turns = make(speak=False)
     running = {"now": 0, "most": 0}

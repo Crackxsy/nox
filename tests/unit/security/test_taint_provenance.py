@@ -22,7 +22,7 @@ from nox.core.toolloop import ToolLoop
 from nox.security.model import Decision, PermissionRequest, Risk, TemporaryGrant
 from nox.security.permissions import DefaultPermissionEngine
 from nox.security.taint import MAX_UNTRUSTED_CHARS, TaintLedger
-from tests.unit.core.test_orchestrator import make
+from tests.unit.fakes import make_orchestrator as make
 
 from .conftest import MutableClock
 

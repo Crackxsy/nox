@@ -11,7 +11,7 @@ from typing import Any
 
 from nox.ai.base import AiChunk, AiRequest, AiResponse, ProviderInfo
 from nox.core.events import Event, Handler
-from nox.core.orchestrator import RecordedTurn
+from nox.core.orchestrator import Orchestrator, OrchestratorConfig, RecordedTurn
 from nox.core.state import NoxState
 from nox.voice.base import TtsRequest
 
@@ -264,3 +264,36 @@ class FakeTurns:
             for (s, r, t), p, c in marked
             if s == session_id and c == conversation
         ][-limit:]
+
+
+class AllowPolicy:
+    """A memory policy that allows or forbids writing, as a test says."""
+
+    def __init__(self, allow: bool = True) -> None:
+        self.allow = allow
+
+    def allows_memory_write(self) -> bool:
+        return self.allow
+
+
+def make_orchestrator(
+    **kw: Any,
+) -> tuple[Orchestrator, FakeBus, FakeRouter, FakeSpeaker, FakeTurns]:
+    """An orchestrator over the in-memory fakes; keyword arguments go to `OrchestratorConfig`
+    (`policy` is the memory policy)."""
+    bus = FakeBus()
+    state = FakeState()
+    router = FakeRouter(bus)
+    speaker = FakeSpeaker()
+    turns = FakeTurns()
+    orch = Orchestrator(
+        bus=bus,
+        state=state,
+        router=router,
+        speaker=speaker,
+        turns=turns,
+        memory_policy=kw.pop("policy", AllowPolicy()),
+        system_prompt=lambda: "You are Nox.",
+        config=OrchestratorConfig(**kw),
+    )
+    return orch, bus, router, speaker, turns

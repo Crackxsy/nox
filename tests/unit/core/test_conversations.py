@@ -16,7 +16,7 @@ from nox.ai.base import AiChunk, AiRequest
 from nox.ai.tooluse import OfferedTool
 from nox.core.orchestrator import VOICE_CHANNEL, is_new_conversation_request
 from nox.core.toolloop import ToolLoop
-from tests.unit.core.test_orchestrator import make
+from tests.unit.fakes import make_orchestrator as make
 
 
 class _Outcome(BaseModel):
