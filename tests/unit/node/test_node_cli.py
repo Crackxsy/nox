@@ -132,7 +132,7 @@ def test_german_words_and_labels_match_the_devices_page(monkeypatch: pytest.Monk
     assert group_label("files") == "read and write files"
 
 
-# ---- N1: pairing again ---------------------------------------------------------------------------
+# ---- pairing again -------------------------------------------------------------------------------
 
 
 def test_pair_again_only_when_the_pairing_cannot_work(tmp_path: Path) -> None:

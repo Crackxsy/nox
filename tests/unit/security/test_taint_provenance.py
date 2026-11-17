@@ -1,4 +1,4 @@
-"""Taint without confirmation fatigue (re-review N1): a tainted conversation still lets a lookup run
+"""Taint without confirmation fatigue: a tainted conversation still lets a lookup run
 quietly when its free text is demonstrably taken from what the user said, and only then.
 
 The rule under test (`TaintLedger.user_directed`), two conditions, both required:

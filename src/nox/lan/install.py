@@ -498,6 +498,6 @@ def _register_requests(core: Any, runtime: LanRuntime) -> None:
 
 
 def _pet_dist(core: Any) -> Path | None:
-    """The built pet page, for a node's overlay relay (C9); None when it is not built."""
+    """The built pet page, for a node's overlay relay; None when it is not built."""
     dist = getattr(core, "pet_dist", None)
     return dist if isinstance(dist, Path) and dist.exists() else None

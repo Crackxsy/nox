@@ -1,4 +1,4 @@
-"""Routing a tool call to a device: the core itself or one of its nodes (spec C §1.5).
+"""Routing a tool call to a device: the core itself or one of its nodes.
 
 A routable tool is still *one* tool for the model (the offer budget stays as it is), with an
 optional `device` argument: "core" or a node's name. When it is left out, in order:
@@ -101,7 +101,7 @@ VOICE_NODE_CHANNEL = "voice:node:"
 def origin_device() -> str | None:
     """Where the current turn came from: the paired browser device of a `chat:device:<id>#...`
     conversation (`nox.core.orchestrator.conversation_for`), or - for a question asked at a
-    node's voice satellite (`voice:node:<id>#...`, C9) - `node:<id>`, that node itself."""
+    node's voice satellite (`voice:node:<id>#...`) - `node:<id>`, that node itself."""
     conversation = current_conversation()
     for prefix, mark in (("chat:device:", ""), (VOICE_NODE_CHANNEL, NODE_ORIGIN)):
         if conversation.startswith(prefix):
@@ -236,7 +236,7 @@ def resolve(
     if requested is not None and requested.strip():
         word = requested.strip().casefold()
         if word in _HERE_WORDS and origin is not None:
-            # "hier" from a browser on a PC with a node means that PC (review N5).
+            # "hier" from a browser on a PC with a node means that PC.
             linked = _at_origin(entries, origin)
             if len(linked) == 1:
                 return at(linked[0])
@@ -433,7 +433,7 @@ def routed_spec(
         else:
             base_target = core.targets(inner(payload)) if core is not None and core.targets else ""
         # Left to the device only when it can ask, and - while Nox controls a PC - only when it
-        # is that PC (review M2); otherwise the core asks itself, under the session's PIN rule
+        # is that PC; otherwise the core asks itself, under the session's PIN rule
         # (and the node still refuses high risk it cannot confirm, unless trusted there).
         delegate = (
             node_risk_ is Risk.HIGH and entry.confirmer and _may_delegate(registry, entry.device_id)
@@ -545,7 +545,7 @@ def core_only_spec(core: ToolSpec, registry: NodeRegistry) -> ToolSpec:
     """A tool that exists on this core only (`package.*`: it cannot work in a node's sandbox
     yet) with a `device` field that names this core and nothing else. A call that names a paired
     device is refused (`not_available_on_device`) before anyone is asked - never run here
-    instead (review M1) - and the confirmation names this machine while nodes are paired."""
+    instead - and the confirmation names this machine while nodes are paired."""
     model = create_model(
         f"CoreOnly_{core.input_model.__name__}",
         __base__=core.input_model,

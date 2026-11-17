@@ -1,4 +1,4 @@
-"""Spec C §1.7 with real processes: five nodes, each in a Python process of its own (its own node
+"""Stopping with real processes: five nodes, each in a Python process of its own (its own node
 folder and Nox folder), each running a real `sleep 60` in its real sandbox (bwrap) through the
 real `NodeAgent`, `NodeGate` and `shell.run`. The core side is a real `NodeListener` in this test
 process; the kill switch (`KillSwitchService`, with the listener as its "nodes" stop hook, wired

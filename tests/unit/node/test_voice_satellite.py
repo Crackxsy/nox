@@ -46,7 +46,7 @@ def test_voice_and_obs_are_off_by_default_and_routable() -> None:
     defaults = NodeManifest()
     assert defaults.groups["voice"] is False and defaults.groups["obs"] is False
     assert {"voice.say", "obs.request"} <= ROUTABLE
-    # The Devices page (C8) shows a group as soon as Nox routes a tool of it.
+    # The Devices page shows a group as soon as Nox routes a tool of it.
     assert {"voice", "obs"} <= relevant_groups()
 
 
@@ -65,7 +65,7 @@ def test_a_pi_gets_the_small_speech_model(tmp_path: Path, monkeypatch: pytest.Mo
 def test_a_headless_device_listens_for_the_wake_word(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Review panel round 1 (M3): push-to-talk needs a key to hold - a tray or a terminal. A
+    """Push-to-talk needs a key to hold - a tray or a terminal. A
     device without a screen listens for the wake word unless its settings say otherwise."""
     from nox.node.voice import listening_mode
 
@@ -94,7 +94,7 @@ def test_voice_say_is_offered_only_where_the_voice_libraries_are(tmp_path: Path)
 def test_voice_setup_asks_first_and_downloads_into_the_node_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Review panel round 1 (M4): the models only after a yes, into the node's own folder - and
+    """The models only after a yes, into the node's own folder - and
     the node's speech recognition never downloads by itself (`local_files_only`)."""
     from nox.node import voice as voice_module
     from nox.voice.stt.faster_whisper_engine import FasterWhisperStt
@@ -388,7 +388,7 @@ async def test_an_older_core_is_sent_no_satellite_method(
         await asyncio.wait_for(node.task, 10)
 
 
-# ---- review round 2 (H1-H4, M1-M4, L4, L6, mutants) ---------------------------------------------
+# ---- while it speaks, per wake word, and when it may not listen ----------------------------------
 
 
 async def test_while_the_node_speaks_only_the_kill_phrase_counts(tmp_path: Path) -> None:

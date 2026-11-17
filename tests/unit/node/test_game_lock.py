@@ -87,7 +87,7 @@ async def test_a_game_starting_inside_a_session_stops_it_before_the_next_event()
     assert len(seen["sender"].events) == sent
 
 
-# ---- H1: the game lock ---------------------------------------------------------------------------
+# ---- the game lock -------------------------------------------------------------------------------
 
 
 def _lock(**over: Any) -> GameLock:
@@ -220,7 +220,7 @@ def test_the_wire_accepts_program_names_only() -> None:
 
 
 def test_a_service_query_that_fails_locks() -> None:
-    """N19: only "no such service" means not running; any other failure raises (locked)."""
+    """Only "no such service" means not running; any other failure raises (locked)."""
     from nox.desktop.anticheat import ERROR_SERVICE_DOES_NOT_EXIST, running_services
 
     errors = {"missing": ERROR_SERVICE_DOES_NOT_EXIST, "denied": 5}

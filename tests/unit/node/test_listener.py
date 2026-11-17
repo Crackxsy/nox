@@ -520,7 +520,7 @@ async def test_a_reconnect_replaces_the_old_session(
     await second.close()
 
 
-# ---- found in the self-review --------------------------------------------------------------------
+# ---- reconnects, cut-offs and revocation at awkward moments --------------------------------------
 
 
 async def test_a_public_peer_is_refused(

@@ -26,14 +26,14 @@ from tests.unit.node.support import (
 @pytest.fixture(autouse=True)
 def _english_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     """The node's terminal and dialog words in English, whatever this machine's locale; the
-    German texts are tested on their own (`test_gremium_r1a.py`)."""
+    German texts are tested on their own (`test_node_cli.py`)."""
     monkeypatch.setenv("NOX_LANG", "en")
 
 
 @pytest.fixture(autouse=True)
 def _instant_answers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scripted confirmers answer at once; the 1.5 s rule against reflex answers is tested on
-    its own (`test_review_c4.py`)."""
+    its own (`test_device_confirmation.py`)."""
     from nox.node import agent as agent_module
 
     monkeypatch.setattr(agent_module, "MIN_DECISION_S", 0.0)

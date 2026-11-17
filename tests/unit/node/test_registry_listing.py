@@ -39,7 +39,7 @@ def test_a_node_that_stopped_answering_is_not_offered() -> None:
     assert entry.offers("notify.show") is True
 
 
-# ---- M2 (architecture): one writer for node.link -------------------------------------------------
+# ---- one writer for node.link --------------------------------------------------------------------
 
 
 async def test_set_linked_writes_the_database_and_memory_together() -> None:

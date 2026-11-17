@@ -216,7 +216,7 @@ async def test_a_node_turn_waits_and_cancels_nothing_elsewhere() -> None:
     await orch.stop()
 
 
-# ---- with #167's lock: session_refusal, saturation, taint during a session -----------------
+# ---- during a computer-use session: refusal, saturation, taint -----------------------------------
 
 
 def _session_control() -> Any:
@@ -287,7 +287,7 @@ async def test_voice_during_a_session_is_marked_like_paired_device_chat(
     await runtime.stop()
 
 
-# ---- re-review (R1-R3, low findings, mutants N2/N16/N19/N24) ------------------------------------
+# ---- presets, one turn at a time, and what a node is told to say ---------------------------------
 
 
 class _Gates:

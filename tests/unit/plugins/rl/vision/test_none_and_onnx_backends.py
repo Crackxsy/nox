@@ -1,6 +1,6 @@
 """`NoneDetector` (always empty, zero cost) and the `onnx` backend stub (always `unavailable` in
 this environment - no `onnxruntime` dependency, per ENGINEERING.md's hard rule not to add a heavy ML
-dependency for this pass). Neither backend ever fabricates a detection (P10)."""
+dependency for this pass). Neither backend ever fabricates a detection."""
 
 from __future__ import annotations
 

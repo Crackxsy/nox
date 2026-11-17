@@ -33,7 +33,6 @@ from tests.unit.node.support_sessions import LAPTOP, privacy_state, routed_specs
 
 
 def test_here_from_a_browser_on_a_node_means_that_node() -> None:
-    """Review N5."""
     from nox.node.registry import NodeEntry
     from nox.node.router import resolve
 
@@ -246,7 +245,7 @@ async def test_a_delegated_call_without_a_dialog_is_refused_even_when_trusted(
         await asyncio.wait_for(node.task, 5)
 
 
-# ---- M-b: who decided on the core travels in the receipt; trust needs a person ----
+# ---- who decided on the core travels in the receipt; trust needs a person ------------------------
 
 
 @pytest.mark.parametrize("decided_by", ["user", "grant", "profile", "device"])
@@ -353,7 +352,7 @@ async def test_the_executor_says_who_decided() -> None:
     assert seen == [(c[2], True) for c in cases]
 
 
-# ---- M4: a call that waits for the device's dialog -----------------------------------------------
+# ---- a call that waits for the device's dialog ---------------------------------------------------
 
 
 async def test_a_high_call_waits_for_the_dialog_on_the_device() -> None:

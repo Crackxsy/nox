@@ -762,6 +762,15 @@ jobs:
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "$pwd\.venv\Scripts"
 
+      # Readability: comments, docstrings and docs may not point to documents a reader of this
+      # repository cannot open - section numbers of a planning specification, numbered decisions,
+      # review finding ids, delivery-step ids. The rule is said in plain words or linked to a
+      # public document instead. False positives: scripts/planning_ids_allowlist.txt (an entry
+      # that matches nothing any more fails too). The unit test
+      # tests/unit/scripts/test_check_planning_ids.py runs the same script.
+      - name: No private planning or review ids in src/, tests/ and docs/
+        run: python scripts/check_planning_ids.py
+
       # Fails when a dependency's license is denied or unresolved against docs/license_policy.yaml.
       # Known open point as of 2026-09-14: piper-tts (voice extra) declares GPL-3.0-or-later on
       # PyPI, which this policy denies for bundled code - this step is expected to be red until

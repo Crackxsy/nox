@@ -90,7 +90,7 @@ async def test_a_node_session_grants_input_on_that_node_only_and_shows_who_is_co
     assert notices[-1]["active"] and notices[-1]["device"].startswith("Laptop")
     # No paired device may approve while Nox controls a node - none is provably elsewhere;
     # the core machine's own dashboard (no device id) still may.
-    assert control.active()  # the lock holds (who may still approve: test_c6_review)
+    assert control.active()  # the lock holds (who may approve: test_node_session_approvals.py)
     # The node reports the session over: notice off, grant revoked, lock lifted.
     await route_call(specs, "computer.pointer", {"action": "click"})
     assert notices[-1]["active"] is False and granted[-1] == grant.grant_id
@@ -259,7 +259,7 @@ def test_session_reports_are_read_strictly() -> None:
     ):
         with pytest.raises(ValueError):
             SessionReport.model_validate(bad)
-    # A field of a newer protocol is ignored, the known ones stay strict (review K1).
+    # A field of a newer protocol is ignored, the known ones stay strict.
     assert SessionReport.model_validate({"gen": 1, "active": False, "more": 1}).gen == 1
     assert "session" in NodeHello.model_fields
 
@@ -277,7 +277,7 @@ def test_a_same_generation_pong_leaves_a_start_in_flight() -> None:
     assert device.attempt is None and control.active()
 
 
-# ---- M3: a cancelled start -----------------------------------------------------------------------
+# ---- a cancelled start ---------------------------------------------------------------------------
 
 
 async def test_a_cancelled_start_ends_the_session_in_the_background(tmp_path: Path) -> None:
@@ -413,7 +413,7 @@ def _violations() -> tuple[NodeControl, list[tuple[str, str]]]:
     return control, seen
 
 
-# ---- H1 a: the lock comes only from a start of this core ---------------------------------------
+# ---- the lock comes only from a start of this core -----------------------------------------------
 
 
 def test_a_node_claiming_a_session_in_its_hello_is_a_violation_and_locks_nothing() -> None:
@@ -502,7 +502,7 @@ def _world_control(sessions: dict[str, Any], tools: dict[str, dict[str, str]]) -
 
 
 async def test_reports_of_a_node_without_computer_use_are_never_read_as_open() -> None:
-    """H1 c: "open" only from a node offering `computer.session_start` on this connection."""
+    """A session counts as open only from a node offering `computer.session_start` now."""
     session = SimpleNamespace(
         computer=SessionReport(gen=2, active=True, id="ab" * 16),
         peer_host="",

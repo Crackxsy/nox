@@ -82,7 +82,7 @@ def install(core: CoreLike) -> PresetsRuntime:
 
     async def call_tool(name: str, arguments: dict[str, Any]) -> Any:
         """Every step that touches the outside world goes through the permission check."""
-        # From a voice satellite (C9): another agent, so a profile's allowance for `presets`
+        # From a voice satellite: another agent, so a profile's allowance for `presets`
         # does not carry over, and the call sits in the node's (tainted) conversation.
         agent = SATELLITE_AGENT if FROM_SATELLITE.get() else _AGENT
         return await core.tool_executor.call(

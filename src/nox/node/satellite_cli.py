@@ -1,4 +1,4 @@
-"""`nox-node voice | obs | overlay` - the satellites' own terminal commands (C9).
+"""`nox-node voice | obs | overlay` - the satellites' own terminal commands.
 
 All of them act on this device only, as the logged-in user: the microphone's mute switch (only
 this device unmutes), push-to-talk from a terminal, the OBS password in this device's keyring,

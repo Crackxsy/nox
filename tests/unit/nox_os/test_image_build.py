@@ -213,7 +213,7 @@ def test_the_installer_refuses_options_that_do_not_belong(
     assert result.returncode == 2, result.stderr
 
 
-# ---- O2: hardening ----------------------------------------------------------------------------
+# ---- hardening -----------------------------------------------------------------------------------
 
 HARDENING_STAGE = PIGEN / "stage-nox" / "03-hardening"
 
@@ -243,7 +243,7 @@ def test_remote_maintenance_can_never_be_enabled_at_boot() -> None:
     assert "--stopped" in service["ExecStopPost"][0]
     run = (HARDENING_STAGE / "00-run.sh").read_text("utf-8")
     assert "nox-ssh.service" not in run.split("systemctl enable", 1)[1].split("\n", 2)[0]
-    # O1's masks stay untouched.
+    # The masks of the system sub-stage stay untouched.
     system = (PIGEN / "stage-nox" / "02-system" / "00-run.sh").read_text("utf-8")
     assert "systemctl mask ssh.service ssh.socket sshswitch.service" in system
     assert "unmask" not in run
@@ -333,7 +333,7 @@ def test_o2_is_checked_by_the_workflow() -> None:
     assert "03-hardening/files/*.py" in steps["Python tools compile"]["run"]
 
 
-# ---- O3: first boot without a screen --------------------------------------------------------
+# ---- first boot without a screen -----------------------------------------------------------------
 
 FIRSTBOOT_STAGE = PIGEN / "stage-nox" / "04-firstboot"
 

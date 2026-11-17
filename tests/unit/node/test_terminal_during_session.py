@@ -60,7 +60,7 @@ def test_widening_commands_refuse_while_a_session_runs_or_cannot_be_read(
 
 
 def test_shell_is_not_available_on_a_mac(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Review round 1: `allow shell` on macOS says so plainly, whatever else is going on."""
+    """`allow shell` on macOS says so plainly, whatever else is going on."""
     from nox.node import cli, cli_text
 
     real = cli_text.unsupported_reason

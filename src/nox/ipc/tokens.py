@@ -144,7 +144,7 @@ class AuthDecision:
     #: Which persistent credential authenticated the connection (overlay only), so revoking the
     #: credential can close the connections that used it.
     credential_id: str = ""
-    #: The paired node an overlay credential was issued to (`node:<id>`, C9), or "".
+    #: The paired node an overlay credential was issued to (`node:<id>`), or "".
     overlay_node: str = ""
 
 
@@ -168,7 +168,7 @@ class TokenStore:
         self._session_file_restricted: bool | None = None
         self._device_verifier: DeviceVerifier | None = None
         #: Whether the node an overlay credential was issued to (`node:<id>`) may still hold one
-        #: (C9, set by `nox.node.install`). Not set, or failing: no node overlay over the network.
+        #: (set by `nox.node.install`). Not set, or failing: no node overlay over the network.
         self.node_overlay_allowed: Callable[[str], bool] | None = None
 
     @property
@@ -247,8 +247,8 @@ class TokenStore:
         """Check `token` for a connection claiming `role`/`client_id`; worker tokens are used up.
 
         `via_lan` says the connection came through the network listener. Such a connection may
-        only be a paired device - or the read-only overlay of a paired node's overlay relay
-        (C9), with a credential the core issued to that node (label `node:<id>`) - and a paired
+        only be a paired device - or the read-only overlay of a paired node's overlay relay,
+        with a credential the core issued to that node (label `node:<id>`) - and a paired
         device may only come that way.
         """
         if via_lan:

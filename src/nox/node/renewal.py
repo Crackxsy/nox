@@ -1,4 +1,4 @@
-"""Renewing the node's certificate before it ends (spec C §1.2, step 4).
+"""Renewing the node's certificate before it ends.
 
 A node certificate is valid for 30 days. From day 20 (`RENEW_WINDOW_DAYS` left) the node asks its
 core over the already authenticated connection (`nox/renew`) for a new one - for the same key, so

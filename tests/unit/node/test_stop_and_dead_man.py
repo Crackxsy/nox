@@ -125,7 +125,7 @@ async def test_the_dead_man_aborts_a_side_effect_when_the_core_goes_silent(
 async def test_an_expired_certificate_ends_the_session(
     pairing: NodePairing, tls: TlsMaterial, tmp_path: Path
 ) -> None:
-    """Review N1: a session does not outlive its certificate."""
+    """A session does not outlive its certificate."""
     from nox.node.repo import NodeRepository
 
     signer = ReceiptSigner(tmp_path / "tls")
@@ -158,13 +158,13 @@ async def test_an_expired_certificate_ends_the_session(
 async def test_the_stop_reaches_five_loopback_nodes_quickly(
     listener: NodeListener, pairing: NodePairing, tls: TlsMaterial, tmp_path: Path
 ) -> None:
-    """Spec C §1.7, as far as a single test runner can show it: five nodes on loopback in one
+    """Stopping, as far as a single test runner can show it: five nodes on loopback in one
     process, a long call on each, the kill switch engaged -> every `nox/killed`. Each round is
     timed from `KillSwitchService.engage()` until the last node's `nox/killed` arrived. 20
     rounds; the p99 (and so the slowest round) stays under a second and no call completes after
     its node said killed. With separate node processes and a real sandboxed `sleep 60`:
     `tests/integration/test_node_kill_processes.py`; over Wi-Fi on a Pi and PCs it belongs to
-    the hardware checklist (spec §7)."""
+    the hardware checklist."""
     switch, all_killed, acks = kill_switch_for(listener)
     nodes = [await start_node(listener, pairing, tls, tmp_path) for _ in range(5)]
     try:
@@ -224,7 +224,7 @@ async def test_the_kill_switch_resumes_the_nodes() -> None:
     assert resumed == ["nodes"]
 
 
-# ---- found in the self-review ------------------------------------------------------------------
+# ---- a stop that arrives at an awkward moment ----------------------------------------------------
 
 
 async def test_a_node_that_connects_while_nox_is_stopped_stays_stopped(
@@ -294,7 +294,7 @@ def test_a_stop_on_the_device_holds_even_before_the_node_noticed(tmp_path: Path)
     assert gate.check("system.info", {}).reason == "stopped_on_device"
 
 
-# ---- M-a: a dead-man stop lifts when the core is back; the core sees the state ----
+# ---- a dead-man stop lifts when the core is back; the core sees the state ------------------------
 
 
 async def test_the_dead_man_stop_lifts_after_pings_and_the_core_sees_it(

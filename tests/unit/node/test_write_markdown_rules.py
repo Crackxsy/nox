@@ -37,7 +37,7 @@ async def test_ordinary_markdown_is_written(empty_fs_world: dict[str, Path]) -> 
     assert (await write_file(empty_fs_world, "notes/einkauf.md", text))["ok"] is True
 
 
-# ---- review: the Markdown scan is line based, and an append is judged on the whole file ---------
+# ---- the Markdown scan is line based, and an append is judged on the whole file ------------------
 
 
 @pytest.mark.parametrize(
@@ -203,7 +203,7 @@ async def test_an_append_refusal_says_what_in_the_file_blocks_it(
     assert "already in the file" in caught.value.detail
 
 
-# ---- review: a cap is never a skip - padding past it is refused --------------------------------
+# ---- a cap is never a skip - padding past it is refused ------------------------------------------
 
 
 @pytest.mark.parametrize(

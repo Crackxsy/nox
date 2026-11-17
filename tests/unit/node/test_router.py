@@ -97,7 +97,7 @@ def test_the_default_core_and_a_named_default() -> None:
 
 
 def test_an_offline_linked_device_is_reported_never_replaced() -> None:
-    """Review M1: the browser's own PC is offline and exactly one other device could do it - the
+    """The browser's own PC is offline and exactly one other device could do it - the
     message must not silently land on that other device."""
     entries = [
         registry_entry(LAPTOP, "Laptop", online=False, linked="d" * 32),
@@ -315,7 +315,7 @@ def test_a_remembered_answer_on_a_node_is_bound_to_it() -> None:
 
 
 def test_free_text_in_a_core_target_never_makes_a_call_device_bound() -> None:
-    """Review M4: a window title (or a purpose, an intent) that starts like a device prefix is
+    """A window title (or a purpose, an intent) that starts like a device prefix is
     just text. A grant remembered for that node never covers the core call, and the core call
     never produces a device-bound grant."""
     from nox.security.permissions import DefaultPermissionEngine
@@ -401,7 +401,7 @@ def test_the_facts_line_names_every_device() -> None:
     registry.entries = lambda: sorted(registry._entries.values(), key=lambda e: e.name)  # type: ignore[method-assign]
     registry.core_name = lambda: "Wohnzimmer-Pi"
     line = registry.prompt_line()
-    # This machine by its name, and that a tool without `device` runs here only (review M1).
+    # This machine by its name, and that a tool without `device` runs here only.
     assert line.startswith('Geräte: dieser Rechner (Wohnzimmer-Pi, device "core")')
     assert line.endswith("Werkzeuge ohne device-Feld laufen nur auf diesem Rechner.")
     assert "Arbeits-PC · bbbb (online)" in line and "Laptop · aaaa (offline seit 21.10." in line
@@ -458,7 +458,7 @@ def test_node_results_taint_the_conversation() -> None:
     assert result_taints("system.info") and result_taints("notify.show")
 
 
-# ---- names typed on the device (orchestrator review) ----------------------------------------
+# ---- names typed on the device -------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

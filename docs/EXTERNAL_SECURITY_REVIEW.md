@@ -49,7 +49,7 @@ The review should cover, at minimum:
    role-restricted resume path, and the PIN-on-security-path-resume rule. Specifically worth
    attacking: can a plugin, worker, or AI-originated request resume from a kill? (It should be
    rejected outright.)
-5. **Plugin sandboxing boundary** (P11, `docs/PLUGIN_AUTHORING.md`) — manifest validation, the
+5. **Plugin sandboxing boundary** (`docs/PLUGIN_AUTHORING.md`) — manifest validation, the
    `<id>.` tool namespace, the `nox/<id>/...` secret namespace, and the two-layer egress check
    (core authorization before spawn, `PluginEgressGuard` inside the worker). Specifically worth
    attacking: can a plugin reach an endpoint outside its declared `network.egress`, or read a

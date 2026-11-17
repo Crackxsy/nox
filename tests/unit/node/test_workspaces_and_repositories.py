@@ -82,7 +82,7 @@ def test_allowing_a_folder_inside_a_repository_or_vault_is_refused(tmp_path: Pat
     node_cli.allow(home, "files", True, say=lambda _t: None, folder=str(plain), **yes)  # type: ignore[arg-type]
 
 
-# ---- review: renamed vault config folders, the home folder, more link schemes -------------------
+# ---- renamed vault config folders, the home folder, more link schemes ----------------------------
 
 
 @pytest.mark.parametrize(

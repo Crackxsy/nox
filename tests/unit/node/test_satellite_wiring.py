@@ -15,7 +15,7 @@ from nox.node import protocol as p
 from tests.unit.fakes import FakeBus, wait_until
 from tests.unit.node.support_voice import PI, fake_session, heard, running_satellite, voice_hub
 
-# ---- presets from a voice satellite, through the real wiring (R1e, R1f) ---------------------
+# ---- presets from a voice satellite, through the real wiring ---------------------
 
 
 def _preset_core(executor: Any) -> Any:
@@ -77,9 +77,9 @@ async def test_a_satellite_preset_runs_its_steps_as_the_satellite_agent_through_
     node = f"voice:node:{PI}#c0ffee"
     try:
         answer = await gate.handle_from_satellite("kuschelabend", "de", conversation=node)
-        # R1e: the step goes out as `presets.satellite`, in the node's (tainted) conversation.
+        # The step goes out as `presets.satellite`, in the node's (tainted) conversation.
         assert calls == [(SATELLITE_AGENT, "home.scene", node)]
-        # R1f: the mode step is refused by the real `set_mode`, and that is reported.
+        # The mode step is refused by the real `set_mode`, and that is reported.
         assert switched == [] and answer is not None and "nicht geklappt" in answer
         # The same preset said by the owner: the ordinary agent, and the mode does switch.
         await gate.handle("kuschelabend", "de")
@@ -89,7 +89,7 @@ async def test_a_satellite_preset_runs_its_steps_as_the_satellite_agent_through_
         await runtime.stop()
 
 
-# ---- what the core sends a node to say (R3b) and the name in the model's context (L1) --------
+# ---- what the core sends a node to say and the name in the model's context --------
 
 
 async def test_a_dropped_sentence_in_the_middle_is_skipped_not_sent_empty() -> None:
@@ -150,7 +150,7 @@ async def test_the_hub_cleans_the_nodes_name_itself() -> None:
     await hub.close()
 
 
-# ---- the node's own voice coming back (N8b) -------------------------------------------------
+# ---- the node's own voice coming back -------------------------------------------------
 
 
 async def test_a_segment_begun_during_speech_is_dropped_even_after_the_echo_tail(

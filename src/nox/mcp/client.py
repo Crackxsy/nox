@@ -231,7 +231,7 @@ PeerHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class WebSocketTransport:
-    """JSON-RPC over one WebSocket, one message per text frame (`nox node`, spec C §1.3).
+    """JSON-RPC over one WebSocket, one message per text frame (`nox node`).
 
     The connection carries traffic in both directions: answers to the client's requests (and the
     `notifications/tools/list_changed` notification) go to `McpClient`; every other request or

@@ -10,7 +10,7 @@ What it serves, and nothing else:
   * `POST /api/node/pair` - a new `nox node` redeems a one-time code for a client certificate
     (`nox.node`). Not a browser route: a request with an `Origin` header is refused.
   * `/pet/` - the built pet page (static files, no credential in them), for a paired node's
-    overlay relay (`nox.node.overlay`, C9).
+    overlay relay (`nox.node.overlay`).
 
 **Unclaimed Nox-OS** (`ClaimSurface`, `nox.noxos.claim`): a Raspberry Pi image that has no owner
 yet serves nothing but its claim - `/claim/` (a small page of its own), `GET`/`POST /api/claim`,

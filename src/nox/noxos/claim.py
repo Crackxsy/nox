@@ -1,4 +1,4 @@
-"""Claiming a Nox-OS device: the moment an unclaimed Raspberry Pi gets its owner (step O3).
+"""Claiming a Nox-OS device: the moment an unclaimed Raspberry Pi gets its owner.
 
 A freshly flashed Nox-OS has nobody it trusts. Until it is claimed, its network listener serves
 the claim and nothing else (`nox.lan.app.ClaimSurface`): the dashboard, pairing, nodes and the
@@ -33,7 +33,7 @@ the device is unclaimed - also when the mark cannot be read (fail closed). Once 
 is remembered for the life of the process; it never goes back.
 
 Requests, for the UI roles: `noxos.claim.status` (read-only; whether there is an owner and the
-setup window's time left) - O4's onboarding starts from it.
+setup window's time left) - the onboarding wizard starts from it.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ __all__ = [
 ]
 
 CLAIMED_MARKER = Path("/var/lib/nox-os-claim/claimed")
-#: Where the claim page sends the new owner: O4's onboarding wizard starts there.
+#: Where the claim page sends the new owner: the onboarding wizard starts there.
 ONBOARDING_URL = "/dashboard/#onboarding"
 #: The dashboard's devices page, where a second device is paired.
 PAIR_URL = "/dashboard/#/devices/devices"

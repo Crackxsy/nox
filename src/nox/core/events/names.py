@@ -126,7 +126,7 @@ class E:
     # read-only pass over frames the plugin's capture pipeline already produces. Nothing
     # here reads game memory or sends input.
     RL_VISION_DETECTIONS = "rl.vision.detections"  # low-rate, confidence-gated (not audited)
-    RL_VISION_DISABLED = "rl.vision.disabled"  # budget guard or manual auto/forced disable (P6)
+    RL_VISION_DISABLED = "rl.vision.disabled"  # budget guard or manual auto/forced disable
     RL_VISION_ANALYSIS = "rl.vision.analysis"  # post-match rough rotation-position analysis
 
     # The clip pipeline. A deliberately small event surface: the

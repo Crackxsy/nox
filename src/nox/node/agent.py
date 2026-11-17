@@ -10,7 +10,7 @@ Connection lost: reconnect with backoff, 1 s doubling to 60 s, and never act on 
 `nox/revoked`: the node deletes its key and certificate and stops ("Von Nox entfernt").
 The node pings every second; the core's pings are answered.
 
-Stopping (spec C §1.7):
+Stopping (see docs/ARCHITECTURE-NODES.md, "Stopping"):
 * `nox/kill` from the core: every running call is cancelled at once, the node answers
   `nox/killed` with their ids and refuses everything until the core's `nox/resume`.
 * Dead man: while a call with a side effect runs and nothing came from the core for
@@ -63,7 +63,7 @@ PING_INTERVAL_S = 1.0
 HELLO_TIMEOUT_S = 5.0
 #: Largest result sent in one frame; the protocol caps frames at 1 MiB.
 MAX_RESULT_CHARS = 512 * 1024
-#: No word from the core for this long while a side effect runs: abort it (spec C §1.7).
+#: No word from the core for this long while a side effect runs: abort it.
 DEAD_MAN_S = 3.0
 DEAD_MAN_TICK_S = 0.25
 LOCAL_STOP_POLL_S = 0.2
@@ -82,7 +82,7 @@ Connector = Callable[..., Awaitable[ClientConnection]]
 #: Longest question the dialog shows; anything longer is refused, never cut.
 MAX_CONFIRM_CHARS = 1200
 #: A "yes" faster than this after the question appeared is a reflex or a stray key, not a
-#: decision: it counts as no (review M-c).
+#: decision: it counts as no.
 MIN_DECISION_S = 1.5
 #: Consecutive pings from a core that is not stopped after which a dead-man stop lifts.
 DEAD_MAN_RESET_PINGS = 3
@@ -164,7 +164,7 @@ def all_local_addresses() -> list[str]:
 ADDRESSES_TTL_S = 30.0
 
 
-#: What each tool does, in one plain sentence for the person at the device (review M3). A tool
+#: What each tool does, in one plain sentence for the person at the device. A tool
 #: that is not listed is named instead (`DIALOG_FALLBACK`).
 DIALOG_SENTENCES: dict[str, dict[str, str]] = {
     "de": {
@@ -354,7 +354,7 @@ class NodeAgent:
         if identity is None or not self._home.paired:
             return "not_paired"
         if not self._home.pinned_ca_ok(identity):
-            # The stored authority is not the pinned one: never accept another (spec C §1.8).
+            # The stored authority is not the pinned one: never accept another.
             log.error("node.pin_mismatch")
             self._status("pin_mismatch", identity)
             return "pin_mismatch"
@@ -427,7 +427,7 @@ class NodeAgent:
                 ),
                 "confirmer": bool(self._confirmer.available),
                 "addresses": self._addresses_now(),
-                # The satellite methods this node understands from a core (C9).
+                # The satellite methods this node understands from a core.
                 "features": sorted(p.FEATURES),
                 **self._session_field(),
             },
@@ -779,7 +779,7 @@ class NodeAgent:
 
     async def _cancel_input_calls(self, ws: ClientConnection, *, own: str) -> None:
         """Before a question appears, every other running call with a side effect is stopped -
-        none may act on the dialog (review M-c)."""
+        none may act on the dialog."""
         doomed = {
             key: entry
             for key, entry in self._calls.items()
@@ -880,7 +880,7 @@ class NodeAgent:
             await asyncio.sleep(RENEW_CHECK_S)
 
     async def renew_certificate(self, ws: ClientConnection, identity: NodeIdentity) -> bool:
-        """Ask for a new certificate once the current one is in its last days (spec C Â§1.2).
+        """Ask for a new certificate once the current one is in its last days.
         True when a new one is stored; it is used from the next connection on."""
         if not due(self._home.cert_file):
             return False
@@ -1022,7 +1022,7 @@ class NodeAgent:
         blob = result.pop(BLOB_KEY, None) if isinstance(result, dict) else None
         if isinstance(blob, bytes):
             # A capture: its bytes go to the core that asked, in chunks, and are dropped here
-            # with this call - the node keeps no copy (spec C §1.4, C6).
+            # with this call - the node keeps no copy.
             sent = await self._send_blob(ws, meta.call_id, blob)
             del blob
             if not sent:
@@ -1106,13 +1106,13 @@ class NodeAgent:
     async def _confirm_here(
         self, ws: ClientConnection, tool: NodeTool, args: BaseModel, meta: p.NoxCallMeta
     ) -> str | None:
-        """High risk: the person at this device decides (D1). None when they allowed it."""
+        """High risk: the person at this device decides. None when they allowed it."""
         if not self._confirmer.available:
             # `trust_core_for_high` trusts a confirmation a PERSON gave on the core. A call the
             # core left to this device, or allowed by a rule or a remembered answer, was
-            # confirmed by nobody for this call: refuse it (review M-b). And only a device
+            # confirmed by nobody for this call: refuse it. And only a device
             # WITHOUT a screen trusts at all: one with a screen but no working dialog program
-            # refuses (D1: high risk is confirmed on the device that has one).
+            # refuses (high risk is confirmed on the device that has a screen).
             screen = getattr(self._confirmer, "screen", None)
             headless = not (has_screen() if screen is None else bool(screen))
             trusted = self._gate.manifest.trust_core_for_high and headless

@@ -98,7 +98,7 @@ class NodeCliError(RuntimeError):
 
 def session_refusal(home: NodeHome) -> str | None:
     """Why a command that widens what Nox may do here refuses now: a computer-use session runs
-    on this device (or whether one runs cannot be read), or None (review H2)."""
+    on this device (or whether one runs cannot be read), or None."""
     from nox.core.config.hands import ComputerUseConfig  # noqa: PLC0415
 
     state = session_marker_state(home.path)
@@ -123,9 +123,9 @@ class NodeRuntime:
     gate: NodeGate
     audit: SqliteAuditLog
     manifest_key: ConfirmationKey | None = None
-    #: The C6 tools' device side (captures, browser, desktop, computer use, media).
+    #: The device side of the world tools (captures, browser, desktop, computer use, media).
     world: World | None = None
-    #: The C9 satellites (voice, OBS, the overlay relay).
+    #: The satellites (voice, OBS, the overlay relay).
     satellites: NodeSatellites | None = None
 
 
@@ -212,7 +212,7 @@ def build(
         **satellites.tools(),
     }
     gate = NodeGate(tools, manifest, audit, protected=home.path)
-    gate.input_lock = world.lock.reason  # the game lock, before anything else (spec C §1.6)
+    gate.input_lock = world.lock.reason  # the game lock, before anything else
     holder.append(gate)
     keystore = NodeKeyStore(home.key_file, secrets)
     gate.restore_budget(audit)  # a restart does not refill the hour's budget
@@ -227,7 +227,7 @@ def media_notice() -> str:
 
 
 async def media_notice_once(runtime: NodeRuntime) -> bool:
-    """Music control is on by default (spec C §1.4): the first time a node runs with it on - a
+    """Music control is on by default: the first time a node runs with it on - a
     new pairing or an update that brought it -, this device says so once. True when shown."""
     marker = runtime.home.path / MEDIA_NOTICE_MARKER
     world = runtime.world
@@ -754,7 +754,7 @@ def games(
 
 
 #: Not a group, but confirmed the same way: on a device without a screen, let high risk run when
-#: a person confirmed it on the core (spec C §1.6 step 5, a documented residual risk).
+#: a person confirmed it on the core (see docs/SECURITY.md, "Accepted limits (nodes)").
 TRUST_SETTING = "trust_core_for_high"
 
 
@@ -766,7 +766,7 @@ def computer_warning() -> str:
 
 
 def computer_supported() -> bool:
-    """Computer use on a node exists on Windows only (spec C §1.4)."""
+    """Computer use on a node exists on Windows only."""
     return supported_here("computer")
 
 
@@ -824,7 +824,8 @@ def allow(
         if not confirm(prompt):
             raise NodeCliError(t("allow_refused", lang))
         if group == "computer" and not confirm(computer_warning()):
-            # Asked twice, the second time with what it means (owner decision 2026-10-18).
+            # Asked twice, the second time with what it means: mouse and keyboard are too much to
+            # hand over on one reflexive "yes".
             raise NodeCliError(t("allow_refused", lang))
     key = manifest_key(home.path, secrets)
     manifest = last_confirmed(audit, key) or NodeManifest(groups=dict(MOST_RESTRICTIVE.groups))

@@ -23,7 +23,7 @@ log = get_logger(__name__)
 
 __all__ = ["FROM_SATELLITE", "SATELLITE_AGENT", "VoicePresetGate", "compose_answer"]
 
-#: Set while a preset runs because a node's voice satellite said its phrase (C9): its steps are
+#: Set while a preset runs because a node's voice satellite said its phrase: its steps are
 #: called as this agent - not `presets`, which the shipped profiles allow - in the node's
 #: conversation, so the normal rules and that conversation's taint apply; mode steps refuse.
 FROM_SATELLITE: ContextVar[bool] = ContextVar("nox_preset_from_satellite", default=False)

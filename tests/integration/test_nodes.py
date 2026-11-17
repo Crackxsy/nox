@@ -306,7 +306,7 @@ async def test_a_node_enrolls_runs_and_serves_the_core(core: NoxCore, tmp_path: 
 async def test_the_core_routes_tool_calls_to_the_right_device(
     core: NoxCore, tmp_path: Path
 ) -> None:
-    """C3 end to end: `device` resolves to the paired laptop, the permission target and the audit
+    """End to end: `device` resolves to the paired laptop, the permission target and the audit
     name it, an unknown device is an honest error, and an offline one is never substituted."""
     from nox.node.agent import NodeAgent
     from nox.node.enroll import enroll
@@ -432,7 +432,7 @@ async def test_unpairing_a_node_revokes_its_remembered_grants(
 async def test_removing_a_node_revokes_its_grants_even_with_network_access_off(
     tmp_path: Path,
 ) -> None:
-    """Review N7: the grant clean-up does not depend on the listener running."""
+    """The grant clean-up does not depend on the listener running."""
     from datetime import UTC, datetime, timedelta
 
     from nox.remote.repo import RemoteRepository

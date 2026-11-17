@@ -94,7 +94,7 @@ def test_at_most_sixteen_reported_addresses_count() -> None:
 async def test_the_node_says_where_it_is_in_its_hello_and_every_pong(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """P2: `NodeHello.addresses` and `nox/pong` `addresses`, reused for a while."""
+    """`NodeHello.addresses` and `nox/pong` `addresses`, reused for a while."""
     from nox.node import agent as agent_module
     from nox.node.protocol import NodeHello, Ping
 
@@ -158,7 +158,7 @@ def test_real_interfaces_come_before_virtual_ones(monkeypatch: pytest.MonkeyPatc
     assert found.index("192.168.9.9") > found.index("172.20.0.1")
 
 
-# ---- commit review: the same-machine list is complete, the binding never shrinks ---------------
+# ---- the same-machine list is complete, the binding never shrinks --------------------------------
 
 
 def test_this_machine_is_recognised_whatever_its_number_of_adapters(
@@ -278,7 +278,7 @@ async def test_while_saturated_approvals_and_messages_wait_the_rest_follows_the_
         reply = await send_from(core, "chat.send", client, {}, "192.0.2.99")
         assert reply.kind is Kind.ERROR and reply.payload["message"] == REFUSE_SATURATED
         assert reply.payload["details"]["sub_reason"] == "node_session_saturated"
-        # Saturation binds approvals and messages only (review H1 d): the rest follows the PIN.
+        # Saturation binds approvals and messages only: the rest follows the PIN.
         approve = await send_from(core, "plans.approve", client, {"pin": "4711"}, "192.0.2.99")
         assert approve.kind is Kind.RESPONSE
         assert (await send_from(core, "security.kill", client, {}, "")).kind is Kind.RESPONSE
@@ -291,7 +291,7 @@ async def test_while_saturated_approvals_and_messages_wait_the_rest_follows_the_
     assert (await handlers.permission_reply(local, deny))["ok"] is True
 
 
-# ---- the addresses a node reports, end to end (L5/L6) ---------------------------------------
+# ---- the addresses a node reports, end to end ---------------------------------------
 
 
 async def test_the_listener_takes_the_addresses_the_agent_sends_in_hello_and_pongs(
@@ -322,7 +322,7 @@ async def test_the_listener_takes_the_addresses_the_agent_sends_in_hello_and_pon
         await node.task
 
 
-# ---- this machine's own addresses (B4) ------------------------------------------------------
+# ---- this machine's own addresses ------------------------------------------------------
 
 
 def test_unreadable_own_addresses_count_as_this_machine_during_a_session(

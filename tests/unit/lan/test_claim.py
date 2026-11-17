@@ -1,4 +1,4 @@
-"""Claiming a Nox-OS device (`nox.noxos.claim`, step O3): while unclaimed the listener serves the
+"""Claiming a Nox-OS device (`nox.noxos.claim`): while unclaimed the listener serves the
 claim and nothing else, the claim needs the code and the open setup window (the root helper's
 verdict), pairs the claiming browser as the owner's device, sets the PIN the setup portal took,
 and a refused claim leaves no device behind."""

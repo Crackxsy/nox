@@ -1,0 +1,5 @@
+# False positives of scripts/check_planning_ids.py, one per line:
+#   path pattern :: text the matching line contains :: reason
+# An entry that matches nothing any more fails the check.
+src/nox/ai/local_models.py :: default (Q4) download :: Q4 is a model quantisation level (4-bit), not a planning id
+tests/unit/evals/test_nodes_os_tasks.py :: "os-update-status": :: benchmark data: the roadmap step a not-yet-possible task waits for, mirrored from evals/

@@ -173,13 +173,13 @@ async def test_a_broken_dialog_is_a_no(
         await asyncio.wait_for(node.task, 5)
 
 
-# ---- M-c: nothing types while the person is asked; a reflex "yes" is a no ----
+# ---- nothing types while the person is asked; a reflex "yes" is a no -----------------------------
 
 
 def test_nothing_with_a_side_effect_runs_while_a_dialog_is_open(tmp_path: Path) -> None:
     gate, signer = gate_with_every_group(tmp_path)
     gate.dialog_open = lambda: True
-    gate.input_lock = lambda: None  # no game here (the game lock is tested in test_c6)
+    gate.input_lock = lambda: None  # no game here (the game lock: test_game_lock.py)
     args = {"text": "y"}
     for name in ("desktop.type_text", "system.low", "notify.show"):
         meta = call_meta(signer, name, args)
@@ -206,7 +206,7 @@ async def test_a_yes_faster_than_reading_is_a_no(
 
 
 def test_trust_core_for_high_is_set_with_nox_node_allow(tmp_path: Path) -> None:
-    """N3: reachable through the confirmed path, not only by editing the file."""
+    """Reachable through the confirmed path, not only by editing the file."""
     from nox.node import cli as node_cli
 
     home = NodeHome(tmp_path / "h")
@@ -226,7 +226,6 @@ def test_trust_core_for_high_is_set_with_nox_node_allow(tmp_path: Path) -> None:
 
 
 def test_the_dialog_says_when_foreign_content_was_involved() -> None:
-    """N6."""
     plain = confirmation_text("package.install", {"name": "VLC"}, lang="de")
     warned = confirmation_text("package.install", {"name": "VLC"}, tainted=True, lang="de")
     assert plain is not None and warned is not None
@@ -250,7 +249,7 @@ async def test_running_input_calls_stop_before_a_question_appears(
         "desktop.type_text", "desktop", "low", "t", TargetArgs, typing, path_safe=True
     )
     node.agent._gate._manifest.groups["desktop"] = True
-    node.agent._gate.input_lock = lambda: None  # no game here (the game lock: test_c6)
+    node.agent._gate.input_lock = lambda: None  # no game here (the game lock: test_game_lock.py)
     try:
         session = await session_of(listener, node.node_id)
         typing_call = asyncio.create_task(
@@ -288,7 +287,7 @@ async def test_every_running_side_effect_stops_before_a_question(
         await asyncio.wait_for(node.task, 5)
 
 
-# ---- M3: the device's dialog ---------------------------------------------------------------------
+# ---- the device's dialog -------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

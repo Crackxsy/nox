@@ -59,7 +59,7 @@ ROUTABLE: frozenset[str] = frozenset(
         "file.move",
         "file.delete",
         "shell.run",
-        # C6: the eyes, the browser, the desktop, mouse and keyboard, and music.
+        # The eyes, the browser, the desktop, mouse and keyboard, and music.
         "screen.capture",
         "camera.snapshot",
         "browser.open",
@@ -80,7 +80,7 @@ ROUTABLE: frozenset[str] = frozenset(
         "computer.keys",
         "computer.session_end",
         "media.control",
-        # C9: the satellites - speaking on a node, and OBS where it runs.
+        # The satellites - speaking on a node, and OBS where it runs.
         "voice.say",
         "obs.request",
     }
@@ -95,7 +95,7 @@ MAX_TOOLS = 64
 #: What a node's result may put in front of the model, at most.
 MAX_RESULT_CHARS = 16_000
 RISKS = ("read", "low", "medium", "high", "critical")
-#: An incompatible (outdated) node offers only this (spec C §1.8).
+#: An incompatible (outdated) node offers only this.
 OUTDATED_TOOLS: frozenset[str] = frozenset({"system.info"})
 #: Folders a node may report for `files` (`_nox.folders` of its tool list), and their length.
 MAX_FOLDERS = 32
@@ -267,7 +267,7 @@ class NodeRegistry:
         #: Retries of a first listing that failed (`on_connected`).
         self._retries: set[asyncio.Future[None]] = set()
         #: Told after the owner's narrowing of a group is stored: (node, group, narrowed) - also
-        #: for a node that is offline (C9: its overlay credential goes with `obs`).
+        #: for a node that is offline (its overlay credential goes with `obs`).
         self.on_narrowed: list[Callable[[str, str, bool], Awaitable[None]]] = []
         #: Whether a high-risk call may be left to this node's own dialog right now (set by the
         #: computer-use lock: while Nox controls a PC, only that PC's, `NodeControl.may_delegate`).
@@ -602,8 +602,7 @@ class NodeRegistry:
 
     def prompt_line(self) -> str:
         """One line for the turn context: which devices exist and whether they are reachable -
-        this machine by its name first, and that a tool without a `device` field runs here only
-        (review M1)."""
+        this machine by its name first, and that a tool without a `device` field runs here only."""
         entries = self.entries()
         if not entries:
             return ""

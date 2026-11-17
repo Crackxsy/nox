@@ -11,7 +11,7 @@ import pytest
 from nox.core.events.names import E
 from tests.unit.node.support_voice import running_satellite
 
-# ---- lookalike letters (B3) ------------------------------------------------------------------
+# ---- lookalike letters ------------------------------------------------------------------
 # A speech engine reads letters by their sound: nothing but Latin letters is ever said on a
 # node's speaker, and the wake-word and kill-phrase checks run on exactly what is left.
 

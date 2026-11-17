@@ -94,7 +94,7 @@ def test_ssh_only_while_remote_maintenance_is_on_and_only_from_private_networks(
 
 
 def test_an_unclaimed_device_opens_the_dashboard_port_only() -> None:
-    """O3: before the claim Nox serves only its claim page on the dashboard port; the node port
+    """Before the claim Nox serves only its claim page on the dashboard port; the node port
     stays closed whatever the configuration says."""
     chain = input_chain(rules(lan_enabled=True))
     assert "ip saddr @private4 tcp dport 47843 ct state new accept" in chain
@@ -160,7 +160,7 @@ def test_the_setup_window_counts_only_while_open(tmp_path: Path) -> None:
     assert fw.setup_window_open(mode, ident, uptime=100, owner=me + 1) is False  # not root's
     _window(tmp_path, {"v": 1, "boot_id": "another boot", "until": 1800})
     assert fw.setup_window_open(mode, ident, uptime=100, owner=me) is False
-    mode.write_text("", "utf-8")  # O2's empty flag is no window any more
+    mode.write_text("", "utf-8")  # an empty flag is no window any more
     assert fw.setup_window_open(mode, ident, uptime=100, owner=me) is False
     assert fw.setup_window_open(tmp_path / "missing", ident, uptime=100, owner=me) is False
 

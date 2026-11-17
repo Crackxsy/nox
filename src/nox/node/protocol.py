@@ -59,7 +59,7 @@ __all__ = [
 ]
 
 #: The protocol this release speaks, and the range of node protocols the core accepts. A node
-#: outside the range is told "update needed" and offered nothing (spec C §1.8).
+#: outside the range is told "update needed" and offered nothing.
 NODE_PROTOCOL = 1
 NODE_PROTOCOL_RANGE: tuple[int, int] = (1, 1)
 NODE_PORT = 47844
@@ -69,7 +69,7 @@ MAX_FRAME_BYTES = 1024 * 1024
 #: One tool result, all its blob chunks together.
 MAX_RESULT_BYTES = 8 * 1024 * 1024
 BLOB_CHUNK_BYTES = 512 * 1024
-#: A node asks for a new certificate once its current one has this many days left (spec C §1.2:
+#: A node asks for a new certificate once its current one has this many days left (that is,
 #: from day 20 of 30). The core refuses earlier requests (one more day of slack for clocks).
 RENEW_WINDOW_DAYS = 10
 
@@ -95,7 +95,7 @@ M_BLOB = "nox/blob"
 #: node -> core: a new certificate for the same key, over the already authenticated channel.
 M_RENEW = "nox/renew"
 
-# ---- satellites (C9): only between a core and a node that agreed on them (`features`) ----------
+# ---- satellites: only between a core and a node that agreed on them (`features`) ---------------
 
 #: node -> core: what the voice satellite heard, as text (never audio). Answered at once with
 #: `{accepted, reason}`; the answer to the question follows as `nox/voice/say`.
@@ -284,7 +284,7 @@ class NodeHello(_Peer):
     arch: str = Field(max_length=16, pattern=r"^[A-Za-z0-9_]{1,16}$")
     manifest_hash: _Hex64
     #: Whether the person at this device can be asked (a screen and a working dialog). Only then
-    #: does the core leave a high-risk confirmation to the device (D1).
+    #: does the core leave a high-risk confirmation to the device.
     confirmer: bool = False
     clientInfo: dict[_Short, _Short] = Field(default_factory=dict, max_length=4)  # noqa: N815
     #: Computer use on this device right now (`SessionReport`); None from a node without it.
@@ -311,7 +311,7 @@ class NoxCallMeta(_Strict):
     deadline: float = Field(ge=0)
     #: Who allowed it on the core (`policy`, `user`, `core`), as signed in the receipt.
     decided_by: str = Field(default="", max_length=32)
-    #: High risk: the core left the decision to this device (owner decision D1).
+    #: High risk: the core left the decision to this device.
     confirm_on_device: bool = False
     #: The conversation held content Nox did not write (the device's dialog says so).
     tainted: bool = False
@@ -375,7 +375,7 @@ class RenewRequest(_Peer):
     csr: str = Field(min_length=64, max_length=4096)
 
 
-# ---- satellites (C9) ---------------------------------------------------------------------------
+# ---- satellites: the parameters of their methods -----------------------------------------------
 
 #: A turn the node started: 32 hex digits it chose itself.
 _TurnId = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{32}$")]

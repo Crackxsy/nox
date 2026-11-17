@@ -86,7 +86,7 @@ async def test_the_core_refuses_bad_structured_text_before_asking_anyone() -> No
     assert answer["error"] == "content_refused" and registry.calls == []
 
 
-# ---- review: linear, bounded, off the event loop ------------------------------------------------
+# ---- linear, bounded, off the event loop ---------------------------------------------------------
 
 
 ADVERSARIAL = {
@@ -195,7 +195,7 @@ def test_the_node_gate_is_safe_to_run_in_a_thread(tmp_path: Path) -> None:
     assert allowed.count(True) == 5  # the budget holds under concurrency
 
 
-# ---- final review: an abandoned check changes nothing; no skip in the vault scan ----------------
+# ---- an abandoned check changes nothing ----------------------------------------------------------
 
 
 async def test_a_slow_text_check_never_holds_up_the_stop(

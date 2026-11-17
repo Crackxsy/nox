@@ -114,7 +114,7 @@ async def test_a_slow_remote_check_never_blocks_and_counts_as_unknown(
 async def test_changes_go_through_the_same_rule_on_the_real_dispatch_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """M-a: not only "allow" - adding an MCP server, approving a plan, any change."""
+    """Not only "allow" - adding an MCP server, approving a plan, any change."""
     from pydantic import BaseModel
 
     import nox.node.install as install_module
@@ -195,7 +195,7 @@ async def test_the_reply_handler_follows_the_rule_and_deny_always_counts(
 
 
 async def test_the_real_wiring_registers_status_release_and_the_hello_reset() -> None:
-    """N31: `wire_guards`, `_register_control_requests` and the connection hook are wired."""
+    """`wire_guards`, `_register_control_requests` and the connection hook are wired."""
     from nox.node.install import connection_hook
 
     core, control, _guard, _audit = wired_core(PinGate())
@@ -256,14 +256,14 @@ def test_a_remote_session_is_recognised_on_windows() -> None:
     from nox.node.console import SM_REMOTESESSION, console_is_remote
 
     assert SM_REMOTESESSION == 0x1000
-    assert console_is_remote(platform="win32", windll=_WinDll(remote=1)) is True  # N7
+    assert console_is_remote(platform="win32", windll=_WinDll(remote=1)) is True  # RDP
     assert console_is_remote(platform="win32", windll=_WinDll()) is False  # at the console
     assert console_is_remote(platform="win32", windll=_WinDll(session=2)) is True  # not it
-    # N8: no session attached to the console: unknown - never "local".
+    # No session attached to the console: unknown - never "local".
     assert console_is_remote(platform="win32", windll=_WinDll(console=0xFFFFFFFF)) is None
 
 
-# ---- H1 d-g: getting out of a lock ---------------------------------------------------------------
+# ---- getting out of a lock -----------------------------------------------------------------------
 
 
 def _saturated() -> NodeControl:
@@ -379,7 +379,8 @@ async def test_a_refused_request_carries_a_stable_sub_reason(
 
 
 async def test_the_input_lock_counts_unmuting_as_a_change(monkeypatch: pytest.MonkeyPatch) -> None:
-    """H2 (architecture): one rule for "calm" with the node lock."""
+    """One rule for "calm": what the input lock lets through is what the node lock lets
+    through - and unmuting the microphone is not calm."""
     from nox.ipc.dispatch import RequestContext, RequestRegistry
     from nox.ipc.protocol import Kind
 
@@ -396,7 +397,7 @@ async def test_the_input_lock_counts_unmuting_as_a_change(monkeypatch: pytest.Mo
         assert (await registry.dispatch(ctx, envelope)).kind is kind
 
 
-# ---- M1 / M2: which device -----------------------------------------------------------------------
+# ---- which device --------------------------------------------------------------------------------
 
 
 def test_while_a_session_runs_only_its_own_node_may_ask_for_high_risk() -> None:

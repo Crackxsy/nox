@@ -1,4 +1,4 @@
--- 0006_clips: Clip Pipeline tables (Spec v0.6 §7, EPIC-15). `clips.file_path` stays NOT NULL by
+-- 0006_clips: Clip pipeline tables. `clips.file_path` stays NOT NULL by
 -- design: an unclipped highlight during a recording-only session (no replay-buffer file yet) is a
 -- `clip_markers` row instead, never a `clips` row with no file. `parent_clip_id` links a trim to
 -- its source clip; trimming always writes a new file, never edits the parent's.
@@ -24,7 +24,7 @@ CREATE INDEX IF NOT EXISTS idx_clips_session ON clips(session_id);
 CREATE INDEX IF NOT EXISTS idx_clips_checksum ON clips(checksum);
 CREATE INDEX IF NOT EXISTS idx_clips_parent ON clips(parent_clip_id);
 
--- Recording-only marker path (Spec v0.6 §4.3): a DaVinci-style timestamp marker, promotable to a
+-- Recording-only marker path: a DaVinci-style timestamp marker, promotable to a
 -- real `clips` row later once the recording file exists on disk.
 CREATE TABLE IF NOT EXISTS clip_markers (
     id                TEXT    PRIMARY KEY,

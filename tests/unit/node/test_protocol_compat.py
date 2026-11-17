@@ -13,7 +13,7 @@ import pytest
 
 from nox.node.protocol import NodeHello, Ping
 
-# ---- K1: protocol extensibility ------------------------------------------------------------------
+# ---- protocol extensibility ----------------------------------------------------------------------
 
 
 def test_messages_of_the_next_protocol_with_new_fields_are_accepted() -> None:

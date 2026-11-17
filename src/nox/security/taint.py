@@ -64,7 +64,7 @@ __all__ = [
 ]
 
 #: Conversations whose every message comes from a source Nox cannot vouch for, tainted from their
-#: first turn and never cleared (C9): what a node's voice satellite heard - a far-field microphone
+#: first turn and never cleared: what a node's voice satellite heard - a far-field microphone
 #: in a room, not necessarily the owner. As if `mark(conversation, None)` had been called: nothing
 #: in them is user-directed, a remembered grant above LOW asks again, and every call that sends
 #: data off the machine asks.

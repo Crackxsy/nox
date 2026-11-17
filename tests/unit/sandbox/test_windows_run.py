@@ -522,7 +522,7 @@ def test_the_acl_reader_reports_explicit_aces_by_sid(tmp_path) -> None:  # noqa:
 
 
 async def test_a_run_cannot_read_the_work_folder_of_another_workload(tmp_path) -> None:  # noqa: ANN001
-    # Re-review N6: every run used one container SID, so a shell command could read the work
+    # Every run used one container SID, so a shell command could read the work
     # folder of a running MCP server or skill. Each workload class has its own container now.
     sandbox = _appcontainer()
     backend = sandbox._backend  # type: ignore[attr-defined]
@@ -648,7 +648,7 @@ def test_an_icacls_change_that_hangs_fails_instead_of_blocking(
     tmp_path,  # noqa: ANN001
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """C10: `icacls` had no timeout - a propagation that never ended blocked the run (and a CI
+    """`icacls` had no timeout - a propagation that never ended blocked the run (and a CI
     job until pytest-timeout ended the whole session)."""
     import subprocess
 

@@ -1,4 +1,4 @@
-"""C5 on the real sandboxes: a node's `shell.run` cannot see the node's own folder, and a stopped
+"""On the real sandboxes: a node's `shell.run` cannot see the node's own folder, and a stopped
 call takes its sandboxed process tree with it.
 
 Linux: bwrap (CI sets `NOX_REQUIRE_BWRAP=1`, so a missing bwrap fails there instead of skipping).

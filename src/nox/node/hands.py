@@ -1,5 +1,5 @@
 """The node's hands: `file.list/read/write/move/delete` and `shell.run` - the core's tool names,
-run on this device under this device's rules (spec C §1.4, C5).
+run on this device under this device's rules.
 
 They run only after `NodeGate` allowed the call (prohibitions, stop state, capability group,
 risk ceiling, arguments, the core's receipt, budget, and the confirmation on this device for high
@@ -27,7 +27,7 @@ risk). On top of that, each one holds its own boundary at the moment it acts:
   dead-man rule) kills the sandboxed process tree. On macOS, which has no such sandbox at all,
   `shell.run` is not even offered (`hand_tools`), so no status claims it.
 * **`package.*`** is not offered on nodes yet: a package manager needs rights the sandbox does
-  not give, so it could not work there (owner decision D6: a narrow privileged helper later).
+  not give, so it could not work there (it would take a narrow privileged helper, not built yet).
 
 A refusal is raised as `NodeRefusal(reason)`; the agent answers it like a gate refusal and writes
 it to the node's audit trail.

@@ -117,7 +117,6 @@ async def test_a_changed_receipt_key_is_never_accepted(
 
 
 def test_a_receipt_for_another_node_or_core_is_invalid(tmp_path: Path) -> None:
-    """N2."""
     gate, signer = gate_with_every_group(tmp_path)
     args = {"text": "y"}
     other_node = NoxCallMeta.model_validate(

@@ -187,7 +187,7 @@ async def route_call(specs: dict[str, Any], name: str, args: dict[str, Any]) -> 
     return result
 
 
-# ---- H2/H3/M-a/M-b: approvals and changes while the lock holds ----------------------------------
+# ---- approvals and changes while the lock holds --------------------------------------------------
 
 OTHER_PHONE = "e" * 32
 
@@ -306,7 +306,7 @@ def conversation_registry(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, NodeCon
     return core, control, ran
 
 
-# ---- review: unmute coercion, remote check for talking, a browser on the controlled PC ----------
+# ---- a request as the dispatcher sees it ---------------------------------------------------------
 
 
 async def send_from(core: Any, name: str, client: str, payload: dict[str, Any], peer: str) -> Any:
@@ -322,7 +322,7 @@ async def send_from(core: Any, name: str, client: str, payload: dict[str, Any], 
 OTHER_NODE = "c" * 32
 
 
-# ---- H2: the node's terminal during a session ----------------------------------------------------
+# ---- a node folder without a pairing -------------------------------------------------------------
 
 
 def plain_node_home(tmp_path: Path) -> Any:

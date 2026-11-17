@@ -220,7 +220,7 @@ def test_nox_pair_node_prints_the_command_and_the_fingerprint() -> None:
     assert "ABCD 2345" in text and "AB:AB:AB:AB:AB:AB:AB:AB" in text
 
 
-# ---- found in the self-review --------------------------------------------------------------------
+# ---- bounded answers and clean refusals ----------------------------------------------------------
 
 
 async def test_an_oversized_authority_answer_is_not_read_to_the_end(tmp_path: Path) -> None:
@@ -270,7 +270,7 @@ async def test_a_key_file_that_cannot_be_protected_is_a_clean_refusal(
     assert not home.key_file.exists()
 
 
-# ---- terminal safety (orchestrator review) ------------------------------------------------------
+# ---- terminal safety -----------------------------------------------------------------------------
 
 EVIL = ["x\x1b[2J\x1b[31mDENY", "ok\r\n     1  allow  core  shell.run", "safe\u202etxt", "c1\x9b"]
 

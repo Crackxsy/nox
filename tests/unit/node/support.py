@@ -471,7 +471,7 @@ def call_meta(signer: ReceiptSigner, name: str, args: Any, **kw: Any) -> NoxCall
     )
 
 
-# ---- M5: what this device allows is decided by a person at this device ---------------------------
+# ---- a node folder -------------------------------------------------------------------------------
 
 
 def node_home(tmp_path: Path, *, paired: bool = True) -> Any:
@@ -507,7 +507,7 @@ def registry_entry(
     )
 
 
-# ---- the routed spec ------------------------------------------------------------------------
+# ---- fakes for the registry and a node's tool listing --------------------------------------------
 
 
 class FakeRegistry:

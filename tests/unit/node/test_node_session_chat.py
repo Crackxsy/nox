@@ -83,7 +83,7 @@ def test_the_calm_rule_for_one_call() -> None:
 
 
 async def test_a_paired_device_without_a_pin_check_is_refused() -> None:
-    """S6: no device PIN guard on this core - refused, never let through."""
+    """No device PIN guard on this core - refused, never let through."""
     control = NodeControl(None, lambda _n: None, linked=lambda _d: None)
     control.answered(LAPTOP, session_report(2, True))
     refusal = await session_refusal(
@@ -99,7 +99,7 @@ async def test_a_paired_device_without_a_pin_check_is_refused() -> None:
 
 
 async def test_the_installed_link_lookup_finds_the_controlled_browser() -> None:
-    """W3: the `linked()` that `_world_specs` installs reads the registry's links."""
+    """The `linked()` that `_world_specs` installs reads the registry's links."""
     from nox.ipc.dispatch import RequestContext, RequestRegistry
     from nox.node.install import _world_specs
     from nox.tools.registry import ToolRegistry
@@ -250,18 +250,18 @@ async def test_a_paired_devices_message_during_a_session_counts_as_untrusted() -
     assert len(tainted) == 1 and len(turns) == 3
 
 
-# ---- external review of #167: wiring, the same machine, addresses in every pong -----------------
+# ---- the wiring, and the same machine ------------------------------------------------------------
 
 
 def test_the_conversation_requests_are_exactly_these() -> None:
-    """C3: adding anything here (say `config.set`) must be a deliberate, reviewed change."""
+    """Adding anything here (say `config.set`) must be a deliberate, reviewed change."""
     from nox.ipc.dispatch import CONVERSATION_UI_REQUESTS
 
     assert frozenset({"chat.send", "voice.ptt"}) == CONVERSATION_UI_REQUESTS
 
 
 def test_the_installed_chat_rule_marks_paired_devices_and_the_controlled_machine() -> None:
-    """T2/T3: `wire_guards` installs `node_chat_untrusted` with these answers."""
+    """`wire_guards` installs `node_chat_untrusted` with these answers."""
     from nox.ipc.dispatch import RequestRegistry
     from nox.node.install import wire_guards
 

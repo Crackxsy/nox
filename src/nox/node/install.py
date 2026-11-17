@@ -110,7 +110,7 @@ class NodeRuntime:
     enabled: bool
     listener: NodeListener | None = None
     registry: NodeRegistry | None = None
-    #: The satellites' side (C9): voice turns, overlay credentials, the microphone gate.
+    #: The satellites' side: voice turns, overlay credentials, the microphone gate.
     satellites: SatelliteHub | None = None
     error: str = ""
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
@@ -205,7 +205,7 @@ def install(core: Any) -> NodeRuntime:
     satellites = install_satellites(core, runtime, registry, listener, pairing)
 
     async def stop_nodes() -> None:
-        # The stop reaches every node over the sockets that are already open (spec C §1.7).
+        # The stop reaches every node over the sockets that are already open.
         await listener.broadcast_kill("kill switch")
 
     async def resume_nodes() -> None:
@@ -218,7 +218,7 @@ def install(core: Any) -> NodeRuntime:
     controls.append(control)
 
     async def lift_lock(device_id: str, _reason: str) -> None:
-        # Removed: whatever lock, address binding or saturation it held ends now (review H1).
+        # Removed: whatever lock, address binding or saturation it held ends now.
         control.forget(device_id)
 
     pairing.on_revoked(lift_lock)
@@ -438,7 +438,7 @@ async def _watch_sessions(
 
 
 def attach_control(satellites: SatelliteHub, control: NodeControl) -> None:
-    """Computer use and the satellites (C9 review H4, with #167's lock): the node Nox controls
+    """Computer use and the satellites under the computer-use lock: the node Nox controls
     is refused (`controlled_here`) - and every node while a binding is saturated, when nobody
     can be told apart from the controlled PC any more; while any session runs, voice turns from
     other nodes are marked as holding unreadable untrusted content, like paired-device chat."""
@@ -483,7 +483,7 @@ class TtlCache:
 def install_satellites(
     core: Any, runtime: NodeRuntime, registry: NodeRegistry, listener: Any, pairing: NodePairing
 ) -> SatelliteHub:
-    """The core's side of the satellites (C9, `nox.node.satellites`): voice turns from nodes,
+    """The core's side of the satellites (`nox.node.satellites`): voice turns from nodes,
     their speech levels for a pet, overlay credentials for their overlay relays, the microphone
     gate (pushed on connection, every second, and at once on a privacy change), and the panic
     button for OBS on nodes."""
@@ -662,7 +662,7 @@ def _install_routes(
         ("file.list", "What is in one folder", Risk.READ, False, PathArgs, _field("path")),
         ("file.read", "The text of one file", Risk.READ, False, PathArgs, _field("path")),
         ("file.write", "Write text to a file", Risk.MEDIUM, True, WriteArgs, _write_target),
-        # On a device both are high: asked there every time, never remembered (D1).
+        # On a device both are high: asked there every time, never remembered.
         ("file.move", "Move or rename a file", Risk.HIGH, True, MoveArgs, _move_target),
         ("file.delete", "Move a file to the trash", Risk.HIGH, True, PathArgs, _field("path")),
         ("shell.run", "Run a command sandboxed", Risk.HIGH, True, ShellArgs, _shell_target),
@@ -721,7 +721,7 @@ def _install_routes(
         except Exception:  # noqa: BLE001 - cannot tell: tainted
             return True
 
-    specs.append(voice_say_spec(registry, defaults, tainted=tainted_now))  # C9: speak on a node
+    specs.append(voice_say_spec(registry, defaults, tainted=tainted_now))  # speak on a node
     for name in ("package.install", "package.remove"):
         mine = own(name)
         if mine is not None:
@@ -733,7 +733,7 @@ def _install_routes(
     tools = core.tool_registry
     wrapped: set[str] = set()
     if hasattr(tools, "wrap"):
-        # C9: `obs.request` - the plugin's tool while OBS runs here, routed to the node where OBS
+        # `obs.request` - the plugin's tool while OBS runs here, routed to the node where OBS
         # runs otherwise. The plugin comes and goes; the route stays (`ToolRegistry.wrap`).
         tools.wrap("obs.request", obs_route(registry, defaults))
         wrapped.add("obs.request")
@@ -765,7 +765,7 @@ def _install_routes(
 def _world_specs(
     core: Any, registry: NodeRegistry, defaults: Callable[[], Any], listeners: list[Any]
 ) -> tuple[list[ToolSpec], NodeControl]:
-    """C6: captures, browser, desktop, computer use and media, routable to nodes; and the
+    """Captures, browser, desktop, computer use and media, routable to nodes; and the
     record of computer-use sessions on nodes (dashboard notice, grant, "allow" lock)."""
     from nox.security._events import publish_nowait  # noqa: PLC0415
 
@@ -794,7 +794,7 @@ def _world_specs(
         if listener is None:
             return []
         # "Open" is read only from a node that offers computer use on this very connection;
-        # "over" from any node (it only ever lifts, review H1 c).
+        # "over" from any node (it only ever lifts).
         return [
             (d, s.computer)
             for d, s in listener.sessions.items()
@@ -851,7 +851,7 @@ def _world_specs(
         stop_hotkey=desktop.computer_use.stop_hotkey if desktop is not None else "",
         on_violation=violation,
     )
-    # While a session runs, high risk is left to no other node's dialog (review M2).
+    # While a session runs, high risk is left to no other node's dialog.
     registry.may_delegate = control.may_delegate
     wire_guards(core, control)
     # A stop never lifts the lock by itself: the node ends its session on `nox/kill` and says

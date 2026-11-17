@@ -21,13 +21,13 @@ from nox.node.manifest import NodeManifest
 from nox.node.pairing import NodePairing
 from tests.unit.node.support import Confirmer, call, session_of, start_node
 
-# ---- M-d: the Linux dialog is zenity only, default "No", no markup ----
+# ---- the Linux dialog is zenity only, default "No", no markup ------------------------------------
 
 
 async def test_zenity_first_kdialog_on_kde_and_always_no_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Review panel round 1 (M2): kdialog is the KDE fallback - its `--warningyesno` has "No" as
+    """Kdialog is the KDE fallback - its `--warningyesno` has "No" as
     the default button; zenity, where it is there, is still preferred."""
     from nox.node import confirm as confirm_module
 
@@ -191,7 +191,7 @@ def test_the_user_manager_is_asked_only_for_session_variables(
 async def test_a_device_with_a_screen_never_trusts_the_core_for_high_risk(
     listener: NodeListener, pairing: NodePairing, tls: TlsMaterial, tmp_path: Path
 ) -> None:
-    """D1: `trust_core_for_high` is for a device without a screen. A desktop whose dialog
+    """`trust_core_for_high` is for a device without a screen. A desktop whose dialog
     program is missing refuses, whatever the manifest says."""
     confirmer: Any = Confirmer(available=False)
     confirmer.screen = True

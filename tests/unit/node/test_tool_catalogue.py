@@ -28,7 +28,7 @@ def test_every_c6_tool_has_a_group_and_is_off_by_default_except_music() -> None:
     assert {t.group for t in tools.values()} == set(SENSE_GROUPS)
     defaults = NodeManifest()
     for group in SENSE_GROUPS:
-        # Spec C §1.4: music is on by default (low risk); everything else only on the device.
+        # Music is on by default (low risk); everything else only on the device.
         assert defaults.groups[group] is (group == "media"), group
     gate = NodeGate(tools, defaults, None)
     assert {t.name for t in gate.offered()} == {"media.control"}
@@ -120,7 +120,7 @@ def test_building_the_tools_touches_no_window_api() -> None:
 
 
 def test_a_tool_whose_library_or_os_is_missing_is_not_offered() -> None:
-    """Review panel round 1 (H1): the node never lists what cannot work here, so the core's
+    """The node never lists what cannot work here, so the core's
     status and the dashboard never claim it."""
     from nox.node.world import withheld
 

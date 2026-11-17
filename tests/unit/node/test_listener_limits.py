@@ -34,7 +34,7 @@ async def _listener(
     return server
 
 
-# ---- M2: half-open and slow connections are bounded --------------------------------------------
+# ---- half-open and slow connections are bounded --------------------------------------------------
 
 
 async def test_a_stalled_tls_handshake_is_dropped(
@@ -65,7 +65,7 @@ async def test_one_node_cannot_lock_out_another(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Review M2: a node (or anyone behind the same address) filling the waiting slots only
+    """A node (or anyone behind the same address) filling the waiting slots only
     displaces its own older attempts; another node still gets in."""
     monkeypatch.setattr(listener_module, "MAX_PREAUTH_TOTAL", 3)
     server = await _listener(pairing, nodes, tls)
@@ -105,7 +105,7 @@ async def test_slow_hellos_are_capped_in_total(
         await server.stop()
 
 
-# ---- M3: a node repeating security.kill cannot flood the audit trail ---------------------------
+# ---- a node repeating security.kill cannot flood the audit trail ---------------------------------
 
 
 async def test_repeats_while_stopped_change_nothing_and_are_audited_once(
@@ -189,7 +189,7 @@ async def test_a_kill_after_a_resume_always_takes_effect(
         await server.stop()
 
 
-# ---- N8: unconsumed blobs do not linger ---------------------------------------------------------
+# ---- unconsumed blobs do not linger --------------------------------------------------------------
 
 
 async def test_an_unfinished_blob_is_dropped_after_its_time(

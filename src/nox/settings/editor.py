@@ -60,7 +60,7 @@ def _error_for(path: str, exc: ValidationError) -> str:
 
 def preset_paths(values: Mapping[str, Any] | Sequence[str]) -> list[str]:
     """The submitted `presets.*` paths: presets start registered programs and, marked
-    `from_satellites`, can be started at a voice satellite (C9) - every write to them needs the
+    `from_satellites`, can be started at a voice satellite - every write to them needs the
     PIN when one is set, whatever it changes (owner decision)."""
     return [path for path in values if path == "presets" or path.startswith("presets.")]
 

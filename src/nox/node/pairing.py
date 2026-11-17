@@ -248,7 +248,7 @@ class NodePairing:
         if not ok:
             return False
         self._nodes.revoke_certs(device_id, reason=reason, when=self._clock())
-        self._nodes.clear_opt_in(device_id, when=self._clock())  # C9: the second key goes too
+        self._nodes.clear_opt_in(device_id, when=self._clock())  # the core's opt-in goes too
         for callback in self._on_revoked:
             try:
                 await callback(device_id, reason)

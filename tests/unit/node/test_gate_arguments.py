@@ -36,7 +36,7 @@ from tests.unit.node.support import (
     start_node,
 )
 
-# ---- H1: nothing the core sends is resolved, expanded or opened ---------------------------------
+# ---- nothing the core sends is resolved, expanded or opened --------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -52,7 +52,7 @@ from tests.unit.node.support import (
 def test_core_strings_never_reach_the_file_system(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str
 ) -> None:
-    """Review H1: `Path(word).resolve()` on `\\\\attacker\\x` made Windows open an SMB
+    """`Path(word).resolve()` on `\\\\attacker\\x` made Windows open an SMB
     connection (NetNTLM hash leak) and blocked the event loop. The gate compares text only."""
     gate, signer = gate_with_every_group(tmp_path)
     touched: list[str] = []
@@ -71,7 +71,7 @@ def test_core_strings_never_reach_the_file_system(
     args = {"path": text}
     decision = gate.check("system.low", args, meta=call_meta(signer, "system.low", args))
     assert decision.reason == "path_alias_refused", decision.reason  # refused on the text alone
-    # Free text (a notice, a note) is not a path (C5 review N4): allowed - and never touched.
+    # Free text (a notice, a note) is not a path: allowed - and never touched.
     words = {"text": text}
     assert gate.check("notify.show", words, meta=call_meta(signer, "notify.show", words)).allowed
     assert not any("attacker" in t or "geheim" in t for t in touched), touched
@@ -93,7 +93,6 @@ def test_remote_and_device_paths_count_as_inside_without_being_touched(tmp_path:
 
 
 def test_invalid_unicode_is_refused_and_nfc_is_one_text(tmp_path: Path) -> None:
-    """N4."""
     gate, signer = gate_with_every_group(tmp_path)
     composed = unicodedata.normalize("NFC", "Wäsche")
     decomposed = unicodedata.normalize("NFD", "Wäsche")
@@ -110,7 +109,7 @@ def test_invalid_unicode_is_refused_and_nfc_is_one_text(tmp_path: Path) -> None:
     assert confirmation_text("system.high", broken) is None
 
 
-# ---- follow-ups ----------------------------------------------------------------------------------
+# ---- path aliases, and tools that never said how they treat paths --------------------------------
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,4 @@
-"""The overlay relay (C9): the pet as an OBS browser source on a PC that is not the core.
+"""The overlay relay: the pet as an OBS browser source on a PC that is not the core.
 
 `nox node` serves, on this device's loopback only (`http://127.0.0.1:47845`), the pet page in
 overlay mode and one WebSocket, both relayed to the core's network listener over TLS against the

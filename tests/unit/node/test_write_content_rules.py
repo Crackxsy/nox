@@ -25,7 +25,7 @@ from tests.unit.node.support_hands import (
     read_refusal,
 )
 
-# ---- review round 1: what a write may never do ---------------------------------------------------
+# ---- what a write may never do -------------------------------------------------------------------
 
 REFUSED_WRITES = ("execution_trigger", "hidden_refused", "extension_refused", "config_refused")
 
@@ -98,7 +98,7 @@ async def test_a_file_with_a_second_name_is_not_written(fs_world: dict[str, Path
     assert (fs_world["root"] / "notes" / "einkauf.txt").read_bytes() == b"Haferflocken\n"
 
 
-# ---- review round 2: writes are an allowlist of data files ------------------------------------
+# ---- writes are an allowlist of data files ----------------------------------------------------
 
 
 @pytest.mark.parametrize(

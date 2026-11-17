@@ -257,7 +257,7 @@ def permission_device(request: dict[str, Any]) -> tuple[str, str]:
 
 
 def voice_satellite_line(request: dict[str, Any], language: str = "de") -> str:
-    """The dialog's line for a question that came from a node's voice satellite (C9), or ""."""
+    """The dialog's line for a question that came from a node's voice satellite, or ""."""
     name = request.get("voice_satellite")
     if not isinstance(name, str) or not name.strip():
         return ""
