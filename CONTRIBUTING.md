@@ -1,16 +1,25 @@
 # Contributing to Nox
 
-Thanks for taking a look. Nox is a Windows-only, local-first desktop companion; the parts of it
-that touch a microphone, the screen, a game window or the network have hard rules that a pull
-request cannot relax. Everything else is open to discussion.
+Thanks for taking a look. Nox is a local-first companion. Its core runs on Windows (with the
+desktop pet) and on Linux as a home server (a Raspberry Pi, Debian, Ubuntu); a node - Nox's hands
+on another computer of the household - runs on Windows, Linux and macOS. The parts that touch a
+microphone, the screen, a game window or the network have hard rules that a pull request cannot
+relax. Everything else is open to discussion.
+
+Where to start reading: the README's architecture section for the whole, and
+[`docs/ARCHITECTURE-NODES.md`](docs/ARCHITECTURE-NODES.md) for the node code - one call followed
+from the model to a file on another PC, with the file and function of every step.
 
 Before a larger change, open an issue or a discussion first — the roadmap is opinionated and it is
 better to agree on the shape of a feature before you build it.
 
 ## Development setup
 
-Requirements: Windows 11, **Python 3.13 from python.org** (not the Microsoft Store build — Store
-Python virtualises `%APPDATA%`, which breaks Nox's runtime token files), Node.js 20 or newer, Git.
+Requirements on Windows: Windows 11, **Python 3.13 from python.org** (not the Microsoft Store
+build — Store Python virtualises `%APPDATA%`, which breaks Nox's runtime token files), Node.js 20
+or newer, Git. On Linux and macOS: Python 3.13, `uv`, Git - the same commands with
+`.venv/bin/python`; the desktop shell (`--extra shell`) is Windows-only, and CI runs the node
+tests on all three systems.
 
 ```powershell
 git clone https://github.com/Crackxsy/nox.git
@@ -36,6 +45,7 @@ Run what CI runs:
 .venv\Scripts\python.exe -m ruff format --check src tests
 .venv\Scripts\python.exe -m mypy src/nox
 .venv\Scripts\python.exe scripts/gen_ts_types.py --check
+.venv\Scripts\python.exe scripts/check_planning_ids.py
 .venv\Scripts\python.exe -m pytest tests/unit -m "not hardware and not network and not spike" -p no:cacheprovider
 .venv\Scripts\python.exe -m pytest tests/integration -p no:cacheprovider
 cd ui\pet && npm test && cd ..\dashboard && npm test
@@ -65,6 +75,15 @@ because those tend to be numerous and shallow:
 - **A new security test must demonstrably kill a mutant.** Change the guarded line (drop an element,
   flip a comparison, change a default) and show that the test fails; mention the mutant in the pull
   request.
+- **A test lives in a file named after the behaviour it protects** (`test_gate_order.py`,
+  `test_stop_and_dead_man.py`), never after the delivery step or the review that produced it. Which
+  review found a gap belongs in the commit message. Shared helpers go into a `support.py` or
+  `conftest.py` next to the tests; a test module does not import from another test module. To wait
+  for something, use `tests.unit.fakes.wait_until(check, what="...")`, so a failure says what never
+  happened.
+- **No references a reader cannot resolve.** Comments, docstrings and docs say the rule in plain
+  words or link a document in this repository - never the number of a planning section, a decision
+  or a review finding. `scripts/check_planning_ids.py` (run in CI) fails on them.
 - A bare `pytest` must stay hermetic: anything that needs a real service, device, network or toolchain
   is marked `e2e`, `network`, `hardware` or `spike`.
 

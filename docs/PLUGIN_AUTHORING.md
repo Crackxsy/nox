@@ -3,7 +3,7 @@
 Audience: third-party plugin developers. A Nox plugin is **a manifest plus a worker process** — the
 manifest is validated before anything is ever spawned, and everything the worker can do at runtime
 is scoped to exactly what that manifest declared. Nothing a plugin does can widen what the core
-already validated (`nox.plugins.manifest`, `nox.plugins.api`; ADR-012/ADR-013).
+already validated (`nox.plugins.manifest`, `nox.plugins.api`).
 
 For a worked example, read `plugins/obs/manifest.yaml` and `plugins/obs/src/` (or the smaller
 `plugins/echo/` for the minimal skeleton) alongside this guide.
