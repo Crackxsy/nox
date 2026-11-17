@@ -1,6 +1,6 @@
 # Nodes: Nox' Hände an deinen anderen Computern
 
-*English: [NODES.md](NODES.md)*
+*English: [NODES.md](NODES.md)* · Für Entwickler, eine Karte durch den Code (englisch): [ARCHITECTURE-NODES.md](ARCHITECTURE-NODES.md)
 
 > Befehle: `nox-node ...` ist dasselbe wie `nox node ...` und funktioniert unter Windows in der Eingabeaufforderung und unter Linux/macOS im Terminal.
 

@@ -1,6 +1,6 @@
 # Nodes: Nox's hands on your other computers
 
-*Deutsch: [NODES.de.md](NODES.de.md)*
+*Deutsch: [NODES.de.md](NODES.de.md)* · For developers, a map through the code: [ARCHITECTURE-NODES.md](ARCHITECTURE-NODES.md)
 
 > Commands: `nox-node ...` is the same as `nox node ...` and works in the Command Prompt on Windows and in a terminal on Linux/macOS.
 
