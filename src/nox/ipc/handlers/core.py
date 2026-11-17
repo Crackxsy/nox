@@ -342,9 +342,11 @@ class CoreHandlers:
             }
         node_guard = getattr(self._core, "node_approval_guard", None)
         if p.decision is Decision.ALLOW and node_guard is not None:
-            # The same while Nox controls a paired PC (spec C §1.5): no paired device approves,
-            # and this machine only with the PIN and not remotely
-            # (`nox.node.world_routes.approval_refusal`). A "deny" always counts.
+            # The same while Nox controls a paired PC: a "yes" must come from someone who is
+            # not at that PC. No paired device approves, and this machine only with the PIN and
+            # not from a remote session (`nox.node.world_routes.session_refusal`; the decision
+            # tree is in docs/ARCHITECTURE-NODES.md, "Approvals during a node session").
+            # A "deny" always counts.
             refusal = await node_guard(ctx, p.pin)
             if refusal is not None:
                 # `sub_reason`: the stable code the dashboard words itself (`Refusal.code`).

@@ -1,23 +1,43 @@
 """`NodeGate`: the node's own check before any handler runs - whatever the core decided.
 
-A compromised core can send well-formed calls with valid receipts; the node refuses on its own
-authority (spec C §1.6). In order:
+A compromised core can send well-formed calls with valid receipts, so the node refuses on its own
+authority. The checks run in this order (`CHECK_ORDER`, pinned by
+`tests/unit/node/test_gate_order.py`); the first one that refuses gives the refusal the core
+hears and the audit trail records:
 
-1. **Hard prohibitions** - the core's immutable list, by name and as a glob; and the **game
-   lock**: mouse, keys, typing and window changes (`LOCKED_TOOLS`) are refused while a game or
-   anti-cheat software runs on this device, a game is in front or owns the screen, or that
-   cannot be told (`input_lock`, installed by `nox.node.world`; without one: refused).
-2. **Stopped** - stopped on this device (only this device resumes), stopped by the core (until
-   `nox/resume`), or after the dead-man rule fired (until the core is back and not stopped).
-3. **Known tool, capability** - the tool's group enabled in this device's confirmed manifest and
-   not narrowed by the core for this connection.
-4. **Risk ceiling** - `max_risk` of the manifest (default high; critical never); the core may not
-   claim a lower risk than the node's own for the tool.
-5. **Arguments** - the tool's strict model; no argument may name the node's own folder.
-6. **Receipt** - every call with a side effect carries the core's signature over exactly this
-   call (`nox.node.receipts`); missing, altered, expired or replayed -> refused.
-7. **Budget** - side effects and high-risk calls per hour, counted here, independent of the core.
-8. High risk then still needs the **confirmation on this device** (`nox.node.agent`, D1).
+1. `hard_prohibition` - the core's immutable list, by name and as a glob.
+2. `game_lock` - mouse, keys, typing and window changes (`LOCKED_TOOLS`) are refused while a game
+   or anti-cheat software runs on this device, a game is in front or owns the screen, or that
+   cannot be told. The refusal is the lock's own reason (`input_lock`, installed by
+   `nox.node.world`; without one: `game_lock_unavailable`). It answers before the stop and the
+   receipt, so a call that could never run says so whatever else is wrong with it.
+3. `stopped` - stopped on this device (only this device resumes), stopped by the core (until
+   `nox/resume`), or after the dead-man rule fired (until the core is back and not stopped). The
+   refusal is the stop's own reason.
+4. `unknown_tool` - not a tool of this node (a side-effect tool that never declared how it
+   treats paths is not registered at all).
+5. `capability_disabled` - the tool's group is not enabled in this device's confirmed manifest,
+   or the core narrowed it for this connection.
+6. `risk_ceiling` - the tool's own risk is above `max_risk` of the manifest (default high;
+   critical never).
+7. `dialog_open` - while the person at the device is being asked, nothing else with a side effect
+   runs: typing, clicking, a shell, a browser or a voice could all act on the dialog.
+8. `receipt` - every call with a side effect carries the core's signature over exactly this call
+   (`nox.node.receipts`). Missing, for a lower risk than the tool's own, altered, expired or
+   replayed -> refused (`receipt_missing`, `risk_understated`, `receipt_invalid`, ...). It comes
+   before the arguments: nothing the core sent is looked at before it is known to be the core's.
+9. `invalid_arguments` - the tool's strict model.
+10. `node_home_protected` - no argument may name the node's own folder (compared as text).
+11. `path_alias_refused` - no path argument in a spelling only the file system could resolve.
+12. `precheck` - the tool's own text check, unless it already ran off the event loop; the refusal
+    is the tool's own reason.
+13. `risk_ceiling` - again, now for this call's own risk (a write that replaces a file is high).
+14. `risk_understated` - the core must have judged this call at least as risky as the node does.
+15. `budget` - side effects and high-risk calls per hour, counted here, independent of the core.
+
+A call that passes may still need the **confirmation on this device**: high risk is decided by
+the person at the device, not by the core (`GateDecision.needs_local_confirmation`, asked by
+`nox.node.agent`).
 
 Every decision - allowed or refused - goes into the node's own hash-chained audit trail
 (`nox node log`), which the core cannot read or erase.
@@ -27,7 +47,7 @@ every path through `nox.node.safe_fs` - inside a folder this device allowed, dec
 file at open time (on the handle), never the node's folder or the keyring's; `shell.run` and
 `package.*` run only inside this device's `make_sandbox()`, which cannot see the node's folder,
 and are refused (`sandbox_unavailable`) where there is none. A refusal there is audited like one
-of the gate's.
+of the gate's. The whole path of a call is drawn in docs/ARCHITECTURE-NODES.md.
 """
 
 from __future__ import annotations
@@ -52,15 +72,47 @@ from nox.node.tools import NodeTool
 from nox.security.model import AuditLog
 from nox.security.prohibitions import matching_hard_prohibition
 
-__all__ = ["CEILING", "GateDecision", "INPUT_TOOLS", "LOCKED_TOOLS", "NodeGate", "RISK_ORDER"]
+__all__ = [
+    "CEILING",
+    "CHECK_ORDER",
+    "GateDecision",
+    "INPUT_TOOLS",
+    "LOCKED_TOOLS",
+    "NodeGate",
+    "RISK_ORDER",
+]
 
 RISK_ORDER = ("read", "low", "medium", "high", "critical")
 #: What never runs on a node, whatever any manifest says.
 CEILING = "high"
 #: The budget's window.
 BUDGET_WINDOW_S = 3600.0
-#: Tools that send input on this device: refused while a game runs or is in front (spec C §1.6
-#: step 1). Ending a session sends nothing, so `computer.session_end` always runs.
+#: The checks of `NodeGate._decide` in the order they run, named by the refusal they give. Four
+#: of them pass on a reason from elsewhere and are named by their source: `game_lock` (the input
+#: lock's reason), `stopped` (the stop state's), `receipt` (the receipt check's) and `precheck`
+#: (the tool's own text check). `risk_ceiling` runs twice: for the tool, then for this call.
+#: The module docstring lists the same order with the reasons;
+#: `tests/unit/node/test_gate_order.py` holds this tuple against both the docstring and the code.
+CHECK_ORDER: tuple[str, ...] = (
+    "hard_prohibition",
+    "game_lock",
+    "stopped",
+    "unknown_tool",
+    "capability_disabled",
+    "risk_ceiling",
+    "dialog_open",
+    "receipt",
+    "invalid_arguments",
+    "node_home_protected",
+    "path_alias_refused",
+    "precheck",
+    "risk_ceiling",
+    "risk_understated",
+    "budget",
+)
+#: Tools that send input on this device: refused while a game runs or is in front - the first
+#: thing the gate checks after the hard prohibitions. Ending a session sends nothing, so
+#: `computer.session_end` always runs.
 INPUT_TOOLS: frozenset[str] = frozenset(
     {"computer.session_start", "computer.pointer", "computer.keys", "desktop.type_text"}
 )
@@ -80,8 +132,7 @@ LOCKED_TOOLS: frozenset[str] = INPUT_TOOLS | frozenset(
 @dataclass(frozen=True)
 class GateDecision:
     allowed: bool
-    #: Machine token: hard_prohibition | unknown_tool | capability_disabled | risk_ceiling |
-    #: invalid_arguments | "" when allowed.
+    #: Machine token of the check that refused (see `CHECK_ORDER`), or "" when allowed.
     reason: str = ""
     tool: NodeTool | None = None
     args: BaseModel | None = None
@@ -314,7 +365,7 @@ class NodeGate:
             return GateDecision(False, "risk_ceiling", tool)
         if self.dialog_open() and tool.risk != "read":
             # While the person is being asked, nothing else with a side effect runs - typing,
-            # clicking, a shell, a browser or a voice could all act on the dialog (review M-c).
+            # clicking, a shell, a browser or a voice could all act on the dialog.
             return GateDecision(False, "dialog_open", tool)
         if tool.risk != "read":
             # The core's signature first: nothing the core sent is looked at before it is known
@@ -398,7 +449,7 @@ class NodeGate:
 
     def restore_budget(self, audit: Any) -> None:
         """After a restart the hour's spending is read back from the node's own audit trail, so a
-        restart does not refill the budget (review N1)."""
+        restart does not refill the budget."""
         conn = getattr(audit, "_conn", None)
         if conn is None:
             return

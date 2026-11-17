@@ -4,12 +4,63 @@ here against `nox.node.gate.CHECK_ORDER` and the module's documentation."""
 
 from __future__ import annotations
 
+import ast
+import inspect
+import re
+import textwrap
 from pathlib import Path
 
-from nox.node.gate import INPUT_TOOLS, LOCKED_TOOLS
+from nox.node import gate as gate_module
+from nox.node.gate import CHECK_ORDER, INPUT_TOOLS, LOCKED_TOOLS, NodeGate
 from tests.unit.node.support_sessions import device_world, world_gate
 
-# ---- M1: the names and the order of the gate's checks --------------------------------------------
+# ---- the order itself: one list, held against the code and the documentation ---------------------
+
+#: The checks whose refusal is a reason passed on from elsewhere: the variable `_decide` returns
+#: -> the name `CHECK_ORDER` gives that check.
+PASSED_ON = {"locked": "game_lock", "stopped": "stopped", "refusal": "receipt", "early": "precheck"}
+
+
+def _refusals_in_code_order() -> list[str]:
+    """Every `GateDecision(False, <reason>, ...)` of `NodeGate._decide`, in source order."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(NodeGate._decide)))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "GateDecision"
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value is False
+    ]
+    reasons: list[str] = []
+    for call in sorted(calls, key=lambda node: (node.lineno, node.col_offset)):
+        reason = call.args[1]
+        if isinstance(reason, ast.Constant):
+            name = str(reason.value)
+        else:
+            assert isinstance(reason, ast.Name), ast.dump(reason)
+            name = PASSED_ON[reason.id]
+        if not reasons or reasons[-1] != name:  # two ways to fail one check are one step
+            reasons.append(name)
+    return reasons
+
+
+def test_the_code_runs_the_checks_in_the_documented_order() -> None:
+    assert _refusals_in_code_order() == list(CHECK_ORDER)
+
+
+def test_the_module_documentation_lists_the_same_order() -> None:
+    documented = re.findall(r"^\s*\d+\. `([a-z_]+)`", gate_module.__doc__ or "", re.MULTILINE)
+    assert documented == list(CHECK_ORDER)
+
+
+def test_the_documented_steps_are_numbered_without_a_gap() -> None:
+    numbers = re.findall(r"^\s*(\d+)\. `[a-z_]+`", gate_module.__doc__ or "", re.MULTILINE)
+    assert [int(n) for n in numbers] == list(range(1, len(CHECK_ORDER) + 1))
+
+
+# ---- which tools the game lock covers, and that it answers first --------------------------------
 
 
 def test_the_locked_tools_are_exactly_these() -> None:
