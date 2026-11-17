@@ -200,6 +200,7 @@ def test_pair_a_pc_switch_on_commands_and_answer_while_nox_controls_the_mouse(  
     add.get_by_role("button", name=w["copy"]).click()
     copied = page.evaluate("() => window.__copied")
     assert copied.startswith("nox-node://pair?") and '"' not in copied  # the link alone
+    journey.no_overflow_in("dialog[open]", "add sheet")
     journey.shot("02-code")
     journey.axe("code")
     journey.no_sideways_scroll()
@@ -216,6 +217,7 @@ def test_pair_a_pc_switch_on_commands_and_answer_while_nox_controls_the_mouse(  
     sheet.get_by_role("button", name=w["how"]).click()
     expect(sheet.get_by_text(w["cmd"])).to_be_visible()
     expect(sheet.get_by_text("nox-node allow shell", exact=True)).to_be_visible()
+    journey.no_overflow_in("dialog[open]", "node sheet")
     journey.shot("04-befehl")
     journey.axe("befehl")
     journey.no_sideways_scroll()

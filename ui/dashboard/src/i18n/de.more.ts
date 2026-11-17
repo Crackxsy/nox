@@ -323,7 +323,7 @@ export const deMore = {
   remote_title: 'Über Telegram gekoppelt',
   remote_tile_title: 'Telefon über Telegram',
   remote_hint:
-    'Ein gekoppeltes Telefon darf Status lesen, den Not-Aus auslösen und den Privatsphäre-Modus verschärfen. Es kann nie Rechte, Profile oder die Verbotsliste ändern und den Not-Aus nie aufheben.',
+    'Ein gekoppeltes Telefon darf Status lesen, Stopp auslösen und den Privatsphäre-Modus verschärfen. Es kann nie Rechte, Profile oder die Verbotsliste ändern und Stopp nie aufheben.',
   remote_disabled: 'Telegram ist ausgeschaltet. Einschalten geht in den Einstellungen unter „Geräte“.',
   remote_unavailable: 'ausgeschaltet',
   remote_settings_link: 'Zu den Einstellungen',
