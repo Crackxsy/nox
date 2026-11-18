@@ -72,14 +72,16 @@ the thing a reader most often expects there and will not find.
 
 | Module | Owns | Does not |
 | --- | --- | --- |
-| `node/install.py` | Wiring into a started core (`install`): the IPC requests, the routed tool specs, the stop hooks, the approval guards (`wire_guards`). | Decide anything itself. |
+| `node/install.py` | Wiring into a started core (`install`): the IPC requests, the routed tool specs, the stop hooks, and the node-session condition added to the access policy (`wire_guards`). | Decide anything itself. |
 | `node/listener.py` | The node port: TLS, "is this a paired node" (`NodePairing.identify`), the first message, the `NODE_TO_CORE` allow-list, pings, blobs, `broadcast_kill`. | Know what a tool is. |
 | `node/pairing.py` | One-time code -> client certificate, `identify`, renewal on the core, `revoke`. | Store anything secret of the node (it keeps hashes). |
 | `node/repo.py` | The node tables (certificates, groups, links). | The pairing row (that is `nox.remote.repo`). |
 | `node/registry.py` | Which nodes are online, what each offers (filtered: `ROUTABLE`, never a hard-prohibited name), the one call path `NodeRegistry.call`, cleaning results (`clean_result`). | Choose the device. |
 | `node/router.py` | Choosing the device (`resolve`) and the routed tool spec (`routed_spec`): scope, permission target, handler. | Talk to a node (it calls the registry). |
 | `node/policy.py` | What the dashboard may change: narrow a group, set a default device. | Widen anything. |
-| `node/world_routes.py` | The routed specs for captures, browser, desktop, computer use and media; `NodeControl` (the computer-use lock, address binding); `session_refusal` (who may approve during a session). | Run anything on a device. |
+| `node/world_routes.py` | The routed specs for captures, browser, desktop, computer use and media; `NodeControl` (the computer-use lock, address binding). | Run anything on a device. |
+| `node/session_access.py` | `NodeSessionCondition`: who may approve or change something while a session runs ([6c](#6c-approvals-during-a-node-session)), the three ways out (`ESCAPES`), the remote-session check. | The words of a refusal and the PIN checks (`security/access.py`), the lock itself (`NodeControl`). |
+| `security/access.py` | `AccessPolicy`: the one place that decides, for a request (`decide`) and for an answer to a permission prompt (`approval`), whether a UI client may go ahead while synthetic input or a node session is in play. `ClientContext`, the verdicts (`Allow`, `Refuse`, `NeedsPin`), the refusal words (`REFUSE_*`), the calm-request rule (`calm_call`), `InputLock`, `PinChecks`. | Know a node, a role name or a transport. |
 | `node/satellites.py` | The core's side of voice on a node, OBS on a node and the overlay credential (`SatelliteHub`). | Audio. Only text arrives. |
 | `node/receipts.py` (`ReceiptSigner`) | Signing what the core decided. | — |
 
@@ -453,10 +455,15 @@ Tests: `test_address_binding.py` (`test_the_binding_only_grows_while_the_lock_ho
 
 ### 6c. Approvals during a node session
 
-`world_routes.py::session_refusal`, wired into the dispatcher and the permission reply by
-`install.py::wire_guards`. Nox does not know the security PIN - so the PIN is what tells a
-person from Nox. The question asked for every "allow" and every request that changes something
-while a lock holds:
+`session_access.py::NodeSessionCondition`, one of the conditions of `AccessPolicy`
+(`security/access.py`): `RequestRegistry.dispatch` asks `policy.decide` for every request,
+`permission_reply` asks `policy.approval` for every answer, and `install.py::wire_guards` adds
+the condition. The local input lock of computer use on this machine (`InputLock`) is the other
+condition; both read "calm" from the same `calm_call`, so a request is never calm under one lock
+and not under the other - unmuting the microphone is not calm under either. When both hold, the
+input lock speaks first (`precedence`), whatever order the extensions installed in. Nox does not
+know the security PIN - so the PIN is what tells a person from Nox. The question asked for
+every "allow" and every request that changes something while a lock holds:
 
 ```mermaid
 flowchart TD
@@ -494,9 +501,12 @@ By role, with the reason behind each branch:
 Reading, "deny" and stop are never asked here: they only narrow. The three ways out
 (`ESCAPES`: remove the node, release the lock, resume after a stop) can never be bound by a
 node's addresses or by saturation. A refusal carries a stable sub-reason code, so the dashboard
-words it itself (`Refusal.code`).
+words it itself (`Refuse.code`).
 
-Tests: `test_node_session_approvals.py::test_who_may_approve_or_change_while_nox_controls_a_node`
+Tests: `tests/unit/security/test_access_table.py` (the whole table: five kinds of client in
+eight states, for requests and for answers to prompts, cell by cell),
+`test_access_transitions.py` (one lock ends, the other stays),
+`test_node_session_approvals.py::test_who_may_approve_or_change_while_nox_controls_a_node`
 (one case per role), `::test_the_escapes_work_with_the_pin_even_remotely_and_from_the_linked_browser`,
 `test_node_session_chat.py`.
 

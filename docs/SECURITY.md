@@ -192,8 +192,9 @@ target:
   confirmation waits. That check races by nature, so it is not the boundary. **The boundary is in
   the core:** while a session is open and for three seconds after Nox's last event, an "allow"
   answer to a confirmation is refused (a "deny" always counts) and the dashboard and shell keep
-  only reading and stopping requests - no skill activation, no MCP approval, no settings. The user
-  ends the session with the stop hotkey, which this module never sends, and then answers. Every
+  only reading and stopping requests - no skill activation, no MCP approval, no settings, and no
+  unmuting of the microphone (the same rule as in a node session: `AccessPolicy`, `nox.security.access`).
+  The user ends the session with the stop hotkey, which this module never sends, and then answers. Every
   combination with the Windows key, Ctrl+Esc, Alt+Tab, Alt+Esc, Alt+Space, Ctrl+Alt+Del,
   Ctrl+Shift+Esc, the stop hotkey and Alt+F4 on Nox are refused as a convenience. Key-ups after an
   interrupted combination are not sent into a game that came to the foreground; the session ends
@@ -834,8 +835,8 @@ voice satellites included (`nox.home.boundary`).
   the node (`ComputerUseConfig.session_minutes`), and a new session back to back gets a fresh
   grant. While it holds, **every "allow" and every request that changes something** (adding
   an MCP server, approving a plan, any setting - everything but reading, "deny" and Stopp, which
-  always work) goes through one rule (`session_refusal`, in `security.permission.reply` and in
-  `RequestRegistry.dispatch`), because Nox does not know the PIN and the PIN is the guard: (1)
+  always work) goes through one rule (`AccessPolicy` in `nox.security.access`, asked by `security.permission.reply`
+  and by `RequestRegistry.dispatch`; the node part is `NodeSessionCondition`), because Nox does not know the PIN and the PIN is the guard: (1)
   the browser device linked to a node Nox controls never approves or changes anything; (2) any
   other paired device and this machine's own dashboard or shell only with the security PIN, sent
   with the request (`pin`; the PIN's lockout applies, and a paired device is removed after
