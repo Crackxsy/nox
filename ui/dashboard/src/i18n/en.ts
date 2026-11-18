@@ -47,6 +47,8 @@ export const en: Record<CoreKey, string> = {
   setting_stream_twitch_rate_limit_min_gap_s: 'Minimum gap between messages (seconds)',
   setting_stream_twitch_min_backoff_s: 'Wait before the first reconnect (seconds)',
   setting_stream_twitch_max_backoff_s: 'Longest wait between reconnects (seconds)',
+  setting_stream_twitch_schedule_text: 'Answer to !schedule (one line)',
+  setting_stream_twitch_ignored_chatters: 'Other bots this bot ignores',
   setting_stream_ai_voice_disclosure_enabled: 'Say on stream that the voice is AI-generated',
   setting_stream_ai_voice_disclosure_chat_text: 'Chat note',
   setting_stream_ai_voice_disclosure_chat_text_hint:
