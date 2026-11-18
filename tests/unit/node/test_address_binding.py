@@ -62,7 +62,7 @@ def test_a_node_cannot_claim_a_public_address() -> None:
 
 
 def test_a_matching_address_is_refused_even_if_another_device_uses_it() -> None:
-    """Fail closed (owner decision): a device sharing the controlled PC's address is treated as
+    """Fail closed: a device sharing the controlled PC's address is treated as
     that PC. The possible lock-out of another device is accepted and documented."""
     control = _addressed(["192.168.1.50"])
     assert control.from_controlled("192.168.1.50")

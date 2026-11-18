@@ -1,4 +1,4 @@
-"""Click test, on video, of what a household member does with wave C: pair a PC, switch on
+"""Click test, on video, of what a household member does with a node: pair a PC, switch on
 "Befehle ausführen" on that PC, and answer a permission question while Nox controls its mouse.
 
 Same harness as `test_devices_stubbed.py` (the built bundle through `page.route`, the IPC socket

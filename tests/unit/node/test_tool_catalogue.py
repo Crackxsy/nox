@@ -21,7 +21,7 @@ from tests.unit.node.support_sessions import LAPTOP, SENSE_GROUPS, device_world,
 # ---- the catalogue and its groups ---------------------------------------------------------------
 
 
-def test_every_c6_tool_has_a_group_and_is_off_by_default_except_music() -> None:
+def test_every_world_tool_has_a_group_and_is_off_by_default_except_music() -> None:
     world, _ = device_world()
     tools = world_tools(world)
     assert set(tools) <= ROUTABLE

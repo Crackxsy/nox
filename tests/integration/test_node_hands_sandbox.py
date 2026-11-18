@@ -53,7 +53,7 @@ def node_home(sandbox: Sandbox, monkeypatch: pytest.MonkeyPatch) -> Iterator[Nod
     """A node folder where a real one lives - in the user's own profile, not in /tmp (which the
     Linux sandbox replaces anyway, so a test there would prove nothing)."""
     base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share")
-    folder = base / "nox-c5-test" / uuid.uuid4().hex[:8]
+    folder = base / "nox-node-files-test" / uuid.uuid4().hex[:8]
     monkeypatch.setenv(HOME_ENV, str(folder))
     home = NodeHome(folder)
     home.ensure()  # owner-only, as for a real node

@@ -118,7 +118,7 @@ async def test_pinned_transport_dials_the_ip_and_keeps_sni_hostname(
     assert str(seen["hdr"]).startswith("example.com")
 
 
-# ---- web.search backend exception (review finding 16) ------------------------------------------
+# ---- web.search backend exception -------------------------------------------------------------
 
 
 def _search_tool(base_url: str, captured: list[str]) -> object:

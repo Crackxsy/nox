@@ -1,4 +1,4 @@
-"""Click tests of the redesigned dashboard (Spec UX-Neubau) against a stubbed IPC, on video.
+"""Click tests of the redesigned dashboard against a stubbed IPC, on video.
 
 Like `test_capabilities_stubbed.py` this boots no core: the built bundle is served from
 `ui/dashboard/dist` through `page.route`, and the IPC websocket is answered by an in-test stub

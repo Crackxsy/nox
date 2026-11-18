@@ -69,7 +69,7 @@ async def test_write_lands_in_work_dir() -> None:
 
 async def test_no_network_without_declaration() -> None:
     # The child must actually run and report that the connect failed: a positive BLOCKED marker,
-    # so a PowerShell that never started cannot pass this test (review finding 3).
+    # so a PowerShell that never started cannot pass this test.
     result = await _appcontainer().run(
         [
             PS,
@@ -127,7 +127,7 @@ async def test_appcontainer_guarantees_match_the_measurement() -> None:
 
 
 async def test_large_output_does_not_hang() -> None:
-    # Review finding 10: a single read after the wait deadlocked as soon as the child filled the
+    # A single read after the wait deadlocked as soon as the child filled the
     # pipe (~4 KB). 1 MB on stdout and stderr each must finish quickly, capped and flagged.
     script = (
         "$s='x'*1048576; [Console]::Out.Write($s); [Console]::Error.Write($s); "
@@ -146,7 +146,7 @@ async def test_large_output_does_not_hang() -> None:
 
 
 async def test_unrelated_inheritable_handles_do_not_leak_into_the_child() -> None:
-    # Review finding 8: bInheritHandles=TRUE without PROC_THREAD_ATTRIBUTE_HANDLE_LIST hands the
+    # bInheritHandles=TRUE without PROC_THREAD_ATTRIBUTE_HANDLE_LIST hands the
     # child every inheritable handle of the core. Make one (the write end of a pipe), run a child
     # that lives ~4 s, drop our own copy and read: with no leak EOF comes at once; with a leak the
     # read blocks until the child exits.
@@ -183,7 +183,7 @@ def _online() -> bool:
 
 @pytest.mark.network
 async def test_appcontainer_declared_egress_reaches_only_the_declared_host() -> None:
-    # Review finding 11: the declared egress path must really work in an AppContainer (named pipe
+    # The declared egress path must really work in an AppContainer (named pipe
     # to the proxy + in-container forwarder), and still only through the proxy.
     if not HAS_CURL:
         pytest.skip("curl.exe not present")
@@ -451,7 +451,7 @@ def _old_manifest(path, folders) -> None:  # noqa: ANN001
 
 
 def test_the_legacy_broad_ace_is_removed_only_where_nox_can_tell_it_put_it(tmp_path) -> None:  # noqa: ANN001
-    # Review finding #18: the migration used to strip ALL APPLICATION PACKAGES from every runtime
+    # The migration used to strip ALL APPLICATION PACKAGES from every runtime
     # candidate, including an ACE the user or another program had set there.
     from nox.sandbox.windows import RuntimeGrants
 

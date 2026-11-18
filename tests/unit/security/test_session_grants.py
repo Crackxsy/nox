@@ -70,7 +70,7 @@ def test_taint_revokes_cmd_grants(
 def test_taint_also_revokes_a_cmd_grant_made_while_already_tainted(
     engine: DefaultPermissionEngine, grants: InMemoryGrantStore
 ) -> None:
-    """Every arrival of untrusted content revokes them, not only the first (owner decision):
+    """Every arrival of untrusted content revokes them, not only the first:
     a command remembered since, in another conversation, must not stay usable while untrusted
     content keeps arriving."""
     engine.mark_tainted("c1", "first page")
