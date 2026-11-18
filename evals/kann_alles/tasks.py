@@ -158,7 +158,7 @@ class Task(BaseModel):
     approve_high: list[str] = Field(default_factory=list)
     max_s: float = Field(default=90.0, gt=0)
     max_calls: int = Field(default=20, ge=0)
-    #: Which wave is expected to make this solvable; informational, shown in the report (the task
+    #: Which feature is expected to make this solvable; informational, shown in the report (the task
     #: still runs and is scored, so the quote shows what is missing).
     needs: str = ""
     #: How the prompt reaches Nox. `text`: a chat turn. `kill_phrase`: spoken - the voice

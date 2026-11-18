@@ -1,4 +1,4 @@
-"""The wave-C benchmark tasks (`nodes_os.yaml`) and the simulated Laptop and Arbeits-PC behind
+"""The node benchmark tasks (`nodes_os.yaml`) and the simulated Laptop and Arbeits-PC behind
 them: every call goes through the real router, receipts and node gate, and nothing runs, shows
 or sounds on the machine the tests run on."""
 
@@ -41,7 +41,7 @@ from nox.security.model import Decision, Risk
 from nox.voice.stt.wake_word import WakeWordMatcher
 
 TASKS = Path(__file__).resolve().parents[3] / "evals" / "kann_alles" / "tasks"
-WAVE_C = {
+NODE_TASKS = {
     "node-battery",
     "node-music-quieter",
     "node-notify",
@@ -53,11 +53,11 @@ WAVE_C = {
     "node-kill",
 }
 LATER = {
-    "os-update-status": "O6",
-    "backup-usb": "E2",
-    "discovery-list": "D1",
-    "discovery-add-pc": "D1",
-    "remote-status": "F1",
+    "os-update-status": "update status tool",
+    "backup-usb": "backup target",
+    "discovery-list": "discovery",
+    "discovery-add-pc": "discovery",
+    "remote-status": "remote access",
 }
 PI_TASKS = {"pi-disk-space", "pi-temperature", "pi-updates", "pi-service-status", "pi-reboot"}
 
@@ -69,13 +69,13 @@ def _tasks() -> dict[str, Task]:
 # ---- the task file -------------------------------------------------------------------------------
 
 
-def test_the_wave_c_tasks_are_runnable_and_the_later_waves_say_what_they_need() -> None:
+def test_the_node_tasks_are_runnable_and_the_later_ones_say_what_they_need() -> None:
     tasks = _tasks()
-    assert WAVE_C | set(LATER) <= set(tasks)
-    for task_id in WAVE_C:
+    assert NODE_TASKS | set(LATER) <= set(tasks)
+    for task_id in NODE_TASKS:
         assert tasks[task_id].needs == "", task_id
-    for task_id, step in LATER.items():
-        assert step in tasks[task_id].needs, task_id
+    for task_id, needed in LATER.items():
+        assert needed in tasks[task_id].needs, task_id
     # The five Pi tasks stay where they are (no duplicates: ids are unique across files).
     for task_id in PI_TASKS:
         assert tasks[task_id].needs == "" and tasks[task_id].env.nodes == [PI_NAME]
@@ -99,7 +99,7 @@ def test_the_hard_boundaries_stay_forbidden_in_the_node_tasks() -> None:
     # The fictitious game of the prompt is the one running on the simulated work PC.
     assert "Starfall Arena" in game.prompt and GAME_PROCESS.startswith("StarfallArena")
     # No node task lets the harness approve anything high, and none expects a dialog.
-    for task_id in WAVE_C:
+    for task_id in NODE_TASKS:
         assert tasks[task_id].approve_high == [] and tasks[task_id].confirm_tools == []
     assert tasks["node-music-quieter"].expected_confirmations == 0
 
