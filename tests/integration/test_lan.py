@@ -687,7 +687,7 @@ async def test_a_device_sees_whether_a_pin_is_set_but_no_local_detail(core: NoxC
 
 
 #: Every registered request the calm rule lets through while Nox controls mouse and keyboard
-#: (`nox.ipc.dispatch.calm_ui_request`: the explicit list, `ipc.*`, `*.list`, `*.status`). A new
+#: (`nox.security.access.calm_ui_request`: the explicit list, `ipc.*`, `*.list`, `*.status`). A new
 #: name here must only read or stop: a state-changing `x.status` turns this red on purpose.
 CALM_SNAPSHOT = frozenset(
     {
@@ -735,12 +735,117 @@ CALM_SNAPSHOT = frozenset(
 )
 
 
+#: Every other registered request: refused to a UI client while synthetic input is in play or a
+#: node session runs (`nox.security.access`). A request added to the core must be written into
+#: this list or into `CALM_SNAPSHOT` - nothing is left undecided by default.
+LOCKED_SNAPSHOT = frozenset(
+    {
+        "ai.providers",
+        "ai.setup.check",
+        "ai.setup.start",
+        "capabilities.report",
+        "chat.send",
+        "clip.export",
+        "clip.tag",
+        "clip.trim",
+        "config.set",
+        "consent.grant",
+        "consent.revoke",
+        "day.reminder.add",
+        "day.reminder.cancel",
+        "home.command",
+        "home.light",
+        "home.scene",
+        "home.switch",
+        "home.test",
+        "lan.pair.start",
+        "lan.unpair",
+        "mcp.servers.add",
+        "mcp.servers.approve",
+        "mcp.servers.enable",
+        "mcp.servers.remove",
+        "mcp.tools.call",
+        "memory.profile.add",
+        "memory.profile.confirm",
+        "memory.profile.forget",
+        "mode.set",
+        "node.computer.release",
+        "node.defaults.set",
+        "node.link",
+        "node.narrow",
+        "node.pair.start",
+        "node.unpair",
+        "noxos.ssh.disable",
+        "noxos.ssh.enable",
+        "noxos.ssh.keys.set",
+        "noxos.ssh.passphrase.change",
+        "noxos.ssh.passphrase.set",
+        "personality.set",
+        "pet.interact",
+        "plans.approve",
+        "plans.discard",
+        "plugin.register",
+        "plugin.secret.get",
+        "plugin.tool.call",
+        "presets.activate",
+        "presets.test_action",
+        "privacy.set",
+        "remote.pair.start",
+        "remote.unpair",
+        "secrets.delete",
+        "secrets.set",
+        "security.resume",
+        "skills.activate",
+        "skills.deactivate",
+        "skills.forget",
+        "stream.audio_track.setup",
+        "stream.funken.top",
+        "stream.overlay.revoke",
+        "stream.overlay.setup",
+        "twitch.auth.disconnect",
+        "twitch.auth.start",
+        "views.clear",
+        "voice.model.download",
+        "voice.ptt",
+        "watch.delete",
+        "worker.heartbeat",
+        "worker.ready",
+        "worker.register",
+    }
+)
+
+
 async def test_the_calm_requests_are_exactly_the_snapshot(core: NoxCore) -> None:
-    from nox.ipc.dispatch import calm_ui_request
+    from nox.security.access import calm_ui_request
 
     assert core.registry is not None
     calm = {n for n in core.registry.names() if calm_ui_request(n)}
     assert calm == CALM_SNAPSHOT
+
+
+async def test_no_registered_request_is_left_undecided_by_the_locks(core: NoxCore) -> None:
+    """Under a lock, every request of the real registry is calm or refused to a UI client - and
+    the two lists above name each one, so a new request is a reviewed decision."""
+    from nox.ipc.dispatch import client_context
+    from nox.security.access import AccessPolicy, Allow, InputLock
+
+    assert core.registry is not None
+    names = set(core.registry.names())
+    assert names == CALM_SNAPSHOT | LOCKED_SNAPSHOT
+    assert not CALM_SNAPSHOT & LOCKED_SNAPSHOT
+    policy = AccessPolicy()
+    policy.add_condition(InputLock(lambda: True))
+    for role in ("dashboard", "shell", "device"):
+        client = client_context(f"{role}:1", role)
+        for name in sorted(names):
+            payload = {"muted": True} if name == "voice.mute" else {}
+            verdict = await policy.decide(client, name, payload)
+            assert isinstance(verdict, Allow) == (name in CALM_SNAPSHOT), (role, name)
+
+
+async def test_the_real_core_installs_both_locks_in_a_fixed_order(core: NoxCore) -> None:
+    assert core.registry is not None
+    assert core.registry.policy.condition_names() == ("input_lock", "node_session")
 
 
 async def test_a_paired_devices_request_carries_its_network_address(core: NoxCore) -> None:
