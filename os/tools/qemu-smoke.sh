@@ -3,10 +3,10 @@
 #
 #   sudo os/tools/qemu-smoke.sh <image.img> <boot files folder> [timeout seconds per boot, default 2700]
 #
-# Two boots, each from a fresh copy of the image (O3): "provisioned" - with a provisioning file
+# Two boots, each from a fresh copy of the image: "provisioned" - with a provisioning file
 # on the boot partition (fictitious Wi-Fi, the card's claim code and hotspot password): imported
 # and deleted, setup window, hotspot profile, the portal as a phone in a network namespace sees
-# it, the claim, then the O2 checks on the claimed device; and "fresh" - no provisioning file and
+# it, the claim, then the hardening checks on the claimed device; and "fresh" - no provisioning file and
 # a test-only setup window of 600 s: claim code and hotspot password made on the device, the
 # console shows them, the window closes by itself and takes them along, a claim after it is
 # refused. NOX_SMOKE_ONLY=provisioned|fresh runs one of them.
@@ -72,8 +72,8 @@ s.shutdown(socket.SHUT_WR)
 print(s.makefile().readline().strip())' "$1" 2>&1
 }
 listening22() { ss -Htln 'sport = :22' 2>/dev/null | grep -q .; }
-# O2: firewall, SSH off and its switch, SD-card wear, kernel settings, the console status.
-o2_checks() {
+# Hardening: firewall, SSH off and its switch, SD-card wear, kernel settings, the console status.
+hardening_checks() {
   rules="$(nft list table inet nox_os 2>&1)"
   echo "$rules" | grep -q 'hook input priority filter; policy drop;' \
     || finish "NOX-SMOKE-FAIL: firewall not loaded or not default deny: $(echo "$rules" | head -n 3)"
@@ -143,7 +143,7 @@ print(f"core={core} fallback={fallback} other={other}")' "$main" 2>&1)"
   rm -f /run/nox-smoke-key /run/nox-smoke-key.pub
   ssh-keygen -q -t ed25519 -N '' -C smoke -f /run/nox-smoke-key
   fp="$(ssh-keygen -lf /run/nox-smoke-key.pub | cut -d' ' -f2)"
-  # The maintenance passphrase came with the setup (the portal, O3): set once, only root's scrypt
+  # The maintenance passphrase came with the setup (the portal): set once, only root's scrypt
   # hash, and never again without the old one - setup mode ended with the claim.
   answer="$(ask "maint set
 new $(b64 "another smoke passphrase")")"
@@ -254,7 +254,7 @@ open(p, "w").write(json.dumps(s))'
   rm -f /run/nox-smoke-key /run/nox-smoke-key.pub
   say "NOX-SMOKE: SSH off again: sshd stopped, keys and sudo rule gone, port 22 closed"
 }
-# ---- O3: first boot without a screen ---------------------------------------------------------
+# ---- first boot without a screen ---------------------------------------------------------
 scenario="$(cat /etc/nox-smoke-scenario 2>/dev/null || echo fresh)"
 b64() { printf '%s' "$1" | base64 -w0; }
 uptime_s() { cut -d. -f1 /proc/uptime; }
@@ -286,7 +286,7 @@ claim() {
 status_code() { curl -sk -o /dev/null -w '%{http_code}' "$@"; }
 # What the setup window looks like right at boot - before Nox is even up (the window counts from
 # power-on).
-o3_at_boot() {
+firstboot_at_boot() {
   systemctl is-active --quiet nox-firstboot.service \
     || finish "NOX-SMOKE-FAIL: nox-firstboot.service: $(systemctl status nox-firstboot.service --no-pager 2>&1 | tail -n 5)"
   [ "$(systemctl is-enabled systemd-firstboot.service 2>/dev/null)" = masked ] \
@@ -304,7 +304,7 @@ o3_at_boot() {
 }
 # The hotspot's profile: written when setup mode wants the hotspot (QEMU has no Wi-Fi radio, so it
 # stays a profile - in RAM, root only, WPA2 with this device's password).
-o3_hotspot_profile() {
+firstboot_hotspot_profile() {
   profile=/run/NetworkManager/system-connections/nox-setup-hotspot.nmconnection
   tries=0
   until [ -e "$profile" ] || [ "$tries" -ge 30 ]; do sleep 5; tries=$((tries + 1)); done
@@ -325,7 +325,7 @@ o3_hotspot_profile() {
   say "NOX-SMOKE: setup hotspot profile ready ($ssid, WPA2, 10.42.0.1/24, read back by NetworkManager), no radio in QEMU"
 }
 # Unclaimed: the dashboard port serves the claim only; the node port is closed.
-o3_unclaimed_firewall() {
+firstboot_unclaimed_firewall() {
   # The listener comes up a little after /health (it makes its certificates first).
   tries=0
   until [ "$(status_code https://127.0.0.1:47843/api/lan/info)" = 200 ] || [ "$tries" -ge 60 ]; do
@@ -342,7 +342,7 @@ o3_unclaimed_firewall() {
     || finish "NOX-SMOKE-FAIL: unclaimed pairing answered"
   say "NOX-SMOKE: unclaimed: firewall opens the claim port only (no node port), Nox serves the claim only"
 }
-o3_provisioned() {
+firstboot_provisioned() {
   [ ! -e /boot/firmware/nox-provision.json ] || finish "NOX-SMOKE-FAIL: provisioning file not deleted"
   [ "$(field /run/nox-os/setup/status.json provision.imported)" = true ] \
     || finish "NOX-SMOKE-FAIL: provisioning not imported: $(cat /run/nox-os/setup/status.json)"
@@ -362,7 +362,7 @@ o3_provisioned() {
   say "NOX-SMOKE: provisioning imported (Wi-Fi keyfile root 0600, read back by NetworkManager, time zone, claim code hash), file deleted, password in no log"
 }
 # The portal as a phone sees it: a phone in a namespace on a virtual hotspot interface.
-o3_portal() {
+firstboot_portal() {
   modprobe veth 2>/dev/null || true
   ip netns add nox-phone
   ip link add noxap0 type veth peer name nox-phone0
@@ -434,7 +434,7 @@ except OSError as exc:
   [ "$verdict" = TimeoutError ] || finish "NOX-SMOKE-FAIL: Nox's port from the hotspot: $verdict"
   say "NOX-SMOKE: portal: captive redirect, CSP, Origin checked, claim code and Wi-Fi only (no PIN or passphrase), wrong claim code keeps nothing, root's CA fingerprint, portal on the hotspot only, Nox's port closed to the hotspot"
 }
-o3_claim() {
+firstboot_claim() {
   # A complete claim (PIN and passphrase too) with a wrong code: the root helper refuses it.
   code="$(claim "{\"code\": \"ZZZZ-ZZZZ-ZZZZ\", \"name\": \"Smoke phone\", \"pin\": \"$SMOKE_PIN\", \"passphrase\": \"$pass\"}")"
   [ "$code" = 401 ] || finish "NOX-SMOKE-FAIL: a wrong claim code: $code $(cat /run/nox-smoke-claim.json)"
@@ -479,7 +479,7 @@ o3_claim() {
 }
 # Physical access is full access: a marker on the boot partition forgets the owner. The boot step
 # runs again here (with Nox stopped, as at boot) instead of a second boot.
-o3_reclaim() {
+firstboot_reclaim() {
   echo reclaim > /boot/firmware/nox-reclaim
   before="$(sha256sum /var/lib/nox-os/maintenance | cut -d' ' -f1)"
   systemctl stop nox.service
@@ -517,7 +517,7 @@ o3_reclaim() {
     || finish "NOX-SMOKE-FAIL: the new owner's passphrase was not set"
   say "NOX-SMOKE: reclaim: marker deleted, pairings and PIN gone, fresh window, the new owner claimed with a fresh passphrase"
 }
-o3_fresh() {
+firstboot_fresh() {
   shown="$(cat /run/nox-os/setup/claim-code)"
   echo "$shown" | grep -qE '^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$' \
     || finish "NOX-SMOKE-FAIL: device claim code: $shown"
@@ -527,17 +527,17 @@ o3_fresh() {
     || finish "NOX-SMOKE-FAIL: generated hotspot password (80 bits): $psk"
   [ ! -e /run/nox-os/setup/blink ] || finish "NOX-SMOKE-FAIL: a 40-bit blink code was written"
   [ "$(field /run/nox-os/setup-mode until)" = 600 ] || finish "NOX-SMOKE-FAIL: test window not used"
-  o3_hotspot_profile "$psk"
+  firstboot_hotspot_profile "$psk"
   say "NOX-SMOKE: no provisioning: claim code and hotspot password made on the device"
 }
-o3_fresh_after_nox() {
+firstboot_fresh_after_nox() {
   # As the console runs: a throwaway user that reads the setup secrets through its group only.
   screen="$(systemd-run --quiet --wait --pipe -p DynamicUser=yes -p SupplementaryGroups=nox-os-setup \
     /usr/bin/python3 -I -S /usr/local/lib/nox-os/nox_console.py --once 2>&1)"
   echo "$screen" | grep -qF "$shown" && echo "$screen" | grep -q '^Setup Wi-Fi:    Nox-Setup-' \
     && echo "$screen" | grep -q "scan this with the phone" && echo "$screen" | grep -q '█' || finish "NOX-SMOKE-FAIL: console setup block: $(echo "$screen" | head -n 20)"
   echo "$screen" | sed 's/^/NOX-SMOKE: console | /' | grep -v 'password\|Claim code\|█\|▀\|▄' >> "$out"
-  o3_unclaimed_firewall
+  firstboot_unclaimed_firewall
   status="$(curl -sk https://127.0.0.1:47843/api/claim)"
   echo "$status" | grep -q '"window_open": *true' || finish "NOX-SMOKE-FAIL: claim status: $status"
   # The window ends by itself (a shortened test window: 600 s after power-on).
@@ -568,10 +568,10 @@ SMOKE_WIFI_PSK="springfield-smoke-psk"
 SMOKE_HOTSPOT_PSK="smoke-setup-hotspot"
 SMOKE_CLAIM_CODE="ABCD-EFGH-JKMN"
 say "NOX-SMOKE: started ($scenario), waiting for nox.service"
-o3_at_boot
+firstboot_at_boot
 case "$scenario" in
-  provisioned) o3_provisioned; o3_hotspot_profile "$SMOKE_HOTSPOT_PSK" ;;
-  *) o3_fresh ;;
+  provisioned) firstboot_provisioned; firstboot_hotspot_profile "$SMOKE_HOTSPOT_PSK" ;;
+  *) firstboot_fresh ;;
 esac
 waited=0
 while [ "$waited" -lt 2100 ]; do
@@ -583,13 +583,13 @@ while [ "$waited" -lt 2100 ]; do
     say "NOX-SMOKE: host key $(ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub | cut -d' ' -f2)"
     if grep -qx uninitialized /etc/machine-id; then finish "NOX-SMOKE-FAIL: machine-id not made"; fi
     if [ "$scenario" = provisioned ]; then
-      o3_unclaimed_firewall
-      o3_portal
-      o3_claim
-      o2_checks
-      o3_reclaim
+      firstboot_unclaimed_firewall
+      firstboot_portal
+      firstboot_claim
+      hardening_checks
+      firstboot_reclaim
     else
-      o3_fresh_after_nox
+      firstboot_fresh_after_nox
     fi
     finish "NOX-SMOKE-OK $scenario $(. /etc/nox-os-release && echo "$NOX_OS_VERSION")"
   fi

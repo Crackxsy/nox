@@ -1,5 +1,5 @@
 #!/bin/bash -e
-# Nox-OS first boot without a screen (O3, stage-nox/README.md, os/README.md): the provisioning
+# Nox-OS first boot without a screen (stage-nox/README.md, os/README.md): the provisioning
 # file, the setup window, the setup hotspot with its captive portal, and the claim's root side.
 # os/tools/check-image.sh checks every guarantee here on the finished image.
 

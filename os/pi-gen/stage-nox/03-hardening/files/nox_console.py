@@ -6,7 +6,7 @@ maintenance (SSH) is on. Refreshed every ten seconds. It runs as a throwaway use
 (`DynamicUser=`) and reads public facts: /etc/nox-os-release, `ip`, Nox's unauthenticated
 `/health` on loopback and the firewall's and SSH switch's state files.
 
-The one exception is the setup window (step O3): while an unclaimed device is in setup mode -
+The one exception is the setup window (04-firstboot): while an unclaimed device is in setup mode -
 at most 30 minutes after power-on - the screen also shows the setup hotspot's name and password
 and, when it was made on the device, the claim code (/run/nox-os/setup/console.json, readable by
 the group nox-os-setup, which this unit carries). A screen is physical access; those secrets stop

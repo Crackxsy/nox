@@ -152,7 +152,7 @@ nox_needs_the_firewall() {
 no_stored_keys() {
   [ ! -e "$root/var/lib/nox-os" ] || none < <(find "$root/var/lib/nox-os" -mindepth 1 2>/dev/null)
 }
-# O3: the setup portal runs as its own user, unprivileged but for port 80, on the hotspot only.
+# First boot: the setup portal runs as its own user, unprivileged but for port 80, on the hotspot only.
 portal_unprivileged() {
   local unit="$root/etc/systemd/system/nox-setup-portal.service"
   has_lines "$unit" 'User=nox-setup' 'NoNewPrivileges=yes' 'ProtectSystem=strict' \
@@ -226,7 +226,7 @@ run_checks() {
   check "no GitHub tokens anywhere" none < <(grep -rlI -E \
     -e '(ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36}' -e 'github_pat_[A-Za-z0-9_]{40,}' "$root" "$boot" 2>/dev/null)
 
-  # O2: remote maintenance is off, and only the root helper switches it on (key only, LAN only).
+  # Hardening: remote maintenance is off, and only the root helper switches it on (key only, LAN only).
   check "nox-ssh.service not enabled" not_enabled nox-ssh.service
   check "nox-ssh's sshd: key only, nox-admin only, from private networks" sshd_key_only
   check "sudo only while remote maintenance is on (/run)" sudo_only_while_maintained
@@ -235,13 +235,13 @@ run_checks() {
     helper_socket_for_nox_service_only
   check "nox.service sandboxed (user nox, ProtectSystem=strict, no privileges)" nox_service_sandboxed
 
-  # O2: firewall, default deny from the start.
+  # Hardening: firewall, default deny from the start.
   check "nftables.service enabled" enabled sysinit.target nftables.service
   check "nox.service does not start without the firewall" nox_needs_the_firewall
   check "nox-firewall.service and .path enabled" firewall_units_enabled
   check "boot firewall: default deny, no port of Nox's or SSH open" firewall_closed_at_boot
 
-  # O2: SD-card wear, kernel settings, unused services, the console.
+  # Hardening: SD-card wear, kernel settings, unused services, the console.
   check "journal in memory only (Storage=volatile, no /var/log/journal)" journal_in_memory
   check "/ mounted noatime with a commit interval" root_mount_spares_the_card
   check "/tmp and /var/tmp in memory (tmpfs)" tmp_in_memory
@@ -251,7 +251,7 @@ run_checks() {
     triggerhappy.service ModemManager.service
   check "console status on tty1, no login prompt there" console_on_tty1
 
-  # O3: first boot without a screen - provisioning, setup window, hotspot, portal, claim.
+  # First boot without a screen - provisioning, setup window, hotspot, portal, claim.
   check "systemd-firstboot.service masked (Nox-OS answers what it would ask)" masked systemd-firstboot.service
   check "nox-firstboot.service, nox-setup.timer and nox-setup-apply.path enabled" first_boot_units
   check "setup portal started only by setup mode (not enabled)" not_enabled nox-setup-portal.service

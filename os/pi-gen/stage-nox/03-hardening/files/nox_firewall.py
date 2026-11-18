@@ -10,11 +10,12 @@ atomically. Open: loopback, answers to connections this device made, the ICMP th
 need, the DHCP client, mDNS (`nox.local`), and - only while network access is on
 (`ipc.lan.enabled`) - Nox's dashboard and node ports, from private networks only unless
 `ipc.lan.allow_public_clients` says otherwise, with new connections rate-limited per address.
-While the device has no owner yet (no root-owned /var/lib/nox-os-claim/claimed, step O3) only
-the dashboard port is opened - Nox serves nothing there but its claim page then - and the node
-port stays closed. SSH (port 22) only while remote maintenance is on (/run/nox-os/ssh.json,
-written by the root helper), from private networks only. The setup ports (HTTP, DNS, DHCP server)
-only in setup mode (/run/nox-os/setup-mode, its end not reached) and only on the setup hotspot's
+While the device has no owner yet (no root-owned /var/lib/nox-os-claim/claimed, set by the
+first-boot setup) only the dashboard port is opened - Nox serves nothing there but its claim
+page then - and the node port stays closed. SSH (port 22) only while remote maintenance is on
+(/run/nox-os/ssh.json, written by the root helper), from private networks only. The setup ports
+(HTTP, DNS, DHCP server) only in setup mode (/run/nox-os/setup-mode, its end not reached) and
+only on the setup hotspot's
 interface (/run/nox-os/setup/hotspot.json). That interface gets nothing else - neither Nox's
 ports nor SSH - for as long as the hotspot exists, window open or not: its isolation never waits
 for the hotspot to be taken down.
@@ -50,7 +51,8 @@ DEFAULTS = Path("/opt/nox/current/config/defaults.yaml")
 USER = Path("/var/lib/nox/user.yaml")
 #: Written by the root helper (nox_os_helper.py) while remote maintenance is on.
 SSH_STATE = Path("/run/nox-os/ssh.json")
-#: Step O3 creates it while the device is in setup mode (hotspot and captive portal).
+#: The first-boot setup creates it while the device is in setup mode (hotspot and captive
+#: portal).
 SETUP_MODE = Path("/run/nox-os/setup-mode")
 BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 #: The setup hotspot's interface while it is up (nox_setup.py).
@@ -306,7 +308,7 @@ def render(settings: Settings, *, boot: bool = False) -> str:
     ]
     if settings.hotspot:
         iface = f'iifname "{settings.hotspot}"'
-        rules.append("# Setup hotspot (O3): the portal, DHCP and DNS in setup mode - nothing else")
+        rules.append("# Setup hotspot: the portal, DHCP and DNS in setup mode - nothing else")
         if settings.setup:
             rules += [
                 f"{iface} ip saddr {HOTSPOT_NET} tcp dport 80 accept",

@@ -7,7 +7,7 @@
 A first, generated manifest: every Debian / Raspberry Pi OS package with its version and source
 package (the coordinates of its corresponding source code in the Debian and Raspberry Pi archives),
 the licence names its copyright file declares, and every Python package in Nox's environment with
-its declared licence. Mirroring the GPL source packages as a release asset is a later step (O8);
+its declared licence. Mirroring the GPL source packages as a release asset is a later step;
 until then the manifest says where the sources are. Reads files only; standard library only.
 """
 
@@ -178,7 +178,7 @@ def build(
             "note": (
                 "Every Debian / Raspberry Pi OS package below is listed with its source package "
                 "and version: its corresponding source code is in the archives named here. "
-                "Mirroring the GPL source packages as a release asset follows (Nox-OS step O8)."
+                "Mirroring the GPL source packages as a release asset follows."
             ),
             "archives": list(ARCHIVES),
         },
