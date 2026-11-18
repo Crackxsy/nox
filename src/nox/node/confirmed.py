@@ -194,8 +194,9 @@ def effective_manifest(
         )
         if say is not None:
             say(
-                "The manifest needs to be confirmed again on this device (nox node allow "
-                "<group>). Until then Nox may only read system values here."
+                "The manifest needs to be confirmed again on this device "
+                f"({_node_command('allow <group>')}). Until then Nox may only read system "
+                "values here."
             )
         confirmed = MOST_RESTRICTIVE
     groups = {g: bool(current.groups.get(g) and confirmed.groups.get(g)) for g in GROUPS}
@@ -227,6 +228,14 @@ def effective_manifest(
             say(
                 "node.yaml allows more than was confirmed on this device: "
                 + ", ".join(widened)
-                + ". Not applied. Confirm in a terminal: nox node allow <group>"
+                + ". Not applied. Confirm in a terminal: "
+                + _node_command("allow <group>")
             )
     return effective
+
+
+def _node_command(rest: str) -> str:
+    """The node's command as this device needs it (`nox.node.cli_text.command`)."""
+    from nox.node.cli_text import command  # noqa: PLC0415
+
+    return command(rest)

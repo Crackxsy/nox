@@ -116,9 +116,18 @@ def screen_support() -> str | None:
     import importlib.util
 
     if sys.platform.startswith("linux"):
+        wayland = bool(os.environ.get("WAYLAND_DISPLAY")) or (
+            os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+        )
+        if wayland:
+            # Under Wayland an X11 grab sees only XWayland windows (mostly black): refused
+            # rather than a wrong picture. The desktop portal's Screenshot API asks the person
+            # in a dialog of its own; Nox does not use it yet.
+            return (
+                "wayland_unsupported: screen capture under Wayland needs the desktop portal "
+                "(not yet) - log in to an X11 session for it"
+            )
         if not os.environ.get("DISPLAY"):
-            if os.environ.get("WAYLAND_DISPLAY"):
-                return "Wayland without X11: screen capture needs the desktop portal (not yet)"
             return "no display: this machine runs headless"
     if importlib.util.find_spec("mss") is None:
         return "screen capture needs the optional 'mss' package (extra `senses`)"

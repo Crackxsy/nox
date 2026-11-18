@@ -1,7 +1,7 @@
 /**
  * Geräte & Fähigkeiten › Fähigkeiten: what Nox can do beyond what it ships with.
  *
- * Plain first, then a visible step down (Spec UX-Neubau §3): Abläufe (formerly Presets) and
+ * Plain first, then a visible step down: Abläufe (formerly Presets) and
  * Wächter for everyone; under "Für Fortgeschrittene" the skills Nox taught itself and the
  * extensions (MCP servers) other people wrote. Each section loads on its own, so one missing
  * extension does not blank the page; "Aktualisieren" re-reads all of them. The PIN status is read

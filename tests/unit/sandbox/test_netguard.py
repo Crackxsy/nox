@@ -80,7 +80,7 @@ def test_no_resolution_is_refused() -> None:
 @pytest.mark.parametrize(
     "addr,reason",
     [
-        # Review finding 7: CGNAT / Tailscale was let through because it is neither private nor
+        # CGNAT / Tailscale was let through once because it is neither private nor
         # reserved. The guard now refuses everything that is not globally routable.
         ("100.64.0.1", "CGNAT"),
         ("100.100.100.100", "CGNAT"),

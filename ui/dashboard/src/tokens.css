@@ -1,5 +1,5 @@
 /**
- * Dashboard design tokens (Spec UX-Neubau §11). One palette per theme, one type scale, one spacing
+ * Dashboard design tokens. One palette per theme, one type scale, one spacing
  * grid, three radii. A component that needs a number reaches for a token.
  *
  * Colour roles, not colour names: `--ink` is text and primary buttons, `--lamp` means only "Nox is

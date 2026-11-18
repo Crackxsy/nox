@@ -14,7 +14,9 @@ Steps (in order, each idempotent - re-running `build.py` from a clean `build/` i
    immutable URL and SHA-256 (`PINNED_SHA256`) - a file whose hash differs is refused, cached or
    not.
 4. Regenerate `installer/requirements.lock` via `uv export --extra shell --extra voice
-   --extra voice-supertonic` (Supertonic 3 is the default voice; its ~400 MB of model files are
+   --extra voice-supertonic --extra senses --extra browser` (the screen, camera and browser
+   libraries are what the Windows node offers; Chromium itself is NOT shipped - `browser.*` needs
+   a one-time `playwright install chromium` (docs/NODES.md); Supertonic 3 is the default voice; its ~400 MB of model files are
    downloaded after the user agrees, never shipped) - the locked, reproducible dependency set,
    NOT `pyproject.toml`, which this script never touches - *with* hashes, and `pip install
    --require-hashes --only-binary=:all:` everything in it (wheels only: an sdist's build
@@ -218,7 +220,7 @@ def step_export_lock() -> Path:
     uv = shutil.which("uv") or sys.executable  # `python -m uv` also works (ENGINEERING.md)
     cmd = [uv, "export"] if shutil.which("uv") else [sys.executable, "-m", "uv", "export"]
     cmd += ["--color", "never", "--frozen", "--extra", "shell", "--extra", "voice"]
-    cmd += ["--extra", "voice-supertonic"]
+    cmd += ["--extra", "voice-supertonic", "--extra", "senses", "--extra", "browser"]
     log(f"exporting locked dependencies: {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=True)
     REQUIREMENTS_LOCK.write_text(result.stdout, encoding="utf-8")
@@ -456,7 +458,8 @@ def step_record_sizes(python_version: str) -> None:
 
 def app_version() -> str:
     """Nox's version, as `nox.iss` names the installer."""
-    for line in (INSTALLER_DIR / "nox.iss").read_text(encoding="ascii").splitlines():
+    # UTF-8 with a byte order mark (Inno Setup reads it as Unicode; real umlauts in German).
+    for line in (INSTALLER_DIR / "nox.iss").read_text(encoding="utf-8-sig").splitlines():
         if line.startswith("#define MyAppVersion "):
             return line.split('"')[1]
     raise RuntimeError("nox.iss has no MyAppVersion")

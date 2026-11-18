@@ -1,0 +1,11 @@
+# Nox-OS: the setup portal wrote a request (home Wi-Fi, security PIN, maintenance passphrase);
+# root checks it again and carries it out (nox_setup.py apply).
+[Unit]
+Description=Nox-OS setup portal: watch for a request
+
+[Path]
+PathExists=/run/nox-os/setup/portal/request.json
+Unit=nox-setup-apply.service
+
+[Install]
+WantedBy=multi-user.target

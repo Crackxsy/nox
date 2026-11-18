@@ -1,5 +1,5 @@
 /**
- * Performance budget for the dashboard build (Spec UX-Neubau §12), run after `vite build`:
+ * Performance budget for the dashboard build, run after `vite build`:
  *
  *   start JS (the entry chunk and everything it imports statically), gzip   <= 110 KB
  *   each lazily loaded area (its chunk plus what only it pulls in), gzip    <=  35 KB
@@ -10,7 +10,9 @@
  * bundle - that is what a first visit to the area downloads. Two corrections make the numbers what a
  * reader actually downloads: the start dictionary (`de` / `en`, fetched before the first render) is
  * part of the start bundle - the larger of the two is counted - and an area's first visit also
- * fetches the area copy (`de.more` / `en.more`), the larger of which is added to every area.
+ * fetches the area copy (`de.more` / `en.more`), the larger of which is added to every area. The
+ * computers section (`Nodes`) also fetches its own copy (`de.nodes` / `en.nodes`): the larger is
+ * added to that section.
  * Exits non-zero over budget; prints the table either way, so CI logs show the trend.
  *
  * Usage: node scripts/bundle-budget.mjs [distDir]
@@ -48,8 +50,10 @@ const largest = (names) =>
   Math.max(0, ...names.flatMap(bySourceName).map((k) => gzipped(manifest[k].file)));
 const DICTS = ['de', 'en'];
 const AREA_COPY = ['de.more', 'en.more'];
+const NODE_COPY = ['de.nodes', 'en.nodes'];
 const startDict = largest(DICTS);
 const areaCopy = largest(AREA_COPY);
+const nodeCopy = largest(NODE_COPY);
 const startJs = [...start].reduce((sum, k) => sum + gzipped(manifest[k].file), 0) + startDict;
 
 const css = new Set();
@@ -59,11 +63,12 @@ const cssTotal = [...css].reduce((sum, f) => sum + gzipped(f), 0);
 const lazyKeys = new Set();
 for (const k of Object.keys(manifest)) for (const d of manifest[k].dynamicImports ?? []) lazyKeys.add(d);
 const lazy = [...lazyKeys]
-  .filter((k) => ![...DICTS, ...AREA_COPY].includes(manifest[k].name))
+  .filter((k) => ![...DICTS, ...AREA_COPY, ...NODE_COPY].includes(manifest[k].name))
   .map((k) => {
     const own = [...staticClosure(k)].filter((c) => !start.has(c));
     const size = own.reduce((sum, c) => sum + gzipped(manifest[c].file), 0);
-    return { name: manifest[k].name ?? k, size: size + areaCopy };
+    const name = manifest[k].name ?? k;
+    return { name, size: size + areaCopy + (name === 'Nodes' ? nodeCopy : 0) };
   })
   .sort((a, b) => b.size - a.size);
 
@@ -79,6 +84,6 @@ for (const [name, size, budget] of rows) {
   console.log(`${over ? 'OVER' : 'ok  '}  ${(size / KB).toFixed(1).padStart(6)} KB / ${(budget / KB).toFixed(0)} KB  ${name}`);
 }
 if (failed) {
-  console.error('bundle budget exceeded (Spec UX-Neubau §12)');
+  console.error('bundle budget exceeded');
   process.exit(1);
 }

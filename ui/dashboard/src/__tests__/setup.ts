@@ -10,13 +10,15 @@
 import { afterEach, beforeEach } from 'vitest';
 import { cleanup } from '@testing-library/react';
 
-import { loadLang, loadMore } from '../i18n';
+import { loadLang, loadMore, loadNodes } from '../i18n';
 
 // The app loads English and the area copy on demand; tests use all of it synchronously.
 await loadLang('en');
 await loadLang('de');
 await loadMore('de');
 await loadMore('en');
+await loadNodes('de');
+await loadNodes('en');
 
 if (typeof window.matchMedia !== 'function') {
   window.matchMedia = (query: string) =>

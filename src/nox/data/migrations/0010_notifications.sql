@@ -1,4 +1,4 @@
--- 0010_notifications: persist EPIC-19's proactive notification store (ST-19-08 follow-up).
+-- 0010_notifications: persist the proactive notification store.
 -- `nox.proactive.store.NotificationStore` was an in-memory-only ring buffer (see the now-stale
 -- note on `ProactiveConfig`); this table lets it survive a restart. `id` is the same uuid4 hex
 -- string `nox.proactive.models.NotificationRecord.id` already carries (the public id used by

@@ -1,4 +1,4 @@
-"""`tests._ports.free_port_base`: a pair the OS will not hand to someone else meanwhile (C10).
+"""`tests._ports.free_port_base`: a pair the OS will not hand to someone else meanwhile.
 
 A base taken from `bind(0)` sits in the OS's ephemeral range, and Windows allocates that range in
 sequence - `base + 1` was the next port any `bind(0)` or outgoing connection got while the core

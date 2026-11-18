@@ -1,4 +1,4 @@
-"""`satellites.yaml` in the node's folder: how this device's satellites work (C9).
+"""`satellites.yaml` in the node's folder: how this device's satellites work.
 
 How it listens and speaks (`voice:`), which port its OBS listens on and the names of its privacy
 scene and scene set (`obs:`), the overlay relay's port (`overlay:`). Never *whether* - that is the

@@ -10,7 +10,7 @@ Connection lost: reconnect with backoff, 1 s doubling to 60 s, and never act on 
 `nox/revoked`: the node deletes its key and certificate and stops ("Von Nox entfernt").
 The node pings every second; the core's pings are answered.
 
-Stopping (spec C §1.7):
+Stopping (see docs/ARCHITECTURE-NODES.md, "Stopping"):
 * `nox/kill` from the core: every running call is cancelled at once, the node answers
   `nox/killed` with their ids and refuses everything until the core's `nox/resume`.
 * Dead man: while a call with a side effect runs and nothing came from the core for
@@ -42,7 +42,7 @@ from nox import __version__
 from nox.core.logging import get_logger
 from nox.mcp.protocol import PROTOCOL_VERSION
 from nox.node import protocol as p
-from nox.node.confirm import Confirmer, PlatformConfirmer
+from nox.node.confirm import Confirmer, PlatformConfirmer, has_screen
 from nox.node.enroll import local_os
 from nox.node.gate import NodeGate
 from nox.node.home import NodeHome, NodeIdentity
@@ -63,7 +63,7 @@ PING_INTERVAL_S = 1.0
 HELLO_TIMEOUT_S = 5.0
 #: Largest result sent in one frame; the protocol caps frames at 1 MiB.
 MAX_RESULT_CHARS = 512 * 1024
-#: No word from the core for this long while a side effect runs: abort it (spec C §1.7).
+#: No word from the core for this long while a side effect runs: abort it.
 DEAD_MAN_S = 3.0
 DEAD_MAN_TICK_S = 0.25
 LOCAL_STOP_POLL_S = 0.2
@@ -82,7 +82,7 @@ Connector = Callable[..., Awaitable[ClientConnection]]
 #: Longest question the dialog shows; anything longer is refused, never cut.
 MAX_CONFIRM_CHARS = 1200
 #: A "yes" faster than this after the question appeared is a reflex or a stray key, not a
-#: decision: it counts as no (review M-c).
+#: decision: it counts as no.
 MIN_DECISION_S = 1.5
 #: Consecutive pings from a core that is not stopped after which a dead-man stop lifts.
 DEAD_MAN_RESET_PINGS = 3
@@ -164,24 +164,113 @@ def all_local_addresses() -> list[str]:
 ADDRESSES_TTL_S = 30.0
 
 
-def confirmation_text(tool: str, arguments: dict[str, Any], *, tainted: bool = False) -> str | None:
-    """The question for the person at the device: every argument in full, one per line, rendered
-    exactly as the core's permission target renders it (`protocol.render`: quoted, look-alikes,
-    bidi and invisible characters escaped, runs of spaces counted). None when it would be too long
-    to read - then nothing is asked and the call is refused (no silent truncation)."""
+#: What each tool does, in one plain sentence for the person at the device. A tool
+#: that is not listed is named instead (`DIALOG_FALLBACK`).
+DIALOG_SENTENCES: dict[str, dict[str, str]] = {
+    "de": {
+        "file.list": "Nox möchte sehen, was in einem Ordner auf diesem Gerät liegt.",
+        "file.read": "Nox möchte eine Datei auf diesem Gerät lesen.",
+        "file.write": "Nox möchte eine Datei auf diesem Gerät schreiben.",
+        "shell.run": "Nox möchte auf diesem Gerät einen Befehl ausführen (abgeschirmt).",
+        "screen.capture": "Nox möchte ein Bildschirmfoto dieses Geräts machen und es an Nox "
+        "zu Hause schicken.",
+        "camera.snapshot": "Nox möchte mit der Kamera dieses Geräts ein Bild aufnehmen und es "
+        "an Nox zu Hause schicken.",
+        "computer.session_start": "Nox steuert bis {minutes} min Maus und Tastatur und kann in "
+        "dieser Zeit alles, was du an diesem PC kannst.",
+        "desktop.process_stop": "Nox möchte ein Programm auf diesem Gerät beenden; was darin "
+        "nicht gespeichert ist, geht verloren.",
+        "desktop.type_text": "Nox möchte Text in ein Fenster auf diesem Gerät tippen.",
+        "desktop.window_close": "Nox möchte ein Fenster auf diesem Gerät schließen.",
+        "browser.click": "Nox möchte in seinem eigenen Browser auf diesem Gerät etwas anklicken.",
+        "browser.type": "Nox möchte in seinem eigenen Browser auf diesem Gerät etwas eintippen.",
+        "browser.submit": "Nox möchte in seinem eigenen Browser auf diesem Gerät ein Formular "
+        "absenden.",
+        "notify.show": "Nox möchte auf diesem Gerät einen Hinweis zeigen.",
+        "media.control": "Nox möchte die Musik auf diesem Gerät steuern.",
+        "voice.say": "Nox möchte auf diesem Gerät etwas sagen.",
+        "obs.request": "Nox möchte OBS auf diesem Gerät steuern.",
+    },
+    "en": {
+        "file.list": "Nox wants to see what is in a folder on this device.",
+        "file.read": "Nox wants to read a file on this device.",
+        "file.write": "Nox wants to write a file on this device.",
+        "shell.run": "Nox wants to run a command on this device (sandboxed).",
+        "screen.capture": "Nox wants to take a screenshot of this device and send it to the "
+        "Nox at home.",
+        "camera.snapshot": "Nox wants to take a picture with this device's camera and send it "
+        "to the Nox at home.",
+        "computer.session_start": "Nox controls mouse and keyboard for up to {minutes} min and "
+        "can do anything you can do at this PC during that time.",
+        "desktop.process_stop": "Nox wants to end a program on this device; whatever is not "
+        "saved in it is lost.",
+        "desktop.type_text": "Nox wants to type text into a window on this device.",
+        "desktop.window_close": "Nox wants to close a window on this device.",
+        "browser.click": "Nox wants to click something in its own browser on this device.",
+        "browser.type": "Nox wants to type something in its own browser on this device.",
+        "browser.submit": "Nox wants to send a form in its own browser on this device.",
+        "notify.show": "Nox wants to show a notice on this device.",
+        "media.control": "Nox wants to control the music on this device.",
+        "voice.say": "Nox wants to say something on this device.",
+        "obs.request": "Nox wants to control OBS on this device.",
+    },
+}
+DIALOG_FALLBACK = {
+    "de": "Nox möchte auf diesem Gerät „{tool}“ ausführen.",
+    "en": "Nox wants to run “{tool}” on this device.",
+}
+DIALOG_DETAILS = {"de": "Genau:", "en": "Exactly:"}
+DIALOG_TAINTED = {
+    "de": "Achtung: Die Anfrage kam aus einem Gespräch mit fremden Inhalten (Web, Dateien, "
+    "Nachrichten). Nur erlauben, wenn du das selbst wolltest.",
+    "en": "Careful: the request came from a conversation with content from elsewhere (web, "
+    "files, messages). Allow it only if you wanted this yourself.",
+}
+DIALOG_QUESTION = {
+    "de": "Erlauben? (Ohne Antwort in 60 s: Ablehnen)",
+    "en": "Allow? (No answer in 60 s: deny)",
+}
+#: The session length the dialog names when the call leaves it to the device's setting.
+DEFAULT_SESSION_MINUTES = 15
+
+
+def dialog_sentence(tool: str, arguments: dict[str, Any], lang: str) -> str:
+    """The one plain sentence that opens the device's question about `tool`."""
+    words = DIALOG_SENTENCES.get(lang, DIALOG_SENTENCES["en"])
+    sentence = words.get(tool)
+    if sentence is None:
+        return DIALOG_FALLBACK.get(lang, DIALOG_FALLBACK["en"]).format(tool=p.escape_controls(tool))
+    if tool == "computer.session_start":
+        minutes = arguments.get("minutes")
+        valid = isinstance(minutes, int) and not isinstance(minutes, bool) and 0 < minutes <= 120
+        return sentence.format(minutes=minutes if valid else DEFAULT_SESSION_MINUTES)
+    return sentence
+
+
+def confirmation_text(
+    tool: str, arguments: dict[str, Any], *, tainted: bool = False, lang: str | None = None
+) -> str | None:
+    """The question for the person at the device: one plain sentence for what the tool does
+    (`DIALOG_SENTENCES`, in this device's language), then every argument in full, one per line,
+    rendered exactly as the core's permission target renders it (`protocol.render`: quoted,
+    look-alikes, bidi and invisible characters escaped, runs of spaces counted). None when it
+    would be too long to read - then nothing is asked and the call is refused (no silent
+    truncation)."""
+    from nox.node.cli_text import language  # noqa: PLC0415
+
+    chosen = lang or language()
     try:
         json.dumps(arguments, ensure_ascii=False).encode("utf-8")
     except (UnicodeEncodeError, TypeError, ValueError):
         return None  # not valid Unicode (a lone surrogate): refused, not shown escaped
-    lines = [f"Nox möchte auf diesem Gerät „{p.escape_controls(tool)}“ ausführen:"]
+    lines = [dialog_sentence(tool, arguments, chosen)]
+    # The tool's own name always, so the sentence can be checked against it.
+    lines.append(f"{DIALOG_DETAILS.get(chosen, DIALOG_DETAILS['en'])} {p.escape_controls(tool)}")
     for key, value in arguments.items():
         lines.append(f"  {p.escape_controls(str(key))}: {p.render(value)}")
     if tainted:
-        lines.append(
-            "Achtung: Die Anfrage kam aus einem Gespräch mit fremden Inhalten (Web, Dateien, "
-            "Nachrichten). Nur erlauben, wenn du das selbst wolltest."
-        )
-    lines.append("Erlauben? (Ohne Antwort in 60 s: Ablehnen)")
+        lines.append(DIALOG_TAINTED.get(chosen, DIALOG_TAINTED["en"]))
+    lines.append(DIALOG_QUESTION.get(chosen, DIALOG_QUESTION["en"]))
     text = unicodedata.normalize("NFC", "\n".join(lines))
     try:
         text.encode("utf-8")
@@ -265,7 +354,7 @@ class NodeAgent:
         if identity is None or not self._home.paired:
             return "not_paired"
         if not self._home.pinned_ca_ok(identity):
-            # The stored authority is not the pinned one: never accept another (spec C §1.8).
+            # The stored authority is not the pinned one: never accept another.
             log.error("node.pin_mismatch")
             self._status("pin_mismatch", identity)
             return "pin_mismatch"
@@ -338,6 +427,8 @@ class NodeAgent:
                 ),
                 "confirmer": bool(self._confirmer.available),
                 "addresses": self._addresses_now(),
+                # The satellite methods this node understands from a core.
+                "features": sorted(p.FEATURES),
                 **self._session_field(),
             },
         }
@@ -470,7 +561,10 @@ class NodeAgent:
         """What this device enabled, said outright (the core shows it; it widens nothing): the
         core cannot infer it from the tool list, which leaves out a narrowed group and every tool
         above `max_risk`."""
-        return {"groups": sorted(self._gate.manifest.enabled())}
+        manifest = self._gate.manifest
+        folders = [str(f) for f in manifest.folders][:32] if "files" in manifest.enabled() else []
+        # The folders `files` may open here, for the Devices page (the core never routes by them).
+        return {"groups": sorted(manifest.enabled()), "folders": folders}
 
     def reload_manifest(self) -> bool:
         """Re-read `node.yaml` when it changed; True when what the node offers changed."""
@@ -685,7 +779,7 @@ class NodeAgent:
 
     async def _cancel_input_calls(self, ws: ClientConnection, *, own: str) -> None:
         """Before a question appears, every other running call with a side effect is stopped -
-        none may act on the dialog (review M-c)."""
+        none may act on the dialog."""
         doomed = {
             key: entry
             for key, entry in self._calls.items()
@@ -786,7 +880,7 @@ class NodeAgent:
             await asyncio.sleep(RENEW_CHECK_S)
 
     async def renew_certificate(self, ws: ClientConnection, identity: NodeIdentity) -> bool:
-        """Ask for a new certificate once the current one is in its last days (spec C Â§1.2).
+        """Ask for a new certificate once the current one is in its last days.
         True when a new one is stored; it is used from the next connection on."""
         if not due(self._home.cert_file):
             return False
@@ -928,7 +1022,7 @@ class NodeAgent:
         blob = result.pop(BLOB_KEY, None) if isinstance(result, dict) else None
         if isinstance(blob, bytes):
             # A capture: its bytes go to the core that asked, in chunks, and are dropped here
-            # with this call - the node keeps no copy (spec C §1.4, C6).
+            # with this call - the node keeps no copy.
             sent = await self._send_blob(ws, meta.call_id, blob)
             del blob
             if not sent:
@@ -1012,12 +1106,16 @@ class NodeAgent:
     async def _confirm_here(
         self, ws: ClientConnection, tool: NodeTool, args: BaseModel, meta: p.NoxCallMeta
     ) -> str | None:
-        """High risk: the person at this device decides (D1). None when they allowed it."""
+        """High risk: the person at this device decides. None when they allowed it."""
         if not self._confirmer.available:
             # `trust_core_for_high` trusts a confirmation a PERSON gave on the core. A call the
             # core left to this device, or allowed by a rule or a remembered answer, was
-            # confirmed by nobody for this call: refuse it (review M-b).
-            trusted = self._gate.manifest.trust_core_for_high
+            # confirmed by nobody for this call: refuse it. And only a device
+            # WITHOUT a screen trusts at all: one with a screen but no working dialog program
+            # refuses (high risk is confirmed on the device that has a screen).
+            screen = getattr(self._confirmer, "screen", None)
+            headless = not (has_screen() if screen is None else bool(screen))
+            trusted = self._gate.manifest.trust_core_for_high and headless
             if trusted and not meta.confirm_on_device and meta.decided_by == "user":
                 self._audit_event("node.confirm", "core", "trusted (no screen)")
                 return None

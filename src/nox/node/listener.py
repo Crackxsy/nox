@@ -13,7 +13,9 @@ in order, before a single application message is read:
    handshake, before the WebSocket upgrade is answered - the standard library has no verify
    callback inside the handshake, and nothing is read from the peer before this check passes.
 3. **No browser:** a request with an `Origin` header is refused; only `NODE_PATH` exists.
-4. The node's first message must be `initialize` within `HELLO_TIMEOUT_S`.
+4. The node's first message must be `initialize` within `HELLO_TIMEOUT_S`. A node of another
+   protocol whose hello this release cannot read in full is still answered `compatible: false`
+   (`NodeHelloHead`) and then let go, so it can tell its owner that an update is needed.
 
 After that the core is an MCP client of the node (`McpClient` over `WebSocketTransport`). What the
 node may send on its own is the role `node` allow-list, `nox.node.protocol.NODE_TO_CORE`; anything
@@ -88,7 +90,7 @@ ERR_INVALID_PARAMS = -32602
 
 SecurityKillFn = Callable[[str, str], Awaitable[None]]
 SessionFn = Callable[["NodeSession"], Awaitable[None]]
-#: A satellite method from a node (C9): (session, method, validated params) -> the answer's
+#: A satellite method from a node: (session, method, validated params) -> the answer's
 #: `result`, or None for a notification. Must return quickly - it runs on the node's channel.
 SatelliteFn = Callable[["NodeSession", str, BaseModel], Awaitable[dict[str, Any] | None]]
 #: Satellite levels a node may send per second; more are dropped (never a violation).
@@ -117,7 +119,7 @@ class NodeSession:
     #: Set when the node answered `nox/killed` after the last `nox/kill`.
     killed: asyncio.Event = field(default_factory=asyncio.Event)
     killed_calls: list[str] = field(default_factory=list)
-    #: The certificate's end: the session closes when it is reached (review N1).
+    #: The certificate's end: the session closes when it is reached.
     cert_not_after: datetime | None = None
     #: What the node reported in its last `nox/pong`: why it refuses everything, or "".
     node_state: str = ""
@@ -353,6 +355,9 @@ class NodeListener:
             await connection.close(CLOSE_POLICY_VIOLATION, "removed")
             return
         hello_msg, hello_id = hello
+        if isinstance(hello_msg, p.NodeHelloHead):
+            await self._answer_outdated(connection, device, hello_msg, hello_id)
+            return
         low, high = p.NODE_PROTOCOL_RANGE
         compatible = low <= hello_msg.node_protocol <= high
         session: NodeSession | None = None
@@ -420,7 +425,7 @@ class NodeListener:
                     "node_id": device.id,
                     "receipt_key": self._receipt_key,
                     "engaged": bool(self._kill_engaged is not None and self._kill_engaged()),
-                    # The satellite methods this core understands (C9): a node sends no other.
+                    # The satellite methods this core understands: a node sends no other.
                     "features": sorted(p.FEATURES) if self.on_satellite is not None else [],
                     "serverInfo": {"name": "nox-core", "version": str(p.NODE_PROTOCOL)},
                 },
@@ -450,7 +455,41 @@ class NodeListener:
                 with contextlib.suppress(Exception):
                     await self._on_disconnected(session)
 
-    async def _hello(self, connection: ServerConnection) -> tuple[p.NodeHello, Any] | None:
+    async def _answer_outdated(
+        self, connection: ServerConnection, device: DeviceRow, head: p.NodeHelloHead, hello_id: Any
+    ) -> None:
+        """A node of another protocol with a hello this release cannot read in full: it hears
+        `compatible: false` (and which protocols this core accepts), and the connection ends."""
+        if not self._is_removed(device.id):
+            with contextlib.suppress(ConnectionClosed, OSError):
+                await connection.send(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": hello_id,
+                            "result": {
+                                "protocolVersion": head.protocolVersion,
+                                "node_protocol": list(p.NODE_PROTOCOL_RANGE),
+                                "compatible": False,
+                                "core_id": self.core_id,
+                                "node_id": device.id,
+                                "receipt_key": self._receipt_key,
+                                "engaged": bool(
+                                    self._kill_engaged is not None and self._kill_engaged()
+                                ),
+                                "features": [],
+                                "serverInfo": {"name": "nox-core", "version": str(p.NODE_PROTOCOL)},
+                            },
+                        }
+                    )
+                )
+            self._append_audit("node.connect", device.id, "deny", "outdated")
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(connection.close(CLOSE_GOING_AWAY, "update needed"), 0.5)
+
+    async def _hello(
+        self, connection: ServerConnection
+    ) -> tuple[p.NodeHello | p.NodeHelloHead, Any] | None:
         try:
             frame = await asyncio.wait_for(connection.recv(), HELLO_TIMEOUT_S)
             message = json.loads(frame) if isinstance(frame, str) else None
@@ -463,10 +502,20 @@ class NodeListener:
             or "id" not in message
         ):
             return None
+        params = message.get("params") or {}
         try:
-            return p.NodeHello.model_validate(message.get("params") or {}), message["id"]
+            return p.NodeHello.model_validate(params), message["id"]
+        except ValidationError:
+            pass
+        # Not a hello of this release: answerable only when it names another protocol.
+        try:
+            head = p.NodeHelloHead.model_validate(params)
         except ValidationError:
             return None
+        low, high = p.NODE_PROTOCOL_RANGE
+        if low <= head.node_protocol <= high:
+            return None  # this protocol, but a hello it does not keep: refused as before
+        return head, message["id"]
 
     async def _ping(self, session: NodeSession) -> None:
         seq = 0
@@ -542,7 +591,7 @@ class NodeListener:
             session.killed.set()
         elif method == p.M_CONFIRM_RESULT:
             assert isinstance(params, p.ConfirmResult)
-            # The decision was the device's (D1); the core records that it was asked there.
+            # The decision was the device's; the core records that it was asked there.
             self._append_audit(
                 "node.confirm",
                 session.device_id,
@@ -564,7 +613,7 @@ class NodeListener:
     async def _satellite(
         self, session: NodeSession, method: str, msg_id: Any, params: BaseModel
     ) -> None:
-        """A satellite method (C9). A core without satellites answers "not supported" - a node
+        """A satellite method. A core without satellites answers "not supported" - a node
         only sends these to a core that said it understands them, so it is no violation."""
         handler = self.on_satellite
         limit = FLOOD_PER_MINUTE.get(method)
@@ -747,6 +796,18 @@ class NodeListener:
                 )
             await self._close(session, CLOSE_POLICY_VIOLATION, "removed")
             return True
+
+    async def drop(self, device_id: str, why: str) -> bool:
+        """End a node's connection for a protocol violation found outside this listener (a
+        computer-use session the core never started, `nox.node.world_routes.NodeControl`):
+        audited, and the node is refused for `VIOLATION_COOLDOWN_S`. True when one was open."""
+        session = self.sessions.get(device_id)
+        self._append_audit("node.refused", device_id, "deny", p.safe_name(why, 64))
+        if session is None:
+            return False
+        self._cooling[device_id] = time.monotonic() + VIOLATION_COOLDOWN_S
+        await self._close(session, CLOSE_POLICY_VIOLATION, "protocol violation")
+        return True
 
     def _lock(self, device_id: str) -> asyncio.Lock:
         lock = self._locks.get(device_id)

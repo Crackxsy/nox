@@ -61,10 +61,15 @@ SUBSCRIPTIONS = [
     "system.*",
     "voice.*",
     "state.changed",
+    #: Nox controls mouse and keyboard on a paired PC: "allow" then needs the PIN (the dialog
+    #: shows the field only then).
+    "desktop.computer_use",
     #: `config.set pet.variant` publishes this; the shell reloads the pet page with the new
     # variant so the setting takes effect without restarting Nox.
     "settings.changed",
 ]
+#: The answer to `node.computer.status`, fed through the event path (`_on_node_status`).
+NODE_STATUS = "node.computer.status"
 PING_INTERVAL_MS = 5000
 RECONNECT_INTERVAL_MS = 3000
 PING_FAILURES_BEFORE_RECONNECT = 2
@@ -247,6 +252,18 @@ class ShellApp:
 
     def _subscribe(self) -> None:
         self._request("ipc.subscribe", {"patterns": SUBSCRIPTIONS})
+        # Which paired PCs Nox controls right now; later changes arrive as events.
+        fut = self._request("node.computer.status", {})
+        if fut is not None:
+            fut.add_done_callback(self._on_node_status)
+
+    def _on_node_status(self, fut: Future[Any]) -> None:
+        """Bridge thread: hand the answer to the main thread like an event."""
+        if fut.exception() is not None:
+            return
+        result = fut.result()
+        if isinstance(result, dict):
+            self._signals.event_received.emit({"name": NODE_STATUS, "payload": result})
 
     def _load_pet_page(self) -> None:
         assert self.pet is not None
@@ -319,7 +336,12 @@ class ShellApp:
         if changed:
             self.tray.refresh(self.model)
         if name == "security.kill_switch":
-            self.tray.notify("Nox", "Kill switch engaged – safe mode", critical=True)
+            stopped = (
+                "Gestoppt – Nox tut nichts mehr, bis du ihn wieder startest."
+                if self.language.startswith("de")
+                else "Stopped – Nox does nothing until you start it again."
+            )
+            self.tray.notify("Nox", stopped, critical=True)
 
     def _apply_settings_changed(self, payload: dict[str, Any]) -> None:
         """: apply a changed `pet.variant` by reloading the pet page with the new variant.
@@ -364,7 +386,9 @@ class ShellApp:
 
     def _native_permission_dialog(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         try:
-            return PermissionDialog(payload, language=self.language).run()
+            return PermissionDialog(
+                payload, language=self.language, node_control=bool(self.model.node_control)
+            ).run()
         except ValueError:
             log.warning("shell.permission_request_invalid")
             return None
@@ -429,7 +453,7 @@ class ShellApp:
             self._request(
                 "security.kill",
                 {"reason": "user", "origin": origin},
-                failure_text="Not-Aus nicht ausgelöst",
+                failure_text="Stopp nicht ausgelöst",
             )
             return path
         sup_token = read_supervisor_token(self.runtime_dir)

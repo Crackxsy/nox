@@ -1,5 +1,5 @@
 /**
- * How a permission question this dashboard showed ended, in one sentence (Spec UX-Neubau §5):
+ * How a permission question this dashboard showed ended, in one sentence:
  * "Erlaubt.", "Abgelehnt.", nobody answered in time, decided on another device, cancelled by Stopp.
  * Kept apart from the question itself so the live region is in the page from the start, while the
  * question loads only when one is asked.

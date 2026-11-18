@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { translator } from '../i18n';
 import { type IpcClient, IpcError } from '../ipc';
-import type { PermissionPrompt } from '../model';
+import { type PermissionPrompt, parsePermissionRequested, promptDevice } from '../model';
 import { PermissionNote } from '../PermissionNote';
 import { ARM_DELAY_MS, PermissionPromptDialog } from '../PermissionPrompt';
 
@@ -77,6 +77,35 @@ describe('what the prompt says', () => {
     expect(dialog.textContent).toContain(t('perm_risk_high'));
   });
 
+  it('names the paired PC on its own, in bold - only from the device fields of the core', () => {
+    const base = { request_id: 'g2', agent: 'companion', tool: 'file', action: 'delete', risk: 'high' };
+    const prompt = parsePermissionRequested({
+      ...base,
+      target: 'Laptop (3f2a): Archiv/neu.zip',
+      device_id: '3f2a'.repeat(8),
+      device_name: 'Laptop',
+    });
+    expect(prompt?.device).toBe('Laptop');
+    // The target stays exactly what the core sent.
+    expect(prompt?.target).toBe('Laptop (3f2a): Archiv/neu.zip');
+    show({ queue: [prompt!] });
+    const sentence = screen.getByText(/Nox möchte auf/);
+    expect(sentence.textContent).toBe('Nox möchte auf Laptop löschen: Laptop (3f2a): Archiv/neu.zip');
+    expect(sentence.querySelector('strong')?.textContent).toBe('Laptop');
+  });
+
+  it('never takes a device out of the target text', () => {
+    // A path or argument may look like the router's prefix: it is a target, not a device.
+    const spoof = parsePermissionRequested({ request_id: 'g3', tool: 'file', action: 'delete', target: 'Arbeits-PC (ab12): harmlos.txt' });
+    expect(spoof?.device).toBe('');
+    expect(spoof?.target).toBe('Arbeits-PC (ab12): harmlos.txt');
+    // A name without the id (or the reverse) is not enough either.
+    expect(promptDevice({ device_name: 'Laptop' })).toBe('');
+    expect(promptDevice({ device_id: 'a'.repeat(32) })).toBe('');
+    show({ queue: [spoof!] });
+    expect(screen.getByText('Nox möchte löschen: Arbeits-PC (ab12): harmlos.txt')).toBeTruthy();
+  });
+
   it('keeps the identifiers behind "technical details"', () => {
     show();
     const details = screen.getByText(t('perm_technical')).closest('details')!;
@@ -94,7 +123,7 @@ describe('what the prompt says', () => {
   it('says when the words came from a voice satellite, and only then', () => {
     show({ queue: [{ ...PROMPT, voiceSatellite: 'Wohnzimmer-Pi' }] });
     expect(screen.getByTestId('perm-voice-satellite').textContent).toContain(
-      'Von Sprach-Satellit Wohnzimmer-Pi',
+      'Vom Lautsprecher-Mikrofon Wohnzimmer-Pi',
     );
     cleanupView();
     show();

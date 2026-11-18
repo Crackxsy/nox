@@ -66,6 +66,8 @@ DEVICE_SURFACE = frozenset(
         "node.unpair",
         # Nox-OS remote maintenance: switching on needs the PIN, always (`nox.noxos`); a headless
         # Pi is administered from a paired device.
+        # Nox-OS claim: read-only - whether the device has its owner (the onboarding wizard asks).
+        "noxos.claim.status",
         "noxos.ssh.disable",
         "noxos.ssh.enable",
         "noxos.ssh.keys.set",
@@ -707,6 +709,7 @@ CALM_SNAPSHOT = frozenset(
         "memory.profile.list",
         "node.computer.status",
         "node.list",
+        "noxos.claim.status",
         "noxos.ssh.status",
         "personality.get",
         "plans.list",
@@ -741,7 +744,7 @@ async def test_the_calm_requests_are_exactly_the_snapshot(core: NoxCore) -> None
 
 
 async def test_a_paired_devices_request_carries_its_network_address(core: NoxCore) -> None:
-    """P1: a request bridged in by the network listener knows the device's address
+    """A request bridged in by the network listener knows the device's address
     (`RequestContext.peer`); a client on this machine has none."""
     from pydantic import BaseModel
 

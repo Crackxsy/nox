@@ -1,4 +1,4 @@
-"""Taint (review finding 6): every untrusted tool result taints its conversation, the taint survives
+"""Taint: every untrusted tool result taints its conversation, the taint survives
 the next turn, parallel conversations do not clobber each other, and a tainted conversation must
 confirm any call that sends data out - including LOW tools like `web.fetch`.
 """

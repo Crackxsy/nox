@@ -1,4 +1,4 @@
-"""The core's side of the satellites (C9): voice on a node, OBS where it runs, the pet overlay.
+"""The core's side of the satellites: voice on a node, OBS where it runs, the pet overlay.
 
 **Voice** (`nox/voice/heard`) - a node's voice satellite sends what it heard as text. The core
 takes it only while all of this holds, checked for every utterance, in this order:
@@ -284,7 +284,7 @@ class SatelliteHub:
                 return
             if text:
                 # Never its own name or a kill phrase out of a speaker a microphone hears - not
-                # even when an untrusted conversation made the model write it (review R3).
+                # even when an untrusted conversation made the model write it.
                 text = speakable(text) or ""
             if not text and not last:
                 # A dropped sentence (or an empty one) is skipped, never sent as an empty say:

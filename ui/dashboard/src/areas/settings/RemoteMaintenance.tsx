@@ -1,5 +1,5 @@
 /**
- * Einstellungen › System › Fernwartung (SSH) - only on Nox-OS, the Raspberry Pi image (Spec §2.2).
+ * Einstellungen › System › Fernwartung (SSH) - only on Nox-OS, the Raspberry Pi image.
  *
  * SSH is off there. Everything that can switch it on needs two secrets: the security PIN (checked
  * by Nox) and the **maintenance passphrase** (at least 12 characters, checked only by the Pi's root

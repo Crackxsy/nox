@@ -1,6 +1,6 @@
 /**
  * "Sag Nox, was er tun soll" at the bottom of every page except the conversation, where the chat
- * field takes its place (Spec UX-Neubau §4). Typing into it, tapping it, or pressing Enter opens the
+ * field takes its place. Typing into it, tapping it, or pressing Enter opens the
  * command palette with what was typed so far; Tab passes through it without opening anything.
  *
  * There is no microphone button: push-to-talk belongs to the desktop shell (`voice.ptt` is not a

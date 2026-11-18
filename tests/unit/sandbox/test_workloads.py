@@ -1,4 +1,4 @@
-"""One AppContainer per workload class (re-review N6): names, and what `Sandbox` hands the backend.
+"""One AppContainer per workload class: names, and what `Sandbox` hands the backend.
 
 Runs off Windows too: the backend here is a fake; the real isolation is proven in
 `test_windows_run.test_a_run_cannot_read_the_work_folder_of_another_workload`.
@@ -202,7 +202,7 @@ def test_the_windows_forwarder_never_gets_the_childs_environment(tmp_path, monke
     assert port == 47145  # a port of the block the network rules leave open for this container
     assert seen == [_base_env(tmp_path)]
     assert not any("PROXY" in key.upper() for key in seen[0])
-    # ... and in the run's own container, the only one the proxy pipe admits (N6).
+    # ... and in the run's own container, the only one the proxy pipe admits.
     assert containers == [sid]
     windows._release_forwarder(fwd, own)  # noqa: SLF001
 

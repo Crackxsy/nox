@@ -1,6 +1,6 @@
 /**
- * The shell around every page (Spec UX-Neubau §3-5): the four areas and their keys, old tab ids,
- * Stopp (at once, no question - the owner's decision) and Fortsetzen (the core's resume rules,
+ * The shell around every page: the four areas and their keys, old tab ids,
+ * Stopp (at once, no question asked) and Fortsetzen (the core's resume rules,
  * PIN included), the command palette from the keyboard, and what a paired device may not do.
  */
 

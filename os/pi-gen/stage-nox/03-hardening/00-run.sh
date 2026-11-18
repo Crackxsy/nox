@@ -1,5 +1,5 @@
 #!/bin/bash -e
-# Nox-OS hardening (O2, stage-nox/README.md, os/README.md): firewall, remote maintenance off with a
+# Nox-OS hardening (stage-nox/README.md, os/README.md): firewall, remote maintenance off with a
 # switch in the dashboard, SD-card wear, kernel settings, unused services off, console status.
 # os/tools/check-image.sh checks every guarantee here on the finished image.
 
@@ -76,8 +76,8 @@ install -m 0644 files/90-nox-os.conf "${ROOTFS_DIR}/etc/sysctl.d/90-nox-os.conf"
 
 # ---- services a headless Nox does not use: masked, so nothing pulls them in again ---------------
 # Bluetooth (and the Pi 3/Zero 2 W UART helper for it), the keyboard-hotkey daemon, modem
-# management. avahi stays: it answers for nox.local. Updates (unattended-upgrades) are step O6
-# (sub-stage 05-updates), not here.
+# management. avahi stays: it answers for nox.local. Updates (unattended-upgrades) are a later
+# sub-stage (05-updates), not here.
 on_chroot <<'EOF2'
 for unit in bluetooth.service hciuart.service triggerhappy.service triggerhappy.socket \
 	ModemManager.service; do

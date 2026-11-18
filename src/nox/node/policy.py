@@ -1,5 +1,5 @@
 """What the dashboard may change about a node: narrow its capability groups, and say which device a
-tool family runs on by default (spec C §1.10).
+tool family runs on by default.
 
 The device decides what Nox may do on it (`node.yaml`, `nox node allow`). From the core the owner
 can only *take away* - a narrowed group is filtered out of what the core routes and sent to the
@@ -61,7 +61,7 @@ __all__ = [
     "reported_groups",
 ]
 
-#: Tool name prefix -> capability group (spec C §1.4). The core's own mapping, see the docstring.
+#: Tool name prefix -> capability group. The core's own mapping, see the docstring.
 _PREFIX_GROUP: dict[str, str] = {
     "system": "system",
     "notify": "notify",
@@ -77,7 +77,7 @@ _PREFIX_GROUP: dict[str, str] = {
     "voice": "voice",
     "obs": "obs",
 }
-#: Groups that need two keys (C9): enabled on the device *and* switched on for that node on the
+#: Groups that need two keys: enabled on the device *and* switched on for that node on the
 #: core by the owner - a voice satellite sends what it hears to Nox as the user's words. The
 #: second key is a persisted fact (`node_capabilities.core_opted_in`, migration 0018), set only by
 #: clearing the narrowing in the Devices page (`node.narrow`, with the PIN when one is set, from
@@ -147,7 +147,7 @@ class NodePolicy:
             if not complete:
                 for group in narrowed - listed:
                     enabled[group] = before.get(group, (False, True))[0]
-        # Two keys (C9): a `CORE_OPT_IN` group the owner has not switched on here is narrowed -
+        # Two keys: a `CORE_OPT_IN` group the owner has not switched on here is narrowed -
         # on every listing, whatever the device says and whenever it says it, the first one
         # included. Only the owner's PIN-protected clearing in the Devices page opts it in.
         opted = self._nodes.opted_in_groups(device_id)

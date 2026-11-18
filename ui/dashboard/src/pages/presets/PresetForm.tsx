@@ -6,6 +6,8 @@
  * and easier to read back than a column of boxes with remove buttons.
  */
 
+import { useId } from 'react';
+
 import {
   type Preset,
   type PresetAction,
@@ -26,6 +28,7 @@ export interface PresetFormProps {
 }
 
 export function PresetForm({ t, preset, actions, onChange }: PresetFormProps) {
+  const id = useId();
   const setTriggers = (changes: Partial<Preset['triggers']>) =>
     onChange({ ...preset, triggers: { ...preset.triggers, ...changes } });
 
@@ -89,10 +92,13 @@ export function PresetForm({ t, preset, actions, onChange }: PresetFormProps) {
           type="checkbox"
           checked={preset.from_satellites === true}
           onChange={(e) => onChange({ ...preset, from_satellites: e.target.checked })}
+          aria-describedby={`${id}-satellites`}
         />{' '}
         <span className="setting-name">{t('presets_from_satellites')}</span>
       </label>
-      <p className="hint">{t('presets_from_satellites_hint')}</p>
+      <p id={`${id}-satellites`} className="hint">
+        {t('presets_from_satellites_hint')}
+      </p>
 
       <label className="setting">
         <span className="setting-name">{t('presets_at')}</span>

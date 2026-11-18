@@ -1,6 +1,6 @@
 """The one turn slot (`Orchestrator.handle_text`): barge-ins, waiting turns and cancellation.
 
-C10 quality wave: a waiting node turn never runs ahead of the owner's new input, the newer of two
+What it pins: a waiting node turn never runs ahead of the owner's new input, the newer of two
 barge-ins in one cancel window wins, a barge-in whose caller gave up starts nothing, and the slot
 is not handed on before a cancelled turn has finished unwinding.
 """
@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from tests.unit.core.test_orchestrator import make
+from tests.unit.fakes import make_orchestrator as make
 
 NODE = "voice:node:" + "a" * 32
 

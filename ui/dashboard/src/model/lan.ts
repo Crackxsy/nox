@@ -168,6 +168,21 @@ export interface PermissionPrompt {
   rememberTtlS: number;
   /** The voice satellite (a node's name) the words that led here were spoken at; empty when not. */
   voiceSatellite?: string;
+  /** The paired PC the call runs on, by name; empty for the machine Nox runs on. */
+  device?: string;
+}
+
+/**
+ * The paired PC a question is about - only from the core's own fields (`device_id` and
+ * `device_name`, set by its router), never read out of the target: the target is what the tool
+ * says, and a path or argument can look like anything, "Laptop (ab12): ..." included. Without
+ * those fields (an older core) there is no device, and the target is shown exactly as it came.
+ */
+export function promptDevice(payload: Record<string, unknown>): string {
+  const id = payload.device_id;
+  const name = payload.device_name;
+  if (!str(id) || id.trim() === '' || !str(name)) return '';
+  return name.trim().slice(0, 64);
 }
 
 /**
@@ -190,6 +205,7 @@ export function parsePermissionRequested(payload: unknown, skewMs = 0): Permissi
     deadline: Number.isFinite(expires) ? expires - skewMs : null,
     rememberTtlS: ttl > 0 ? ttl : 0,
     voiceSatellite: str(p.voice_satellite) ? p.voice_satellite.slice(0, 64) : '',
+    device: promptDevice(p),
   };
 }
 

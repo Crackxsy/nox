@@ -1,6 +1,6 @@
 /**
- * The facts the old Status page showed, each on the Settings page it belongs to now (Spec UX-Neubau
- * §6): the health report on System, the AI providers on KI, the voice pipeline's live facts on
+ * The facts the old Status page showed, each on the Settings page it belongs to now: the health
+ * report on System, the AI providers on KI, the voice pipeline's live facts on
  * Stimme › Mehr Optionen. Words first, the core's identifiers underneath (`Detail`).
  *
  * The health report stays a real <table> (component row header, status cell, reason cell): it is a

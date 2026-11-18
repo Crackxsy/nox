@@ -1,0 +1,10 @@
+# False positives of scripts/check_planning_ids.py, one per line:
+#   path pattern :: text the matching line contains :: reason
+# An entry that matches nothing any more fails the check. Keep this list as short as possible:
+# a reference to a planning document is rephrased, not listed here.
+src/nox/ai/local_models.py :: default (Q4) download :: Q4 is a model quantisation level (4-bit), not a planning id
+tests/unit/pm/* :: ST-13 :: fixture in the id format of the vault notes the PM index parses (the user's own notes)
+tests/unit/pm/* :: EPIC-13 :: fixture in the id format of the vault notes the PM index parses (the user's own notes)
+tests/unit/pm/* :: ST-99-99 :: an id in that format that no fixture note has, for the not-found cases
+tests/integration/test_pm.py :: ST-13 :: fixture in the id format of the vault notes the PM index parses (the user's own notes)
+tests/integration/test_pm.py :: EPIC-13 :: fixture in the id format of the vault notes the PM index parses (the user's own notes)

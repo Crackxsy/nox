@@ -20,7 +20,7 @@ from nox.lan.tls import (
     node_id_of,
     spki_sha256,
 )
-from tests.unit.node.conftest import make_csr, make_key
+from tests.unit.node.support import make_csr, make_key
 
 NODE_ID = "a" * 32
 

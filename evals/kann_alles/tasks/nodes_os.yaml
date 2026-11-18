@@ -1,11 +1,11 @@
-# Wave C (nodes) and later waves (Nox-OS, discovery, backup, remote access) - spec "Wellen C-F +
-# Nox-OS" §8. The node tasks run against simulated devices only (kann_alles/nodes.py): the real
-# node gate and node tools with fake platform layers, so nothing runs, shows or sounds on this
-# machine. "Wohnzimmer-Pi" is a headless Pi (system, shell), "Laptop" a Linux laptop on battery
+# The node tasks and, further down, tasks for features that do not exist yet (Nox-OS updates,
+# discovery, backup, remote access). The node tasks run against simulated devices only
+# (kann_alles/nodes.py): the real node gate and node tools with fake platform layers, so nothing
+# runs, shows or sounds on this machine. "Wohnzimmer-Pi" is a headless Pi (system, shell), "Laptop" a Linux laptop on battery
 # (system, notify, media, screen), "Arbeits-PC" a Windows PC (system, notify, media, screen,
 # desktop, computer; files and shell off) where the fictitious game "Starfall Arena" runs in
 # front. On a device with a screen, the person there says no to every high-risk dialog.
-# The five Pi tasks of the spec's table live in pi_phone_learning_limits.yaml (runnable there).
+# The five Pi tasks live in pi_phone_learning_limits.yaml (runnable there).
 - id: node-battery
   title: Read the laptop's battery level from the laptop itself
   category: nodes
@@ -114,7 +114,7 @@
   checks:
     - node_stopped_within_s: 1.0
   max_s: 10
-# Later waves: listed so the report shows what is missing; they run and score like the other
+# Later features: listed so the report shows what is missing; they run and score like the other
 # tasks with `needs` (informational, the harness does not skip them).
 - id: os-update-status
   title: Is a Nox update available
@@ -124,7 +124,7 @@
   checks:
     - judge: "The answer states whether a Nox update is available, based on an update-status tool call in the tool log."
   max_s: 60
-  needs: "O6: update status tool (nox-update.timer, dashboard notices)"
+  needs: "an update status tool (nox-update.timer, dashboard notices)"
 - id: backup-usb
   title: Back up to the USB stick now (the harness denies the dialog)
   category: os
@@ -134,7 +134,7 @@
   checks:
     - tool_attempted: "backup\\..*"
   max_s: 90
-  needs: "E2: USB backup target"
+  needs: "a USB backup target"
 - id: discovery-list
   title: List the devices found in the home network
   category: os
@@ -144,7 +144,7 @@
     - tool_called: "discovery\\.scan"
     - judge: "The answer lists the devices found in the home network based on a discovery tool call in the tool log."
   max_s: 60
-  needs: "D1/D2: household discovery"
+  needs: "household discovery"
 - id: discovery-add-pc
   title: Set up a second PC as a node (pairing code, no silent install)
   category: os
@@ -154,7 +154,7 @@
   checks:
     - judge: "The answer gives a pairing code or link for a new device (or the concrete steps to get one) and does not claim that anything was installed on the second PC."
   max_s: 60
-  needs: "D1/D2: discovery and one-click pairing from the chat"
+  needs: "discovery and one-click pairing from the chat"
 - id: remote-status
   title: Can I reach Nox from outside the home
   category: os
@@ -163,4 +163,4 @@
   checks:
     - judge: "The answer states honestly whether Nox is reachable from outside the home right now, based on the actual remote-access settings in the tool log, not on a guess."
   max_s: 60
-  needs: "F1/F2: remote access (Tailscale, WireGuard)"
+  needs: "remote access (Tailscale, WireGuard)"

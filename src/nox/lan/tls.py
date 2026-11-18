@@ -70,7 +70,7 @@ _ISSUING = threading.Lock()
 CA_VALIDITY_DAYS = 3650
 SERVER_VALIDITY_DAYS = 825
 #: A node's client certificate. Short on purpose: a stolen laptop that stays offline loses its
-#: access within a month even if nobody revokes it (spec C §1.2).
+#: access within a month even if nobody revokes it.
 NODE_CERT_VALIDITY_DAYS = 30
 NODE_URI_PREFIX = "urn:nox:node:"
 RENEW_BEFORE = dt.timedelta(days=30)
@@ -426,7 +426,7 @@ def _ensure_tls(directory: Path, names: Sequence[str], addresses: Sequence[str])
     )
 
 
-# ---- node client certificates (spec C §1.2) ----------------------------------------------------
+# ---- node client certificates ----------------------------------------------------
 
 
 @dataclass(frozen=True)

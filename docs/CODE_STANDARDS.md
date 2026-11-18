@@ -7,9 +7,9 @@ project lore to make sense, the rule is wrong.
 ## 1. Readable as if written by one person
 
 - One style across all modules. Names say what a thing does (`replay_backfill_queue`, not `q2`).
-- Comments explain *why*, never *which ticket*. Story, spike and requirement identifiers (`ST-18-03`,
-  `SP-07`, `FR-7.16`, `B-11`, `OP-7 C`) belong in the changelog and the private product archive, not
-  in code comments or docstrings. If a constraint matters, state the constraint.
+- Comments explain *why*, never *which ticket*. Story, spike and requirement numbers (a ticket id, a review
+  finding number, a delivery step or wave letter) belong in the commit message and the changelog's
+  plain-words entry, not in code comments or docstrings. If a constraint matters, state the constraint.
 - A module has a one-paragraph docstring saying what it owns and what it deliberately does not.
 - No dead code, no commented-out code, no "temporary" flags older than one release.
 

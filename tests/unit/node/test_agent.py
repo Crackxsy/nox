@@ -24,7 +24,7 @@ from nox.node.manifest import NodeManifest, save_manifest
 from nox.node.pairing import NodePairing
 from nox.node.tools import NodeTool, default_tools
 from nox.security.audit import SqliteAuditLog
-from tests.unit.node.conftest import key_pem, pair_node
+from tests.unit.node.support import key_pem, pair_node
 
 
 class FakeNotifier:

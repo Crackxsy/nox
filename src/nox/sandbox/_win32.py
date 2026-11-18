@@ -562,7 +562,7 @@ class _AttributeList:
     Every sandboxed child is created with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` naming exactly its own
     three standard handles. `bInheritHandles` must be TRUE for stdio redirection, and without the
     list *every* inheritable handle the core holds at that moment - another run's pipe, a socket,
-    a file - would leak into the child (review finding 8).
+    a file - would leak into the child.
     """
 
     def __init__(self, count: int) -> None:

@@ -201,7 +201,7 @@ def test_the_layout_is_exactly_what_nox_release_writes(
     )
     assert from_script == from_nox
     parse_manifest(from_script)
-    # The node fields (C7) the same way, and strictly typed when read back.
+    # The node fields the same way, and strictly typed when read back.
     with_node = {"node_speaks": 2, "deps_changed": False}
     script_node = script.build_manifest(
         tag="v0.7.0",

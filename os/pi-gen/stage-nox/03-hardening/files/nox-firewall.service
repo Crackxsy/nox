@@ -8,7 +8,9 @@ Requires=nftables.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/nox/current/.venv/bin/python -I /usr/local/lib/nox-os/nox_firewall.py apply
+# The system interpreter and the distribution's PyYAML (python3-yaml): root never runs code from
+# Nox's own environment, which Nox updates itself. It only reads Nox's settings (data).
+ExecStart=/usr/bin/python3 -I /usr/local/lib/nox-os/nox_firewall.py apply
 ProtectSystem=strict
 ReadWritePaths=/run/nox-os
 ProtectHome=yes
