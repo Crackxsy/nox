@@ -872,14 +872,16 @@ def _world_specs(
 
 
 def wire_guards(
-    core: Any, control: NodeControl, *, remote: Callable[[], bool | None] = console_is_remote
+    core: Any, control: NodeControl, *, remote: Callable[[], bool | None] | None = None
 ) -> None:
     """While Nox controls a node: every "allow" and every request that changes something goes
     through `NodeSessionCondition`, a condition of the core's access policy; and the
     `node.computer.*` requests. Separate so a test can wire a fake core exactly like this.
-    `remote` tells whether this computer is used through a remote session."""
+    `remote` tells whether this computer is used through a remote session; by default the real
+    probe (`nox.node.console.console_is_remote`), looked up when this runs."""
     policy = core.registry.policy
-    policy.add_condition(NodeSessionCondition(control, policy.pins, remote))
+    probe = remote if remote is not None else console_is_remote
+    policy.add_condition(NodeSessionCondition(control, policy.pins, probe))
     _register_control_requests(core, core.registry, control)
 
 
