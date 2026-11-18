@@ -1,6 +1,6 @@
-"""The node's eyes and the rest of its hands (C6): `screen.capture`, `camera.snapshot`,
+"""The node's eyes and the rest of its hands: `screen.capture`, `camera.snapshot`,
 `browser.*`, `desktop.*`, `computer.*` and `media.control` - the core's tool names, run on this
-device under this device's rules (spec C §1.4).
+device under this device's rules.
 
 Each is reached only through `NodeGate` (prohibitions, the game lock, stop state, the group this
 device enabled - all off by default except `media` -, risk ceiling, the core's receipt, budget,
@@ -566,7 +566,7 @@ def _real_sender() -> Any:
 
 @dataclass
 class World:
-    """Everything the C6 tools need from this device; each part can be replaced in a test."""
+    """Everything the world tools need from this device; each part can be replaced in a test."""
 
     notice: Notice
     #: Whether `computer` is enabled here and the node is not stopped (read before every event).
@@ -763,7 +763,7 @@ def _desktop_and_computer(world: World) -> list[NodeTool]:
         notice=notice,
         nox_process=_is_nox_process,
         confirmation_pending=world.dialog_open,
-        # A terminal running `nox-node` is Nox's own window here (review H2): never clicked.
+        # A terminal running `nox-node` is Nox's own window here: never clicked.
         terminal_nox=lambda pid: terminal_runs_nox(pid, is_nox=_is_nox_process),
     )
     scratch = ToolRegistry()
@@ -811,7 +811,7 @@ def withheld(world: World) -> dict[str, str]:
 
 
 def world_tools(world: World) -> dict[str, NodeTool]:
-    """The C6 tools of this device: captures, browser, desktop, computer use and media - those
+    """The world tools of this device: captures, browser, desktop, computer use and media - those
     that can work here (`withheld`)."""
 
     async def media(args: BaseModel) -> dict[str, Any]:

@@ -382,7 +382,7 @@ def install(
 
     async def h_claim_status(_ctx: RequestContext, _p: StatusRequest) -> dict[str, Any]:
         """Read-only: whether this Nox-OS has its owner, and the setup window's time left - where
-        O4's onboarding starts. Elsewhere: not available."""
+        the onboarding wizard starts. Elsewhere: not available."""
         claim = getattr(core, "noxos_claim", None)
         if claim is None:
             return {"available": False, "claimed": False, "setup_mode": False, "seconds_left": None}

@@ -1,5 +1,5 @@
 /**
- * The strip under the header for states that must never scroll out of sight (Spec UX-Neubau §3):
+ * The strip under the header for states that must never scroll out of sight:
  * Nox is stopped, Nox steers mouse and keyboard (here, or on a paired PC - one line each, with the
  * same Stopp as the header), there is no connection to Nox. It has no close
  * button - each line goes away when the core says the state ended.
@@ -27,7 +27,7 @@ export interface StatusStripProps {
   /** When the stop happened, if this page saw it; null when only the level is known. */
   stoppedAt: string | null;
   computerUse: ComputerUseNotice | null;
-  /** Computer-use sessions on paired PCs (spec C §1.10). */
+  /** Computer-use sessions on paired PCs. */
   nodeComputerUse?: ComputerUseNotice[];
   /** The core is unreachable (not "still connecting"). */
   offline: boolean;

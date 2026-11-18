@@ -32,7 +32,7 @@ const tourParam = animate ? queryString(window.location.search, 'tour') : null;
 const tour = tourParam ? tourParam.split(',').filter(Boolean) : null;
 const tourEveryMs = queryInt(window.location.search, 'every') ?? 3500;
 const forceRig = animate && queryString(window.location.search, 'renderer') === 'rig';
-// `?device=<id>`: the overlay a paired node serves (C9) - its pet follows that node's speech.
+// `?device=<id>`: the overlay a paired node serves - its pet follows that node's speech.
 const device = deviceFromQuery(queryString(window.location.search, 'device'));
 // One language per window (#43/#55): the same rule the dashboard uses, so a German desktop shows
 // German in both. `<html lang>` follows, so a screen reader pronounces the words correctly.

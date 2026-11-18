@@ -381,7 +381,7 @@ async def test_a_kill_while_the_process_is_being_spawned_discards_the_session(
 async def test_a_start_thrown_away_after_a_kill_returns_only_once_the_process_is_gone(
     tmp_path: Path, log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """C10: the kill switch kills a starting process without waiting (SIGKILL is delivered
+    """The kill switch kills a starting process without waiting (SIGKILL is delivered
     asynchronously). The start that then throws its session away waits until the process has
     really ended, so whoever sees the failure sees the process gone - no polling needed."""
     provider, _ = _provider(tmp_path, log, monkeypatch, FAKE_INIT_DELAY="0.5")

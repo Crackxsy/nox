@@ -1,5 +1,5 @@
 /**
- * The four areas, always in the same place (Spec UX-Neubau §3, §8): a side bar from 720 px up
+ * The four areas, always in the same place: a side bar from 720 px up
  * (232 px with text on a desktop, 92 px with icon and short text on a tablet) and a 64 px bar at
  * the bottom of a phone. Both are plain navigation links with `aria-current`; Alt+1..4 reach them
  * from anywhere (App wires the keys).

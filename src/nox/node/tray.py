@@ -1,4 +1,4 @@
-"""The node's tray icon and its stop key (spec C §1.7, §1.8): what Nox does on this device, at a
+"""The node's tray icon and its stop key: what Nox does on this device, at a
 glance, and a stop that works even when the core is gone.
 
 * Icon and tooltip follow `status.json` of the running node: connected, not connected with Nox
@@ -10,7 +10,7 @@ glance, and a stop that works even when the core is gone.
   says once it resumed.
 * **Was Nox hier darf** lists the capability groups this device allowed, in the dashboard's words;
   changing them stays a command on this device (`nox-node allow`), on purpose.
-* **Zuhören und sprechen** (C9): while its microphone is open the icon says so ("Nox hört zu"); a
+* **Zuhören und sprechen**: while its microphone is open the icon says so ("Nox hört zu"); a
   microphone the dashboard has not switched on yet says that too ("Nox hört hier nicht zu: im
   Dashboard noch nicht eingeschaltet."). With listening set up, the menu has a checkable
   **Mikrofon stumm** (`nox-node voice mute`); `Ctrl+Alt+Space` held is push-to-talk.
@@ -45,7 +45,7 @@ __all__ = [
     "view",
 ]
 
-#: The stop key (spec C §1.7).
+#: The stop key: it stops Nox on this device even when the core is gone.
 STOP_KEYS = frozenset({"ctrl", "alt", "shift", "k"})
 #: Push-to-talk for the voice satellite, held (the core's default key).
 PTT_KEYS = frozenset({"ctrl", "alt", "space"})

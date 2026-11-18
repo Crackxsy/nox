@@ -424,7 +424,7 @@ export const de = {
   computer_use_release_failed: 'Die Sperre wurde nicht gelöst.',
   computer_use_banner_no_hotkey: 'Nox steuert gerade Maus und Tastatur – „Stopp“ beendet sofort.',
 
-  // -- UX redesign (Spec UX-Neubau): shell, Heute, palette, permission, Stopp, settings pages --
+  // -- UX redesign: shell, Heute, palette, permission, Stopp, settings pages --
   ux_area_today: 'Heute',
   ux_area_nox: 'Nox',
   ux_area_devices: 'Geräte & Fähigkeiten',

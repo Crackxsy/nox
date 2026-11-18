@@ -1,6 +1,6 @@
 # Nodes: Nox's hands on your other computers
 
-*Deutsch: [NODES.de.md](NODES.de.md)*
+*Deutsch: [NODES.de.md](NODES.de.md)* · For developers, a map through the code: [ARCHITECTURE-NODES.md](ARCHITECTURE-NODES.md)
 
 > Commands: `nox-node ...` is the same as `nox node ...` and works in the Command Prompt on Windows and in a terminal on Linux/macOS.
 
@@ -8,13 +8,13 @@ A household has **one** Nox - the *core*, ideally on a Raspberry Pi. Every other
 run a small **`nox node`**: it connects to the core and lets Nox do things *on that device* - and
 only the things you allowed there.
 
-> Status: wave C is complete. A node pairs with a code, holds its own allow-list, audit trail and
+> Status: A node pairs with a code, holds its own allow-list, audit trail and
 > budget, asks high-risk questions on the device itself, and offers system values, notices, music,
 > files in folders you allow, commands in its own sandbox, screen and camera pictures, a browser,
 > windows and programs, mouse and keyboard (Windows), and the voice, OBS and pet-overlay
 > satellites. Installing programs (`package.*`) is **not** available on nodes yet - see
 > [Installing programs](#installing-programs-not-available-yet). The node finds the core only at
-> the address in its pairing link; discovery in the home network comes with wave D.
+> the address in its pairing link; finding the core in the home network is not available yet.
 
 Two rules hold everywhere below. **Every call passes two gates:** the core's permission engine and
 the node's own gate - either can refuse, only both together allow. **The device decides its hard
@@ -589,7 +589,7 @@ look; `nox-node log` shows every decision the node made, with its reason.
   dashboard says "You can connect computers once other devices may open Nox." otherwise.
 - **Can it reach the core's port?** See [Firewall](#firewall-port-47844) below.
 - **Did the core's address change?** The node connects only to the address in its pairing link
-  (discovery comes with wave D). Give the core a fixed address in your router, or pair again.
+  (finding the core in the home network is not available yet). Give the core a fixed address in your router, or pair again.
 - **"Update needed"** means the core does not accept the node's protocol: update the node (or
   the core); until then Nox only reads system values there.
 
@@ -674,7 +674,7 @@ the current release with the installer.
 See [SECURITY.md](SECURITY.md#nodes-nox-node) for the node's threat model and
 [Accepted limits (nodes)](SECURITY.md#accepted-limits-nodes) for every accepted limit in one
 place. Known limits in this release: the node finds the core only at the address in the pairing
-link (discovery comes with wave D); installing programs on nodes is an open decision. The Windows
+link (finding the core in the home network is not available yet); installing programs on nodes is an open decision. The Windows
 logon task is checked in CI on an administrator account; that a standard account can register it
 is the documented Task Scheduler behaviour for a task that runs as that account, not yet a tested
 fact. The macOS installer is a beta.

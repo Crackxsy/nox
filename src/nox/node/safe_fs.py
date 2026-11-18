@@ -32,9 +32,10 @@ a move and for the file to delete, then act relative to the verified handles - a
 replacing, into the trash only (never an unlink); see their docstrings.
 
 Everything read or written afterwards goes through that one handle, so swapping the path between
-the check and the use changes nothing (`test_c5.py` swaps it). What the OS cannot bind to a handle
-is said plainly: listing a folder on Windows enumerates by its verified path while the folder's
-handle is held open and compares the folder's identity before and after.
+the check and the use changes nothing (`tests/unit/node/test_safe_fs_read_write.py` swaps it;
+the example is drawn in docs/ARCHITECTURE-NODES.md, "Files: check on the handle"). What the OS
+cannot bind to a handle is said plainly: listing a folder on Windows enumerates by its verified
+path while the folder's handle is held open and compares the folder's identity before and after.
 """
 
 from __future__ import annotations

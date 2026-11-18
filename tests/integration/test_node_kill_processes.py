@@ -1,4 +1,4 @@
-"""Spec C §1.7 with real processes: five nodes, each in a Python process of its own (its own node
+"""Stopping with real processes: five nodes, each in a Python process of its own (its own node
 folder and Nox folder), each running a real `sleep 60` in its real sandbox (bwrap) through the
 real `NodeAgent`, `NodeGate` and `shell.run`. The core side is a real `NodeListener` in this test
 process; the kill switch (`KillSwitchService`, with the listener as its "nodes" stop hook, wired
@@ -39,8 +39,16 @@ from nox.node.receipts import ReceiptSigner
 from nox.node.repo import NodeRepository
 from nox.remote.repo import RemoteRepository
 from tests.unit.ipc.conftest import SimpleBus
-from tests.unit.node.conftest import ADDRESSES, NAMES, key_pem, pair_node
-from tests.unit.node.test_c4 import call, kill_switch_for, percentile, session_of
+from tests.unit.node.support import (
+    ADDRESSES,
+    NAMES,
+    call,
+    key_pem,
+    kill_switch_for,
+    pair_node,
+    percentile,
+    session_of,
+)
 
 pytestmark = [
     pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the strong sandbox (bwrap)"),

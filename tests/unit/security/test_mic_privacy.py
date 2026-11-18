@@ -1,4 +1,4 @@
-"""Review finding 14: `mic.record_long` must obey privacy zones and the microphone capture switch.
+"""`mic.record_long` must obey privacy zones and the microphone capture switch.
 
 `CAPTURE_TOOL_PATTERNS` listed "microphone" but the tool is called `mic`, so a privacy zone did not
 stop it, and the `privacy.capture.microphone` switch was not consulted by the engine at all.

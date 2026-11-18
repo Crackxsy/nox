@@ -90,7 +90,7 @@ ERR_INVALID_PARAMS = -32602
 
 SecurityKillFn = Callable[[str, str], Awaitable[None]]
 SessionFn = Callable[["NodeSession"], Awaitable[None]]
-#: A satellite method from a node (C9): (session, method, validated params) -> the answer's
+#: A satellite method from a node: (session, method, validated params) -> the answer's
 #: `result`, or None for a notification. Must return quickly - it runs on the node's channel.
 SatelliteFn = Callable[["NodeSession", str, BaseModel], Awaitable[dict[str, Any] | None]]
 #: Satellite levels a node may send per second; more are dropped (never a violation).
@@ -119,7 +119,7 @@ class NodeSession:
     #: Set when the node answered `nox/killed` after the last `nox/kill`.
     killed: asyncio.Event = field(default_factory=asyncio.Event)
     killed_calls: list[str] = field(default_factory=list)
-    #: The certificate's end: the session closes when it is reached (review N1).
+    #: The certificate's end: the session closes when it is reached.
     cert_not_after: datetime | None = None
     #: What the node reported in its last `nox/pong`: why it refuses everything, or "".
     node_state: str = ""
@@ -425,7 +425,7 @@ class NodeListener:
                     "node_id": device.id,
                     "receipt_key": self._receipt_key,
                     "engaged": bool(self._kill_engaged is not None and self._kill_engaged()),
-                    # The satellite methods this core understands (C9): a node sends no other.
+                    # The satellite methods this core understands: a node sends no other.
                     "features": sorted(p.FEATURES) if self.on_satellite is not None else [],
                     "serverInfo": {"name": "nox-core", "version": str(p.NODE_PROTOCOL)},
                 },
@@ -591,7 +591,7 @@ class NodeListener:
             session.killed.set()
         elif method == p.M_CONFIRM_RESULT:
             assert isinstance(params, p.ConfirmResult)
-            # The decision was the device's (D1); the core records that it was asked there.
+            # The decision was the device's; the core records that it was asked there.
             self._append_audit(
                 "node.confirm",
                 session.device_id,
@@ -613,7 +613,7 @@ class NodeListener:
     async def _satellite(
         self, session: NodeSession, method: str, msg_id: Any, params: BaseModel
     ) -> None:
-        """A satellite method (C9). A core without satellites answers "not supported" - a node
+        """A satellite method. A core without satellites answers "not supported" - a node
         only sends these to a core that said it understands them, so it is no violation."""
         handler = self.on_satellite
         limit = FLOOD_PER_MINUTE.get(method)

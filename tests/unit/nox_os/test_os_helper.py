@@ -489,7 +489,7 @@ def test_the_passphrase_is_set_only_in_setup_mode(tmp_path: Path) -> None:
         with pytest.raises(helper.Refused):
             helper.handle(_req(f"maint set\n{_new(PASS)}"), sys_)
         mode.unlink()
-    # No window (O3): an empty flag, one whose end is reached, one of an earlier boot.
+    # No window: an empty flag, one whose end is reached, one of an earlier boot.
     for no_window in (
         lambda: mode.write_text("", "ascii"),
         lambda: open_setup(tmp_path, until=UPTIME),
@@ -622,7 +622,7 @@ def test_maint_set_never_replaces_a_passphrase_without_roots_reset(tmp_path: Pat
     assert refused.value.code == "not_setup"
 
 
-# ---- the claim (O3) --------------------------------------------------------------------------
+# ---- the claim --------------------------------------------------------------------------
 
 CLAIM_CODE = "ABCD-EFGH-JKMN"  # fictitious
 LAN_PEER = "192.0.2.30"

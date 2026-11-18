@@ -1,5 +1,5 @@
 /**
- * The pet of one paired node (C9): an overlay a node relays carries `?device=<id>` and follows
+ * The pet of one paired node: an overlay a node relays carries `?device=<id>` and follows
  * that node's speech only; the core's own pet ignores a node's speech. Nothing else is filtered.
  */
 

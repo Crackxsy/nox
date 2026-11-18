@@ -80,7 +80,7 @@ def _clean_tree(base: Path) -> tuple[Path, Path]:
 
 
 def _o2(root: Path) -> None:
-    """What O2's sub-stage (os/pi-gen/stage-nox/03-hardening/00-run.sh) leaves in the image, from
+    """What hardening (os/pi-gen/stage-nox/03-hardening/00-run.sh) leaves in the image, from
     the very files it installs."""
     system = root / "etc" / "systemd" / "system"
     shutil.copy(REPO / "installer" / "linux" / "nox.service", system / "nox.service")
@@ -149,7 +149,7 @@ def _o2(root: Path) -> None:
 
 
 def _o3(root: Path) -> None:
-    """What O3's sub-stage (os/pi-gen/stage-nox/04-firstboot/00-run.sh) leaves in the image."""
+    """What first boot (os/pi-gen/stage-nox/04-firstboot/00-run.sh) leaves in the image."""
     system = root / "etc" / "systemd" / "system"
     for unit in (
         "nox-firstboot.service",
@@ -255,7 +255,7 @@ SPOILERS: dict[str, Spoil] = {
     "nox.service not enabled": lambda r, b: (
         r / "etc/systemd/system/multi-user.target.wants/nox.service"
     ).unlink(),
-    # O2
+    # hardening
     "nox-ssh.service enabled": lambda r, b: _link(
         r / "etc/systemd/system/multi-user.target.wants/nox-ssh.service", "/x"
     ),
@@ -333,7 +333,7 @@ SPOILERS: dict[str, Spoil] = {
     "a boot firewall letting SSH in from the device itself": lambda r, b: _replace(
         r / "etc/nftables.conf", 'iif "lo" tcp dport 22 drop\n', ""
     ),
-    # O3
+    # first boot
     "systemd-firstboot not masked": lambda r, b: (
         r / "etc/systemd/system/systemd-firstboot.service"
     ).unlink(),

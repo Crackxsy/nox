@@ -40,7 +40,7 @@ class GroupInfo:
     label_en: str
 
 
-#: Spec C §1.4. Off by default unless it only reads or shows something harmless.
+#: The capability groups. Off by default unless it only reads or shows something harmless.
 GROUPS: dict[str, GroupInfo] = {
     # The same words as the Devices page (`ui/dashboard/src/i18n`, `node_group_*`).
     "system": GroupInfo(True, "Systemwerte lesen", "read system values"),
@@ -70,10 +70,10 @@ class NodeManifest(BaseModel):
     #: Highest risk this node accepts at all. `critical` is not a choice.
     max_risk: RiskName = "high"
     #: A node without a screen cannot ask locally; high risk is then refused unless this was set
-    #: here, on the device (spec C §1.6 step 5, a documented residual risk).
+    #: here, on the device (see docs/SECURITY.md, "Accepted limits (nodes)").
     trust_core_for_high: bool = False
     #: The node's own budget, independent of the core's: calls with a side effect, and high-risk
-    #: calls, per hour (spec C §1.6 step 6).
+    #: calls, per hour.
     max_calls_per_hour: int = Field(default=60, ge=0, le=1000)
     max_high_per_hour: int = Field(default=5, ge=0, le=100)
     #: The folders `file.*` may open on this device (group `files`); none by default. Absolute,

@@ -4,80 +4,39 @@ test can send exactly what a malicious node would."""
 
 from __future__ import annotations
 
-import asyncio
-import json
-import ssl
 from collections.abc import AsyncIterator, Iterator
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import pytest
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
-from websockets.asyncio.client import ClientConnection, connect
 
 from nox.data.db import Database
 from nox.lan.tls import TlsMaterial, ensure_tls
 from nox.node.listener import NodeListener
 from nox.node.pairing import NodePairing
-from nox.node.protocol import NODE_PATH, NodePairRequest
 from nox.node.repo import NodeRepository
 from nox.remote.repo import RemoteRepository
 from tests.unit.ipc.conftest import SimpleBus
-
-NAMES = ("localhost", "wohnzimmer-pi.local")
-ADDRESSES = ("127.0.0.1", "192.168.1.20")
-MANIFEST = "0" * 64
+from tests.unit.node import support
+from tests.unit.node.support import (
+    ADDRESSES,
+    NAMES,
+)
 
 
 @pytest.fixture(autouse=True)
 def _english_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     """The node's terminal and dialog words in English, whatever this machine's locale; the
-    German texts are tested on their own (`test_gremium_r1a.py`)."""
+    German texts are tested on their own (`test_node_cli.py`)."""
     monkeypatch.setenv("NOX_LANG", "en")
 
 
 @pytest.fixture(autouse=True)
 def _instant_answers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scripted confirmers answer at once; the 1.5 s rule against reflex answers is tested on
-    its own (`test_review_c4.py`)."""
+    its own (`test_device_confirmation.py`)."""
     from nox.node import agent as agent_module
 
     monkeypatch.setattr(agent_module, "MIN_DECISION_S", 0.0)
-
-
-def make_key() -> ec.EllipticCurvePrivateKey:
-    return ec.generate_private_key(ec.SECP256R1())
-
-
-def make_csr(key: Any, *, cn: str = "Laptop", extra: bool = False) -> str:
-    builder = x509.CertificateSigningRequestBuilder().subject_name(
-        x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
-    )
-    if extra:  # what a greedy node might ask for: a CA, a server name
-        builder = builder.add_extension(
-            x509.BasicConstraints(ca=True, path_length=None), critical=True
-        ).add_extension(x509.SubjectAlternativeName([x509.DNSName("evil.example")]), critical=False)
-    return builder.sign(key, hashes.SHA256()).public_bytes(serialization.Encoding.PEM).decode()
-
-
-def key_pem(key: ec.EllipticCurvePrivateKey) -> bytes:
-    return key.private_bytes(
-        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
-    )
-
-
-@dataclass
-class PairedNode:
-    node_id: str
-    key: ec.EllipticCurvePrivateKey
-    cert_pem: str
-    serial: str
-    cert_file: Path
-    key_file: Path
 
 
 @pytest.fixture
@@ -112,34 +71,6 @@ def pairing(
     return NodePairing(repo, nodes, tls_dir=tmp_path / "tls", bus=SimpleBus())  # type: ignore[arg-type]
 
 
-async def pair_node(pairing: NodePairing, tmp_path: Path, name: str = "") -> PairedNode:
-    key = make_key()
-    start = await pairing.start(name=name)
-    redeemed = await pairing.redeem(
-        NodePairRequest(
-            code=start.code,
-            csr=make_csr(key),
-            name=name,
-            os="linux",
-            arch="x86_64",
-            version="0.7.0",
-        )
-    )
-    assert redeemed.result.ok and redeemed.issued is not None, redeemed.result
-    folder = tmp_path / f"node-{redeemed.result.device_id[:8]}"
-    folder.mkdir()
-    (folder / "node.crt").write_text(redeemed.issued.cert_pem)
-    (folder / "node.key").write_bytes(key_pem(key))
-    return PairedNode(
-        node_id=redeemed.result.device_id,
-        key=key,
-        cert_pem=redeemed.issued.cert_pem,
-        serial=redeemed.issued.serial,
-        cert_file=folder / "node.crt",
-        key_file=folder / "node.key",
-    )
-
-
 @pytest.fixture
 async def listener(
     pairing: NodePairing, nodes: NodeRepository, tls: TlsMaterial, tmp_path: Path
@@ -171,72 +102,6 @@ async def listener(
         await server.stop()
 
 
-def client_context(
-    tls: TlsMaterial, node: PairedNode | None = None, *, max_tls12: bool = False
-) -> ssl.SSLContext:
-    context = ssl.create_default_context(cafile=str(tls.ca_file))
-    if node is not None:
-        context.load_cert_chain(str(node.cert_file), str(node.key_file))
-    if max_tls12:
-        context.maximum_version = ssl.TLSVersion.TLSv1_2
-    return context
-
-
-async def open_node(
-    listener: NodeListener,
-    context: ssl.SSLContext,
-    *,
-    origin: str | None = None,
-    path: str = NODE_PATH,
-) -> ClientConnection:
-    return await connect(
-        f"wss://127.0.0.1:{listener.port}{path}",
-        ssl=context,
-        server_hostname="localhost",
-        origin=origin,  # type: ignore[arg-type]
-        open_timeout=5,
-        ping_interval=None,
-        compression=None,
-        max_size=2 * 1024 * 1024,
-    )
-
-
-def hello(node_protocol: int = 1) -> dict[str, Any]:
-    return {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-06-18",
-            "node_protocol": node_protocol,
-            "node_version": "0.7.0",
-            "os": "linux",
-            "arch": "x86_64",
-            "manifest_hash": MANIFEST,
-        },
-    }
-
-
-async def recv_json(ws: ClientConnection, timeout: float = 5.0) -> dict[str, Any]:
-    message: dict[str, Any] = json.loads(await asyncio.wait_for(ws.recv(), timeout))
-    return message
-
-
-async def recv_until(ws: ClientConnection, predicate: Any, timeout: float = 5.0) -> dict[str, Any]:
-    async def loop() -> dict[str, Any]:
-        while True:
-            message = await recv_json(ws, timeout)
-            if predicate(message):
-                return message
-
-    return await asyncio.wait_for(loop(), timeout)
-
-
-async def greet(ws: ClientConnection, node_protocol: int = 1) -> dict[str, Any]:
-    await ws.send(json.dumps(hello(node_protocol)))
-    return await recv_until(ws, lambda m: m.get("id") == 1)
-
-
 @pytest.fixture(autouse=True)
 def _same_groups_on_every_test_os(monkeypatch: pytest.MonkeyPatch) -> None:
     """On the macOS runner `shell` and `media` are not available (`cli_text.supported_here`), so
@@ -255,3 +120,49 @@ def _same_groups_on_every_test_os(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         cli, "supported_here", lambda group, platform="linux": real(group, platform) is None
     )
+
+
+@pytest.fixture(autouse=True)
+def receipt_target(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """The node and core the receipts of this test are signed for - a fresh one for every test.
+
+    `support.signed` reads it, `support.start_node` points it at the core of the node it starts.
+    Nothing of it outlives the test."""
+    target = {"device": "d" * 32, "core": "c" * 64}
+    monkeypatch.setattr(support, "_receipt_target", target)
+    return target
+
+
+@pytest.fixture
+def a_screen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A device with a screen (`mode: auto` is push-to-talk there). The satellite test modules
+    use it for every test; the headless default has a test of its own
+    (`test_a_headless_device_listens_for_the_wake_word`)."""
+    monkeypatch.setattr("nox.node.confirm.has_screen", lambda: True)
+
+
+@pytest.fixture
+def fs_world(tmp_path: Path) -> dict[str, Path]:
+    """An allowed folder with one note in it, the node folder with its key, and a folder
+    outside both - the three places a path on a node can point to."""
+    root = tmp_path / "allowed"
+    (root / "notes").mkdir(parents=True)
+    (root / "notes" / "einkauf.txt").write_bytes(b"Haferflocken\n")
+    node = tmp_path / "node-home"
+    node.mkdir()
+    (node / "node.key").write_text("NODE-KEY", encoding="utf-8")
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "private.txt").write_text("not for Nox", encoding="utf-8")
+    return {"root": root, "node": node, "outside": outside}
+
+
+@pytest.fixture
+def empty_fs_world(tmp_path: Path) -> dict[str, Path]:
+    """An allowed folder with an empty `notes` folder and an empty node folder: what the write
+    tests start from, so that a file found afterwards was written by the test."""
+    root = tmp_path / "allowed"
+    (root / "notes").mkdir(parents=True)
+    node = tmp_path / "node-home"
+    node.mkdir()
+    return {"root": root, "node": node}

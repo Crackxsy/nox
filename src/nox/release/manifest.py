@@ -134,7 +134,7 @@ class ReleaseManifest:
     next_keys: tuple[TrustedKey, ...] = ()
     node_protocol: tuple[int, int] | None = None
     min_node_version: Version | None = None
-    #: The node protocol the `nox node` of this release speaks (C7): a node installs it by itself
+    #: The node protocol the `nox node` of this release speaks: a node installs it by itself
     #: only when its paired core accepts that protocol.
     node_speaks: int | None = None
     #: Whether `uv.lock` changed since the previous release: then a node's code-only update

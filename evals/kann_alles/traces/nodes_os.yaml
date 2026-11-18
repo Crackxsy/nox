@@ -1,4 +1,4 @@
-# Replay traces for the wave C node tasks (tasks/nodes_os.yaml), hand-written from each task's
+# Replay traces for the node tasks (tasks/nodes_os.yaml), hand-written from each task's
 # expectation (kann_alles/traces.py documents the format). CI replays them against a real core and
 # the simulated devices: no model, no judge. `expect.score` is what the replay must reach; `ok`
 # says how each call must end. A recorded live run (`--record`) can replace a hand-written trace.

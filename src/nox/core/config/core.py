@@ -130,7 +130,7 @@ class LanConfig(StrictSection):
     pair_attempts_per_minute: int = Field(default=5, ge=1, le=60)
     #: Serve clients from public addresses too. Off: only loopback and private networks are
     #: answered, so a port forward or a public address on the machine does not expose the
-    #: pairing page to the internet. Access from outside the home is its own feature (wave F).
+    #: pairing page to the internet. Access from outside the home is a feature of its own.
     allow_public_clients: bool = False
     #: Where `nox node`s connect (mutual TLS, `nox.node.listener`); only while `enabled`.
     node_port: int = Field(default=47844, ge=0, le=65535)

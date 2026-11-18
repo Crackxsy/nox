@@ -277,7 +277,7 @@ class RequestRegistry:
             raise IpcError(ERR_PERMISSION, f"role {ctx.role!r} may not call {envelope.name!r}")
         lock = self.input_lock
         payload = envelope.payload
-        # One rule for "calm" with the node lock below: unmuting is not calm (review H2).
+        # One rule for "calm" with the node lock below: unmuting is not calm.
         if (
             ctx.role in INPUT_ROLES
             and lock is not None

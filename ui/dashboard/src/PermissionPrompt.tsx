@@ -1,5 +1,5 @@
 /**
- * "Darf Nox …?": one permission component in three places (Spec UX-Neubau §5) - inline in the
+ * "Darf Nox …?": one permission component in three places - inline in the
  * conversation, under "Wartet auf dich" on Heute, and as a sheet on every other page.
  *
  * The core asks every confirming client at once (`security.permission_requested`); the first answer
@@ -475,7 +475,7 @@ function PromptDialog(props: PermissionPromptProps & { prompt: PermissionPrompt;
         className="perm-dialog ask"
       >
         <PromptBody {...props} idBase="perm" level={2} takeFocus holdFocus={hold} answerRef={answerRef} />
-        {/* The page behind is inert; Stopp stays where it always is (Spec §5). */}
+        {/* The page behind is inert; Stopp stays where it always is. */}
         <StopButton placement="corner" />
       </div>
     </div>

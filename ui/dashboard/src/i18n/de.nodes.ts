@@ -1,7 +1,7 @@
 /**
  * German copy of Geräte › Computer und Server (`pages/Nodes.tsx` and its sheets) - PCs, laptops
  * and servers paired as nodes (`nox.node`). Only that section uses it, so it is fetched with that
- * section (`withNodeCopy`), not with every area (Spec UX-Neubau §12). Same rules as `de.ts`.
+ * section (`withNodeCopy`), not with every area. Same rules as `de.ts`.
  */
 
 export const deNodes = {

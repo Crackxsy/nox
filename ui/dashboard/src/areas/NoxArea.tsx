@@ -1,5 +1,5 @@
 /**
- * Nox: what was said and what Nox did (Spec UX-Neubau §3) - Gespräch, Ansichten (formerly Board),
+ * Nox: what was said and what Nox did - Gespräch, Ansichten (formerly Board),
  * Clips, Verlauf (formerly Audit, in plain words). Loaded on first visit.
  *
  * The conversation carries the open permission question inline, at the place of the action; the

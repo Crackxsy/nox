@@ -1,4 +1,4 @@
-"""One conversation per channel, cleared exactly when its context is discarded (re-review N1).
+"""One conversation per channel, cleared exactly when its context is discarded.
 
 Before: every turn of the process - voice, every dashboard client, every phone - ran in one
 conversation (`Orchestrator.session_id`), so one page read anywhere tainted everything, and
@@ -16,7 +16,7 @@ from nox.ai.base import AiChunk, AiRequest
 from nox.ai.tooluse import OfferedTool
 from nox.core.orchestrator import VOICE_CHANNEL, is_new_conversation_request
 from nox.core.toolloop import ToolLoop
-from tests.unit.core.test_orchestrator import make
+from tests.unit.fakes import make_orchestrator as make
 
 
 class _Outcome(BaseModel):

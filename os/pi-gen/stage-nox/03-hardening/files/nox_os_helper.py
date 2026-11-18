@@ -18,7 +18,7 @@ shell, no paths, no units, no options:
                                   - or root created /var/lib/nox-os/reset-maintenance
     maint change                  then `pass <old>` and `new <passphrase>`
     claim <device id> <address>   then `code <claim code>`, optionally `new <passphrase>` and
-                                  `ticket <ticket>` (step O3, from Nox's claim page, over TLS):
+                                  `ticket <ticket>` (from Nox's claim page, over TLS):
                                   only in setup mode, only while unclaimed. Marks the device
                                   claimed (/var/lib/nox-os-claim/claimed), sets the maintenance
                                   passphrase sent (if none is set, or root asked for a reset) and
@@ -122,7 +122,7 @@ PASSPHRASE_LOCK = RUN / "helper" / "passphrase.lock"
 #: Root's deliberate reset: with it (and in setup mode) `maint set` may replace a passphrase.
 RESET_FLAG = Path("/var/lib/nox-os/reset-maintenance")
 #: Present (root's) only while the first-boot setup runs: the one time a passphrase may be set
-#: without knowing an old one, and the claim's window (step O3).
+#: without knowing an old one, and the claim's window.
 SETUP_MODE = RUN / "setup-mode"
 BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 #: The claim code's hash (nox_setup.py; from the setup card or made at boot), root 0600.
@@ -874,7 +874,7 @@ def _claim_side(pending: dict[str, object], request: Request) -> tuple[str, str]
 
 
 def claim(system: System, request: Request) -> dict[str, object]:
-    """The claim (step O3): the code against its hash, in the setup window, while unclaimed.
+    """The claim: the code against its hash, in the setup window, while unclaimed.
     Success marks the device claimed - root's file, the firewall and Nox go by it - sets the
     maintenance passphrase sent (never over an existing one, unless root asked for a reset),
     and ends setup mode - hotspot and portal down before the firewall is regenerated."""

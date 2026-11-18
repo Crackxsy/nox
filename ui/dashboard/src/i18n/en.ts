@@ -407,7 +407,7 @@ export const en: Record<CoreKey, string> = {
   computer_use_release_failed: 'The lock was not released.',
   computer_use_banner_no_hotkey: 'Nox is controlling mouse and keyboard – “Stop” ends it at once.',
 
-  // -- UX redesign (Spec UX-Neubau): shell, Today, palette, permission, Stop, settings pages --
+  // -- UX redesign: shell, Today, palette, permission, Stop, settings pages --
   ux_area_today: 'Today',
   ux_area_nox: 'Nox',
   ux_area_devices: 'Devices & skills',

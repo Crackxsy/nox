@@ -420,7 +420,7 @@ def grant_matches(grant: TemporaryGrant, request: PermissionRequest, now: dateti
     bound to one node as `device:<id>|<scope>`.
 
     Device-scoped both ways: a grant remembered for a call on the laptop covers only the laptop,
-    and a grant remembered on the core never covers a node (spec C §1.5)."""
+    and a grant remembered on the core never covers a node."""
     grant_device, inner_scope = split_device_scope(grant.scope)
     if (grant_device or "") != request.device:
         return False
@@ -832,7 +832,7 @@ class DefaultPermissionEngine:
         #: Conversations (`PermissionRequest.conversation`) that hold untrusted content, and
         #: what the user said in each.
         self._taint = TaintLedger()
-        #: A node's name by its id, for a question that came from its voice satellite (C9, set by
+        #: A node's name by its id, for a question that came from its voice satellite (set by
         #: `nox.node.install`).
         self.satellite_label: Callable[[str], str] | None = None
 
@@ -852,7 +852,7 @@ class DefaultPermissionEngine:
         `end_session`): a command remembered meanwhile in another, untainted conversation would
         otherwise stay usable while untrusted content keeps arriving - by work the tainted
         conversation set up to run later outside it, for one. The cost is accepted (owner
-        decision, C10): during a node session every message from a paired device takes the
+        decision): during a node session every message from a paired device takes the
         remembered commands with it, and they are approved again. A tainted conversation also
         never creates a remembered grant (`_can_remember`).
         """

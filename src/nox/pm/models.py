@@ -46,7 +46,7 @@ class WorkItemValidationError(ValueError):
 
 class WorkItem(BaseModel):
     """One row of the PM index (`pm_items`), mirrored from a vault note or a `projects` list
-    entry. `id` is the filename-prefix id used throughout the vault (e.g. `ST-13-01`), which is
+    entry. `id` is the filename-prefix id used throughout the vault (`ST-<epic>-<story>`), which is
     accepted over the alternative `NOX-<epic>.<story>` form."""
 
     model_config = ConfigDict(frozen=True)

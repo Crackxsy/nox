@@ -1,5 +1,5 @@
 /**
- * The bar on top of every page (Spec UX-Neubau §3, §5): on the left what Nox is doing right now and
+ * The bar on top of every page: on the left what Nox is doing right now and
  * in which Modus (tapping it opens the Modus menu with "Stumm"), on the right what waits for the
  * person, the privacy level, and Stopp.
  *
@@ -19,7 +19,7 @@ import { Icon } from './icons';
 import type { Presence } from './presence';
 import { Sheet } from './Sheet';
 
-/** The menus' forms load when a menu opens (the start bundle stays small, Spec §12). */
+/** The menus' forms load when a menu opens (the start bundle stays small). */
 const ModeChoice = lazy(() => withCopy(() => import('./choices')).then((m) => ({ default: m.ModeChoice })));
 const MuteSwitch = lazy(() => withCopy(() => import('./choices')).then((m) => ({ default: m.MuteSwitch })));
 const PrivacyChoice = lazy(() => withCopy(() => import('./choices')).then((m) => ({ default: m.PrivacyChoice })));

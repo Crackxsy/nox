@@ -1,4 +1,4 @@
-"""`file.move` and `file.delete` on a node (review panel round 1, H4).
+"""`file.move` and `file.delete` on a node.
 
 Both ends of a move and the file deleted follow the write rules and are decided on handles
 (`nox.node.safe_fs.move_file`, `trash_file`). The escapes are tried for real on this OS (junctions

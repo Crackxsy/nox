@@ -21,7 +21,7 @@ from nox.node.keystore import PASSPHRASE_SECRET, NodeKeyStore
 from nox.node.manifest import GROUPS, NodeManifest, load_manifest, save_manifest
 from nox.node.protocol import PairLink
 from nox.security.secrets import InMemorySecretStore
-from tests.unit.node.conftest import make_key
+from tests.unit.node.support import make_key
 
 # ---- key -----------------------------------------------------------------------------------------
 
@@ -120,7 +120,7 @@ def _identity() -> NodeIdentity:
 async def test_a_look_alike_never_sees_the_code(tmp_path: Path) -> None:
     """The device answering at the link's address has another authority: nothing is posted."""
     from nox.lan.tls import ensure_tls
-    from tests.unit.node.conftest import ADDRESSES, NAMES
+    from tests.unit.node.support import ADDRESSES, NAMES
 
     impostor = ensure_tls(tmp_path / "impostor", names=NAMES, addresses=ADDRESSES)
     posted: list[str] = []
@@ -143,12 +143,12 @@ async def test_a_look_alike_never_sees_the_code(tmp_path: Path) -> None:
 
 async def test_a_certificate_for_another_key_is_refused(tmp_path: Path) -> None:
     from nox.lan.tls import ensure_tls, issue_client_certificate
-    from tests.unit.node.conftest import ADDRESSES, NAMES
+    from tests.unit.node.support import ADDRESSES, NAMES
 
     tls = ensure_tls(tmp_path / "tls", names=NAMES, addresses=ADDRESSES)
     fp = hashlib.sha256(tls.ca_der).hexdigest()
     foreign = make_key()
-    from tests.unit.node.conftest import make_csr
+    from tests.unit.node.support import make_csr
 
     issued = issue_client_certificate(tmp_path / "tls", make_csr(foreign), "b" * 32)
 
@@ -177,7 +177,7 @@ async def test_a_certificate_for_another_key_is_refused(tmp_path: Path) -> None:
 
 async def test_a_refused_code_leaves_no_key(tmp_path: Path) -> None:
     from nox.lan.tls import ensure_tls
-    from tests.unit.node.conftest import ADDRESSES, NAMES
+    from tests.unit.node.support import ADDRESSES, NAMES
 
     tls = ensure_tls(tmp_path / "tls", names=NAMES, addresses=ADDRESSES)
     fp = hashlib.sha256(tls.ca_der).hexdigest()
@@ -220,7 +220,7 @@ def test_nox_pair_node_prints_the_command_and_the_fingerprint() -> None:
     assert "ABCD 2345" in text and "AB:AB:AB:AB:AB:AB:AB:AB" in text
 
 
-# ---- found in the self-review --------------------------------------------------------------------
+# ---- bounded answers and clean refusals ----------------------------------------------------------
 
 
 async def test_an_oversized_authority_answer_is_not_read_to_the_end(tmp_path: Path) -> None:
@@ -249,7 +249,7 @@ async def test_a_key_file_that_cannot_be_protected_is_a_clean_refusal(
 ) -> None:
     from nox.lan.tls import ensure_tls
     from nox.node import keystore as keystore_module
-    from tests.unit.node.conftest import ADDRESSES, NAMES
+    from tests.unit.node.support import ADDRESSES, NAMES
 
     tls = ensure_tls(tmp_path / "tls", names=NAMES, addresses=ADDRESSES)
     fp = hashlib.sha256(tls.ca_der).hexdigest()
@@ -270,7 +270,7 @@ async def test_a_key_file_that_cannot_be_protected_is_a_clean_refusal(
     assert not home.key_file.exists()
 
 
-# ---- terminal safety (orchestrator review) ------------------------------------------------------
+# ---- terminal safety -----------------------------------------------------------------------------
 
 EVIL = ["x\x1b[2J\x1b[31mDENY", "ok\r\n     1  allow  core  shell.run", "safe\u202etxt", "c1\x9b"]
 
@@ -346,7 +346,7 @@ def test_the_node_speaks_tls_1_3_only(tmp_path: Path) -> None:
     import ssl
 
     from nox.lan.tls import ensure_tls, issue_client_certificate
-    from tests.unit.node.conftest import ADDRESSES, NAMES, make_csr
+    from tests.unit.node.support import ADDRESSES, NAMES, make_csr
 
     tls = ensure_tls(tmp_path / "tls", names=NAMES, addresses=ADDRESSES)
     keystore = NodeKeyStore(tmp_path / "node.key", None)

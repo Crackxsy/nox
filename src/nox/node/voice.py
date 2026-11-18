@@ -1,4 +1,4 @@
-"""The voice satellite (C9): Nox listens and speaks on this device; only text crosses the network.
+"""The voice satellite: Nox listens and speaks on this device; only text crosses the network.
 
 With the group `voice` enabled on this device (`nox node allow voice`, off by default) - and
 switched on for it on the core as well, where it starts switched off (`nox.node.policy`,
@@ -725,7 +725,7 @@ def latin_only(text: str) -> str:
     NFKC leaves alone, symbols, emoji, invisible characters - is dropped. A speech engine reads
     letters by their sound, not their look (Cyrillic "ноx" is read "nox"), and may read out a
     symbol's name. The wake-word and kill-phrase checks and the speech engine all get exactly
-    this result (C10)."""
+    this result, so none of them can be shown one spelling and the others another."""
     import unicodedata  # noqa: PLC0415
 
     kept: list[str] = []
@@ -771,7 +771,7 @@ def says_a_command(text: str, wake_word: str = "Nox") -> bool:
 
 
 def speakable(text: str, wake_word: str = "Nox") -> str | None:
-    """`text` as it may be spoken on a speaker a microphone can hear (C9 review R3): only its
+    """`text` as it may be spoken on a speaker a microphone can hear: only its
     Latin letters (`latin_only`), the wake word (any spelling of it) as "ich", and None - not
     spoken at all - for a sentence with a kill phrase or with nothing left to say. Applied to
     every sentence the core sends a node, and again on the node."""

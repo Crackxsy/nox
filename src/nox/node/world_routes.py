@@ -1,5 +1,5 @@
-"""The core's side of C6: `screen.capture`, `camera.snapshot`, `browser.*`, `desktop.*`,
-`computer.*` and `media.control` routed to nodes (spec C §1.4/§1.5).
+"""The core's side of the world tools: `screen.capture`, `camera.snapshot`, `browser.*`,
+`desktop.*`, `computer.*` and `media.control` routed to nodes.
 
 Each runs through the same path as every routed tool (`nox.node.router`): the device resolved in
 the permission scope, the permission request naming it, a signed receipt per call, the node's own
@@ -406,7 +406,7 @@ class NodeControl:
 
     def may_delegate(self, device_id: str) -> bool:
         """Whether a high-risk call may be left to `device_id`'s own dialog right now: always
-        while no session runs; while one does, only on the node it runs on (review M2) - any
+        while no session runs; while one does, only on the node it runs on - any
         other node's question is asked here, under `session_refusal` (the PIN)."""
         if not self.active():
             return True
@@ -449,7 +449,7 @@ class NodeControl:
                 if host and private_address(host):
                     self._bind_reported(device_id, host)
         # Kept while the lock holds for a node - also while it is disconnected -, gone once it
-        # lifts: fail closed (spec C §1.5, SECURITY.md).
+        # lifts: fail closed (see docs/ARCHITECTURE-NODES.md, "Address binding and saturation").
         for known in (self.node_observed, self.node_reported):
             for device_id in list(known):
                 device = self.devices.get(device_id)
@@ -838,7 +838,7 @@ def world_specs(
     captures_root: Callable[[], Path],
     privacy: Callable[[], Any],
 ) -> list[ToolSpec]:
-    """The routable specs of C6, each the core's own tool when the call stays here."""
+    """The routable specs of the world tools, each the core's own tool when the call stays here."""
 
     def captures(kind: str) -> NodeAround:
         return _capture_around(kind, captures_root, privacy)
@@ -920,7 +920,7 @@ APPROVAL = "security.permission.reply"
 #: Always possible with the PIN, whatever the session: removing a node (which needs no PIN from
 #: this machine's own shell and dashboard), lifting a stuck lock, resuming after a stop. None of
 #: them can be bound by a saturated binding or a node's addresses - they are how the owner gets
-#: out of a lock a node holds (review H1).
+#: out of a lock a node holds.
 ESCAPES: frozenset[str] = frozenset({"node.unpair", "node.computer.release", "security.resume"})
 
 
@@ -1004,7 +1004,7 @@ async def session_refusal(
     remote: Callable[[], bool | None],
 ) -> Refusal | None:
     """Why an "allow" or a request that changes something is refused while Nox controls a node,
-    or None (spec C §1.5). Nox does not know the PIN, so the PIN is the guard:
+    or None. Nox does not know the PIN, so the PIN is the guard:
 
     1. the browser on a node Nox controls never approves or changes anything - linked to it in
        the dashboard, or connecting from that node's address;

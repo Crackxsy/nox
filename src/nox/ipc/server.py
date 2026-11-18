@@ -366,7 +366,7 @@ class ClientSession:
     device_id: str = ""
     #: The persistent credential this connection authenticated with (overlay role only).
     credential_id: str = ""
-    #: The node whose own overlay credential that was (`node:<id>`, C9): only it gets that
+    #: The node whose own overlay credential that was (`node:<id>`): only it gets that
     #: node's speech (`pet_view`).
     overlay_node: str = ""
 

@@ -1,9 +1,9 @@
 /**
- * Stopp is always reachable (Spec UX-Neubau §5, owner decision): not only in the header, which a
- * modal surface makes inert, but inside every modal surface too - the menus, the command line,
- * the permission sheet and the first run. Each gets its own Stopp at the header's spot (or, in
- * the command line, in its top row); all of them send the same `security.kill` through
- * `StopContext`, which `App` provides.
+ * Stopp is always reachable (a stop that waits for an answer is no stop): not only in the
+ * header, which a modal surface makes inert, but inside every modal surface too - the menus, the
+ * command line, the permission sheet and the first run. Each gets its own Stopp at the header's
+ * spot (or, in the command line, in its top row); all of them send the same `security.kill`
+ * through `StopContext`, which `App` provides.
  */
 
 import { createContext, useContext } from 'react';

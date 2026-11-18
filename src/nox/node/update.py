@@ -1,4 +1,4 @@
-"""A node updates itself - only from a signed release, never from its core (spec C §1.9).
+"""A node updates itself - only from a signed release, never from its core.
 
 About once a day the node fetches `release-manifest.json` and its signature from the project's
 latest GitHub release and decides, in this order. Any "no" stops it and changes nothing:

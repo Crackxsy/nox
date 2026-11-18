@@ -1,5 +1,5 @@
 /**
- * Nox dashboard styles (Spec UX-Neubau §11). One stylesheet, no framework, no web fonts, no CDN:
+ * Nox dashboard styles. One stylesheet, no framework, no web fonts, no CDN:
  * the dashboard is served offline by the core under a strict CSP.
  *
  * The shape: a white (or neutral dark) page, ink as the main colour, large plain type, lists with
@@ -2121,7 +2121,7 @@ details > summary:hover {
   }
 }
 
-/* The desktop input bar floats over the content: keep the page clear of it (review finding). */
+/* The desktop input bar floats over the content: keep the page clear of it. */
 @media (min-width: 720px) {
   .main {
     padding-bottom: 120px;
@@ -3867,7 +3867,7 @@ details > summary:hover {
   margin-top: var(--s-2);
 }
 
-/* Touch targets in the computer sheets and the list: 44 x 44 like every other button (M9). */
+/* Touch targets in the computer sheets and the list: 44 x 44 like every other button. */
 .node-sheet .btn--sm,
 .node-list .btn--sm,
 .node-defaults .btn--sm,

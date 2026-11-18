@@ -336,7 +336,7 @@ class Orchestrator:
         `remote:<device>` for a paired phone. Each channel has a conversation of its own - its own
         history, model context and taint (`nox.security.taint`).
 
-        `barge_in=False` (a node's voice satellite, C9) cancels nothing and interrupts no speech:
+        `barge_in=False` (a node's voice satellite) cancels nothing and interrupts no speech:
         the turn waits until the one in flight - and the question it may be waiting on - is over.
         `context_note` is said to the model in this turn's context (where the words came from).
         """
@@ -488,7 +488,7 @@ class Orchestrator:
         started = time.perf_counter()
         request_id = uuid.uuid4().hex
         speak_enabled = self.config.speak if speak is None else speak
-        # A node's voice satellite (C9): words from a room, not necessarily the owner's. Neither
+        # A node's voice satellite: words from a room, not necessarily the owner's. Neither
         # the preset nor the mode shortcut runs on them (only presets the owner marked
         # `from_satellites`, as an untrusted turn's), and "neues Gespräch" does not discard the
         # conversation or end its grants: the text goes on like any other untrusted turn.

@@ -30,7 +30,7 @@ requests.
 | Data loss | Checkpoints; the vault is the source of truth; Nox-written notes can be rolled back. |
 | A device in the home network reaches the node port (47844) | Mutual TLS 1.3: only a client certificate of this installation's authority completes the handshake; serial denylist, revoked pairings and the paired key are checked before the upgrade; no browser `Origin`. See "Nodes" below. |
 | A device in the home network during node pairing (a look-alike core, a spoofed address, guessed codes) | The pairing link carries the authority's SHA-256 fingerprint and the node compares it before it sends the code, so there is no first-contact trust and no browser warning to click through; the code is single-use, valid 5 minutes and rate-limited; afterwards the node trusts only the pinned authority. Flooding the pairing endpoint or claiming addresses can deny service, never grant access ([Accepted limits (nodes)](#accepted-limits-nodes)). |
-| A compromised node (malware on a laptop, a stolen laptop) | Role `node`: a fixed JSON-RPC allow-list - no memory, audit, config, prompts or other nodes; refused messages are audited and cut the connection; revocation closes it at once; certificates live 30 days; its results are untrusted (schema-checked, bounded, tainting). The one way to talk to Nox is a voice satellite's text (C9), and only with two keys: `voice` enabled on the device *and* switched on for it on the core by the owner (with the PIN when one is set; a persisted fact, checked for every utterance); its turns run in a conversation of their own, approve nothing, and what Nox learns from them waits for confirmation. What it can still do - stop Nox, lock devices out during its own computer-use session, ask what a person in that room could ask - is listed in [Accepted limits (nodes)](#accepted-limits-nodes). See "Satellites" below. |
+| A compromised node (malware on a laptop, a stolen laptop) | Role `node`: a fixed JSON-RPC allow-list - no memory, audit, config, prompts or other nodes; refused messages are audited and cut the connection; revocation closes it at once; certificates live 30 days; its results are untrusted (schema-checked, bounded, tainting). The one way to talk to Nox is a voice satellite's text, and only with two keys: `voice` enabled on the device *and* switched on for it on the core by the owner (with the PIN when one is set; a persisted fact, checked for every utterance); its turns run in a conversation of their own, approve nothing, and what Nox learns from them waits for confirmation. What it can still do - stop Nox, lock devices out during its own computer-use session, ask what a person in that room could ask - is listed in [Accepted limits (nodes)](#accepted-limits-nodes). See "Satellites" below. |
 | A compromised core (the Pi taken over, a malicious update) as seen by a node | The node treats the core as untrusted for its hard limits: hard prohibitions, the game lock, the groups enabled on the device, the device's own dialog for high risk (nodes with a screen), its sandbox, budget and audit trail are enforced on the node and hold even against a core patched to allow everything (tested with a deliberately permissive fake core). No code flows from the core to a node; updates come only from the signed release. Residual: whatever the device enabled at medium risk or below, and on a headless node with `trust_core_for_high` also high ([Accepted limits (nodes)](#accepted-limits-nodes)). |
 | Nox approving its own question while it controls a PC | The node is the authority on whether a session runs; while it does, the browser on that PC approves and changes nothing, every other device and this machine need the PIN (never from a remote session), and with no PIN set nothing can be approved. See "Self-approval lock on nodes" below. |
 | A voice in the room (a satellite microphone hears whoever is there) | Text only, its own conversation `voice:node:<id>` that counts as untrusted from its first turn, no approvals by voice, no presets or mode changes from the room, rate limits, an echo window, the kill phrase handled on the device; the home boundary refuses locks, alarm panels, garage doors and valves for every channel. See "Satellites" below. |
@@ -660,7 +660,7 @@ installer CI job.
 
 ## Nodes (`nox node`)
 
-A node is Nox on another PC in the home (spec wave C), paired like a phone but holding a **client
+A node is Nox on another PC in the home, paired like a phone but holding a **client
 certificate** of this installation's authority instead of a token. Every call to a node passes
 two gates - the core's permission engine with a device-bound target, then the node's own
 `NodeGate` - and either can refuse. Every limit this design accepts is listed in one place,
@@ -700,8 +700,8 @@ On the node itself (`nox node`, [`NODES.md`](NODES.md)) - a compromised core can
 well-formed calls with valid receipts, so **for its hard limits the node treats the core as
 untrusted** and decides on its own authority (`nox.node.gate.NodeGate`). A disabled group, a hard
 prohibition, the game lock and the device's own dialog for high risk are refused or asked on the
-node even when the core is patched to allow everything (acceptance criterion C 1.12.3, tested
-with a deliberately permissive core in `tests/unit/node/test_agent.py`). `game.input.send` is
+node even when the core is patched to allow everything (tested with a deliberately
+permissive core in `tests/unit/node/test_agent.py`). `game.input.send` is
 never possible on any device. Nodes add no path around the home boundary: Nox has no tool for
 locks, alarm panels, garage doors and valves, and refuses them in code for every channel,
 voice satellites included (`nox.home.boundary`).
@@ -732,7 +732,7 @@ voice satellites included (`nox.home.boundary`).
   effects and 5 high-risk calls per hour by default, charged at the higher of the node's and the
   core's risk, read back from the node's audit after a restart). The core can only narrow the
   groups (`nox/policy`).
-- **High risk is confirmed on the device itself** (owner decision D1): whenever the node's tool,
+- **High risk is confirmed on the device itself**: whenever the node's tool,
   the core's receipt or the core's delegation says high, the node asks in a system dialog on that
   device - every argument in full (control characters escaped, no markup; too long or not
   valid Unicode -> refused, never cut), a warning when the conversation held foreign content,
@@ -786,7 +786,7 @@ voice satellites included (`nox.home.boundary`).
   change is audited with its outcome, every refusal after authorization; a change once accepted
   runs to its end even when the asking dashboard disconnects, so the database, the routing and
   the node never disagree.
-- **Captures, browser, desktop, computer use and media on nodes (C6).** All off by default
+- **Captures, browser, desktop, computer use and media on nodes.** All off by default
   except `media` (a node announces it once on the device). `screen.capture` and `camera.snapshot`
   are high risk on a node (the device's dialog every time, never remembered), need this core's
   privacy to allow that kind of capture - checked before the node is asked **and again after the
@@ -865,7 +865,7 @@ voice satellites included (`nox.home.boundary`).
   vielen Adressen - Freigaben nur nach Ende der Sitzung". "This machine" is matched against every address of every local interface,
   uncapped; an address that cannot be classified counts as this machine, and when this machine's
   addresses cannot be read at all its dashboard and shell count as the controlled PC. Fail closed
-  (owner decision): a device that shares such an address is treated as the controlled PC. A
+  (a deliberate choice): a device that shares such an address is treated as the controlled PC. A
   compromised node can use this to lock a device out of approving during its own session, and a
   full binding locks everyone out - both are [accepted limits](#accepted-limits-nodes).
   A paired device's message during the session marks its conversation as holding **unreadable
@@ -939,7 +939,7 @@ A typed name that breaks a rule is refused before the code is spent - and only c
 valid code, so nobody without one can probe which names exist. The model and the dashboard
 always see the name with a short id the device cannot choose ("Laptop · 3f2a").
 
-**The hands on a node** (C5, `nox.node.hands`, `nox.node.safe_fs`) - each one holds its own
+**The hands on a node** (`nox.node.hands`, `nox.node.safe_fs`) - each one holds its own
 boundary *after* `NodeGate`, the device's confirmation and the receipt:
 
 - `file.list/read/write` open only inside folders confirmed on the device
@@ -1049,7 +1049,7 @@ Later work: a real presence check for `nox node allow` (Windows Hello, polkit) a
 device's dialog. Negative tests: `tests/unit/node/` (a deliberately permissive core in
 `test_agent.py`), `tests/integration/test_nodes.py`.
 
-## Satellites (C9): voice, OBS and the pet overlay on a node
+## Satellites: voice, OBS and the pet overlay on a node
 
 What leaves a node, and what a node may send the core (`nox.node.voice`, `nox.node.obs`,
 `nox.node.overlay`, core side `nox.node.satellites`):
@@ -1184,7 +1184,7 @@ in the home network.
   compromised node can report the owner's phone address and lock that phone out for the length
   of the lock; a device that shares an address with the controlled PC - behind the same NAT, or
   because someone on the home network took that address over - is locked out the same way.
-  *Why accepted:* owner decision for security over availability. A home network offers nothing
+  *Why accepted:* a deliberate choice for security over availability. A home network offers nothing
   a node cannot influence to tell devices apart; failing open would let Nox approve its own
   question from the PC it controls. *Mitigation:* it only ever comes from the controlled machine
   (or the network it is on) while its lock holds and ends with the lock; deny and Stopp always
@@ -1219,7 +1219,7 @@ in the home network.
   repeated wrong PINs before it alone reaches the lockout; removing a node needs no PIN on the
   computer Nox runs on and ends its connection, its stops and its reports.
 
-- **A node that fakes computer use (review H1, fixed).** The lock comes only from a session
+- **A node that fakes computer use (fixed).** The lock comes only from a session
   this core started itself (the answer to its own `computer.session_start` names the session);
   "open" in a hello or for a session the core never started is a protocol violation - audited,
   the connection closed, never a lock; reports of a node that does not offer computer use are
@@ -1227,7 +1227,7 @@ in the home network.
   `node.computer.release` and `security.resume` always work with the PIN (`node.unpair` from this
   machine's shell and dashboard without one, also over SSH), `nox node release` does the same for
   a headless core, and removing a node ends its lock, address binding and saturation at once.
-- **Computer use on a node undermines "only the device widens" (review H2, accepted).** During a
+- **Computer use on a node undermines "only the device widens" (accepted).** During a
   confirmed session Nox has user-level control of that PC; the marker, the terminal-window guard
   and the dialog make the common paths refuse, not all of them.
 - **Remote maintenance over SSH.** `nox unpair --node` and `nox node release` work in an SSH
@@ -1331,7 +1331,7 @@ in the home network.
 ## Nox-OS (the Raspberry Pi image)
 
 What the image guarantees, and how each part is enforced, is in
-[`os/README.md`](../os/README.md#hardening-o2); `os/tools/check-image.sh` refuses an image that
+[`os/README.md`](../os/README.md#hardening); `os/tools/check-image.sh` refuses an image that
 breaks it and the QEMU boot test checks it on the running system. In short:
 
 - **Nothing to log in with is shipped.** No password, no key, no `authorized_keys`, SSH masked.
@@ -1366,7 +1366,7 @@ breaks it and the QEMU boot test checks it on the running system. In short:
 - **Console:** a status screen on tty1, no login there; no account has a password. It shows no
   secrets - except, during the setup window of an unclaimed device, the setup hotspot's password
   and the claim code made on the device (a screen is physical access).
-- **First boot without a screen** ([`os/README.md`](../os/README.md#first-boot-without-a-screen-o3)):
+- **First boot without a screen** ([`os/README.md`](../os/README.md#first-boot-without-a-screen)):
   - **Setup window:** root's file with this boot's id and its end in seconds since boot, at most
     30 minutes after power-on, only while unclaimed; only a power cycle opens another. Every
     grant of setup mode (hotspot ports, portal, `maint set`, `claim`) checks the file itself, so
@@ -1403,7 +1403,7 @@ breaks it and the QEMU boot test checks it on the running system. In short:
     2 x 200 = 400 wrong guesses per boot reach the comparison, so the chance to hit a 60-bit code
     in a boot is at most 400 / 2^60, about 3.5e-16 (40 bits: 3.6e-10) - and every boot makes a new
     device code. A locked LAN side cannot lock the owner out: the hotspot side needs its WPA2
-    password, shown only on the console (or the setup card, or the LED from O5), never on the
+    password, shown only on the console (or the setup card, or a status LED), never on the
     LAN, and the portal's one-time ticket lets the owner's claim from the home network count on
     the hotspot side. On the LAN side, an attacker with many IPv6 /64s (e.g. unique-local
     prefixes) gets one backoff record per /64 - which the 200-guess budget caps; the LAN side
@@ -1427,7 +1427,7 @@ Root over SSH takes the security PIN **and** the maintenance passphrase **and** 
 confirmed **and** a connection from the home network; while remote maintenance is on, whoever
 holds one of its keys in the home network is root, and what root changed stays changed after it
 is switched off. IPv6 clients from the home's global prefix are not "private" and are refused (fail
-closed). **Setup without a setup card (owner decision D2):** within the 30 minutes after power-on,
+closed). **Setup without a setup card:** within the 30 minutes after power-on,
 whoever reads the screen - a neighbour at the window at the same moment - can join the setup
 hotspot and learn the claim code. The hotspot's 80-bit password keeps a recorded handshake from
 revealing the home Wi-Fi password the portal carried, and PIN and passphrase never cross the

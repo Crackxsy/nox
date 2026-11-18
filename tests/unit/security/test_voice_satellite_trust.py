@@ -1,4 +1,4 @@
-"""C9 review H1/H3: what a node's voice satellite heard is lower-trust input from its first turn,
+"""What a node's voice satellite heard is lower-trust input from its first turn,
 and a node's speech levels reach only that node's own overlay.
 
 The real permission engine and its `TaintLedger`; fictitious names only ("Living room Pi").
@@ -94,7 +94,7 @@ async def test_the_question_says_which_satellite_the_words_came_from(
     assert voice_satellite_line({}, "de") == ""
 
 
-# ---- H3: speech levels ---------------------------------------------------------------------------
+# ---- speech levels -------------------------------------------------------------------------------
 
 
 def _level(device: str = "", channel: str = "node") -> dict[str, object]:

@@ -1,4 +1,4 @@
-"""The confirmation on the device itself, for high risk (owner decision D1, spec C §1.6 step 5).
+"""The confirmation on the device itself, for high risk: whoever sits at the device decides.
 
 "Nox möchte auf diesem Gerät …: Erlauben? Ablehnen." with a 60 s countdown and **deny** as the
 default - no answer, a closed dialog or any error is a refusal. The core never shows this prompt

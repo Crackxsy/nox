@@ -34,7 +34,7 @@ Binding sources for any contribution: the code contracts in this repo —
 - Test rules (binding for agent-written tests too; details in `../CONTRIBUTING.md`): every policy list is tested element by element with literal cases; every `except`, default and limit has a test that drives the code into it; a bug fix comes with a test that fails without it; no sleep-then-assert; at least one behavioural assertion per test (not only `is not None`); a new security test must demonstrably kill a mutant of the line it guards.
 - Keep changes to shared contracts (`events.py`, `state.py`, `model.py`, `protocol.py`, `base.py`) small and additive, and call them out in the pull request.
 - TypeScript types under `ui/shared/generated/` are generated from the pydantic models: run `python scripts/gen_ts_types.py` after changing a contract; CI checks they are current.
-- Docstrings: one line per module explaining its purpose and which contract/ADR it implements.
+- Docstrings: every module says what it owns and why it is built that way, in plain words. No references to documents a reader of this repository cannot open (planning notes, review finding ids, numbered decisions) - `scripts/check_planning_ids.py` fails CI on them. Where a rule needs more than a paragraph, link a document in `docs/` (for the node code: `ARCHITECTURE-NODES.md`).
 
 ## Contributing
 Branch and pull-request flow: `../CONTRIBUTING.md`. Reporting a vulnerability: `../SECURITY.md`.

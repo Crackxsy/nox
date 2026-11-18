@@ -1,5 +1,5 @@
 /**
- * The command line behind "Sag Nox, was er tun soll" (Spec UX-Neubau §4): a centred dialog on a
+ * The command line behind "Sag Nox, was er tun soll": a centred dialog on a
  * desktop, a full-screen sheet on a phone, opened by Ctrl+K / Cmd+K or by typing into the field at
  * the bottom of any page.
  *

@@ -1,6 +1,6 @@
 # Nodes: Nox' Hände an deinen anderen Computern
 
-*English: [NODES.md](NODES.md)*
+*English: [NODES.md](NODES.md)* · Für Entwickler, eine Karte durch den Code (englisch): [ARCHITECTURE-NODES.md](ARCHITECTURE-NODES.md)
 
 > Befehle: `nox-node ...` ist dasselbe wie `nox node ...` und funktioniert unter Windows in der Eingabeaufforderung und unter Linux/macOS im Terminal.
 
@@ -8,14 +8,14 @@ Ein Haushalt hat **einen** Nox - den *Core*, am besten auf einem Raspberry Pi. J
 oder Laptop kann einen kleinen **`nox node`** laufen lassen: Er verbindet sich mit dem Core und
 lässt Nox Dinge *auf diesem Gerät* tun - und nur die, die du dort erlaubt hast.
 
-> Stand: Welle C ist fertig. Ein Node koppelt sich mit einem Code, hat seine eigene
+> Stand: Ein Node koppelt sich mit einem Code, hat seine eigene
 > Erlaubnisliste, sein eigenes Protokoll und Budget, fragt Hohes Risiko am Gerät selbst und bietet
 > Systemwerte, Hinweise, Musik, Dateien in Ordnern, die du erlaubst, Befehle in seiner eigenen
 > Sandbox, Bildschirm- und Kamerabilder, einen Browser, Fenster und Programme, Maus und Tastatur
 > (Windows) sowie die Satelliten für Sprache, OBS und das Pet-Overlay. Programme installieren
 > (`package.*`) gibt es auf Nodes **noch nicht** - siehe
 > [Programme installieren](#programme-installieren-noch-nicht-verfügbar). Der Node findet den Core
-> nur unter der Adresse aus seinem Kopplungslink; die Suche im Heimnetz kommt mit Welle D.
+> nur unter der Adresse aus seinem Kopplungslink; die Suche nach dem Core im Heimnetz gibt es noch nicht.
 
 Zwei Regeln gelten überall unten. **Jeder Aufruf geht durch zwei Prüfungen:** die
 Berechtigungsprüfung des Cores und die eigene Prüfung des Nodes - jede kann ablehnen, nur beide
@@ -594,7 +594,7 @@ Gerät neu koppelt, steht unter
   sonst sagt das Dashboard „Computer verbindest du, sobald andere Geräte Nox öffnen dürfen.“
 - **Erreicht er den Port des Cores?** Siehe [Firewall](#firewall-port-47844) unten.
 - **Hat sich die Adresse des Cores geändert?** Der Node verbindet sich nur mit der Adresse aus
-  seinem Kopplungslink (die Suche im Heimnetz kommt mit Welle D). Gib dem Core im Router eine
+  seinem Kopplungslink (die Suche nach dem Core im Heimnetz gibt es noch nicht). Gib dem Core im Router eine
   feste Adresse oder kopple neu.
 - **„Update nötig“** heißt, der Core nimmt das Protokoll des Nodes nicht an: den Node (oder den
   Core) aktualisieren; bis dahin liest Nox dort nur Systemwerte.
@@ -682,7 +682,7 @@ das Netz prüfen oder das aktuelle Release mit dem Installer installieren.
 Siehe [SECURITY.md](SECURITY.md#nodes-nox-node) für das Bedrohungsmodell des Nodes und
 [Accepted limits (nodes)](SECURITY.md#accepted-limits-nodes) für alle hingenommenen Grenzen an
 einer Stelle. Bekannte Grenzen dieser Version: Der Node findet den Core nur unter der Adresse aus
-dem Kopplungslink (Suche im Heimnetz kommt mit Welle D); Programme auf Nodes installieren ist eine
+dem Kopplungslink (die Suche nach dem Core im Heimnetz gibt es noch nicht); Programme auf Nodes installieren ist eine
 offene Entscheidung. Die Windows-Anmeldeaufgabe prüft die CI mit einem Administratorkonto; dass ein
 Standardkonto sie anlegen darf, ist das dokumentierte Verhalten der Aufgabenplanung für eine
 Aufgabe, die als dieses Konto läuft, aber noch nicht getestet. Der macOS-Installer ist eine Beta.

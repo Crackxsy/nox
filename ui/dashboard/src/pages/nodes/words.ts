@@ -86,7 +86,7 @@ export function allowCommand(t: T, group: string, sudo = false): string {
   return sudo ? `sudo ${base}` : base;
 }
 
-/** How to get to a command line on that device, in words: the OS decides (K1). */
+/** How to get to a command line on that device, in words: the OS decides. */
 export function enableHowKey(node: NodeInfo): Key {
   switch (node.os) {
     case 'windows':

@@ -130,7 +130,7 @@ export function DevicesSection({
 }: DevicesSectionProps) {
   const [view, setView] = useState<View>({ kind: 'loading' });
   const [pairing, setPairing] = useState<LanPairing | null>(null);
-  /** The pairing sheet (Spec §6: Koppeln als Sheet). */
+  /** The pairing sheet: pairing opens as a sheet, not as a page of its own. */
   const [pairOpen, setPairOpen] = useState(false);
   const [name, setName] = useState('');
   const [pin, setPin] = useState('');

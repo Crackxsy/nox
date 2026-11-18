@@ -5,12 +5,12 @@ preinstalled**, as a headless home server. It is built in CI with
 [pi-gen](https://github.com/RPi-Distro/pi-gen), the tool Raspberry Pi OS itself is built with, and
 works on every 64-bit Pi the base supports (3B/3B+/Zero 2 W, 4B/400/CM4, 5/CM5).
 
-> **Status: steps O1-O3 of the Nox-OS plan** - the image is built, hardened (firewall, SSH off
+> **Status:** the image is built, hardened (firewall, SSH off
 > with a switch in the dashboard, SD-card care, console status), sets itself up without a screen
 > (Wi-Fi from a provisioning file, a setup hotspot with a captive portal, claiming the device from
-> a phone - [First boot](#first-boot-without-a-screen-o3)), and is checked and boot-tested. The
-> onboarding wizard after the claim (AI login, PC node) is O4, the LED O5, the PC assistant that
-> writes the provisioning file O7.
+> a phone - [First boot](#first-boot-without-a-screen)), and is checked and boot-tested. Not built
+> yet: the onboarding wizard after the claim (AI login, PC node), the LED blink code, and the PC
+> assistant that writes the provisioning file.
 > Until then use a screen or a hand-written provisioning file, and
 > [`docs/RASPBERRY_PI.md`](../docs/RASPBERRY_PI.md) (the installer on a stock Raspberry Pi OS) for a
 > real home server.
@@ -30,13 +30,13 @@ Nox is installed by the same installer a Pi uses, `scripts/install-linux.sh`, in
 | Baked into the image (identical on every card) | Made on the device at first boot (unique per Pi) |
 | --- | --- |
 | Raspberry Pi OS Lite (pinned pi-gen release), hostname `nox` | `/etc/machine-id` |
-| First boot, setup mode and the setup portal (O3) | Provisioning imported, this boot's claim code and hotspot password, the claim mark |
+| First boot, setup mode and the setup portal | Provisioning imported, this boot's claim code and hotspot password, the claim mark |
 | Nox: the program, its Python environment (uv, Python 3.13), the dashboard | SSH host keys (`nox-ssh-hostkeys.service`; SSH stays off) |
 | `nox.service` (hardened, `installer/linux/nox.service`), enabled | Nox's CA and server certificate, its database, every pairing - when `nox.service` first starts |
 | `/var/lib/nox/user.yaml` (server defaults, no secrets) | |
 | `/etc/nox-os-release` (version, base, build date) | |
 | The firewall's boot rules (`/etc/nftables.conf`: default deny, no port of Nox's open) | The firewall rules from Nox's settings (`nox-firewall.service`, at every boot and every change) |
-| Hardening, SD-card wear profile, the root helper, the console status ([Hardening](#hardening-o2)) | |
+| Hardening, SD-card wear profile, the root helper, the console status ([Hardening](#hardening)) | |
 
 Never in the image: a password (the first user `nox-admin` is locked, root is locked), passwordless
 sudo, an SSH key or `authorized_keys`, SSH switched on (`ssh.service`, `ssh.socket` and
@@ -50,7 +50,7 @@ these, and the boot test checks the first boot made the per-device parts. SSH ho
 `regenerate_ssh_host_keys` may do the same - either way they are the device's own).
 
 Raspberry Pi Imager's own customisation (user, password, SSH key, Wi-Fi) is not offered for
-Nox-OS - the Imager entry has no `init_format` - because Nox-OS sets itself up (O3). That is not a
+Nox-OS - the Imager entry has no `init_format` - because Nox-OS sets itself up. That is not a
 lock against the owner of the card: the boot partition is plain FAT, and whoever holds the card can
 still use what Raspberry Pi OS reads from it (`custom.toml`, a `systemd.run=` in `cmdline.txt`) or
 change anything else. Physical access to the card is full access, as on every Pi.
@@ -59,7 +59,7 @@ The image ships `user.yaml` with Nox's LAN listener on (`ipc.lan.enabled: true`,
 Nox listens in the home network from its first start - **while unclaimed it serves nothing there
 but its claim**, and the firewall keeps the node port closed ([The claim](#the-claim)).
 
-## Hardening (O2)
+## Hardening
 
 Sub-stage `stage-nox/03-hardening`. `os/tools/check-image.sh` checks every point below on the
 finished image, `os/tools/qemu-smoke.sh` on the booted one.
@@ -104,7 +104,7 @@ would have nothing left to do, and one more daemon writing logs is what the SD c
 
 ### Remote maintenance (SSH)
 
-Off. `ssh.service`, `ssh.socket` and `sshswitch.service` stay masked (O1), and no account has a
+Off. `ssh.service`, `ssh.socket` and `sshswitch.service` stay masked (the image build does it), and no account has a
 password. Dashboard -> Einstellungen -> System -> **Fernwartung (SSH)**, in two steps, each with
 two secrets - the **security PIN** (always, also on a paired phone, and refused while no PIN is
 set) **and the maintenance passphrase**:
@@ -127,7 +127,7 @@ step: at least 12 characters, checked only by the root helper (scrypt, `/var/lib
 root 0600), never written to a file the service user can read and never logged - the core only
 passes it through in the one request. Five wrong passphrases lock it for 15 minutes, every five
 more for twice as long, at most a day (counted root-side, `/var/lib/nox-os/maintenance-lockout`).
-It is set once during the first-boot setup - by the claim (O3), from the setup portal or the claim
+It is set once during the first-boot setup - by the claim, from the setup portal or the claim
 page - or with `maint set`, which the helper accepts `maint set` only while the setup window is open (root's `/run/nox-os/setup-mode`,
 this boot's, its end not reached) and no passphrase is set yet - and changed later only with the
 old one. A forgotten passphrase is reset by root only:
@@ -211,21 +211,21 @@ Nothing has been measured on a device yet: the write counter (`/sys/block/mmcblk
 - Masked: Bluetooth (`bluetooth`, `hciuart`), `triggerhappy`, `ModemManager`. avahi stays: it
   answers for `nox.local`. `nox.service` is unchanged and as hardened as `installer/linux/`
   ships it (user `nox`, `ProtectSystem=strict`, no capabilities - checked by `check-image.sh`).
-- Updates: `unattended-upgrades` is step O6 (sub-stage `05-updates`), not here.
+- Updates: `unattended-upgrades` is a later step of its own (sub-stage `05-updates`), not here.
 - **Console status** on the first screen (tty1) instead of a login prompt: Nox-OS and Nox
   version, addresses, the dashboard's address, network access and paired devices, health, SSH on
   or off. No secrets, no login, refreshed every 10 s, run as a throwaway user without rights
   (`nox-console.service`, `DynamicUser=`). The other consoles keep a login prompt at which nobody
   can log in (no account has a password).
 
-`systemd-firstboot.service` (which failed on the first boot of O1/O2 images: it had nobody to ask)
-is masked since O3; `nox-firstboot.service` takes over what it would set.
+`systemd-firstboot.service` (which failed on the first boot of the first images: it had nobody to ask)
+is masked since the first-boot setup; `nox-firstboot.service` takes over what it would set.
 
 During setup mode the console shows the setup hotspot's name and password and the claim code made
 on the device (the unit carries the group `nox-os-setup`, which may read them); a screen is
 physical access, and they stop working when the window closes.
 
-## First boot without a screen (O3)
+## First boot without a screen
 
 Sub-stage `stage-nox/04-firstboot`: `nox_setup.py` (root, short steps only - never a daemon), the
 setup portal `nox_setup_portal.py` (its own user), their units, and the claim's root side in the
@@ -247,7 +247,7 @@ root helper. `os/tools/check-image.sh` and `os/tools/qemu-smoke.sh` check it.
    and **claims** the device at `https://nox.local:47843/claim/`.
 
 `systemd-firstboot.service` is masked: it would ask for locale, keymap, time zone and a root
-password on a console a headless Pi does not have (and failed there in O1/O2). Its answers come from
+password on a console a headless Pi does not have (and failed there in the first images). Its answers come from
 the image (pi-gen's defaults) and the provisioning file; root stays locked.
 
 ### The setup window
@@ -256,7 +256,7 @@ Root's `/run/nox-os/setup-mode` (JSON: this boot's id and the end in **seconds s
 `CLOCK_BOOTTIME`, which no clock change moves - a Pi has no real-time clock and gets the time from
 the network later). It is open **at most 30 minutes after power-on**, only while the device has no
 owner, and nothing reopens it but another boot: **a power cycle is the physical act** that proves
-someone is at the device (owner decision D2: setup without a PC is allowed, with a 30-minute window
+someone is at the device (a deliberate choice: setup without a PC is allowed, with a 30-minute window
 and the blink code). Everything that grants something during setup checks the file itself - the
 setup hotspot's firewall ports, the portal, the root helper's `maint set` and `claim` - so an
 expired window grants nothing even in the seconds before `nox-setup.timer` removes it. When it
@@ -270,7 +270,7 @@ least); `check-image.sh` refuses an image that has `/etc/nox-os/testing`.
 ### The provisioning file
 
 `/boot/firmware/nox-provision.json` - written by the PC dashboard's "Raspberry Pi einrichten"
-assistant (O7) right after flashing, or by hand from
+assistant right after flashing, or by hand from
 [`provisioning/nox-provision.example.json`](provisioning/nox-provision.example.json). Schema:
 [`provisioning/nox-provision.schema.json`](provisioning/nox-provision.schema.json) (version 1);
 `nox_setup.py validate` refuses anything it does not allow - unknown or duplicate fields, a wrong
@@ -335,9 +335,9 @@ programs; tested module by module against segno) - **root never runs code from N
 environment**, which Nox updates itself; `check-image.sh` refuses an image where a root unit or a
 root setup program does (the firewall too runs on `/usr/bin/python3` with the distribution's
 PyYAML). Without a card or a screen the hotspot cannot be joined yet:
-use the setup card (O7) or a screen. **Blink code (O5):** an LED can carry about 12 digits (40
-bits), which is too little for the hotspot password; `nox_setup.new_blink_digits` is kept for O5,
-which has to give a blink code a role of its own (e.g. comparing a claim), never the WPA2
+use the setup card or a screen. **Blink code (not built yet):** an LED can carry about 12
+digits (40 bits), which is too little for the hotspot password; `nox_setup.new_blink_digits` is
+kept for the LED, which has to give a blink code a role of its own (e.g. comparing a claim), never the WPA2
 password.
 
 **Firewall:** while setup mode is on, the hotspot interface gets the portal (TCP 80), DHCP (UDP
@@ -414,7 +414,7 @@ waited for, before the firewall is regenerated. Nox then sets the security PIN t
 sent (the claim page asks for both, over TLS; nothing comes from the portal), audits the claim (`noxos.claim`, never a code or secret), and the browser stores its device token
 like a paired device. The page then says that **this browser is now the only key** and offers
 to pair a second device at once (`/dashboard/#/devices/devices`), before "Continue" to
-`/dashboard/#onboarding` (O4's wizard). A refused claim removes the device it paired. After the claim: `nox-setup-close.service` stops the hotspot and the portal and
+`/dashboard/#onboarding` (the onboarding wizard). A refused claim removes the device it paired. After the claim: `nox-setup-close.service` stops the hotspot and the portal and
 removes the setup secrets, the firewall opens the node port.
 
 **Wrong claim codes** are counted root-side on **two independent sides**: `lan` (the claim page)
@@ -430,7 +430,7 @@ it counts on the hotspot side - so whoever locked the LAN side cannot lock out t
 the hotspot, whose WPA2 password is only on the Pi's screen, the setup card or the LED. The math is
 in [`docs/SECURITY.md`](../docs/SECURITY.md#nox-os-the-raspberry-pi-image).
 
-The core has one read-only request for O4, `noxos.claim.status` (owner or not, setup window, its
+The core has one read-only request for the onboarding wizard, `noxos.claim.status` (owner or not, setup window, its
 time left).
 
 ### Reclaiming the device
@@ -456,7 +456,7 @@ Made per start and never stored, so nothing to rotate: the session and worker to
 bridge secret, the node-session lock. Whoever holds the card could read what is kept anyway. The
 setup window then opens as on a new device, with a new claim code.
 
-**Residual risks (D2):** without a setup card, whoever reads the screen within the 30 minutes - a
+**Residual risks of setup without a PC:** without a setup card, whoever reads the screen within the 30 minutes - a
 neighbour at the window at the same moment - can join the hotspot and learn the claim code. The
 hotspot's password has 80 bits, so a recorded handshake does not reveal the home Wi-Fi password
 the portal carried; PIN and passphrase never cross the hotspot. A claimed device never opens the
@@ -505,7 +505,7 @@ hand, on a machine that runs Nox:
   2. `os/tools/check-image.sh`: the image is mounted read-only and checked (list above).
   3. `os/tools/qemu-smoke.sh`: copies of the image boot headless in QEMU (an emulated Raspberry
      Pi 3, the image's own kernel, no network and no Wi-Fi radio) with one CI-only unit added.
-     **Twice (O3):** once *provisioned* - a provisioning file (fictitious Wi-Fi, the card's claim
+     **Twice:** once *provisioned* - a provisioning file (fictitious Wi-Fi, the card's claim
      code and hotspot password) is imported and deleted, its password in no log, the setup window
      is open at boot, the hotspot profile is written, the firewall opens the claim port only;
      then the portal as a phone in a network namespace on a virtual hotspot interface sees it
@@ -513,13 +513,13 @@ hand, on a machine that runs Nox:
      nothing, root's CA fingerprint, Nox's port closed to the hotspot); a wrong claim code is
      refused, a claim without PIN too, the card's code with PIN and passphrase claims the device
      (setup closed, secrets and hotspot gone, node port open, a second device offered, the claim
-     page's own CSP) - then the O2 checks below run on the claimed device, and a reclaim marker
+     page's own CSP) - then the hardening checks below run on the claimed device, and a reclaim marker
      forgets the owner again (pairings and PIN gone, fresh window, a new owner claims); once
      *fresh* - no provisioning file and a test-only 600-second window: claim code and an 80-bit
      hotspot password made on the device, shown on the console (text and QR code) as its
      throwaway user sees it, then the window closes by itself and takes them along, and a claim and `maint
      set` after it are refused. Each boot runs until `nox.service` is active and `/health`
-     answers, SSH is not running and the host keys and machine id were made; then O2:
+     answers, SSH is not running and the host keys and machine id were made; then the hardening checks:
      the firewall is loaded and default deny with the dashboard port opened from Nox's settings,
      journal, `/`, `/tmp` and swap as above, sysctl applied, the console status renders, the root
      helper is out of reach of the user `nox` and refuses another process with its group, the core
@@ -562,7 +562,7 @@ redistributable firmware) and Nox (Apache-2.0) with its Python dependencies
 it and is not shipped. `nox-os-<tag>-arm64.licenses.json` lists every package with its version,
 its source package (where its corresponding source code is in the Debian and Raspberry Pi
 archives) and the licences it declares, and every Python package with its licence. Mirroring the
-GPL source packages as a release asset is step O8.
+GPL source packages as a release asset follows.
 
 Not in the image, ever installed only by the user's own action or downloaded on demand after
 asking: Claude Code, Ollama and models, Playwright's Chromium, voice models and Whisper weights.
@@ -573,7 +573,7 @@ asking: Claude Code, Ollama and models, Playwright's Chromium, voice models and 
 | --- | --- |
 | `pi-gen/config` | pi-gen settings: Lite stages + `stage-nox`, hostname, locked first user, SSH and cloud-init off |
 | `pi-gen/build.sh` | Fetches the pinned pi-gen, adds `stage-nox` and the Nox inputs, runs pi-gen in Docker |
-| `pi-gen/stage-nox/` | Nox's stage; numbered sub-stages per step (`03-hardening` O2, then O3 first boot, O6 updates) |
+| `pi-gen/stage-nox/` | Nox's stage; numbered sub-stages in build order (`03-hardening`, then `04-firstboot`; updates follow) |
 | `pi-gen/stage-nox/03-hardening/files/` | Firewall generator, root helper, console status, their units, sshd and system settings |
 | `pi-gen/stage-nox/04-firstboot/files/` | First boot and setup mode (`nox_setup.py`), the setup portal, their units, captive DNS |
 | `provisioning/` | The provisioning file's JSON schema and a fictitious example |

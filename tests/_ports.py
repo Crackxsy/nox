@@ -8,7 +8,7 @@ hands out comes from its *ephemeral* range, which Windows allocates in sequence:
 then the very next port the OS gave to the next `bind(0)` or outgoing connection - the LAN
 server's own port, a plugin worker's connection, the browser's sockets - while the core was still
 starting. The core's HTTP server and its clients could then meet someone else on that port, and
-a dashboard never got online (connection resets, C10).
+a dashboard never got online (connection resets).
 
 So the pair is drawn from below every common ephemeral range (Linux starts at 32768, Windows and
 macOS at 49152), where the OS never allocates on its own, and verified by binding both - which

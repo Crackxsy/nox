@@ -747,7 +747,7 @@ class RuntimeGrants:
 
     def migrate_legacy(self, *, force: bool = False) -> int:
         """Remove the broad `ALL APPLICATION PACKAGES` read ACE one earlier build put on the
-        runtime folders - and only where Nox can tell it did (review finding #18).
+        runtime folders - and only where Nox can tell it did.
 
         That build granted `*S-1-15-2-1:(OI)(CI)(RX)` and recorded nothing; the build right after
         it recorded its own grants without the folder's prior state. So a folder is cleaned only
@@ -1365,7 +1365,7 @@ def _read_line(fd: int, timeout_s: float) -> str:
 
 class _Pump(threading.Thread):
     """Drains one pipe to EOF, keeping at most `cap` bytes; the rest is read and dropped so the
-    child never blocks on a full pipe (review finding 10)."""
+    child never blocks on a full pipe."""
 
     def __init__(self, fd: int, cap: int) -> None:
         super().__init__(daemon=True)

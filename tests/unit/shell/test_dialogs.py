@@ -1,4 +1,4 @@
-"""The desktop permission dialog says what the dashboard's prompt says (H4). Made-up names only."""
+"""The desktop permission dialog says what the dashboard's prompt says. Made-up names only."""
 
 from __future__ import annotations
 

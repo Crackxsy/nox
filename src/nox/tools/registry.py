@@ -38,7 +38,7 @@ class CallScope:
     target: str = ""
     #: The node the call runs on (`nox.node.router`); "" for this core.
     device: str = ""
-    #: High risk on a node: the person at that device confirms it there (owner decision D1),
+    #: High risk on a node: the person at that device confirms it there,
     #: so the core does not ask anyone itself. A refusal by the core's rules still refuses.
     confirm_on_device: bool = False
     #: False: no "remember" answer for this call, whatever the tool allows otherwise (a write on

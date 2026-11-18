@@ -86,7 +86,7 @@ CLAIM_CODE = SETUP / "claim-code"  # root:nox-os-setup 0640 - the portal shows i
 NETWORKS = SETUP / "networks.json"  # root:nox-os-setup 0640 - the portal's Wi-Fi list
 STATUS = SETUP / "status.json"  # root:nox-os-setup 0640 - no secrets
 HOTSPOT_STATE = SETUP / "hotspot.json"  # root 0644 - the firewall's setup ports
-BLINK = SETUP / "blink"  # root 0600 - reserved for the LED (O5); not written yet
+BLINK = SETUP / "blink"  # root 0600 - reserved for the LED; not written yet
 PENDING = SETUP / "pending.json"  # root 0600 - the root helper's (the portal ticket's hash)
 CA_FINGERPRINT = SETUP / "ca_fingerprint"  # root:nox-os-setup 0640 - from Nox's CA file
 #: Nox's certificate authority (nox.lan.tls); root reads it - the portal cannot, and must not
@@ -150,7 +150,7 @@ CLAIM_PREFIX = b"nox-claim-v1:"
 #: The hotspot password made on the device: 16 characters of the claim-code alphabet, grouped by
 #: four with dashes that are part of it (what is shown is what is typed): 80 bits.
 HOTSPOT_GROUPS = 4
-#: Digits a blink code could carry (O5, not used yet): see new_blink_digits.
+#: Digits a blink code could carry (not used yet): see new_blink_digits.
 BLINK_DIGITS = 12
 MIN_CARD_HOTSPOT_PSK = 16
 MIN_PIN = 6
@@ -388,9 +388,9 @@ def new_hotspot_psk() -> str:
 
 
 def new_blink_digits() -> str:
-    """12 random digits (about 40 bits): what an LED could blink (step O5). Not the hotspot
-    password - 40 bits are crackable offline from a recorded handshake; O5 decides how a blink
-    code may be used (os/README.md)."""
+    """12 random digits (about 40 bits): what an LED could blink. Not the hotspot
+    password - 40 bits are crackable offline from a recorded handshake; the LED feature decides
+    how a blink code may be used (os/README.md)."""
     return "".join(str(secrets.randbelow(10)) for _ in range(BLINK_DIGITS))
 
 

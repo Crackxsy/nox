@@ -1,5 +1,5 @@
 /**
- * Performance budget for the dashboard build (Spec UX-Neubau §12), run after `vite build`:
+ * Performance budget for the dashboard build, run after `vite build`:
  *
  *   start JS (the entry chunk and everything it imports statically), gzip   <= 110 KB
  *   each lazily loaded area (its chunk plus what only it pulls in), gzip    <=  35 KB
@@ -84,6 +84,6 @@ for (const [name, size, budget] of rows) {
   console.log(`${over ? 'OVER' : 'ok  '}  ${(size / KB).toFixed(1).padStart(6)} KB / ${(budget / KB).toFixed(0)} KB  ${name}`);
 }
 if (failed) {
-  console.error('bundle budget exceeded (Spec UX-Neubau §12)');
+  console.error('bundle budget exceeded');
   process.exit(1);
 }

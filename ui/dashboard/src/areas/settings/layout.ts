@@ -1,5 +1,5 @@
 /**
- * Which setting lives on which of the eight Settings pages (Spec UX-Neubau §6, §7).
+ * Which setting lives on which of the eight Settings pages.
  *
  * Every page lists its rows in three tiers: visible, "Mehr Optionen", and - inside the components -
  * "Technische Angaben". A setting the core reports that no page names here is not dropped: System ›
@@ -137,7 +137,7 @@ export function pageOfPath(path: string): SettingsPageId {
 
 /**
  * Settings the dashboard never shows as a raw field. `security.profile` is set by the Modus (one
- * control for mode and rules, owner decision): a second, separate field for it would let the two
+ * control for mode and rules): a second, separate field for it would let the two
  * disagree.
  */
 export const NEVER_SHOWN: ReadonlySet<string> = new Set(['security.profile']);

@@ -253,8 +253,7 @@ def test_the_real_check_runs_a_signed_release(
 ) -> None:
     """Installed by the updater, checked by the launcher with the (test) trusted key."""
     from nox.release import trusted_keys
-    from tests.unit.node.test_update import Key, updater
-    from tests.unit.node.test_update import release as signed_release
+    from tests.unit.node.support_update import Key, signed_release, updater
 
     key = Key()
     monkeypatch.setattr(trusted_keys, "TRUSTED_KEYS", (key.trusted,))

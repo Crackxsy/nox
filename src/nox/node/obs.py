@@ -1,8 +1,8 @@
-"""OBS on a node (C9): `obs.request` where OBS runs, with the core-local rules unchanged.
+"""OBS on a node: `obs.request` where OBS runs, with the core-local rules unchanged.
 
 A streaming PC is often not the PC Nox's core runs on. With the group `obs` enabled on that PC
 (`nox node allow obs`, off by default), the core routes `obs.request` there (`nox.node.router`;
-the family default from the Devices page, C8). On the node:
+the family default from the Devices page). On the node:
 
 * **The node talks to its own OBS only**: obs-websocket on `127.0.0.1` (the port is the one
   setting), never another host. The OBS password stays on this device, in its keyring

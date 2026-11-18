@@ -7,8 +7,9 @@ import pytest
 from nox.ai.base import AiRole
 from nox.ai.fastpath import FastPath
 from nox.core.events import E, Event
-from nox.core.orchestrator import Orchestrator, OrchestratorConfig, TurnContext
-from tests.unit.fakes import FakeBus, FakeRouter, FakeSpeaker, FakeState, FakeTurns
+from nox.core.orchestrator import Orchestrator, TurnContext
+from tests.unit.fakes import AllowPolicy
+from tests.unit.fakes import make_orchestrator as make
 
 #: 30 words, no marker: the length half of the escalation rule without the memory half.
 LONG_UNGROUNDED_QUESTION = (
@@ -20,33 +21,6 @@ LONG_UNGROUNDED_QUESTION = (
 
 async def _context(block: str, relevance: float) -> TurnContext:
     return TurnContext(block=block, relevance=relevance, items=1 if block else 0)
-
-
-class AllowPolicy:
-    def __init__(self, allow: bool = True) -> None:
-        self.allow = allow
-
-    def allows_memory_write(self) -> bool:
-        return self.allow
-
-
-def make(**kw):
-    bus = FakeBus()
-    state = FakeState()
-    router = FakeRouter(bus)
-    speaker = FakeSpeaker()
-    turns = FakeTurns()
-    orch = Orchestrator(
-        bus=bus,
-        state=state,
-        router=router,
-        speaker=speaker,
-        turns=turns,
-        memory_policy=kw.pop("policy", AllowPolicy()),
-        system_prompt=lambda: "You are Nox.",
-        config=OrchestratorConfig(**kw),
-    )
-    return orch, bus, router, speaker, turns
 
 
 async def test_text_turn_streams_sentences_to_speaker():

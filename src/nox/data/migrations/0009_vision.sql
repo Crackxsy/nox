@@ -1,7 +1,7 @@
--- 0009_vision: Vision Stage 2 (Spec v0.9 §7, EPIC-18, ST-18-01..06). Two tables, mirroring
+-- 0009_vision: on-screen detection for Rocket League (observation only). Two tables, mirroring
 -- 0003_rl's pattern. `rl_vision_frames` is the short-retention raw detection log written by
 -- `nox.rl.vision.RlVisionPersistenceService` from `rl.vision.detections` (retain_until,
--- config-driven `rl.vision.detections_retain_hours` - Spec §7 open point's proposed minimization
+-- config-driven `rl.vision.detections_retain_hours` - the intended minimization
 -- default "not persisted beyond session unless a callout fired" is approximated here as a short
 -- bounded window rather than an unretained-only store, so the post-match rotation analysis - run
 -- moments after `rl.match_ended` - can still read the match's own frames). `rl_vision_analysis` is

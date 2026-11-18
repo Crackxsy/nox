@@ -1,4 +1,4 @@
-"""Every write to `presets.*` needs the security PIN when one is set (C9 review, owner decision):
+"""Every write to `presets.*` needs the security PIN when one is set:
 presets start registered programs and, marked `from_satellites`, can be started at a voice
 satellite. No "does this widen anything" diff - any key, any value, removals included."""
 

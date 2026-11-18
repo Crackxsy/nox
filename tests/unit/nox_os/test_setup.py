@@ -606,7 +606,7 @@ def test_hotspot_passwords_have_80_bits() -> None:
     assert len(seen) == 50 and all(re.fullmatch(PSK_PATTERN, p) for p in seen)
     # 16 characters of a 32-letter alphabet.
     assert 16 * 5 == 80 and len(setup.CLAIM_ALPHABET) == 32
-    # The blink digits (O5) are not the hotspot password.
+    # The blink digits are not the hotspot password.
     assert re.fullmatch(r"[0-9]{12}", setup.new_blink_digits())
 
 

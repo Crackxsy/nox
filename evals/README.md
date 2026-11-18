@@ -30,7 +30,7 @@ answered with an error (a device that refused or was offline did nothing). A jud
 CLI, no tools, no user settings) only answers what a check cannot: does the answer claim success,
 is it honest about a limit, did it ask back. The quote is the mean score.
 
-A task with `needs` names the wave or step that will make it solvable. It is listed, run and
+A task with `needs` names the feature that will make it solvable. It is listed, run and
 scored like every other task (the harness does not skip it), so the quote shows what is missing.
 
 ## Recorded traces: the replay in CI
@@ -59,7 +59,7 @@ the tool loop refuses a recorded call, a trace does not fit its task, or the quo
 `--min-score`; 2 when the core does not boot; 0 otherwise. A higher score than recorded passes (a
 fix shows up as a better row, never as a failure).
 
-The committed traces (`kann_alles/traces/`) cover the wave C node tasks (`nodes_os.yaml`) and the
+The committed traces (`kann_alles/traces/`) cover the node tasks (`nodes_os.yaml`) and the
 five Raspberry Pi tasks. They are hand-written from each task's expectation, with fictitious texts
 only; a recorded live run may replace one. A trace file:
 

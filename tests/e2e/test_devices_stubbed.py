@@ -1,4 +1,4 @@
-"""Click test of Geräte › Computer und Server (spec C §1.10) against a stubbed IPC, on video.
+"""Click test of Geräte › Computer und Server against a stubbed IPC, on video.
 
 Same harness as `test_ux_redesign_stubbed.py`: the built bundle is served through `page.route`
 and the IPC websocket is answered in the test through `page.route_web_socket` - no port is
