@@ -1,7 +1,7 @@
 """Who may do what while Nox's own hands are on the machine: the whole table, cell by cell.
 
 Two surfaces, one rule. A *request* (`RequestRegistry.dispatch`) and an *answer to a permission
-prompt* (`CoreHandlers.permission_reply`) are asked from five kinds of client in eight states of
+prompt* (`CoreHandlers.permission_reply`) are asked from six kinds of client in nine states of
 the world. Every cell is a literal, so a rule that changes shows up as one red cell and a diff in
 this file - not as a refactor that "kept the tests green".
 
@@ -9,7 +9,9 @@ The words of a cell: A = allowed, L = refused by the local input lock (synthetic
 clicking), K = refused as the PC Nox controls (linked browser, or this machine), R = refused as a
 remote session, N = refused because no PIN is set, S = refused because the node's address binding
 is full, O = refused as a role that never approves, P = the PIN is missing or wrong, D = a
-"deny" (always counts), X = a paired device's high-risk "allow" without a valid PIN.
+"deny" (always counts), X = a paired device's high-risk "allow" without a valid PIN. The client
+"at_the_pc" is a paired device that is not linked in the dashboard but connects from the address
+of the PC Nox controls: it counts as that PC's browser.
 """
 
 from __future__ import annotations
@@ -56,7 +58,7 @@ WORDS = {
 }
 
 #: state -> (local input lock, node session, remote console, a PIN is set)
-STATES: dict[str, tuple[bool, str, bool, bool]] = {
+STATES: dict[str, tuple[bool, str, bool | None, bool]] = {
     "idle": (False, "off", False, True),
     "local lock": (True, "off", False, True),
     "node session": (False, "remote_pc", False, True),
@@ -64,6 +66,7 @@ STATES: dict[str, tuple[bool, str, bool, bool]] = {
     "node on this PC": (False, "this_pc", False, True),
     "binding full": (False, "saturated", False, True),
     "remote console": (False, "remote_pc", True, True),
+    "remote unknown": (False, "remote_pc", None, True),
     "no PIN set": (False, "remote_pc", False, False),
 }
 
@@ -74,6 +77,7 @@ REQUEST_TABLE: dict[str, dict[str, str]] = {
         "shell": "AAAAAAAAAAAAA",
         "phone": "AAAAAAAAAAAAA",
         "linked": "AAAAAAAAAAAAA",
+        "at_the_pc": "AAAAAAAAAAAAA",
         "plugin": "AAAAAAAAAAAAA",
     },
     "local lock": {
@@ -81,6 +85,7 @@ REQUEST_TABLE: dict[str, dict[str, str]] = {
         "shell": "AAAALLLLLLLLL",
         "phone": "AAAALLLLLLLLL",
         "linked": "AAAALLLLLLLLL",
+        "at_the_pc": "AAAALLLLLLLLL",
         "plugin": "AAAAAAAAAAAAA",
     },
     "node session": {
@@ -88,6 +93,7 @@ REQUEST_TABLE: dict[str, dict[str, str]] = {
         "shell": "AAAAPAAPAPAAA",
         "phone": "AAAAPAAPAPPAA",
         "linked": "AAAAKKKKKKPAA",
+        "at_the_pc": "AAAAKKKKKKPAA",
         "plugin": "AAAAAAAAAAAAA",
     },
     "both locks": {
@@ -95,6 +101,7 @@ REQUEST_TABLE: dict[str, dict[str, str]] = {
         "shell": "AAAALLLLLLLLL",
         "phone": "AAAALLLLLLLLL",
         "linked": "AAAALLLLLLLLL",
+        "at_the_pc": "AAAALLLLLLLLL",
         "plugin": "AAAAAAAAAAAAA",
     },
     "node on this PC": {
@@ -102,6 +109,7 @@ REQUEST_TABLE: dict[str, dict[str, str]] = {
         "shell": "AAAAKAAKKKAAA",
         "phone": "AAAAPAAPAPPAA",
         "linked": "AAAAKKKKKKPAA",
+        "at_the_pc": "AAAAPAAPAPPAA",
         "plugin": "AAAAAAAAAAAAA",
     },
     "binding full": {
@@ -109,6 +117,7 @@ REQUEST_TABLE: dict[str, dict[str, str]] = {
         "shell": "AAAAPSSPAPAAA",
         "phone": "AAAAPSSPAPPAA",
         "linked": "AAAAKSSKKKPAA",
+        "at_the_pc": "AAAAKSSKKKPAA",
         "plugin": "AAAAAAAAAAAAA",
     },
     "remote console": {
@@ -116,6 +125,15 @@ REQUEST_TABLE: dict[str, dict[str, str]] = {
         "shell": "AAAARRRRRRAAA",
         "phone": "AAAAPAAPAPPAA",
         "linked": "AAAAKKKKKKPAA",
+        "at_the_pc": "AAAAKKKKKKPAA",
+        "plugin": "AAAAAAAAAAAAA",
+    },
+    "remote unknown": {
+        "dashboard": "AAAARRRRRRAAA",
+        "shell": "AAAARRRRRRAAA",
+        "phone": "AAAAPAAPAPPAA",
+        "linked": "AAAAKKKKKKPAA",
+        "at_the_pc": "AAAAKKKKKKPAA",
         "plugin": "AAAAAAAAAAAAA",
     },
     "no PIN set": {
@@ -123,68 +141,86 @@ REQUEST_TABLE: dict[str, dict[str, str]] = {
         "shell": "AAAANAANNNAAN",
         "phone": "AAAANAANNNNNN",
         "linked": "AAAAKKKKKKNNN",
+        "at_the_pc": "AAAAKKKKKKNNN",
         "plugin": "AAAAAAAAAAAAA",
     },
 }
 
 #: state -> client -> the answers to a permission prompt: allow with the PIN, allow without it,
-#: deny, allow with the PIN at high risk, allow without it at high risk.
+#: deny, allow with the PIN at high risk, allow without it at high risk, the same two at
+#: critical risk.
 REPLY_TABLE: dict[str, dict[str, str]] = {
     "idle": {
-        "dashboard": "AADAA",
-        "shell": "AADAA",
-        "phone": "AADAX",
-        "linked": "AADAX",
-        "plugin": "AADAA",
+        "dashboard": "AADAAAA",
+        "shell": "AADAAAA",
+        "phone": "AADAXAX",
+        "linked": "AADAXAX",
+        "at_the_pc": "AADAXAX",
+        "plugin": "AADAAAA",
     },
     "local lock": {
-        "dashboard": "LLDLL",
-        "shell": "LLDLL",
-        "phone": "LLDLL",
-        "linked": "LLDLL",
-        "plugin": "LLDLL",
+        "dashboard": "LLDLLLL",
+        "shell": "LLDLLLL",
+        "phone": "LLDLLLL",
+        "linked": "LLDLLLL",
+        "at_the_pc": "LLDLLLL",
+        "plugin": "LLDLLLL",
     },
     "node session": {
-        "dashboard": "APDAP",
-        "shell": "APDAP",
-        "phone": "APDAP",
-        "linked": "KKDKK",
-        "plugin": "OODOO",
+        "dashboard": "APDAPAP",
+        "shell": "APDAPAP",
+        "phone": "APDAPAP",
+        "linked": "KKDKKKK",
+        "at_the_pc": "KKDKKKK",
+        "plugin": "OODOOOO",
     },
     "both locks": {
-        "dashboard": "LLDLL",
-        "shell": "LLDLL",
-        "phone": "LLDLL",
-        "linked": "LLDLL",
-        "plugin": "LLDLL",
+        "dashboard": "LLDLLLL",
+        "shell": "LLDLLLL",
+        "phone": "LLDLLLL",
+        "linked": "LLDLLLL",
+        "at_the_pc": "LLDLLLL",
+        "plugin": "LLDLLLL",
     },
     "node on this PC": {
-        "dashboard": "KKDKK",
-        "shell": "KKDKK",
-        "phone": "APDAP",
-        "linked": "KKDKK",
-        "plugin": "OODOO",
+        "dashboard": "KKDKKKK",
+        "shell": "KKDKKKK",
+        "phone": "APDAPAP",
+        "linked": "KKDKKKK",
+        "at_the_pc": "APDAPAP",
+        "plugin": "OODOOOO",
     },
     "binding full": {
-        "dashboard": "SSDSS",
-        "shell": "SSDSS",
-        "phone": "SSDSS",
-        "linked": "SSDSS",
-        "plugin": "SSDSS",
+        "dashboard": "SSDSSSS",
+        "shell": "SSDSSSS",
+        "phone": "SSDSSSS",
+        "linked": "SSDSSSS",
+        "at_the_pc": "SSDSSSS",
+        "plugin": "SSDSSSS",
     },
     "remote console": {
-        "dashboard": "RRDRR",
-        "shell": "RRDRR",
-        "phone": "APDAP",
-        "linked": "KKDKK",
-        "plugin": "OODOO",
+        "dashboard": "RRDRRRR",
+        "shell": "RRDRRRR",
+        "phone": "APDAPAP",
+        "linked": "KKDKKKK",
+        "at_the_pc": "KKDKKKK",
+        "plugin": "OODOOOO",
+    },
+    "remote unknown": {
+        "dashboard": "RRDRRRR",
+        "shell": "RRDRRRR",
+        "phone": "APDAPAP",
+        "linked": "KKDKKKK",
+        "at_the_pc": "KKDKKKK",
+        "plugin": "OODOOOO",
     },
     "no PIN set": {
-        "dashboard": "NNDNN",
-        "shell": "NNDNN",
-        "phone": "NNDNN",
-        "linked": "KKDKK",
-        "plugin": "OODOO",
+        "dashboard": "NNDNNNN",
+        "shell": "NNDNNNN",
+        "phone": "NNDNNNN",
+        "linked": "KKDKKKK",
+        "at_the_pc": "KKDKKKK",
+        "plugin": "OODOOOO",
     },
 }
 
@@ -195,6 +231,8 @@ ANSWERS: list[tuple[Decision, str | None, Risk | None]] = [
     (Decision.DENY, None, None),
     (Decision.ALLOW, PIN, Risk.HIGH),
     (Decision.ALLOW, None, Risk.HIGH),
+    (Decision.ALLOW, PIN, Risk.CRITICAL),
+    (Decision.ALLOW, None, Risk.CRITICAL),
 ]
 
 

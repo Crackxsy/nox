@@ -40,6 +40,8 @@ CLIENTS: dict[str, tuple[str, str, str]] = {
     "shell": ("shell", "shell:1", ""),
     "phone": ("device", "device:" + OTHER_PHONE, "192.168.1.20"),
     "linked": ("device", "device:" + BROWSER, "192.168.1.30"),
+    # Not linked in the dashboard, but connecting from the address of the PC Nox controls.
+    "at_the_pc": ("device", "device:" + "d" * 32, "192.168.1.40"),
     "plugin": ("plugin", "plugin:1", ""),
 }
 #: Where the controlled node connects from: another PC, or this very machine.

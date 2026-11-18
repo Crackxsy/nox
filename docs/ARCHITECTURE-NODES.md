@@ -503,8 +503,8 @@ Reading, "deny" and stop are never asked here: they only narrow. The three ways 
 node's addresses or by saturation. A refusal carries a stable sub-reason code, so the dashboard
 words it itself (`Refuse.code`).
 
-Tests: `tests/unit/security/test_access_table.py` (the whole table: five kinds of client in
-eight states, for requests and for answers to prompts, cell by cell),
+Tests: `tests/unit/security/test_access_table.py` (the whole table: six kinds of client in
+nine states, for requests and for answers to prompts, cell by cell),
 `test_access_transitions.py` (one lock ends, the other stays),
 `test_node_session_approvals.py::test_who_may_approve_or_change_while_nox_controls_a_node`
 (one case per role), `::test_the_escapes_work_with_the_pin_even_remotely_and_from_the_linked_browser`,

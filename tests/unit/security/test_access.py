@@ -141,6 +141,26 @@ def test_a_client_is_what_its_role_makes_it() -> None:
     assert DASHBOARD.is_person_ui and PHONE.is_person_ui
 
 
+def test_every_ui_role_is_held_to_the_locks() -> None:
+    """A role added to `UI_ROLES` must never fall out of the rule as "anything else"."""
+    from nox.ipc.roles import UI_ROLES
+
+    for role in UI_ROLES:
+        assert client_context("x:1", role).is_person_ui, role
+    assert not client_context("x:1", "plugin").is_person_ui
+
+
+def test_a_role_added_to_the_ui_roles_is_held_to_the_locks_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import nox.ipc.dispatch as dispatch
+    from nox.ipc.roles import UI_ROLES
+
+    assert not client_context("tablet:1", "tablet").is_person_ui
+    monkeypatch.setattr(dispatch, "UI_ROLES", (*UI_ROLES, "tablet"))
+    assert client_context("tablet:1", "tablet").is_person_ui
+
+
 # ---- the verdicts ------------------------------------------------------------------------------
 
 
@@ -263,6 +283,53 @@ async def test_the_input_lock_speaks_only_while_it_holds_and_words_each_surface(
     assert isinstance(prompt, Refuse) and "press the stop hotkey, then allow" in prompt.reason
     assert not request.code and not prompt.code  # no sub-reason: the dashboard words these itself
     assert not lock.chat_untrusted(DASHBOARD)
+
+
+class Broken(Fake):
+    """A condition that fails while it thinks."""
+
+    async def check(self, client: ClientContext, call: Call) -> Verdict:
+        raise RuntimeError("the rule broke")
+
+    def chat_untrusted(self, client: ClientContext) -> bool:
+        raise RuntimeError("the rule broke")
+
+
+async def test_a_failing_condition_stops_the_decision_it_never_waves_a_request_through() -> None:
+    """Fail closed: an error inside a condition reaches the caller (the hub answers `internal`);
+    the conditions after it are not asked, and nothing is read as "allowed"."""
+    policy, after = AccessPolicy(), Fake("after")
+    policy.add_condition(Broken("broken", precedence=10))
+    policy.add_condition(after)
+    with pytest.raises(RuntimeError):
+        await policy.decide(DASHBOARD, "plans.approve", {})
+    with pytest.raises(RuntimeError):
+        await policy.approval(DASHBOARD, answer())
+    with pytest.raises(RuntimeError):
+        policy.chat_untrusted(DASHBOARD)
+    assert after.asked == []
+
+
+async def test_a_failing_condition_keeps_the_handler_from_running() -> None:
+    from nox.ipc.dispatch import EmptyPayload, RequestContext, RequestRegistry
+    from nox.ipc.protocol import Envelope, Kind, Source
+
+    ran: list[str] = []
+
+    async def handler(_ctx: Any, _p: Any) -> dict[str, Any]:
+        ran.append("plans.approve")
+        return {}
+
+    registry = RequestRegistry()
+    registry.register("plans.approve", EmptyPayload, handler, roles=("dashboard",))
+    registry.policy.add_condition(Broken("broken"))
+    envelope = Envelope(
+        kind=Kind.REQUEST, name="plans.approve", src=Source(role="dashboard", id="dashboard:1")
+    )
+    ctx = RequestContext(client_id="dashboard:1", role="dashboard", request=envelope)
+    with pytest.raises(RuntimeError):
+        await registry.dispatch(ctx, envelope)
+    assert ran == []
 
 
 # ---- answers to permission prompts -------------------------------------------------------------
@@ -394,3 +461,32 @@ async def test_administration_from_a_device_is_the_doors_and_locally_the_gates()
 async def test_administration_without_a_gate_is_refused_not_waved_through() -> None:
     verdict = await PinChecks().admin(DASHBOARD, "4711", "lan.pair", local_needs_pin=True)
     assert isinstance(verdict, Refuse)
+
+
+# ---- the production wiring ---------------------------------------------------------------------
+
+
+async def test_wire_guards_puts_the_real_remote_probe_into_the_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without an explicit probe the node condition asks `console_is_remote`: this computer used
+    through a remote session is refused for talking to Nox, one used at the console is not."""
+    from types import SimpleNamespace
+
+    import nox.node.install as install_module
+    from nox.ipc.dispatch import RequestRegistry
+    from nox.node.world_routes import NodeControl
+
+    answers: list[bool | None] = [False]
+    monkeypatch.setattr(install_module, "console_is_remote", lambda: answers[0])
+    core = SimpleNamespace(registry=RequestRegistry())
+    control = NodeControl(None, lambda _n: None)
+    control.answered("a" * 32, {"gen": 2, "active": True, "id": "ab" * 16})
+    install_module.wire_guards(core, control)
+    policy = core.registry.policy
+    assert policy.condition_names() == ("node_session",)
+    assert await policy.decide(DASHBOARD, "chat.send", {}) == Allow(pin_read=True)
+    for remote in (True, None):  # at a remote session, or when that cannot be told
+        answers[0] = remote
+        verdict = await policy.decide(DASHBOARD, "chat.send", {})
+        assert isinstance(verdict, Refuse) and verdict.code == "node_session_remote"

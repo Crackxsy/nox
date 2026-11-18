@@ -885,3 +885,55 @@ async def test_a_paired_devices_request_carries_its_network_address(core: NoxCor
                 break
         assert reply.kind is Kind.RESPONSE, reply.payload
     assert seen == [("device", "127.0.0.1"), ("dashboard", "")]
+
+
+async def test_a_device_at_the_controlled_pcs_address_is_refused_by_the_hub_context(
+    core: NoxCore,
+) -> None:
+    """The hub builds each connection's `ClientContext` with the address the network listener saw:
+    a paired device connecting from the address of the PC Nox controls is that PC's browser."""
+    from pydantic import BaseModel
+
+    from nox.node.session_access import NodeSessionCondition
+    from nox.node.world_routes import NodeControl
+
+    assert core.registry is not None
+    seen: list[tuple[str, str]] = []
+    ran: list[str] = []
+
+    class Empty(BaseModel):
+        pass
+
+    async def handler(ctx: Any, _p: Empty) -> dict[str, Any]:
+        seen.append((ctx.client.peer, ctx.client.peer_class.value))
+        ran.append("zz.change")
+        return {}
+
+    class Probe(NodeSessionCondition):
+        """The node condition under its own name, beside the one the core installed."""
+
+        name = "zz_session"
+
+    controlled = "a" * 32
+    control = NodeControl(None, lambda _n: None)
+    control.answered(controlled, {"gen": 2, "active": True, "id": "ab" * 16})
+    control.node_observed[controlled] = {"127.0.0.1"}  # where the controlled PC connects from
+    policy = core.registry.policy
+    policy.add_condition(Probe(control, policy.pins, lambda: False))
+    core.registry.register("zz.change", Empty, handler, roles=("device",))
+    paired = await _pair(core)
+    async with await _connect(core) as ws:
+        await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
+        reply = await _request(ws, paired["client_id"], "zz.change", {})
+    assert reply.kind is Kind.ERROR, reply.payload
+    assert reply.payload["details"] == {
+        "reason": "node_session",
+        "sub_reason": "node_session_linked",
+    }
+    assert ran == [] and seen == []
+    control.observe(controlled, {"gen": 3, "active": False, "id": ""})  # the session is over
+    async with await _connect(core) as ws:
+        await _auth(ws, token=paired["token"], role="device", client_id=paired["client_id"])
+        reply = await _request(ws, paired["client_id"], "zz.change", {})
+    assert reply.kind is Kind.RESPONSE, reply.payload
+    assert seen == [("127.0.0.1", "local")]
