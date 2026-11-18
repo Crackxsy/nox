@@ -832,7 +832,7 @@ def allow(
     if trust:
         manifest.trust_core_for_high = enabled
     elif folder:
-        # Allowing a folder switches `files` on with it (one question, UX K2); denying one keeps
+        # Allowing a folder switches `files` on with it (one question, not two); denying one keeps
         # the group as it is.
         rest = [f for f in manifest.folders if f != folder]
         manifest.folders = [*rest, folder] if enabled else rest

@@ -108,7 +108,7 @@ class TrayController:
         self.menu.addAction(self.action_dashboard)
 
         self.menu.addSeparator()
-        # "Stopp" everywhere, like the dashboard's button (Spec UX-Neubau, glossary): one name for
+        # "Stopp" everywhere, like the dashboard's button: one name for
         # one control - it stops Nox everywhere.
         self.action_kill = QAction("Stopp (überall)" if de else "Stop (everywhere)")
         self.action_kill.triggered.connect(on_kill)
