@@ -660,7 +660,7 @@ installer CI job.
 
 ## Nodes (`nox node`)
 
-A node is Nox on another PC in the home (spec wave C), paired like a phone but holding a **client
+A node is Nox on another PC in the home, paired like a phone but holding a **client
 certificate** of this installation's authority instead of a token. Every call to a node passes
 two gates - the core's permission engine with a device-bound target, then the node's own
 `NodeGate` - and either can refuse. Every limit this design accepts is listed in one place,
@@ -865,7 +865,7 @@ voice satellites included (`nox.home.boundary`).
   vielen Adressen - Freigaben nur nach Ende der Sitzung". "This machine" is matched against every address of every local interface,
   uncapped; an address that cannot be classified counts as this machine, and when this machine's
   addresses cannot be read at all its dashboard and shell count as the controlled PC. Fail closed
-  (owner decision): a device that shares such an address is treated as the controlled PC. A
+  (a deliberate choice): a device that shares such an address is treated as the controlled PC. A
   compromised node can use this to lock a device out of approving during its own session, and a
   full binding locks everyone out - both are [accepted limits](#accepted-limits-nodes).
   A paired device's message during the session marks its conversation as holding **unreadable
@@ -1184,7 +1184,7 @@ in the home network.
   compromised node can report the owner's phone address and lock that phone out for the length
   of the lock; a device that shares an address with the controlled PC - behind the same NAT, or
   because someone on the home network took that address over - is locked out the same way.
-  *Why accepted:* owner decision for security over availability. A home network offers nothing
+  *Why accepted:* a deliberate choice for security over availability. A home network offers nothing
   a node cannot influence to tell devices apart; failing open would let Nox approve its own
   question from the PC it controls. *Mitigation:* it only ever comes from the controlled machine
   (or the network it is on) while its lock holds and ends with the lock; deny and Stopp always
@@ -1331,7 +1331,7 @@ in the home network.
 ## Nox-OS (the Raspberry Pi image)
 
 What the image guarantees, and how each part is enforced, is in
-[`os/README.md`](../os/README.md#hardening-o2); `os/tools/check-image.sh` refuses an image that
+[`os/README.md`](../os/README.md#hardening); `os/tools/check-image.sh` refuses an image that
 breaks it and the QEMU boot test checks it on the running system. In short:
 
 - **Nothing to log in with is shipped.** No password, no key, no `authorized_keys`, SSH masked.
@@ -1366,7 +1366,7 @@ breaks it and the QEMU boot test checks it on the running system. In short:
 - **Console:** a status screen on tty1, no login there; no account has a password. It shows no
   secrets - except, during the setup window of an unclaimed device, the setup hotspot's password
   and the claim code made on the device (a screen is physical access).
-- **First boot without a screen** ([`os/README.md`](../os/README.md#first-boot-without-a-screen-o3)):
+- **First boot without a screen** ([`os/README.md`](../os/README.md#first-boot-without-a-screen)):
   - **Setup window:** root's file with this boot's id and its end in seconds since boot, at most
     30 minutes after power-on, only while unclaimed; only a power cycle opens another. Every
     grant of setup mode (hotspot ports, portal, `maint set`, `claim`) checks the file itself, so
