@@ -689,7 +689,7 @@ jobs:
         working-directory: ui/${{ matrix.app }}
         run: npm run build
 
-      # Spec UX-Neubau §12: start bundle <= 110 KB gzip, each lazy area <= 35 KB, CSS <= 12 KB.
+      # Performance budget of the dashboard: start bundle <= 110 KB gzip, each lazy area <= 35 KB, CSS <= 12 KB.
       - name: Bundle budget
         if: matrix.app == 'dashboard'
         working-directory: ui/dashboard
@@ -762,13 +762,14 @@ jobs:
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "$pwd\.venv\Scripts"
 
-      # Readability: comments, docstrings and docs may not point to documents a reader of this
-      # repository cannot open - section numbers of a planning specification, numbered decisions,
-      # review finding ids, delivery-step ids. The rule is said in plain words or linked to a
-      # public document instead. False positives: scripts/planning_ids_allowlist.txt (an entry
+      # Readability: comments, docstrings, docs, UI, installers, the OS image, benchmarks and the
+      # changelog may not point to documents a reader of this repository cannot open - section
+      # numbers of a planning specification, numbered decisions, review finding ids, delivery
+      # waves and step ids, epic and story numbers. The rule is said in plain words or linked to
+      # a public document instead. False positives: scripts/planning_ids_allowlist.txt (an entry
       # that matches nothing any more fails too). The unit test
       # tests/unit/scripts/test_check_planning_ids.py runs the same script.
-      - name: No private planning or review ids in src/, tests/ and docs/
+      - name: No private planning or review ids in the repository
         run: python scripts/check_planning_ids.py
 
       # Fails when a dependency's license is denied or unresolved against docs/license_policy.yaml.

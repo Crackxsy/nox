@@ -81,9 +81,10 @@ because those tend to be numerous and shallow:
   `conftest.py` next to the tests; a test module does not import from another test module. To wait
   for something, use `tests.unit.fakes.wait_until(check, what="...")`, so a failure says what never
   happened.
-- **No references a reader cannot resolve.** Comments, docstrings and docs say the rule in plain
-  words or link a document in this repository - never the number of a planning section, a decision
-  or a review finding. `scripts/check_planning_ids.py` (run in CI) fails on them.
+- **No references a reader cannot resolve.** Comments, docstrings, docs and the changelog say
+  the rule in plain words or link a document in this repository - never the number of a planning
+  section, a decision, a review finding, a delivery wave or step, or an epic or story.
+  `scripts/check_planning_ids.py` (run in CI, whole repository) fails on them.
 - A bare `pytest` must stay hermetic: anything that needs a real service, device, network or toolchain
   is marked `e2e`, `network`, `hardware` or `spike`.
 
