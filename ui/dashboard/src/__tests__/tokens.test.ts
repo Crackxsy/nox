@@ -1,6 +1,6 @@
 /**
- * The dashboard's design tokens (Spec UX-Neubau §11), measured rather than asserted by eye: the two
- * dark blocks agree, and every pair the spec's contrast table names reaches its WCAG minimum - text
+ * The dashboard's design tokens, measured rather than asserted by eye: the two
+ * dark blocks agree, and every text and control pair of the palette reaches its WCAG minimum - text
  * 4.5:1, the borders of inputs and switches (`--ctl`) 3:1 (WCAG 1.4.11).
  */
 
@@ -64,7 +64,7 @@ describe('the dark palette', () => {
   });
 });
 
-describe('contrast (Spec §10 table)', () => {
+describe('contrast of the text and control pairs', () => {
   const cases: [string, string, string, number][] = [
     ['text on ground', '--ink', '--bg', 4.5],
     ['text 2 on ground', '--ink-2', '--bg', 4.5],

@@ -61,7 +61,7 @@ export function deviceFromQuery(value: string | null): string | null {
 
 /**
  * Whether an event is for this pet. Speech has a place: a pet for one paired node (`?device=<id>`,
- * the overlay a node serves, C9) moves its mouth with that node's speech only, and the core's own
+ * the overlay a node serves) moves its mouth with that node's speech only, and the core's own
  * pet with the core's. Only `tts.*` events carry a `device`; every other event is for every pet.
  */
 export function forThisPet(env: Envelope, device: string | null): boolean {

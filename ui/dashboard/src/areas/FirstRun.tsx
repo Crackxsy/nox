@@ -1,5 +1,5 @@
 /**
- * The first start (Spec UX-Neubau §9): three full-screen steps - the person's name, how private
+ * The first start: three full-screen steps - the person's name, how private
  * Nox should be (Standard preselected), which voice engine speaks. Every step can be skipped and
  * everything can be changed later in Einstellungen; nothing is written before "Weiter".
  *

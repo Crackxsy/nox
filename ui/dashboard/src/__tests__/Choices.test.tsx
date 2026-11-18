@@ -1,5 +1,5 @@
 /**
- * The Modus and privacy forms (Spec UX-Neubau §5, owner decision 1): one "Modus" for mode and
+ * The Modus and privacy forms: one "Modus" for mode and
  * security profile, applied only on the button; "Alles erlaubt" only with an explicit yes; relaxing
  * privacy asks for the PIN when the core says so.
  */

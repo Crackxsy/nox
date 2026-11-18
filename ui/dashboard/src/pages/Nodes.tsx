@@ -1,5 +1,5 @@
 /**
- * Geräte › Computer und Server (Spec C §1.10): every PC, laptop and small server paired as a
+ * Geräte › Computer und Server: every PC, laptop and small server paired as a
  * node, above the phones. One row per node - its kind, name, state ("Verbunden", "Offline seit
  * 14:02", "Update nötig"), in one sentence what Nox may do there, whether it is the default
  * device for something, its version - and a detail sheet per node (`nodes/NodeSheet.tsx`). Below

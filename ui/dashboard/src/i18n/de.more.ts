@@ -1,7 +1,7 @@
 /**
  * German copy that only the lazily loaded areas use (Geräte & Fähigkeiten, Einstellungen, Nox,
  * the pairing screens). `loadMore` fetches it together with the first such area, so the start
- * bundle carries only what the shell and Heute say (Spec UX-Neubau §12). Same rules as `de.ts`.
+ * bundle carries only what the shell and Heute say. Same rules as `de.ts`.
  */
 
 export const deMore = {

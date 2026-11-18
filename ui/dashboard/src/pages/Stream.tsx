@@ -1,5 +1,5 @@
 /**
- * The stream, in the two places it lives now (Spec UX-Neubau §3, §6):
+ * The stream, in the two places it lives now:
  *
  *  - `StreamLive` is Heute in the stream Modus: the session, the privacy scene as its own red
  *    button (a different purpose from Stopp: it secures the picture, Nox keeps running), the live
@@ -55,7 +55,7 @@ export function StreamLive({ t, lang, state, client, onState }: StreamProps) {
   return (
     <div className="live">
       <div className="live-h">
-        {/* Red only while really live (Spec §2: red means Stop, Live and errors). */}
+        {/* Red only while really live (red means Stop, Live and errors, nothing else). */}
         <span className={session.active ? 'badge badge--danger' : 'badge'}>
           {session.active && <span className="lamp lamp--sm" data-s="live" aria-hidden="true" />}
           {session.active ? t('stream_active') : t('stream_inactive')}

@@ -1,5 +1,5 @@
 /**
- * "PC oder Laptop hinzufügen" (Spec C §1.10): pick the system, install Nox on the new device
+ * "PC oder Laptop hinzufügen": pick the system, install Nox on the new device
  * first, and only then make the one-time code - it lives five minutes, so it is never made while
  * somebody is still downloading. The code travels as a `nox-node://pair?...` link (and its QR
  * code) that carries the fingerprint of Nox's own authority, so the new device pins it before it

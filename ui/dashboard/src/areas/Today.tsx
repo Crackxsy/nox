@@ -1,5 +1,5 @@
 /**
- * Heute: what is on today and what Nox needs from the person (Spec UX-Neubau §3).
+ * Heute: what is on today and what Nox needs from the person.
  *
  * A greeting with a one-sentence summary, then "Wartet auf dich" (open questions, facts that wait
  * for a yes, skills ready to check, parts of Nox that are down), "Dein Tag", Zuhause (scenes and a

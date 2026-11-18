@@ -1,5 +1,5 @@
 /**
- * The dashboard shell (Spec UX-Neubau §3): four areas - Heute, Nox, Geräte & Fähigkeiten,
+ * The dashboard shell: four areas - Heute, Nox, Geräte & Fähigkeiten,
  * Einstellungen - in a side bar (tablet, desktop) or a bottom bar (phone), a header with what Nox is
  * doing, what waits for the person, the privacy level and Stopp, a sticky strip for states that must
  * never scroll away, and "Sag Nox, was er tun soll" at the bottom of every page.
@@ -405,7 +405,8 @@ export function App({ auth, lang, theme: initialTheme, onDeviceGone, notice }: A
     troubles: troubles.length,
   });
 
-  /** Stopp: at once, no question asked (owner decision); every device may send it. */
+  /** Stopp: at once, no question asked (a stop that waits for an answer is no stop); every
+   * device may send it. */
   const stop = useCallback(() => {
     if (!client || stopBusy) return;
     setStopBusy(true);

@@ -1,8 +1,8 @@
 /**
- * Geräte & Fähigkeiten: what Nox is connected to and what it can do (Spec UX-Neubau §3).
+ * Geräte & Fähigkeiten: what Nox is connected to and what it can do.
  *
- * "Geräte" is everything Nox is connected to - computers and servers paired as nodes (spec C
- * §1.10, above the phones), phones, tablets and PCs (pairing in the home network, and Telegram),
+ * "Geräte" is everything Nox is connected to - computers and servers paired as nodes (above
+ * the phones), phones, tablets and PCs (pairing in the home network, and Telegram),
  * the rooms of the house, the stream technology. "Fähigkeiten" is the
  * Abläufe, the Wächter and, set apart, what is for advanced users. Loaded on first visit.
  *
@@ -26,7 +26,7 @@ import { LocalOnly } from '../shell/LocalOnly';
 import type { DevicesTab, Route } from '../shell/routes';
 import { SubTabs } from '../shell/SubTabs';
 
-// Its own chunk: the area stays within its budget (Spec UX-Neubau §12), and the copy is loaded
+// Its own chunk: the area stays within its budget, and the copy is loaded
 // with the area already.
 const ComputersSection = lazy(() =>
   withNodeCopy(() => import('../pages/Nodes')).then((m) => ({ default: m.ComputersSection })),

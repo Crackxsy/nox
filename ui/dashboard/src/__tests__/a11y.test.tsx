@@ -1,5 +1,5 @@
 /**
- * axe-core on the shell and every area (Spec UX-Neubau §10: WCAG 2.2 AA, zero findings).
+ * axe-core on the shell and every area (WCAG 2.2 AA, zero findings).
  *
  * jsdom has no layout, so the two rules that need one - colour contrast and target size - are
  * measured elsewhere: contrast by `tokens.test.ts` on the palette itself, and both by the headless

@@ -1,5 +1,5 @@
 /**
- * One computer in detail (Spec C §1.10): what Nox may do there, group by group, what Nox did
+ * One computer in detail: what Nox may do there, group by group, what Nox did
  * there lately, and removing it. Where a tool family runs when nobody names a device applies to
  * every computer and lives under "Standardgeräte" on the page itself (`DefaultsSection`).
  *
