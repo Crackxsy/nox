@@ -843,9 +843,15 @@ async def test_no_registered_request_is_left_undecided_by_the_locks(core: NoxCor
             assert isinstance(verdict, Allow) == (name in CALM_SNAPSHOT), (role, name)
 
 
-async def test_the_real_core_installs_both_locks_in_a_fixed_order(core: NoxCore) -> None:
+async def test_the_real_core_installs_the_locks_its_platform_has(core: NoxCore) -> None:
+    """The node lock everywhere; the local input lock only where computer use exists (Windows,
+    as `nox.desktop.install` does). The order when both are there is fixed by precedence, see
+    `test_access.py::test_the_real_locks_speak_in_a_fixed_order`."""
+    import sys
+
     assert core.registry is not None
-    assert core.registry.policy.condition_names() == ("input_lock", "node_session")
+    expected = ("input_lock", "node_session") if sys.platform == "win32" else ("node_session",)
+    assert core.registry.policy.condition_names() == expected
 
 
 async def test_a_paired_devices_request_carries_its_network_address(core: NoxCore) -> None:

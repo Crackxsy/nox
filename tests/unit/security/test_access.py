@@ -490,3 +490,22 @@ async def test_wire_guards_puts_the_real_remote_probe_into_the_policy(
         answers[0] = remote
         verdict = await policy.decide(DASHBOARD, "chat.send", {})
         assert isinstance(verdict, Refuse) and verdict.code == "node_session_remote"
+
+
+async def test_the_real_locks_speak_in_a_fixed_order() -> None:
+    """Whichever extension installs first, the local input lock is asked before the node lock."""
+    from types import SimpleNamespace
+
+    from nox.ipc.dispatch import RequestRegistry
+    from nox.node.install import wire_guards
+    from nox.node.world_routes import NodeControl
+
+    for lock_first in (True, False):
+        core = SimpleNamespace(registry=RequestRegistry())
+        policy = core.registry.policy
+        if lock_first:
+            policy.add_condition(InputLock(lambda: True))
+        wire_guards(core, NodeControl(None, lambda _n: None), remote=lambda: False)
+        if not lock_first:
+            policy.add_condition(InputLock(lambda: True))
+        assert policy.condition_names() == ("input_lock", "node_session")
