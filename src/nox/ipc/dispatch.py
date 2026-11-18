@@ -2,9 +2,11 @@
 
 A request is accepted when all three hold: a handler is registered for its name, the caller's role
 allow-list (or a service namespace the connection declared) matches the name, and the handler's
-own `roles` - if it named any - contains the caller's role. The payload is then validated against
-the handler's model before it runs. Every failure becomes one error code: `validation.failed`,
-`not_found`, `permission.denied` or `internal`.
+own `roles` - if it named any - contains the caller's role. While synthetic input or a node
+session is in play, `nox.security.access.AccessPolicy` then decides whether a UI client may make a
+request that changes something. The payload is validated against the handler's model before it
+runs. Every failure becomes one error code: `validation.failed`, `not_found`,
+`permission.denied` or `internal`.
 
 Name matching is the dotted, segment-aware dialect from `nox.core.globbing`: `security.*` covers
 `security.kill` but not `security.permission.reply`, which is why the latter is listed by name.
@@ -13,7 +15,7 @@ Name matching is the dotted, segment-aware dialect from `nox.core.globbing`: `se
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -29,7 +31,15 @@ from nox.ipc.errors import (
     IpcError,
 )
 from nox.ipc.protocol import NAME_ERROR, RESPONSE_PAYLOAD_MODELS, Envelope, Kind
-from nox.ipc.roles import UI_ROLES
+from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES
+from nox.ipc.tokens import DEVICE_CLIENT_PREFIX
+from nox.security.access import (
+    AccessPolicy,
+    Allow,
+    ClientContext,
+    ClientKind,
+    peer_class_of,
+)
 
 log = get_logger(__name__)
 
@@ -130,6 +140,19 @@ async def _no_stream(_payload: dict[str, Any], _done: bool) -> None:
     raise IpcError(ERR_INTERNAL, "streaming is not available in this context")
 
 
+def client_context(client_id: str, role: str, peer: str = "") -> ClientContext:
+    """Who is asking, for `AccessPolicy`: what the role makes the client (a local UI, a paired
+    device, anything else), the device behind it and where it connects from. The hub builds it
+    once per connection."""
+    if role == DEVICE_ROLE:
+        kind, device_id = ClientKind.DEVICE, client_id.removeprefix(DEVICE_CLIENT_PREFIX)
+    elif role in LOCAL_UI_ROLES:
+        kind, device_id = ClientKind.LOCAL_UI, ""
+    else:
+        kind, device_id = ClientKind.OTHER, ""
+    return ClientContext(client_id, role, kind, device_id, peer, peer_class_of(peer))
+
+
 @dataclass
 class RequestContext:
     """What a handler knows about the caller; `stream(payload, done)` sends a stream frame."""
@@ -142,6 +165,14 @@ class RequestContext:
     #: The network address a paired device connects from (bridged in by the network listener);
     #: "" for local clients.
     peer: str = ""
+    #: The connection's own `ClientContext`, built once by the hub; built here for a caller that
+    #: has none (a test, an in-process call).
+    connection: InitVar[ClientContext | None] = None
+    #: Who is asking, as `AccessPolicy` sees it.
+    client: ClientContext = field(init=False)
+
+    def __post_init__(self, connection: ClientContext | None) -> None:
+        self.client = connection or client_context(self.client_id, self.role, self.peer)
 
 
 @dataclass(frozen=True)
@@ -156,62 +187,14 @@ class EmptyPayload(BaseModel):
     """For requests without parameters (`{}`)."""
 
 
-#: The UI roles a person clicks in - and so roles synthetic input could click in for them. A
-#: paired device counts too: its browser may run on the very machine Nox is steering.
-INPUT_ROLES: frozenset[str] = frozenset(UI_ROLES)
-#: What a UI client may still do while Nox controls mouse and keyboard: look, stop, mute.
-CALM_UI_REQUESTS: frozenset[str] = frozenset(
-    {"state.get", "health.get", "health.history", "config.effective", "config.get",
-     "security.kill", "security.panic", "security.pin.status", "voice.mute", "plugin.status",
-     "secrets.status", "security.permission.reply", "security.permission.pending",
-     "personality.get", "day.today"}
-)  # fmt: skip
-#: Talking to Nox: while Nox controls mouse and keyboard on a paired PC these need no PIN - from
-#: anywhere but the browser on that very PC, so Nox cannot type instructions to itself
-#: (`nox.node.world_routes.session_refusal`). Anything they lead to is asked as usual.
-CONVERSATION_UI_REQUESTS: frozenset[str] = frozenset({"chat.send", "voice.ptt"})
-
-
-def calm_ui_request(name: str) -> bool:
-    """A request that only reads or stops - allowed while synthetic input is in play."""
-    return (
-        name in CALM_UI_REQUESTS or name.startswith("ipc.") or name.endswith((".list", ".status"))
-    )
-
-
-def conversation_request(name: str) -> bool:
-    """Talking to Nox (`CONVERSATION_UI_REQUESTS`)."""
-    return name in CONVERSATION_UI_REQUESTS
-
-
-def calm_call(name: str, payload: Any) -> bool:
-    """`calm_ui_request` for one call. `voice.mute` is calm only when it mutes - `muted` literally
-    `true`; anything else (unmuting, "false", 0, a missing field) is not: it could give Nox an ear
-    again. The field is a strict boolean, so the model never reads it otherwise."""
-    if name == "voice.mute":
-        return isinstance(payload, dict) and payload.get("muted") is True
-    return calm_ui_request(name)
-
-
-#: (context, the request's `pin`, the request's name) -> why it is refused, or None. The reason
-#: may carry a stable `code` (`nox.node.world_routes.Refusal`), sent as `details.sub_reason`.
-NodeGuard = Callable[[RequestContext, str | None, str], Awaitable[str | None]]
-
-
 class RequestRegistry:
     """name -> (payload model, async handler, allowed roles). Dispatches envelopes to handlers."""
 
-    def __init__(self) -> None:
+    def __init__(self, policy: AccessPolicy | None = None) -> None:
         self._handlers: dict[str, Registration] = {}
-        #: True while synthetic input could be in play (`nox.desktop.computer_use`): UI clients
-        #: then keep only `calm_ui_request`s, so no click Nox sends can activate, approve or
-        #: change anything. Set by the desktop extension.
-        self.input_lock: Callable[[], bool] | None = None
-        #: While Nox controls mouse and keyboard on a paired PC: why a UI client's request that
-        #: changes something is refused (`nox.node.world_routes.session_refusal`: the PIN, never
-        #: the browser on that PC, not from a remote session), or None. Given the request's
-        #: `pin` and name. Set by the node extension.
-        self.node_guard: NodeGuard | None = None
+        #: Who may make a request that changes something while synthetic input or a node
+        #: session is in play. The desktop and node extensions install their conditions here.
+        self.policy = policy or AccessPolicy()
 
     def register(
         self,
@@ -275,39 +258,20 @@ class RequestRegistry:
             raise IpcError(ERR_NOT_FOUND, f"unknown request {envelope.name!r}")
         if not self.is_allowed(envelope.name, ctx.role, service_patterns(ctx.services)):
             raise IpcError(ERR_PERMISSION, f"role {ctx.role!r} may not call {envelope.name!r}")
-        lock = self.input_lock
         payload = envelope.payload
-        # One rule for "calm" with the node lock below: unmuting is not calm.
+        verdict = await self.policy.decide(ctx.client, envelope.name, payload)
+        if not isinstance(verdict, Allow):
+            # `sub_reason`: a stable code the dashboard words itself; the message is the English
+            # fallback.
+            raise IpcError(ERR_PERMISSION, verdict.reason, details=verdict.wire_details())
         if (
-            ctx.role in INPUT_ROLES
-            and lock is not None
-            and not calm_call(envelope.name, payload)
-            and lock()
+            verdict.pin_read
+            and isinstance(payload, dict)
+            and isinstance(payload.get("pin"), str)
+            and "pin" not in reg.payload_model.model_fields
         ):
-            raise IpcError(
-                ERR_PERMISSION,
-                "Nox is controlling mouse and keyboard; end it with the stop hotkey and try again",
-            )
-        node_guard = self.node_guard
-        if (
-            ctx.role in INPUT_ROLES
-            and node_guard is not None
-            and not calm_call(envelope.name, payload)
-        ):
-            raw_pin = payload.get("pin") if isinstance(payload, dict) else None
-            pin = raw_pin if isinstance(raw_pin, str) else None
-            refusal = await node_guard(ctx, pin, envelope.name)
-            if refusal is not None:
-                # `sub_reason`: a stable code the dashboard words itself (`world_routes.Refusal`);
-                # the message is the English fallback.
-                details = {"reason": "node_session"}
-                code = getattr(refusal, "code", "")
-                if isinstance(code, str) and code:
-                    details["sub_reason"] = code
-                raise IpcError(ERR_PERMISSION, str(refusal), details=details)
-            if pin is not None and "pin" not in reg.payload_model.model_fields:
-                # The PIN was for this check only; the request itself takes none.
-                payload = {k: v for k, v in payload.items() if k != "pin"}
+            # The PIN was for the check only; the request itself takes none.
+            payload = {k: v for k, v in payload.items() if k != "pin"}
         try:
             model = reg.payload_model.model_validate(payload)
         except ValidationError as exc:

@@ -7,6 +7,7 @@ import pytest
 from nox.ipc.dispatch import RequestContext
 from nox.ipc.errors import ERR_PERMISSION, IpcError
 from nox.ipc.protocol import Envelope, Kind, Source
+from nox.security.access import ClientContext
 from nox.security.device_pin import DEFAULT_PIN_FAILURES, DevicePinGuard
 from nox.security.gate import SecurityChangeGate
 from nox.security.secrets import InMemorySecretStore, PinManager
@@ -14,13 +15,13 @@ from nox.security.secrets import InMemorySecretStore, PinManager
 PIN = "4711"
 
 
-def ctx(role: str, client_id: str) -> RequestContext:
+def ctx(role: str, client_id: str) -> ClientContext:
     envelope = Envelope(
         kind=Kind.REQUEST,
         name="lan.pair.start",
         src=Source(role=role, id=client_id),  # type: ignore[arg-type]
     )
-    return RequestContext(client_id=client_id, role=role, request=envelope)
+    return RequestContext(client_id=client_id, role=role, request=envelope).client
 
 
 def gate(pin: str | None) -> SecurityChangeGate:

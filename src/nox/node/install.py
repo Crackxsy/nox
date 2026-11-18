@@ -11,7 +11,7 @@ Requests, for the UI roles (`nox.ipc.roles`):
   * `node.list` - paired nodes, online or not,
   * `node.unpair` - revoke a node: its certificates go on the denylist, its connection closes
     at once, and a computer-use lock it held ends with it. Narrowing only, so no PIN locally -
-    also while Nox controls a PC (`nox.node.world_routes.ESCAPES`).
+    also while Nox controls a PC (`nox.node.session_access.ESCAPES`).
   * `node.narrow`, `node.defaults.set` - see `nox.node.policy`.
 """
 
@@ -57,10 +57,12 @@ from nox.node.registry import NodeEntry, NodeRegistry
 from nox.node.repo import NodeRepository
 from nox.node.router import CannotShow, core_only_spec, install_routes, routed_spec
 from nox.node.satellites import SatelliteHub, obs_route, voice_say_spec
+from nox.node.session_access import NodeSessionCondition
 from nox.node.tools import NoArgs, NotifyArgs, system_info
-from nox.node.world_routes import NodeControl, pin_refusal, session_refusal, world_specs
+from nox.node.world_routes import NodeControl, world_specs
 from nox.remote.models import DeviceRow
 from nox.remote.repo import RemoteRepository
+from nox.security.access import Allow, ClientKind
 from nox.security.model import Risk
 from nox.tools.registry import ToolSpec
 
@@ -869,85 +871,53 @@ def _world_specs(
     return specs, control
 
 
-def wire_guards(core: Any, control: NodeControl) -> None:
-    """While Nox controls a node: every "allow" (`security.permission.reply`) and every request
-    that changes something (`RequestRegistry.node_guard`) go through `session_refusal`; and the
-    `node.computer.*` requests. Separate so a test can wire a fake core exactly like this."""
-    from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
-
-    security = getattr(core, "security", None)
-
-    def gate() -> Any:
-        return getattr(security, "gate", None)
-
-    async def guard(ctx: Any, pin: str | None, action: str) -> str | None:
-        return await session_refusal(
-            control,
-            ctx,
-            pin,
-            action=action,
-            gate=gate(),
-            device_guard=getattr(core, "device_pin_guard", None),
-            remote=console_is_remote,
-        )
-
-    async def approval(ctx: Any, pin: str | None) -> str | None:
-        return await guard(ctx, pin, "security.permission.reply")
-
-    core.node_approval_guard = approval
-
-    def chat_untrusted(ctx: Any) -> bool:
-        # Words that could have been typed by Nox on the PC it controls count as unreadable
-        # untrusted content: a paired device's, and this machine's own when the controlled PC
-        # is this machine.
-        role = getattr(ctx, "role", "")
-        if role == DEVICE_ROLE:
-            return control.active()
-        return role in LOCAL_UI_ROLES and control.controls_local()
-
-    core.node_chat_untrusted = chat_untrusted
-    ipc = getattr(core, "registry", None)
-    if ipc is not None and hasattr(ipc, "register"):
-        ipc.node_guard = guard
-        _register_control_requests(core, ipc, control, gate)
+def wire_guards(
+    core: Any, control: NodeControl, *, remote: Callable[[], bool | None] = console_is_remote
+) -> None:
+    """While Nox controls a node: every "allow" and every request that changes something goes
+    through `NodeSessionCondition`, a condition of the core's access policy; and the
+    `node.computer.*` requests. Separate so a test can wire a fake core exactly like this.
+    `remote` tells whether this computer is used through a remote session."""
+    policy = core.registry.policy
+    policy.add_condition(NodeSessionCondition(control, policy.pins, remote))
+    _register_control_requests(core, core.registry, control)
 
 
 class ReleaseRequest(BaseModel):
     pin: str | None = Field(default=None, max_length=128)
 
 
-def _register_control_requests(core: Any, ipc: Any, control: NodeControl, gate: Any) -> None:
+def _register_control_requests(core: Any, ipc: Any, control: NodeControl) -> None:
     """`node.computer.status` (what the header shows, for a dashboard that (re)connects) and
     `node.computer.release` (lift a stuck lock by hand: this machine's own shell or dashboard
     with the PIN - also over SSH to a headless core, `nox node release`; a node that still
     reports the session this core started locks again at once)."""
-    from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
-    from nox.ipc.tokens import DEVICE_CLIENT_PREFIX  # noqa: PLC0415
+    from nox.ipc.roles import LOCAL_UI_ROLES  # noqa: PLC0415
 
     async def h_status(ctx: RequestContext, _p: EmptyRequest) -> dict[str, Any]:
         # Whether the asking browser is the one on a PC Nox controls: it cannot approve then,
         # so it shows no PIN field at all.
-        here = ctx.role == DEVICE_ROLE and (
-            control.controls_browser(ctx.client_id.removeprefix(DEVICE_CLIENT_PREFIX))
-            or control.from_controlled(ctx.peer)
+        client = ctx.client
+        here = client.kind is ClientKind.DEVICE and (
+            control.controls_browser(client.device_id) or control.from_controlled(client.peer)
         )
         return {"sessions": control.status(), "controlled_here": here}
 
     async def h_release(ctx: RequestContext, p: ReleaseRequest) -> dict[str, Any]:
-        refusal = await pin_refusal(ctx, p.pin, gate=gate(), action="node.computer.release")
-        if refusal is not None:
+        verdict = await ipc.policy.pins.local_ui(ctx.client, p.pin, "node.computer.release")
+        if not isinstance(verdict, Allow):
             core.security.audit.append(
                 actor=ctx.client_id or ctx.role,
                 tool="node",
                 action="node.computer.release",
                 target="",
                 decision="deny",
-                result=refusal[:64],
+                result=verdict.reason[:64],
             )
             raise IpcError(
                 ERR_UNAVAILABLE,
-                refusal,
-                details={"reason": "refused", "sub_reason": refusal.code},
+                verdict.reason,
+                details={"reason": "refused", "sub_reason": verdict.code},
             )
         released = control.release("released by the owner")
         core.security.audit.append(

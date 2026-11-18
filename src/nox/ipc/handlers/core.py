@@ -32,6 +32,7 @@ from nox.ipc.dispatch import EmptyPayload, RequestContext
 from nox.ipc.errors import ERR_PERMISSION, ERR_UNAVAILABLE, IpcError
 from nox.ipc.roles import CONFIRMING_ROLES, DEVICE_ROLE, LOCAL_UI_ROLES, UI_ROLES
 from nox.memory.capture import turn_origin
+from nox.security.access import Allow, Approval
 from nox.security.constants import RESUME_ROLES, USER_KILL_ORIGINS
 from nox.security.gate import PinRequiredError, relaxes_privacy
 from nox.security.model import Decision, Risk
@@ -122,7 +123,7 @@ class VoicePtt(BaseModel):
 
 class VoiceMute(BaseModel):
     #: Strict: "false", 0 or "no" are not booleans - never quietly read as one (the calm rule of
-    #: `nox.ipc.dispatch.calm_call` depends on it).
+    #: `nox.security.access.calm_call` depends on it).
     muted: StrictBool
 
 
@@ -330,43 +331,30 @@ class CoreHandlers:
         allow anything at high or critical risk it needs the PIN - otherwise a phone could ask Nox
         for something through the chat and then allow it itself (`nox.security.device_pin`). The
         audit trail names the client that answered."""
-        assert self._core.security is not None
-        lock = getattr(self._core.registry, "input_lock", None)
-        if p.decision is Decision.ALLOW and lock is not None and lock():
-            # Nox may be the one clicking: an "allow" while it controls the input is not the
-            # user's. The dialog stays open; ending the session with the stop hotkey (which Nox
-            # never sends) makes the answer count. A "deny" always counts.
-            return {
-                "ok": False,
-                "reason": "Nox controls mouse and keyboard; press the stop hotkey, then allow",
-            }
-        node_guard = getattr(self._core, "node_approval_guard", None)
-        if p.decision is Decision.ALLOW and node_guard is not None:
-            # The same while Nox controls a paired PC: a "yes" must come from someone who is
-            # not at that PC. No paired device approves, and this machine only with the PIN and
-            # not from a remote session (`nox.node.world_routes.session_refusal`; the decision
-            # tree is in docs/ARCHITECTURE-NODES.md, "Approvals during a node session").
-            # A "deny" always counts.
-            refusal = await node_guard(ctx, p.pin)
-            if refusal is not None:
-                # `sub_reason`: the stable code the dashboard words itself (`Refusal.code`).
-                answer: dict[str, Any] = {"ok": False, "reason": str(refusal)}
-                code = getattr(refusal, "code", "")
-                if isinstance(code, str) and code:
-                    answer["sub_reason"] = code
-                return answer
-        engine = self._core.security.engine
-        if ctx.role == DEVICE_ROLE and p.decision is Decision.ALLOW:
+        core = self._core
+        assert core.security is not None and core.registry is not None
+        engine = core.security.engine
+
+        def pending_risk() -> Risk | None:
             request = engine.pending_request(p.grant_id)
-            if request is not None and request.risk in (Risk.HIGH, Risk.CRITICAL):
-                guard = getattr(self._core, "device_pin_guard", None)
-                if guard is None:
-                    raise IpcError(ERR_PERMISSION, "a paired device cannot allow this")
-                await guard.require(ctx, p.pin, "security.permission.reply")
-        remember = p.remember and ctx.role != DEVICE_ROLE
-        ok = self._core.security.engine.reply(
-            p.grant_id, p.decision, remember=remember, by=ctx.client_id or ctx.role
+            return request.risk if request is not None else None
+
+        # While Nox may be the one clicking - synthetic input here, or a session on a paired PC -
+        # an "allow" must come from somebody Nox cannot be, and a device needs its PIN for
+        # anything risky (`nox.security.access`). A "deny" always counts; a refused "allow"
+        # leaves the dialog open.
+        verdict = await core.registry.policy.approval(
+            ctx.client,
+            Approval(allow=p.decision is Decision.ALLOW, pin=p.pin, risk=pending_risk),
         )
+        if not isinstance(verdict, Allow):
+            # `sub_reason`: the stable code the dashboard words itself.
+            answer: dict[str, Any] = {"ok": False, "reason": verdict.reason}
+            if verdict.code:
+                answer["sub_reason"] = verdict.code
+            return answer
+        remember = p.remember and ctx.role != DEVICE_ROLE
+        ok = engine.reply(p.grant_id, p.decision, remember=remember, by=ctx.client_id or ctx.role)
         return {"ok": ok, "remembered": remember and ok}
 
     async def permission_pending(self, _ctx: RequestContext, _p: EmptyPayload) -> dict[str, Any]:
@@ -411,12 +399,13 @@ class CoreHandlers:
             await ctx.stream({"delta": delta}, False)
 
         # Each dashboard client is a conversation of its own (history, model context, taint).
-        untrusted = getattr(self._core, "node_chat_untrusted", None)
-        if untrusted is not None and untrusted(ctx) and self._core.security is not None:
+        registry = self._core.registry
+        assert registry is not None
+        if self._core.security is not None and registry.policy.chat_untrusted(ctx.client):
             # While Nox controls a paired PC, a message from there may have been typed by Nox
             # itself: the conversation counts as holding unreadable untrusted content, so no
             # lookup in it counts as the user's own (`TaintLedger.user_directed`) and every
-            # off-machine call asks (`nox.node.install.wire_guards`).
+            # off-machine call asks (`nox.node.session_access`).
             conversation = self._core.orchestrator.conversation_for(f"chat:{ctx.client_id}")
             self._core.security.engine.mark_tainted(conversation, None)
         with turn_origin("chat"):  # facts learned from it count as the user's own words

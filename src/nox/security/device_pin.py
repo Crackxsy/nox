@@ -19,10 +19,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from nox.core.logging import get_logger
-from nox.ipc.dispatch import RequestContext
 from nox.ipc.errors import ERR_PERMISSION, IpcError
-from nox.ipc.roles import DEVICE_ROLE
-from nox.ipc.tokens import DEVICE_CLIENT_PREFIX
+from nox.security.access import ClientContext, ClientKind
 from nox.security.gate import PinRequiredError, SecurityChangeGate
 
 log = get_logger(__name__)
@@ -51,12 +49,12 @@ class DevicePinGuard:
     def failures(self, device_id: str) -> int:
         return self._failures.get(device_id, 0)
 
-    async def require(self, ctx: RequestContext, pin: str | None, action: str) -> None:
+    async def require(self, client: ClientContext, pin: str | None, action: str) -> None:
         """Pass for a local client (its own gate rules apply elsewhere) and for a device that gave
         the right PIN; raise `IpcError(permission.denied)` otherwise."""
-        if ctx.role != DEVICE_ROLE:
+        if client.kind is not ClientKind.DEVICE:
             return
-        device_id = ctx.client_id.removeprefix(DEVICE_CLIENT_PREFIX)
+        device_id = client.device_id
         gate = self._gate()
         if not gate.is_required():
             raise IpcError(
@@ -65,7 +63,7 @@ class DevicePinGuard:
                 details={"reason": "pin_not_set"},
             )
         try:
-            await gate.require(pin, action=action, by=ctx.client_id)
+            await gate.require(pin, action=action, by=client.client_id)
         except PinRequiredError as exc:
             if pin:
                 await self._wrong(device_id, action)

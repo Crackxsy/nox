@@ -92,6 +92,7 @@ from nox.plugins.manager import (
     PluginManagerSettings,
     PluginState,
 )
+from nox.security.access import AccessPolicy
 from nox.security.killswitch import KillReport
 from nox.security.service import SecurityContext
 from nox.skills.worker_launch import SkillWorkerLauncher, sandbox_factory_for
@@ -341,7 +342,10 @@ class NoxCore:
         )
         self.tokens.write_session_token(Path(paths.runtime_dir))
         self.workers.use_tokens(self.tokens)
-        self.registry = RequestRegistry()
+        # The access rule reads the security PIN from the core's gate, whenever it is asked.
+        self.registry = RequestRegistry(
+            AccessPolicy(gate=lambda: self.security.gate if self.security else None)
+        )
         register_core_handlers(self)
         self.hub = IpcHub(
             HubSettings.from_config(self.config.ipc),

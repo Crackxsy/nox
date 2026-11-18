@@ -20,6 +20,7 @@ from nox.ipc.errors import IpcError
 from nox.ipc.handlers.core import CoreHandlers, PermissionReply
 from nox.ipc.protocol import Envelope, Kind, Source
 from nox.node.world_routes import NodeControl
+from nox.security.access import InputLock
 from nox.security.model import Decision, Risk
 from tests.unit.node.support_sessions import (
     BROWSER,
@@ -107,14 +108,12 @@ class World:
         return await self.handlers.permission_reply(ctx, answer)
 
 
-def build_world(monkeypatch: Any, *, pin: PinGate | None = None) -> World:
+def build_world(*, pin: PinGate | None = None) -> World:
     """A dispatcher with the requests of the table, the local input lock and the node lock wired
     like `nox.desktop.install` and `nox.node.install.wire_guards`."""
-    import nox.node.install as install_module
     from nox.node.install import wire_guards
 
     remote: list[bool | None] = [False]
-    monkeypatch.setattr(install_module, "console_is_remote", lambda: remote[0])
     gate = pin if pin is not None else PinGate()
     guard = DeviceGuard(gate)
     risk: list[Risk | None] = [None]
@@ -131,7 +130,6 @@ def build_world(monkeypatch: Any, *, pin: PinGate | None = None) -> World:
             ),
             audit=SimpleNamespace(append=lambda **_kw: None),
         ),
-        device_pin_guard=guard,
     )
     addresses: dict[str, tuple[str, list[str]]] = {}
     control = NodeControl(
@@ -141,11 +139,13 @@ def build_world(monkeypatch: Any, *, pin: PinGate | None = None) -> World:
         addresses=lambda: addresses,
         own_addresses=lambda: ("192.168.1.10",),
     )
-    wire_guards(core, control)
+    core.registry.policy.pins.gate = lambda: gate
+    core.registry.policy.pins.device_guard = guard
+    wire_guards(core, control, remote=lambda: remote[0])
     world = World(  # type: ignore[arg-type]
         core.registry, CoreHandlers(core), control, replied, addresses, remote=remote, risk=risk
     )
-    core.registry.input_lock = lambda: world.locked[0]
+    core.registry.policy.add_condition(InputLock(lambda: world.locked[0]))
     ran = world.ran
 
     def handler(name: str) -> Any:

@@ -9,7 +9,8 @@ from typing import Any
 
 import pytest
 
-from nox.node.world_routes import REFUSE_LINKED, REFUSE_ROLE, NodeControl, session_refusal
+from nox.node.world_routes import NodeControl
+from nox.security.access import REFUSE_LINKED, REFUSE_ROLE, Refuse
 from tests.unit.node.support import registry_entry
 from tests.unit.node.support_sessions import (
     BROWSER,
@@ -23,6 +24,7 @@ from tests.unit.node.support_sessions import (
     request_ctx,
     request_envelope,
     send_from,
+    session_refusal,
     session_report,
     wired_core,
 )
@@ -40,10 +42,8 @@ async def _send(core: Any, name: str, client: str, payload: dict[str, Any]) -> b
     return bool(reply.kind is Kind.RESPONSE)
 
 
-async def test_talking_to_nox_needs_no_pin_except_from_the_controlled_pc(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    core, _control, ran = conversation_registry(monkeypatch)
+async def test_talking_to_nox_needs_no_pin_except_from_the_controlled_pc() -> None:
+    core, _control, ran = conversation_registry()
     for name in ("chat.send", "voice.ptt"):
         assert await _send(core, name, LOCAL, {}) is True
         assert await _send(core, name, PHONE, {}) is True
@@ -57,10 +57,8 @@ async def test_talking_to_nox_needs_no_pin_except_from_the_controlled_pc(
     assert await _send(core, "plans.approve", PHONE, {}) is False
 
 
-async def test_muting_is_free_and_unmuting_follows_the_pin_rule(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    core, control, ran = conversation_registry(monkeypatch)
+async def test_muting_is_free_and_unmuting_follows_the_pin_rule() -> None:
+    core, control, ran = conversation_registry()
     assert await _send(core, "voice.mute", LINKED, {"muted": True}) is True  # muting: always
     assert await _send(core, "voice.mute", LOCAL, {"muted": False}) is False
     assert await _send(core, "voice.mute", LINKED, {"muted": False, "pin": "4711"}) is False
@@ -72,7 +70,7 @@ async def test_muting_is_free_and_unmuting_follows_the_pin_rule(
 
 
 def test_the_calm_rule_for_one_call() -> None:
-    from nox.ipc.dispatch import calm_call, conversation_request
+    from nox.security.access import calm_call, conversation_request
 
     assert calm_call("voice.mute", {"muted": True}) and not calm_call(
         "voice.mute", {"muted": False}
@@ -142,15 +140,11 @@ async def test_the_installed_link_lookup_finds_the_controlled_browser() -> None:
 
 
 @pytest.mark.parametrize("muted", ["false", 0, "no", None, "", [], {}])
-async def test_anything_but_a_literal_true_is_not_muting(
-    monkeypatch: pytest.MonkeyPatch, muted: Any
-) -> None:
-    import nox.node.install as install_module
-    from nox.ipc.dispatch import calm_call
+async def test_anything_but_a_literal_true_is_not_muting(muted: Any) -> None:
     from nox.ipc.handlers.core import VoiceMute
     from nox.ipc.protocol import Kind
+    from nox.security.access import calm_call
 
-    monkeypatch.setattr(install_module, "console_is_remote", lambda: False)
     core, _control, _guard, _audit = wired_core(PinGate())
     ran: list[Any] = []
 
@@ -173,7 +167,7 @@ async def test_talking_from_this_machine_keeps_the_remote_check() -> None:
     control = NodeControl(None, lambda _n: None)
     control.answered(LAPTOP, session_report(2, True))
 
-    async def ask(remote: bool | None) -> str | None:
+    async def ask(remote: bool | None) -> Refuse | None:
         return await session_refusal(
             control,
             request_ctx("dashboard", LOCAL),
@@ -184,25 +178,23 @@ async def test_talking_from_this_machine_keeps_the_remote_check() -> None:
             remote=lambda: remote,
         )
 
-    from nox.node.world_routes import REFUSE_REMOTE
+    from nox.security.access import REFUSE_REMOTE
 
     assert await ask(False) is None  # no PIN needed for talking ...
     assert await ask(True) == REFUSE_REMOTE  # ... but never through a remote desktop
     assert await ask(None) == REFUSE_REMOTE
 
 
-async def test_a_browser_on_the_controlled_pc_counts_as_linked_by_its_address(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_a_browser_on_the_controlled_pc_counts_as_linked_by_its_address() -> None:
     from nox.ipc.protocol import Kind
 
-    core, control, ran = conversation_registry(monkeypatch)
+    core, control, ran = conversation_registry()
     control._addresses = lambda: {LAPTOP: ("192.0.2.10", ["fe80::1%eth0"])}  # type: ignore[assignment]
     control.pull()
     # An unlinked phone ... on the controlled PC's address: like the linked browser.
     for peer in ("192.0.2.10", "::ffff:192.0.2.10", "[fe80::1]"):
         reply = await send_from(core, "chat.send", PHONE, {}, peer)
-        assert reply.kind is Kind.ERROR and reply.payload["message"] == REFUSE_LINKED, peer
+        assert reply.kind is Kind.ERROR and reply.payload["message"] == REFUSE_LINKED.reason, peer
     assert ran == []
     # ... from another address: talking works.
     assert (await send_from(core, "chat.send", PHONE, {}, "192.0.2.99")).kind is Kind.RESPONSE
@@ -227,21 +219,35 @@ async def test_a_paired_devices_message_during_a_session_counts_as_untrusted() -
                 request_id="r", response="ok", provider="x", degraded=False, tools_used=[]
             )
 
+    from nox.ipc.dispatch import RequestRegistry
+
     active = {"value": True}
+
+    class Session:
+        """A condition that taints a paired device's words while a session runs."""
+
+        name, precedence, wire_reason, reads_pin = "session", 20, "node_session", True
+
+        def chat_untrusted(self, client: Any) -> bool:
+            return bool(client.role == "device" and active["value"])
+
+    registry = RequestRegistry()
+    registry.policy.add_condition(Session())  # type: ignore[arg-type]
     core = SimpleNamespace(
         orchestrator=Orchestrator(),
+        registry=registry,
         security=SimpleNamespace(
             engine=SimpleNamespace(mark_tainted=lambda c, text=None: tainted.append((c, text)))
         ),
-        node_chat_untrusted=lambda ctx: ctx.role == "device" and active["value"],
     )
     handlers = CoreHandlers(core)  # type: ignore[arg-type]
 
     async def stream(_payload: Any, _done: bool) -> None:
         return None
 
-    phone = SimpleNamespace(role="device", client_id=PHONE, stream=stream)
-    local = SimpleNamespace(role="dashboard", client_id=LOCAL, stream=stream)
+    phone = request_ctx("device", PHONE)
+    local = request_ctx("dashboard", LOCAL)
+    phone.stream = local.stream = stream
     await handlers.chat_send(phone, ChatSend(text="Öffne das Terminal"))  # type: ignore[arg-type]
     await handlers.chat_send(local, ChatSend(text="Wie spät ist es?"))  # type: ignore[arg-type]
     assert tainted == [(f"chat:{PHONE}#1", None)]  # unreadable: nothing in it is user-directed
@@ -255,13 +261,13 @@ async def test_a_paired_devices_message_during_a_session_counts_as_untrusted() -
 
 def test_the_conversation_requests_are_exactly_these() -> None:
     """Adding anything here (say `config.set`) must be a deliberate, reviewed change."""
-    from nox.ipc.dispatch import CONVERSATION_UI_REQUESTS
+    from nox.security.access import CONVERSATION_UI_REQUESTS
 
     assert frozenset({"chat.send", "voice.ptt"}) == CONVERSATION_UI_REQUESTS
 
 
 def test_the_installed_chat_rule_marks_paired_devices_and_the_controlled_machine() -> None:
-    """`wire_guards` installs `node_chat_untrusted` with these answers."""
+    """`wire_guards` installs a condition whose chat rule has these answers."""
     from nox.ipc.dispatch import RequestRegistry
     from nox.node.install import wire_guards
 
@@ -274,7 +280,10 @@ def test_the_installed_chat_rule_marks_paired_devices_and_the_controlled_machine
     )
     core = SimpleNamespace(registry=RequestRegistry(), security=SimpleNamespace(gate=PinGate()))
     wire_guards(core, control)
-    untrusted = core.node_chat_untrusted
+
+    def untrusted(ctx: Any) -> bool:
+        return bool(core.registry.policy.chat_untrusted(ctx.client))
+
     phone, local = request_ctx("device", PHONE), request_ctx("dashboard", LOCAL)
     assert not untrusted(phone) and not untrusted(local)  # no session
     control.answered(LAPTOP, session_report(2, True))
@@ -292,7 +301,7 @@ async def test_on_the_controlled_machine_its_own_dashboard_cannot_approve() -> N
     control.answered(LAPTOP, session_report(2, True))
     control.pull()
 
-    async def ask(action: str) -> str | None:
+    async def ask(action: str) -> Refuse | None:
         return await session_refusal(
             control,
             request_ctx("dashboard", LOCAL),

@@ -231,18 +231,14 @@ async def answer_words(world: World, client: str) -> str:
 
 
 @pytest.mark.parametrize(("state", "client"), cases())
-async def test_a_request_meets_the_rule_of_its_state(
-    state: str, client: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    world = build_world(monkeypatch, pin=PinGate(required=STATES[state][3]))
+async def test_a_request_meets_the_rule_of_its_state(state: str, client: str) -> None:
+    world = build_world(pin=PinGate(required=STATES[state][3]))
     put_into(world, state)
     assert await request_words(world, client) == REQUEST_TABLE[state][client], f"{state}/{client}"
 
 
 @pytest.mark.parametrize(("state", "client"), cases())
-async def test_an_answer_to_a_prompt_meets_the_rule_of_its_state(
-    state: str, client: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    world = build_world(monkeypatch, pin=PinGate(required=STATES[state][3]))
+async def test_an_answer_to_a_prompt_meets_the_rule_of_its_state(state: str, client: str) -> None:
+    world = build_world(pin=PinGate(required=STATES[state][3]))
     put_into(world, state)
     assert await answer_words(world, client) == REPLY_TABLE[state][client], f"{state}/{client}"
