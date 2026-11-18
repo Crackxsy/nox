@@ -14,7 +14,7 @@ from nox.node.pairing import NodePairing
 from nox.node.protocol import NodePairRequest
 from nox.node.repo import NodeRepository
 from nox.remote.repo import RemoteRepository
-from tests.unit.node.conftest import make_csr, make_key, pair_node
+from tests.unit.node.support import make_csr, make_key, pair_node
 
 
 def _request(code: str, csr: str | None = None) -> NodePairRequest:

@@ -18,7 +18,7 @@ from nox.node.policy import NodePolicy, defaults_view, family_tools, group_of, r
 from nox.node.registry import ROUTABLE, NodeEntry, NodeRegistry
 from nox.node.repo import NodeRepository
 from nox.node.router import resolve
-from tests.unit.node.conftest import pair_node
+from tests.unit.node.support import ListingClient, ListingSession, SlowListingClient, pair_node
 
 
 def test_every_routable_tool_belongs_to_a_known_group() -> None:
@@ -88,36 +88,6 @@ async def test_a_tool_of_no_known_group_is_never_routed(
     assert accepted == {"system.info": "read"}
 
 
-class _Client:
-    def __init__(self, tools: list[dict[str, Any]]) -> None:
-        self.tools = tools
-        self.sent: list[tuple[str, dict[str, Any]]] = []
-        self.closed = False
-
-    async def request(self, method: str, params: dict[str, Any], **_kw: Any) -> dict[str, Any]:
-        self.sent.append((method, params))
-        if method == "tools/list":
-            return {"tools": self.tools}
-        return {}
-
-
-class _Session:
-    def __init__(self, device: Any, client: _Client) -> None:
-        self.device = device
-        self.client = client
-        self.compatible = True
-        self.alive = True
-
-        class Hello:
-            confirmer = False
-
-        self.hello = Hello()
-
-    @property
-    def device_id(self) -> str:
-        return str(self.device.id)
-
-
 async def test_the_core_never_routes_a_narrowed_group_even_if_the_node_lists_it(
     pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
 ) -> None:
@@ -125,13 +95,13 @@ async def test_the_core_never_routes_a_narrowed_group_even_if_the_node_lists_it(
     registry = NodeRegistry(pairing, nodes)
     registry.policy.set_narrowed(node.node_id, "notify", True)
     # A node that ignores `nox/policy` and keeps listing the group - or claims it is "system".
-    client = _Client(
+    client = ListingClient(
         [
             {"name": "system.info", "_nox": {"group": "system", "risk": "read"}},
             {"name": "notify.show", "_nox": {"group": "system", "risk": "low"}},
         ]
     )
-    session = _Session(pairing.get(node.node_id), client)
+    session = ListingSession(pairing.get(node.node_id), client)
     await registry.on_connected(session)  # type: ignore[arg-type]
     assert not registry.any_online_with("notify.show")
     assert registry.any_online_with("system.info")
@@ -211,16 +181,16 @@ async def _never_offered_while(registry: NodeRegistry, *tasks: asyncio.Task[None
 
 async def _connected(
     pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
-) -> tuple[NodeRegistry, _Session, str]:
+) -> tuple[NodeRegistry, ListingSession, str]:
     node = await pair_node(pairing, tmp_path)
     registry = NodeRegistry(pairing, nodes)
-    client = _Client(
+    client = ListingClient(
         [
             {"name": "system.info", "_nox": {"group": "system", "risk": "read"}},
             {"name": "notify.show", "_nox": {"group": "notify", "risk": "low"}},
         ]
     )
-    session = _Session(pairing.get(node.node_id), client)
+    session = ListingSession(pairing.get(node.node_id), client)
     await registry.on_connected(session)  # type: ignore[arg-type]
     assert registry.any_online_with("notify.show")
     return registry, session, node.node_id
@@ -376,26 +346,15 @@ async def test_the_marker_is_removed_on_an_error_and_after_a_cancelled_caller(
     assert not registry.any_online_with("notify.show")
 
 
-class _SlowListing(_Client):
-    """A node whose first `tools/list` answer takes a moment to arrive."""
-
-    def __init__(self, tools: list[dict[str, Any]]) -> None:
-        super().__init__(tools)
-        self.answer = asyncio.Event()
-
-    async def request(self, method: str, params: dict[str, Any], **kw: Any) -> dict[str, Any]:
-        if method == "tools/list":
-            await self.answer.wait()
-        return await super().request(method, params, **kw)
-
-
 async def test_a_call_right_after_connecting_waits_for_the_tool_list(
     pairing: NodePairing, nodes: NodeRepository, tmp_path: Path
 ) -> None:
     node = await pair_node(pairing, tmp_path)
     registry = NodeRegistry(pairing, nodes)
-    client = _SlowListing([{"name": "notify.show", "_nox": {"group": "notify", "risk": "low"}}])
-    session = _Session(pairing.get(node.node_id), client)
+    client = SlowListingClient(
+        [{"name": "notify.show", "_nox": {"group": "notify", "risk": "low"}}]
+    )
+    session = ListingSession(pairing.get(node.node_id), client)
     connecting = asyncio.create_task(registry.on_connected(session))  # type: ignore[arg-type]
     await asyncio.sleep(0)
     entry = next(e for e in registry.entries() if e.device_id == node.node_id)
@@ -424,8 +383,10 @@ async def test_a_device_that_never_finishes_announcing_is_offline_after_the_wait
     monkeypatch.setattr(registry_module, "LISTING_WAIT_S", 0.05)
     node = await pair_node(pairing, tmp_path)
     registry = NodeRegistry(pairing, nodes)
-    client = _SlowListing([{"name": "notify.show", "_nox": {"group": "notify", "risk": "low"}}])
-    session = _Session(pairing.get(node.node_id), client)
+    client = SlowListingClient(
+        [{"name": "notify.show", "_nox": {"group": "notify", "risk": "low"}}]
+    )
+    session = ListingSession(pairing.get(node.node_id), client)
     connecting = asyncio.create_task(registry.on_connected(session))  # type: ignore[arg-type]
     await asyncio.sleep(0)
     entry = next(e for e in registry.entries() if e.device_id == node.node_id)
@@ -519,9 +480,11 @@ async def test_a_flood_of_list_changes_queues_one_more_listing(
 ) -> None:
     node = await pair_node(pairing, tmp_path)
     registry = NodeRegistry(pairing, nodes)
-    client = _SlowListing([{"name": "notify.show", "_nox": {"group": "notify", "risk": "low"}}])
+    client = SlowListingClient(
+        [{"name": "notify.show", "_nox": {"group": "notify", "risk": "low"}}]
+    )
     client.answer.set()
-    session = _Session(pairing.get(node.node_id), client)
+    session = ListingSession(pairing.get(node.node_id), client)
     await registry.on_connected(session)  # type: ignore[arg-type]
     client.answer.clear()
     before = sum(1 for m, _ in client.sent if m == "tools/list")
@@ -542,7 +505,7 @@ async def test_what_the_node_says_it_enabled_reaches_the_record(
     node = await pair_node(pairing, tmp_path)
     registry = NodeRegistry(pairing, nodes)
 
-    class Reporting(_Client):
+    class Reporting(ListingClient):
         async def request(self, method: str, params: dict[str, Any], **kw: Any) -> dict[str, Any]:
             answer = await super().request(method, params, **kw)
             if method == "tools/list":
@@ -550,7 +513,7 @@ async def test_what_the_node_says_it_enabled_reaches_the_record(
             return answer
 
     client = Reporting([{"name": "system.info", "_nox": {"group": "system", "risk": "read"}}])
-    await registry.on_connected(_Session(pairing.get(node.node_id), client))  # type: ignore[arg-type]
+    await registry.on_connected(ListingSession(pairing.get(node.node_id), client))  # type: ignore[arg-type]
     # Shell lists no tool (above max_risk, say), yet the device enabled it.
     assert registry.policy.state(node.node_id, "shell") == (True, False)
     assert registry.policy.state(node.node_id, "notify") == (False, False)

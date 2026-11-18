@@ -8,8 +8,31 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 
 ## [Unreleased]
 
+### Added
+- **Nox-OS first boot without a screen** (`os/pi-gen/stage-nox/04-firstboot`, os/README.md):
+  a provisioning file on the boot partition (`nox-provision.json`, versioned JSON schema in
+  `os/provisioning/`: Wi-Fi, country, hostname, time zone, locale, the setup card's claim-code hash
+  and hotspot password) is validated strictly, imported (Wi-Fi as a root 0600 NetworkManager
+  keyfile) and overwritten and deleted, never logged. A **setup window** of at most 30 minutes after
+  power-on (root's `/run/nox-os/setup-mode`, seconds since boot; only a power cycle reopens it)
+  while the device has no owner. When Nox has no network - or the claim code can only be learnt
+  there - a **setup hotspot** `Nox-Setup-XXXX` (WPA2, a per-device password: the card's or 16
+  random characters per boot - 80 bits - shown on a screen as text and Wi-Fi QR code) with
+  captive DNS and a **captive portal** (own unprivileged user, no JavaScript, strict CSP, CSRF token plus Origin,
+  rate limits, German and English, accessible): claim code and home Wi-Fi only - nothing applies
+  without the right claim code, and PIN and passphrase are set only on the claim page over TLS;
+  the hotspot comes back with the reason if joining fails. **Claim:**
+  while unclaimed the core serves only `/claim/` and `/api/claim` on the LAN and the firewall keeps
+  the node port closed; the one-time claim code (card, or screen and portal) checked by the root
+  helper (per-source backoff, 200 wrong codes per side - LAN, hotspot - and boot lock only
+  that side; the portal's one-time ticket keeps the hotspot path open) makes the claiming browser the owner's first device, sets PIN and passphrase, ends setup
+  mode and opens the node port. New read-only request `noxos.claim.status` (for the onboarding wizard to come).
+  A `nox-reclaim` marker on the boot partition forgets the owner at the next boot (all pairings
+  and tokens revoked, the PIN cleared; other data stays). `systemd-firstboot.service` is masked (it failed on headless first boots). The QEMU smoke boots
+  twice (provisioned with portal and claim; fresh with the window expiring).
+
 ### Changed
-- **The dashboard is rebuilt around four areas** (Spec UX-Neubau): Heute, Nox (Gespräch, Ansichten,
+- **The dashboard is rebuilt around four areas**: Heute, Nox (Gespräch, Ansichten,
   Clips, Verlauf), Geräte & Fähigkeiten, Einstellungen (eight pages instead of one form). Every page
   has the same header - what Nox is doing and its Modus, "n warten auf dich", the privacy level and
   **Stopp**, which now acts at once (Ctrl+Alt+Pause too) and is undone with "Fortsetzen" under the
@@ -34,23 +57,22 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   Piper and reports the voice as `limited`. The installer bundles the `voice-supertonic` extra.
 
 ### Added
-- **Nodes: Nox's hands on your other computers** (Spec wave C, C1-C10; guide docs/NODES.md and
+- **Nodes: Nox's hands on your other computers** (guide docs/NODES.md and
   docs/NODES.de.md, threat model and accepted limits in docs/SECURITY.md). Another PC, laptop or
   Pi in the home pairs as a `nox node` and lets Nox act there - only within what that device
   allows, enforced on the device even against a core patched to allow everything. The parts,
   each detailed below: pairing with a one-time code and a link or QR code that pins the
-  installation's authority, mutual TLS on the node port 47844 (C1); `nox node` with its own gate,
-  allow-list and audit trail (C2); routing with an optional `device` and device-bound grants
-  (C3); signed core receipts, high risk confirmed in a dialog on the device, the kill switch on
-  every node in under a second (C4); files in confirmed folders and commands in the device's own
-  sandbox (C5); screen, camera, browser, windows, mouse and keyboard and music, with the game
-  lock and the self-approval lock (C6); installers, logon task and signed self-update (C7); the
-  Devices page for computers (C8); voice, OBS and pet-overlay satellites (C9). Installing programs
-  on nodes (`package.*`) is not available yet: it waits for the owner's decision between a
+  installation's authority, mutual TLS on the node port 47844; `nox node` with its own gate,
+  allow-list and audit trail; routing with an optional `device` and device-bound grants;
+  signed core receipts, high risk confirmed in a dialog on the device, the kill switch on
+  every node in under a second; files in confirmed folders and commands in the device's own
+  sandbox; screen, camera, browser, windows, mouse and keyboard and music, with the game
+  lock and the self-approval lock; installers, logon task and signed self-update; the
+  Devices page for computers; voice, OBS and pet-overlay satellites. Installing programs
+  on nodes (`package.*`) is not available yet: it waits for a decision between a
   privileged helper service and a sandbox profile.
-- **Quality wave for nodes** (Spec C10): docs, threat model, benchmark tasks for nodes, fixes (see
-  PR).
-- **Satellites on nodes: voice, OBS and the pet overlay** (Spec C9, docs/NODES.md). A node with
+- **Quality pass for nodes:** docs, threat model, benchmark tasks for nodes, fixes (see PR).
+- **Satellites on nodes: voice, OBS and the pet overlay** (docs/NODES.md). A node with
   `voice` allowed (and switched on for it in the Devices page - two keys, stored per node,
   migration 0018) listens and speaks there: push-to-talk (`Ctrl+Alt+Space`, `nox node voice
   talk`) or the wake word, speech recognition on the device (`tiny` on a Pi), only text to the
@@ -64,8 +86,8 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   in the URL, a read-only one per node rotated on every connection, an offline label, a pet that
   follows that node's speech (`?device=`). The OBS WebSocket client moved to
   `nox.stream.obs_ws` (the plugin re-exports it).
-- **Screen, camera, browser, windows, mouse and keyboard, and music on nodes** (Spec C6,
-  docs/NODES.md). `screen.capture`, `camera.snapshot`, `browser.*`, `desktop.*`, `computer.*`
+- **Screen, camera, browser, windows, mouse and keyboard, and music on nodes**
+  (docs/NODES.md). `screen.capture`, `camera.snapshot`, `browser.*`, `desktop.*`, `computer.*`
   and the new `media.control` run on a paired PC through the same gate, receipts, budget and
   audit as every node tool; all off on the device by default except music, and narrowable in the
   dashboard. A picture is asked for on the device every time, announced there by a notification
@@ -75,7 +97,7 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   in front; the dashboard shows "Nox steuert gerade Maus und Tastatur auf <Gerät>" with a Stopp.
   `media.control` plays, pauses, skips and sets the volume (SMTC/Core Audio on Windows, MPRIS and
   PipeWire/PulseAudio on Linux).
-- **Hands on nodes: files and commands** (Spec C5, docs/NODES.md). `file.list`, `file.read`,
+- **Hands on nodes: files and commands** (docs/NODES.md). `file.list`, `file.read`,
   `file.write` and `shell.run` run on a paired PC after the node's gate, the device's
   confirmation and the core's receipt. Files open only inside folders confirmed on the device
   (`nox node allow files --folder`, none by default), decided on the opened handle: no links
@@ -87,7 +109,7 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   command. One renderer shows the core's permission target and the device's dialog in full (over
   1000 characters is refused, never cut). `package.*` stays on the core. The five Pi benchmark
   tasks run against a simulated headless Pi node.
-- **Devices page for computers** (Spec C8). Devices & skills › Devices › Computers and servers
+- **Devices page for computers.** Devices & skills › Devices › Computers and servers
   lists every node with its state (connected, offline since, update needed), what Nox may do
   there and what it is the default device for. A sheet per node: one switch per group that only
   narrows (`node.narrow`; switching a group back on needs the PIN when one is set and never goes
@@ -95,7 +117,7 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   (`node.defaults.set`), "Recently done here" and removal. "Add a PC or laptop": system picker, a
   one-time code as link, command and QR code with the authority's fingerprint, and a live status
   until the node connects. German and English copy with parity, axe-checked.
-- **Nodes install, start and update themselves** (Spec C7, docs/NODES.md). The Windows installer
+- **Nodes install, start and update themselves** (docs/NODES.md). The Windows installer
   has a node mode ("Mit einem Nox im Heimnetz verbinden (nur dieses Gerät)", `/MODE=node`): no
   dashboards, a per-user logon task "Nox Node" (least privilege, never a service, never elevated),
   its own notification ID `Nox.Node`, optional pairing during setup. `install-linux.sh --node`
@@ -112,7 +134,7 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
 - **Nodes, part 4 (the node's gate and stopping):** every call with a side effect carries the
   core's Ed25519 receipt (bound to call, tool, arguments, risk, deadline <= 60 s; replays and
   altered calls are refused); the node keeps its own risk ceiling and budget (60 actions, 5
-  high-risk per hour); high risk is confirmed in a dialog on the device itself (D1; all details,
+  high-risk per hour); high risk is confirmed in a dialog on the device itself (all details,
   60 s, default no), delegated by the core only to a node that can ask; nodes without a screen
   refuse it unless trusted locally. Stopping: the kill switch reaches every node in under a
   second (p99, 5 nodes), running calls are aborted, `nox/resume` lifts it; a dead-man rule aborts
@@ -290,7 +312,7 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   never fall back to the file on their own. `security.secret_store` forces either.
 - **CI on Linux, x86-64 and ARM64**, next to Windows: the core's unit and integration tests run on
   the Pi's architecture on every pull request.
-- **Nox-OS image build (O1)** (`os/`, `.github/workflows/os-image.yml`): a flashable Raspberry Pi
+- **Nox-OS image build** (`os/`, `.github/workflows/os-image.yml`): a flashable Raspberry Pi
   OS Lite (64-bit) image with Nox preinstalled, built with a pinned pi-gen on a native arm64 runner.
   Nox comes from `install-linux.sh --image` (same layout and signed-release check as a Pi install;
   enabled, not started, refused on a running system). The image is checked read-only (no password,
@@ -300,10 +322,10 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   (`"kind": "os-image"`; every verifier now names the manifest kind it expects, `nox release verify
   --kind`), and without the release key nothing is attached at all. While `install-linux.sh` trusts
   no release key, the Nox inside the image is pinned by tag/commit and its dashboard by SHA-256, not
-  by a signature. The first-boot setup without a screen follows (O3/O4), so the image is for testing
+  by a signature. The first-boot setup without a screen follows, so the image is for testing
   until then.
 
-- **Nox-OS hardening (O2)** (`os/pi-gen/stage-nox/03-hardening`, os/README.md): nftables with
+- **Nox-OS hardening** (`os/pi-gen/stage-nox/03-hardening`, os/README.md): nftables with
   inbound default deny (IPv4/IPv6), Nox's dashboard and node ports generated from its own settings
   at boot and on every settings change, only while network access is on, from private networks
   only and rate-limited per address; fails closed; SSH from the device itself always dropped. SSH
@@ -334,7 +356,7 @@ Nox is pre-v1.0 as of this writing. See `docs/RELEASE_CHECKLIST.md` for what v1.
   stops typing/clicking calls while open; Linux uses zenity only. A dead-man stop lifts after
   three pings from a running core and nodes report their state; the budget survives a restart
   and is charged at the higher risk; arguments are NFC-normalised once for hash, dialog and run.
-- **Nodes, external review of wave C part 1-3:** an `origin` default never lands on another
+- **Nodes, external review of parts 1-3:** an `origin` default never lands on another
   device when the asking PC's node is offline or not linked; the node port bounds TLS handshakes
   (5 s), waiting connections per node and in total; a node's stop always takes effect while Nox
   runs and repeats while stopped are answered `already_engaged` and audited once; the device of a

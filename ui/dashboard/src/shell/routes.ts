@@ -95,7 +95,7 @@ export function hashToRoute(hash: string): Route | null {
   }
 }
 
-/** The old top-level tab ids, and where their content lives now (Spec UX-Neubau §6). */
+/** The old top-level tab ids, and where their content lives now. */
 export function legacyRoute(tab: string): Route | null {
   switch (tab) {
     case 'status':

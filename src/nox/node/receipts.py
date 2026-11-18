@@ -12,7 +12,7 @@ from its pings, so a jump of the node's own clock (NTP) neither opens nor closes
 What a receipt protects against: a confused or replayed call, a call altered on its way, a call
 meant for another node, a call from anything but the core's key. What it does not: a fully
 compromised core signs whatever it wants - which is why the node still applies its own gate, its
-own confirmation for high risk and its own budget (spec C §1.6).
+own confirmation for high risk and its own budget.
 
 The private key lives next to the authority (`<data_dir>/tls/receipt.key`, owner-only); the node
 learns the public key at pairing and pins it.

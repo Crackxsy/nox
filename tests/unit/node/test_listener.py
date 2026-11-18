@@ -27,7 +27,7 @@ from nox.node.listener import MAX_PENDING_BLOBS, MAX_VIOLATIONS, NodeListener
 from nox.node.pairing import NodePairing
 from nox.node.protocol import MAX_RESULT_BYTES
 from nox.node.repo import NodeRepository
-from tests.unit.node.conftest import (
+from tests.unit.node.support import (
     client_context,
     greet,
     hello,
@@ -352,7 +352,7 @@ async def test_malformed_params_count_as_a_violation(
     ws = await open_node(listener, client_context(tls, node))
     await greet(ws)
     await ws.send(
-        json.dumps({"jsonrpc": "2.0", "id": 3, "method": "security.kill", "params": {"x": 1}})
+        json.dumps({"jsonrpc": "2.0", "id": 3, "method": "security.kill", "params": {"reason": 5}})
     )
     answer = await recv_until(ws, lambda m: m.get("id") == 3)
     assert answer["error"]["code"] == -32602
@@ -520,7 +520,7 @@ async def test_a_reconnect_replaces_the_old_session(
     await second.close()
 
 
-# ---- found in the self-review --------------------------------------------------------------------
+# ---- reconnects, cut-offs and revocation at awkward moments --------------------------------------
 
 
 async def test_a_public_peer_is_refused(

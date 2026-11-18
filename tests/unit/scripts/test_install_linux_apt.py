@@ -1,4 +1,4 @@
-"""`scripts/install-linux.sh` never waits forever for apt (C10): a stuck dpkg lock or a mirror that
+"""`scripts/install-linux.sh` never waits forever for apt: a stuck dpkg lock or a mirror that
 stopped answering once held a CI job for 30 minutes. Every apt-get call carries the lock and
 network timeouts, has an overall time limit and fails with a clear message."""
 

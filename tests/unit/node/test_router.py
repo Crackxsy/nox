@@ -16,29 +16,12 @@ from nox.security.model import PermissionRequest, Risk, TemporaryGrant
 from nox.security.permissions import grant_matches
 from nox.security.taint import CONVERSATION
 from nox.tools.registry import ToolSpec
+from tests.unit.node.support import FakeRegistry, registry_entry
 
 LAPTOP = "a" * 32
+
+
 PC = "b" * 32
-
-
-def _entry(
-    device_id: str,
-    name: str,
-    *,
-    online: bool = True,
-    tools: dict[str, str] | None = None,
-    compatible: bool = True,
-    linked: str | None = None,
-) -> NodeEntry:
-    return NodeEntry(
-        device_id=device_id,
-        name=name,
-        online=online,
-        compatible=compatible,
-        tools={"notify.show": "low", "system.info": "read"} if tools is None else tools,
-        last_seen=datetime(2026, 10, 21, 14, 2, tzinfo=UTC),
-        linked_device_id=linked,
-    )
 
 
 def _resolve(
@@ -66,66 +49,66 @@ def _resolve(
 
 
 def test_an_explicit_device_by_name_or_id() -> None:
-    entries = [_entry(LAPTOP, "Laptop"), _entry(PC, "Arbeits-PC")]
+    entries = [registry_entry(LAPTOP, "Laptop"), registry_entry(PC, "Arbeits-PC")]
     assert _resolve(requested="laptop", entries=entries).device == LAPTOP
     assert _resolve(requested=PC, entries=entries).device == PC
 
 
 def test_core_words_mean_the_core_only_when_it_has_the_tool() -> None:
-    entries = [_entry(LAPTOP, "Laptop")]
+    entries = [registry_entry(LAPTOP, "Laptop")]
     assert _resolve("system.info", "core", entries=entries, core_has=True).device == CORE
     refused = _resolve("notify.show", "core", entries=entries, core_has=False)
     assert refused.error["error"] == "not_on_core"
 
 
 def test_an_unknown_device_is_an_error_with_the_candidates() -> None:
-    refused = _resolve(requested="Toaster", entries=[_entry(LAPTOP, "Laptop")])
+    refused = _resolve(requested="Toaster", entries=[registry_entry(LAPTOP, "Laptop")])
     assert refused.device == "" and refused.error["error"] == "unknown_device"
     assert refused.error["candidates"] == ["Laptop · aaaa"]
 
 
 def test_an_offline_device_is_never_substituted() -> None:
-    entries = [_entry(LAPTOP, "Laptop", online=False), _entry(PC, "Arbeits-PC")]
+    entries = [registry_entry(LAPTOP, "Laptop", online=False), registry_entry(PC, "Arbeits-PC")]
     refused = _resolve(requested="Laptop", entries=entries)
     assert refused.device == "" and refused.error["error"] == "device_offline"
     assert refused.error["device"] == "Laptop · aaaa" and refused.error["last_seen"]
 
 
 def test_a_group_off_on_the_device_says_so() -> None:
-    entries = [_entry(PC, "Arbeits-PC", tools={"system.info": "read"})]
+    entries = [registry_entry(PC, "Arbeits-PC", tools={"system.info": "read"})]
     refused = _resolve("notify.show", "Arbeits-PC", entries=entries)
     assert refused.error["error"] == "not_enabled_on_device"
     assert "nur am Gerät" in refused.error["hint"]
 
 
 def test_an_outdated_node_offers_only_system_info() -> None:
-    entries = [_entry(PC, "Arbeits-PC", compatible=False)]
+    entries = [registry_entry(PC, "Arbeits-PC", compatible=False)]
     assert _resolve("system.info", "Arbeits-PC", entries=entries, side_effects=False).device == PC
     assert _resolve("notify.show", "Arbeits-PC", entries=entries).error["error"] == "update_needed"
 
 
 def test_the_default_core_and_a_named_default() -> None:
-    entries = [_entry(LAPTOP, "Laptop"), _entry(PC, "Arbeits-PC")]
+    entries = [registry_entry(LAPTOP, "Laptop"), registry_entry(PC, "Arbeits-PC")]
     assert _resolve("system.info", entries=entries, core_has=True, default="core").device == CORE
     assert _resolve(entries=entries, default="Arbeits-PC").device == PC
     # The configured device is offline: say so, never fall back to the other one.
-    gone = [_entry(LAPTOP, "Laptop", online=False), _entry(PC, "Arbeits-PC")]
+    gone = [registry_entry(LAPTOP, "Laptop", online=False), registry_entry(PC, "Arbeits-PC")]
     assert _resolve(entries=gone, default="Laptop").error["error"] == "device_offline"
 
 
 def test_an_offline_linked_device_is_reported_never_replaced() -> None:
-    """Review M1: the browser's own PC is offline and exactly one other device could do it - the
+    """The browser's own PC is offline and exactly one other device could do it - the
     message must not silently land on that other device."""
     entries = [
-        _entry(LAPTOP, "Laptop", online=False, linked="d" * 32),
-        _entry(PC, "Arbeits-PC"),
+        registry_entry(LAPTOP, "Laptop", online=False, linked="d" * 32),
+        registry_entry(PC, "Arbeits-PC"),
     ]
     refused = _resolve(entries=entries, default="origin", origin="d" * 32)
     assert refused.device == "" and refused.error["error"] == "device_offline"
 
 
 def test_origin_without_a_link_never_guesses_a_side_effect() -> None:
-    entries = [_entry(PC, "Arbeits-PC")]  # the only candidate, but not where the user is
+    entries = [registry_entry(PC, "Arbeits-PC")]  # the only candidate, but not where the user is
     assert _resolve(entries=entries, default="origin", origin="d" * 32).error["error"] == (
         "needs_device"
     )
@@ -139,7 +122,7 @@ def test_origin_without_a_link_never_guesses_a_side_effect() -> None:
 
 
 def test_origin_is_the_node_linked_to_the_asking_browser() -> None:
-    entries = [_entry(LAPTOP, "Laptop", linked="d" * 32), _entry(PC, "Arbeits-PC")]
+    entries = [registry_entry(LAPTOP, "Laptop", linked="d" * 32), registry_entry(PC, "Arbeits-PC")]
     assert _resolve(entries=entries, default="origin", origin="d" * 32).device == LAPTOP
     # No linked node for that browser: no guess.
     assert _resolve(entries=entries, default="origin", origin="e" * 32).error["error"] == (
@@ -148,12 +131,12 @@ def test_origin_is_the_node_linked_to_the_asking_browser() -> None:
 
 
 def test_one_candidate_is_used() -> None:
-    assert _resolve(entries=[_entry(LAPTOP, "Laptop")]).device == LAPTOP
+    assert _resolve(entries=[registry_entry(LAPTOP, "Laptop")]).device == LAPTOP
     assert _resolve("system.info", entries=[], core_has=True, side_effects=False).device == CORE
 
 
 def test_a_read_may_stay_on_the_core_a_side_effect_never_guesses() -> None:
-    entries = [_entry(LAPTOP, "Laptop"), _entry(PC, "Arbeits-PC")]
+    entries = [registry_entry(LAPTOP, "Laptop"), registry_entry(PC, "Arbeits-PC")]
     assert _resolve("system.info", entries=entries, core_has=True, side_effects=False).device == (
         CORE
     )
@@ -163,42 +146,8 @@ def test_a_read_may_stay_on_the_core_a_side_effect_never_guesses() -> None:
 
 
 def test_nobody_has_it() -> None:
-    refused = _resolve(entries=[_entry(LAPTOP, "Laptop", online=False)])
+    refused = _resolve(entries=[registry_entry(LAPTOP, "Laptop", online=False)])
     assert refused.error["error"] == "no_device"
-
-
-# ---- the routed spec ------------------------------------------------------------------------
-
-
-class FakeRegistry:
-    def __init__(self, entries: list[NodeEntry]) -> None:
-        self._entries = entries
-        self.calls: list[tuple[str, str, dict[str, Any], str]] = []
-
-    def entries(self) -> list[NodeEntry]:
-        return self._entries
-
-    def known(self) -> list[NodeEntry]:
-        return self._entries
-
-    async def settle(self, device_ids: Any = None, timeout_s: float = 3.0) -> None:
-        """No device is still connecting here (the router waits for that before a call)."""
-        return None
-
-    async def call(
-        self,
-        entry: NodeEntry,
-        tool: str,
-        arguments: dict[str, Any],
-        *,
-        risk: str,
-        timeout_s: float,
-        confirm_on_device: bool = False,
-    ) -> dict[str, Any]:
-        if not entry.online:
-            return {"error": "device_offline", "device": entry.name}
-        self.calls.append((entry.device_id, tool, arguments, risk))
-        return {"device": entry.name, "result": {"shown": True}}
 
 
 def _notify(registry: FakeRegistry) -> ToolSpec:
@@ -213,7 +162,7 @@ def _notify(registry: FakeRegistry) -> ToolSpec:
 
 
 async def test_the_permission_target_names_the_device_and_the_call_runs_there() -> None:
-    registry = FakeRegistry([_entry(LAPTOP, "Laptop"), _entry(PC, "Arbeits-PC")])
+    registry = FakeRegistry([registry_entry(LAPTOP, "Laptop"), registry_entry(PC, "Arbeits-PC")])
     spec = _notify(registry)
     payload = spec.input_model.model_validate({"text": "hi", "device": "Laptop"}).model_dump()
     assert spec.scope is not None
@@ -225,7 +174,7 @@ async def test_the_permission_target_names_the_device_and_the_call_runs_there() 
 
 
 async def test_a_node_reporting_a_higher_risk_raises_it() -> None:
-    registry = FakeRegistry([_entry(LAPTOP, "Laptop", tools={"notify.show": "high"})])
+    registry = FakeRegistry([registry_entry(LAPTOP, "Laptop", tools={"notify.show": "high"})])
     spec = _notify(registry)
     payload = spec.input_model.model_validate({"text": "hi"}).model_dump()
     assert spec.scope is not None
@@ -233,7 +182,7 @@ async def test_a_node_reporting_a_higher_risk_raises_it() -> None:
 
 
 async def test_a_node_reporting_a_lower_risk_does_not_lower_it() -> None:
-    registry = FakeRegistry([_entry(LAPTOP, "Laptop", tools={"notify.show": "read"})])
+    registry = FakeRegistry([registry_entry(LAPTOP, "Laptop", tools={"notify.show": "read"})])
     spec = _notify(registry)
     payload = spec.input_model.model_validate({"text": "hi"}).model_dump()
     assert spec.scope is not None
@@ -241,7 +190,7 @@ async def test_a_node_reporting_a_lower_risk_does_not_lower_it() -> None:
 
 
 async def test_a_refused_resolution_asks_nothing_and_runs_nothing() -> None:
-    registry = FakeRegistry([_entry(LAPTOP, "Laptop"), _entry(PC, "Arbeits-PC")])
+    registry = FakeRegistry([registry_entry(LAPTOP, "Laptop"), registry_entry(PC, "Arbeits-PC")])
     spec = _notify(registry)
     payload = spec.input_model.model_validate({"text": "hi"}).model_dump()
     assert spec.scope is not None
@@ -252,8 +201,8 @@ async def test_a_refused_resolution_asks_nothing_and_runs_nothing() -> None:
 
 
 async def test_a_device_gone_between_permission_and_run_fails_fast() -> None:
-    laptop = _entry(LAPTOP, "Laptop")
-    registry = FakeRegistry([laptop, _entry(PC, "Arbeits-PC")])
+    laptop = registry_entry(LAPTOP, "Laptop")
+    registry = FakeRegistry([laptop, registry_entry(PC, "Arbeits-PC")])
     spec = _notify(registry)
     payload = spec.input_model.model_validate({"text": "hi", "device": "Laptop"}).model_dump()
     assert spec.scope is not None
@@ -366,7 +315,7 @@ def test_a_remembered_answer_on_a_node_is_bound_to_it() -> None:
 
 
 def test_free_text_in_a_core_target_never_makes_a_call_device_bound() -> None:
-    """Review M4: a window title (or a purpose, an intent) that starts like a device prefix is
+    """A window title (or a purpose, an intent) that starts like a device prefix is
     just text. A grant remembered for that node never covers the core call, and the core call
     never produces a device-bound grant."""
     from nox.security.permissions import DefaultPermissionEngine
@@ -446,17 +395,20 @@ def test_the_facts_line_names_every_device() -> None:
 
     registry = NodeRegistry(Pairing(), None)  # type: ignore[arg-type]
     registry._entries = {
-        LAPTOP: _entry(LAPTOP, "Laptop", online=False),
-        PC: _entry(PC, "Arbeits-PC"),
+        LAPTOP: registry_entry(LAPTOP, "Laptop", online=False),
+        PC: registry_entry(PC, "Arbeits-PC"),
     }
     registry.entries = lambda: sorted(registry._entries.values(), key=lambda e: e.name)  # type: ignore[method-assign]
+    registry.core_name = lambda: "Wohnzimmer-Pi"
     line = registry.prompt_line()
-    assert line.startswith("Geräte: dieser Core (core)")
+    # This machine by its name, and that a tool without `device` runs here only.
+    assert line.startswith('Geräte: dieser Rechner (Wohnzimmer-Pi, device "core")')
+    assert line.endswith("Werkzeuge ohne device-Feld laufen nur auf diesem Rechner.")
     assert "Arbeits-PC · bbbb (online)" in line and "Laptop · aaaa (offline seit 21.10." in line
 
 
 def test_two_devices_with_one_name_are_never_guessed_between() -> None:
-    entries = [_entry(LAPTOP, "Laptop"), _entry(PC, "laptop")]
+    entries = [registry_entry(LAPTOP, "Laptop"), registry_entry(PC, "laptop")]
     refused = _resolve(requested="Laptop", entries=entries)
     assert refused.device == "" and refused.error["error"] == "ambiguous_device"
 
@@ -493,7 +445,7 @@ async def test_a_call_to_a_device_without_the_tool_sends_nothing() -> None:
     class Session:
         client = Client()
 
-    entry = _entry(LAPTOP, "Laptop", tools={"system.info": "read"})
+    entry = registry_entry(LAPTOP, "Laptop", tools={"system.info": "read"})
     entry.session = Session()  # type: ignore[assignment]
     registry = NodeRegistry(None, None)  # type: ignore[arg-type]
     answer = await registry.call(entry, "notify.show", {"text": "x"}, risk="low", timeout_s=1)
@@ -506,7 +458,7 @@ def test_node_results_taint_the_conversation() -> None:
     assert result_taints("system.info") and result_taints("notify.show")
 
 
-# ---- names typed on the device (orchestrator review) ----------------------------------------
+# ---- names typed on the device -------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -571,7 +523,7 @@ async def test_pairing_checks_the_name_only_behind_a_valid_code(tmp_path: Any) -
     from nox.node.protocol import NodePairRequest
     from nox.node.repo import NodeRepository
     from nox.remote.repo import RemoteRepository
-    from tests.unit.node.conftest import make_csr, make_key, pair_node
+    from tests.unit.node.support import make_csr, make_key, pair_node
 
     ensure_tls(tmp_path / "tls", names=("localhost",), addresses=("127.0.0.1",))
     db = Database(tmp_path / "nox.db")
@@ -628,7 +580,7 @@ async def test_an_expired_code_never_reveals_whether_a_name_is_taken(tmp_path: A
     from nox.node.protocol import NodePairRequest
     from nox.node.repo import NodeRepository
     from nox.remote.repo import RemoteRepository
-    from tests.unit.node.conftest import make_csr, make_key, pair_node
+    from tests.unit.node.support import make_csr, make_key, pair_node
 
     ensure_tls(tmp_path / "tls", names=("localhost",), addresses=("127.0.0.1",))
     db = Database(tmp_path / "nox.db")

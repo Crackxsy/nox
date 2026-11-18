@@ -563,7 +563,7 @@ desktop:
     session_minutes: 15
 
 devices:
-  defaults:                      # where a tool runs when you did not say (spec wave C)
+  defaults:                      # where a tool runs when you did not say
     screen.capture: origin       # origin: the PC whose dashboard you are using
     media.control: origin
     notify.show: origin

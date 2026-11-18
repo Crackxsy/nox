@@ -1,4 +1,4 @@
-"""Taint without confirmation fatigue (re-review N1): a tainted conversation still lets a lookup run
+"""Taint without confirmation fatigue: a tainted conversation still lets a lookup run
 quietly when its free text is demonstrably taken from what the user said, and only then.
 
 The rule under test (`TaintLedger.user_directed`), two conditions, both required:
@@ -22,7 +22,7 @@ from nox.core.toolloop import ToolLoop
 from nox.security.model import Decision, PermissionRequest, Risk, TemporaryGrant
 from nox.security.permissions import DefaultPermissionEngine
 from nox.security.taint import MAX_UNTRUSTED_CHARS, TaintLedger
-from tests.unit.core.test_orchestrator import make
+from tests.unit.fakes import make_orchestrator as make
 
 from .conftest import MutableClock
 

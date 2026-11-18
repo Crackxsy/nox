@@ -5,7 +5,7 @@ The security rules under test:
 * the read-only auto-allow and the rememberable `cmd:` target exist only for the argv form; a
   command *string* is always complex, so no shell trickery can earn a no-confirm run;
 * argv0 must be a bare name found in a trusted directory - a path (`C:\\Downloads\\git.exe`) or an
-  unknown program is complex (review finding 4);
+  unknown program is complex;
 * a `cmd:` target names the resolved executable and a hash of its bytes, so a remembered grant
   never covers a different file of the same name;
 * the read-only exception applies only in the strong sandbox and never with declared egress;

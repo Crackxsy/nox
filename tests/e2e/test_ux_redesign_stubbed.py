@@ -1,4 +1,4 @@
-"""Click tests of the redesigned dashboard (Spec UX-Neubau) against a stubbed IPC, on video.
+"""Click tests of the redesigned dashboard against a stubbed IPC, on video.
 
 Like `test_capabilities_stubbed.py` this boots no core: the built bundle is served from
 `ui/dashboard/dist` through `page.route`, and the IPC websocket is answered by an in-test stub
@@ -83,6 +83,15 @@ def _envelope(kind: str, name: str, payload: dict[str, Any], corr: str | None) -
             "payload": payload,
         }
     )
+
+
+class StubError(Exception):
+    """An answer that is an error: `code`, the English operator text and `details` (the reason)."""
+
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
 
 
 @dataclass
@@ -463,7 +472,12 @@ def _install(page: Page, stub: StubCore) -> None:
             if name == "ipc.auth":
                 ws.send(_envelope("response", name, {"ok": True, "session_id": "e2e"}, corr))
                 return
-            result = stub.answer(name, payload)
+            try:
+                result = stub.answer(name, payload)
+            except StubError as error:
+                body = {"code": error.code, "message": str(error), "details": error.details}
+                ws.send(_envelope("error", name, body, corr))
+                return
             if result is None:
                 ws.send(
                     _envelope(
@@ -500,6 +514,10 @@ class Journey:
     _selector: str = ""
 
     def shot(self, step: str) -> None:
+        # Not in the middle of a sheet's rise (or any other animation): wait until they ended.
+        self.page.evaluate(
+            "() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => null)))"
+        )
         self.page.screenshot(
             path=str(self.shots / f"{self.size}_{self.scheme}_{step}.png"), full_page=False
         )
@@ -562,6 +580,30 @@ class Journey:
             "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
         )
         assert overflow <= 0, f"page scrolls sideways by {overflow}px"
+
+    def no_overflow_in(self, selector: str, what: str) -> None:
+        """Nothing inside `selector` reaches past its right edge (a sheet clips, never scrolls)."""
+        clipped = self.page.evaluate(
+            """(sel) => {
+                const box = document.querySelector(sel);
+                if (!box) return ['missing ' + sel];
+                const edge = box.getBoundingClientRect().right;
+                const out = [];
+                if (box.scrollWidth > box.clientWidth) out.push('scrollWidth ' + box.scrollWidth);
+                for (const el of box.querySelectorAll('button, p, a, li, input, img, span')) {
+                  const r = el.getBoundingClientRect();
+                  // Stopp sits at the header's spot, outside the sheet on purpose.
+                  if (el.closest('.stop--corner')) continue;
+                  const name = el.tagName + '.' + el.className + ' ' + el.textContent.slice(0, 24);
+                  if (r.width > 0 && r.right > edge + 1) out.push(name);
+                }
+                return out;
+            }""",
+            selector,
+        )
+        assert clipped == [], (
+            f"{what} ({self.size}, {self.scheme}) reaches past its edge: {clipped}"
+        )
 
     def area(self, name: str) -> None:
         label = {"devices": "Geräte" if self.size == "phone" else "Geräte & Fähigkeiten"}.get(

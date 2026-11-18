@@ -1,19 +1,21 @@
 # Nodes: Nox' Hände an deinen anderen Computern
 
-*English: [NODES.md](NODES.md)*
+*English: [NODES.md](NODES.md)* · Für Entwickler, eine Karte durch den Code (englisch): [ARCHITECTURE-NODES.md](ARCHITECTURE-NODES.md)
+
+> Befehle: `nox-node ...` ist dasselbe wie `nox node ...` und funktioniert unter Windows in der Eingabeaufforderung und unter Linux/macOS im Terminal.
 
 Ein Haushalt hat **einen** Nox - den *Core*, am besten auf einem Raspberry Pi. Jeder andere PC
 oder Laptop kann einen kleinen **`nox node`** laufen lassen: Er verbindet sich mit dem Core und
 lässt Nox Dinge *auf diesem Gerät* tun - und nur die, die du dort erlaubt hast.
 
-> Stand: Welle C ist fertig. Ein Node koppelt sich mit einem Code, hat seine eigene
+> Stand: Ein Node koppelt sich mit einem Code, hat seine eigene
 > Erlaubnisliste, sein eigenes Protokoll und Budget, fragt Hohes Risiko am Gerät selbst und bietet
 > Systemwerte, Hinweise, Musik, Dateien in Ordnern, die du erlaubst, Befehle in seiner eigenen
 > Sandbox, Bildschirm- und Kamerabilder, einen Browser, Fenster und Programme, Maus und Tastatur
 > (Windows) sowie die Satelliten für Sprache, OBS und das Pet-Overlay. Programme installieren
 > (`package.*`) gibt es auf Nodes **noch nicht** - siehe
 > [Programme installieren](#programme-installieren-noch-nicht-verfügbar). Der Node findet den Core
-> nur unter der Adresse aus seinem Kopplungslink; die Suche im Heimnetz kommt mit Welle D.
+> nur unter der Adresse aus seinem Kopplungslink; die Suche nach dem Core im Heimnetz gibt es noch nicht.
 
 Zwei Regeln gelten überall unten. **Jeder Aufruf geht durch zwei Prüfungen:** die
 Berechtigungsprüfung des Cores und die eigene Prüfung des Nodes - jede kann ablehnen, nur beide
@@ -21,6 +23,23 @@ zusammen erlauben. **Seine harten Grenzen entscheidet das Gerät selbst:** Dafü
 den Core als nicht vertrauenswürdig. Spielsperre, harte Verbote, eine am Gerät ausgeschaltete
 Gruppe und der eigene Dialog des Geräts für Hohes Risiko gelten also auch gegen einen Core, der
 übernommen oder so verändert wurde, dass er alles erlaubt.
+
+## In 3 Schritten
+
+1. **Programm auf dem neuen PC installieren.** Windows: die Datei `Nox-Setup-<Version>.exe` starten
+   und „Mit dem Nox zu Hause verbinden (nur dieser PC)“ wählen. Linux (auch Raspberry Pi): das
+   Skript `install-linux.sh --node` ([Tabelle unten](#einen-node-installieren)).
+2. **Code erzeugen und Link übertragen.** Im Dashboard: Geräte & Fähigkeiten › Geräte › Computer und
+   Server › **PC oder Laptop hinzufügen** › **Installiert – Code erzeugen**. Dann **Link
+   kopieren**, die Seite auf dem neuen PC öffnen und den Link in das Feld „Kopplungs-Link“ des
+   Installers einfügen. Der Code gilt nur fünf Minuten - erzeuge ihn erst, wenn das Programm
+   installiert ist.
+3. **Am neuen PC erlauben, was Nox dort darf.** Windows: Eingabeaufforderung öffnen (Windows-Taste,
+   „cmd“ tippen) und zum Beispiel `nox-node allow shell` eingeben; Linux: in einem Terminal
+   dasselbe, ohne Bildschirm mit `sudo nox-node allow shell`. Das Dashboard zeigt dir den Befehl
+   passend zum Gerät unter „So schaltest du es ein“.
+
+(Ein Ablauf mit kurzem Code und Abgleich des Fingerabdrucks statt des langen Links ist geplant.)
 
 ## Einen Node installieren
 
@@ -30,6 +49,16 @@ Gruppe und der eigene Dialog des Geräts für Hohes Risiko gelten also auch gege
 | Linux-Desktop | `curl -fsSL https://github.com/Crackxsy/nox/releases/latest/download/install-linux.sh \| bash -s -- --node` - als du selbst, **ohne** sudo. Braucht `git curl tar python3`. | Eine systemd-**Benutzer**-Unit `nox-node.service`. Befehl: `nox-node ...` (in `~/.local/bin`). |
 | Linux ohne Bildschirm (ein Pi) | dasselbe mit `sudo bash -s -- --node --headless` | Eine gehärtete System-Unit für den eigenen Systembenutzer `nox-node`; Daten in `/var/lib/nox-node`. Befehl: `sudo nox-node ...`. |
 | macOS (**Beta**) | `bash scripts/install-macos.sh --node` in einer Kopie dieses Repositorys | Ein LaunchAgent bei der Anmeldung, als du. **Dieses Skript prüft Release-Signaturen noch nicht:** sobald Signaturen eingerichtet sind, installiert es nichts aus dem Netz (keinen Tag, Branch oder Commit), nur eine Kopie, die du selbst geprüft hast (`NOX_SOURCE=<Ordner>`). |
+
+**Was ein Node anbietet, wird mitinstalliert** (Python-Extras): Bildschirm und Kamera
+(`senses`, auf dem Desktop), die Browser-Bibliothek (`browser`), der Sprach-Satellit (`voice`)
+und auf dem Desktop das Tray (`shell`). Ein Werkzeug, dem seine Bibliothek fehlt, bietet der Node
+gar nicht an. Nie still geladen werden Nox' eigenes Chromium für `browser.*` (ca. 150 MB:
+`--with-browser` oder im Terminal mit Ja antworten; unter Windows einmal `playwright install
+chromium`) und die Sprachmodelle (`nox-node voice setup`). Ein Node ohne Bildschirm braucht für
+die Stimme die Soundkarte: `--node --headless --with-audio` (`--without-audio` nimmt sie wieder
+weg); Kamerabilder macht er nie. Auf dem Linux-Desktop braucht der Dialog `zenity` (KDE:
+`kdialog`), Hinweise brauchen `notify-send`.
 
 `--pair '<Link>'` koppelt gleich mit; den Installer erneut starten aktualisiert; `--uninstall`
 entfernt Programm und Autostart (Kennung und Protokoll des Nodes bleiben; das Gerät auch in Nox
@@ -52,7 +81,7 @@ lässt und später koppelst).
    ausführen, zum Beispiel
 
    ```text
-   nox node pair "nox-node://pair?h=192.0.2.20&p=47843&c=ABCD2345&fp=…" --name Laptop
+   nox-node pair "nox-node://pair?h=192.0.2.20&p=47843&c=ABCD2345&fp=…" --name Laptop
    ```
 
    Der Link enthält den SHA-256-Fingerabdruck der Zertifizierungsstelle deines Nox. Der Node holt
@@ -69,7 +98,7 @@ lässt und später koppelst).
    nicht verbunden ist. Das Blatt im Dashboard springt von „Wartet auf das Gerät …“ auf „… ist
    verbunden“, sobald er da ist.
 
-`nox node status` zeigt, ob er gekoppelt und verbunden ist und was Nox hier darf.
+`nox-node status` zeigt, ob er gekoppelt und verbunden ist und was Nox hier darf.
 
 Namen: nur `A-Z a-z 0-9 ä ö ü Ä Ö Ü ß`, Leerzeichen und `- _ .`, bis 40 Zeichen. Ein Name, den Nox
 schon hat (auch als „LAPTOP“ oder „Kueche“ für „Küche“), wird abgelehnt - dann mit `--name` einen
@@ -99,10 +128,10 @@ Laptop.
 Das entscheidet die Datei `node.yaml` im Node-Ordner, und **nur dieses Gerät kann sie erweitern**:
 
 ```text
-nox node allow shell     # Nox darf hier Befehle ausführen, in der Sandbox des Geräts; fragt nach
-nox node allow files --folder "C:\Users\Alex\Documents\Nox"   # ein Ordner, den Nox öffnen darf
-nox node deny files --folder "C:\Users\Alex\Documents\Nox"    # diesen Ordner wieder wegnehmen
-nox node deny notify     # keine Hinweise mehr auf diesem Gerät - sofort, auch im laufenden Betrieb
+nox-node allow shell     # Nox darf hier Befehle ausführen, in der Sandbox des Geräts; fragt nach
+nox-node allow files --folder "C:\Users\Alex\Documents\Nox"   # ein Ordner, den Nox öffnen darf
+nox-node deny files --folder "C:\Users\Alex\Documents\Nox"    # diesen Ordner wieder wegnehmen
+nox-node deny notify     # keine Hinweise mehr auf diesem Gerät - sofort, auch im laufenden Betrieb
 ```
 
 | Gruppe | Was Nox darf | Standard | Hinweise |
@@ -110,7 +139,7 @@ nox node deny notify     # keine Hinweise mehr auf diesem Gerät - sofort, auch 
 | `system` | `system.info`: Betriebssystem, CPU, Speicher, Platte, Akku, Temperatur, Laufzeit lesen | an | überall |
 | `notify` | `notify.show`: einen Hinweis zeigen | an | braucht einen Benachrichtigungsdienst (Windows, macOS, `notify-send` unter Linux) |
 | `media` | `media.control`: abspielen, pausieren, springen, Lautstärke, stumm | an | Windows und Linux; noch nicht unter macOS |
-| `files` | `file.list`, `file.read`, `file.write` in Ordnern, die du erlaubst | aus | standardmäßig kein Ordner |
+| `files` | `file.list`, `file.read`, `file.write`, `file.move`, `file.delete` in Ordnern, die du erlaubst | aus | standardmäßig kein Ordner |
 | `shell` | `shell.run` in der Sandbox dieses Geräts | aus | Windows (AppContainer), Linux (bubblewrap); unter macOS abgelehnt |
 | `packages` | Programme installieren | aus | **auf Nodes noch nicht verfügbar** |
 | `screen` | `screen.capture` | aus | jedes Mal Hohes Risiko, braucht eine sichtbare Benachrichtigung |
@@ -118,12 +147,12 @@ nox node deny notify     # keine Hinweise mehr auf diesem Gerät - sofort, auch 
 | `browser` | `browser.*` in Nox' eigenem unsichtbarem Browser | aus | nur öffentliche Seiten |
 | `desktop` | Fenster auflisten, nach vorn holen, minimieren, wiederherstellen, schließen; ein Programm beenden; Text tippen | aus | nur Windows |
 | `computer` | Maus und Tastenkombinationen in einer Sitzung | aus | nur Windows; `allow` fragt zweimal |
-| `voice` | der Sprach-Satellit | aus | braucht zusätzlich den Schalter des Besitzers im Dashboard |
+| `voice` | das Lautsprecher-Mikrofon | aus | braucht zusätzlich den Schalter des Besitzers im Dashboard |
 | `obs` | `obs.request` an das OBS auf diesem PC, das Pet-Overlay-Relay | aus | |
 
 Der Core kann Gruppen abschalten, nie anschalten. `allow` geht nur in einem interaktiven Terminal
 mit Bestätigung; wer `node.yaml` von Hand ändert, kann nur etwas wegnehmen - was dazukommt, gilt
-erst nach `nox node allow`. `max_risk` senkt, was der Node annimmt (Standard `high`; `critical`
+erst nach `nox-node allow`. `max_risk` senkt, was der Node annimmt (Standard `high`; `critical`
 nimmt er nie an). Beim Koppeln werden nur diese Standards bestätigt: Eine `node.yaml`, die schon
 da war, wird nicht übernommen.
 
@@ -133,7 +162,7 @@ Ein Systemdialog an diesem Gerät zeigt, was Nox tun will, mit allen Angaben, 60
 keine Antwort heißt nein, und ein „Ja“ in den ersten 1,5 Sekunden zählt als nein. Solange er offen
 ist, werden andere laufende Aktionen mit Wirkung gestoppt und neue abgelehnt (nur Lesen läuft
 weiter). Ein Node ohne Bildschirm lehnt Hohes Risiko ab, außer eine Person hat es an Nox selbst
-bestätigt und du hast das am Gerät erlaubt: `nox node allow trust_core_for_high`. Der Node hat
+bestätigt und du hast das am Gerät erlaubt: `nox-node allow trust_core_for_high`. Der Node hat
 außerdem ein eigenes Budget, unabhängig von dem des Cores: 60 Aktionen und 5 mit Hohem Risiko pro
 Stunde (`max_calls_per_hour`, `max_high_per_hour` in `node.yaml`).
 
@@ -175,7 +204,7 @@ Stunde (`max_calls_per_hour`, `max_high_per_hour` in `node.yaml`).
   ausführen), für ein Plugin (`dataview`, `jsx`, ...) oder einer, den die App zeichnet
   (`mermaid`, `math`, `html`), wird abgelehnt. Beim Anhängen zählt die ganze Datei, und die
   Ablehnung sagt, was stört. Notizen sind höchstens 256 KB groß, JSON-/YAML-Dateien 64 KB.
-- **Dein Notizen-Tresor:** `nox node allow files --folder` lehnt einen Ordner ab, der ein
+- **Dein Notizen-Tresor:** `nox-node allow files --folder` lehnt einen Ordner ab, der ein
   Repository oder ein App-Arbeitsbereich ist oder darin liegt - auch einen Tresor, dessen
   Einstellungsordner umbenannt wurde (erkannt an seinem Inhalt). Erlaube einen einfachen Ordner
   daneben - etwa `Nox` neben dem Tresor - und verschiebe, was Nox geschrieben hat, selbst hinein.
@@ -193,13 +222,21 @@ Stunde (`max_calls_per_hour`, `max_high_per_hour` in `node.yaml`).
   Hohes Risiko: gefragt an diesem Gerät, bei einem Node ohne Bildschirm an Nox. Ein Stopp beendet
   den ganzen Prozessbaum in der Sandbox.
 
+## Dateien verschieben und löschen
+
+`file.move` und `file.delete` sind hohes Risiko: der Dialog am Gerät fragt jedes Mal, ein „Ja“
+wird nie gemerkt. Beide Enden eines Verschiebens und die zu löschende Datei folgen den Regeln
+eines Schreibens (nur erlaubte Ordner und Datenformate, nie ein Link). Verschieben ersetzt nie
+etwas, legt keinen Ordner an und wechselt nie das Laufwerk. Gelöscht wird nur in den Papierkorb
+des Benutzers - geht das nicht, bleibt die Datei und der Aufruf wird abgelehnt.
+
 ## Programme installieren: noch nicht verfügbar
 
 `package.install` und `package.remove` gibt es nur auf dem Rechner, auf dem Nox selbst läuft. Auf
 einem Node werden sie nicht angeboten, und der Core leitet sie nicht dorthin: Ein Paketmanager
 braucht Rechte, die die Sandbox des Nodes nicht gibt (eine systemweite Installation braucht
 Administrator oder root; selbst eine Installation nur für den Benutzer schreibt außerhalb jedes
-Ordners, den die Sandbox sehen darf). `nox node allow packages` lässt sich setzen, ändert aber noch
+Ordners, den die Sandbox sehen darf). `nox-node allow packages` lässt sich setzen, ändert aber noch
 nichts.
 
 Das ist eine **offene Entscheidung** des Projekt-Besitzers zwischen zwei Entwürfen:
@@ -218,7 +255,7 @@ dem Rechner, auf dem Nox läuft, nicht auf dem Laptop: prüfe, was die Frage zei
 
 ## Bildschirm, Kamera, Browser, Fenster, Maus und Tastatur, Musik
 
-Alles aus, außer Musik; jedes wird nur hier eingeschaltet, mit `nox node allow <Gruppe>`.
+Alles aus, außer Musik; jedes wird nur hier eingeschaltet, mit `nox-node allow <Gruppe>`.
 
 ### Bildschirm und Kamera
 
@@ -249,9 +286,9 @@ Fenstertitel von einem Node werden verborgen, solange Nox im Panik- oder abgesic
 
 ### Maus und Tastatur (Computersteuerung)
 
-`computer`, nur Windows (sonst abgelehnt): `nox node allow computer` fragt zweimal. Eine Sitzung
+`computer`, nur Windows (sonst abgelehnt): `nox-node allow computer` fragt zweimal. Eine Sitzung
 wird jedes Mal an diesem Gerät erfragt (hoch), dauert höchstens 15 Minuten und 200 Aktionen, zeigt
-eine Benachrichtigung und endet mit Strg+Alt+Umschalt+K, dem Not-Aus, einer verlorenen Verbindung
+eine Benachrichtigung und endet mit Strg+Alt+Umschalt+K, Stopp, einer verlorenen Verbindung
 oder ihrer Zeit. Darin darf Nox bewegen, klicken, scrollen und Tastenkombinationen drücken - nie
 in Nox' eigene Fenster, nie während hier eine Frage offen ist. Dafür muss der Browser auf diesem
 PC im Dashboard mit dem Node verknüpft sein (`node.link`), damit Nox erkennt, welcher Browser auf
@@ -316,22 +353,23 @@ PulseAudio (`pactl`). Noch nicht unter macOS. „Mach auf dem Arbeits-PC die Mus
 ## Sprache, OBS und das Pet-Overlay (Satelliten)
 
 Drei Dinge, die ein Node über seine Hände hinaus für Nox tun kann - alle standardmäßig aus, jedes
-nur hier eingeschaltet (`nox node allow voice`, `nox node allow obs`). Wie sie arbeiten, steht in
+nur hier eingeschaltet (`nox-node allow voice`, `nox-node allow obs`). Wie sie arbeiten, steht in
 `satellites.yaml` im Node-Ordner (nur Einstellungen, nichts Geheimes, nie *ob*).
 
-### Sprach-Satellit
+### Lautsprecher-Mikrofon (Sprach-Satellit)
 
 `voice`: Nox hört und spricht auf diesem Gerät - etwa ein Wohnzimmer-Pi mit einem
 USB-Lautsprechermikrofon.
 
-- **Zwei Schlüssel.** `nox node allow voice` hier *und* „Zuhören und sprechen einschalten“ für
+- **Zwei Schlüssel.** `nox-node allow voice` hier *und* „Zuhören und sprechen einschalten“ für
   dieses Gerät im Dashboard (im Blatt des Nodes; mit der PIN, wenn eine gesetzt ist, von einem
   gekoppelten Gerät immer). Bis dahin steht die Gruppe dort als ausgeschaltet. Den zweiten
   Schlüssel prüft der Core bei jeder Äußerung erneut.
-- **Zuhören** geht standardmäßig per Push-to-Talk (`mode: push_to_talk`): `Strg+Alt+Leertaste`
-  halten, wo das Symbol läuft, oder `nox node voice talk` ausführen und Enter drücken, wenn du
-  fertig bist. Mit `mode: wake_word` bleibt das Mikrofon offen und Nox reagiert auf seinen Namen
-  („Nox, ...“).
+- **Zuhören** geht standardmäßig per `mode: auto`: Push-to-Talk mit Bildschirm
+  (`Strg+Alt+Leertaste` halten, wo das Symbol läuft, oder `nox-node voice talk` und Enter) und
+  das Weckwort ohne Bildschirm - ein Pi ohne Taste: das Mikrofon bleibt offen und Nox reagiert
+  auf seinen Namen („Nox, ...“). `mode: push_to_talk` / `wake_word` legt es fest. Modelle:
+  `nox-node voice setup` (fragt zuerst; der Node lädt nie von selbst).
 - **Text, nie Audio.** Die Spracherkennung läuft hier (faster-whisper, `tiny` auf einem Pi, sonst
   `base` - `stt_model` ändert es); nur der erkannte **Text** geht an Nox, höchstens 500 Zeichen pro
   Äußerung. Audio verlässt das Gerät nie und wird nie gespeichert; die Protokolle halten fest, dass
@@ -341,10 +379,10 @@ USB-Lautsprechermikrofon.
   --models-dir <Node-Ordner>/models`); von selbst wird nichts geladen.
 - **Du siehst und hörst, wenn es zuhört:** Das Symbol zeigt „Nox hört zu“, solange das Mikrofon
   offen ist, und ein kurzer Ton erklingt, wenn Push-to-Talk beginnt und wenn Nox deine Frage
-  angenommen hat (`earcon: false` schaltet die Töne aus). `nox node voice status` sagt dasselbe im
+  angenommen hat (`earcon: false` schaltet die Töne aus). `nox-node voice status` sagt dasselbe im
   Terminal.
-- **Stumm und Privatsphäre.** `nox node voice mute` schaltet das Mikrofon hier stumm (auch im Menü
-  des Symbols); nur dieses Gerät hebt das auf (`nox node voice unmute`). Auch Nox' Privatsphäre
+- **Stumm und Privatsphäre.** `nox-node voice mute` schaltet das Mikrofon hier stumm (auch im Menü
+  des Symbols); nur dieses Gerät hebt das auf (`nox-node voice unmute`). Auch Nox' Privatsphäre
   schließt es: der Mikrofon- bzw. Aufnahme-Schalter, Panik, abgesicherter Modus, eine
   Privatsphäre-Zone und der Stopp-Knopf. Während Nox Maus und Tastatur auf diesem PC steuert, hört
   es ihm nicht zu.
@@ -354,13 +392,13 @@ USB-Lautsprechermikrofon.
   hört, wird bei Nox ein eigenes Gespräch (`voice:node:<Kennung>`), gespeichert oder nicht nach
   Nox' Privatsphäre-Modus, und dieses Gespräch gilt vom ersten Wort an als eines mit fremden
   Inhalten: Alles, was Daten nach draußen schickt, fragt vorher, ein anderswo gegebenes „für diese
-  Sitzung merken“ gilt dafür nicht, und die Frage zeigt „von Sprach-Satellit <Name>“. Was Nox
+  Sitzung merken“ gilt dafür nicht, und die Frage zeigt „Vom Lautsprecher-Mikrofon <Name>“. Was Nox
   daraus lernt, wartet auf deine Bestätigung. **Erlaubnisse gibt es nie per Stimme.** „Hier“ heißt
   dieses Gerät: „Mach hier die Musik leiser“. Es wartet, bis Nox im Dashboard fertig ist, statt es
   zu unterbrechen (höchstens 90 s). Schlösser, Alarmanlagen, Garagentore und Ventile sind wie für
   jeden Kanal unerreichbar - dafür hat Nox kein Werkzeug.
-- **Keine Abkürzungen aus dem Raum.** Presets und Moduswechsel starten von hier nicht - nur ein
-  Preset, das du „Auch über Sprach-Satelliten“ markiert hast (mit der PIN, wenn eine gesetzt ist),
+- **Keine Abkürzungen aus dem Raum.** Abläufe und Moduswechsel starten von hier nicht - nur ein
+  Ablauf, den du „Auch per Sprache aus einem Raum starten“ markiert hast (mit der PIN, wenn eine gesetzt ist),
   und dann folgt jeder Schritt den normalen Regeln; der Modus wechselt per Stimme von einem
   Satelliten nie, und ein dort gesagtes „neues Gespräch“ verwirft das Gespräch nicht und beendet
   seine Erlaubnisse nicht.
@@ -383,7 +421,7 @@ USB-Lautsprechermikrofon.
 
 `obs`: OBS läuft auf diesem PC, Nox auf einem anderen.
 
-- `nox node obs password` legt das obs-websocket-Passwort im Schlüsselbund dieses Geräts ab; es
+- `nox-node obs password` legt das obs-websocket-Passwort im Schlüsselbund dieses Geräts ab; es
   geht nie an Nox' Core. Der Node verbindet sich nur mit dem OBS auf diesem PC (`127.0.0.1`,
   Port `4455` - `obs: port:` ändert ihn).
 - In `satellites.yaml` die Privatsphäre-Szene dieses OBS und die Szenen nennen, zu denen Nox
@@ -396,13 +434,13 @@ USB-Lautsprechermikrofon.
   Szenenliste dieses PCs nicht). Die Privatsphäre-Szene und alles darin lassen sich nicht ändern.
 - Der Panik-Knopf schaltet dieses OBS auf seine Privatsphäre-Szene (auch wenn dieser PC aus war
   und während der Panik wiederkommt); danach ändert Nox hier nichts mehr in OBS, bis du auf diesem
-  PC `nox node obs resume` ausführst - das wirkt sofort, auch während der Node läuft.
+  PC `nox-node obs resume` ausführst - das wirkt sofort, auch während der Node läuft.
 
 ### Pet-Overlay
 
 Das Pet als OBS-Browserquelle auf diesem PC, vom Nox zuhause.
 
-- Mit erlaubtem `obs` stellt der Node das Pet nur auf diesem PC bereit. `nox node overlay` zeigt
+- Mit erlaubtem `obs` stellt der Node das Pet nur auf diesem PC bereit. `nox-node overlay` zeigt
   die Adresse für eine OBS-Browserquelle (oder einen Browser hier), etwa
   `http://127.0.0.1:47845/pet/?overlay=1&device=<id>#overlay=relay`. Die Adresse enthält kein
   Geheimnis: Der Node ergänzt seinen eigenen Nur-Lese-Zugang, erneuert ihn bei jeder Verbindung und
@@ -423,31 +461,35 @@ ist, seine Version. Sein Blatt hat einen Schalter je Gruppe:
   auch nach jedem Neuverbinden.
 - **Wieder an** geht dort nur für eine Gruppe, die du dort ausgeschaltet hast, mit der PIN, wenn
   eine gesetzt ist. Was das Gerät selbst nicht erlaubt, schaltest du nur am Gerät ein:
-  `nox node allow <Gruppe>` im Terminal dort (das Symbol im Infobereich zeigt nur, was erlaubt
-  ist; ein Pi ohne Bildschirm hat keins - dort ein Terminal nutzen, etwa über SSH).
+  `nox-node allow <Gruppe>` dort (das Symbol im Infobereich zeigt nur, was erlaubt ist; ein Pi
+  ohne Bildschirm hat keins). Das Dashboard nennt dafür den Befehl passend zum Gerät: unter
+  Windows die Eingabeaufforderung (Windows-Taste, „cmd“ tippen), unter Linux ein Terminal, ohne
+  Bildschirm `sudo nox-node ...` etwa über SSH. Eine Gruppe, die das Gerät nicht erlaubt, ist
+  dort kein Schalter, sondern ein Schloss mit „So schaltest du es ein“.
 
-Im selben Blatt stellst du das Standardgerät je Werkzeugfamilie ein, siehst „Zuletzt hier getan“
+Unter der Liste, bei „Standardgeräte“, stellst du je Werkzeugfamilie ein, wo Nox etwas tut
+(„Wo Nox Systemwerte liest“) - das gilt für alle Computer. Im Blatt eines Nodes siehst du „Zuletzt hier getan“
 aus dem Protokoll und entfernst den Node („Wirklich entfernen“, zweimal gedrückt); Standards, die
 einen entfernten Node nannten, stehen danach wieder auf `auto`. Die Anfragen heißen `node.narrow`
 und `node.defaults.set` (siehe [SECURITY.md](SECURITY.md#nodes-nox-node)).
 
 ## Stoppen
 
-- **Der Stopp-Knopf von Nox stoppt jeden Node in unter einer Sekunde:** Der Not-Aus erreicht jeden
+- **Der Stopp-Knopf von Nox stoppt jeden Node in unter einer Sekunde:** Stopp erreicht jeden
   verbundenen Node über seine offene Verbindung, laufende Aktionen werden abgebrochen (bei einem
   Befehl in der Sandbox der ganze Prozessbaum), eine Sitzung mit Maus und Tastatur endet, und der
   Node lehnt alles ab, bis Nox fortsetzt.
-- **Am Gerät selbst:** `nox node stop`, **Not-Aus hier** im Symbol-Menü oder
+- **Am Gerät selbst:** `nox-node stop`, **Stopp (überall)** im Symbol-Menü oder
   `Strg+Alt+Umschalt+K` (wo ein globaler Tasten-Hook verfügbar ist) - oder „Nox, Notaus“ an einem
   Sprach-Satelliten - stoppt es dort und Nox überall; den eigenen Stopp des Nodes hebt nur
-  `nox node resume` (oder **Hier fortsetzen**) an diesem Gerät auf.
+  `nox-node resume` (oder **Hier fortsetzen**) an diesem Gerät auf.
 - **Totmannschalter:** Hört ein Node 3 Sekunden lang nichts von Nox, während er etwas tut, bricht
   er das ab und lehnt alles ab, bis Nox wieder da und nicht gestoppt ist.
 
 Auf einem Desktop mit Infobereich-Symbol (Windows; Linux, wo PySide6 installiert ist) zeigt das
 Symbol den Zustand - verbunden, „Nicht verbunden mit Nox“, Update nötig, gestoppt - und sein Menü
-hat **Not-Aus hier**, **Hier fortsetzen**, **Was Nox hier darf** und, mit Sprache, den
-Mikrofon-Schalter. Das Symbol schreibt nur dieselbe Stopp-Datei wie `nox node stop`. Hinweise eines
+hat **Stopp (überall)**, **Hier fortsetzen**, **Was Nox hier darf** und, mit Sprache, den
+Mikrofon-Schalter. Das Symbol schreibt nur dieselbe Stopp-Datei wie `nox-node stop`. Hinweise eines
 unter Windows im Node-Modus installierten Nodes tragen Nox' eigenen Namen (AppUserModelID
 `Nox.Node`), nicht „Windows PowerShell“.
 
@@ -466,13 +508,13 @@ es; nichts wird geändert):
 3. das Manifest ist wohlgeformt und nennt dieses Projekt;
 4. keine Rückstufung, keine Wiedergabe: nicht unter der laufenden und nicht unter der höchsten
    hier gelaufenen Version, und nicht älter als das neueste schon gesehene Manifest. Eine
-   Version, die hier scheiterte, wird 7 Tage übersprungen (oder mit `nox node update --yes`
+   Version, die hier scheiterte, wird 7 Tage übersprungen (oder mit `nox-node update --yes`
    erneut versucht);
 5. **von selbst** installiert sich nur ein stabiles Patch-Release ohne geänderte Bibliotheken
    (`deps_changed: false` im Manifest), dessen neuer Node ein Protokoll spricht, das **der
    gekoppelte Core annimmt** (`node_speaks`, gegen den Bereich, den der Core beim letzten
    Verbinden nannte). Minor-, Major- und Vorab-Versionen sowie ein unbekanntes oder abgelehntes
-   Protokoll warten auf `nox node update` am Gerät; geänderte Bibliotheken brauchen den Installer
+   Protokoll warten auf `nox-node update` am Gerät; geänderte Bibliotheken brauchen den Installer
    (ein Hinweis sagt, was gilt);
 6. das Paket `nox-app-<Tag>.zip` aus dem Release genau dieses Tags stimmt in Größe und SHA-256
    (aus derselben geöffneten Datei geprüft und entpackt);
@@ -487,9 +529,9 @@ fehlende Datei oder eine gefälschte Zustandsdatei startet das installierte Prog
 Version gilt als funktionierend, sobald sie verbunden ist und der Core ihr Protokoll annahm. Zwei
 echte Abstürze vorher (keine Abmeldung, kein Herunterfahren, kein Stopp) oder ein Core, der ihr
 Protokoll ablehnt, gehen auf die vorige Version zurück. Ein erneutes Installieren des Programms
-(jeder Installer) verwirft die selbst installierten Versionen. `nox node update --check` schaut
+(jeder Installer) verwirft die selbst installierten Versionen. `nox-node update --check` schaut
 nur; Rückgabewert 3 heißt: Release-Signaturen noch nicht eingerichtet. Wurde länger als 30 Tage
-keine neuere signierte Release-Information gesehen, sagen das `nox node status` und ein Hinweis:
+keine neuere signierte Release-Information gesehen, sagen das `nox-node status` und ein Hinweis:
 Updates könnten zurückgehalten werden.
 
 Ein Node, dessen Protokoll der Core nicht annimmt, zeigt „Update nötig“ und bietet bis zum Update
@@ -512,12 +554,12 @@ Die bewusst hingenommenen Restrisiken der Selbst-Updates stehen in
 | `node.crt`, `ca.crt`, `node.json` | Sein Zertifikat (30 Tage), die angepinnte Stelle, die Adresse des Cores und die Kennung des Nodes |
 | `node.yaml` | Was Nox hier darf |
 | `manifest.key` | Nur ohne Schlüsselbund: der Schlüssel, der die Bestätigungen von `node.yaml` signiert (0600) |
-| `audit.db` | Jeder Aufruf, erlaubt oder abgelehnt, als Hash-Kette: `nox node log` |
+| `audit.db` | Jeder Aufruf, erlaubt oder abgelehnt, als Hash-Kette: `nox-node log` |
 | `app/` | Versionen, die der Node selbst installiert hat (`releases/<Version>`), und `state.json`, welche läuft |
-| `update.json` | Die letzte Update-Prüfung, gezeigt von `nox node status` und dem Symbol |
+| `update.json` | Die letzte Update-Prüfung, gezeigt von `nox-node status` und dem Symbol |
 | `satellites.yaml` | Wie Sprache, OBS und das Overlay hier arbeiten (nichts Geheimes) |
 | `voice.json`, `voice-muted`, `voice-ptt` | Was der Sprach-Satellit gerade tut (für das Symbol), der Stummschalter, Push-to-Talk gehalten |
-| `obs-panic` | Da nach dem Panik-Knopf: Nox ändert hier nichts in OBS bis `nox node obs resume` |
+| `obs-panic` | Da nach dem Panik-Knopf: Nox ändert hier nichts in OBS bis `nox-node obs resume` |
 
 Ordner: `%LOCALAPPDATA%\Nox\node` (Windows), `~/.local/share/nox/node` (Linux),
 `~/Library/Application Support/Nox/node` (macOS); `NOX_NODE_HOME` ändert ihn. Der Node läuft als
@@ -539,12 +581,12 @@ Gerät neu koppelt, steht unter
 
 ## Fehlersuche
 
-`nox node status` am Gerät und die Zeile des Nodes im Dashboard sind die ersten Anlaufstellen;
-`nox node log` zeigt jede Entscheidung des Nodes mit ihrem Grund.
+`nox-node status` am Gerät und die Zeile des Nodes im Dashboard sind die ersten Anlaufstellen;
+`nox-node log` zeigt jede Entscheidung des Nodes mit ihrem Grund.
 
 ### Der Node zeigt „offline“
 
-- **Läuft er?** `nox node status` sagt `not running`, `disconnected` (er erreicht Nox nicht),
+- **Läuft er?** `nox-node status` sagt `not running`, `disconnected` (er erreicht Nox nicht),
   `connected`, `update_needed`, `pin_mismatch` oder „Removed from Nox“. Mit `nox node run`
   starten oder die Anmelde-Aufgabe „Nox Node“ (Windows), `systemctl --user status nox-node`
   (Linux-Desktop) bzw. `sudo systemctl status nox-node` (ohne Bildschirm) prüfen.
@@ -552,7 +594,7 @@ Gerät neu koppelt, steht unter
   sonst sagt das Dashboard „Computer verbindest du, sobald andere Geräte Nox öffnen dürfen.“
 - **Erreicht er den Port des Cores?** Siehe [Firewall](#firewall-port-47844) unten.
 - **Hat sich die Adresse des Cores geändert?** Der Node verbindet sich nur mit der Adresse aus
-  seinem Kopplungslink (die Suche im Heimnetz kommt mit Welle D). Gib dem Core im Router eine
+  seinem Kopplungslink (die Suche nach dem Core im Heimnetz gibt es noch nicht). Gib dem Core im Router eine
   feste Adresse oder kopple neu.
 - **„Update nötig“** heißt, der Core nimmt das Protokoll des Nodes nicht an: den Node (oder den
   Core) aktualisieren; bis dahin liest Nox dort nur Systemwerte.
@@ -579,9 +621,9 @@ nodes as it accepts“ - erst einen entfernen; ein Name, der einem vorhandenen G
   Datenordner): Jeder Node muss neu gekoppelt werden.
 
 Ein Gerät neu koppeln: in Nox entfernen (falls es noch da steht), den Node am Gerät stoppen,
-`node.json`, `node.crt` und `node.key` aus dem Node-Ordner löschen und dann `nox node pair` mit
+`node.json`, `node.crt` und `node.key` aus dem Node-Ordner löschen und dann `nox-node pair` mit
 einem neuen Link ausführen. Neu koppeln beginnt mit den Standardgruppen; was du brauchst, mit
-`nox node allow` wieder erlauben.
+`nox-node allow` wieder erlauben.
 
 ### Firewall: Port 47844
 
@@ -607,31 +649,31 @@ lässt sich von Nox aus nicht übergehen. Prüfe:
   hinzugefügt hat, lässt sich am Node nicht entfernen;
 - Maus, Tastatur und Fenster gibt es nur auf Windows-Nodes (`windows_only`).
 
-### Der Sprach-Satellit hört nicht zu
+### Das Lautsprecher-Mikrofon hört nicht zu
 
-`nox node voice status` ausführen. Der Reihe nach:
+`nox-node voice status` ausführen. Der Reihe nach:
 
-- **„Voice: off“** - `nox node allow voice` am Gerät;
-- **„Muted here: yes“** - `nox node voice unmute` am Gerät;
+- **„Voice: off“** - `nox-node allow voice` am Gerät;
+- **„Muted here: yes“** - `nox-node voice unmute` am Gerät;
 - **„Core says: no (...)“** - der Grund liegt bei Nox: Das Gerät ist im Dashboard nicht
   eingeschaltet (der zweite Schlüssel), der Mikrofon- oder Aufnahme-Schalter ist aus, Nox ist im
   Panik- oder abgesicherten Modus, eine Privatsphäre-Zone ist aktiv, Nox ist gestoppt, oder Nox
   steuert Maus und Tastatur auf diesem PC;
 - **„Running: no“** oder eine Zeile **„Problem:“** - die Sprachverarbeitung ist nicht gestartet:
   meist fehlen die Sprachmodelle (einmal laden, siehe oben) oder es wurde kein Mikrofon gefunden;
-- mit `mode: push_to_talk` wird ohne die Taste oder `nox node voice talk` nichts gehört; mit
+- mit `mode: push_to_talk` wird ohne die Taste oder `nox-node voice talk` nichts gehört; mit
   `mode: wake_word` beginnt jede Frage mit „Nox“;
 - während Nox hier spricht und kurz danach, wird Gehörtes nicht als Frage genommen.
 
 ### Ein Update ist gescheitert oder wurde zurückgenommen
 
-`nox node status` zeigt die letzte Prüfung in der Zeile „Update:“. „Release signing is not
-configured“ heißt, es gibt noch keine Selbst-Updates (Rückgabewert 3 von `nox node update
---check`). Eine gescheiterte Version wird 7 Tage übersprungen; `nox node update --yes` versucht sie
+`nox-node status` zeigt die letzte Prüfung in der Zeile „Update:“. „Release signing is not
+configured“ heißt, es gibt noch keine Selbst-Updates (Rückgabewert 3 von `nox-node update
+--check`). Eine gescheiterte Version wird 7 Tage übersprungen; `nox-node update --yes` versucht sie
 erneut. Eine Version, die zweimal abgestürzt ist, bevor sie sich verbunden hat, oder deren
 Protokoll der Core abgelehnt hat, wurde auf die vorige zurückgesetzt - mit der arbeitet der Node
 weiter. Ein Release mit geänderten Bibliotheken braucht den Installer; ein Minor- oder
-Major-Release wartet auf `nox node update` am Gerät. Eine Warnung, dass seit 30 Tagen kein neueres
+Major-Release wartet auf `nox-node update` am Gerät. Eine Warnung, dass seit 30 Tagen kein neueres
 signiertes Release gesehen wurde, heißt, dass Updates unterwegs zurückgehalten werden könnten:
 das Netz prüfen oder das aktuelle Release mit dem Installer installieren.
 
@@ -640,7 +682,7 @@ das Netz prüfen oder das aktuelle Release mit dem Installer installieren.
 Siehe [SECURITY.md](SECURITY.md#nodes-nox-node) für das Bedrohungsmodell des Nodes und
 [Accepted limits (nodes)](SECURITY.md#accepted-limits-nodes) für alle hingenommenen Grenzen an
 einer Stelle. Bekannte Grenzen dieser Version: Der Node findet den Core nur unter der Adresse aus
-dem Kopplungslink (Suche im Heimnetz kommt mit Welle D); Programme auf Nodes installieren ist eine
+dem Kopplungslink (die Suche nach dem Core im Heimnetz gibt es noch nicht); Programme auf Nodes installieren ist eine
 offene Entscheidung. Die Windows-Anmeldeaufgabe prüft die CI mit einem Administratorkonto; dass ein
 Standardkonto sie anlegen darf, ist das dokumentierte Verhalten der Aufgabenplanung für eine
 Aufgabe, die als dieses Konto läuft, aber noch nicht getestet. Der macOS-Installer ist eine Beta.

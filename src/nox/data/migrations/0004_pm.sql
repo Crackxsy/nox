@@ -1,9 +1,9 @@
--- 0004_pm: EPIC-13 PM index mirror (`pm_items`) - a fast-query mirror of the vault's Project/Epic/
+-- 0004_pm: PM index mirror (`pm_items`) - a fast-query mirror of the vault's Project/Epic/
 -- Story notes, rebuilt from the vault by `nox.pm.index.PmIndex.rebuild`/`upsert`. The vault note is
--- always authoritative on conflict (CP-Core-Runtime Data Model "vault wins", ADR-006 layer 3).
+-- always authoritative on conflict: the vault wins.
 
 CREATE TABLE IF NOT EXISTS pm_items (
-    id         TEXT PRIMARY KEY,       -- vault id, e.g. ST-13-01 / EPIC-13
+    id         TEXT PRIMARY KEY,       -- vault id: the note's filename prefix
     kind       TEXT NOT NULL,          -- project | epic | story
     title      TEXT NOT NULL,
     status     TEXT NOT NULL,

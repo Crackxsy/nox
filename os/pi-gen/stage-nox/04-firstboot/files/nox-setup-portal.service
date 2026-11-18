@@ -1,0 +1,44 @@
+# Nox-OS captive portal on the setup hotspot (nox_setup_portal.py). Started by nox_setup.py only
+# while the hotspot is up (no [Install]); a user of its own, no root, no capability but binding
+# port 80, no network but the hotspot's. It changes nothing itself: it
+# writes one request that root checks again (nox-setup-apply.path).
+[Unit]
+Description=Nox-OS setup portal (captive portal on the setup hotspot)
+Documentation=https://github.com/Crackxsy/nox/blob/develop/os/README.md
+After=NetworkManager.service
+
+[Service]
+ExecStart=/usr/bin/python3 -I -S /usr/local/lib/nox-os/nox_setup_portal.py
+User=nox-setup
+Group=nox-setup
+SupplementaryGroups=nox-os-setup
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=3
+# Setup mode lasts at most 30 minutes; so does the portal.
+RuntimeMaxSec=31min
+UMask=0077
+ProtectSystem=strict
+ReadWritePaths=/run/nox-os/setup/portal
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=10.42.0.0/24
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service

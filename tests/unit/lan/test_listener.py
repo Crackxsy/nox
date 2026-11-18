@@ -203,7 +203,7 @@ async def test_health_follows_the_listener(runtime: LanRuntime) -> None:
     assert status is HealthStatus.LIMITED and "resolver down" in detail
 
 
-# ---- review round 1: what must hold over time -------------------------------------------------
+# ---- what must hold over time -----------------------------------------------------------------
 
 
 async def test_a_hanging_resolver_during_a_recheck_keeps_the_listener(runtime: LanRuntime) -> None:

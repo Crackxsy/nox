@@ -116,6 +116,11 @@ class RemoteRepository:
         )
         return cursor.rowcount == 1
 
+    def purge_pending_pairings(self) -> int:
+        """Every pairing code not redeemed yet, whatever its age (a reclaim)."""
+        cursor = self._db.execute("DELETE FROM remote_pairings WHERE redeemed_at IS NULL")
+        return int(cursor.rowcount)
+
     def purge_expired_pairings(self, now: datetime) -> int:
         cursor = self._db.execute(
             "DELETE FROM remote_pairings WHERE redeemed_at IS NULL AND expires_at < ?",

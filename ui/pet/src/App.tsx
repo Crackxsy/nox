@@ -68,7 +68,7 @@ export interface AppProps {
   tourEveryMs?: number;
   /** Dev-only (`?renderer=rig`): keep the older rig renderer even for a relief creature. */
   forceRig?: boolean;
-  /** `?device=<id>`: the pet of one paired node (its overlay relay, C9) - it follows that node's
+  /** `?device=<id>`: the pet of one paired node (its overlay relay) - it follows that node's
    * speech, not the core's. */
   device?: string | null;
 }

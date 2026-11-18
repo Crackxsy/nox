@@ -1,4 +1,4 @@
-"""Review finding 13: a call that sends data out is a network call for the privacy rules, whatever
+"""A call that sends data out is a network call for the privacy rules, whatever
 its tool name. `shell.run` with a model-supplied `egress` list and `package.*` (a download) used
 to pass OFFLINE/PRIVATE because only tool *names* were matched against the cloud patterns.
 """

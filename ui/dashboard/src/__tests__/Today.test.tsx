@@ -1,5 +1,5 @@
 /**
- * Heute (Spec UX-Neubau §3, §9): the greeting, "Wartet auf dich" with its yes/no answers, the
+ * Heute: the greeting, "Wartet auf dich" with its yes/no answers, the
  * empty state that says what appears here and how to fill it, and the live view in the stream
  * Modus. The first run is pinned here too: three skippable steps, nothing written before "Weiter".
  */

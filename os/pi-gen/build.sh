@@ -85,7 +85,7 @@ if [ -n "$source" ]; then
 fi
 [ -z "$ui_bundle" ] || install -m 0644 "$ui_bundle" "$files/nox-ui.tar.gz"
 
-# /etc/nox-os-release in the image: which Nox-OS this is (O5/O6 read it).
+# /etc/nox-os-release in the image: which Nox-OS this is (the LED and the update check will read it).
 mkdir -p "$pigen/stage-nox/02-system/files"
 {
   printf 'NOX_OS_VERSION=%q\n' "$label"

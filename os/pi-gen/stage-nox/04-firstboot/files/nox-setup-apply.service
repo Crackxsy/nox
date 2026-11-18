@@ -1,0 +1,15 @@
+# Nox-OS: carry out the setup portal's request (nox_setup.py apply; nox-setup-apply.path).
+[Unit]
+Description=Nox-OS setup portal: carry out a request
+After=nox-firstboot.service NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I -S /usr/local/lib/nox-os/nox_setup.py apply
+UMask=0077
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+TimeoutStartSec=180

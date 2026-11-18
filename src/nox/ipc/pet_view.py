@@ -9,7 +9,7 @@ speech meant only for the headphones, and nothing but the privacy mode itself - 
 voice" label, a fixed text from the configuration that says nothing about the user - while the
 privacy mode is PRIVATE or OFFLINE.
 
-Speech has a place (C9): a `tts.*` event with a `device` is a paired node's own speech, played on
+Speech has a place: a `tts.*` event with a `device` is a paired node's own speech, played on
 that node's speaker. Only an overlay that authenticated with that node's own credential
 (`node:<id>`, its overlay relay) receives it - with the `device`, so its `?device=` pet follows
 it - and no other overlay and never the core's desktop pet.
@@ -98,7 +98,7 @@ def view(
     overlay_device: str = "",
 ) -> dict[str, Any] | None:
     """The payload `role` may receive for event `name`, or None when it gets nothing.
-    `overlay_device`: the node whose own overlay credential this overlay used (C9), or ""."""
+    `overlay_device`: the node whose own overlay credential this overlay used, or ""."""
     if name.startswith("tts.") and payload.get("device"):
         device = _device(payload)
         # A node's own speech: only that node's overlay, never the desktop pet.

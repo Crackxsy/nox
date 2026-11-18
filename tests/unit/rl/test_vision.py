@@ -102,7 +102,7 @@ def test_coaching_summary_is_empty_when_only_opponent_cars_seen() -> None:
     assert result.frames_analyzed == 1
     assert result.ball_side_ratio is None
     assert result.avg_self_car_ball_distance is None
-    assert result.coaching_summary == ""  # no fabricated insight from opponent-only data (P10)
+    assert result.coaching_summary == ""  # no fabricated insight from opponent-only data
 
 
 # ---- persistence ----------------------------------------------------------------------------

@@ -413,6 +413,30 @@ Every arrow crossing the security layer is checked: the permission engine decide
 allow / confirm / deny per tool call, the egress guard decides whether a connection may be opened
 at all, and the audit log records the decision.
 
+Beyond the one machine - the other devices of a household reach the core over two listeners of
+their own, and Nox reaches *them* only through a node they started themselves:
+
+```
+  other devices in the home                    Core process (a PC, or a Raspberry Pi with Nox-OS)
+ +-------------------------------+           +--------------------------------------------------+
+ | phone, tablet, another PC:    |  HTTPS    | nox.lan     browser listener :47843 - own        |
+ | the dashboard in a browser    +---------->|             certificate authority, paired        |
+ +-------------------------------+  paired   |             devices only                         |
+                                             |                                                  |
+ +-------------------------------+           | nox.node    node listener :47844 - routes a tool |
+ | nox-node on another computer: | mutual    |             call to the device it is meant for,  |
+ | its own gate, its own audit   | TLS 1.3   |             signs it, cleans what comes back     |
+ | trail, a question on the      +---------->|                                                  |
+ | device for high risk          | the node  | nox.hands   shell, packages, web, browser, senses|
+ +-------------------------------+ dials out | nox.desktop windows and processes, guarded input |
+                                             | nox.noxos   only on the Nox-OS image             |
+                                             +--------------------------------------------------+
+```
+
+A node never accepts a connection, and it checks every call again by its own rules - whatever
+the core decided. The map through that code, with one call followed end to end:
+[`docs/ARCHITECTURE-NODES.md`](docs/ARCHITECTURE-NODES.md).
+
 ## Repository layout
 
 ```
@@ -428,13 +452,22 @@ src/nox/shell       PySide6 desktop shell (pet window, tray, hotkeys, dialogs)
 src/nox/worker      worker runtime for services and plugins
 src/nox/plugins     plugin manager and manifest validation
 src/nox/home        smart-home boundary, deterministic intent matching, `home.*` IPC, connection probe
+src/nox/lan         network access: the installation's own certificate authority, paired devices, HTTPS listener
+src/nox/node        nodes - Nox on your other computers: listener, routing and receipts on the core, `nox-node` on the device
+src/nox/hands       the tools that reach the machine and the world: shell, packages, web, browser, senses
+src/nox/desktop     processes and windows on this machine; typing and computer use behind the game guard
+src/nox/sandbox     runs commands and foreign code confined (AppContainer on Windows, bwrap on Linux)
+src/nox/noxos       what the core does only on the Nox-OS image: the claim, remote maintenance
+src/nox/...         further packages (memory views, presets, skills, release, ...) - each `__init__.py` says what it owns
 plugins/            shipped plugins, each with a manifest declaring tools, secrets and egress
 ui/pet              React + TypeScript pet renderer (Vite)
 ui/dashboard        React + TypeScript dashboard (Vite)
 ui/shared/generated TypeScript types generated from the pydantic contracts
 config/             defaults.yaml and profiles/*.yaml - no secrets, no machine-specific paths
 scripts/            type generation, license audit, secrets scan, link check, repo setup
-installer/          Inno Setup packaging
+installer/          Inno Setup packaging, the node launcher, Linux service files
+os/                 Nox-OS: the flashable Raspberry Pi image (pi-gen stages, provisioning, image checks)
+evals/              capability benchmark: everyday requests against a headless core, scored automatically
 spikes/             measurement and feasibility scripts (not part of the product)
 tests/              unit, integration and end-to-end tests
 docs/               user guide, presets, privacy, security, plugin authoring, release process

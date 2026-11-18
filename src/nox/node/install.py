@@ -9,14 +9,16 @@ Requests, for the UI roles (`nox.ipc.roles`):
     carries the authority's fingerprint. Pairing a node gives a PC to Nox's hands, so it needs the
     PIN when one is set - and from a paired device always (`nox.lan.install.authorize_admin`),
   * `node.list` - paired nodes, online or not,
-  * `node.unpair` - revoke a node: its certificates go on the denylist and its connection closes
-    at once. Narrowing only, so no PIN locally.
+  * `node.unpair` - revoke a node: its certificates go on the denylist, its connection closes
+    at once, and a computer-use lock it held ends with it. Narrowing only, so no PIN locally -
+    also while Nox controls a PC (`nox.node.world_routes.ESCAPES`).
   * `node.narrow`, `node.defaults.set` - see `nox.node.policy`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -35,9 +37,12 @@ from nox.mcp.client import McpClientError
 from nox.node.agent import all_local_addresses
 from nox.node.console import console_is_remote
 from nox.node.hands import (
+    MoveArgs,
     PathArgs,
     ShellArgs,
     WriteArgs,
+    delete_refusal,
+    move_refusal,
     write_risk,
     write_summary,
     write_text_refusal,
@@ -50,10 +55,10 @@ from nox.node.protocol import NodePairRequest, NodePairResponse, PairLink, rende
 from nox.node.receipts import ReceiptSigner
 from nox.node.registry import NodeEntry, NodeRegistry
 from nox.node.repo import NodeRepository
-from nox.node.router import CannotShow, install_routes, routed_spec
+from nox.node.router import CannotShow, core_only_spec, install_routes, routed_spec
 from nox.node.satellites import SatelliteHub, obs_route, voice_say_spec
 from nox.node.tools import NoArgs, NotifyArgs, system_info
-from nox.node.world_routes import NodeControl, local_pin_refusal, session_refusal, world_specs
+from nox.node.world_routes import NodeControl, pin_refusal, session_refusal, world_specs
 from nox.remote.models import DeviceRow
 from nox.remote.repo import RemoteRepository
 from nox.security.model import Risk
@@ -105,7 +110,7 @@ class NodeRuntime:
     enabled: bool
     listener: NodeListener | None = None
     registry: NodeRegistry | None = None
-    #: The satellites' side (C9): voice turns, overlay credentials, the microphone gate.
+    #: The satellites' side: voice turns, overlay credentials, the microphone gate.
     satellites: SatelliteHub | None = None
     error: str = ""
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
@@ -176,7 +181,8 @@ def install(core: Any) -> NodeRuntime:
         )
 
     controls: list[NodeControl] = []
-    on_connected = connection_hook(core, registry, controls)
+    holder_listener: list[NodeListener] = []
+    on_connected = connection_hook(core, registry, controls, holder_listener)
 
     listener = NodeListener(
         pairing=pairing,
@@ -195,10 +201,11 @@ def install(core: Any) -> NodeRuntime:
     )
     runtime.listener = listener
     holder.append(listener)
+    holder_listener.append(listener)
     satellites = install_satellites(core, runtime, registry, listener, pairing)
 
     async def stop_nodes() -> None:
-        # The stop reaches every node over the sockets that are already open (spec C §1.7).
+        # The stop reaches every node over the sockets that are already open.
         await listener.broadcast_kill("kill switch")
 
     async def resume_nodes() -> None:
@@ -209,6 +216,12 @@ def install(core: Any) -> NodeRuntime:
     killswitch.register_resume_hook("nodes", resume_nodes)
     control = _install_routes(core, registry, [listener])
     controls.append(control)
+
+    async def lift_lock(device_id: str, _reason: str) -> None:
+        # Removed: whatever lock, address binding or saturation it held ends now.
+        control.forget(device_id)
+
+    pairing.on_revoked(lift_lock)
     # The PC Nox controls cannot talk to it (`controlled_here`).
     attach_control(satellites, control)
     _keep(runtime, _watch_sessions(control, core, listener, satellites), "nox-node-computer")
@@ -318,6 +331,34 @@ def _write_risk(payload: dict[str, Any]) -> Risk:
     return Risk(write_risk(path, bool(payload.get("append")), bool(payload.get("overwrite"))))
 
 
+def _move_target(payload: dict[str, Any]) -> str:
+    """A node move: from where to where - both in full, or not at all."""
+    source, to = str(payload.get("path") or ""), str(payload.get("to") or "")
+    return _complete(f"move {render(source)} to {render(to)} replaces never")
+
+
+def _move_precheck(payload: dict[str, Any]) -> str | None:
+    return move_refusal(
+        str(payload.get("path") or ""),
+        str(payload.get("to") or ""),
+        overwrite=bool(payload.get("overwrite")),
+        create_folders=bool(payload.get("create_folders")),
+    )
+
+
+def _delete_precheck(payload: dict[str, Any]) -> str | None:
+    return delete_refusal(str(payload.get("path") or ""))
+
+
+#: Node calls whose answer is never remembered: each one is asked on the device again.
+_NEVER_REMEMBERED = frozenset({"file.write", "file.move", "file.delete"})
+_PRECHECKS: dict[str, Callable[[dict[str, Any]], str | None]] = {
+    "file.write": _write_precheck,
+    "file.move": _move_precheck,
+    "file.delete": _delete_precheck,
+}
+
+
 def _field(name: str) -> Callable[[dict[str, Any]], str]:
     return lambda payload: _complete(render(str(payload.get(name) or "")))
 
@@ -337,15 +378,22 @@ async def send_games(core: Any, session: Any) -> None:
 
 
 def connection_hook(
-    core: Any, registry: NodeRegistry, controls: list[NodeControl]
+    core: Any,
+    registry: NodeRegistry,
+    controls: list[NodeControl],
+    listeners: list[Any] | None = None,
 ) -> Callable[[Any], Awaitable[None]]:
     """What happens on every new authenticated node connection: its hello resets how computer
     use stands there (`NodeControl.hello`), the registry lists its tools, and it gets the core's
-    watched games."""
+    watched games. A hello that claims a computer-use session is a protocol violation: the
+    connection ends before anything else (no session of a new connection was started here)."""
 
     async def on_connected(session: Any) -> None:
         for control in controls:
-            control.hello(session.device_id, session.computer)
+            if not control.hello(session.device_id, session.computer):
+                for listener in listeners or []:
+                    await listener.drop(session.device_id, "session_in_hello")
+                return
         await registry.on_connected(session)
         await send_games(core, session)
 
@@ -390,7 +438,7 @@ async def _watch_sessions(
 
 
 def attach_control(satellites: SatelliteHub, control: NodeControl) -> None:
-    """Computer use and the satellites (C9 review H4, with #167's lock): the node Nox controls
+    """Computer use and the satellites under the computer-use lock: the node Nox controls
     is refused (`controlled_here`) - and every node while a binding is saturated, when nobody
     can be told apart from the controlled PC any more; while any session runs, voice turns from
     other nodes are marked as holding unreadable untrusted content, like paired-device chat."""
@@ -435,7 +483,7 @@ class TtlCache:
 def install_satellites(
     core: Any, runtime: NodeRuntime, registry: NodeRegistry, listener: Any, pairing: NodePairing
 ) -> SatelliteHub:
-    """The core's side of the satellites (C9, `nox.node.satellites`): voice turns from nodes,
+    """The core's side of the satellites (`nox.node.satellites`): voice turns from nodes,
     their speech levels for a pet, overlay credentials for their overlay relays, the microphone
     gate (pushed on connection, every second, and at once on a privacy change), and the panic
     button for OBS on nodes."""
@@ -606,13 +654,17 @@ def _install_routes(
     """`system.info` (the core has it too), `notify.show` (nodes only) and the hands - `file.*`
     and `shell.run`, each the core's own tool when the call stays here - become routable; the
     capability report hides a node-only tool while no node offers it, and every turn's context
-    names the devices. `package.*` stays on the core: it cannot work in a node's sandbox yet."""
+    names the devices. `package.*` stays on the core: it cannot work in a node's sandbox yet, and
+    a call that names a paired device is refused (`core_only_spec`)."""
     defaults = lambda: core.config.devices.defaults  # noqa: E731 - read per call
     own = core.tool_registry.get
     hands: list[tuple[str, str, Risk, bool, type[BaseModel], _Target]] = [
         ("file.list", "What is in one folder", Risk.READ, False, PathArgs, _field("path")),
         ("file.read", "The text of one file", Risk.READ, False, PathArgs, _field("path")),
         ("file.write", "Write text to a file", Risk.MEDIUM, True, WriteArgs, _write_target),
+        # On a device both are high: asked there every time, never remembered.
+        ("file.move", "Move or rename a file", Risk.HIGH, True, MoveArgs, _move_target),
+        ("file.delete", "Move a file to the trash", Risk.HIGH, True, PathArgs, _field("path")),
         ("shell.run", "Run a command sandboxed", Risk.HIGH, True, ShellArgs, _shell_target),
     ]
     specs = [
@@ -653,8 +705,8 @@ def _install_routes(
                 # Replacing or extending a file on a device is high there, and a write on a
                 # device is asked every time (never remembered).
                 node_risk=_write_risk if name == "file.write" else None,
-                remember_on_node=name != "file.write",
-                precheck=_write_precheck if name == "file.write" else None,
+                remember_on_node=name not in _NEVER_REMEMBERED,
+                precheck=_PRECHECKS.get(name),
             )
         )
     world, control = _world_specs(core, registry, defaults, listeners or [])
@@ -669,14 +721,19 @@ def _install_routes(
         except Exception:  # noqa: BLE001 - cannot tell: tainted
             return True
 
-    specs.append(voice_say_spec(registry, defaults, tainted=tainted_now))  # C9: speak on a node
+    specs.append(voice_say_spec(registry, defaults, tainted=tainted_now))  # speak on a node
+    for name in ("package.install", "package.remove"):
+        mine = own(name)
+        if mine is not None:
+            # This core only: a call that names a paired device is refused, never run here.
+            specs.append(core_only_spec(mine, registry))
     on_core = {spec.name for spec in specs if own(spec.name) is not None}
     install_routes(core.tool_registry, specs)
     node_only = {spec.name for spec in specs} - on_core
     tools = core.tool_registry
     wrapped: set[str] = set()
     if hasattr(tools, "wrap"):
-        # C9: `obs.request` - the plugin's tool while OBS runs here, routed to the node where OBS
+        # `obs.request` - the plugin's tool while OBS runs here, routed to the node where OBS
         # runs otherwise. The plugin comes and goes; the route stays (`ToolRegistry.wrap`).
         tools.wrap("obs.request", obs_route(registry, defaults))
         wrapped.add("obs.request")
@@ -708,7 +765,7 @@ def _install_routes(
 def _world_specs(
     core: Any, registry: NodeRegistry, defaults: Callable[[], Any], listeners: list[Any]
 ) -> tuple[list[ToolSpec], NodeControl]:
-    """C6: captures, browser, desktop, computer use and media, routable to nodes; and the
+    """Captures, browser, desktop, computer use and media, routable to nodes; and the
     record of computer-use sessions on nodes (dashboard notice, grant, "allow" lock)."""
     from nox.security._events import publish_nowait  # noqa: PLC0415
 
@@ -724,11 +781,25 @@ def _world_specs(
     security = getattr(core, "security", None)
     desktop = getattr(core.config, "desktop", None)
 
+    def offers_computer(device_id: str, session: Any) -> bool:
+        entry = next((e for e in registry.known() if e.device_id == device_id), None)
+        return (
+            entry is not None
+            and entry.session is session
+            and "computer.session_start" in entry.tools
+        )
+
     def reports() -> list[tuple[str, Any]]:
         listener = listeners[0] if listeners else None
         if listener is None:
             return []
-        return [(d, s.computer) for d, s in listener.sessions.items() if s.computer is not None]
+        # "Open" is read only from a node that offers computer use on this very connection;
+        # "over" from any node (it only ever lifts).
+        return [
+            (d, s.computer)
+            for d, s in listener.sessions.items()
+            if s.computer is not None and (not s.computer.active or offers_computer(d, s))
+        ]
 
     def addresses() -> dict[str, tuple[str, list[str]]]:
         listener = listeners[0] if listeners else None
@@ -755,6 +826,18 @@ def _world_specs(
         entry = next((e for e in registry.entries() if e.device_id == device_id), None)
         return entry.label if entry is not None else device_id[:8]
 
+    pending: set[asyncio.Task[Any]] = set()
+
+    def violation(device_id: str, why: str) -> None:
+        # A computer-use session this core never started: the connection ends (audited there).
+        listener = listeners[0] if listeners else None
+        if listener is None:
+            return
+        with contextlib.suppress(RuntimeError):  # no loop: nothing is connected either
+            task = asyncio.get_running_loop().create_task(listener.drop(device_id, why))
+            pending.add(task)
+            task.add_done_callback(pending.discard)
+
     control = NodeControl(
         getattr(security, "engine", None),
         publish,
@@ -766,7 +849,10 @@ def _world_specs(
         own_addresses=all_local_addresses,
         audit=audit_control,
         stop_hotkey=desktop.computer_use.stop_hotkey if desktop is not None else "",
+        on_violation=violation,
     )
+    # While a session runs, high risk is left to no other node's dialog.
+    registry.may_delegate = control.may_delegate
     wire_guards(core, control)
     # A stop never lifts the lock by itself: the node ends its session on `nox/kill` and says
     # so in its next pong, which `pull` reads (also every second, `_watch_sessions`).
@@ -832,8 +918,9 @@ class ReleaseRequest(BaseModel):
 
 def _register_control_requests(core: Any, ipc: Any, control: NodeControl, gate: Any) -> None:
     """`node.computer.status` (what the header shows, for a dashboard that (re)connects) and
-    `node.computer.release` (lift a stuck lock by hand: only at the computer Nox runs on, with
-    the PIN, not remotely; a node that still reports a session locks again at once)."""
+    `node.computer.release` (lift a stuck lock by hand: this machine's own shell or dashboard
+    with the PIN - also over SSH to a headless core, `nox node release`; a node that still
+    reports the session this core started locks again at once)."""
     from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES  # noqa: PLC0415
     from nox.ipc.tokens import DEVICE_CLIENT_PREFIX  # noqa: PLC0415
 
@@ -847,9 +934,7 @@ def _register_control_requests(core: Any, ipc: Any, control: NodeControl, gate: 
         return {"sessions": control.status(), "controlled_here": here}
 
     async def h_release(ctx: RequestContext, p: ReleaseRequest) -> dict[str, Any]:
-        refusal = await local_pin_refusal(
-            ctx, p.pin, gate=gate(), remote=console_is_remote, action="node.computer.release"
-        )
+        refusal = await pin_refusal(ctx, p.pin, gate=gate(), action="node.computer.release")
         if refusal is not None:
             core.security.audit.append(
                 actor=ctx.client_id or ctx.role,
@@ -859,7 +944,11 @@ def _register_control_requests(core: Any, ipc: Any, control: NodeControl, gate: 
                 decision="deny",
                 result=refusal[:64],
             )
-            raise IpcError(ERR_UNAVAILABLE, refusal, details={"reason": "refused"})
+            raise IpcError(
+                ERR_UNAVAILABLE,
+                refusal,
+                details={"reason": "refused", "sub_reason": refusal.code},
+            )
         released = control.release("released by the owner")
         core.security.audit.append(
             actor=ctx.client_id or ctx.role,
@@ -906,6 +995,8 @@ def _node_json(device: DeviceRow, runtime: NodeRuntime) -> dict[str, Any]:
         "last_seen_at": device.last_seen_at.isoformat() if device.last_seen_at else None,
         "revoked": device.revoked,
         "online": session is not None,
+        # The folders the device allowed for `files`, as it last said (only the device adds one).
+        "folders": list(entry.folders) if entry is not None and entry.online else [],
         "compatible": session.compatible if session is not None else None,
         "os": session.hello.os if session is not None else None,
         "version": session.hello.node_version if session is not None else None,
@@ -997,7 +1088,14 @@ def _register_requests(core: Any, runtime: NodeRuntime, lan: Any) -> None:
             if browser is None or browser.revoked:
                 raise IpcError(ERR_NOT_FOUND, "no such paired device")
         await authorize_admin(core, ctx, p.pin, "node.link", local_needs_pin=True)
-        await asyncio.to_thread(NodeRepository(core.db).set_linked_device, p.node_id, p.device_id)
+        registry = runtime.registry
+        if registry is not None:
+            # The one writer: the database and what routing reads from memory, together.
+            await registry.set_linked(p.node_id, p.device_id)
+        else:
+            await asyncio.to_thread(
+                NodeRepository(core.db).set_linked_device, p.node_id, p.device_id
+            )
         return {"ok": True, "node_id": p.node_id, "device_id": p.device_id}
 
     reg("node.link", LinkRequest, h_link, roles=UI_ROLES)

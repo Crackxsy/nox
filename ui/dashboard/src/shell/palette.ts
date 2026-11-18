@@ -1,5 +1,5 @@
 /**
- * The command palette's matcher (Spec UX-Neubau §4): pure, synchronous, no model involved, so a
+ * The command palette's matcher: pure, synchronous, no model involved, so a
  * keystroke has its results well inside the 50 ms budget.
  *
  * Four groups, always in this order:

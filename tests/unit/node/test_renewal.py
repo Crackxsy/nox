@@ -1,4 +1,4 @@
-"""Certificate renewal before day 30 (spec C §1.2 step 4): over the authenticated connection, for
+"""Certificate renewal before day 30: over the authenticated connection, for
 the paired key only, once per connection, only in the last `RENEW_WINDOW_DAYS` days - and the node
 takes a new certificate only from its pinned authority, for itself and its own key."""
 
@@ -26,7 +26,7 @@ from nox.node.renewal import RenewalRefusedError, accept_renewed, due, store_cer
 from nox.node.repo import NodeRepository
 from nox.node.tools import default_tools
 from nox.security.audit import SqliteAuditLog
-from tests.unit.node.conftest import (
+from tests.unit.node.support import (
     client_context,
     greet,
     key_pem,

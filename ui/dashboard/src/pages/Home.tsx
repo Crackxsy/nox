@@ -200,7 +200,7 @@ export function EntityRow({
   return (
     <li className="row">
       <span className="grow">
-        {/* The entity id is technical: a tooltip, not a line (Spec §7). */}
+        {/* The entity id is technical: a tooltip, not a line. */}
         <span className="row-t" title={entity.entityId}>
           {entity.name}
         </span>

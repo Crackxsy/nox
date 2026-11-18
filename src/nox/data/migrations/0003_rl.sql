@@ -1,7 +1,7 @@
--- 0003_rl: Rocket League Stage 1 tables (Spec v0.3 §7, extends vault 03 - Data Model Layer 2).
+-- 0003_rl: Rocket League tables (observation only: events, matches, replays).
 -- Timestamps are ISO-8601 UTC text, matching 0001_initial/0002_stream. Retention (rl_events/
--- rl_matches) is config-driven (rl.retention.*, pending approval per Spec §7/§15). `rl_replays`
--- rows are never deleted by Nox except on explicit request (Spec §7) - no retain_until column.
+-- rl_matches) is config-driven (rl.retention.*). `rl_replays`
+-- rows are never deleted by Nox except on explicit request - no retain_until column.
 
 CREATE TABLE IF NOT EXISTS rl_replays (
     id              INTEGER PRIMARY KEY,

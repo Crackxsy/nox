@@ -420,7 +420,7 @@ def grant_matches(grant: TemporaryGrant, request: PermissionRequest, now: dateti
     bound to one node as `device:<id>|<scope>`.
 
     Device-scoped both ways: a grant remembered for a call on the laptop covers only the laptop,
-    and a grant remembered on the core never covers a node (spec C §1.5)."""
+    and a grant remembered on the core never covers a node."""
     grant_device, inner_scope = split_device_scope(grant.scope)
     if (grant_device or "") != request.device:
         return False
@@ -832,7 +832,7 @@ class DefaultPermissionEngine:
         #: Conversations (`PermissionRequest.conversation`) that hold untrusted content, and
         #: what the user said in each.
         self._taint = TaintLedger()
-        #: A node's name by its id, for a question that came from its voice satellite (C9, set by
+        #: A node's name by its id, for a question that came from its voice satellite (set by
         #: `nox.node.install`).
         self.satellite_label: Callable[[str], str] | None = None
 
@@ -852,7 +852,7 @@ class DefaultPermissionEngine:
         `end_session`): a command remembered meanwhile in another, untainted conversation would
         otherwise stay usable while untrusted content keeps arriving - by work the tainted
         conversation set up to run later outside it, for one. The cost is accepted (owner
-        decision, C10): during a node session every message from a paired device takes the
+        decision): during a node session every message from a paired device takes the
         remembered commands with it, and they are approved again. A tainted conversation also
         never creates a remembered grant (`_can_remember`).
         """
@@ -980,6 +980,24 @@ class DefaultPermissionEngine:
             )
         return removed
 
+    def revoke_all_grants(self, *, reason: str, by: str = "system") -> int:
+        """Revoke every grant there is - remembered, session and node-bound alike, and every
+        confirmation still waiting (a reclaim: whoever answered them is no owner any more)."""
+        removed = self._grants.remove_scope_prefix("")
+        for grant_id in list(self._pending):
+            self.reply(grant_id, Decision.DENY, by=by)
+        self._audit.append(
+            actor=by,
+            tool="security",
+            action="grant.revoke_all",
+            target="",
+            decision=Decision.ALLOW.value,
+            result="ok",
+            details={"removed": str(removed), "reason": reason},
+        )
+        log.warning("security.all_grants_revoked", removed=removed, reason=reason)
+        return removed
+
     def revoke_command_grants(self, *, reason: str, by: str = "system") -> int:
         """Revoke every remembered shell command (`cmd:` grants).
 
@@ -1084,6 +1102,10 @@ class DefaultPermissionEngine:
                 self._session_grant_ttl.total_seconds() if self._may_remember(pending) else 0.0
             ),
             voice_satellite=self._satellite_of(request.conversation),
+            # Structured, from the router's registry - the dashboard names the device from these
+            # two fields only, never from the target text (which a tool argument can shape).
+            device_id=request.device or ("core" if request.device_name else ""),
+            device_name=request.device_name,
         )
 
     def _satellite_of(self, conversation: str) -> str:

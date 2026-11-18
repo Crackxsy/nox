@@ -25,9 +25,9 @@ The devices:
   `computer` enabled, `files` and `shell` off. The fictitious game "Starfall Arena" is on its own
   watched-game list and runs in front, so its game lock holds.
 
-Laptop and Arbeits-PC have a screen: high risk there is asked on the device itself (spec C §1.6
-step 5), and the person at the device in this world always says no - the same deny-by-default the
-harness applies to every dialog on the core.
+Laptop and Arbeits-PC have a screen: high risk there is asked on the device itself, and the
+person at the device in this world always says no - the same deny-by-default the harness applies
+to every dialog on the core.
 """
 
 from __future__ import annotations
@@ -228,7 +228,7 @@ class NodeProfile:
     trust_core_for_high: bool
     windows: bool
     info: Mapping[str, Any]
-    #: Whether the C6 tools (screen, desktop, computer use, media) exist on this device.
+    #: Whether the world tools (screen, desktop, computer use, media) exist on this device.
     world: bool = True
     #: This device's own watched-game list (`node.yaml` `games`).
     games: tuple[str, ...] = ()
@@ -370,7 +370,7 @@ class SimulatedNode:
         if profile.world:
             tools.update(self._world_tools(manifest))
         self.gate = NodeGate(tools, manifest, None, stopped=self._stop_state, receipts=verifier)
-        # Without the C6 tools there is no lock to read: input stays refused (fail closed).
+        # Without those tools there is no lock to read: input stays refused (fail closed).
         if self._lock is not None:
             self.gate.input_lock = self._lock.reason
 
@@ -378,7 +378,7 @@ class SimulatedNode:
         return self.stopped
 
     def _world_tools(self, manifest: NodeManifest) -> dict[str, NodeTool]:
-        """The C6 tools with fakes behind them; on an older checkout without them: none."""
+        """The screen, desktop and media tools with fakes behind them (none on an old checkout)."""
         try:
             from nox.desktop.computer_use import DryRunSender  # noqa: PLC0415
             from nox.node.world import GameLock, World, default_games, world_tools  # noqa: PLC0415

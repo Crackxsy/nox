@@ -71,6 +71,12 @@ const PATHS = {
       <path d="M8.5 20h7M12 16v4" />
     </>
   ),
+  lock: (
+    <>
+      <rect x="5.5" y="11" width="13" height="9" rx="2" />
+      <path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3" />
+    </>
+  ),
   board: (
     <>
       <rect x="4" y="5" width="16" height="14" rx="1.5" />

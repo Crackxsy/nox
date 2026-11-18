@@ -1,4 +1,4 @@
--- 0008_remote: Mobile Companion (Spec v0.8 §6, EPIC-17). Reserved slot for the `remote` area.
+-- 0008_remote: Mobile Companion. Reserved slot for the `remote` area.
 -- Four things live here: pending pairings, the hashed per-device key, revocation, and the audit
 -- trail of every remote command.
 --
@@ -15,7 +15,7 @@
 
 ALTER TABLE paired_devices ADD COLUMN revoked_at TEXT;
 ALTER TABLE paired_devices ADD COLUMN revoked_reason TEXT NOT NULL DEFAULT '';
--- Which one-time code created this pairing (audit trail per Spec §6), never the code itself.
+-- Which one-time code created this pairing (for the audit trail), never the code itself.
 ALTER TABLE paired_devices ADD COLUMN pairing_code_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE paired_devices ADD COLUMN channel TEXT NOT NULL DEFAULT 'telegram';
 -- Salt for `public_key` (see header): random per device, so two devices never share a hash.
@@ -26,7 +26,7 @@ ALTER TABLE paired_devices ADD COLUMN last_update_id INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_paired_devices_channel ON paired_devices(channel, revoked_at);
 
 -- Pending one-time pairing codes. A code is single use (`redeemed_at`) and short-lived
--- (`expires_at`, default 5 min per Spec §5.2); the row survives redemption as the audit trail.
+-- (`expires_at`, 5 minutes by default); the row survives redemption as the audit trail.
 CREATE TABLE IF NOT EXISTS remote_pairings (
     id          TEXT PRIMARY KEY,
     code_hash   TEXT NOT NULL,
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS remote_pairings (
 );
 CREATE INDEX IF NOT EXISTS idx_remote_pairings_expires ON remote_pairings(expires_at);
 
--- Every remote command attempt, allowed or denied (Spec §5.3). `command` is the verb only; the
+-- Every remote command attempt, allowed or denied. `command` is the verb only; the
 -- arguments, the chat text and any notification body are deliberately absent - there is no column
 -- they could be written into later.
 CREATE TABLE IF NOT EXISTS remote_audit (

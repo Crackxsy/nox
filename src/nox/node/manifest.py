@@ -40,21 +40,22 @@ class GroupInfo:
     label_en: str
 
 
-#: Spec C §1.4. Off by default unless it only reads or shows something harmless.
+#: The capability groups. Off by default unless it only reads or shows something harmless.
 GROUPS: dict[str, GroupInfo] = {
+    # The same words as the Devices page (`ui/dashboard/src/i18n`, `node_group_*`).
     "system": GroupInfo(True, "Systemwerte lesen", "read system values"),
     "notify": GroupInfo(True, "Hinweise zeigen", "show notices"),
     "media": GroupInfo(True, "Musik steuern", "control music"),
-    "files": GroupInfo(False, "Dateien", "files"),
+    "files": GroupInfo(False, "Dateien lesen und schreiben", "read and write files"),
     "shell": GroupInfo(False, "Befehle ausführen", "run commands"),
     "packages": GroupInfo(False, "Programme installieren", "install programs"),
     "screen": GroupInfo(False, "Bildschirm sehen", "see the screen"),
-    "camera": GroupInfo(False, "Kamera", "camera"),
-    "browser": GroupInfo(False, "Browser", "browser"),
-    "desktop": GroupInfo(False, "Fenster und Programme", "windows and programs"),
-    "computer": GroupInfo(False, "Maus und Tastatur", "mouse and keyboard"),
-    "voice": GroupInfo(False, "Sprache", "voice"),
-    "obs": GroupInfo(False, "OBS", "OBS"),
+    "camera": GroupInfo(False, "Kamera nutzen", "use the camera"),
+    "browser": GroupInfo(False, "Im Browser arbeiten", "work in the browser"),
+    "desktop": GroupInfo(False, "Fenster und Programme steuern", "control windows and programs"),
+    "computer": GroupInfo(False, "Maus und Tastatur steuern", "control mouse and keyboard"),
+    "voice": GroupInfo(False, "Zuhören und sprechen", "listen and speak"),
+    "obs": GroupInfo(False, "OBS steuern", "control OBS"),
 }
 
 RiskName = Literal["read", "low", "medium", "high"]
@@ -69,10 +70,10 @@ class NodeManifest(BaseModel):
     #: Highest risk this node accepts at all. `critical` is not a choice.
     max_risk: RiskName = "high"
     #: A node without a screen cannot ask locally; high risk is then refused unless this was set
-    #: here, on the device (spec C §1.6 step 5, a documented residual risk).
+    #: here, on the device (see docs/SECURITY.md, "Accepted limits (nodes)").
     trust_core_for_high: bool = False
     #: The node's own budget, independent of the core's: calls with a side effect, and high-risk
-    #: calls, per hour (spec C §1.6 step 6).
+    #: calls, per hour.
     max_calls_per_hour: int = Field(default=60, ge=0, le=1000)
     max_high_per_hour: int = Field(default=5, ge=0, le=100)
     #: The folders `file.*` may open on this device (group `files`); none by default. Absolute,

@@ -1,5 +1,5 @@
 #!/bin/bash -e
-# The baseline every Nox-OS image has (stage-nox/README.md). Hardening proper is O2's sub-stage.
+# The baseline every Nox-OS image has (stage-nox/README.md). Hardening proper is the next sub-stage (03-hardening).
 
 install -m 0644 files/nox-os-release "${ROOTFS_DIR}/etc/nox-os-release"
 
@@ -12,14 +12,14 @@ EOF2
 
 # Nobody can log in: the first user's throwaway build password (os/pi-gen/build.sh) becomes a lock
 # without any hash, root stays locked as pi-gen leaves it, and no account has a key. Remote access is
-# switched on deliberately on the device later (O2), never shipped.
+# switched on deliberately on the device later (03-hardening), never shipped.
 on_chroot <<EOF2
 usermod --password '!' "${FIRST_USER_NAME}"
 EOF2
 rm -rf "${ROOTFS_DIR}/home/${FIRST_USER_NAME}/.ssh" "${ROOTFS_DIR}/root/.ssh"
 
 # SSH off: disabled and masked, so neither an "ssh" file on the boot partition (sshswitch) nor
-# anything else starts it. O2's dashboard toggle unmasks it on purpose, key-only.
+# anything else starts it. The dashboard toggle (03-hardening) unmasks it on purpose, key-only.
 on_chroot <<'EOF2'
 systemctl disable ssh.service ssh.socket >/dev/null 2>&1 || true
 systemctl mask ssh.service ssh.socket sshswitch.service

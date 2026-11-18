@@ -1,4 +1,4 @@
-"""The satellites on a node, put together (C9): voice, OBS and the overlay relay.
+"""The satellites on a node, put together: voice, OBS and the overlay relay.
 
 `build_satellites` makes them from the node's folder and gate; `attach` connects them to the
 node's agent (what the core sends them, the connection coming and going, a stop); `run` keeps

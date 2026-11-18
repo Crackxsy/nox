@@ -1,4 +1,4 @@
--- 0017_nodes: `nox node` (spec wave C §1.2). A node is a paired device (`paired_devices`,
+-- 0017_nodes: `nox node`. A node is a paired device (`paired_devices`,
 -- channel 'node', role 'node') that holds a client certificate of this installation's authority.
 --
 -- Nothing secret is stored here. The node's private key never leaves the node; `spki_sha256` is
@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     os               TEXT NOT NULL DEFAULT '',
     arch             TEXT NOT NULL DEFAULT '',
     version          TEXT NOT NULL DEFAULT '',
-    -- A paired browser device on the same machine (its dashboard), for "origin" routing (C3).
+    -- A paired browser device on the same machine (its dashboard), for "origin" routing.
     linked_device_id TEXT,
     -- SHA-256 of the capability manifest the node reported last.
     manifest_hash    TEXT NOT NULL DEFAULT '',

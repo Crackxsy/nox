@@ -1,5 +1,5 @@
 /**
- * Einstellungen: eight pages instead of one long form (Spec UX-Neubau §3, §6, §7).
+ * Einstellungen: eight pages instead of one long form.
  *
  * The overview lists the pages with their current state in words ("Standard, Mikrofon an"), so a
  * person seldom has to open one. Each page shows the few things that matter, then "Mehr Optionen",

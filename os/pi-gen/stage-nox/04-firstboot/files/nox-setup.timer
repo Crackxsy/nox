@@ -1,0 +1,13 @@
+# Nox-OS setup mode (nox_setup.py tick): every 15 s while the setup window is open - closes it
+# when its time is up, starts the setup hotspot when Nox has no network. Stops itself when the
+# window is closed; the next boot starts it again.
+[Unit]
+Description=Nox-OS setup mode: window and hotspot
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=15s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

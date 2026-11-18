@@ -106,7 +106,7 @@ body {
  * The overlay's AI-voice disclosure: present, readable, and out of the way — a small caption in the
  * bottom-right corner that never covers the creature's face and never takes a click.
  */
-/* The overlay lost its core (C9: also an overlay relayed by a node): said quietly, in a corner. */
+/* The overlay lost its core (also an overlay relayed by a node): said quietly, in a corner. */
 .pet-overlay-offline {
   position: absolute;
   left: 6px;

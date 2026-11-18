@@ -1,4 +1,4 @@
-"""Review finding 14: there must be a way to STORE a consent - and the model must not be able to
+"""There must be a way to STORE a consent - and the model must not be able to
 store one by itself. The tool always asks and is never remembered; the dashboard needs the PIN while
 one is configured; every row says who agreed, the wording, when, and how it was recorded.
 """

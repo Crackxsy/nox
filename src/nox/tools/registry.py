@@ -38,12 +38,17 @@ class CallScope:
     target: str = ""
     #: The node the call runs on (`nox.node.router`); "" for this core.
     device: str = ""
-    #: High risk on a node: the person at that device confirms it there (owner decision D1),
+    #: High risk on a node: the person at that device confirms it there,
     #: so the core does not ask anyone itself. A refusal by the core's rules still refuses.
     confirm_on_device: bool = False
     #: False: no "remember" answer for this call, whatever the tool allows otherwise (a write on
     #: a node is asked every time).
     rememberable: bool = True
+    #: The device's name as the confirmation shows it, set by the router from its registry -
+    #: never from model or tool text: the node's label for a call on a node, this core's
+    #: computer name for a call here while nodes are paired ("" otherwise). Shown only, never
+    #: matched like `target`.
+    device_name: str = ""
 
 
 Scope = Callable[[dict[str, Any]], CallScope]

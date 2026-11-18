@@ -1,6 +1,6 @@
--- 0002_stream: Stream Bot tables (Spec v0.2 §7, extends vault 03 - Data Model Layer 2).
+-- 0002_stream: Stream Bot tables.
 -- Timestamps are ISO-8601 UTC text, matching 0001_initial. chat_events.text retention is
--- short-lived and configurable (stream.chat.retain_raw_text_days, pending approval Spec v0.2 §7);
+-- short-lived and configurable (stream.chat.retain_raw_text_days);
 -- viewers/viewer_memory follow the decided 12-month-inactivity default (FR-7.9).
 
 CREATE TABLE IF NOT EXISTS stream_sessions (
