@@ -31,7 +31,7 @@ from nox.ipc.errors import (
     IpcError,
 )
 from nox.ipc.protocol import NAME_ERROR, RESPONSE_PAYLOAD_MODELS, Envelope, Kind
-from nox.ipc.roles import DEVICE_ROLE, LOCAL_UI_ROLES
+from nox.ipc.roles import DEVICE_ROLE, UI_ROLES
 from nox.ipc.tokens import DEVICE_CLIENT_PREFIX
 from nox.security.access import (
     AccessPolicy,
@@ -146,7 +146,9 @@ def client_context(client_id: str, role: str, peer: str = "") -> ClientContext:
     once per connection."""
     if role == DEVICE_ROLE:
         kind, device_id = ClientKind.DEVICE, client_id.removeprefix(DEVICE_CLIENT_PREFIX)
-    elif role in LOCAL_UI_ROLES:
+    elif role in UI_ROLES:
+        # Derived from `UI_ROLES`, not from a list of its parts: a UI role added there is held to
+        # the locks at once, never silently treated as "anything else".
         kind, device_id = ClientKind.LOCAL_UI, ""
     else:
         kind, device_id = ClientKind.OTHER, ""

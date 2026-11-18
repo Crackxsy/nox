@@ -131,7 +131,9 @@ class ClientKind(StrEnum):
 
 
 class PeerClass(StrEnum):
-    """Where a connection comes from, for the log and for rules that tell networks apart."""
+    """Where a connection comes from. Diagnostic only: it goes into the log line of a refusal and
+    takes no part in any decision - what counts as the controlled PC is its address
+    (`NodeControl.from_controlled`), not its network."""
 
     LOCAL = "local"
     LAN = "lan"
