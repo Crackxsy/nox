@@ -8,7 +8,7 @@
 
 export type Lang = 'de' | 'en';
 
-/** `?lang=de|en` wins, then the browser's preference, then German (FR-5.3: DE first). */
+/** `?lang=de|en` wins, then the browser's preference, then German (German first). */
 export function pickLang(search: string, navigatorLanguages: readonly string[] = []): Lang {
   const q = new URLSearchParams(search).get('lang');
   if (q === 'de' || q === 'en') return q;

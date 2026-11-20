@@ -144,7 +144,7 @@ _ALLOWED_DUNDERS: Final[frozenset[str]] = frozenset({"__init__", "__name__", "__
 _DUNDER_STRING = re.compile(r"__\w+__")
 #: A `str.format` field that reaches a private attribute or item (`"{0._os}"`, `"{0[_x]}"`).
 _PRIVATE_FIELD = re.compile(r"\{[^{}]*?[.\[]\s*_")
-#: CI's list (Security Model §10) plus the other input-synthesis entry points. Spelled in pieces:
+#: CI's list (docs/SECURITY.md) plus the other input-synthesis entry points. Spelled in pieces:
 #: the CI scan cannot tell this list from a use of what it names (see `nox.desktop.keyboard`).
 FORBIDDEN_TEXT = re.compile(
     "|".join(

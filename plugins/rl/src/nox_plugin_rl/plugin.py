@@ -1,8 +1,9 @@
 """Rocket League Coach plugin (Rocket League Stage 1). Observation only:
 game/window process-list detection, HUD-region template matching, the replay watcher/parser, and
-the calibration tool. Never sends input, never reads game process memory (Security Model) -
-`nox.rl.install` owns the core-side services (mode transitions, DB persistence, the callout engine,
-session summaries) since a plugin worker has no SQLite/TTS access of its own.
+the calibration tool. Never sends input, never reads game process memory (docs/SECURITY.md,
+observation-only boundary) - `nox.rl.install` owns the core-side services (mode transitions, DB
+persistence, the callout engine, session summaries) since a plugin worker has no SQLite/TTS access
+of its own.
 """
 
 from __future__ import annotations

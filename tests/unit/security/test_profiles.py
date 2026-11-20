@@ -1,4 +1,4 @@
-"""Profiles: the six repo profiles load, restrictions match the Security Model, hard list wins."""
+"""Profiles: the six repo profiles load, restrictions match docs/SECURITY.md, hard list wins."""
 
 from __future__ import annotations
 

@@ -9,7 +9,7 @@ opt-in `NOX_PET_SOFTWARE_RENDER=1` switch that disables GPU compositing
 
 This spike launches the real shell (`python -m nox.shell --runtime <empty tmp dir>`) twice -- no
 core is reachable, so the pet shows the honest offline page while tray, hotkeys and the QtWebEngine
-helper processes all start normally, which is the real process tree ADR-004's ~150 MB estimate
+helper processes all start normally, which is the real process tree the earlier ~150 MB estimate
 refers to:
 
   1. "before": default settings (GPU compositing on, hardened off-the-record profile).

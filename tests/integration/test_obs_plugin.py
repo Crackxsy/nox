@@ -36,8 +36,8 @@ if str(_OBS_SRC) not in sys.path:
 def _obs_plugin_dir(tmp_path: Path, *, port: int) -> Path:
     """Copy `plugins/obs`, pointing its config at the fake server and widening the declared
     egress to that ephemeral loopback port (the shipped manifest declares the fixed production
-    port 4455; ADR-013 still requires an explicit declaration, so the test manifest gets its
-    own)."""
+    port 4455; the plugin egress rule still requires an explicit declaration, so the test manifest
+    gets its own)."""
     directory = tmp_path / "plugins"
     directory.mkdir()
     dest = directory / "obs"
@@ -121,8 +121,8 @@ async def obs_server():
 def _profiles_dir_with_test_port(tmp_path: Path, *, port: int) -> Path:
     """Copy `config/profiles/` and widen the `stream` profile's `loopback_allowlist` to the fake
     server's ephemeral port - the core authorizes a plugin's declared `network.egress` against the
-    *active profile* at spawn time (ADR-013), and `config/profiles/stream.yaml` (owned by the
-    security/config area) is not touched: only this tmp_path copy is."""
+    *active profile* at spawn time (docs/PLUGIN_AUTHORING.md), and `config/profiles/stream.yaml`
+    (owned by the security/config area) is not touched: only this tmp_path copy is."""
     directory = tmp_path / "profiles"
     shutil.copytree(PROFILES_DIR, directory)
     stream_path = directory / "stream.yaml"

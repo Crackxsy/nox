@@ -1,5 +1,5 @@
-"""Hard-prohibition matching around `nox.security.hardlist.HARD_PROHIBITIONS` (Security Model §4,
-ADR-007).
+"""Hard-prohibition matching around `nox.security.hardlist.HARD_PROHIBITIONS` (docs/SECURITY.md,
+"Hard prohibitions").
 
 The constant lives in `hardlist.py`; this module adds glob-aware matching and the "config may only
 add, never remove" validation. Nothing here can be overridden by profiles, grants, plugins or

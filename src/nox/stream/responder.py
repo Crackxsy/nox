@@ -32,7 +32,7 @@ Clock = Callable[[], datetime]
 Unsubscribe = Callable[[], None]
 FactsFn = Callable[[], Mapping[str, object]]
 
-#: One chat line (FR-9.x cadence rules; Twitch's own message cap is ~500 chars, this stays clear
+#: One chat line (the cadence rules; Twitch's own message cap is ~500 chars, this stays clear
 #: of it with room for the platform to add its own prefixes).
 MAX_REPLY_CHARS = 400
 

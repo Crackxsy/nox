@@ -1,4 +1,4 @@
-"""Typed repositories over `Database` (ADR-006, Data Model L2). Rows are pydantic models; no ORM.
+"""Typed repositories over `Database` (data layer). Rows are pydantic models; no ORM.
 
 Time handling: every timestamp is stored as ISO-8601 UTC text; callers pass aware datetimes (naive
 values are treated as UTC). Retention: `TurnRepository.purge_expired`,

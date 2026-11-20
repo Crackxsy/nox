@@ -1,4 +1,4 @@
-"""Download the voice models used by Nox into a local, git-ignored models directory (see ADR-009).
+"""Download the voice models used by Nox into a local, git-ignored models directory.
 
 Piper voices come from Hugging Face rhasspy/piper-voices via httpx; faster-whisper models are
 fetched through the library's own downloader (huggingface_hub) with download_root set here.

@@ -1,7 +1,7 @@
 -- 0002_stream: Stream Bot tables.
 -- Timestamps are ISO-8601 UTC text, matching 0001_initial. chat_events.text retention is
 -- short-lived and configurable (stream.chat.retain_raw_text_days);
--- viewers/viewer_memory follow the decided 12-month-inactivity default (FR-7.9).
+-- viewers/viewer_memory follow the decided 12-month-inactivity default.
 
 CREATE TABLE IF NOT EXISTS stream_sessions (
     id                   INTEGER PRIMARY KEY,
@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS viewers (
     last_seen_at   TEXT NOT NULL,
     loyalty_tier   TEXT NOT NULL DEFAULT 'none',
     funken_balance REAL NOT NULL DEFAULT 0,
-    opt_out        INTEGER NOT NULL DEFAULT 0,               -- 0/1 (FR-9.15 viewer privacy)
-    retain_until   TEXT                                       -- 12 months inactivity (FR-7.9)
+    opt_out        INTEGER NOT NULL DEFAULT 0,               -- 0/1 (viewer privacy: opted out)
+    retain_until   TEXT                                       -- 12 months inactivity
 );
 CREATE INDEX IF NOT EXISTS idx_viewers_retain ON viewers(retain_until);
 

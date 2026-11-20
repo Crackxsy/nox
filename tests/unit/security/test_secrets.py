@@ -145,9 +145,13 @@ def test_pin_hash_format_and_argon2_fallback_report() -> None:
     pin = PinManager(store, prefer_argon2=False)
     pin.set_pin("4711")
     stored = store.get(PIN_SECRET_NAME)
-    assert (
-        stored is not None and stored.startswith("pbkdf2_sha256$600000$") and "4711" not in stored
-    )
+    assert stored is not None
+    # Salt and digest are random hex: a four-digit PIN shows up in them by chance about once in
+    # 700 runs, so the PIN is looked for as a field of its own, not as a substring of the text.
+    scheme, iterations, salt_hex, digest_hex = stored.split("$")
+    assert (scheme, iterations) == ("pbkdf2_sha256", "600000")
+    assert "4711" not in (scheme, iterations, salt_hex, digest_hex)
+    assert (len(salt_hex), len(digest_hex)) == (32, 64)  # 16 and 32 bytes, far longer than any PIN
     auto = PinManager(store)
     assert auto.verify_pin("4711").ok  # verifies pbkdf2 regardless of argon2 presence
     assert auto.algorithm in ("argon2id", "pbkdf2_sha256")

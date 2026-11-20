@@ -730,7 +730,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Security Model §10. Rocket League is observation-only (ENGINEERING.md hard rules), and
+      # Observation-only boundary (docs/SECURITY.md). Rocket League is observation-only (ENGINEERING.md hard rules), and
       # input synthesis is allowed in exactly two files - typing (`keyboard.py`) and the approved
       # computer-use module (`computer_use.py`, owner approval 2026-10-18) - each of which must
       # keep its game guard. The script scans src/ and every plugin under plugins/ for SendInput,
