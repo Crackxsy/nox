@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict
 
 from nox.core.events import E, EventBus, PermissionDecided, PermissionRequested
 from nox.core.globbing import value_matches, value_matches_any
+from nox.core.hooks import NamedHooks
 from nox.core.state import PrivacyMode
 from nox.security._events import publish, publish_nowait
 from nox.security._logging import get_logger
@@ -832,9 +833,16 @@ class DefaultPermissionEngine:
         #: Conversations (`PermissionRequest.conversation`) that hold untrusted content, and
         #: what the user said in each.
         self._taint = TaintLedger()
-        #: A node's name by its id, for a question that came from its voice satellite (set by
-        #: `nox.node.hub.install`).
-        self.satellite_label: Callable[[str], str] | None = None
+        #: Ways to name a node by its id, for a question that came from its voice satellite
+        #: (`add_satellite_label`); the first one that has a name for the id answers.
+        self._satellite_labels: NamedHooks[Callable[[str], str]] = NamedHooks("satellite label")
+
+    def add_satellite_label(self, name: str, label: Callable[[str], str]) -> None:
+        """Name voice satellites in a question ("from voice satellite <name>"): `label` maps a
+        device id to its name, or to "" when it does not know the device. Providers are asked in
+        the order they registered, and the first non-empty name wins. A name registers once: a
+        second registration under it raises `DuplicateHookError`."""
+        self._satellite_labels.add(name, label)
 
     # ---- PermissionEngine protocol ---------------------------------------------------------------
 
@@ -1114,8 +1122,12 @@ class DefaultPermissionEngine:
         if not conversation.startswith(prefix):
             return ""
         device_id = conversation[len(prefix) :].split("#", 1)[0]
+        name = ""
         try:
-            name = self.satellite_label(device_id) if self.satellite_label is not None else ""
+            for label in self._satellite_labels:
+                name = label(device_id)
+                if name:
+                    break
         except Exception:  # noqa: BLE001 - a name is a courtesy; the marker itself stays
             name = ""
         return (name or device_id[:8] or "?")[:64]

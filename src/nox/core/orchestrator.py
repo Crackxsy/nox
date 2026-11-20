@@ -23,6 +23,7 @@ from nox.ai.escalation import EscalationPolicy
 from nox.ai.fastpath import FastPath
 from nox.ai.tooluse import render_result
 from nox.core.events import E, Event, EventBus
+from nox.core.hooks import NamedHooks
 from nox.core.logging import get_logger
 from nox.core.state import StateManager
 from nox.core.toolloop import ActiveTurn, ToolEvent, ToolLoop
@@ -270,7 +271,8 @@ class Orchestrator:
     #: Set by `nox.capabilities.install` so that everything reachable from the dashboard is
     #: also reachable by saying it. `None` = the model can only talk.
     tool_loop: ToolLoop | None = None
-    #: Current facts (time, mode, privacy) for the turn context; `None` = none.
+    #: Current facts (time, mode, privacy) for the turn context; `None` = none. An extension adds
+    #: its own lines with `add_fact_source`, which sit after these and never replace them.
     facts: Callable[[], str] | None = None
     #: Whether cloud models are allowed right now. Turns recorded while they are not are marked
     #: private, and cloud providers never send them, not even later as history. `None` = always.
@@ -295,6 +297,16 @@ class Orchestrator:
     _barge_pending: int = 0
     #: Counts barge-ins; the newest one's number is the one that may run.
     _barge_ticket: int = 0
+    #: What extensions add to the facts (`add_fact_source`), in the order they registered.
+    _fact_sources: NamedHooks[Callable[[], str]] = field(
+        default_factory=lambda: NamedHooks("fact source")
+    )
+
+    def add_fact_source(self, name: str, source: Callable[[], str]) -> None:
+        """Add a line source to the turn context, after `facts` and the sources registered before
+        it (an empty answer adds nothing). A name registers once: a second registration under it
+        raises `DuplicateHookError` instead of showing the same line twice."""
+        self._fact_sources.add(name, source)
 
     async def start(self) -> None:
         self._unsubs = [
@@ -873,13 +885,13 @@ class Orchestrator:
         return "\n\n".join(part for part in parts if part)
 
     def _facts(self) -> str:
-        if self.facts is None:
-            return ""
         try:
-            return self.facts()
+            parts = [self.facts()] if self.facts is not None else []
+            parts += [source() for source in self._fact_sources]
         except Exception as exc:  # noqa: BLE001 - an answer without the clock beats no answer
             log.warning("orchestrator.facts_failed", error=str(exc))
             return ""
+        return "\n".join(part for part in parts if part)
 
     def _profile(self) -> str:
         """What Nox knows about the user, or nothing: a broken profile must not fail the turn."""

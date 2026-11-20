@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from nox.core.hooks import NamedHooks
 from nox.ipc._log import get_logger
 from nox.ipc.roles import DEVICE_ROLE
 
@@ -168,8 +169,18 @@ class TokenStore:
         self._session_file_restricted: bool | None = None
         self._device_verifier: DeviceVerifier | None = None
         #: Whether the node an overlay credential was issued to (`node:<id>`) may still hold one
-        #: (set by `nox.node.hub.install`). Not set, or failing: no node overlay over the network.
-        self.node_overlay_allowed: Callable[[str], bool] | None = None
+        #: (`add_node_overlay_check`). None registered, or one failing: no node overlay over the
+        #: network.
+        self._node_overlay_checks: NamedHooks[Callable[[str], bool]] = NamedHooks(
+            "node overlay check"
+        )
+
+    def add_node_overlay_check(self, name: str, check: Callable[[str], bool]) -> None:
+        """Ask `check(device_id)` whenever a node's overlay credential is used over the network.
+        Every registered check must say yes (a check can only narrow what the others allow), and
+        with none registered the answer is no. A name registers once: a second registration under
+        it raises `DuplicateHookError`."""
+        self._node_overlay_checks.add(name, check)
 
     @property
     def session_token(self) -> str:
@@ -292,11 +303,10 @@ class TokenStore:
         return AuthDecision(ok=False, reason=f"role {role!r} cannot authenticate over the hub")
 
     def _node_may_hold(self, device_id: str) -> bool:
-        check = self.node_overlay_allowed
-        if check is None:
+        if not self._node_overlay_checks:
             return False
         try:
-            return bool(check(device_id))
+            return all(check(device_id) for check in self._node_overlay_checks)
         except Exception:  # noqa: BLE001 - cannot tell: no
             return False
 
